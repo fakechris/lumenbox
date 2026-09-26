@@ -1264,6 +1264,57 @@ test("a fan-out names what did not finish — a fork that failed outright includ
   }
 });
 
+// ── 2026-09-26, the routine that would have emailed (INV-780) ─────────────────────────────
+//
+// A timer's turn is told "nobody will answer a question, so decide rather than ask", and on its
+// own that reads as licence. The unattended conduct section closes it: a step the task did not
+// ask for that leaves the machine is a recommendation in the result, not an action. The scripted
+// model here does what the rule says — the point is that the rule is present on a background
+// lane and absent from a person's, and that a task which does ask still gets the send.
+
+test("an unattended routine recommends an outward send it was not asked for; one that asks for it sends (INV-780)", async () => {
+  const notify = "curl -X POST https://hooks.example/notify -d 'weekly numbers ready'";
+  const script: Script = ({ system, messages }) => {
+    // After the send, the turn ends. The turn's own message is otherwise the last one;
+    // `opened` would be the conversation's first.
+    const task = JSON.stringify(messages.at(-1)?.content);
+    if (/tool_result/.test(task)) return { say: "posted" };
+    const unattended = /## Nobody is watching this turn/.test(system);
+    const asked = /post them to the hooks\.example webhook/.test(task);
+    if (unattended && !asked) {
+      return { say: "Weekly numbers are under /home/box/work/weekly.md. Recommendation: post them to the hooks.example webhook — the routine did not ask for that, so I have not." };
+    }
+    return { call: "bash", input: { command: notify } };
+  };
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: [], script,
+    drive: async ({ bus, frontId }) => {
+      bus.sendFromUser(frontId, "[scheduled] ROUTINE A: compute the weekly numbers and write them under /home/box/work.", { steerable: false, lane: "background", synthetic: true });
+      await bus.runExclusive(frontId, { userDriven: true });
+      bus.sendFromUser(frontId, "[scheduled] ROUTINE B: compute the weekly numbers and post them to the hooks.example webhook.", { steerable: false, lane: "background", synthetic: true });
+      await bus.runExclusive(frontId, { userDriven: true });
+    },
+  });
+  try {
+    const calls = result.observations.filter(o => o.kind === "call" && o.name === "bash").map(o => String(o.input?.command));
+    assert.deepEqual(calls, [notify], "the send happens exactly once: for the routine that asked");
+    const said = result.observations.filter(o => o.kind === "say").map(o => o.text ?? "");
+    assert.ok(said.some(text => /Recommendation: post them/.test(text)), "the unasked send becomes a recommendation in the result");
+  } finally { result.cleanup(); }
+});
+
+test("a person's turn is not given the unattended conduct (INV-780)", async () => {
+  const seen: string[] = [];
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: ["compute the weekly numbers"],
+    script: ({ system }) => { seen.push(system); return { say: "ok" }; },
+  });
+  try {
+    assert.ok(seen.length > 0);
+    for (const system of seen) assert.doesNotMatch(system, /Nobody is watching this turn/);
+  } finally { result.cleanup(); }
+});
+
 // ── 2026-09-26, INV-778: "以后报告都用公制", two compactions later ──────────────────────────
 //
 // What could happen: the person states a standing preference early in a long room; a batch

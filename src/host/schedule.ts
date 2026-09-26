@@ -413,7 +413,7 @@ export function triggerPrompt(
       deliver === undefined
         ? "Nobody is waiting on a reply and no one will answer a question, so do the work and record the result where it can be found later."
         : "Nobody will answer a question, so decide rather than ask — but your reply is delivered to a chat where people will read it, so write it for them."
-    }`,
+    } The rules for unattended work in your system prompt apply: the skill's text is your whole authorization, and a step it did not ask for is a recommendation in your result, not an action.`,
     "",
     `You are running the **${skillName}** skill, scheduled ${described}. Read \`${path}\` and follow it.`,
     "",
@@ -505,7 +505,9 @@ export function listenerPrompt(
   return [
     `[listener] This turn was started because a message matched the **${skillName}** routine, not because ` +
       "someone addressed you. Your reply is delivered to the chat it was said in, where people will read it; " +
-      "nobody will answer a question, so decide rather than ask.",
+      "nobody will answer a question, so decide rather than ask. The rules for unattended work in your " +
+      "system prompt apply: the routine's text is your whole authorization, and a step it did not ask for " +
+      "is a recommendation in your result, not an action.",
     "",
     `Read \`${path}\` and follow it for this message from ${said.sender} in ${said.chatKey}:`,
     "",
