@@ -29,6 +29,7 @@ import {
   statSync,
 } from "node:fs";
 import { appendLine } from "../host/jsonl.ts";
+import { credentialIn } from "../host/secret-scan.ts";
 import { BOX_RECORD_FILENAME, ensureBoxRecord, type BoxRecord } from "../box/identity.ts";
 import { BOXES_FILENAME, type BoxEntry, ensureBoxes, saveBoxes } from "../box/boxes.ts";
 import { DEFAULT_CONTAINER } from "../box/docker.ts";
@@ -279,6 +280,21 @@ export class AgentNotFoundError extends Error {
   constructor(readonly agentId: string) {
     super(`No agent found with id ${agentId}.`);
     this.name = "AgentNotFoundError";
+  }
+}
+
+
+/**
+ * The last line before memory reaches disk (INV-740): whatever wrote it — a tool, the extractor, an
+ * episode, a pitfall, an edit in the web UI — a record that carries a credential is refused here.
+ * Retractions are let through: they repeat the text they withdraw, and withdrawing a memory that
+ * already leaked a key must stay possible. The message names the pattern, never the content.
+ */
+function refuseCredentialInMemory(records: readonly MemoryRecord[]): void {
+  for (const record of records) {
+    if (record.kind === "retraction") continue;
+    const credential = credentialIn(record.text);
+    if (credential !== undefined) throw new Error(`refusing to store what looks like a credential (${credential}) in memory`);
   }
 }
 
@@ -1062,6 +1078,7 @@ export class AgentRegistry {
     const mode = this.contextScope.getStore()?.mode;
     if (mode !== undefined && mode !== "normal") throw new Error(`${mode === "clean" ? "Clean" : "Recovery"} context: refusing to write learned memory`);
     if (records.length === 0) return;
+    refuseCredentialInMemory(records);
     const revoked = existsSync(this.memoryRecordsPathFor(agentId))
       ? revokedMemorySources(this.readMemoryRecords(agentId))
       : new Set<string>();
@@ -1190,6 +1207,7 @@ export class AgentRegistry {
     const mode = this.contextScope.getStore()?.mode;
     if (mode !== undefined && mode !== "normal") throw new Error(`${mode === "clean" ? "Clean" : "Recovery"} context: refusing to write shared memory`);
     if (records.length === 0) return;
+    refuseCredentialInMemory(records);
     const revoked = revokedMemorySources(this.readSharedMemory(agentId));
     const blocked = records.find(record => record.revokedSources === undefined && record.from?.some(source => revoked.has(source)));
     if (blocked !== undefined) throw new Error("Memory source was withdrawn: refusing to re-import its shared derivative");

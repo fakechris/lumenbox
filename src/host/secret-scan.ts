@@ -101,6 +101,22 @@ export function recordFiles(root: string): string[] {
  */
 export const MIN_EXACT_LENGTH = 12;
 
+/**
+ * The name of the first credential pattern in this text, or undefined (INV-740).
+ *
+ * For stores that must never hold one — memory, learnings — where the only useful answer is
+ * whether, and what kind. Deliberately not the excerpt: a refusal that quotes the first 34
+ * characters of a key has written most of the key into the transcript while refusing to store it.
+ */
+export function credentialIn(text: string): string | undefined {
+  return scanText(text).patterns[0]?.pattern;
+}
+
+/** How a store refuses a credential: what kind it looked like, never any of its characters. */
+export function credentialRefusal(store: string, pattern: string): string {
+  return `That looks like it holds a credential (${pattern}). ${store} never carries one — say where the credential lives instead.`;
+}
+
 export function scanText(
   text: string,
   held: ReadonlyMap<string, string> = new Map()

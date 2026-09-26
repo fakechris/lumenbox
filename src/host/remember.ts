@@ -35,6 +35,7 @@ import {
   type MemoryRecord,
 } from "./memory.ts";
 import { buildPitfallPrompt, parsePitfall, type PitfallSource } from "./pitfalls.ts";
+import { credentialIn } from "./secret-scan.ts";
 
 /**
  * How many exchanges accumulate before extraction runs.
@@ -261,6 +262,10 @@ export class Rememberer {
         principal
       );
       records = parseExtraction(reply, known, new Date(), citable);
+      // parseExtraction drops what validateRecord refuses; a credential is the one worth saying so,
+      // and only by kind — the line itself is what must not be written anywhere (INV-740).
+      const leaked = reply.split("\n").map(line => credentialIn(line)).filter((kind): kind is string => kind !== undefined);
+      if (leaked.length > 0) this.log(`dropped ${leaked.length} extracted line(s) that looked like a credential (${[...new Set(leaked)].join(", ")})`);
     } catch (error) {
       // Swallowed on purpose, and said once. The turn already succeeded; a failure to take notes is
       // not a failure the person needs to see, and retrying would spend money on the same guess.
