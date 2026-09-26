@@ -96,3 +96,16 @@ test("proxy request lines: CONNECT and absolute-form", () => {
   assert.equal(parseProxyTarget("GET /relative HTTP/1.1"), undefined);
   assert.equal(parseProxyTarget("garbage"), undefined);
 });
+
+// ── the call line (INV-784) ───────────────────────────────────────────────────────
+test("a call token rides the preamble as its own line, and a stream without one still decodes", () => {
+  const withCall = decodeRequest(Buffer.from(encodeRequest({ token: "tok", host: "example.com", port: 443, call: "abc_-123" })));
+  assert.equal(withCall?.request.call, "abc_-123");
+  const without = decodeRequest(Buffer.from(encodeRequest({ token: "tok", host: "example.com", port: 443 })));
+  assert.equal(without?.request.call, undefined);
+  assert.throws(() => encodeRequest({ token: "tok", host: "example.com", port: 443, call: "not a token\r\nHost: x" }), EgressProtocolError);
+  // A malformed call line from an older or hostile proxy is ignored, not refused.
+  const bad = decodeRequest(Buffer.from("AGENTBOX-EGRESS 1\r\nAuthorization: tok\r\nHost: example.com:443\r\nCall: !!\r\n\r\n"));
+  assert.equal(bad?.request.call, undefined);
+  assert.equal(bad?.request.host, "example.com");
+});

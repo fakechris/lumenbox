@@ -42,6 +42,7 @@ import { MCP_FACE_DIR, MCP_FACE_TOKEN_VARIABLE, type McpFace } from "./mcp-face.
 import type { ModelRelay } from "./model-relay.ts";
 import type { DelegateSessions } from "./delegate-sessions.ts";
 import { randomBytes } from "node:crypto";
+import { encodeCall } from "../egress/call.ts";
 import { MAIN_CONVERSATION, normaliseTags } from "../agents/registry.ts";
 import { describeTask, isLive, isTaskStatus, TASK_STATUSES, type TaskStore, clampContract } from "./tasks.ts";
 import { ABSENT, versionOf, type FileVersions } from "./files.ts";
@@ -228,6 +229,11 @@ export interface ToolContext {
    * transcript that is its evidence.
    */
   turnId?: string;
+  /**
+   * The tool_use id of this call (INV-784). With `turnId`, what the box is told the call
+   * is, so the relay's network events say which call opened each connection.
+   */
+  toolUseId?: string;
   /**
    * The tools this turn has called so far, this one included. A reviewer accepting a task
    * with nothing here but `Tasks` has read the assignee's summary and checked nothing.
@@ -2186,6 +2192,23 @@ function boxOfAgent(context: ToolContext): { id: string; name: string } | undefi
   }
 }
 
+/**
+ * The call token a box request carries (INV-784, egress/call.ts): who this is, for the
+ * relay's record. Nothing when the turn is not one — a CLI run, a test — and then the
+ * box attributes the connections to nobody rather than to a made-up id.
+ */
+function callFor(context: ToolContext, jobId?: string): { call?: string } {
+  if (context.turnId === undefined || context.toolUseId === undefined) return {};
+  return {
+    call: encodeCall({
+      agentId: context.agent.id,
+      turnId: context.turnId,
+      toolUseId: context.toolUseId,
+      ...(jobId !== undefined ? { jobId } : {}),
+    }),
+  };
+}
+
 function requireBox(context: ToolContext): BoxClient {
   if (!context.box) {
     throw new Error(
@@ -2507,10 +2530,14 @@ export async function dispatchTool(
       if (guarded.refusal !== undefined) return { text: guarded.refusal, isError: true };
       const box = requireBox(context);
       if (input.background === true) {
+        // Minted here so the call token can name the job before it exists (INV-784).
+        const jobId = `job-${randomBytes(8).toString("hex")}`;
         const started = await box.startJob(command, {
           ...(input.cwd ? { cwd: String(input.cwd) } : {}),
           ...(context.displayIndex !== undefined ? { display: context.displayIndex } : {}),
           ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
+          jobId,
+          ...callFor(context, jobId),
         });
         return {
           text:
@@ -2532,6 +2559,7 @@ export async function dispatchTool(
         owner: context.boxOwner,
         // For the box's record: this one is the model's own shell, not housekeeping.
         actor: `agent:${context.agent.id}`,
+        ...callFor(context),
       });
       return {
         text: formatExec(result, input.timeout_ms ? Number(input.timeout_ms) : undefined),
@@ -2788,6 +2816,7 @@ export async function dispatchTool(
           const started = await box.startJob(installCommand(preset), {
             ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
             jobId: installJobId,
+            ...callFor(context, installJobId),
           });
           return {
             text:
@@ -2962,6 +2991,7 @@ export async function dispatchTool(
           ...(Object.keys(jobEnv).length > 0 ? { env: jobEnv } : {}),
           ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
           jobId,
+          ...callFor(context, jobId),
         });
       } catch (error) {
         if (routeKey !== undefined) context.mcpFace?.revoke(routeKey, "job failed to start");
@@ -3583,6 +3613,7 @@ export async function dispatchTool(
           op: "fill_secret",
           display: context.displayIndex,
           ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
+          ...callFor(context),
           ref,
           secret_value: value,
           domains,
@@ -3653,6 +3684,7 @@ export async function dispatchTool(
               : name.slice("browser_".length),
         display: context.displayIndex,
         ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
+        ...callFor(context),
       };
       if (name === "browser_open") {
         try {

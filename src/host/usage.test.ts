@@ -317,3 +317,59 @@ test("an anomaly is a zero-token row, counted by name and visible under its own 
   assert.equal(log.totalsSince(0).outputTokens, 20);
   assert.deepEqual(log.anomaliesSince(Date.now() + 60_000), []);
 });
+
+test("three low cache turns with a changed segment write one reason row, not one per turn (INV-782)", () => {
+  const log = new UsageLog(logPath());
+  const low = { inputTokens: 900, cacheReadTokens: 100, cacheWriteTokens: 0 };
+  const who = { agentId: "id-Ada", agentName: "Ada", provider: "minimax", model: "MiniMax-M3", round: 0 };
+  const note = (changed: string[] | undefined, usage = low, turnId = "t") =>
+    log.notePromptCache({ ...who, usage, changed, turnId });
+
+  assert.equal(note(undefined).share, 0.1, "the share is reported from the first turn: no warmup");
+  assert.equal(note(["tools"]).reason, undefined, "two turns is not the window");
+  const third = note(["volatile"], low, "t3");
+  assert.match(third.reason ?? "", /below 0\.5 for 3 turns/);
+  assert.match(third.reason ?? "", /prompt changed in: tools, volatile/, "every segment that moved in the window is named");
+
+  const rows = log.since(0).filter(record => record.anomaly === "prompt_cache_low");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.turnId, "t3");
+  assert.equal(rows[0]!.inputTokens + rows[0]!.outputTokens, 0, "a reason spends nothing");
+
+  // Three more cold turns: the window restarted, so this is a second row and not a fourth, fifth, sixth.
+  note(["tools"]);
+  note([]);
+  assert.equal(log.since(0).filter(record => record.anomaly === "prompt_cache_low").length, 1, "still one: the window is not full again");
+  note([]);
+  assert.equal(log.since(0).filter(record => record.anomaly === "prompt_cache_low").length, 2);
+  assert.deepEqual(log.anomaliesSince(), [{ anomaly: "prompt_cache_low", count: 2 }]);
+});
+
+test("a cold cache with nothing changed, or a warm one, writes no reason row (INV-782)", () => {
+  const log = new UsageLog(logPath());
+  const who = { agentId: "id-Ada", agentName: "Ada", provider: "minimax", model: "MiniMax-M3", round: 0 };
+  const low = { inputTokens: 900, cacheReadTokens: 100, cacheWriteTokens: 0 };
+  const warm = { inputTokens: 100, cacheReadTokens: 900, cacheWriteTokens: 0 };
+
+  for (let turn = 0; turn < 5; turn++) log.notePromptCache({ ...who, usage: low, changed: [] });
+  assert.equal(log.since(0).length, 0, "the prompt did not move: a cold cache is the provider's, not ours");
+
+  for (let turn = 0; turn < 5; turn++) log.notePromptCache({ ...who, usage: warm, changed: ["volatile"] });
+  assert.equal(log.since(0).length, 0, "a warm cache with a moving tail is the normal case");
+
+  // One warm turn inside the window resets the run of low ones.
+  log.notePromptCache({ ...who, usage: low, changed: ["tools"] });
+  log.notePromptCache({ ...who, usage: low, changed: ["tools"] });
+  log.notePromptCache({ ...who, usage: warm, changed: ["tools"] });
+  log.notePromptCache({ ...who, usage: low, changed: ["tools"] });
+  assert.equal(log.since(0).length, 0, "the last three are low, warm, low: not consecutive");
+
+  // No input at all says nothing and does not advance the window.
+  assert.equal(log.notePromptCache({ ...who, usage: { inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }, changed: ["tools"] }).share, undefined);
+
+  // Conversations are separate windows: two low turns here and two in a side thread are not four.
+  const other = { ...who, conversation: "feishu-oc_room" };
+  log.notePromptCache({ ...other, usage: low, changed: ["stable"] });
+  log.notePromptCache({ ...other, usage: low, changed: ["stable"] });
+  assert.equal(log.since(0).length, 0);
+});

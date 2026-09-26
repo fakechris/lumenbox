@@ -5847,7 +5847,13 @@ function who(name) {
 function activityLine(e) {
   if (e.type === "prompt") return { html: "<b>you</b> &rarr; " + who(nameOf(e.agentId)), cls: "" };
   if (e.type === "turn_started") return { html: who(nameOf(e.agentId)) + " started a turn", cls: "" };
-  if (e.type === "tool_start") return { html: who(e.agentName) + " &rarr; " + esc(e.tool), cls: "" };
+  if (e.type === "tool_start") {
+    // The plain-language line when the server attached one (INV-783); the bare tool
+    // name is the fallback for events stored before phrases existed.
+    var phrase = e.phrase && (e.phrase[MSG_LOCALE] || e.phrase.en);
+    if (phrase) return { html: who(e.agentName) + " " + esc(phrase), cls: "" };
+    return { html: who(e.agentName) + " &rarr; " + esc(e.tool), cls: "" };
+  }
   if (e.type === "message_sent") {
     return {
       html: who(e.fromName) + " &rarr; " + who(e.toName) +
