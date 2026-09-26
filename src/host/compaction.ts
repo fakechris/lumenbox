@@ -193,7 +193,7 @@ export interface SummaryEntry {
 export const MAX_SUMMARY_GENERATIONS = 4;
 
 export type HistoryEntry =
-  | { role: "user" | "assistant"; text: string; at: string }
+  | { role: "user" | "assistant"; text: string; at: string; host?: true }
   | { role: "assistant"; kind: "blocks"; blocks: Anthropic.ContentBlockParam[]; at: string }
   | { role: "user"; kind: "results"; blocks: Anthropic.ToolResultBlockParam[]; at: string }
   | SummaryEntry;
@@ -442,6 +442,25 @@ export const PINNED_USER_CHARS = 2_000;
  * longer demonstrates, newest tools first, capped. Results are trimmed hard — the
  * schema a weak model imitates lives in the call, not in what came back.
  */
+/**
+ * Host prompts that were written before the `host` stamp existed, recognised by their opening
+ * words so a record nobody rewrites still reads right. Each is the exact text the host writes
+ * (`progress.ts` continuationPrompt, `turn.ts` last round and Stop hook), so a person who
+ * happens to type these words is not mistaken for the host.
+ */
+const LEGACY_HOST_PROMPTS: readonly RegExp[] = [
+  /^You have used \d+ tool rounds, which is the limit for one turn/,
+  /^\[last round\] You have one response left in this turn/,
+  /^\[Stop hook\] /,
+];
+
+/** Written by the host to the model, as opposed to said by a person or a teammate. */
+export function isHostAuthored(entry: HistoryEntry): boolean {
+  if ("kind" in entry) return false;
+  if (entry.host === true) return true;
+  return entry.role === "user" && LEGACY_HOST_PROMPTS.some(pattern => pattern.test(entry.text));
+}
+
 export function choosePinnedEntries(
   older: readonly HistoryEntry[],
   tail: readonly HistoryEntry[]
@@ -461,12 +480,17 @@ export function choosePinnedEntries(
     if (typeof generation === "number" && generation >= MAX_SUMMARY_GENERATIONS) pinned.push(entry);
   }
 
-  const isPlainUser = (entry: HistoryEntry): boolean =>
-    !("kind" in entry) && entry.role === "user";
-  if (!tail.some(isPlainUser)) {
+  // The ask is what a person (or a teammate) said, never what the host said to the model.
+  // A continuation prompt, a last-round notice and a Stop-hook note are all plain user
+  // messages on the wire, and each used to win here over the request that opened the work:
+  // after one continuation the pinned "ask" was "You have used 400 tool rounds…" and the
+  // objective survived only as background in the summary (INV-766).
+  const isAsk = (entry: HistoryEntry): boolean =>
+    !("kind" in entry) && entry.role === "user" && !isHostAuthored(entry);
+  if (!tail.some(isAsk)) {
     for (let index = older.length - 1; index >= 0; index--) {
       const entry = older[index]!;
-      if (isPlainUser(entry)) {
+      if (isAsk(entry)) {
         const text = (entry as { text: string; at: string }).text;
         pinned.push({
           role: "user",
@@ -654,7 +678,7 @@ export function extractAnchors(entries: readonly HistoryEntry[]): string[] {
       // The person's own words (INV-778): an instruction, a constraint, a preference they
       // stated is kept verbatim, from user-role messages only. Tool output and pages are
       // never a source of these — that is where injection lives.
-      if (entry.role === "user") for (const sentence of userInstructionSentences(entry.text)) take(`${USER_ANCHOR_PREFIX}${sentence}`, "user");
+      if (entry.role === "user" && !isHostAuthored(entry)) for (const sentence of userInstructionSentences(entry.text)) take(`${USER_ANCHOR_PREFIX}${sentence}`, "user");
       scan(entry.text);
       continue;
     }
@@ -732,7 +756,9 @@ export const SUMMARY_WORD_CAP = envNumber("AGENTBOX_SUMMARY_WORDS", 400);
 export function buildSummaryPrompt(entries: readonly HistoryEntry[]): string {
   const rendered = entries
     .map(entry => {
-      if (!("kind" in entry)) return `${entry.role}: ${entry.text}`;
+      // Named for what it is: a summariser that reads "user: You have used 400 tool rounds"
+      // writes "the user asked to use 400 rounds" into the record it is meant to keep.
+      if (!("kind" in entry)) return `${isHostAuthored(entry) ? "host" : entry.role}: ${entry.text}`;
       if (entry.kind === "summary") {
         // The previous summary is an *update input*, not one more event: the model
         // merges into it rather than re-telling it, which is what stops each summary

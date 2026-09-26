@@ -29,6 +29,7 @@ DEFAULT_POLICY,
   calibratedTokens,
   CompactionGuard,
   choosePinnedEntries,
+  isHostAuthored,
   estimateRequestTokens,
   noteRealInputTokens,
   trimInputLeaves,
@@ -706,6 +707,47 @@ test("pinned entries: the ask and one successful pair per undemonstrated tool", 
   const bare = summaryEntry("s", 6);
   const carrying = { ...bare, pinned };
   assert.ok(estimateTokens([carrying]) > estimateTokens([bare]));
+});
+
+// INV-766: after one continuation the pinned "ask" was the host's "You have used 400 tool
+// rounds…" and the request that opened the work survived only as background in the summary.
+test("the pinned ask is what the person said, never what the host said to the model", () => {
+  const at = "2026-09-26T10:00:00Z";
+  const ask: HistoryEntry = { role: "user", text: "把季度报告写完并发给财务", at };
+  const continuation: HistoryEntry = {
+    role: "user", at, host: true,
+    text: "You have used 400 tool rounds, which is the limit for one turn, and you were still making progress…",
+  };
+  const legacyLastRound: HistoryEntry = {
+    role: "user", at,
+    text: "[last round] You have one response left in this turn and no tools. Reply now with what you have.",
+  };
+  assert.equal(isHostAuthored(ask), false);
+  assert.equal(isHostAuthored(continuation), true, "stamped");
+  assert.equal(isHostAuthored(legacyLastRound), true, "recognised by its words where the record predates the stamp");
+  assert.equal(isHostAuthored({ role: "user", text: "You have used up my patience", at }), false, "a person's words are not the host's");
+
+  // The host prompt sits in the older part: the ask is the person's, not the prompt.
+  const older: HistoryEntry[] = [ask, continuation];
+  const pinnedFromOlder = choosePinnedEntries(older, []);
+  assert.equal(pinnedFromOlder.length, 1);
+  assert.match((pinnedFromOlder[0] as { text: string }).text, /季度报告/);
+
+  // The host prompt is the only plain user message in the tail: that is not "the tail already
+  // carries the ask" — the person's request is still pinned.
+  const pinnedPastTail = choosePinnedEntries([ask], [legacyLastRound]);
+  assert.equal(pinnedPastTail.length, 1);
+  assert.match((pinnedPastTail[0] as { text: string }).text, /季度报告/);
+
+  // A person's message in the tail still means nothing to pin.
+  assert.equal(choosePinnedEntries([ask], [{ role: "user", text: "继续", at }]).length, 0);
+
+  // The summariser is told who said what, and does not anchor on the host's sentences.
+  const prompt = buildSummaryPrompt([ask, continuation]);
+  assert.match(prompt, /^host: You have used/m);
+  assert.doesNotMatch(prompt, /^user: You have used/m);
+  const anchors = extractAnchors([ask, continuation]);
+  assert.equal(anchors.some(line => line.includes("tool rounds")), false, "no user anchor from the host's words");
 });
 
 test("tool exemplars do not pin the research monologue beside a successful call", () => {
