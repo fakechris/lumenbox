@@ -1263,3 +1263,74 @@ test("a fan-out names what did not finish — a fork that failed outright includ
     episode.cleanup();
   }
 });
+
+test("a reply that claims the email was sent with no send call is sent back, and the model then sends it (INV-779)", async () => {
+  const sent: unknown[] = [];
+  const mcp = {
+    toolsFor: () => [{ name: "google__send_email", description: "Send an email.", inputSchema: { type: "object", properties: { to: { type: "string" }, body: { type: "string" } } } }],
+    isHostTool: () => false,
+    owns: (name: string) => name === "google__send_email",
+    call: async (_name: string, input: unknown) => { sent.push(input); return "sent"; },
+    describeTools: () => "google__send_email",
+  };
+  const conduct: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => { const line = args.map(String).join(" "); if (line.includes("[conduct]")) conduct.push(line); };
+  let nudge = "";
+  let result: Awaited<ReturnType<typeof runEpisode>>;
+  try {
+    result = await runEpisode({
+      team: [{ name: "Nova" }], says: ["给王总发封邮件说报价明天给他"],
+      mcp: mcp as never,
+      script: ({ round, messages }) => {
+        if (round === 0) return { say: "好的，邮件已发送给王总。" };
+        if (round === 1) {
+          const last = messages.at(-1);
+          nudge = typeof last?.content === "string" ? last.content : JSON.stringify(last?.content);
+          return { call: "google__send_email", input: { to: "wang@example.com", body: "报价明天给您。" } };
+        }
+        return { say: "已发送给王总。" };
+      },
+    });
+  } finally { console.error = original; }
+  try {
+    assert.match(nudge, /\[harness\] 你说你已经发送/, "the send-back names the claim");
+    assert.match(nudge, /真实状态|先调用工具/);
+    assert.equal(sent.length, 1, "the model then actually sent it");
+    assert.ok(conduct.some(line => /guard claim-without-call fired \(1\/2/.test(line)), conduct.join("\n"));
+    assert.ok(conduct.some(line => /guard claim-without-call complied/.test(line)), conduct.join("\n"));
+    const front = result.registry.list()[0]!;
+    const replies = (result.registry.readTranscript(front.id) as { role?: string; text?: string }[]).filter(e => e.role === "assistant" && e.text);
+    assert.deepEqual(replies.map(e => e.text), ["已发送给王总。"], "only the true reply is delivered text");
+  } finally { result.cleanup(); }
+});
+
+test("a model that keeps claiming with no call is nudged twice, recorded as ignored, and still delivered (INV-779)", async () => {
+  const mcp = {
+    toolsFor: () => [{ name: "google__send_email", description: "Send an email.", inputSchema: { type: "object", properties: { to: { type: "string" } } } }],
+    isHostTool: () => false,
+    owns: (name: string) => name === "google__send_email",
+    call: async () => "sent",
+    describeTools: () => "google__send_email",
+  };
+  const conduct: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => { const line = args.map(String).join(" "); if (line.includes("[conduct]")) conduct.push(line); };
+  let rounds = 0;
+  let result: Awaited<ReturnType<typeof runEpisode>>;
+  try {
+    result = await runEpisode({
+      team: [{ name: "Nova" }], says: ["给王总发封邮件"],
+      mcp: mcp as never,
+      script: () => { rounds++; return { say: "邮件已发送。" }; },
+    });
+  } finally { console.error = original; }
+  try {
+    assert.equal(rounds, 3, "two nudges, then the third reply goes out");
+    assert.equal(conduct.filter(line => /guard claim-without-call fired/.test(line)).length, 2);
+    assert.equal(conduct.filter(line => /guard claim-without-call ignored/.test(line)).length, 2);
+    const front = result.registry.list()[0]!;
+    const replies = (result.registry.readTranscript(front.id) as { role?: string; text?: string }[]).filter(e => e.role === "assistant" && e.text);
+    assert.deepEqual(replies.map(e => e.text), ["邮件已发送。"], "delivery is not blocked forever");
+  } finally { result.cleanup(); }
+});
