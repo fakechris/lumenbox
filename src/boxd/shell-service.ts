@@ -312,16 +312,25 @@ export const SCRUBBED_ENV = [
   "AGENTBOX_TOKEN",
 ];
 
-function wrapForSession(command: string, key: string, explicitCwd?: string): string {
+function wrapForSession(command: string, key: string, explicitCwd?: string, pinned: Record<string, string> = {}): string {
   const cwdFile = `/tmp/boxd-session-${key}.cwd`;
   const envFile = `/tmp/boxd-session-${key}.env`;
+  // Per-call variables (INV-784) are set again after the saved environment is restored,
+  // and left out of the save: the session remembers `cd` and `export`, not which tool
+  // call ran last, and a call token that outlived its call would be a wrong record.
+  const pinnedNames = Object.keys(pinned);
+  const save =
+    pinnedNames.length === 0
+      ? `export -p > '${envFile}' 2>/dev/null`
+      : `export -p 2>/dev/null | grep -Ev '^declare -x (${pinnedNames.join("|")})=' > '${envFile}' 2>/dev/null`;
 
   return [
-    `__bs_save() { pwd > '${cwdFile}' 2>/dev/null; export -p > '${envFile}' 2>/dev/null; }`,
+    `__bs_save() { pwd > '${cwdFile}' 2>/dev/null; ${save}; }`,
     `trap __bs_save EXIT`,
     // Restore the environment before the directory, so a saved PWD cannot fight
     // the cd below.
     `[ -f '${envFile}' ] && . '${envFile}' 2>/dev/null`,
+    ...pinnedNames.map(name => `export ${name}=${shellQuote(pinned[name] ?? "")}`),
     // An explicit cwd on the request wins over the remembered one.
     explicitCwd
       ? `cd ${shellQuote(explicitCwd)} 2>/dev/null`
@@ -334,7 +343,12 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-export function runShell(request: ExecRequest): Promise<ExecResult> {
+/**
+ * Runs one command. `pinned` is environment the daemon sets for this call and this call
+ * only (the call token and proxy of INV-784): it wins over the request's own `env` and
+ * over whatever a session saved last time.
+ */
+export function runShell(request: ExecRequest, pinned: Record<string, string> = {}): Promise<ExecResult> {
   const command = request.command?.trim();
   if (!command) {
     return Promise.reject(new Error("command must be a non-empty string"));
@@ -346,7 +360,7 @@ export function runShell(request: ExecRequest): Promise<ExecResult> {
   );
 
   const key = sessionKey(request.session);
-  const script = key ? wrapForSession(command, key, request.cwd) : command;
+  const script = key ? wrapForSession(command, key, request.cwd, pinned) : command;
 
   return new Promise<ExecResult>(resolve => {
     // Run behind the interactive path. One box shares its CPU between two workloads with
@@ -368,6 +382,7 @@ export function runShell(request: ExecRequest): Promise<ExecResult> {
         // on whichever one the daemon happens to default to.
         ...(request.display ? { DISPLAY: `:${request.display}` } : {}),
         ...request.env,
+        ...pinned,
       },
       stdio: ["ignore", "pipe", "pipe"],
       // New process group, so a timeout kills the whole tree rather than

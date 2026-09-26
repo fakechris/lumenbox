@@ -91,12 +91,34 @@ interface BeginRecord {
   model?: string;
   build?: { version: string; commit: string };
   promptHash?: string;
+  /**
+   * The same prompt in three parts (INV-782): the stable prefix, the volatile tail, and the
+   * tool definitions sent with it. `promptHash` says *whether* the prompt changed; this says
+   * *which part*, which is the question a cache miss actually asks — the tool set moves with
+   * skills, MCP servers and the lane, and was not in the hash at all.
+   */
+  promptFingerprint?: PromptFingerprint;
+  /** Which of the three parts differ from the previous turn in this conversation; absent when there was none. */
+  promptChanged?: PromptSegment[];
   contextEpoch?: number;
   contextMode?: "normal" | "clean" | "recover";
   memoryProjection?: {
     personal: import("./memory.ts").MemoryProjectionManifest;
     shared: import("./memory.ts").MemoryProjectionManifest;
   };
+}
+
+/** The three parts of an assembled prompt that can each break the provider's cache on their own. */
+export type PromptSegment = "stable" | "volatile" | "tools";
+
+/** A 16-hex digest per segment (turn.ts `promptHashOf`). */
+export type PromptFingerprint = Record<PromptSegment, string>;
+
+export const PROMPT_SEGMENTS: readonly PromptSegment[] = ["stable", "volatile", "tools"];
+
+/** The segments whose digest differs between two fingerprints, in fixed order. */
+export function changedPromptSegments(previous: PromptFingerprint, current: PromptFingerprint): PromptSegment[] {
+  return PROMPT_SEGMENTS.filter(segment => previous[segment] !== current[segment]);
 }
 
 interface EndRecord {
@@ -207,6 +229,8 @@ export class TurnLedger {
     model?: string;
     build?: { version: string; commit: string };
     promptHash?: string;
+    promptFingerprint?: PromptFingerprint;
+    promptChanged?: PromptSegment[];
     contextEpoch?: number;
     contextMode?: "normal" | "clean" | "recover";
     memoryProjection?: BeginRecord["memoryProjection"];
@@ -225,12 +249,29 @@ export class TurnLedger {
       ...(options.model !== undefined ? { model: options.model } : {}),
       ...(options.build !== undefined ? { build: options.build } : {}),
       ...(options.promptHash !== undefined ? { promptHash: options.promptHash } : {}),
+      ...(options.promptFingerprint !== undefined ? { promptFingerprint: options.promptFingerprint } : {}),
+      ...(options.promptChanged !== undefined ? { promptChanged: [...options.promptChanged] } : {}),
       ...(options.contextEpoch !== undefined ? { contextEpoch: options.contextEpoch } : {}),
       ...(options.contextMode !== undefined ? { contextMode: options.contextMode } : {}),
       ...(options.memoryProjection !== undefined ? { memoryProjection: options.memoryProjection } : {}),
     };
     this.append(record);
     return record.id;
+  }
+
+  /**
+   * The fingerprint of the most recent turn this agent began in this conversation, or
+   * `undefined` when none in the live file carries one (INV-782). Live file only, like
+   * `evidence()`: the comparison is between adjacent turns, and an archived one is not adjacent.
+   */
+  lastPromptFingerprint(agentId: string, conversation?: string): PromptFingerprint | undefined {
+    let found: PromptFingerprint | undefined;
+    for (const record of this.read()) {
+      if (record.event !== "begin" || record.agentId !== agentId) continue;
+      if ((record.conversation ?? undefined) !== conversation) continue;
+      if (record.promptFingerprint !== undefined) found = record.promptFingerprint;
+    }
+    return found;
   }
 
   /** Records that a turn is over, however it ended. */

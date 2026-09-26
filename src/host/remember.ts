@@ -34,6 +34,14 @@ import {
   selectRelevant,
   type MemoryRecord,
 } from "./memory.ts";
+import {
+  buildMaintenancePrompt,
+  parseMaintenanceProposals,
+  recordsOfPlan,
+  snapshotForMaintenance,
+  verifyMaintenanceProposals,
+  type MaintenancePlan,
+} from "./memory-maintenance.ts";
 import { buildPitfallPrompt, parsePitfall, type PitfallSource } from "./pitfalls.ts";
 import { credentialIn } from "./secret-scan.ts";
 import type { HistoryEntry } from "./compaction.ts";
@@ -55,6 +63,23 @@ export const EXTRACT_EVERY = envNumber("AGENTBOX_EXTRACT_EVERY", 3);
  * extractions is roughly a session's worth.
  */
 export const EPISODE_EVERY = envNumber("AGENTBOX_EPISODE_EVERY", 4);
+
+/**
+ * How many episodes are condensed before the memory file is tidied (INV-781).
+ *
+ * The maintenance pass reads the whole live view and is the one memory call that can
+ * write retractions on its own, so it runs at the cadence of condense or lower, never
+ * higher: two episodes is a couple of sessions' worth, enough for a "next Tuesday" to
+ * have passed. One runs it after every episode; zero disables it, which is the honest
+ * way to turn off a feature that spends money and changes the file.
+ */
+export const MAINTAIN_EVERY = envNumber("AGENTBOX_MAINTAIN_EVERY", 2);
+
+/**
+ * Dry run: the pass proposes and verifies, logs what it would have written, and writes
+ * nothing. For watching a model's judgement on a real memory file before trusting it.
+ */
+export const MAINTAIN_DRY_RUN = (process.env.AGENTBOX_MAINTAIN_DRY_RUN ?? "") !== "" && process.env.AGENTBOX_MAINTAIN_DRY_RUN !== "0";
 
 /** How many existing memories the extractor is shown, so it can avoid repeating them. */
 const RELEVANT_LIMIT = 12;
@@ -166,6 +191,8 @@ export class Rememberer {
   /** Where each condensed batch's exchanges were, for the episode to cite. */
   private readonly extractionRefs = new Map<string, string[]>();
   private readonly extractionGuards = new Map<string, (() => boolean)[]>();
+  /** Episodes condensed since the last maintenance pass, per agent (INV-781). */
+  private readonly episodesSinceMaintenance = new Map<string, number>();
   private readonly log: (line: string) => void;
 
   constructor(private readonly deps: RememberDeps) {
@@ -423,23 +450,84 @@ export class Rememberer {
       if (!guard()) return;
       const reply = await this.ask(agentId, buildEpisodePrompt(exchanges), principal);
       const episode = parseEpisode(reply, new Date(), refs);
-      if (episode === undefined || !guard()) return;
-      this.deps.registry.appendMemoryRecords(agentId, [episode]);
-      this.log(`condensed ${exchanges.length} batches into an episode`);
+      if (episode !== undefined && guard()) {
+        this.deps.registry.appendMemoryRecords(agentId, [episode]);
+        this.log(`condensed ${exchanges.length} batches into an episode`);
+      }
     } catch (error) {
       this.log(
         `could not write an episode: ${error instanceof Error ? error.message : String(error)}`
       );
     }
+    // Whether or not the episode was worth writing, the stretch of work it stood for
+    // counts toward the tidy: the file aged either way.
+    if (MAINTAIN_EVERY <= 0 || !guard()) return;
+    const count = (this.episodesSinceMaintenance.get(agentId) ?? 0) + 1;
+    if (count < MAINTAIN_EVERY) {
+      this.episodesSinceMaintenance.set(agentId, count);
+      return;
+    }
+    this.episodesSinceMaintenance.set(agentId, 0);
+    await this.maintain(agentId, { principal, guard });
+  }
+
+  /**
+   * The memory maintenance pass (INV-781): propose, verify, apply.
+   *
+   * Runs on the agent's write chain like every other memory write, so a batch cannot
+   * land between the snapshot and the apply — and the verify step re-reads the live view
+   * anyway, refusing any proposal whose version has moved. Public so a test and an
+   * operator can run it on demand; `condense` runs it on its own cadence. The plan is
+   * returned so a caller can see what was and was not applied, and why.
+   */
+  async maintain(
+    agentId: string,
+    options: { principal?: string; guard?: () => boolean; dryRun?: boolean; now?: Date } = {}
+  ): Promise<MaintenancePlan | undefined> {
+    const guard = options.guard ?? this.deps.registry.contextWriteGuard();
+    const dryRun = options.dryRun ?? MAINTAIN_DRY_RUN;
+    const now = options.now ?? new Date();
+    try {
+      if (!guard()) return undefined;
+      const candidates = snapshotForMaintenance(this.deps.registry.readMemoryRecords(agentId));
+      if (candidates.length < 2) return undefined;
+      const reply = await this.ask(agentId, buildMaintenancePrompt(candidates, now), options.principal, 2048);
+      const parsed = parseMaintenanceProposals(reply);
+      if (!guard()) return undefined;
+      // The live view is read again here, after the model answered: what the verify step
+      // compares versions against is what is on disk now, not what the snapshot saw.
+      const plan = verifyMaintenanceProposals(parsed.proposals, candidates, this.deps.registry.readMemoryRecords(agentId), { now });
+      plan.dropped.unshift(...parsed.dropped);
+      for (const { proposal, why } of plan.dropped) {
+        this.log(`maintenance dropped ${proposal.op ?? "a proposal"}${proposal.ids !== undefined ? ` of ${proposal.ids.join(",")}` : ""}: ${why}`);
+      }
+      const records = recordsOfPlan(plan);
+      const summary = plan.changes.map(change => change.proposal.op).join(", ");
+      if (records.length === 0) {
+        this.log(`maintenance pass over ${candidates.length} memories found nothing to change`);
+        return plan;
+      }
+      if (dryRun) {
+        this.log(`maintenance dry run: would apply ${plan.changes.length} change(s) (${summary}) as ${records.length} record(s); nothing written`);
+        return plan;
+      }
+      this.deps.registry.appendMemoryRecords(agentId, records);
+      this.log(`maintenance applied ${plan.changes.length} change(s) (${summary}) over ${candidates.length} memories`);
+      return plan;
+    } catch (error) {
+      this.log(`maintenance pass failed: ${error instanceof Error ? error.message : String(error)}`);
+      return undefined;
+    }
   }
 
   /** One plain, tool-free call on the cheap profile. */
-  private async ask(agentId: string, prompt: string, principal?: string): Promise<string> {
+  private async ask(agentId: string, prompt: string, principal?: string, maxTokens = 1024): Promise<string> {
     const response = await this.deps.client.messages.create({
       model: this.deps.provider.model,
       // Small: three lines of memory or six sentences of episode. A cap this tight is also a guard
-      // against an extractor that decides to narrate.
-      max_tokens: Math.min(1024, this.deps.provider.maxTokens),
+      // against an extractor that decides to narrate. Maintenance asks for twice that: a JSON
+      // list of ten proposals with their text does not fit in one thousand tokens.
+      max_tokens: Math.min(maxTokens, this.deps.provider.maxTokens),
       messages: [{ role: "user", content: prompt }],
     });
     this.deps.usage?.recordAside({

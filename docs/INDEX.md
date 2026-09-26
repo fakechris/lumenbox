@@ -24,7 +24,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [04-design](04-design.md) | Design | current | 2026-09-26 |
 | [05-data](05-data.md) | Data | current | 2026-09-26 |
 | [08-control-plane](08-control-plane.md) | Control plane | current | 2026-09-12 |
-| [11-roadmap](11-roadmap.md) | Roadmap and backlog | current | 2026-09-14 |
+| [11-roadmap](11-roadmap.md) | Roadmap and backlog | current | 2026-09-26 |
 | [21-dingtalk-wire](21-dingtalk-wire.md) | The DingTalk wire | current | 2026-08-28 |
 | [22-domain-model](22-domain-model.md) | The domain model: people, doors, workers, rooms | current | 2026-09-25 |
 | [27-testing-and-release](27-testing-and-release.md) | Testing and release stability: ours, against OpenClaw and Hermes | current | 2026-09-01 |
@@ -40,7 +40,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [17-two-agents](17-two-agents.md) | Two agents on one repository | current | 2026-08-26 |
 | [19-pitfalls](19-pitfalls.md) | Pitfalls: remembering how things went wrong | current | 2026-08-28 |
 | [37-onboarding](37-onboarding.md) | Getting started, every way in | current | 2026-09-05 |
-| [38-operators-guide](38-operators-guide.md) | The operator's guide (what the README used to be) | current | 2026-09-07 |
+| [38-operators-guide](38-operators-guide.md) | The operator's guide (what the README used to be) | current | 2026-09-26 |
 | [55-external-desktops](55-external-desktops.md) | External browsers and desktop control | current | 2026-09-15 |
 | [56-teaching-upgrade](56-teaching-upgrade.md) | Teaching draft upgrade | current | 2026-09-15 |
 | [70-cua-linux-validation](70-cua-linux-validation.md) | Linux CUA 回归矩阵与状态验收 | current | 2026-09-22 |
@@ -52,7 +52,7 @@ this file and the headers disagree. Edit the header, not this table.
 |---|---|---|---|
 | [07-review](07-review.md) | Review against the specification | current | 2026-08-20 |
 | [09-tenancy](09-tenancy.md) | Tenancy: teams, users, and who may drive which agent | superseded by [22-domain-model](22-domain-model.md) — §3 retires per-agent visibility; §0 sets uniformity | 2026-08-19 |
-| [10-security-backlog](10-security-backlog.md) | Security backlog | current | 2026-09-03 |
+| [10-security-backlog](10-security-backlog.md) | Security backlog | current | 2026-09-26 |
 | [14-from-outside-reading](14-from-outside-reading.md) | Ideas taken from outside reading | current | 2026-08-26 |
 | [15-secrets-in-the-record](15-secrets-in-the-record.md) | R7: secrets an agent reads land in the record in clear | current | 2026-08-25 |
 | [16-long-work](16-long-work.md) | Finishing long work: the protocol, the cost, and the stop | current | 2026-08-26 |
@@ -102,6 +102,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [69-fidelity-and-evidence-root-causes](69-fidelity-and-evidence-root-causes.md) | 采集失真与证据蒸发：两类问题的根因、复发路径与卡口 | current | 2026-09-22 |
 | [71-evidence-provenance-practice](71-evidence-provenance-practice.md) | 证据与溯源的业界实践（2025–2026）：我们领先在哪、缺在哪 | current | 2026-09-22 |
 | [72-laya-vs-jev-language-evaluation](72-laya-vs-jev-language-evaluation.md) | laya 与 Jev 的中英文对比实测：差距在任务类型，不在语言 | current | 2026-09-23 |
+| [74-goal-mode](74-goal-mode.md) | Goal 模式：一个持久目标、一个有界的续跑循环、一道不归执行者管的完成闸门 | current | 2026-09-26 |
 
 ## handoff
 
