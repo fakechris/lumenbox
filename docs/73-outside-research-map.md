@@ -41,6 +41,7 @@
 | WorkBuddy（腾讯）/ 豆包 Work（字节） | 闭源，二进制 | 09-03、09-14 | [research/…workbuddy](research/2026-09-14-workbuddy-doubao-binaries.md)、33、51 | 审批超时自动拒、无人值守跳过提问、回环 MCP host、专家包 | 527、601 |
 | QwenWork | 产品 | 09-03 | [33](33-mcp-face.md) | MCP 走 vsock，凭据不进沙箱 | — |
 | Muse / Hatch | 第三方存档 | 09-25 | [research/…muse-hatch](research/2026-09-25-muse-hatch-skills-and-box.md) | skill 权限声明、per-skill eval、交付前产物验收 | 690–693 |
+| Muse / Hatch 主二进制运行时 | 生产镜像备份（本地，不入库） | 09-26 | INV-773 | runtime 替模型兜底：回合检查点、显式沉默工具、cron 两段式交付、常驻文件注入+diff、压缩前记忆落盘、行为断言对账、无人值守收敛规则、记忆维护 pass、prompt cache 账本、活动翻译、出网按调用归因、fork 提示补丁。**更正**：「压缩前 flush」确实存在（orchestrator.onSummarised → Rememberer.flush），但整段一次性送入、时间戳伪造、无视三段抽取水位，重复抽取或漏掉状态变化；INV-778 修正 | 774–785 |
 | zuse、raft-source、OpenMuse、google/ax、ZCode | 开源 | 09-25 | INV-694 | webhook 投递幂等、投递 outcome_unknown、例程退避暂停、审批有效期、microcompact、唤醒提示伪造转义等 18 条 | 695–712（707 已修，PR #240） |
 | egoist/lorca | 开源（GPL-3.0） | 09-26 | INV-739 | Grok Bot 的单人一周复刻，设计完整的 alpha、E2E 只防中继；记忆写入扫凭据、无人时暂停例程、跨会话近况简报、命令卡住交回 agent | 740–743 |
 | Antigravity Teamwork | 产品 | 08-28? | [19](19-pitfalls.md) | 与答案无关的 pitfall 登记 | — |
