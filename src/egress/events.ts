@@ -24,6 +24,10 @@ export function networkEventsPath(): string {
 
 export interface NetworkEventQuery {
   box?: string;
+  /** By who made the call (INV-784): an agent id, a turn id, a tool_use id. */
+  agent?: string;
+  turn?: string;
+  toolUse?: string;
   /** ISO instants, inclusive. */
   from?: string;
   to?: string;
@@ -36,7 +40,12 @@ export interface NetworkEventQuery {
 export const DEFAULT_EVENT_LIMIT = 200;
 
 export class NetworkEventLog {
-  constructor(private readonly path: string = networkEventsPath()) {}
+  /** Resolved on first use, not at construction: a log nobody reads must not need a home. */
+  constructor(private readonly at?: string) {}
+
+  get path(): string {
+    return this.at ?? networkEventsPath();
+  }
 
   append(event: NetworkEvent): void {
     appendLine(this.path, JSON.stringify(event));
@@ -44,11 +53,12 @@ export class NetworkEventLog {
 
   /** Every event, oldest first. A torn line costs one event, never the query. */
   readAll(): NetworkEvent[] {
-    if (!existsSync(this.path)) return [];
+    const path = this.path;
+    if (!existsSync(path)) return [];
     const out: NetworkEvent[] = [];
     let text: string;
     try {
-      text = readFileSync(this.path, "utf8");
+      text = readFileSync(path, "utf8");
     } catch {
       return [];
     }
@@ -64,6 +74,12 @@ export class NetworkEventLog {
           port: Number(parsed.port ?? 0),
           allowed: parsed.allowed === true,
           ...(parsed.reason !== undefined ? { reason: parsed.reason } : {}),
+          // A line written before INV-784 names no call; read as what it is.
+          attribution: parsed.attribution === "call" ? "call" : "unattributed",
+          ...(typeof parsed.agentId === "string" ? { agentId: parsed.agentId } : {}),
+          ...(typeof parsed.turnId === "string" ? { turnId: parsed.turnId } : {}),
+          ...(typeof parsed.toolUseId === "string" ? { toolUseId: parsed.toolUseId } : {}),
+          ...(typeof parsed.jobId === "string" ? { jobId: parsed.jobId } : {}),
         });
       } catch {
         // One torn line.
@@ -83,6 +99,9 @@ export class NetworkEventLog {
 export function filterEvents(events: readonly NetworkEvent[], query: NetworkEventQuery): NetworkEvent[] {
   return events.filter(event => {
     if (query.box !== undefined && query.box !== "" && event.box !== query.box) return false;
+    if (query.agent !== undefined && query.agent !== "" && event.agentId !== query.agent) return false;
+    if (query.turn !== undefined && query.turn !== "" && event.turnId !== query.turn) return false;
+    if (query.toolUse !== undefined && query.toolUse !== "" && event.toolUseId !== query.toolUse) return false;
     if (query.from !== undefined && query.from !== "" && event.at < query.from) return false;
     if (query.to !== undefined && query.to !== "" && event.at > query.to) return false;
     if (query.refused === true && event.allowed) return false;
@@ -105,4 +124,19 @@ export function summariseEvents(events: readonly NetworkEvent[]): { box: string;
   return [...byBox.entries()]
     .map(([box, row]) => ({ box, allowed: row.allowed, refused: row.refused, refusedHosts: [...row.refusedHosts].sort() }))
     .sort((a, b) => b.refused - a.refused || b.allowed - a.allowed);
+}
+
+/**
+ * The one line a tool call is told about its refusals (INV-784): "2 outbound connections
+ * refused: a.test, b.test". Undefined when there were none, so nothing is appended. Hosts
+ * once each, in the order first refused, capped so a sweep cannot flood the result.
+ */
+export function refusedLine(events: readonly NetworkEvent[], maxHosts = 8): string | undefined {
+  const refused = events.filter(event => !event.allowed);
+  if (refused.length === 0) return undefined;
+  const hosts: string[] = [];
+  for (const event of refused) if (!hosts.includes(event.host)) hosts.push(event.host);
+  const shown = hosts.slice(0, maxHosts);
+  const more = hosts.length - shown.length;
+  return `${refused.length} outbound connection${refused.length === 1 ? "" : "s"} refused: ${shown.join(", ")}${more > 0 ? ` and ${more} more` : ""}`;
 }

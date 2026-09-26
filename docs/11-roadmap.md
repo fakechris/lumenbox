@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: roadmap
-     updated: 2026-09-14
+     updated: 2026-09-26
 -->
 # Roadmap and backlog
 
@@ -342,6 +342,20 @@ The turn ledger's begin record now carries `model`, `build {version, commit}` an
 of lines and mostly repeats — but "the prompt changed between these two turns" is the
 question, and a hash answers it. The context length at the moment of confusion is the
 compaction log's business (docs/23) and stays there.
+
+*Prompt cache ledger (INV-782, 2026-09-26).* The begin record now also carries
+`promptFingerprint {stable, volatile, tools}` — three 16-hex digests, the third over the tool
+definitions as sent (sorted, canonical keys; `toolsFingerprintOf` in turn.ts), which
+`promptHash` never covered and which moves with skills, MCP servers and the lane — and
+`promptChanged`, the segments that differ from the previous turn in the same conversation
+(`TurnLedger.lastPromptFingerprint`). The round span repeats them as
+`agentbox.prompt.{stable,volatile,tools}_hash` and `agentbox.prompt.changed`. The turn's opening
+call is scored `cacheShare = cache_read / (input + cache_read + cache_write)` on its usage row
+and the span (`agentbox.usage.cache_read_share`); when `AGENTBOX_CACHE_LOW_TURNS` (3)
+consecutive turns open below `AGENTBOX_CACHE_LOW_SHARE` (0.5) *and* some segment changed in
+that window, the usage ledger gets one zero-token `anomaly` row, `prompt_cache_low`, whose
+`reason` names the segments — one per window, none for a cold cache under a prompt that did
+not move. Record and compare only: nothing here changes how the prompt is assembled.
 
 <details><summary>original entry</summary>
 

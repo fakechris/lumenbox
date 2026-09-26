@@ -511,3 +511,12 @@ test("authoring hints: a description without when, and an unattended body pointi
   const personWritten = skillFrom("y", parseSkillFile("---\ndescription: Summarise the inbox.\n---\nbody"));
   assert.ok("skill" in personWritten && personWritten.note === undefined, "hints are for what an agent wrote unreviewed");
 });
+
+test("deliver_when: always or changed is read; anything else is refused with the fix named (INV-776)", () => {
+  const always = skillFrom("prices", parseSkillFile("---\ndescription: hourly price\nschedule: @every 1h\ndeliver: feishu:oc_1\ndeliver_when: Always\n---\ncheck"));
+  assert.ok("skill" in always && always.skill.deliverWhen === "always");
+  const absent = skillFrom("prices", parseSkillFile("---\ndescription: hourly price\nschedule: @every 1h\ndeliver: feishu:oc_1\n---\ncheck"));
+  assert.ok("skill" in absent && absent.skill.deliverWhen === undefined, "absent means changed, decided by the resolve step");
+  const wrong = skillFrom("prices", parseSkillFile("---\ndescription: hourly price\nschedule: @every 1h\ndeliver: feishu:oc_1\ndeliver_when: sometimes\n---\ncheck"));
+  assert.ok("problem" in wrong && /deliver_when must be "always" or "changed"/.test(wrong.problem));
+});

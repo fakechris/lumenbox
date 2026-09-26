@@ -27,6 +27,7 @@ import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AgentRegistry, MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
 import { isContextCommand, newContext } from "../host/context-recovery.ts";
+import { isStandingName, readStanding, STANDING_BYTE_CAP, STANDING_FILES, writeStanding } from "../host/standing.ts";
 import { isRecoveryCommand, recoverTask } from "../host/task-recovery.ts";
 import { isRetryCommand, retryLastAnswer } from "../host/retry-recovery.ts";
 import type { BusEvent } from "../agents/bus.ts";
@@ -974,6 +975,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       sampled: messageId => orchestrator.sampledForAnswerReview(messageId),
       review: input => orchestrator.reviewAnswer(input),
     },
+    attachToReply: chatKey => orchestrator.routineAttachments.take(chatKey),
     ingress,
     messages,
     listeners: message => {
@@ -3482,6 +3484,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const limitParam = url.searchParams.get("limit");
           const { events, total } = log.query({
             box: url.searchParams.get("box") ?? undefined,
+            agent: url.searchParams.get("agent") ?? undefined,
+            turn: url.searchParams.get("turn") ?? undefined,
+            toolUse: url.searchParams.get("toolUse") ?? undefined,
             from: url.searchParams.get("from") ?? undefined,
             to: url.searchParams.get("to") ?? undefined,
             refused: url.searchParams.get("refused") === "1",
@@ -3647,13 +3652,29 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // Reading is open like the board; firing one by hand is a driver's call, because
         // it spends money and wakes an agent.
         if (route === "GET /api/schedules") {
+          // Each routine's last result rides along (INV-776): a run that was judged not worth
+          // delivering is still a run, and this is where a person sees what it found.
+          const lastResults = new Map<string, ReturnType<typeof orchestrator.routineResults.list>[number]>();
+          for (const entry of orchestrator.routineResults.list()) if (!lastResults.has(entry.slug)) lastResults.set(entry.slug, entry);
           send(res, 200, {
-            schedules: await orchestrator.scheduler.status(),
+            schedules: (await orchestrator.scheduler.status()).map(entry => {
+              const last = lastResults.get(entry.slug);
+              return last === undefined ? entry : { ...entry, lastResult: { at: last.at, verdict: last.verdict, reason: last.reason, text: last.text.slice(0, 600) } };
+            }),
             armed: process.env.AGENTBOX_SCHEDULER !== "0",
             // The places (INV-430): the view groups routines by the box they live in.
             boxes: registry.listBoxes().map(box => ({ id: box.id, name: box.name })),
             defaultBox: registry.box.id,
           });
+          return;
+        }
+
+        // Every result a routine's runs produced, newest first — delivered or not (INV-776).
+        // Read like the list above: what a routine found is no more secret than that it ran.
+        if (route === "GET /api/schedules/results") {
+          const slug = url.searchParams.get("slug") ?? undefined;
+          const limit = Math.max(1, Math.min(200, Number(url.searchParams.get("limit") ?? 50) || 50));
+          send(res, 200, { results: orchestrator.routineResults.list({ ...(slug !== undefined ? { slug } : {}), limit }) });
           return;
         }
 
@@ -4112,6 +4133,42 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           }
           if (refused(agentId)) return;
           send(res, 200, { agent: agentId, ...memoryAdmin.detail(agentId) });
+          return;
+        }
+        // The standing files (INV-777): read and written on the host, the copy that counts; a
+        // write is pushed to the agent's box so the copy it may edit is current.
+        if (route === "GET /api/standing") {
+          const agentId = url.searchParams.get("agent") ?? "";
+          if (!registry.has(agentId)) {
+            send(res, 404, { error: `No agent ${agentId}` });
+            return;
+          }
+          if (refused(agentId)) return;
+          send(res, 200, { agent: agentId, cap: STANDING_BYTE_CAP, files: readStanding(registry.dirFor(agentId), registry.get(agentId).profile.name) });
+          return;
+        }
+        if (route === "POST /api/standing") {
+          const body = await readJson(req);
+          const agentId = String(body.agent ?? "");
+          if (!registry.has(agentId)) {
+            send(res, 404, { error: `No agent ${agentId}` });
+            return;
+          }
+          if (refused(agentId)) return;
+          const name = String(body.name ?? "");
+          if (!isStandingName(name) || typeof body.text !== "string") {
+            send(res, 400, { error: `name must be one of ${STANDING_FILES.join(", ")} and text a string` });
+            return;
+          }
+          const agent = registry.get(agentId);
+          const result = writeStanding(registry.dirFor(agentId), agent.profile.name, name, body.text, "person");
+          if (!result.ok) {
+            send(res, 413, { error: result.refusal });
+            return;
+          }
+          log(`standing: ${caller.userId ?? "operator"} edited ${name} of ${agent.profile.name}`);
+          void orchestrator.syncStanding(agentId).catch(() => undefined);
+          send(res, 200, { ok: true, files: readStanding(registry.dirFor(agentId), agent.profile.name) });
           return;
         }
         if (route === "POST /api/memory/change") {

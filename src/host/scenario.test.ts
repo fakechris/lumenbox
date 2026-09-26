@@ -1561,3 +1561,114 @@ test("a model that keeps claiming with no call is nudged twice, recorded as igno
     assert.deepEqual(replies.map(e => e.text), ["邮件已发送。"], "delivery is not blocked forever");
   } finally { result.cleanup(); }
 });
+
+// ── 2026-09-26, the hourly check that reported twenty-four times (INV-776) ────────────────
+//
+// A routine's turn used to deliver whatever the model said, and a model in task context
+// reports. Execute now writes the result; a resolve step decides. Twenty-four hourly price
+// checks on the real turn loop, scripted to find one change: the chat hears exactly once, one
+// of the unchanged hours is a NothingToSay rather than a sentence, and every run — delivered
+// or not — is on the ledger where the automations page reads it.
+
+test("an hourly price check runs 24 times with one change: the chat hears once, every run is on the record (INV-776)", async () => {
+  const { finishRoutineRun, RoutineResultLedger } = await import("./routine-resolve.ts");
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const chat = "feishu:oc_prices";
+  const conversation = conversationIdFor(chat);
+  const price = (hour: number) => (hour < 12 ? "BTC 60,000 USD" : "BTC 61,000 USD");
+  const script: Script = ({ messages, offered }) => {
+    // The turn's own message is the last one; `opened` would be hour 0 every time.
+    const hour = Number(/hour (\d+)/.exec(JSON.stringify(messages.at(-1)?.content))?.[1] ?? -1);
+    if (hour === 5) {
+      assert.ok(offered.includes("NothingToSay"), "a timer's turn may stay silent");
+      return { call: "NothingToSay", input: { reason: "price unchanged since the last check" } };
+    }
+    return { say: price(hour) };
+  };
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-routine-scenario-"));
+  const ledger = new RoutineResultLedger(join(dir, "routine-results.jsonl"));
+  const delivered: string[] = [];
+  // The check has been running: yesterday's last result is on the ledger, so hour 0 is a
+  // repeat and not a first sighting.
+  ledger.record({ id: "seed", slug: "hourly-price", at: "2026-09-25T23:00:00Z", agentId: "seed", deliver: chat, text: price(0), sha256: (await import("./fetched.ts")).sha256(price(0)), verdict: "push_now", reason: "seed" });
+  const episode = await runEpisode({
+    team: [{ name: "Nova" }], says: [], script,
+    drive: async ({ bus, registry, frontId }) => {
+      for (let hour = 0; hour < 24; hour += 1) {
+        const before = registry.readTranscript(frontId, conversation).length;
+        bus.sendFromUser(frontId, `[scheduled] hourly-price, hour ${hour}: check the BTC price and report it.`, { steerable: false, lane: "background", synthetic: true, conversation });
+        await bus.runExclusive(frontId, { userDriven: true, conversation });
+        const entries = registry.readTranscript(frontId, conversation) as { role?: string; kind?: string; text?: string; host?: true; silent?: { reason: string } }[];
+        const said = entries.slice(before).filter(e => e.role === "assistant" && e.kind === undefined && e.host !== true && e.text).map(e => e.text as string).join("\n\n");
+        const silent = entries.slice(before).find(e => e.silent !== undefined)?.silent;
+        await finishRoutineRun(
+          { slug: "hourly-price", agentId: frontId, deliver: chat, said, ...(silent !== undefined ? { silent } : {}) },
+          { ledger, recentChat: () => [], deliverToChat: async (_chat, text) => { delivered.push(text); } }
+        );
+      }
+    },
+  });
+  try {
+    assert.equal(episode.score.turns, 24, "every hour ran a real turn");
+    assert.deepEqual(delivered, ["BTC 61,000 USD"], "the chat hears the one change and nothing else");
+    const runs = ledger.list({ slug: "hourly-price" });
+    assert.equal(runs.length, 25, "24 runs plus the seed, every one retrievable");
+    assert.deepEqual(runs.filter(r => r.verdict === "push_now").map(r => r.text), ["BTC 61,000 USD", price(0)]);
+    assert.equal(runs.filter(r => r.verdict === "silent").length, 23);
+    const quiet = runs.find(r => r.silent !== undefined)!;
+    assert.match(quiet.reason, /price unchanged since the last check/, "the NothingToSay reason is on the record");
+    assert.ok(runs.every(r => r.verdict !== "pending"), "each run resolved");
+  } finally { episode.cleanup(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a person's USER.md edit reaches the next turn as text and as a diff; an agent's AGENTS.md lesson is in the prompt after (INV-777)", async () => {
+  const { readStanding, standingBoxDir, writeStanding } = await import("./standing.ts");
+  const systems: string[] = [];
+  const openers: string[] = [];
+  let calls = 0;
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: [],
+    script: ({ system, messages }) => {
+      calls++;
+      systems.push(system);
+      const last = messages[messages.length - 1]!;
+      openers.push(typeof last.content === "string" ? last.content : JSON.stringify(last.content));
+      if (calls === 1) return { say: "Hi there." };
+      if (calls === 2) return { say: "Noticed you changed USER.md — Skipper it is." };
+      if (calls === 3) {
+        return { call: "write_file", input: { path: `${standingBoxDir("Nova")}/AGENTS.md`, content: "## Lessons\n\n- LESSON_FROM_NOVA\n", overwrite: true } };
+      }
+      return { say: "Done." };
+    },
+    drive: async ({ registry, frontId, say, files }) => {
+      // Turn 1: the seeds are in the prompt, mirrored to the box, and nothing has "changed".
+      await say("hello");
+      assert.match(systems[0]!, /# Your standing files/);
+      assert.match(systems[0]!, /## USER\.md\n\n# USER\.md — the person/);
+      assert.ok(files.has(`${standingBoxDir("Nova")}/USER.md`), "the box holds the read-write mirror");
+      assert.doesNotMatch(openers[0]!, /\[file-diff\]/);
+      // A person edits USER.md on the host between turns.
+      const home = registry.dirFor(frontId);
+      writeStanding(home, "Nova", "USER.md", "# USER.md — the person\n\n- Call me: Skipper\n", "person");
+      await say("what should you call me?");
+      assert.match(systems[1]!, /- Call me: Skipper/, "the next turn's prompt carries the new text");
+      assert.match(openers[1]!, /\[file-diff\] USER\.md changed/);
+      assert.match(openers[1]!, /```diff source=file-diff\n[\s\S]*\+- Call me: Skipper/);
+      assert.match(result0(), /Skipper/);
+      // The agent writes a lesson through write_file: host copy updated, no notice about its own edit.
+      await say("keep a lesson");
+      assert.match(readStanding(home, "Nova")["AGENTS.md"], /LESSON_FROM_NOVA/, "the host copy is written in the same call");
+      await say("anything else?");
+      assert.match(systems.at(-1)!, /LESSON_FROM_NOVA/, "a later turn's system prompt contains the lesson");
+      assert.doesNotMatch(openers.at(-1)!, /\[file-diff\]/, "an agent's own write is not reported back to it");
+      function result0(): string {
+        return registry.readTranscript(frontId).filter(e => (e as { role?: string }).role === "assistant").map(e => (e as { text?: string }).text ?? "").join("\n");
+      }
+    },
+  });
+  try {
+    assert.equal(result.score.turns, 4);
+    assert.ok(result.score.said.some(s => /Noticed you changed USER\.md/.test(s.text)));
+  } finally { result.cleanup(); }
+});

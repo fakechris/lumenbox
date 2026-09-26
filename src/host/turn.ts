@@ -19,7 +19,10 @@ import type { DisplayLease } from "../box/display-lease.ts";
 import type { PolicyGate } from "./policy.ts";
 import type { Claims } from "./claims.ts";
 import type { FileVersions } from "./files.ts";
-import type { TurnLedger } from "./resume.ts";
+import type { StepLedger, TurnLedger } from "./resume.ts";
+import { approvalOutcomeResult, notStartedResult, outcomeUnknownResult } from "./resume.ts";
+import { idempotencyOf } from "../protocol/idempotency.ts";
+import { changedPromptSegments, type PromptFingerprint } from "./resume.ts";
 import type { PendingWork } from "./pending-work.ts";
 import type { McpFace } from "./mcp-face.ts";
 import type { ModelRelay } from "./model-relay.ts";
@@ -41,8 +44,9 @@ import {
   FirstTokenStallError,
   FIRST_TOKEN_DEADLINE_MS,
 } from "./transient.ts";
-import type { UsageKind, UsageLog } from "./usage.ts";
+import { cacheReadShare, type UsageKind, type UsageLog } from "./usage.ts";
 import { chooseRelevant, memoryProjectionManifest, SHARED_CHAR_BUDGET, type MemoryRecall } from "./memory.ts";
+import { refusedLine, type NetworkEventLog } from "../egress/events.ts";
 import { needsReview, type ReviewInput, type ReviewMode, type Verdict } from "./auto-review.ts";
 import type { HookRunner } from "./hooks.ts";
 import { AGENT_WAKE_CUE, laneOf } from "../agents/bus.ts";
@@ -119,6 +123,7 @@ import type { ScopeStore } from "./scopes.ts";
 import { checkpointSummary, type DurableState } from "./durable.ts";
 import { narrowSkills, type BundleStore } from "./bundles.ts";
 import { readInstallationInstructions } from "./place.ts";
+import { changeNotice, readStanding, takeChanges } from "./standing.ts";
 import type { McpManager } from "./mcp.ts";
 import { TOOL_BUDGET_WARNING } from "./mcp.ts";
 import { narrowTools } from "./scopes.ts";
@@ -217,6 +222,20 @@ export function classifyOverflow(error: unknown): Overflow | undefined {
 function safeToReplay(name: string, input: Record<string, unknown>): boolean {
   if (name === "read_file" || name === "list_dir" || name === "ReadHistory") return true;
   if (name === "Tasks" && input.action === "list") return true;
+  return false;
+}
+
+/**
+ * Whether the protocol's own declaration (INV-525) says this call lands the same state
+ * twice: a read, or an idempotent write that carries the key making it so. A call with an
+ * `operation_id` is the box's way of saying the same thing. Everything else is `unsafe`,
+ * and a restart answers it `outcome_unknown` rather than running it again.
+ */
+function replaysToSameState(name: string, input: Record<string, unknown>): boolean {
+  if (typeof input.operation_id === "string" && input.operation_id !== "") return true;
+  const declared = idempotencyOf(name);
+  if (declared.kind === "read") return true;
+  if (declared.kind === "idempotent") return declared.key === undefined || input[declared.key] !== undefined;
   return false;
 }
 
@@ -502,6 +521,11 @@ export interface TurnDeps {
   autoReview?: { mode(): ReviewMode; review(input: ReviewInput): Promise<Verdict> };
   /** Records which agent wrote into a skill. Absent means no record is kept. */
   skillProvenance?: ToolContext["skillProvenance"];
+  /**
+   * Pushes the agent's standing files to its box before the turn reads them (INV-777), so the
+   * copy it may edit is the copy the prompt carries. Absent means no mirror — tests, or no box.
+   */
+  syncStanding?: (agentId: string) => Promise<unknown>;
   /** The template this turn installs, when it is an imported bot's setup turn (docs/29). */
   templateSetup?: string;
   /** Where a packed template is staged; absent withholds PackTemplate. */
@@ -526,6 +550,14 @@ export interface TurnDeps {
    * that should not touch the state directory wants.
    */
   turns?: TurnLedger;
+  /** Where each tool call is checkpointed as it is dispatched and settled (INV-774). */
+  steps?: StepLedger;
+  /**
+   * What the egress relay decided (INV-784): read after each tool call so the model is told,
+   * in one line on the result, which outbound connections its call had refused. Absent
+   * means the box's traffic is not going through a relay this host can see.
+   */
+  networkEvents?: Pick<NetworkEventLog, "query">;
   /** The fork ledger (docs/32): forks are recorded before they start and committed here. */
   pendingWork?: PendingWork;
   /** The MCP face (docs/33), for Delegate. */
@@ -543,7 +575,19 @@ export interface TurnDeps {
    * Threaded in rather than derived, because only the caller doing the resuming knows which turn
    * this continues and how many attempts have gone before.
    */
-  resumeOf?: { id: string; attempt: number; workId?: string };
+  resumeOf?: {
+    id: string;
+    attempt: number;
+    workId?: string;
+    /**
+     * Continue *this* turn rather than open a new one told about it (INV-774): same
+     * turnId, no user message, and the step ledger's open calls answered before the
+     * model is asked again. Only set for turns the step ledger recorded.
+     */
+    continues?: true;
+    /** How the person answered the approval an open step was waiting on, when one was. */
+    approval?: { id: string; how: "allowed" | "refused" | "gone" };
+  };
   onEvent?: (event: TurnEvent) => void;
   /**
    * Where one span per LLM call goes (trace.ts). Absent by default: a box whose
@@ -1391,7 +1435,11 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
 
   // Recorded before anything else, so a process that dies at any point after this leaves a begin
   // with no end — a fact, rather than a turn that simply stopped existing.
-  const turnId = randomUUID();
+  //
+  // Or, for a turn continued in place (INV-774), the id it already has: the resumed
+  // rounds belong to the turn that began them, not to a second attempt beside it.
+  const continuing = deps.resumeOf?.continues === true;
+  const turnId = continuing ? deps.resumeOf!.id : randomUUID();
   /** Every tool this turn has called so far. The Tasks tool reads it: a reviewer that has
    *  looked at nothing may not accept (Argus's harness makes the same check). */
   const toolsUsedThisTurn = new Set<string>();
@@ -1452,7 +1500,17 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     if (ended) return;
     ended = true;
     deps.turns?.end(turnId, how, new Date(), category, keptThisTurn);
+    deps.steps?.closed(turnId);
   };
+
+  // The standing files (INV-777): mirrored to the box first, so what the agent can edit is what it
+  // is about to read; then read from the host, which is the copy that counts. Changes since the
+  // last injection that this agent did not make are told once, on the message side below.
+  if (!isolated && box !== undefined && deps.syncStanding !== undefined) {
+    await deps.syncStanding(agent.id).catch(() => undefined);
+  }
+  const standing = isolated ? undefined : readStanding(registry.dirFor(agent.id), agent.profile.name);
+  const standingNotice = standing === undefined ? undefined : changeNotice(takeChanges(registry.dirFor(agent.id), standing));
 
   // Both personal and shared memories pass the same relevance gate, even below budget.
   const ownMemory = isolated ? [] : registry.readMemoryRecords(agent.id);
@@ -1505,6 +1563,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
         .filter(entry => entry.id !== conversation).length,
       // One lane per turn (bus.ts), so the first message's lane is the turn's (INV-780).
       ...(inbound.length > 0 ? { lane: laneOf(inbound[0]!) } : {}),
+      ...(standing !== undefined ? { standing } : {}),
     });
   const builtPromptParts = buildParts(memoryRecall);
   const promptParts = isolated ? {
@@ -1579,7 +1638,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   // call — and a read-only call answered fresh beats a result declared unknown.
   // Everything not declared safe keeps the honest "never recorded" treatment at
   // assembly, and the model is still told to look before redoing those.
-  if (!isolated && deps.resumeOf !== undefined && history.length > 0) {
+  if (!isolated && deps.resumeOf !== undefined && !continuing && history.length > 0) {
     const last = history[history.length - 1]!;
     if ("kind" in last && last.kind === "blocks") {
       const calls = last.blocks.filter(
@@ -1636,6 +1695,84 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     }
   }
 
+  // A turn continued in place (INV-774) answers the calls it was inside of before the model
+  // is asked anything. The trailing `blocks` entry is the record of what was asked — it is
+  // written before any call runs — and the step ledger says which of those calls were
+  // dispatched. A dispatched call is re-run only when re-running it changes nothing (a
+  // read, or a write keyed to land the same state); every other one is answered
+  // `outcome_unknown`, which is the truth and the only safe thing to say. A call never
+  // dispatched is answered `not_started`. Settled calls already have their result on disk
+  // and are never touched.
+  if (continuing && history.length > 0) {
+    const last = history[history.length - 1]!;
+    const open = new Map((deps.steps?.stepsOf(turnId).open ?? []).map(step => [step.toolUseId, step] as const));
+    if ("kind" in last && last.kind === "blocks") {
+      const calls = last.blocks.filter(
+        (block): block is Anthropic.ToolUseBlockParam => (block as { type?: string }).type === "tool_use"
+      );
+      const answered: Anthropic.ToolResultBlockParam[] = [];
+      for (const call of calls) {
+        const input = (call.input ?? {}) as Record<string, unknown>;
+        const step = open.get(call.id);
+        let text: string;
+        let isError = true;
+        if (step === undefined) {
+          text = notStartedResult(call.name);
+        } else if (step.approvalId !== undefined) {
+          const how = deps.resumeOf?.approval?.id === step.approvalId ? deps.resumeOf!.approval!.how : "gone";
+          text = approvalOutcomeResult(call.name, how);
+        } else if (safeToReplay(call.name, input) || replaysToSameState(call.name, input)) {
+          // Policy is deliberately not re-consulted: the block's presence in the transcript is
+          // the record that the original call already passed the gate.
+          const outcome = await dispatchTool(call.name, input, {
+            agent,
+            registry,
+            bus,
+            box,
+            files: deps.files,
+            claims: deps.claims,
+            caller: deps.caller,
+            ...(deps.callerName !== undefined ? { callerName: deps.callerName } : {}),
+            displayIndex: deps.displayIndex,
+            boxOwner: deps.boxOwner,
+            tasks: deps.tasks,
+            turnId,
+            conversation,
+            memorySources: inbound.map(message => `message:${message.id}`),
+          });
+          text =
+            "[Re-run on resume: this call was interrupted before its result was recorded, and " +
+            `re-running it changes nothing.]
+
+${outcome.text}`;
+          isError = outcome.isError === true;
+        } else {
+          text = outcomeUnknownResult(call.name);
+        }
+        answered.push({
+          type: "tool_result",
+          tool_use_id: call.id,
+          content: [{ type: "text", text }],
+          ...(isError ? { is_error: true } : {}),
+        });
+      }
+      if (answered.length > 0) {
+        const entry = {
+          role: "user",
+          kind: "results",
+          blocks: answered,
+          at: new Date().toISOString(),
+          turnId,
+        } satisfies TranscriptEntry;
+        registry.appendTranscript(agent.id, entry, conversation);
+        history = [...history, entry];
+      }
+    }
+    // Whatever the transcript now says, these steps are over: either answered above, or
+    // their result was on disk already and only the `settled` line was lost.
+    for (const step of open.values()) deps.steps?.settled(turnId, step.toolUseId);
+  }
+
   // A person, as opposed to the harness wearing the person's shape: a timer, a webhook, a
   // resume and a first run all arrive as `fromId: "user"` because that is what opens a turn.
   const personOpened = inbound.some(message => message.fromId === "user" && message.synthetic !== true);
@@ -1683,21 +1820,31 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   const opener = inbound.some(message => message.fromId === "user")
     ? turnReminderFor(provider.model, turnText, visibleSkillCount > 0)
     : undefined;
-  // The API copy of the turn's message: what was said, then (without breakpoints) the volatile
-  // tier, then the reminder — the reminder last, beside the request, as docs/31 measured.
-  const messages: Anthropic.MessageParam[] = [
-    ...historyToMessages(history),
-    {
-      role: "user",
-      content: [
-        turnText,
-        ...(volatileInTail ? [hostContext(promptParts.volatile + forkLine)] : []),
-        ...(opener === undefined ? [] : [opener]),
-      ].join("\n\n"),
-    },
-  ];
+  // The API copy of the turn's message: what was said, the standing-file diff (INV-777, given once,
+  // never replayed), then — without breakpoints — the volatile tier, then the reminder last, beside
+  // the request, as docs/31 measured. The transcript keeps only what the person said.
+  const tail = volatileInTail ? hostContext(promptParts.volatile + forkLine) : undefined;
+  const messages: Anthropic.MessageParam[] = continuing
+    ? historyToMessages(history)
+    : [
+        ...historyToMessages(history),
+        { role: "user", content: [turnText, standingNotice, tail, opener].filter(part => part !== undefined).join("\n\n") },
+      ];
+  // A continued turn appends nothing new for the model to answer: the next observation is the
+  // result it was waiting on, already in the history. The one exception is a history that
+  // ends on the model's own words — a filed answer written before the call was — where the
+  // wire needs a user message; a one-line host note is the least that satisfies it.
+  if (continuing && messages[messages.length - 1]?.role !== "user") {
+    messages.push({ role: "user", content: "[The host restarted while you were working. Carry on.]" });
+  }
+  // A continued turn still needs its volatile tier somewhere: on the message the wire ends with.
+  if (continuing && tail !== undefined) {
+    const last = messages[messages.length - 1]!;
+    if (typeof last.content === "string") last.content = `${last.content}\n\n${tail}`;
+    else last.content = [...last.content, { type: "text", text: tail }];
+  }
 
-  registry.appendTranscript(agent.id, {
+  if (!continuing) registry.appendTranscript(agent.id, {
     role: "user",
     text: turnText,
     at: new Date().toISOString(),
@@ -1828,6 +1975,27 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     .filter(tool => routineScope === undefined || routineScope.has(tool.name) ||
       (MCP_GATEWAY_TOOLS.has(tool.name) && [...routineScope].some(name => name.includes("__"))));
 
+  // The prompt in three digests (INV-782): the stable prefix, the volatile tail, and the tool
+  // definitions as sent. The tool set was never in `promptHash`, and it is the segment that moves
+  // with skills, MCP servers and the lane — the common cache killer nobody could see. Compared
+  // with the previous turn in this conversation, so the ledger and the span say *which* part
+  // moved, not only that something did. Record and compare only: nothing here changes the prompt.
+  const promptFingerprint: PromptFingerprint = {
+    stable: promptHashOf(promptParts.stable),
+    volatile: promptHashOf(promptParts.volatile),
+    tools: promptHashOf(toolsFingerprintOf(tools)),
+  };
+  const ledgerConversation = conversation !== MAIN_CONVERSATION ? conversation : undefined;
+  const previousFingerprint = deps.turns?.lastPromptFingerprint(agent.id, ledgerConversation);
+  const promptChanged =
+    previousFingerprint !== undefined ? changedPromptSegments(previousFingerprint, promptFingerprint) : undefined;
+  if (promptChanged !== undefined && promptChanged.length > 0) {
+    console.error(`[turn] ${agent.profile.name}: prompt changed since last turn: ${promptChanged.join(", ")}`);
+  }
+  // The opening call of the turn is the one whose cache share says whether the prefix survived
+  // from the previous turn; later rounds hit what this one just wrote. Noted once.
+  let cacheShareNoted = false;
+
   // One entry per completed round, for the loop and progress judgements. Held out here rather than
   // inside runRounds so a continuation can reset it: a fresh budget deserves a fresh judgement.
   const rounds: RoundRecord[] = [];
@@ -1898,15 +2066,9 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     model: provider.model,
     build: buildInfo(),
     promptHash: promptHashOf(promptParts.stable, promptParts.volatile),
-    // Split, so "which part changed between these two turns" is a comparison of two fields
-    // rather than a guess (INV-767): the one hash above differed on 40 of 41 turns and could
-    // not say whether the stable tier — the one a cache depends on — was among them.
-    promptHashes: {
-      stable: promptHashOf(promptParts.stable),
-      volatile: promptHashOf(promptParts.volatile),
-      tools: promptHashOf(JSON.stringify(tools)),
-      volatileInTail,
-    },
+    promptFingerprint,
+    ...(promptChanged !== undefined ? { promptChanged } : {}),
+    volatileInTail,
     contextEpoch: registry.contextVersion(agent.id, conversation),
     contextMode,
     memoryProjection: {
@@ -2170,6 +2332,12 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
         "agentbox.conversation": conversation,
         "agentbox.round": round,
         "agentbox.attempt": attempts + 1,
+        // Which prompt, in parts, and which parts differ from the previous turn (INV-782):
+        // `changed` is a comma list, empty when nothing moved, absent on a first turn.
+        "agentbox.prompt.stable_hash": promptFingerprint.stable,
+        "agentbox.prompt.volatile_hash": promptFingerprint.volatile,
+        "agentbox.prompt.tools_hash": promptFingerprint.tools,
+        ...(promptChanged !== undefined ? { "agentbox.prompt.changed": promptChanged.join(",") } : {}),
       },
       { traceId: turnId }
     );
@@ -2346,11 +2514,32 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       cacheWriteTokens: response.usage.cache_creation_input_tokens ?? 0,
     };
     emit({ type: "usage", agentId: agent.id, round, ...usage });
+    // The turn's opening call, scored for the cache ledger (INV-782): what share came from
+    // cache, and — when enough turns in a row came in low with a segment moving — why.
+    let cacheShare: number | undefined;
+    if (!cacheShareNoted) {
+      cacheShareNoted = true;
+      const noted = deps.usage?.notePromptCache({
+        agentId: agent.id,
+        agentName: agent.profile.name,
+        provider: deps.provider?.label ?? "unknown",
+        model: deps.provider?.model ?? "unknown",
+        round,
+        usage,
+        changed: promptChanged,
+        workId,
+        turnId,
+        conversation,
+      });
+      cacheShare = noted?.share ?? cacheReadShare(usage);
+      if (noted?.reason !== undefined) console.error(`[usage] ${agent.profile.name}: ${noted.reason}`);
+    }
     span?.end({
       "gen_ai.usage.input_tokens": usage.inputTokens,
       "gen_ai.usage.output_tokens": usage.outputTokens,
       "agentbox.usage.cache_read_tokens": usage.cacheReadTokens,
       "agentbox.usage.cache_write_tokens": usage.cacheWriteTokens,
+      ...(cacheShare !== undefined ? { "agentbox.usage.cache_read_share": cacheShare } : {}),
     });
     // Learn the real context window while we are here. Providers report it under different names —
     // Anthropic does not report it at all today, several OpenAI-compatible endpoints do — so this
@@ -2409,6 +2598,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       model: deps.provider?.model ?? "unknown",
       round,
       ...usage,
+      ...(cacheShare !== undefined ? { cacheShare } : {}),
     });
 
     // A response the context squeezed rather than finished. Discarded, never
@@ -2811,6 +3001,25 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     // and a defect that succeeds slowly (a click that took fifteen seconds) invisible to
     // any reading of the transcript.
     const requestedAt = new Date().toISOString();
+    // Persist the calls as blocks *before* any of them runs, and the results after (the
+    // order the API requires: the calling assistant turn, then its results). On disk first
+    // because the block is the durable record of what was asked (INV-774): a restart that
+    // finds it with no results, and the step ledger saying which calls were dispatched,
+    // can answer each one honestly instead of losing the action that was in flight.
+    // Thinking blocks are not kept — they are only valid within the turn that produced
+    // them. Text promoted as a filed answer above is left out here: it already stands as
+    // a plain entry just before this one, and keeping both would replay the same
+    // paragraph twice into every later request.
+    registry.appendTranscript(agent.id, {
+      role: "assistant",
+      kind: "blocks",
+      blocks: response.content.filter(
+        (block): block is Anthropic.TextBlock | Anthropic.ToolUseBlock =>
+          (block.type === "text" && !filedAnswer) || block.type === "tool_use"
+      ),
+      at: requestedAt,
+      turnId,
+    } satisfies TranscriptEntry, conversation);
     const results: Anthropic.ToolResultBlockParam[] = [];
     /** Tool-use ids whose stored text differs from what the model was shown. */
     const withheld = new Map<string, string>();
@@ -2892,6 +3101,10 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
           isError: true,
         };
       } else try {
+        // Checkpointed before it runs (INV-774): a crash from here until the result is on
+        // disk leaves this call open in the ledger, which is what lets a restart continue
+        // this turn instead of guessing at it.
+        deps.steps?.pending(turnId, toolUse.id, toolUse.name);
         outcome = await dispatchTool(
           toolUse.name,
           (toolUse.input ?? {}) as Record<string, unknown>,
@@ -2931,6 +3144,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
             ...(deps.templateSetup !== undefined ? { templateSetup: deps.templateSetup } : {}),
             ...(deps.templates !== undefined ? { templates: deps.templates } : {}),
             turnId,
+            toolUseId: toolUse.id,
             conversation,
             memorySources: inbound.map(message => `message:${message.id}`),
             toolsUsedThisTurn,
@@ -2943,6 +3157,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
           isError: true,
         };
       }
+      if (outcome.approval !== undefined) deps.steps?.awaitingApproval(turnId, toolUse.id, outcome.approval.id);
 
       emit({
         type: "tool_end",
@@ -2952,6 +3167,19 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
         summary: outcome.text.split("\n")[0]?.slice(0, 200) ?? "",
         screenshot: outcome.images?.[0]?.data,
       });
+
+      // What the relay refused while this call ran, as one line on the result (INV-784): the
+      // model learns that `pip install` failed because vendor.test is not allowed, rather
+      // than reading a timeout. Read from the relay's own ledger, keyed by this call.
+      if (deps.networkEvents !== undefined) {
+        let refused: string | undefined;
+        try {
+          refused = refusedLine(deps.networkEvents.query({ toolUse: toolUse.id, refused: true, limit: 1000 }).events);
+        } catch {
+          // The ledger must never decide a tool result.
+        }
+        if (refused !== undefined) outcome = { ...outcome, text: `${outcome.text}\n${refused}` };
+      }
 
       // A model without vision must not be handed image blocks it cannot decode — the
       // request would be refused outright. The text keeps the fact that there was an
@@ -3024,22 +3252,6 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       if (entry.recordAs !== undefined) withheld.set(entry.block.tool_use_id, entry.recordAs);
     }
 
-    // Persist the exchange as blocks, in the order the API requires: the calling
-    // assistant turn, then its results. Thinking blocks are not kept — they are
-    // only valid within the turn that produced them. Text promoted as a filed answer
-    // above is left out here: it already stands as a plain entry just before this
-    // one, and keeping both would replay the same paragraph twice into every later
-    // request.
-    registry.appendTranscript(agent.id, {
-      role: "assistant",
-      kind: "blocks",
-      blocks: response.content.filter(
-        (block): block is Anthropic.TextBlock | Anthropic.ToolUseBlock =>
-          (block.type === "text" && !filedAnswer) || block.type === "tool_use"
-      ),
-      at: requestedAt,
-      turnId,
-    } satisfies TranscriptEntry, conversation);
     const storedResults = results.map(block =>
       storableResult(block, withheld.get(block.tool_use_id), {
         turnId,
@@ -3056,6 +3268,9 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       at: new Date().toISOString(),
       turnId,
     } satisfies TranscriptEntry, conversation);
+    // Settled only now, with the results on disk: a crash before this line leaves the
+    // calls open, and open means "the result may be missing", which is exactly the case.
+    for (const use of toolUses) deps.steps?.settled(turnId, use.id);
     // Only now are a fork's findings durably the parent's (docs/32 §1): the results entry is
     // on disk. Committing inside the tool would record `done` for findings a crash could
     // still lose between the join and this line.
@@ -3214,6 +3429,25 @@ export function reviewInputFor(options: {
     input: options.input,
     why: options.why,
   };
+}
+
+/**
+ * The tool definitions as one stable string, for the `tools` segment of the prompt fingerprint
+ * (INV-782). Sorted by name and with every object's keys sorted, so the digest answers "is this
+ * the same tool set" and not "were they assembled in the same order".
+ */
+export function toolsFingerprintOf<T extends { name: string }>(tools: readonly T[]): string {
+  const canonical = (value: unknown): unknown =>
+    Array.isArray(value)
+      ? value.map(canonical)
+      : value !== null && typeof value === "object"
+        ? Object.fromEntries(
+            Object.keys(value as Record<string, unknown>)
+              .sort()
+              .map(key => [key, canonical((value as Record<string, unknown>)[key])])
+          )
+        : value;
+  return JSON.stringify([...tools].sort((a, b) => a.name.localeCompare(b.name)).map(canonical));
 }
 
 /** A short, stable digest of an assembled prompt, for the turn ledger's `promptHash`. */

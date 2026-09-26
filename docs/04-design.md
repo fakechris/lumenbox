@@ -263,6 +263,34 @@ and ten long ones cost very different amounts of the thing actually being spent.
   move. Shared shards compact together: a retraction is only dropped once nothing it could kill
   remains on disk, so no crash between shard writes can resurrect a withdrawn fact.
 
+### 13.1 Standing files (INV-777)
+
+Memory is written by the agent and projected by us; `instructions.md` is written by the operator
+once. Neither is a place a person and the agent both edit that is in front of the model every turn.
+The **standing files** are: four per agent under the agent's host directory,
+`<agents>/<id>/standing/` — `AGENTS.md` (conventions and the agent's own lessons), `SOUL.md`
+(voice; a change to it is mentioned to the person), `USER.md` (the person, in their own words —
+distinct from memory facts) and `HEARTBEAT.md` (a `- [ ]` checklist). Seeded from short templates
+on first read, never re-seeded; capped at 8 KiB each, a longer write refused with a message.
+
+- **Canonical copy: the host.** The box carries a read-write mirror at
+  `/home/box/work/standing/<agent-slug>/`, pushed by the same sync as the memory mirror before each
+  turn. `write_file` and `edit_file` on a mirror path write the host copy in the same call; a
+  `bash` write reaches only the box and is overwritten by the next sync (stated in the prompt).
+- **Injected last.** One volatile section, `standing`, rendered from disk each turn after
+  `unattended` and before the recap, so an edit invalidates only the tail of the cached prefix.
+  An empty file renders as `(empty)`.
+- **Change notice, once.** `standing.json` beside the files holds the hash and text of each file
+  as last injected. At turn start, a file whose hash moved — and was not moved by this agent's own
+  tool write, which updates the table directly — is put on the user-message side as a unified diff
+  in a `diff source=file-diff` fence, labelled as data. The table is then advanced, so the notice
+  is never repeated; first sight of a file is not a change.
+- **Heartbeat.** A built-in `@every 30m` routine per agent (`heartbeat:<agent-id>`), through the
+  ordinary scheduler, running as the agent whose file it is. It is offered to the scheduler only
+  when `HEARTBEAT.md` has an unchecked item; an empty or fully checked list starts no turn.
+- **Web.** `GET /api/standing?agent=` and `POST /api/standing {agent,name,text}` (413 over the
+  cap), and a file picker + textarea in the agent modal.
+
 ## 14. Skills and schedules
 
 A skill is a markdown file with frontmatter under `/home/box/work/skills/<slug>/SKILL.md`, written
@@ -299,6 +327,24 @@ applies.
   recoverable. The soft rule exists because the hard one cannot see inside a tool: `bash` reaches
   the network and `write_file` can land on a standing file, and "decide rather than ask" on its own
   read as licence to do both.
+- **A routine's run is two steps: execute writes a result, resolve decides whether anyone hears
+  it (INV-776).** Before this the model's final message went to the chat as-is and the only
+  filter was the model's own silence; a model in task context reports, so an hourly check that
+  found the same thing twenty-three times said so twenty-three times. Now every run's final
+  text — including a `NothingToSay` — is written to the results ledger
+  (`routine-results.jsonl`, shown per routine on the automations page and at
+  `/api/schedules/results`) *before* a verdict is asked for. The verdict is `silent`,
+  `attach_next` or `push_now`, with a one-sentence reason on the record. The default judge is a
+  deterministic rule set, in order: nothing said → silent; `deliver_when: always` in the
+  frontmatter → push; the same bytes as the previous run → silent; otherwise push. Behind
+  `AGENTBOX_ROUTINE_RESOLVE=model` the cheap model may turn a push into an attach or a silence
+  and say why; it never re-opens a silence the rules found and falls back to the rules when it
+  cannot answer, since a routine whose delivery depends on an unavailable model is a routine
+  that quietly stops reporting. `attach_next` queues the result under the agent's next reply in
+  that chat rather than interrupting for it. Commitment reconciliation (§INV-528, INV-534)
+  happens inside resolve and only for a result that will be delivered: the cue turn still runs,
+  its reply is not delivered, and what is still unheld afterwards is a note on the same
+  delivery — one message per run, never two.
 
 ## 15. The policy gate
 
@@ -483,9 +529,9 @@ a system prompt changed by one word at its end, or a first message with a remind
 difference on MiniMax-M3. So for a provider whose profile says `promptCaching: false`, the system
 prompt is the stable tier alone and the volatile tier rides at the end of the newest message,
 inside `<host_context>`, after the person's words and before the per-turn reminder. The turn
-ledger records `promptHashes` — stable, volatile, tools — so which part changed between two turns
-is a comparison, and `scripts/cache-hits.mjs` reads the first round of every turn out of the
-local ledgers. `AGENTBOX_VOLATILE_TAIL=0` keeps the two-block shape everywhere, for comparison.
+ledger's `promptFingerprint` and `promptChanged` (INV-782) say which segment changed between two
+turns, `volatileInTail` says where the tier rode, and `scripts/cache-hits.mjs` reads the first
+round of every turn out of the local ledgers. `AGENTBOX_VOLATILE_TAIL=0` keeps the two-block shape everywhere, for comparison.
 
 The order is the part worth writing down, because it is the part that gets changed by accident —
 sections are appended by whoever adds one, and "wherever it landed" is not a reason:

@@ -4,18 +4,24 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { MemoryMirror } from "./memory-mirror.ts";
 import { renderMemoryFiles } from "./memory.ts";
 import type { MemoryRecord } from "./memory.ts";
 
 function fakeRegistry(records: MemoryRecord[]) {
   const agent = { id: "a1", profile: { name: "Ada Lovelace", description: "" } };
+  const home = mkdtempSync(join(tmpdir(), "agentbox-mirror-standing-"));
   return {
     records,
     registry: {
       readMemoryRecords: () => records,
       get: (id: string) => (id === "a1" ? agent : undefined),
       list: () => [agent],
+      // The standing files (INV-777) ride the same sync; they need a host directory to be seeded in.
+      dirFor: () => home,
     } as never,
   };
 }
@@ -56,12 +62,17 @@ test("sync writes changed files only, and a box that is not there costs nothing"
 
   assert.deepEqual(await mirror.sync("a1"), { written: 0 });
   box = { writeFile: async path => void writes.push(path) };
-  assert.deepEqual(await mirror.sync("a1"), { written: 1 });
+  // The profile, and the four standing files (INV-777) that ride the same sync.
+  assert.deepEqual(await mirror.sync("a1"), { written: 5 });
   assert.deepEqual(await mirror.sync("a1"), { written: 0 }, "unchanged content is not rewritten");
   records.push({ at: "2026-08-31T00:00:00.000Z", kind: "note", text: "a new note" });
   assert.deepEqual(await mirror.sync("a1"), { written: 1 }, "only the new month file");
   assert.deepEqual(writes, [
     "/home/box/work/memory/ada-lovelace/profile.md",
+    "/home/box/work/standing/ada-lovelace/AGENTS.md",
+    "/home/box/work/standing/ada-lovelace/SOUL.md",
+    "/home/box/work/standing/ada-lovelace/USER.md",
+    "/home/box/work/standing/ada-lovelace/HEARTBEAT.md",
     "/home/box/work/memory/ada-lovelace/log/2026-08.md",
   ]);
   assert.deepEqual(await mirror.sync("nobody"), { written: 0 });
@@ -81,7 +92,7 @@ test("a box that refuses the write is a log line, not a failure", async () => {
   });
   assert.deepEqual(await mirror.sync("a1"), { written: 0 });
   assert.match(lines[0] ?? "", /could not write .*profile\.md \(fs\/write: 503\)/);
-  // Not remembered as written: the next sync tries again.
+  // Not remembered as written: the next sync tries again — every file, the standing four included.
   await mirror.syncAll();
-  assert.equal(lines.length, 2);
+  assert.equal(lines.length, 10);
 });

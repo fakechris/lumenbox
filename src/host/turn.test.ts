@@ -26,6 +26,7 @@ import {
   isTruncatedByContext,
   runTurn,
   storableResult,
+  toolsFingerprintOf,
   TurnAborted,
   type TranscriptEntry,
   truncateOldestResultsForTest,
@@ -3590,6 +3591,147 @@ test("a failed LLM call still ends its span, marked with the error", async () =>
     assert.equal(ended.length, 1, "the failed call's span was ended, not leaked");
     assert.match(String(ended[0]!.error), /boom/);
   } finally {
+    cleanup();
+  }
+});
+
+test("a tool call whose connections the relay refused gets one line saying so on its result (INV-784)", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box, calls } = stubBox();
+    const capture: Capture = { params: [] };
+    const { client } = stubClient(
+      [
+        message([toolUseBlock("bash", { command: "pip install thing" }, "toolu_refused")], "tool_use"),
+        message([textBlock("done")]),
+      ],
+      capture
+    );
+    const queries: unknown[] = [];
+    await runTurn(
+      ada,
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "install", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      {
+        client,
+        registry,
+        bus,
+        box,
+        resolution: { display: { width: 1280, height: 800 }, api: { width: 1280, height: 800 } },
+        networkEvents: {
+          query: query => {
+            queries.push(query);
+            const refused = (host: string) => ({ at: "2026-09-26T00:00:00Z", box: "agentbox", host, port: 443, allowed: false, reason: "not allowed" as const, attribution: "call" as const, agentId: ada.id, toolUseId: "toolu_refused" });
+            return { events: [refused("vendor.test"), refused("mirror.test"), refused("vendor.test")], total: 3 };
+          },
+        },
+      }
+    );
+    assert.equal(calls[0]!.kind, "exec");
+    assert.equal((queries[0] as { toolUse: string }).toolUse, "toolu_refused", "the ledger is asked about this call, by its id");
+    const result = (capture.params[1]!.messages.at(-1)!.content as Anthropic.ContentBlockParam[])[0] as Anthropic.ToolResultBlockParam;
+    const text = ((result.content as Anthropic.ContentBlockParam[])[0] as { text: string }).text;
+    const lines = text.split("\n");
+    assert.equal(lines.at(-1), "3 outbound connections refused: vendor.test, mirror.test", "one line, appended last");
+    assert.match(text, /hello from the box/, "the result itself is untouched");
+  } finally {
+    cleanup();
+  }
+});
+
+test("the tools fingerprint is order-blind and moves only when the tool set does (INV-782)", () => {
+  const read = { name: "read_file", description: "Read", input_schema: { type: "object", properties: { path: { type: "string" } } } };
+  const bash = { name: "bash", description: "Run", input_schema: { properties: { cmd: { type: "string" } }, type: "object" } };
+  const same = { input_schema: { type: "object", properties: { path: { type: "string" } } }, description: "Read", name: "read_file" };
+  assert.equal(toolsFingerprintOf([read, bash]), toolsFingerprintOf([bash, read]), "assembly order is not a change");
+  assert.equal(toolsFingerprintOf([read]), toolsFingerprintOf([same]), "key order is not a change");
+  assert.notEqual(toolsFingerprintOf([read, bash]), toolsFingerprintOf([read]), "a tool gone is a change");
+  assert.notEqual(
+    toolsFingerprintOf([read]),
+    toolsFingerprintOf([{ ...read, description: "Read a file" }]),
+    "a description edit is a change: the provider hashes the envelope, so do we"
+  );
+});
+
+test("a tool set change moves the tools fingerprint, leaves stable alone, and the diff is on the ledger (INV-782)", async () => {
+  const { registry, cleanup } = fixture();
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-cache-"));
+  try {
+    let ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const ledger = new TurnLedger(join(dir, "turns.jsonl"));
+    const turn = async (text: string) => {
+      const { client } = stubClient([message([textBlock("ok")])], { params: [] });
+      await runTurn(
+        ada,
+        [{ id: `m-${text}`, fromId: "user", fromName: "user", text, priority: false, receivedAt: "" }],
+        new AbortController().signal,
+        { client, registry, bus, box: undefined, resolution: undefined, turns: ledger }
+      );
+    };
+    await turn("one");
+    await turn("two");
+    // The lane narrows: skills, MCP servers and a profile edit all land here as a different tool set.
+    registry.update(ada.id, { tools: ["read_file"] });
+    ada = registry.get(ada.id);
+    await turn("three");
+
+    const begins = readFileSync(join(dir, "turns.jsonl"), "utf8")
+      .split("\n")
+      .filter(line => line.trim() !== "")
+      .map(line => JSON.parse(line) as { event: string; promptHash?: string; promptFingerprint?: Record<string, string>; promptChanged?: string[] })
+      .filter(record => record.event === "begin");
+    assert.equal(begins.length, 3);
+    const [first, second, third] = begins;
+    for (const record of begins) {
+      assert.match(record.promptHash ?? "", /^[0-9a-f]{16}$/, "promptHash is still written, for whoever reads it");
+      for (const segment of ["stable", "volatile", "tools"]) assert.match(record.promptFingerprint?.[segment] ?? "", /^[0-9a-f]{16}$/);
+    }
+    assert.equal(first!.promptChanged, undefined, "a first turn has nothing to compare with");
+    assert.equal(second!.promptFingerprint!.tools, first!.promptFingerprint!.tools, "same tool set, same tools digest");
+    assert.equal(second!.promptFingerprint!.stable, first!.promptFingerprint!.stable, "same prompt, same stable digest");
+    assert.ok(!(second!.promptChanged ?? []).includes("tools"), "nothing moved in the tool set between one and two");
+    assert.notEqual(third!.promptFingerprint!.tools, second!.promptFingerprint!.tools, "the narrowed lane is a different tool set");
+    assert.equal(third!.promptFingerprint!.stable, second!.promptFingerprint!.stable, "the stable prefix did not move with it");
+    assert.ok(third!.promptChanged!.includes("tools"), `the ledger names the segment: ${JSON.stringify(third!.promptChanged)}`);
+    assert.ok(!third!.promptChanged!.includes("stable"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    cleanup();
+  }
+});
+
+test("the round span carries the three digests and which segments changed (INV-782)", async () => {
+  const { registry, cleanup } = fixture();
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-cache-"));
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const ledger = new TurnLedger(join(dir, "turns.jsonl"));
+    const spans: Record<string, unknown>[] = [];
+    const tracer: Tracer = {
+      start: (_name, attrs) => ({ end: extra => spans.push({ ...attrs, ...extra }) }),
+      async flush() {},
+    };
+    for (const text of ["one", "two"]) {
+      const { client } = stubClient([message([textBlock("ok")])], { params: [] });
+      await runTurn(
+        ada,
+        [{ id: `m-${text}`, fromId: "user", fromName: "user", text, priority: false, receivedAt: "" }],
+        new AbortController().signal,
+        { client, registry, bus, box: undefined, resolution: undefined, turns: ledger, tracer }
+      );
+    }
+    assert.equal(spans.length, 2);
+    assert.match(String(spans[0]!["agentbox.prompt.tools_hash"]), /^[0-9a-f]{16}$/);
+    assert.equal(spans[0]!["agentbox.prompt.changed"], undefined, "first turn: nothing to diff against");
+    assert.equal(typeof spans[1]!["agentbox.prompt.changed"], "string", "second turn: the diff, as a comma list");
+    assert.ok(!String(spans[1]!["agentbox.prompt.changed"]).includes("tools"));
+    assert.equal(spans[1]!["agentbox.usage.cache_read_share"], 0, "10 input, 0 cached: share 0");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
     cleanup();
   }
 });

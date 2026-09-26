@@ -371,6 +371,11 @@ export class PolicyGate {
    * waiting on you" while the window is closed.
    */
   onApprovalRequested: ((approval: PendingApproval) => void) | undefined;
+  /**
+   * Told when a person answers an approval, from whichever door (INV-774). The
+   * orchestrator uses it to continue a turn that was parked on that answer.
+   */
+  onApprovalSettled: ((approval: PendingApproval, how: "allowed" | "refused") => void) | undefined;
 
   /** Agents whose current turn a person has asked to stop. */
   private readonly stopped = new Set<string>();
@@ -812,6 +817,7 @@ export class PolicyGate {
         agentId: found.agentId,
       });
       this.log(`${by} approved, standing until revoked: ${found.description}`);
+      this.settled(found, "allowed");
       return true;
     }
 
@@ -819,13 +825,24 @@ export class PolicyGate {
       this.session.set(found.fingerprint, found);
       this.append({ at, kind: "approval-granted-session", id, by });
       this.log(`${by} approved for this session: ${found.description}`);
+      this.settled(found, "allowed");
       return true;
     }
 
     this.granted.set(found.fingerprint, found);
     this.append({ at, kind: "approval-granted", id, by });
     this.log(`${by} approved: ${found.description}`);
+    this.settled(found, "allowed");
     return true;
+  }
+
+  /** After the answer is on the record, never before: a listener's failure changes nothing. */
+  private settled(approval: PendingApproval, how: "allowed" | "refused"): void {
+    try {
+      this.onApprovalSettled?.(approval, how);
+    } catch {
+      // Same rule as `onApprovalRequested`: a notifier's failure must not change a decision.
+    }
   }
 
   /** The standing grants, for showing a person what holds and letting them end it. */
@@ -847,6 +864,7 @@ export class PolicyGate {
     if (found === undefined) return false;
     this.awaiting.delete(found.fingerprint);
     this.append({ at: this.now().toISOString(), kind: "approval-denied", id, by, ...(reason ? { reason } : {}) });
+    this.settled(found, "refused");
     return true;
   }
 

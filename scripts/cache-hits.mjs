@@ -39,7 +39,10 @@ for (const row of first) {
   if (read > 128) hits += 1;
   if (read === 128) only128 += 1;
   const share = input > 0 ? Math.round((read / input) * 100) : 0;
-  const hashes = begin?.promptHashes ? `s:${begin.promptHashes.stable.slice(0, 6)} v:${begin.promptHashes.volatile.slice(0, 6)} t:${begin.promptHashes.tools.slice(0, 6)}` : (begin?.promptHash ?? "").slice(0, 8);
+  const fp = begin?.promptFingerprint;
+  const hashes = fp
+    ? `s:${fp.stable.slice(0, 6)} v:${fp.volatile.slice(0, 6)} t:${fp.tools.slice(0, 6)}${begin.promptChanged?.length ? ` changed:${begin.promptChanged.join("+")}` : ""}${begin.volatileInTail ? " tail" : ""}`
+    : (begin?.promptHash ?? "").slice(0, 8);
   console.log(`${row.at.slice(0, 19)} ${(row.agentName ?? "").padEnd(8)} ${(row.conversation ?? "main").slice(0, 24).padEnd(24)} read ${String(read).padStart(6)} of ${String(input).padStart(6)} (${String(share).padStart(3)}%) ${hashes}`);
 }
 const total = reads + fresh;

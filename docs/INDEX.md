@@ -24,7 +24,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [04-design](04-design.md) | Design | current | 2026-09-27 |
 | [05-data](05-data.md) | Data | current | 2026-09-26 |
 | [08-control-plane](08-control-plane.md) | Control plane | current | 2026-09-12 |
-| [11-roadmap](11-roadmap.md) | Roadmap and backlog | current | 2026-09-14 |
+| [11-roadmap](11-roadmap.md) | Roadmap and backlog | current | 2026-09-26 |
 | [21-dingtalk-wire](21-dingtalk-wire.md) | The DingTalk wire | current | 2026-08-28 |
 | [22-domain-model](22-domain-model.md) | The domain model: people, doors, workers, rooms | current | 2026-09-25 |
 | [27-testing-and-release](27-testing-and-release.md) | Testing and release stability: ours, against OpenClaw and Hermes | current | 2026-09-01 |
@@ -52,7 +52,7 @@ this file and the headers disagree. Edit the header, not this table.
 |---|---|---|---|
 | [07-review](07-review.md) | Review against the specification | current | 2026-08-20 |
 | [09-tenancy](09-tenancy.md) | Tenancy: teams, users, and who may drive which agent | superseded by [22-domain-model](22-domain-model.md) — §3 retires per-agent visibility; §0 sets uniformity | 2026-08-19 |
-| [10-security-backlog](10-security-backlog.md) | Security backlog | current | 2026-09-03 |
+| [10-security-backlog](10-security-backlog.md) | Security backlog | current | 2026-09-26 |
 | [14-from-outside-reading](14-from-outside-reading.md) | Ideas taken from outside reading | current | 2026-08-26 |
 | [15-secrets-in-the-record](15-secrets-in-the-record.md) | R7: secrets an agent reads land in the record in clear | current | 2026-08-25 |
 | [16-long-work](16-long-work.md) | Finishing long work: the protocol, the cost, and the stop | current | 2026-08-26 |
