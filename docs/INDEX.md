@@ -40,7 +40,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [17-two-agents](17-two-agents.md) | Two agents on one repository | current | 2026-08-26 |
 | [19-pitfalls](19-pitfalls.md) | Pitfalls: remembering how things went wrong | current | 2026-08-28 |
 | [37-onboarding](37-onboarding.md) | Getting started, every way in | current | 2026-09-05 |
-| [38-operators-guide](38-operators-guide.md) | The operator's guide (what the README used to be) | current | 2026-09-07 |
+| [38-operators-guide](38-operators-guide.md) | The operator's guide (what the README used to be) | current | 2026-09-26 |
 | [55-external-desktops](55-external-desktops.md) | External browsers and desktop control | current | 2026-09-15 |
 | [56-teaching-upgrade](56-teaching-upgrade.md) | Teaching draft upgrade | current | 2026-09-15 |
 | [70-cua-linux-validation](70-cua-linux-validation.md) | Linux CUA 回归矩阵与状态验收 | current | 2026-09-22 |

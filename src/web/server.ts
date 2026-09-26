@@ -111,21 +111,6 @@ function withinWork(path: string): boolean {
   return normalised === WORK_DIR || normalised.startsWith(`${WORK_DIR}/`);
 }
 
-/**
- * One line of "what is it doing", for a chat task card.
- *
- * The tool name is the truth; the argument shown is the one a person recognises — a
- * command, a path, a URL — clamped hard, because a card is glanced at, not read.
- */
-function actionLine(tool: string, input: unknown): string {
-  const record =
-    typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {};
-  const detail = [record.command, record.path, record.action, record.url].find(
-    (value): value is string => typeof value === "string" && value !== ""
-  );
-  const line = detail === undefined ? tool : `${tool}: ${detail}`;
-  return line.length > 64 ? `${line.slice(0, 63)}…` : line;
-}
 import { agentboxHome, loadConfig, saveConfig, type AgentboxConfig } from "../config.ts";
 
 type AgentboxConfigHostExec = NonNullable<AgentboxConfig["hostExec"]>;
@@ -215,6 +200,7 @@ import { describeQueues } from "../host/actor-queue.ts";
 import { parseSuccessor } from "../host/successor.ts";
 import { describeReceipts } from "../host/receipts.ts";
 import { resolveLocale } from "../i18n/locale.ts";
+import { activityPhrase, activityPhrases } from "../host/activity-phrase.ts";
 import { MESSAGES } from "../i18n/messages.ts";
 import { QuestionWatch } from "../host/question-expiry.ts";
 import { appendLine } from "../host/jsonl.ts";
@@ -641,7 +627,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // the live row and the replayed row read the same way (INV-112). The host's event
       // stays what it is; the diff is the page's view of it.
       const diff = event.type === "tool_start" ? editDiffOf(event.tool, event.input) : undefined;
-      broadcast(diff === undefined ? event : ({ ...event, diff } as unknown as OutboundEvent));
+      // And the plain-language line, in both languages, so the feed can say "running a
+      // command (python)" in the reader's language rather than `bash` (INV-783).
+      const phrase = event.type === "tool_start" ? activityPhrases(event.tool, event.input) : undefined;
+      broadcast(
+        phrase === undefined
+          ? event
+          : ({ ...event, phrase, ...(diff === undefined ? {} : { diff }) } as unknown as OutboundEvent)
+      );
       for (const listener of channelTurnListeners) listener(event);
     },
     onBusEvent: broadcast,
@@ -1336,6 +1329,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // card and the board the blocked row, so the loop report is raised as the
       // failure it is for anyone waiting on this work.
       let stuck: string | undefined;
+      // The card's language follows the door: a Feishu room reads Chinese, as its status
+      // strings already do.
+      const cardLocale = resolveLocale({ channelType: identity.split(":")[0] });
       // Batch progress outranks tool chatter: once the script starts reporting 37/300,
       // "bash: python batch.py" is noise and the number is the card. The file convention
       // is in the prompt; reading it is a poll, because the box cannot push.
@@ -1356,8 +1352,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (event.type === "tool_start" && streamed !== "" && !streamed.endsWith("\n\n")) {
           streamed = `${streamed.trimEnd()}\n\n`;
         }
+        // The phrase stands in only until the script self-reports: a number the work
+        // wrote outranks a sentence guessed from the tool it is using.
         if (event.type === "tool_start" && batchLine === undefined) {
-          onProgress?.(actionLine(event.tool, event.input), event.tool);
+          onProgress?.(activityPhrase(event.tool, event.input, cardLocale), event.tool);
         }
         // The opening line, handed to the chat while the tools run (docs/31 layer 1a).
         if (event.type === "interim") onInterim?.(event.text);
