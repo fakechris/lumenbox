@@ -447,15 +447,6 @@ test("a skill that names the host's ledgers is not written, and a reviewer's acc
   }
 });
 
-test("every tool's effect on the world is declared, and an unknown one is not assumed harmless", async () => {
-  const { sideEffectScopeOf } = await import("./tools.ts");
-  assert.equal(sideEffectScopeOf("read_file"), "read");
-  assert.equal(sideEffectScopeOf("SendToChat"), "publish");
-  assert.equal(sideEffectScopeOf("RunOnHost"), "credential");
-  assert.equal(sideEffectScopeOf("bash"), "mutate");
-  assert.equal(sideEffectScopeOf("acme__delete_everything"), "mutate", "an MCP tool is never read by default");
-});
-
 test("an agent asks for a secret by name and hands its desktop over with one instruction; forks may do neither", async () => {
   const asked: { id: string; description: string }[] = [];
   const handed: { instruction: string; reason: string }[] = [];

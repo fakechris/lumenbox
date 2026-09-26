@@ -17,6 +17,7 @@ import { ChannelManager, type ChannelAdapter, type InboundMessage as ChannelMess
 import { choosePinnedEntries, type HistoryEntry } from "./compaction.ts";
 import { replyForMessage } from "./reply.ts";
 import { conversationIdFor } from "../agents/registry.ts";
+import { chatFilesRoot, parseWakePrompt } from "./prompt.ts";
 import { contextTaskBlockers, newContext } from "./context-recovery.ts";
 import { recoverTask } from "./task-recovery.ts";
 import { retryLastAnswer } from "./retry-recovery.ts";
@@ -25,7 +26,6 @@ import { TaskStore } from "./tasks.ts";
 import { Messages } from "../channels/messages.ts";
 import { MemoryAdmin } from "./memory-admin.ts";
 import { join } from "node:path";
-import { parseWakePrompt } from "./prompt.ts";
 
 test("/new through the chat door drops old narrative and plans, retains relevant facts, and preserves follow-up continuity", async () => {
   let calls = 0;
@@ -717,6 +717,35 @@ test("a teammate cannot put words in another teammate's mouth", async () => {
   }
 });
 
+// ── 2026-09-26, a key pasted in chat that would have been remembered (INV-740) ─────────────
+//
+// What could happen: a person pastes an API key, the agent calls RememberFact with it, and memory —
+// read into every later turn, mirrored into the box, shared with teammates — now carries the key.
+// Found reading egoist/lorca, which scrubs every memory write for the same reason.
+
+test("a key pasted in chat is not remembered, and the refusal does not repeat it", async () => {
+  const key = `sk-${"Zq9Xw8Vu7T".repeat(3)}`;
+  let laterSystem: string | undefined;
+  const script: Script = ({ round, system }) => {
+    if (round === 0) return { call: "RememberFact", input: { fact: `Chris's OpenAI key is ${key}` } };
+    laterSystem ??= system;
+    return { say: "I won't keep the key itself; tell me where it is stored instead." };
+  };
+  const episode = await runEpisode({ team: [{ name: "Ada" }], says: [`my key is ${key}, remember it`], script });
+  try {
+    const refusal = episode.score.refusals.find(line => line.startsWith("Ada") && /credential/.test(line));
+    assert.ok(episode.score.trail.includes("Ada:RememberFact"), "the agent did try to remember it");
+    assert.ok(refusal !== undefined, `RememberFact was refused: ${episode.score.refusals.join(" | ")}`);
+    assert.match(refusal, /credential \(openai-anthropic\)/);
+    assert.ok(!refusal.includes(key.slice(3, 15)), "the refusal quotes no part of the key");
+    const ada = episode.registry.list()[0]!.id;
+    assert.ok(!JSON.stringify(episode.registry.readMemoryRecords(ada)).includes(key), "memory has no key");
+    assert.ok(laterSystem !== undefined && !laterSystem.includes(key), "the next call's system prompt has no key");
+  } finally {
+    episode.cleanup();
+  }
+});
+
 // ── 2026-09-08, the front agent that disappeared into the work ────────────────────────────
 //
 // What happened: heavy work ran inline, so the person watched nothing happen for minutes with no
@@ -919,3 +948,111 @@ for (const receipt of ["changed", "partial", "legacy_failed"]) {
     } finally { episode.cleanup(); }
   });
 }
+
+test("a broken deliverable is caught before the turn ends, fixed, and only the fixed file reaches the chat (INV-692)", async () => {
+  const key = "feishu:deliver-user";
+  const conversation = conversationIdFor(key);
+  const outbox = `${chatFilesRoot(conversation)}/outbox`;
+  let gateSeen = 0;
+  let answered: string | undefined;
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: [],
+    script: ({ messages }) => {
+      const last = messages.at(-1);
+      const lastText = typeof last?.content === "string" ? last.content : JSON.stringify(last?.content ?? "");
+      const wrote = JSON.stringify(messages).includes("data.json");
+      if (lastText.includes("[harness]") && lastText.includes("data.json")) {
+        gateSeen++;
+        assert.match(lastText, /JSON does not parse/);
+        assert.match(lastText, /will not be sent/);
+        return { call: "write_file", input: { path: `${outbox}/data.json`, content: '{"城市": "北京", "人口": 2189}', overwrite: true } };
+      }
+      if (!wrote) return { call: "write_file", input: { path: `${outbox}/data.json`, content: '{"城市": "北京", "人口": 2189,}' } };
+      return { say: gateSeen === 0 ? "数据整理好了，见附件。" : "已修好，见附件。" };
+    },
+    drive: async ({ registry, bus, frontId, files }) => {
+      let receive!: (message: ChannelMessage) => Promise<string | undefined>;
+      const sent: { name: string; body: string }[] = [];
+      const adapter: ChannelAdapter = {
+        name: "feishu", start: async handler => { receive = handler; }, stop() {}, send: async () => undefined,
+        sendToChat: async () => undefined,
+        sendFile: async (_chatKey, name, base64) => { sent.push({ name, body: Buffer.from(base64, "base64").toString("utf8") }); },
+      };
+      const moved: string[] = [];
+      const manager = new ChannelManager({
+        mayDrive: () => true, log: () => {},
+        ask: async (_name, text, _identity, _chat, _progress, _thread, _task, _interim, _stream, origin) => {
+          bus.sendFromUser(frontId, text, { conversation, steerable: false, messageId: origin!.messageId });
+          await bus.runExclusive(frontId, { userDriven: true, conversation });
+          answered = replyForMessage(registry.readTranscript(frontId, conversation), origin!.messageId);
+          return answered;
+        },
+        collectOutbox: async () =>
+          [...files.entries()]
+            .filter(([path]) => path.startsWith(`${outbox}/`))
+            .map(([path, body]) => ({ name: path.slice(outbox.length + 1), base64: Buffer.from(body).toString("base64") })),
+        outboxDelivered: async (_chatKey, names) => { moved.push(...names); },
+      });
+      manager.register(adapter, true, "test"); manager.start();
+      await new Promise(resolve => setImmediate(resolve));
+      try {
+        await receive({ identity: "feishu:user", chatKey: key, privateChat: true, senderLabel: "user", text: "把北京的人口数据整理成 json 发我", messageId: "deliver1" });
+        await manager.idle();
+      } finally { manager.stop(); }
+      assert.deepEqual(sent.map(file => file.name), ["data.json"]);
+      assert.doesNotThrow(() => JSON.parse(sent[0]!.body), "what reached the chat is the fixed file");
+      assert.deepEqual(moved, ["data.json"]);
+    },
+  });
+  try {
+    assert.equal(gateSeen, 1, "the gate spoke once, and was silent once the file was fixed");
+    assert.equal(answered, "已修好，见附件。", "the person hears the answer given after the fix, not the one before it");
+  } finally { result.cleanup(); }
+});
+
+test("a routine that declared read-only tools is offered only those; a person's turn is not narrowed (INV-691)", async () => {
+  const offeredBy: { opened: string; offered: string[] }[] = [];
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: [],
+    script: ({ messages, offered }) => {
+      // The turn's own message is the last one; `opened` is the conversation's first.
+      const last = messages.at(-1);
+      offeredBy.push({ opened: typeof last?.content === "string" ? last.content : JSON.stringify(last?.content), offered });
+      return { say: "done" };
+    },
+    drive: async ({ bus, frontId }) => {
+      bus.sendFromUser(frontId, "ROUTINE: summarise the inbox", { steerable: false, lane: "background", synthetic: true, toolScope: ["read_file", "list_dir", "SendToAgent-not-offered-here"] });
+      await bus.runExclusive(frontId, { userDriven: true });
+      bus.sendFromUser(frontId, "PERSON: what is in the inbox?");
+      await bus.runExclusive(frontId, { userDriven: true });
+    },
+  });
+  try {
+    const routine = offeredBy.find(turn => turn.opened.includes("ROUTINE"))!;
+    const person = offeredBy.find(turn => turn.opened.includes("PERSON"))!;
+    assert.deepEqual([...routine.offered].sort(), ["list_dir", "read_file"], "only what the agent had and the skill named");
+    assert.ok(person.offered.includes("write_file") && person.offered.includes("bash"), "a person's turn keeps every tool");
+  } finally { result.cleanup(); }
+});
+
+test("the memory box answers looking around from its files, and anything else as before (INV-693)", async () => {
+  let seen = "";
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: ["look"],
+    files: { "/home/box/work/notes/a.txt": "alpha\nbeta\n" },
+    script: ({ round, messages }) => {
+      if (round === 0) return { call: "bash", input: { command: "ls -la /home/box/work/notes 2>&1 && cat /home/box/work/notes/a.txt; wc -l /home/box/work/notes/a.txt" } };
+      if (round === 1) {
+        seen = JSON.stringify(messages.at(-1)?.content);
+        return { call: "bash", input: { command: "npm install left-pad" } };
+      }
+      if (round === 2) seen += JSON.stringify(messages.at(-1)?.content);
+      return { say: "done" };
+    },
+  });
+  try {
+    assert.match(seen, /a\.txt\\nalpha\\nbeta/);
+    assert.match(seen, /2 \/home\/box\/work\/notes\/a\.txt/);
+    assert.match(seen, /\(ran\) npm install left-pad/, "a command that would do something is not simulated");
+  } finally { result.cleanup(); }
+});

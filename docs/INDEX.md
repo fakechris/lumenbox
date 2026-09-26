@@ -22,11 +22,11 @@ this file and the headers disagree. Edit the header, not this table.
 | [02-product](02-product.md) | Product | current | 2026-08-19 |
 | [03-architecture](03-architecture.md) | Architecture | current | 2026-09-22 |
 | [04-design](04-design.md) | Design | current | 2026-09-24 |
-| [05-data](05-data.md) | Data | current | 2026-09-24 |
+| [05-data](05-data.md) | Data | current | 2026-09-25 |
 | [08-control-plane](08-control-plane.md) | Control plane | current | 2026-09-12 |
 | [11-roadmap](11-roadmap.md) | Roadmap and backlog | current | 2026-09-14 |
 | [21-dingtalk-wire](21-dingtalk-wire.md) | The DingTalk wire | current | 2026-08-28 |
-| [22-domain-model](22-domain-model.md) | The domain model: people, doors, workers, rooms | current | 2026-09-11 |
+| [22-domain-model](22-domain-model.md) | The domain model: people, doors, workers, rooms | current | 2026-09-25 |
 | [27-testing-and-release](27-testing-and-release.md) | Testing and release stability: ours, against OpenClaw and Hermes | current | 2026-09-01 |
 | [57-agent-consumer-contract](57-agent-consumer-contract.md) | Agent 消费者合同：谁去拉，谁保证，不同架构怎么统一 | current | 2026-09-15 |
 
@@ -44,6 +44,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [55-external-desktops](55-external-desktops.md) | External browsers and desktop control | current | 2026-09-15 |
 | [56-teaching-upgrade](56-teaching-upgrade.md) | Teaching draft upgrade | current | 2026-09-15 |
 | [70-cua-linux-validation](70-cua-linux-validation.md) | Linux CUA 回归矩阵与状态验收 | current | 2026-09-22 |
+| [73-outside-research-map](73-outside-research-map.md) | 外部调研全景：读过哪些项目、记在哪、拿走了什么 | current | 2026-09-26 |
 
 ## decision
 
@@ -75,7 +76,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [40-chat-area](40-chat-area.md) | The chat area: what a person can do with a message | current | 2026-09-08 |
 | [41-chat-grammar](41-chat-grammar.md) | The chat column, rebuilt: one grammar for everything that appears in it | current | 2026-09-08 |
 | [42-front-and-workers](42-front-and-workers.md) | One front, invisible workers | current | 2026-09-08 |
-| [43-scenarios](43-scenarios.md) | Episodes as tests | current | 2026-09-14 |
+| [43-scenarios](43-scenarios.md) | Episodes as tests | current | 2026-09-25 |
 | [44-webhook-triggers](44-webhook-triggers.md) | Webhook triggers | current | 2026-09-14 |
 | [45-teams](45-teams.md) | Teams | current | 2026-09-09 |
 | [46-chat-as-a-chat](46-chat-as-a-chat.md) | The chat is a chat | current | 2026-09-09 |

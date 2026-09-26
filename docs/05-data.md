@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: storage
-     updated: 2026-09-24
+     updated: 2026-09-25
 -->
 # Data
 
@@ -706,6 +706,13 @@ Four answers the phrase "without anyone asking" forces, all of them in `schedule
   replayed. Silently catching up is the behaviour that produces a surprise bill.
 - **The turn knows it was a timer.** An agent that believes someone is waiting asks questions nobody
   will answer and hurries, so the prompt says so and says where to leave its output.
+- **It is held to the tools it named (INV-691).** `allowed-tools:` — comma- or space-separated,
+  in our names or Claude Code's (`Read` → `read_file`, `mcp__srv__tool` → `srv__tool`; `Grep` is
+  `read_file`+`list_dir`, never `bash`) — narrows a scheduled, listener or webhook run to what the
+  agent already had *and* the skill named. It rides on the kickoff message (`toolScope`), so a run
+  resumed after a restart is held to the same list. A turn a person drives is never narrowed, and a
+  name that is not a tool here is reported on the skills page and adds nothing. Only a narrowing:
+  the policy gate and `rules/*.md` still decide every call inside it.
 
 **Seeding, and the three answers (INV-688).** `.seeded` records `<slug> <sha8>` per line:
 what has been offered and which version. Three states stay distinct where there used to be
@@ -739,6 +746,34 @@ Read at most every few seconds, and the load reports whether the directory was a
 distinct from being read and empty. Those mean opposite things: without the distinction a box
 restarting replaces a good list with an empty one, and since the list is in the prompt, that reads as
 "you have no skills" rather than "we could not check".
+
+### 3.1b `chats/<conversation>/outbox/` — checked before it goes (INV-692)
+
+A turn that belongs to an outside chat hands a person files by writing them to
+`/home/box/work/chats/<conversation>/outbox/` (`chatFilesRoot`, `prompt.ts`). When the turn
+ends they are pushed into the chat and moved to `sent/`; a push that fails leaves the file
+where it was.
+
+Before that, the bytes are checked (`checkDeliverable`, `src/host/deliverables.ts`), because
+"the script ran" and "the file opens" are different claims and the second was never checked:
+
+- **broken** — cannot be opened as its extension says: a `.docx` that is markdown, a zip cut
+  off before its directory, an Office package without `[Content_Types].xml` or its main part,
+  a PDF without `%PDF-` or `%%EOF`, an image whose bytes are another format, JSON that does
+  not parse, an empty file.
+- **suspect** — opens, but reads unfinished: `{{placeholder}}`, lorem ipsum, `[插入…]` /
+  `[insert …]` / `[TODO]` slots, a CSV row whose width disagrees with the header (quoted
+  separators understood). A bare "TODO" is not flagged: a task list is a real deliverable.
+
+Unknown extensions and files over 25MB pass unchecked; a check we cannot make is not a reason
+to hold somebody's file.
+
+The check runs in two places. **In the turn**, when the model gives its final answer, the
+outbox is read and any finding goes back to the model once, like the quote gate — at most
+twice per turn, silent when every file is fine. **At delivery**, `deliverFiles` holds back
+whatever is broken: it is not pushed, stays in the outbox, the task does not close as done,
+and the chat is told which file and why. Suspect findings never block delivery; the agent was
+asked about them and may have said the slot is intended.
 
 ### 3.2 `config` volume — `/home/box/.config`
 

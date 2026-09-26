@@ -38,6 +38,7 @@
  * and a package is several files where a starter is one. They keep the offer-once rule.
  */
 
+import type { SkillEval } from "./skill-evals.ts";
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -201,9 +202,12 @@ interface StarterSkill {
 const STARTERS: readonly StarterSkill[] = [
   {
     slug: "research-brief",
+    // The description before INV-693 said what it does and not when; the live evals showed it
+    // was not opened for its own requests. This is that version, which we may replace.
+    supersedes: ["9739e713"],
     content: `---
 name: research-brief
-description: Research a topic in the browser and write a sourced brief to the work directory.
+description: Use when someone asks you to research or look into a topic (调研, 研究一下, 查一下) and wants a written, sourced brief. Search, read primary sources, write the brief to the work directory. Not for a table or file they handed you (data-brief), nor the day's package (daily-research-digest).
 scope: global
 ---
 
@@ -225,9 +229,12 @@ Do not pad. A brief that says "the sources disagree" is a finding.
   },
   {
     slug: "study-a-corpus",
+    // The description before INV-693 said what it does and not when; the live evals showed it
+    // was not opened for its own requests. This is that version, which we may replace.
+    supersedes: ["63e35309"],
     content: `---
 name: study-a-corpus
-description: Read a large body of documents once, and leave notes that make every later question cheap.
+description: Use when you are handed a large body of documents — a dataroom, an archive, a folder of reports (资料库, 一堆文件, 先通读) — and will be asked about it again and again. Read it once and leave notes that make every later question cheap. Not for one file or a web topic.
 scope: global
 ---
 
@@ -260,9 +267,12 @@ notes are a living index, not a one-time export.
   },
   {
     slug: "tidy-downloads",
+    // The description before INV-693 said what it does and not when; the live evals showed it
+    // was not opened for its own requests. This is that version, which we may replace.
+    supersedes: ["50670d80"],
     content: `---
 name: tidy-downloads
-description: Sort the Downloads directory into the work directory by type and month.
+description: Use when someone asks to tidy, clean up or organise their Downloads folder (整理下载, Downloads 太乱了). Sort it into the work directory by type and month.
 scope: global
 ---
 
@@ -383,9 +393,12 @@ into the shape of a full one is worse than saying it was thin.
   },
   {
     slug: "weekly-retro",
+    // The description before INV-693 said what it does and not when; the live evals showed it
+    // was not opened for its own requests. This is that version, which we may replace.
+    supersedes: ["6200edf5"],
     content: `---
 name: weekly-retro
-description: Write a one-page retro of the last seven days in the work directory.
+description: Use when someone asks for a weekly retro, review or recap of the last seven days (周报, 这周的复盘, weekly review). Write one page to the work directory. For yesterday alone, use morning-summary.
 scope: global
 ---
 
@@ -404,9 +417,12 @@ Do not pad with "great collaboration". Empty weeks get a short file, not a speec
   },
   {
     slug: "code-review",
+    // The description before INV-693 said what it does and not when; the live evals showed it
+    // was not opened for its own requests. This is that version, which we may replace.
+    supersedes: ["13498819"],
     content: `---
 name: code-review
-description: Review a change for correctness, security and tests; write the review to a file, do not rewrite the code.
+description: Use when someone asks you to review a change, a diff, a PR or some code (review, 代码评审, 看一下这个改动) for correctness, security and tests. Write the review to a file; do not rewrite the code. Not for a request to change the code itself.
 scope: global
 ---
 
@@ -427,9 +443,12 @@ Reply with the path and the blocker count.
   },
   {
     slug: "wechat-longform",
+    // The description before INV-693 said what it does and not when; the live evals showed it
+    // was not opened for its own requests. This is that version, which we may replace.
+    supersedes: ["bb96a447"],
     content: `---
 name: wechat-longform
-description: Draft a WeChat-style long article to the work directory, sourced and readable aloud.
+description: Use when someone asks for a WeChat official-account article or any long-form article (公众号文章, 长文, 推文). Draft it to the work directory, sourced and readable aloud. Short notes are xiaohongshu-note; spoken scripts are short-video-script.
 scope: global
 ---
 
@@ -468,9 +487,12 @@ Not a long article. Not a spoken script.
   },
   {
     slug: "short-video-script",
+    // The description before INV-693 said what it does and not when; the live evals showed it
+    // was not opened for its own requests. This is that version, which we may replace.
+    supersedes: ["32528bb8"],
     content: `---
 name: short-video-script
-description: Write a spoken short-video script with a timed hook, one point, and one ask.
+description: Use when someone asks for a short-video or voice-over script (短视频脚本, 口播, 抖音, 视频号, Reels). Write a spoken script with a timed hook, one point and one ask. Written notes are xiaohongshu-note; articles are wechat-longform.
 scope: global
 ---
 
@@ -491,9 +513,12 @@ Not a WeChat article. Not a Xiaohongshu note.
   },
   {
     slug: "data-brief",
+    // The description before INV-693 said what it does and not when; the live evals showed it
+    // was not opened for its own requests. This is that version, which we may replace.
+    supersedes: ["d09a4b36"],
     content: `---
 name: data-brief
-description: Turn a table into a sourced brief with a quality check first and actions at the end.
+description: Use when someone hands you a table — csv, xlsx, a folder of sheets — and asks what it says (看数据, 分析这个表, 数据简报). Check data quality first, then answer with figures tied to columns, and end with actions. For a topic with no table, use research-brief.
 scope: global
 ---
 
@@ -507,6 +532,40 @@ Given a csv, xlsx, or a folder of tables, write \`/home/box/work/briefs/<slug>.m
 4. Do not invent a row that was not in the file. Do not give investment advice.
 
 Python in the box is allowed for the arithmetic. The brief is the product, not a notebook.
+`,
+  },
+  {
+    // The conduct half of INV-692. The host checks the outbox mechanically (does it open, is it
+    // what its name says, is a template slot left); this is what a mechanical check cannot do.
+    slug: "check-before-delivering",
+    content: `---
+name: check-before-delivering
+description: Before handing a person a file you made (docx, xlsx, pptx, pdf, csv, an image), open the result and check it against the request. Not for plain chat answers with no file.
+scope: global
+---
+
+# Check before delivering
+
+The script that wrote a file ran without an error. That says nothing about whether the
+file is right. Check the file, not the code that made it.
+
+1. **Open what you made, fresh.** Read the file back from disk the way the person will
+   get it: unzip a docx/xlsx/pptx and read the text, open a PDF and read a page, render a
+   chart or slide to PNG and look at it. Do not reason from what the code should have
+   produced.
+2. **Is it the format its name says?** A .docx must be written by something that writes
+   Word files — never markdown with a new extension. Same for .xlsx and .pptx.
+3. **Hold it against the request, point by point.** Every question asked has an answer in
+   the file; every figure the person gave you is there as they gave it; nothing is from a
+   different file or an older draft.
+4. **Nothing unfinished.** No {{name}}, no [插入…], no lorem ipsum, no "TBD" where a
+   value belongs, no empty sheet, no slide with a title and nothing under it. If a slot is
+   meant to stay open (they asked for a template), say so in your reply.
+5. **Then deliver.** Put it in this chat's outbox/ and say in one or two sentences what it
+   is and what is in it.
+
+If the same problem survives three fixes, stop and tell the person what is stuck and what
+you tried. A late honest answer is better than a broken file on time.
 `,
   },
   {
@@ -576,6 +635,77 @@ without quoting the sensitive part. If nothing was, add nothing.
 `,
   },
 ];
+
+/**
+ * What each starter is for and not for, as cases a live run can check (INV-693, skill-evals.ts).
+ *
+ * Beside the starters rather than inside their text, so a case can change without changing the
+ * bytes a box was seeded with — the digest in `.seeded` is of the content alone. Each no-trigger
+ * case is a request that belongs to a neighbour, because the confusable neighbour is where a
+ * description drawn too wide shows first.
+ */
+const STARTER_EVALS: Record<string, readonly SkillEval[]> = {
+  "research-brief": [
+    { name: "topic brief", kind: "trigger", says: "帮我调研一下固态电池过去一年的进展，给我一份带来源的简报。" },
+    { name: "a table is data-brief", kind: "no-trigger", instead: "data-brief", says: "这是 /home/box/work/sales.csv，按区域看一下表现，先查数据质量，最后给建议。", files: { "/home/box/work/sales.csv": "region,month,revenue\nnorth,2026-07,120\nsouth,2026-07,95\n" } },
+  ],
+  "study-a-corpus": [
+    { name: "dataroom first", kind: "trigger", says: "/home/box/work/dataroom 里有三百份合同和报告。先通读一遍，接下来一周我会问你很多问题。", files: { "/home/box/work/dataroom/contract-001.md": "Master services agreement between A and B…", "/home/box/work/dataroom/report-q2.md": "Q2 operating report…" } },
+    { name: "a web topic is research-brief", kind: "no-trigger", instead: "research-brief", says: "帮我查一下这周 AI 芯片有什么新闻，写个简报。" },
+  ],
+  "tidy-downloads": [
+    // With a Downloads folder to find: the first live run had none, and the agent spent its budget searching the disk for one [infra].
+    { name: "messy downloads", kind: "trigger", says: "我的 Downloads 文件夹太乱了，帮我整理一下。", files: { "/home/box/Downloads/invoice-2026-08.pdf": "%PDF-1.7\n%%EOF\n", "/home/box/Downloads/IMG_2041.jpg": "jpeg", "/home/box/Downloads/notes (1).txt": "draft" } },
+    { name: "yesterday's changes are morning-summary", kind: "no-trigger", instead: "morning-summary", says: "总结一下昨天 work 目录里都改了什么，写成一条早上看的笔记。" },
+  ],
+  "morning-summary": [
+    { name: "yesterday's changes", kind: "trigger", says: "总结一下昨天 work 目录里都改了什么，写成一条早上看的笔记。" },
+    { name: "a week is weekly-retro", kind: "no-trigger", instead: "weekly-retro", says: "帮我写一份这周的复盘，一页就行。" },
+  ],
+  "daily-research-digest": [
+    { name: "today's package", kind: "trigger", says: "把今天的日包读一遍，写一份按主题组织的横向综合，不要逐条罗列。" },
+    { name: "one topic is research-brief", kind: "no-trigger", instead: "research-brief", says: "帮我研究一下 RISC-V 生态现在发展到哪一步了，写个带来源的简报。" },
+  ],
+  "weekly-retro": [
+    { name: "this week", kind: "trigger", says: "帮我写一份这周的复盘，一页就行。" },
+    { name: "yesterday is morning-summary", kind: "no-trigger", instead: "morning-summary", says: "总结一下昨天 work 目录里的变化，给我一条早报。" },
+  ],
+  "code-review": [
+    { name: "review a change", kind: "trigger", says: "帮我 review 一下 /home/box/work/repo 最新的这个改动，重点看安全和测试。", files: { "/home/box/work/repo/src/login.ts": "export function login(user: string, password: string) { return db.query(`SELECT * FROM users WHERE name='${user}'`); }\n" } },
+    { name: "a rewrite is not a review", kind: "no-trigger", says: "把 /home/box/work/repo/src/login.ts 直接改成用参数化查询，改完就行。", files: { "/home/box/work/repo/src/login.ts": "export function login(user: string, password: string) { return db.query(`SELECT * FROM users WHERE name='${user}'`); }\n" } },
+  ],
+  "wechat-longform": [
+    { name: "a long article", kind: "trigger", says: "写一篇公众号长文，讲清楚为什么小团队也需要认真做数据备份。" },
+    { name: "notes are xiaohongshu", kind: "no-trigger", instead: "xiaohongshu-note", says: "帮我写几条小红书笔记推荐露营装备，要标题、封面文案和正文。" },
+  ],
+  "xiaohongshu-note": [
+    { name: "camping notes", kind: "trigger", says: "帮我写几条小红书笔记推荐露营装备，要标题、封面文案和正文。" },
+    { name: "a spoken script is short-video", kind: "no-trigger", instead: "short-video-script", says: "写一个 60 秒的抖音口播脚本，讲露营装备怎么选，开头三秒要抓人。" },
+  ],
+  "short-video-script": [
+    { name: "sixty seconds", kind: "trigger", says: "写一个 60 秒的抖音口播脚本，讲露营装备怎么选，开头三秒要抓人。" },
+    { name: "an article is wechat-longform", kind: "no-trigger", instead: "wechat-longform", says: "写一篇公众号长文，讲清楚为什么小团队也需要认真做数据备份。" },
+  ],
+  "data-brief": [
+    { name: "a sales table", kind: "trigger", says: "这是 /home/box/work/sales.csv，按区域看一下表现，先查数据质量，最后给建议。", files: { "/home/box/work/sales.csv": "region,month,revenue\nnorth,2026-07,120\nsouth,2026-07,95\n" } },
+    { name: "competitor pricing is research", kind: "no-trigger", instead: "research-brief", says: "调研一下三家主要竞品的定价策略，给我一份带来源的简报。" },
+  ],
+  // For the starter INV-692 adds (PR #237). Keyed by slug, so it waits here until that starter
+  // exists, and whichever of the two lands second does not turn the coverage guard red.
+  "check-before-delivering": [
+    { name: "a file to hand over", kind: "trigger", says: "把这份季度数据整理成一个 Excel 表格发给我。", files: { "/home/box/work/q3.csv": "region,revenue\nnorth,120\nsouth,95\n" } },
+    { name: "a plain answer has no file", kind: "no-trigger", says: "北京今天适合出门跑步吗？一句话回答就行。" },
+  ],
+  "export-template": [
+    { name: "share yourself", kind: "trigger", says: "把你自己打包成一个模板吧，我想分享给同事用。" },
+    { name: "exporting a file is not a template", kind: "no-trigger", says: "把 /home/box/work/report.md 导出成 PDF 发我。", files: { "/home/box/work/report.md": "# Q3 report\n\nRevenue grew 12%.\n" } },
+  ],
+};
+
+/** Every starter with its text and its cases: for the coverage guard and the live run. */
+export function starterSkillsWithEvals(): readonly { slug: string; content: string; evals: readonly SkillEval[] }[] {
+  return STARTERS.map(starter => ({ slug: starter.slug, content: starter.content, evals: STARTER_EVALS[starter.slug] ?? [] }));
+}
 
 export interface SeedingResult extends SeedingPlan {
   /** Hub packages seeded this run, which follow the offer-once rule. */

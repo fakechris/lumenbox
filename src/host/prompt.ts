@@ -878,10 +878,15 @@ function renderTasks(context: PromptContext): string {
  * is in the prompt at all: an agent that does not know the convention answers with
  * a path, and a path is not a deliverable to somebody reading a phone.
  */
+/** Where an outside chat's files live on the box: what the prompt tells the agent, and where the delivery gate looks. */
+export function chatFilesRoot(conversation: string): string {
+  return `/home/box/work/chats/${conversation}`;
+}
+
 function renderChatFiles(context: PromptContext): string {
   const conversation = context.conversation ?? "";
   if (conversation === "" || conversation === MAIN_CONVERSATION || !context.hasBox) return "";
-  const root = `/home/box/work/chats/${conversation}`;
+  const root = chatFilesRoot(conversation);
   return (
     "## This conversation's file exchange\n\n" +
     // Stated as somewhere to write rather than as somewhere that exists. It used to

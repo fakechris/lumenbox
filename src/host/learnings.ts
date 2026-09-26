@@ -17,7 +17,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { agentboxHome } from "../config.ts";
 import { appendLine } from "./jsonl.ts";
-import { scanText } from "./secret-scan.ts";
+import { credentialIn, credentialRefusal } from "./secret-scan.ts";
 
 export function learningsDir(): string {
   return process.env.AGENTBOX_LEARNINGS ?? join(agentboxHome(), "learnings");
@@ -51,10 +51,8 @@ export function validateLearning(text: string): string | undefined {
   if (trimmed.length > MAX_LEARNING_CHARS) {
     return `A note may be ${MAX_LEARNING_CHARS} characters and this is ${trimmed.length}. It is shown on every open of this site; keep it to what the next visit needs.`;
   }
-  const hit = scanText(trimmed).patterns[0];
-  if (hit !== undefined) {
-    return `That looks like it holds a credential (${hit.pattern}: ${hit.excerpt}). A learning never carries one — say where the credential lives instead.`;
-  }
+  const credential = credentialIn(trimmed);
+  if (credential !== undefined) return credentialRefusal("A learning", credential);
   return undefined;
 }
 

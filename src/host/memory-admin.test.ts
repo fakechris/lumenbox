@@ -138,3 +138,43 @@ test("withdrawing a source disables every derivative, survives restart, and reje
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("memory refuses a credential at every door, names only its kind, and still lets a leaked line be withdrawn (INV-740)", () => {
+  const root = mkdtempSync(join(tmpdir(), "agentbox-memory-credential-"));
+  // Built, not written out, so this file never holds a string the scanner would flag.
+  const key = `sk-${"a1B2c3D4e5".repeat(3)}`;
+  try {
+    const registry = new AgentRegistry(join(root, "agents"));
+    const ada = registry.create({ name: "Ada" }).id;
+
+    // The sink: every writer goes through these two, so nothing reaches disk with a key in it.
+    assert.throws(() => registry.appendMemoryRecords(ada, [{ at: at(1), kind: "fact", text: `the API key is ${key}` }]), /looks like a credential \(openai-anthropic\)/);
+    assert.throws(() => registry.appendSharedMemory(ada, [{ at: at(1), kind: "episode", text: `used ${key} to call the API` }]), /credential/);
+    for (const kind of ["note", "pitfall"] as const) {
+      assert.throws(() => registry.appendMemoryRecords(ada, [{ at: at(1), kind, text: `Bearer ${"x".repeat(24)}` }]), /credential \(bearer\)/);
+    }
+    assert.equal(registry.readMemoryRecords(ada).length, 0);
+    assert.ok(!JSON.stringify(registry.readSharedMemory(ada)).includes(key));
+
+    // A line that leaked before this check existed can still be withdrawn: a retraction repeats it.
+    const memoryFile = registry.memoryRecordsPathFor(ada);
+    writeFileSync(memoryFile, `${JSON.stringify({ at: at(2), kind: "fact", text: `old key ${key}` })}\n`, { flag: "a" });
+    const admin = new MemoryAdmin(registry, join(root, "audit.jsonl"), () => new Date(Date.parse(at(10))));
+    const leaked = admin.detail(ada).own.find(view => view.text.includes("old key"));
+    if (leaked !== undefined) {
+      const withdrawn = admin.change({ agentId: ada, scope: "own", key: leaked.key, version: leaked.version, by: "chris" });
+      assert.equal(withdrawn.ok, true, JSON.stringify(withdrawn));
+      // An edit that swaps in another key is refused with a reason, not a crash — and the reason
+      // does not repeat the key.
+      registry.appendMemoryRecords(ada, [{ at: at(11), kind: "fact", text: "the deploy region is eu-west-1" }]);
+      const region = admin.detail(ada).own.find(view => /eu-west-1/.test(view.text))!;
+      const edit = admin.change({ agentId: ada, scope: "own", key: region.key, version: region.version, text: `region key ${key}`, by: "chris" });
+      assert.ok(!edit.ok && /looks like it holds a credential \(openai-anthropic\)/.test(edit.why), JSON.stringify(edit));
+      assert.ok(!edit.ok && !edit.why.includes(key.slice(3, 15)), "the refusal quotes no part of the key");
+    } else {
+      assert.fail("the pre-existing leaked line should be visible to withdraw");
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

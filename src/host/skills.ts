@@ -32,6 +32,8 @@
 import { envNumber } from "../config.ts";
 import { namesControlSurface } from "./control-surfaces.ts";
 import { describeSchedule, knownTimezone, parseSchedule, type Schedule } from "./schedule.ts";
+import { declaredTools } from "./side-effects.ts";
+import { engineToolNames } from "./engine-tools.ts";
 
 /** Where skills live inside the box. Under the work volume for the reasons in the module comment. */
 export const SKILLS_DIR = "/home/box/work/skills";
@@ -133,9 +135,44 @@ export interface Skill {
    * store — the same reason a schedule is a line and not an object.
    */
   paused?: boolean;
+  /**
+   * The tools this skill says it needs (`allowed-tools:`), in this installation's names (INV-691).
+   *
+   * A narrowing, never a grant: when the skill runs unattended — a schedule, a listener, a
+   * webhook — the turn is offered only the tools the agent already had *and* the skill named.
+   * Nobody is watching those runs, which is exactly when a skill's own statement of what it needs
+   * is worth holding it to. A turn a person drives is not narrowed. Absent means no narrowing.
+   */
+  allowedTools?: readonly string[];
 }
 
 export type SkillScope = "global" | "agent";
+
+
+/** Our own tool names, from the one place every tool is declared. */
+const KNOWN_TOOL_NAMES: ReadonlySet<string> = new Set([...declaredTools(), "connector_request", "FindMcpTool", "UseMcpTool"]);
+
+/**
+ * `allowed-tools:` read into our names, and what could not be read.
+ *
+ * Accepts a comma- or space-separated list, optionally in `[brackets]`. Claude Code's names map
+ * through `engine-tools.ts`, which is what hub skills are written against. `mcp__server__tool` is
+ * Claude Code's spelling of our `server__tool`. A name that is neither ours nor mapped is reported
+ * and contributes nothing.
+ */
+export function allowedToolsFrom(raw: string, ours: ReadonlySet<string> | undefined = undefined): { tools: string[]; unknown: string[] } {
+  const names = raw.replace(/^\s*\[|\]\s*$/g, "").split(/[\s,]+/).map(name => name.trim().replace(/^["']|["']$/g, "")).filter(name => name !== "");
+  const tools = new Set<string>();
+  const unknown: string[] = [];
+  for (const name of names) {
+    const mapped = engineToolNames(name);
+    if (mapped !== undefined) for (const tool of mapped) tools.add(tool);
+    else if (name.startsWith("mcp__")) tools.add(name.slice("mcp__".length));
+    else if (ours === undefined || ours.has(name) || name.includes("__")) tools.add(name);
+    else unknown.push(name);
+  }
+  return { tools: [...tools], unknown };
+}
 
 /** Frontmatter keys that mean something. Anything else is ignored rather than rejected. */
 const KNOWN_KEYS = new Set([
@@ -153,6 +190,7 @@ const KNOWN_KEYS = new Set([
   "match",
   "chat",
   "paused",
+  "allowed-tools",
 ]);
 
 export interface ParsedSkill {
@@ -249,7 +287,7 @@ export function skillFrom(
   const full = parsed.meta.description?.trim() ?? "";
   const description =
     full.length > MAX_DESCRIPTION_CHARS ? `${full.slice(0, MAX_DESCRIPTION_CHARS).trimEnd()}…` : full;
-  const note =
+  const descriptionNote =
     full.length > MAX_DESCRIPTION_CHARS
       ? `${slug}: description cut to ${MAX_DESCRIPTION_CHARS} characters in the index (it is ` +
         `${full.length}); say when it applies in a sentence and keep the rest in the body.`
@@ -323,6 +361,18 @@ export function skillFrom(
       ? { match, ...(chat !== undefined && chat !== "" ? { chat } : {}) }
       : undefined;
 
+  // What the skill says it needs. Unknown names are said, not refused: a hub skill written for
+  // another harness still loads, and the note tells whoever reads the skills page why a name
+  // did nothing.
+  const allowedRaw = parsed.meta["allowed-tools"]?.trim();
+  const allowed = allowedRaw !== undefined && allowedRaw !== "" ? allowedToolsFrom(allowedRaw, KNOWN_TOOL_NAMES) : undefined;
+  const toolNote =
+    allowed !== undefined && allowed.unknown.length > 0
+      ? `${slug}: allowed-tools names ${allowed.unknown.join(", ")}, which ${allowed.unknown.length === 1 ? "is" : "are"} not a tool here; ` +
+        `${allowed.unknown.length === 1 ? "it narrows" : "they narrow"} an unattended run to nothing extra.`
+      : undefined;
+  const note = [descriptionNote, toolNote].filter((line): line is string => line !== undefined).join("\n") || undefined;
+
   // Likewise a delivery target with nothing to deliver: the person meant to schedule it.
   const deliver = parsed.meta.deliver?.trim();
   if (deliver !== undefined && deliver !== "" && schedule === undefined && trigger !== "webhook") {
@@ -347,6 +397,7 @@ export function skillFrom(
       ...(parsed.meta.authored_by ? { authoredBy: parsed.meta.authored_by.trim() } : {}),
       ...(parsed.meta.because ? { because: parsed.meta.because.trim() } : {}),
       ...(parsed.meta.paused?.trim() === "true" ? { paused: true } : {}),
+      ...(allowed !== undefined ? { allowedTools: allowed.tools } : {}),
     },
     ...(note === undefined ? {} : { note }),
   };

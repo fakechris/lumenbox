@@ -15,7 +15,8 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { SqliteControlStore } from "./store.ts";
 import { StaticAllocator, type BoxAllocator, type BoxHandle, type BoxSpec } from "./allocator.ts";
-import { forwardableCookies, Gateway, PasswordListIdentity, routeOf, SESSION_COOKIE, SessionSigner, stripIdentityHeaders, safeNext } from "./gateway.ts";
+import { forwardableCookies, Gateway, PasswordListIdentity, routeOf, SESSION_COOKIE, SessionSigner, stripIdentityHeaders } from "./gateway.ts";
+import { safeNext } from "../web/auth.ts";
 
 /** A stand-in box UI: reports back exactly what it was sent, so leaks are visible. */
 async function fakeBoxUi(expectedToken: string): Promise<{ url: string; close: () => void }> {

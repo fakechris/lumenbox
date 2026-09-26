@@ -779,3 +779,24 @@ test("nextFire reads cron and interval schedules by the tick's own rules, in the
   assert.equal(nextFire(every, new Date("2026-09-11T07:00:00Z"), new Date("2026-09-11T06:00:00Z"))?.toISOString(), "2026-09-11T08:00:00.000Z");
   assert.equal(nextFire(every, new Date("2026-09-11T07:00:00Z"), undefined)?.toISOString(), "2026-09-11T07:00:00.000Z", "never run means now");
 });
+
+test("a routine's declared tools travel with every run of it, timed or by hand (INV-691)", async () => {
+  const scopes: (readonly string[] | undefined)[] = [];
+  const clock = at("2026-08-20T09:00:00");
+  const scheduler = new Scheduler({
+    due: async () => [
+      { slug: "brief", name: "Brief", path: "/p", schedule: scheduleOf("@every 30m"), allowedTools: ["read_file", "WebSearch"] },
+      { slug: "tidy", name: "Tidy", path: "/q", schedule: scheduleOf("@every 30m") },
+    ],
+    run: async (_agent, _prompt, _deliver, _slug, toolScope) => {
+      scopes.push(toolScope);
+    },
+    defaultAgent: () => "agent-ada",
+    now: () => clock,
+    path: null,
+  });
+  await scheduler.tick();
+  await scheduler.runNow("brief");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(scopes, [["read_file", "WebSearch"], undefined, ["read_file", "WebSearch"]]);
+});

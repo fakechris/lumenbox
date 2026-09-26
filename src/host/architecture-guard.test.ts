@@ -209,3 +209,38 @@ test("a message's id is minted at the door, or inherited — never invented down
     .map(file => file.path);
   assert.deepEqual(offenders, [], "carry the id the door minted; do not mint a second one for the same message");
 });
+
+test("what a tool does to the world is declared in side-effects.ts and nowhere else (INV-691)", () => {
+  // The table this replaced sat in tools.ts, was read by nothing, and named a tool that did not
+  // exist. A second declaration would drift from the first the same way.
+  const tier = /\btier:\s*"(?:observe|self|reach|spend|credential)"/;
+  const elsewhere = sources()
+    .filter(file => file.path !== "host/side-effects.ts" && tier.test(file.text))
+    .map(file => file.path);
+  assert.deepEqual(elsewhere, [], "declare a tool's effect in src/host/side-effects.ts");
+});
+
+test("Claude Code's tool names map to ours in engine-tools.ts only (INV-691)", () => {
+  // mcp-face.ts had its own four-line mapping; skills.ts grew a second. One table now.
+  const table = /\bmultiedit\b["']?\s*:|\bMultiEdit\b["']?\s*:/;
+  const elsewhere = sources()
+    .filter(file => file.path !== "host/engine-tools.ts" && table.test(file.text))
+    .map(file => file.path);
+  assert.deepEqual(elsewhere, [], "map an engine tool name in src/host/engine-tools.ts");
+});
+
+test("a login's next is checked by safeNext in web/auth.ts and nowhere else (INV-724)", () => {
+  // The box and the control-plane gateway each had their own check, and each missed a different
+  // way a browser leaves the origin (`/\`, then tab). A third hand-rolled `startsWith("//")`
+  // check would be the same bug again.
+  const handRolled = /\.startsWith\(\s*["']\/\/["']\s*\)/;
+  // The pattern has to catch what it is for, or the empty list below proves nothing.
+  assert.ok(handRolled.test(`const next = raw.startsWith("/") && !raw.startsWith("//") ? raw : "/";`));
+  // tools.ts checks a connector_request path, which is appended to a fixed API base after its
+  // host — a leading "/" already ends the authority, so it is not a redirect and cannot leave it.
+  const allowed = new Set(["web/auth.ts", "host/tools.ts"]);
+  const elsewhere = sources()
+    .filter(file => !allowed.has(file.path) && handRolled.test(file.text))
+    .map(file => file.path);
+  assert.deepEqual(elsewhere, [], "check a redirect target with safeNext from src/web/auth.ts");
+});

@@ -2,7 +2,7 @@
      title: Episodes as tests
      family: decision
      status: current
-     updated: 2026-09-14
+     updated: 2026-09-25
 -->
 # 43 · Episodes as tests
 
@@ -100,6 +100,38 @@ it was not written on; the untaught control recalls nothing), execution, verific
 The report prints the 5×3 matrix taught|untaught with failures by stage, says that the
 call delta is by construction of the scripted model, and lists as UNVERIFIED the same
 matrix on a real model and the two non-author installs the contract asks for.
+
+## Skills say when they are used (INV-693, 2026-09-25)
+
+A skill's description is chosen or ignored by the model, which no scripted episode can test. So
+each starter carries cases (`STARTER_EVALS` in `starter-skills.ts`, schema in `skill-evals.ts`):
+at least one **trigger** — a request it owns — and one **no-trigger**, taken from the neighbour it
+is most easily confused with. `npm test` holds the shape: every starter has both kinds, `instead`
+names a real skill, preset files stay under `/home/box`. The judgement is one mechanical fact —
+did the agent `read_file` that skill's `SKILL.md` — because the prompt carries only the index,
+so a skill that was used was opened.
+
+`npm run scenario -- --skills [--only <slug>] [--runs N] [--calls N] [--trail]` runs them on the
+configured provider: the real turn, prompt and index, every starter at its box path, the memory
+box (whose shell now answers `ls`/`cat`/`wc -l`/`pwd`/`echo` from its files), the model cut after
+`--calls` calls because the choice comes first. `·` pass, `x` fail, `-` N/A, `!` the model never
+answered. **N/A and `!` are never a pass** — the first version counted a run whose every call
+failed as a no-trigger pass, because a model that did nothing also opened nothing.
+
+**The tuning loop.** Tag each `x`: **[agent]** — the model had what it needed and did not open
+the skill; fix the description. **[infra]** — the case or the harness stood in the way (a
+preset file missing, a command the memory box cannot answer); fix the case. Rerun what changed.
+
+**First two rounds, MiniMax-M3, one run per case.** No-trigger 12/12 both rounds: no starter is
+drawn too wide. Trigger 4/12, then 5/12 after rewriting eight descriptions from *what it does* to
+*use when*, with the Chinese words people type and the neighbour that owns the adjacent request.
+The rewrite fixed wechat-longform and short-video-script. Of the rest, five were [infra] —
+`find`, `git` and `date` the memory box cannot answer, and a Downloads case with no Downloads
+folder (fixed; it then failed as [agent]) — and research-brief, data-brief and tidy-downloads are
+[agent] of one kind: the model acts on the request at once and never consults the index,
+whatever the description says. That is a finding about how the index is framed in the prompt,
+not about any one description, and is the next thing to change. One run per case is noisy:
+the same sentence opened short-video-script in one case and not in another.
 
 ## What it is not
 
