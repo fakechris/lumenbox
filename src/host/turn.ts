@@ -25,7 +25,7 @@ import type { McpFace } from "./mcp-face.ts";
 import type { ModelRelay } from "./model-relay.ts";
 import type { DelegateSessions } from "./delegate-sessions.ts";
 import { classifyFailure, type FailureCategory } from "./failure-taxonomy.ts";
-import type { Skill } from "./skills.ts";
+import { visibleTo, type Skill } from "./skills.ts";
 import {
   classifyLimit,
   continuationPrompt,
@@ -1449,6 +1449,10 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
         records: sharedMemory, budget: SHARED_CHAR_BUDGET, ...selection,
       })]);
 
+  // The skills this turn's prompt lists — narrowed by the box's bundles, then by who may see each —
+  // computed once, so the per-turn reminder never points at a list the prompt does not contain.
+  const offeredSkills = isolated ? [] : narrowSkills(deps.skills ?? [], deps.bundles?.forBox(registry.boxOf(agent.id)));
+  const visibleSkillCount = visibleTo(offeredSkills, agent.profile.name).length;
   // Built once, and the volatile half rebuilt on every continuation — see `rebuildVolatile`. The
   // stable half never changes for one agent, so it is fixed here.
   const buildParts = (recallToUse: typeof memoryRecall) =>
@@ -1460,7 +1464,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       memoryQuery,
       sharedMemory,
       sharedMemoryRecall,
-      skills: isolated ? [] : narrowSkills(deps.skills ?? [], deps.bundles?.forBox(registry.boxOf(agent.id))),
+      skills: offeredSkills,
       place: placeOf(registry, agent.id, deps.bundles),
       transcript: registry.readTranscript(agent.id, conversation),
       heard: isolated ? [] : registry.readHeard(agent.id, conversation),
@@ -1629,7 +1633,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   // The per-turn reminder rides the API copy of the person's message only (docs/31 layer
   // 2b): the transcript keeps what the person said, and a later replay re-appends nothing.
   const opener = inbound.some(message => message.fromId === "user")
-    ? turnReminderFor(provider.model, turnText, (deps.skills?.length ?? 0) > 0 && !isolated)
+    ? turnReminderFor(provider.model, turnText, visibleSkillCount > 0)
     : undefined;
   const messages: Anthropic.MessageParam[] = [
     ...historyToMessages(history),

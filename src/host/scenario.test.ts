@@ -1057,20 +1057,47 @@ test("the memory box answers looking around from its files, and anything else as
   } finally { result.cleanup(); }
 });
 
-test("the memory box also answers find, date, head and git — git honestly, with no repository (INV-715)", async () => {
-  let seen = "";
+test("the memory box answers find, date, head and git honestly — filters applied, statuses kept (INV-715)", async () => {
+  const outputs: string[] = [];
+  const commands = [
+    "date; find /home/box/work/notes -type f -name '*.md'",
+    "find /home/box/work/notes -type f -mtime -1",
+    "cd /home/box/work && git log --oneline -5 && head -n 1 /home/box/work/notes/a.txt",
+    "head -n 1 /home/box/work/notes/a.txt; tail -1 /home/box/work/notes/a.txt",
+  ];
   const result = await runEpisode({
     team: [{ name: "Nova" }], says: ["look"],
     files: { "/home/box/work/notes/a.txt": "alpha\nbeta\n", "/home/box/work/notes/deep/b.md": "# b\n" },
     script: ({ round, messages }) => {
-      if (round === 0) return { call: "bash", input: { command: "date; find /home/box/work/notes -type f -mtime -1; cd /home/box/work && git log --oneline -5; head -n 1 /home/box/work/notes/a.txt" } };
-      if (round === 1) seen = JSON.stringify(messages.at(-1)?.content);
+      if (round > 0) outputs.push(JSON.stringify(messages.at(-1)?.content));
+      if (round < commands.length) return { call: "bash", input: { command: commands[round]! } };
       return { say: "done" };
     },
   });
   try {
-    assert.match(seen, /2026/);
-    assert.match(seen, /notes\/a\.txt\\n\/home\/box\/work\/notes\/deep\/b\.md/);
-    assert.match(seen, /not a git repository/);
+    assert.match(outputs[0]!, /2026/);
+    assert.match(outputs[0]!, /deep\/b\.md/);
+    assert.doesNotMatch(outputs[0]!, /a\.txt/, "-name filters");
+    assert.match(outputs[1]!, /-mtime is not supported/, "a predicate it cannot honour is refused, not ignored");
+    assert.match(outputs[2]!, /not a git repository/);
+    assert.doesNotMatch(outputs[2]!, /alpha/, "&& stops after git fails");
+    assert.match(outputs[3]!, /alpha/);
+    assert.match(outputs[3]!, /beta/);
+    assert.doesNotMatch(outputs[3]!.replace(/beta/, ""), /beta/, "head -n 1 and tail -1 each give one line");
+  } finally { result.cleanup(); }
+});
+
+test("the turn's skills reminder follows the skills the prompt actually lists, not the raw set (INV-715)", async () => {
+  const skill = { name: "Rex only", slug: "rex-only", description: "Use when…", path: "/home/box/work/skills/rex-only/SKILL.md", scope: "agent" as const, owner: "Rex", helpers: [] };
+  let opener = "";
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: ["帮我调研一下固态电池的进展"],
+    skills: [skill],
+    provider: { label: "test", model: "MiniMax-M3" } as never,
+    script: ({ messages }) => { opener = JSON.stringify(messages.at(-1)?.content); return { say: "ok" }; },
+  });
+  try {
+    assert.match(opener, /system_reminder/, "the reminded model gets the reminder");
+    assert.doesNotMatch(opener, /Skills 清单/, "a skill only Rex can see is not in Nova's prompt, so the reminder does not point at it");
   } finally { result.cleanup(); }
 });

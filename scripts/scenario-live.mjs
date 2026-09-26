@@ -156,6 +156,13 @@ async function skillEvals(provider, runs, only) {
     return made.skill;
   });
   const skillFiles = Object.fromEntries(starters.map(starter => [`${SKILLS_DIR}/${starter.slug}/SKILL.md`, starter.content]));
+  // An absent --kind means both; a --kind with no value or an unknown one is a mistake, and
+  // running everything or nothing in its place would read as a result.
+  const kind = process.argv.includes("--kind") ? flag("--kind") : undefined;
+  if (process.argv.includes("--kind") && kind !== "trigger" && kind !== "no-trigger") {
+    console.error(`--kind needs trigger or no-trigger, not ${kind ?? "nothing"}.`);
+    process.exit(1);
+  }
   const chosen = only ? starters.filter(starter => starter.slug === only) : starters;
   if (chosen.length === 0) {
     console.error(`No starter called ${only}.`);
@@ -165,7 +172,6 @@ async function skillEvals(provider, runs, only) {
   const rows = [];
   for (const starter of chosen) {
     const path = `${SKILLS_DIR}/${starter.slug}/SKILL.md`;
-    const kind = flag("--kind");
     for (const one of starter.evals.filter(item => kind === undefined || item.kind === kind)) {
       const verdicts = [];
       const opened = new Set();
