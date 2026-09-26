@@ -17,8 +17,10 @@
  * `AGENTBOX_GUARDS=0` switches every guard off, for the ablation run R28 established.
  */
 
+import { describeClaim, unmetClaim } from "./action-claims.ts";
+
 /** Which guard fired, for the log and the counter. */
-export type GuardReason = "verdict-without-check" | "offers-to-check" | "trailing-intent";
+export type GuardReason = "verdict-without-check" | "offers-to-check" | "trailing-intent" | "claim-without-call";
 
 /** How many times the guards may send the model back in one turn. Hermes: 2. */
 export const MAX_GUARD_NUDGES = 2;
@@ -84,23 +86,43 @@ export function trailingIntent(text: string): boolean {
 /**
  * Which guard, if any, a final text trips.
  *
+ * `toolsThisTurn` names every tool the turn called, in order, for the claim guard (INV-779):
+ * a completed-action claim ("已发送", "I've saved it") must be backed by a call of the matching
+ * category in this turn. Checked after the three older guards, and regardless of the count —
+ * a turn that read three files and then claims to have sent the email is the case it exists for.
+ *
  * The structural condition comes first and is the only one that unlocks the verdict and
  * offer families: a turn that already used a tool has checked *something*, and a ruling
  * after evidence is the model's to make. The trailing-intent family applies regardless —
  * "I'll check now" with nothing following is wrong at any point in a turn.
  */
-export function guardFor(text: string, toolCallsThisTurn: number): GuardReason | undefined {
+export function guardFor(
+  text: string,
+  toolCallsThisTurn: number,
+  toolsThisTurn: readonly string[] = []
+): GuardReason | undefined {
   if (toolCallsThisTurn === 0) {
     if (verdictWithoutCheck(text)) return "verdict-without-check";
     if (offersToCheck(text)) return "offers-to-check";
   }
   if (trailingIntent(text)) return "trailing-intent";
+  if (unmetClaim(text, toolsThisTurn) !== undefined) return "claim-without-call";
   return undefined;
 }
 
-/** What the model is told, per reason. Not written to the durable record (Hermes's rule). */
-export function nudgeFor(reason: GuardReason, chinese: boolean): string {
+/**
+ * What the model is told, per reason. Not written to the durable record (Hermes's rule).
+ * The claim guard names the claim it read, so `text` is what fired it.
+ */
+export function nudgeFor(reason: GuardReason, chinese: boolean, text = ""): string {
   switch (reason) {
+    case "claim-without-call": {
+      const claim = unmetClaim(text, []);
+      const what = describeClaim(claim ?? "send", chinese);
+      return chinese
+        ? `[harness] 你说你已经${what}，但这一轮没有发生对应的工具调用。要么如实说明真实状态（还没做），要么先调用工具把它做了，再回复。不要重复刚才的话。`
+        : `[harness] You said you have ${what}, but no call of that kind happened in this turn. Either state the real status (it has not been done), or do it first with a tool and then reply. Do not repeat what you just said.`;
+    }
     case "verdict-without-check":
       return chinese
         ? "[harness] 你刚才对一个具体事物的存在、版本或真伪下了结论，但这一轮没有调用任何工具。你的权重和记忆是过去；先用工具（WebSearch 等）核实，再回答。不要重复刚才的话。"

@@ -30,6 +30,8 @@ import { runTurn } from "./turn.ts";
 import { fakeModel } from "./testing/fake-model.ts";
 import type { BoxClient } from "../box/client.ts";
 import type { HistoryEntry } from "./compaction.ts";
+import { Rememberer, summariseExchange } from "./remember.ts";
+import { memoryRef } from "./memory.ts";
 import type { ProviderProfile } from "./provider.ts";
 import type { PolicyGate } from "./policy.ts";
 import type { McpManager } from "./mcp.ts";
@@ -309,8 +311,19 @@ export interface EpisodeOptions {
   history?: readonly HistoryEntry[];
   /** Script only the relevance decision, while retaining the production projection path. */
   selectMemory?: (prompt: string) => Promise<string | undefined>;
-  /** Drive concurrent channel arrivals through the real bus instead of sequential says. */
-  drive?: (context: { bus: AgentBus; registry: AgentRegistry; frontId: string; files: Map<string, string> }) => Promise<void>;
+  /**
+   * Wire the production memory path (INV-778): each person-driven turn is recorded for
+   * batch extraction and a compaction flushes what it summarises, both through the
+   * scripted model. Opt-in, because the extra model calls would surprise every script
+   * that counts rounds.
+   */
+  memory?: boolean;
+  /**
+   * Drive concurrent channel arrivals through the real bus instead of sequential says.
+   * `say` is one line of `says`, with the same after-turn bookkeeping, for a drive that
+   * needs to change the world between turns.
+   */
+  drive?: (context: { bus: AgentBus; registry: AgentRegistry; frontId: string; files: Map<string, string>; say: (line: string) => Promise<void> }) => Promise<void>;
 }
 
 /**
@@ -342,7 +355,9 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
   const front = registry.list()[0]!;
   for (const entry of options.history ?? []) registry.appendTranscript(front.id, entry);
 
-  const scripted = fakeModel(async ({ params }) => {
+  // One responder for both wires: the turn loop streams, the summariser and the memory
+  // extractor call `create` (INV-778). A script tells them apart by what opened the call.
+  const respond = async ({ params }: { params: Anthropic.MessageCreateParams }) => {
     calls += 1;
     if (calls > maxRounds) return message([{ type: "text", text: "(scenario cut: too many rounds)" } as Anthropic.ContentBlock], "end_turn");
     const system =
@@ -373,10 +388,14 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       [{ type: "tool_use", id: `t${clock}`, name: reply.call, input: reply.input } as unknown as Anthropic.ContentBlock],
       "tool_use"
     );
-  });
+  };
+  const scripted = fakeModel(respond, { create: respond });
   if (options.client === undefined && options.script === undefined) throw new Error("runEpisode needs a script or a client");
   const client = options.client ?? scripted;
 
+  const rememberer = options.memory === true
+    ? new Rememberer({ registry, client, provider: { label: "scenario", model: "scenario", maxTokens: 1024 } as ProviderProfile })
+    : undefined;
   const bus: AgentBus = new AgentBus(registry, async (record, inbound, signal, conversation) => {
     for (const inboundMessage of inbound) {
       if (inboundMessage.fromId !== "user") {
@@ -403,6 +422,9 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       ...(options.display !== undefined ? { displayIndex: options.display } : {}),
       ...(options.skills !== undefined ? { skills: options.skills } : {}),
       conversation,
+      ...(rememberer !== undefined
+        ? { onSummarised: (agentId: string, conversationId: string, entries: readonly HistoryEntry[]) => { void rememberer.flush(agentId, conversationId, entries).catch(() => {}); } }
+        : {}),
       askUser: async (input: { agentName: string; question: string }) => {
         observations.push({ at: clock++, agent: input.agentName, kind: "call", name: "AskUser:delivered", input: { question: input.question } });
         return "in the app";
@@ -410,12 +432,23 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
     } as never);
   });
 
-  if (options.drive !== undefined) await options.drive({ bus, registry, frontId: front.id, files });
-  for (const line of options.says) {
+  const say = async (line: string): Promise<void> => {
+    const before = registry.readTranscript(front.id).length;
     bus.sendFromUser(front.id, line);
     await bus.wake(front.id);
     await bus.idle();
-  }
+    if (rememberer === undefined) return;
+    // The orchestrator's after-turn bookkeeping, on the same terms: the reply read back
+    // from the transcript, cited by conversation and time. Settled before the next line,
+    // so a scenario asserts on a ledger that has caught up — the production path does not wait.
+    const written = registry.readTranscript(front.id).slice(before) as { role?: string; kind?: string; text?: string; at?: string }[];
+    const said = written.filter(entry => entry.role === "assistant" && entry.kind === undefined && entry.text).map(entry => entry.text!).join("\n\n");
+    const last = written[written.length - 1];
+    if (said !== "") await rememberer.record({ agentId: front.id, text: summariseExchange(line, said), ref: memoryRef("main", new Date()), conversation: "main", ...(last?.at !== undefined ? { at: last.at } : {}) });
+    await rememberer.settle(front.id);
+  };
+  if (options.drive !== undefined) await options.drive({ bus, registry, frontId: front.id, files, say });
+  for (const line of options.says) await say(line);
 
   // Errors are read off the transcripts: a refused tool is the rail doing its job, and a
   // scenario asserts on it by name.

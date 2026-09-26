@@ -1314,3 +1314,144 @@ test("a person's turn is not given the unattended conduct (INV-780)", async () =
     for (const system of seen) assert.doesNotMatch(system, /Nobody is watching this turn/);
   } finally { result.cleanup(); }
 });
+
+// ── 2026-09-26, INV-778: "以后报告都用公制", two compactions later ──────────────────────────
+//
+// What could happen: the person states a standing preference early in a long room; a batch
+// extraction never got to that stretch before compaction summarised it; the summariser
+// paraphrased it into nothing. Two compactions later the agent reports in miles.
+//
+// What the harness must hold: the entries a summary replaces are flushed to memory first
+// (the ledger holds the preference, cited to where it was said), and the person's own
+// sentence rides as an anchor through both summaries — so the third turn sees it twice.
+
+test("a preference said before two compactions is in the ledger with provenance and still in the context", async () => {
+  const at = "2026-09-26T08:00:00.000Z";
+  const filler = (from: number, count: number): HistoryEntry[] =>
+    Array.from({ length: count }, (_, i) => from + i).flatMap(i => [
+      { role: "assistant" as const, kind: "blocks" as const, at, blocks: [{ type: "tool_use" as const, id: `t${i}`, name: "bash", input: { command: `step ${i}` } }] },
+      { role: "user" as const, kind: "results" as const, at, blocks: [{ type: "tool_result" as const, tool_use_id: `t${i}`, content: `output ${i}` }] },
+    ]);
+  let summaries = 0;
+  let flushes = 0;
+  let reportContext = "";
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: [], memory: true,
+    selectMemory: async () => '{"selected":[1]}',
+    history: [
+      { role: "user", text: "以后报告都用公制。", at },
+      { role: "assistant", text: "好的。", at },
+      ...filler(0, 170),
+    ],
+    script: ({ opened, system, messages }) => {
+      if (opened.startsWith("Summarise the earlier part")) {
+        summaries += 1;
+        // A summariser that paraphrases the preference away — the failure the anchors exist for.
+        return { say: "**Threads**\n- 例行步骤，进行中\n**Done**\n- 跑了若干步骤\n**State**\n- 他们对报告格式有些偏好\n**Artifacts**\nnone" };
+      }
+      if (opened.startsWith("Below is part of a conversation")) {
+        // The conversation shown, not the "already remembered" list above it — after the
+        // first flush the ledger line itself says 公制.
+        if (!(opened.split("--- conversation ---")[1] ?? "").includes("公制")) return { say: "NOTHING" };
+        flushes += 1;
+        assert.match(opened, /change of state comes/, "the flush prompt puts state changes first");
+        return { say: "他们要求以后所有报告都用公制单位" };
+      }
+      if (opened.includes("exchanges from your recent work")) return { say: "NOTHING" };
+      // After a compaction the first message is the summary, so the ask is read off the last.
+      if (JSON.stringify(messages.at(-1) ?? "").includes("给我一份报告")) {
+        reportContext = system + JSON.stringify(messages);
+        return { say: "报告：全长 12 公里，气温 20 摄氏度。" };
+      }
+      return { say: "继续中。" };
+    },
+    drive: async ({ registry, frontId, say }) => {
+      await say("继续");
+      assert.equal(summaries, 1, "the first turn compacted (over the entry trigger)");
+      for (const entry of filler(1000, 80)) registry.appendTranscript(frontId, entry);
+      await say("再继续");
+      assert.equal(summaries, 2, "and the second compacted the first summary");
+      await say("给我一份报告");
+    },
+  });
+  try {
+    assert.equal(flushes, 1, "the preference stretch was flushed once, at the first compaction, not again at the second");
+    const kept = result.registry.readMemoryRecords(result.registry.list()[0]!.id).filter(record => /公制/.test(record.text));
+    assert.equal(kept.length, 1, "the ledger holds the preference once");
+    assert.deepEqual(kept[0]!.from, ["main@2026-09-26T08:00"], "cited to where it was said");
+    assert.match(reportContext, /以后报告都用公制/, "the person's sentence is still in the context two summaries later");
+    assert.match(reportContext, /他们要求以后所有报告都用公制单位/, "and the memory is projected");
+    assert.match(result.score.said.filter(item => item.agent === "Nova").at(-1)!.text, /公里/, "the report is in metric");
+  } finally { result.cleanup(); }
+});
+
+test("a reply that claims the email was sent with no send call is sent back, and the model then sends it (INV-779)", async () => {
+  const sent: unknown[] = [];
+  const mcp = {
+    toolsFor: () => [{ name: "google__send_email", description: "Send an email.", inputSchema: { type: "object", properties: { to: { type: "string" }, body: { type: "string" } } } }],
+    isHostTool: () => false,
+    owns: (name: string) => name === "google__send_email",
+    call: async (_name: string, input: unknown) => { sent.push(input); return "sent"; },
+    describeTools: () => "google__send_email",
+  };
+  const conduct: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => { const line = args.map(String).join(" "); if (line.includes("[conduct]")) conduct.push(line); };
+  let nudge = "";
+  let result: Awaited<ReturnType<typeof runEpisode>>;
+  try {
+    result = await runEpisode({
+      team: [{ name: "Nova" }], says: ["给王总发封邮件说报价明天给他"],
+      mcp: mcp as never,
+      script: ({ round, messages }) => {
+        if (round === 0) return { say: "好的，邮件已发送给王总。" };
+        if (round === 1) {
+          const last = messages.at(-1);
+          nudge = typeof last?.content === "string" ? last.content : JSON.stringify(last?.content);
+          return { call: "google__send_email", input: { to: "wang@example.com", body: "报价明天给您。" } };
+        }
+        return { say: "已发送给王总。" };
+      },
+    });
+  } finally { console.error = original; }
+  try {
+    assert.match(nudge, /\[harness\] 你说你已经发送/, "the send-back names the claim");
+    assert.match(nudge, /真实状态|先调用工具/);
+    assert.equal(sent.length, 1, "the model then actually sent it");
+    assert.ok(conduct.some(line => /guard claim-without-call fired \(1\/2/.test(line)), conduct.join("\n"));
+    assert.ok(conduct.some(line => /guard claim-without-call complied/.test(line)), conduct.join("\n"));
+    const front = result.registry.list()[0]!;
+    const replies = (result.registry.readTranscript(front.id) as { role?: string; text?: string }[]).filter(e => e.role === "assistant" && e.text);
+    assert.deepEqual(replies.map(e => e.text), ["已发送给王总。"], "only the true reply is delivered text");
+  } finally { result.cleanup(); }
+});
+
+test("a model that keeps claiming with no call is nudged twice, recorded as ignored, and still delivered (INV-779)", async () => {
+  const mcp = {
+    toolsFor: () => [{ name: "google__send_email", description: "Send an email.", inputSchema: { type: "object", properties: { to: { type: "string" } } } }],
+    isHostTool: () => false,
+    owns: (name: string) => name === "google__send_email",
+    call: async () => "sent",
+    describeTools: () => "google__send_email",
+  };
+  const conduct: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => { const line = args.map(String).join(" "); if (line.includes("[conduct]")) conduct.push(line); };
+  let rounds = 0;
+  let result: Awaited<ReturnType<typeof runEpisode>>;
+  try {
+    result = await runEpisode({
+      team: [{ name: "Nova" }], says: ["给王总发封邮件"],
+      mcp: mcp as never,
+      script: () => { rounds++; return { say: "邮件已发送。" }; },
+    });
+  } finally { console.error = original; }
+  try {
+    assert.equal(rounds, 3, "two nudges, then the third reply goes out");
+    assert.equal(conduct.filter(line => /guard claim-without-call fired/.test(line)).length, 2);
+    assert.equal(conduct.filter(line => /guard claim-without-call ignored/.test(line)).length, 2);
+    const front = result.registry.list()[0]!;
+    const replies = (result.registry.readTranscript(front.id) as { role?: string; text?: string }[]).filter(e => e.role === "assistant" && e.text);
+    assert.deepEqual(replies.map(e => e.text), ["邮件已发送。"], "delivery is not blocked forever");
+  } finally { result.cleanup(); }
+});

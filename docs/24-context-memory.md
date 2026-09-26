@@ -2,7 +2,7 @@
      title: Context, memory and compaction: ours, against Hermes and OpenClaw
      family: decision
      status: current
-     updated: 2026-09-14
+     updated: 2026-09-26
 -->
 # Context, memory and compaction: ours, against Hermes and OpenClaw
 
@@ -172,7 +172,7 @@ follow schemas, lost the `computer` format and burned ten minutes.
 | Iterative update | implicit (old summary re-rendered) | explicit previous-summary prompt | explicit UPDATE/merge prompts |
 | Anti-thrash | **none** | ineffective-count, cooldown, backoff, real-usage verdict | overflow retry cap, prune fallback ladder |
 | Recovery of compacted detail | **`ReadHistory`**, advertised post-compaction | FTS5 `session_search` + summary embeds the call | files list carried; transcript in SQLite |
-| Pre-compaction memory save | persisted plan/todos re-read on 400-round continuation (passive; unwritten plans die) | 10-turn background review fork | **flush turn before compaction** (active) |
+| Pre-compaction memory save | **flush of the not-yet-extracted entries a summary replaces, cited per exchange, state changes first** (INV-778, 2026-09-26; before that: passive plan/todos re-read only) | 10-turn background review fork | **flush turn before compaction** (active) |
 | Speculative background summary | **yes — unique as off-thread LLM summary** | display-token preflight seed, not a summary; gates synchronous | preflight is synchronous |
 | Prefix-cache discipline | 2 breakpoints; volatile half rebuilt on 400-round continuation | first-class invariant, byte-identical reuse | first-class, TTL-gated pruning, 4 breakpoints |
 | Weak-model schema insurance | none (bitten) | skill-marker reinjection, protected tail 20 msgs | recent-turns-verbatim guarantees |

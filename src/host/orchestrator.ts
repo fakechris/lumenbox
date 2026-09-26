@@ -90,6 +90,7 @@ import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
 import type { OAuthGate } from "./oauth.ts";
 import { Rememberer, summariseExchange } from "./remember.ts";
+import type { HistoryEntry } from "./compaction.ts";
 import { memoryRef } from "./memory.ts";
 import type { PitfallSource } from "./pitfalls.ts";
 import { SkillCache } from "./skills.ts";
@@ -1624,20 +1625,10 @@ export class Orchestrator {
       delegateSessions: this.delegateSessions,
       onSummarised: (agentId, conversationId, entries) => {
         if (this.registry.contextMode(agentId, conversationId) !== "normal") return;
-        // The prose of what the summary replaces, bounded: enough for the extractor to
-        // find a decision in, not the whole history it is standing in for.
-        const prose = entries
-          .flatMap(entry => {
-            const shaped = entry as { role?: string; text?: unknown };
-            return typeof shaped.text === "string" && (shaped.role === "user" || shaped.role === "assistant")
-              ? [`${shaped.role}: ${shaped.text}`]
-              : [];
-          })
-          .join("\n\n");
-        const bounded = prose.length > 12_000 ? `${prose.slice(0, 6_000)}\n…\n${prose.slice(-6_000)}` : prose;
-        void this.rememberer
-          .flush(agentId, bounded, memoryRef(conversationId, new Date()))
-          .catch(() => {});
+        // What the summary replaces goes to the extractor first, minus what a batch
+        // already took (INV-778). Not awaited: the flush is insurance for the summary,
+        // never a gate on it, and it logs its own failure.
+        void this.rememberer.flush(agentId, conversationId, entries as HistoryEntry[]).catch(() => {});
       },
       boxKind: this.boxEntryOf(agent.id).kind,
       // The same cheap profile the summariser and the note-taker use. Choosing which memories to
@@ -1968,11 +1959,16 @@ export class Orchestrator {
       // and the time the reply was read back, which is how a person finds it again in the
       // transcript (the `History` tool searches by conversation and shows times).
       const ref = memoryRef(conversation, new Date(), options.messageId);
+      // The transcript time of the exchange, so a compaction flush and the batch agree
+      // on which entries each has extracted (INV-778).
+      const last = this.registry.readTranscript(agent.id, conversation).at(-1) as { at?: string } | undefined;
       void this.rememberer
         .record({
           agentId: agent.id,
           text: summariseExchange(text, said),
           ref,
+          conversation,
+          ...(last?.at !== undefined ? { at: last.at } : {}),
           // Taking notes on a person's conversation is that person's cost. A batch that
           // spans two people bills to neither — see Rememberer.payerOf.
           ...(caller?.userId !== undefined ? { principal: caller.userId } : {}),
