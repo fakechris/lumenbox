@@ -302,3 +302,18 @@ test("a file that lost its beginning says so", () => {
   writeFileSync(path, `${JSON.stringify({ ...entry(), seq: 4_812, at: new Date().toISOString() })}\n`);
   assert.equal(new UsageLog(path).compacted(), true, "seq 4812 as the first line means 4811 are gone");
 });
+
+test("an anomaly is a zero-token row, counted by name and visible under its own kind (INV-775)", () => {
+  const log = new UsageLog(logPath());
+  log.record(entry("Ada", 0));
+  log.noteAnomaly({ anomaly: "empty_output", agentId: "id-Ada", agentName: "Ada", provider: "minimax", model: "MiniMax-M3", round: 2, turnId: "t1" });
+  log.noteAnomaly({ anomaly: "empty_output", agentId: "id-Bob", agentName: "Bob", provider: "minimax", model: "MiniMax-M3", round: 0 });
+
+  assert.deepEqual(log.anomaliesSince(), [{ anomaly: "empty_output", count: 2 }]);
+  const anomalies = log.byKind().find(group => group.kind === "anomaly")!;
+  assert.equal(anomalies.totals.records, 2);
+  assert.equal(anomalies.totals.inputTokens + anomalies.totals.outputTokens, 0, "counting a fault spends nothing");
+  // The real spend is untouched by the count.
+  assert.equal(log.totalsSince(0).outputTokens, 20);
+  assert.deepEqual(log.anomaliesSince(Date.now() + 60_000), []);
+});

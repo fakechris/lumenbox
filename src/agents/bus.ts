@@ -104,6 +104,12 @@ export interface InboundMessage {
    */
   synthetic?: boolean;
   /**
+   * A person said this in a room without addressing this agent (INV-775): a group message
+   * that names nobody, on a door that runs every message. The turn is a person's, but nobody
+   * is waiting on this agent in particular, so it may end in deliberate silence.
+   */
+  addressed?: false;
+  /**
    * The tools a routine's own skill said it needs (INV-691). A turn opened only by messages that
    * carry one is offered what the agent has *and* the skill named — never more. Rides inside the
    * message so a routine resumed after a restart is held to the same list.
@@ -457,6 +463,8 @@ export class AgentBus {
       steerable?: boolean;
       lane?: Lane;
       synthetic?: boolean;
+      /** False when the message named nobody in a room; see `InboundMessage.addressed`. */
+      addressed?: boolean;
       /**
        * The id the message already has, when it came through a door: minted where the
        * channel message was admitted and written to `messages.jsonl` there, so the same
@@ -474,6 +482,7 @@ export class AgentBus {
       fromId: "user",
       fromName: "user",
       ...(options.synthetic === true ? { synthetic: true } : {}),
+      ...(options.addressed === false ? { addressed: false as const } : {}),
       text: clampMessage(text, AGENT_MESSAGE_MAX_LENGTH),
       priority: false,
       receivedAt: new Date().toISOString(),

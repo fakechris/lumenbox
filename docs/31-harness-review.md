@@ -108,6 +108,17 @@ to report"), the engine sends one hidden nudge — "you acknowledged and then ra
 person's last sight of you is the acknowledgement; deliver the result now" — and lets the
 model finish. Once per turn. Logged as `[conduct] closing-nudge`.
 
+**1b′. Silence is a call, empty output is an anomaly (INV-775, 2026-09-26).** On a turn nobody
+is waiting on — a teammate's wake, a fork landing, a schedule, a webhook, a listener, a room
+message that addressed nobody — the agent is offered `NothingToSay(reason)`. Calling it ends the
+turn: the reason is recorded on the `blocks` entry as `silent`, the ledger says `silent`, nothing
+is delivered, and neither the closing nudge nor commitment reconciliation runs. The tool is
+withheld (and refused if forged) on any turn a person opened. A turn that ends with no text and
+no such call is `empty_output`: the "ended without anything to report" note stays for the reader
+but is marked `host: true` so `replySince` never delivers it, and `usage.jsonl` counts it as a
+zero-token `anomaly` row. The prompts for those lanes now say "call NothingToSay with the reason"
+where they used to say "reply with an empty message".
+
 **1c. Parallel read-only tools (Hermes's set, our names).** In `turn.ts`, split a round's
 tool calls into segments in the model's order: a run of calls whose names are all in
 `PARALLEL_SAFE` (`WebSearch, WebFetch, read_file, list_dir, Recall, ReadHistory,

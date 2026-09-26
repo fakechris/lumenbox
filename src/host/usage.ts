@@ -31,7 +31,15 @@ import { agentboxHome } from "../config.ts";
  *
  * `turn` is the agent thinking. The other three are the harness keeping house around it.
  */
-export type UsageKind = "turn" | "summarize" | "memory" | "select" | "review" | "delegate";
+export type UsageKind = "turn" | "summarize" | "memory" | "select" | "review" | "delegate" | "anomaly";
+
+/**
+ * Something the model did that spent nothing and should still be counted (INV-775).
+ * `empty_output`: a turn ended with no text and no `NothingToSay` call — silence the runtime
+ * cannot tell from a decision. One per turn, on a zero-token row of kind `anomaly`, so a
+ * model that does this often shows up in the same ledger as what it costs.
+ */
+export type UsageAnomaly = "empty_output";
 
 /** What a row with no kind is reported as. Not a kind: the absence of one. */
 export const UNATTRIBUTED = "unattributed";
@@ -95,6 +103,8 @@ export interface UsageRecord {
    * look like a jump in turn cost that never happened.
    */
   kind?: UsageKind;
+  /** Set on `anomaly` rows only; see `UsageAnomaly`. */
+  anomaly?: UsageAnomaly;
   /**
    * Who this spend is on behalf of — the principal id of whoever drove the turn.
    * Absent for work no person triggered directly: a teammate's wake, a scheduled run.
@@ -390,6 +400,51 @@ export class UsageLog {
       cacheReadTokens: options.usage.cache_read_input_tokens ?? 0,
       cacheWriteTokens: options.usage.cache_creation_input_tokens ?? 0,
     });
+  }
+
+  /**
+   * Counts one thing the model did wrong that cost nothing (INV-775). A zero-token row, so the
+   * totals it joins are unchanged and `byKind` shows it under `anomaly`.
+   */
+  noteAnomaly(options: {
+    anomaly: UsageAnomaly;
+    agentId: string;
+    agentName: string;
+    provider: string;
+    model: string;
+    round: number;
+    workId?: string;
+    turnId?: string;
+    conversation?: string;
+  }): void {
+    this.record({
+      kind: "anomaly",
+      anomaly: options.anomaly,
+      agentId: options.agentId,
+      agentName: options.agentName,
+      provider: options.provider,
+      model: options.model,
+      round: options.round,
+      ...(options.workId !== undefined ? { workId: options.workId } : {}),
+      ...(options.turnId !== undefined ? { turnId: options.turnId } : {}),
+      ...(options.conversation !== undefined ? { conversation: options.conversation } : {}),
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    });
+  }
+
+  /** How many times each anomaly happened since a timestamp, most frequent first. */
+  anomaliesSince(sinceMs = 0): { anomaly: UsageAnomaly; count: number }[] {
+    const counts = new Map<UsageAnomaly, number>();
+    for (const record of this.since(0, Number.MAX_SAFE_INTEGER)) {
+      if (record.anomaly === undefined) continue;
+      const at = Date.parse(record.at ?? "");
+      if (!Number.isNaN(at) && at < sinceMs) continue;
+      counts.set(record.anomaly, (counts.get(record.anomaly) ?? 0) + 1);
+    }
+    return [...counts.entries()].map(([anomaly, count]) => ({ anomaly, count })).sort((a, b) => b.count - a.count);
   }
 
   private sum(records: readonly UsageRecord[]): UsageTotals {

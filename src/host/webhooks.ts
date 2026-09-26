@@ -279,6 +279,7 @@ export function webhookPrompt(input: {
     input.deliver === undefined
       ? "Nobody is waiting on a reply and nobody will answer a question, so decide rather than ask and record the result where it can be found later."
       : "Nobody will answer a question, so decide rather than ask — but your reply is delivered to a chat where people will read it, so write it for them.",
+    "If there is nothing to do, call NothingToSay with the reason.",
     "The rules for unattended work in your system prompt apply: the routine's text is your whole authorization, and a step it did not ask for is a recommendation in your result, not an action.",
     "",
     `You are running the **${input.skillName}** routine. Read \`${input.path}\` and follow it.`,

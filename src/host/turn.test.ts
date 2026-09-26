@@ -41,6 +41,7 @@ import { PolicyGate, type PolicyLimits } from "./policy.ts";
 import { UsageLog } from "./usage.ts";
 import type { Tracer } from "./trace.ts";
 import { buildTools, dispatchTool } from "./tools.ts";
+import { replyForMessage } from "./reply.ts";
 
 interface Capture {
   params: Anthropic.MessageCreateParams[];
@@ -1840,6 +1841,9 @@ test("a turn that ends with nothing to say says that, rather than ending silentl
     // stopped without narrating it. From the person's side an unreported version of this is "I asked
     // and nothing happened" — indistinguishable from a hang, a crash, or being ignored.
     const { client } = stubClient([message([])], capture);
+    const home = mkdtempSync(join(tmpdir(), "agentbox-empty-"));
+    const usage = new UsageLog(join(home, "usage.jsonl"));
+    const turns = new TurnLedger(join(home, "turns.jsonl"), () => {});
 
     const events: { type: string; delta?: string }[] = [];
     await runTurn(
@@ -1852,6 +1856,8 @@ test("a turn that ends with nothing to say says that, rather than ending silentl
         bus,
         box: undefined,
         resolution: undefined,
+        usage,
+        turns,
         onEvent: event => events.push(event as { type: string }),
       }
     );
@@ -1864,6 +1870,110 @@ test("a turn that ends with nothing to say says that, rather than ending silentl
     assert.match(last.text, /not an empty one/);
     // The watcher is told too, not just the file.
     assert.ok(events.some(event => event.type === "text" && /ended without/.test(event.delta ?? "")));
+    // INV-775: the note is the host's, not the agent's — on the record, never delivered as a reply.
+    assert.equal(last.host, true);
+    assert.equal(replyForMessage(transcript, "m-test"), "", "the boilerplate is not the agent's reply");
+    // And the anomaly is counted where spend is counted, on a row that costs nothing.
+    assert.deepEqual(usage.anomaliesSince(), [{ anomaly: "empty_output", count: 1 }]);
+    assert.equal(usage.byKind().find(group => group.kind === "anomaly")?.totals.outputTokens, 0);
+    const ended = readFileSync(join(home, "turns.jsonl"), "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line) as { event: string; how?: string });
+    assert.equal(ended.find(record => record.event === "end")?.how, "empty_output");
+    rmSync(home, { recursive: true, force: true });
+  } finally {
+    cleanup();
+  }
+});
+
+test("NothingToSay ends a turn nobody is waiting on: reason recorded, nothing delivered, no anomaly (INV-775)", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const capture: Capture = { params: [] };
+    // One reply only: the call must end the turn, or the stub runs dry and the test fails there.
+    const { client } = stubClient(
+      [message([toolUseBlock("NothingToSay", { reason: "the routine does not apply to this message" })], "tool_use")],
+      capture
+    );
+    const home = mkdtempSync(join(tmpdir(), "agentbox-silent-"));
+    const usage = new UsageLog(join(home, "usage.jsonl"));
+    const turns = new TurnLedger(join(home, "turns.jsonl"), () => {});
+    const events: { type: string }[] = [];
+
+    await runTurn(
+      ada,
+      // A listener's kickoff: the harness wearing the person's shape, nobody waiting.
+      [{ id: "m-listen", fromId: "user", fromName: "user", text: "[listener] a message matched", priority: false, receivedAt: "", synthetic: true }],
+      new AbortController().signal,
+      { client, registry, bus, box: undefined, resolution: undefined, usage, turns, onEvent: event => events.push(event as { type: string }) }
+    );
+
+    assert.ok(capture.params[0]!.tools!.some(tool => "name" in tool && tool.name === "NothingToSay"), "offered on a turn nobody is waiting on");
+    const transcript = registry.readTranscript(ada.id) as TranscriptEntry[];
+    const silent = transcript.find(entry => "kind" in entry && entry.kind === "blocks") as { silent?: { reason: string } } | undefined;
+    assert.deepEqual(silent?.silent, { reason: "the routine does not apply to this message" });
+    // Nothing a door would deliver: no assistant prose, no text event, no reply for the message.
+    assert.ok(!transcript.some(entry => entry.role === "assistant" && !("kind" in entry)), "no prose was recorded");
+    assert.ok(!events.some(event => event.type === "text"), "nothing was emitted as text");
+    assert.equal(replyForMessage(transcript, "m-listen"), "");
+    // Deliberate silence is not the anomaly; the ledger says how the turn ended.
+    assert.deepEqual(usage.anomaliesSince(), []);
+    const ended = readFileSync(join(home, "turns.jsonl"), "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line) as { event: string; how?: string });
+    assert.equal(ended.find(record => record.event === "end")?.how, "silent");
+    rmSync(home, { recursive: true, force: true });
+  } finally {
+    cleanup();
+  }
+});
+
+test("NothingToSay is withheld from a turn a person opened, and refused if called anyway (INV-775)", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const capture: Capture = { params: [] };
+    // The model calls it regardless (a forged or remembered call); the second reply answers the refusal.
+    const { client } = stubClient(
+      [
+        message([toolUseBlock("NothingToSay", { reason: "nothing to add" })], "tool_use"),
+        message([textBlock("There is nothing to do here.")]),
+      ],
+      capture
+    );
+
+    await runTurn(
+      ada,
+      [{ id: "m-person", fromId: "user", fromName: "user", text: "anything for me?", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box: undefined, resolution: undefined }
+    );
+
+    assert.ok(!capture.params[0]!.tools!.some(tool => "name" in tool && tool.name === "NothingToSay"), "not offered where a person is waiting");
+    const transcript = registry.readTranscript(ada.id) as TranscriptEntry[];
+    const results = transcript.find(entry => "kind" in entry && entry.kind === "results") as { blocks: { is_error?: boolean; content?: unknown }[] } | undefined;
+    assert.equal(results?.blocks[0]?.is_error, true, "the call is refused, not honoured");
+    assert.match(JSON.stringify(results?.blocks[0]?.content), /someone is waiting/);
+    assert.equal(replyForMessage(transcript, "m-person"), "There is nothing to do here.");
+  } finally {
+    cleanup();
+  }
+});
+
+test("NothingToSay is offered on a room message that addressed nobody, and on a teammate's wake (INV-775)", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bob = registry.create({ name: "Bob" });
+    const bus = new AgentBus(registry, async () => {});
+    for (const inbound of [
+      { id: "m-room", fromId: "user", fromName: "user", text: "morning all", priority: false, receivedAt: "", addressed: false as const },
+      { id: "m-peer", fromId: bob.id, fromName: "Bob", text: "fyi: done", priority: false, receivedAt: "" },
+    ]) {
+      const capture: Capture = { params: [] };
+      const { client } = stubClient([message([toolUseBlock("NothingToSay", { reason: "not for me" })], "tool_use")], capture);
+      await runTurn(ada, [inbound], new AbortController().signal, { client, registry, bus, box: undefined, resolution: undefined });
+      assert.ok(capture.params[0]!.tools!.some(tool => "name" in tool && tool.name === "NothingToSay"), `offered for ${inbound.id}`);
+    }
   } finally {
     cleanup();
   }

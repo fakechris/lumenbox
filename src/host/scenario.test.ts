@@ -1264,6 +1264,45 @@ test("a fan-out names what did not finish — a fork that failed outright includ
   }
 });
 
+test("two agents woken by one room message that addressed nobody: the unrelated one calls NothingToSay and the room hears one reply (INV-775)", async () => {
+  // A group on a door that runs every message wakes every agent in it. Before INV-775 the agent
+  // the message was not for could only stay quiet by emitting nothing — which the engine wrote up
+  // as "ended without anything to report" and a door could deliver as its reply. Now silence is a
+  // call with a reason, and the room receives exactly the one reply that was meant.
+  const conversation = conversationIdFor("feishu:room-1");
+  const script: Script = ({ agent, offered }) => {
+    assert.ok(offered.includes("NothingToSay"), `${agent} may stay silent on a message that named nobody`);
+    if (agent === "Iris") return { say: "部署我来负责，今天下午三点。" };
+    return { call: "NothingToSay", input: { reason: "The question is about deployment, which Iris owns; nothing for me." } };
+  };
+  const episode = await runEpisode({
+    team: [{ name: "Iris", description: "owns deployment" }, { name: "Mia", description: "owns design" }],
+    says: [],
+    script,
+    drive: async ({ registry, bus }) => {
+      for (const record of registry.list()) {
+        bus.sendFromUser(record.id, "大家早，今天的部署谁负责？", { conversation, addressed: false, messageId: `room-msg-${record.profile.name}` });
+        await bus.wake(record.id);
+      }
+      await bus.idle();
+    },
+  });
+  try {
+    const { score, registry } = episode;
+    assert.equal(score.turns, 2, "both agents were woken");
+    assert.deepEqual(score.said, [{ agent: "Iris", text: "部署我来负责，今天下午三点。" }], "the room hears exactly one reply");
+    assert.deepEqual(score.trail, ["Mia:NothingToSay"]);
+    assert.deepEqual(score.refusals, [], "silence was honoured, not refused");
+    const mia = registry.list().find(record => record.profile.name === "Mia")!;
+    const transcript = registry.readTranscript(mia.id, conversation) as { kind?: string; silent?: { reason: string }; role?: string }[];
+    assert.match(transcript.find(entry => entry.kind === "blocks")?.silent?.reason ?? "", /Iris owns/);
+    assert.equal(replyForMessage(transcript, "room-msg-Mia"), "", "nothing of Mia's is delivered");
+    assert.ok(!transcript.some(entry => entry.role === "assistant" && entry.kind === undefined), "no host boilerplate stands in for a reply");
+  } finally {
+    episode.cleanup();
+  }
+});
+
 // ── 2026-09-26, the parent that kept talking about its forks ──────────────────────────────
 //
 // What happened: a front agent started two background forks, then spent its turn guessing at

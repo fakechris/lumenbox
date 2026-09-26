@@ -491,7 +491,7 @@ export interface ChannelManagerDeps {
     /** The reply as it is being written — everything so far, each time it grows. */
     onText?: (soFar: string) => void,
     /** The message's own id, when this ask is one message becoming a turn (INV-613). */
-    origin?: { messageId: string; questionId?: string }
+    origin?: { messageId: string; questionId?: string; addressed?: false }
   ) => Promise<string>;
   /**
    * How many requests are ahead of a new one for this agent and chat. Zero means it
@@ -2256,7 +2256,15 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
           });
         },
         onText,
-        message.id !== undefined ? { messageId: message.id, ...(options?.questionId !== undefined ? { questionId: options.questionId } : {}) } : undefined
+        message.id !== undefined
+          ? {
+              messageId: message.id,
+              ...(options?.questionId !== undefined ? { questionId: options.questionId } : {}),
+              // A room message that named nobody, on a door that runs every message: the turn
+              // is a person's, but nobody is waiting on this agent, so it may stay silent (INV-775).
+              ...(message.addressed === false ? { addressed: false as const } : {}),
+            }
+          : undefined
       );
       clearTimeout(ackTimer);
       let suggestion: string | undefined;
