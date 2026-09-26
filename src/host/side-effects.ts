@@ -84,6 +84,10 @@ const DECLARED: Record<string, SideEffect> = {
   HandOverDesktop: { tier: "self" },
   // Staged only; nothing is shared until the person publishes it from the card.
   PackTemplate: { tier: "self" },
+  // Deletes the person's own copies, at their request. Its gate is its own two-turn protocol — a plan,
+  // the person's answer, a confirm in a later turn (forget.ts) — not a card: the card would ask the
+  // same person the same question twice.
+  Forget: { tier: "self" },
 
   // Past the box.
   browser_upload: { tier: "reach", action: "upload a file from the box to a web page" },
