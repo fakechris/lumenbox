@@ -535,6 +535,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const pendingHandovers = new Map<string, { agentId: string; agentName: string; instruction: string; reason: string; conversation?: string; at: string; desktopPath?: string }>();
 
   const orchestrator = new Orchestrator({
+    pendingQuestions: (agentId, conversation) => questions.list().filter(item => item.agentId === agentId && item.conversation === conversation && item.expiresAt > Date.now()).length,
     registry,
     provider,
     useBox: options.useBox,
@@ -938,6 +939,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           operationId: input.operationId,
           privateChat: input.privateChat,
           text: input.text,
+          chatKey: input.conversationKey,
         });
       },
     } } : {}),
@@ -2420,6 +2422,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     );
   }
   const picked = orchestrator.resumeInterrupted();
+  const rearmed = orchestrator.rearmGoals();
+  if (rearmed > 0) log(`looking again at ${rearmed} goal${rearmed === 1 ? "" : "s"} that ${rearmed === 1 ? "was" : "were"} active before the restart`);
   if (picked.resumed > 0) {
     log(`picking up ${picked.resumed} turn${picked.resumed === 1 ? "" : "s"} interrupted by a restart`);
   }

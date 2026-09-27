@@ -786,9 +786,27 @@ the ageing sweep and a silent close proposal all leave it where it is. The first
 `/goal` is a host-authored brief that drafts the checklist through the `Goal` tool and shows it to
 the person; a checklist command runs nowhere until `/goal confirm n`. A running pursuit refuses
 `/new` and says how to let go (`/goal pause`, `/goal clear`); a paused one does not. The prompt
-carries the goal every turn, rendered from the board, so compaction cannot lose it. Continuation
-(INV-770) and the completion gate (INV-771) are not in this slice: a pursuit is set, shown, paused,
-resumed, confirmed and cleared, and nothing yet works toward it on its own.
+carries the goal every turn, rendered from the board, so compaction cannot lose it.
+
+**The continuation loop (INV-770, `src/host/goal-loop.ts`).** While a pursuit is `active`, the host
+keeps it moving: each time its conversation goes quiet — no running or open turn, nothing queued,
+no question or approval waiting on the person — the loop arms one continuation, 1.5 s later, and
+starts it only if the conversation is still quiet then; a person's message arriving first makes it
+stale, and a stale wake that reaches the front of the queue is not run. The wake is a host
+notification (`<host_notification source="goal">`: the objective as data, the checklist, the last
+verdict, the pursuit rules), sent `synthetic` on the `background` lane through the wake gate, and
+its turn runs under the pursuit's `workId`, writes its inbound entry as the host's, runs no inner
+continuation, and files its closing words as blocks that `replySince` never delivers. A person who
+steers into it is answered as a person. Four stops: three continuations in a row that called no
+working tool (`GOAL_BOOKKEEPING_TOOLS` do not count) pause it as `anti_spin`; plan + todos +
+workspace manifest unchanged across two continuations pause it as `stalled`; at the continuation
+count or active-time limit the last wake is finish-only (one round, `tool_choice: none`) and its
+report is the one continuation text the person is sent. A continuation turn that fails is retried
+twice with 30 s × 2ⁿ backoff, then pauses the goal as `error`. The person is told only when the goal
+stops, in the chat it was set in (`pursuit.chatKey`). Counters live on the board, so a restart
+re-arms every active goal (`rearmGoals`) under the same id. The bus now emits `turn_finished`
+after the conversation is free, not before. The completion gate (INV-771) is not in this slice: a
+goal works until something stops it, and nothing yet says it is done.
 
 Forgetting is `Forget` (`src/host/forget.ts`), in two turns. **plan** searches every place the words
 can be — both memory tiers and the box's mirror of them, kept pages, kept results, the board with its
