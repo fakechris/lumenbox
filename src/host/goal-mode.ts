@@ -101,6 +101,22 @@ export const GOAL_GATE_ACTOR = "goal-gate";
 
 export const DEFAULT_PURSUIT_LIMITS = { continuations: 30, activeMs: 12 * 3_600_000 } as const;
 
+/**
+ * Cost in input-token equivalents (INV-772). The defaults are conservative: cache reads a
+ * tenth, output four times — roughly every current provider's ratio. A provider profile may
+ * carry its own. Tokens are what usage records; prices are not, on purpose (usage.ts).
+ */
+export const DEFAULT_TOKEN_WEIGHTS = { input: 1, cacheRead: 0.1, cacheWrite: 1.25, output: 4 } as const;
+export type TokenWeights = { input: number; cacheRead: number; cacheWrite: number; output: number };
+export interface TokenUsage { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }
+
+export function weightedCost(usage: TokenUsage, weights: TokenWeights = DEFAULT_TOKEN_WEIGHTS): number {
+  return usage.inputTokens * weights.input + usage.cacheReadTokens * weights.cacheRead + usage.cacheWriteTokens * weights.cacheWrite + usage.outputTokens * weights.output;
+}
+
+/** The share of the budget spent at which the executor is told, and at which the goal stops. */
+export const BUDGET_WARN_AT = 0.8;
+
 const OBJECTIVE_MAX = 4_000;
 const CHECKLIST_MAX = 40;
 
@@ -110,8 +126,9 @@ export function isGoalCommand(text: string): boolean {
 
 export type GoalCommand =
   | { kind: "status" }
-  | { kind: "create"; objective: string }
-  | { kind: "replace"; objective: string }
+  | { kind: "create"; objective: string; budget?: number }
+  | { kind: "replace"; objective: string; budget?: number }
+  | { kind: "budget"; budget: number }
   | { kind: "pause" }
   | { kind: "resume" }
   | { kind: "clear" }
@@ -119,7 +136,16 @@ export type GoalCommand =
   | { kind: "usage" };
 
 export const GOAL_USAGE =
-  "用法：/goal <目标> 创建；/goal 查看；/goal pause | resume | clear；/goal replace <目标>；/goal confirm <序号> 确认清单里的命令。";
+  "用法：/goal <目标> [--budget <额度>] 创建；/goal 查看；/goal pause | resume | clear；/goal replace <目标>；/goal confirm <序号> 确认清单里的命令；/goal budget <额度> 给当前目标设预算（折算输入 token 数）。";
+
+/** `--budget N` anywhere in an objective, N in input-token equivalents (k/m suffixes allowed). */
+function takeBudget(text: string): { text: string; budget?: number } {
+  const match = /(?:^|\s)--budget[=\s]+(\d+(?:\.\d+)?)([kKmM])?(?=\s|$)/.exec(text);
+  if (match === null) return { text };
+  const unit = match[2]?.toLowerCase();
+  const budget = Math.round(Number(match[1]) * (unit === "k" ? 1_000 : unit === "m" ? 1_000_000 : 1));
+  return { text: text.replace(match[0], " ").replace(/\s+/g, " ").trim(), ...(budget > 0 ? { budget } : {}) };
+}
 
 /** Subcommands are single words; anything longer is an objective, so `/goal pause the build` is a goal. */
 export function parseGoalCommand(text: string): GoalCommand {
@@ -136,8 +162,16 @@ export function parseGoalCommand(text: string): GoalCommand {
     const index = Number.parseInt(after, 10);
     return Number.isInteger(index) && index > 0 && String(index) === after ? { kind: "confirm", index } : { kind: "usage" };
   }
-  if (word === "replace") return after === "" ? { kind: "usage" } : { kind: "replace", objective: after.slice(0, OBJECTIVE_MAX) };
-  return { kind: "create", objective: rest.slice(0, OBJECTIVE_MAX) };
+  if (word === "budget") {
+    const parsed = takeBudget(`--budget ${after}`);
+    return parsed.budget !== undefined ? { kind: "budget", budget: parsed.budget } : { kind: "usage" };
+  }
+  if (word === "replace") {
+    const parsed = takeBudget(after);
+    return parsed.text === "" ? { kind: "usage" } : { kind: "replace", objective: parsed.text.slice(0, OBJECTIVE_MAX), ...(parsed.budget !== undefined ? { budget: parsed.budget } : {}) };
+  }
+  const parsed = takeBudget(rest);
+  return parsed.text === "" ? { kind: "usage" } : { kind: "create", objective: parsed.text.slice(0, OBJECTIVE_MAX), ...(parsed.budget !== undefined ? { budget: parsed.budget } : {}) };
 }
 
 /** Which board status a pursuit state is (docs/74 §7 R7). */
@@ -375,6 +409,12 @@ export function goalCommand(deps: GoalCommandDeps, input: GoalCommandInput): Goa
     deps.tasks.setPursuit(current.id, p => ({ ...p, status: "cleared", pausedReason: "person" }), "cleared by the person (/goal clear)", input.requester, now);
     return { text: `目标 ${current.id} 已清除；记录留在板上，不再推进。` };
   }
+  if (command.kind === "budget") {
+    if (current === undefined) return { text: "当前会话没有目标可设预算。" };
+    deps.tasks.setPursuit(current.id, p => ({ ...p, limits: { ...p.limits, budget: command.budget } }), `budget set by the person: ${command.budget}`, input.requester, now);
+    const spent = Math.round(current.pursuit!.spent.cost);
+    return { text: `目标 ${current.id} 的预算设为 ${command.budget}（折算输入 token）；已花 ${spent}。到 80% 时会提醒执行者，到线时交出已完成的部分并暂停。` };
+  }
   if (command.kind === "confirm") {
     if (current === undefined) return { text: "当前会话没有目标。" };
     const item = current.pursuit!.checklist[command.index - 1];
@@ -399,7 +439,7 @@ export function goalCommand(deps: GoalCommandDeps, input: GoalCommandInput): Goa
   if (command.kind === "replace" && current !== undefined) {
     deps.tasks.setPursuit(current.id, p => ({ ...p, status: "cleared", pausedReason: "person" }), "replaced by the person (/goal replace)", input.requester, now);
   }
-  const pursuit = newPursuit({ objective: command.objective, workId: deps.workId?.() ?? randomUUID(), sourceMessageId: input.operationId, ...(input.chatKey !== undefined ? { chatKey: input.chatKey } : {}), now });
+  const pursuit = newPursuit({ objective: command.objective, workId: deps.workId?.() ?? randomUUID(), sourceMessageId: input.operationId, ...(input.chatKey !== undefined ? { chatKey: input.chatKey } : {}), ...(command.budget !== undefined ? { budget: command.budget } : {}), now });
   const created = deps.tasks.create({
     title: command.objective.split("\n")[0]!.trim().slice(0, 80),
     requester: input.requester,
@@ -411,7 +451,7 @@ export function goalCommand(deps: GoalCommandDeps, input: GoalCommandInput): Goa
   });
   if (created === undefined) return { text: "目标不能为空。" };
   return {
-    text: `目标 ${created.id} 已创建：${pursuit.objective.slice(0, 120)}\n我先起草一份验收清单给你看，然后再开始。/goal 随时查看进度。`,
+    text: `目标 ${created.id} 已创建：${pursuit.objective.slice(0, 120)}${pursuit.limits.budget !== undefined ? `\n预算 ${pursuit.limits.budget}（折算输入 token）。` : ""}\n我先起草一份验收清单给你看，然后再开始。/goal 随时查看进度。`,
     draft: { taskId: created.id, prompt: draftingPrompt(created, chinese), title: `目标 ${created.id}：起草清单` },
   };
 }
@@ -470,6 +510,10 @@ export function continuationNotice(task: Pick<Task, "id" | "pursuit">, seq: numb
   }
   if (pursuit.lastVerdict !== undefined) {
     lines.push(`Last verification: ${pursuit.lastVerdict.passed ? "passed" : "not passed"}.${pursuit.lastVerdict.nextAction !== undefined ? ` Next: ${pursuit.lastVerdict.nextAction}` : ""}`, "");
+  }
+  const budget = pursuit.limits.budget;
+  if (budget !== undefined && pursuit.spent.cost >= budget * BUDGET_WARN_AT) {
+    lines.push(`Budget: ${Math.round(pursuit.spent.cost)} of ${budget} input-token equivalents spent (${Math.round((pursuit.spent.cost / budget) * 100)}%). When it is reached the goal pauses and reports what is done; make what remains count, and claim completion as soon as it is true.`, "");
   }
   lines.push(PURSUIT_GUIDELINES, "</host_notification>");
   return lines.join("\n");

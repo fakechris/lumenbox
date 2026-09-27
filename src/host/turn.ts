@@ -103,6 +103,7 @@ import {
 import { malformedNudge, malformedOutput, sanitizeHistoryText } from "./output-integrity.ts";
 import { type GoalTurnReport, isWorkingTool } from "./goal-loop.ts";
 import { commandIsConfirmed, type GoalGate } from "./goal-gate.ts";
+import { DEFAULT_TOKEN_WEIGHTS, weightedCost } from "./goal-mode.ts";
 import {
   BOOKKEEPING_TOOLS,
   FORK_PROMPT_LINE,
@@ -1507,6 +1508,8 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   let ended = false;
   let endedHow: string | undefined;
   let lastFinalText: string | undefined;
+  /** The whole turn's spend, for a goal's budget (INV-772). */
+  const turnUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
   const finish = (how: string, category?: FailureCategory) => {
     if (ended) return;
     ended = true;
@@ -2176,6 +2179,7 @@ ${outcome.text}`;
         conversation,
         how: endedHow ?? "failed",
         worked: [...toolsUsedThisTurn].some(isWorkingTool),
+        cost: weightedCost(turnUsage, provider.tokenWeights ?? DEFAULT_TOKEN_WEIGHTS),
         ...(lastFinalText !== undefined ? { finalText: lastFinalText } : {}),
       });
     }
@@ -2548,6 +2552,10 @@ ${outcome.text}`;
       cacheWriteTokens: response.usage.cache_creation_input_tokens ?? 0,
     };
     emit({ type: "usage", agentId: agent.id, round, ...usage });
+    turnUsage.inputTokens += usage.inputTokens;
+    turnUsage.outputTokens += usage.outputTokens;
+    turnUsage.cacheReadTokens += usage.cacheReadTokens;
+    turnUsage.cacheWriteTokens += usage.cacheWriteTokens;
     // The turn's opening call, scored for the cache ledger (INV-782): what share came from
     // cache, and — when enough turns in a row came in low with a segment moving — why.
     let cacheShare: number | undefined;

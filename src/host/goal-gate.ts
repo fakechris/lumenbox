@@ -160,6 +160,10 @@ export class GoalGate {
       this.deps.log(`goal ${marker.taskId}: verifier report ignored (${pursuit?.status ?? "no goal"}, attempt ${marker.verify.attempt})`);
       return;
     }
+    // The verifier's spend is the goal's spend (INV-772): ZCode left it off the books.
+    if (report.cost !== undefined && report.cost > 0) {
+      this.deps.tasks.setPursuit(task.id, current => ({ ...current, spent: { ...current.spent, cost: current.spent.cost + report.cost! } }), `verification attempt ${marker.verify.attempt} cost ${Math.round(report.cost)}`);
+    }
     const verdict = report.how === "done" && report.finalText !== undefined ? parseGoalVerdict(report.finalText, pursuit.checklist) : undefined;
     if (verdict === undefined) {
       await this.noVerdict(task, `the verifier ${report.how === "done" ? "ended without a parsable verdict" : report.how}`, task.assigneeId!);

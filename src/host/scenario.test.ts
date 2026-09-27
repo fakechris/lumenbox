@@ -504,12 +504,14 @@ test("/goal sets a pursuit: the first turn drafts a checklist, the prompt carrie
 
 // INV-770: the loop keeps a goal moving on its own, stops it when the work stops moving, and
 // tells the person only then; a new process picks it up from the board under the same workId.
-function episodeLoop(told: string[], schedule?: (fn: () => void, ms: number) => { cancel: () => void }) {
-  return ({ bus, registry, tasks }: { bus: AgentBus; registry: AgentRegistry; tasks: TaskStore | undefined }) =>
+function episodeLoop(told: string[], schedule?: (fn: () => void, ms: number) => { cancel: () => void }, options: { manifest?: boolean } = {}) {
+  return ({ bus, registry, tasks, files }: { bus: AgentBus; registry: AgentRegistry; tasks: TaskStore | undefined; files: Map<string, string> }) =>
     new GoalLoop({
       tasks: tasks!,
       agentName: id => registry.tryGet(id)?.profile.name,
       bus,
+      // The scenario box's files as the workspace, when the episode wants writing to count as change.
+      ...(options.manifest ? { manifest: async () => new Map([...files.entries()].map(([path, content]) => [path, `h:${content.length}`])) } : {}),
       busy: () => [],
       wakeGate: () => ({ allowed: true }),
       durableState: (agentId, conversation) => registry.readDurableState(agentId, conversation),
@@ -582,7 +584,7 @@ test("a goal continues on its own until three continuations do no work, the pers
 
         // The person resumes; a fresh loop over the same board — a restart — carries on under the same id.
         assert.match((await receive({ identity: "feishu:user", chatKey: key, privateChat: true, senderLabel: "user", text: "/goal resume", messageId: "loop-2" })) ?? "", /继续推进/);
-        const fresh = episodeLoop(told)({ bus, registry, tasks });
+        const fresh = episodeLoop(told)({ bus, registry, tasks, files: new Map() });
         assert.equal(fresh.rearm(), 1);
         await settled(() => (tasks.get("t1")?.pursuit?.spent.continuations ?? 0) >= 4);
         assert.equal(tasks.get("t1")!.pursuit!.workId, workId);
@@ -730,6 +732,60 @@ test("a goal is verified by a turn that never saw the work: a premature claim is
         assert.ok(told.some(text => /目标 t1 验证通过/.test(text)), `the person is told to accept: ${JSON.stringify(told)}`);
         assert.ok(told.some(text => /没有通过验证/.test(text)), "and was told of the rejection");
         assert.equal(claims >= 2, true);
+      } finally { manager.stop(); }
+    },
+  });
+  result.cleanup();
+});
+
+// INV-772: a person's budget for one goal. The scripted model bills 10 input + 5 output per
+// round (30 input-token equivalents at the default weights), so a budget of 200 is reached in
+// a few continuations: the executor is warned at 80%, and the last turn is a finish-only report.
+test("a goal's budget warns the executor at 80% and ends with a finish-only report the person receives", async () => {
+  const tasks = new TaskStore(join(mkdtempSync(join(tmpdir(), "agentbox-goal-budget-scenario-")), "tasks.jsonl"));
+  const told: string[] = [];
+  const notices: string[] = [];
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: [], tasks, goalLoop: episodeLoop(told, undefined, { manifest: true }),
+    script: ({ messages }) => {
+      const all = JSON.stringify(messages);
+      const latest = JSON.stringify(messages.at(-1)?.content ?? "");
+      // A finish-only wake is followed by the host's last-round note, so the notice is one
+      // message back; the note is the newest.
+      if (/Goal t1 is pausing: the budget is reached/.test(all) && /\[last round\]/.test(latest)) return { say: "做到一半：大纲有了，正文还差两节。" };
+      if (/Continue working toward goal t1/.test(latest)) { notices.push(latest); return { call: "write_file", input: { path: `/home/box/work/part-${notices.length}.md`, content: "…" } }; }
+      if (/Continue working toward goal t1/.test(all)) return { say: "写了一段。" };
+      if (/\[host\] 目标 t1 已由人创建/.test(all)) return { say: "清单稍后。" };
+      return { say: "ok" };
+    },
+    drive: async ({ bus, registry, frontId }) => {
+      const key = "feishu:private-budget";
+      const conversation = conversationIdFor(key);
+      let receive!: (message: ChannelMessage) => Promise<string | undefined>;
+      const manager = new ChannelManager({
+        mayDrive: () => true, log: () => {},
+        goal: { command: input => goalCommand({ tasks, mayUse: () => true, contextMode: () => "normal", blockers: () => [] }, { agentId: frontId, conversation, requester: "principal-user", operationId: input.operationId, privateChat: input.privateChat, text: input.text, chatKey: key }) },
+        ask: async (_name, text, _identity, _chat, _progress, _thread, _task, _interim, _stream, origin) => {
+          bus.sendFromUser(frontId, text, { conversation, steerable: false, messageId: origin!.messageId });
+          await bus.runExclusive(frontId, { userDriven: true, conversation });
+          return replyForMessage(registry.readTranscript(frontId, conversation), origin!.messageId);
+        },
+      });
+      manager.register({ name: "feishu", start: async handler => { receive = handler; }, stop() {}, send: async () => undefined }, true, "test");
+      manager.start(); await new Promise(resolve => setImmediate(resolve));
+      try {
+        const created = await receive({ identity: "feishu:user", chatKey: key, privateChat: true, senderLabel: "user", text: "/goal 写完季度报告 --budget 200", messageId: "b-1" });
+        assert.match(created ?? "", /预算 200/);
+        await manager.idle();
+        await settled(() => tasks.get("t1")?.pursuit?.status === "paused", 8_000);
+        const pursuit = tasks.get("t1")!.pursuit!;
+        assert.equal(pursuit.pausedReason, "budget");
+        assert.ok(pursuit.spent.cost >= 200, `over the budget: ${pursuit.spent.cost}`);
+        assert.ok(notices.some(text => /Budget: \d+ of 200 input-token equivalents spent \(\d+%\)/.test(text)), `the executor was warned: ${notices.map(n => n.slice(0, 80))}`);
+        assert.ok(notices.every(text => !/Budget:/.test(text) || Number(/\((\d+)%\)/.exec(text)?.[1]) >= 80), "and only past 80%");
+        assert.match(told.at(-1) ?? "", /^做到一半：大纲有了，正文还差两节。\n\n目标 t1 已暂停：预算到了上限/, "the finish-only report reaches the person with the stop notice");
+        const shown = await receive({ identity: "feishu:user", chatKey: key, privateChat: true, senderLabel: "user", text: "/goal", messageId: "b-2" });
+        assert.match(shown ?? "", /花费 \d+\/200/);
       } finally { manager.stop(); }
     },
   });

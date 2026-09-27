@@ -5,6 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskStore } from "./tasks.ts";
 import {
+  BUDGET_WARN_AT,
+  continuationNotice,
+  weightedCost,
   checklistAdditions,
   GOAL_GATE_ACTOR,
   goalCommand,
@@ -166,3 +169,28 @@ test("the board moves a pursuit only for the gate or the requester, and a turn e
     assert.equal(cleared.task.pursuit?.status, "cleared");
   } finally { cleanup(); }
 });
+
+test("a budget rides the objective as --budget, or is set later; cost is weighted input-token equivalents", () => {
+  assert.deepEqual(parseGoalCommand("/goal 写季度报告 --budget 200k"), { kind: "create", objective: "写季度报告", budget: 200_000 });
+  assert.deepEqual(parseGoalCommand("/goal --budget 1.5m 写季度报告"), { kind: "create", objective: "写季度报告", budget: 1_500_000 });
+  assert.deepEqual(parseGoalCommand("/goal replace 改成英文 --budget 5000"), { kind: "replace", objective: "改成英文", budget: 5000 });
+  assert.deepEqual(parseGoalCommand("/goal budget 50000"), { kind: "budget", budget: 50_000 });
+  assert.deepEqual(parseGoalCommand("/goal budget lots"), { kind: "usage" });
+  assert.deepEqual(parseGoalCommand("/goal --budget 100"), { kind: "usage" }, "a budget with no objective");
+  assert.equal(weightedCost({ inputTokens: 1000, outputTokens: 100, cacheReadTokens: 10_000, cacheWriteTokens: 200 }), 1000 + 400 + 1000 + 250);
+  assert.equal(weightedCost({ inputTokens: 1000, outputTokens: 100, cacheReadTokens: 10_000, cacheWriteTokens: 200 }, { input: 1, cacheRead: 0.1, cacheWrite: 1, output: 4 }), 1000 + 400 + 1000 + 200);
+
+  const { tasks, cleanup } = board();
+  try {
+    const d = deps(tasks);
+    assert.match(goalCommand(d, { ...input, operationId: "m1", text: "/goal 写季度报告 --budget 200k" }).text, /预算 200000/);
+    assert.equal(tasks.get("t1")?.pursuit?.limits.budget, 200_000);
+    assert.match(goalCommand(d, { ...input, operationId: "m2", text: "/goal budget 300k" }).text, /预算设为 300000/);
+    assert.equal(tasks.get("t1")?.pursuit?.limits.budget, 300_000);
+    // The notice warns only past the threshold.
+    assert.doesNotMatch(continuationNotice(tasks.get("t1")!, 1), /Budget:/);
+    tasks.setPursuit("t1", p => ({ ...p, spent: { ...p.spent, cost: 300_000 * BUDGET_WARN_AT } }), "spent");
+    assert.match(continuationNotice(tasks.get("t1")!, 2), /Budget: 240000 of 300000 input-token equivalents spent \(80%\)/);
+  } finally { cleanup(); }
+});
+
