@@ -2,7 +2,7 @@
      title: Goal 模式：一个持久目标、一个有界的续跑循环、一道不归执行者管的完成闸门
      family: decision
      status: current
-     updated: 2026-09-26
+     updated: 2026-09-27
 -->
 # 74. Goal 模式：一个持久目标、一个有界的续跑循环、一道不归执行者管的完成闸门
 
@@ -197,3 +197,67 @@ docs/16「全局上限先观察」的决定不冲突：那是对整台机器的�
 
 第 3、4 步改变「什么算完成」，按 [docs/13](13-design-review.md) **先过对抗式评审再动手**；
 第 2 步只加字段与命令，不改完成语义。
+
+## 7. 对抗式评审后的修订（2026-09-27）
+
+评审记录：[reviews/2026-09-27-goal-mode](reviews/2026-09-27-goal-mode.md)，对照 `origin/main`
+c632f015，3 条致命、7 条重大、2 条次要。下面每一条都是对一个发现的回答；编号对应评审的编号。
+§3 的正文保留为第一稿；有冲突处以本节为准，实施合同（INV-769/770/771）已按本节改写。
+
+**R1 闸门有后门（致命）。** `pursuit` 的状态机由 `TaskStore.update` 强制执行，不靠调用方自觉：带
+`pursuit` 的任务，`review` 与 `done` 只接受宿主闸门的 actor（`goal-gate`）与 requester 的验收；assignee、
+其他 agent、`turnFinished`、老化扫描一律拒绝，拒绝写进历史。任务上**不设 `reviewerId`**——那会让现有
+`maybeAudit` 与本设计的验证者各跑一遍——验证者由闸门直接驱动：同一 agent 的一个**新会话**（fork 类，
+无执行者历史，只读工具，不能触达人），或有第二个 agent 时由它承担。`/goal` 是控制命令，不经渠道的
+"每条消息一个任务"路径；起草清单的第一回合是挂在 pursuit 任务下的合成唤醒，不会把别的任务记成 done。
+
+**R2 验证结论活不过重启（致命）。** `pursuit.status` 增加 `verifying { turnId, startedAt }`，持久化。
+验证 turn 结束时，宿主从它的 transcript 解析报告（`parseAuditReport` 终于有生产调用方），写入
+`lastVerdict`。启动扫描：`verifying` 且该 turn 在 ledger 中已结束 → 解析；未结束、不可解析、超时 →
+判不通过（`rejections + 1`，`nextAction` 写明"验证被中断"），回到 `active`。工作区 manifest 在验证
+期间有差异、或 manifest 缺失 → 判不通过，不是备注。
+
+**R3 清单命令以宿主身份、绕过策略门执行（致命）。** 宿主永不执行清单里的命令。带命令的条目在人
+**确认**前只是提案（回复卡片或 `/goal confirm <n>`）；确认过的命令由**验证者的 turn** 通过它自己的
+工具执行，走策略门，actor 是验证者，且 `bash` 只放行清单里确认过的命令原文；未确认的命令项降级为
+验证者的判断项。产物检查以**申请完成之前**取的工作区 manifest（`audit.ts` `workspaceManifest`）为准，
+验证期间工作区变动 → 判不通过。验证者的 prompt 不再要求先 `ReadHistory`；它拿到的是目标原文、清单
+和执行者的证据指针，没有执行者的叙述。
+
+**R4 `workId` 与 attempt 语义冲突（重大）。** `orchestrator.prompt` 增加独立的 `workId` 选项；续跑
+turn 传 `pursuit.workId`；`attempt` 仍是单个 turn 的崩溃恢复计数（每次续跑从 1 起），`MAX_RESUMES`
+只约束一个 turn 的恢复，不约束续跑次数。docs/16 的"一个 id 跨越所有尝试"由此只有一个写入点。
+
+**R5 防空转与停滞的盲点（重大）。** "有工具调用"排除簿记工具（`SetTodos`、`SetPlan`、`Tasks`、
+`Goal`、`RememberFact` 及同类）；停滞哈希 = plan/todos 哈希 + 工作区 manifest 哈希——docs/16 第 3 步
+在这里落地。
+
+**R6 人并不总是优先（重大）。** 续跑**不进队列**：只在总线空闲时直接启动；启动前有人的消息到达就
+放弃这一次（因此不受 120 秒饥饿提升影响）。续跑 turn 的入站消息以 `host: true` 写入 transcript，压缩
+不会钉它。一个 turn 中若有人的 steering 到达，`personOpened` 翻为 true、撤回 `NothingToSay`，守卫按
+人开启的 turn 处理。续跑 turn 的最终文本不经 `replySince` 投递到渠道；投递的只有 §3.7 列的通知。
+
+**R7 Task.status 与 pursuit 的映射未定（重大）。** `active`/`verifying` → `doing`；`paused` → `blocked`
+（note 为 `pausedReason`）；`complete` → `review`；`cleared` → `dropped`（by requester）。老化扫描与
+关闭提议对带 `pursuit` 的任务跳过（INV-768 对 `goal` 的豁免扩展到 `pursuit`）。`/new`：pursuit 为
+`active`/`verifying` 时拒绝，提示先 `/goal pause` 或 `/goal clear`；`paused` 不阻塞 `/new`，但换了
+epoch 后要人显式 `/goal resume`——新 epoch 的历史为空，目标块仍从任务板渲染。
+
+**R8 谁能 `/goal`、在哪（重大）。** 首版入口只有飞书与 Telegram 的私聊（`privateChat` 为真的门）；
+网页端今天拒绝一切控制命令，钉钉从不标私聊，二者都不在首版。principal 规则与 `/new` 相同
+（`mayEnterBox`），该私聊的身份成为 requester。幂等：pursuit 记录创建它的渠道消息 id
+（`sourceMessageId`），同一 id 再到达答"已创建"，两台设备、一次重发只得一个目标。
+
+**R9 预算没有价格表、只有 48 小时记忆（重大）。** 花费在任务上**累计**：每个 turn 结束把本 turn 的
+usage 按权重折算加到 `pursuit.spent.cost`，单位是"折算输入 token"，权重默认 input 1、cache write
+1.25、cache read 0.1、output 4，可按 provider 配置；不从 usage 行重算，不受保留期影响。
+
+**R10/R11 INV-410 不是可复用代码，`MAX_CONTINUATIONS` 只有环境变量（次要）。** `MAX_CONTINUATIONS`
+改为 turn 的 dep（goal 模式传 0）；"只许收尾"抽成 `runTurn` 的 `finishOnly` 选项（一轮、无工具），
+上限到线时用它交 partial。
+
+**R12 场景会错误地通过（次要）。** 场景框架的盒子要能声明必失败的命令；断言验证者 turn 的历史不含
+执行者的文字；预写一个 `PASS` 文件加一条失败的命令 → 必须驳回；活跃时长与让路用可注入的时钟测。
+
+构建顺序不变。① 的合同补 R1、R7、R8；② 补 R4、R5、R6、R10/R11；③ 补 R2、R3、R12。
+
