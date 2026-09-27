@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CLOSE_PROPOSAL_MS, TASK_IDLE_MS, TASK_NUDGE_GAP_MS, TaskStore, dueOf } from "./tasks.ts";
+import { CLOSE_PROPOSAL_MS, GOAL_QUIET_FACTOR, TASK_IDLE_MS, TASK_NUDGE_GAP_MS, TaskStore, dueOf } from "./tasks.ts";
 
 const T0 = new Date("2026-09-01T09:00:00Z");
 const plus = (ms: number) => new Date(T0.getTime() + ms);
@@ -214,6 +214,55 @@ test("waiting is not abandonment: blocked, in review, waiting on somebody, or sn
     assert.equal(store.get(snoozed.id)?.status, "open");
     const awake = store.age(new Date(Date.parse("2026-10-02T09:00:00Z")));
     assert.deepEqual(awake.filter(e => e.task.id === snoozed.id).map(e => e.kind), ["nudge"], "and speaks again after it");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// INV-768: a goal the person stated (INV-757) is overdue by nature and unanswered for weeks at a
+// time. The sweep read that as abandonment and archived it after two nudges — the opposite of
+// "set up once, then followed". A goal is asked about, less often past the cap, and closed only
+// on the person's word; a close proposal on it expires rather than closing it by silence.
+test("a goal is checked in on and never archived for silence; a close proposal on it expires instead of closing it", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-tasks-aging-"));
+  try {
+    const store = new TaskStore(join(dir, "tasks.jsonl"));
+    const day = 86_400_000;
+    const goal = store.create({ title: "跑步：每周三次", requester: "chris", assigneeId: "bot", due: "2026-09-05", goal: { area: "health", commitment: "run 3 times a week" }, now: T0 })!;
+    const plain = store.create({ title: "plain overdue", requester: "chris", assigneeId: "bot", due: "2026-09-05", now: T0 })!;
+
+    // Two check-ins, at the ordinary gap, worded as a check-in rather than a countdown.
+    const first = store.age(plus(6 * day));
+    assert.deepEqual(first.map(e => [e.kind, e.task.id]).sort(), [["nudge", goal.id], ["nudge", plain.id]].sort());
+    const goalLine = first.find(e => e.task.id === goal.id)!.text;
+    assert.match(goalLine, /check-in 1\. How is it going\? A goal stays open until you say it is done or let it go/);
+    assert.doesNotMatch(goalLine, /archived after the next nudge/);
+    deliver(store, first, plus(6 * day));
+    const second = store.age(plus(8 * day + 1));
+    assert.deepEqual(second.map(e => [e.kind, e.task.id]).sort(), [["nudge", goal.id], ["nudge", plain.id]].sort());
+    deliver(store, second, plus(8 * day + 1));
+
+    // One gap later the plain task is archived; the goal is neither archived nor asked yet.
+    const third = store.age(plus(10 * day + 2));
+    assert.deepEqual(third.map(e => [e.kind, e.task.id]), [["archived", plain.id]]);
+    assert.equal(store.get(goal.id)?.status, "open");
+
+    // GOAL_QUIET_FACTOR gaps after its last check-in, the goal is asked again — still open.
+    const quiet = store.age(plus(8 * day + 1 + GOAL_QUIET_FACTOR * TASK_NUDGE_GAP_MS + 1));
+    assert.deepEqual(quiet.map(e => [e.kind, e.task.id, (e as { nudge?: number }).nudge]), [["nudge", goal.id, 3]]);
+    assert.match(quiet[0]!.text, /check-in 3\./);
+    assert.equal(store.get(goal.id)?.status, "open");
+
+    // A close proposal on a goal expires when its window passes; the goal stays, the history says why.
+    const proposedAt = plus(20 * day);
+    const proposed = store.proposeClose(goal.id, "bot", "no progress reported for weeks", proposedAt);
+    assert.ok("task" in proposed, JSON.stringify(proposed));
+    const settled = store.settleCloseProposals(new Date(proposedAt.getTime() + CLOSE_PROPOSAL_MS + 1));
+    assert.deepEqual(settled, [], "nothing closed");
+    const after = store.get(goal.id)!;
+    assert.equal(after.status, "open");
+    assert.equal(after.closeProposal, undefined);
+    assert.match(after.history[after.history.length - 1]!.note ?? "", /close proposal by bot expired: a goal closes only on chris's word/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

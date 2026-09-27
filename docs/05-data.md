@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: storage
-     updated: 2026-09-26
+     updated: 2026-09-27
 -->
 # Data
 
@@ -771,6 +771,9 @@ skill loading or a draft being published.
 is its one home: `due` is the next check-in and the aging sweep is the follow-up. `Tasks` create with
 `goal_area` refuses a second open goal in the same area and names the existing one, which is what
 stops a second intake; the `goals` starter says to look first, set up once, and then only follow up.
+The sweep never archives a goal (INV-768): past the second check-in it asks again every
+`GOAL_QUIET_FACTOR` gaps rather than going quiet or closing, and a close proposal on a goal expires
+when its window passes instead of closing it — a goal ends on the person's word only.
 
 Forgetting is `Forget` (`src/host/forget.ts`), in two turns. **plan** searches every place the words
 can be — both memory tiers and the box's mirror of them, kept pages, kept results, the board with its

@@ -187,6 +187,13 @@ export const TASK_IDLE_MS = envNumber("AGENTBOX_TASKS_IDLE_DAYS", 7) * 24 * 3_60
 /** Between nudges, and after the second, before archiving. */
 export const TASK_NUDGE_GAP_MS = envNumber("AGENTBOX_TASKS_NUDGE_HOURS", 48) * 3_600_000;
 export const TASK_NUDGES_BEFORE_ARCHIVE = 2;
+/**
+ * A goal the person stated (INV-757) is never archived for silence (INV-768): past the cap it
+ * keeps being asked about, this many gaps apart instead of one. A long-term goal is overdue
+ * by nature and unanswered for weeks at a time; reading that as abandonment is the opposite
+ * of "set up once, then followed".
+ */
+export const GOAL_QUIET_FACTOR = envNumber("AGENTBOX_TASKS_GOAL_QUIET_FACTOR", 4);
 /** How long a requester has to object to an assignee's close proposal. */
 export const CLOSE_PROPOSAL_MS = envNumber("AGENTBOX_TASKS_CLOSE_PROPOSAL_HOURS", 48) * 3_600_000;
 /** What a nudge offers; the answers are ordinary board moves or a reply in the thread. */
@@ -671,7 +678,9 @@ export class TaskStore {
       const idle = t - Date.parse(task.updatedAt) >= TASK_IDLE_MS;
       if (!overdue && !idle) continue;
       const since = task.aging === undefined ? Infinity : t - Date.parse(task.aging.lastNudgedAt);
-      if (since < TASK_NUDGE_GAP_MS) continue;
+      // A goal past the cap is asked about less often, not never (INV-768).
+      const quiet = task.goal !== undefined && (task.aging?.nudges ?? 0) >= TASK_NUDGES_BEFORE_ARCHIVE;
+      if (since < TASK_NUDGE_GAP_MS * (quiet ? GOAL_QUIET_FACTOR : 1)) continue;
       const reason: "overdue" | "idle" = overdue ? "overdue" : "idle";
       const nudges = (task.aging?.nudges ?? 0) + 1;
       // What may be archived for not moving, and what may only be asked about (INV-532).
@@ -680,12 +689,14 @@ export class TaskStore {
       // holiday, a supplier's month-end, or a reviewer's queue as an abandoned request —
       // which contradicts the rule the sweep is written under: silence is never consent
       // to close work. They are nudged up to the cap and then go quiet, still open.
+      // A goal is closed by the person's word — done, or let go — never by the sweep (INV-768).
       const archivable =
+        task.goal === undefined &&
         (task.status === "open" || task.status === "doing") &&
         task.waitingOn === undefined &&
         (overdue || task.due === undefined);
-      if (nudges > TASK_NUDGES_BEFORE_ARCHIVE && !archivable) continue;
-      if (nudges > TASK_NUDGES_BEFORE_ARCHIVE) {
+      if (nudges > TASK_NUDGES_BEFORE_ARCHIVE && !archivable && task.goal === undefined) continue;
+      if (nudges > TASK_NUDGES_BEFORE_ARCHIVE && archivable) {
         const text = `${task.id} "${task.title}" was archived: ${reason} and no movement after ${TASK_NUDGES_BEFORE_ARCHIVE} nudges. Reopen it on the board if it still matters.`;
         const moved = this.update(task.id, { status: "dropped", note: `archived by ageing: ${reason}, no answer to ${TASK_NUDGES_BEFORE_ARCHIVE} nudges` }, AGING_ACTOR, undefined, now);
         if (moved !== undefined) {
@@ -704,10 +715,12 @@ export class TaskStore {
       const waiting = task.waitingOn !== undefined ? ` (waiting on ${task.waitingOn})` : task.status === "blocked" || task.status === "review" ? ` (${task.status})` : "";
       const text =
         `${task.id} "${task.title}"${waiting} is ${reason === "overdue" ? `overdue (due ${task.due})` : `idle: nothing has moved for ${Math.round((t - Date.parse(task.updatedAt)) / 86_400_000)} days`}` +
-        ` — nudge ${nudges} of ${TASK_NUDGES_BEFORE_ARCHIVE}. ${NUDGE_OPTIONS.join(" / ")}? Move it on the board or answer here; ` +
-        (archivable
-          ? `with no answer it is archived after the next nudge.`
-          : `it stays open either way — say when to look again and it goes quiet until then.`);
+        (task.goal !== undefined
+          ? ` — check-in ${nudges}. How is it going? A goal stays open until you say it is done or let it go; say when to look again and it goes quiet until then.`
+          : ` — nudge ${nudges} of ${TASK_NUDGES_BEFORE_ARCHIVE}. ${NUDGE_OPTIONS.join(" / ")}? Move it on the board or answer here; ` +
+            (archivable
+              ? `with no answer it is archived after the next nudge.`
+              : `it stays open either way — say when to look again and it goes quiet until then.`));
       events.push({ kind: "nudge", task, reason, nudge: nudges, text });
     }
     return events;
@@ -806,6 +819,17 @@ export class TaskStore {
         delete stale.closeProposal;
         this.tasks.set(task.id, stale);
         this.append({ kind: "task", task: stale });
+        continue;
+      }
+      // Silence is not the person's word on a goal (INV-768): the proposal expires, the goal
+      // stays, and the check-ins resume rather than the sweep answering for them.
+      if (task.goal !== undefined) {
+        const at = now.toISOString();
+        const kept: Task = { ...task, updatedAt: at, history: [...task.history, { at, by: AGING_ACTOR, note: `close proposal by ${proposal.by} expired: a goal closes only on ${task.requester}'s word` }].slice(-HISTORY_LIMIT) };
+        delete kept.closeProposal;
+        this.tasks.set(task.id, kept);
+        this.append({ kind: "task", task: kept });
+        for (const listener of this.listeners) listener(kept);
         continue;
       }
       const moved = this.update(task.id, { status: "dropped", note: `closed as ${proposal.by} proposed (${proposal.reason}); ${task.requester} did not object by ${proposal.decideBy}` }, AGING_ACTOR, undefined, now);
