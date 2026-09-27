@@ -186,6 +186,50 @@ test("tool set shrinks to messaging-only without a box", () => {
   }
 });
 
+// INV-767: MiniMax's automatic cache has no breakpoints and treats tools + system + the first
+// message as one unit, so a volatile tier inside the system prompt missed the whole prefix on
+// every turn (33 of 41 first rounds read exactly 128 tokens). Without breakpoints the volatile
+// tier rides the newest message and the system prompt is the same bytes turn after turn.
+test("without breakpoints the volatile tier rides the newest message and the system prefix is byte-stable across turns", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const capture: Capture = { params: [] };
+    const { client } = stubClient([message([textBlock("one")]), message([textBlock("two")])], capture);
+    const provider = {
+      label: "test", model: "test-model", maxTokens: 32_000, vision: true, adaptiveThinking: false,
+      effort: false, promptCaching: false, auth: "bearer" as const, keyEnv: "TEST_KEY",
+    };
+    for (const text of ["hi", "and now something else"]) {
+      await runTurn(
+        ada,
+        [{ id: `m-${text.length}`, fromId: "user", fromName: "user", text, priority: false, receivedAt: "" }],
+        new AbortController().signal,
+        { client, registry, bus, box: undefined, resolution: undefined, provider }
+      );
+    }
+    const [first, second] = capture.params as [Anthropic.MessageCreateParams, Anthropic.MessageCreateParams];
+    const systemOf = (params: Anthropic.MessageCreateParams) => params.system as Anthropic.TextBlockParam[];
+    assert.equal(systemOf(first).length, 1, "the stable tier alone");
+    assert.equal(systemOf(first)[0]!.cache_control, undefined, "no breakpoint where none is honoured");
+    assert.equal(systemOf(first)[0]!.text, systemOf(second)[0]!.text, "the same bytes on the next turn");
+    assert.equal(JSON.stringify(first.tools), JSON.stringify(second.tools), "and the same tools");
+    assert.match(systemOf(first)[0]!.text, /Your name is Ada/);
+    assert.doesNotMatch(systemOf(first)[0]!.text, /# Memory|# Before you answer/, "nothing volatile in the system prompt");
+
+    const lastOf = (params: Anthropic.MessageCreateParams) => params.messages[params.messages.length - 1]!.content as string;
+    assert.match(lastOf(first), /^hi\n\n<host_context>/, "the person's words first, then the host's context");
+    assert.match(lastOf(first), /# Before you answer[\s\S]*<\/host_context>/, "the recap rides in the tail");
+    assert.match(lastOf(second), /^and now something else\n\n<host_context>/);
+    assert.doesNotMatch(String(second.messages[0]!.content), /host_context/, "the replay of the first message carries what was said, not the tier");
+    const said = (registry.readTranscript(ada.id) as { role: string; text?: string }[]).filter(entry => entry.role === "user").map(entry => entry.text);
+    assert.deepEqual(said, ["hi", "and now something else"], "the transcript keeps what the person said");
+  } finally {
+    cleanup();
+  }
+});
+
 test("a turn caches the system prompt and sends the tool set", async () => {
   const { registry, cleanup } = fixture();
   try {

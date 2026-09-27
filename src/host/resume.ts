@@ -100,6 +100,8 @@ interface BeginRecord {
   promptFingerprint?: PromptFingerprint;
   /** Which of the three parts differ from the previous turn in this conversation; absent when there was none. */
   promptChanged?: PromptSegment[];
+  /** Whether the volatile tier rode the newest message instead of the system prompt (INV-767). */
+  volatileInTail?: boolean;
   contextEpoch?: number;
   contextMode?: "normal" | "clean" | "recover";
   memoryProjection?: {
@@ -231,6 +233,7 @@ export class TurnLedger {
     promptHash?: string;
     promptFingerprint?: PromptFingerprint;
     promptChanged?: PromptSegment[];
+    volatileInTail?: boolean;
     contextEpoch?: number;
     contextMode?: "normal" | "clean" | "recover";
     memoryProjection?: BeginRecord["memoryProjection"];
@@ -251,6 +254,7 @@ export class TurnLedger {
       ...(options.promptHash !== undefined ? { promptHash: options.promptHash } : {}),
       ...(options.promptFingerprint !== undefined ? { promptFingerprint: options.promptFingerprint } : {}),
       ...(options.promptChanged !== undefined ? { promptChanged: [...options.promptChanged] } : {}),
+      ...(options.volatileInTail !== undefined ? { volatileInTail: options.volatileInTail } : {}),
       ...(options.contextEpoch !== undefined ? { contextEpoch: options.contextEpoch } : {}),
       ...(options.contextMode !== undefined ? { contextMode: options.contextMode } : {}),
       ...(options.memoryProjection !== undefined ? { memoryProjection: options.memoryProjection } : {}),
