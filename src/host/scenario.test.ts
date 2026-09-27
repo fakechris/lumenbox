@@ -642,6 +642,35 @@ test("a real turn with an undeliverable reply leaves a failed task, never a succ
   } finally { episode.cleanup(); }
 });
 
+// INV-766: a long turn that hit the round limit and continued, then compacted. The record
+// predates the host stamp, so the continuation prompt is a plain user message; it used to
+// win as the pinned ask and the person's request reached the model only as summary text.
+test("after a continuation and a compaction the model still reads the person's request verbatim", async () => {
+  const at = "2026-09-26T10:00:00Z";
+  const ask = "把 docs 目录里所有过期的链接找出来并修好，修完跑一遍 lint";
+  const old: HistoryEntry[] = [{ role: "user", text: ask, at, fromPerson: true } as HistoryEntry];
+  for (let i = 0; i < 170; i++) {
+    old.push({ role: "assistant", kind: "blocks", at, blocks: [{ type: "tool_use", id: `g${i}`, name: "shell", input: { command: `grep -n http docs/${i}.md` } }] });
+    old.push({ role: "user", kind: "results", at, blocks: [{ type: "tool_result", tool_use_id: `g${i}`, content: `docs/${i}.md:12: https://example.test/${i}` }] });
+  }
+  old.push({ role: "user", at, text: "You have used 400 tool rounds, which is the limit for one turn, and you were still making progress — so this is a fresh turn rather than a failure. This is continuation 1 of at most 3." });
+  let request = "";
+  const episode = await runEpisode({
+    team: [{ name: "Nova" }], says: ["还剩多少没修？"], history: old,
+    script: ({ agent, messages }) => {
+      if (agent !== "Nova") return { say: "## Threads\n- fixing links\n## Done\n- 170 files grepped\n## State\n- none\n## Artifacts\n- none" };
+      request = JSON.stringify(messages);
+      return { say: "还有十几个，继续修。" };
+    },
+  });
+  try {
+    assert.match(request, /kind":"summary|Threads/, "the history was compacted");
+    assert.ok(request.includes(ask), "the person's request is in the request verbatim");
+    const pinnedHostPrompt = /"content":"You have used 400 tool rounds/.test(request);
+    assert.equal(pinnedHostPrompt, false, "the host's continuation prompt is not what got pinned");
+  } finally { episode.cleanup(); }
+});
+
 test("legacy research narration is not replayed as a pinned tool exemplar", async () => {
   const at = "2026-09-20T00:38:55Z";
   const narration = "17 个核心事实，1:1 核完，5 维 cross-comparison。".repeat(60);
