@@ -15,8 +15,9 @@ import assert from "node:assert/strict";
 import { runEpisode, type Script } from "./scenario.ts";
 import { ChannelManager, type ChannelAdapter, type InboundMessage as ChannelMessage } from "../channels/manager.ts";
 import { choosePinnedEntries, type HistoryEntry } from "./compaction.ts";
-import { replyForMessage } from "./reply.ts";
+import { replyForMessage, silenceForMessage } from "./reply.ts";
 import { conversationIdFor } from "../agents/registry.ts";
+import { EMPTY_REPLY_NOTE } from "../channels/strings.ts";
 import { chatFilesRoot, parseWakePrompt } from "./prompt.ts";
 import { contextTaskBlockers, newContext } from "./context-recovery.ts";
 import { recoverTask } from "./task-recovery.ts";
@@ -1327,6 +1328,69 @@ test("two agents woken by one room message that addressed nobody: the unrelated 
     assert.match(transcript.find(entry => entry.kind === "blocks")?.silent?.reason ?? "", /Iris owns/);
     assert.equal(replyForMessage(transcript, "room-msg-Mia"), "", "nothing of Mia's is delivered");
     assert.ok(!transcript.some(entry => entry.role === "assistant" && entry.kind === undefined), "no host boilerplate stands in for a reply");
+  } finally {
+    episode.cleanup();
+  }
+});
+
+test("the same room message, through the channel manager: the silent agent posts neither a reply nor the empty-reply note (INV-801)", async () => {
+  // Codex's review of INV-775: the orchestrator's `ask` returned "" for a NothingToSay turn, and
+  // the manager took "" for a turn with nothing to show and posted 做完了。(它没有留下说明。) in
+  // the room. The same episode as above, run through the real delivery path: two doors into one
+  // room, one per agent, wired the way web/server.ts wires `ask` — reply by causal identity,
+  // silence by the same identity, told apart before the manager sees either.
+  const chatKey = "feishu:room-1";
+  const conversation = conversationIdFor(chatKey);
+  const script: Script = ({ agent }) =>
+    agent === "Iris"
+      ? { say: "部署我来负责，今天下午三点。" }
+      : { call: "NothingToSay", input: { reason: "The question is about deployment, which Iris owns; nothing for me." } };
+  const room: { door: string; text: string }[] = [];
+  const episode = await runEpisode({
+    team: [{ name: "Iris", description: "owns deployment" }, { name: "Mia", description: "owns design" }],
+    says: [],
+    script,
+    drive: async ({ registry, bus }) => {
+      const doors = registry.list().map(record => {
+        let receive!: (message: ChannelMessage) => Promise<string | undefined>;
+        const adapter: ChannelAdapter = {
+          name: `feishu-${record.profile.name}`,
+          start: async handler => { receive = handler; },
+          stop() {},
+          send: async (_identity, text) => { room.push({ door: record.profile.name, text }); return undefined; },
+          sendToChat: async (_chat, text) => { room.push({ door: record.profile.name, text }); },
+        };
+        return { record, adapter, receive: (message: ChannelMessage) => receive(message) };
+      });
+      const manager = new ChannelManager({
+        mayDrive: () => true, log: () => {},
+        defaultAgentFor: door => door.replace(/^feishu-/, ""),
+        ask: async (name, text, _identity, _chat, _progress, _thread, _task, _interim, _stream, origin) => {
+          const agent = registry.resolve(name!);
+          bus.sendFromUser(agent.id, text, { conversation, steerable: false, messageId: origin!.messageId, ...(origin!.addressed === false ? { addressed: false } : {}) });
+          await bus.runExclusive(agent.id, { userDriven: true, conversation });
+          const transcript = registry.readTranscript(agent.id, conversation);
+          const reply = replyForMessage(transcript, origin!.messageId);
+          return reply.trim() === "" ? (silenceForMessage(transcript, origin!.messageId) ?? reply) : reply;
+        },
+      });
+      for (const door of doors) manager.register(door.adapter, true, "test");
+      manager.start();
+      await new Promise(resolve => setImmediate(resolve));
+      try {
+        for (const door of doors) {
+          await door.receive({ identity: "feishu:user", chatKey, senderLabel: "user", text: "大家早，今天的部署谁负责？", messageId: `room-msg-${door.record.profile.name}`, addressed: false });
+        }
+        await manager.idle();
+      } finally { manager.stop(); }
+    },
+  });
+  try {
+    const { score } = episode;
+    assert.equal(score.turns, 2, "both agents were woken");
+    assert.deepEqual(score.trail, ["Mia:NothingToSay"]);
+    assert.deepEqual(room, [{ door: "Iris", text: "部署我来负责，今天下午三点。" }], "the room receives exactly one message, and it is Iris's");
+    assert.ok(!room.some(line => line.text.includes(EMPTY_REPLY_NOTE)), "no 做完了 stands in for Mia's silence");
   } finally {
     episode.cleanup();
   }

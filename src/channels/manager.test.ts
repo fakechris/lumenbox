@@ -26,7 +26,7 @@ import {
   type InboundMessage,
   type TaskCardState,
 } from "./manager.ts";
-import { NO_UPGRADE_WAITING, UPGRADE_IS_ADMIN_CALL } from "./strings.ts";
+import { EMPTY_REPLY_NOTE, NO_UPGRADE_WAITING, UPGRADE_IS_ADMIN_CALL } from "./strings.ts";
 
 function testAdapter(): ChannelAdapter & {
   inject: (message: InboundMessage) => Promise<string | undefined>;
@@ -2303,6 +2303,37 @@ test("on a door that answers only when addressed, a group message that names nob
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(asked.length, 2, "ran, because the door's rule is all");
   assert.equal(heard.length, 1);
+});
+
+test("a turn that chose silence posts nothing — not the reply, not the empty-reply note (INV-801)", async () => {
+  // Codex's review of INV-775: the orchestrator returned "" for a NothingToSay turn, and the
+  // manager read "" as a turn with nothing to show, so the supposedly silent agent posted
+  // 做完了。(它没有留下说明。) into the room. Silence is now a value of its own.
+  const adapter = testAdapter();
+  const closed: string[] = [];
+  const manager = new ChannelManager({
+    mayDrive: () => true, log: () => {},
+    ask: async (_agent, text) =>
+      text === "anyone?" ? { silent: { reason: "not for me" } } : "",
+    board: {
+      open: () => "t1",
+      started: () => {},
+      closed: (taskId, status) => { closed.push(`${taskId}:${status}`); return "done"; },
+    },
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+  try {
+    await adapter.inject({ identity: "telegram:7", chatKey: "telegram:room", messageId: "m1", senderLabel: "Alice", text: "anyone?", addressed: false });
+    await manager.idle();
+    assert.deepEqual(adapter.sent.map(entry => entry.text), [], "silence delivers nothing");
+    assert.deepEqual(closed, ["t1:done"], "the turn still settles: it completed, it just had nothing to say");
+
+    // Genuine empty output keeps the note: the person asked and is owed a line.
+    await adapter.inject({ identity: "telegram:7", chatKey: "telegram:room", messageId: "m2", senderLabel: "Alice", text: "status?", addressed: true });
+    await manager.idle();
+    assert.deepEqual(adapter.sent.map(entry => entry.text), [EMPTY_REPLY_NOTE]);
+  } finally { manager.stop(); }
 });
 
 test("the word the upgrade notice asks for is the word this manager answers to", async () => {

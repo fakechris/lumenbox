@@ -9,7 +9,7 @@
 import { bindingsOf, CommitmentLedger, describeGaps, parseCommitments, priorCommitmentsPrompt, reconcileCommitments } from "./commitments.ts";
 import { finishRoutineRun, PendingAttachments, RoutineResultLedger, routineResolveMode } from "./routine-resolve.ts";
 import { learningsDir } from "./learnings.ts";
-import { replyForMessage } from "./reply.ts";
+import { replyForMessage, silenceForMessage } from "./reply.ts";
 import { contextTaskBlockers, isContextCommand } from "./context-recovery.ts";
 import { isRecoveryCommand } from "./task-recovery.ts";
 import { isRetryCommand } from "./retry-recovery.ts";
@@ -2215,6 +2215,11 @@ export class Orchestrator {
 
   replyForMessage(agentId: string, messageId: string, conversation: string = MAIN_CONVERSATION): string {
     return replyForMessage(this.registry.readTranscript(agentId, conversation), messageId);
+  }
+
+  /** Whether the turn a message opened ended by calling `NothingToSay` (INV-775), and why; see `silenceForMessage` (INV-801). */
+  silenceForMessage(agentId: string, messageId: string, conversation: string = MAIN_CONVERSATION): { silent: { reason: string } } | undefined {
+    return silenceForMessage(this.registry.readTranscript(agentId, conversation), messageId);
   }
 
   /**
