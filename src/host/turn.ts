@@ -2066,6 +2066,9 @@ ${outcome.text}`;
         text: outcome.continueWith,
         at: new Date().toISOString(),
         turnId,
+        // The host's words, not the person's: compaction must never pin this as the ask
+        // in place of what opened the work (INV-766).
+        host: true,
       } satisfies TranscriptEntry, conversation);
 
       // Reassembled from the transcript, and compacted on the way, which is what the comment above
@@ -2168,7 +2171,7 @@ ${outcome.text}`;
         "[last round] You have one response left in this turn and no tools. Reply now with what " +
         "you have: the result so far, marked partial where it is, and what is left. Anything you " +
         "checkpointed is already safe; do not repeat it, point at it.";
-      registry.appendTranscript(agent.id, { role: "user", text: lastCall, at: new Date().toISOString(), turnId } satisfies TranscriptEntry, conversation);
+      registry.appendTranscript(agent.id, { role: "user", text: lastCall, at: new Date().toISOString(), turnId, host: true } satisfies TranscriptEntry, conversation);
       messages.push({ role: "user", content: lastCall });
       forceTools = { type: "none" };
     }
@@ -2871,7 +2874,7 @@ ${outcome.text}`;
             stopHookActive = true;
             finishing = true;
             const note = `[Stop hook] ${hook.reason ?? "continue"}`;
-            registry.appendTranscript(agent.id, { role: "user", text: note, at: new Date().toISOString() } satisfies TranscriptEntry, conversation);
+            registry.appendTranscript(agent.id, { role: "user", text: note, at: new Date().toISOString(), host: true } satisfies TranscriptEntry, conversation);
             messages.push({ role: "user", content: note });
             continue;
           }

@@ -2,7 +2,7 @@
      title: Why the agent kept compacting, and what long-horizon systems do instead
      family: decision
      status: current
-     updated: 2026-09-26
+     updated: 2026-09-27
 -->
 # Why the agent kept compacting, and what long-horizon systems do instead
 
@@ -152,6 +152,17 @@ scripted summariser, so what is tested is the machinery, not the model's prose:
   the person's imperative sentences (`the person said: …`, ≤140 chars, user-role messages
   only) outside the model's output, forward across passes. Scenario: "以后报告都用公制",
   two compactions later.
+- **INV-766 (2026-09-27)** the pinned ask is what a person or a teammate said, never what
+  the host said to the model. A continuation prompt ("You have used 400 tool rounds…"), the
+  last-round notice and a Stop-hook note are plain user messages on the wire, and each used
+  to win as the newest plain user message: after one continuation the request that opened
+  the work reached the model only as summary prose marked "background, not instructions".
+  Those entries now carry `host: true` in the transcript; records written before the stamp
+  are recognised by their exact opening words (`isHostAuthored`). A tail whose only plain
+  user message is the host's still pins the person's ask; the summariser is shown `host:`
+  rather than `user:` for them; `extractAnchors` takes no "the person said" sentence from
+  them. Scenario: a legacy continuation prompt, 170 tool pairs, a compaction — the
+  person's request is in the next request verbatim and the prompt is not.
 - **A4** `clampSummaryToBudget`: whatever the summariser answered, summary + tail fits
   the trigger, by clipping with a visible mark — one step, no further model call. The
   summariser is asked at most three times per pass (draft, shape retry, fresh cut).
