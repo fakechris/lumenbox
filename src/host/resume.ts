@@ -601,11 +601,37 @@ export class StepLedger {
    * of its calls are still open. `known: false` is the older transcript's case.
    */
   stepsOf(turnId: string): { known: boolean; open: OpenStep[] } {
-    let known = false;
-    const open = new Map<string, OpenStep>();
+    const turns = this.openByTurn();
+    const turn = turns.get(turnId);
+    return { known: turn !== undefined, open: turn === undefined ? [] : [...turn.values()] };
+  }
+
+  /**
+   * Closes the step that was waiting on this approval, once the person has answered it
+   * (INV-798). A step handed to a person stays open past the end of its batch — that is
+   * what lets a restart park on the answer — so the answer is what closes it. Nothing to
+   * close is the ordinary case: the turn ended first, or the approval was not a step's.
+   */
+  settleApproval(approvalId: string, now = new Date()): boolean {
+    for (const [turnId, steps] of this.openByTurn()) {
+      for (const step of steps.values()) {
+        if (step.approvalId !== approvalId) continue;
+        this.settled(turnId, step.toolUseId, now);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Every turn the ledger has seen, with the steps still open in each. */
+  private openByTurn(): Map<string, Map<string, OpenStep>> {
+    const turns = new Map<string, Map<string, OpenStep>>();
     for (const record of this.read()) {
-      if (record.turnId !== turnId) continue;
-      known = true;
+      let open = turns.get(record.turnId);
+      if (open === undefined) {
+        open = new Map();
+        turns.set(record.turnId, open);
+      }
       if (record.event === "pending") {
         open.set(record.toolUseId, { toolUseId: record.toolUseId, name: record.name, at: record.at });
       } else if (record.event === "awaiting_approval") {
@@ -617,7 +643,7 @@ export class StepLedger {
         open.clear();
       }
     }
-    return { known, open: [...open.values()] };
+    return turns;
   }
 
   private append(record: StepRecord): void {

@@ -864,7 +864,12 @@ export class Orchestrator {
       options.steps === null
         ? undefined
         : (options.steps ?? new StepLedger(stepLedgerPath(), line => console.error(`[turn-steps] ${line}`)));
-    this.policy.onApprovalSettled = (approval, how) => this.continueParked(approval.id, how);
+    this.policy.onApprovalSettled = (approval, how) => {
+      // A parked turn continues from the waiting step and settles it itself, reading the
+      // ledger as it wakes; any other step waiting on this answer closes here (INV-798).
+      if (this.parked.has(approval.id)) this.continueParked(approval.id, how);
+      else this.steps?.settleApproval(approval.id);
+    };
     this.networkEvents =
       options.networkEvents === null ? undefined : (options.networkEvents ?? new NetworkEventLog());
     this.pendingWork =

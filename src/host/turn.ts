@@ -227,12 +227,15 @@ function safeToReplay(name: string, input: Record<string, unknown>): boolean {
 
 /**
  * Whether the protocol's own declaration (INV-525) says this call lands the same state
- * twice: a read, or an idempotent write that carries the key making it so. A call with an
- * `operation_id` is the box's way of saying the same thing. Everything else is `unsafe`,
- * and a restart answers it `outcome_unknown` rather than running it again.
+ * twice: a read, or an idempotent write that carries the key making it so. Everything else
+ * is `unsafe`, and a restart answers it `outcome_unknown` rather than running it again.
+ *
+ * Only the declaration counts. A field in the model's input — an `operation_id`, say — is
+ * not a contract: no executor here reads it, `bash` does not forward it to the box, and
+ * the job ids boxd does dedupe are minted by the tool per dispatch, never taken from the
+ * call. A keyed `bash` that took effect before the crash would run again (INV-798).
  */
 function replaysToSameState(name: string, input: Record<string, unknown>): boolean {
-  if (typeof input.operation_id === "string" && input.operation_id !== "") return true;
   const declared = idempotencyOf(name);
   if (declared.kind === "read") return true;
   if (declared.kind === "idempotent") return declared.key === undefined || input[declared.key] !== undefined;
@@ -1649,8 +1652,8 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       for (const call of calls) {
         const input = (call.input ?? {}) as Record<string, unknown>;
         if (!safeToReplay(call.name, input)) continue;
-        // Policy is deliberately not re-consulted: the block's presence in the
-        // transcript is the record that the original call already passed the gate.
+        // Through the current policy gate, like any call (INV-798): the transcript records
+        // that the call was asked for, not that it was authorised.
         const outcome = await dispatchTool(call.name, input, {
           agent,
           registry,
@@ -1658,12 +1661,14 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
           box,
           files: deps.files,
           claims: deps.claims,
+          policy: deps.policy,
           caller: deps.caller,
           ...(deps.callerName !== undefined ? { callerName: deps.callerName } : {}),
           displayIndex: deps.displayIndex,
           boxOwner: deps.boxOwner,
           tasks: deps.tasks,
           turnId,
+          toolUseId: call.id,
           conversation,
           memorySources: inbound.map(message => `message:${message.id}`),
         });
@@ -1674,8 +1679,10 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
             {
               type: "text",
               text:
-                "[Re-run on resume: this read-only call was interrupted before its result " +
-                `was recorded.]\n\n${outcome.text}`,
+                outcome.approval !== undefined
+                  ? outcome.text
+                  : "[Re-run on resume: this read-only call was interrupted before its result " +
+                    `was recorded.]\n\n${outcome.text}`,
             },
           ],
           ...(outcome.isError ? { is_error: true } : {}),
@@ -1703,9 +1710,21 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   // `outcome_unknown`, which is the truth and the only safe thing to say. A call never
   // dispatched is answered `not_started`. Settled calls already have their result on disk
   // and are never touched.
+  //
+  // A re-run goes through the policy gate as it stands *now* (INV-798). The pending line
+  // is written before the gate is consulted, so an open step may be one the gate never
+  // saw; and the person may have changed the rules while the host was down. The block's
+  // presence in the transcript records that the call was asked for, not that it was
+  // authorised. A call the gate now hands to a person stays open until they answer.
   if (continuing && history.length > 0) {
     const last = history[history.length - 1]!;
     const open = new Map((deps.steps?.stepsOf(turnId).open ?? []).map(step => [step.toolUseId, step] as const));
+    /** Steps answered by a result below, so the notice further down does not repeat them. */
+    const answeredHere = new Set<string>();
+    /** Steps the current gate put in front of a person: open until the answer lands. */
+    const stillWaiting = new Set<string>();
+    const approvalHow = (approvalId: string): "allowed" | "refused" | "gone" =>
+      deps.resumeOf?.approval?.id === approvalId ? deps.resumeOf!.approval!.how : "gone";
     if ("kind" in last && last.kind === "blocks") {
       const calls = last.blocks.filter(
         (block): block is Anthropic.ToolUseBlockParam => (block as { type?: string }).type === "tool_use"
@@ -1719,11 +1738,10 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
         if (step === undefined) {
           text = notStartedResult(call.name);
         } else if (step.approvalId !== undefined) {
-          const how = deps.resumeOf?.approval?.id === step.approvalId ? deps.resumeOf!.approval!.how : "gone";
-          text = approvalOutcomeResult(call.name, how);
+          text = approvalOutcomeResult(call.name, approvalHow(step.approvalId));
+          answeredHere.add(call.id);
         } else if (safeToReplay(call.name, input) || replaysToSameState(call.name, input)) {
-          // Policy is deliberately not re-consulted: the block's presence in the transcript is
-          // the record that the original call already passed the gate.
+          answeredHere.add(call.id);
           const outcome = await dispatchTool(call.name, input, {
             agent,
             registry,
@@ -1731,21 +1749,31 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
             box,
             files: deps.files,
             claims: deps.claims,
+            policy: deps.policy,
             caller: deps.caller,
             ...(deps.callerName !== undefined ? { callerName: deps.callerName } : {}),
             displayIndex: deps.displayIndex,
             boxOwner: deps.boxOwner,
             tasks: deps.tasks,
             turnId,
+            toolUseId: call.id,
             conversation,
             memorySources: inbound.map(message => `message:${message.id}`),
           });
-          text =
-            "[Re-run on resume: this call was interrupted before its result was recorded, and " +
-            `re-running it changes nothing.]
+          if (outcome.approval !== undefined) {
+            // The gate asked a person. The same shape as a first run: the refusal is the
+            // call's result, the step is marked waiting, and it is not settled below.
+            deps.steps?.awaitingApproval(turnId, call.id, outcome.approval.id);
+            stillWaiting.add(call.id);
+            text = outcome.text;
+          } else {
+            text =
+              "[Re-run on resume: this call was interrupted before its result was recorded, and " +
+              `re-running it changes nothing. It passed the policy gate again as it ran.]
 
 ${outcome.text}`;
-          isError = outcome.isError === true;
+            isError = outcome.isError === true;
+          }
         } else {
           text = outcomeUnknownResult(call.name);
         }
@@ -1768,9 +1796,30 @@ ${outcome.text}`;
         history = [...history, entry];
       }
     }
+    // A step that was waiting on a person and whose refusal is already on the record: the
+    // call's result slot is taken, so the answer arrives as a line from the host. This is
+    // the shape a restart during the model request after an approval leaves (INV-798):
+    // the step stays open until the person answers, the turn parks on it, and what they
+    // said has to reach the model somewhere.
+    const told = [...open.values()]
+      .filter(step => step.approvalId !== undefined && !answeredHere.has(step.toolUseId))
+      .map(step => approvalOutcomeResult(step.name, approvalHow(step.approvalId!)));
+    if (told.length > 0) {
+      const entry = {
+        role: "user",
+        text: `[host] ${told.join("\n")}`,
+        at: new Date().toISOString(),
+        turnId,
+      } satisfies TranscriptEntry;
+      registry.appendTranscript(agent.id, entry, conversation);
+      history = [...history, entry];
+    }
     // Whatever the transcript now says, these steps are over: either answered above, or
-    // their result was on disk already and only the `settled` line was lost.
-    for (const step of open.values()) deps.steps?.settled(turnId, step.toolUseId);
+    // their result was on disk already and only the `settled` line was lost. Except the
+    // ones the gate just handed to a person: those close when the person answers.
+    for (const step of open.values()) {
+      if (!stillWaiting.has(step.toolUseId)) deps.steps?.settled(turnId, step.toolUseId);
+    }
   }
 
   // A person, as opposed to the harness wearing the person's shape: a timer, a webhook, a
@@ -3026,6 +3075,12 @@ ${outcome.text}`;
     const results: Anthropic.ToolResultBlockParam[] = [];
     /** Tool-use ids whose stored text differs from what the model was shown. */
     const withheld = new Map<string, string>();
+    /**
+     * Calls the gate handed to a person this round (INV-798). Their step stays open in the
+     * ledger past the end of the batch: it closes when the person answers, so a restart in
+     * the meantime parks on the answer instead of continuing as if nothing were pending.
+     */
+    const awaitingPerson = new Set<string>();
     const runOne = async (
       toolUse: Anthropic.ToolUseBlock
     ): Promise<{ block: Anthropic.ToolResultBlockParam; recordAs?: string; commit?: { id: string; how: import("./pending-work.ts").CommitHow }[] }> => {
@@ -3160,7 +3215,10 @@ ${outcome.text}`;
           isError: true,
         };
       }
-      if (outcome.approval !== undefined) deps.steps?.awaitingApproval(turnId, toolUse.id, outcome.approval.id);
+      if (outcome.approval !== undefined) {
+        deps.steps?.awaitingApproval(turnId, toolUse.id, outcome.approval.id);
+        awaitingPerson.add(toolUse.id);
+      }
 
       emit({
         type: "tool_end",
@@ -3273,7 +3331,11 @@ ${outcome.text}`;
     } satisfies TranscriptEntry, conversation);
     // Settled only now, with the results on disk: a crash before this line leaves the
     // calls open, and open means "the result may be missing", which is exactly the case.
-    for (const use of toolUses) deps.steps?.settled(turnId, use.id);
+    // A call waiting on a person is not settled by its refusal being on disk: the
+    // orchestrator settles it when the person answers (INV-798).
+    for (const use of toolUses) {
+      if (!awaitingPerson.has(use.id)) deps.steps?.settled(turnId, use.id);
+    }
     // Only now are a fork's findings durably the parent's (docs/32 §1): the results entry is
     // on disk. Committing inside the tool would record `done` for findings a crash could
     // still lose between the join and this line.
