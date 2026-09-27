@@ -1474,7 +1474,7 @@ test("a preference said before two compactions is in the ledger with provenance 
     team: [{ name: "Nova" }], says: [], memory: true,
     selectMemory: async () => '{"selected":[1]}',
     history: [
-      { role: "user", text: "以后报告都用公制。", at },
+      { role: "user", text: "以后报告都用公制。", at, fromPerson: true },
       { role: "assistant", text: "好的。", at },
       ...filler(0, 170),
     ],

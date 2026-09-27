@@ -24,6 +24,7 @@
  */
 
 import { envNumber } from "../config.ts";
+import { AGENT_WAKE_CUE } from "../agents/bus.ts";
 import type Anthropic from "@anthropic-ai/sdk";
 
 /**
@@ -193,7 +194,7 @@ export interface SummaryEntry {
 export const MAX_SUMMARY_GENERATIONS = 4;
 
 export type HistoryEntry =
-  | { role: "user" | "assistant"; text: string; at: string; host?: true }
+  | { role: "user" | "assistant"; text: string; at: string; host?: true; fromPerson?: true }
   | { role: "assistant"; kind: "blocks"; blocks: Anthropic.ContentBlockParam[]; at: string }
   | { role: "user"; kind: "results"; blocks: Anthropic.ToolResultBlockParam[]; at: string }
   | SummaryEntry;
@@ -614,6 +615,30 @@ export function userInstructionSentences(text: string): string[] {
 }
 
 /**
+ * The separator `buildTurnPrompt` writes between the person's messages and the teammate wake
+ * that shares the turn. Everything from it onwards is scaffolding and what colleagues said.
+ */
+const WAKE_BOUNDARY = `\n\n---\n\n${AGENT_WAKE_CUE}`;
+
+/**
+ * The words in a user-role entry that a person actually typed, or undefined when none are
+ * theirs (INV-799).
+ *
+ * A user-role entry is the shape that opens a turn, not a claim about who wrote it: a
+ * teammate's wake, a timer's or a webhook's prompt, a fork delivery and a host note all
+ * arrive as `role: "user"`. Only a turn the person opened carries `fromPerson`, and within
+ * it their messages come first, before the `---` and the `[agent]` wake that any peer
+ * messages of the same turn are rendered under. That boundary is written by us, and a
+ * peer's own lines are quoted, so a colleague cannot write past it into the person's part.
+ */
+export function personAuthoredText(entry: HistoryEntry): string | undefined {
+  if ("kind" in entry || entry.role !== "user" || entry.fromPerson !== true || isHostAuthored(entry)) return undefined;
+  if (entry.text.startsWith(AGENT_WAKE_CUE)) return undefined;
+  const boundary = entry.text.indexOf(WAKE_BOUNDARY);
+  return boundary === -1 ? entry.text : entry.text.slice(0, boundary);
+}
+
+/**
  * Exact strings the summariser must not be trusted to keep (docs/24 v3 P0 #3).
  *
  * Harvested by regex from the *full* blocks — before any rendering clip — and appended
@@ -676,9 +701,11 @@ export function extractAnchors(entries: readonly HistoryEntry[]): string[] {
   for (const entry of entries) {
     if (!("kind" in entry)) {
       // The person's own words (INV-778): an instruction, a constraint, a preference they
-      // stated is kept verbatim, from user-role messages only. Tool output and pages are
-      // never a source of these — that is where injection lives.
-      if (entry.role === "user" && !isHostAuthored(entry)) for (const sentence of userInstructionSentences(entry.text)) take(`${USER_ANCHOR_PREFIX}${sentence}`, "user");
+      // stated is kept verbatim, from what the person authored only. Tool output and pages
+      // are never a source of these — that is where injection lives — and neither is a
+      // teammate's wake, a timer's prompt or a host note, which share the user role (INV-799).
+      const spoken = personAuthoredText(entry);
+      if (spoken !== undefined) for (const sentence of userInstructionSentences(spoken)) take(`${USER_ANCHOR_PREFIX}${sentence}`, "user");
       scan(entry.text);
       continue;
     }

@@ -2217,6 +2217,9 @@ ${outcome.text}`;
         text: steerText,
         at: new Date().toISOString(),
         causedBy: steered.map(message => message.id),
+        // Stamped like the opening message (INV-799): a steer is the person typing mid-turn, and
+        // the anchor harvest keeps only what carries the stamp.
+        ...(steered.some(message => message.fromId === "user" && message.synthetic !== true) ? { fromPerson: true as const } : {}),
         turnId,
       } satisfies TranscriptEntry, conversation);
       messages.push({ role: "user", content: steerText });
