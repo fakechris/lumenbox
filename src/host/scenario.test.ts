@@ -23,6 +23,7 @@ import { chatFilesRoot, parseWakePrompt } from "./prompt.ts";
 import { contextTaskBlockers, newContext } from "./context-recovery.ts";
 import { goalCommand } from "./goal-mode.ts";
 import { GoalLoop } from "./goal-loop.ts";
+import { GoalGate } from "./goal-gate.ts";
 import { recoverTask } from "./task-recovery.ts";
 import { retryLastAnswer } from "./retry-recovery.ts";
 import { AnswerReviewer } from "./answer-review.ts";
@@ -636,6 +637,99 @@ test("a person who speaks while a continuation waits goes first and is answered;
         assert.equal(order.filter(kind => kind === "continuation").length, 1);
         assert.equal(tasks.get("t1")!.pursuit!.spent.continuations, 1);
         assert.equal(told.length, 0, "nothing to tell: the goal is still moving");
+      } finally { manager.stop(); }
+    },
+  });
+  result.cleanup();
+});
+
+// INV-771: completion is claimed, not declared. A verifier that never saw the executor's words
+// checks each item against the current state — running only the command the person confirmed,
+// refusing any other — and a claim made before the work is done is rejected with a next action
+// the loop carries; the second claim, with the file in place, passes into review.
+test("a goal is verified by a turn that never saw the work: a premature claim is rejected, an unconfirmed command refused, the real one passes into review", async () => {
+  const tasks = new TaskStore(join(mkdtempSync(join(tmpdir(), "agentbox-goal-gate-scenario-")), "tasks.jsonl"));
+  const told: string[] = [];
+  const verifierRequests: string[] = [];
+  const bashResults: string[] = [];
+  let claims = 0;
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: [], tasks,
+    goalLoop: episodeLoop(told),
+    goalGate: ({ bus, registry, files }) => new GoalGate({
+      tasks: tasks!, registry, bus,
+      manifest: async () => new Map([...files.entries()].map(([path, content]) => [path, `h:${content.length}`])),
+      notify: async (_task, text) => { told.push(text); }, log: () => {},
+    }),
+    script: ({ messages, offered }) => {
+      const all = JSON.stringify(messages);
+      if (/\[host verification: goal t1\]/.test(all)) {
+        verifierRequests.push(all);
+        assert.deepEqual([...offered].sort(), ["ReadKept", "bash", "list_dir", "read_file"], "a verifier holds read tools and bash");
+        if (!/"name":"bash"/.test(all)) return { call: "bash", input: { command: "cat /etc/passwd" } };
+        const results = [...all.matchAll(/"tool_use_id":"[^"]+","content":\[\{"type":"text","text":"((?:[^"\\]|\\.)*)"/g)].map(match => match[1]!);
+        bashResults.push(...results.filter(text => !bashResults.includes(text)));
+        if ((all.match(/"name":"bash"/g) ?? []).length < 2) return { call: "bash", input: { command: "test -e /home/box/work/q3.md" } };
+        const exitZero = results.some(text => /exit code:?\s*0\b/i.test(text)) && !results.some(text => /exit code:?\s*[1-9]/i.test(text));
+        return exitZero
+          ? { say: "Status: complete\nIntegrity: clean\nContract audit: aligned\nItem c1: proven — test -e exited 0\nItem c2: proven — read the file\nNext action: none" }
+          : { say: "Status: incomplete\nIntegrity: clean\nContract audit: aligned\nItem c1: contradicted — test -e exited 1\nItem c2: unverified\nNext action: write /home/box/work/q3.md first" };
+      }
+      if (/Continue working toward goal t1/.test(all)) {
+        // Only this continuation's own rounds count, not the earlier claim in the history.
+        const tail = all.slice(all.lastIndexOf("Continue working toward goal t1"));
+        if (/"action":"claim_complete"/.test(tail)) return { say: "申请了。" };
+        // The first continuation claims before doing anything — the shape the gate exists to
+        // catch; the next one writes the file first.
+        if (claims === 0) { claims += 1; return { call: "Goal", input: { action: "claim_complete", evidence: [{ id: "c1", evidence: "will be there" }, { id: "c2", evidence: "trust me" }] } }; }
+        if (!/"name":"write_file"/.test(tail)) return { call: "write_file", input: { path: "/home/box/work/q3.md", content: "# Q3\n…" } };
+        claims += 1;
+        return { call: "Goal", input: { action: "claim_complete", evidence: [{ id: "c1", evidence: "/home/box/work/q3.md" }, { id: "c2", evidence: "wrote it" }] } };
+      }
+      if (/\[host\] 目标 t1 已由人创建/.test(all)) {
+        if (!/"name":"Goal"/.test(all)) return { call: "Goal", input: { action: "checklist_add", items: [{ text: "报告文件存在", command: "test -e /home/box/work/q3.md", expect_exit: 0 }, { text: "报告读得通" }] } };
+        return { say: "清单两条。" };
+      }
+      return { say: "ok" };
+    },
+    drive: async ({ bus, registry, frontId }) => {
+      const key = "feishu:private-gate";
+      const conversation = conversationIdFor(key);
+      let receive!: (message: ChannelMessage) => Promise<string | undefined>;
+      const pushed: string[] = [];
+      const manager = new ChannelManager({
+        mayDrive: () => true, log: () => {},
+        goal: { command: input => goalCommand({ tasks, mayUse: () => true, contextMode: () => "normal", blockers: () => [] }, { agentId: frontId, conversation, requester: "principal-user", operationId: input.operationId, privateChat: input.privateChat, text: input.text, chatKey: key }) },
+        ask: async (_name, text, _identity, _chat, _progress, _thread, _task, _interim, _stream, origin) => {
+          bus.sendFromUser(frontId, text, { conversation, steerable: false, messageId: origin!.messageId });
+          await bus.runExclusive(frontId, { userDriven: true, conversation });
+          return replyForMessage(registry.readTranscript(frontId, conversation), origin!.messageId);
+        },
+      });
+      manager.register({ name: "feishu", start: async handler => { receive = handler; }, stop() {}, send: async (_i, text) => { pushed.push(text); return undefined; }, sendToChat: async (_c, text) => { pushed.push(text); } }, true, "test");
+      manager.start(); await new Promise(resolve => setImmediate(resolve));
+      try {
+        await receive({ identity: "feishu:user", chatKey: key, privateChat: true, senderLabel: "user", text: "/goal 写一份 Q3 报告", messageId: "g-1" });
+        await manager.idle();
+        await settled(() => (tasks.get("t1")?.pursuit?.checklist.length ?? 0) === 2);
+        // The loop would continue on its own; the person's confirmation and go-ahead come first.
+        assert.match((await receive({ identity: "feishu:user", chatKey: key, privateChat: true, senderLabel: "user", text: "/goal confirm 1", messageId: "g-2" })) ?? "", /已确认第 1 条的命令：test -e/);
+        // First claim, from the first continuation: nothing written yet. The verifier runs, refuses the stray command, runs the confirmed one, rejects.
+        await settled(() => (tasks.get("t1")?.pursuit?.spent.rejections ?? 0) >= 1, 5_000);
+        const afterFirst = tasks.get("t1")!.pursuit!;
+        assert.equal(afterFirst.status, "active", "rejected, back to the loop");
+        assert.equal(afterFirst.lastVerdict?.nextAction, "write /home/box/work/q3.md first");
+        assert.equal(afterFirst.checklist[0]!.verdict, "contradicted");
+        assert.ok(bashResults.some(text => /bash refused: a verification runs only the commands the person confirmed/.test(text)), `the stray command was refused: ${JSON.stringify(bashResults)}`);
+        assert.ok(verifierRequests.every(request => !/清单两条|申请了|写一份 Q3 报告，/.test(request)), "the verifier never saw the executor's words or the person's chat");
+        // The loop continues: the executor writes the file and claims again; this time it passes.
+        try { await settled(() => tasks.get("t1")?.pursuit?.status === "complete", 8_000); }
+        catch (error) { throw new Error(`${String(error)}; pursuit=${JSON.stringify(tasks.get("t1")?.pursuit)} claims=${claims} verifierRequests=${verifierRequests.length} bash=${JSON.stringify(bashResults)} told=${JSON.stringify(told)} history=${JSON.stringify(tasks.get("t1")?.history.map(h => h.note))}`); }
+        assert.equal(tasks.get("t1")!.status, "review");
+        assert.deepEqual(tasks.get("t1")!.pursuit!.checklist.map(item => item.verdict), ["proven", "proven"]);
+        assert.ok(told.some(text => /目标 t1 验证通过/.test(text)), `the person is told to accept: ${JSON.stringify(told)}`);
+        assert.ok(told.some(text => /没有通过验证/.test(text)), "and was told of the rejection");
+        assert.equal(claims >= 2, true);
       } finally { manager.stop(); }
     },
   });

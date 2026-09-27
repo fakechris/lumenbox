@@ -102,6 +102,7 @@ import {
 } from "./guards.ts";
 import { malformedNudge, malformedOutput, sanitizeHistoryText } from "./output-integrity.ts";
 import { type GoalTurnReport, isWorkingTool } from "./goal-loop.ts";
+import { commandIsConfirmed, type GoalGate } from "./goal-gate.ts";
 import {
   BOOKKEEPING_TOOLS,
   FORK_PROMPT_LINE,
@@ -592,6 +593,8 @@ export interface TurnDeps {
   onEvent?: (event: TurnEvent) => void;
   /** A goal continuation turn ended (INV-770): what it did and how, for the loop's accounting. */
   onGoalTurn?: (report: GoalTurnReport) => void;
+  /** The completion gate (INV-771): the Goal tool's claim_complete goes through it. */
+  goalGate?: GoalGate;
   /**
    * Where one span per LLM call goes (trace.ts). Absent by default: a box whose
    * operator configured no collector has no tracer, and the `?.` below is the
@@ -2169,6 +2172,8 @@ ${outcome.text}`;
     if (goal !== undefined) {
       deps.onGoalTurn?.({
         marker: goal,
+        turnId,
+        conversation,
         how: endedHow ?? "failed",
         worked: [...toolsUsedThisTurn].some(isWorkingTool),
         ...(lastFinalText !== undefined ? { finalText: lastFinalText } : {}),
@@ -3131,6 +3136,16 @@ ${outcome.text}`;
       let outcome: ToolOutcome;
       if (isolated || (effectiveTools !== undefined && !tools.some(tool => tool.name === toolUse.name))) {
         outcome = { text: isolated ? `Tools are disabled in ${contextMode} context.` : "This tool is unavailable in the current execution context.", isError: true };
+      } else if (goal?.verify !== undefined && toolUse.name === "bash" && !commandIsConfirmed(goal, String((toolInput as { command?: unknown }).command ?? ""))) {
+        // A verifier runs what the person confirmed and nothing else (review R3): the checklist
+        // was written by a model, and a model-written command is a proposal until a person says.
+        outcome = {
+          text:
+            `bash refused: a verification runs only the commands the person confirmed, exactly as written` +
+            (goal.verify.confirmedCommands.length > 0 ? ` (${goal.verify.confirmedCommands.join(" | ")})` : " (none were confirmed)") +
+            ". Judge the item from what you can read instead.",
+          isError: true,
+        };
       } else if (hookBlock !== undefined) {
         outcome = { text: `Blocked by a PreToolUse hook: ${hookBlock}`, isError: true };
       } else if (blocked !== undefined) {
@@ -3167,6 +3182,7 @@ ${outcome.text}`;
             vault: deps.vault,
             oauth: isForkConversation(conversation) ? undefined : deps.oauth,
             tasks: deps.tasks,
+            ...(deps.goalGate !== undefined ? { goalGate: deps.goalGate } : {}),
             scopes: deps.scopes,
             mcp: isForkConversation(conversation) ? undefined : deps.mcp,
             askUser: deps.askUser,

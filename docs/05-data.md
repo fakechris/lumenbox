@@ -805,8 +805,27 @@ report is the one continuation text the person is sent. A continuation turn that
 twice with 30 s × 2ⁿ backoff, then pauses the goal as `error`. The person is told only when the goal
 stops, in the chat it was set in (`pursuit.chatKey`). Counters live on the board, so a restart
 re-arms every active goal (`rearmGoals`) under the same id. The bus now emits `turn_finished`
-after the conversation is free, not before. The completion gate (INV-771) is not in this slice: a
-goal works until something stops it, and nothing yet says it is done.
+after the conversation is free, not before.
+
+**The completion gate (INV-771, `src/host/goal-gate.ts`).** An executor claims completion with
+`Goal claim_complete`, one evidence pointer per checklist item; it cannot finish a goal itself. The
+host's own checks come first and cost no model: an open todo refuses the claim outright, and an
+artifact path missing from the workspace manifest taken at that moment rejects it. An accepted
+claim puts the pursuit in `verifying` — on the board, with the verifier's conversation
+(`goalverify-<task>-<claim>`), the attempt, and the manifest's digest — and wakes the same agent
+in that conversation, which has no history of the work, with `VERIFIER_TOOLS` (read_file,
+list_dir, bash, ReadKept) where bash runs only the commands the person confirmed with
+`/goal confirm n`, exactly as written, and refuses anything else. The brief carries the objective as
+data, the checklist and the executor's pointers, never the executor's account, and asks for headers
+plus one line per item; the host parses the verdict (`parseGoalVerdict`). It fails closed: a turn
+that fails or ends without a parsable verdict is run once more and then handed to the person; a
+workspace whose digest changed during verification voids the verdict; a late report from an
+earlier attempt is ignored. A pass moves the pursuit to `complete` and the task to `review`, where
+only the requester's word is done. A rejection writes the verdict and next action onto the
+pursuit, marks each checklist item, returns the goal to `active` for the loop to carry the next
+action — and the third rejection in a row pauses it as `needs_person`. On startup a goal left
+verifying finds its verdict in the verifier conversation's transcript or is rejected as
+interrupted. The person hears the verdict either way, in the chat the goal was set in.
 
 Forgetting is `Forget` (`src/host/forget.ts`), in two turns. **plan** searches every place the words
 can be — both memory tiers and the box's mirror of them, kept pages, kept results, the board with its

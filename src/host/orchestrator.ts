@@ -13,6 +13,7 @@ import { replyForMessage } from "./reply.ts";
 import { contextTaskBlockers, isContextCommand } from "./context-recovery.ts";
 import { isGoalCommand } from "./goal-mode.ts";
 import { GoalLoop } from "./goal-loop.ts";
+import { GoalGate } from "./goal-gate.ts";
 import { isRecoveryCommand } from "./task-recovery.ts";
 import { isRetryCommand } from "./retry-recovery.ts";
 import { AnswerReviewer, answerReviewMode, sampledForReview, type AnswerReviewInput, type AnswerVerdict } from "./answer-review.ts";
@@ -368,6 +369,8 @@ export class Orchestrator {
   readonly tasks: TaskStore | undefined;
   /** The continuation loop of goal mode (INV-770); absent without a task board. */
   readonly goalLoop: GoalLoop | undefined;
+  /** The completion gate of goal mode (INV-771); absent without a task board. */
+  readonly goalGate: GoalGate | undefined;
   readonly scopes: ScopeStore | undefined;
   /** Bundles attached to boxes (INV-420). */
   readonly bundles: BundleStore;
@@ -991,6 +994,21 @@ export class Orchestrator {
       log: line => console.error(`[goal] ${line}`),
     });
     if (this.tasks !== undefined) this.tasks.onChange(task => this.goalLoop?.onTaskChanged(task));
+    this.goalGate = this.tasks === undefined ? undefined : new GoalGate({
+      tasks: this.tasks,
+      registry: this.registry,
+      bus: this.bus,
+      manifest: () => this.workspaceManifest(),
+      notify: async (task, text) => {
+        const chatKey = task.pursuit?.chatKey;
+        if (chatKey === undefined) {
+          console.error(`[goal] ${task.id}: no chat to tell; the board has the verdict`);
+          return;
+        }
+        await this.options.deliverToChat?.(chatKey, text, task.assigneeId);
+      },
+      log: line => console.error(`[goal] ${line}`),
+    });
   }
 
   /**
@@ -1763,7 +1781,11 @@ export class Orchestrator {
       // Watched on the way past rather than subscribed to elsewhere: a turn that gave up
       // in a loop is the fourth pitfall source, and this is the one place that has the
       // report, the agent and what it was asked to do all in hand.
-      onGoalTurn: report => { void this.goalLoop?.turnEnded(report); },
+      onGoalTurn: report => {
+        if (report.marker.verify !== undefined) void this.goalGate?.verifierEnded(report);
+        else void this.goalLoop?.turnEnded(report);
+      },
+      ...(this.goalGate !== undefined ? { goalGate: this.goalGate } : {}),
       onEvent: event => {
         if (event.type === "stuck" && event.agentId === agent.id) {
           void this.rememberer
@@ -1809,6 +1831,9 @@ export class Orchestrator {
    */
   /** On startup: every active goal is looked at again; its counters live on the board. */
   rearmGoals(): number {
+    // Goals left verifying are settled first — from the transcript, or failed closed — so the
+    // loop below sees them as active or paused rather than as nobody's.
+    void this.goalGate?.rearm().catch(error => console.error(`[goal] rearm: ${error instanceof Error ? error.message : String(error)}`));
     return this.goalLoop?.rearm() ?? 0;
   }
 
