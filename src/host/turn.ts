@@ -101,6 +101,7 @@ import {
   type GuardReason,
 } from "./guards.ts";
 import { malformedNudge, malformedOutput, sanitizeHistoryText } from "./output-integrity.ts";
+import { type GoalTurnReport, isWorkingTool } from "./goal-loop.ts";
 import {
   BOOKKEEPING_TOOLS,
   FORK_PROMPT_LINE,
@@ -589,6 +590,8 @@ export interface TurnDeps {
     approval?: { id: string; how: "allowed" | "refused" | "gone" };
   };
   onEvent?: (event: TurnEvent) => void;
+  /** A goal continuation turn ended (INV-770): what it did and how, for the loop's accounting. */
+  onGoalTurn?: (report: GoalTurnReport) => void;
   /**
    * Where one span per LLM call goes (trace.ts). Absent by default: a box whose
    * operator configured no collector has no tracer, and the `?.` below is the
@@ -1449,7 +1452,10 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   // The turn is the attempt; the work is what the attempts are attempts at. A resumption
   // inherits rather than mints, which is the whole point of the field: without it a turn that
   // resumed twice appears in every report as three unrelated short turns.
-  const workId = deps.resumeOf?.workId ?? randomUUID();
+  // A goal continuation inherits the pursuit's id the same way a resumption inherits its
+  // work's (INV-770): every turn of one objective is one piece of work in the ledgers.
+  const goal = inbound.find(message => message.goal !== undefined)?.goal;
+  const workId = deps.resumeOf?.workId ?? goal?.workId ?? randomUUID();
   // Built once, here, because this is the only place that knows all four of the things an aside
   // has to be attributed to. Passing the ledger down instead would mean passing the agent, the
   // work and the conversation down with it, which is three more chances to pass the wrong one.
@@ -1496,9 +1502,12 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   let quotesChecked = false;
 
   let ended = false;
+  let endedHow: string | undefined;
+  let lastFinalText: string | undefined;
   const finish = (how: string, category?: FailureCategory) => {
     if (ended) return;
     ended = true;
+    endedHow = how;
     deps.turns?.end(turnId, how, new Date(), category, keptThisTurn);
     deps.steps?.closed(turnId);
   };
@@ -1775,7 +1784,7 @@ ${outcome.text}`;
 
   // A person, as opposed to the harness wearing the person's shape: a timer, a webhook, a
   // resume and a first run all arrive as `fromId: "user"` because that is what opens a turn.
-  const personOpened = inbound.some(message => message.fromId === "user" && message.synthetic !== true);
+  let personOpened = inbound.some(message => message.fromId === "user" && message.synthetic !== true);
   /**
    * Whether the person is a party to this conversation at all: they opened this turn, or they
    * have spoken here before. False for a worker that only ever hears from teammates.
@@ -1788,7 +1797,7 @@ ${outcome.text}`;
    * `NothingToSay` offered. A person's own turn is never one — nor a resume of one, which
    * continues work somebody asked for.
    */
-  const silenceOffered =
+  let silenceOffered =
     deps.resumeOf === undefined && (!personOpened || inbound.every(message => message.addressed === false));
 
   const turnText = buildTurnPrompt(inbound);
@@ -1854,6 +1863,8 @@ ${outcome.text}`;
     // not be walked backwards however precisely everything was timed.
     causedBy: inbound.map(message => message.id),
     ...(personOpened ? { fromPerson: true as const } : {}),
+    // A continuation wake is the host's text; compaction must never pin it as the ask (INV-766).
+    ...(goal !== undefined ? { host: true as const } : {}),
     turnId,
   } satisfies TranscriptEntry, conversation);
 
@@ -2155,6 +2166,14 @@ ${outcome.text}`;
     );
     throw error;
   } finally {
+    if (goal !== undefined) {
+      deps.onGoalTurn?.({
+        marker: goal,
+        how: endedHow ?? "failed",
+        worked: [...toolsUsedThisTurn].some(isWorkingTool),
+        ...(lastFinalText !== undefined ? { finalText: lastFinalText } : {}),
+      });
+    }
     // Release the desktop however the turn ends — normally, by abort, or by
     // throwing. A lease leaked here would lock every other agent out of the
     // screen for the lifetime of the process.
@@ -2200,7 +2219,7 @@ ${outcome.text}`;
     // reserved final turn): the model is told, and tools are withheld for this request,
     // so what it has becomes a reply — partial, and said so — instead of a 401st call
     // nobody reads.
-    if (round === MAX_ROUNDS - 1) {
+    if (round === MAX_ROUNDS - 1 || (goal?.finishOnly === true && round === 0)) {
       const lastCall =
         "[last round] You have one response left in this turn and no tools. Reply now with what " +
         "you have: the result so far, marked partial where it is, and what is left. Anything you " +
@@ -2211,6 +2230,13 @@ ${outcome.text}`;
     }
     const steered = finishing ? [] : deps.bus.takeSteering(agent.id, conversation);
     if (steered.length > 0) {
+      // A person who speaks into a turn nobody was waiting on is now waited on (review R6):
+      // silence is withdrawn — the tool refuses from here — and the guards read the rest of
+      // the turn as theirs.
+      if (steered.some(message => message.fromId === "user" && message.synthetic !== true)) {
+        personOpened = true;
+        silenceOffered = false;
+      }
       const steerText = buildTurnPrompt(steered);
       registry.appendTranscript(agent.id, {
         role: "user",
@@ -2888,7 +2914,20 @@ ${outcome.text}`;
       }
 
       if (finalText.trim()) {
-        registry.appendTranscript(agent.id, {
+        lastFinalText = finalText;
+        // A continuation's closing words are the record's, not the person's reply: filed as
+        // blocks, which `replySince` never delivers, so a goal working in the background does
+        // not talk into the chat (docs/74 §3.7). The finish-only report is sent by the loop.
+        if (goal !== undefined) {
+          registry.appendTranscript(agent.id, {
+            role: "assistant",
+            kind: "blocks",
+            blocks: [{ type: "text", text: finalText }],
+            at: new Date().toISOString(),
+            turnId,
+            silent: { reason: "goal continuation: kept on the record, not delivered" },
+          } satisfies TranscriptEntry, conversation);
+        } else registry.appendTranscript(agent.id, {
           role: "assistant",
           text: finalText,
           at: new Date().toISOString(),
@@ -2977,11 +3016,9 @@ ${outcome.text}`;
       roundText.trim().length >= FILED_ANSWER_FLOOR &&
       toolUses.every(use => BOOKKEEPING_TOOLS.has(use.name));
     if (filedAnswer) {
-      registry.appendTranscript(agent.id, {
-        role: "assistant",
-        text: roundText,
-        at: new Date().toISOString(),
-      } satisfies TranscriptEntry, conversation);
+      registry.appendTranscript(agent.id, goal !== undefined
+        ? { role: "assistant", kind: "blocks", blocks: [{ type: "text", text: roundText }], at: new Date().toISOString(), turnId, silent: { reason: "goal continuation: kept on the record, not delivered" } }
+        : { role: "assistant", text: roundText, at: new Date().toISOString() } satisfies TranscriptEntry, conversation);
     }
 
     // The opening line reaches the person while the tools run (docs/31 layer 1a). Grok Bot
@@ -3328,7 +3365,10 @@ ${outcome.text}`;
     throw new TurnRoundLimitExceeded(report);
   }
 
-  if (outcome.kind === "progressing" && continuation < MAX_CONTINUATIONS) {
+  // A goal turn continues through the loop, not inside itself: two nested continuations would
+  // make either limit meaningless (docs/74 §3.3).
+  const maxContinuations = goal !== undefined ? 0 : MAX_CONTINUATIONS;
+  if (outcome.kind === "progressing" && continuation < maxContinuations) {
     // A budget, not a wall. The plan and todo list are in the system prompt and unchanged, and the
     // history will be compacted on the way in — so a fresh turn resumes rather than restarts.
     const next = continuation + 1;

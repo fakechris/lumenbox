@@ -37,6 +37,7 @@ import type { ProviderProfile } from "./provider.ts";
 import type { PolicyGate } from "./policy.ts";
 import type { McpManager } from "./mcp.ts";
 import type { TaskStore } from "./tasks.ts";
+import type { GoalLoop, GoalTurnReport } from "./goal-loop.ts";
 
 /** One model reply, in the shape the script writes it. */
 export type ScriptedReply =
@@ -298,6 +299,12 @@ export interface EpisodeOptions {
   mcp?: McpManager;
   /** A task board for the turns (INV-769): the Tasks and Goal tools need one to act on. */
   tasks?: TaskStore;
+  /**
+   * The continuation loop of goal mode (INV-770), built once the bus exists so it can wake
+   * through it. The episode feeds it what the orchestrator would: a turn starting, a turn
+   * finished, a continuation's report.
+   */
+  goalLoop?: (context: { bus: AgentBus; registry: AgentRegistry; tasks: TaskStore | undefined }) => GoalLoop;
   /** Files the box starts with. */
   files?: Record<string, string>;
   /** Stops an episode that will not settle. Default 200. */
@@ -327,7 +334,7 @@ export interface EpisodeOptions {
    * `say` is one line of `says`, with the same after-turn bookkeeping, for a drive that
    * needs to change the world between turns.
    */
-  drive?: (context: { bus: AgentBus; registry: AgentRegistry; frontId: string; files: Map<string, string>; say: (line: string) => Promise<void> }) => Promise<void>;
+  drive?: (context: { bus: AgentBus; registry: AgentRegistry; frontId: string; files: Map<string, string>; say: (line: string) => Promise<void> ; goalLoop?: GoalLoop }) => Promise<void>;
 }
 
 /**
@@ -403,7 +410,9 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
   const rememberer = options.memory === true
     ? new Rememberer({ registry, client, provider: { label: "scenario", model: "scenario", maxTokens: 1024 } as ProviderProfile })
     : undefined;
+  let goalLoop: GoalLoop | undefined;
   const bus: AgentBus = new AgentBus(registry, async (record, inbound, signal, conversation) => {
+    if (goalLoop !== undefined && !goalLoop.turnStarting(record.id, conversation, inbound)) return;
     for (const inboundMessage of inbound) {
       if (inboundMessage.fromId !== "user") {
         observations.push({
@@ -438,8 +447,12 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
         observations.push({ at: clock++, agent: input.agentName, kind: "call", name: "AskUser:delivered", input: { question: input.question } });
         return "in the app";
       },
+      onGoalTurn: (report: GoalTurnReport) => { void goalLoop?.turnEnded(report); },
     } as never);
+  }, event => {
+    if (event.type === "turn_finished") goalLoop?.onTurnFinished(event.agentId);
   });
+  goalLoop = options.goalLoop?.({ bus, registry, tasks: options.tasks });
 
   const say = async (line: string): Promise<void> => {
     const before = registry.readTranscript(front.id).length;
@@ -456,7 +469,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
     if (said !== "") await rememberer.record({ agentId: front.id, text: summariseExchange(line, said), ref: memoryRef("main", new Date()), conversation: "main", ...(last?.at !== undefined ? { at: last.at } : {}) });
     await rememberer.settle(front.id);
   };
-  if (options.drive !== undefined) await options.drive({ bus, registry, frontId: front.id, files, say });
+  if (options.drive !== undefined) await options.drive({ bus, registry, frontId: front.id, files, say, ...(goalLoop !== undefined ? { goalLoop } : {}) });
   for (const line of options.says) await say(line);
 
   // Errors are read off the transcripts: a refused tool is the rail doing its job, and a

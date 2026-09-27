@@ -12,6 +12,7 @@ import { learningsDir } from "./learnings.ts";
 import { replyForMessage } from "./reply.ts";
 import { contextTaskBlockers, isContextCommand } from "./context-recovery.ts";
 import { isGoalCommand } from "./goal-mode.ts";
+import { GoalLoop } from "./goal-loop.ts";
 import { isRecoveryCommand } from "./task-recovery.ts";
 import { isRetryCommand } from "./retry-recovery.ts";
 import { AnswerReviewer, answerReviewMode, sampledForReview, type AnswerReviewInput, type AnswerVerdict } from "./answer-review.ts";
@@ -217,6 +218,8 @@ export interface OrchestratorOptions {
    * on the session (`delivery.py:72-75`), and we had nothing.
    */
   deliverToChat?: (chatKey: string, text: string, fromAgentId?: string) => Promise<void>;
+  /** Questions waiting on a person in a conversation (INV-770): a goal does not continue over one. */
+  pendingQuestions?: (agentId: string, conversation: string) => number;
   /**
    * A principal id as the roster shows it, so an operator rule can be written about a
    * person by name (INV-156). Absent leaves rules id-only, which still works.
@@ -363,6 +366,8 @@ export class Orchestrator {
    * replay-and-compact and a second writer would interleave two views of the board.
    */
   readonly tasks: TaskStore | undefined;
+  /** The continuation loop of goal mode (INV-770); absent without a task board. */
+  readonly goalLoop: GoalLoop | undefined;
   readonly scopes: ScopeStore | undefined;
   /** Bundles attached to boxes (INV-420). */
   readonly bundles: BundleStore;
@@ -949,12 +954,43 @@ export class Orchestrator {
     this.bus = new AgentBus(
       this.registry,
       (agent, inbound, signal, conversation) => this.executeTurn(agent, inbound, signal, conversation),
-      options.onBusEvent,
+      event => {
+        options.onBusEvent?.(event);
+        // A turn ending is what lets a goal consider its next continuation (INV-770).
+        if (event.type === "turn_finished") this.goalLoop?.onTurnFinished(event.agentId);
+      },
       options.inbox === null
         ? undefined
         : (options.inbox ??
           new Inbox<InboundMessage>(inboxPath(), line => console.error(`[inbox] ${line}`)))
     );
+    this.goalLoop = this.tasks === undefined ? undefined : new GoalLoop({
+      tasks: this.tasks,
+      agentName: id => this.registry.tryGet(id)?.profile.name,
+      bus: this.bus,
+      busy: (agentId, conversation) => [
+        ...(this.hasOpenTurn(agentId, conversation) ? ["an open turn in the ledger"] : []),
+        ...(this.policy.pending().some(item => item.agentId === agentId) ? ["a pending approval"] : []),
+        ...((this.options.pendingQuestions?.(agentId, conversation) ?? 0) > 0 ? ["a question waiting on the person"] : []),
+      ],
+      wakeGate: agentId => {
+        const name = this.registry.tryGet(agentId)?.profile.name ?? agentId;
+        const decision = this.policy.check({ kind: "wake", agentId, agentName: name, targetId: agentId, targetName: name });
+        return decision.allow ? { allowed: true } : { allowed: false, reason: decision.reason };
+      },
+      durableState: (agentId, conversation) => this.registry.readDurableState(agentId, conversation),
+      manifest: () => this.workspaceManifest(),
+      notify: async (task, text) => {
+        const chatKey = task.pursuit?.chatKey;
+        if (chatKey === undefined) {
+          console.error(`[goal] ${task.id}: no chat to tell; the board has the note`);
+          return;
+        }
+        await this.options.deliverToChat?.(chatKey, text, task.assigneeId);
+      },
+      log: line => console.error(`[goal] ${line}`),
+    });
+    if (this.tasks !== undefined) this.tasks.onChange(task => this.goalLoop?.onTaskChanged(task));
   }
 
   /**
@@ -1636,6 +1672,9 @@ export class Orchestrator {
     // the attempt count is the whole of the crash-loop guard.
     const resumeOf = this.resuming.get(agent.id);
     this.resuming.delete(agent.id);
+    // A continuation that a person's message overtook, or whose goal stopped meanwhile, is
+    // not run (INV-770): the loop reconsiders when the person's turn ends.
+    if (this.goalLoop !== undefined && !this.goalLoop.turnStarting(agent.id, conversation, inbound)) return;
 
     const displayIndex = await this.ensureDesktop(agent);
     // Started on the first turn that could use them, not at boot: a CLI question should
@@ -1724,6 +1763,7 @@ export class Orchestrator {
       // Watched on the way past rather than subscribed to elsewhere: a turn that gave up
       // in a loop is the fourth pitfall source, and this is the one place that has the
       // report, the agent and what it was asked to do all in hand.
+      onGoalTurn: report => { void this.goalLoop?.turnEnded(report); },
       onEvent: event => {
         if (event.type === "stuck" && event.agentId === agent.id) {
           void this.rememberer
@@ -1767,6 +1807,11 @@ export class Orchestrator {
    * Whether a turn is still writing in this conversation (INV-435). Without the
    * conversation, any open turn of the agent's — the older, coarser question.
    */
+  /** On startup: every active goal is looked at again; its counters live on the board. */
+  rearmGoals(): number {
+    return this.goalLoop?.rearm() ?? 0;
+  }
+
   hasOpenTurn(agentId: string, conversation?: string): boolean {
     return openTurnFor(this.turns?.interrupted() ?? [], agentId, conversation) !== undefined;
   }

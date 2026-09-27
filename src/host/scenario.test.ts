@@ -10,6 +10,8 @@
  * scorecard assertion, and the next regression fails the build instead of the person's afternoon.
  */
 
+import type { AgentBus } from "../agents/bus.ts";
+import type { AgentRegistry } from "../agents/registry.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { runEpisode, type Script } from "./scenario.ts";
@@ -20,6 +22,7 @@ import { conversationIdFor } from "../agents/registry.ts";
 import { chatFilesRoot, parseWakePrompt } from "./prompt.ts";
 import { contextTaskBlockers, newContext } from "./context-recovery.ts";
 import { goalCommand } from "./goal-mode.ts";
+import { GoalLoop } from "./goal-loop.ts";
 import { recoverTask } from "./task-recovery.ts";
 import { retryLastAnswer } from "./retry-recovery.ts";
 import { AnswerReviewer } from "./answer-review.ts";
@@ -496,6 +499,147 @@ test("/goal sets a pursuit: the first turn drafts a checklist, the prompt carrie
   });
   try { assert.equal(result.score.turns, 2, "the drafting turn and the person's turn; no control command reached the model"); }
   finally { result.cleanup(); }
+});
+
+// INV-770: the loop keeps a goal moving on its own, stops it when the work stops moving, and
+// tells the person only then; a new process picks it up from the board under the same workId.
+function episodeLoop(told: string[], schedule?: (fn: () => void, ms: number) => { cancel: () => void }) {
+  return ({ bus, registry, tasks }: { bus: AgentBus; registry: AgentRegistry; tasks: TaskStore | undefined }) =>
+    new GoalLoop({
+      tasks: tasks!,
+      agentName: id => registry.tryGet(id)?.profile.name,
+      bus,
+      busy: () => [],
+      wakeGate: () => ({ allowed: true }),
+      durableState: (agentId, conversation) => registry.readDurableState(agentId, conversation),
+      notify: async (_task, text) => { told.push(text); },
+      log: () => {},
+      // Real timers, shortened: the loop's delays are for people, not for a test.
+      schedule: schedule ?? ((fn, ms) => { const timer = setTimeout(fn, Math.min(ms, 10)); return { cancel: () => clearTimeout(timer) }; }),
+    });
+}
+
+async function settled(predicate: () => boolean, ms = 3_000): Promise<void> {
+  const until = Date.now() + ms;
+  while (!predicate()) {
+    if (Date.now() > until) throw new Error("did not settle in time");
+    await new Promise(resolve => setTimeout(resolve, 15));
+  }
+}
+
+test("a goal continues on its own until three continuations do no work, the person hears once, and a restart picks it up under the same workId", async () => {
+  const tasks = new TaskStore(join(mkdtempSync(join(tmpdir(), "agentbox-goal-loop-scenario-")), "tasks.jsonl"));
+  const told: string[] = [];
+  const continuationTexts: string[] = [];
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: [], tasks, goalLoop: episodeLoop(told),
+    script: ({ messages }) => {
+      const all = JSON.stringify(messages);
+      const latest = JSON.stringify(messages.at(-1)?.content ?? "");
+      if (/Continue working toward goal t1/.test(latest)) {
+        continuationTexts.push(latest);
+        // Bookkeeping only: the todo is reworded, nothing is done.
+        return { call: "SetTodos", input: { todos: [{ text: `step ${continuationTexts.length}`, status: "pending" }] } };
+      }
+      if (/Continue working toward goal t1/.test(all) && /"name":"SetTodos"/.test(all)) return { say: "记了一下待办。" };
+      if (/\[host\] 目标 t1 已由人创建/.test(all)) {
+        if (!/"name":"Goal"/.test(all)) return { call: "Goal", input: { action: "checklist_add", items: [{ text: "报告写完" }] } };
+        return { say: "清单一条：报告写完。" };
+      }
+      return { say: "ok" };
+    },
+    drive: async ({ bus, registry, frontId }) => {
+      const key = "feishu:private-loop";
+      const conversation = conversationIdFor(key);
+      let receive!: (message: ChannelMessage) => Promise<string | undefined>;
+      const manager = new ChannelManager({
+        mayDrive: () => true, log: () => {},
+        goal: { command: input => goalCommand({ tasks, mayUse: () => true, contextMode: () => "normal", blockers: () => [] }, { agentId: frontId, conversation, requester: "principal-user", operationId: input.operationId, privateChat: input.privateChat, text: input.text, chatKey: key }) },
+        ask: async (_name, text, _identity, _chat, _progress, _thread, _task, _interim, _stream, origin) => {
+          bus.sendFromUser(frontId, text, { conversation, steerable: false, messageId: origin!.messageId });
+          await bus.runExclusive(frontId, { userDriven: true, conversation });
+          return replyForMessage(registry.readTranscript(frontId, conversation), origin!.messageId);
+        },
+      });
+      manager.register({ name: "feishu", start: async handler => { receive = handler; }, stop() {}, send: async () => undefined }, true, "test");
+      manager.start(); await new Promise(resolve => setImmediate(resolve));
+      try {
+        await receive({ identity: "feishu:user", chatKey: key, privateChat: true, senderLabel: "user", text: "/goal 写完季度报告", messageId: "loop-1" });
+        await manager.idle();
+        const workId = tasks.get("t1")!.pursuit!.workId;
+        await settled(() => tasks.get("t1")?.pursuit?.status === "paused");
+        const pursuit = tasks.get("t1")!.pursuit!;
+        assert.equal(pursuit.pausedReason, "anti_spin");
+        assert.equal(pursuit.spent.continuations, 3);
+        assert.equal(continuationTexts.length, 3, "three continuation wakes, each with the objective as data");
+        assert.match(continuationTexts[0]!, /<objective>\\n写完季度报告\\n<\/objective>/);
+        assert.equal(told.length, 1, "the person hears once, when it stops");
+        assert.match(told[0]!, /目标 t1 已暂停：连续 3 次续跑没有做任何实际工作/);
+        const transcript = registry.readTranscript(frontId, conversation) as { role: string; kind?: string; text?: string; host?: true }[];
+        assert.equal(transcript.filter(entry => entry.role === "user" && entry.host === true).length, 3, "the wakes are on the record as the host's");
+        assert.equal(transcript.some(entry => entry.role === "assistant" && entry.kind === undefined && entry.text === "记了一下待办。"), false, "continuation chatter is never a reply");
+
+        // The person resumes; a fresh loop over the same board — a restart — carries on under the same id.
+        assert.match((await receive({ identity: "feishu:user", chatKey: key, privateChat: true, senderLabel: "user", text: "/goal resume", messageId: "loop-2" })) ?? "", /继续推进/);
+        const fresh = episodeLoop(told)({ bus, registry, tasks });
+        assert.equal(fresh.rearm(), 1);
+        await settled(() => (tasks.get("t1")?.pursuit?.spent.continuations ?? 0) >= 4);
+        assert.equal(tasks.get("t1")!.pursuit!.workId, workId);
+      } finally { manager.stop(); }
+    },
+  });
+  result.cleanup();
+});
+
+test("a person who speaks while a continuation waits goes first and is answered; the goal continues after", async () => {
+  const tasks = new TaskStore(join(mkdtempSync(join(tmpdir(), "agentbox-goal-person-scenario-")), "tasks.jsonl"));
+  const told: string[] = [];
+  const order: string[] = [];
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: [], tasks, goalLoop: episodeLoop(told, (fn, ms) => { const timer = setTimeout(fn, Math.min(ms, 60)); return { cancel: () => clearTimeout(timer) }; }),
+    script: ({ messages }) => {
+      const all = JSON.stringify(messages);
+      const latest = JSON.stringify(messages.at(-1)?.content ?? "");
+      if (/几点了/.test(latest)) { order.push("person"); return { say: "现在是下午三点。" }; }
+      if (/Continue working toward goal t1/.test(latest)) { order.push("continuation"); return { call: "write_file", input: { path: "/home/box/work/q3.md", content: "draft" } }; }
+      if (/Continue working toward goal t1/.test(all) && /"name":"write_file"/.test(all)) return { say: "写了草稿。" };
+      if (/\[host\] 目标 t1 已由人创建/.test(all)) return { say: "好，清单稍后补。" };
+      return { say: "ok" };
+    },
+    drive: async ({ bus, registry, frontId }) => {
+      const key = "feishu:private-person";
+      const conversation = conversationIdFor(key);
+      let receive!: (message: ChannelMessage) => Promise<string | undefined>;
+      const manager = new ChannelManager({
+        mayDrive: () => true, log: () => {},
+        goal: { command: input => goalCommand({ tasks, mayUse: () => true, contextMode: () => "normal", blockers: () => [] }, { agentId: frontId, conversation, requester: "principal-user", operationId: input.operationId, privateChat: input.privateChat, text: input.text, chatKey: key }) },
+        ask: async (_name, text, _identity, _chat, _progress, _thread, _task, _interim, _stream, origin) => {
+          bus.sendFromUser(frontId, text, { conversation, steerable: false, messageId: origin!.messageId });
+          await bus.runExclusive(frontId, { userDriven: true, conversation });
+          return replyForMessage(registry.readTranscript(frontId, conversation), origin!.messageId);
+        },
+      });
+      const pushed: string[] = [];
+      manager.register({ name: "feishu", start: async handler => { receive = handler; }, stop() {}, send: async (_identity, text) => { pushed.push(text); return undefined; }, sendToChat: async (_chat, text) => { pushed.push(text); } }, true, "test");
+      manager.start(); await new Promise(resolve => setImmediate(resolve));
+      try {
+        await receive({ identity: "feishu:user", chatKey: key, privateChat: true, senderLabel: "user", text: "/goal 写一份 Q3 草稿", messageId: "p-1" });
+        await manager.idle();
+        // The first continuation is now waiting out its delay; the person speaks first. An
+        // ordinary message is answered behind the door's return, so the answer is what the
+        // adapter was given to send.
+        await receive({ identity: "feishu:user", chatKey: key, privateChat: true, senderLabel: "user", text: "几点了？", messageId: "p-2" });
+        await manager.idle();
+        assert.ok(pushed.includes("现在是下午三点。"), `the person is answered, by a turn of their own: ${JSON.stringify(pushed)}`);
+        await settled(() => order.includes("continuation"));
+        assert.equal(order[0], "person", "the person went first");
+        assert.equal(order.filter(kind => kind === "continuation").length, 1);
+        assert.equal(tasks.get("t1")!.pursuit!.spent.continuations, 1);
+        assert.equal(told.length, 0, "nothing to tell: the goal is still moving");
+      } finally { manager.stop(); }
+    },
+  });
+  result.cleanup();
 });
 
 test("two completed review tasks do not trap a private chat that asks for clean context", async () => {

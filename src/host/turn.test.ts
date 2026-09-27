@@ -8,6 +8,8 @@
  * surfaced as TurnAborted rather than a half-written transcript.
  */
 
+import type { GoalMarker } from "./goal-mode.ts";
+import type { GoalTurnReport } from "./goal-loop.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -190,6 +192,53 @@ test("tool set shrinks to messaging-only without a box", () => {
 // message as one unit, so a volatile tier inside the system prompt missed the whole prefix on
 // every turn (33 of 41 first rounds read exactly 128 tokens). Without breakpoints the volatile
 // tier rides the newest message and the system prompt is the same bytes turn after turn.
+// INV-770: a goal continuation is a turn the host opened. It runs under the pursuit's workId,
+// its inbound entry is the host's (never pinned as the ask), its closing words stay on the record
+// without being delivered, and a finish-only wake gets one response with no tools.
+test("a goal continuation turn: the pursuit's workId, a host inbound entry, undelivered closing words, and a finish-only round", async () => {
+  const { registry, cleanup } = fixture();
+  const home = mkdtempSync(join(tmpdir(), "agentbox-goal-turn-"));
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const turns = new TurnLedger(join(home, "turns.jsonl"), () => {});
+    const capture: Capture = { params: [] };
+    const { client } = stubClient([
+      message([{ type: "tool_use", id: "t1", name: "SetTodos", input: { todos: [{ text: "x", status: "pending" }] } } as Anthropic.ContentBlock]),
+      message([textBlock("进度：写了两节。")]),
+      message([textBlock("做完了 1 和 2；3 还差数据。")]),
+    ], capture);
+    const reports: GoalTurnReport[] = [];
+    const marker: GoalMarker = { taskId: "t1", workId: "work-goal-1", seq: 1, personSeq: 0 };
+    const inbound = (goal: GoalMarker, text: string) => [{ id: `g-${goal.seq}`, fromId: "user", fromName: "user", text, priority: false, receivedAt: "", synthetic: true, goal }];
+    await runTurn(ada, inbound(marker, "<host_notification source=\"goal\">continue</host_notification>"), new AbortController().signal, { client, registry, bus, box: undefined, resolution: undefined, turns, onGoalTurn: report => reports.push(report) });
+
+    const transcript = registry.readTranscript(ada.id) as { role: string; kind?: string; text?: string; host?: true; silent?: { reason: string }; blocks?: { text?: string }[] }[];
+    const opener = transcript.find(entry => entry.role === "user" && entry.kind === undefined)!;
+    assert.equal(opener.host, true, "the wake is the host's text");
+    assert.equal(opener.text?.includes("continue"), true);
+    const closing = transcript.filter(entry => entry.role === "assistant" && entry.blocks?.some(block => block.text === "进度：写了两节。"));
+    assert.equal(closing.length, 1, "the closing words are on the record");
+    assert.equal(closing[0]!.kind, "blocks");
+    assert.match(closing[0]!.silent?.reason ?? "", /not delivered/);
+    assert.equal(transcript.some(entry => entry.role === "assistant" && entry.kind === undefined && entry.text === "进度：写了两节。"), false, "and never as a reply replySince would deliver");
+    const begin = JSON.parse(readFileSync(join(home, "turns.jsonl"), "utf8").split("\n")[0]!) as { workId?: string };
+    assert.equal(begin.workId, "work-goal-1", "the ledger carries the pursuit's id");
+    assert.deepEqual(reports.map(report => [report.marker.seq, report.how, report.worked]), [[1, "done", false]], "SetTodos alone is not work");
+
+    // Finish-only: one response, tools withheld by tool_choice on round 0, the last-round note given.
+    const finish: GoalMarker = { ...marker, seq: 2, finishOnly: true, reason: "continuations" };
+    await runTurn(ada, inbound(finish, "<host_notification source=\"goal\">pausing</host_notification>"), new AbortController().signal, { client, registry, bus, box: undefined, resolution: undefined, turns, onGoalTurn: report => reports.push(report) });
+    const last = capture.params.at(-1)!;
+    assert.deepEqual(last.tool_choice, { type: "none" }, "no tools on a finish-only turn");
+    assert.match(JSON.stringify(last.messages.at(-1)?.content), /\[last round\] You have one response left/);
+    assert.equal(reports.at(-1)?.finalText, "做完了 1 和 2；3 还差数据。", "the report carries the words the loop will deliver");
+  } finally {
+    cleanup();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("without breakpoints the volatile tier rides the newest message and the system prefix is byte-stable across turns", async () => {
   const { registry, cleanup } = fixture();
   try {
