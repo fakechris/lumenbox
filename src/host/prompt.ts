@@ -7,6 +7,7 @@
  * time, the inbound message) goes in the message turns, not here.
  */
 
+import { conversationOfTask, renderPursuit } from "./goal-mode.ts";
 import type { AgentRecord, HeardLine } from "../agents/registry.ts";
 import { isForkConversation } from "./tools.ts";
 import { MAIN_CONVERSATION } from "../agents/registry.ts";
@@ -1035,6 +1036,18 @@ will read your questions or stop you mid-way. That makes the rules tighter, not 
 
 export const VOLATILE_SECTIONS: readonly PromptSection[] = [
   { name: "plan", render: context => renderDurableBlocks(context.durable ?? {}) },
+  // The goal being pursued (docs/74 §3.3): rendered from the board every turn, like the plan,
+  // so no compaction and no continuation can lose it.
+  {
+    name: "goal",
+    render: context => {
+      const task = (context.tasks ?? []).find(
+        candidate => candidate.pursuit !== undefined && conversationOfTask(candidate) === context.conversation &&
+          candidate.pursuit.status !== "cleared" && candidate.pursuit.status !== "complete"
+      );
+      return task === undefined ? "" : renderPursuit(task);
+    },
+  },
   { name: "tasks", render: renderTasks },
   { name: "chat-files", render: renderChatFiles },
   {

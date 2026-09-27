@@ -11,6 +11,7 @@ import { finishRoutineRun, PendingAttachments, RoutineResultLedger, routineResol
 import { learningsDir } from "./learnings.ts";
 import { replyForMessage } from "./reply.ts";
 import { contextTaskBlockers, isContextCommand } from "./context-recovery.ts";
+import { isGoalCommand } from "./goal-mode.ts";
 import { isRecoveryCommand } from "./task-recovery.ts";
 import { isRetryCommand } from "./retry-recovery.ts";
 import { AnswerReviewer, answerReviewMode, sampledForReview, type AnswerReviewInput, type AnswerVerdict } from "./answer-review.ts";
@@ -2047,7 +2048,7 @@ export class Orchestrator {
       toolScope?: readonly string[];
     } = {}
   ): Promise<void> {
-    if (isContextCommand(text) || isRecoveryCommand(text) || isRetryCommand(text)) throw new Error("上下文控制命令只能通过已接入的独立私聊入口执行；不会让模型模拟切换或恢复。");
+    if (isContextCommand(text) || isRecoveryCommand(text) || isRetryCommand(text) || isGoalCommand(text)) throw new Error("上下文控制命令只能通过已接入的独立私聊入口执行；不会让模型模拟切换或恢复。");
     const agent = this.registry.resolve(agentIdOrName);
     const conversation = options.conversation ?? MAIN_CONVERSATION;
     return this.registry.withContext(agent.id, conversation, async () => {
@@ -2359,6 +2360,7 @@ export const ALL_TOOLS: readonly string[] = [
   "Recall",
   "OtherThreads",
   "Tasks",
+  "Goal",
   "RunOnHost",
 ];
 

@@ -775,6 +775,21 @@ The sweep never archives a goal (INV-768): past the second check-in it asks agai
 `GOAL_QUIET_FACTOR` gaps rather than going quiet or closing, and a close proposal on a goal expires
 when its window passes instead of closing it — a goal ends on the person's word only.
 
+**A goal the agent pursues (INV-769, docs/74).** `/goal <objective>` in a private chat puts a
+`pursuit` on a task: the person's words verbatim, a checklist that only grows, limits and spend,
+and a `workId` every later turn of it shares. It is a host control command beside `/new` — never
+sent to the model, refused in clean and recovery contexts, on the team room, in groups, and on
+the web door in this version. The board derives the task's status from the pursuit (`active`/
+`verifying` → doing, `paused` → blocked, `complete` → review, `cleared` → dropped) and refuses to
+move it on anyone's word but the gate's or the requester's: the assignee's `done`, `turnFinished`,
+the ageing sweep and a silent close proposal all leave it where it is. The first turn after
+`/goal` is a host-authored brief that drafts the checklist through the `Goal` tool and shows it to
+the person; a checklist command runs nowhere until `/goal confirm n`. A running pursuit refuses
+`/new` and says how to let go (`/goal pause`, `/goal clear`); a paused one does not. The prompt
+carries the goal every turn, rendered from the board, so compaction cannot lose it. Continuation
+(INV-770) and the completion gate (INV-771) are not in this slice: a pursuit is set, shown, paused,
+resumed, confirmed and cleared, and nothing yet works toward it on its own.
+
 Forgetting is `Forget` (`src/host/forget.ts`), in two turns. **plan** searches every place the words
 can be — both memory tiers and the box's mirror of them, kept pages, kept results, the board with its
 history, the commitments ledger, and routines — and answers in counts and names, never the words;
