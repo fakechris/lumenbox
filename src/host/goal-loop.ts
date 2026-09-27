@@ -38,6 +38,8 @@ export const RETRY_BACKOFF_MS = 30_000;
 
 export interface GoalTurnReport {
   marker: GoalMarker;
+  turnId?: string;
+  conversation?: string;
   how: string;
   /** Whether any tool outside the bookkeeping set ran. */
   worked: boolean;
@@ -151,6 +153,12 @@ export class GoalLoop {
     }
     const marker = inbound.find(message => message.goal !== undefined)?.goal;
     if (marker === undefined) return true;
+    // A verification wake belongs to the gate (INV-771): it runs while the goal is verifying,
+    // and the gate decides whether this attempt is still the one it wants.
+    if (marker.verify !== undefined) {
+      const verifying = this.deps.tasks.get(marker.taskId)?.pursuit;
+      return verifying?.status === "verifying" && verifying.verifying?.attempt === marker.verify.attempt;
+    }
     const task = this.deps.tasks.get(marker.taskId);
     const stillActive = task?.pursuit?.status === "active";
     const current = (this.personSeq.get(key) ?? 0) === marker.personSeq;

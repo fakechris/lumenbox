@@ -38,6 +38,7 @@ import type { PolicyGate } from "./policy.ts";
 import type { McpManager } from "./mcp.ts";
 import type { TaskStore } from "./tasks.ts";
 import type { GoalLoop, GoalTurnReport } from "./goal-loop.ts";
+import type { GoalGate } from "./goal-gate.ts";
 
 /** One model reply, in the shape the script writes it. */
 export type ScriptedReply =
@@ -122,6 +123,14 @@ function memoryBox(files: Map<string, string>, overrides: Partial<BoxClient> = {
         files.set(redirect[2]!, redirect[1]!);
         return { exit_code: 0, stdout: "", stderr: "" };
       }
+      // A command that must fail, and a check that reads the files (INV-771): a verifier's bash
+      // has to be able to say no, or every checklist command passes and the gate is theatre.
+      const trimmed = command.trim();
+      if (trimmed === "false") return { exit_code: 1, stdout: "", stderr: "" };
+      const exit = /^exit\s+(\d+)$/.exec(trimmed);
+      if (exit) return { exit_code: Number(exit[1]), stdout: "", stderr: "" };
+      const testExists = /^test\s+-[ef]\s+(\S+)$/.exec(trimmed);
+      if (testExists) return { exit_code: files.has(testExists[1]!) ? 0 : 1, stdout: "", stderr: "" };
       // Looking around is answered from the files (INV-693): a live model that runs `ls` and gets
       // "(ran) ls" back looks again, and spent a skill eval's whole budget doing so. Anything that
       // is not plain looking keeps the old answer, which scripted scenarios rely on.
@@ -305,6 +314,8 @@ export interface EpisodeOptions {
    * finished, a continuation's report.
    */
   goalLoop?: (context: { bus: AgentBus; registry: AgentRegistry; tasks: TaskStore | undefined }) => GoalLoop;
+  /** The completion gate (INV-771), built the same way. */
+  goalGate?: (context: { bus: AgentBus; registry: AgentRegistry; tasks: TaskStore | undefined; files: Map<string, string> }) => GoalGate;
   /** Files the box starts with. */
   files?: Record<string, string>;
   /** Stops an episode that will not settle. Default 200. */
@@ -411,8 +422,10 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
     ? new Rememberer({ registry, client, provider: { label: "scenario", model: "scenario", maxTokens: 1024 } as ProviderProfile })
     : undefined;
   let goalLoop: GoalLoop | undefined;
+  let goalGate: GoalGate | undefined;
   const bus: AgentBus = new AgentBus(registry, async (record, inbound, signal, conversation) => {
     if (goalLoop !== undefined && !goalLoop.turnStarting(record.id, conversation, inbound)) return;
+    if (goalLoop === undefined && goalGate?.verifierMayRun(inbound) === false) return;
     for (const inboundMessage of inbound) {
       if (inboundMessage.fromId !== "user") {
         observations.push({
@@ -447,12 +460,17 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
         observations.push({ at: clock++, agent: input.agentName, kind: "call", name: "AskUser:delivered", input: { question: input.question } });
         return "in the app";
       },
-      onGoalTurn: (report: GoalTurnReport) => { void goalLoop?.turnEnded(report); },
+      onGoalTurn: (report: GoalTurnReport) => {
+        if (report.marker.verify !== undefined) void goalGate?.verifierEnded(report);
+        else void goalLoop?.turnEnded(report);
+      },
+      ...(goalGate !== undefined ? { goalGate } : {}),
     } as never);
   }, event => {
     if (event.type === "turn_finished") goalLoop?.onTurnFinished(event.agentId);
   });
   goalLoop = options.goalLoop?.({ bus, registry, tasks: options.tasks });
+  goalGate = options.goalGate?.({ bus, registry, tasks: options.tasks, files });
 
   const say = async (line: string): Promise<void> => {
     const before = registry.readTranscript(front.id).length;

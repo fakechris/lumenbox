@@ -46,6 +46,7 @@ import { encodeCall } from "../egress/call.ts";
 import { MAIN_CONVERSATION, normaliseTags } from "../agents/registry.ts";
 import { describeTask, isLive, isTaskStatus, TASK_STATUSES, type TaskStore, clampContract } from "./tasks.ts";
 import { checklistAdditions, describePursuit } from "./goal-mode.ts";
+import type { GoalGate } from "./goal-gate.ts";
 import { ABSENT, versionOf, type FileVersions } from "./files.ts";
 import {
   describeTodos,
@@ -217,6 +218,8 @@ export interface ToolContext {
   memorySources?: readonly string[];
   /** The team's task board. Absent means the Tasks tool answers that there is none. */
   tasks?: TaskStore;
+  /** The completion gate (INV-771), where a goal's claim_complete goes. */
+  goalGate?: GoalGate;
   /** The scopes registry, so a secret granted by the caller's scope resolves. */
   scopes?: ScopeStore;
   /** How often WaitForControl polls the box; tests shorten it. */
@@ -1473,12 +1476,28 @@ export function buildTools(
         "'checklist_add' adds acceptance items — what evidence would prove each part of the " +
         "objective is done; give a command (exit code) or an artifact path where one exists. " +
         "The checklist only grows; removing an item needs the person's agreement. An item with a " +
-        "command is a proposal until the person confirms it (/goal confirm n). You cannot mark the " +
-        "goal complete here; stopping is not finishing.",
+        "command is a proposal until the person confirms it (/goal confirm n). 'claim_complete' is " +
+        "how a goal ends from your side: give a pointer per checklist item (a path, a command's " +
+        "output, a URL) and a verifier that has not seen this conversation checks every item " +
+        "against the current state. Claim only when every item is actually true now — an open " +
+        "todo or a missing artifact is refused outright, and three rejections hand the goal to " +
+        "the person. Stopping is not finishing.",
       input_schema: {
         type: "object",
         properties: {
-          action: { type: "string", enum: ["status", "checklist_add"] },
+          action: { type: "string", enum: ["status", "checklist_add", "claim_complete"] },
+          evidence: {
+            type: "array",
+            description: "For claim_complete: per checklist item, where the proof is.",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "string", description: "The checklist item id (c1, c2, …)." },
+                evidence: { type: "string", description: "A pointer to the proof: a file path, a command and its result, a URL." },
+              },
+              required: ["id", "evidence"],
+            },
+          },
           items: {
             type: "array",
             description: "For checklist_add: the items to add.",
@@ -4619,7 +4638,18 @@ export async function dispatchTool(
         if (moved === undefined) return { text: "The goal could not be updated.", isError: true };
         return { text: `Added ${additions.items.length} item(s).\n\n${describePursuit(moved.task)}` };
       }
-      return { text: `Unknown Goal action "${action}"; use status or checklist_add.`, isError: true };
+      if (action === "claim_complete") {
+        if (context.goalGate === undefined) return { text: "There is no completion gate on this installation.", isError: true };
+        const evidence = Array.isArray(input.evidence)
+          ? (input.evidence as unknown[]).map(entry => {
+              const record = (typeof entry === "object" && entry !== null ? entry : {}) as Record<string, unknown>;
+              return { id: String(record.id ?? ""), evidence: String(record.evidence ?? "") };
+            })
+          : [];
+        const result = await context.goalGate.claim(task.id, context.agent.id, evidence);
+        return { text: result.text, ...(result.accepted ? {} : { isError: true }) };
+      }
+      return { text: `Unknown Goal action "${action}"; use status, checklist_add or claim_complete.`, isError: true };
     }
     case "Tasks": {
       const board = context.tasks;
