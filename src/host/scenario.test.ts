@@ -1633,7 +1633,7 @@ test("an hourly price check runs 24 times with one change: the chat hears once, 
         const silent = entries.slice(before).find(e => e.silent !== undefined)?.silent;
         await finishRoutineRun(
           { slug: "hourly-price", agentId: frontId, deliver: chat, said, ...(silent !== undefined ? { silent } : {}) },
-          { ledger, recentChat: () => [], deliverToChat: async (_chat, text) => { delivered.push(text); } }
+          { ledger, recentChat: () => [], deliverToChat: async (_chat, text) => { delivered.push(text); return { delivered: true }; } }
         );
       }
     },

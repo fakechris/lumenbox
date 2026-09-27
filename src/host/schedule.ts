@@ -582,7 +582,13 @@ export interface SchedulerDeps {
    * hands it over rather than resolving it, because which conversation a chatKey means
    * and how a reply reaches it are the caller's business, not the clock's.
    */
-  run: (agent: string, prompt: string, deliver?: string, slug?: string, toolScope?: readonly string[], deliverWhen?: DeliverWhen) => Promise<void>;
+  /**
+   * `slug` names the routine whose commitments are reconciled afterwards; `identity` names
+   * whose result history the run is written to when that is not the same thing (INV-802):
+   * a listener passes no slug, because a listener run is not reconciled, but its results
+   * are its own — not one `ad-hoc` history every listener shares.
+   */
+  run: (agent: string, prompt: string, deliver?: string, slug?: string, toolScope?: readonly string[], deliverWhen?: DeliverWhen, identity?: string) => Promise<void>;
   /**
    * What a routine committed to last time and where it stands (INV-528), prepended to
    * its prompt so a retro opens with its own previous "next week" rather than a blank.
@@ -764,7 +770,12 @@ export class Scheduler {
           deliver,
           // No slug, as before: a listener run is not reconciled against commitments.
           undefined,
-          skill.allowedTools
+          skill.allowedTools,
+          undefined,
+          // But its results are its own (INV-802): keyed by the listener, and by the room
+          // it answered in, so a second listener saying the same words, or this one in
+          // another room, is not silenced by a result that room never heard.
+          skill.slug
         )
         .catch(error => {
           this.log(`${skill.name}: run failed — ${error instanceof Error ? error.message : String(error)}`);

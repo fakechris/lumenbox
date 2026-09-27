@@ -616,12 +616,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           .some(box => registry.agentsIn(box.id).some(agent => registry.readTranscript(agent.id, conversation).length > 0));
         const here = registry.agentsIn(myBox).some(agent => registry.readTranscript(agent.id, conversation).length > 0);
         if (elsewhere && !here) {
-          log(`refused: ${owner.profile.name} (box ${registry.boxOf(owner.id).name}) tried to report into ${chatKey}, which is another box's room`);
-          return;
+          const why = `refused: ${owner.profile.name} (box ${registry.boxOf(owner.id).name}) tried to report into ${chatKey}, which is another box's room`;
+          log(why);
+          return { delivered: false, why };
         }
       }
       log(`scheduled report → ${chatKey}`);
-      await chats?.pushToChat(chatKey, text);
+      // The receipt, not the swallowing door (INV-802): a vendor failure here must read as
+      // undelivered, or the next identical result is silenced against a send nobody got.
+      if (chats === undefined) return { delivered: false, why: "no channels are configured" };
+      return chats.tryPushToChat(chatKey, text);
     },
     onTurnEvent: event => {
       // An edit_file call goes to the page with its diff attached, computed here once, so

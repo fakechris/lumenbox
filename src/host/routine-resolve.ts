@@ -68,6 +68,15 @@ export interface RoutineResultRecord {
   reason: string;
   /** Present when commitments were checked and something was left unheld. */
   gapsNote?: string;
+  /**
+   * The delivery receipt (INV-802): `true` once the chat door reported the text sent (or
+   * queued to ride the next reply), `false` when the send failed — the record stays on the
+   * ledger with its verdict, and the next identical result is not compared against it.
+   * Absent on the pending line and on a silent run.
+   */
+  delivered?: boolean;
+  /** Why the send failed, when `delivered` is false. */
+  deliveryError?: string;
 }
 
 export type RoutineResolveMode = "rules" | "model";
@@ -164,6 +173,15 @@ export async function resolveRoutineResult(
   return judged === undefined ? { ...byRules, reason: `${byRules.reason} (judge unavailable)` } : judged;
 }
 
+/**
+ * Records written before INV-802 carry no receipt; a pushed or attached verdict from then
+ * is taken at its word, so an upgrade does not repeat every routine's last result once.
+ */
+function wasDelivered(entry: RoutineResultRecord): boolean {
+  if (entry.delivered !== undefined) return entry.delivered;
+  return entry.verdict === "push_now" || entry.verdict === "attach_next";
+}
+
 /** Where every run's result lands, delivered or not. One line per run, newest last. */
 export class RoutineResultLedger {
   constructor(private readonly path: string) {}
@@ -190,14 +208,20 @@ export class RoutineResultLedger {
   /**
    * The newest record for a routine. `saidOnly` skips runs that produced no text — a
    * `NothingToSay` between two identical results must not make the second one read as a
-   * change, which is what the scenario found on hour six.
+   * change, which is what the scenario found on hour six. `deliver` narrows to one
+   * destination, and `deliveredOnly` to results a chat actually received (INV-802): what
+   * "the same as last time" means is *the same as what this room last heard*, so a
+   * listener answering in a second room, or a result whose send failed, is not suppressed
+   * by a delivery that never reached anyone.
    */
-  lastFor(slug: string, options: { saidOnly?: boolean } = {}): RoutineResultRecord | undefined {
+  lastFor(slug: string, options: { saidOnly?: boolean; deliver?: string; deliveredOnly?: boolean } = {}): RoutineResultRecord | undefined {
     const all = this.read();
     for (let i = all.length - 1; i >= 0; i -= 1) {
       const entry = all[i]!;
       if (entry.slug !== slug) continue;
+      if (options.deliver !== undefined && entry.deliver !== options.deliver) continue;
       if (options.saidOnly === true && entry.text === "") continue;
+      if (options.deliveredOnly === true && !wasDelivered(entry)) continue;
       return entry;
     }
     return undefined;
@@ -266,7 +290,12 @@ export interface RoutineDeliveryDeps {
   ledger: RoutineResultLedger;
   /** The last lines of the deliver target's conversation, for the judge. */
   recentChat: (deliver: string, count: number) => readonly string[];
-  deliverToChat: (chatKey: string, text: string, fromAgentId: string) => Promise<void>;
+  /**
+   * Sends and says whether anybody got it. A door that swallows a vendor failure and
+   * resolves anyway would make a failed first send suppress every identical result after
+   * it (INV-802); a throw is read as `delivered: false` too.
+   */
+  deliverToChat: (chatKey: string, text: string, fromAgentId: string) => Promise<DeliveryOutcome>;
   /** Absent means `attach_next` is delivered as `push_now`. */
   attachNext?: (chatKey: string, text: string, fromAgentId: string) => void;
   /**
@@ -279,11 +308,19 @@ export interface RoutineDeliveryDeps {
   log?: (line: string) => void;
 }
 
+/** What the chat door answers to "did anybody get it" — the shape `ChannelManager.tryPushToChat` returns. */
+export interface DeliveryOutcome {
+  delivered: boolean;
+  why?: string;
+}
+
 export interface RoutineDelivery {
   verdict: RoutineVerdict;
   reason: string;
-  /** What went to the chat, or was queued for it. Absent when silent. */
+  /** What went to the chat, or was queued for it. Absent when silent or when the send failed. */
   delivered?: string;
+  /** Why the send failed. The result stays retryable: the next identical run is delivered again. */
+  deliveryError?: string;
 }
 
 /** How much of the chat the judge sees. */
@@ -298,7 +335,9 @@ export const RECENT_CHAT_LINES = 12;
 export async function finishRoutineRun(run: RoutineRun, deps: RoutineDeliveryDeps): Promise<RoutineDelivery> {
   const at = (run.at ?? new Date()).toISOString();
   const text = run.said.trim();
-  const previous = deps.ledger.lastFor(run.slug, { saidOnly: true });
+  // What this destination last heard from this routine: another room, or a send that
+  // failed, is not "last time" (INV-802).
+  const previous = deps.ledger.lastFor(run.slug, { saidOnly: true, deliver: run.deliver, deliveredOnly: true });
   const base: Omit<RoutineResultRecord, "verdict" | "reason"> = {
     id: randomUUID(),
     slug: run.slug,
@@ -330,11 +369,27 @@ export async function finishRoutineRun(run: RoutineRun, deps: RoutineDeliveryDep
   }
   const gapsNote = deps.reconcile === undefined ? undefined : await deps.reconcile(run);
   const delivered = gapsNote === undefined ? text : `${text}\n\n${gapsNote}`;
-  deps.ledger.record({ ...base, ...resolution, ...(gapsNote !== undefined ? { gapsNote } : {}) });
+  const resolved = { ...base, ...resolution, ...(gapsNote !== undefined ? { gapsNote } : {}) };
+  // Written with the verdict before the send — as not delivered, so a door that hangs
+  // leaves a retryable record rather than a receipt; written once more with the outcome.
+  deps.ledger.record({ ...resolved, delivered: false });
+  let outcome: DeliveryOutcome;
   if (resolution.verdict === "attach_next" && deps.attachNext !== undefined) {
     deps.attachNext(run.deliver, delivered, run.agentId);
+    outcome = { delivered: true };
   } else {
-    await deps.deliverToChat(run.deliver, delivered, run.agentId);
+    try {
+      outcome = await deps.deliverToChat(run.deliver, delivered, run.agentId);
+    } catch (error) {
+      outcome = { delivered: false, why: error instanceof Error ? error.message : String(error) };
+    }
   }
-  return { ...resolution, delivered };
+  if (outcome.delivered) {
+    deps.ledger.record({ ...resolved, delivered: true });
+    return { ...resolution, delivered };
+  }
+  const deliveryError = outcome.why ?? "the chat door did not confirm delivery";
+  deps.log?.(`${run.slug}: not delivered to ${run.deliver} — ${deliveryError}`);
+  deps.ledger.record({ ...resolved, delivered: false, deliveryError });
+  return { ...resolution, deliveryError };
 }
