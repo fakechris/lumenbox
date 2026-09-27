@@ -45,6 +45,7 @@ import { randomBytes } from "node:crypto";
 import { encodeCall } from "../egress/call.ts";
 import { MAIN_CONVERSATION, normaliseTags } from "../agents/registry.ts";
 import { describeTask, isLive, isTaskStatus, TASK_STATUSES, type TaskStore, clampContract } from "./tasks.ts";
+import { checklistAdditions, describePursuit } from "./goal-mode.ts";
 import { ABSENT, versionOf, type FileVersions } from "./files.ts";
 import {
   describeTodos,
@@ -387,6 +388,8 @@ const FORGET_PLANS = new ForgetPlans();
 export const FORK_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
   // Forgetting is the person's decision, confirmed in their conversation (INV-757).
   "Forget",
+  // A goal belongs to the conversation the person set it in; a fork works, it does not steer.
+  "Goal",
   "RunOnHost",
   "computer",
   "SendToAgent",
@@ -1460,6 +1463,38 @@ export function buildTools(
           },
         },
         required: ["fact"],
+      },
+    },
+    {
+      name: "Goal",
+      description:
+        "The goal the person set for this conversation with /goal (docs/74): an objective you keep " +
+        "working toward until a gate you do not own says it is met. 'status' shows it. " +
+        "'checklist_add' adds acceptance items — what evidence would prove each part of the " +
+        "objective is done; give a command (exit code) or an artifact path where one exists. " +
+        "The checklist only grows; removing an item needs the person's agreement. An item with a " +
+        "command is a proposal until the person confirms it (/goal confirm n). You cannot mark the " +
+        "goal complete here; stopping is not finishing.",
+      input_schema: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["status", "checklist_add"] },
+          items: {
+            type: "array",
+            description: "For checklist_add: the items to add.",
+            items: {
+              type: "object",
+              properties: {
+                text: { type: "string", description: "What must be true, and what would prove it." },
+                command: { type: "string", description: "Optional: a shell command whose exit code proves it. A proposal until the person confirms it." },
+                expect_exit: { type: "integer", description: "For command: the exit code that means proven (default 0)." },
+                artifact: { type: "string", description: "Optional: a file path that must exist when the goal is done." },
+              },
+              required: ["text"],
+            },
+          },
+        },
+        required: ["action"],
       },
     },
     {
@@ -4563,6 +4598,29 @@ export async function dispatchTool(
       return { text: 'Forget needs action "plan" (with about) or "confirm" (with plan).', isError: true };
     }
 
+    case "Goal": {
+      const board = context.tasks;
+      if (board === undefined) return { text: "There is no task board on this installation.", isError: true };
+      const conversation = context.conversation ?? MAIN_CONVERSATION;
+      const task = board.pursuitIn(conversation);
+      if (task?.pursuit === undefined) return { text: "No goal is set for this conversation. The person sets one with /goal.", isError: true };
+      const action = String(input.action ?? "");
+      if (action === "status") return { text: describePursuit(task) };
+      if (action === "checklist_add") {
+        if (task.assigneeId !== context.agent.id) return { text: `Goal ${task.id} is ${task.assigneeId ?? "nobody"}'s to pursue; only its assignee drafts the checklist.`, isError: true };
+        const additions = checklistAdditions(task.pursuit.checklist, input.items);
+        if ("refused" in additions) return { text: additions.refused, isError: true };
+        const moved = board.setPursuit(
+          task.id,
+          pursuit => ({ ...pursuit, checklist: [...pursuit.checklist, ...additions.items] }),
+          `checklist: ${additions.items.length} item(s) added by ${context.agent.profile.name}`,
+          context.agent.id
+        );
+        if (moved === undefined) return { text: "The goal could not be updated.", isError: true };
+        return { text: `Added ${additions.items.length} item(s).\n\n${describePursuit(moved.task)}` };
+      }
+      return { text: `Unknown Goal action "${action}"; use status or checklist_add.`, isError: true };
+    }
     case "Tasks": {
       const board = context.tasks;
       if (board === undefined) {

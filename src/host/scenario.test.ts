@@ -19,6 +19,7 @@ import { replyForMessage } from "./reply.ts";
 import { conversationIdFor } from "../agents/registry.ts";
 import { chatFilesRoot, parseWakePrompt } from "./prompt.ts";
 import { contextTaskBlockers, newContext } from "./context-recovery.ts";
+import { goalCommand } from "./goal-mode.ts";
 import { recoverTask } from "./task-recovery.ts";
 import { retryLastAnswer } from "./retry-recovery.ts";
 import { AnswerReviewer } from "./answer-review.ts";
@@ -26,6 +27,8 @@ import { TaskStore } from "./tasks.ts";
 import { Messages } from "../channels/messages.ts";
 import { MemoryAdmin } from "./memory-admin.ts";
 import { join } from "node:path";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 
 test("/new through the chat door drops old narrative and plans, retains relevant facts, and preserves follow-up continuity", async () => {
   let calls = 0;
@@ -418,6 +421,81 @@ test("a conversation that already holds a leaked loop recovers without editing t
     const stored = result.registry.readTranscript(front.id) as { text?: string }[];
     assert.ok(stored.some(entry => entry.text === LEAKED_LOOP), "the record on disk is untouched");
   } finally { result.cleanup(); }
+});
+
+// INV-769: `/goal` in a private chat. The first turn drafts the checklist through the Goal tool
+// and tells the person; the goal is then on the board as a pursuit, in the prompt every turn,
+// holds `/new` while it runs, and cannot be closed by the executor's own word.
+test("/goal sets a pursuit: the first turn drafts a checklist, the prompt carries the goal, and the executor cannot close it", async () => {
+  const tasks = new TaskStore(join(mkdtempSync(join(tmpdir(), "agentbox-goal-scenario-")), "tasks.jsonl"));
+  const systems: string[] = [];
+  let doneAttempt = "";
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: [], tasks,
+    script: ({ system, messages }) => {
+      systems.push(system);
+      // The scenario's round counter spans the episode, so branch on what the request holds.
+      const all = JSON.stringify(messages);
+      if (/把它标成完成/.test(all)) {
+        if (!/"name":"Tasks"/.test(all)) return { call: "Tasks", input: { action: "update", id: "t1", status: "done" } };
+        doneAttempt = all;
+        return { say: "板上没让我标完成；进度我先记着。" };
+      }
+      if (/\[host\] 目标 t1 已由人创建/.test(all)) {
+        if (!/"name":"Goal"/.test(all)) return { call: "Goal", input: { action: "checklist_add", items: [{ text: "报告文件存在", artifact: "/home/box/work/chats/feishu-private-goal/outbox/q3.md" }, { text: "lint 通过", command: "npm run lint", expect_exit: 0 }] } };
+        return { say: "清单两条：报告文件存在；lint 通过（命令待你确认）。还要补什么吗？" };
+      }
+      return { say: "ok" };
+    },
+    drive: async ({ bus, registry, frontId }) => {
+      const key = "feishu:private-goal";
+      const conversation = conversationIdFor(key);
+      let receive!: (message: ChannelMessage) => Promise<string | undefined>;
+      const manager = new ChannelManager({
+        mayDrive: () => true, log: () => {},
+        contextMode: () => registry.contextMode(frontId, conversation),
+        goal: {
+          command: input => goalCommand({
+            tasks, mayUse: () => true, contextMode: () => registry.contextMode(frontId, conversation),
+            blockers: () => [...input.blockers, ...contextTaskBlockers(tasks.forAgent(frontId), conversation)],
+          }, { agentId: frontId, conversation, requester: "principal-user", operationId: input.operationId, privateChat: input.privateChat, text: input.text }),
+        },
+        newContext: input => newContext({ registry, mayReset: () => true, blockers: () => contextTaskBlockers(tasks.forAgent(frontId), conversation) }, { ...input, agentId: frontId, conversation }).text,
+        ask: async (_name, text, _identity, _chat, _progress, _thread, _task, _interim, _stream, origin) => {
+          bus.sendFromUser(frontId, text, { conversation, steerable: false, messageId: origin!.messageId });
+          await bus.runExclusive(frontId, { userDriven: true, conversation });
+          return replyForMessage(registry.readTranscript(frontId, conversation), origin!.messageId);
+        },
+      });
+      manager.register({ name: "feishu", start: async handler => { receive = handler; }, stop() {}, send: async () => undefined }, true, "test");
+      manager.start(); await new Promise(resolve => setImmediate(resolve));
+      try {
+        const created = await receive({ identity: "feishu:user", chatKey: key, privateChat: true, senderLabel: "user", text: "/goal 写一份 Q3 报告并把 lint 跑通", messageId: "goal-1" });
+        assert.match(created ?? "", /目标 t1 已创建/);
+        await manager.idle();
+        const task = tasks.get("t1")!;
+        assert.equal(task.pursuit?.status, "active");
+        assert.equal(task.status, "doing");
+        assert.deepEqual(task.pursuit?.checklist.map(item => [item.text, item.check?.kind, item.confirmed]), [["报告文件存在", "artifact", undefined], ["lint 通过", "command", undefined]]);
+        const shown = await receive({ identity: "feishu:user", chatKey: key, privateChat: true, senderLabel: "user", text: "/goal", messageId: "goal-2" });
+        assert.match(shown ?? "", /目标 t1：active[\s\S]*1\. \[未验证\] 报告文件存在[\s\S]*2\. \[未验证\] lint 通过（命令：npm run lint，待确认：\/goal confirm 2）/);
+        const refused = await receive({ identity: "feishu:user", chatKey: key, privateChat: true, senderLabel: "user", text: "/new", messageId: "goal-3" });
+        assert.match(refused ?? "", /目标 t1 正在推进（active）：先 \/goal pause 或 \/goal clear/);
+        await receive({ identity: "feishu:user", chatKey: key, privateChat: true, senderLabel: "user", text: "把它标成完成", messageId: "goal-4" });
+        await manager.idle();
+        assert.match(doneAttempt, /moves only through the goal gate/, "the executor's done is refused by the board, and told so");
+        assert.equal(tasks.get("t1")?.status, "doing");
+        assert.equal(tasks.get("t1")?.pursuit?.status, "active");
+        assert.ok(systems.at(-1)!.includes("## The goal you are pursuing") && systems.at(-1)!.includes("写一份 Q3 报告并把 lint 跑通"), "the goal block rides every turn's prompt");
+        const paused = await receive({ identity: "feishu:user", chatKey: key, privateChat: true, senderLabel: "user", text: "/goal pause", messageId: "goal-5" });
+        assert.match(paused ?? "", /已暂停/);
+        const switched = await receive({ identity: "feishu:user", chatKey: key, privateChat: true, senderLabel: "user", text: "/new", messageId: "goal-6" });
+        assert.match(switched ?? "", /已开始新对话/, "a paused goal does not hold the conversation");
+      } finally { manager.stop(); }
+    },
+  });
+  try { assert.equal(result.score.turns, 2, "the drafting turn and the person's turn; no control command reached the model"); }
+  finally { result.cleanup(); }
 });
 
 test("two completed review tasks do not trap a private chat that asks for clean context", async () => {
