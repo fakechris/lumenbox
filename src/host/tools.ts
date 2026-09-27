@@ -3411,7 +3411,7 @@ export async function dispatchTool(
         };
       }
       // A standing file (INV-777) is capped, and its host copy is written in the same call.
-      const standingEdited = standingFileOf(path, context.agent.profile.name);
+      const standingEdited = standingFileOf(path, context.agent.id);
       const editCap = standingEdited === undefined ? undefined : capRefusal(standingEdited, updated);
       if (editCap !== undefined) return { text: editCap, isError: true };
       await box.writeFile(path, updated);
@@ -3497,7 +3497,7 @@ export async function dispatchTool(
       const written = templateStamp(context, path, content);
       // A standing file (INV-777) is capped, and its host copy — the one that counts — is written
       // in the same call, so the agent's edit is in its next prompt and never reported back to it.
-      const standingWritten = standingFileOf(path, context.agent.profile.name);
+      const standingWritten = standingFileOf(path, context.agent.id);
       const writeCap = standingWritten === undefined ? undefined : capRefusal(standingWritten, written);
       if (writeCap !== undefined) return { text: writeCap, isError: true };
       const result = await box.writeFile(path, written);

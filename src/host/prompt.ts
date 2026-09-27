@@ -1108,7 +1108,7 @@ export const VOLATILE_SECTIONS: readonly PromptSection[] = [
   },
   // The standing files (INV-777): the last thing that changes from turn to turn, so an edit to
   // USER.md invalidates only this and the recap; nothing above it moves by a byte.
-  { name: "standing", render: context => renderStanding(context.standing, context.agent.profile.name) },
+  { name: "standing", render: context => renderStanding(context.standing, context.agent.id) },
   // Last, always. See CRITICAL_RECAP: the tail is where a model reads best, and it was
   // being spent on the roster.
   { name: "critical", render: context => (context.toolless === true ? TOOLLESS_RECAP : CRITICAL_RECAP) },

@@ -273,7 +273,7 @@ export class Orchestrator {
       out.push({
         slug: heartbeatSlug(agent.id),
         name: `${agent.profile.name}'s heartbeat`,
-        path: `${standingBoxDir(agent.profile.name)}/HEARTBEAT.md`,
+        path: `${standingBoxDir(agent.id)}/HEARTBEAT.md`,
         schedule: HEARTBEAT_SCHEDULE,
         runAs: agent.id,
         boxId: this.registry.boxOf(agent.id).id,

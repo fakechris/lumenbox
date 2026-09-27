@@ -1656,6 +1656,8 @@ test("a person's USER.md edit reaches the next turn as text and as a diff; an ag
   const systems: string[] = [];
   const openers: string[] = [];
   let calls = 0;
+  // The mirror directory is keyed by the agent's id (INV-803), known once the episode has a roster.
+  let novaId = "";
   const result = await runEpisode({
     team: [{ name: "Nova" }], says: [],
     script: ({ system, messages }) => {
@@ -1666,16 +1668,17 @@ test("a person's USER.md edit reaches the next turn as text and as a diff; an ag
       if (calls === 1) return { say: "Hi there." };
       if (calls === 2) return { say: "Noticed you changed USER.md — Skipper it is." };
       if (calls === 3) {
-        return { call: "write_file", input: { path: `${standingBoxDir("Nova")}/AGENTS.md`, content: "## Lessons\n\n- LESSON_FROM_NOVA\n", overwrite: true } };
+        return { call: "write_file", input: { path: `${standingBoxDir(novaId)}/AGENTS.md`, content: "## Lessons\n\n- LESSON_FROM_NOVA\n", overwrite: true } };
       }
       return { say: "Done." };
     },
     drive: async ({ registry, frontId, say, files }) => {
+      novaId = frontId;
       // Turn 1: the seeds are in the prompt, mirrored to the box, and nothing has "changed".
       await say("hello");
       assert.match(systems[0]!, /# Your standing files/);
       assert.match(systems[0]!, /## USER\.md\n\n# USER\.md — the person/);
-      assert.ok(files.has(`${standingBoxDir("Nova")}/USER.md`), "the box holds the read-write mirror");
+      assert.ok(files.has(`${standingBoxDir(frontId)}/USER.md`), "the box holds the read-write mirror");
       assert.doesNotMatch(openers[0]!, /\[file-diff\]/);
       // A person edits USER.md on the host between turns.
       const home = registry.dirFor(frontId);

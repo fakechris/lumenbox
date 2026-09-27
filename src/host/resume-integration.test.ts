@@ -265,7 +265,8 @@ function countingBox(files: Map<string, string>, ran: string[]): BoxClient {
     },
     readFile: async (path: string) => {
       // `write_file` reads before it writes (the version check); only a file that exists is a read the task made.
-      if (files.has(path)) ran.push(`read:${path}`);
+      // The mirror reads the standing files back every sync (INV-803): bookkeeping, like its writes.
+      if (files.has(path) && !path.includes("/standing/")) ran.push(`read:${path}`);
       const content = files.get(path);
       if (content === undefined) throw new Error(`${path} does not exist`);
       return { path, content, total_lines: 1, truncated: false };
