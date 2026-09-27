@@ -827,6 +827,18 @@ action — and the third rejection in a row pauses it as `needs_person`. On star
 verifying finds its verdict in the verifier conversation's transcript or is rejected as
 interrupted. The person hears the verdict either way, in the chat the goal was set in.
 
+**A goal's budget (INV-772).** `/goal <objective> --budget 200k` (or `/goal budget 200k` on the
+goal that is running) caps one goal's spend; without one the spend is only recorded. The unit is
+input-token equivalents: every turn of the goal — continuations, the finish-only report, the
+verifier's turns — sums its rounds' usage and weights each class by the provider's
+`tokenWeights` (MiniMax-M3: input 1, cache read 0.1, cache write 1, output 4; the defaults are
+1 / 0.1 / 1.25 / 4), and the turn's report carries the number onto `pursuit.spent.cost`. That
+is where the bill lives: not recomputed from usage rows, which keep 48 hours and carry no
+prices, and not the machine-wide ceiling docs/16 chose to observe first. Past 80% the
+continuation notice tells the executor how much is left; at the limit the next wake is
+finish-only and the goal pauses as `budget`, with the report delivered. `/goal` shows spent and
+budget.
+
 Forgetting is `Forget` (`src/host/forget.ts`), in two turns. **plan** searches every place the words
 can be — both memory tiers and the box's mirror of them, kept pages, kept results, the board with its
 history, the commitments ledger, and routines — and answers in counts and names, never the words;

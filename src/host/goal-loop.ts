@@ -45,6 +45,8 @@ export interface GoalTurnReport {
   worked: boolean;
   /** The turn's final text, when it had one. Delivered only for a finish-only turn. */
   finalText?: string;
+  /** What the turn cost, in input-token equivalents (INV-772), weighted by its provider. */
+  cost?: number;
 }
 
 export interface GoalLoopDeps {
@@ -212,6 +214,7 @@ export class GoalLoop {
   private limitReached(pursuit: Pursuit): PausedReason | undefined {
     if (pursuit.spent.continuations >= pursuit.limits.continuations) return "continuations";
     if (pursuit.spent.activeMs >= pursuit.limits.activeMs) return "deadline";
+    if (pursuit.limits.budget !== undefined && pursuit.spent.cost >= pursuit.limits.budget) return "budget";
     return undefined;
   }
 
@@ -258,7 +261,7 @@ export class GoalLoop {
 
     if (marker.finishOnly === true) {
       const reason = marker.reason ?? "continuations";
-      this.deps.tasks.setPursuit(task.id, current => ({ ...current, status: "paused", pausedReason: reason, spent: { ...current.spent, activeMs: current.spent.activeMs + elapsed } }), `paused: ${reason}, after a finish-only turn`);
+      this.deps.tasks.setPursuit(task.id, current => ({ ...current, status: "paused", pausedReason: reason, spent: { ...current.spent, activeMs: current.spent.activeMs + elapsed, cost: current.spent.cost + (report.cost ?? 0) } }), `paused: ${reason}, after a finish-only turn`);
       this.deps.log(`goal ${task.id}: paused (${reason}) after ${pursuit.spent.continuations} continuations`);
       await this.tell(task, `${report.finalText?.trim() ? `${report.finalText.trim()}\n\n` : ""}${stopNotice(this.deps.tasks.get(task.id)!, reason)}`);
       return;
@@ -267,12 +270,12 @@ export class GoalLoop {
     if (report.how !== "done" && report.how !== "silent") {
       const failures = (pursuit.spent.errorStreak ?? 0) + 1;
       if (failures > MAX_CONTINUATION_RETRIES) {
-        this.deps.tasks.setPursuit(task.id, current => ({ ...current, status: "paused", pausedReason: "error", spent: { ...current.spent, errorStreak: failures, activeMs: current.spent.activeMs + elapsed } }), `paused: ${failures} continuation turns failed in a row (last: ${report.how})`);
+        this.deps.tasks.setPursuit(task.id, current => ({ ...current, status: "paused", pausedReason: "error", spent: { ...current.spent, errorStreak: failures, activeMs: current.spent.activeMs + elapsed, cost: current.spent.cost + (report.cost ?? 0) } }), `paused: ${failures} continuation turns failed in a row (last: ${report.how})`);
         this.deps.log(`goal ${task.id}: paused (error) after ${failures} failed continuations`);
         await this.tell(task, stopNotice(this.deps.tasks.get(task.id)!, "error", `最近一次：${report.how}`));
         return;
       }
-      this.deps.tasks.setPursuit(task.id, current => ({ ...current, spent: { ...current.spent, errorStreak: failures, activeMs: current.spent.activeMs + elapsed } }), `continuation turn ${report.how}; retry ${failures} of ${MAX_CONTINUATION_RETRIES} after backoff`);
+      this.deps.tasks.setPursuit(task.id, current => ({ ...current, spent: { ...current.spent, errorStreak: failures, activeMs: current.spent.activeMs + elapsed, cost: current.spent.cost + (report.cost ?? 0) } }), `continuation turn ${report.how}; retry ${failures} of ${MAX_CONTINUATION_RETRIES} after backoff`);
       const delay = RETRY_BACKOFF_MS * 2 ** (failures - 1);
       this.deps.log(`goal ${task.id}: continuation ${report.how}; retrying in ${Math.round(delay / 1000)}s`);
       const key = this.keyOf(task)!;
@@ -292,7 +295,7 @@ export class GoalLoop {
       current => ({
         ...current,
         ...(stop !== undefined ? { status: "paused" as const, pausedReason: stop } : {}),
-        spent: { ...current.spent, idleStreak, stallStreak, errorStreak: 0, activeMs: current.spent.activeMs + elapsed, ...(stateHash !== undefined ? { lastStateHash: stateHash } : {}) },
+        spent: { ...current.spent, idleStreak, stallStreak, errorStreak: 0, activeMs: current.spent.activeMs + elapsed, cost: current.spent.cost + (report.cost ?? 0), ...(stateHash !== undefined ? { lastStateHash: stateHash } : {}) },
       }),
       stop !== undefined
         ? `paused: ${stop} after continuation ${pursuit.spent.continuations}`

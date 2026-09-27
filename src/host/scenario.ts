@@ -313,7 +313,7 @@ export interface EpisodeOptions {
    * through it. The episode feeds it what the orchestrator would: a turn starting, a turn
    * finished, a continuation's report.
    */
-  goalLoop?: (context: { bus: AgentBus; registry: AgentRegistry; tasks: TaskStore | undefined }) => GoalLoop;
+  goalLoop?: (context: { bus: AgentBus; registry: AgentRegistry; tasks: TaskStore | undefined; files: Map<string, string> }) => GoalLoop;
   /** The completion gate (INV-771), built the same way. */
   goalGate?: (context: { bus: AgentBus; registry: AgentRegistry; tasks: TaskStore | undefined; files: Map<string, string> }) => GoalGate;
   /** Files the box starts with. */
@@ -469,7 +469,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
   }, event => {
     if (event.type === "turn_finished") goalLoop?.onTurnFinished(event.agentId);
   });
-  goalLoop = options.goalLoop?.({ bus, registry, tasks: options.tasks });
+  goalLoop = options.goalLoop?.({ bus, registry, tasks: options.tasks, files });
   goalGate = options.goalGate?.({ bus, registry, tasks: options.tasks, files });
 
   const say = async (line: string): Promise<void> => {

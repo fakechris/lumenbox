@@ -55,6 +55,12 @@ export interface ProviderProfile {
   effort: boolean;
   promptCaching: boolean;
   /**
+   * What each token class costs relative to a fresh input token (INV-772): a goal's budget is
+   * kept in "input-token equivalents", so a cache read that is billed at a tenth counts a
+   * tenth. Absent means the defaults in goal-mode.ts, which are conservative.
+   */
+  tokenWeights?: { input: number; cacheRead: number; cacheWrite: number; output: number };
+  /**
    * The endpoint caches a repeated prefix on its own, with no markers sent. Billing shows
    * it as cache reads all the same; what differs is only that `promptCaching` stays false
    * so no cache_control breakpoints go out. Reported as having caching, because it does.
@@ -104,6 +110,8 @@ const MINIMAX: ProviderProfile = {
   label: "MiniMax",
   baseUrl: "https://api.minimaxi.com/anthropic",
   model: "MiniMax-M3",
+  // M3 list prices: input $0.6/M, cache hit $0.06/M, output $2.4/M (2026-09).
+  tokenWeights: { input: 1, cacheRead: 0.1, cacheWrite: 1, output: 4 },
   // Thinking counts against the cap, so a tight budget yields an empty response
   // with stop_reason max_tokens rather than an answer.
   maxTokens: 32_000,

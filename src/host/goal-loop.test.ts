@@ -219,3 +219,36 @@ test("the wake gate holds a continuation, and rearm looks at every active goal a
     assert.equal(h.wakes[0]!.goal?.workId, "w-1", "under the same workId");
   } finally { h.cleanup(); }
 });
+
+test("cost accrues from every continuation's report, and a spent budget ends with a finish-only turn (INV-772)", async () => {
+  const h = harness();
+  try {
+    h.tasks.setPursuit(h.task.id, p => ({ ...p, limits: { ...p.limits, budget: 1_000 } }), "budget");
+    const run = async (cost: number, how = "done") => {
+      h.loop.onTurnFinished("nova"); h.fire();
+      const wake = h.wakes.at(-1)!;
+      h.loop.turnStarting("nova", CONV, [{ id: `g${h.wakes.length}`, fromId: "user", fromName: "user", text: wake.text, priority: false, receivedAt: "", synthetic: true, goal: wake.goal }]);
+      await h.loop.turnEnded({ marker: wake.goal!, how, worked: true, cost });
+      return wake;
+    };
+    await run(400);
+    assert.equal(h.pursuit().spent.cost, 400);
+    await run(300, "failed");
+    assert.equal(h.pursuit().spent.cost, 700, "a failed turn still cost what it cost");
+    h.fire(); // the retry timer
+    const retry = h.wakes.at(-1)!;
+    h.loop.turnStarting("nova", CONV, [{ id: "r", fromId: "user", fromName: "user", text: retry.text, priority: false, receivedAt: "", synthetic: true, goal: retry.goal }]);
+    await h.loop.turnEnded({ marker: retry.goal!, how: "done", worked: true, cost: 350 });
+    assert.equal(h.pursuit().spent.cost, 1_050, "over budget");
+    assert.equal(h.pursuit().status, "active", "the limit is read when the next continuation is considered");
+    const last = await run(20);
+    assert.equal(last.goal?.finishOnly, true);
+    assert.equal(last.goal?.reason, "budget");
+    assert.match(last.text, /the budget is reached/);
+    assert.equal(h.pursuit().status, "paused");
+    assert.equal(h.pursuit().pausedReason, "budget");
+    assert.equal(h.pursuit().spent.cost, 1_070, "the finish-only turn is on the bill too");
+    assert.match(h.told.at(-1) ?? "", /预算到了上限/);
+  } finally { h.cleanup(); }
+});
+

@@ -207,3 +207,14 @@ test("after a restart a goal left verifying finds its verdict in the transcript,
     } finally { again.cleanup(); }
   } finally { h.cleanup(); }
 });
+
+test("the verifier's spend lands on the goal's bill (INV-772)", async () => {
+  const h = harness();
+  try {
+    await h.gate.claim(h.task.id, "nova", EVIDENCE);
+    await h.gate.verifierEnded({ marker: h.wakes[0]!.goal!, how: "done", worked: true, finalText: REPORT_PASS, cost: 1234 });
+    assert.equal(h.pursuit().spent.cost, 1234);
+    assert.equal(h.pursuit().status, "complete");
+  } finally { h.cleanup(); }
+});
+
