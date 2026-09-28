@@ -9,8 +9,11 @@
 import { bindingsOf, CommitmentLedger, describeGaps, parseCommitments, priorCommitmentsPrompt, reconcileCommitments } from "./commitments.ts";
 import { finishRoutineRun, PendingAttachments, RoutineResultLedger, routineResolveMode, type DeliveryOutcome } from "./routine-resolve.ts";
 import { learningsDir } from "./learnings.ts";
-import { replyForMessage } from "./reply.ts";
+import { replyForMessage, silenceForMessage } from "./reply.ts";
 import { contextTaskBlockers, isContextCommand } from "./context-recovery.ts";
+import { isGoalCommand } from "./goal-mode.ts";
+import { GoalLoop } from "./goal-loop.ts";
+import { GoalGate } from "./goal-gate.ts";
 import { isRecoveryCommand } from "./task-recovery.ts";
 import { isRetryCommand } from "./retry-recovery.ts";
 import { AnswerReviewer, answerReviewMode, sampledForReview, type AnswerReviewInput, type AnswerVerdict } from "./answer-review.ts";
@@ -217,6 +220,8 @@ export interface OrchestratorOptions {
    */
   /** Sends a routine's result into a chat and says whether anybody got it (INV-802). */
   deliverToChat?: (chatKey: string, text: string, fromAgentId?: string) => Promise<DeliveryOutcome>;
+  /** Questions waiting on a person in a conversation (INV-770): a goal does not continue over one. */
+  pendingQuestions?: (agentId: string, conversation: string) => number;
   /**
    * A principal id as the roster shows it, so an operator rule can be written about a
    * person by name (INV-156). Absent leaves rules id-only, which still works.
@@ -274,7 +279,7 @@ export class Orchestrator {
       out.push({
         slug: heartbeatSlug(agent.id),
         name: `${agent.profile.name}'s heartbeat`,
-        path: `${standingBoxDir(agent.profile.name)}/HEARTBEAT.md`,
+        path: `${standingBoxDir(agent.id)}/HEARTBEAT.md`,
         schedule: HEARTBEAT_SCHEDULE,
         runAs: agent.id,
         boxId: this.registry.boxOf(agent.id).id,
@@ -363,6 +368,10 @@ export class Orchestrator {
    * replay-and-compact and a second writer would interleave two views of the board.
    */
   readonly tasks: TaskStore | undefined;
+  /** The continuation loop of goal mode (INV-770); absent without a task board. */
+  readonly goalLoop: GoalLoop | undefined;
+  /** The completion gate of goal mode (INV-771); absent without a task board. */
+  readonly goalGate: GoalGate | undefined;
   readonly scopes: ScopeStore | undefined;
   /** Bundles attached to boxes (INV-420). */
   readonly bundles: BundleStore;
@@ -869,7 +878,12 @@ export class Orchestrator {
       options.steps === null
         ? undefined
         : (options.steps ?? new StepLedger(stepLedgerPath(), line => console.error(`[turn-steps] ${line}`)));
-    this.policy.onApprovalSettled = (approval, how) => this.continueParked(approval.id, how);
+    this.policy.onApprovalSettled = (approval, how) => {
+      // A parked turn continues from the waiting step and settles it itself, reading the
+      // ledger as it wakes; any other step waiting on this answer closes here (INV-798).
+      if (this.parked.has(approval.id)) this.continueParked(approval.id, how);
+      else this.steps?.settleApproval(approval.id);
+    };
     this.networkEvents =
       options.networkEvents === null ? undefined : (options.networkEvents ?? new NetworkEventLog());
     this.pendingWork =
@@ -953,12 +967,58 @@ export class Orchestrator {
     this.bus = new AgentBus(
       this.registry,
       (agent, inbound, signal, conversation) => this.executeTurn(agent, inbound, signal, conversation),
-      options.onBusEvent,
+      event => {
+        options.onBusEvent?.(event);
+        // A turn ending is what lets a goal consider its next continuation (INV-770).
+        if (event.type === "turn_finished") this.goalLoop?.onTurnFinished(event.agentId);
+      },
       options.inbox === null
         ? undefined
         : (options.inbox ??
           new Inbox<InboundMessage>(inboxPath(), line => console.error(`[inbox] ${line}`)))
     );
+    this.goalLoop = this.tasks === undefined ? undefined : new GoalLoop({
+      tasks: this.tasks,
+      agentName: id => this.registry.tryGet(id)?.profile.name,
+      bus: this.bus,
+      busy: (agentId, conversation) => [
+        ...(this.hasOpenTurn(agentId, conversation) ? ["an open turn in the ledger"] : []),
+        ...(this.policy.pending().some(item => item.agentId === agentId) ? ["a pending approval"] : []),
+        ...((this.options.pendingQuestions?.(agentId, conversation) ?? 0) > 0 ? ["a question waiting on the person"] : []),
+      ],
+      wakeGate: agentId => {
+        const name = this.registry.tryGet(agentId)?.profile.name ?? agentId;
+        const decision = this.policy.check({ kind: "wake", agentId, agentName: name, targetId: agentId, targetName: name });
+        return decision.allow ? { allowed: true } : { allowed: false, reason: decision.reason };
+      },
+      durableState: (agentId, conversation) => this.registry.readDurableState(agentId, conversation),
+      manifest: () => this.workspaceManifest(),
+      notify: async (task, text) => {
+        const chatKey = task.pursuit?.chatKey;
+        if (chatKey === undefined) {
+          console.error(`[goal] ${task.id}: no chat to tell; the board has the note`);
+          return;
+        }
+        await this.options.deliverToChat?.(chatKey, text, task.assigneeId);
+      },
+      log: line => console.error(`[goal] ${line}`),
+    });
+    if (this.tasks !== undefined) this.tasks.onChange(task => this.goalLoop?.onTaskChanged(task));
+    this.goalGate = this.tasks === undefined ? undefined : new GoalGate({
+      tasks: this.tasks,
+      registry: this.registry,
+      bus: this.bus,
+      manifest: () => this.workspaceManifest(),
+      notify: async (task, text) => {
+        const chatKey = task.pursuit?.chatKey;
+        if (chatKey === undefined) {
+          console.error(`[goal] ${task.id}: no chat to tell; the board has the verdict`);
+          return;
+        }
+        await this.options.deliverToChat?.(chatKey, text, task.assigneeId);
+      },
+      log: line => console.error(`[goal] ${line}`),
+    });
   }
 
   /**
@@ -1640,6 +1700,9 @@ export class Orchestrator {
     // the attempt count is the whole of the crash-loop guard.
     const resumeOf = this.resuming.get(agent.id);
     this.resuming.delete(agent.id);
+    // A continuation that a person's message overtook, or whose goal stopped meanwhile, is
+    // not run (INV-770): the loop reconsiders when the person's turn ends.
+    if (this.goalLoop !== undefined && !this.goalLoop.turnStarting(agent.id, conversation, inbound)) return;
 
     const displayIndex = await this.ensureDesktop(agent);
     // Started on the first turn that could use them, not at boot: a CLI question should
@@ -1728,6 +1791,11 @@ export class Orchestrator {
       // Watched on the way past rather than subscribed to elsewhere: a turn that gave up
       // in a loop is the fourth pitfall source, and this is the one place that has the
       // report, the agent and what it was asked to do all in hand.
+      onGoalTurn: report => {
+        if (report.marker.verify !== undefined) void this.goalGate?.verifierEnded(report);
+        else void this.goalLoop?.turnEnded(report);
+      },
+      ...(this.goalGate !== undefined ? { goalGate: this.goalGate } : {}),
       onEvent: event => {
         if (event.type === "stuck" && event.agentId === agent.id) {
           void this.rememberer
@@ -1771,6 +1839,14 @@ export class Orchestrator {
    * Whether a turn is still writing in this conversation (INV-435). Without the
    * conversation, any open turn of the agent's — the older, coarser question.
    */
+  /** On startup: every active goal is looked at again; its counters live on the board. */
+  rearmGoals(): number {
+    // Goals left verifying are settled first — from the transcript, or failed closed — so the
+    // loop below sees them as active or paused rather than as nobody's.
+    void this.goalGate?.rearm().catch(error => console.error(`[goal] rearm: ${error instanceof Error ? error.message : String(error)}`));
+    return this.goalLoop?.rearm() ?? 0;
+  }
+
   hasOpenTurn(agentId: string, conversation?: string): boolean {
     return openTurnFor(this.turns?.interrupted() ?? [], agentId, conversation) !== undefined;
   }
@@ -2052,7 +2128,7 @@ export class Orchestrator {
       toolScope?: readonly string[];
     } = {}
   ): Promise<void> {
-    if (isContextCommand(text) || isRecoveryCommand(text) || isRetryCommand(text)) throw new Error("上下文控制命令只能通过已接入的独立私聊入口执行；不会让模型模拟切换或恢复。");
+    if (isContextCommand(text) || isRecoveryCommand(text) || isRetryCommand(text) || isGoalCommand(text)) throw new Error("上下文控制命令只能通过已接入的独立私聊入口执行；不会让模型模拟切换或恢复。");
     const agent = this.registry.resolve(agentIdOrName);
     const conversation = options.conversation ?? MAIN_CONVERSATION;
     return this.registry.withContext(agent.id, conversation, async () => {
@@ -2222,6 +2298,11 @@ export class Orchestrator {
     return replyForMessage(this.registry.readTranscript(agentId, conversation), messageId);
   }
 
+  /** Whether the turn a message opened ended by calling `NothingToSay` (INV-775), and why; see `silenceForMessage` (INV-801). */
+  silenceForMessage(agentId: string, messageId: string, conversation: string = MAIN_CONVERSATION): { silent: { reason: string } } | undefined {
+    return silenceForMessage(this.registry.readTranscript(agentId, conversation), messageId);
+  }
+
   /**
    * Settles forks left open by the last process (docs/32 §1). Must run before the inbox is
    * replayed and before interrupted turns are resumed: it is the authority for `fork/*`.
@@ -2364,6 +2445,7 @@ export const ALL_TOOLS: readonly string[] = [
   "Recall",
   "OtherThreads",
   "Tasks",
+  "Goal",
   "RunOnHost",
 ];
 

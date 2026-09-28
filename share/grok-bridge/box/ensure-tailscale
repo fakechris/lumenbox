@@ -1,0 +1,239 @@
+#!/usr/bin/env bash
+# ensure-tailscale — detect/reinstall/start Tailscale after box rebuild.
+# Lives under ~/.lumen so box-store-sync keeps it across Update Computer.
+# Safe to run again. Does not block on interactive login.
+#
+# Identity stability: after a successful join, backs up /var/lib/tailscale into
+# ~/.lumen/tailscale-state/ (survives Update Computer). On the next boot, if
+# the live state is missing/NeedsLogin, restores that backup before joining so
+# hostname and 100.x IP stay the same instead of spawning cursor-N.
+set -euo pipefail
+
+LUMEN_HOME="${LUMEN_HOME:-$HOME/.lumen}"
+RUN="$LUMEN_HOME/run"
+LOG="$RUN/ensure-tailscale.log"
+URL_FILE="$RUN/tailscale-login.url"
+AUTHKEY_FILE="$LUMEN_HOME/tailscale-authkey"
+STATE_DIR="/var/lib/tailscale"
+STATE_BACKUP_DIR="$LUMEN_HOME/tailscale-state"
+STATE_BACKUP_TGZ="$STATE_BACKUP_DIR/tailscaled-state.tgz"
+HOSTNAME_DEFAULT="cursor"
+HOSTNAME="${TAILSCALE_HOSTNAME:-$HOSTNAME_DEFAULT}"
+
+mkdir -p "$RUN" "$STATE_BACKUP_DIR"
+chmod 700 "$STATE_BACKUP_DIR" 2>/dev/null || true
+exec >>"$LOG" 2>&1
+echo "---- $(date -Is) ensure-tailscale start ----"
+
+say() { printf '[ensure-tailscale] %s\n' "$*"; }
+
+ts_ip() { command -v tailscale >/dev/null 2>&1 && tailscale ip -4 2>/dev/null | head -1 || true; }
+
+ts_needs_login() {
+  # true when not joined (NeedsLogin / Logged out / no IP)
+  local ip
+  ip="$(ts_ip)"
+  [ -z "$ip" ]
+}
+
+stop_tailscaled() {
+  if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+    sudo systemctl stop tailscaled 2>/dev/null || true
+  fi
+  sudo pkill -x tailscaled 2>/dev/null || true
+  # wait for socket to go away
+  for _ in $(seq 1 20); do
+    [ ! -S /run/tailscale/tailscaled.sock ] && return 0
+    sleep 0.2
+  done
+}
+
+backup_tailscale_state() {
+  local ip
+  ip="$(ts_ip)"
+  if [ -z "$ip" ]; then
+    say "skip backup: not joined"
+    return 0
+  fi
+  if ! sudo test -e "$STATE_DIR/tailscaled.state" && ! sudo test -d "$STATE_DIR"; then
+    say "skip backup: no $STATE_DIR"
+    return 0
+  fi
+  mkdir -p "$STATE_BACKUP_DIR"
+  chmod 700 "$STATE_BACKUP_DIR"
+  local tmp
+  tmp="$(mktemp "$STATE_BACKUP_DIR/.backup.XXXXXX.tgz")"
+  # Copy via sudo tar so we can read root-owned state without changing perms live.
+  if ! sudo tar -C "$STATE_DIR" -czf "$tmp" . 2>/dev/null; then
+    say "WARNING: state backup failed"
+    rm -f "$tmp"
+    return 0
+  fi
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$STATE_BACKUP_TGZ"
+  # Record which identity we saved (best-effort; no secrets)
+  {
+    echo "backed_up_at=$(date -Is)"
+    echo "ip=$ip"
+    echo "hostname=$HOSTNAME"
+    sudo tailscale status --self 2>/dev/null | head -3 || true
+  } > "$STATE_BACKUP_DIR/META.txt"
+  chmod 600 "$STATE_BACKUP_DIR/META.txt" 2>/dev/null || true
+  say "backed up Tailscale state → $STATE_BACKUP_TGZ (ip=$ip)"
+}
+
+restore_tailscale_state_if_needed() {
+  # Only restore when we are not joined and a backup exists.
+  if ! ts_needs_login; then
+    say "already joined ($(ts_ip)); leave live state alone"
+    return 0
+  fi
+  if [ ! -s "$STATE_BACKUP_TGZ" ]; then
+    say "no state backup at $STATE_BACKUP_TGZ"
+    return 0
+  fi
+  say "NeedsLogin with backup present — restoring $STATE_BACKUP_TGZ"
+  stop_tailscaled
+  sudo mkdir -p "$STATE_DIR"
+  sudo chmod 700 "$STATE_DIR"
+  # Wipe empty/fresh state so restore is clean
+  sudo find "$STATE_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+  if ! sudo tar -C "$STATE_DIR" -xzf "$STATE_BACKUP_TGZ"; then
+    say "ERROR: failed to extract state backup"
+    return 1
+  fi
+  sudo chmod 700 "$STATE_DIR"
+  say "state restored; will start tailscaled and re-advertise"
+}
+
+start_tailscaled() {
+  if pgrep -x tailscaled >/dev/null 2>&1; then
+    say "tailscaled already running"
+    return 0
+  fi
+  if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+    sudo systemctl enable --now tailscaled 2>/dev/null || true
+    sleep 1
+    if pgrep -x tailscaled >/dev/null 2>&1; then return 0; fi
+  fi
+  say "starting tailscaled (no systemd)"
+  sudo mkdir -p /run/tailscale /var/lib/tailscale /var/log
+  sudo chmod 755 /run/tailscale
+  sudo chmod 700 /var/lib/tailscale
+  PORT=41641
+  FLAGS=""
+  if [ -r /etc/default/tailscaled ]; then
+    # shellcheck disable=SC1091
+    . /etc/default/tailscaled
+  fi
+  sudo sh -c "nohup /usr/sbin/tailscaled \
+    --state=/var/lib/tailscale/tailscaled.state \
+    --socket=/run/tailscale/tailscaled.sock \
+    --port=${PORT:-41641} \
+    ${FLAGS:-} \
+    >>/var/log/tailscaled.log 2>&1 &"
+  for _ in $(seq 1 25); do
+    [ -S /run/tailscale/tailscaled.sock ] && return 0
+    sleep 0.2
+  done
+  say "WARNING: tailscaled socket not ready yet"
+}
+
+install_tailscale() {
+  if command -v tailscale >/dev/null 2>&1 && command -v tailscaled >/dev/null 2>&1; then
+    say "package present: $(tailscale version 2>/dev/null | head -1)"
+    return 0
+  fi
+  say "Tailscale missing — installing via official script"
+  curl -fsSL https://tailscale.com/install.sh | sudo sh
+  command -v tailscale >/dev/null 2>&1 || { say "ERROR: install finished but tailscale not on PATH"; return 1; }
+}
+
+join_or_hint() {
+  local ip
+  ip="$(ts_ip)"
+  if [ -n "$ip" ]; then
+    say "already on tailnet: $ip"
+    sudo tailscale set --ssh --hostname "$HOSTNAME" >/dev/null 2>&1 || true
+    # Re-up without authkey refreshes ads after a state restore
+    sudo tailscale up --ssh --hostname "$HOSTNAME" >/dev/null 2>&1 || true
+    rm -f "$URL_FILE"
+    backup_tailscale_state
+    echo "JOINED $ip"
+    return 0
+  fi
+
+  # After restore, daemon may need an explicit up (no new login if state is valid)
+  say "not joined yet — trying tailscale up with restored/local state"
+  sudo tailscale up --ssh --hostname "$HOSTNAME" --timeout=8s >/dev/null 2>&1 || true
+  sleep 1
+  ip="$(ts_ip)"
+  if [ -n "$ip" ]; then
+    say "rejoined from restored state: $ip"
+    rm -f "$URL_FILE"
+    backup_tailscale_state
+    echo "JOINED $ip"
+    return 0
+  fi
+
+  local authkey=""
+  if [ -n "${TS_AUTHKEY:-}" ]; then
+    authkey="$TS_AUTHKEY"
+  elif [ -s "$AUTHKEY_FILE" ]; then
+    authkey="$(tr -d ' \n\r\t' < "$AUTHKEY_FILE")"
+  fi
+
+  if [ -n "$authkey" ]; then
+    say "joining with auth key (non-interactive)"
+    # Prefer reuse of existing node if state had partial identity
+    sudo tailscale up --ssh --hostname "$HOSTNAME" --authkey="$authkey" || true
+    sleep 2
+    ip="$(ts_ip)"
+    if [ -n "$ip" ]; then
+      say "joined via auth key: $ip"
+      rm -f "$URL_FILE"
+      backup_tailscale_state
+      echo "JOINED $ip"
+      return 0
+    fi
+    say "ERROR: auth key join did not produce an IP"
+    echo "NEED_LOGIN authkey-failed"
+    return 1
+  fi
+
+  say "not joined — starting interactive up (login URL)"
+  # Don't block autostart for 10 minutes; capture URL for the agent/keepalive to surface.
+  sudo pkill -f 'tailscale up' 2>/dev/null || true
+  sudo sh -c "nohup tailscale up --ssh --hostname '$HOSTNAME' --timeout=0s >'$RUN/tailscale-up.log' 2>&1 &"
+  local url=""
+  for _ in $(seq 1 40); do
+    url="$(grep -oE 'https://login\.tailscale\.com/[A-Za-z0-9/._-]+' "$RUN/tailscale-up.log" 2>/dev/null | head -1 || true)"
+    [ -n "$url" ] && break
+    ip="$(ts_ip)"; [ -n "$ip" ] && break
+    sleep 0.5
+  done
+  if [ -n "$(ts_ip)" ]; then
+    say "joined during wait: $(ts_ip)"
+    rm -f "$URL_FILE"
+    backup_tailscale_state
+    echo "JOINED $(ts_ip)"
+    return 0
+  fi
+  if [ -n "$url" ]; then
+    printf '%s\n' "$url" > "$URL_FILE"
+    say "LOGIN_URL $url"
+    echo "NEED_LOGIN $url"
+    return 2
+  fi
+  say "WARNING: no login URL yet; see $RUN/tailscale-up.log"
+  echo "NEED_LOGIN pending"
+  return 2
+}
+
+install_tailscale
+restore_tailscale_state_if_needed || true
+start_tailscaled
+join_or_hint
+rc=$?
+echo "---- $(date -Is) ensure-tailscale done rc=$rc ----"
+exit $rc

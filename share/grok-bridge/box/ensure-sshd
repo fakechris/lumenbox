@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# ensure-sshd — install/start OpenSSH so Tailscale SSH and classic ssh work after rebuild.
+set -euo pipefail
+LOG="${LUMEN_HOME:-$HOME/.lumen}/run/ensure-sshd.log"
+mkdir -p "$(dirname "$LOG")"
+exec >>"$LOG" 2>&1
+echo "---- $(date -Is) ensure-sshd ----"
+
+if ! command -v sshd >/dev/null 2>&1; then
+  echo "installing openssh-server"
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server
+fi
+
+sudo mkdir -p /etc/ssh/sshd_config.d /run/sshd /var/run/sshd
+sudo tee /etc/ssh/sshd_config.d/box.conf >/dev/null <<'CFG'
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+PubkeyAuthentication yes
+AllowUsers box
+CFG
+sudo sshd -t
+
+if pgrep -x sshd >/dev/null 2>&1; then
+  echo "sshd already running"
+else
+  echo "starting sshd"
+  sudo /usr/sbin/sshd
+fi
+ss -tln | grep -E ':22\b' || echo "WARNING: nothing listening on :22"

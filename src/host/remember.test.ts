@@ -206,6 +206,37 @@ test("a flush that throws or hangs is one logged line, and the write chain moves
   assert.deepEqual(h.appended.map(record => record.text), ["they prefer metric"], "a later flush still lands after a failed one");
 });
 
+test("a flush that times out cannot write when it finally answers: the later flush's memory stands alone", async () => {
+  // The model is a deferred promise per call, so the order of answers is the test's to choose.
+  const pending: ((text: string) => void)[] = [];
+  const h = flushHarness(() => new Promise<string>(resolve => { pending.push(resolve); }));
+  // First flush: the old understanding. It times out (50ms) and its answer is held back.
+  await h.rememberer.flush("ada", "main", turn(1, "use imperial", "ok"));
+  assert.equal(pending.length, 1);
+  assert.ok(h.logs.some(line => /flush timed out after 50ms/.test(line)), h.logs.join(" / "));
+  // Second flush: the correction. It answers in time and is kept.
+  const second = h.rememberer.flush("ada", "main", turn(2, "no — use metric from now on", "ok"));
+  await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(pending.length, 2, "the second flush was not held behind the first");
+  pending[1]!("NEW: they use metric [1]");
+  await second;
+  assert.deepEqual(h.appended.map(record => record.text), ["NEW: they use metric"]);
+  // Now the first answers, late. Nothing is appended, and the log says so once.
+  pending[0]!("OLD: they use imperial [1]");
+  await new Promise(resolve => setTimeout(resolve, 5));
+  assert.deepEqual(h.appended.map(record => record.text), ["NEW: they use metric"], "the late answer wrote nothing");
+  assert.equal(h.logs.filter(line => /answered 50ms\+ late; its result was discarded/.test(line)).length, 1);
+  // The watermark stands at the second flush: an older exchange is not flushed again, the next one is.
+  await h.rememberer.flush("ada", "main", turn(1, "use imperial", "ok"));
+  assert.equal(pending.length, 2, "nothing behind the watermark is asked about again");
+  const third = h.rememberer.flush("ada", "main", turn(3, "and kilometres", "ok"));
+  await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(pending.length, 3);
+  pending[2]!("NOTHING");
+  await third;
+  assert.deepEqual(h.appended.map(record => record.text), ["NEW: they use metric"]);
+});
+
 test("exchangesOf groups a message with the reply that answered it and cites each by its own time", () => {
   const groups = exchangesOf(
     [

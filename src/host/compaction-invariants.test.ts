@@ -29,7 +29,8 @@ const PENDING = "PENDING: waiting on Chris to choose plan A or plan B";
 const APPROVAL = "Chris approved deleting build/ once, for this run only";
 
 const at = "2026-09-13T00:00:00Z";
-const user = (text: string): TranscriptEntry => ({ role: "user", text, at });
+// Stamped as a real turn stamps it: a person-said anchor needs human provenance (INV-799).
+const user = (text: string): TranscriptEntry => ({ role: "user", text, at, fromPerson: true });
 const pair = (i: number, size = 500): TranscriptEntry[] => [
   { role: "assistant", kind: "blocks", blocks: [{ type: "tool_use", id: `t${i}`, name: "bash", input: { command: `step ${i} ${"x".repeat(40)}` } }], at },
   { role: "user", kind: "results", blocks: [{ type: "tool_result", tool_use_id: `t${i}`, content: `output ${i} ${"y".repeat(size)}` }], at },

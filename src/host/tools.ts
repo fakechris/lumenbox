@@ -45,6 +45,8 @@ import { randomBytes } from "node:crypto";
 import { encodeCall } from "../egress/call.ts";
 import { MAIN_CONVERSATION, normaliseTags } from "../agents/registry.ts";
 import { describeTask, isLive, isTaskStatus, TASK_STATUSES, type TaskStore, clampContract } from "./tasks.ts";
+import { checklistAdditions, describePursuit } from "./goal-mode.ts";
+import type { GoalGate } from "./goal-gate.ts";
 import { ABSENT, versionOf, type FileVersions } from "./files.ts";
 import {
   describeTodos,
@@ -216,6 +218,8 @@ export interface ToolContext {
   memorySources?: readonly string[];
   /** The team's task board. Absent means the Tasks tool answers that there is none. */
   tasks?: TaskStore;
+  /** The completion gate (INV-771), where a goal's claim_complete goes. */
+  goalGate?: GoalGate;
   /** The scopes registry, so a secret granted by the caller's scope resolves. */
   scopes?: ScopeStore;
   /** How often WaitForControl polls the box; tests shorten it. */
@@ -387,6 +391,8 @@ const FORGET_PLANS = new ForgetPlans();
 export const FORK_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
   // Forgetting is the person's decision, confirmed in their conversation (INV-757).
   "Forget",
+  // A goal belongs to the conversation the person set it in; a fork works, it does not steer.
+  "Goal",
   "RunOnHost",
   "computer",
   "SendToAgent",
@@ -1460,6 +1466,54 @@ export function buildTools(
           },
         },
         required: ["fact"],
+      },
+    },
+    {
+      name: "Goal",
+      description:
+        "The goal the person set for this conversation with /goal (docs/74): an objective you keep " +
+        "working toward until a gate you do not own says it is met. 'status' shows it. " +
+        "'checklist_add' adds acceptance items — what evidence would prove each part of the " +
+        "objective is done; give a command (exit code) or an artifact path where one exists. " +
+        "The checklist only grows; removing an item needs the person's agreement. An item with a " +
+        "command is a proposal until the person confirms it (/goal confirm n). 'claim_complete' is " +
+        "how a goal ends from your side: give a pointer per checklist item (a path, a command's " +
+        "output, a URL) and a verifier that has not seen this conversation checks every item " +
+        "against the current state. Claim only when every item is actually true now — an open " +
+        "todo or a missing artifact is refused outright, and three rejections hand the goal to " +
+        "the person. Stopping is not finishing.",
+      input_schema: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["status", "checklist_add", "claim_complete"] },
+          evidence: {
+            type: "array",
+            description: "For claim_complete: per checklist item, where the proof is.",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "string", description: "The checklist item id (c1, c2, …)." },
+                evidence: { type: "string", description: "A pointer to the proof: a file path, a command and its result, a URL." },
+              },
+              required: ["id", "evidence"],
+            },
+          },
+          items: {
+            type: "array",
+            description: "For checklist_add: the items to add.",
+            items: {
+              type: "object",
+              properties: {
+                text: { type: "string", description: "What must be true, and what would prove it." },
+                command: { type: "string", description: "Optional: a shell command whose exit code proves it. A proposal until the person confirms it." },
+                expect_exit: { type: "integer", description: "For command: the exit code that means proven (default 0)." },
+                artifact: { type: "string", description: "Optional: a file path that must exist when the goal is done." },
+              },
+              required: ["text"],
+            },
+          },
+        },
+        required: ["action"],
       },
     },
     {
@@ -3411,7 +3465,7 @@ export async function dispatchTool(
         };
       }
       // A standing file (INV-777) is capped, and its host copy is written in the same call.
-      const standingEdited = standingFileOf(path, context.agent.profile.name);
+      const standingEdited = standingFileOf(path, context.agent.id);
       const editCap = standingEdited === undefined ? undefined : capRefusal(standingEdited, updated);
       if (editCap !== undefined) return { text: editCap, isError: true };
       await box.writeFile(path, updated);
@@ -3497,7 +3551,7 @@ export async function dispatchTool(
       const written = templateStamp(context, path, content);
       // A standing file (INV-777) is capped, and its host copy — the one that counts — is written
       // in the same call, so the agent's edit is in its next prompt and never reported back to it.
-      const standingWritten = standingFileOf(path, context.agent.profile.name);
+      const standingWritten = standingFileOf(path, context.agent.id);
       const writeCap = standingWritten === undefined ? undefined : capRefusal(standingWritten, written);
       if (writeCap !== undefined) return { text: writeCap, isError: true };
       const result = await box.writeFile(path, written);
@@ -4563,6 +4617,40 @@ export async function dispatchTool(
       return { text: 'Forget needs action "plan" (with about) or "confirm" (with plan).', isError: true };
     }
 
+    case "Goal": {
+      const board = context.tasks;
+      if (board === undefined) return { text: "There is no task board on this installation.", isError: true };
+      const conversation = context.conversation ?? MAIN_CONVERSATION;
+      const task = board.pursuitIn(conversation);
+      if (task?.pursuit === undefined) return { text: "No goal is set for this conversation. The person sets one with /goal.", isError: true };
+      const action = String(input.action ?? "");
+      if (action === "status") return { text: describePursuit(task) };
+      if (action === "checklist_add") {
+        if (task.assigneeId !== context.agent.id) return { text: `Goal ${task.id} is ${task.assigneeId ?? "nobody"}'s to pursue; only its assignee drafts the checklist.`, isError: true };
+        const additions = checklistAdditions(task.pursuit.checklist, input.items);
+        if ("refused" in additions) return { text: additions.refused, isError: true };
+        const moved = board.setPursuit(
+          task.id,
+          pursuit => ({ ...pursuit, checklist: [...pursuit.checklist, ...additions.items] }),
+          `checklist: ${additions.items.length} item(s) added by ${context.agent.profile.name}`,
+          context.agent.id
+        );
+        if (moved === undefined) return { text: "The goal could not be updated.", isError: true };
+        return { text: `Added ${additions.items.length} item(s).\n\n${describePursuit(moved.task)}` };
+      }
+      if (action === "claim_complete") {
+        if (context.goalGate === undefined) return { text: "There is no completion gate on this installation.", isError: true };
+        const evidence = Array.isArray(input.evidence)
+          ? (input.evidence as unknown[]).map(entry => {
+              const record = (typeof entry === "object" && entry !== null ? entry : {}) as Record<string, unknown>;
+              return { id: String(record.id ?? ""), evidence: String(record.evidence ?? "") };
+            })
+          : [];
+        const result = await context.goalGate.claim(task.id, context.agent.id, evidence);
+        return { text: result.text, ...(result.accepted ? {} : { isError: true }) };
+      }
+      return { text: `Unknown Goal action "${action}"; use status, checklist_add or claim_complete.`, isError: true };
+    }
     case "Tasks": {
       const board = context.tasks;
       if (board === undefined) {

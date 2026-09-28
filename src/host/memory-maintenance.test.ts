@@ -125,18 +125,75 @@ test("a rewrite may resolve a relative time into a date within reach, and may no
     fact("the user prefers tabs", 20),
   ];
   const snapshot = snapshotForMaintenance(records);
-  const resolved = verifyMaintenanceProposals([proposal(records, "rewrite", ["the demo is next Tuesday"], { text: "the demo is on 2026-09-22 (Tuesday)" })], snapshot, records, { now: NOW });
+  const resolved = verifyMaintenanceProposals([proposal(records, "rewrite", ["the demo is next Tuesday"], { text: "the demo is 2026-09-22" })], snapshot, records, { now: NOW });
   assert.equal(resolved.dropped.length, 0, JSON.stringify(resolved.dropped));
   const written = recordsOfPlan(resolved);
   assert.equal(written[0]!.kind, "retraction");
-  assert.equal(written[1]!.text, "the demo is on 2026-09-22 (Tuesday)");
+  assert.equal(written[1]!.text, "the demo is 2026-09-22");
   assert.equal(memoryView([...records, ...written]).find(entry => entry.text === "the demo is next Tuesday")?.retractedBy, `superseded by ${versionOf(written[1]!)} (rewritten)`);
 
   const invented = verifyMaintenanceProposals([proposal(records, "rewrite", ["the user prefers tabs"], { text: "the user prefers tabs since 2026-01-01" })], snapshot, records, { now: NOW });
   assert.equal(invented.changes.length, 0);
   assert.match(invented.dropped[0]!.why, /adds a date .* no relative time/);
-  const farAway = verifyMaintenanceProposals([proposal(records, "rewrite", ["the demo is next Tuesday"], { text: "the demo is on 2027-09-22" })], snapshot, records, { now: NOW });
+  const farAway = verifyMaintenanceProposals([proposal(records, "rewrite", ["the demo is next Tuesday"], { text: "the demo is 2027-09-22" })], snapshot, records, { now: NOW });
   assert.match(farAway.dropped[0]!.why, /not within 90 days/);
+});
+
+test("INV-800: a rewrite is one relative time out and one date in; dropping, adding or reordering any other word is refused", () => {
+  const constraint = "never deploy the billing service without approval from the owner";
+  const records = [fact(constraint, 10), fact("the migration runs tomorrow at 09:00", 3)];
+  const snapshot = snapshotForMaintenance(records);
+  const rewrite = (source: string, text: string) => verifyMaintenanceProposals([proposal(records, "rewrite", [source], { text })], snapshot, records, { now: NOW });
+
+  // The finding: 70% coverage let "never" go and turned a prohibition into an instruction.
+  const dropped = rewrite(constraint, "deploy the billing service without approval from the owner");
+  assert.equal(dropped.changes.length, 0);
+  assert.match(dropped.dropped[0]!.why, /must resolve a relative time/);
+  // Even with a date to hide behind, a line with no relative time gains nothing.
+  const dated = rewrite(constraint, "never deploy the billing service without approval from the owner 2026-09-20");
+  assert.match(dated.dropped[0]!.why, /no relative time/);
+
+  const source = "the migration runs tomorrow at 09:00";
+  const accepted = rewrite(source, "the migration runs 2026-09-24 at 09:00");
+  assert.equal(accepted.dropped.length, 0, JSON.stringify(accepted.dropped));
+  assert.equal(recordsOfPlan(accepted)[1]!.text, "the migration runs 2026-09-24 at 09:00");
+  const reordered = rewrite(source, "at 09:00 the migration runs 2026-09-24");
+  assert.match(reordered.dropped[0]!.why, /every other word must stay/);
+  const wordAdded = rewrite(source, "the migration runs on 2026-09-24 at 09:00");
+  assert.match(wordAdded.dropped[0]!.why, /every other word must stay/);
+  const wordDropped = rewrite(source, "the migration runs 2026-09-24");
+  assert.match(wordDropped.dropped[0]!.why, /every other word must stay/);
+  const twoDates = rewrite(source, "the migration runs 2026-09-24 2026-09-25 at 09:00");
+  assert.match(twoDates.dropped[0]!.why, /more than one date/);
+});
+
+test("INV-800: retire's expiredOn must be the date the line itself implies — its ISO date, or a relative time read against its at", () => {
+  const records = [
+    fact("the design review is on 2026-12-10", 1),
+    fact("the standup moves to 2026-09-01", 40),
+    fact("the demo is next Tuesday", 10),
+    fact("the report is due tomorrow", 5),
+  ];
+  const snapshot = snapshotForMaintenance(records);
+  const retire = (source: string, expiredOn: string) => verifyMaintenanceProposals([proposal(records, "retire", [source], { expiredOn })], snapshot, records, { now: NOW });
+
+  // The finding: a past expiredOn the line never said retired an upcoming event.
+  const upcoming = retire("the design review is on 2026-12-10", "2026-09-01");
+  assert.equal(upcoming.changes.length, 0);
+  assert.match(upcoming.dropped[0]!.why, /not the line's own date/);
+  const matching = retire("the standup moves to 2026-09-01", "2026-09-01");
+  assert.equal(matching.dropped.length, 0, JSON.stringify(matching.dropped));
+  assert.equal(recordsOfPlan(matching)[0]!.source, "maintenance:expired:2026-09-01");
+  const mismatching = retire("the standup moves to 2026-09-01", "2026-09-02");
+  assert.match(mismatching.dropped[0]!.why, /not the line's own date/);
+
+  // "next Tuesday" written on 2026-09-16 (a Wednesday) is 2026-09-22; "tomorrow" on 09-21 is 09-22.
+  const relative = retire("the demo is next Tuesday", "2026-09-22");
+  assert.equal(relative.dropped.length, 0, JSON.stringify(relative.dropped));
+  const tomorrow = retire("the report is due tomorrow", "2026-09-22");
+  assert.equal(tomorrow.dropped.length, 0, JSON.stringify(tomorrow.dropped));
+  const wrongDay = retire("the report is due tomorrow", "2026-09-20");
+  assert.match(wrongDay.dropped[0]!.why, /not the line's own date/);
 });
 
 test("the per-pass cap holds and the same line cannot be changed twice in one pass", () => {

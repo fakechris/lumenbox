@@ -82,6 +82,7 @@ const TEMPLATES: Record<string, Template> = {
   Forget: { en: "forgetting a memory", zh: "忘记一条记忆" },
   ClaimWork: { en: "taking a piece of work", zh: "领取一项工作" },
   Tasks: { en: "checking the task board", zh: "查看任务板" },
+  Goal: { en: "working on the goal's checklist", zh: "整理目标清单" },
   PackTemplate: { en: "packing a template", zh: "打包模板" },
   NothingToSay: { en: "nothing to add", zh: "无需回复" },
 };
