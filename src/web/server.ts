@@ -554,11 +554,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     },
     handOver: input => {
       const index = registry.tryGet(input.agentId)?.profile.displayIndex;
+      // The desktop is on the agent's box, own or attached — the plain /desktop/<index> form
+      // named the own box's display of that number, which is somebody else's screen.
+      const boxEntry = index === undefined ? undefined : registry.boxOf(input.agentId);
+      const prefix = boxEntry === undefined || boxEntry.id === registry.box.id ? `desktop/${index}` : `desktop/b/${boxEntry.id}/${index}`;
       pendingHandovers.set(input.agentId, {
         ...input,
         at: new Date().toISOString(),
         ...(index !== undefined
-          ? { desktopPath: `/desktop/${index}/vnc.html?autoconnect=1&resize=scale&path=desktop/${index}/websockify` }
+          ? { desktopPath: `/${prefix}/vnc.html?autoconnect=1&resize=scale&path=${prefix}/websockify` }
           : {}),
       });
       broadcast({ type: "handover_pending", agentId: input.agentId, agentName: input.agentName, instruction: input.instruction, reason: input.reason });
@@ -2508,6 +2512,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   }
   let cachedOrigin: { value: Origin | undefined; at: number } | undefined;
   const ORIGIN_TTL_MS = 5000;
+  // How long a desktop request waits for the box to answer before the pane is told it cannot
+  // be reached. Measured 2026-09-28 with the grok VM off the tailnet: with no deadline the TCP
+  // connect took 75 seconds to fail, and for all of it the browser kept showing the previous
+  // document — the own box's Linux desktop under the attached agent's name. Seconds, not
+  // minutes: a box on the same tailnet answers in tens of milliseconds, and a box that does not
+  // answer in four seconds is not going to.
+  const DESKTOP_UPSTREAM_TIMEOUT_MS = 4000;
 
   async function resolveBoxdOrigin(force = false, boxId?: string): Promise<Origin | undefined> {
     // An attached box is reached where its record says, with the token its file holds.
@@ -2611,10 +2622,19 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       }
     );
 
+    // Only until the box answers: a connected stream idles for as long as the person looks at
+    // the desktop, and killing it for being quiet would drop every viewer who stopped moving.
+    upstream.setTimeout(DESKTOP_UPSTREAM_TIMEOUT_MS, () => {
+      upstream.destroy(new Error(`no answer from ${origin.host}:${origin.port} in ${DESKTOP_UPSTREAM_TIMEOUT_MS}ms`));
+    });
+    upstream.on("response", () => upstream.setTimeout(0));
+
     upstream.on("error", error => {
       // A recreated box means a new host port. One retry with a forced lookup turns
-      // that from a permanent 502 into a hiccup.
-      if (!retried && !res.headersSent) {
+      // that from a permanent 502 into a hiccup. Only the own box: an attached box is
+      // reached where its record says, so looking again finds the same address and only
+      // doubles the wait.
+      if (!retried && boxId === undefined && !res.headersSent) {
         void proxyDesktop(req, res, path, true);
         return;
       }
@@ -6407,6 +6427,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       upstream.destroy();
       clientSocket.destroy();
     };
+    // The same deadline as the page: a socket to a box that never answers would otherwise sit
+    // in "Connecting…" for as long as the kernel's connect timeout, with the old picture behind it.
+    upstream.setTimeout(DESKTOP_UPSTREAM_TIMEOUT_MS, drop);
+    upstream.once("data", () => upstream.setTimeout(0));
     upstream.on("error", drop);
     clientSocket.on("error", drop);
   }
