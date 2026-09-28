@@ -3801,7 +3801,25 @@ function showDesktop(id) {
     $("full").style.display = "none";
     return;
   }
-  $("desktoptitle").textContent = agent.name + " · d" + agent.displayIndex + (boxesSeen.length > 1 && agent.boxName ? " · " + agent.boxName : "");
+  var box = null;
+  for (var j = 0; j < boxesSeen.length; j++) if (boxesSeen[j].id === agent.boxId) box = boxesSeen[j];
+  var offline = !!(box && box.connected === false);
+  $("desktoptitle").textContent = agent.name + " · d" + agent.displayIndex + (boxesSeen.length > 1 && agent.boxName ? " · " + agent.boxName : "") + (offline ? " · offline" : "");
+  var frame = $("vnc");
+  if (offline) {
+    // The box is not reachable, and the pane says so *now*. Pointing the frame at the proxy
+    // would leave the previous document on screen until the proxy gave up — which, with the
+    // grok VM off the tailnet (2026-09-28), was the own box's Linux desktop shown under the
+    // attached agent's name. The state refresh calls back here every few seconds, so the
+    // real desktop takes over as soon as the box is connected again.
+    $("full").style.display = "none";
+    if (frame.getAttribute("data-offline") !== agent.boxId) {
+      frame.removeAttribute("src");
+      frame.setAttribute("srcdoc", desktopOfflineDoc(box.name));
+      frame.setAttribute("data-offline", agent.boxId);
+    }
+    return;
+  }
   $("full").href = agent.desktopUrl;
   $("full").style.display = "";
   // The iframe rides with embedded=1 so the proxy skips the box-class banner:
@@ -3811,9 +3829,24 @@ function showDesktop(id) {
   var embeddedUrl = agent.desktopUrl + "&embedded=1";
   // Only reload when it is a different desktop: re-setting src restarts noVNC and
   // flashes "Connecting…", so switching back and forth must not thrash it.
-  if ($("vnc").getAttribute("src") !== embeddedUrl) {
-    $("vnc").setAttribute("src", embeddedUrl);
+  if (frame.getAttribute("src") !== embeddedUrl) {
+    frame.removeAttribute("data-offline");
+    frame.removeAttribute("srcdoc");
+    // A browser keeps the old document visible until the new one commits, so between two
+    // desktops the pane would show the previous agent's screen under this one's name. Blank
+    // until the new page has loaded (the load event fires for the waiting page as well).
+    frame.style.opacity = "0";
+    frame.setAttribute("src", embeddedUrl);
   }
+}
+$("vnc").onload = function () { this.style.opacity = ""; };
+
+/** The document the pane shows for a box that is not connected: black like the desktop, no picture. */
+function desktopOfflineDoc(boxName) {
+  return "<!doctype html><html><head><meta charset=\"utf-8\"><style>html,body{margin:0;height:100%;background:#000;color:#8a8a8a;" +
+    "font:13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}body{display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;box-sizing:border-box}" +
+    "small{display:block;margin-top:8px;color:#555}</style></head><body><div>Box " + esc(boxName) +
+    " is not connected<small>No desktop to show. The picture returns when the box is reachable again.</small></div></body></html>";
 }
 
 /**
