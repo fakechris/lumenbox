@@ -36,7 +36,7 @@ function harness(path: string, overrides: Partial<RoutineDeliveryDeps> = {}) {
   const deps: RoutineDeliveryDeps = {
     ledger,
     recentChat: () => [],
-    deliverToChat: async (_chat, text) => { pushed.push(text); },
+    deliverToChat: async (_chat, text) => { pushed.push(text); return { delivered: true }; },
     attachNext: (chat, text) => attachments.add(chat, text),
     ...overrides,
   };
@@ -168,6 +168,62 @@ test("a commitment gap is a note on the one delivery, never a second message; a 
     await finishRoutineRun(run(report), deps);
     assert.equal(reconciled, 1, "the identical run stayed silent and was not reconciled");
     assert.equal(pushed.length, 1);
+  } finally { cleanup(); }
+});
+
+test("INV-802: result history is keyed by routine and destination — two listeners with one text each deliver; one listener in two rooms delivers to each", async () => {
+  const { path, cleanup } = home();
+  try {
+    const { deps, pushed } = harness(path);
+    assert.equal((await finishRoutineRun(run("deploy is red", { slug: "deploy-watch" }), deps)).verdict, "push_now");
+    assert.equal((await finishRoutineRun(run("deploy is red", { slug: "ops-alert" }), deps)).verdict, "push_now", "another listener, same words: its own history");
+    assert.equal((await finishRoutineRun(run("deploy is red", { slug: "deploy-watch", deliver: "feishu:oc_2" }), deps)).verdict, "push_now", "same listener, a room that never heard it");
+    assert.equal((await finishRoutineRun(run("deploy is red", { slug: "deploy-watch" }), deps)).verdict, "silent", "the first room did hear it");
+    assert.equal(pushed.length, 3);
+  } finally { cleanup(); }
+});
+
+test("INV-802: only a delivered result suppresses a repeat — a failed send is retried by the next identical run; a thrown send reads the same", async () => {
+  const { path, cleanup } = home();
+  try {
+    let fail: "no" | "outcome" | "throw" = "outcome";
+    const { deps, pushed, ledger } = harness(path, {
+      deliverToChat: async (_chat, text) => {
+        if (fail === "throw") throw new Error("feishu 500");
+        if (fail === "outcome") return { delivered: false, why: "could not send to feishu:oc_1 — timeout" };
+        pushed.push(text);
+        return { delivered: true };
+      },
+    });
+    const first = await finishRoutineRun(run("BTC 60k"), deps);
+    assert.equal(first.verdict, "push_now");
+    assert.equal(first.delivered, undefined, "nothing went out");
+    assert.match(first.deliveryError ?? "", /timeout/);
+    assert.equal(ledger.lastFor("price-check")?.delivered, false);
+    assert.match(ledger.lastFor("price-check")?.deliveryError ?? "", /timeout/);
+    assert.equal(ledger.lastFor("price-check", { deliveredOnly: true }), undefined, "no delivered result yet");
+
+    fail = "throw";
+    const second = await finishRoutineRun(run("BTC 60k"), deps);
+    assert.equal(second.verdict, "push_now", "identical text after a failed send is tried again");
+    assert.match(second.deliveryError ?? "", /feishu 500/);
+
+    fail = "no";
+    const third = await finishRoutineRun(run("BTC 60k"), deps);
+    assert.equal(third.verdict, "push_now", "still not delivered: delivered again");
+    assert.equal(third.delivered, "BTC 60k");
+    assert.equal(pushed.length, 1);
+    assert.equal(ledger.lastFor("price-check")?.delivered, true);
+
+    const fourth = await finishRoutineRun(run("BTC 60k"), deps);
+    assert.equal(fourth.verdict, "silent", "success then identical: silent");
+    assert.equal(pushed.length, 1);
+    // A record from before the receipt existed is taken at its verdict's word.
+    const { delivered: _receipt, ...legacy } = ledger.lastFor("price-check", { deliveredOnly: true })!;
+    ledger.record({ ...legacy, id: "legacy", slug: "legacy", text: "old", sha256: sha256("old") });
+    assert.equal(ledger.lastFor("legacy", { deliveredOnly: true })?.text, "old", "a pushed record from before the receipt is trusted");
+    ledger.record({ ...legacy, id: "legacy-quiet", slug: "legacy", text: "quiet", sha256: sha256("quiet"), verdict: "silent" });
+    assert.equal(ledger.lastFor("legacy", { deliveredOnly: true })?.text, "old", "a silent one is not");
   } finally { cleanup(); }
 });
 

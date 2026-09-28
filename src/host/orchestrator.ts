@@ -7,7 +7,7 @@
  */
 
 import { bindingsOf, CommitmentLedger, describeGaps, parseCommitments, priorCommitmentsPrompt, reconcileCommitments } from "./commitments.ts";
-import { finishRoutineRun, PendingAttachments, RoutineResultLedger, routineResolveMode } from "./routine-resolve.ts";
+import { finishRoutineRun, PendingAttachments, RoutineResultLedger, routineResolveMode, type DeliveryOutcome } from "./routine-resolve.ts";
 import { learningsDir } from "./learnings.ts";
 import { replyForMessage, silenceForMessage } from "./reply.ts";
 import { contextTaskBlockers, isContextCommand } from "./context-recovery.ts";
@@ -218,7 +218,8 @@ export interface OrchestratorOptions {
    * into another box's room is the cross-box leak Octop closes with an ownership check
    * on the session (`delivery.py:72-75`), and we had nothing.
    */
-  deliverToChat?: (chatKey: string, text: string, fromAgentId?: string) => Promise<void>;
+  /** Sends a routine's result into a chat and says whether anybody got it (INV-802). */
+  deliverToChat?: (chatKey: string, text: string, fromAgentId?: string) => Promise<DeliveryOutcome>;
   /** Questions waiting on a person in a conversation (INV-770): a goal does not continue over one. */
   pendingQuestions?: (agentId: string, conversation: string) => number;
   /**
@@ -625,7 +626,7 @@ export class Orchestrator {
     // rather than in the main conversation, which no chat has ever read.
     // Last time's commitments open the next run of the same routine (INV-528).
     priorCommitments: slug => priorCommitmentsPrompt(this.commitments.lastFor(slug), this.tasks?.list() ?? []),
-    run: async (agent, prompt, deliver, slug, toolScope, deliverWhen) => {
+    run: async (agent, prompt, deliver, slug, toolScope, deliverWhen, identity) => {
       const scope = toolScope !== undefined ? { toolScope } : {};
       if (deliver === undefined) {
         await this.prompt(agent, prompt, undefined, { steerable: false, lane: "background", synthetic: true, ...scope });
@@ -652,7 +653,7 @@ export class Orchestrator {
       // on the ledger; a routine that asked for every run gets every run.
       await finishRoutineRun(
         {
-          slug: slug ?? "ad-hoc",
+          slug: slug ?? identity ?? "ad-hoc",
           agentId,
           agentName: record.profile.name,
           deliver,
@@ -663,7 +664,11 @@ export class Orchestrator {
         {
           ledger: this.routineResults,
           recentChat: (chatKey, count) => this.recentChatLines(agentId, conversationIdFor(chatKey), count),
-          deliverToChat: async (chatKey, text, fromAgentId) => { await this.options.deliverToChat?.(chatKey, text, fromAgentId); },
+          // No door configured is not a delivery: the result stays retryable.
+          deliverToChat: async (chatKey, text, fromAgentId) =>
+            this.options.deliverToChat === undefined
+              ? { delivered: false, why: "no chat door is configured" }
+              : this.options.deliverToChat(chatKey, text, fromAgentId),
           attachNext: (chatKey, text) => this.routineAttachments.add(chatKey, text),
           mode: routineResolveMode(),
           ask: question => this.askCheaply(record, question, "review"),
