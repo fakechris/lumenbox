@@ -52,12 +52,14 @@ export const BACKUP_CARRIES =
   "survives a rebuild. Treat a copy of one as you would treat those logins.";
 
 /**
- * The image other people pull. The product is LumenBox; this name is what Docker Hub shows.
+ * The image other people pull.
  *
- * The package and the command are still `agentbox`, and a box already running on this machine
- * keeps the container name it was created with. Those are not this tag.
+ * Docker Hub has an organization named lumenbox that is not this project. The account that
+ * can publish is `fakechris`, so the repository is `fakechris/lumenbox`. The package and the
+ * command are still `agentbox`, and a box already running keeps the container name it was
+ * created with.
  */
-export const BOX_IMAGE_REPO = "lumenbox/box";
+export const BOX_IMAGE_REPO = "fakechris/lumenbox";
 export const DEFAULT_CONTAINER = "agentbox-box";
 
 /** package.json's version, walking up from this file so a bundle in dist/ still finds it. */
@@ -82,7 +84,7 @@ export function packageVersion(): string {
   return "0.0.0";
 }
 
-/** `lumenbox/box:0.3.0`. A release pins this; `:latest` is only the moving alias. */
+/** `fakechris/lumenbox:0.3.0`. A release pins this; `:latest` is only the moving alias. */
 export function boxImageRef(version: string = packageVersion()): string {
   return `${BOX_IMAGE_REPO}:${version}`;
 }
@@ -585,7 +587,7 @@ export class BoxManager {
    * Publishes the version tag and moves `:latest` to it.
    *
    * Both, because a release that only moves `:latest` cannot be named later, and a release
-   * that only pushes the version leaves `docker pull lumenbox/box` on an older alias.
+   * that only pushes the version leaves `docker pull fakechris/lumenbox` on an older alias.
    */
   async push(onOutput?: (line: string) => void): Promise<void> {
     const versionTag = this.config.image;

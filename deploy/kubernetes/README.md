@@ -12,8 +12,8 @@ the Pod spec.
 # 1. Build and push the image somewhere the cluster can pull it. The box image doubles as the
 #    control-plane image (one build carries the CLI); AGENTBOX_IMAGE_REPO picks the prefix.
 npm run build:image
-docker tag lumenbox/box:0.3.0 <your-registry>/lumenbox/box:0.3.0
-docker push <your-registry>/lumenbox/box:0.3.0
+docker tag fakechris/lumenbox:0.3.0 <your-registry>/lumenbox:0.3.0
+docker push <your-registry>/lumenbox:0.3.0
 
 # 2. Namespace, then the identity, then the workload. RBAC references the namespace, and the
 #    Deployment references the ServiceAccount, so this order is the one that applies cleanly.

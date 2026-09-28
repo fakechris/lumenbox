@@ -58,14 +58,14 @@ Everything else — agents, chat channels, skills — has defaults and can wait.
 
 Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) or
 [OrbStack](https://orbstack.dev/) and start it. Back in LumenBox Settings, press *Start the
-box*. The first time, it pulls `lumenbox/box:<version>` from Docker Hub — the same version
+box*. The first time, it pulls `fakechris/lumenbox:<version>` from Docker Hub — the same version
 as the app — which takes a few minutes. Then it starts one container named `agentbox-box`,
 and the page turns green when the desktop inside it is up. Nothing else to configure; the
 box is only reachable from this machine.
 
 From a checkout of this repository you can build that image yourself instead of pulling it:
-`npm run build:image`. `npm run push:image` publishes `lumenbox/box:<version>` and
-`lumenbox/box:latest` (it needs `docker login`). An image already on the machine is used as
+`npm run build:image`. `npm run push:image` publishes `fakechris/lumenbox:<version>` and
+`fakechris/lumenbox:latest` (it needs `docker login`). An image already on the machine is used as
 it is; a pull only happens when the version tag is absent.
 
 If the button says *Cannot reach a Docker engine*, Docker is not running or not installed —
