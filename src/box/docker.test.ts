@@ -15,12 +15,69 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { BACKUP_EXCLUDES, BoxManager, boxTokenPath, boxUiToken, loadBoxToken, networkNameFor, readBoxToken, uiToken } from "./docker.ts";
+import { BACKUP_EXCLUDES, BOX_IMAGE_REPO, BoxManager, boxImageRef, boxTokenPath, boxUiToken, defaultBoxConfig, DockerError, ensureLocalImage, loadBoxToken, networkNameFor, packageVersion, readBoxToken, uiToken } from "./docker.ts";
 import { SPILL_AT_BYTES, SPOOL_DIR } from "../boxd/shell-service.ts";
 import { DURABLE_RESULT_CHARS } from "../protocol/index.ts";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+test("the published image is lumenbox/box at this package's version", () => {
+  const version = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version;
+  assert.equal(packageVersion(), version);
+  assert.equal(boxImageRef(), `${BOX_IMAGE_REPO}:${version}`);
+  assert.equal(BOX_IMAGE_REPO, "lumenbox/box");
+  const home = mkdtempSync(join(tmpdir(), "agentbox-image-"));
+  const previousImage = process.env.AGENTBOX_IMAGE;
+  const previousHome = process.env.AGENTBOX_HOME;
+  delete process.env.AGENTBOX_IMAGE;
+  process.env.AGENTBOX_HOME = home;
+  try {
+    assert.equal(defaultBoxConfig().image, `lumenbox/box:${version}`);
+  } finally {
+    if (previousImage === undefined) delete process.env.AGENTBOX_IMAGE;
+    else process.env.AGENTBOX_IMAGE = previousImage;
+    if (previousHome === undefined) delete process.env.AGENTBOX_HOME;
+    else process.env.AGENTBOX_HOME = previousHome;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a missing image is pulled, and a failed pull says how to build it", async () => {
+  let pulled = false;
+  const lines: string[] = [];
+  const note = (line: string) => {
+    lines.push(line);
+  };
+  await ensureLocalImage(
+    "lumenbox/box:0.3.0",
+    { exists: async () => true, pull: async () => { pulled = true; } },
+    note,
+  );
+  assert.equal(pulled, false);
+  assert.deepEqual(lines, []);
+
+  await ensureLocalImage(
+    "lumenbox/box:0.3.0",
+    { exists: async () => false, pull: async () => { pulled = true; } },
+    note,
+  );
+  assert.equal(pulled, true);
+  assert.equal(lines[0], "image lumenbox/box:0.3.0 is not on this machine; pulling it");
+
+  await assert.rejects(
+    () => ensureLocalImage("lumenbox/box:0.3.0", {
+      exists: async () => false,
+      pull: async () => { throw new Error("denied"); },
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof DockerError);
+      assert.match(error.message, /agentbox box build/);
+      assert.match(error.message, /lumenbox\/box:0\.3\.0/);
+      return true;
+    },
+  );
+});
 
 test("the daemon is published to loopback, because its VNC upgrade is unauthenticated", () => {
   // Measured on a running installation, 2026-08-28, before this was fixed: from the

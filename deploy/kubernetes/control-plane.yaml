@@ -25,9 +25,9 @@ data:
   # AGENTBOX_K8S_MEMORY: "4Gi"
   # AGENTBOX_K8S_STORAGE: "10Gi"
   #
-  # The image new boxes are created from. The default is agentbox/box:latest, which only exists
-  # on a laptop's Docker — a cluster must be told the registry-pushed tag explicitly.
-  # AGENTBOX_IMAGE: "registry.example.com/base/agentbox:<content-hash>"
+  # The image new boxes are created from. The default is lumenbox/box:<package version>.
+  # A cluster that cannot pull Docker Hub must be told its own registry explicitly.
+  # AGENTBOX_IMAGE: "registry.example.com/lumenbox/box:0.3.0"
   #
   # Which provider the relay serves and boxes assume. Defaults to anthropic; set this to match
   # whichever provider key the Secret below actually carries.
@@ -75,7 +75,7 @@ spec:
       serviceAccountName: agentbox-control
       containers:
         - name: control
-          image: agentbox/box:latest
+          image: lumenbox/box:0.3.0
           imagePullPolicy: IfNotPresent
           command: ["node", "/opt/hostd/hostd.mjs"]
           args: ["control", "up", "--allocator", "kubernetes", "--relay", "--host", "0.0.0.0", "--port", "8080"]

@@ -38,8 +38,8 @@ image runs the control plane (it is one build; the control plane is the CLI invo
 ## 2. Build and push the image
 
 ```sh
-AGENTBOX_IMAGE_REPO=<registry>/<project>/agentbox npm run build:image
-docker push <registry>/<project>/agentbox:latest    # and the content-hash tag it printed
+AGENTBOX_IMAGE_REPO=<registry>/<project>/lumenbox/box npm run build:image
+docker push <registry>/<project>/lumenbox/box:0.3.0    # and the content-hash tag it printed
 ```
 
 Prefer the content-hash tag over `:latest` when you edit `control-plane.yaml`: nodes cache

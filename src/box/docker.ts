@@ -8,11 +8,12 @@
  */
 
 import { envNumber } from "../config.ts";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { BOXD_PORT, UI_PORT } from "../protocol/index.ts";
 import { BoxClient } from "./client.ts";
@@ -50,8 +51,43 @@ export const BACKUP_CARRIES =
   "credential a tool in the box wrote to ~/.config. That is deliberate: it is how a login " +
   "survives a rebuild. Treat a copy of one as you would treat those logins.";
 
-export const DEFAULT_IMAGE = "agentbox/box:latest";
+/**
+ * The image other people pull. The product is LumenBox; this name is what Docker Hub shows.
+ *
+ * The package and the command are still `agentbox`, and a box already running on this machine
+ * keeps the container name it was created with. Those are not this tag.
+ */
+export const BOX_IMAGE_REPO = "lumenbox/box";
 export const DEFAULT_CONTAINER = "agentbox-box";
+
+/** package.json's version, walking up from this file so a bundle in dist/ still finds it. */
+export function packageVersion(): string {
+  let dir = dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 6; i++) {
+    try {
+      const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as {
+        name?: unknown;
+        version?: unknown;
+      };
+      if (pkg.name === "agentbox" && typeof pkg.version === "string" && pkg.version !== "") {
+        return pkg.version;
+      }
+    } catch {
+      // Not this directory. The next parent might be the repo root.
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return "0.0.0";
+}
+
+/** `lumenbox/box:0.3.0`. A release pins this; `:latest` is only the moving alias. */
+export function boxImageRef(version: string = packageVersion()): string {
+  return `${BOX_IMAGE_REPO}:${version}`;
+}
+
+export const DEFAULT_IMAGE = boxImageRef();
 
 /**
  * The private network a box lives on. One per container, named after it.
@@ -230,7 +266,7 @@ export function defaultBoxConfig(overrides: Partial<BoxConfig> = {}): BoxConfig 
   const containerName = overrides.containerName ?? process.env.AGENTBOX_CONTAINER ?? DEFAULT_CONTAINER;
   return {
     containerName,
-    image: process.env.AGENTBOX_IMAGE ?? DEFAULT_IMAGE,
+    image: process.env.AGENTBOX_IMAGE ?? boxImageRef(),
     boxdPort: envNumber("AGENTBOX_BOXD_PORT", 0),
     // Keyed by the container it is for, so two boxes never share a key.
     token: loadBoxToken(containerName),
@@ -297,6 +333,62 @@ async function docker(
       stderr ||
       `${failure.message.replace(/\n[\s\S]*$/, "")} (exit ${String(failure.code ?? "?")}${failure.signal ? `, signal ${failure.signal}` : ""}; docker resolved on PATH=${(process.env.PATH ?? "").split(":").slice(0, 3).join(":")}…)`;
     throw new DockerError(`docker ${args[0]} failed: ${how}`, stderr);
+  }
+}
+
+/** docker pull/push talk on stderr for the whole transfer. A person waiting needs those lines. */
+function dockerStream(
+  args: readonly string[],
+  timeoutMs: number,
+  onOutput?: (line: string) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("docker", [...args], { stdio: ["ignore", "pipe", "pipe"] });
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(new DockerError(`docker ${args[0]} timed out after ${timeoutMs / 1000}s`));
+    }, timeoutMs);
+    const emit = (chunk: Buffer) => {
+      for (const line of chunk.toString().split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (trimmed !== "") onOutput?.(trimmed);
+      }
+    };
+    child.stdout?.on("data", emit);
+    child.stderr?.on("data", emit);
+    child.on("error", error => {
+      clearTimeout(timer);
+      reject(new DockerError(`docker ${args[0]} failed: ${error.message}`));
+    });
+    child.on("close", code => {
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(new DockerError(`docker ${args[0]} failed (exit ${code ?? "?"})`));
+    });
+  });
+}
+
+/**
+ * A machine that has never built the box still has to be able to start one.
+ *
+ * Present locally: use it, so a checkout's own build is what `box up` runs. Absent: pull the
+ * versioned tag from Docker Hub. A pull that fails names `box build`, which is the other half
+ * of the same image.
+ */
+export async function ensureLocalImage(
+  image: string,
+  probe: { exists(): Promise<boolean>; pull(): Promise<void> },
+  onOutput?: (line: string) => void,
+): Promise<void> {
+  if (await probe.exists()) return;
+  onOutput?.(`image ${image} is not on this machine; pulling it`);
+  try {
+    await probe.pull();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new DockerError(
+      `Could not pull ${image}. From a checkout, \`agentbox box build\` builds the same image locally. ${detail}`,
+    );
   }
 }
 
@@ -472,11 +564,40 @@ export class BoxManager {
     }
     // Build output is large and streaming it needs spawn, but the CLI already
     // prints progress to stderr; we surface only the outcome.
+    const tags = ["-t", this.config.image];
+    // `:latest` is the alias a person types. The version tag is the one a release pulls.
+    if (this.config.image.startsWith(`${BOX_IMAGE_REPO}:`) && !this.config.image.endsWith(":latest")) {
+      tags.push("-t", `${BOX_IMAGE_REPO}:latest`);
+    }
     await docker(
-      ["build", ...engineArgs, "-t", this.config.image, contextDir],
+      ["build", ...engineArgs, ...tags, contextDir],
       20 * 60_000
     );
     onOutput?.(`built ${this.config.image}`);
+  }
+
+  /** Pulls this box's tag. Callers that already know the image is missing use `ensureLocalImage`. */
+  async pull(onOutput?: (line: string) => void): Promise<void> {
+    await dockerStream(["pull", this.config.image], 30 * 60_000, onOutput);
+  }
+
+  /**
+   * Publishes the version tag and moves `:latest` to it.
+   *
+   * Both, because a release that only moves `:latest` cannot be named later, and a release
+   * that only pushes the version leaves `docker pull lumenbox/box` on an older alias.
+   */
+  async push(onOutput?: (line: string) => void): Promise<void> {
+    const versionTag = this.config.image;
+    const latest = `${BOX_IMAGE_REPO}:latest`;
+    if (versionTag.startsWith(`${BOX_IMAGE_REPO}:`) && versionTag !== latest) {
+      await docker(["tag", versionTag, latest], 30_000);
+    }
+    const tags = versionTag === latest ? [latest] : [versionTag, latest];
+    for (const tag of tags) {
+      onOutput?.(`pushing ${tag}`);
+      await dockerStream(["push", tag], 30 * 60_000, onOutput);
+    }
   }
 
   /** Exposed for the test that pins where the daemon is published. */
@@ -654,11 +775,11 @@ export class BoxManager {
     }
 
     if (state === "missing") {
-      if (!(await this.imageExists())) {
-        throw new DockerError(
-          `Image ${this.config.image} not found. Run \`agentbox box build\` first.`
-        );
-      }
+      await ensureLocalImage(
+        this.config.image,
+        { exists: () => this.imageExists(), pull: () => this.pull(onOutput) },
+        onOutput,
+      );
       onOutput?.(`starting container ${this.config.containerName}`);
       await this.ensureNetwork();
       await docker(this.runArguments(), 120_000);

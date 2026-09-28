@@ -16,6 +16,7 @@
     "build:box": "npm run build:boxd && npm run build:hostd && npm run build:xwatchdog",
     "pack:dropin": "npm run build:boxd && node scripts/pack-dropin.mjs",
     "build:image": "npm run build:box && node scripts/build-image.mjs",
+    "push:image": "node --experimental-transform-types src/cli.ts box push",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node scripts/test-floor.mjs",
     "scenario": "node --experimental-transform-types scripts/scenario-live.mjs",
