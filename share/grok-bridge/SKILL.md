@@ -80,6 +80,26 @@ will see: a box named `grok` in LumenBox, where they create an agent whose deskt
 Finish with one sentence: their LumenBox agents and you share the files under `~/work`, and
 nothing else of yours is touched.
 
+## 4b. Install boot-recovery scripts (sshd / Tailscale identity)
+
+After `lumen-bridge.sh install`, also install the box recovery scripts so Update Computer
+does not spawn a new Tailscale node (`cursor-1`, `cursor-2`, …) with a new 100.x IP:
+
+```
+BASE=https://raw.githubusercontent.com/fakechris/lumenbox/main/share/grok-bridge/box
+mkdir -p ~/.lumen/bin
+curl -fsSL "$BASE/ensure-sshd" -o ~/.lumen/bin/ensure-sshd
+curl -fsSL "$BASE/ensure-tailscale" -o ~/.lumen/bin/ensure-tailscale
+curl -fsSL "$BASE/ensure-lumen-bridge-deps" -o ~/.lumen/bin/ensure-lumen-bridge-deps
+curl -fsSL "$BASE/BOOT-RECOVERY.md" -o ~/.lumen/BOOT-RECOVERY.md
+chmod +x ~/.lumen/bin/ensure-sshd ~/.lumen/bin/ensure-tailscale ~/.lumen/bin/ensure-lumen-bridge-deps
+```
+
+`ensure-tailscale` backs up `/var/lib/tailscale` into `~/.lumen/tailscale-state/` after a
+successful join and restores it before re-login after a rebuild. Optional: put a reusable
+auth key in `~/.lumen/tailscale-authkey`. Prefer hostname `cursor`. If MagicDNS becomes
+`cursor-N`, ask the person to delete offline stubs in the Tailscale admin.
+
 ## 5. Turn the keep-alive on, and what happens after a reboot
 
 This box has no service manager, so after a restart the daemon is down until something starts
