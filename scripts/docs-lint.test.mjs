@@ -7,6 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -44,4 +45,19 @@ test("the rules that matter catch what they are for", () => {
   assert.deepEqual(header, { doc: "22-domain-model", family: "spec", status: "current" });
   assert.equal(parseHeader("# No header\n"), undefined);
   assert.equal(titleOf("<!-- x -->\n# 53 — Connector doors\n"), "Connector doors");
+});
+
+test("research material is not tracked (c11f918: it lives in /research/, ignored)", () => {
+  // Research notes and competitive analysis are kept locally, never shipped. They kept landing
+  // in docs/research/ and scripts/research/ instead, 46 files by 2026-09-28, so the rule is a
+  // check rather than a comment. Outside a git checkout (a packed source tree) there is nothing
+  // to check.
+  let tracked;
+  try {
+    tracked = execFileSync("git", ["ls-files", "research", "docs/research", "scripts/research"], { cwd: root, encoding: "utf8" });
+  } catch {
+    return;
+  }
+  const files = tracked.split("\n").filter(line => line !== "");
+  assert.deepEqual(files, [], `research material is tracked; move it to /research/ and git rm --cached it:\n${files.join("\n")}`);
 });

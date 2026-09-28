@@ -18,7 +18,7 @@ Jev 的调用延迟和价格有优势，但本次并不是数量级的速度差�
 
 ## 2. 方法与数据边界
 
-产物在 `scripts/research/jev-2026-09-22/business/`。
+产物在 `research/scripts/jev-2026-09-22/business/`。
 
 - **引用**：8 份固定 SHA 的公开项目源码/作者记录，人工编写 24 项主张，覆盖支持、矛盾、证据不足；另加 2 个刻意伪造引文和 1 个缺失来源。不是 27 份独立文档，也不是生产日报。
 - **资料筛选**：从 docs/66 固定目录取 16 个真实项目简介；6 个中英查询，共 96 个候选判断，12 个作者标注的直接相关项目。检验简介层筛选，不等于论文/长文检索质量。
@@ -121,9 +121,9 @@ l07 原文是“我是企业软件公司的工程师，转发别人想约演示�
 验证记录见 `business/validation.json`。核心命令：
 
 ```sh
-node scripts/research/jev-2026-09-22/business/evaluate.mjs --self-check
-node scripts/research/jev-2026-09-22/business/evaluate.mjs --replay
-node scripts/research/jev-2026-09-22/business/evaluate.mjs --diagnostic --replay
+node research/scripts/jev-2026-09-22/business/evaluate.mjs --self-check
+node research/scripts/jev-2026-09-22/business/evaluate.mjs --replay
+node research/scripts/jev-2026-09-22/business/evaluate.mjs --diagnostic --replay
 npm test
 ```
 

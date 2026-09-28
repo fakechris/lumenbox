@@ -126,6 +126,11 @@ Every file in `docs/` opens with a header block naming what it is:
 - **Verify on the artifact, not in your head.** Print the byte, read the field, take the
   screenshot (`node scripts/ui-shot.mjs`). Sound reasoning has disagreed with reality here more
   than once.
+- **Research and competitive analysis stay out of the repo.** Notes, reports, raw results and
+  probe scripts about other products go in `/research/` at the repo root, which is ignored —
+  not `docs/research/`, not `scripts/research/` (both ignored too; `docs-lint.test.mjs` fails
+  if any of the three is tracked). What a study decided belongs in a design doc, a commit
+  message or a code comment, and says what we do and why without naming anyone.
 - **Never print or store a token, key or secret** — not in a message, not in a commit, not in a
   transcript. Name it and say where it lives.
 - **Another agent may be working in this checkout.** Check the branch, commit only your own

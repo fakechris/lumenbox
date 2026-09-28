@@ -8,7 +8,7 @@
 
 延续 [docs/63](63-jev-integration-research.md)、[docs/64](64-jev-memory-evaluation.md) 与 [docs/67](67-jev-business-pilot.md)。前几轮的问题是「Jev 值不值得接」，本轮的问题是「有没有可以自己跑的替代品」。laya（`convaiinnovations/laya`，ConvAI Innovations）是 Jev 的开源复刻，连原语名字（choice / score / noul）都照搬，作者明确把它定位成「Jev 闭源只给 API，我把权重开出来」。
 
-本轮只做隔离评测，不改产品代码、依赖或运行时配置。研究脚本与全部原始结果在 [scripts/research/laya-vs-jev-2026-09-23/](../scripts/research/laya-vs-jev-2026-09-23/)。
+本轮只做隔离评测，不改产品代码、依赖或运行时配置。研究脚本与全部原始结果在 [research/scripts/laya-vs-jev-2026-09-23/](../research/scripts/laya-vs-jev-2026-09-23/)。
 
 ## 1. 结论：按任务形状分流，不按语言分流
 
@@ -23,7 +23,7 @@
 
 ## 2. 实验如何保证可比较
 
-同一份 [fixtures.json](../scripts/research/laya-vs-jev-2026-09-23/fixtures.json)：22 个用例，每个都写了**语义完全相同的中英文两版**。两个模型吃完全相同的 JSON state、完全相同的 `instructions` 与 `criteria`。laya 侧 [run_laya.py](../scripts/research/laya-vs-jev-2026-09-23/run_laya.py)，Jev 侧 [run_jev.mjs](../scripts/research/laya-vs-jev-2026-09-23/run_jev.mjs)，汇总 [analyze.py](../scripts/research/laya-vs-jev-2026-09-23/analyze.py)。
+同一份 [fixtures.json](../research/scripts/laya-vs-jev-2026-09-23/fixtures.json)：22 个用例，每个都写了**语义完全相同的中英文两版**。两个模型吃完全相同的 JSON state、完全相同的 `instructions` 与 `criteria`。laya 侧 [run_laya.py](../research/scripts/laya-vs-jev-2026-09-23/run_laya.py)，Jev 侧 [run_jev.mjs](../research/scripts/laya-vs-jev-2026-09-23/run_jev.mjs)，汇总 [analyze.py](../research/scripts/laya-vs-jev-2026-09-23/analyze.py)。
 
 三个变体分离出「语言」这一个变量：
 
@@ -57,7 +57,7 @@
 
 Jev 66/66 全对，中英文零差异。laya 的中英差异在 ±0.09 之内，22 例上就是 1–2 例，落在噪声里。
 
-按问题类型 pool 全部三个变体后，分离才显出来（[robustness.py](../scripts/research/laya-vs-jev-2026-09-23/robustness.py)）：
+按问题类型 pool 全部三个变体后，分离才显出来（[robustness.py](../research/scripts/laya-vs-jev-2026-09-23/robustness.py)）：
 
 | 模型 | noul 二值判断 36 例 | 对抛硬币的单边 P 值 | choice 多分类 30 例 |
 |---|---|---|---|

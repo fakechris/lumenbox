@@ -10,7 +10,7 @@
 结论在各自的文档或 INV 调研条目里，这里只指过去。
 
 为什么要有这一页：到 2026-09-26，调研过约 40 个具名项目，结论散在 decision 文档、
-[roadmap](11-roadmap.md) 的段落、[docs/research/](research/) 下没有头部块的文件（因而不进
+[roadmap](11-roadmap.md) 的段落、research/（`research/`，本地，不入库） 下没有头部块的文件（因而不进
 [INDEX](INDEX.md)）、仓库外的原始报告，以及 INV 条目里。[docs/14](14-from-outside-reading.md)
 是最接近的一页，但它是 decision、止于 08-26、只收文章与观点，覆盖不到五分之一。结果是同一个项目
 被重读、同一条结论被重提。
@@ -30,21 +30,21 @@
 
 | 项目 | 类型 | 日期 | 记在哪 | 拿走了什么 | INV |
 |---|---|---|---|---|---|
-| Hermes Agent（NousResearch） | 开源 | 08-29～09-22 多次 | [24](24-context-memory.md)、[27](27-testing-and-release.md)、[31](31-harness-review.md)、[51](51-follow-through.md)、58、65；[research/…hermes](research/2026-09-14-hermes-follow-through.md) | 压缩器、并行安全工具、按模型家族注入纪律提示、clarify 超时、`/new` | 147、426、530–535 |
-| OpenClaw | 开源 | 08-29～09-22 | 24、26、27、51、58、65；[research/…openclaw](research/2026-09-14-openclaw-follow-through.md) | Telegram 持久 offset、共享 inbound 合同测试、记忆来源防回灌 | 530–535 |
+| Hermes Agent（NousResearch） | 开源 | 08-29～09-22 多次 | [24](24-context-memory.md)、[27](27-testing-and-release.md)、[31](31-harness-review.md)、[51](51-follow-through.md)、58、65；`research/2026-09-14-hermes-follow-through.md`（本地，不入库） | 压缩器、并行安全工具、按模型家族注入纪律提示、clarify 超时、`/new` | 147、426、530–535 |
+| OpenClaw | 开源 | 08-29～09-22 | 24、26、27、51、58、65；`research/2026-09-14-openclaw-follow-through.md`（本地，不入库） | Telegram 持久 offset、共享 inbound 合同测试、记忆来源防回灌 | 530–535 |
 | Grok Bot（0.30 等） | 闭源，拆包 | 08-25～09-10 | 14、[28](28-grokbot-0.30-delta.md)、29–31、35、39–42、46、49 | 盒内 harness、auto-review、hooks、示范学习、bot 模板与市场 | 406、411、481 |
 | Claude Code | 产品文档 | 08-29～09-03 | [23](23-context-compaction.md)、28、31、34、54、57 | 按比例触发压缩、system-reminder、hooks | — |
 | Argus（Microsoft） | 开源 | 09-06 | 11「Argus read」、51 | 没看过的 reviewer 不能验收、按角色 capsule、doctor | — |
 | FrontierAgent（ApodexAI） | 开源 | 08-26 | 11 R30/R8 | 代码层提交门 | — |
 | TurnkeyAI | 开源（已归档） | 09-07 | 11「TurnkeyAI read」 | Idempotency-Key、副作用 scope、压缩前 flush、失败分类 | — |
-| Octop（腾讯云） | 开源 | 09-14；09-26 增量 | [research/…octop](research/2026-09-14-octop-follow-through.md)、51、52；INV-723 | HITL 只认被问的人、投递归属、i18n；增量：开放重定向、扫码建机器人、MCP OAuth、钉钉/企微登录、frontmatter 合一 | 532、533、541–544；724、725、728、729、737 |
-| WorkBuddy（腾讯）/ 豆包 Work（字节） | 闭源，二进制 | 09-03、09-14 | [research/…workbuddy](research/2026-09-14-workbuddy-doubao-binaries.md)、33、51 | 审批超时自动拒、无人值守跳过提问、回环 MCP host、专家包 | 527、601 |
+| Octop（腾讯云） | 开源 | 09-14；09-26 增量 | `research/2026-09-14-octop-follow-through.md`（本地，不入库）、51、52；INV-723 | HITL 只认被问的人、投递归属、i18n；增量：开放重定向、扫码建机器人、MCP OAuth、钉钉/企微登录、frontmatter 合一 | 532、533、541–544；724、725、728、729、737 |
+| WorkBuddy（腾讯）/ 豆包 Work（字节） | 闭源，二进制 | 09-03、09-14 | `research/2026-09-14-workbuddy-doubao-binaries.md`（本地，不入库）、33、51 | 审批超时自动拒、无人值守跳过提问、回环 MCP host、专家包 | 527、601 |
 | QwenWork | 产品 | 09-03 | [33](33-mcp-face.md) | MCP 走 vsock，凭据不进沙箱 | — |
-| Muse / Hatch | 第三方存档 | 09-25 | [research/…muse-hatch](research/2026-09-25-muse-hatch-skills-and-box.md) | skill 权限声明、per-skill eval、交付前产物验收 | 690–693 |
+| Muse / Hatch | 第三方存档 | 09-25 | `research/2026-09-25-muse-hatch-skills-and-box.md`（本地，不入库） | skill 权限声明、per-skill eval、交付前产物验收 | 690–693 |
 | Muse / Hatch 主二进制运行时 | 生产镜像备份（本地，不入库） | 09-26 | INV-773 | runtime 替模型兜底：回合检查点、显式沉默工具、cron 两段式交付、常驻文件注入+diff、压缩前记忆落盘、行为断言对账、无人值守收敛规则、记忆维护 pass、prompt cache 账本、活动翻译、出网按调用归因、fork 提示补丁。**更正**：「压缩前 flush」确实存在（orchestrator.onSummarised → Rememberer.flush），但整段一次性送入、时间戳伪造、无视三段抽取水位，重复抽取或漏掉状态变化；INV-778 修正 | 774–785 |
 | zuse、raft-source、OpenMuse、google/ax、ZCode | 开源 | 09-25 | INV-694 | webhook 投递幂等、投递 outcome_unknown、例程退避暂停、审批有效期、microcompact、唤醒提示伪造转义等 18 条 | 695–712（707 已修，PR #240） |
 | egoist/lorca | 开源（GPL-3.0） | 09-26 | INV-739 | Grok Bot 的单人一周复刻，设计完整的 alpha、E2E 只防中继；记忆写入扫凭据、无人时暂停例程、跨会话近况简报、命令卡住交回 agent | 740–743 |
-| Grok Bot 0.56（盒内 Cursor 运行时）、ZCode、Muse 的 goal 实现 | 闭源拆包 / 开源 / 第三方存档 | 09-26 | [research/…goal-mode](research/2026-09-26-goal-mode-references.md)、[74](74-goal-mode.md)；INV-764 | 防空转、完成审计 prompt、独立验证器与 nextAction 回灌；反转 ZCode 的 fail open；补上限、预算、确定性检查与人验收 | 765–772 |
+| Grok Bot 0.56（盒内 Cursor 运行时）、ZCode、Muse 的 goal 实现 | 闭源拆包 / 开源 / 第三方存档 | 09-26 | `research/2026-09-26-goal-mode-references.md`（本地，不入库）、[74](74-goal-mode.md)；INV-764 | 防空转、完成审计 prompt、独立验证器与 nextAction 回灌；反转 ZCode 的 fail open；补上限、预算、确定性检查与人验收 | 765–772 |
 | Antigravity Teamwork | 产品 | 08-28? | [19](19-pitfalls.md) | 与答案无关的 pitfall 登记 | — |
 | Kimi K3 AgentENV / 300-agent swarm | 文章 | 08 月 | 14、[16](16-long-work.md) | 测量边界要说清、节点合同 | — |
 
@@ -104,5 +104,5 @@ Seltz / CrewAI GTM、《LLMs Eat Scaffolding》、《Against agent sprawl》、g
   `MULTIPLAYER-PRODUCT-DESIGN.md`、`grokbot/RESEARCH_CUA_FOUR_PROJECTS.md`、
   `grokbot/versions/0.30.0/*`、`LONGHORIZON-HARNESS-COMPARISON.md`（`src/host/audit.ts` 引用）、
   docs/25 提到的 `CODING-AGENT-*`。结论已经进了上面各文档，原文只在作者本机。
-- **docs/research/ 下的文件没有头部块**，不进 INDEX；本页是它们唯一的入口。
+- **research/ 下的文件没有头部块**，不进 INDEX；本页是它们唯一的入口。
 - **2026-09-25 之前的调研多数没有 INV 节点**，只能从本页或文档找到。
