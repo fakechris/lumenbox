@@ -6,7 +6,7 @@
 -->
 # 70. Linux CUA 回归矩阵与状态验收
 
-本指南对应 INV-639；执行合同以 [03-architecture](03-architecture.md) 为准，研究和依赖选择见 [62-cua-driver-research](62-cua-driver-research.md)。测试只操作 runner 自行创建的临时容器，结束时删除；不连接现有盒子，不读取宿主 `~/.agentbox/token`。凭据只在本次进程内存和临时容器环境中，不进入报告。
+本指南对应 INV-639；执行合同以 [03-architecture](03-architecture.md) 为准，依赖取舍见 [roadmap「What outside research decided」](11-roadmap.md)。测试只操作 runner 自行创建的临时容器，结束时删除；不连接现有盒子，不读取宿主 `~/.agentbox/token`。凭据只在本次进程内存和临时容器环境中，不进入报告。
 
 ## 构建与运行
 

@@ -6,7 +6,7 @@
 -->
 # CUA 修复实施与验收记录
 
-工作树：`/Users/chris/workspace/lumenbox-cua-fixes`，初始分支 `fix/cua-observation-contract`（领取 INV 后改用服务器签发的 `feat/inv-636-cua`），基线 `23f51fd`。研究与依赖取舍见 [62-cua-driver-research](62-cua-driver-research.md)；研究记录保留当时事实，本文件记录后续实现。
+工作树：`/Users/chris/workspace/lumenbox-cua-fixes`，初始分支 `fix/cua-observation-contract`（领取 INV 后改用服务器签发的 `feat/inv-636-cua`），基线 `23f51fd`。研究与依赖取舍当时见 docs/62（2026-09-28 移出仓库，结论见 [roadmap「What outside research decided」](11-roadmap.md)）；研究记录保留当时事实，本文件记录后续实现。
 
 ## INV-636：观测与目标一致性
 
@@ -64,7 +64,7 @@ INV-636—640 已由人提交为 COMMITTED。本会话尝试 `work_claim` 与不
 
 持久原始报告 [evidence/cua-linux-2026-09-22.json](evidence/cua-linux-2026-09-22.json) 同时记录 digest、fixture 内容 hash、toolkit 版本、10 次 cold/warm-session 端到端样本。首次读树 312 ms，热读树 P50/P95=313/330 ms，invoke=2340/2357 ms，set_value=2339/2351 ms；每次 helper 都重新启动。生产制品较第一轮观测修复增加 16,646 bytes，测试 toolkit 依赖只进入测试层。
 
-工程层已验证；20 任务×5次的真实模型层没有运行，不把 scripted episode 或 GUI fixture 当成真实模型的成功率。未来模型评测应按 docs/62 的同模型/prompt/初态/版本约束另行执行。
+工程层已验证；20 任务×5次的真实模型层没有运行，不把 scripted episode 或 GUI fixture 当成真实模型的成功率。未来模型评测应按同模型/prompt/初态/版本的约束另行执行（原 docs/62，已移出仓库）。
 
 额外边界核对：native invoke/set_value 与坐标输入共用 host 的写操作分类，均进入已有 auto-review；新动作没有另开权限通道。后续 `59865d7` 与最终断言更新补齐该项。
 

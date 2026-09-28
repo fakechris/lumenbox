@@ -59,7 +59,7 @@
 - docs/05 §8 规定记忆镜像位于 box 的 `/home/box/work/memory/<agent-slug>/`。允许任意 shell/file access 时，隐藏 Recall 不能阻止读镜像。
 - 当前 channel manager 以线程/聊天区分 conversation，且消息有持久 ID。清上下文不应改写外部收件地址或吞掉消息账本。
 
-[部署后复审](handoff-2026-09-22-post207-answer-quality-review.md)已复现空选择回填旧记忆。工作区新增的 [Jev 第二轮实测](64-jev-memory-evaluation.md)也报告：不推荐的正文/索引仍可能展示，空提升列表不代表零曝光。这里引用其记录，没有把他人的实验冒充本轮重跑。
+[部署后复审](handoff-2026-09-22-post207-answer-quality-review.md)已复现空选择回填旧记忆。当时的判断模型实测（研究原文不入库，结论见 [roadmap「What outside research decided」](11-roadmap.md)）也报告：不推荐的正文/索引仍可能展示，空提升列表不代表零曝光。这里引用其记录，没有把他人的实验冒充本轮重跑。
 
 ## 4. 三种操作的行为合同
 
@@ -194,7 +194,7 @@ app 的 `main` 在既有实现里还承接队友/调度活动，不能以“我�
 | D | 派生记忆来源、纠错、共享与模板防回灌 | INV-142、397、415、615/612 | 不建另一套事实账本，不重写历史决策 |
 | E | 基于证据的自动触发、小流量质量门禁 | INV-101、140/144 | 不用模糊跑题分数随意中断/删记忆 |
 
-INV-600 与 docs/63/64 的判断模型实验并行但独立：promotion、filter、rank、policy 是不同职责。某个选择模型推荐了正确条目，不证明剩余内容未曝光。
+INV-600 的判断模型实验（结论见 roadmap「What outside research decided」）与本方案并行但独立：promotion、filter、rank、policy 是不同职责。某个选择模型推荐了正确条目，不证明剩余内容未曝光。
 
 本次检索确认已有 INV-142 归属，不认领整个里程碑、不把讨论变成已承诺实施，也不创建重复 candidate。实施拆分先检索其已有子项，再由人确认执行范围。
 
