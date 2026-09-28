@@ -468,6 +468,8 @@ export interface TurnDeps {
   caller?: { userId?: string };
   /** That person's name, for an operator rule written about them by name (INV-156). */
   callerName?: string;
+  /** Every door identity the person driving this turn speaks from (INV-754). */
+  callerIdentities?: readonly string[];
   /**
    * Skills, already read from the box.
    *
@@ -1679,6 +1681,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
           policy: deps.policy,
           caller: deps.caller,
           ...(deps.callerName !== undefined ? { callerName: deps.callerName } : {}),
+          ...(deps.callerIdentities !== undefined ? { callerIdentities: deps.callerIdentities } : {}),
           displayIndex: deps.displayIndex,
           boxOwner: deps.boxOwner,
           tasks: deps.tasks,
@@ -3239,6 +3242,7 @@ ${outcome.text}`;
             policy: deps.policy,
             caller: deps.caller,
           ...(deps.callerName !== undefined ? { callerName: deps.callerName } : {}),
+          ...(deps.callerIdentities !== undefined ? { callerIdentities: deps.callerIdentities } : {}),
             display: deps.display,
             displayIndex: deps.displayIndex,
             boxOwner: deps.boxOwner,

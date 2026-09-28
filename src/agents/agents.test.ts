@@ -687,7 +687,9 @@ test("every tool is accounted for in the coordinator's set", () => {
   // makes adding a tool a decision rather than an omission.
   // With the host door open too, so a tool reachable only in that mode is still
   // accounted for rather than slipping past because the default build omits it.
-  const offered = buildTools(true, true, undefined, true).map(tool => tool.name).sort();
+  // And with every connection present: connector_request was missing from the lists for as long as
+  // it existed, because this guard built the tools without a connection and never offered it (INV-754).
+  const offered = buildTools(true, true, undefined, true, true, true, true, false, ["github", "feishu", "dingtalk"]).map(tool => tool.name).sort();
   const coordinator = [...(STARTER_TEAM.find(profile => profile.name === "Ada")?.tools ?? [])].sort();
   assert.deepEqual(
     offered.filter(name => !coordinator.includes(name)),
