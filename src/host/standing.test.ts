@@ -70,11 +70,11 @@ test("the section renders every file, an empty one as (empty), and names the box
   const { dir, done } = scratch();
   try {
     writeStanding(dir, "Ada Lovelace", "SOUL.md", "   \n", "person");
-    const text = renderStanding(readStanding(dir, "Ada Lovelace"), "Ada Lovelace");
+    const text = renderStanding(readStanding(dir, "Ada Lovelace"), "ada-id");
     assert.match(text, /^# Your standing files/);
     assert.match(text, /## SOUL\.md\n\n\(empty\)/);
     assert.match(text, /## USER\.md\n\n# USER\.md — the person/);
-    assert.match(text, /\/home\/box\/work\/standing\/ada-lovelace\//);
+    assert.match(text, /\/home\/box\/work\/standing\/ada-id\//);
     assert.equal(renderStanding(undefined, "Ada"), "");
   } finally {
     done();
@@ -121,13 +121,15 @@ test("the agent's own write moves the snapshot, so it is not told about its own 
   }
 });
 
-test("a box path names a standing file only under this agent's own mirror directory", () => {
-  assert.equal(standingBoxDir("Ada Lovelace"), "/home/box/work/standing/ada-lovelace");
-  assert.equal(standingFileOf("/home/box/work/standing/ada-lovelace/AGENTS.md", "Ada Lovelace"), "AGENTS.md");
-  assert.equal(standingFileOf("~/work/standing/ada-lovelace/SOUL.md", "Ada Lovelace"), "SOUL.md");
-  assert.equal(standingFileOf("/home/box/work/standing/bob/AGENTS.md", "Ada Lovelace"), undefined, "another agent's");
-  assert.equal(standingFileOf("/home/box/work/standing/ada-lovelace/notes.md", "Ada Lovelace"), undefined, "not one of the four");
-  assert.equal(standingFileOf("/home/box/work/memory/ada-lovelace/profile.md", "Ada Lovelace"), undefined);
+test("a box path names a standing file only under this agent's own mirror directory, keyed by id (INV-803)", () => {
+  assert.equal(standingBoxDir("ada-id"), "/home/box/work/standing/ada-id");
+  assert.equal(standingFileOf("/home/box/work/standing/ada-id/AGENTS.md", "ada-id"), "AGENTS.md");
+  assert.equal(standingFileOf("~/work/standing/ada-id/SOUL.md", "ada-id"), "SOUL.md");
+  assert.equal(standingFileOf("/home/box/work/standing/bob-id/AGENTS.md", "ada-id"), undefined, "another agent's");
+  assert.equal(standingFileOf("/home/box/work/standing/ada-id/notes.md", "ada-id"), undefined, "not one of the four");
+  assert.equal(standingFileOf("/home/box/work/memory/ada-lovelace/profile.md", "ada-id"), undefined);
+  // The id, not a slug of the name: two names outside a-z0-9 would slug to the same directory.
+  assert.notEqual(standingBoxDir("zhang-id"), standingBoxDir("li-id"));
 });
 
 test("the heartbeat runs on unchecked items only: an empty or fully checked list starts no turn", () => {

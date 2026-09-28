@@ -274,9 +274,11 @@ distinct from memory facts) and `HEARTBEAT.md` (a `- [ ]` checklist). Seeded fro
 on first read, never re-seeded; capped at 8 KiB each, a longer write refused with a message.
 
 - **Canonical copy: the host.** The box carries a read-write mirror at
-  `/home/box/work/standing/<agent-slug>/`, pushed by the same sync as the memory mirror before each
-  turn. `write_file` and `edit_file` on a mirror path write the host copy in the same call; a
-  `bash` write reaches only the box and is overwritten by the next sync (stated in the prompt).
+  `/home/box/work/standing/<agent-id>/` — keyed by the immutable id, since a name slug is lossy
+  and two agents must never share a writable directory (INV-803) — pushed by the same sync as the
+  memory mirror before each turn. `write_file` and `edit_file` on a mirror path write the host copy
+  in the same call; a `bash` write or delete reaches only the box: every sync reads the box copy
+  back and, when it differs from the host copy or is missing, rewrites it and logs one line.
 - **Injected last.** One volatile section, `standing`, rendered from disk each turn after
   `unattended` and before the recap, so an edit invalidates only the tail of the cached prefix.
   An empty file renders as `(empty)`.

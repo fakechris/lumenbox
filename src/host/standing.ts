@@ -14,6 +14,11 @@
  * A write through `bash` reaches only the box copy and is overwritten by the next sync — the same
  * hole skill provenance has, and stated in the prompt rather than papered over.
  *
+ * The mirror directory is keyed by the agent's immutable id, not a slug of its name (INV-803): a
+ * slug is lossy — two names outside a-z0-9 both slug to `agent` — and a writable directory two
+ * agents share lets one read the other's files and write them back into its own host copy through
+ * the tools. The id is opaque, so the prompt states the directory in full.
+ *
  * A change nobody in the turn made is surfaced as a diff (`changeNotices`), once: the snapshot in
  * `standing.json` is what was last injected, and the agent's own tool writes update it directly,
  * which is what keeps an agent from being told about its own edit.
@@ -23,7 +28,6 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { lineDiff } from "../web/line-diff.ts";
-import { agentSlug } from "./memory.ts";
 
 export const STANDING_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "HEARTBEAT.md"] as const;
 export type StandingName = (typeof STANDING_FILES)[number];
@@ -47,14 +51,14 @@ export function standingDir(agentDir: string): string {
   return join(agentDir, STANDING_DIRNAME);
 }
 
-/** The box directory that mirrors one agent's set. */
-export function standingBoxDir(agentName: string): string {
-  return `${STANDING_BOX_DIR}/${agentSlug(agentName)}`;
+/** The box directory that mirrors one agent's set: keyed by the immutable id, which is unique. */
+export function standingBoxDir(agentId: string): string {
+  return `${STANDING_BOX_DIR}/${agentId}`;
 }
 
 /** Which standing file a box path names, for this agent, or undefined when it is not one. */
-export function standingFileOf(path: string, agentName: string): StandingName | undefined {
-  const dir = standingBoxDir(agentName);
+export function standingFileOf(path: string, agentId: string): StandingName | undefined {
+  const dir = standingBoxDir(agentId);
   const normalised = path.replace(/^~\/work\//, "/home/box/work/");
   if (!normalised.startsWith(`${dir}/`)) return undefined;
   const rest = normalised.slice(dir.length + 1);
@@ -177,9 +181,9 @@ export function writeStandingFromAgent(agentDir: string, agentName: string, name
 }
 
 /** The files as the box mirror should hold them, host copy verbatim. */
-export function standingBoxFiles(agentDir: string, agentName: string): { path: string; content: string }[] {
+export function standingBoxFiles(agentDir: string, agentId: string, agentName: string): { path: string; content: string }[] {
   const snapshot = readStanding(agentDir, agentName);
-  const dir = standingBoxDir(agentName);
+  const dir = standingBoxDir(agentId);
   return STANDING_FILES.map(name => ({ path: `${dir}/${name}`, content: snapshot[name] }));
 }
 
@@ -288,9 +292,9 @@ export function changeNotice(changes: readonly StandingChange[]): string | undef
 /** How much of one file the section carries. The cap is bytes; this is a second guard in chars. */
 const RENDER_CHARS = STANDING_BYTE_CAP;
 
-export function renderStanding(snapshot: StandingSnapshot | undefined, agentName: string): string {
+export function renderStanding(snapshot: StandingSnapshot | undefined, agentId: string): string {
   if (snapshot === undefined) return "";
-  const dir = standingBoxDir(agentName);
+  const dir = standingBoxDir(agentId);
   const body = STANDING_FILES.map(name => {
     const text = snapshot[name].trim();
     const shown = text === "" ? "(empty)" : text.length > RENDER_CHARS ? `${text.slice(0, RENDER_CHARS)}\n(cut here)` : text;
