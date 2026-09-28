@@ -54,8 +54,10 @@ keep a task board of what they owe you.
 2. **Give it a key.** Settings opens by itself: pick a model provider and paste a key
    (Anthropic, MiniMax, DeepSeek, Zhipu, Moonshot, OpenAI, or any OpenAI-compatible endpoint).
 3. **Give it a computer.** Install [Docker Desktop](https://www.docker.com/products/docker-desktop/)
-   or [OrbStack](https://orbstack.dev/), then press *Start the box* in Settings. No Docker? A box
-   can live on another machine of yours, or be a Grok Bot's box — see
+   or [OrbStack](https://orbstack.dev/), then press *Start the box* in Settings. The first time,
+   that pulls `lumenbox/box` at this app's version from Docker Hub. From a checkout,
+   `npm run build:image` builds it locally instead. No Docker? A box can live on another
+   machine of yours, or be a Grok Bot's box — see
    [Getting started](docs/37-onboarding.md) for every path.
 4. **Say hello.** Ada answers. Ask for something real.
 

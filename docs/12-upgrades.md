@@ -2,7 +2,7 @@
      title: Upgrading somebody's box
      family: guide
      status: current
-     updated: 2026-08-24
+     updated: 2026-09-28
 -->
 # Upgrading somebody's box
 
@@ -56,11 +56,11 @@ running.
 **R2 — Never leave yourself without the image you replaced.** `docker build -t …:latest`
 overwrites the tag in place, and the image it replaced survives only as an untagged layer
 until the next `docker image prune` — which is to say until the moment somebody is tidying
-up because something is wrong. `npm run build:image` writes three tags: a content tag
-naming what was built, `:latest`, and `:previous` moved to whatever `:latest` used to be.
-The content tag is a hash of the build directory rather than the package version, because
-the version changes on release and the image changes on every edit to a Dockerfile or a
-bundled daemon.
+up because something is wrong. `npm run build:image` writes four tags: a content hash
+naming what was built, `lumenbox/box:<package version>` (the tag a release pulls),
+`:latest`, and `:previous` moved to whatever `:latest` used to be. The hash stays because
+the image changes on every edit to a Dockerfile or a bundled daemon, not only when the
+package version does.
 
 **R3 — Refuse to run on a version mismatch.** boxd and the orchestrator are separate
 binaries speaking a private HTTP protocol, and they are upgraded independently. `BOXD_PROTOCOL`
