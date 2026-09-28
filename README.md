@@ -48,7 +48,8 @@ keep a task board of what they owe you.
 
 1. **Install.** Download the `.dmg` from the
    [latest release](https://github.com/fakechris/lumenbox/releases/latest) and drag LumenBox
-   to Applications. The app is signed but not notarized, so the first time either right-click →
+   to Applications. From 0.3.0 the app is signed with a local development certificate and is
+   not notarized, so the first time either right-click →
    *Open*, or run `xattr -dr com.apple.quarantine /Applications/LumenBox.app`.
 2. **Give it a key.** Settings opens by itself: pick a model provider and paste a key
    (Anthropic, MiniMax, DeepSeek, Zhipu, Moonshot, OpenAI, or any OpenAI-compatible endpoint).
