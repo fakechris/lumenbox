@@ -33,7 +33,7 @@
 
 未安装上游驱动、未授予宿主桌面权限、未运行上游完整 GUI E2E、未测跨平台性能或成本。Cua 的历史通过数量是**上游文档记录**，不是本次独立复测；仓库版本号也不等于该版本已有可用二进制发布。本文不以 stars 或 README 的平台勾选表推定生产成熟度。
 
-研究脚本：[`scripts/research-cua-probe.mjs`](../scripts/research-cua-probe.mjs)。它调用真实 `X11Executor.execute` / 缓存解析和协议函数，仅把原生输入及截图替换为内存 fixture。它验证本地控制流，不证明真实桌面交付效果。
+研究脚本：`research/scripts/research-cua-probe.mjs`（本地，不入库）。它调用真实 `X11Executor.execute` / 缓存解析和协议函数，仅把原生输入及截图替换为内存 fixture。它验证本地控制流，不证明真实桌面交付效果。
 
 ## 3. 三者处在什么层
 
@@ -83,7 +83,7 @@ INV context 的 completed run 是历史交付证据，不代表本次已重新�
 
 ### 4.2 本次复现的五个合同问题
 
-命令：`node --experimental-transform-types scripts/research-cua-probe.mjs`。2026-09-22 在上述基线运行，五项均 `reproduced: true`，退出 0 表示研究脚本执行完成，**不是这五个行为符合产品要求**。
+命令：`node --experimental-transform-types research/scripts/research-cua-probe.mjs`。2026-09-22 在上述基线运行，五项均 `reproduced: true`，退出 0 表示研究脚本执行完成，**不是这五个行为符合产品要求**。
 
 | 编号 | 触发与观察 | 后果 | 修订目标 |
 |---|---|---|---|
@@ -362,7 +362,7 @@ Rust helper 的首选 PoC 协议是私有 stdio JSON lines 或受控 Unix socket
 
 | 检查 | 本轮结果 |
 |---|---|
-| `node --experimental-transform-types scripts/research-cua-probe.mjs` | 退出 0；§4.2 五项问题均复现；native I/O 为 fixture |
+| `node --experimental-transform-types research/scripts/research-cua-probe.mjs` | 退出 0；§4.2 五项问题均复现；native I/O 为 fixture |
 | `lintDocs` / `renderIndex` | 无问题；新增 docs/62 的索引条目，保留已有 handoff 条目 |
 | `npm test` | 退出 0；1721 tests / 1721 pass / 0 fail / 0 skip；含文档一致性检查 |
 | 上游原生 GUI / 本地 Docker smoke | 本轮未执行；不作性能、平台交付或发布验收声明 |

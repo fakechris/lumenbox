@@ -15,9 +15,16 @@ docker/box/hostd.mjs
 *.log
 *.webp
 .DS_Store
-# Local research notes at the repo root. Nested `research/` dirs inside
-# vendored skill packages (catalog-data) are source and must be committed.
+# Research and competitive analysis stay out of the repo (c11f918, 2026-08-18): useful to keep,
+# not useful to ship, and the reasoning they support belongs in commits and code comments
+# without naming anyone. They live in /research/ at the repo root. docs/research/ and
+# scripts/research/ are ignored too because that is where they kept landing instead
+# (2026-09-28); scripts/docs-lint.test.mjs fails if any of the three is tracked.
+# Nested `research/` dirs inside vendored skill packages (catalog-data) are source and must be
+# committed, which is why these are rooted.
 /research/
+/docs/research/
+/scripts/research/
 /dist-app/
 /design/
 

@@ -18,7 +18,7 @@
 
 ## 2. 实验如何保证可比较
 
-研究脚本：[memory-eval.mjs](../scripts/research/jev-2026-09-22/memory-eval.mjs)。它导入现有 `memory-fixtures.ts` 与真实 `chooseRelevant/recall`，保持原候选生成、去重、撤回、预算和最终渲染。模型只收到 query 与已生成的候选，不收到 fixture 的 required/forbidden、oracle 选择或正确答案。
+研究脚本：[memory-eval.mjs](../research/scripts/jev-2026-09-22/memory-eval.mjs)。它导入现有 `memory-fixtures.ts` 与真实 `chooseRelevant/recall`，保持原候选生成、去重、撤回、预算和最终渲染。模型只收到 query 与已生成的候选，不收到 fixture 的 required/forbidden、oracle 选择或正确答案。
 
 四条比较路径：
 
@@ -33,7 +33,7 @@
 
 为了评估真实消费语义，研究脚本从现有 selector prompt 提取候选，把 typed 判断转换为既有选中 ID 格式交回 `chooseRelevant`。**这只是测试适配层，不是建议上线的接口**。产品仍应按 docs/63 引入 typed seam，包含稳定候选 ID、日期/来源、证据版本；不让业务长期依赖解析 prompt 文本。研究桥接保持现有 prompt 能提供的信息，不偷偷增加日期等优势。
 
-原始 API 响应、三轮逐例结果、6 条新样例、脚本及源文件 SHA256 保存在 [memory-results.json](../scripts/research/jev-2026-09-22/memory-results.json)。`--replay` 核对请求哈希并用保存响应重走真实召回，最终结果须逐项相同，不再次访问 API。默认运行无网络；只有显式 `--live` 才调用。
+原始 API 响应、三轮逐例结果、6 条新样例、脚本及源文件 SHA256 保存在 [memory-results.json](../research/scripts/jev-2026-09-22/memory-results.json)。`--replay` 核对请求哈希并用保存响应重走真实召回，最终结果须逐项相同，不再次访问 API。默认运行无网络；只有显式 `--live` 才调用。
 
 ## 3. 结果与实际费用
 
@@ -106,7 +106,7 @@ API schema 也复核了：Score 的 probabilities 是以等级字符串为 key �
 
 ## 7. 原真实命令验收的现状
 
-只读检查本机 `~/.agentbox/policy.jsonl`：494 条事件，其中 17 次 shell 检查、16 条不同命令；13 次 ls、3 次 grep、1 次 curl。这里只代表一个本机 host 日志，未搜索所有 Box。未导出或发送命令正文，只保存了[聚合清点](../scripts/research/jev-2026-09-22/audit-inventory.json)与源文件哈希。没有足够代表性的风险操作与授权/撤回配对上下文，因此不为这些明显偏读的样本付费生成“准确率”。
+只读检查本机 `~/.agentbox/policy.jsonl`：494 条事件，其中 17 次 shell 检查、16 条不同命令；13 次 ls、3 次 grep、1 次 curl。这里只代表一个本机 host 日志，未搜索所有 Box。未导出或发送命令正文，只保存了[聚合清点](../research/scripts/jev-2026-09-22/audit-inventory.json)与源文件哈希。没有足够代表性的风险操作与授权/撤回配对上下文，因此不为这些明显偏读的样本付费生成“准确率”。
 
 原 INV-600 的 ≥50 条真实命令及逐条人工分歧裁定仍未完成，也不能用本轮 108 次 API 请求替代。后续采样须记录真实来源、原工具、事件时间范围、脱敏方式与授权上下文是否齐全；不执行被评估的命令。分别比较 `needsReview` 的粗筛、PolicyGate 的确定性 allow/ask/deny 与模型的语义判断：三者问题不同，简单数一致率会把“代码允许但未验证语义授权”误算为模型错误或正确。
 
@@ -114,13 +114,13 @@ API schema 也复核了：Score 的 probabilities 是以等级字符串为 key �
 
 ```sh
 # 无网络：现有 scored recall 与 oracle 上界；不伪装有模型结果
-node --experimental-transform-types scripts/research/jev-2026-09-22/memory-eval.mjs
+node --experimental-transform-types research/scripts/jev-2026-09-22/memory-eval.mjs
 
 # 无网络：保存的响应重放，核对请求哈希与逐例最终结果
-node --experimental-transform-types scripts/research/jev-2026-09-22/memory-eval.mjs --replay
+node --experimental-transform-types research/scripts/jev-2026-09-22/memory-eval.mjs --replay
 
 # 仅显式请求才运行；消耗 API 配额，覆盖 memory-results.json
-node --experimental-transform-types scripts/research/jev-2026-09-22/memory-eval.mjs --live
+node --experimental-transform-types research/scripts/jev-2026-09-22/memory-eval.mjs --live
 ```
 
-本轮 dry、live、replay 均退出 0，live 108 个合法响应、0 错误，重放结果一致。最终仓库门禁结果另见 [round2-validation.json](../scripts/research/jev-2026-09-22/round2-validation.json)。没有运行在线 A/B，没有生产用户结果盲评，没有证明优于现有 LLM，也没有验收 provider 切换产品功能。研究完成不等于 INV-600 整体 Done。
+本轮 dry、live、replay 均退出 0，live 108 个合法响应、0 错误，重放结果一致。最终仓库门禁结果另见 [round2-validation.json](../research/scripts/jev-2026-09-22/round2-validation.json)。没有运行在线 A/B，没有生产用户结果盲评，没有证明优于现有 LLM，也没有验收 provider 切换产品功能。研究完成不等于 INV-600 整体 Done。

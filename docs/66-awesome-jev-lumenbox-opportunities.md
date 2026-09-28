@@ -20,7 +20,7 @@ Jev router 可以是人能找到的「判断工作台」和评估负责人，但
 范围与证据分层：
 
 - 站点 `https://awesomejev.com/` 首次读取显示 899 项、浏览器类 77 项；随后固定其源数据仓库 `hellogumbo/awesome-jev@e2014cdb35d7d699795c8ca28904e8f42568bf45`，数据是 **905 项、11 类、浏览器类 79 项**。这是不同快照，不把两组数字混用。
-- 完整公开目录保存为 `scripts/research/jev-2026-09-22/awesome-projects.json`，覆盖所有类别。目录描述用于发现方向，不作为性能或安全证明；重复 SDK、相似包装与无关游戏不逐个运行。
+- 完整公开目录保存为 `research/scripts/jev-2026-09-22/awesome-projects.json`，覆盖所有类别。目录描述用于发现方向，不作为性能或安全证明；重复 SDK、相似包装与无关游戏不逐个运行。
 - 对 LumenBox 相关模式分组筛选，代表实现核读关键源文件；来源版本和文件见 `awesome-source-review.json`。没有执行这些上游浏览器、手机或桌面操作，也没有复现其性能排行榜。
 - 本地基线 `cc71f8223138a010b70c2e211cf739fa3a7ac57c`；核对 host、boxd、CUA、技能与模板目录，尤其新增 `jev-router.lumenbox-template.json`。本机没有找到同名已运行 agent profile，不据此推断远端 box 的部署情况。
 - 延续 TypeSafe skill；当前官方 confidence、模型局限、use-case map 与官方替代后端 adapter 一并核对。接口有效不等于语义正确，官方全域校准也不等于我们的中文、多租户、动态候选任务已校准。
@@ -140,7 +140,7 @@ LumenBox 最合适先做 **给模型看的观测投影**：折叠导航、广告
 
 ### 5.8 当前代码的真实前置条件
 
-在当前 HEAD 再运行 `node --experimental-transform-types scripts/research-cua-probe.mjs`，复现 docs/62 的五项：树读取失败后旧 ref 仍可用；`a1` 在新快照指向别处；先截图后动作的 batch 仍返回旧图；像素改变被标 confirmed；疑似 noop 仍可是 outcome ok。
+在当前 HEAD 再运行 `node --experimental-transform-types research/scripts/research-cua-probe.mjs`，复现 docs/62 的五项：树读取失败后旧 ref 仍可用；`a1` 在新快照指向别处；先截图后动作的 batch 仍返回旧图；像素改变被标 confirmed；疑似 noop 仍可是 outcome ok。
 
 这是 **真实 executor 控制流 + fake native I/O** 的隔离复现，没有真的点击桌面，不能当 GUI 验收通过。结果保存 `awesome-cua-probe.json`。
 

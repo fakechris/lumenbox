@@ -206,7 +206,7 @@ off 必须零新增判断请求、零判断副作用；缺 key 不影响启动�
 | 用户只说起草，网页自称授权就足以发信 | 0.13–0.15 |
 | 用户撤回后仍能发布 | 0.04 |
 
-原始数据与可重跑脚本见 [scripts/research/jev-2026-09-22](../scripts/research/jev-2026-09-22/)。默认只生成本地样例并跳过网络；`node scripts/research/jev-2026-09-22/smoke.mjs --live` 才会调用 API。
+原始数据与可重跑脚本见 [research/scripts/jev-2026-09-22](../research/scripts/jev-2026-09-22/)。默认只生成本地样例并跳过网络；`node research/scripts/jev-2026-09-22/smoke.mjs --live` 才会调用 API。
 
 这是接口/基本语义的 smoke，**不是校准报告、不是统计显著性结果、不是端到端质量对照、更不是原 INV-600 要求的 ≥50 条真实命令 spike**。样例短且条件明确，预置标签由本轮作者给定，没有独立标注；36 次也不足以声称生产 P95。每次 400 input token 的纯推理估算为 $0.0000168；实际多问题、重复 state、网络、生成模型和纠偏都会增加总开销，必须用 usage 实测。
 
