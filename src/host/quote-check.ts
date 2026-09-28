@@ -27,7 +27,7 @@
  * this source. It does not say the quote was invented, the source was faked, or the agent
  * lied. A paraphrase in quotation marks, a translated line, a quote from a different page
  * in the same answer all land here. The word is chosen to be the weakest true statement,
- * matching docs/68 §4's `quote_not_located`, which exists for the same reason.
+ * matching the `quote_not_located` verdict in docs/11 ("What outside research decided"), which exists for the same reason.
  *
  * Nobody ships this. LlamaIndex's citation engine numbers chunks and trusts the number;
  * LangChain has no string check; ALCE uses entailment and never string matching (docs/71
@@ -36,7 +36,7 @@
  */
 
 /**
- * The three things that can be true of a quote, in docs/68 §4's vocabulary.
+ * The three things that can be true of a quote, in the vocabulary docs/11 ("What outside research decided") keeps.
  *
  * `unavailable` is about the *source*, not the quote: we cannot say anything either way
  * because there is nothing to search. Keeping it distinct from `not_located` is the whole
