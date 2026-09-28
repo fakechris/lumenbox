@@ -27,6 +27,7 @@ import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AgentRegistry, MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
 import { isContextCommand, newContext } from "../host/context-recovery.ts";
+import { goalCommand, isGoalCommand } from "../host/goal-mode.ts";
 import { isStandingName, readStanding, STANDING_BYTE_CAP, STANDING_FILES, writeStanding } from "../host/standing.ts";
 import { isRecoveryCommand, recoverTask } from "../host/task-recovery.ts";
 import { isRetryCommand, retryLastAnswer } from "../host/retry-recovery.ts";
@@ -534,6 +535,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const pendingHandovers = new Map<string, { agentId: string; agentName: string; instruction: string; reason: string; conversation?: string; at: string; desktopPath?: string }>();
 
   const orchestrator = new Orchestrator({
+    pendingQuestions: (agentId, conversation) => questions.list().filter(item => item.agentId === agentId && item.conversation === conversation && item.expiresAt > Date.now()).length,
     registry,
     provider,
     useBox: options.useBox,
@@ -912,6 +914,35 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         ],
       }, request).text;
     },
+    ...(orchestrator.tasks !== undefined ? { goal: {
+      command: input => {
+        let agent: ReturnType<typeof registry.resolve> | undefined;
+        try { agent = input.agentName === undefined ? registry.list()[0] : registry.resolve(input.agentName); }
+        catch { return { text: "找不到目标 agent；没有修改目标。" }; }
+        if (agent === undefined) return { text: "找不到目标 agent；没有修改目标。" };
+        const principal = principals.resolve(input.identity);
+        const conversation = conversationIdFor(input.conversationKey);
+        const agentId = agent.id;
+        return goalCommand({
+          tasks: orchestrator.tasks!,
+          mayUse: () => mayEnterBox(registry.boxOf(agentId), principal.id),
+          contextMode: () => registry.contextMode(agentId, conversation),
+          blockers: () => [
+            ...input.blockers,
+            ...orchestrator.contextBlockers(agentId, conversation),
+            ...questions.list().filter(item => item.agentId === agentId && item.conversation === conversation && item.expiresAt > Date.now()).map(item => `问题 ${item.id} 待回答`),
+          ],
+        }, {
+          agentId,
+          conversation,
+          requester: principal.id,
+          operationId: input.operationId,
+          privateChat: input.privateChat,
+          text: input.text,
+          chatKey: input.conversationKey,
+        });
+      },
+    } } : {}),
     ...(orchestrator.tasks !== undefined ? { recover: {
       prepare: input => {
         let agent: ReturnType<typeof registry.resolve> | undefined;
@@ -2391,6 +2422,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     );
   }
   const picked = orchestrator.resumeInterrupted();
+  const rearmed = orchestrator.rearmGoals();
+  if (rearmed > 0) log(`looking again at ${rearmed} goal${rearmed === 1 ? "" : "s"} that ${rearmed === 1 ? "was" : "were"} active before the restart`);
   if (picked.resumed > 0) {
     log(`picking up ${picked.resumed} turn${picked.resumed === 1 ? "" : "s"} interrupted by a restart`);
   }
@@ -6169,7 +6202,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (refused(agentId)) return;
           const text = String(body.text ?? "").trim();
 
-          if (isContextCommand(text) || isRecoveryCommand(text) || isRetryCommand(text)) {
+          if (isContextCommand(text) || isRecoveryCommand(text) || isRetryCommand(text) || isGoalCommand(text)) {
             send(res, 409, { error: "控制台主会话还包含团队活动，暂不支持上下文恢复命令。请在已接入的独立私聊使用；本次没有修改上下文。" });
             return;
           }

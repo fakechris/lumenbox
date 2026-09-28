@@ -11,6 +11,7 @@
  * inside one turn, so its transcript and profile have a single writer.
  */
 
+import type { GoalMarker } from "../host/goal-mode.ts";
 import { randomUUID } from "node:crypto";
 import { envNumber } from "../config.ts";
 import type { Inbox } from "./inbox.ts";
@@ -115,6 +116,12 @@ export interface InboundMessage {
    * message so a routine resumed after a restart is held to the same list.
    */
   toolScope?: readonly string[];
+  /**
+   * A goal continuation (INV-770): the host woke the agent to keep working toward a pursuit.
+   * The turn reads it for the workId it shares, writes its inbound entry as the host's, and
+   * runs with no inner continuation; the goal loop decides at start whether it still applies.
+   */
+  goal?: GoalMarker;
 }
 
 /** Ordered: `user` beats `agent` beats `background`, and the drain enforces exactly that. */
@@ -475,6 +482,8 @@ export class AgentBus {
       messageId?: string;
       /** A routine's declared tools; see `InboundMessage.toolScope`. */
       toolScope?: readonly string[];
+      /** A goal continuation's marker; see `InboundMessage.goal`. */
+      goal?: GoalMarker;
     } = {}
   ): number | undefined {
     return this.enqueue(agentId, {
@@ -490,6 +499,7 @@ export class AgentBus {
       ...(options.steerable === false ? { steerable: false } : {}),
       ...(options.lane !== undefined ? { lane: options.lane } : {}),
       ...(options.toolScope !== undefined ? { toolScope: options.toolScope } : {}),
+      ...(options.goal !== undefined ? { goal: options.goal } : {}),
     });
   }
 
@@ -666,6 +676,7 @@ export class AgentBus {
       });
 
       let inbound: InboundMessage[] = [];
+      let started = false;
       try {
         // Drain inside the exclusive section, so messages that arrived while we
         // were queued are picked up by this turn instead of spawning another —
@@ -681,8 +692,8 @@ export class AgentBus {
         // twice; resuming one properly needs per-step checkpoints, which do not exist yet.
         this.inbox?.start(inbound.map(message => message.admission));
         this.onEvent({ type: "turn_started", agentId, inboundCount: inbound.length });
+        started = true;
         await this.runTurn(agent, inbound, controller.signal, conversation);
-        this.onEvent({ type: "turn_finished", agentId });
       } catch (error) {
         // The senders are told. Their acknowledgement said the message would be delivered, and it
         // was — into a turn that then failed, which they would otherwise wait on forever. This is
@@ -693,6 +704,9 @@ export class AgentBus {
         if (this.active.get(key)?.controller === controller) {
           this.active.delete(key);
         }
+        // After the active flag is cleared, not before (INV-770): "finished" is read by the goal
+        // loop as "this conversation is free", and it used to fire while the turn still held it.
+        if (started) this.onEvent({ type: "turn_finished", agentId });
       }
     })();
 

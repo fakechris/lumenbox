@@ -8,7 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRegistry } from "../agents/registry.ts";
@@ -265,7 +265,8 @@ function countingBox(files: Map<string, string>, ran: string[]): BoxClient {
     },
     readFile: async (path: string) => {
       // `write_file` reads before it writes (the version check); only a file that exists is a read the task made.
-      if (files.has(path)) ran.push(`read:${path}`);
+      // The mirror reads the standing files back every sync (INV-803): bookkeeping, like its writes.
+      if (files.has(path) && !path.includes("/standing/")) ran.push(`read:${path}`);
       const content = files.get(path);
       if (content === undefined) throw new Error(`${path} does not exist`);
       return { path, content, total_lines: 1, truncated: false };
@@ -400,7 +401,10 @@ test("settled steps are never re-run; a pending read is answered fresh", async (
   }
 });
 
-test("a call carrying an operation_id (INV-525) is replayed; the same call without one is unknown", async () => {
+test("an operation_id on a bash call does not make it replayable: no executor honours it (INV-798)", async () => {
+  // The field used to count as an idempotency contract. It is not one: `bash` never
+  // forwards it to the box, and the job ids boxd does dedupe are minted per dispatch by
+  // the tool. A keyed command that took effect before the crash must not run twice.
   const f = stepFixture();
   try {
     const ada = f.registry.create({ name: "Ada" });
@@ -420,9 +424,131 @@ test("a call carrying an operation_id (INV-525) is replayed; the same call witho
     void orch.bus.wake(ada.id);
     await orch.settle();
 
-    assert.deepEqual(f.ran, ["bash:echo keyed"]);
-    assert.match(resultText(f.registry, ada.id, "c1"), /Re-run on resume/);
+    assert.deepEqual(f.ran, [], "neither command ran again: the effect is not duplicated");
+    assert.match(resultText(f.registry, ada.id, "c1"), /outcome_unknown/);
     assert.match(resultText(f.registry, ada.id, "c2"), /outcome_unknown/);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("a resumed read whose policy now says ask is put before a person, not run (INV-798)", async () => {
+  // The pending line is written before the gate is consulted, so this open step may be one the
+  // gate never saw; and the rules may have changed while the host was down. Either way the
+  // transcript is not authorisation.
+  const f = stepFixture();
+  process.env.AGENTBOX_APPROVAL_TOOLS = "read_file";
+  try {
+    const ada = f.registry.create({ name: "Ada" });
+    f.files.set("/home/box/work/secret.txt", "S");
+    leave(f.registry, ada.id, "t1", [blocks("t1", { id: "c1", name: "read_file", input: { path: "/home/box/work/secret.txt" } })]);
+    f.ledger().begin({ id: "t1", agentId: ada.id, about: "deploy the release" });
+    f.steps().pending("t1", "c1", "read_file");
+
+    const orch = await f.restart(() => say("waiting on you"));
+    assert.deepEqual(orch.resumeInterrupted(), { resumed: 1, abandoned: 0 });
+    void orch.bus.wake(ada.id);
+    await orch.settle();
+
+    assert.deepEqual(f.ran, [], "the read did not run");
+    assert.equal(orch.policy.pending().length, 1, "an approval was requested instead");
+    assert.match(resultText(f.registry, ada.id, "c1"), /approv/i);
+    assert.doesNotMatch(resultText(f.registry, ada.id, "c1"), /Re-run on resume/);
+    assert.ok(!JSON.stringify(f.registry.readTranscript(ada.id)).includes('"S"'), "the file's content reached nobody");
+  } finally {
+    delete process.env.AGENTBOX_APPROVAL_TOOLS;
+    f.cleanup();
+  }
+});
+
+test("a resumed read whose policy now says deny is refused, not run (INV-798)", async () => {
+  const f = stepFixture();
+  try {
+    const ada = f.registry.create({ name: "Ada" });
+    // A rule written while the host was down.
+    const rules = join(f.ledgerPath, "..", "rules");
+    mkdirSync(rules, { recursive: true });
+    writeFileSync(join(rules, "no-reads.md"), "---\nname: no-reads\neffect: deny\ntool: read_file\n---\nNo agent reads files here.\n");
+    f.files.set("/home/box/work/a.txt", "A");
+    leave(f.registry, ada.id, "t1", [blocks("t1", { id: "c1", name: "read_file", input: { path: "/home/box/work/a.txt" } })]);
+    f.ledger().begin({ id: "t1", agentId: ada.id, about: "deploy the release" });
+    f.steps().pending("t1", "c1", "read_file");
+
+    const orch = await f.restart(() => say("understood"));
+    assert.deepEqual(orch.resumeInterrupted(), { resumed: 1, abandoned: 0 });
+    void orch.bus.wake(ada.id);
+    await orch.settle();
+
+    assert.deepEqual(f.ran, [], "the read did not run");
+    assert.match(resultText(f.registry, ada.id, "c1"), /Refused by rule no-reads/);
+    assert.equal(orch.policy.pending().length, 0, "a deny asks nobody");
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("scenario: an approval outstanding at restart parks the turn, even though its refusal was already on the record (INV-798)", async () => {
+  // The whole path, not a hand-built ledger: a turn hits an approval, the host dies inside the
+  // model request that follows, and the process that replaces it must wait for the person —
+  // the step used to be settled with the rest of its batch, so the restart continued as if
+  // nothing were pending and the later grant found nothing to wake.
+  const f = stepFixture();
+  process.env.AGENTBOX_APPROVAL_TOOLS = "bash";
+  try {
+    const ada = f.registry.create({ name: "Ada" });
+    let round = 0;
+    const first = await f.restart(() => {
+      round += 1;
+      if (round === 1) return call("c1", "bash", { command: "rm -rf build" });
+      // The model request after the refusal: the process dies inside it.
+      return new Promise<never>(() => {});
+    });
+    void first.prompt(ada.id, "clean the build");
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(round, 2, "the process is inside the model request after the approval was asked");
+    assert.equal(first.policy.pending().length, 1);
+    const approvalId = first.policy.pending()[0]!.id;
+    assert.deepEqual(f.ran, [], "the command never ran");
+    const turnId = f.ledger().interrupted()[0]!.id;
+    assert.deepEqual(
+      f.steps().stepsOf(turnId).open.map(step => ({ id: step.toolUseId, approvalId: step.approvalId })),
+      [{ id: "c1", approvalId }],
+      "the step is still open, keyed to the approval, though its refusal is on disk"
+    );
+    assert.match(resultText(f.registry, ada.id, "c1"), /approv/i);
+
+    // The restart. The approval is replayed from policy.jsonl and still waiting.
+    const second = await f.restart(() => say("cleaned it"));
+    assert.deepEqual(second.resumeInterrupted(), { resumed: 0, abandoned: 0, parked: 1 });
+    assert.equal(second.bus.pendingCount(ada.id), 0, "nothing runs until the person answers");
+    assert.equal(f.ledger().interrupted().length, 1, "still an open turn: waiting, not lost");
+
+    assert.equal(second.policy.grant(approvalId, "chris"), true);
+    await second.settle();
+    const entries = entriesOf(f.registry, ada.id);
+    assert.ok(entries.some(entry => entry.turnId === turnId && /allowed this bash call[\s\S]*call it again/.test(entry.text ?? "")), "the answer reached the turn");
+    assert.ok(entries.some(entry => entry.turnId === turnId && entry.text === "cleaned it"), "and the turn went on, as itself");
+    assert.deepEqual(f.ran, [], "the grant is held; the call is the model's to make again");
+    assert.deepEqual(f.ledger().interrupted(), []);
+    assert.deepEqual(f.steps().stepsOf(turnId).open, []);
+  } finally {
+    delete process.env.AGENTBOX_APPROVAL_TOOLS;
+    f.cleanup();
+  }
+});
+
+test("a step waiting on a person closes when the person answers, while the turn is still alive (INV-798)", () => {
+  // The other half of keeping approval steps open: a grant or refusal during a live turn
+  // must settle the step, or a later restart would park on an approval nobody is waiting on.
+  const f = stepFixture();
+  try {
+    const steps = f.steps();
+    steps.pending("t1", "c1", "bash");
+    steps.awaitingApproval("t1", "c1", "ap-1");
+    steps.pending("t1", "c2", "read_file");
+    assert.equal(steps.settleApproval("ap-1"), true);
+    assert.deepEqual(f.steps().stepsOf("t1").open.map(step => step.toolUseId), ["c2"]);
+    assert.equal(steps.settleApproval("ap-1"), false, "nothing left waiting on it");
   } finally {
     f.cleanup();
   }

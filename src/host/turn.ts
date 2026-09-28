@@ -101,6 +101,9 @@ import {
   type GuardReason,
 } from "./guards.ts";
 import { malformedNudge, malformedOutput, sanitizeHistoryText } from "./output-integrity.ts";
+import { type GoalTurnReport, isWorkingTool } from "./goal-loop.ts";
+import { commandIsConfirmed, type GoalGate } from "./goal-gate.ts";
+import { DEFAULT_TOKEN_WEIGHTS, weightedCost } from "./goal-mode.ts";
 import {
   BOOKKEEPING_TOOLS,
   FORK_PROMPT_LINE,
@@ -227,12 +230,15 @@ function safeToReplay(name: string, input: Record<string, unknown>): boolean {
 
 /**
  * Whether the protocol's own declaration (INV-525) says this call lands the same state
- * twice: a read, or an idempotent write that carries the key making it so. A call with an
- * `operation_id` is the box's way of saying the same thing. Everything else is `unsafe`,
- * and a restart answers it `outcome_unknown` rather than running it again.
+ * twice: a read, or an idempotent write that carries the key making it so. Everything else
+ * is `unsafe`, and a restart answers it `outcome_unknown` rather than running it again.
+ *
+ * Only the declaration counts. A field in the model's input — an `operation_id`, say — is
+ * not a contract: no executor here reads it, `bash` does not forward it to the box, and
+ * the job ids boxd does dedupe are minted by the tool per dispatch, never taken from the
+ * call. A keyed `bash` that took effect before the crash would run again (INV-798).
  */
 function replaysToSameState(name: string, input: Record<string, unknown>): boolean {
-  if (typeof input.operation_id === "string" && input.operation_id !== "") return true;
   const declared = idempotencyOf(name);
   if (declared.kind === "read") return true;
   if (declared.kind === "idempotent") return declared.key === undefined || input[declared.key] !== undefined;
@@ -589,6 +595,10 @@ export interface TurnDeps {
     approval?: { id: string; how: "allowed" | "refused" | "gone" };
   };
   onEvent?: (event: TurnEvent) => void;
+  /** A goal continuation turn ended (INV-770): what it did and how, for the loop's accounting. */
+  onGoalTurn?: (report: GoalTurnReport) => void;
+  /** The completion gate (INV-771): the Goal tool's claim_complete goes through it. */
+  goalGate?: GoalGate;
   /**
    * Where one span per LLM call goes (trace.ts). Absent by default: a box whose
    * operator configured no collector has no tracer, and the `?.` below is the
@@ -1449,7 +1459,10 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   // The turn is the attempt; the work is what the attempts are attempts at. A resumption
   // inherits rather than mints, which is the whole point of the field: without it a turn that
   // resumed twice appears in every report as three unrelated short turns.
-  const workId = deps.resumeOf?.workId ?? randomUUID();
+  // A goal continuation inherits the pursuit's id the same way a resumption inherits its
+  // work's (INV-770): every turn of one objective is one piece of work in the ledgers.
+  const goal = inbound.find(message => message.goal !== undefined)?.goal;
+  const workId = deps.resumeOf?.workId ?? goal?.workId ?? randomUUID();
   // Built once, here, because this is the only place that knows all four of the things an aside
   // has to be attributed to. Passing the ledger down instead would mean passing the agent, the
   // work and the conversation down with it, which is three more chances to pass the wrong one.
@@ -1496,9 +1509,14 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   let quotesChecked = false;
 
   let ended = false;
+  let endedHow: string | undefined;
+  let lastFinalText: string | undefined;
+  /** The whole turn's spend, for a goal's budget (INV-772). */
+  const turnUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
   const finish = (how: string, category?: FailureCategory) => {
     if (ended) return;
     ended = true;
+    endedHow = how;
     deps.turns?.end(turnId, how, new Date(), category, keptThisTurn);
     deps.steps?.closed(turnId);
   };
@@ -1649,8 +1667,8 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       for (const call of calls) {
         const input = (call.input ?? {}) as Record<string, unknown>;
         if (!safeToReplay(call.name, input)) continue;
-        // Policy is deliberately not re-consulted: the block's presence in the
-        // transcript is the record that the original call already passed the gate.
+        // Through the current policy gate, like any call (INV-798): the transcript records
+        // that the call was asked for, not that it was authorised.
         const outcome = await dispatchTool(call.name, input, {
           agent,
           registry,
@@ -1658,12 +1676,14 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
           box,
           files: deps.files,
           claims: deps.claims,
+          policy: deps.policy,
           caller: deps.caller,
           ...(deps.callerName !== undefined ? { callerName: deps.callerName } : {}),
           displayIndex: deps.displayIndex,
           boxOwner: deps.boxOwner,
           tasks: deps.tasks,
           turnId,
+          toolUseId: call.id,
           conversation,
           memorySources: inbound.map(message => `message:${message.id}`),
         });
@@ -1674,8 +1694,10 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
             {
               type: "text",
               text:
-                "[Re-run on resume: this read-only call was interrupted before its result " +
-                `was recorded.]\n\n${outcome.text}`,
+                outcome.approval !== undefined
+                  ? outcome.text
+                  : "[Re-run on resume: this read-only call was interrupted before its result " +
+                    `was recorded.]\n\n${outcome.text}`,
             },
           ],
           ...(outcome.isError ? { is_error: true } : {}),
@@ -1703,9 +1725,21 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   // `outcome_unknown`, which is the truth and the only safe thing to say. A call never
   // dispatched is answered `not_started`. Settled calls already have their result on disk
   // and are never touched.
+  //
+  // A re-run goes through the policy gate as it stands *now* (INV-798). The pending line
+  // is written before the gate is consulted, so an open step may be one the gate never
+  // saw; and the person may have changed the rules while the host was down. The block's
+  // presence in the transcript records that the call was asked for, not that it was
+  // authorised. A call the gate now hands to a person stays open until they answer.
   if (continuing && history.length > 0) {
     const last = history[history.length - 1]!;
     const open = new Map((deps.steps?.stepsOf(turnId).open ?? []).map(step => [step.toolUseId, step] as const));
+    /** Steps answered by a result below, so the notice further down does not repeat them. */
+    const answeredHere = new Set<string>();
+    /** Steps the current gate put in front of a person: open until the answer lands. */
+    const stillWaiting = new Set<string>();
+    const approvalHow = (approvalId: string): "allowed" | "refused" | "gone" =>
+      deps.resumeOf?.approval?.id === approvalId ? deps.resumeOf!.approval!.how : "gone";
     if ("kind" in last && last.kind === "blocks") {
       const calls = last.blocks.filter(
         (block): block is Anthropic.ToolUseBlockParam => (block as { type?: string }).type === "tool_use"
@@ -1719,11 +1753,10 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
         if (step === undefined) {
           text = notStartedResult(call.name);
         } else if (step.approvalId !== undefined) {
-          const how = deps.resumeOf?.approval?.id === step.approvalId ? deps.resumeOf!.approval!.how : "gone";
-          text = approvalOutcomeResult(call.name, how);
+          text = approvalOutcomeResult(call.name, approvalHow(step.approvalId));
+          answeredHere.add(call.id);
         } else if (safeToReplay(call.name, input) || replaysToSameState(call.name, input)) {
-          // Policy is deliberately not re-consulted: the block's presence in the transcript is
-          // the record that the original call already passed the gate.
+          answeredHere.add(call.id);
           const outcome = await dispatchTool(call.name, input, {
             agent,
             registry,
@@ -1731,21 +1764,31 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
             box,
             files: deps.files,
             claims: deps.claims,
+            policy: deps.policy,
             caller: deps.caller,
             ...(deps.callerName !== undefined ? { callerName: deps.callerName } : {}),
             displayIndex: deps.displayIndex,
             boxOwner: deps.boxOwner,
             tasks: deps.tasks,
             turnId,
+            toolUseId: call.id,
             conversation,
             memorySources: inbound.map(message => `message:${message.id}`),
           });
-          text =
-            "[Re-run on resume: this call was interrupted before its result was recorded, and " +
-            `re-running it changes nothing.]
+          if (outcome.approval !== undefined) {
+            // The gate asked a person. The same shape as a first run: the refusal is the
+            // call's result, the step is marked waiting, and it is not settled below.
+            deps.steps?.awaitingApproval(turnId, call.id, outcome.approval.id);
+            stillWaiting.add(call.id);
+            text = outcome.text;
+          } else {
+            text =
+              "[Re-run on resume: this call was interrupted before its result was recorded, and " +
+              `re-running it changes nothing. It passed the policy gate again as it ran.]
 
 ${outcome.text}`;
-          isError = outcome.isError === true;
+            isError = outcome.isError === true;
+          }
         } else {
           text = outcomeUnknownResult(call.name);
         }
@@ -1768,14 +1811,35 @@ ${outcome.text}`;
         history = [...history, entry];
       }
     }
+    // A step that was waiting on a person and whose refusal is already on the record: the
+    // call's result slot is taken, so the answer arrives as a line from the host. This is
+    // the shape a restart during the model request after an approval leaves (INV-798):
+    // the step stays open until the person answers, the turn parks on it, and what they
+    // said has to reach the model somewhere.
+    const told = [...open.values()]
+      .filter(step => step.approvalId !== undefined && !answeredHere.has(step.toolUseId))
+      .map(step => approvalOutcomeResult(step.name, approvalHow(step.approvalId!)));
+    if (told.length > 0) {
+      const entry = {
+        role: "user",
+        text: `[host] ${told.join("\n")}`,
+        at: new Date().toISOString(),
+        turnId,
+      } satisfies TranscriptEntry;
+      registry.appendTranscript(agent.id, entry, conversation);
+      history = [...history, entry];
+    }
     // Whatever the transcript now says, these steps are over: either answered above, or
-    // their result was on disk already and only the `settled` line was lost.
-    for (const step of open.values()) deps.steps?.settled(turnId, step.toolUseId);
+    // their result was on disk already and only the `settled` line was lost. Except the
+    // ones the gate just handed to a person: those close when the person answers.
+    for (const step of open.values()) {
+      if (!stillWaiting.has(step.toolUseId)) deps.steps?.settled(turnId, step.toolUseId);
+    }
   }
 
   // A person, as opposed to the harness wearing the person's shape: a timer, a webhook, a
   // resume and a first run all arrive as `fromId: "user"` because that is what opens a turn.
-  const personOpened = inbound.some(message => message.fromId === "user" && message.synthetic !== true);
+  let personOpened = inbound.some(message => message.fromId === "user" && message.synthetic !== true);
   /**
    * Whether the person is a party to this conversation at all: they opened this turn, or they
    * have spoken here before. False for a worker that only ever hears from teammates.
@@ -1788,7 +1852,7 @@ ${outcome.text}`;
    * `NothingToSay` offered. A person's own turn is never one — nor a resume of one, which
    * continues work somebody asked for.
    */
-  const silenceOffered =
+  let silenceOffered =
     deps.resumeOf === undefined && (!personOpened || inbound.every(message => message.addressed === false));
 
   const turnText = buildTurnPrompt(inbound);
@@ -1854,6 +1918,8 @@ ${outcome.text}`;
     // not be walked backwards however precisely everything was timed.
     causedBy: inbound.map(message => message.id),
     ...(personOpened ? { fromPerson: true as const } : {}),
+    // A continuation wake is the host's text; compaction must never pin it as the ask (INV-766).
+    ...(goal !== undefined ? { host: true as const } : {}),
     turnId,
   } satisfies TranscriptEntry, conversation);
 
@@ -2155,6 +2221,17 @@ ${outcome.text}`;
     );
     throw error;
   } finally {
+    if (goal !== undefined) {
+      deps.onGoalTurn?.({
+        marker: goal,
+        turnId,
+        conversation,
+        how: endedHow ?? "failed",
+        worked: [...toolsUsedThisTurn].some(isWorkingTool),
+        cost: weightedCost(turnUsage, provider.tokenWeights ?? DEFAULT_TOKEN_WEIGHTS),
+        ...(lastFinalText !== undefined ? { finalText: lastFinalText } : {}),
+      });
+    }
     // Release the desktop however the turn ends — normally, by abort, or by
     // throwing. A lease leaked here would lock every other agent out of the
     // screen for the lifetime of the process.
@@ -2200,7 +2277,7 @@ ${outcome.text}`;
     // reserved final turn): the model is told, and tools are withheld for this request,
     // so what it has becomes a reply — partial, and said so — instead of a 401st call
     // nobody reads.
-    if (round === MAX_ROUNDS - 1) {
+    if (round === MAX_ROUNDS - 1 || (goal?.finishOnly === true && round === 0)) {
       const lastCall =
         "[last round] You have one response left in this turn and no tools. Reply now with what " +
         "you have: the result so far, marked partial where it is, and what is left. Anything you " +
@@ -2211,6 +2288,13 @@ ${outcome.text}`;
     }
     const steered = finishing ? [] : deps.bus.takeSteering(agent.id, conversation);
     if (steered.length > 0) {
+      // A person who speaks into a turn nobody was waiting on is now waited on (review R6):
+      // silence is withdrawn — the tool refuses from here — and the guards read the rest of
+      // the turn as theirs.
+      if (steered.some(message => message.fromId === "user" && message.synthetic !== true)) {
+        personOpened = true;
+        silenceOffered = false;
+      }
       const steerText = buildTurnPrompt(steered);
       registry.appendTranscript(agent.id, {
         role: "user",
@@ -2520,6 +2604,10 @@ ${outcome.text}`;
       cacheWriteTokens: response.usage.cache_creation_input_tokens ?? 0,
     };
     emit({ type: "usage", agentId: agent.id, round, ...usage });
+    turnUsage.inputTokens += usage.inputTokens;
+    turnUsage.outputTokens += usage.outputTokens;
+    turnUsage.cacheReadTokens += usage.cacheReadTokens;
+    turnUsage.cacheWriteTokens += usage.cacheWriteTokens;
     // The turn's opening call, scored for the cache ledger (INV-782): what share came from
     // cache, and — when enough turns in a row came in low with a segment moving — why.
     let cacheShare: number | undefined;
@@ -2891,7 +2979,20 @@ ${outcome.text}`;
       }
 
       if (finalText.trim()) {
-        registry.appendTranscript(agent.id, {
+        lastFinalText = finalText;
+        // A continuation's closing words are the record's, not the person's reply: filed as
+        // blocks, which `replySince` never delivers, so a goal working in the background does
+        // not talk into the chat (docs/74 §3.7). The finish-only report is sent by the loop.
+        if (goal !== undefined) {
+          registry.appendTranscript(agent.id, {
+            role: "assistant",
+            kind: "blocks",
+            blocks: [{ type: "text", text: finalText }],
+            at: new Date().toISOString(),
+            turnId,
+            silent: { reason: "goal continuation: kept on the record, not delivered" },
+          } satisfies TranscriptEntry, conversation);
+        } else registry.appendTranscript(agent.id, {
           role: "assistant",
           text: finalText,
           at: new Date().toISOString(),
@@ -2980,11 +3081,9 @@ ${outcome.text}`;
       roundText.trim().length >= FILED_ANSWER_FLOOR &&
       toolUses.every(use => BOOKKEEPING_TOOLS.has(use.name));
     if (filedAnswer) {
-      registry.appendTranscript(agent.id, {
-        role: "assistant",
-        text: roundText,
-        at: new Date().toISOString(),
-      } satisfies TranscriptEntry, conversation);
+      registry.appendTranscript(agent.id, goal !== undefined
+        ? { role: "assistant", kind: "blocks", blocks: [{ type: "text", text: roundText }], at: new Date().toISOString(), turnId, silent: { reason: "goal continuation: kept on the record, not delivered" } }
+        : { role: "assistant", text: roundText, at: new Date().toISOString() } satisfies TranscriptEntry, conversation);
     }
 
     // The opening line reaches the person while the tools run (docs/31 layer 1a). Grok Bot
@@ -3029,6 +3128,12 @@ ${outcome.text}`;
     const results: Anthropic.ToolResultBlockParam[] = [];
     /** Tool-use ids whose stored text differs from what the model was shown. */
     const withheld = new Map<string, string>();
+    /**
+     * Calls the gate handed to a person this round (INV-798). Their step stays open in the
+     * ledger past the end of the batch: it closes when the person answers, so a restart in
+     * the meantime parks on the answer instead of continuing as if nothing were pending.
+     */
+    const awaitingPerson = new Set<string>();
     const runOne = async (
       toolUse: Anthropic.ToolUseBlock
     ): Promise<{ block: Anthropic.ToolResultBlockParam; recordAs?: string; commit?: { id: string; how: import("./pending-work.ts").CommitHow }[] }> => {
@@ -3097,6 +3202,16 @@ ${outcome.text}`;
       let outcome: ToolOutcome;
       if (isolated || (effectiveTools !== undefined && !tools.some(tool => tool.name === toolUse.name))) {
         outcome = { text: isolated ? `Tools are disabled in ${contextMode} context.` : "This tool is unavailable in the current execution context.", isError: true };
+      } else if (goal?.verify !== undefined && toolUse.name === "bash" && !commandIsConfirmed(goal, String((toolInput as { command?: unknown }).command ?? ""))) {
+        // A verifier runs what the person confirmed and nothing else (review R3): the checklist
+        // was written by a model, and a model-written command is a proposal until a person says.
+        outcome = {
+          text:
+            `bash refused: a verification runs only the commands the person confirmed, exactly as written` +
+            (goal.verify.confirmedCommands.length > 0 ? ` (${goal.verify.confirmedCommands.join(" | ")})` : " (none were confirmed)") +
+            ". Judge the item from what you can read instead.",
+          isError: true,
+        };
       } else if (hookBlock !== undefined) {
         outcome = { text: `Blocked by a PreToolUse hook: ${hookBlock}`, isError: true };
       } else if (blocked !== undefined) {
@@ -3133,6 +3248,7 @@ ${outcome.text}`;
             vault: deps.vault,
             oauth: isForkConversation(conversation) ? undefined : deps.oauth,
             tasks: deps.tasks,
+            ...(deps.goalGate !== undefined ? { goalGate: deps.goalGate } : {}),
             scopes: deps.scopes,
             mcp: isForkConversation(conversation) ? undefined : deps.mcp,
             askUser: deps.askUser,
@@ -3163,7 +3279,10 @@ ${outcome.text}`;
           isError: true,
         };
       }
-      if (outcome.approval !== undefined) deps.steps?.awaitingApproval(turnId, toolUse.id, outcome.approval.id);
+      if (outcome.approval !== undefined) {
+        deps.steps?.awaitingApproval(turnId, toolUse.id, outcome.approval.id);
+        awaitingPerson.add(toolUse.id);
+      }
 
       emit({
         type: "tool_end",
@@ -3276,7 +3395,11 @@ ${outcome.text}`;
     } satisfies TranscriptEntry, conversation);
     // Settled only now, with the results on disk: a crash before this line leaves the
     // calls open, and open means "the result may be missing", which is exactly the case.
-    for (const use of toolUses) deps.steps?.settled(turnId, use.id);
+    // A call waiting on a person is not settled by its refusal being on disk: the
+    // orchestrator settles it when the person answers (INV-798).
+    for (const use of toolUses) {
+      if (!awaitingPerson.has(use.id)) deps.steps?.settled(turnId, use.id);
+    }
     // Only now are a fork's findings durably the parent's (docs/32 §1): the results entry is
     // on disk. Committing inside the tool would record `done` for findings a crash could
     // still lose between the join and this line.
@@ -3331,7 +3454,10 @@ ${outcome.text}`;
     throw new TurnRoundLimitExceeded(report);
   }
 
-  if (outcome.kind === "progressing" && continuation < MAX_CONTINUATIONS) {
+  // A goal turn continues through the loop, not inside itself: two nested continuations would
+  // make either limit meaningless (docs/74 §3.3).
+  const maxContinuations = goal !== undefined ? 0 : MAX_CONTINUATIONS;
+  if (outcome.kind === "progressing" && continuation < maxContinuations) {
     // A budget, not a wall. The plan and todo list are in the system prompt and unchanged, and the
     // history will be compacted on the way in — so a fresh turn resumes rather than restarts.
     const next = continuation + 1;

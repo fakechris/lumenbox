@@ -37,6 +37,7 @@ import { dirname, join } from "node:path";
 import { appendLine, type LedgerKind } from "./jsonl.ts";
 import { Receipts } from "./receipts.ts";
 import { agentboxHome, envNumber } from "../config.ts";
+import { conversationOfTask, GOAL_GATE_ACTOR, type Pursuit, taskStatusFor } from "./goal-mode.ts";
 
 /**
  * What each task is, now, plus a grace period on closed ones so a person asking about
@@ -158,6 +159,13 @@ export interface Task {
    * is the follow-up machinery, and one open goal per area is what stops a second intake.
    */
   goal?: { area: string; commitment?: string };
+  /**
+   * An objective the *agent* pursues until a gate it does not own says it is met (docs/74,
+   * INV-769). Distinct from `goal`, which is the person's own goal followed up by check-ins.
+   * The board derives `status` from it and refuses to move a pursuit task on anyone's word
+   * but the gate's or the requester's.
+   */
+  pursuit?: Pursuit;
   /** Leave it alone until this instant: the answer to a nudge that is "not now" (INV-532). */
   snoozeUntil?: string;
   /** How often the requester has been nudged about an overdue or idle task, and when last. */
@@ -360,6 +368,7 @@ export class TaskStore {
     proposedBy?: string;
     due?: string;
     goal?: { area: string; commitment?: string };
+    pursuit?: Pursuit;
     now?: Date;
   }): Task | undefined {
     const title = input.title.replace(/\s+/g, " ").trim().slice(0, 200);
@@ -372,7 +381,7 @@ export class TaskStore {
       ...(input.description !== undefined && input.description.trim() !== ""
         ? { description: clampDescription(input.description) }
         : {}),
-      status: "open",
+      status: input.pursuit !== undefined ? taskStatusFor(input.pursuit) : "open",
       requester: input.requester,
       ...(input.sourceMessageId !== undefined ? { sourceMessageId: input.sourceMessageId } : {}),
       ...(input.assigneeId !== undefined ? { assigneeId: input.assigneeId } : {}),
@@ -384,9 +393,10 @@ export class TaskStore {
       ...(input.goal !== undefined && input.goal.area.trim() !== ""
         ? { goal: { area: input.goal.area.trim().slice(0, 80), ...(input.goal.commitment?.trim() ? { commitment: input.goal.commitment.trim().slice(0, 500) } : {}) } }
         : {}),
+      ...(input.pursuit !== undefined ? { pursuit: input.pursuit } : {}),
       createdAt: at,
       updatedAt: at,
-      history: [{ at, by: input.requester, status: "open", note: input.proposedBy !== undefined ? "proposed, awaiting a person's commit" : "created" }],
+      history: [{ at, by: input.requester, status: input.pursuit !== undefined ? taskStatusFor(input.pursuit) : "open", note: input.proposedBy !== undefined ? "proposed, awaiting a person's commit" : input.pursuit !== undefined ? "goal set by the person" : "created" }],
     };
     this.tasks.set(task.id, task);
     this.append({ kind: "task", task });
@@ -474,6 +484,8 @@ export class TaskStore {
     const task = this.tasks.get(id);
     if (task === undefined) return undefined;
     if (task.status !== "open" && task.status !== "doing") return { task };
+    // A turn ending says nothing about a goal (docs/74 §7 R1): the gate does.
+    if (task.pursuit !== undefined) return { task };
     // Attributed to whoever the work belongs to, so the gate sees the same thing it sees
     // when that agent marks its own task done — because that is what is happening.
     return this.update(id, { status: "done" }, task.assigneeId ?? "channel", undefined, now);
@@ -508,6 +520,24 @@ export class TaskStore {
     const at = now.toISOString();
     let coerced: string | undefined;
     let status = changes.status;
+
+    // A pursuit's status is derived from the goal's state and moves only through the gate
+    // (docs/74 §7 R1). The review found three routes to `done` besides the gate — the
+    // assignee with no reviewer named, a reviewer that is the assignee, and `turnFinished`
+    // — so the refusal is here, in the store, and not in the callers' good manners. The
+    // requester keeps two words: accepting a completed goal, and clearing it.
+    if (task.pursuit !== undefined && status !== undefined && status !== task.status) {
+      const allowed =
+        by === GOAL_GATE_ACTOR ||
+        (by === task.requester && ((status === "done" && task.status === "review") || status === "dropped"));
+      if (!allowed) {
+        status = undefined;
+        coerced =
+          `${id} is a goal the person set (${task.pursuit.status}); its status moves only through the goal gate, ` +
+          `or when ${task.requester} accepts or clears it. It has not moved — put what you found in a note, ` +
+          `or claim completion with the Goal tool.`;
+      }
+    }
 
     // A proposal is not work yet: nobody starts it until a person commits it. Redirected
     // rather than refused, like the review gate, so the caller learns the rule from the
@@ -642,6 +672,10 @@ export class TaskStore {
     if (by !== AGING_ACTOR && updated.aging !== undefined) updated.aging = { nudges: 0, lastNudgedAt: at, reason: updated.aging.reason };
     // Any move by the requester while a close is proposed is their answer to it.
     if (updated.closeProposal !== undefined && by === task.requester) delete updated.closeProposal;
+    // The requester clearing a goal is the goal ending; the pursuit record says so too.
+    if (updated.pursuit !== undefined && status === "dropped" && by === task.requester) {
+      updated.pursuit = { ...updated.pursuit, status: "cleared", pausedReason: "person" };
+    }
 
     this.tasks.set(id, updated);
     this.append({ kind: "task", task: updated });
@@ -669,6 +703,8 @@ export class TaskStore {
     const t = now.getTime();
     for (const task of [...this.tasks.values()]) {
       if (!isLive(task.status) || task.proposedBy !== undefined) continue;
+      // A pursuit has its own clocks and stops (docs/74 §3.5); the sweep is not one of them.
+      if (task.pursuit !== undefined) continue;
       // Asked to come back later, and told when. Until then there is nothing to say.
       if (task.snoozeUntil !== undefined && Date.parse(task.snoozeUntil) > t) continue;
       // A close proposal is already a clock with a person's answer at the end of it;
@@ -823,7 +859,7 @@ export class TaskStore {
       }
       // Silence is not the person's word on a goal (INV-768): the proposal expires, the goal
       // stays, and the check-ins resume rather than the sweep answering for them.
-      if (task.goal !== undefined) {
+      if (task.goal !== undefined || task.pursuit !== undefined) {
         const at = now.toISOString();
         const kept: Task = { ...task, updatedAt: at, history: [...task.history, { at, by: AGING_ACTOR, note: `close proposal by ${proposal.by} expired: a goal closes only on ${task.requester}'s word` }].slice(-HISTORY_LIMIT) };
         delete kept.closeProposal;
@@ -890,6 +926,48 @@ export class TaskStore {
       const detail = error instanceof Error ? error.message : String(error);
       this.onWarn(`tasks: cannot read ${this.path} (${detail})`);
     }
+  }
+
+  /** The pursuit on a conversation that is not over — active, verifying or paused. At most one. */
+  pursuitIn(conversation: string): Task | undefined {
+    return [...this.tasks.values()].find(
+      task => task.pursuit !== undefined && conversationOfTask(task) === conversation &&
+        (task.pursuit.status === "active" || task.pursuit.status === "verifying" || task.pursuit.status === "paused")
+    );
+  }
+
+  /** The pursuit a channel message already created, so a resent `/goal` is one goal (docs/74 §7 R8). */
+  pursuitFromMessage(messageId: string): Task | undefined {
+    return [...this.tasks.values()].find(task => task.pursuit?.sourceMessageId === messageId);
+  }
+
+  /**
+   * Change a pursuit. The board status follows the pursuit's (docs/74 §7 R7) and the move is
+   * recorded under the gate's name, because this is the one path a pursuit moves through.
+   */
+  setPursuit(
+    id: string,
+    change: (pursuit: Pursuit) => Pursuit,
+    note: string,
+    by: string = GOAL_GATE_ACTOR,
+    now: Date = new Date()
+  ): { task: Task } | undefined {
+    const task = this.tasks.get(id);
+    if (task?.pursuit === undefined) return undefined;
+    const pursuit = change(task.pursuit);
+    const status = taskStatusFor(pursuit);
+    const at = now.toISOString();
+    const updated: Task = {
+      ...task,
+      pursuit,
+      status,
+      updatedAt: at,
+      history: [...task.history, { at, by, ...(status !== task.status ? { status } : {}), note: note.trim().slice(0, 500) }].slice(-HISTORY_LIMIT),
+    };
+    this.tasks.set(id, updated);
+    this.append({ kind: "task", task: updated });
+    for (const listener of this.listeners) listener(updated);
+    return { task: this.get(id)! };
   }
 
   /** The live goal in an area, if there is one: what a second "I want to…" should follow up rather than restart. */
@@ -973,5 +1051,6 @@ export function describeTask(task: Task, nameOf: (id: string) => string): string
   const reviewer = task.reviewerId !== undefined ? ` · review by ${nameOf(task.reviewerId)}` : "";
   const proposed = task.proposedBy !== undefined ? " (proposed — a person commits it before anyone starts)" : "";
   const goal = task.goal !== undefined ? ` · goal (${task.goal.area}${task.goal.commitment !== undefined ? `: ${task.goal.commitment}` : ""})` : "";
-  return `${task.id} [${task.status}]${assignee} ${task.title}${goal}${reviewer}${proposed}`;
+  const pursuit = task.pursuit !== undefined ? ` · pursuing (${task.pursuit.status})` : "";
+  return `${task.id} [${task.status}]${assignee} ${task.title}${goal}${pursuit}${reviewer}${proposed}`;
 }

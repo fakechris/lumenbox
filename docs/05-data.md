@@ -775,6 +775,70 @@ The sweep never archives a goal (INV-768): past the second check-in it asks agai
 `GOAL_QUIET_FACTOR` gaps rather than going quiet or closing, and a close proposal on a goal expires
 when its window passes instead of closing it — a goal ends on the person's word only.
 
+**A goal the agent pursues (INV-769, docs/74).** `/goal <objective>` in a private chat puts a
+`pursuit` on a task: the person's words verbatim, a checklist that only grows, limits and spend,
+and a `workId` every later turn of it shares. It is a host control command beside `/new` — never
+sent to the model, refused in clean and recovery contexts, on the team room, in groups, and on
+the web door in this version. The board derives the task's status from the pursuit (`active`/
+`verifying` → doing, `paused` → blocked, `complete` → review, `cleared` → dropped) and refuses to
+move it on anyone's word but the gate's or the requester's: the assignee's `done`, `turnFinished`,
+the ageing sweep and a silent close proposal all leave it where it is. The first turn after
+`/goal` is a host-authored brief that drafts the checklist through the `Goal` tool and shows it to
+the person; a checklist command runs nowhere until `/goal confirm n`. A running pursuit refuses
+`/new` and says how to let go (`/goal pause`, `/goal clear`); a paused one does not. The prompt
+carries the goal every turn, rendered from the board, so compaction cannot lose it.
+
+**The continuation loop (INV-770, `src/host/goal-loop.ts`).** While a pursuit is `active`, the host
+keeps it moving: each time its conversation goes quiet — no running or open turn, nothing queued,
+no question or approval waiting on the person — the loop arms one continuation, 1.5 s later, and
+starts it only if the conversation is still quiet then; a person's message arriving first makes it
+stale, and a stale wake that reaches the front of the queue is not run. The wake is a host
+notification (`<host_notification source="goal">`: the objective as data, the checklist, the last
+verdict, the pursuit rules), sent `synthetic` on the `background` lane through the wake gate, and
+its turn runs under the pursuit's `workId`, writes its inbound entry as the host's, runs no inner
+continuation, and files its closing words as blocks that `replySince` never delivers. A person who
+steers into it is answered as a person. Four stops: three continuations in a row that called no
+working tool (`GOAL_BOOKKEEPING_TOOLS` do not count) pause it as `anti_spin`; plan + todos +
+workspace manifest unchanged across two continuations pause it as `stalled`; at the continuation
+count or active-time limit the last wake is finish-only (one round, `tool_choice: none`) and its
+report is the one continuation text the person is sent. A continuation turn that fails is retried
+twice with 30 s × 2ⁿ backoff, then pauses the goal as `error`. The person is told only when the goal
+stops, in the chat it was set in (`pursuit.chatKey`). Counters live on the board, so a restart
+re-arms every active goal (`rearmGoals`) under the same id. The bus now emits `turn_finished`
+after the conversation is free, not before.
+
+**The completion gate (INV-771, `src/host/goal-gate.ts`).** An executor claims completion with
+`Goal claim_complete`, one evidence pointer per checklist item; it cannot finish a goal itself. The
+host's own checks come first and cost no model: an open todo refuses the claim outright, and an
+artifact path missing from the workspace manifest taken at that moment rejects it. An accepted
+claim puts the pursuit in `verifying` — on the board, with the verifier's conversation
+(`goalverify-<task>-<claim>`), the attempt, and the manifest's digest — and wakes the same agent
+in that conversation, which has no history of the work, with `VERIFIER_TOOLS` (read_file,
+list_dir, bash, ReadKept) where bash runs only the commands the person confirmed with
+`/goal confirm n`, exactly as written, and refuses anything else. The brief carries the objective as
+data, the checklist and the executor's pointers, never the executor's account, and asks for headers
+plus one line per item; the host parses the verdict (`parseGoalVerdict`). It fails closed: a turn
+that fails or ends without a parsable verdict is run once more and then handed to the person; a
+workspace whose digest changed during verification voids the verdict; a late report from an
+earlier attempt is ignored. A pass moves the pursuit to `complete` and the task to `review`, where
+only the requester's word is done. A rejection writes the verdict and next action onto the
+pursuit, marks each checklist item, returns the goal to `active` for the loop to carry the next
+action — and the third rejection in a row pauses it as `needs_person`. On startup a goal left
+verifying finds its verdict in the verifier conversation's transcript or is rejected as
+interrupted. The person hears the verdict either way, in the chat the goal was set in.
+
+**A goal's budget (INV-772).** `/goal <objective> --budget 200k` (or `/goal budget 200k` on the
+goal that is running) caps one goal's spend; without one the spend is only recorded. The unit is
+input-token equivalents: every turn of the goal — continuations, the finish-only report, the
+verifier's turns — sums its rounds' usage and weights each class by the provider's
+`tokenWeights` (MiniMax-M3: input 1, cache read 0.1, cache write 1, output 4; the defaults are
+1 / 0.1 / 1.25 / 4), and the turn's report carries the number onto `pursuit.spent.cost`. That
+is where the bill lives: not recomputed from usage rows, which keep 48 hours and carry no
+prices, and not the machine-wide ceiling docs/16 chose to observe first. Past 80% the
+continuation notice tells the executor how much is left; at the limit the next wake is
+finish-only and the goal pauses as `budget`, with the report delivered. `/goal` shows spent and
+budget.
+
 Forgetting is `Forget` (`src/host/forget.ts`), in two turns. **plan** searches every place the words
 can be — both memory tiers and the box's mirror of them, kept pages, kept results, the board with its
 history, the commitments ledger, and routines — and answers in counts and names, never the words;
