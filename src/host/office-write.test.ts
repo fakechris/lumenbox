@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chunkBlocks, dingtalkEventBody, doorIdOf, feishuDocUrl, feishuEventBody, feishuTaskBody, instantOf, markdownToFeishuBlocks } from "./office-write.ts";
+import { chunkBlocks, dingtalkEventBody, doorIdOf, doorIdsOf, feishuDocUrl, feishuEventBody, feishuTaskBody, instantOf, markdownToFeishuBlocks } from "./office-write.ts";
 import { dispatchTool } from "./tools.ts";
 
 test("markdown becomes the document blocks Feishu documents, one paragraph per block", () => {
@@ -39,12 +39,17 @@ test("links and ids come from what is known, never guessed", () => {
   assert.equal(feishuDocUrl("doxA", "https://acme.feishu.cn/"), "https://acme.feishu.cn/docx/doxA");
   assert.equal(doorIdOf(["telegram:1", "feishu:ou_me"], "feishu"), "ou_me");
   assert.equal(doorIdOf(["telegram:1"], "feishu"), undefined);
+  // A replaced door leaves its old id behind, earlier in the list: the newest one is the one to use.
+  assert.equal(doorIdOf(["feishu:ou_old", "telegram:1", "feishu:ou_new"], "feishu"), "ou_new");
+  assert.deepEqual(doorIdsOf(["feishu:ou_old", "telegram:1", "feishu:ou_new"], "feishu"), ["ou_new", "ou_old"]);
 });
 
 /** Feishu answering as its docs say: 200 with code 0 and the result under data. */
-function feishuStub() {
+function feishuStub(override?: (url: string, body: unknown) => unknown) {
   const calls: { method: string; url: string; headers: Record<string, string>; body: unknown }[] = [];
-  const reply = (url: string): unknown => {
+  const reply = (url: string, body?: unknown): unknown => {
+    const overridden = override?.(url, body);
+    if (overridden !== undefined) return overridden;
     if (url.endsWith("/docx/v1/documents")) return { code: 0, data: { document: { document_id: "doxAAA", title: "Q3" } } };
     if (url.includes("/drive/v1/permissions/")) return { code: 0, data: { member: {} } };
     if (url.includes("/blocks/")) return { code: 0, data: { children: [] } };
@@ -58,8 +63,9 @@ function feishuStub() {
   };
   const original = globalThis.fetch;
   globalThis.fetch = (async (url: string, init: { method: string; headers: Record<string, string>; body?: string }) => {
-    calls.push({ method: init.method, url, headers: init.headers, body: init.body === undefined ? undefined : JSON.parse(init.body) });
-    return new Response(JSON.stringify(reply(url)), { status: 200 });
+    const body = init.body === undefined ? undefined : JSON.parse(init.body);
+    calls.push({ method: init.method, url, headers: init.headers, body });
+    return new Response(JSON.stringify(reply(url, body)), { status: 200 });
   }) as typeof fetch;
   return { calls, restore: () => { globalThis.fetch = original; } };
 }
@@ -98,6 +104,39 @@ test("doc_create without knowing who asked says only the app can see it", async 
     const out = await dispatchTool("FeishuWrite", { action: "doc_create", title: "Q3" }, context([]));
     assert.match(out.text, /only the app can see it/);
     assert.equal(stub.calls.length, 1);
+  } finally { stub.restore(); }
+});
+
+test("doc_create that comes back without a document id stops there and says the outcome is unknown", async () => {
+  const stub = feishuStub(url => (url.endsWith("/docx/v1/documents") ? { code: 0, data: { document: {} } } : undefined));
+  try {
+    const out = await dispatchTool("FeishuWrite", { action: "doc_create", title: "Q3", markdown: "hello" }, context(["feishu:ou_me"]));
+    assert.ok(out.isError, out.text);
+    assert.match(out.text, /unknown/i);
+    assert.match(out.text, /no document id/);
+    assert.equal(stub.calls.length, 1, "no permission or block call is sent to an empty path");
+  } finally { stub.restore(); }
+});
+
+test("doc_create tries the person's other Feishu ids when the newest is not this app's", async () => {
+  const stub = feishuStub((url, body) =>
+    url.includes("/drive/v1/permissions/") && (body as { member_id?: string }).member_id === "ou_new" ? { code: 1063001, msg: "invalid open_id" } : undefined);
+  try {
+    const out = await dispatchTool("FeishuWrite", { action: "doc_create", title: "Q3" }, context(["feishu:ou_old", "feishu:ou_new"]));
+    assert.ok(!out.isError, out.text);
+    const granted = stub.calls.filter(call => call.url.includes("/drive/v1/permissions/")).map(call => (call.body as { member_id: string }).member_id);
+    assert.deepEqual(granted, ["ou_new", "ou_old"], "newest first, then the older one");
+    assert.match(out.text, /can open and edit it/);
+  } finally { stub.restore(); }
+});
+
+test("calendar_event with no primary calendar creates nothing and says why", async () => {
+  const stub = feishuStub(url => (url.endsWith("/calendar/v4/calendars/primary") ? { code: 0, data: { calendars: [] } } : undefined));
+  try {
+    const out = await dispatchTool("FeishuWrite", { action: "calendar_event", summary: "Review", start: "2026-10-03 15:00", end: "2026-10-03 16:00", timezone: "Asia/Shanghai" }, context(["feishu:ou_me"]));
+    assert.ok(out.isError, out.text);
+    assert.match(out.text, /no primary calendar/);
+    assert.equal(stub.calls.length, 1, "no event is posted to /calendars//events");
   } finally { stub.restore(); }
 });
 

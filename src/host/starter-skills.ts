@@ -742,7 +742,7 @@ Tool names, ids, JSON, status codes or words like \`not_connected\` — say what
     // A usage skill for a connector we already offer (INV-753, INV-754).
     slug: "feishu",
     // Rewritten for FeishuWrite (INV-754); this is the INV-753 version, which we may replace.
-    supersedes: ["dfa72b18"],
+    supersedes: ["dfa72b18", "31e3a2c5"],
     content: `---
 name: feishu
 description: Use when someone asks you to put work into Feishu (飞书) or read it there — write a 飞书文档, add or update rows in a 多维表格, put an event on the 飞书日程, create or finish a 飞书任务 — or to read a Feishu document. Not for replying in the chat you are already in, which needs no tool, and not for DingTalk (dingtalk).
@@ -753,7 +753,7 @@ scope: global
 
 ## Is it connected here
 
-It is connected when \`FeishuWrite\` is in your tool list (and \`ReadFeishuDoc\` for reading). If it is not, say so in one sentence — "Feishu isn't connected here yet; an admin can connect it" — and offer what you can do without it. Never ask for a token, never invent a link, never pretend a step happened.
+Writing needs \`FeishuWrite\` in your tool list; reading a document needs \`ReadFeishuDoc\`. They are separate — one can be there without the other — so check the one the request needs. If that one is missing, say so in one sentence — "Feishu isn't connected here yet; an admin can connect it" — and offer what you can do without it. Never ask for a token, never invent a link, never pretend a step happened.
 
 ## How the app's writes behave
 

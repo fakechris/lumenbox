@@ -8,7 +8,7 @@ import { isComputerWrite } from "../cua/execution.ts";
  */
 
 import { randomUUID } from "node:crypto";
-import { chunkBlocks, dingtalkEventBody, doorIdOf, feishuDocUrl, feishuEventBody, feishuTaskBody, instantOf, markdownToFeishuBlocks } from "./office-write.ts";
+import { chunkBlocks, dingtalkEventBody, doorIdOf, doorIdsOf, feishuDocUrl, feishuEventBody, feishuTaskBody, instantOf, markdownToFeishuBlocks } from "./office-write.ts";
 import { agentboxHome } from "../config.ts";
 import { executeForget, forgetOutcomeReport, forgetPlanReport, forgettable, ForgetPlans, inventory } from "./forget.ts";
 import type Anthropic from "@anthropic-ai/sdk";
@@ -3734,12 +3734,21 @@ export async function dispatchTool(
           const created = await connectorJson(auth, "POST", "/docx/v1/documents", { title, ...(text(input.folder_token) ? { folder_token: text(input.folder_token) } : {}) });
           if (!created.ok) return fail(created.text, created.unknown);
           const id = String(data(created.json).document?.document_id ?? "");
+          // Feishu said yes but named no document: something may exist, and nothing after this can address it.
+          if (id === "") return fail("Feishu accepted doc_create but returned no document id, so the document may or may not exist and cannot be shared or written to — check Feishu Docs for the title before trying again", true);
           const lines = [`Created "${title}" (document ${id}).`];
           // A document the app creates is invisible to everyone else until someone is added.
           const grant = (openId: string, perm: "edit" | "full_access") =>
             connectorJson(auth, "POST", `/drive/v1/permissions/${encodeURIComponent(id)}/members?type=docx`, { member_type: "openid", member_id: openId, perm, type: "user" });
           if (me !== undefined) {
-            const added = await grant(me, "full_access");
+            // A person can carry more than one feishu: identity (a replaced door leaves the old
+            // one behind), and an open_id is only valid for the app that issued it — so try each,
+            // newest first, and stop at the one this app accepts.
+            let added = await grant(me, "full_access");
+            for (const older of doorIdsOf(context.callerIdentities, "feishu").filter(id => id !== me)) {
+              if (added.ok) break;
+              added = await grant(older, "full_access");
+            }
             lines.push(added.ok ? "The person who asked can open and edit it." : `Could not add the person who asked (${added.text}). If the connected Feishu app is not the one that runs this chat, their id differs between the two; the document exists but only the app can see it.`);
           } else {
             lines.push("Their Feishu id is not known here, so only the app can see it yet — ask whom to add, or share it with share_with.");
@@ -3800,6 +3809,7 @@ export async function dispatchTool(
           const primary = await connectorJson(auth, "POST", "/calendar/v4/calendars/primary");
           if (!primary.ok) return fail(`${primary.text} (the app needs its bot capability turned on to have a calendar)`, primary.unknown);
           const calendarId = String((data(primary.json).calendars ?? [])[0]?.calendar?.calendar_id ?? "");
+          if (calendarId === "") return fail("Feishu returned no primary calendar for the connected app, so no event was created (the app needs its bot capability turned on to have a calendar)");
           const created = await connectorJson(auth, "POST", `/calendar/v4/calendars/${encodeURIComponent(calendarId)}/events?idempotency_key=${randomUUID()}${randomUUID().slice(0, 8)}`,
             feishuEventBody({ summary, description: text(input.description), startMs, endMs, timezone: zone }));
           if (!created.ok) return fail(created.text, created.unknown);

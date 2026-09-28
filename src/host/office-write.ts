@@ -161,8 +161,20 @@ export function dingtalkEventBody(input: { summary: string; description?: string
   };
 }
 
-/** The requester's own id on a door, from the identities their principal speaks from. */
+/**
+ * Every id the requester has on a door, newest first. Identities are appended as doors are
+ * linked, so a door that was replaced leaves its old id earlier in the list — and that id
+ * belongs to an app that may no longer be the connected one.
+ */
+export function doorIdsOf(identities: readonly string[] | undefined, door: "feishu" | "dingtalk"): string[] {
+  return (identities ?? [])
+    .filter(identity => identity.startsWith(`${door}:`))
+    .map(identity => identity.slice(door.length + 1))
+    .filter(id => id !== "")
+    .reverse();
+}
+
+/** The requester's own id on a door: the most recently linked one (see doorIdsOf). */
 export function doorIdOf(identities: readonly string[] | undefined, door: "feishu" | "dingtalk"): string | undefined {
-  const found = identities?.find(identity => identity.startsWith(`${door}:`));
-  return found?.slice(door.length + 1) || undefined;
+  return doorIdsOf(identities, door)[0];
 }
