@@ -314,19 +314,32 @@ export class Rememberer {
       agentId,
       (this.pending.get(agentId) ?? []).filter(item => !this.behindWatermark(agentId, item.conversation, item.at))
     );
-    const guard = this.deps.registry.contextWriteGuard();
+    const contextGuard = this.deps.registry.contextWriteGuard();
     await this.enqueue(agentId, async () => {
       let timer: NodeJS.Timeout | undefined;
       const limit = this.deps.flushTimeoutMs ?? FLUSH_TIMEOUT_MS;
       const timeout = new Promise<"timeout">(resolve => {
         timer = setTimeout(() => resolve("timeout"), limit);
       });
+      // The timeout releases the write chain; it does not stop the model call. Whatever that call
+      // returns later must find its flush already over (INV-799): the guard is checked before every
+      // write and before the episode state moves, so a late answer appends nothing, advances nothing
+      // and leaves the condense counters to the flushes that came after it. Without this, a late
+      // "OLD understanding" landed on top of the "NEW correction" the next flush had already kept.
+      let live = true;
+      const guard = () => live && contextGuard();
       try {
-        const outcome = await Promise.race([
-          this.extract(agentId, exchanges.map(item => item.text), undefined, exchanges.map(item => item.ref), guard, { stateChangesFirst: true }),
-          timeout,
-        ]);
-        if (outcome === "timeout") this.log(`pre-compaction memory flush timed out after ${limit}ms; the summary stands`);
+        const extraction = this.extract(agentId, exchanges.map(item => item.text), undefined, exchanges.map(item => item.ref), guard, { stateChangesFirst: true });
+        const outcome = await Promise.race([extraction, timeout]);
+        if (outcome === "timeout") {
+          live = false;
+          this.log(`pre-compaction memory flush timed out after ${limit}ms; the summary stands`);
+          // Said once when it does come back, and never left as an unhandled rejection.
+          extraction.then(
+            () => this.log(`a pre-compaction memory flush answered ${limit}ms+ late; its result was discarded`),
+            () => {}
+          );
+        }
       } catch (error) {
         this.log(`pre-compaction memory flush failed (${error instanceof Error ? error.message : String(error)}); the summary stands`);
       } finally {
