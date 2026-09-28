@@ -30,13 +30,20 @@ import { runTurn } from "./turn.ts";
 import { fakeModel } from "./testing/fake-model.ts";
 import type { BoxClient } from "../box/client.ts";
 import type { HistoryEntry } from "./compaction.ts";
+import { Rememberer, summariseExchange } from "./remember.ts";
+import { MemoryMirror } from "./memory-mirror.ts";
+import { memoryRef } from "./memory.ts";
 import type { ProviderProfile } from "./provider.ts";
 import type { PolicyGate } from "./policy.ts";
 import type { McpManager } from "./mcp.ts";
+import type { TaskStore } from "./tasks.ts";
+import type { GoalLoop, GoalTurnReport } from "./goal-loop.ts";
+import type { GoalGate } from "./goal-gate.ts";
 
 /** One model reply, in the shape the script writes it. */
 export type ScriptedReply =
-  | { say: string }
+  // `stop` replays a reply that ran to the output cap (INV-761); a say ends its turn otherwise.
+  | { say: string; stop?: "max_tokens" }
   | { call: string; input: Record<string, unknown>; then?: ScriptedReply };
 
 export interface ScriptContext {
@@ -116,6 +123,14 @@ function memoryBox(files: Map<string, string>, overrides: Partial<BoxClient> = {
         files.set(redirect[2]!, redirect[1]!);
         return { exit_code: 0, stdout: "", stderr: "" };
       }
+      // A command that must fail, and a check that reads the files (INV-771): a verifier's bash
+      // has to be able to say no, or every checklist command passes and the gate is theatre.
+      const trimmed = command.trim();
+      if (trimmed === "false") return { exit_code: 1, stdout: "", stderr: "" };
+      const exit = /^exit\s+(\d+)$/.exec(trimmed);
+      if (exit) return { exit_code: Number(exit[1]), stdout: "", stderr: "" };
+      const testExists = /^test\s+-[ef]\s+(\S+)$/.exec(trimmed);
+      if (testExists) return { exit_code: files.has(testExists[1]!) ? 0 : 1, stdout: "", stderr: "" };
       // Looking around is answered from the files (INV-693): a live model that runs `ls` and gets
       // "(ran) ls" back looks again, and spent a skill eval's whole budget doing so. Anything that
       // is not plain looking keeps the old answer, which scripted scenarios rely on.
@@ -291,6 +306,16 @@ export interface EpisodeOptions {
   policy?: PolicyGate;
   /** Connected external tools, as the MCP manager offers them; absent means none. */
   mcp?: McpManager;
+  /** A task board for the turns (INV-769): the Tasks and Goal tools need one to act on. */
+  tasks?: TaskStore;
+  /**
+   * The continuation loop of goal mode (INV-770), built once the bus exists so it can wake
+   * through it. The episode feeds it what the orchestrator would: a turn starting, a turn
+   * finished, a continuation's report.
+   */
+  goalLoop?: (context: { bus: AgentBus; registry: AgentRegistry; tasks: TaskStore | undefined; files: Map<string, string> }) => GoalLoop;
+  /** The completion gate (INV-771), built the same way. */
+  goalGate?: (context: { bus: AgentBus; registry: AgentRegistry; tasks: TaskStore | undefined; files: Map<string, string> }) => GoalGate;
   /** Files the box starts with. */
   files?: Record<string, string>;
   /** Stops an episode that will not settle. Default 200. */
@@ -308,8 +333,19 @@ export interface EpisodeOptions {
   history?: readonly HistoryEntry[];
   /** Script only the relevance decision, while retaining the production projection path. */
   selectMemory?: (prompt: string) => Promise<string | undefined>;
-  /** Drive concurrent channel arrivals through the real bus instead of sequential says. */
-  drive?: (context: { bus: AgentBus; registry: AgentRegistry; frontId: string; files: Map<string, string> }) => Promise<void>;
+  /**
+   * Wire the production memory path (INV-778): each person-driven turn is recorded for
+   * batch extraction and a compaction flushes what it summarises, both through the
+   * scripted model. Opt-in, because the extra model calls would surprise every script
+   * that counts rounds.
+   */
+  memory?: boolean;
+  /**
+   * Drive concurrent channel arrivals through the real bus instead of sequential says.
+   * `say` is one line of `says`, with the same after-turn bookkeeping, for a drive that
+   * needs to change the world between turns.
+   */
+  drive?: (context: { bus: AgentBus; registry: AgentRegistry; frontId: string; files: Map<string, string>; say: (line: string) => Promise<void> ; goalLoop?: GoalLoop }) => Promise<void>;
 }
 
 /**
@@ -323,6 +359,9 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
   const registry = new AgentRegistry(home);
   const files = new Map<string, string>(Object.entries(options.files ?? {}));
   const box = memoryBox(files, options.box ?? {});
+  // The real mirror over the memory box, so the standing files (INV-777) land where the tools
+  // and the prompt expect them, exactly as the orchestrator syncs them.
+  const mirror = new MemoryMirror({ registry, box: () => box });
   const observations: Observation[] = [];
   const rounds = new Map<string, number>();
   let clock = 0;
@@ -341,7 +380,9 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
   const front = registry.list()[0]!;
   for (const entry of options.history ?? []) registry.appendTranscript(front.id, entry);
 
-  const scripted = fakeModel(async ({ params }) => {
+  // One responder for both wires: the turn loop streams, the summariser and the memory
+  // extractor call `create` (INV-778). A script tells them apart by what opened the call.
+  const respond = async ({ params }: { params: Anthropic.MessageCreateParams }) => {
     calls += 1;
     if (calls > maxRounds) return message([{ type: "text", text: "(scenario cut: too many rounds)" } as Anthropic.ContentBlock], "end_turn");
     const system =
@@ -365,18 +406,26 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
     if (reply === undefined) return message([{ type: "text", text: "" } as Anthropic.ContentBlock], "end_turn");
     if ("say" in reply) {
       observations.push({ at: clock++, agent, kind: "say", text: reply.say });
-      return message([{ type: "text", text: reply.say } as Anthropic.ContentBlock], "end_turn");
+      return message([{ type: "text", text: reply.say } as Anthropic.ContentBlock], reply.stop ?? "end_turn");
     }
     observations.push({ at: clock++, agent, kind: "call", name: reply.call, input: reply.input });
     return message(
       [{ type: "tool_use", id: `t${clock}`, name: reply.call, input: reply.input } as unknown as Anthropic.ContentBlock],
       "tool_use"
     );
-  });
+  };
+  const scripted = fakeModel(respond, { create: respond });
   if (options.client === undefined && options.script === undefined) throw new Error("runEpisode needs a script or a client");
   const client = options.client ?? scripted;
 
+  const rememberer = options.memory === true
+    ? new Rememberer({ registry, client, provider: { label: "scenario", model: "scenario", maxTokens: 1024 } as ProviderProfile })
+    : undefined;
+  let goalLoop: GoalLoop | undefined;
+  let goalGate: GoalGate | undefined;
   const bus: AgentBus = new AgentBus(registry, async (record, inbound, signal, conversation) => {
+    if (goalLoop !== undefined && !goalLoop.turnStarting(record.id, conversation, inbound)) return;
+    if (goalLoop === undefined && goalGate?.verifierMayRun(inbound) === false) return;
     for (const inboundMessage of inbound) {
       if (inboundMessage.fromId !== "user") {
         observations.push({
@@ -394,6 +443,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       ...(options.provider !== undefined ? { provider: options.provider } : {}),
       ...(options.policy !== undefined ? { policy: options.policy } : {}),
       ...(options.mcp !== undefined ? { mcp: options.mcp } : {}),
+      ...(options.tasks !== undefined ? { tasks: options.tasks } : {}),
       registry,
       bus,
       box,
@@ -402,19 +452,43 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       ...(options.display !== undefined ? { displayIndex: options.display } : {}),
       ...(options.skills !== undefined ? { skills: options.skills } : {}),
       conversation,
+      syncStanding: (agentId: string) => mirror.sync(agentId),
+      ...(rememberer !== undefined
+        ? { onSummarised: (agentId: string, conversationId: string, entries: readonly HistoryEntry[]) => { void rememberer.flush(agentId, conversationId, entries).catch(() => {}); } }
+        : {}),
       askUser: async (input: { agentName: string; question: string }) => {
         observations.push({ at: clock++, agent: input.agentName, kind: "call", name: "AskUser:delivered", input: { question: input.question } });
         return "in the app";
       },
+      onGoalTurn: (report: GoalTurnReport) => {
+        if (report.marker.verify !== undefined) void goalGate?.verifierEnded(report);
+        else void goalLoop?.turnEnded(report);
+      },
+      ...(goalGate !== undefined ? { goalGate } : {}),
     } as never);
+  }, event => {
+    if (event.type === "turn_finished") goalLoop?.onTurnFinished(event.agentId);
   });
+  goalLoop = options.goalLoop?.({ bus, registry, tasks: options.tasks, files });
+  goalGate = options.goalGate?.({ bus, registry, tasks: options.tasks, files });
 
-  if (options.drive !== undefined) await options.drive({ bus, registry, frontId: front.id, files });
-  for (const line of options.says) {
+  const say = async (line: string): Promise<void> => {
+    const before = registry.readTranscript(front.id).length;
     bus.sendFromUser(front.id, line);
     await bus.wake(front.id);
     await bus.idle();
-  }
+    if (rememberer === undefined) return;
+    // The orchestrator's after-turn bookkeeping, on the same terms: the reply read back
+    // from the transcript, cited by conversation and time. Settled before the next line,
+    // so a scenario asserts on a ledger that has caught up — the production path does not wait.
+    const written = registry.readTranscript(front.id).slice(before) as { role?: string; kind?: string; text?: string; at?: string }[];
+    const said = written.filter(entry => entry.role === "assistant" && entry.kind === undefined && entry.text).map(entry => entry.text!).join("\n\n");
+    const last = written[written.length - 1];
+    if (said !== "") await rememberer.record({ agentId: front.id, text: summariseExchange(line, said), ref: memoryRef("main", new Date()), conversation: "main", ...(last?.at !== undefined ? { at: last.at } : {}) });
+    await rememberer.settle(front.id);
+  };
+  if (options.drive !== undefined) await options.drive({ bus, registry, frontId: front.id, files, say, ...(goalLoop !== undefined ? { goalLoop } : {}) });
+  for (const line of options.says) await say(line);
 
   // Errors are read off the transcripts: a refused tool is the rail doing its job, and a
   // scenario asserts on it by name.

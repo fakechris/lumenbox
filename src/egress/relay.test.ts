@@ -64,3 +64,50 @@ test("a stream is the box its token names, with the global list widened by its b
   assert.equal(permitted({ host: "vendor.test", port: 443 }, strict.allow), false);
   assert.equal(permitted({ host: "vendor.test", port: 443 }, identify("relay-token-1234567890", options)!.allow), true);
 });
+
+// ── attribution (INV-784) ─────────────────────────────────────────────────────────
+import { createServer, connect } from "node:net";
+import { encodeCall } from "./call.ts";
+import { encodeRequest } from "./protocol.ts";
+import { attributionOf, type NetworkEvent } from "./relay.ts";
+
+test("attribution is read from the call token, and a missing or bad token is unattributed rather than dropped", () => {
+  const token = encodeCall({ agentId: "ada", turnId: "t-1", toolUseId: "toolu_1", jobId: "job-0123abcd" });
+  assert.deepEqual(attributionOf(token), { attribution: "call", agentId: "ada", turnId: "t-1", toolUseId: "toolu_1", jobId: "job-0123abcd" });
+  assert.deepEqual(attributionOf(undefined), { attribution: "unattributed" });
+  assert.deepEqual(attributionOf("garbage"), { attribution: "unattributed" });
+});
+
+test("the relay stamps the event with the call the stream named, allowed or refused", async () => {
+  const upstream = createServer(socket => socket.end("hi"));
+  await new Promise<void>(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  const upstreamPort = (upstream.address() as { port: number }).port;
+  const events: NetworkEvent[] = [];
+  const relay = startEgressRelay({ token: "relay-token-1234567890", allow: ["127.0.0.1"], port: 0, onEvent: event => events.push(event) });
+  await new Promise<void>(resolve => relay.once("listening", resolve));
+  const relayPort = (relay.address() as { port: number }).port;
+  const token = encodeCall({ agentId: "ada", turnId: "t-1", toolUseId: "toolu_1" });
+
+  const stream = (host: string, call?: string) =>
+    new Promise<void>(resolve => {
+      const socket = connect(relayPort, "127.0.0.1", () => socket.write(encodeRequest({ token: "relay-token-1234567890", host, port: upstreamPort, ...(call !== undefined ? { call } : {}) })));
+      socket.on("data", () => socket.end());
+      socket.on("close", () => resolve());
+      socket.on("error", () => resolve());
+    });
+  try {
+    await stream("127.0.0.1", token);
+    await stream("evil.test", token);
+    await stream("127.0.0.1");
+    assert.equal(events.length, 3);
+    assert.equal(events[0]!.allowed, true);
+    assert.deepEqual([events[0]!.attribution, events[0]!.agentId, events[0]!.turnId, events[0]!.toolUseId], ["call", "ada", "t-1", "toolu_1"]);
+    assert.equal(events[1]!.allowed, false);
+    assert.equal(events[1]!.toolUseId, "toolu_1", "a refusal is attributed too: that is what the tool result reports");
+    assert.equal(events[2]!.attribution, "unattributed");
+    assert.equal(events[2]!.agentId, undefined);
+  } finally {
+    relay.close();
+    upstream.close();
+  }
+});

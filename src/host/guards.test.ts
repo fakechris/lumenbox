@@ -59,6 +59,26 @@ test("the structural condition gates the verdict and offer guards; trailing inte
   assert.equal(guardFor("查完了，都在。", 0), undefined);
 });
 
+test("a completed-action claim with no matching call trips the claim guard, at any tool count (INV-779)", () => {
+  assert.equal(guardFor("邮件已发送给王总。", 0, []), "claim-without-call");
+  assert.equal(guardFor("邮件已发送给王总。", 2, ["read_file", "WebSearch"]), "claim-without-call", "reads do not send");
+  assert.equal(guardFor("邮件已发送给王总。", 3, ["read_file", "google__send_email"]), undefined);
+  assert.equal(guardFor("I've saved it to your notes.", 0, []), "claim-without-call");
+  assert.equal(guardFor("I've saved it to your notes.", 1, ["RememberFact"]), undefined);
+  assert.equal(guardFor("已安排在周二上午。", 1, ["WebFetch"]), "claim-without-call");
+  assert.equal(guardFor("已安排在周二上午。", 1, ["google_calendar__create_event"]), undefined);
+  assert.equal(guardFor("I checked the page; it exists.", 1, ["WebFetch"]), undefined);
+  assert.equal(guardFor("I checked the page; it exists.", 1, ["SetPlan"]), "claim-without-call");
+  // Future and conditional forms are not claims.
+  assert.equal(guardFor("我会发给他。", 1, ["read_file"]), undefined);
+  assert.equal(guardFor("I'll send it once you confirm.", 1, ["read_file"]), undefined);
+  // The older guards keep precedence: a verdict with zero calls is still the verdict guard.
+  assert.equal(guardFor("GLM 目前公开到 4.x，没有 5.3。已发送。", 0, []), "verdict-without-check");
+  assert.match(nudgeFor("claim-without-call", true, "邮件已发送。"), /你说你已经发送/);
+  assert.match(nudgeFor("claim-without-call", false, "I've saved it."), /saved or remembered/);
+  assert.match(nudgeFor("claim-without-call", false, "I've saved it."), /state the real status/);
+});
+
 test("nudges are written in the person's language, and the switch turns everything off", () => {
   assert.match(nudgeFor("verdict-without-check", true), /先用工具/);
   assert.match(nudgeFor("verdict-without-check", false), /check it with a tool/);

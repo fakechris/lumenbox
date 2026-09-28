@@ -677,7 +677,7 @@ test("a skill runs as the agent the host saw write it, and as nobody else", asyn
 });
 
 test("a listener fires once per matching message, in the thread it was said in, under the runner rules", async () => {
-  const runs: { agent: string; prompt: string; deliver?: string }[] = [];
+  const runs: { agent: string; prompt: string; deliver?: string; slug?: string; identity?: string }[] = [];
   const lines: string[] = [];
   const scheduler = new Scheduler({
     due: async () => [],
@@ -686,8 +686,8 @@ test("a listener fires once per matching message, in the thread it was said in, 
       { slug: "only-ops", name: "Ops room", path: "/p", match: "on call", chat: "feishu:oc_ops" },
       { slug: "bobs", name: "Bob's", path: "/p", match: "deploy", runAs: "Ada" },
     ],
-    run: async (agent, prompt, deliver) => {
-      runs.push({ agent, prompt, deliver });
+    run: async (agent, prompt, deliver, slug, _toolScope, _deliverWhen, identity) => {
+      runs.push({ agent, prompt, deliver, slug, identity });
     },
     defaultAgent: () => "agent-ops",
     resolveAgent: name => ({ Ada: "agent-ada" })[name],
@@ -703,6 +703,8 @@ test("a listener fires once per matching message, in the thread it was said in, 
   );
   assert.equal(runs[0]?.agent, "agent-ops");
   assert.equal(runs[0]?.deliver, "feishu:oc_dev/om_t1", "delivered to the thread");
+  assert.equal(runs[0]?.slug, undefined, "a listener run is not reconciled against commitments");
+  assert.equal(runs[0]?.identity, "deploy-watch", "but its result history is its own, not a shared ad-hoc one (INV-802)");
   assert.match(runs[0]?.prompt ?? "", /\[listener\]/);
   assert.match(runs[0]?.prompt ?? "", /from Chris in feishu:oc_dev\/om_t1/);
   assert.match(runs[0]?.prompt ?? "", /Deploy FAILED again/);

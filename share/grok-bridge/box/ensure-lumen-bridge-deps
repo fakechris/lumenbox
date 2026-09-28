@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# ensure-lumen-bridge-deps — box boot recovery for LumenBox attach.
+# Persists under ~/.lumen (survives Update Computer via box-store-sync).
+# Order: sshd → Tailscale → lumen-bridge (only if joined).
+set -uo pipefail
+LUMEN_HOME="${LUMEN_HOME:-$HOME/.lumen}"
+BIN="$LUMEN_HOME/bin"
+RUN="$LUMEN_HOME/run"
+mkdir -p "$RUN"
+LOG="$RUN/ensure-lumen-bridge-deps.log"
+exec >>"$LOG" 2>&1
+echo "==== $(date -Is) ensure-lumen-bridge-deps ===="
+
+"$BIN/ensure-sshd" || echo "ensure-sshd failed rc=$?"
+
+set +e
+"$BIN/ensure-tailscale"
+ts_rc=$?
+set -e
+echo "ensure-tailscale rc=$ts_rc"
+
+ip=""
+command -v tailscale >/dev/null 2>&1 && ip="$(tailscale ip -4 2>/dev/null | head -1 || true)"
+
+if [ -n "$ip" ] && [ -x "$BIN/lumen-bridge.sh" ]; then
+  echo "tailnet up ($ip) — ensuring lumen-bridge"
+  "$BIN/lumen-bridge.sh" start || echo "lumen-bridge start failed"
+  "$BIN/lumen-bridge.sh" status || true
+elif [ -f "$RUN/tailscale-login.url" ]; then
+  echo "NEED_LOGIN $(cat "$RUN/tailscale-login.url")"
+else
+  echo "tailnet not ready; bridge skipped"
+fi
+
+echo "==== $(date -Is) done ===="
+exit 0

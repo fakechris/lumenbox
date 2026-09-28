@@ -2,7 +2,7 @@
      title: Coordination as protocol, slice one: a fork ledger that survives restarts, and fenced children
      family: decision
      status: current
-     updated: 2026-09-03
+     updated: 2026-09-26
 -->
 # 32 — Coordination as protocol, slice one: a fork ledger that survives restarts, and fenced children
 
@@ -203,3 +203,31 @@ record cannot be written is refused; a `done` task cannot be claimed.
 
 S–M. After it: the submission gate (a task moves to `review` only through a `Tasks submit` that
 names the evidence) and `appendLine` fsync everywhere, as their own notes.
+
+## 8. Addendum 2026-09-26 (INV-785): the prompt side of the fork protocol
+
+The mechanism above is unchanged: depth one via `FORK_WITHHELD_TOOLS`, breadth `MAX_FORKS`,
+the `HANDOFF:` trailer. What changed is two pieces of prose the parent reads, after a run where
+a front agent started two background forks and then spent its turn guessing at their findings,
+promising a time, and — once the results landed — answering the last fork instead of the person.
+
+- **The background receipt says what not to do.** `Fork` with `background: true` used to return
+  only "end your turn now with what the person should hear". It now also says: do not check on
+  the forks' progress, do not predict or invent what they will find, do not estimate how long
+  they will take, do not keep writing about the delegated work; each result arrives as a message
+  of its own and that is when it is folded in. A parent has no tool that could check on a fork,
+  so any text about the forks' progress was fiction.
+- **The closing message stands alone, in every lane.** The rule (what was asked, what you did,
+  what came of it, where the deliverable is) lived inside the file-exchange section, so it was
+  only rendered for an outside chat with a box. It is now its own volatile section, `wrap-up`
+  (`renderWrapUp` in `prompt.ts`), rendered in the main session, in a team room and in a
+  one-to-one chat, worded for the reader each lane has — a room reads only the message, a phone
+  has no "above", a session is re-read cold — and, for every lane: after fork results have landed
+  as messages, the wrap-up restates the whole deliverable rather than reacting to the piece that
+  landed last. Forks get no wrap-up section; their closing message is the handoff. The stable
+  prefix is untouched, so the prompt cache is not paid for again.
+
+Tests: `fork.test.ts` (the receipt text), `prompt.test.ts` (every lane carries the rule, one
+copy, stable tier unchanged), and the INV-785 scenario in `scenario.test.ts` (a parent starts
+forks, ends its turn, two results land, the final message is one standalone deliverable).
+

@@ -19,7 +19,10 @@ import type { DisplayLease } from "../box/display-lease.ts";
 import type { PolicyGate } from "./policy.ts";
 import type { Claims } from "./claims.ts";
 import type { FileVersions } from "./files.ts";
-import type { TurnLedger } from "./resume.ts";
+import type { StepLedger, TurnLedger } from "./resume.ts";
+import { approvalOutcomeResult, notStartedResult, outcomeUnknownResult } from "./resume.ts";
+import { idempotencyOf } from "../protocol/idempotency.ts";
+import { changedPromptSegments, type PromptFingerprint } from "./resume.ts";
 import type { PendingWork } from "./pending-work.ts";
 import type { McpFace } from "./mcp-face.ts";
 import type { ModelRelay } from "./model-relay.ts";
@@ -41,11 +44,12 @@ import {
   FirstTokenStallError,
   FIRST_TOKEN_DEADLINE_MS,
 } from "./transient.ts";
-import type { UsageKind, UsageLog } from "./usage.ts";
+import { cacheReadShare, type UsageKind, type UsageLog } from "./usage.ts";
 import { chooseRelevant, memoryProjectionManifest, SHARED_CHAR_BUDGET, type MemoryRecall } from "./memory.ts";
+import { refusedLine, type NetworkEventLog } from "../egress/events.ts";
 import { needsReview, type ReviewInput, type ReviewMode, type Verdict } from "./auto-review.ts";
 import type { HookRunner } from "./hooks.ts";
-import { AGENT_WAKE_CUE } from "../agents/bus.ts";
+import { AGENT_WAKE_CUE, laneOf } from "../agents/bus.ts";
 import { TEMPLATE_CUE, TEMPLATE_SETUP_TOOLS } from "./template.ts";
 import {
   activeWindow,
@@ -96,12 +100,17 @@ import {
   readsAsChinese,
   type GuardReason,
 } from "./guards.ts";
+import { malformedNudge, malformedOutput, sanitizeHistoryText } from "./output-integrity.ts";
+import { type GoalTurnReport, isWorkingTool } from "./goal-loop.ts";
+import { commandIsConfirmed, type GoalGate } from "./goal-gate.ts";
+import { DEFAULT_TOKEN_WEIGHTS, weightedCost } from "./goal-mode.ts";
 import {
   BOOKKEEPING_TOOLS,
   FORK_PROMPT_LINE,
   isForkConversation,
   PARALLEL_SAFE_TOOLS,
   PERSON_FACING_TOOLS,
+  SILENCE_TOOL,
   PARALLEL_TOOL_LIMIT,
   buildTools,
   dispatchTool,
@@ -117,6 +126,7 @@ import type { ScopeStore } from "./scopes.ts";
 import { checkpointSummary, type DurableState } from "./durable.ts";
 import { narrowSkills, type BundleStore } from "./bundles.ts";
 import { readInstallationInstructions } from "./place.ts";
+import { changeNotice, readStanding, takeChanges } from "./standing.ts";
 import type { McpManager } from "./mcp.ts";
 import { TOOL_BUDGET_WARNING } from "./mcp.ts";
 import { narrowTools } from "./scopes.ts";
@@ -151,6 +161,8 @@ const KEEP_IMAGES = envNumber("AGENTBOX_KEEP_IMAGES", 1);
  * strictly more than the last, so three is enough to go from "all screenshots" to "one" to "none".
  */
 const MAX_SHED_ATTEMPTS = envNumber("AGENTBOX_MAX_SHED_ATTEMPTS", 3);
+/** How many malformed replies (INV-761) one turn may discard and ask again for. */
+const MAX_MALFORMED_RETRIES = 1;
 
 /**
  * Below this many characters, text preceding bookkeeping-only tool calls is an aside
@@ -213,6 +225,23 @@ export function classifyOverflow(error: unknown): Overflow | undefined {
 function safeToReplay(name: string, input: Record<string, unknown>): boolean {
   if (name === "read_file" || name === "list_dir" || name === "ReadHistory") return true;
   if (name === "Tasks" && input.action === "list") return true;
+  return false;
+}
+
+/**
+ * Whether the protocol's own declaration (INV-525) says this call lands the same state
+ * twice: a read, or an idempotent write that carries the key making it so. Everything else
+ * is `unsafe`, and a restart answers it `outcome_unknown` rather than running it again.
+ *
+ * Only the declaration counts. A field in the model's input — an `operation_id`, say — is
+ * not a contract: no executor here reads it, `bash` does not forward it to the box, and
+ * the job ids boxd does dedupe are minted by the tool per dispatch, never taken from the
+ * call. A keyed `bash` that took effect before the crash would run again (INV-798).
+ */
+function replaysToSameState(name: string, input: Record<string, unknown>): boolean {
+  const declared = idempotencyOf(name);
+  if (declared.kind === "read") return true;
+  if (declared.kind === "idempotent") return declared.key === undefined || input[declared.key] !== undefined;
   return false;
 }
 
@@ -500,6 +529,11 @@ export interface TurnDeps {
   autoReview?: { mode(): ReviewMode; review(input: ReviewInput): Promise<Verdict> };
   /** Records which agent wrote into a skill. Absent means no record is kept. */
   skillProvenance?: ToolContext["skillProvenance"];
+  /**
+   * Pushes the agent's standing files to its box before the turn reads them (INV-777), so the
+   * copy it may edit is the copy the prompt carries. Absent means no mirror — tests, or no box.
+   */
+  syncStanding?: (agentId: string) => Promise<unknown>;
   /** The template this turn installs, when it is an imported bot's setup turn (docs/29). */
   templateSetup?: string;
   /** Where a packed template is staged; absent withholds PackTemplate. */
@@ -524,6 +558,14 @@ export interface TurnDeps {
    * that should not touch the state directory wants.
    */
   turns?: TurnLedger;
+  /** Where each tool call is checkpointed as it is dispatched and settled (INV-774). */
+  steps?: StepLedger;
+  /**
+   * What the egress relay decided (INV-784): read after each tool call so the model is told,
+   * in one line on the result, which outbound connections its call had refused. Absent
+   * means the box's traffic is not going through a relay this host can see.
+   */
+  networkEvents?: Pick<NetworkEventLog, "query">;
   /** The fork ledger (docs/32): forks are recorded before they start and committed here. */
   pendingWork?: PendingWork;
   /** The MCP face (docs/33), for Delegate. */
@@ -541,8 +583,24 @@ export interface TurnDeps {
    * Threaded in rather than derived, because only the caller doing the resuming knows which turn
    * this continues and how many attempts have gone before.
    */
-  resumeOf?: { id: string; attempt: number; workId?: string };
+  resumeOf?: {
+    id: string;
+    attempt: number;
+    workId?: string;
+    /**
+     * Continue *this* turn rather than open a new one told about it (INV-774): same
+     * turnId, no user message, and the step ledger's open calls answered before the
+     * model is asked again. Only set for turns the step ledger recorded.
+     */
+    continues?: true;
+    /** How the person answered the approval an open step was waiting on, when one was. */
+    approval?: { id: string; how: "allowed" | "refused" | "gone" };
+  };
   onEvent?: (event: TurnEvent) => void;
+  /** A goal continuation turn ended (INV-770): what it did and how, for the loop's accounting. */
+  onGoalTurn?: (report: GoalTurnReport) => void;
+  /** The completion gate (INV-771): the Goal tool's claim_complete goes through it. */
+  goalGate?: GoalGate;
   /**
    * Where one span per LLM call goes (trace.ts). Absent by default: a box whose
    * operator configured no collector has no tracer, and the `?.` below is the
@@ -703,9 +761,23 @@ export type TranscriptEntry =
        * the compaction summary, which belongs to no one turn.
        */
       turnId?: string;
+      /**
+       * Written by the host, not said by the model (INV-775): the note a turn leaves when the
+       * model produced no text. In the record so a reader sees what happened; excluded from
+       * `replySince`, so it is never delivered as though the agent had said it.
+       */
+      host?: true;
     }
   /** An assistant turn that called tools; carries text and tool_use blocks. */
-  | { role: "assistant"; kind: "blocks"; blocks: Anthropic.ContentBlockParam[]; at: string; turnId?: string }
+  | {
+      role: "assistant";
+      kind: "blocks";
+      blocks: Anthropic.ContentBlockParam[];
+      at: string;
+      turnId?: string;
+      /** The turn ended in deliberate silence — `NothingToSay` was called — and why (INV-775). */
+      silent?: { reason: string };
+    }
   /** The matching results. Must immediately follow its `blocks` entry. */
   | {
       role: "user";
@@ -1289,7 +1361,10 @@ function historyToMessages(
       if (entry.blocks.length === 0) continue;
       messages.push({ role: entry.role, content: entry.blocks });
     } else if (entry.text.trim() !== "") {
-      messages.push({ role: entry.role, content: entry.text });
+      // A reply stored before the output gate existed (INV-761) may be a call written as
+      // text; it goes back to the model cut at the markup, so a conversation that already
+      // holds one recovers without anyone editing the record.
+      messages.push({ role: entry.role, content: entry.role === "assistant" ? sanitizeHistoryText(entry.text) : entry.text });
     }
   }
   // Last, over the assembled request rather than over the entries: an unpaired call does not
@@ -1372,7 +1447,11 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
 
   // Recorded before anything else, so a process that dies at any point after this leaves a begin
   // with no end — a fact, rather than a turn that simply stopped existing.
-  const turnId = randomUUID();
+  //
+  // Or, for a turn continued in place (INV-774), the id it already has: the resumed
+  // rounds belong to the turn that began them, not to a second attempt beside it.
+  const continuing = deps.resumeOf?.continues === true;
+  const turnId = continuing ? deps.resumeOf!.id : randomUUID();
   /** Every tool this turn has called so far. The Tasks tool reads it: a reviewer that has
    *  looked at nothing may not accept (Argus's harness makes the same check). */
   const toolsUsedThisTurn = new Set<string>();
@@ -1382,7 +1461,10 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   // The turn is the attempt; the work is what the attempts are attempts at. A resumption
   // inherits rather than mints, which is the whole point of the field: without it a turn that
   // resumed twice appears in every report as three unrelated short turns.
-  const workId = deps.resumeOf?.workId ?? randomUUID();
+  // A goal continuation inherits the pursuit's id the same way a resumption inherits its
+  // work's (INV-770): every turn of one objective is one piece of work in the ledgers.
+  const goal = inbound.find(message => message.goal !== undefined)?.goal;
+  const workId = deps.resumeOf?.workId ?? goal?.workId ?? randomUUID();
   // Built once, here, because this is the only place that knows all four of the things an aside
   // has to be attributed to. Passing the ledger down instead would mean passing the agent, the
   // work and the conversation down with it, which is three more chances to pass the wrong one.
@@ -1429,11 +1511,26 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   let quotesChecked = false;
 
   let ended = false;
+  let endedHow: string | undefined;
+  let lastFinalText: string | undefined;
+  /** The whole turn's spend, for a goal's budget (INV-772). */
+  const turnUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
   const finish = (how: string, category?: FailureCategory) => {
     if (ended) return;
     ended = true;
+    endedHow = how;
     deps.turns?.end(turnId, how, new Date(), category, keptThisTurn);
+    deps.steps?.closed(turnId);
   };
+
+  // The standing files (INV-777): mirrored to the box first, so what the agent can edit is what it
+  // is about to read; then read from the host, which is the copy that counts. Changes since the
+  // last injection that this agent did not make are told once, on the message side below.
+  if (!isolated && box !== undefined && deps.syncStanding !== undefined) {
+    await deps.syncStanding(agent.id).catch(() => undefined);
+  }
+  const standing = isolated ? undefined : readStanding(registry.dirFor(agent.id), agent.profile.name);
+  const standingNotice = standing === undefined ? undefined : changeNotice(takeChanges(registry.dirFor(agent.id), standing));
 
   // Both personal and shared memories pass the same relevance gate, even below budget.
   const ownMemory = isolated ? [] : registry.readMemoryRecords(agent.id);
@@ -1478,15 +1575,19 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       ...(deps.boxAccess !== undefined ? { boxAccess: deps.boxAccess } : {}),
       agentsRoot: registry.root,
       hasBox: !isolated && box !== undefined,
+      toolless: isolated,
       vision: provider.vision,
       conversation,
       siblingConversations: isolated ? 0 : registry
         .listConversations(agent.id)
         .filter(entry => entry.id !== conversation).length,
+      // One lane per turn (bus.ts), so the first message's lane is the turn's (INV-780).
+      ...(inbound.length > 0 ? { lane: laneOf(inbound[0]!) } : {}),
+      ...(standing !== undefined ? { standing } : {}),
     });
   const builtPromptParts = buildParts(memoryRecall);
   const promptParts = isolated ? {
-    stable: `${builtPromptParts.stable}\n\n---\n\n## ${clean ? "Clean" : "Recovery"} context\n\n${clean ? "Clean context is active." : "Recovery context is active for one isolated revision. Treat only the host recovery packet in the current conversation as request evidence; do not reconstruct facts from omitted history."} Only the host's safety and authority rules, this agent's configured identity, and messages in this new context are loaded. Earlier conversations, personal and shared long-term memory, learned skills, tasks, plans, heard-room context, and other threads are excluded. No tools are available and nothing in this context may be learned into long-term or shared memory. Messages are still recorded for continuity and audit; this is not incognito mode.`,
+    stable: `${builtPromptParts.stable}\n\n---\n\n## ${clean ? "Clean" : "Recovery"} context\n\n${clean ? "Clean context is active." : "Recovery context is active for one isolated revision. Treat only the host recovery packet in the current conversation as request evidence; do not reconstruct facts from omitted history."} Only the host's safety and authority rules, this agent's configured identity, and messages in this new context are loaded. Earlier conversations, personal and shared long-term memory, learned skills, tasks, plans, heard-room context, and other threads are excluded. No tools are available and nothing in this context may be learned into long-term or shared memory. Messages are still recorded for continuity and audit; this is not incognito mode.\n\nThis overrides every instruction above about tools, looking things up, forks or background work: none of it applies here. Answer in words from what this conversation holds. A tool call written out as text is never executed and never reaches the person as an answer, so do not write one in any format. When a request needs a search, files, code or anything else only a tool can reach, say so plainly, answer the part you can, and tell the person that sending /new returns to a normal context where tools are available.`,
     volatile: builtPromptParts.volatile,
   } : builtPromptParts;
 
@@ -1518,10 +1619,26 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     ? ({ cache_control: { type: "ephemeral" } } as const)
     : {};
   const forkLine = isForkConversation(conversation) ? `\n\n${FORK_PROMPT_LINE}` : "";
-  const system: Anthropic.TextBlockParam[] = [
-    { type: "text", text: promptParts.stable, ...cache },
-    { type: "text", text: promptParts.volatile + forkLine, ...cache },
-  ];
+  // Where the volatile tier rides (INV-767). With breakpoints, the stable block is cached on
+  // its own and the volatile one may sit beside it. An automatic prefix cache has no
+  // breakpoints — MiniMax's matches at message boundaries and treats tools + system + the
+  // first message as one unit — so one changed byte of system (the memory selected for
+  // *this* request, a todo ticked) misses the whole prefix: measured 2026-09-26, 33 of 41
+  // first rounds read exactly 128 tokens, and two turns with a byte-identical system prompt
+  // and no tools still read 128. There the volatile tier goes to the end of the newest
+  // message, which is where MiniMax's own guidance puts dynamic content; the system prompt
+  // and the tools are then the same bytes turn after turn.
+  const volatileInTail = !provider.promptCaching && process.env.AGENTBOX_VOLATILE_TAIL !== "0";
+  const hostContext = (volatile: string): string =>
+    "<host_context>\nAssembled by the host for this turn: the tasks, plan, memory and roster " +
+    "that would otherwise be system text. Not the person's words — the request is the " +
+    `message above.\n\n${volatile}\n</host_context>`;
+  const system: Anthropic.TextBlockParam[] = volatileInTail
+    ? [{ type: "text", text: promptParts.stable }]
+    : [
+        { type: "text", text: promptParts.stable, ...cache },
+        { type: "text", text: promptParts.volatile + forkLine, ...cache },
+      ];
 
   // A stop belongs to the turn that was running. Clearing it as the next turn starts means a
   // person's next instruction is not silently refused — which would read as the agent having broken
@@ -1541,7 +1658,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   // call — and a read-only call answered fresh beats a result declared unknown.
   // Everything not declared safe keeps the honest "never recorded" treatment at
   // assembly, and the model is still told to look before redoing those.
-  if (!isolated && deps.resumeOf !== undefined && history.length > 0) {
+  if (!isolated && deps.resumeOf !== undefined && !continuing && history.length > 0) {
     const last = history[history.length - 1]!;
     if ("kind" in last && last.kind === "blocks") {
       const calls = last.blocks.filter(
@@ -1552,8 +1669,8 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       for (const call of calls) {
         const input = (call.input ?? {}) as Record<string, unknown>;
         if (!safeToReplay(call.name, input)) continue;
-        // Policy is deliberately not re-consulted: the block's presence in the
-        // transcript is the record that the original call already passed the gate.
+        // Through the current policy gate, like any call (INV-798): the transcript records
+        // that the call was asked for, not that it was authorised.
         const outcome = await dispatchTool(call.name, input, {
           agent,
           registry,
@@ -1561,6 +1678,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
           box,
           files: deps.files,
           claims: deps.claims,
+          policy: deps.policy,
           caller: deps.caller,
           ...(deps.callerName !== undefined ? { callerName: deps.callerName } : {}),
           ...(deps.callerIdentities !== undefined ? { callerIdentities: deps.callerIdentities } : {}),
@@ -1568,6 +1686,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
           boxOwner: deps.boxOwner,
           tasks: deps.tasks,
           turnId,
+          toolUseId: call.id,
           conversation,
           memorySources: inbound.map(message => `message:${message.id}`),
         });
@@ -1578,8 +1697,10 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
             {
               type: "text",
               text:
-                "[Re-run on resume: this read-only call was interrupted before its result " +
-                `was recorded.]\n\n${outcome.text}`,
+                outcome.approval !== undefined
+                  ? outcome.text
+                  : "[Re-run on resume: this read-only call was interrupted before its result " +
+                    `was recorded.]\n\n${outcome.text}`,
             },
           ],
           ...(outcome.isError ? { is_error: true } : {}),
@@ -1599,15 +1720,143 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     }
   }
 
+  // A turn continued in place (INV-774) answers the calls it was inside of before the model
+  // is asked anything. The trailing `blocks` entry is the record of what was asked — it is
+  // written before any call runs — and the step ledger says which of those calls were
+  // dispatched. A dispatched call is re-run only when re-running it changes nothing (a
+  // read, or a write keyed to land the same state); every other one is answered
+  // `outcome_unknown`, which is the truth and the only safe thing to say. A call never
+  // dispatched is answered `not_started`. Settled calls already have their result on disk
+  // and are never touched.
+  //
+  // A re-run goes through the policy gate as it stands *now* (INV-798). The pending line
+  // is written before the gate is consulted, so an open step may be one the gate never
+  // saw; and the person may have changed the rules while the host was down. The block's
+  // presence in the transcript records that the call was asked for, not that it was
+  // authorised. A call the gate now hands to a person stays open until they answer.
+  if (continuing && history.length > 0) {
+    const last = history[history.length - 1]!;
+    const open = new Map((deps.steps?.stepsOf(turnId).open ?? []).map(step => [step.toolUseId, step] as const));
+    /** Steps answered by a result below, so the notice further down does not repeat them. */
+    const answeredHere = new Set<string>();
+    /** Steps the current gate put in front of a person: open until the answer lands. */
+    const stillWaiting = new Set<string>();
+    const approvalHow = (approvalId: string): "allowed" | "refused" | "gone" =>
+      deps.resumeOf?.approval?.id === approvalId ? deps.resumeOf!.approval!.how : "gone";
+    if ("kind" in last && last.kind === "blocks") {
+      const calls = last.blocks.filter(
+        (block): block is Anthropic.ToolUseBlockParam => (block as { type?: string }).type === "tool_use"
+      );
+      const answered: Anthropic.ToolResultBlockParam[] = [];
+      for (const call of calls) {
+        const input = (call.input ?? {}) as Record<string, unknown>;
+        const step = open.get(call.id);
+        let text: string;
+        let isError = true;
+        if (step === undefined) {
+          text = notStartedResult(call.name);
+        } else if (step.approvalId !== undefined) {
+          text = approvalOutcomeResult(call.name, approvalHow(step.approvalId));
+          answeredHere.add(call.id);
+        } else if (safeToReplay(call.name, input) || replaysToSameState(call.name, input)) {
+          answeredHere.add(call.id);
+          const outcome = await dispatchTool(call.name, input, {
+            agent,
+            registry,
+            bus,
+            box,
+            files: deps.files,
+            claims: deps.claims,
+            policy: deps.policy,
+            caller: deps.caller,
+            ...(deps.callerName !== undefined ? { callerName: deps.callerName } : {}),
+            displayIndex: deps.displayIndex,
+            boxOwner: deps.boxOwner,
+            tasks: deps.tasks,
+            turnId,
+            toolUseId: call.id,
+            conversation,
+            memorySources: inbound.map(message => `message:${message.id}`),
+          });
+          if (outcome.approval !== undefined) {
+            // The gate asked a person. The same shape as a first run: the refusal is the
+            // call's result, the step is marked waiting, and it is not settled below.
+            deps.steps?.awaitingApproval(turnId, call.id, outcome.approval.id);
+            stillWaiting.add(call.id);
+            text = outcome.text;
+          } else {
+            text =
+              "[Re-run on resume: this call was interrupted before its result was recorded, and " +
+              `re-running it changes nothing. It passed the policy gate again as it ran.]
+
+${outcome.text}`;
+            isError = outcome.isError === true;
+          }
+        } else {
+          text = outcomeUnknownResult(call.name);
+        }
+        answered.push({
+          type: "tool_result",
+          tool_use_id: call.id,
+          content: [{ type: "text", text }],
+          ...(isError ? { is_error: true } : {}),
+        });
+      }
+      if (answered.length > 0) {
+        const entry = {
+          role: "user",
+          kind: "results",
+          blocks: answered,
+          at: new Date().toISOString(),
+          turnId,
+        } satisfies TranscriptEntry;
+        registry.appendTranscript(agent.id, entry, conversation);
+        history = [...history, entry];
+      }
+    }
+    // A step that was waiting on a person and whose refusal is already on the record: the
+    // call's result slot is taken, so the answer arrives as a line from the host. This is
+    // the shape a restart during the model request after an approval leaves (INV-798):
+    // the step stays open until the person answers, the turn parks on it, and what they
+    // said has to reach the model somewhere.
+    const told = [...open.values()]
+      .filter(step => step.approvalId !== undefined && !answeredHere.has(step.toolUseId))
+      .map(step => approvalOutcomeResult(step.name, approvalHow(step.approvalId!)));
+    if (told.length > 0) {
+      const entry = {
+        role: "user",
+        text: `[host] ${told.join("\n")}`,
+        at: new Date().toISOString(),
+        turnId,
+      } satisfies TranscriptEntry;
+      registry.appendTranscript(agent.id, entry, conversation);
+      history = [...history, entry];
+    }
+    // Whatever the transcript now says, these steps are over: either answered above, or
+    // their result was on disk already and only the `settled` line was lost. Except the
+    // ones the gate just handed to a person: those close when the person answers.
+    for (const step of open.values()) {
+      if (!stillWaiting.has(step.toolUseId)) deps.steps?.settled(turnId, step.toolUseId);
+    }
+  }
+
   // A person, as opposed to the harness wearing the person's shape: a timer, a webhook, a
   // resume and a first run all arrive as `fromId: "user"` because that is what opens a turn.
-  const personOpened = inbound.some(message => message.fromId === "user" && message.synthetic !== true);
+  let personOpened = inbound.some(message => message.fromId === "user" && message.synthetic !== true);
   /**
    * Whether the person is a party to this conversation at all: they opened this turn, or they
    * have spoken here before. False for a worker that only ever hears from teammates.
    */
   const personIsHere =
     personOpened || personHasSpoken(registry.readTranscript(agent.id, conversation) as TranscriptEntry[]);
+  /**
+   * Whether this is a turn nobody is waiting on (INV-775): a teammate's wake, a fork landing,
+   * a schedule, a webhook, a listener, or a room message that named nobody. Only then is
+   * `NothingToSay` offered. A person's own turn is never one — nor a resume of one, which
+   * continues work somebody asked for.
+   */
+  let silenceOffered =
+    deps.resumeOf === undefined && (!personOpened || inbound.every(message => message.addressed === false));
 
   const turnText = buildTurnPrompt(inbound);
 
@@ -1638,12 +1887,31 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   const opener = inbound.some(message => message.fromId === "user")
     ? turnReminderFor(provider.model, turnText, visibleSkillCount > 0)
     : undefined;
-  const messages: Anthropic.MessageParam[] = [
-    ...historyToMessages(history),
-    { role: "user", content: opener === undefined ? turnText : `${turnText}\n\n${opener}` },
-  ];
+  // The API copy of the turn's message: what was said, the standing-file diff (INV-777, given once,
+  // never replayed), then — without breakpoints — the volatile tier, then the reminder last, beside
+  // the request, as docs/31 measured. The transcript keeps only what the person said.
+  const tail = volatileInTail ? hostContext(promptParts.volatile + forkLine) : undefined;
+  const messages: Anthropic.MessageParam[] = continuing
+    ? historyToMessages(history)
+    : [
+        ...historyToMessages(history),
+        { role: "user", content: [turnText, standingNotice, tail, opener].filter(part => part !== undefined).join("\n\n") },
+      ];
+  // A continued turn appends nothing new for the model to answer: the next observation is the
+  // result it was waiting on, already in the history. The one exception is a history that
+  // ends on the model's own words — a filed answer written before the call was — where the
+  // wire needs a user message; a one-line host note is the least that satisfies it.
+  if (continuing && messages[messages.length - 1]?.role !== "user") {
+    messages.push({ role: "user", content: "[The host restarted while you were working. Carry on.]" });
+  }
+  // A continued turn still needs its volatile tier somewhere: on the message the wire ends with.
+  if (continuing && tail !== undefined) {
+    const last = messages[messages.length - 1]!;
+    if (typeof last.content === "string") last.content = `${last.content}\n\n${tail}`;
+    else last.content = [...last.content, { type: "text", text: tail }];
+  }
 
-  registry.appendTranscript(agent.id, {
+  if (!continuing) registry.appendTranscript(agent.id, {
     role: "user",
     text: turnText,
     at: new Date().toISOString(),
@@ -1653,6 +1921,8 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     // not be walked backwards however precisely everything was timed.
     causedBy: inbound.map(message => message.id),
     ...(personOpened ? { fromPerson: true as const } : {}),
+    // A continuation wake is the host's text; compaction must never pin it as the ask (INV-766).
+    ...(goal !== undefined ? { host: true as const } : {}),
     turnId,
   } satisfies TranscriptEntry, conversation);
 
@@ -1766,10 +2036,34 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     // The test is the whole conversation, not this turn: the front agent woken by a worker's
     // report is still the person's counterpart, and it is the one that has to be able to ask.
     .filter(tool => !(!personIsHere && PERSON_FACING_TOOLS.has(tool.name)))
+    // Deliberate silence is for turns nobody is waiting on (INV-775): withheld, not refused,
+    // wherever a person opened the turn and is reading for the answer.
+    .filter(tool => silenceOffered || tool.name !== SILENCE_TOOL)
     // A routine's own skill said what it needs (INV-691). Applied last, as an intersection, so it
     // can only take away: a name the agent was never offered stays unoffered.
     .filter(tool => routineScope === undefined || routineScope.has(tool.name) ||
       (MCP_GATEWAY_TOOLS.has(tool.name) && [...routineScope].some(name => name.includes("__"))));
+
+  // The prompt in three digests (INV-782): the stable prefix, the volatile tail, and the tool
+  // definitions as sent. The tool set was never in `promptHash`, and it is the segment that moves
+  // with skills, MCP servers and the lane — the common cache killer nobody could see. Compared
+  // with the previous turn in this conversation, so the ledger and the span say *which* part
+  // moved, not only that something did. Record and compare only: nothing here changes the prompt.
+  const promptFingerprint: PromptFingerprint = {
+    stable: promptHashOf(promptParts.stable),
+    volatile: promptHashOf(promptParts.volatile),
+    tools: promptHashOf(toolsFingerprintOf(tools)),
+  };
+  const ledgerConversation = conversation !== MAIN_CONVERSATION ? conversation : undefined;
+  const previousFingerprint = deps.turns?.lastPromptFingerprint(agent.id, ledgerConversation);
+  const promptChanged =
+    previousFingerprint !== undefined ? changedPromptSegments(previousFingerprint, promptFingerprint) : undefined;
+  if (promptChanged !== undefined && promptChanged.length > 0) {
+    console.error(`[turn] ${agent.profile.name}: prompt changed since last turn: ${promptChanged.join(", ")}`);
+  }
+  // The opening call of the turn is the one whose cache share says whether the prefix survived
+  // from the previous turn; later rounds hit what this one just wrote. Noted once.
+  let cacheShareNoted = false;
 
   // One entry per completed round, for the loop and progress judgements. Held out here rather than
   // inside runRounds so a continuation can reset it: a fresh budget deserves a fresh judgement.
@@ -1806,6 +2100,8 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   // How many tool calls this turn has made, across continuations: the structural signal the
   // guards read (docs/31 layer 1e). A ruling reached with this at zero is a ruling from memory.
   let toolCallsInTurn = 0;
+  // Their names, for the claim guard (INV-779): "已发送" with no reach-tier call this turn.
+  const toolNamesInTurn: string[] = [];
   // Guard bookkeeping: how many times the model was sent back, whether a send-back is
   // awaiting its answer (so the answer can be logged as complied or not), and whether the
   // closing nudge has been spent.
@@ -1814,6 +2110,9 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   let closingNudged = false;
   // The delivery gate (INV-692) sends the model back at most this many times per turn.
   let deliverableNudges = 0;
+  // The output gate (INV-761): a reply that is a leaked tool call or a loop at the cap is
+  // discarded and asked for once more; a second one ends the turn as failed.
+  let malformedRetries = 0;
   const chinese = readsAsChinese(inbound.map(message => message.text).join("\n"));
 
   // The ledger opens here, not during setup. Its job is to record that a turn was *executing* — a
@@ -1836,6 +2135,9 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     model: provider.model,
     build: buildInfo(),
     promptHash: promptHashOf(promptParts.stable, promptParts.volatile),
+    promptFingerprint,
+    ...(promptChanged !== undefined ? { promptChanged } : {}),
+    volatileInTail,
     contextEpoch: registry.contextVersion(agent.id, conversation),
     contextMode,
     memoryProjection: {
@@ -1858,6 +2160,9 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
         text: outcome.continueWith,
         at: new Date().toISOString(),
         turnId,
+        // The host's words, not the person's: compaction must never pin this as the ask
+        // in place of what opened the work (INV-766).
+        host: true,
       } satisfies TranscriptEntry, conversation);
 
       // Reassembled from the transcript, and compacted on the way, which is what the comment above
@@ -1896,7 +2201,16 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       // re-running a plain score-based recall here quietly threw that choice away (audit 2026-09-01
       // #6). A fact remembered mid-turn reaches the next turn, not this one — the same freeze Grok
       // Bot applies per compaction epoch, and the reason the memory block stays byte-stable.
-      system[1] = { type: "text", text: buildParts(memoryRecall).volatile + forkLine, ...cache };
+      const rebuilt = buildParts(memoryRecall).volatile + forkLine;
+      if (volatileInTail) {
+        // The continuation prompt is the newest message now; the rebuilt tier rides with it.
+        const last = messages[messages.length - 1];
+        if (last !== undefined && last.role === "user" && typeof last.content === "string") {
+          last.content = `${last.content}\n\n${hostContext(rebuilt)}`;
+        }
+      } else {
+        system[1] = { type: "text", text: rebuilt, ...cache };
+      }
 
       rounds.length = 0; // a fresh budget means a fresh judgement about looping
     }
@@ -1910,6 +2224,17 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     );
     throw error;
   } finally {
+    if (goal !== undefined) {
+      deps.onGoalTurn?.({
+        marker: goal,
+        turnId,
+        conversation,
+        how: endedHow ?? "failed",
+        worked: [...toolsUsedThisTurn].some(isWorkingTool),
+        cost: weightedCost(turnUsage, provider.tokenWeights ?? DEFAULT_TOKEN_WEIGHTS),
+        ...(lastFinalText !== undefined ? { finalText: lastFinalText } : {}),
+      });
+    }
     // Release the desktop however the turn ends — normally, by abort, or by
     // throwing. A lease leaked here would lock every other agent out of the
     // screen for the lifetime of the process.
@@ -1955,23 +2280,33 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     // reserved final turn): the model is told, and tools are withheld for this request,
     // so what it has becomes a reply — partial, and said so — instead of a 401st call
     // nobody reads.
-    if (round === MAX_ROUNDS - 1) {
+    if (round === MAX_ROUNDS - 1 || (goal?.finishOnly === true && round === 0)) {
       const lastCall =
         "[last round] You have one response left in this turn and no tools. Reply now with what " +
         "you have: the result so far, marked partial where it is, and what is left. Anything you " +
         "checkpointed is already safe; do not repeat it, point at it.";
-      registry.appendTranscript(agent.id, { role: "user", text: lastCall, at: new Date().toISOString(), turnId } satisfies TranscriptEntry, conversation);
+      registry.appendTranscript(agent.id, { role: "user", text: lastCall, at: new Date().toISOString(), turnId, host: true } satisfies TranscriptEntry, conversation);
       messages.push({ role: "user", content: lastCall });
       forceTools = { type: "none" };
     }
     const steered = finishing ? [] : deps.bus.takeSteering(agent.id, conversation);
     if (steered.length > 0) {
+      // A person who speaks into a turn nobody was waiting on is now waited on (review R6):
+      // silence is withdrawn — the tool refuses from here — and the guards read the rest of
+      // the turn as theirs.
+      if (steered.some(message => message.fromId === "user" && message.synthetic !== true)) {
+        personOpened = true;
+        silenceOffered = false;
+      }
       const steerText = buildTurnPrompt(steered);
       registry.appendTranscript(agent.id, {
         role: "user",
         text: steerText,
         at: new Date().toISOString(),
         causedBy: steered.map(message => message.id),
+        // Stamped like the opening message (INV-799): a steer is the person typing mid-turn, and
+        // the anchor harvest keeps only what carries the stamp.
+        ...(steered.some(message => message.fromId === "user" && message.synthetic !== true) ? { fromPerson: true as const } : {}),
         turnId,
       } satisfies TranscriptEntry, conversation);
       messages.push({ role: "user", content: steerText });
@@ -2090,6 +2425,12 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
         "agentbox.conversation": conversation,
         "agentbox.round": round,
         "agentbox.attempt": attempts + 1,
+        // Which prompt, in parts, and which parts differ from the previous turn (INV-782):
+        // `changed` is a comma list, empty when nothing moved, absent on a first turn.
+        "agentbox.prompt.stable_hash": promptFingerprint.stable,
+        "agentbox.prompt.volatile_hash": promptFingerprint.volatile,
+        "agentbox.prompt.tools_hash": promptFingerprint.tools,
+        ...(promptChanged !== undefined ? { "agentbox.prompt.changed": promptChanged.join(",") } : {}),
       },
       { traceId: turnId }
     );
@@ -2266,11 +2607,36 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       cacheWriteTokens: response.usage.cache_creation_input_tokens ?? 0,
     };
     emit({ type: "usage", agentId: agent.id, round, ...usage });
+    turnUsage.inputTokens += usage.inputTokens;
+    turnUsage.outputTokens += usage.outputTokens;
+    turnUsage.cacheReadTokens += usage.cacheReadTokens;
+    turnUsage.cacheWriteTokens += usage.cacheWriteTokens;
+    // The turn's opening call, scored for the cache ledger (INV-782): what share came from
+    // cache, and — when enough turns in a row came in low with a segment moving — why.
+    let cacheShare: number | undefined;
+    if (!cacheShareNoted) {
+      cacheShareNoted = true;
+      const noted = deps.usage?.notePromptCache({
+        agentId: agent.id,
+        agentName: agent.profile.name,
+        provider: deps.provider?.label ?? "unknown",
+        model: deps.provider?.model ?? "unknown",
+        round,
+        usage,
+        changed: promptChanged,
+        workId,
+        turnId,
+        conversation,
+      });
+      cacheShare = noted?.share ?? cacheReadShare(usage);
+      if (noted?.reason !== undefined) console.error(`[usage] ${agent.profile.name}: ${noted.reason}`);
+    }
     span?.end({
       "gen_ai.usage.input_tokens": usage.inputTokens,
       "gen_ai.usage.output_tokens": usage.outputTokens,
       "agentbox.usage.cache_read_tokens": usage.cacheReadTokens,
       "agentbox.usage.cache_write_tokens": usage.cacheWriteTokens,
+      ...(cacheShare !== undefined ? { "agentbox.usage.cache_read_share": cacheShare } : {}),
     });
     // Learn the real context window while we are here. Providers report it under different names —
     // Anthropic does not report it at all today, several OpenAI-compatible endpoints do — so this
@@ -2329,6 +2695,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       model: deps.provider?.model ?? "unknown",
       round,
       ...usage,
+      ...(cacheShare !== undefined ? { cacheShare } : {}),
     });
 
     // A response the context squeezed rather than finished. Discarded, never
@@ -2385,6 +2752,61 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       return;
     }
 
+    // The output gate (INV-761): a response with no structured call whose text is a call
+    // written out, or a loop that ran to the cap, is not an answer. Discarded before it
+    // reaches the transcript — which is what the channels deliver from — and before any
+    // guard reads it; asked for once more; a second one fails the turn rather than
+    // delivering it and letting the channel call the task done. Never "continue": that pays
+    // again for more of the loop.
+    if (!response.content.some(block => block.type === "tool_use")) {
+      const malformed = malformedOutput(
+        response.content
+          .filter((block): block is Anthropic.TextBlock => block.type === "text")
+          .map(block => block.text)
+          .join(""),
+        response.stop_reason
+      );
+      if (malformed !== undefined) {
+        const retrying = malformedRetries < MAX_MALFORMED_RETRIES;
+        console.error(
+          `[conduct] ${agent.profile.name}: malformed output — ${malformed.kind} (${malformed.detail}, ` +
+            `${usage.outputTokens} output tokens); ${retrying ? "discarded, asking once more" : "discarded again, failing the turn"}`
+        );
+        emit({
+          type: "retrying",
+          agentId: agent.id,
+          round,
+          attempt: malformedRetries + 1,
+          delayMs: 0,
+          kind: "malformed",
+          discardPartial: outputProduced,
+          detail: `the reply was ${malformed.kind === "degenerate" ? "a repetition loop" : "a tool call written as text"} and was discarded`,
+        });
+        if (!retrying) {
+          throw new Error(
+            malformed.kind === "degenerate"
+              ? "The model's reply fell into a repetition loop twice and was not delivered. Ask again, or ask for less at once."
+              : "The model wrote a tool call as text instead of answering, twice, and nothing was delivered. Ask again."
+          );
+        }
+        malformedRetries += 1;
+        // Nothing of the discarded reply is appended, so the request still ends on the
+        // person's side; the nudge joins that message, because the Anthropic wire rejects
+        // two user messages in a row.
+        const nudge: Anthropic.TextBlockParam = { type: "text", text: malformedNudge(malformed.kind, tools.length > 0, chinese) };
+        const last = messages[messages.length - 1];
+        if (last !== undefined && last.role === "user") {
+          last.content = typeof last.content === "string"
+            ? [{ type: "text", text: last.content }, nudge]
+            : [...last.content, nudge];
+        } else {
+          messages.push({ role: "user", content: [nudge] });
+        }
+        round -= 1; // retry this round rather than consuming one
+        continue;
+      }
+    }
+
     // Append the whole content array, not just text: tool_use blocks and thinking
     // blocks have to be echoed back unchanged for the next round to be valid.
     messages.push({ role: "assistant", content: response.content });
@@ -2413,6 +2835,42 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       guardPending = undefined;
     }
 
+    // Deliberate silence (INV-775): the model looked and decided there is nothing to do. The
+    // turn ends here — nothing is delivered, no nudge asks it to say more, and the reason is on
+    // the record beside the call. Anything else requested in the same round is not run: a turn
+    // that has decided to say nothing has no result to act on. Only when it was offered; a
+    // call on a turn someone is waiting on falls through to the tool's own refusal.
+    const silence = silenceOffered ? toolUses.find(use => use.name === SILENCE_TOOL) : undefined;
+    if (silence !== undefined) {
+      const reason = String((silence.input as { reason?: unknown } | null)?.reason ?? "").trim() || "(no reason given)";
+      const at = new Date().toISOString();
+      registry.appendTranscript(agent.id, {
+        role: "assistant",
+        kind: "blocks",
+        blocks: response.content.filter(
+          (block): block is Anthropic.TextBlock | Anthropic.ToolUseBlock => block.type === "text" || block.type === "tool_use"
+        ),
+        at,
+        turnId,
+        silent: { reason },
+      } satisfies TranscriptEntry, conversation);
+      registry.appendTranscript(agent.id, {
+        role: "user",
+        kind: "results",
+        blocks: toolUses.map(use => ({
+          type: "tool_result" as const,
+          tool_use_id: use.id,
+          content: use.id === silence.id ? `Silence recorded: ${reason}` : `Not run: the turn ended with ${SILENCE_TOOL}.`,
+        })),
+        at: new Date().toISOString(),
+        turnId,
+      } satisfies TranscriptEntry, conversation);
+      emit({ type: "tool_start", agentId: agent.id, agentName: agent.profile.name, tool: SILENCE_TOOL, input: silence.input });
+      console.error(`[conduct] ${agent.profile.name}: ${SILENCE_TOOL} — ${reason.slice(0, 120)}`);
+      finish("silent");
+      return;
+    }
+
     if (toolUses.length === 0) {
       const finalText = response.content
         .filter((block): block is Anthropic.TextBlock => block.type === "text")
@@ -2425,8 +2883,11 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       // the model's text is filed as blocks so the record has it, but it is not a reply
       // (`replySince` would have delivered the wrong verdict beside the corrected one).
       const reason =
-        personOpened && guardsEnabled() && guardNudges < MAX_GUARD_NUDGES && finalText.trim() !== ""
-          ? guardFor(finalText, toolCallsInTurn)
+        // Every guard answers with a demand for a tool call, so none may fire where no tool
+        // was offered (INV-761): asking a toolless context to act is how a model ends up
+        // writing the call as text.
+        personOpened && guardsEnabled() && tools.length > 0 && guardNudges < MAX_GUARD_NUDGES && finalText.trim() !== ""
+          ? guardFor(finalText, toolCallsInTurn, toolNamesInTurn)
           : undefined;
       if (reason !== undefined) {
         guardNudges += 1;
@@ -2441,11 +2902,12 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
           at: new Date().toISOString(),
           turnId,
         } satisfies TranscriptEntry, conversation);
-        messages.push({ role: "user", content: nudgeFor(reason, chinese) });
+        messages.push({ role: "user", content: nudgeFor(reason, chinese, finalText) });
         // A verdict or an offer is answered with a demand for a tool call, which is what the
         // wires can now carry; a trailing intent is left to the model, which already named
-        // the action.
-        if (reason !== "trailing-intent") forceTools = { type: "any" };
+        // the action; a claim without a call is left to it too — the honest answer may be
+        // "not yet", which is text.
+        if (reason !== "trailing-intent" && reason !== "claim-without-call") forceTools = { type: "any" };
         finishing = false;
         continue;
       }
@@ -2511,7 +2973,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
 
       // The closing send (Grok Bot's `turnEndedOnSilentToolCalls`, docs/31 layer 1b): the
       // person saw the opening line, then tools ran, then nothing. Once.
-      if (!finalText.trim() && personOpened && interimDelivered && !closingNudged && guardsEnabled()) {
+      if (!finalText.trim() && personOpened && interimDelivered && !closingNudged && guardsEnabled() && tools.length > 0) {
         closingNudged = true;
         console.error(`[conduct] ${agent.profile.name}: closing nudge (acknowledged, ran tools, ended silent)`);
         messages.push({ role: "user", content: closingNudge(chinese) });
@@ -2520,7 +2982,20 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       }
 
       if (finalText.trim()) {
-        registry.appendTranscript(agent.id, {
+        lastFinalText = finalText;
+        // A continuation's closing words are the record's, not the person's reply: filed as
+        // blocks, which `replySince` never delivers, so a goal working in the background does
+        // not talk into the chat (docs/74 §3.7). The finish-only report is sent by the loop.
+        if (goal !== undefined) {
+          registry.appendTranscript(agent.id, {
+            role: "assistant",
+            kind: "blocks",
+            blocks: [{ type: "text", text: finalText }],
+            at: new Date().toISOString(),
+            turnId,
+            silent: { reason: "goal continuation: kept on the record, not delivered" },
+          } satisfies TranscriptEntry, conversation);
+        } else registry.appendTranscript(agent.id, {
           role: "assistant",
           text: finalText,
           at: new Date().toISOString(),
@@ -2540,7 +3015,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
             stopHookActive = true;
             finishing = true;
             const note = `[Stop hook] ${hook.reason ?? "continue"}`;
-            registry.appendTranscript(agent.id, { role: "user", text: note, at: new Date().toISOString() } satisfies TranscriptEntry, conversation);
+            registry.appendTranscript(agent.id, { role: "user", text: note, at: new Date().toISOString(), host: true } satisfies TranscriptEntry, conversation);
             messages.push({ role: "user", content: note });
             continue;
           }
@@ -2556,6 +3031,11 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       // It happens when a final message carries no text: thinking blocks only, an empty content
       // array, a model that stopped for a reason it did not narrate. Rare, and rare is exactly why
       // it is worth a line rather than a shrug.
+      //
+      // Since INV-775 this is an anomaly with a name, `empty_output`: a model that had nothing
+      // to say had `NothingToSay` to say so (where nobody was waiting) or a person to answer
+      // (where somebody was). The note stays, marked as the host's so no door delivers it as
+      // the agent's reply, and the ledger counts it so a model that does this often is visible.
       const silent =
         `The turn ended without anything to report. The model returned no text on its last round, ` +
         `so there is no answer here — not an empty one. Ask again, or ask for what is missing.`;
@@ -2564,14 +3044,28 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
         text: silent,
         at: new Date().toISOString(),
         turnId,
+        host: true,
       } satisfies TranscriptEntry, conversation);
+      deps.usage?.noteAnomaly({
+        anomaly: "empty_output",
+        agentId: agent.id,
+        agentName: agent.profile.name,
+        provider: deps.provider?.label ?? "unknown",
+        model: deps.provider?.model ?? "unknown",
+        round,
+        workId,
+        turnId,
+        conversation,
+      });
       emit({ type: "text", agentId: agent.id, agentName: agent.profile.name, delta: silent });
-      console.error(`[turn] ${agent.profile.name}: ended with no text on round ${round}`);
+      console.error(`[turn] ${agent.profile.name}: empty_output — ended with no text on round ${round}`);
+      finish("empty_output");
       return;
     }
     // Tool calls mean the model is working again, so steering is welcome at the next boundary.
     finishing = false;
     toolCallsInTurn += toolUses.length;
+    toolNamesInTurn.push(...toolUses.map(use => use.name));
 
     // Text followed only by bookkeeping calls is not narration — it is the answer,
     // filed. Measured on t51: the agent wrote its whole analysis, then tidied up
@@ -2590,11 +3084,9 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       roundText.trim().length >= FILED_ANSWER_FLOOR &&
       toolUses.every(use => BOOKKEEPING_TOOLS.has(use.name));
     if (filedAnswer) {
-      registry.appendTranscript(agent.id, {
-        role: "assistant",
-        text: roundText,
-        at: new Date().toISOString(),
-      } satisfies TranscriptEntry, conversation);
+      registry.appendTranscript(agent.id, goal !== undefined
+        ? { role: "assistant", kind: "blocks", blocks: [{ type: "text", text: roundText }], at: new Date().toISOString(), turnId, silent: { reason: "goal continuation: kept on the record, not delivered" } }
+        : { role: "assistant", text: roundText, at: new Date().toISOString() } satisfies TranscriptEntry, conversation);
     }
 
     // The opening line reaches the person while the tools run (docs/31 layer 1a). Grok Bot
@@ -2617,9 +3109,34 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     // and a defect that succeeds slowly (a click that took fifteen seconds) invisible to
     // any reading of the transcript.
     const requestedAt = new Date().toISOString();
+    // Persist the calls as blocks *before* any of them runs, and the results after (the
+    // order the API requires: the calling assistant turn, then its results). On disk first
+    // because the block is the durable record of what was asked (INV-774): a restart that
+    // finds it with no results, and the step ledger saying which calls were dispatched,
+    // can answer each one honestly instead of losing the action that was in flight.
+    // Thinking blocks are not kept — they are only valid within the turn that produced
+    // them. Text promoted as a filed answer above is left out here: it already stands as
+    // a plain entry just before this one, and keeping both would replay the same
+    // paragraph twice into every later request.
+    registry.appendTranscript(agent.id, {
+      role: "assistant",
+      kind: "blocks",
+      blocks: response.content.filter(
+        (block): block is Anthropic.TextBlock | Anthropic.ToolUseBlock =>
+          (block.type === "text" && !filedAnswer) || block.type === "tool_use"
+      ),
+      at: requestedAt,
+      turnId,
+    } satisfies TranscriptEntry, conversation);
     const results: Anthropic.ToolResultBlockParam[] = [];
     /** Tool-use ids whose stored text differs from what the model was shown. */
     const withheld = new Map<string, string>();
+    /**
+     * Calls the gate handed to a person this round (INV-798). Their step stays open in the
+     * ledger past the end of the batch: it closes when the person answers, so a restart in
+     * the meantime parks on the answer instead of continuing as if nothing were pending.
+     */
+    const awaitingPerson = new Set<string>();
     const runOne = async (
       toolUse: Anthropic.ToolUseBlock
     ): Promise<{ block: Anthropic.ToolResultBlockParam; recordAs?: string; commit?: { id: string; how: import("./pending-work.ts").CommitHow }[] }> => {
@@ -2688,6 +3205,16 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       let outcome: ToolOutcome;
       if (isolated || (effectiveTools !== undefined && !tools.some(tool => tool.name === toolUse.name))) {
         outcome = { text: isolated ? `Tools are disabled in ${contextMode} context.` : "This tool is unavailable in the current execution context.", isError: true };
+      } else if (goal?.verify !== undefined && toolUse.name === "bash" && !commandIsConfirmed(goal, String((toolInput as { command?: unknown }).command ?? ""))) {
+        // A verifier runs what the person confirmed and nothing else (review R3): the checklist
+        // was written by a model, and a model-written command is a proposal until a person says.
+        outcome = {
+          text:
+            `bash refused: a verification runs only the commands the person confirmed, exactly as written` +
+            (goal.verify.confirmedCommands.length > 0 ? ` (${goal.verify.confirmedCommands.join(" | ")})` : " (none were confirmed)") +
+            ". Judge the item from what you can read instead.",
+          isError: true,
+        };
       } else if (hookBlock !== undefined) {
         outcome = { text: `Blocked by a PreToolUse hook: ${hookBlock}`, isError: true };
       } else if (blocked !== undefined) {
@@ -2698,6 +3225,10 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
           isError: true,
         };
       } else try {
+        // Checkpointed before it runs (INV-774): a crash from here until the result is on
+        // disk leaves this call open in the ledger, which is what lets a restart continue
+        // this turn instead of guessing at it.
+        deps.steps?.pending(turnId, toolUse.id, toolUse.name);
         outcome = await dispatchTool(
           toolUse.name,
           (toolUse.input ?? {}) as Record<string, unknown>,
@@ -2721,6 +3252,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
             vault: deps.vault,
             oauth: isForkConversation(conversation) ? undefined : deps.oauth,
             tasks: deps.tasks,
+            ...(deps.goalGate !== undefined ? { goalGate: deps.goalGate } : {}),
             scopes: deps.scopes,
             mcp: isForkConversation(conversation) ? undefined : deps.mcp,
             askUser: deps.askUser,
@@ -2738,6 +3270,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
             ...(deps.templateSetup !== undefined ? { templateSetup: deps.templateSetup } : {}),
             ...(deps.templates !== undefined ? { templates: deps.templates } : {}),
             turnId,
+            toolUseId: toolUse.id,
             conversation,
             memorySources: inbound.map(message => `message:${message.id}`),
             toolsUsedThisTurn,
@@ -2750,6 +3283,10 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
           isError: true,
         };
       }
+      if (outcome.approval !== undefined) {
+        deps.steps?.awaitingApproval(turnId, toolUse.id, outcome.approval.id);
+        awaitingPerson.add(toolUse.id);
+      }
 
       emit({
         type: "tool_end",
@@ -2759,6 +3296,19 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
         summary: outcome.text.split("\n")[0]?.slice(0, 200) ?? "",
         screenshot: outcome.images?.[0]?.data,
       });
+
+      // What the relay refused while this call ran, as one line on the result (INV-784): the
+      // model learns that `pip install` failed because vendor.test is not allowed, rather
+      // than reading a timeout. Read from the relay's own ledger, keyed by this call.
+      if (deps.networkEvents !== undefined) {
+        let refused: string | undefined;
+        try {
+          refused = refusedLine(deps.networkEvents.query({ toolUse: toolUse.id, refused: true, limit: 1000 }).events);
+        } catch {
+          // The ledger must never decide a tool result.
+        }
+        if (refused !== undefined) outcome = { ...outcome, text: `${outcome.text}\n${refused}` };
+      }
 
       // A model without vision must not be handed image blocks it cannot decode — the
       // request would be refused outright. The text keeps the fact that there was an
@@ -2831,22 +3381,6 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       if (entry.recordAs !== undefined) withheld.set(entry.block.tool_use_id, entry.recordAs);
     }
 
-    // Persist the exchange as blocks, in the order the API requires: the calling
-    // assistant turn, then its results. Thinking blocks are not kept — they are
-    // only valid within the turn that produced them. Text promoted as a filed answer
-    // above is left out here: it already stands as a plain entry just before this
-    // one, and keeping both would replay the same paragraph twice into every later
-    // request.
-    registry.appendTranscript(agent.id, {
-      role: "assistant",
-      kind: "blocks",
-      blocks: response.content.filter(
-        (block): block is Anthropic.TextBlock | Anthropic.ToolUseBlock =>
-          (block.type === "text" && !filedAnswer) || block.type === "tool_use"
-      ),
-      at: requestedAt,
-      turnId,
-    } satisfies TranscriptEntry, conversation);
     const storedResults = results.map(block =>
       storableResult(block, withheld.get(block.tool_use_id), {
         turnId,
@@ -2863,6 +3397,13 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       at: new Date().toISOString(),
       turnId,
     } satisfies TranscriptEntry, conversation);
+    // Settled only now, with the results on disk: a crash before this line leaves the
+    // calls open, and open means "the result may be missing", which is exactly the case.
+    // A call waiting on a person is not settled by its refusal being on disk: the
+    // orchestrator settles it when the person answers (INV-798).
+    for (const use of toolUses) {
+      if (!awaitingPerson.has(use.id)) deps.steps?.settled(turnId, use.id);
+    }
     // Only now are a fork's findings durably the parent's (docs/32 §1): the results entry is
     // on disk. Committing inside the tool would record `done` for findings a crash could
     // still lose between the join and this line.
@@ -2917,7 +3458,10 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     throw new TurnRoundLimitExceeded(report);
   }
 
-  if (outcome.kind === "progressing" && continuation < MAX_CONTINUATIONS) {
+  // A goal turn continues through the loop, not inside itself: two nested continuations would
+  // make either limit meaningless (docs/74 §3.3).
+  const maxContinuations = goal !== undefined ? 0 : MAX_CONTINUATIONS;
+  if (outcome.kind === "progressing" && continuation < maxContinuations) {
     // A budget, not a wall. The plan and todo list are in the system prompt and unchanged, and the
     // history will be compacted on the way in — so a fresh turn resumes rather than restarts.
     const next = continuation + 1;
@@ -3021,6 +3565,25 @@ export function reviewInputFor(options: {
     input: options.input,
     why: options.why,
   };
+}
+
+/**
+ * The tool definitions as one stable string, for the `tools` segment of the prompt fingerprint
+ * (INV-782). Sorted by name and with every object's keys sorted, so the digest answers "is this
+ * the same tool set" and not "were they assembled in the same order".
+ */
+export function toolsFingerprintOf<T extends { name: string }>(tools: readonly T[]): string {
+  const canonical = (value: unknown): unknown =>
+    Array.isArray(value)
+      ? value.map(canonical)
+      : value !== null && typeof value === "object"
+        ? Object.fromEntries(
+            Object.keys(value as Record<string, unknown>)
+              .sort()
+              .map(key => [key, canonical((value as Record<string, unknown>)[key])])
+          )
+        : value;
+  return JSON.stringify([...tools].sort((a, b) => a.name.localeCompare(b.name)).map(canonical));
 }
 
 /** A short, stable digest of an assembled prompt, for the turn ledger's `promptHash`. */

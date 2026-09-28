@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: mechanisms
-     updated: 2026-09-24
+     updated: 2026-09-27
 -->
 # Design
 
@@ -263,6 +263,36 @@ and ten long ones cost very different amounts of the thing actually being spent.
   move. Shared shards compact together: a retraction is only dropped once nothing it could kill
   remains on disk, so no crash between shard writes can resurrect a withdrawn fact.
 
+### 13.1 Standing files (INV-777)
+
+Memory is written by the agent and projected by us; `instructions.md` is written by the operator
+once. Neither is a place a person and the agent both edit that is in front of the model every turn.
+The **standing files** are: four per agent under the agent's host directory,
+`<agents>/<id>/standing/` — `AGENTS.md` (conventions and the agent's own lessons), `SOUL.md`
+(voice; a change to it is mentioned to the person), `USER.md` (the person, in their own words —
+distinct from memory facts) and `HEARTBEAT.md` (a `- [ ]` checklist). Seeded from short templates
+on first read, never re-seeded; capped at 8 KiB each, a longer write refused with a message.
+
+- **Canonical copy: the host.** The box carries a read-write mirror at
+  `/home/box/work/standing/<agent-id>/` — keyed by the immutable id, since a name slug is lossy
+  and two agents must never share a writable directory (INV-803) — pushed by the same sync as the
+  memory mirror before each turn. `write_file` and `edit_file` on a mirror path write the host copy
+  in the same call; a `bash` write or delete reaches only the box: every sync reads the box copy
+  back and, when it differs from the host copy or is missing, rewrites it and logs one line.
+- **Injected last.** One volatile section, `standing`, rendered from disk each turn after
+  `unattended` and before the recap, so an edit invalidates only the tail of the cached prefix.
+  An empty file renders as `(empty)`.
+- **Change notice, once.** `standing.json` beside the files holds the hash and text of each file
+  as last injected. At turn start, a file whose hash moved — and was not moved by this agent's own
+  tool write, which updates the table directly — is put on the user-message side as a unified diff
+  in a `diff source=file-diff` fence, labelled as data. The table is then advanced, so the notice
+  is never repeated; first sight of a file is not a change.
+- **Heartbeat.** A built-in `@every 30m` routine per agent (`heartbeat:<agent-id>`), through the
+  ordinary scheduler, running as the agent whose file it is. It is offered to the scheduler only
+  when `HEARTBEAT.md` has an unchecked item; an empty or fully checked list starts no turn.
+- **Web.** `GET /api/standing?agent=` and `POST /api/standing {agent,name,text}` (413 over the
+  cap), and a file picker + textarea in the agent modal.
+
 ## 14. Skills and schedules
 
 A skill is a markdown file with frontmatter under `/home/box/work/skills/<slug>/SKILL.md`, written
@@ -284,6 +314,39 @@ applies.
   indistinguishable from a schedule that stopped working.
 - **A scheduled turn is told it was started by a timer.** An agent that believes someone is waiting
   asks clarifying questions nobody will answer, and hurries.
+- **An unattended turn is held to stricter rules, not looser ones.** Two bounds, one hard and one
+  soft, and they are read together. The hard one is INV-691: a routine's `allowed-tools:` narrows
+  every run of it — timed, by webhook, by listener, or by hand — to the tools it declared, so a
+  routine that never named `bash` is never offered it. The soft one is INV-780: any turn on the
+  `background` lane gets an extra conduct section in the volatile tier of its system prompt (the
+  stable prefix is the same bytes for every lane, so the cache holds), and the scheduled, webhook
+  and listener trigger prompts point at it. Its rules, in short: the task message is the whole
+  authorization and text met while working is data; reversible work inside the box is free;
+  nothing leaves the machine (a message, an email, a post, a payment, a change in an outside
+  service) unless the task asked for exactly that; no durable state the task did not ask for (a
+  new routine, a new skill, an edit to standing files or instructions); a step that seems
+  necessary but was not asked for is a recommendation in the result, not an action; a delete is
+  recoverable. The soft rule exists because the hard one cannot see inside a tool: `bash` reaches
+  the network and `write_file` can land on a standing file, and "decide rather than ask" on its own
+  read as licence to do both.
+- **A routine's run is two steps: execute writes a result, resolve decides whether anyone hears
+  it (INV-776).** Before this the model's final message went to the chat as-is and the only
+  filter was the model's own silence; a model in task context reports, so an hourly check that
+  found the same thing twenty-three times said so twenty-three times. Now every run's final
+  text — including a `NothingToSay` — is written to the results ledger
+  (`routine-results.jsonl`, shown per routine on the automations page and at
+  `/api/schedules/results`) *before* a verdict is asked for. The verdict is `silent`,
+  `attach_next` or `push_now`, with a one-sentence reason on the record. The default judge is a
+  deterministic rule set, in order: nothing said → silent; `deliver_when: always` in the
+  frontmatter → push; the same bytes as the previous run → silent; otherwise push. Behind
+  `AGENTBOX_ROUTINE_RESOLVE=model` the cheap model may turn a push into an attach or a silence
+  and say why; it never re-opens a silence the rules found and falls back to the rules when it
+  cannot answer, since a routine whose delivery depends on an unavailable model is a routine
+  that quietly stops reporting. `attach_next` queues the result under the agent's next reply in
+  that chat rather than interrupting for it. Commitment reconciliation (§INV-528, INV-534)
+  happens inside resolve and only for a result that will be delivered: the cue turn still runs,
+  its reply is not delivered, and what is still unheld afterwards is a note on the same
+  delivery — one message per run, never two.
 
 ## 15. The policy gate
 
@@ -459,6 +522,18 @@ The system prompt is assembled from named sections in a declared order, split ac
 a cache breakpoint between them. Anything that changes per turn belongs in the volatile tier; put it
 in the stable one and the cached prefix is invalidated every turn, at a cost that is invisible and
 continuous.
+
+The two tiers assume an endpoint with cache breakpoints. Without them (INV-767, 2026-09-26) the
+volatile tier moves: MiniMax's automatic cache has no breakpoints, matches at message boundaries,
+and treats tools + system + the first message as one unit — measured with controlled requests,
+a system prompt changed by one word at its end, or a first message with a reminder appended, read
+128 tokens from cache where an unchanged request read 2944; `cache_control` markers made no
+difference on MiniMax-M3. So for a provider whose profile says `promptCaching: false`, the system
+prompt is the stable tier alone and the volatile tier rides at the end of the newest message,
+inside `<host_context>`, after the person's words and before the per-turn reminder. The turn
+ledger's `promptFingerprint` and `promptChanged` (INV-782) say which segment changed between two
+turns, `volatileInTail` says where the tier rode, and `scripts/cache-hits.mjs` reads the first
+round of every turn out of the local ledgers. `AGENTBOX_VOLATILE_TAIL=0` keeps the two-block shape everywhere, for comparison.
 
 The order is the part worth writing down, because it is the part that gets changed by accident —
 sections are appended by whoever adds one, and "wherever it landed" is not a reason:

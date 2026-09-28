@@ -56,6 +56,8 @@ const DECLARED: Record<string, SideEffect> = {
   WebSearch: { tier: "observe" },
   ReadFeishuDoc: { tier: "observe" },
   WaitForControl: { tier: "observe" },
+  // Ends the turn with nothing delivered; the reason goes in the record (INV-775).
+  NothingToSay: { tier: "observe" },
   browser_pages: { tier: "observe" },
   browser_snapshot: { tier: "observe" },
   browser_read: { tier: "observe" },
@@ -77,6 +79,8 @@ const DECLARED: Record<string, SideEffect> = {
   ClaimWork: { tier: "self" },
   RememberFact: { tier: "self" },
   Tasks: { tier: "self" },
+  // Reading the goal or growing its checklist changes the board, which is the agent's own work.
+  Goal: { tier: "self" },
   NoteSiteLearning: { tier: "self" },
   SendToAgent: { tier: "self" },
   AskUser: { tier: "self" },

@@ -51,8 +51,11 @@ test("two questions in a row is the budget; the third is refused", async () => {
     assert.equal(third.isError, true);
     assert.match(third.text, /Decide this one yourself/);
     assert.deepEqual(asked, []);
-    // Work in between resets the count.
+    // Work in between resets the count. Its results are on disk too: a trailing `blocks`
+    // entry with none is the batch being run right now (INV-774), and is not counted either way.
     registry.appendTranscript(ada.id, { role: "assistant", kind: "blocks", blocks: [{ type: "tool_use", id: "t", name: "bash", input: { command: "ls" } }], at: "" } as never);
+    assert.equal(consecutiveQuestions(context), 2, "the in-flight batch is not a finished turn");
+    registry.appendTranscript(ada.id, { role: "user", kind: "results", blocks: [{ type: "tool_result", tool_use_id: "t", content: [{ type: "text", text: "" }] }], at: "" } as never);
     assert.equal(consecutiveQuestions(context), 0);
   } finally {
     rmSync(root, { recursive: true, force: true });

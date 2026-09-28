@@ -7,9 +7,13 @@
  */
 
 import { bindingsOf, CommitmentLedger, describeGaps, parseCommitments, priorCommitmentsPrompt, reconcileCommitments } from "./commitments.ts";
+import { finishRoutineRun, PendingAttachments, RoutineResultLedger, routineResolveMode, type DeliveryOutcome } from "./routine-resolve.ts";
 import { learningsDir } from "./learnings.ts";
-import { replyForMessage } from "./reply.ts";
+import { replyForMessage, silenceForMessage } from "./reply.ts";
 import { contextTaskBlockers, isContextCommand } from "./context-recovery.ts";
+import { isGoalCommand } from "./goal-mode.ts";
+import { GoalLoop } from "./goal-loop.ts";
+import { GoalGate } from "./goal-gate.ts";
 import { isRecoveryCommand } from "./task-recovery.ts";
 import { isRetryCommand } from "./retry-recovery.ts";
 import { AnswerReviewer, answerReviewMode, sampledForReview, type AnswerReviewInput, type AnswerVerdict } from "./answer-review.ts";
@@ -29,6 +33,10 @@ import {
   resumePrompt,
   TurnLedger,
   turnLedgerPath,
+  StepLedger,
+  stepLedgerPath,
+  continuationNote,
+  type InterruptedTurn,
   openTurnFor,
 } from "./resume.ts";
 import { AgentRegistry, type AgentRecord } from "../agents/registry.ts";
@@ -38,6 +46,7 @@ import { AutoReviewer } from "./auto-review.ts";
 import { SkillProvenance } from "./skill-provenance.ts";
 import { HookRunner } from "./hooks.ts";
 import { appendLine } from "./jsonl.ts";
+import { NetworkEventLog } from "../egress/events.ts";
 import { agentboxHome } from "../config.ts";
 import { join } from "node:path";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -90,10 +99,12 @@ import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
 import type { OAuthGate } from "./oauth.ts";
 import { Rememberer, summariseExchange } from "./remember.ts";
+import type { HistoryEntry } from "./compaction.ts";
 import { memoryRef } from "./memory.ts";
 import type { PitfallSource } from "./pitfalls.ts";
 import { SkillCache } from "./skills.ts";
-import { Scheduler } from "./schedule.ts";
+import { parseSchedule, type Schedule, type Scheduled, Scheduler } from "./schedule.ts";
+import { heartbeatAgentOf, heartbeatItems, heartbeatSlug, readStanding, standingBoxDir } from "./standing.ts";
 import { UsageLog } from "./usage.ts";
 import { tracerFromEnv, type Tracer } from "./trace.ts";
 import {
@@ -144,6 +155,13 @@ export interface OrchestratorOptions {
    * `null` keeps none.
    */
   turns?: TurnLedger | null;
+  /**
+   * Where each turn's tool calls are checkpointed as they run (INV-774), so a restart
+   * continues the turn from the call it was inside. `null` keeps none.
+   */
+  steps?: StepLedger | null;
+  /** The relay's network event log (INV-784), for the refusal line on tool results. `null` for none. */
+  networkEvents?: NetworkEventLog | null;
   /** The fork ledger (docs/32). `null` keeps none; omitted uses the default path. */
   pendingWork?: PendingWork | null;
   /** The extension layer (docs/34). `null` loads none; omitted reads ~/.agentbox/extensions. */
@@ -200,7 +218,10 @@ export interface OrchestratorOptions {
    * into another box's room is the cross-box leak Octop closes with an ownership check
    * on the session (`delivery.py:72-75`), and we had nothing.
    */
-  deliverToChat?: (chatKey: string, text: string, fromAgentId?: string) => Promise<void>;
+  /** Sends a routine's result into a chat and says whether anybody got it (INV-802). */
+  deliverToChat?: (chatKey: string, text: string, fromAgentId?: string) => Promise<DeliveryOutcome>;
+  /** Questions waiting on a person in a conversation (INV-770): a goal does not continue over one. */
+  pendingQuestions?: (agentId: string, conversation: string) => number;
   /**
    * A principal id as the roster shows it, so an operator rule can be written about a
    * person by name (INV-156). Absent leaves rules id-only, which still works.
@@ -212,6 +233,13 @@ export interface OrchestratorOptions {
 
 /** A newer version of an already-imported template arrived without `update` (INV-411). */
 export class TemplateVersionConflict extends Error {}
+
+/** The heartbeat cadence (INV-777). Parsed once; the text is ours, so a problem is a bug. */
+const HEARTBEAT_SCHEDULE: Schedule = (() => {
+  const parsed = parseSchedule("@every 30m");
+  if ("problem" in parsed) throw new Error(parsed.problem);
+  return parsed.schedule;
+})();
 
 export class Orchestrator {
   readonly registry: AgentRegistry;
@@ -229,6 +257,38 @@ export class Orchestrator {
   /** One skills directory per box; the prompt shows an agent its own box's. */
   private readonly skillCaches = new Map<string, SkillCache>();
   private readonly memoryMirror: MemoryMirror;
+
+  /** Pushes an agent's standing files to its box after a person edited them on the host (INV-777). */
+  syncStanding(agentId: string): Promise<unknown> {
+    return this.memoryMirror.sync(agentId);
+  }
+
+  /**
+   * The built-in heartbeat routine per agent (INV-777): every 30 minutes, the checklist in its
+   * HEARTBEAT.md. An agent whose list has no unchecked item is not due at all — an empty
+   * checklist starts no turn, rather than a turn that finds nothing to do.
+   */
+  private heartbeats(): Scheduled[] {
+    const out: Scheduled[] = [];
+    for (const agent of this.registry.list()) {
+      let text: string;
+      try {
+        text = readStanding(this.registry.dirFor(agent.id), agent.profile.name)["HEARTBEAT.md"];
+      } catch {
+        continue;
+      }
+      if (heartbeatItems(text).length === 0) continue;
+      out.push({
+        slug: heartbeatSlug(agent.id),
+        name: `${agent.profile.name}'s heartbeat`,
+        path: `${standingBoxDir(agent.id)}/HEARTBEAT.md`,
+        schedule: HEARTBEAT_SCHEDULE,
+        runAs: agent.id,
+        boxId: this.registry.boxOf(agent.id).id,
+      });
+    }
+    return out;
+  }
   readonly skillProvenance: SkillProvenance;
   readonly hooks: HookRunner | undefined;
   /**
@@ -310,12 +370,20 @@ export class Orchestrator {
    * replay-and-compact and a second writer would interleave two views of the board.
    */
   readonly tasks: TaskStore | undefined;
+  /** The continuation loop of goal mode (INV-770); absent without a task board. */
+  readonly goalLoop: GoalLoop | undefined;
+  /** The completion gate of goal mode (INV-771); absent without a task board. */
+  readonly goalGate: GoalGate | undefined;
   readonly scopes: ScopeStore | undefined;
   /** Bundles attached to boxes (INV-420). */
   readonly bundles: BundleStore;
   readonly teachDrafts = new TeachDrafts(join(agentboxHome(), "skills-drafts"));
   /** What routines committed to and whether anything holds it (INV-528). */
   readonly commitments = new CommitmentLedger(join(agentboxHome(), "commitments.jsonl"));
+  /** Every routine run's result, delivered or not (INV-776). */
+  readonly routineResults = new RoutineResultLedger(join(agentboxHome(), "routine-results.jsonl"));
+  /** Results waiting to ride along with the next reply in their chat (`attach_next`, INV-776). */
+  readonly routineAttachments = new PendingAttachments();
   /**
    * What was decided, written when it was decided (INV-551).
    *
@@ -394,6 +462,8 @@ export class Orchestrator {
 
   /** Begin/end per turn. A begin with no end is a turn the process died underneath. */
   private readonly turns: TurnLedger | undefined;
+  private readonly steps: StepLedger | undefined;
+  private readonly networkEvents: NetworkEventLog | undefined;
   readonly pendingWork: PendingWork | undefined;
   /** The MCP face (docs/33): per-job routes a delegated engine calls the host's MCP tools through. */
   readonly mcpFace: McpFace;
@@ -410,7 +480,15 @@ export class Orchestrator {
    * Without the link, every resumption would start its own chain and a turn that kills the process
    * would be retried forever — the count is the whole of the crash-loop guard.
    */
-  private readonly resuming = new Map<string, { id: string; attempt: number; workId?: string }>();
+  private readonly resuming = new Map<
+    string,
+    { id: string; attempt: number; workId?: string; continues?: true; approval?: { id: string; how: "allowed" | "refused" | "gone" } }
+  >();
+  /**
+   * Turns parked on a person's approval when the process died (INV-774), by approval id.
+   * Continued from that step when the answer arrives, from whichever door it comes.
+   */
+  private readonly parked = new Map<string, InterruptedTurn>();
 
   /**
    * What each agent last saw each shared file as.
@@ -489,7 +567,7 @@ export class Orchestrator {
     spentSinceAgent: (sinceMs, agentId) => this.usage.spentSinceAgent(sinceMs, agentId),
     due: async () => {
       const everywhere = await this.skillsEverywhere();
-      return everywhere.flatMap(({ boxId, skills }) => skills
+      return [...this.heartbeats(), ...everywhere.flatMap(({ boxId, skills }) => skills
         .filter(skill => skill.schedule !== undefined)
         .map(skill => ({
           boxId,
@@ -500,11 +578,12 @@ export class Orchestrator {
           ...(skill.runAs !== undefined ? { runAs: skill.runAs } : {}),
           ...(skill.timezone !== undefined ? { timezone: skill.timezone } : {}),
           ...(skill.deliver !== undefined ? { deliver: skill.deliver } : {}),
+          ...(skill.deliverWhen !== undefined ? { deliverWhen: skill.deliverWhen } : {}),
           ...(skill.authoredBy !== undefined ? { authoredBy: skill.authoredBy } : {}),
           ...(skill.because !== undefined ? { because: skill.because } : {}),
           ...(skill.paused === true ? { paused: true } : {}),
           ...(skill.allowedTools !== undefined ? { allowedTools: skill.allowedTools } : {}),
-        })));
+        })))];
     },
     hooked: async () => {
       const everywhere = await this.skillsEverywhere();
@@ -517,6 +596,7 @@ export class Orchestrator {
           path: skill.path,
           ...(skill.runAs !== undefined ? { runAs: skill.runAs } : {}),
           ...(skill.deliver !== undefined ? { deliver: skill.deliver } : {}),
+          ...(skill.deliverWhen !== undefined ? { deliverWhen: skill.deliverWhen } : {}),
           ...(skill.authoredBy !== undefined ? { authoredBy: skill.authoredBy } : {}),
           ...(skill.because !== undefined ? { because: skill.because } : {}),
           ...(skill.paused === true ? { paused: true } : {}),
@@ -548,14 +628,15 @@ export class Orchestrator {
     // rather than in the main conversation, which no chat has ever read.
     // Last time's commitments open the next run of the same routine (INV-528).
     priorCommitments: slug => priorCommitmentsPrompt(this.commitments.lastFor(slug), this.tasks?.list() ?? []),
-    run: async (agent, prompt, deliver, slug, toolScope) => {
+    run: async (agent, prompt, deliver, slug, toolScope, deliverWhen, identity) => {
       const scope = toolScope !== undefined ? { toolScope } : {};
       if (deliver === undefined) {
         await this.prompt(agent, prompt, undefined, { steerable: false, lane: "background", synthetic: true, ...scope });
         return;
       }
       const conversation = conversationIdFor(deliver);
-      const agentId = this.registry.resolve(agent).id;
+      const record = this.registry.resolve(agent);
+      const agentId = record.id;
       // Taken before the turn, because "what it said" is everything past this point —
       // the same mark the channel path uses, and the reason a reply can be recovered at
       // all after a restart.
@@ -569,43 +650,34 @@ export class Orchestrator {
       });
       await this.settle();
       const said = this.replySince(agentId, before, conversation).trim();
-      // Silence is not delivered. A skill that had nothing to report should not put an
-      // empty message in a room every morning — the absence is the report.
-      if (said === "") return;
-      await this.options.deliverToChat?.(deliver, said, agentId);
-      // Commitments in the report are checked against the board and the scheduler
-      // (INV-528): what nothing holds is said in the same chat, and the agent is cued
-      // to create the card and the reminder now, in a turn of its own.
-      if (slug === undefined) return;
-      const commitments = parseCommitments(said);
-      if (commitments.length === 0) return;
-      const routines = (await this.scheduler.status().catch(() => [])).map(entry => ({ slug: entry.slug, name: entry.name, paused: entry.paused, ...(entry.nextRun !== undefined && entry.kind === "once" ? { at: Date.parse(entry.nextRun) } : {}) }));
-      // Made now, so a card finished last month cannot be what carries it, and bound to
-      // whatever the last run tied each item to — an id rather than a word match (INV-534).
-      const madeAt = Date.now();
-      const bindings = bindingsOf(this.commitments.lastFor(slug));
-      const checks = reconcileCommitments(commitments, this.tasks?.list() ?? [], routines, madeAt, bindings);
-      const isDone = (taskId: string | undefined): boolean => taskId !== undefined && this.tasks?.get(taskId)?.status === "done";
-      const gaps = describeGaps(checks);
-      if (gaps.toChat === undefined || gaps.cue === undefined) {
-        this.commitments.record(this.commitments.withCarried({ at: new Date(madeAt).toISOString(), slug, agentId, commitments, checks }, isDone));
-        return;
-      }
-      console.error(`[commitments] ${slug}: ${checks.filter(c => c.missing.length > 0).length} of ${checks.length} commitment(s) not held`);
-      await this.options.deliverToChat?.(deliver, gaps.toChat, agentId);
-      const mark = this.registry.readTranscript(agentId, conversation).length;
-      await this.prompt(agent, gaps.cue, undefined, { steerable: false, lane: "background", synthetic: true, conversation });
-      await this.settle();
-      const created = this.replySince(agentId, mark, conversation).trim();
-      if (created !== "") await this.options.deliverToChat?.(deliver, created, agentId);
-      // What the cue actually produced, checked rather than believed (INV-534): the agent
-      // saying "created" is a sentence, and the ledger is about what exists. Whatever is
-      // still unheld is said once — not cued again, because a second cue that produced
-      // nothing the first time is a loop, and the next run opens with it anyway.
-      const after = reconcileCommitments(commitments, this.tasks?.list() ?? [], (await this.scheduler.status().catch(() => [])).map(entry => ({ slug: entry.slug, name: entry.name, paused: entry.paused, ...(entry.nextRun !== undefined && entry.kind === "once" ? { at: Date.parse(entry.nextRun) } : {}) })), madeAt, bindings);
-      this.commitments.record(this.commitments.withCarried({ at: new Date(madeAt).toISOString(), slug, agentId, commitments, checks: after }, isDone));
-      const stillOpen = describeGaps(after);
-      if (stillOpen.toChat !== undefined) await this.options.deliverToChat?.(deliver, `Still nothing holding these after that turn:\n${stillOpen.toChat.split("\n").slice(1).join("\n")}`, agentId);
+      // Execute is over. What it said is written down and a resolve step decides whether
+      // the chat hears it (INV-776): nothing to say, or the same result as last time, stays
+      // on the ledger; a routine that asked for every run gets every run.
+      await finishRoutineRun(
+        {
+          slug: slug ?? identity ?? "ad-hoc",
+          agentId,
+          agentName: record.profile.name,
+          deliver,
+          ...(deliverWhen !== undefined ? { deliverWhen } : {}),
+          said,
+          ...(this.silenceSince(agentId, before, conversation) ?? {}),
+        },
+        {
+          ledger: this.routineResults,
+          recentChat: (chatKey, count) => this.recentChatLines(agentId, conversationIdFor(chatKey), count),
+          // No door configured is not a delivery: the result stays retryable.
+          deliverToChat: async (chatKey, text, fromAgentId) =>
+            this.options.deliverToChat === undefined
+              ? { delivered: false, why: "no chat door is configured" }
+              : this.options.deliverToChat(chatKey, text, fromAgentId),
+          attachNext: (chatKey, text) => this.routineAttachments.add(chatKey, text),
+          mode: routineResolveMode(),
+          ask: question => this.askCheaply(record, question, "review"),
+          ...(slug !== undefined ? { reconcile: async () => this.reconcileRoutineCommitments(slug, agent, agentId, conversation, said) } : {}),
+          log: line => console.error(`[routine] ${line}`),
+        }
+      );
     },
     // A waiting webhook: the same turn, but the caller is told what came of it.
     runAndSay: async (agent, prompt, toolScope) => {
@@ -619,7 +691,14 @@ export class Orchestrator {
     // first agent only when the box has none (or the skill did not say).
     defaultAgent: boxId =>
       (boxId !== undefined ? this.registry.agentsIn(boxId)[0]?.id : undefined) ?? this.registry.list()[0]?.id,
-    writerOf: slug => this.skillProvenance.writerOf(slug),
+    // A heartbeat is the agent's own routine — its HEARTBEAT.md, in its own directory — so it
+    // runs as that agent the way a skill runs as the agent the host saw write it.
+    writerOf: slug => {
+      const owner = heartbeatAgentOf(slug);
+      if (owner === undefined) return this.skillProvenance.writerOf(slug);
+      const agent = this.registry.tryGet(owner);
+      return agent === undefined ? undefined : { agentId: agent.id, agentName: agent.profile.name };
+    },
     // So the scheduler can tell "agent: Ada" from "agent: <somebody else>" — the gate
     // it applies to a name that came out of a writable file.
     resolveAgent: name => {
@@ -797,6 +876,18 @@ export class Orchestrator {
         ? undefined
         : (options.turns ??
           new TurnLedger(turnLedgerPath(), line => console.error(`[turns] ${line}`)));
+    this.steps =
+      options.steps === null
+        ? undefined
+        : (options.steps ?? new StepLedger(stepLedgerPath(), line => console.error(`[turn-steps] ${line}`)));
+    this.policy.onApprovalSettled = (approval, how) => {
+      // A parked turn continues from the waiting step and settles it itself, reading the
+      // ledger as it wakes; any other step waiting on this answer closes here (INV-798).
+      if (this.parked.has(approval.id)) this.continueParked(approval.id, how);
+      else this.steps?.settleApproval(approval.id);
+    };
+    this.networkEvents =
+      options.networkEvents === null ? undefined : (options.networkEvents ?? new NetworkEventLog());
     this.pendingWork =
       options.pendingWork === null
         ? undefined
@@ -878,12 +969,58 @@ export class Orchestrator {
     this.bus = new AgentBus(
       this.registry,
       (agent, inbound, signal, conversation) => this.executeTurn(agent, inbound, signal, conversation),
-      options.onBusEvent,
+      event => {
+        options.onBusEvent?.(event);
+        // A turn ending is what lets a goal consider its next continuation (INV-770).
+        if (event.type === "turn_finished") this.goalLoop?.onTurnFinished(event.agentId);
+      },
       options.inbox === null
         ? undefined
         : (options.inbox ??
           new Inbox<InboundMessage>(inboxPath(), line => console.error(`[inbox] ${line}`)))
     );
+    this.goalLoop = this.tasks === undefined ? undefined : new GoalLoop({
+      tasks: this.tasks,
+      agentName: id => this.registry.tryGet(id)?.profile.name,
+      bus: this.bus,
+      busy: (agentId, conversation) => [
+        ...(this.hasOpenTurn(agentId, conversation) ? ["an open turn in the ledger"] : []),
+        ...(this.policy.pending().some(item => item.agentId === agentId) ? ["a pending approval"] : []),
+        ...((this.options.pendingQuestions?.(agentId, conversation) ?? 0) > 0 ? ["a question waiting on the person"] : []),
+      ],
+      wakeGate: agentId => {
+        const name = this.registry.tryGet(agentId)?.profile.name ?? agentId;
+        const decision = this.policy.check({ kind: "wake", agentId, agentName: name, targetId: agentId, targetName: name });
+        return decision.allow ? { allowed: true } : { allowed: false, reason: decision.reason };
+      },
+      durableState: (agentId, conversation) => this.registry.readDurableState(agentId, conversation),
+      manifest: () => this.workspaceManifest(),
+      notify: async (task, text) => {
+        const chatKey = task.pursuit?.chatKey;
+        if (chatKey === undefined) {
+          console.error(`[goal] ${task.id}: no chat to tell; the board has the note`);
+          return;
+        }
+        await this.options.deliverToChat?.(chatKey, text, task.assigneeId);
+      },
+      log: line => console.error(`[goal] ${line}`),
+    });
+    if (this.tasks !== undefined) this.tasks.onChange(task => this.goalLoop?.onTaskChanged(task));
+    this.goalGate = this.tasks === undefined ? undefined : new GoalGate({
+      tasks: this.tasks,
+      registry: this.registry,
+      bus: this.bus,
+      manifest: () => this.workspaceManifest(),
+      notify: async (task, text) => {
+        const chatKey = task.pursuit?.chatKey;
+        if (chatKey === undefined) {
+          console.error(`[goal] ${task.id}: no chat to tell; the board has the verdict`);
+          return;
+        }
+        await this.options.deliverToChat?.(chatKey, text, task.assigneeId);
+      },
+      log: line => console.error(`[goal] ${line}`),
+    });
   }
 
   /**
@@ -1565,6 +1702,9 @@ export class Orchestrator {
     // the attempt count is the whole of the crash-loop guard.
     const resumeOf = this.resuming.get(agent.id);
     this.resuming.delete(agent.id);
+    // A continuation that a person's message overtook, or whose goal stopped meanwhile, is
+    // not run (INV-770): the loop reconsiders when the person's turn ends.
+    if (this.goalLoop !== undefined && !this.goalLoop.turnStarting(agent.id, conversation, inbound)) return;
 
     const displayIndex = await this.ensureDesktop(agent);
     // Started on the first turn that could use them, not at boot: a CLI question should
@@ -1623,32 +1763,25 @@ export class Orchestrator {
       effort: this.options.effort,
       ...(this.tracer !== undefined ? { tracer: this.tracer } : {}),
       turns: this.turns,
+      ...(this.steps !== undefined ? { steps: this.steps } : {}),
+      ...(this.networkEvents !== undefined ? { networkEvents: this.networkEvents } : {}),
       ...(this.pendingWork !== undefined ? { pendingWork: this.pendingWork } : {}),
       mcpFace: this.mcpFace,
       modelRelay: this.modelRelay,
       delegateSessions: this.delegateSessions,
       onSummarised: (agentId, conversationId, entries) => {
         if (this.registry.contextMode(agentId, conversationId) !== "normal") return;
-        // The prose of what the summary replaces, bounded: enough for the extractor to
-        // find a decision in, not the whole history it is standing in for.
-        const prose = entries
-          .flatMap(entry => {
-            const shaped = entry as { role?: string; text?: unknown };
-            return typeof shaped.text === "string" && (shaped.role === "user" || shaped.role === "assistant")
-              ? [`${shaped.role}: ${shaped.text}`]
-              : [];
-          })
-          .join("\n\n");
-        const bounded = prose.length > 12_000 ? `${prose.slice(0, 6_000)}\n…\n${prose.slice(-6_000)}` : prose;
-        void this.rememberer
-          .flush(agentId, bounded, memoryRef(conversationId, new Date()))
-          .catch(() => {});
+        // What the summary replaces goes to the extractor first, minus what a batch
+        // already took (INV-778). Not awaited: the flush is insurance for the summary,
+        // never a gate on it, and it logs its own failure.
+        void this.rememberer.flush(agentId, conversationId, entries as HistoryEntry[]).catch(() => {});
       },
       boxKind: this.boxEntryOf(agent.id).kind,
       // The same cheap profile the summariser and the note-taker use. Choosing which memories to
       // show is the least interesting work in the system and should be billed accordingly.
       selectMemory: prompt => this.askCheaply(agent, prompt),
       skillProvenance: this.skillProvenance,
+      syncStanding: agentId => this.memoryMirror.sync(agentId),
       ...(this.templateSetups.has(agent.id) ? { templateSetup: this.templateSetups.get(agent.id)! } : {}),
       templates: this.templates,
       hooks: this.hooks,
@@ -1663,6 +1796,11 @@ export class Orchestrator {
       // Watched on the way past rather than subscribed to elsewhere: a turn that gave up
       // in a loop is the fourth pitfall source, and this is the one place that has the
       // report, the agent and what it was asked to do all in hand.
+      onGoalTurn: report => {
+        if (report.marker.verify !== undefined) void this.goalGate?.verifierEnded(report);
+        else void this.goalLoop?.turnEnded(report);
+      },
+      ...(this.goalGate !== undefined ? { goalGate: this.goalGate } : {}),
       onEvent: event => {
         if (event.type === "stuck" && event.agentId === agent.id) {
           void this.rememberer
@@ -1706,6 +1844,14 @@ export class Orchestrator {
    * Whether a turn is still writing in this conversation (INV-435). Without the
    * conversation, any open turn of the agent's — the older, coarser question.
    */
+  /** On startup: every active goal is looked at again; its counters live on the board. */
+  rearmGoals(): number {
+    // Goals left verifying are settled first — from the transcript, or failed closed — so the
+    // loop below sees them as active or paused rather than as nobody's.
+    void this.goalGate?.rearm().catch(error => console.error(`[goal] rearm: ${error instanceof Error ? error.message : String(error)}`));
+    return this.goalLoop?.rearm() ?? 0;
+  }
+
   hasOpenTurn(agentId: string, conversation?: string): boolean {
     return openTurnFor(this.turns?.interrupted() ?? [], agentId, conversation) !== undefined;
   }
@@ -1736,10 +1882,11 @@ export class Orchestrator {
     return outstanding.length;
   }
 
-  resumeInterrupted(): { resumed: number; abandoned: number } {
+  resumeInterrupted(): { resumed: number; abandoned: number; parked?: number } {
     const outstanding = this.turns?.interrupted() ?? [];
     let resumed = 0;
     let abandoned = 0;
+    let parked = 0;
 
     for (const turn of outstanding) {
       const agent = this.registry.tryGet(turn.agentId);
@@ -1763,12 +1910,30 @@ export class Orchestrator {
         // the person reading this is the one who can do something about it. A clean exit is
         // exempt: the operator ending the process is not the turn's doing, however many times.
         this.turns?.end(turn.id, "given-up");
+        this.steps?.closed(turn.id);
         this.registry.appendTranscript(agent.id, {
           role: "assistant",
           text: giveUpNote(turn.about, turn.attempt),
           at: new Date().toISOString(),
         });
         abandoned += 1;
+        continue;
+      }
+
+      // A turn the step ledger knows is continued in place (INV-774): same turn, no new
+      // message, the open call answered honestly before the model is asked again. A turn
+      // it does not know — a transcript from before the ledger — is told about itself the
+      // older way. One parked on a person's approval waits for the answer, however long.
+      const steps = this.steps?.stepsOf(turn.id);
+      if (steps?.known === true) {
+        const waiting = steps.open.find(step => step.approvalId !== undefined);
+        if (waiting !== undefined && this.policy.pending().some(item => item.id === waiting.approvalId)) {
+          this.parked.set(waiting.approvalId!, turn);
+          parked += 1;
+          continue;
+        }
+        this.continueTurn(turn, waiting !== undefined ? { id: waiting.approvalId!, how: "gone" } : undefined);
+        resumed += 1;
         continue;
       }
 
@@ -1801,7 +1966,37 @@ export class Orchestrator {
       resumed += 1;
     }
 
-    return { resumed, abandoned };
+    return { resumed, abandoned, ...(parked > 0 ? { parked } : {}) };
+  }
+
+  /** Picks a parked turn back up once the person has answered the approval it waited on. */
+  private continueParked(approvalId: string, how: "allowed" | "refused"): void {
+    const turn = this.parked.get(approvalId);
+    if (turn === undefined) return;
+    this.parked.delete(approvalId);
+    this.continueTurn(turn, { id: approvalId, how });
+  }
+
+  /**
+   * Continues an interrupted turn as itself (INV-774): the ledger record is closed and
+   * reopened under the same id by the turn, the wake carries no user text, and `runTurn`
+   * answers the open step from the transcript before asking the model anything.
+   */
+  private continueTurn(turn: InterruptedTurn, approval?: { id: string; how: "allowed" | "refused" | "gone" }): void {
+    this.turns?.end(turn.id, "continued");
+    this.resuming.set(turn.agentId, {
+      id: turn.id,
+      attempt: turn.cleanExit ? turn.attempt : turn.attempt + 1,
+      ...(turn.workId !== undefined ? { workId: turn.workId } : {}),
+      continues: true,
+      ...(approval !== undefined ? { approval } : {}),
+    });
+    this.bus.sendFromUser(turn.agentId, continuationNote(turn.about), {
+      synthetic: true,
+      ...(turn.conversation !== undefined ? { conversation: turn.conversation } : {}),
+      steerable: false,
+    });
+    void this.bus.wake(turn.agentId);
   }
 
   /**
@@ -1930,13 +2125,15 @@ export class Orchestrator {
       steerable?: boolean;
       lane?: Lane;
       synthetic?: boolean;
+      /** False when a room message named nobody (INV-775); see `InboundMessage.addressed`. */
+      addressed?: boolean;
       /** The message's id from the door it came through (INV-613); see `AgentBus.sendFromUser`. */
       messageId?: string;
       /** A routine's declared tools (INV-691); see `InboundMessage.toolScope`. */
       toolScope?: readonly string[];
     } = {}
   ): Promise<void> {
-    if (isContextCommand(text) || isRecoveryCommand(text) || isRetryCommand(text)) throw new Error("上下文控制命令只能通过已接入的独立私聊入口执行；不会让模型模拟切换或恢复。");
+    if (isContextCommand(text) || isRecoveryCommand(text) || isRetryCommand(text) || isGoalCommand(text)) throw new Error("上下文控制命令只能通过已接入的独立私聊入口执行；不会让模型模拟切换或恢复。");
     const agent = this.registry.resolve(agentIdOrName);
     const conversation = options.conversation ?? MAIN_CONVERSATION;
     return this.registry.withContext(agent.id, conversation, async () => {
@@ -1957,6 +2154,7 @@ export class Orchestrator {
       ...(options.steerable === false ? { steerable: false } : {}),
       ...(options.lane !== undefined ? { lane: options.lane } : {}),
       ...(options.messageId !== undefined ? { messageId: options.messageId } : {}),
+      ...(options.addressed === false ? { addressed: false } : {}),
       ...(options.toolScope !== undefined ? { toolScope: options.toolScope } : {}),
     });
     const before = this.registry.readTranscript(agent.id, conversation).length;
@@ -1973,11 +2171,16 @@ export class Orchestrator {
       // and the time the reply was read back, which is how a person finds it again in the
       // transcript (the `History` tool searches by conversation and shows times).
       const ref = memoryRef(conversation, new Date(), options.messageId);
+      // The transcript time of the exchange, so a compaction flush and the batch agree
+      // on which entries each has extracted (INV-778).
+      const last = this.registry.readTranscript(agent.id, conversation).at(-1) as { at?: string } | undefined;
       void this.rememberer
         .record({
           agentId: agent.id,
           text: summariseExchange(text, said),
           ref,
+          conversation,
+          ...(last?.at !== undefined ? { at: last.at } : {}),
           // Taking notes on a person's conversation is that person's cost. A batch that
           // spans two people bills to neither — see Rememberer.payerOf.
           ...(caller?.userId !== undefined ? { principal: caller.userId } : {}),
@@ -2036,15 +2239,73 @@ export class Orchestrator {
    * over, and what a chat channel sends back as the reply.
    */
   replySince(agentId: string, from: number, conversation: string = MAIN_CONVERSATION): string {
-    return (this.registry.readTranscript(agentId, conversation) as { role?: string; text?: string; kind?: string }[])
+    // A host-authored line (the empty-output note, INV-775) is for the record, not a reply.
+    return (this.registry.readTranscript(agentId, conversation) as { role?: string; text?: string; kind?: string; host?: true }[])
       .slice(from)
-      .filter(entry => entry.role === "assistant" && entry.kind === undefined && entry.text)
+      .filter(entry => entry.role === "assistant" && entry.kind === undefined && entry.host !== true && entry.text)
       .map(entry => entry.text as string)
       .join("\n\n");
   }
 
+  /** Whether the turn since a transcript position ended by calling `NothingToSay` (INV-775), and why. */
+  silenceSince(agentId: string, from: number, conversation: string = MAIN_CONVERSATION): { silent: { reason: string } } | undefined {
+    const entries = this.registry.readTranscript(agentId, conversation) as { role?: string; kind?: string; silent?: { reason: string } }[];
+    for (let i = entries.length - 1; i >= from; i -= 1) {
+      const silent = entries[i]?.silent;
+      if (silent !== undefined) return { silent };
+    }
+    return undefined;
+  }
+
+  /** The last lines a chat's conversation holds, oldest first: what the routine judge reads (INV-776). */
+  recentChatLines(agentId: string, conversation: string, count: number): string[] {
+    return (this.registry.readTranscript(agentId, conversation) as { role?: string; kind?: string; text?: string; host?: true }[])
+      .filter(entry => entry.kind === undefined && entry.host !== true && typeof entry.text === "string" && entry.text.trim() !== "")
+      .slice(-count)
+      .map(entry => `${entry.role === "assistant" ? "assistant" : "person"}: ${(entry.text as string).trim().slice(0, 400)}`);
+  }
+
+  /**
+   * Commitments in a delivered report are checked against the board and the scheduler
+   * (INV-528). Gaps cue the agent to create the card and the reminder now, in a turn of
+   * its own whose reply is not delivered; what is still unheld after that is the note the
+   * caller appends to the one delivery (INV-776) — never a second message.
+   */
+  private async reconcileRoutineCommitments(slug: string, agent: string, agentId: string, conversation: string, said: string): Promise<string | undefined> {
+    const commitments = parseCommitments(said);
+    if (commitments.length === 0) return undefined;
+    const routinesNow = async () => (await this.scheduler.status().catch(() => [])).map(entry => ({ slug: entry.slug, name: entry.name, paused: entry.paused, ...(entry.nextRun !== undefined && entry.kind === "once" ? { at: Date.parse(entry.nextRun) } : {}) }));
+    // Made now, so a card finished last month cannot be what carries it, and bound to
+    // whatever the last run tied each item to — an id rather than a word match (INV-534).
+    const madeAt = Date.now();
+    const bindings = bindingsOf(this.commitments.lastFor(slug));
+    const checks = reconcileCommitments(commitments, this.tasks?.list() ?? [], await routinesNow(), madeAt, bindings);
+    const isDone = (taskId: string | undefined): boolean => taskId !== undefined && this.tasks?.get(taskId)?.status === "done";
+    const gaps = describeGaps(checks);
+    if (gaps.cue === undefined) {
+      this.commitments.record(this.commitments.withCarried({ at: new Date(madeAt).toISOString(), slug, agentId, commitments, checks }, isDone));
+      return undefined;
+    }
+    console.error(`[commitments] ${slug}: ${checks.filter(c => c.missing.length > 0).length} of ${checks.length} commitment(s) not held`);
+    await this.prompt(agent, gaps.cue, undefined, { steerable: false, lane: "background", synthetic: true, conversation });
+    await this.settle();
+    // What the cue actually produced, checked rather than believed (INV-534): the agent
+    // saying "created" is a sentence, and the ledger is about what exists. Whatever is
+    // still unheld is said once, on the delivery itself — not cued again, because a
+    // second cue that produced nothing the first time is a loop, and the next run opens
+    // with it anyway.
+    const after = reconcileCommitments(commitments, this.tasks?.list() ?? [], await routinesNow(), madeAt, bindings);
+    this.commitments.record(this.commitments.withCarried({ at: new Date(madeAt).toISOString(), slug, agentId, commitments, checks: after }, isDone));
+    return describeGaps(after).toChat;
+  }
+
   replyForMessage(agentId: string, messageId: string, conversation: string = MAIN_CONVERSATION): string {
     return replyForMessage(this.registry.readTranscript(agentId, conversation), messageId);
+  }
+
+  /** Whether the turn a message opened ended by calling `NothingToSay` (INV-775), and why; see `silenceForMessage` (INV-801). */
+  silenceForMessage(agentId: string, messageId: string, conversation: string = MAIN_CONVERSATION): { silent: { reason: string } } | undefined {
+    return silenceForMessage(this.registry.readTranscript(agentId, conversation), messageId);
   }
 
   /**
@@ -2146,6 +2407,8 @@ export class Orchestrator {
  */
 export const ALL_TOOLS: readonly string[] = [
   "Checkpoint",
+  // Deliberate silence on a turn nobody is waiting on (INV-775); every role may need it.
+  "NothingToSay",
   "WaitForControl",
   "browser_fill_secret",
   "browser_pages",
@@ -2187,6 +2450,7 @@ export const ALL_TOOLS: readonly string[] = [
   "Recall",
   "OtherThreads",
   "Tasks",
+  "Goal",
   "RunOnHost",
   // Offered only when a connection exists (INV-422, INV-754) — and until they were listed here, the
   // starter team never saw them even then: an allowlist withholds what it does not name.

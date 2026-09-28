@@ -31,7 +31,32 @@ import { agentboxHome } from "../config.ts";
  *
  * `turn` is the agent thinking. The other three are the harness keeping house around it.
  */
-export type UsageKind = "turn" | "summarize" | "memory" | "select" | "review" | "delegate";
+export type UsageKind = "turn" | "summarize" | "memory" | "select" | "review" | "delegate" | "anomaly";
+
+/**
+ * Something the model did that spent nothing and should still be counted (INV-775).
+ * `empty_output`: a turn ended with no text and no `NothingToSay` call — silence the runtime
+ * cannot tell from a decision. One per turn, on a zero-token row of kind `anomaly`, so a
+ * model that does this often shows up in the same ledger as what it costs.
+ */
+export type UsageAnomaly = "empty_output" | "prompt_cache_low";
+
+/**
+ * How many consecutive turns must open with a poor cache read share, and what "poor" is, before
+ * the ledger writes one reason line (INV-782). No warmup: the first turn counts.
+ */
+export const CACHE_LOW_TURNS = Math.max(1, Math.floor(envNumber("AGENTBOX_CACHE_LOW_TURNS", 3)));
+export const CACHE_LOW_SHARE = envNumber("AGENTBOX_CACHE_LOW_SHARE", 0.5);
+
+/**
+ * The fraction of a call's input the provider served from cache, or `undefined` when the call
+ * had no input to speak of. Total input is every billed input class — a cached prefix is still
+ * input — which is the same denominator the estimator calibrates against in turn.ts.
+ */
+export function cacheReadShare(usage: { inputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }): number | undefined {
+  const total = usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
+  return total > 0 ? usage.cacheReadTokens / total : undefined;
+}
 
 /** What a row with no kind is reported as. Not a kind: the absence of one. */
 export const UNATTRIBUTED = "unattributed";
@@ -95,6 +120,12 @@ export interface UsageRecord {
    * look like a jump in turn cost that never happened.
    */
   kind?: UsageKind;
+  /** Set on `anomaly` rows only; see `UsageAnomaly`. */
+  anomaly?: UsageAnomaly;
+  /** One line saying why, on the rows that carry a reason (`prompt_cache_low`: which segments changed). */
+  reason?: string;
+  /** `cacheReadTokens / total input` for the call that opened a turn (INV-782); on `turn` rows of round 0. */
+  cacheShare?: number;
   /**
    * Who this spend is on behalf of — the principal id of whoever drove the turn.
    * Absent for work no person triggered directly: a teammate's wake, a scheduled run.
@@ -154,6 +185,13 @@ export class UsageLog {
    * the records it lost are gone.
    */
   private unavailableReason: string | undefined;
+
+  /**
+   * The last few turns' opening cache share per agent and conversation, for the low-hit
+   * reason line (INV-782). In memory only: the window is three turns and a restart is
+   * itself a reason for a cold cache that nobody needs a row about.
+   */
+  private readonly cacheWindows = new Map<string, { share: number; changed: readonly string[] }[]>();
 
   constructor(
     private readonly path: string = usageLogPath(),
@@ -390,6 +428,109 @@ export class UsageLog {
       cacheReadTokens: options.usage.cache_read_input_tokens ?? 0,
       cacheWriteTokens: options.usage.cache_creation_input_tokens ?? 0,
     });
+  }
+
+  /**
+   * Counts one thing the model did wrong that cost nothing (INV-775). A zero-token row, so the
+   * totals it joins are unchanged and `byKind` shows it under `anomaly`.
+   */
+  noteAnomaly(options: {
+    anomaly: UsageAnomaly;
+    agentId: string;
+    agentName: string;
+    provider: string;
+    model: string;
+    round: number;
+    workId?: string;
+    turnId?: string;
+    conversation?: string;
+  }): void {
+    this.record({
+      kind: "anomaly",
+      anomaly: options.anomaly,
+      agentId: options.agentId,
+      agentName: options.agentName,
+      provider: options.provider,
+      model: options.model,
+      round: options.round,
+      ...(options.workId !== undefined ? { workId: options.workId } : {}),
+      ...(options.turnId !== undefined ? { turnId: options.turnId } : {}),
+      ...(options.conversation !== undefined ? { conversation: options.conversation } : {}),
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    });
+  }
+
+  /**
+   * Notes what share of a turn's opening call came from cache, and which prompt segments moved
+   * since the previous turn (INV-782). When `CACHE_LOW_TURNS` consecutive turns in one
+   * conversation open below `CACHE_LOW_SHARE` and some segment changed inside that window, one
+   * `prompt_cache_low` row is written naming the segments, and the window starts over — so a
+   * cache that stays cold for twenty turns produces a row every N turns, not one per turn.
+   * A window with no change in it writes nothing: a low share with a stable prompt is the
+   * provider's business (an eviction, a different backend), not a prompt assembly bug.
+   *
+   * A call with no input at all is not evidence either way and does not advance the window.
+   */
+  notePromptCache(options: {
+    agentId: string;
+    agentName: string;
+    provider: string;
+    model: string;
+    round: number;
+    usage: { inputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
+    /** Segments that differ from the previous turn; `undefined` when there was no previous turn to compare with. */
+    changed: readonly string[] | undefined;
+    workId?: string;
+    turnId?: string;
+    conversation?: string;
+  }): { share: number | undefined; reason?: string } {
+    const share = cacheReadShare(options.usage);
+    if (share === undefined) return { share };
+    const key = `${options.agentId}\u0000${options.conversation ?? ""}`;
+    const window = this.cacheWindows.get(key) ?? [];
+    window.push({ share, changed: options.changed ?? [] });
+    while (window.length > CACHE_LOW_TURNS) window.shift();
+    this.cacheWindows.set(key, window);
+    if (window.length < CACHE_LOW_TURNS || window.some(turn => turn.share >= CACHE_LOW_SHARE)) return { share };
+    const segments = [...new Set(window.flatMap(turn => turn.changed))];
+    if (segments.length === 0) return { share };
+    const reason =
+      `cache read share below ${CACHE_LOW_SHARE} for ${CACHE_LOW_TURNS} turns ` +
+      `(${window.map(turn => turn.share.toFixed(2)).join(", ")}); prompt changed in: ${segments.join(", ")}`;
+    this.record({
+      kind: "anomaly",
+      anomaly: "prompt_cache_low",
+      reason,
+      agentId: options.agentId,
+      agentName: options.agentName,
+      provider: options.provider,
+      model: options.model,
+      round: options.round,
+      ...(options.workId !== undefined ? { workId: options.workId } : {}),
+      ...(options.turnId !== undefined ? { turnId: options.turnId } : {}),
+      ...(options.conversation !== undefined ? { conversation: options.conversation } : {}),
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    });
+    this.cacheWindows.set(key, []);
+    return { share, reason };
+  }
+
+  /** How many times each anomaly happened since a timestamp, most frequent first. */
+  anomaliesSince(sinceMs = 0): { anomaly: UsageAnomaly; count: number }[] {
+    const counts = new Map<UsageAnomaly, number>();
+    for (const record of this.since(0, Number.MAX_SAFE_INTEGER)) {
+      if (record.anomaly === undefined) continue;
+      const at = Date.parse(record.at ?? "");
+      if (!Number.isNaN(at) && at < sinceMs) continue;
+      counts.set(record.anomaly, (counts.get(record.anomaly) ?? 0) + 1);
+    }
+    return [...counts.entries()].map(([anomaly, count]) => ({ anomaly, count })).sort((a, b) => b.count - a.count);
   }
 
   private sum(records: readonly UsageRecord[]): UsageTotals {

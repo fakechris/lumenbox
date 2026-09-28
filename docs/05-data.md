@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: storage
-     updated: 2026-09-26
+     updated: 2026-09-27
 -->
 # Data
 
@@ -167,6 +167,17 @@ pitfall learning are guarded at their write source, so clean content cannot late
 shared memory. Existing memory remains on disk and remains usable by other normal conversations.
 An ordinary `/new` from clean advances again in `normal` mode and says that memory and tools have
 been re-enabled under their normal relevance and permission gates.
+
+Offering no tools is not enough on its own: the prompt has to stop asking for them (INV-761). The
+first real clean request (2026-09-26) met a prompt still telling it to search, and MiniMax-M3 wrote
+its calls as text until the output cap; the loop was delivered and the task closed as done. So a
+toolless turn renders a recap without the tool lines, the conduct guards — each of which answers
+with a demand for a tool call — do not fire where no tool was offered, and every final answer, in
+any context, passes the output gate (`src/host/output-integrity.ts`): a reply that is call markup
+written as text, or a repetition loop at `max_tokens`, is discarded before it reaches the
+transcript the channels deliver from, asked for once more, and a second one fails the turn instead
+of completing the task. Replies stored before the gate existed go back to the model cut at the
+markup; the record on disk is not edited.
 
 `/recover <taskId>` advances to a persisted `recover` epoch after the same private-chat,
 permission, idle-custody and operation-id gates. The task board remains the sole task truth: it
@@ -401,6 +412,26 @@ file never compacts at all. Refused messages are not in it (ingress says they we
 not scanned for secrets on the way in — the audit export redacts on the way out — because a record
 that edits what a person said is not a record of what they said.
 
+#### 2.4.0 Turn checkpoints: `turn-steps.jsonl` (INV-774)
+
+`turns.jsonl` says *that* a turn did not end; `turn-steps.jsonl` says *which call* it was
+inside. Written by the host, never by the model and never shown to it: `pending {turnId,
+toolUseId, name}` before a call is dispatched, `settled` after its result is in the transcript,
+`awaiting_approval {approvalId}` when the policy gate handed the call to a person, `closed` when
+the turn ends. The `blocks` entry is appended to the transcript *before* any of its calls run, so
+the record of what was asked survives a crash between the ask and the answer. On restart
+`resumeInterrupted` reads this file first. A turn it knows is **continued as itself** — same
+`turnId`, no new user message, no resume prompt: each open call is answered in the transcript as
+a tool result before the model is asked anything (`outcome_unknown` for anything that may have
+run; re-run only when the protocol's own declaration (INV-525: a read, an idempotent write with
+its key, or an `operation_id`) says a second run lands the same state; `not_started` for a call
+that was never dispatched), and the model meets that result as the next observation of the call
+it made. A turn parked on an approval waits for the person's answer, from whichever door, and
+continues from that step with the answer as the call's result. A turn the file never saw — a
+transcript from before it existed — keeps the older path, a new turn opened with `resumePrompt`.
+Settled steps are never re-run; `MAX_RESUMES` and the give-up note apply to both paths. It is a
+`queue`: a settled step is already in the transcript, which is the record.
+
 #### 2.4.1 Every ledger says what kind of thing it is
 
 Twelve files here compact, and until INV-634 none of them said which of four things it was, so
@@ -411,7 +442,7 @@ thirteenth that does not.
 | kind | what compaction may do | files |
 |---|---|---|
 | `record` | move a line to an archive, never lose one | `ingress.jsonl`, `turns.jsonl` |
-| `queue` | drop what is settled; that was its job | `inbox.jsonl`, `deliveries.jsonl` |
+| `queue` | drop what is settled; that was its job | `inbox.jsonl`, `deliveries.jsonl`, `turn-steps.jsonl` |
 | `state` | keep one line per key; older ones are noise | `conversations`, `sent-roots`, `cards`, `claims`, `tasks` |
 | `feed` | let old lines fall off the back | `usage.jsonl`, `activity`, `policy` |
 
@@ -754,6 +785,73 @@ skill loading or a draft being published.
 is its one home: `due` is the next check-in and the aging sweep is the follow-up. `Tasks` create with
 `goal_area` refuses a second open goal in the same area and names the existing one, which is what
 stops a second intake; the `goals` starter says to look first, set up once, and then only follow up.
+The sweep never archives a goal (INV-768): past the second check-in it asks again every
+`GOAL_QUIET_FACTOR` gaps rather than going quiet or closing, and a close proposal on a goal expires
+when its window passes instead of closing it — a goal ends on the person's word only.
+
+**A goal the agent pursues (INV-769, docs/74).** `/goal <objective>` in a private chat puts a
+`pursuit` on a task: the person's words verbatim, a checklist that only grows, limits and spend,
+and a `workId` every later turn of it shares. It is a host control command beside `/new` — never
+sent to the model, refused in clean and recovery contexts, on the team room, in groups, and on
+the web door in this version. The board derives the task's status from the pursuit (`active`/
+`verifying` → doing, `paused` → blocked, `complete` → review, `cleared` → dropped) and refuses to
+move it on anyone's word but the gate's or the requester's: the assignee's `done`, `turnFinished`,
+the ageing sweep and a silent close proposal all leave it where it is. The first turn after
+`/goal` is a host-authored brief that drafts the checklist through the `Goal` tool and shows it to
+the person; a checklist command runs nowhere until `/goal confirm n`. A running pursuit refuses
+`/new` and says how to let go (`/goal pause`, `/goal clear`); a paused one does not. The prompt
+carries the goal every turn, rendered from the board, so compaction cannot lose it.
+
+**The continuation loop (INV-770, `src/host/goal-loop.ts`).** While a pursuit is `active`, the host
+keeps it moving: each time its conversation goes quiet — no running or open turn, nothing queued,
+no question or approval waiting on the person — the loop arms one continuation, 1.5 s later, and
+starts it only if the conversation is still quiet then; a person's message arriving first makes it
+stale, and a stale wake that reaches the front of the queue is not run. The wake is a host
+notification (`<host_notification source="goal">`: the objective as data, the checklist, the last
+verdict, the pursuit rules), sent `synthetic` on the `background` lane through the wake gate, and
+its turn runs under the pursuit's `workId`, writes its inbound entry as the host's, runs no inner
+continuation, and files its closing words as blocks that `replySince` never delivers. A person who
+steers into it is answered as a person. Four stops: three continuations in a row that called no
+working tool (`GOAL_BOOKKEEPING_TOOLS` do not count) pause it as `anti_spin`; plan + todos +
+workspace manifest unchanged across two continuations pause it as `stalled`; at the continuation
+count or active-time limit the last wake is finish-only (one round, `tool_choice: none`) and its
+report is the one continuation text the person is sent. A continuation turn that fails is retried
+twice with 30 s × 2ⁿ backoff, then pauses the goal as `error`. The person is told only when the goal
+stops, in the chat it was set in (`pursuit.chatKey`). Counters live on the board, so a restart
+re-arms every active goal (`rearmGoals`) under the same id. The bus now emits `turn_finished`
+after the conversation is free, not before.
+
+**The completion gate (INV-771, `src/host/goal-gate.ts`).** An executor claims completion with
+`Goal claim_complete`, one evidence pointer per checklist item; it cannot finish a goal itself. The
+host's own checks come first and cost no model: an open todo refuses the claim outright, and an
+artifact path missing from the workspace manifest taken at that moment rejects it. An accepted
+claim puts the pursuit in `verifying` — on the board, with the verifier's conversation
+(`goalverify-<task>-<claim>`), the attempt, and the manifest's digest — and wakes the same agent
+in that conversation, which has no history of the work, with `VERIFIER_TOOLS` (read_file,
+list_dir, bash, ReadKept) where bash runs only the commands the person confirmed with
+`/goal confirm n`, exactly as written, and refuses anything else. The brief carries the objective as
+data, the checklist and the executor's pointers, never the executor's account, and asks for headers
+plus one line per item; the host parses the verdict (`parseGoalVerdict`). It fails closed: a turn
+that fails or ends without a parsable verdict is run once more and then handed to the person; a
+workspace whose digest changed during verification voids the verdict; a late report from an
+earlier attempt is ignored. A pass moves the pursuit to `complete` and the task to `review`, where
+only the requester's word is done. A rejection writes the verdict and next action onto the
+pursuit, marks each checklist item, returns the goal to `active` for the loop to carry the next
+action — and the third rejection in a row pauses it as `needs_person`. On startup a goal left
+verifying finds its verdict in the verifier conversation's transcript or is rejected as
+interrupted. The person hears the verdict either way, in the chat the goal was set in.
+
+**A goal's budget (INV-772).** `/goal <objective> --budget 200k` (or `/goal budget 200k` on the
+goal that is running) caps one goal's spend; without one the spend is only recorded. The unit is
+input-token equivalents: every turn of the goal — continuations, the finish-only report, the
+verifier's turns — sums its rounds' usage and weights each class by the provider's
+`tokenWeights` (MiniMax-M3: input 1, cache read 0.1, cache write 1, output 4; the defaults are
+1 / 0.1 / 1.25 / 4), and the turn's report carries the number onto `pursuit.spent.cost`. That
+is where the bill lives: not recomputed from usage rows, which keep 48 hours and carry no
+prices, and not the machine-wide ceiling docs/16 chose to observe first. Past 80% the
+continuation notice tells the executor how much is left; at the limit the next wake is
+finish-only and the goal pauses as `budget`, with the report delivered. `/goal` shows spent and
+budget.
 
 Forgetting is `Forget` (`src/host/forget.ts`), in two turns. **plan** searches every place the words
 can be — both memory tiers and the box's mirror of them, kept pages, kept results, the board with its

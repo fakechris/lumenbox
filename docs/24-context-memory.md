@@ -2,7 +2,7 @@
      title: Context, memory and compaction: ours, against Hermes and OpenClaw
      family: decision
      status: current
-     updated: 2026-09-14
+     updated: 2026-09-26
 -->
 # Context, memory and compaction: ours, against Hermes and OpenClaw
 
@@ -172,7 +172,7 @@ follow schemas, lost the `computer` format and burned ten minutes.
 | Iterative update | implicit (old summary re-rendered) | explicit previous-summary prompt | explicit UPDATE/merge prompts |
 | Anti-thrash | **none** | ineffective-count, cooldown, backoff, real-usage verdict | overflow retry cap, prune fallback ladder |
 | Recovery of compacted detail | **`ReadHistory`**, advertised post-compaction | FTS5 `session_search` + summary embeds the call | files list carried; transcript in SQLite |
-| Pre-compaction memory save | persisted plan/todos re-read on 400-round continuation (passive; unwritten plans die) | 10-turn background review fork | **flush turn before compaction** (active) |
+| Pre-compaction memory save | **flush of the not-yet-extracted entries a summary replaces, cited per exchange, state changes first** (INV-778, 2026-09-26; before that: passive plan/todos re-read only) | 10-turn background review fork | **flush turn before compaction** (active) |
 | Speculative background summary | **yes — unique as off-thread LLM summary** | display-token preflight seed, not a summary; gates synchronous | preflight is synchronous |
 | Prefix-cache discipline | 2 breakpoints; volatile half rebuilt on 400-round continuation | first-class invariant, byte-identical reuse | first-class, TTL-gated pruning, 4 breakpoints |
 | Weak-model schema insurance | none (bitten) | skill-marker reinjection, protected tail 20 msgs | recent-turns-verbatim guarantees |
@@ -371,3 +371,44 @@ key, from/to version, before/after text). `src/host/memory-admin.ts`,
 `src/web/server.ts` (`/api/memory`, `/api/memory/agent`, `/api/memory/change`),
 `memory-admin.test.ts` (view, versions, recall and mirror agree, audit) and
 `web/memory-routes.test.ts` (authorization both ways, 409, 404 vs empty).
+
+## Memory maintenance: the model proposes, the code verifies and applies (INV-781, 2026-09-26)
+
+Until this, staleness only showed as recall-time decay (`scoreOf`): a record never
+retired, dedupe and near-duplicate collapse were read-side only, `compactMemoryLines`
+kept every live line byte-for-byte, and `condense` only turned notes into episodes — so
+the file only grew, one fact lived in several wordings, and an expired "next Tuesday"
+floated at a low score forever. `src/host/memory-maintenance.ts` is the pass, run by the
+`Rememberer` after every `AGENTBOX_MAINTAIN_EVERY` episodes (default 2; 0 disables) on
+the agent's write chain, or on demand via `Rememberer.maintain`. Three steps and only
+three. **Propose**: a bounded snapshot of the live view (`AGENTBOX_MAINTAIN_CANDIDATES`,
+default 60; most-duplicated first, then oldest) goes to the cheap profile as
+`{id, version, kind, at, text}` lines, and the model answers with a JSON list of
+`merge` / `retire` (with `expiredOn`) / `rewrite` proposals, told in our own words to
+retire what has expired by its own date or wording, merge exact and semantic duplicates
+into one wording that keeps every detail, rewrite only a relative time into the absolute
+date it meant, never invent, and propose nothing when unsure. **Verify**, in code: every
+id must exist and its `version` (the `memory-admin` digest) must still be the live one
+when the reply arrives — the same compare-and-swap Settings → Memory uses, so a line
+that moved between snapshot and apply is dropped, not overwritten; a merge names at least
+two lines and its text must carry at least `AGENTBOX_MAINTAIN_COVERAGE` (0.7) of each
+source's tokens and may add no date, number, month or capitalised name and no more than
+`AGENTBOX_MAINTAIN_NOVEL_SHARE` (0.2) new words; a rewrite is exactly one substitution —
+one relative expression out, one ISO date within 90 days of the line's own `at` in, every
+other word kept in order (no coverage ratio: INV-800 found 70% let "never deploy X"
+become "deploy X"); a retire needs a past `expiredOn` that the line itself implies — an
+ISO date it writes, or a relative expression resolved against its `at` — so a made-up
+past date cannot retire an upcoming event. Everything refused is logged with its reason and never applied; at most
+`AGENTBOX_MAINTAIN_MAX_CHANGES` (10) proposals apply per pass. **Apply**: one append of
+a retraction per record that goes (`source: maintenance:merged-into:<version>`,
+`maintenance:rewritten-as:<version>`, `maintenance:expired:<date>`) plus the replacement
+record, whose `from` is the union of its sources' and whose kind is the strongest source's.
+No original line is ever deleted or edited; `memoryView` renders the retraction as
+"superseded by <version> (merged)" or "retired: expired on <date>", and `recall`, the
+mirror and `Recall` stop showing the withdrawn line because a retraction is what they
+already honour. `AGENTBOX_MAINTAIN_DRY_RUN=1` proposes, verifies and logs what it would
+write, and writes nothing. Shared memory is not tidied by this pass. Tests:
+`memory-maintenance.test.ts` (merge keeps all sources, expired record retired and out of
+recall, version conflict dropped, invented date/name refused, rewrite is one substitution
+only, expiredOn must be the line's own date, cap, dry run, cadence);
+the INV-147 fixture floor is unchanged and green.

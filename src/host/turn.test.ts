@@ -8,6 +8,8 @@
  * surfaced as TurnAborted rather than a half-written transcript.
  */
 
+import type { GoalMarker } from "./goal-mode.ts";
+import type { GoalTurnReport } from "./goal-loop.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -26,6 +28,7 @@ import {
   isTruncatedByContext,
   runTurn,
   storableResult,
+  toolsFingerprintOf,
   TurnAborted,
   type TranscriptEntry,
   truncateOldestResultsForTest,
@@ -41,6 +44,7 @@ import { PolicyGate, type PolicyLimits } from "./policy.ts";
 import { UsageLog } from "./usage.ts";
 import type { Tracer } from "./trace.ts";
 import { buildTools, dispatchTool } from "./tools.ts";
+import { replyForMessage } from "./reply.ts";
 
 interface Capture {
   params: Anthropic.MessageCreateParams[];
@@ -181,6 +185,97 @@ test("tool set shrinks to messaging-only without a box", () => {
   // Messaging never depends on the box.
   for (const name of ["SendToAgent", "CreateAgent", "UpdateAgent", "RememberFact"]) {
     assert.ok(withoutBox.includes(name), `${name} must still be available`);
+  }
+});
+
+// INV-767: MiniMax's automatic cache has no breakpoints and treats tools + system + the first
+// message as one unit, so a volatile tier inside the system prompt missed the whole prefix on
+// every turn (33 of 41 first rounds read exactly 128 tokens). Without breakpoints the volatile
+// tier rides the newest message and the system prompt is the same bytes turn after turn.
+// INV-770: a goal continuation is a turn the host opened. It runs under the pursuit's workId,
+// its inbound entry is the host's (never pinned as the ask), its closing words stay on the record
+// without being delivered, and a finish-only wake gets one response with no tools.
+test("a goal continuation turn: the pursuit's workId, a host inbound entry, undelivered closing words, and a finish-only round", async () => {
+  const { registry, cleanup } = fixture();
+  const home = mkdtempSync(join(tmpdir(), "agentbox-goal-turn-"));
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const turns = new TurnLedger(join(home, "turns.jsonl"), () => {});
+    const capture: Capture = { params: [] };
+    const { client } = stubClient([
+      message([{ type: "tool_use", id: "t1", name: "SetTodos", input: { todos: [{ text: "x", status: "pending" }] } } as Anthropic.ContentBlock]),
+      message([textBlock("进度：写了两节。")]),
+      message([textBlock("做完了 1 和 2；3 还差数据。")]),
+    ], capture);
+    const reports: GoalTurnReport[] = [];
+    const marker: GoalMarker = { taskId: "t1", workId: "work-goal-1", seq: 1, personSeq: 0 };
+    const inbound = (goal: GoalMarker, text: string) => [{ id: `g-${goal.seq}`, fromId: "user", fromName: "user", text, priority: false, receivedAt: "", synthetic: true, goal }];
+    await runTurn(ada, inbound(marker, "<host_notification source=\"goal\">continue</host_notification>"), new AbortController().signal, { client, registry, bus, box: undefined, resolution: undefined, turns, onGoalTurn: report => reports.push(report) });
+
+    const transcript = registry.readTranscript(ada.id) as { role: string; kind?: string; text?: string; host?: true; silent?: { reason: string }; blocks?: { text?: string }[] }[];
+    const opener = transcript.find(entry => entry.role === "user" && entry.kind === undefined)!;
+    assert.equal(opener.host, true, "the wake is the host's text");
+    assert.equal(opener.text?.includes("continue"), true);
+    const closing = transcript.filter(entry => entry.role === "assistant" && entry.blocks?.some(block => block.text === "进度：写了两节。"));
+    assert.equal(closing.length, 1, "the closing words are on the record");
+    assert.equal(closing[0]!.kind, "blocks");
+    assert.match(closing[0]!.silent?.reason ?? "", /not delivered/);
+    assert.equal(transcript.some(entry => entry.role === "assistant" && entry.kind === undefined && entry.text === "进度：写了两节。"), false, "and never as a reply replySince would deliver");
+    const begin = JSON.parse(readFileSync(join(home, "turns.jsonl"), "utf8").split("\n")[0]!) as { workId?: string };
+    assert.equal(begin.workId, "work-goal-1", "the ledger carries the pursuit's id");
+    assert.deepEqual(reports.map(report => [report.marker.seq, report.how, report.worked]), [[1, "done", false]], "SetTodos alone is not work");
+
+    // Finish-only: one response, tools withheld by tool_choice on round 0, the last-round note given.
+    const finish: GoalMarker = { ...marker, seq: 2, finishOnly: true, reason: "continuations" };
+    await runTurn(ada, inbound(finish, "<host_notification source=\"goal\">pausing</host_notification>"), new AbortController().signal, { client, registry, bus, box: undefined, resolution: undefined, turns, onGoalTurn: report => reports.push(report) });
+    const last = capture.params.at(-1)!;
+    assert.deepEqual(last.tool_choice, { type: "none" }, "no tools on a finish-only turn");
+    assert.match(JSON.stringify(last.messages.at(-1)?.content), /\[last round\] You have one response left/);
+    assert.equal(reports.at(-1)?.finalText, "做完了 1 和 2；3 还差数据。", "the report carries the words the loop will deliver");
+  } finally {
+    cleanup();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("without breakpoints the volatile tier rides the newest message and the system prefix is byte-stable across turns", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const capture: Capture = { params: [] };
+    const { client } = stubClient([message([textBlock("one")]), message([textBlock("two")])], capture);
+    const provider = {
+      label: "test", model: "test-model", maxTokens: 32_000, vision: true, adaptiveThinking: false,
+      effort: false, promptCaching: false, auth: "bearer" as const, keyEnv: "TEST_KEY",
+    };
+    for (const text of ["hi", "and now something else"]) {
+      await runTurn(
+        ada,
+        [{ id: `m-${text.length}`, fromId: "user", fromName: "user", text, priority: false, receivedAt: "" }],
+        new AbortController().signal,
+        { client, registry, bus, box: undefined, resolution: undefined, provider }
+      );
+    }
+    const [first, second] = capture.params as [Anthropic.MessageCreateParams, Anthropic.MessageCreateParams];
+    const systemOf = (params: Anthropic.MessageCreateParams) => params.system as Anthropic.TextBlockParam[];
+    assert.equal(systemOf(first).length, 1, "the stable tier alone");
+    assert.equal(systemOf(first)[0]!.cache_control, undefined, "no breakpoint where none is honoured");
+    assert.equal(systemOf(first)[0]!.text, systemOf(second)[0]!.text, "the same bytes on the next turn");
+    assert.equal(JSON.stringify(first.tools), JSON.stringify(second.tools), "and the same tools");
+    assert.match(systemOf(first)[0]!.text, /Your name is Ada/);
+    assert.doesNotMatch(systemOf(first)[0]!.text, /# Memory|# Before you answer/, "nothing volatile in the system prompt");
+
+    const lastOf = (params: Anthropic.MessageCreateParams) => params.messages[params.messages.length - 1]!.content as string;
+    assert.match(lastOf(first), /^hi\n\n<host_context>/, "the person's words first, then the host's context");
+    assert.match(lastOf(first), /# Before you answer[\s\S]*<\/host_context>/, "the recap rides in the tail");
+    assert.match(lastOf(second), /^and now something else\n\n<host_context>/);
+    assert.doesNotMatch(String(second.messages[0]!.content), /host_context/, "the replay of the first message carries what was said, not the tier");
+    const said = (registry.readTranscript(ada.id) as { role: string; text?: string }[]).filter(entry => entry.role === "user").map(entry => entry.text);
+    assert.deepEqual(said, ["hi", "and now something else"], "the transcript keeps what the person said");
+  } finally {
+    cleanup();
   }
 });
 
@@ -1840,6 +1935,9 @@ test("a turn that ends with nothing to say says that, rather than ending silentl
     // stopped without narrating it. From the person's side an unreported version of this is "I asked
     // and nothing happened" — indistinguishable from a hang, a crash, or being ignored.
     const { client } = stubClient([message([])], capture);
+    const home = mkdtempSync(join(tmpdir(), "agentbox-empty-"));
+    const usage = new UsageLog(join(home, "usage.jsonl"));
+    const turns = new TurnLedger(join(home, "turns.jsonl"), () => {});
 
     const events: { type: string; delta?: string }[] = [];
     await runTurn(
@@ -1852,6 +1950,8 @@ test("a turn that ends with nothing to say says that, rather than ending silentl
         bus,
         box: undefined,
         resolution: undefined,
+        usage,
+        turns,
         onEvent: event => events.push(event as { type: string }),
       }
     );
@@ -1864,6 +1964,110 @@ test("a turn that ends with nothing to say says that, rather than ending silentl
     assert.match(last.text, /not an empty one/);
     // The watcher is told too, not just the file.
     assert.ok(events.some(event => event.type === "text" && /ended without/.test(event.delta ?? "")));
+    // INV-775: the note is the host's, not the agent's — on the record, never delivered as a reply.
+    assert.equal(last.host, true);
+    assert.equal(replyForMessage(transcript, "m-test"), "", "the boilerplate is not the agent's reply");
+    // And the anomaly is counted where spend is counted, on a row that costs nothing.
+    assert.deepEqual(usage.anomaliesSince(), [{ anomaly: "empty_output", count: 1 }]);
+    assert.equal(usage.byKind().find(group => group.kind === "anomaly")?.totals.outputTokens, 0);
+    const ended = readFileSync(join(home, "turns.jsonl"), "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line) as { event: string; how?: string });
+    assert.equal(ended.find(record => record.event === "end")?.how, "empty_output");
+    rmSync(home, { recursive: true, force: true });
+  } finally {
+    cleanup();
+  }
+});
+
+test("NothingToSay ends a turn nobody is waiting on: reason recorded, nothing delivered, no anomaly (INV-775)", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const capture: Capture = { params: [] };
+    // One reply only: the call must end the turn, or the stub runs dry and the test fails there.
+    const { client } = stubClient(
+      [message([toolUseBlock("NothingToSay", { reason: "the routine does not apply to this message" })], "tool_use")],
+      capture
+    );
+    const home = mkdtempSync(join(tmpdir(), "agentbox-silent-"));
+    const usage = new UsageLog(join(home, "usage.jsonl"));
+    const turns = new TurnLedger(join(home, "turns.jsonl"), () => {});
+    const events: { type: string }[] = [];
+
+    await runTurn(
+      ada,
+      // A listener's kickoff: the harness wearing the person's shape, nobody waiting.
+      [{ id: "m-listen", fromId: "user", fromName: "user", text: "[listener] a message matched", priority: false, receivedAt: "", synthetic: true }],
+      new AbortController().signal,
+      { client, registry, bus, box: undefined, resolution: undefined, usage, turns, onEvent: event => events.push(event as { type: string }) }
+    );
+
+    assert.ok(capture.params[0]!.tools!.some(tool => "name" in tool && tool.name === "NothingToSay"), "offered on a turn nobody is waiting on");
+    const transcript = registry.readTranscript(ada.id) as TranscriptEntry[];
+    const silent = transcript.find(entry => "kind" in entry && entry.kind === "blocks") as { silent?: { reason: string } } | undefined;
+    assert.deepEqual(silent?.silent, { reason: "the routine does not apply to this message" });
+    // Nothing a door would deliver: no assistant prose, no text event, no reply for the message.
+    assert.ok(!transcript.some(entry => entry.role === "assistant" && !("kind" in entry)), "no prose was recorded");
+    assert.ok(!events.some(event => event.type === "text"), "nothing was emitted as text");
+    assert.equal(replyForMessage(transcript, "m-listen"), "");
+    // Deliberate silence is not the anomaly; the ledger says how the turn ended.
+    assert.deepEqual(usage.anomaliesSince(), []);
+    const ended = readFileSync(join(home, "turns.jsonl"), "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line) as { event: string; how?: string });
+    assert.equal(ended.find(record => record.event === "end")?.how, "silent");
+    rmSync(home, { recursive: true, force: true });
+  } finally {
+    cleanup();
+  }
+});
+
+test("NothingToSay is withheld from a turn a person opened, and refused if called anyway (INV-775)", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const capture: Capture = { params: [] };
+    // The model calls it regardless (a forged or remembered call); the second reply answers the refusal.
+    const { client } = stubClient(
+      [
+        message([toolUseBlock("NothingToSay", { reason: "nothing to add" })], "tool_use"),
+        message([textBlock("There is nothing to do here.")]),
+      ],
+      capture
+    );
+
+    await runTurn(
+      ada,
+      [{ id: "m-person", fromId: "user", fromName: "user", text: "anything for me?", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box: undefined, resolution: undefined }
+    );
+
+    assert.ok(!capture.params[0]!.tools!.some(tool => "name" in tool && tool.name === "NothingToSay"), "not offered where a person is waiting");
+    const transcript = registry.readTranscript(ada.id) as TranscriptEntry[];
+    const results = transcript.find(entry => "kind" in entry && entry.kind === "results") as { blocks: { is_error?: boolean; content?: unknown }[] } | undefined;
+    assert.equal(results?.blocks[0]?.is_error, true, "the call is refused, not honoured");
+    assert.match(JSON.stringify(results?.blocks[0]?.content), /someone is waiting/);
+    assert.equal(replyForMessage(transcript, "m-person"), "There is nothing to do here.");
+  } finally {
+    cleanup();
+  }
+});
+
+test("NothingToSay is offered on a room message that addressed nobody, and on a teammate's wake (INV-775)", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bob = registry.create({ name: "Bob" });
+    const bus = new AgentBus(registry, async () => {});
+    for (const inbound of [
+      { id: "m-room", fromId: "user", fromName: "user", text: "morning all", priority: false, receivedAt: "", addressed: false as const },
+      { id: "m-peer", fromId: bob.id, fromName: "Bob", text: "fyi: done", priority: false, receivedAt: "" },
+    ]) {
+      const capture: Capture = { params: [] };
+      const { client } = stubClient([message([toolUseBlock("NothingToSay", { reason: "not for me" })], "tool_use")], capture);
+      await runTurn(ada, [inbound], new AbortController().signal, { client, registry, bus, box: undefined, resolution: undefined });
+      assert.ok(capture.params[0]!.tools!.some(tool => "name" in tool && tool.name === "NothingToSay"), `offered for ${inbound.id}`);
+    }
   } finally {
     cleanup();
   }
@@ -3436,6 +3640,147 @@ test("a failed LLM call still ends its span, marked with the error", async () =>
     assert.equal(ended.length, 1, "the failed call's span was ended, not leaked");
     assert.match(String(ended[0]!.error), /boom/);
   } finally {
+    cleanup();
+  }
+});
+
+test("a tool call whose connections the relay refused gets one line saying so on its result (INV-784)", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box, calls } = stubBox();
+    const capture: Capture = { params: [] };
+    const { client } = stubClient(
+      [
+        message([toolUseBlock("bash", { command: "pip install thing" }, "toolu_refused")], "tool_use"),
+        message([textBlock("done")]),
+      ],
+      capture
+    );
+    const queries: unknown[] = [];
+    await runTurn(
+      ada,
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "install", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      {
+        client,
+        registry,
+        bus,
+        box,
+        resolution: { display: { width: 1280, height: 800 }, api: { width: 1280, height: 800 } },
+        networkEvents: {
+          query: query => {
+            queries.push(query);
+            const refused = (host: string) => ({ at: "2026-09-26T00:00:00Z", box: "agentbox", host, port: 443, allowed: false, reason: "not allowed" as const, attribution: "call" as const, agentId: ada.id, toolUseId: "toolu_refused" });
+            return { events: [refused("vendor.test"), refused("mirror.test"), refused("vendor.test")], total: 3 };
+          },
+        },
+      }
+    );
+    assert.equal(calls[0]!.kind, "exec");
+    assert.equal((queries[0] as { toolUse: string }).toolUse, "toolu_refused", "the ledger is asked about this call, by its id");
+    const result = (capture.params[1]!.messages.at(-1)!.content as Anthropic.ContentBlockParam[])[0] as Anthropic.ToolResultBlockParam;
+    const text = ((result.content as Anthropic.ContentBlockParam[])[0] as { text: string }).text;
+    const lines = text.split("\n");
+    assert.equal(lines.at(-1), "3 outbound connections refused: vendor.test, mirror.test", "one line, appended last");
+    assert.match(text, /hello from the box/, "the result itself is untouched");
+  } finally {
+    cleanup();
+  }
+});
+
+test("the tools fingerprint is order-blind and moves only when the tool set does (INV-782)", () => {
+  const read = { name: "read_file", description: "Read", input_schema: { type: "object", properties: { path: { type: "string" } } } };
+  const bash = { name: "bash", description: "Run", input_schema: { properties: { cmd: { type: "string" } }, type: "object" } };
+  const same = { input_schema: { type: "object", properties: { path: { type: "string" } } }, description: "Read", name: "read_file" };
+  assert.equal(toolsFingerprintOf([read, bash]), toolsFingerprintOf([bash, read]), "assembly order is not a change");
+  assert.equal(toolsFingerprintOf([read]), toolsFingerprintOf([same]), "key order is not a change");
+  assert.notEqual(toolsFingerprintOf([read, bash]), toolsFingerprintOf([read]), "a tool gone is a change");
+  assert.notEqual(
+    toolsFingerprintOf([read]),
+    toolsFingerprintOf([{ ...read, description: "Read a file" }]),
+    "a description edit is a change: the provider hashes the envelope, so do we"
+  );
+});
+
+test("a tool set change moves the tools fingerprint, leaves stable alone, and the diff is on the ledger (INV-782)", async () => {
+  const { registry, cleanup } = fixture();
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-cache-"));
+  try {
+    let ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const ledger = new TurnLedger(join(dir, "turns.jsonl"));
+    const turn = async (text: string) => {
+      const { client } = stubClient([message([textBlock("ok")])], { params: [] });
+      await runTurn(
+        ada,
+        [{ id: `m-${text}`, fromId: "user", fromName: "user", text, priority: false, receivedAt: "" }],
+        new AbortController().signal,
+        { client, registry, bus, box: undefined, resolution: undefined, turns: ledger }
+      );
+    };
+    await turn("one");
+    await turn("two");
+    // The lane narrows: skills, MCP servers and a profile edit all land here as a different tool set.
+    registry.update(ada.id, { tools: ["read_file"] });
+    ada = registry.get(ada.id);
+    await turn("three");
+
+    const begins = readFileSync(join(dir, "turns.jsonl"), "utf8")
+      .split("\n")
+      .filter(line => line.trim() !== "")
+      .map(line => JSON.parse(line) as { event: string; promptHash?: string; promptFingerprint?: Record<string, string>; promptChanged?: string[] })
+      .filter(record => record.event === "begin");
+    assert.equal(begins.length, 3);
+    const [first, second, third] = begins;
+    for (const record of begins) {
+      assert.match(record.promptHash ?? "", /^[0-9a-f]{16}$/, "promptHash is still written, for whoever reads it");
+      for (const segment of ["stable", "volatile", "tools"]) assert.match(record.promptFingerprint?.[segment] ?? "", /^[0-9a-f]{16}$/);
+    }
+    assert.equal(first!.promptChanged, undefined, "a first turn has nothing to compare with");
+    assert.equal(second!.promptFingerprint!.tools, first!.promptFingerprint!.tools, "same tool set, same tools digest");
+    assert.equal(second!.promptFingerprint!.stable, first!.promptFingerprint!.stable, "same prompt, same stable digest");
+    assert.ok(!(second!.promptChanged ?? []).includes("tools"), "nothing moved in the tool set between one and two");
+    assert.notEqual(third!.promptFingerprint!.tools, second!.promptFingerprint!.tools, "the narrowed lane is a different tool set");
+    assert.equal(third!.promptFingerprint!.stable, second!.promptFingerprint!.stable, "the stable prefix did not move with it");
+    assert.ok(third!.promptChanged!.includes("tools"), `the ledger names the segment: ${JSON.stringify(third!.promptChanged)}`);
+    assert.ok(!third!.promptChanged!.includes("stable"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    cleanup();
+  }
+});
+
+test("the round span carries the three digests and which segments changed (INV-782)", async () => {
+  const { registry, cleanup } = fixture();
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-cache-"));
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const ledger = new TurnLedger(join(dir, "turns.jsonl"));
+    const spans: Record<string, unknown>[] = [];
+    const tracer: Tracer = {
+      start: (_name, attrs) => ({ end: extra => spans.push({ ...attrs, ...extra }) }),
+      async flush() {},
+    };
+    for (const text of ["one", "two"]) {
+      const { client } = stubClient([message([textBlock("ok")])], { params: [] });
+      await runTurn(
+        ada,
+        [{ id: `m-${text}`, fromId: "user", fromName: "user", text, priority: false, receivedAt: "" }],
+        new AbortController().signal,
+        { client, registry, bus, box: undefined, resolution: undefined, turns: ledger, tracer }
+      );
+    }
+    assert.equal(spans.length, 2);
+    assert.match(String(spans[0]!["agentbox.prompt.tools_hash"]), /^[0-9a-f]{16}$/);
+    assert.equal(spans[0]!["agentbox.prompt.changed"], undefined, "first turn: nothing to diff against");
+    assert.equal(typeof spans[1]!["agentbox.prompt.changed"], "string", "second turn: the diff, as a comma list");
+    assert.ok(!String(spans[1]!["agentbox.prompt.changed"]).includes("tools"));
+    assert.equal(spans[1]!["agentbox.usage.cache_read_share"], 0, "10 input, 0 cached: share 0");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
     cleanup();
   }
 });

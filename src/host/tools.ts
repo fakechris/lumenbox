@@ -44,8 +44,11 @@ import { MCP_FACE_DIR, MCP_FACE_TOKEN_VARIABLE, type McpFace } from "./mcp-face.
 import type { ModelRelay } from "./model-relay.ts";
 import type { DelegateSessions } from "./delegate-sessions.ts";
 import { randomBytes } from "node:crypto";
+import { encodeCall } from "../egress/call.ts";
 import { MAIN_CONVERSATION, normaliseTags } from "../agents/registry.ts";
 import { describeTask, isLive, isTaskStatus, TASK_STATUSES, type TaskStore, clampContract } from "./tasks.ts";
+import { checklistAdditions, describePursuit } from "./goal-mode.ts";
+import type { GoalGate } from "./goal-gate.ts";
 import { ABSENT, versionOf, type FileVersions } from "./files.ts";
 import {
   describeTodos,
@@ -72,6 +75,7 @@ import {
 } from "../protocol/index.ts";
 import { afterTimeout, idempotencyOfHttp } from "../protocol/idempotency.ts";
 import { skillSlugOf } from "./skill-provenance.ts";
+import { capRefusal, standingFileOf, writeStandingFromAgent } from "./standing.ts";
 import { SKILL_FILENAME } from "./skills.ts";
 import {
   type BotTemplate,
@@ -218,6 +222,8 @@ export interface ToolContext {
   memorySources?: readonly string[];
   /** The team's task board. Absent means the Tasks tool answers that there is none. */
   tasks?: TaskStore;
+  /** The completion gate (INV-771), where a goal's claim_complete goes. */
+  goalGate?: GoalGate;
   /** The scopes registry, so a secret granted by the caller's scope resolves. */
   scopes?: ScopeStore;
   /** How often WaitForControl polls the box; tests shorten it. */
@@ -232,6 +238,11 @@ export interface ToolContext {
    * transcript that is its evidence.
    */
   turnId?: string;
+  /**
+   * The tool_use id of this call (INV-784). With `turnId`, what the box is told the call
+   * is, so the relay's network events say which call opened each connection.
+   */
+  toolUseId?: string;
   /**
    * The tools this turn has called so far, this one included. A reviewer accepting a task
    * with nothing here but `Tasks` has read the assignee's summary and checked nothing.
@@ -313,6 +324,12 @@ export interface ToolOutcome {
    * about.
    */
   recordAs?: string;
+  /**
+   * The approval this call is waiting on, when the policy gate put it in front of a person
+   * instead of running it (INV-774). The step ledger records it, so a restart parks the
+   * turn on the person's answer rather than answering the call `outcome_unknown`.
+   */
+  approval?: { id: string };
 }
 
 /**
@@ -347,6 +364,18 @@ export const PARALLEL_SAFE_TOOLS: ReadonlySet<string> = new Set([
 export const PARALLEL_TOOL_LIMIT = 6;
 
 /**
+ * Deliberate silence, as a call (INV-775).
+ *
+ * Until this existed the only way to say nothing was to say nothing — an empty final
+ * message — and the runtime could not tell "the model decided there is nothing to do" from
+ * "the model produced nothing". The first is a decision worth recording with its reason; the
+ * second is an anomaly worth counting. Offered only on turns nobody is waiting on (a room
+ * wake that did not address this agent, a schedule, a webhook, a listener, a fork landing);
+ * the turn engine withholds it whenever a person opened the turn.
+ */
+export const SILENCE_TOOL = "NothingToSay";
+
+/**
  * What a fork child may not do (docs/32 §2): reach a person or a teammate, change the board,
  * remember for the team, or fan out again. Its one outward channel is its final message,
  * which the turn that forked it reads. Hermes strips the same set from delegated children;
@@ -366,6 +395,8 @@ const FORGET_PLANS = new ForgetPlans();
 export const FORK_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
   // Forgetting is the person's decision, confirmed in their conversation (INV-757).
   "Forget",
+  // A goal belongs to the conversation the person set it in; a fork works, it does not steer.
+  "Goal",
   "RunOnHost",
   "computer",
   "SendToAgent",
@@ -381,6 +412,8 @@ export const FORK_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
   "AskSecret",
   "HandOverDesktop",
   "OtherThreads",
+  // A fork's one channel is its final message with its handoff line; silence would read as `unstated`.
+  SILENCE_TOOL,
 ]);
 
 /** Whether a conversation name is a fork child's. */
@@ -1495,6 +1528,54 @@ export function buildTools(
       },
     },
     {
+      name: "Goal",
+      description:
+        "The goal the person set for this conversation with /goal (docs/74): an objective you keep " +
+        "working toward until a gate you do not own says it is met. 'status' shows it. " +
+        "'checklist_add' adds acceptance items — what evidence would prove each part of the " +
+        "objective is done; give a command (exit code) or an artifact path where one exists. " +
+        "The checklist only grows; removing an item needs the person's agreement. An item with a " +
+        "command is a proposal until the person confirms it (/goal confirm n). 'claim_complete' is " +
+        "how a goal ends from your side: give a pointer per checklist item (a path, a command's " +
+        "output, a URL) and a verifier that has not seen this conversation checks every item " +
+        "against the current state. Claim only when every item is actually true now — an open " +
+        "todo or a missing artifact is refused outright, and three rejections hand the goal to " +
+        "the person. Stopping is not finishing.",
+      input_schema: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["status", "checklist_add", "claim_complete"] },
+          evidence: {
+            type: "array",
+            description: "For claim_complete: per checklist item, where the proof is.",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "string", description: "The checklist item id (c1, c2, …)." },
+                evidence: { type: "string", description: "A pointer to the proof: a file path, a command and its result, a URL." },
+              },
+              required: ["id", "evidence"],
+            },
+          },
+          items: {
+            type: "array",
+            description: "For checklist_add: the items to add.",
+            items: {
+              type: "object",
+              properties: {
+                text: { type: "string", description: "What must be true, and what would prove it." },
+                command: { type: "string", description: "Optional: a shell command whose exit code proves it. A proposal until the person confirms it." },
+                expect_exit: { type: "integer", description: "For command: the exit code that means proven (default 0)." },
+                artifact: { type: "string", description: "Optional: a file path that must exist when the goal is done." },
+              },
+              required: ["text"],
+            },
+          },
+        },
+        required: ["action"],
+      },
+    },
+    {
       name: "Tasks",
       description:
         "The team's task board — work as an object everyone can see, not a message that " +
@@ -2092,6 +2173,22 @@ export function buildTools(
     });
   }
 
+  tools.push({
+    name: SILENCE_TOOL,
+    description:
+      "End this turn on purpose with nothing delivered: the message was not for you, the routine " +
+      "does not apply, the fork's result changes nothing you need to say. Give the reason in one " +
+      "short sentence; it goes in the record, never to a person or a chat. Call it instead of " +
+      "replying with an empty message. It is offered only on turns nobody is waiting on.",
+    input_schema: {
+      type: "object",
+      properties: {
+        reason: { type: "string", description: "Why there is nothing to say, in one short sentence." },
+      },
+      required: ["reason"],
+    },
+  });
+
   const offered = withheldFrom(allowed, tools);
   return fork ? offered.filter(tool => !FORK_WITHHELD_TOOLS.has(tool.name)) : offered;
 }
@@ -2215,6 +2312,23 @@ function boxOfAgent(context: ToolContext): { id: string; name: string } | undefi
   }
 }
 
+/**
+ * The call token a box request carries (INV-784, egress/call.ts): who this is, for the
+ * relay's record. Nothing when the turn is not one — a CLI run, a test — and then the
+ * box attributes the connections to nobody rather than to a made-up id.
+ */
+function callFor(context: ToolContext, jobId?: string): { call?: string } {
+  if (context.turnId === undefined || context.toolUseId === undefined) return {};
+  return {
+    call: encodeCall({
+      agentId: context.agent.id,
+      turnId: context.turnId,
+      toolUseId: context.toolUseId,
+      ...(jobId !== undefined ? { jobId } : {}),
+    }),
+  };
+}
+
 function requireBox(context: ToolContext): BoxClient {
   if (!context.box) {
     throw new Error(
@@ -2284,7 +2398,11 @@ export function consecutiveQuestions(context: ToolContext): number {
     return 0;
   }
   let count = 0;
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
+  // A trailing `blocks` entry with no results after it is the batch being run right now — it
+  // is on disk before its tools run (INV-774) — and this call is one of it, not a turn before it.
+  const last = entries[entries.length - 1] as { kind?: string } | undefined;
+  const from = last?.kind === "blocks" ? entries.length - 2 : entries.length - 1;
+  for (let index = from; index >= 0; index -= 1) {
     const entry = entries[index] as { role?: string; kind?: string; blocks?: { type?: string; name?: string }[]; text?: string };
     if (entry.role !== "assistant") continue;
     if (entry.kind === "blocks" && Array.isArray(entry.blocks)) {
@@ -2420,7 +2538,7 @@ export async function dispatchTool(
     ...(context.callerName !== undefined ? { principalName: context.callerName } : {}),
   });
   if (decision !== undefined && !decision.allow) {
-    return { text: decision.reason, isError: true };
+    return { text: decision.reason, isError: true, ...(decision.approval !== undefined ? { approval: { id: decision.approval.id } } : {}) };
   }
   // The fence (docs/32 §2), at dispatch and not only in the offer: a forged or replayed call
   // for a withheld tool is refused here whatever list the model was shown. `Fork` keeps its
@@ -2435,6 +2553,16 @@ export async function dispatchTool(
   }
 
   switch (name) {
+    // Reached only when the turn engine did not intercept it, which means it was not offered:
+    // a forged or replayed call on a turn a person is waiting on. The engine ends the turn
+    // itself when the tool was offered (turn.ts), so this is the refusal, never the success.
+    case SILENCE_TOOL:
+      return {
+        text:
+          `${SILENCE_TOOL} is not available on this turn: someone is waiting on a reply. ` +
+          `Answer them, even if the answer is that there is nothing to do.`,
+        isError: true,
+      };
     case "WaitForControl": {
       const box = requireBox(context);
       const index = context.displayIndex ?? 1;
@@ -2584,10 +2712,14 @@ export async function dispatchTool(
       if (guarded.refusal !== undefined) return { text: guarded.refusal, isError: true };
       const box = requireBox(context);
       if (input.background === true) {
+        // Minted here so the call token can name the job before it exists (INV-784).
+        const jobId = `job-${randomBytes(8).toString("hex")}`;
         const started = await box.startJob(command, {
           ...(input.cwd ? { cwd: String(input.cwd) } : {}),
           ...(context.displayIndex !== undefined ? { display: context.displayIndex } : {}),
           ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
+          jobId,
+          ...callFor(context, jobId),
         });
         return {
           text:
@@ -2609,6 +2741,7 @@ export async function dispatchTool(
         owner: context.boxOwner,
         // For the box's record: this one is the model's own shell, not housekeeping.
         actor: `agent:${context.agent.id}`,
+        ...callFor(context),
       });
       return {
         text: formatExec(result, input.timeout_ms ? Number(input.timeout_ms) : undefined),
@@ -2734,7 +2867,8 @@ export async function dispatchTool(
             const seq = context.bus.deliverSystem(
               context.agent.id,
               `${tag}A fork you started has finished. Fold it into what you tell the person; ` +
-                `they never heard of the fork.\n\n${text}`,
+                `they never heard of the fork. If it changes nothing you need to say, call ` +
+                `${SILENCE_TOOL} with the reason.\n\n${text}`,
               parent
             );
             if (ids[index] !== undefined && (seq !== undefined || context.bus.inboxless)) {
@@ -2742,11 +2876,18 @@ export async function dispatchTool(
             }
           });
         }
+        // The receipt says what to do next and what not to do. It used to say only "end your
+        // turn"; a parent that was not told otherwise went on to check on the forks, guess at
+        // their findings and promise a time — none of which it can know (INV-785).
         return {
           text:
             `Started ${briefs.length} fork${briefs.length === 1 ? "" : "s"} in the background. ` +
             `Each reports here as a message when it lands. End your turn now with what the ` +
-            `person should hear — that you are on it, in your own words, not that you forked.`,
+            `person should hear — that you are on it, in your own words, not that you forked. ` +
+            `Until a fork's result arrives there is nothing more for you to do about it: do not ` +
+            `check on the forks' progress, do not predict or invent what they will find, do not ` +
+            `estimate how long they will take, and do not keep writing about the delegated work. ` +
+            `Each result reaches you as its own message, and that is when you fold it in.`,
         };
       }
 
@@ -2806,7 +2947,8 @@ export async function dispatchTool(
           const seq = context.bus.deliverSystem(
             context.agent.id,
             `${tag}A fork you were waiting on when a new instruction arrived has finished. ` +
-              `Fold it into what you already reported if it still matters.\n\n${text}`,
+              `Fold it into what you already reported if it still matters; if it does not, call ` +
+              `${SILENCE_TOOL} with the reason.\n\n${text}`,
             parent
           );
           // Admitted durably is delivered. The tag lets a restart's sweep see the note is
@@ -2856,6 +2998,7 @@ export async function dispatchTool(
           const started = await box.startJob(installCommand(preset), {
             ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
             jobId: installJobId,
+            ...callFor(context, installJobId),
           });
           return {
             text:
@@ -3030,6 +3173,7 @@ export async function dispatchTool(
           ...(Object.keys(jobEnv).length > 0 ? { env: jobEnv } : {}),
           ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
           jobId,
+          ...callFor(context, jobId),
         });
       } catch (error) {
         if (routeKey !== undefined) context.mcpFace?.revoke(routeKey, "job failed to start");
@@ -3437,7 +3581,12 @@ export async function dispatchTool(
           isError: true,
         };
       }
+      // A standing file (INV-777) is capped, and its host copy is written in the same call.
+      const standingEdited = standingFileOf(path, context.agent.id);
+      const editCap = standingEdited === undefined ? undefined : capRefusal(standingEdited, updated);
+      if (editCap !== undefined) return { text: editCap, isError: true };
       await box.writeFile(path, updated);
+      if (standingEdited !== undefined) writeStandingFromAgent(context.registry.dirFor(context.agent.id), context.agent.profile.name, standingEdited, updated);
       // Recorded like any other write, so the next writer still sees a conflict rather
       // than overwriting an edit nobody else knows happened.
       context.files?.observed(context.agent.id, path, versionOf(updated));
@@ -3517,7 +3666,13 @@ export async function dispatchTool(
         };
       }
       const written = templateStamp(context, path, content);
+      // A standing file (INV-777) is capped, and its host copy — the one that counts — is written
+      // in the same call, so the agent's edit is in its next prompt and never reported back to it.
+      const standingWritten = standingFileOf(path, context.agent.id);
+      const writeCap = standingWritten === undefined ? undefined : capRefusal(standingWritten, written);
+      if (writeCap !== undefined) return { text: writeCap, isError: true };
       const result = await box.writeFile(path, written);
+      if (standingWritten !== undefined) writeStandingFromAgent(context.registry.dirFor(context.agent.id), context.agent.profile.name, standingWritten, written);
       // Its own write is the newest thing it has seen, so writing twice in a row is not a conflict
       // with itself.
       context.files?.observed(context.agent.id, result.path, versionOf(written));
@@ -3808,6 +3963,7 @@ export async function dispatchTool(
           op: "fill_secret",
           display: context.displayIndex,
           ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
+          ...callFor(context),
           ref,
           secret_value: value,
           domains,
@@ -3878,6 +4034,7 @@ export async function dispatchTool(
               : name.slice("browser_".length),
         display: context.displayIndex,
         ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
+        ...callFor(context),
       };
       if (name === "browser_open") {
         try {
@@ -4009,7 +4166,9 @@ export async function dispatchTool(
             input,
             irreversible: finding,
           });
-          if (!decision.allow) return { text: outcomeLine("refused", decision.reason), isError: true };
+          if (!decision.allow) {
+            return { text: outcomeLine("refused", decision.reason), isError: true, ...(decision.approval !== undefined ? { approval: { id: decision.approval.id } } : {}) };
+          }
           try {
             return render(await box.browser({ ...request, confirmed: true }));
           } catch (again) {
@@ -4732,6 +4891,40 @@ export async function dispatchTool(
       return { text: 'Forget needs action "plan" (with about) or "confirm" (with plan).', isError: true };
     }
 
+    case "Goal": {
+      const board = context.tasks;
+      if (board === undefined) return { text: "There is no task board on this installation.", isError: true };
+      const conversation = context.conversation ?? MAIN_CONVERSATION;
+      const task = board.pursuitIn(conversation);
+      if (task?.pursuit === undefined) return { text: "No goal is set for this conversation. The person sets one with /goal.", isError: true };
+      const action = String(input.action ?? "");
+      if (action === "status") return { text: describePursuit(task) };
+      if (action === "checklist_add") {
+        if (task.assigneeId !== context.agent.id) return { text: `Goal ${task.id} is ${task.assigneeId ?? "nobody"}'s to pursue; only its assignee drafts the checklist.`, isError: true };
+        const additions = checklistAdditions(task.pursuit.checklist, input.items);
+        if ("refused" in additions) return { text: additions.refused, isError: true };
+        const moved = board.setPursuit(
+          task.id,
+          pursuit => ({ ...pursuit, checklist: [...pursuit.checklist, ...additions.items] }),
+          `checklist: ${additions.items.length} item(s) added by ${context.agent.profile.name}`,
+          context.agent.id
+        );
+        if (moved === undefined) return { text: "The goal could not be updated.", isError: true };
+        return { text: `Added ${additions.items.length} item(s).\n\n${describePursuit(moved.task)}` };
+      }
+      if (action === "claim_complete") {
+        if (context.goalGate === undefined) return { text: "There is no completion gate on this installation.", isError: true };
+        const evidence = Array.isArray(input.evidence)
+          ? (input.evidence as unknown[]).map(entry => {
+              const record = (typeof entry === "object" && entry !== null ? entry : {}) as Record<string, unknown>;
+              return { id: String(record.id ?? ""), evidence: String(record.evidence ?? "") };
+            })
+          : [];
+        const result = await context.goalGate.claim(task.id, context.agent.id, evidence);
+        return { text: result.text, ...(result.accepted ? {} : { isError: true }) };
+      }
+      return { text: `Unknown Goal action "${action}"; use status, checklist_add or claim_complete.`, isError: true };
+    }
     case "Tasks": {
       const board = context.tasks;
       if (board === undefined) {

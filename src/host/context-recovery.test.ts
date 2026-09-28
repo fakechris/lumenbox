@@ -25,6 +25,18 @@ test("review tasks stay on the board but do not trap a finished conversation", (
   assert.deepEqual(contextTaskBlockers([...tasks, { id: "t14", status: "blocked", conversation: "feishu-private" }], "feishu-private"), ["任务 t14：blocked"]);
 });
 
+test("a running pursuit holds the conversation and names the way out; a paused one does not (INV-769)", () => {
+  const pursuit = (status: "active" | "verifying" | "paused") => ({ status, workId: "w", objective: "x", checklist: [], limits: { continuations: 30, activeMs: 1 }, spent: { continuations: 0, idleStreak: 0, rejections: 0, activeMs: 0, cost: 0 }, createdAt: "2026-09-27T00:00:00Z" });
+  const tasks = [
+    { id: "t1", status: "doing" as const, conversation: "feishu-private", pursuit: pursuit("active") },
+    { id: "t2", status: "blocked" as const, conversation: "feishu-private", pursuit: pursuit("paused") },
+    { id: "t3", status: "doing" as const, conversation: "feishu-private" },
+  ];
+  assert.deepEqual(contextTaskBlockers(tasks, "feishu-private"), ["目标 t1 正在推进（active）：先 /goal pause 或 /goal clear", "任务 t3：doing"]);
+  assert.deepEqual(contextTaskBlockers([tasks[1]!], "feishu-private"), [], "paused: the board keeps it, /goal resume brings it back");
+  assert.deepEqual(contextTaskBlockers([{ ...tasks[0]!, pursuit: pursuit("verifying") }], "feishu-private"), ["目标 t1 正在推进（verifying）：先 /goal pause 或 /goal clear"]);
+});
+
 test("new context is authorised, private, idle, idempotent and never erases history or memory", () => {
   const f = fixture();
   try {
@@ -114,7 +126,7 @@ test("an in-flight extraction cannot reintroduce the old context after new", asy
         return { content: [{ type: "text", text: "Always write seventeen blind spots" }], usage: {} };
       } } } as never,
     });
-    const learning = f.registry.withContext(f.agent.id, f.input.conversation, () => rememberer.flush(f.agent.id, "old conversation"));
+    const learning = f.registry.withContext(f.agent.id, f.input.conversation, () => rememberer.flush(f.agent.id, f.input.conversation, [{ role: "user", text: "old conversation", at: new Date().toISOString() }]));
     await started;
     f.registry.contextStore(f.agent.id, f.input.conversation).advance("new", 0);
     release();

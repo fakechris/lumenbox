@@ -29,7 +29,8 @@ const PENDING = "PENDING: waiting on Chris to choose plan A or plan B";
 const APPROVAL = "Chris approved deleting build/ once, for this run only";
 
 const at = "2026-09-13T00:00:00Z";
-const user = (text: string): TranscriptEntry => ({ role: "user", text, at });
+// Stamped as a real turn stamps it: a person-said anchor needs human provenance (INV-799).
+const user = (text: string): TranscriptEntry => ({ role: "user", text, at, fromPerson: true });
 const pair = (i: number, size = 500): TranscriptEntry[] => [
   { role: "assistant", kind: "blocks", blocks: [{ type: "tool_use", id: `t${i}`, name: "bash", input: { command: `step ${i} ${"x".repeat(40)}` } }], at },
   { role: "user", kind: "results", blocks: [{ type: "tool_result", tool_use_id: `t${i}`, content: `output ${i} ${"y".repeat(size)}` }], at },
@@ -180,4 +181,15 @@ test("clampSummaryToBudget leaves a fitting summary untouched and marks a clippe
   const clipped = clampSummaryToBudget(long, [user("tail")] as never, policy);
   assert.ok(clipped.text.length < 3_000);
   assert.match(clipped.text, /\[summary clipped to fit the context window/);
+});
+
+test("INV-778: a user instruction survives two summaries that omitted it, as an anchor", async () => {
+  const h = harness("user-anchor");
+  const history: TranscriptEntry[] = [user("以后报告都用公制。"), ...Array.from({ length: 14 }, (_, i) => pair(i)).flat()];
+  const once = await h.run(history);
+  const first = text(activeWindow(once as never)[0]!);
+  assert.doesNotMatch(first.split("**Exact references")[0]!, /公制/, "the scripted summariser dropped it from the prose");
+  assert.match(first, /the person said: 以后报告都用公制。/, "the anchor carried it");
+  const twice = await h.run([...once, ...Array.from({ length: 12 }, (_, i) => pair(100 + i)).flat()]);
+  assert.match(text(activeWindow(twice as never)[0]!), /the person said: 以后报告都用公制。/, "and the second pass carried the first pass's anchor");
 });

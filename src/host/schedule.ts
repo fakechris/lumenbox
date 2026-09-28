@@ -36,6 +36,7 @@ import { envNumber } from "../config.ts";
 import { webhookPrompt } from "./webhooks.ts";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { appendLine } from "./jsonl.ts";
+import type { DeliverWhen } from "./routine-resolve.ts";
 import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
 
@@ -413,7 +414,7 @@ export function triggerPrompt(
       deliver === undefined
         ? "Nobody is waiting on a reply and no one will answer a question, so do the work and record the result where it can be found later."
         : "Nobody will answer a question, so decide rather than ask — but your reply is delivered to a chat where people will read it, so write it for them."
-    }`,
+    } The rules for unattended work in your system prompt apply: the skill's text is your whole authorization, and a step it did not ask for is a recommendation in your result, not an action. If there is nothing to do this time, call NothingToSay with the reason.`,
     "",
     `You are running the **${skillName}** skill, scheduled ${described}. Read \`${path}\` and follow it.`,
     "",
@@ -442,6 +443,8 @@ export interface Scheduled {
    * scheduled skill wrote into the main conversation, which no chat reads.
    */
   deliver?: string;
+  /** Whether every run reaches that chat, or only one that changed something (INV-776). */
+  deliverWhen?: DeliverWhen;
   /** The agent that wrote it, when one did. Provenance, not permission — see skills.ts. */
   authoredBy?: string;
   /** Why it exists, in the author's words. */
@@ -462,6 +465,7 @@ export interface Hooked {
   path: string;
   runAs?: string;
   deliver?: string;
+  deliverWhen?: DeliverWhen;
   paused?: boolean;
   boxId?: string;
   authoredBy?: string;
@@ -505,14 +509,16 @@ export function listenerPrompt(
   return [
     `[listener] This turn was started because a message matched the **${skillName}** routine, not because ` +
       "someone addressed you. Your reply is delivered to the chat it was said in, where people will read it; " +
-      "nobody will answer a question, so decide rather than ask.",
+      "nobody will answer a question, so decide rather than ask. The rules for unattended work in your " +
+      "system prompt apply: the routine's text is your whole authorization, and a step it did not ask for " +
+      "is a recommendation in your result, not an action.",
     "",
     `Read \`${path}\` and follow it for this message from ${said.sender} in ${said.chatKey}:`,
     "",
     said.text.slice(0, 4_000),
     "",
     "Make your final message the thing itself, short enough to read on a phone. If the routine does not " +
-      "actually apply to this message, say nothing: reply with an empty message.",
+      "actually apply to this message, call NothingToSay with the reason.",
   ].join("\n");
 }
 
@@ -576,7 +582,13 @@ export interface SchedulerDeps {
    * hands it over rather than resolving it, because which conversation a chatKey means
    * and how a reply reaches it are the caller's business, not the clock's.
    */
-  run: (agent: string, prompt: string, deliver?: string, slug?: string, toolScope?: readonly string[]) => Promise<void>;
+  /**
+   * `slug` names the routine whose commitments are reconciled afterwards; `identity` names
+   * whose result history the run is written to when that is not the same thing (INV-802):
+   * a listener passes no slug, because a listener run is not reconciled, but its results
+   * are its own — not one `ad-hoc` history every listener shares.
+   */
+  run: (agent: string, prompt: string, deliver?: string, slug?: string, toolScope?: readonly string[], deliverWhen?: DeliverWhen, identity?: string) => Promise<void>;
   /**
    * What a routine committed to last time and where it stands (INV-528), prepended to
    * its prompt so a retro opens with its own previous "next week" rather than a blank.
@@ -758,7 +770,12 @@ export class Scheduler {
           deliver,
           // No slug, as before: a listener run is not reconciled against commitments.
           undefined,
-          skill.allowedTools
+          skill.allowedTools,
+          undefined,
+          // But its results are its own (INV-802): keyed by the listener, and by the room
+          // it answered in, so a second listener saying the same words, or this one in
+          // another room, is not silenced by a result that room never heard.
+          skill.slug
         )
         .catch(error => {
           this.log(`${skill.name}: run failed — ${error instanceof Error ? error.message : String(error)}`);
@@ -824,7 +841,8 @@ export class Scheduler {
           triggerPrompt(skill.name, skill.path, describeSchedule(skill.schedule), skill.deliver) + (prior !== undefined ? `\n\n${prior}` : ""),
           skill.deliver,
           skill.slug,
-          skill.allowedTools
+          skill.allowedTools,
+          skill.deliverWhen
         )
         .catch(error => {
           // Reported and dropped. A scheduled run that failed will come round again, and retrying
@@ -861,6 +879,7 @@ export class Scheduler {
       agent: string | undefined;
       timezone: string | undefined;
       deliver: string | undefined;
+      deliverWhen: DeliverWhen | undefined;
       authoredBy: string | undefined;
       because: string | undefined;
       lastRun: string | undefined;
@@ -883,6 +902,7 @@ export class Scheduler {
       agent: skill.runAs,
       timezone: skill.timezone,
       deliver: skill.deliver,
+      deliverWhen: skill.deliverWhen,
       authoredBy: skill.authoredBy,
       because: skill.because,
       lastRun: this.lastRun.get(skill.slug)?.toISOString(),
@@ -906,6 +926,7 @@ export class Scheduler {
         agent: skill.runAs,
         timezone: undefined,
         deliver: skill.deliver,
+        deliverWhen: skill.deliverWhen,
         authoredBy: skill.authoredBy,
         because: skill.because,
         lastRun: this.lastRun.get(skill.slug)?.toISOString(),
@@ -1032,7 +1053,7 @@ export class Scheduler {
     }
 
     void this.deps
-      .run(agent, prompt, skill.deliver, skill.slug, skill.allowedTools)
+      .run(agent, prompt, skill.deliver, skill.slug, skill.allowedTools, skill.deliverWhen)
       .catch(error => {
         this.log(`${skill.name}: webhook run failed — ${error instanceof Error ? error.message : String(error)}`);
       })
@@ -1063,7 +1084,8 @@ export class Scheduler {
         triggerPrompt(skill.name, skill.path, describeSchedule(skill.schedule), skill.deliver) + (priorByHand !== undefined ? `\n\n${priorByHand}` : ""),
         skill.deliver,
         skill.slug,
-        skill.allowedTools
+        skill.allowedTools,
+        skill.deliverWhen
       )
       .catch(error => {
         this.log(

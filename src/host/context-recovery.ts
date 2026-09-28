@@ -3,6 +3,7 @@ import type { AgentRegistry } from "../agents/registry.ts";
 import { MAIN_CONVERSATION } from "../agents/registry.ts";
 import type { ContextMode } from "../agents/context-epoch.ts";
 import type { Task } from "./tasks.ts";
+import { pursuitBlockers } from "./goal-mode.ts";
 
 export function isContextCommand(text: string): boolean {
   return /^\/new(?:\s|$)/i.test(text.trim());
@@ -30,15 +31,23 @@ export interface ContextRecoveryDeps {
  * remains. Treating review as running made completed work permanently trap a private chat.
  */
 export function contextTaskBlockers(
-  tasks: readonly Pick<Task, "id" | "status" | "conversation">[],
+  tasks: readonly Pick<Task, "id" | "status" | "conversation" | "pursuit">[],
   conversation: string,
   excludeTaskId?: string
 ): string[] {
-  return tasks
+  const inScope = tasks
     .filter(task => task.id !== excludeTaskId)
-    .filter(task => (task.conversation ?? MAIN_CONVERSATION) === conversation)
-    .filter(task => task.status === "open" || task.status === "doing" || task.status === "blocked")
-    .map(task => `任务 ${task.id}：${task.status}`);
+    .filter(task => (task.conversation ?? MAIN_CONVERSATION) === conversation);
+  // A goal the agent is pursuing holds the conversation while it runs, and says how to let
+  // go; paused, it holds nothing — the board keeps it and `/goal resume` brings it back
+  // (docs/74 §7 R7).
+  return [
+    ...pursuitBlockers(inScope, conversation),
+    ...inScope
+      .filter(task => task.pursuit === undefined)
+      .filter(task => task.status === "open" || task.status === "doing" || task.status === "blocked")
+      .map(task => `任务 ${task.id}：${task.status}`),
+  ];
 }
 
 export function newContext(

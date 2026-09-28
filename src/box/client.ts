@@ -306,6 +306,8 @@ export class BoxClient {
       owner?: string;
       /** Who asked, for the box's record. A label, not a permission. */
       actor?: string;
+      /** The call token (INV-784, egress/call.ts) the box attributes the command's connections to. */
+      call?: string;
     } = {}
   ): Promise<ExecResult> {
     const commandTimeout = options.timeoutMs ?? 120_000;
@@ -319,6 +321,7 @@ export class BoxClient {
         display: options.display,
         owner: options.owner,
         actor: options.actor,
+        call: options.call,
       },
       // Give the HTTP layer headroom over the command's own timeout, so a
       // command that times out reports its output instead of aborting the request.
@@ -334,7 +337,7 @@ export class BoxClient {
    */
   startJob(
     command: string,
-    options: { cwd?: string; env?: Record<string, string>; display?: number; owner?: string; jobId?: string } = {}
+    options: { cwd?: string; env?: Record<string, string>; display?: number; owner?: string; jobId?: string; call?: string } = {}
   ): Promise<JobStartedResult> {
     return this.post<JobStartedResult>("/exec", {
       command,
@@ -344,6 +347,7 @@ export class BoxClient {
       display: options.display,
       owner: options.owner,
       job_id: options.jobId,
+      call: options.call,
     });
   }
 

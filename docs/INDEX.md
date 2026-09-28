@@ -21,10 +21,10 @@ this file and the headers disagree. Edit the header, not this table.
 | [01-requirements](01-requirements.md) | Requirements | current | 2026-08-22 |
 | [02-product](02-product.md) | Product | current | 2026-08-19 |
 | [03-architecture](03-architecture.md) | Architecture | current | 2026-09-22 |
-| [04-design](04-design.md) | Design | current | 2026-09-24 |
-| [05-data](05-data.md) | Data | current | 2026-09-26 |
+| [04-design](04-design.md) | Design | current | 2026-09-27 |
+| [05-data](05-data.md) | Data | current | 2026-09-27 |
 | [08-control-plane](08-control-plane.md) | Control plane | current | 2026-09-12 |
-| [11-roadmap](11-roadmap.md) | Roadmap and backlog | current | 2026-09-14 |
+| [11-roadmap](11-roadmap.md) | Roadmap and backlog | current | 2026-09-26 |
 | [21-dingtalk-wire](21-dingtalk-wire.md) | The DingTalk wire | current | 2026-08-28 |
 | [22-domain-model](22-domain-model.md) | The domain model: people, doors, workers, rooms | current | 2026-09-25 |
 | [27-testing-and-release](27-testing-and-release.md) | Testing and release stability: ours, against OpenClaw and Hermes | current | 2026-09-01 |
@@ -39,8 +39,8 @@ this file and the headers disagree. Edit the header, not this table.
 | [13-design-review](13-design-review.md) | What goes to adversarial review before it is built | current | 2026-08-25 |
 | [17-two-agents](17-two-agents.md) | Two agents on one repository | current | 2026-08-26 |
 | [19-pitfalls](19-pitfalls.md) | Pitfalls: remembering how things went wrong | current | 2026-08-28 |
-| [37-onboarding](37-onboarding.md) | Getting started, every way in | current | 2026-09-05 |
-| [38-operators-guide](38-operators-guide.md) | The operator's guide (what the README used to be) | current | 2026-09-07 |
+| [37-onboarding](37-onboarding.md) | Getting started, every way in | current | 2026-09-28 |
+| [38-operators-guide](38-operators-guide.md) | The operator's guide (what the README used to be) | current | 2026-09-26 |
 | [55-external-desktops](55-external-desktops.md) | External browsers and desktop control | current | 2026-09-15 |
 | [56-teaching-upgrade](56-teaching-upgrade.md) | Teaching draft upgrade | current | 2026-09-15 |
 | [70-cua-linux-validation](70-cua-linux-validation.md) | Linux CUA 回归矩阵与状态验收 | current | 2026-09-22 |
@@ -52,21 +52,21 @@ this file and the headers disagree. Edit the header, not this table.
 |---|---|---|---|
 | [07-review](07-review.md) | Review against the specification | current | 2026-08-20 |
 | [09-tenancy](09-tenancy.md) | Tenancy: teams, users, and who may drive which agent | superseded by [22-domain-model](22-domain-model.md) — §3 retires per-agent visibility; §0 sets uniformity | 2026-08-19 |
-| [10-security-backlog](10-security-backlog.md) | Security backlog | current | 2026-09-03 |
+| [10-security-backlog](10-security-backlog.md) | Security backlog | current | 2026-09-26 |
 | [14-from-outside-reading](14-from-outside-reading.md) | Ideas taken from outside reading | current | 2026-08-26 |
 | [15-secrets-in-the-record](15-secrets-in-the-record.md) | R7: secrets an agent reads land in the record in clear | current | 2026-08-25 |
 | [16-long-work](16-long-work.md) | Finishing long work: the protocol, the cost, and the stop | current | 2026-08-26 |
 | [18-identity-box](18-identity-box.md) | Boxes that say what they are (v4) | superseded by [22-domain-model](22-domain-model.md) — §4 replaces boxName/config.boxes[name] with ids and incarnations | 2026-08-29 |
 | [20-completion-standard](20-completion-standard.md) | The standard of completion, written before the work | current | 2026-09-14 |
-| [23-context-compaction](23-context-compaction.md) | Why the agent kept compacting, and what long-horizon systems do instead | current | 2026-09-14 |
-| [24-context-memory](24-context-memory.md) | Context, memory and compaction: ours, against Hermes and OpenClaw | current | 2026-09-14 |
+| [23-context-compaction](23-context-compaction.md) | Why the agent kept compacting, and what long-horizon systems do instead | current | 2026-09-27 |
+| [24-context-memory](24-context-memory.md) | Context, memory and compaction: ours, against Hermes and OpenClaw | current | 2026-09-26 |
 | [25-workbuddy](25-workbuddy.md) | Workbuddy: skills, presets, delegated engines — the hands-on program | current | 2026-09-03 |
 | [26-inbound-reliability](26-inbound-reliability.md) | Inbound reliability: what a message goes through, and what mature harnesses do | current | 2026-09-01 |
 | [28-grokbot-0.30-delta](28-grokbot-0.30-delta.md) | What Grok Bot 0.30.0 changed, and what it says we should change | current | 2026-09-01 |
 | [29-bot-templates](29-bot-templates.md) | Bot templates: the bot packs itself, the new bot installs itself | current | 2026-09-14 |
 | [30-multi-box](30-multi-box.md) | Many boxes, one host: the multi-box mode | current | 2026-09-14 |
-| [31-harness-review](31-harness-review.md) | The turn engine, reviewed against the incident and three references | current | 2026-09-02 |
-| [32-coordination-protocol](32-coordination-protocol.md) | Coordination as protocol, slice one: a fork ledger that survives restarts, and fenced children | current | 2026-09-03 |
+| [31-harness-review](31-harness-review.md) | The turn engine, reviewed against the incident and three references | current | 2026-09-26 |
+| [32-coordination-protocol](32-coordination-protocol.md) | Coordination as protocol, slice one: a fork ledger that survives restarts, and fenced children | current | 2026-09-26 |
 | [33-mcp-face](33-mcp-face.md) | The box gets an MCP face: a per-job route on the host, never a credential in the box | current | 2026-09-03 |
 | [34-extensions](34-extensions.md) | Extensions: the edges you can edit without restarting the core (R36) | current | 2026-09-03 |
 | [35-grok-onboarding](35-grok-onboarding.md) | Onboarding a Grok Bot box: the bot prepares its own box, the person connects from the laptop | current | 2026-09-03 |
@@ -102,6 +102,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [69-fidelity-and-evidence-root-causes](69-fidelity-and-evidence-root-causes.md) | 采集失真与证据蒸发：两类问题的根因、复发路径与卡口 | current | 2026-09-22 |
 | [71-evidence-provenance-practice](71-evidence-provenance-practice.md) | 证据与溯源的业界实践（2025–2026）：我们领先在哪、缺在哪 | current | 2026-09-22 |
 | [72-laya-vs-jev-language-evaluation](72-laya-vs-jev-language-evaluation.md) | laya 与 Jev 的中英文对比实测：差距在任务类型，不在语言 | current | 2026-09-23 |
+| [74-goal-mode](74-goal-mode.md) | Goal 模式：一个持久目标、一个有界的续跑循环、一道不归执行者管的完成闸门 | current | 2026-09-27 |
 
 ## handoff
 

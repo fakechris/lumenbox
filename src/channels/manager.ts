@@ -34,6 +34,7 @@ import { checkDeliverable, isBroken } from "../host/deliverables.ts";
 import { boardText, type BoardView } from "./board-view.ts";
 import { parseContinuation } from "./continuation.ts";
 import { isContextCommand } from "../host/context-recovery.ts";
+import { isGoalCommand } from "../host/goal-mode.ts";
 import { isRecoveryCommand, parseRecoveryCommand, type RecoverTaskResult } from "../host/task-recovery.ts";
 import { isRetryCommand, type RetryResult } from "../host/retry-recovery.ts";
 import { recoverySuggestion, type AnswerReviewInput, type AnswerReviewMode, type AnswerVerdict } from "../host/answer-review.ts";
@@ -352,6 +353,14 @@ export function parseApprovalReply(text: string): ApprovalReply | undefined {
   return undefined;
 }
 
+/**
+ * What a turn gives the chat: its reply, or deliberate silence with the reason the agent gave
+ * `NothingToSay` (INV-775). Silence is a value of its own rather than an empty string because an
+ * empty reply is a turn that ended with nothing to show — which the manager reports with
+ * `EMPTY_REPLY_NOTE` — while silence is a turn that must post nothing at all (INV-801).
+ */
+export type AskReply = string | { silent: { reason: string } };
+
 export interface ChannelManagerDeps {
   newContext?: (input: { agentName: string | undefined; identity: string; conversationKey: string; operationId: string; privateChat: boolean; blockers: string[]; mode: "normal" | "clean" }) => string;
   contextMode?: (input: { agentName: string | undefined; conversationKey: string }) => "normal" | "clean" | "recover" | undefined;
@@ -363,11 +372,20 @@ export interface ChannelManagerDeps {
   retry?: {
     prepare: (input: { agentName: string | undefined; identity: string; conversationKey: string; operationId: string; privateChat: boolean; blockers: string[] }) => RetryResult;
   };
+  /** `/goal` (docs/74 §3.2): the board answers, and a new goal's first turn drafts its checklist. */
+  goal?: {
+    command: (input: { agentName: string | undefined; identity: string; conversationKey: string; operationId: string; privateChat: boolean; blockers: string[]; text: string }) => { text: string; draft?: { taskId: string; prompt: string; title: string } };
+  };
   answerReview?: {
     mode: () => AnswerReviewMode;
     sampled: (messageId: string) => boolean;
     review: (input: AnswerReviewInput) => Promise<AnswerVerdict>;
   };
+  /**
+   * Routine results waiting to ride along with the next reply in a chat (INV-776,
+   * `attach_next`). Asked once per delivered reply; whatever comes back is appended.
+   */
+  attachToReply?: (chatKey: string) => string | undefined;
   /**
    * Told of every admitted message from a person, for routines that listen for a phrase. Fired
    * beside the ordinary handling, never instead of it; the callee decides what, if anything, runs.
@@ -491,8 +509,8 @@ export interface ChannelManagerDeps {
     /** The reply as it is being written — everything so far, each time it grows. */
     onText?: (soFar: string) => void,
     /** The message's own id, when this ask is one message becoming a turn (INV-613). */
-    origin?: { messageId: string; questionId?: string }
-  ) => Promise<string>;
+    origin?: { messageId: string; questionId?: string; addressed?: false }
+  ) => Promise<AskReply>;
   /**
    * How many requests are ahead of a new one for this agent and chat. Zero means it
    * starts now. Absent means unknown, which is treated as zero — the acknowledgement
@@ -1449,7 +1467,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         ? { files: message.files.map(file => ({ name: file.name, bytes: Buffer.byteLength(file.base64, "base64") })) }
         : {}),
     });
-    if (!isContextCommand(parseAddress(message.text).text) && !isRecoveryCommand(parseAddress(message.text).text) && !isRetryCommand(parseAddress(message.text).text)) this.deps.listeners?.({
+    if (!isContextCommand(parseAddress(message.text).text) && !isRecoveryCommand(parseAddress(message.text).text) && !isRetryCommand(parseAddress(message.text).text) && !isGoalCommand(parseAddress(message.text).text)) this.deps.listeners?.({
       text: message.text,
       chatKey: message.chatKey ?? message.identity,
       ...(message.threadKey !== undefined ? { threadKey: message.threadKey } : {}),
@@ -1498,6 +1516,39 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         blockers: blocked ? ["渠道仍有运行中、排队、待回答/审批或待处理附件"] : [],
         mode: command === "/new --clean" ? "clean" : "normal",
       }) ?? "此入口尚未接入安全的上下文切换；本次没有修改会话。";
+    }
+    if (isGoalCommand(control.text)) {
+      if (message.files?.length) return "请单独发送 /goal；附件未作为目标的一部分消费。";
+      if (this.deps.goal === undefined) return "此入口尚未接入目标模式；本次没有创建目标。";
+      const key = message.threadKey ?? message.chatKey ?? message.identity;
+      const busy = this.runningWork.get(key) ?? [];
+      const question = [...this.awaitingAnswer.values()].some(item => item.conversationKey === key && item.expiresAt > Date.now());
+      const blocked = pending !== undefined || busy.length > 0 || question || this.pendingDrops.has(key) || [...this.inflightContexts.values()].includes(key);
+      const result = this.deps.goal.command({
+        agentName: control.agentName ?? this.deps.defaultAgentFor?.(adapter.name),
+        identity: message.identity,
+        conversationKey: key,
+        operationId: message.messageId === undefined ? "" : JSON.stringify([adapter.name, key, message.identity, message.messageId, "goal"]),
+        privateChat: message.privateChat === true,
+        blockers: blocked ? ["渠道仍有运行中、排队、待回答/审批或待处理附件"] : [],
+        text: control.text,
+      });
+      if (result.draft !== undefined) {
+        // The first turn of a new goal: host text, run without a task of its own — the
+        // pursuit task is the work, and a turn ending must not close it (docs/74 §7 R1).
+        const drafting = this.runTask(adapter, message, control.agentName, result.draft.prompt, undefined, {
+          cardTitle: result.draft.title,
+          skipTask: true,
+        }).catch(error => {
+          this.deps.log(`channel ${adapter.name}: goal drafting turn failed (${error instanceof Error ? error.message : String(error)})`);
+        }).finally(() => {
+          this.inflight.delete(drafting);
+          this.inflightContexts.delete(drafting);
+        });
+        this.inflight.add(drafting);
+        this.inflightContexts.set(drafting, key);
+      }
+      return result.text;
     }
     if (isRecoveryCommand(control.text)) {
       const taskId = parseRecoveryCommand(control.text);
@@ -1971,7 +2022,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         message.id !== undefined ? { messageId: message.id } : undefined
       );
       const targetChatKey = message.threadKey ?? chatKey;
-      if (reply.trim() !== "") await this.deliver(adapter, targetChatKey, message.identity, reply, anchor);
+      if (typeof reply === "string" && reply.trim() !== "") await this.deliver(adapter, targetChatKey, message.identity, reply, anchor);
     } catch (error) {
       // A failed look must not spam the chat: the receipt already landed, and the
       // person's instruction still works exactly as before.
@@ -2234,7 +2285,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       // final reply is not the same sentence twice when a model repeats itself.
       let interim: string | undefined;
       let interimDelivery: Promise<void> | undefined;
-      const reply = await this.deps.ask(
+      const asked = await this.deps.ask(
         agentName,
         handedFiles.length > 0
           ? `${text}\n\n[随这条消息收到的文件: ${handedFiles.join(", ")}]`
@@ -2256,9 +2307,32 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
           });
         },
         onText,
-        message.id !== undefined ? { messageId: message.id, ...(options?.questionId !== undefined ? { questionId: options.questionId } : {}) } : undefined
+        message.id !== undefined
+          ? {
+              messageId: message.id,
+              ...(options?.questionId !== undefined ? { questionId: options.questionId } : {}),
+              // A room message that named nobody, on a door that runs every message: the turn
+              // is a person's, but nobody is waiting on this agent, so it may stay silent (INV-775).
+              ...(message.addressed === false ? { addressed: false as const } : {}),
+            }
+          : undefined
       );
       clearTimeout(ackTimer);
+      if (typeof asked !== "string") {
+        // Deliberate silence (INV-775): the room hears nothing from this agent — not the reply,
+        // not the empty-output note, not a trailer. Whatever it put in the outbox still goes,
+        // because a file in the outbox is an act, not a sentence. The task settles as done:
+        // the turn completed, it just had nothing to say (INV-801).
+        this.deps.log(`channel ${adapter.name}: ${agentName ?? "agent"} stayed silent — ${asked.silent.reason.slice(0, 120)}`);
+        await interimDelivery;
+        await this.deliverFiles(adapter, targetChatKey, message.threadKey ?? chatKey, "", anchor, line => deliver(line));
+        const settled = taskId !== undefined ? this.deps.board?.closed(taskId, "done") : undefined;
+        if (taskId !== undefined && options?.recoveryOperationId !== undefined) this.deps.recover?.finished(taskId, options.recoveryOperationId, "completed");
+        finishCard(settled === "review" ? "review" : "done");
+        mark("done");
+        return;
+      }
+      const reply = asked;
       let suggestion: string | undefined;
       const review = this.deps.answerReview;
       const reviewable = review !== undefined && message.id !== undefined && (message.files?.length ?? 0) === 0 &&
@@ -2277,11 +2351,15 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         }
         else if (review.mode() === "shadow") void review.review(input).catch(() => {});
       }
+      // A routine result that was judged not worth an interruption rides along here, under
+      // the reply the person was waiting for anyway (INV-776).
+      const attached = this.deps.attachToReply?.(targetChatKey) ?? this.deps.attachToReply?.(chatKey);
+      const trailer = [suggestion, attached].filter((part): part is string => part !== undefined).join("\n\n");
       if (reply.trim() !== interim) {
-        await deliver(`${reply.trim() === "" ? EMPTY_REPLY_NOTE : reply}${suggestion === undefined ? "" : `\n\n${suggestion}`}`);
+        await deliver(`${reply.trim() === "" ? EMPTY_REPLY_NOTE : reply}${trailer === "" ? "" : `\n\n${trailer}`}`);
       } else {
         await interimDelivery;
-        if (suggestion !== undefined) await deliver(suggestion);
+        if (trailer !== "") await deliver(trailer);
       }
       // Whatever the turn left in the chat's outbox follows the reply — images shown
       // as images, everything else as a file. What was pushed is marked delivered;

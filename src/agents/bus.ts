@@ -11,6 +11,7 @@
  * inside one turn, so its transcript and profile have a single writer.
  */
 
+import type { GoalMarker } from "../host/goal-mode.ts";
 import { randomUUID } from "node:crypto";
 import { envNumber } from "../config.ts";
 import type { Inbox } from "./inbox.ts";
@@ -104,11 +105,23 @@ export interface InboundMessage {
    */
   synthetic?: boolean;
   /**
+   * A person said this in a room without addressing this agent (INV-775): a group message
+   * that names nobody, on a door that runs every message. The turn is a person's, but nobody
+   * is waiting on this agent in particular, so it may end in deliberate silence.
+   */
+  addressed?: false;
+  /**
    * The tools a routine's own skill said it needs (INV-691). A turn opened only by messages that
    * carry one is offered what the agent has *and* the skill named — never more. Rides inside the
    * message so a routine resumed after a restart is held to the same list.
    */
   toolScope?: readonly string[];
+  /**
+   * A goal continuation (INV-770): the host woke the agent to keep working toward a pursuit.
+   * The turn reads it for the workId it shares, writes its inbound entry as the host's, and
+   * runs with no inner continuation; the goal loop decides at start whether it still applies.
+   */
+  goal?: GoalMarker;
 }
 
 /** Ordered: `user` beats `agent` beats `background`, and the drain enforces exactly that. */
@@ -457,6 +470,8 @@ export class AgentBus {
       steerable?: boolean;
       lane?: Lane;
       synthetic?: boolean;
+      /** False when the message named nobody in a room; see `InboundMessage.addressed`. */
+      addressed?: boolean;
       /**
        * The id the message already has, when it came through a door: minted where the
        * channel message was admitted and written to `messages.jsonl` there, so the same
@@ -467,6 +482,8 @@ export class AgentBus {
       messageId?: string;
       /** A routine's declared tools; see `InboundMessage.toolScope`. */
       toolScope?: readonly string[];
+      /** A goal continuation's marker; see `InboundMessage.goal`. */
+      goal?: GoalMarker;
     } = {}
   ): number | undefined {
     return this.enqueue(agentId, {
@@ -474,6 +491,7 @@ export class AgentBus {
       fromId: "user",
       fromName: "user",
       ...(options.synthetic === true ? { synthetic: true } : {}),
+      ...(options.addressed === false ? { addressed: false as const } : {}),
       text: clampMessage(text, AGENT_MESSAGE_MAX_LENGTH),
       priority: false,
       receivedAt: new Date().toISOString(),
@@ -481,6 +499,7 @@ export class AgentBus {
       ...(options.steerable === false ? { steerable: false } : {}),
       ...(options.lane !== undefined ? { lane: options.lane } : {}),
       ...(options.toolScope !== undefined ? { toolScope: options.toolScope } : {}),
+      ...(options.goal !== undefined ? { goal: options.goal } : {}),
     });
   }
 
@@ -657,6 +676,7 @@ export class AgentBus {
       });
 
       let inbound: InboundMessage[] = [];
+      let started = false;
       try {
         // Drain inside the exclusive section, so messages that arrived while we
         // were queued are picked up by this turn instead of spawning another —
@@ -672,8 +692,8 @@ export class AgentBus {
         // twice; resuming one properly needs per-step checkpoints, which do not exist yet.
         this.inbox?.start(inbound.map(message => message.admission));
         this.onEvent({ type: "turn_started", agentId, inboundCount: inbound.length });
+        started = true;
         await this.runTurn(agent, inbound, controller.signal, conversation);
-        this.onEvent({ type: "turn_finished", agentId });
       } catch (error) {
         // The senders are told. Their acknowledgement said the message would be delivered, and it
         // was — into a turn that then failed, which they would otherwise wait on forever. This is
@@ -684,6 +704,9 @@ export class AgentBus {
         if (this.active.get(key)?.controller === controller) {
           this.active.delete(key);
         }
+        // After the active flag is cleared, not before (INV-770): "finished" is read by the goal
+        // loop as "this conversation is free", and it used to fire while the turn still held it.
+        if (started) this.onEvent({ type: "turn_finished", agentId });
       }
     })();
 
