@@ -37,7 +37,7 @@ proxied, so adding a desktop does not need a port mapping decided at create time
 
 ```bash
 npm install && npm run build && npm run build:box
-node dist/cli.js box build          # tags lumenbox/box:<version> and :latest
+node dist/cli.js box build          # tags fakechris/lumenbox:<version> and :latest
 node dist/cli.js box push           # Docker Hub; needs docker login
 node dist/cli.js box up             # pulls that version when it is not local
 export MINIMAX_CODE_CN_API_KEY=…        # or ANTHROPIC_API_KEY

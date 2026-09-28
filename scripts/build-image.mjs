@@ -1,7 +1,7 @@
 /**
  * Builds the box image so that the one it replaces is still there afterwards.
  *
- * `docker build -t lumenbox/box:latest` overwrites the tag in place. The previous image
+ * `docker build -t fakechris/lumenbox:latest` overwrites the tag in place. The previous image
  * survives as an untagged layer until the next `docker image prune`, which is to say it
  * survives until precisely the moment somebody is tidying up because something is wrong.
  * A rollback that depends on that is not a rollback.
@@ -11,7 +11,7 @@
  * enough — the failure this protects against is "the image I just built is broken", and
  * nobody rolls back four versions in an incident.
  *
- * Three names: a content hash (what was built), `lumenbox/box:<package version>` (what a
+ * Three names: a content hash (what was built), `fakechris/lumenbox:<package version>` (what a
  * release pulls), and `:latest` (the alias). The hash stays because the image changes on
  * every edit to a Dockerfile or a bundled daemon, not only when the package version does.
  */
@@ -22,7 +22,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const CONTEXT = "docker/box";
-const REPO = process.env.AGENTBOX_IMAGE_REPO ?? "lumenbox/box";
+const REPO = process.env.AGENTBOX_IMAGE_REPO ?? "fakechris/lumenbox";
 const VERSION = JSON.parse(readFileSync("package.json", "utf8")).version;
 
 /** Everything in the build context, in a stable order, as one hash. */

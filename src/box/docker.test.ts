@@ -22,18 +22,18 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-test("the published image is lumenbox/box at this package's version", () => {
+test("the published image is fakechris/lumenbox at this package's version", () => {
   const version = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version;
   assert.equal(packageVersion(), version);
   assert.equal(boxImageRef(), `${BOX_IMAGE_REPO}:${version}`);
-  assert.equal(BOX_IMAGE_REPO, "lumenbox/box");
+  assert.equal(BOX_IMAGE_REPO, "fakechris/lumenbox");
   const home = mkdtempSync(join(tmpdir(), "agentbox-image-"));
   const previousImage = process.env.AGENTBOX_IMAGE;
   const previousHome = process.env.AGENTBOX_HOME;
   delete process.env.AGENTBOX_IMAGE;
   process.env.AGENTBOX_HOME = home;
   try {
-    assert.equal(defaultBoxConfig().image, `lumenbox/box:${version}`);
+    assert.equal(defaultBoxConfig().image, `fakechris/lumenbox:${version}`);
   } finally {
     if (previousImage === undefined) delete process.env.AGENTBOX_IMAGE;
     else process.env.AGENTBOX_IMAGE = previousImage;
@@ -50,7 +50,7 @@ test("a missing image is pulled, and a failed pull says how to build it", async 
     lines.push(line);
   };
   await ensureLocalImage(
-    "lumenbox/box:0.3.0",
+    "fakechris/lumenbox:0.3.0",
     { exists: async () => true, pull: async () => { pulled = true; } },
     note,
   );
@@ -58,22 +58,22 @@ test("a missing image is pulled, and a failed pull says how to build it", async 
   assert.deepEqual(lines, []);
 
   await ensureLocalImage(
-    "lumenbox/box:0.3.0",
+    "fakechris/lumenbox:0.3.0",
     { exists: async () => false, pull: async () => { pulled = true; } },
     note,
   );
   assert.equal(pulled, true);
-  assert.equal(lines[0], "image lumenbox/box:0.3.0 is not on this machine; pulling it");
+  assert.equal(lines[0], "image fakechris/lumenbox:0.3.0 is not on this machine; pulling it");
 
   await assert.rejects(
-    () => ensureLocalImage("lumenbox/box:0.3.0", {
+    () => ensureLocalImage("fakechris/lumenbox:0.3.0", {
       exists: async () => false,
       pull: async () => { throw new Error("denied"); },
     }),
     (error: unknown) => {
       assert.ok(error instanceof DockerError);
       assert.match(error.message, /agentbox box build/);
-      assert.match(error.message, /lumenbox\/box:0\.3\.0/);
+      assert.match(error.message, /fakechris\/lumenbox:0\.3\.0/);
       return true;
     },
   );

@@ -111,7 +111,7 @@ async function cmdBoxPush(): Promise<number> {
     await manager.push(line => out(dim(line)));
   } catch (error) {
     err(error instanceof Error ? error.message : String(error));
-    err("A push to Docker Hub needs `docker login` on an account that can write lumenbox/box.");
+    err("A push to Docker Hub needs `docker login` on an account that can write fakechris/lumenbox.");
     return 1;
   }
   out(`Pushed ${manager.config.image} and ${BOX_IMAGE_REPO}:latest.`);
@@ -1431,14 +1431,14 @@ const USAGE = `agentbox — multi-agent orchestrator with a Docker box and Linux
 Usage: agentbox <command> [args]
 
 Box:
-  box build                 Build lumenbox/box:<version> and tag :latest
+  box build                 Build fakechris/lumenbox:<version> and tag :latest
                             (needs \`npm run build:boxd\` first)
   box push                  Push that version and :latest to Docker Hub
   box upgrade [--yes]       Upgrade if it costs nobody anything; explain if not.
                             Safe to run on a timer.
-  box rollback              Put the box back on lumenbox/box:previous
+  box rollback              Put the box back on fakechris/lumenbox:previous
   box up [--recreate]       Start the box and wait for its desktop.
-                            Pulls lumenbox/box:<version> when it is not local.
+                            Pulls fakechris/lumenbox:<version> when it is not local.
                             --recreate upgrades: destroys and rebuilds the
                             container from the image. Only the work and config
                             volumes survive. It backs them up first and refuses
@@ -1566,7 +1566,7 @@ Environment:
   AGENTBOX_PROVIDER         Which provider to use (see above)
   AGENTBOX_HOME             State directory (default ~/.agentbox)
   AGENTBOX_CONFIG           Config file (default <state>/config.json)
-  AGENTBOX_IMAGE            Box image tag (default lumenbox/box:<package version>)
+  AGENTBOX_IMAGE            Box image tag (default fakechris/lumenbox:<package version>)
   AGENTBOX_BOX_HOST         Override where published ports are reachable
   AGENTBOX_WIDTH/HEIGHT     Box display size (default 1280x800)
   AGENTBOX_CONTROL_USERS    user:password:tenant,... for \`control up\`

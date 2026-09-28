@@ -57,7 +57,7 @@ running.
 overwrites the tag in place, and the image it replaced survives only as an untagged layer
 until the next `docker image prune` — which is to say until the moment somebody is tidying
 up because something is wrong. `npm run build:image` writes four tags: a content hash
-naming what was built, `lumenbox/box:<package version>` (the tag a release pulls),
+naming what was built, `fakechris/lumenbox:<package version>` (the tag a release pulls),
 `:latest`, and `:previous` moved to whatever `:latest` used to be. The hash stays because
 the image changes on every edit to a Dockerfile or a bundled daemon, not only when the
 package version does.

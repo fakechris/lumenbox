@@ -55,7 +55,7 @@ keep a task board of what they owe you.
    (Anthropic, MiniMax, DeepSeek, Zhipu, Moonshot, OpenAI, or any OpenAI-compatible endpoint).
 3. **Give it a computer.** Install [Docker Desktop](https://www.docker.com/products/docker-desktop/)
    or [OrbStack](https://orbstack.dev/), then press *Start the box* in Settings. The first time,
-   that pulls `lumenbox/box` at this app's version from Docker Hub. From a checkout,
+   that pulls `fakechris/lumenbox` at this app's version from Docker Hub. From a checkout,
    `npm run build:image` builds it locally instead. No Docker? A box can live on another
    machine of yours, or be a Grok Bot's box — see
    [Getting started](docs/37-onboarding.md) for every path.
