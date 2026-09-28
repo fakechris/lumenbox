@@ -393,10 +393,12 @@ when the reply arrives — the same compare-and-swap Settings → Memory uses, s
 that moved between snapshot and apply is dropped, not overwritten; a merge names at least
 two lines and its text must carry at least `AGENTBOX_MAINTAIN_COVERAGE` (0.7) of each
 source's tokens and may add no date, number, month or capitalised name and no more than
-`AGENTBOX_MAINTAIN_NOVEL_SHARE` (0.2) new words; a rewrite may add one ISO date only when
-the line had a relative expression and the date is within 90 days of the line's own
-`at`; a retire needs a past `expiredOn` and a line that carries a date or a relative time
-to expire by. Everything refused is logged with its reason and never applied; at most
+`AGENTBOX_MAINTAIN_NOVEL_SHARE` (0.2) new words; a rewrite is exactly one substitution —
+one relative expression out, one ISO date within 90 days of the line's own `at` in, every
+other word kept in order (no coverage ratio: INV-800 found 70% let "never deploy X"
+become "deploy X"); a retire needs a past `expiredOn` that the line itself implies — an
+ISO date it writes, or a relative expression resolved against its `at` — so a made-up
+past date cannot retire an upcoming event. Everything refused is logged with its reason and never applied; at most
 `AGENTBOX_MAINTAIN_MAX_CHANGES` (10) proposals apply per pass. **Apply**: one append of
 a retraction per record that goes (`source: maintenance:merged-into:<version>`,
 `maintenance:rewritten-as:<version>`, `maintenance:expired:<date>`) plus the replacement
@@ -407,5 +409,6 @@ mirror and `Recall` stop showing the withdrawn line because a retraction is what
 already honour. `AGENTBOX_MAINTAIN_DRY_RUN=1` proposes, verifies and logs what it would
 write, and writes nothing. Shared memory is not tidied by this pass. Tests:
 `memory-maintenance.test.ts` (merge keeps all sources, expired record retired and out of
-recall, version conflict dropped, invented date/name refused, cap, dry run, cadence);
+recall, version conflict dropped, invented date/name refused, rewrite is one substitution
+only, expiredOn must be the line's own date, cap, dry run, cadence);
 the INV-147 fixture floor is unchanged and green.

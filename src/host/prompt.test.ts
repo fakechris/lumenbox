@@ -179,6 +179,8 @@ test("the prompt's sections have an order, and it is the documented one", () => 
     // on the teammate roster. Every mature prompt reserves it for its own contract.
     [
       "plan",
+      // goal sits with the plan: the objective being pursued is current intent too (INV-769).
+      "goal",
       "tasks",
       "chat-files",
       "memory",

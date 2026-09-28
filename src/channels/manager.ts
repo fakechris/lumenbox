@@ -34,6 +34,7 @@ import { checkDeliverable, isBroken } from "../host/deliverables.ts";
 import { boardText, type BoardView } from "./board-view.ts";
 import { parseContinuation } from "./continuation.ts";
 import { isContextCommand } from "../host/context-recovery.ts";
+import { isGoalCommand } from "../host/goal-mode.ts";
 import { isRecoveryCommand, parseRecoveryCommand, type RecoverTaskResult } from "../host/task-recovery.ts";
 import { isRetryCommand, type RetryResult } from "../host/retry-recovery.ts";
 import { recoverySuggestion, type AnswerReviewInput, type AnswerReviewMode, type AnswerVerdict } from "../host/answer-review.ts";
@@ -370,6 +371,10 @@ export interface ChannelManagerDeps {
   };
   retry?: {
     prepare: (input: { agentName: string | undefined; identity: string; conversationKey: string; operationId: string; privateChat: boolean; blockers: string[] }) => RetryResult;
+  };
+  /** `/goal` (docs/74 §3.2): the board answers, and a new goal's first turn drafts its checklist. */
+  goal?: {
+    command: (input: { agentName: string | undefined; identity: string; conversationKey: string; operationId: string; privateChat: boolean; blockers: string[]; text: string }) => { text: string; draft?: { taskId: string; prompt: string; title: string } };
   };
   answerReview?: {
     mode: () => AnswerReviewMode;
@@ -1462,7 +1467,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         ? { files: message.files.map(file => ({ name: file.name, bytes: Buffer.byteLength(file.base64, "base64") })) }
         : {}),
     });
-    if (!isContextCommand(parseAddress(message.text).text) && !isRecoveryCommand(parseAddress(message.text).text) && !isRetryCommand(parseAddress(message.text).text)) this.deps.listeners?.({
+    if (!isContextCommand(parseAddress(message.text).text) && !isRecoveryCommand(parseAddress(message.text).text) && !isRetryCommand(parseAddress(message.text).text) && !isGoalCommand(parseAddress(message.text).text)) this.deps.listeners?.({
       text: message.text,
       chatKey: message.chatKey ?? message.identity,
       ...(message.threadKey !== undefined ? { threadKey: message.threadKey } : {}),
@@ -1511,6 +1516,39 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         blockers: blocked ? ["渠道仍有运行中、排队、待回答/审批或待处理附件"] : [],
         mode: command === "/new --clean" ? "clean" : "normal",
       }) ?? "此入口尚未接入安全的上下文切换；本次没有修改会话。";
+    }
+    if (isGoalCommand(control.text)) {
+      if (message.files?.length) return "请单独发送 /goal；附件未作为目标的一部分消费。";
+      if (this.deps.goal === undefined) return "此入口尚未接入目标模式；本次没有创建目标。";
+      const key = message.threadKey ?? message.chatKey ?? message.identity;
+      const busy = this.runningWork.get(key) ?? [];
+      const question = [...this.awaitingAnswer.values()].some(item => item.conversationKey === key && item.expiresAt > Date.now());
+      const blocked = pending !== undefined || busy.length > 0 || question || this.pendingDrops.has(key) || [...this.inflightContexts.values()].includes(key);
+      const result = this.deps.goal.command({
+        agentName: control.agentName ?? this.deps.defaultAgentFor?.(adapter.name),
+        identity: message.identity,
+        conversationKey: key,
+        operationId: message.messageId === undefined ? "" : JSON.stringify([adapter.name, key, message.identity, message.messageId, "goal"]),
+        privateChat: message.privateChat === true,
+        blockers: blocked ? ["渠道仍有运行中、排队、待回答/审批或待处理附件"] : [],
+        text: control.text,
+      });
+      if (result.draft !== undefined) {
+        // The first turn of a new goal: host text, run without a task of its own — the
+        // pursuit task is the work, and a turn ending must not close it (docs/74 §7 R1).
+        const drafting = this.runTask(adapter, message, control.agentName, result.draft.prompt, undefined, {
+          cardTitle: result.draft.title,
+          skipTask: true,
+        }).catch(error => {
+          this.deps.log(`channel ${adapter.name}: goal drafting turn failed (${error instanceof Error ? error.message : String(error)})`);
+        }).finally(() => {
+          this.inflight.delete(drafting);
+          this.inflightContexts.delete(drafting);
+        });
+        this.inflight.add(drafting);
+        this.inflightContexts.set(drafting, key);
+      }
+      return result.text;
     }
     if (isRecoveryCommand(control.text)) {
       const taskId = parseRecoveryCommand(control.text);
