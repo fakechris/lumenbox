@@ -79,6 +79,8 @@ const DECLARED: Record<string, SideEffect> = {
   ClaimWork: { tier: "self" },
   RememberFact: { tier: "self" },
   Tasks: { tier: "self" },
+  // Reading the goal or growing its checklist changes the board, which is the agent's own work.
+  Goal: { tier: "self" },
   NoteSiteLearning: { tier: "self" },
   SendToAgent: { tier: "self" },
   AskUser: { tier: "self" },
