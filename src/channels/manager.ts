@@ -353,6 +353,14 @@ export function parseApprovalReply(text: string): ApprovalReply | undefined {
   return undefined;
 }
 
+/**
+ * What a turn gives the chat: its reply, or deliberate silence with the reason the agent gave
+ * `NothingToSay` (INV-775). Silence is a value of its own rather than an empty string because an
+ * empty reply is a turn that ended with nothing to show — which the manager reports with
+ * `EMPTY_REPLY_NOTE` — while silence is a turn that must post nothing at all (INV-801).
+ */
+export type AskReply = string | { silent: { reason: string } };
+
 export interface ChannelManagerDeps {
   newContext?: (input: { agentName: string | undefined; identity: string; conversationKey: string; operationId: string; privateChat: boolean; blockers: string[]; mode: "normal" | "clean" }) => string;
   contextMode?: (input: { agentName: string | undefined; conversationKey: string }) => "normal" | "clean" | "recover" | undefined;
@@ -502,7 +510,7 @@ export interface ChannelManagerDeps {
     onText?: (soFar: string) => void,
     /** The message's own id, when this ask is one message becoming a turn (INV-613). */
     origin?: { messageId: string; questionId?: string; addressed?: false }
-  ) => Promise<string>;
+  ) => Promise<AskReply>;
   /**
    * How many requests are ahead of a new one for this agent and chat. Zero means it
    * starts now. Absent means unknown, which is treated as zero — the acknowledgement
@@ -2014,7 +2022,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         message.id !== undefined ? { messageId: message.id } : undefined
       );
       const targetChatKey = message.threadKey ?? chatKey;
-      if (reply.trim() !== "") await this.deliver(adapter, targetChatKey, message.identity, reply, anchor);
+      if (typeof reply === "string" && reply.trim() !== "") await this.deliver(adapter, targetChatKey, message.identity, reply, anchor);
     } catch (error) {
       // A failed look must not spam the chat: the receipt already landed, and the
       // person's instruction still works exactly as before.
@@ -2277,7 +2285,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       // final reply is not the same sentence twice when a model repeats itself.
       let interim: string | undefined;
       let interimDelivery: Promise<void> | undefined;
-      const reply = await this.deps.ask(
+      const asked = await this.deps.ask(
         agentName,
         handedFiles.length > 0
           ? `${text}\n\n[随这条消息收到的文件: ${handedFiles.join(", ")}]`
@@ -2310,6 +2318,21 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
           : undefined
       );
       clearTimeout(ackTimer);
+      if (typeof asked !== "string") {
+        // Deliberate silence (INV-775): the room hears nothing from this agent — not the reply,
+        // not the empty-output note, not a trailer. Whatever it put in the outbox still goes,
+        // because a file in the outbox is an act, not a sentence. The task settles as done:
+        // the turn completed, it just had nothing to say (INV-801).
+        this.deps.log(`channel ${adapter.name}: ${agentName ?? "agent"} stayed silent — ${asked.silent.reason.slice(0, 120)}`);
+        await interimDelivery;
+        await this.deliverFiles(adapter, targetChatKey, message.threadKey ?? chatKey, "", anchor, line => deliver(line));
+        const settled = taskId !== undefined ? this.deps.board?.closed(taskId, "done") : undefined;
+        if (taskId !== undefined && options?.recoveryOperationId !== undefined) this.deps.recover?.finished(taskId, options.recoveryOperationId, "completed");
+        finishCard(settled === "review" ? "review" : "done");
+        mark("done");
+        return;
+      }
+      const reply = asked;
       let suggestion: string | undefined;
       const review = this.deps.answerReview;
       const reviewable = review !== undefined && message.id !== undefined && (message.files?.length ?? 0) === 0 &&

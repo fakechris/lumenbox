@@ -1443,6 +1443,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // it in this same tick, and a send that fails leaves the message in the outbox
       // rather than needing this queue as a second retry mechanism.
       deliveries.close(owed);
+      // A turn that chose silence (NothingToSay, INV-775) is told apart from one that ended
+      // with nothing to show: the manager substitutes its empty-reply note for the latter
+      // and must post nothing for the former (INV-801).
+      if (reply.trim() === "") {
+        const silence = origin?.messageId !== undefined
+          ? orchestrator.silenceForMessage(agent.id, origin.messageId, conversation)
+          : orchestrator.silenceSince(agent.id, before, conversation);
+        if (silence !== undefined) return silence;
+      }
       return reply;
     },
     // Channel requests live on the team board: "t12" means the same thing in the
