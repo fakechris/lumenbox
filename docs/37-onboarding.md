@@ -2,7 +2,7 @@
      title: Getting started, every way in
      family: guide
      status: current
-     updated: 2026-09-05
+     updated: 2026-09-28
 -->
 # 37 — Getting started, every way in
 
@@ -11,8 +11,8 @@ whole of it. Product name LumenBox; the command line still says `agentbox`.
 
 ## What you need
 
-- **A Mac with Apple Silicon** for the app (0.2.0). An Intel build follows; Windows and Linux
-  builds exist in the tooling but have not been produced or tested yet — say so if you want one.
+- **A Mac** for the app (0.3.0), Apple Silicon or Intel. Windows and Linux builds exist in
+  the tooling but have not been produced or tested yet — say so if you want one.
 - **A model key.** Any of the built-in providers (Anthropic, MiniMax, DeepSeek, Zhipu, Moonshot,
   OpenAI, and the OpenAI-compatible endpoints). One key is enough; the Settings page lists them.
 - **A box** — one Linux computer the agents work in, with a desktop, a browser and a shell.
@@ -24,7 +24,8 @@ Download `LumenBox-<version>-<arch>.dmg` from the
 [releases page](https://github.com/fakechris/lumenbox/releases), open it, drag LumenBox to
 Applications.
 
-**The first launch on macOS.** The app is signed with a Developer ID but not notarized, so
+**The first launch on macOS.** From 0.3.0 the app is signed with the local development
+certificate `Lumen Local Codesign`, not an Apple Developer ID, and it is not notarized, so
 Gatekeeper says it "cannot be checked for malicious software". Either right-click the app in
 Applications and choose *Open* (once), or run in Terminal:
 
