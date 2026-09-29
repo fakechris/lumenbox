@@ -10,7 +10,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseReadOutcome } from "../host/read-outcome.ts";
-import { FeishuDocReader, parseDocUrl, type DocApiClient } from "./feishu-docs.ts";
+import { docReaderForChat, FeishuDocReader, parseDocUrl, type DocApiClient } from "./feishu-docs.ts";
 
 test("URLs parse to what they name, and only Feishu documents parse at all", () => {
   assert.deepEqual(parseDocUrl("https://acme.feishu.cn/docx/AbCd1234EfGh5678"), {
@@ -133,3 +133,52 @@ test("a non-document URL is refused with directions, not fetched", async () => {
   assert.equal(result.isError, true);
   assert.match(result.text, /WebFetch/);
 });
+
+// INV-871: a link is read with the credential of the door it arrived through, falling back to the default door.
+
+function fakeReader(name: string, fails = false) {
+  const calls: string[] = [];
+  return {
+    calls,
+    read: async (url: string) => {
+      calls.push(url);
+      return fails ? { text: `${name} cannot read it`, isError: true } : { text: `${name} read ${url}` };
+    },
+  };
+}
+
+test("a link from the second door is read with that door's app; from the default door, with the default's (INV-871)", async () => {
+  const a = fakeReader("A");
+  const b = fakeReader("B");
+  const readers = new Map([["feishu", a], ["feishu-b", b]]);
+  assert.equal((await docReaderForChat("feishu-b:oc_1", readers, "feishu")!.read("u1")).text, "B read u1");
+  assert.equal((await docReaderForChat("feishu:oc_2", readers, "feishu")!.read("u2")).text, "A read u2");
+  assert.deepEqual([a.calls, b.calls], [["u2"], ["u1"]]);
+});
+
+test("when the second door's app cannot read it, the default door's is tried; both failing reports the first (INV-871)", async () => {
+  const a = fakeReader("A");
+  const b = fakeReader("B", true);
+  const readers = new Map([["feishu", a], ["feishu-b", b]]);
+  assert.equal((await docReaderForChat("feishu-b:oc_1:om_t", readers, "feishu")!.read("u")).text, "A read u");
+  const both = new Map([["feishu", fakeReader("A", true)], ["feishu-b", fakeReader("B", true)]]);
+  const failed = await docReaderForChat("feishu-b:oc_1", both, "feishu")!.read("u");
+  assert.deepEqual(failed, { text: "B cannot read it", isError: true });
+});
+
+test("with only the second door configured, its links are readable; a web conversation gets the one reader there is (INV-871)", async () => {
+  const b = fakeReader("B");
+  const readers = new Map([["feishu-b", b]]);
+  assert.equal((await docReaderForChat("feishu-b:oc_1", readers, "feishu")!.read("u")).text, "B read u");
+  assert.equal((await docReaderForChat(undefined, readers, "feishu")!.read("w")).text, "B read w");
+  assert.equal(docReaderForChat("feishu:oc_1", new Map(), "feishu"), undefined);
+});
+
+test("what can be read does not depend on the door: a tenant-B link through the default door is read by B's app (docs/22 §3, INV-871)", async () => {
+  const a = fakeReader("A", true);
+  const b = fakeReader("B");
+  const readers = new Map([["feishu", a], ["feishu-b", b]]);
+  assert.equal((await docReaderForChat("feishu:oc_1", readers, "feishu")!.read("u")).text, "B read u");
+  assert.deepEqual([a.calls, b.calls], [["u"], ["u"]], "the arriving door's app first, then the others");
+});
+

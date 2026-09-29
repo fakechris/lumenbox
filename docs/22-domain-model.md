@@ -156,9 +156,14 @@ build items 1–4 cannot produce one; see §7.
 - **Document reading is a box capability, not a door property.** A per-channel
   doc reader authorizes with that app's credentials, so two doors on one box
   would give the same worker different document reach depending on ingress —
-  doors selecting authority, exactly what this model forbids. The box names its
-  document-reading credential (default: the grandfathered channel's); which door
-  a link arrived through is irrelevant to whether it can be read.
+  doors selecting authority, exactly what this model forbids. The box's
+  document-reading credential is the set of every configured door app, tried in
+  turn (INV-871): which door a link arrived through is irrelevant to whether it
+  can be read — the readable set is the union of what each app's tenant grants,
+  the same through every door, and no credential enters the prompt. One app
+  alone (the grandfathered channel's, the earlier rule) holds within one tenant
+  and fails across two: tenant A's app cannot see tenant B's documents at all.
+  The arriving door's app is tried first only because it is likeliest to succeed.
 
 ## 4. Names are labels; ids are identity; incarnations revoke
 
@@ -268,9 +273,10 @@ the box's *identity* arrives first; its *membership machinery* stays late.
    lines included; dingtalk and telegram equivalents) become `${channelId}:`.
 4. Per-door routing: `defaultAgent`, box-roster `@Name`, roster verb, unknown-`@`
    correction from the same list. Document reading becomes the box capability of
-   §3 — the box's configured doc credential serves every door, replacing the
-   orchestrator singleton; a per-channel reader lookup is exactly the
-   door-selects-authority bug and is not the implementation.
+   §3 — every door app, tried in turn, serves every door, replacing the
+   orchestrator singleton. A per-channel reader lookup (each door reads only
+   with its own app) is exactly the door-selects-authority bug and is not the
+   implementation; the arriving door only orders the attempts.
 5. The `members` set on the box record; bind writing box membership (and
    link-only, never mint, on single-member boxes); the knock/bind CAS of §4.
 6. **Grant subjects to the box — by inventory, not by category.** The shipped
