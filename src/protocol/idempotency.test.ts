@@ -11,8 +11,8 @@ import { TOOL_IDEMPOTENCY, afterTimeout, idempotencyOf, idempotencyOfAnnotations
 test("a tool nobody declared is unsafe, and the declared ones say what makes them safe", () => {
   assert.deepEqual(idempotencyOf("some_tool_added_next_month"), { kind: "unsafe" });
   assert.deepEqual(idempotencyOf("bash"), { kind: "unsafe" });
-  assert.deepEqual(idempotencyOf("Read"), { kind: "read" });
-  assert.deepEqual(idempotencyOf("Write"), { kind: "idempotent", key: "path" });
+  assert.deepEqual(idempotencyOf("read_file"), { kind: "read" });
+  assert.deepEqual(idempotencyOf("write_file"), { kind: "idempotent", key: "path" });
   // Every declared write names either a key or nothing, and no read is declared idempotent.
   for (const [tool, declaration] of Object.entries(TOOL_IDEMPOTENCY)) {
     if (declaration.kind === "idempotent") assert.ok(declaration.key === undefined || declaration.key !== "", `${tool} has an empty key`);
@@ -23,7 +23,7 @@ test("a read retries, an idempotent write retries once, an unsafe write never do
   assert.deepEqual(afterTimeout({ kind: "read" }), { retry: true });
   assert.equal(afterTimeout({ kind: "read" }, {}, 2).retry, false);
 
-  const write = idempotencyOf("Write");
+  const write = idempotencyOf("write_file");
   assert.deepEqual(afterTimeout(write, { path: "/home/box/work/a.md" }), { retry: true });
   const second = afterTimeout(write, { path: "/home/box/work/a.md" }, 2);
   assert.equal(second.retry, false);

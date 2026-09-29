@@ -715,3 +715,35 @@ test("scenario: a three-step task killed at step 2 restarts running only step 3"
     f.cleanup();
   }
 });
+
+test("killed mid write_file: the keyed write is re-run on resume; an interrupted edit_file stays unknown (INV-868)", async () => {
+  const f = stepFixture();
+  try {
+    const ada = f.registry.create({ name: "Ada" });
+    leave(f.registry, ada.id, "t1", [
+      blocks(
+        "t1",
+        { id: "w1", name: "write_file", input: { path: "/home/box/work/report.md", content: "# Report\n" } },
+        { id: "e1", name: "edit_file", input: { path: "/home/box/work/notes.md", old_string: "a", new_string: "b" } }
+      ),
+    ]);
+    f.ledger().begin({ id: "t1", agentId: ada.id, about: "write the report" });
+    f.steps().pending("t1", "w1", "write_file");
+    f.steps().pending("t1", "e1", "edit_file");
+
+    const orch = await f.restart(() => say("report written"));
+    assert.deepEqual(orch.resumeInterrupted(), { resumed: 1, abandoned: 0 });
+    void orch.bus.wake(ada.id);
+    await orch.settle();
+
+    // Declared idempotent by path under its real name, so the same content lands the same state.
+    assert.ok(f.ran.includes("write:/home/box/work/report.md"), `ran: ${f.ran.join(", ")}`);
+    assert.equal(f.files.get("/home/box/work/report.md"), "# Report\n");
+    assert.match(resultText(f.registry, ada.id, "w1"), /Re-run on resume/);
+    // An edit applied twice is two edits: never replayed.
+    assert.ok(!f.ran.some(step => step.includes("notes.md")), "the edit was not re-run");
+    assert.match(resultText(f.registry, ada.id, "e1"), /outcome_unknown/);
+  } finally {
+    f.cleanup();
+  }
+});
