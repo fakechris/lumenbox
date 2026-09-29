@@ -414,6 +414,11 @@ export class Orchestrator {
    * channels, after this object exists.
    */
   docReader: TurnDeps["docReader"];
+  /**
+   * Picks the document reader for a conversation — every door app in turn, the conversation's
+   * own door first (INV-871). Set by the web server, which knows the doors; absent means `docReader`.
+   */
+  docReaderFor: ((conversation: string) => TurnDeps["docReader"] | undefined) | undefined;
 
   /**
    * The tools other people wrote, if an operator configured any.
@@ -1803,7 +1808,8 @@ export class Orchestrator {
       askUser: this.options.askUser,
       askSecret: this.options.askSecret,
       handOver: this.options.handOver,
-      docReader: this.options.docReader ?? this.docReader,
+      // The reader for the door this conversation's messages come through (INV-871).
+      docReader: this.options.docReader ?? this.docReaderFor?.(conversation) ?? this.docReader,
       conversation,
       provider: runtime.provider,
       effort: this.options.effort,

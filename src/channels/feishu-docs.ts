@@ -181,3 +181,48 @@ export class FeishuDocReader {
     }
   }
 }
+
+/** Anything that reads a Feishu document link: `FeishuDocReader`, or a composition of them. */
+export interface DocReader {
+  read(url: string): Promise<{ text: string; isError?: boolean }>;
+}
+
+/**
+ * The box's document reader, given the chat a link arrived in (INV-871).
+ *
+ * docs/22 §3: document reading is a box capability, and which door a link came through must not
+ * change whether it can be read. It used to be served by the grandfathered door's app alone,
+ * which holds for two doors in one tenant and fails for two tenants — tenant A's app cannot see
+ * tenant B's documents at all. So the box's document credential is now *every* configured app,
+ * each tried in turn: what can be read is the same whichever door a link arrives through (the
+ * union of what each app's tenant lets it read), and no credential reaches the prompt. The
+ * arriving door's app is tried first only because it is the likeliest to succeed; the default
+ * door's comes next, then the rest.
+ *
+ * `chatKey` is `<door>:<chat>[:<thread>]`; undefined (a web conversation) starts at the default.
+ * The first failure is what is reported when every app fails.
+ */
+export function docReaderForChat(
+  chatKey: string | undefined,
+  readers: ReadonlyMap<string, DocReader>,
+  defaultDoor: string
+): DocReader | undefined {
+  const door = chatKey?.split(":")[0];
+  const order = [door, defaultDoor, ...readers.keys()].filter(
+    (name, index, all): name is string => name !== undefined && readers.has(name) && all.indexOf(name) === index
+  );
+  const chain = order.map(name => readers.get(name)!);
+  if (chain.length === 0) return undefined;
+  if (chain.length === 1) return chain[0];
+  return {
+    read: async url => {
+      let first: { text: string; isError?: boolean } | undefined;
+      for (const reader of chain) {
+        const result = await reader.read(url);
+        if (result.isError !== true) return result;
+        first ??= result;
+      }
+      return first!;
+    },
+  };
+}

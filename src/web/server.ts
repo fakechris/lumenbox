@@ -176,7 +176,7 @@ import {
   upgradeApproved,
 } from "../channels/strings.ts";
 import { CardLedger } from "../channels/card-ledger.ts";
-import { FeishuDocReader } from "../channels/feishu-docs.ts";
+import { type DocReader, docReaderForChat, FeishuDocReader } from "../channels/feishu-docs.ts";
 import { parseProgressFile, progressLine } from "../host/progress-file.ts";
 import { costOfTasks, spendByDay, summariseSpend, type Rates } from "../host/spend.ts";
 import type { UsageRecord } from "../host/usage.ts";
@@ -1757,6 +1757,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // instance, and starting it before the prefix parameterization of item 3
     // would run two adapters minting the same `feishu:` namespace — refused
     // loudly instead.
+    // One document reader per Feishu door with an app (INV-871), filled in the loop below.
+    const docReaders = new Map<string, DocReader>();
+    orchestrator.docReaderFor = conversation => docReaderForChat(conversations.chatKeyFor(conversation), docReaders, "feishu");
     for (const record of channelRecords) {
       if (record.id !== record.type && record.type === "telegram") {
         // Feishu and DingTalk are prefix-parameterized (docs/22 §7 item 3);
@@ -1808,12 +1811,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         );
         // The same identity, reading documents: a pasted docx/wiki link becomes readable
         // the moment a Feishu app exists. R34's near half — the credential never moves.
-        // docs/22 §3 makes document reading a *box* capability, so it is the
-        // grandfathered door's credential that serves it, whichever door a link
-        // arrived through — not a per-door reader, which would be the door
-        // selecting authority.
-        if (record.id === "feishu" && feishuId !== undefined && feishuSecret !== undefined) {
-          orchestrator.docReader = new FeishuDocReader(feishuId, feishuSecret);
+        // Every door with an app gets a reader, and every app is tried in turn whichever door a
+        // link arrived through (INV-871, `docReaderForChat`): docs/22 §3's door-independent
+        // reach, which one grandfathered app alone could not give across two tenants.
+        if (feishuId !== undefined && feishuSecret !== undefined) {
+          const reader = new FeishuDocReader(feishuId, feishuSecret);
+          docReaders.set(record.id, reader);
+          if (record.id === "feishu") orchestrator.docReader = reader;
         }
       } else {
         // Same one-rule env derivation as feishu: the grandfathered door's base is
