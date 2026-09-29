@@ -63,8 +63,13 @@ test("a missing image is pulled, and a failed pull says how to build it", async 
     note,
   );
   assert.equal(pulled, true);
-  assert.equal(lines[0], "image fakechris/lumenbox:0.3.0 is not on this machine; pulling it");
+  // The size and the wait travel with the announcement (INV-856): the pull is the one
+  // long silent step of a first run, and a quiet minute reads as "stuck".
+  assert.match(lines[0], /^image fakechris\/lumenbox:0\.3\.0 is not on this machine; pulling it/);
+  assert.match(lines[0], /750MB|a few minutes/);
 
+  // "denied" is a registry that answered — classified as no-such-image, and it still
+  // names `box build` for the reader who has a checkout (last, not first).
   await assert.rejects(
     () => ensureLocalImage("fakechris/lumenbox:0.3.0", {
       exists: async () => false,
@@ -77,6 +82,63 @@ test("a missing image is pulled, and a failed pull says how to build it", async 
       return true;
     },
   );
+});
+
+test("a pull failure says whether the registry answered or never answered (INV-856)", async () => {
+  // A registry with no such tag: a just-released app racing its image, or a mistyped
+  // mirror. The fix is "update the app or fix the setting", not a network lecture.
+  await assert.rejects(
+    () => ensureLocalImage("fakechris/lumenbox:9.9.9", {
+      exists: async () => false,
+      pull: async () => { throw new Error("manifest for fakechris/lumenbox:9.9.9 not found"); },
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof DockerError);
+      assert.match(error.message, /no such image or tag/);
+      assert.match(error.message, /update the app/);
+      return true;
+    },
+  );
+
+  // A registry that never answered — the common case behind a network where Docker Hub
+  // needs a mirror. The message leads with the network and names the mirror entrance.
+  await assert.rejects(
+    () => ensureLocalImage("fakechris/lumenbox:0.3.0", {
+      exists: async () => false,
+      pull: async () => { throw new Error("Client.Timeout during request"); },
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof DockerError);
+      assert.match(error.message, /registry did not answer/);
+      assert.match(error.message, /mirror/i);
+      assert.match(error.message, /agentbox box build/);
+      return true;
+    },
+  );
+});
+
+test("the image comes from the config file when the environment does not name one (INV-856)", () => {
+  // A Finder-launched app has no shell to export AGENTBOX_IMAGE into, so config.json is
+  // the entrance a mirror has to use — and the environment still wins when it is set.
+  const home = mkdtempSync(join(tmpdir(), "agentbox-boximage-"));
+  const previousHome = process.env.AGENTBOX_HOME;
+  const previousImage = process.env.AGENTBOX_IMAGE;
+  process.env.AGENTBOX_HOME = home;
+  delete process.env.AGENTBOX_IMAGE;
+  try {
+    const version = packageVersion();
+    assert.equal(defaultBoxConfig().image, `fakechris/lumenbox:${version}`, "no config, no override");
+    writeFileSync(join(home, "config.json"), JSON.stringify({ boxImage: "mirror.example.com/lumenbox:0.3.0" }));
+    assert.equal(defaultBoxConfig().image, "mirror.example.com/lumenbox:0.3.0", "config override holds");
+    process.env.AGENTBOX_IMAGE = "pinned.example.com/lumenbox:0.3.0";
+    assert.equal(defaultBoxConfig().image, "pinned.example.com/lumenbox:0.3.0", "environment wins");
+  } finally {
+    if (previousHome === undefined) delete process.env.AGENTBOX_HOME;
+    else process.env.AGENTBOX_HOME = previousHome;
+    if (previousImage === undefined) delete process.env.AGENTBOX_IMAGE;
+    else process.env.AGENTBOX_IMAGE = previousImage;
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test("the daemon is published to loopback, because its VNC upgrade is unauthenticated", () => {

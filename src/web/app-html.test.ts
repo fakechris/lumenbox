@@ -218,6 +218,14 @@ test("the feed renders the plain-language phrase and falls back to the tool name
   assert.equal(enOnly?.html, "<b>Ada</b> using x");
 });
 
+test("the box image override is settable from the page (INV-856)", () => {
+  // A Finder-launched app has no environment to set AGENTBOX_IMAGE in, so the mirror
+  // needs its own input, its load line, and a place in the save body.
+  assert.match(APP_HTML, /id="setboximage"/);
+  assert.match(APP_HTML, /data\.config && data\.config\.boxImage/);
+  assert.match(APP_HTML, /setboximage"\)\.value\.trim\(\)/);
+});
+
 test("the box section can say what is actually wrong with Docker (INV-855)", () => {
   // Three environment states, each with its own sentence. The no-binary one carries the
   // download links, because a fresh machine's next step is installing Docker Desktop or

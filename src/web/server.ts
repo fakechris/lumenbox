@@ -5165,6 +5165,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               provider: config.provider ?? null,
               model: config.model ?? null,
               baseUrl: config.baseUrl ?? null,
+              boxImage: config.boxImage ?? null,
               startupItem: config.startupItem ?? false,
             },
             // The host door, and why it is or is not usable right now.
@@ -5239,10 +5240,19 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (body.startupItem !== undefined) {
             startupItemChange = typeof body.startupItem === "boolean" ? body.startupItem : null;
           }
+          // The box image override (INV-856). A value names what docker pulls when the
+          // machine has no image — usually a mirror; an empty value clears back to the
+          // release default. Applied on the next box start, like the rest of the file.
+          let boxImageChange: string | null | undefined;
+          if (body.boxImage !== undefined) {
+            const value = typeof body.boxImage === "string" ? body.boxImage.trim() : "";
+            boxImageChange = value !== "" ? value : null;
+          }
           const path = saveConfig({
             provider: providerValue === null ? null : field(providerValue)?.toLowerCase(),
             model: body.model === null ? null : field(body.model),
             baseUrl: body.baseUrl === null ? null : field(body.baseUrl),
+            ...(boxImageChange !== undefined ? { boxImage: boxImageChange } : {}),
             ...(hostExecChange !== undefined ? { hostExec: hostExecChange } : {}),
             ...(startupItemChange !== undefined ? { startupItem: startupItemChange } : {}),
             ...(key !== undefined && key !== null
