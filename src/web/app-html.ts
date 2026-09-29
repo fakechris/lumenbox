@@ -319,11 +319,13 @@ export const APP_HTML = String.raw`<!doctype html>
     display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 18px;
   }
   .paneheader .lead { display: flex; align-items: center; gap: 5px; min-width: 0; }
-  /* Right pane only: a crowded lead clips inside its own box instead of painting
-     under the actions — the badge shrinks first (it repeats what the notice banner
-     says in full), the tabs never do. NOT the left pane's lead: the conversation
-     dropdown is absolutely positioned inside it, and overflow:hidden beheads it. */
-  #rightpane .paneheader .lead { overflow: hidden; }
+  /* Tabs and actions take the first row; the desktop identity and box class get
+     their own row rather than shrinking the shared-box warning to a sliver. */
+  #rightpane .paneheader { height: auto; min-height: 52px; flex-wrap: wrap; padding: 6px 18px; gap: 4px 10px; }
+  #rightpane .paneheader .lead { flex: 1 1 250px; flex-wrap: wrap; gap: 2px; }
+  #rightpane .paneheader .headactions { margin-left: auto; }
+  .desktopcontext { display: flex; align-items: center; gap: 8px; flex: 1 0 100%; min-width: 0; }
+  .desktopcontext:has(#desktoptitle:empty):has(#boxclass[style*="display: none"]) { display: none; }
   #title { font-weight: 600; font-size: 1rem; }
   .roundpill {
     display: flex; align-items: center; gap: 7px; font-family: var(--font-mono); font-size: 12px;
@@ -720,15 +722,17 @@ export const APP_HTML = String.raw`<!doctype html>
   }
   .tab:hover { text-decoration: none; background: var(--surface-hover); }
   .tab.on { background: var(--accent-soft); color: var(--accent); }
-  /* The one thing that yields space when the tabs need it, so the last tab is never clipped. */
-  #desktoptitle { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1 1 auto; min-width: 0; }
+  #desktoptitle { font-size: 12px; color: var(--accent-2); text-decoration: underline;
+    text-decoration-color: var(--border-strong); text-underline-offset: 2px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1 1 auto; min-width: 0; }
+  #desktoptitle:hover { text-decoration-color: currentColor; }
+  #desktoptitle:empty { display: none; }
   /* Always rendered, never dismissible: docs/18 §3.1. A shared box is warn-toned because
      what it says changes what a person should be willing to type; a private one is quiet
      because it is only stating the ordinary case. */
   .boxclass {
     font-size: 11px; padding: 2px 8px; border-radius: var(--radius-pill);
-    white-space: nowrap; flex: 0 1 auto; min-width: 0; overflow: hidden;
-    text-overflow: ellipsis; cursor: default;
+    white-space: nowrap; flex: none; cursor: default;
   }
   .boxclass.shared { background: var(--warn-soft); color: var(--warn); border: 1px solid var(--warn-border); }
   .boxclass.private { background: var(--surface-hover); color: var(--muted); }
@@ -763,6 +767,9 @@ export const APP_HTML = String.raw`<!doctype html>
 
   .activityhead { border-top: 1px solid var(--border); padding-top: 12px; }
   .feed { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 0 8px; }
+  /* Waiting items can outnumber the visible board. Keep them scrollable inside
+     Tasks so neither the board nor the Activity feed is painted over. */
+  #attention { flex: none; max-height: 60%; overflow-y: auto; }
   .ev {
     padding: 4px 16px; font-size: 12px; line-height: 1.55; color: var(--muted);
     border-top: 1px solid var(--border);
@@ -914,13 +921,15 @@ export const APP_HTML = String.raw`<!doctype html>
       <a href="#" id="tabtasks" class="tab">Tasks</a>
       <a href="#" id="tabauto" class="tab">Automations</a>
       <a href="#" id="tabaudit" class="tab">Audit</a>
-      <span id="desktoptitle"></span>
-      <span id="boxclass" class="boxclass" style="display:none"></span>
     </span>
     <span class="headactions" id="desktopactions">
       <a id="rec" href="#" title="Record this desktop">&#9679;</a>
       <a id="full" href="#" target="_blank" rel="noopener" class="btn sm" style="text-decoration:none">Take over</a>
       <a id="handback" href="#" class="btn sm" style="text-decoration:none;display:none" title="Give the desktop back to the agent">Hand back</a>
+    </span>
+    <span class="desktopcontext">
+      <a href="#" id="desktoptitle"></a>
+      <span id="boxclass" class="boxclass" style="display:none"></span>
     </span>
   </div>
   <div id="desktopview">
@@ -3779,14 +3788,14 @@ function showBoxClass(box) {
     notice.style.display = "none";
     return;
   }
-  badge.textContent = box.badge + (box.group ? " · " + box.group : "");
+  badge.textContent = box.badge;
   // Warn-toned unless the class is actually enforced. A box labelled private with nothing
   // behind it must not read as the calm case; it is the shared case with a wrong label.
   badge.className = "boxclass " + (box.enforced === false ? "shared" : box.access);
   // The notice, or nothing. This used to fall through to "只有你能打开这台箱子" — the
   // strongest privacy claim in the product, arriving as an || fallback nobody decided on,
   // and false for every box that exists.
-  badge.title = box.notice || "";
+  badge.title = (box.group ? box.group + " · " : "") + (box.notice || "");
   badge.style.display = "";
   notice.textContent = box.notice || "";
   notice.style.display = box.notice ? "" : "none";
@@ -3798,13 +3807,16 @@ function showDesktop(id) {
   for (var i = 0; i < agents.length; i++) if (agents[i].id === id) agent = agents[i];
   if (!agent || !agent.desktopUrl) {
     $("desktoptitle").textContent = "";
+    $("desktoptitle").removeAttribute("title");
     $("full").style.display = "none";
     return;
   }
   var box = null;
   for (var j = 0; j < boxesSeen.length; j++) if (boxesSeen[j].id === agent.boxId) box = boxesSeen[j];
   var offline = !!(box && box.connected === false);
-  $("desktoptitle").textContent = agent.name + " · d" + agent.displayIndex + (boxesSeen.length > 1 && agent.boxName ? " · " + agent.boxName : "") + (offline ? " · offline" : "");
+  var desktopLabel = "Desktop: " + agent.name + " · display " + agent.displayIndex + (boxesSeen.length > 1 && agent.boxName ? " · " + agent.boxName : "") + (offline ? " · offline" : "");
+  $("desktoptitle").textContent = desktopLabel;
+  $("desktoptitle").title = desktopLabel + " — open Desktop tab";
   var frame = $("vnc");
   if (offline) {
     // The box is not reachable, and the pane says so *now*. Pointing the frame at the proxy
@@ -4845,6 +4857,7 @@ function showTab(which) {
   if (which === "audit") startAudit(); else stopAudit();
 }
 document.getElementById("tabdesktop").addEventListener("click", function (e) { e.preventDefault(); showTab("desktop"); });
+document.getElementById("desktoptitle").addEventListener("click", function (e) { e.preventDefault(); showTab("desktop"); });
 document.getElementById("tabfiles").addEventListener("click", function (e) { e.preventDefault(); showTab("files"); });
 document.getElementById("tabtasks").addEventListener("click", function (e) { e.preventDefault(); showTab("tasks"); });
 document.getElementById("tabauto").addEventListener("click", function (e) { e.preventDefault(); showTab("auto"); });

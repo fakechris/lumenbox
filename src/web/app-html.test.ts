@@ -168,6 +168,19 @@ test("every CSS content escape is what a browser will accept", () => {
   assert.deepEqual(wrong, [], "a CSS unicode escape is one backslash and four hex digits");
 });
 
+test("desktop context stays discoverable and opens the desktop tab", () => {
+  assert.match(APP_HTML, /<a href="#" id="desktoptitle"><\/a>/);
+  assert.match(APP_HTML, /"desktoptitle"\)\.title = desktopLabel \+ " — open Desktop tab"/);
+  assert.match(APP_HTML, /getElementById\("desktoptitle"\)\.addEventListener\("click", function \(e\) \{ e\.preventDefault\(\); showTab\("desktop"\); \}\)/);
+  assert.match(APP_HTML, /badge\.textContent = box\.badge;/, "the shared-box badge must not inherit a potentially long group name");
+  assert.match(APP_HTML, /badge\.title = \(box\.group \? box\.group/, "the full group must remain available on hover");
+});
+
+test("long waiting lists scroll within Tasks instead of overlapping Activity", () => {
+  assert.match(APP_HTML, /#attention \{ flex: none; max-height: 60%; overflow-y: auto; \}/);
+  assert.match(APP_HTML, /<div class="scroll" id="tasklist"><\/div>/);
+});
+
 test("the feed renders the plain-language phrase and falls back to the tool name (INV-783)", () => {
   // A browser cannot run here, so the page's activityLine is lifted out and run with the
   // helpers it reaches for stubbed: the contract is "phrase in the reader's language when
