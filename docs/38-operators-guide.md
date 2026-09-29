@@ -2,7 +2,7 @@
      title: The operator's guide (what the README used to be)
      family: guide
      status: current
-     updated: 2026-09-26
+     updated: 2026-09-29
 -->
 # 38 — The operator's guide (what the README used to be)
 
@@ -152,7 +152,8 @@ while a wrong "no" only costs a feature and says so. Opt in once you have checke
   thread; `chat: feishu:oc_…` narrows it to one chat. A skill runs as the agent the host saw
   write it or as the default agent, never as someone else.
 - **Memory files.** Each agent's memory is mirrored read-only into the box at
-  `~/work/memory/<name>/profile.md` and `log/YYYY-MM.md`, so `grep` works on it.
+  `~/work/memory/<agent-id>/profile.md` and `log/YYYY-MM.md`, so `grep` works on it. The prompt
+  tells each agent its own path; the id is on the agent's settings page.
 - **Hooks.** `~/.agentbox/hooks.json` in Claude Code's format (a `settings.json` or its bare
   `hooks` object) runs `PreToolUse`, `PostToolUse`, `Stop` and `PreCompact` commands with the
   same stdin payload and the same answers: exit 2 with stderr as the reason, or a decision JSON.

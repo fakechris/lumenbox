@@ -149,8 +149,8 @@ test("two boxes: files, skills, desktops and memory follow the agent's box; a sc
     assert.deepEqual(ownDisplays, []);
     assert.match(seenSkills[0]!, /Grok only/);
     assert.doesNotMatch(seenSkills[0]!, /Own only/);
-    assert.equal([...grokFiles.keys()].some(key => key.startsWith("/home/box/work/memory/vera/")), true, "the mirror followed her");
-    assert.equal([...ownFiles.keys()].some(key => key.startsWith("/home/box/work/memory/vera/")), false);
+    assert.equal([...grokFiles.keys()].some(key => key.startsWith(`/home/box/work/memory/${vera.id}/`)), true, "the mirror followed her");
+    assert.equal([...ownFiles.keys()].some(key => key.startsWith(`/home/box/work/memory/${vera.id}/`)), false);
 
     // Ada's turn is on the own box, with the own box's skills and desktop 1.
     await orchestrator.prompt(ada.id, "hi");

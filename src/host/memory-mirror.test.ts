@@ -8,7 +8,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MemoryMirror } from "./memory-mirror.ts";
-import { renderMemoryFiles } from "./memory.ts";
+import { memoryMirrorDir, renderMemoryFiles } from "./memory.ts";
 import type { MemoryRecord } from "./memory.ts";
 import { readStanding, standingBoxDir, standingFileOf, writeStanding } from "./standing.ts";
 
@@ -50,7 +50,7 @@ function fakeBox(files = new Map<string, string>(), writes: string[] = []) {
 const fact = (text: string, at = "2026-08-30T10:00:00.000Z"): MemoryRecord => ({ at, kind: "fact", text });
 
 test("profile and monthly logs are rendered from the live view, with retractions applied", () => {
-  const files = renderMemoryFiles("Ada Lovelace", [
+  const files = renderMemoryFiles("ada", "Ada Lovelace", [
     fact("the deploy region is us-east-1", "2026-07-01T00:00:00.000Z"),
     { at: "2026-07-02T00:00:00.000Z", kind: "retraction", text: "the deploy region is us-east-1" },
     fact("the deploy region is eu-west-1", "2026-07-03T00:00:00.000Z"),
@@ -61,9 +61,9 @@ test("profile and monthly logs are rendered from the live view, with retractions
   assert.deepEqual(
     files.map(file => file.path),
     [
-      "/home/box/work/memory/ada-lovelace/profile.md",
-      "/home/box/work/memory/ada-lovelace/log/2026-07.md",
-      "/home/box/work/memory/ada-lovelace/log/2026-08.md",
+      "/home/box/work/memory/ada/profile.md",
+      "/home/box/work/memory/ada/log/2026-07.md",
+      "/home/box/work/memory/ada/log/2026-08.md",
     ]
   );
   const profile = files[0]!.content;
@@ -89,12 +89,12 @@ test("sync writes changed files only, and a box that is not there costs nothing"
   records.push({ at: "2026-08-31T00:00:00.000Z", kind: "note", text: "a new note" });
   assert.deepEqual(await mirror.sync("a1"), { written: 1 }, "only the new month file");
   assert.deepEqual(writes, [
-    "/home/box/work/memory/ada-lovelace/profile.md",
+    "/home/box/work/memory/a1/profile.md",
     "/home/box/work/standing/a1/AGENTS.md",
     "/home/box/work/standing/a1/SOUL.md",
     "/home/box/work/standing/a1/USER.md",
     "/home/box/work/standing/a1/HEARTBEAT.md",
-    "/home/box/work/memory/ada-lovelace/log/2026-08.md",
+    "/home/box/work/memory/a1/log/2026-08.md",
   ]);
   assert.deepEqual(await mirror.sync("nobody"), { written: 0 });
 });
@@ -188,4 +188,42 @@ test("two agents whose names slug identically get distinct mirror directories an
   // tools would not write it back into this agent's host copy.
   assert.equal(standingFileOf("/home/box/work/standing/id-zhang/AGENTS.md", "id-li"), undefined);
   assert.equal(standingFileOf("/home/box/work/standing/id-li/AGENTS.md", "id-li"), "AGENTS.md");
+});
+
+test("the read-only memory mirror is keyed by agent id: two names that slug alike never share a directory, and the old shared one is removed (INV-867)", async () => {
+  const records = new Map<string, MemoryRecord[]>([
+    ["id-zhang", [fact("ZHANG_SECRET")]],
+    ["id-li", [fact("LI_SECRET")]],
+  ]);
+  const agents = [
+    { id: "id-zhang", profile: { name: "张三" } },
+    { id: "id-li", profile: { name: "李四" } },
+  ];
+  const registry = {
+    readMemoryRecords: (id: string) => records.get(id) ?? [],
+    get: (id: string) => agents.find(agent => agent.id === id),
+    list: () => agents,
+    dirFor: (id: string) => homes.get(id),
+  } as never;
+  const homes = new Map(agents.map(agent => [agent.id, mkdtempSync(join(tmpdir(), `agentbox-mirror-${agent.id}-`))]));
+  const { files, box } = fakeBox();
+  // What the slug-keyed mirror left behind: both agents' memories in one shared directory.
+  files.set("/home/box/work/memory/agent/profile.md", "ZHANG_SECRET LI_SECRET");
+  const commands: string[] = [];
+  // One client per box, as the orchestrator hands out.
+  const client = { ...box, exec: async (command: string) => { commands.push(command); return { exit_code: 0 }; } };
+  const mirror = new MemoryMirror({ registry, box: () => client });
+  await mirror.syncAll();
+
+  const zhang = files.get("/home/box/work/memory/id-zhang/profile.md") ?? "";
+  const li = files.get("/home/box/work/memory/id-li/profile.md") ?? "";
+  assert.match(zhang, /ZHANG_SECRET/);
+  assert.doesNotMatch(zhang, /LI_SECRET/);
+  assert.match(li, /LI_SECRET/);
+  assert.doesNotMatch(li, /ZHANG_SECRET/);
+  assert.equal(memoryMirrorDir("id-zhang"), "/home/box/work/memory/id-zhang");
+  // The legacy slug directory is removed once, with the exact path and nothing wider.
+  assert.deepEqual(commands, ["rm -rf -- '/home/box/work/memory/agent'"]);
+  await mirror.syncAll();
+  assert.equal(commands.length, 1, "removed once per box, not on every sync");
 });

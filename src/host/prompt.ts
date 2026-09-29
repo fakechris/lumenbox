@@ -1068,7 +1068,7 @@ export const VOLATILE_SECTIONS: readonly PromptSection[] = [
         : recalled;
       return renderMemory(
         shown,
-        context.hasBox === false ? undefined : memoryMirrorDir(context.agent.profile.name)
+        context.hasBox === false ? undefined : memoryMirrorDir(context.agent.id)
       );
     },
   },
