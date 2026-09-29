@@ -2448,6 +2448,10 @@ function maybeOnboard() {
       if ((!configured && !anyKey) || !boxState.ok) {
         openSettings();
         $("setwelcome").style.display = "";
+        // First run has one sensible ending: save and restart, so what was typed is what
+        // runs. A second, weaker button beside it invites the save that does not take
+        // effect, and the next message dies on the key that was entered but never loaded.
+        $("setsave").style.display = "none";
       }
     })
     .catch(function () {});
@@ -2456,6 +2460,8 @@ function maybeOnboard() {
 function markOnboarded() {
   try { localStorage.setItem("lumen-onboarded", "1"); } catch (error) {}
   $("setwelcome").style.display = "none";
+  // The welcome is over; plain Save is a valid choice again for later visits.
+  $("setsave").style.display = "";
 }
 
 $("setboxup").onclick = function () {
@@ -7154,7 +7160,11 @@ function refreshSetup() {
     // Each step also names the command that does the same thing (INV-542): an
     // installation run on a server has no window to click in, and the person setting it
     // up over ssh was reading a page that assumed a mouse.
+    // The key goes first (INV-857), because the welcome note promises it as one of two
+    // things and every later step is dead without it: an agent with no key cannot say
+    // its first word, and the failure surfaced pages away from the cause.
     var steps = [
+      { done: s.key, head: t("ui.setup.key"), sub: t("ui.setup.keyWhy"), act: t("ui.setup.keyAct"), cli: "Settings → Model", go: function () { openSettings("model"); } },
       { done: s.box, head: t("ui.setup.box"), sub: t("ui.setup.boxWhy"), act: t("ui.setup.boxAct"), cli: "agentbox box up", go: function () { openSettings("boxes"); } },
       { done: s.agentTurn, head: t("ui.setup.agent"), sub: t("ui.setup.agentWhy"), act: t("ui.setup.agentAct"), cli: "agentbox agent new <name>", go: openShelf },
       { done: s.door, head: t("ui.setup.door"), sub: t("ui.setup.doorWhy"), act: t("ui.setup.doorAct"), cli: "Settings → Doors (no CLI yet)", go: function () { openSettings("doors"); } },
