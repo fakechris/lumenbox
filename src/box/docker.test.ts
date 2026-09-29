@@ -65,8 +65,9 @@ test("a missing image is pulled, and a failed pull says how to build it", async 
   assert.equal(pulled, true);
   // The size and the wait travel with the announcement (INV-856): the pull is the one
   // long silent step of a first run, and a quiet minute reads as "stuck".
-  assert.match(lines[0], /^image fakechris\/lumenbox:0\.3\.0 is not on this machine; pulling it/);
-  assert.match(lines[0], /750MB|a few minutes/);
+  const announcement = lines[0] ?? "";
+  assert.match(announcement, /^image fakechris\/lumenbox:0\.3\.0 is not on this machine; pulling it/);
+  assert.match(announcement, /750MB|a few minutes/);
 
   // "denied" is a registry that answered — classified as no-such-image, and it still
   // names `box build` for the reader who has a checkout (last, not first).
