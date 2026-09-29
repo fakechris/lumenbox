@@ -57,6 +57,8 @@ export interface ScriptContext {
   opened: string;
   /** Which tools were offered this call, by name. */
   offered: string[];
+  /** Exact JSON bytes of params.tools in this scripted model request, not billed tokens. */
+  toolSchemaBytes: number;
   /** The actual model-visible context, for replay/compaction regressions. */
   messages: Anthropic.MessageParam[];
 }
@@ -402,7 +404,8 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
     const first = params.messages[0];
     const opened = typeof first?.content === "string" ? first.content : "";
     const offered = (params.tools ?? []).map(tool => ("name" in tool ? String(tool.name) : ""));
-    const reply = await options.script!({ agent, system, round, opened, offered, messages: params.messages });
+    const toolSchemaBytes = Buffer.byteLength(JSON.stringify(params.tools ?? []), "utf8");
+    const reply = await options.script!({ agent, system, round, opened, offered, toolSchemaBytes, messages: params.messages });
     if (reply === undefined) return message([{ type: "text", text: "" } as Anthropic.ContentBlock], "end_turn");
     if ("say" in reply) {
       observations.push({ at: clock++, agent, kind: "say", text: reply.say });

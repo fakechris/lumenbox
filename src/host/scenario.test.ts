@@ -2140,3 +2140,47 @@ test("a person's USER.md edit reaches the next turn as text and as a diff; an ag
     assert.ok(result.score.said.some(s => /Noticed you changed USER\.md/.test(s.text)));
   } finally { result.cleanup(); }
 });
+
+test("an offline tool-list pair captures actual request order and restores a hidden tool before claiming success (INV-874)", async () => {
+  const run = async (narrow: boolean) => {
+    const offered: string[][] = [];
+    const bytes: number[] = [];
+    let read = false;
+    const episode = await runEpisode({
+      team: [{ name: "Sample" }], says: [],
+      files: { "/home/box/work/proof.txt": "ok" },
+      script: ({ offered: names, toolSchemaBytes }) => {
+        offered.push([...names]); // From params.tools, NOT the sorted tool fingerprint.
+        bytes.push(toolSchemaBytes);
+        if (!names.includes("read_file")) return { say: "Need read_file; not verified." };
+        if (!read) {
+          read = true;
+          return { call: "read_file", input: { path: "/home/box/work/proof.txt" } };
+        }
+        return { say: "Verified proof.txt." };
+      },
+      drive: async ({ registry, frontId, say }) => {
+        if (narrow) registry.update(frontId, { tools: ["bash"] });
+        await say("Verify proof.txt");
+        if (narrow) {
+          registry.update(frontId, { tools: null }); // operator rollback, not model escalation
+          await say("Now read the proof.");
+        }
+      },
+    });
+    try {
+      assert.equal(episode.score.said.at(-1)?.text, "Verified proof.txt.");
+      assert.deepEqual(episode.score.refusals, []);
+      assert.ok(episode.score.trail.includes("Sample:read_file"));
+      return { offered, bytes, rounds: episode.score.rounds, said: episode.score.said.map(x => x.text) };
+    } finally { episode.cleanup(); }
+  };
+  const control = await run(false);
+  const treatment = await run(true);
+  assert.deepEqual(treatment.offered[0], ["bash"], "only an existing allowlist narrows the request");
+  assert.ok(control.offered[0]!.length > 1);
+  assert.ok(treatment.bytes[0]! < control.bytes[0]!, "measure sent schema bytes, not a token saving");
+  assert.deepEqual(treatment.offered.at(-1), control.offered[0], "rollback restores the exact sent order");
+  assert.match(treatment.said[0]!, /not verified/, "a hidden tool must not yield a false success");
+  assert.equal(treatment.rounds, control.rounds + 1, "discovery and rollback are not free");
+});
