@@ -248,11 +248,12 @@ batches had finished. `Orchestrate` takes the whole job as one **plan** — `bri
 - **Counted exactly, asked when large.** Calls = items + the reducer. Over 20 still to run, the person
   confirms first through the same approval card an extension's pause uses (`Policy.requestConfirmation`,
   INV-861); nothing runs until they answer, and a decline is reported.
-- **Idempotent by position.** Each answer is kept under the plan's hash and its index
-  (`~/.agentbox/orchestrations/<hash>.jsonl`). After a restart the plan continues from the unanswered
-  items (the fork sweep has already ended the interrupted children); a re-submitted plan reuses what it
-  has. The acceptance scenario — thirty items and a summary, a crash after twelve — costs exactly 31
-  sub-agent turns.
+- **Idempotent by position, within one run.** Each answer is kept under the run (its ledger record)
+  and its index (`~/.agentbox/orchestrations/<hash>-<record>.jsonl`). After a restart the plan
+  continues from the unanswered items (the fork sweep has already ended the interrupted children); the
+  same plan submitted while it is open is not started twice. Answers are not memoized across runs — the
+  same question next week is asked again — and never shared between agents. The acceptance scenario —
+  thirty items and a summary, a crash after twelve — costs exactly 31 sub-agent turns.
 - **Fenced like a fork.** Items and the reducer run in `fork/…` conversations with the fork prompt and
   tool fence; `Orchestrate` itself is withheld from forks, so a plan cannot start a plan.
 - **One record, one message.** The pending-work ledger holds one `orchestrate` record per plan

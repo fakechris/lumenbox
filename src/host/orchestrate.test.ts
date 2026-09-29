@@ -183,16 +183,38 @@ test("30 items and a summary with a restart in the middle cost exactly 31 sub-ag
   } finally { h.cleanup(); }
 });
 
-test("re-submitting a finished plan reuses its answers instead of running them again", async () => {
+test("answers belong to one run: a finished plan asked again runs afresh, and another agent never sees them", async () => {
   const h = harness();
   try {
     const child = answering();
     const orchestrations = h.make(child.runChild);
     orchestrations.submit({ ...who, plan: plan(4) });
     await orchestrations.idle();
-    assert.match(orchestrations.submit({ ...who, plan: plan(4) }).text, /4 item\(s\) answered by an earlier run of this plan are reused/);
+    orchestrations.submit({ ...who, plan: plan(4) });
+    orchestrations.submit({ ...who, agentId: "bob", plan: plan(4) });
     await orchestrations.idle();
-    assert.equal(child.briefs.length, 4);
+    assert.equal(child.briefs.length, 12, "no stale answers from last week, none borrowed from another agent");
+    assert.equal(h.delivered.length, 3);
+  } finally { h.cleanup(); }
+});
+
+test("two plans whose confirmation reads the same both start when it is granted", async () => {
+  const h = harness();
+  try {
+    const child = answering();
+    const orchestrations = h.make(child.runChild);
+    const same = (items: string[]) => {
+      const parsed = parsePlan({ brief: "Survey the vendors", items, prompt: "Price of {{item}}?" });
+      if ("problem" in parsed) throw new Error(parsed.problem);
+      return parsed.plan;
+    };
+    const first = orchestrations.submit({ ...who, plan: same(Array.from({ length: 25 }, (_, i) => `a${i}`)) });
+    const second = orchestrations.submit({ ...who, plan: same(Array.from({ length: 25 }, (_, i) => `b${i}`)) });
+    assert.equal(first.approval!.id, second.approval!.id);
+    h.policy.grant(first.approval!.id);
+    orchestrations.settleApproval(first.approval!.id, "allowed");
+    await orchestrations.idle();
+    assert.equal(child.briefs.length, 50);
     assert.equal(h.delivered.length, 2);
   } finally { h.cleanup(); }
 });

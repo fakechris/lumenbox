@@ -18,8 +18,10 @@
  *
  * - **Counted exactly.** Calls = items + the reducer. Above `confirmAt` the person confirms first
  *   (`Policy.requestConfirmation`, the INV-861 path); nothing runs until they do.
- * - **Idempotent by position.** Each item's answer is kept under the plan's hash and its index. A
- *   resumed or re-submitted plan runs only the items without an answer.
+ * - **Idempotent by position, within one run.** Each item's answer is kept under the run (its ledger
+ *   record) and its index, so a plan resumed after a restart runs only the items without an answer,
+ *   and a plan re-submitted while it is still open is not started twice. Answers are not memoized
+ *   across runs — the same question asked next week is asked again — nor shared between agents.
  * - **Fenced like a fork.** Items run in `fork/…` conversations, so they get the fork prompt, the
  *   fork tool fence (no Orchestrate, no Fork, no messaging) and the fork sweep's cleanup.
  * - **One record.** The pending-work ledger holds one `orchestrate` record per plan: prepared when
@@ -153,14 +155,15 @@ export class Orchestrations {
     return typeof this.deps.resultsDir === "function" ? this.deps.resultsDir() : this.deps.resultsDir;
   }
 
-  private resultsPath(hash: string): string {
-    return join(this.dir(), `${hash}.jsonl`);
+  /** One file per run: the plan's hash for a reader, the ledger record for uniqueness. */
+  private resultsPath(running: Pick<Running, "hash" | "id">): string {
+    return join(this.dir(), `${running.hash}-${running.id}.jsonl`);
   }
 
-  /** What is already known for a plan, by index; -1 is the reducer. */
-  private results(hash: string): Map<number, ItemResult> {
+  /** What this run already has, by index; -1 is the reducer. */
+  private results(running: Pick<Running, "hash" | "id">): Map<number, ItemResult> {
     const known = new Map<number, ItemResult>();
-    const path = this.resultsPath(hash);
+    const path = this.resultsPath(running);
     if (!existsSync(path)) return known;
     for (const line of readFileSync(path, "utf8").split("\n")) {
       if (line.trim() === "") continue;
@@ -174,10 +177,10 @@ export class Orchestrations {
     return known;
   }
 
-  private keep(hash: string, result: ItemResult): void {
+  private keep(running: Pick<Running, "hash" | "id">, result: ItemResult): void {
     mkdirSync(this.dir(), { recursive: true });
     // Durable: replay after a crash trusts these lines to mean "this item is answered".
-    appendLineDurably(this.resultsPath(hash), JSON.stringify(result));
+    appendLineDurably(this.resultsPath(running), JSON.stringify(result));
   }
 
   private open(): OpenFork[] {
@@ -205,9 +208,8 @@ export class Orchestrations {
           `arrive here as one message. Do not submit it again.`,
       };
     }
-    const done = [...this.results(hash).keys()].filter(index => index >= 0).length;
     const confirmAt = this.deps.confirmAt ?? ORCHESTRATE_CONFIRM_AT;
-    const needsConfirm = calls - done > confirmAt;
+    const needsConfirm = calls > confirmAt;
     const approval = needsConfirm
       ? this.deps.policy.requestConfirmation({
           agentId: input.agentId,
@@ -224,13 +226,12 @@ export class Orchestrations {
       brief: input.plan.brief,
       data: { plan: input.plan, hash, ...(approval !== undefined ? { approvalId: approval.id } : {}) },
     });
-    const reused = done > 0 ? ` ${done} item(s) answered by an earlier run of this plan are reused.` : "";
     if (approval !== undefined) {
       return {
         approval: { id: approval.id },
         text:
           `This plan needs ${calls} sub-agent turns, over the ${confirmAt} that run without asking, so the person ` +
-          `has been asked to confirm it.${reused} End your turn now and say that you are waiting for their go-ahead. ` +
+          `has been asked to confirm it. End your turn now and say that you are waiting for their go-ahead. ` +
           `When they answer, it starts (or not) by itself and the result arrives here as one message — do not ` +
           `resubmit, poll, or predict it.`,
       };
@@ -238,25 +239,27 @@ export class Orchestrations {
     this.start({ id, agentId: input.agentId, parent: input.parent, plan: input.plan, hash });
     return {
       text:
-        `Started ${calls} sub-agent turn(s) for "${input.plan.brief}" in the background.${reused} The result arrives ` +
+        `Started ${calls} sub-agent turn(s) for "${input.plan.brief}" in the background. The result arrives ` +
         `here as one message. End your turn with what the person should hear; do not check on it or predict it.`,
     };
   }
 
   /** A person answered a plan's confirmation. Returns whether a plan was waiting on it. */
   settleApproval(approvalId: string, how: "allowed" | "refused"): boolean {
-    const work = this.open().find(item => item.data?.approvalId === approvalId && !item.admitted);
-    if (work === undefined) return false;
-    const running = this.toRunning(work);
-    if (running === undefined) return false;
-    if (how === "allowed") {
-      this.start(running);
-      return true;
+    // Every plan waiting on it: two plans whose confirmation reads the same share one approval.
+    const waiting = this.open().filter(item => item.data?.approvalId === approvalId && !item.admitted);
+    for (const work of waiting) {
+      const running = this.toRunning(work);
+      if (running === undefined) continue;
+      if (how === "allowed") {
+        this.start(running);
+        continue;
+      }
+      if (this.deps.deliver(work.agentId, `[The person declined the plan "${running.plan.brief}"; nothing ran. Do not resubmit it unless they ask.]`, work.parent)) {
+        this.deps.pendingWork.dropped(work.id, "refused");
+      }
     }
-    if (this.deps.deliver(work.agentId, `[The person declined the plan "${running.plan.brief}"; nothing ran. Do not resubmit it unless they ask.]`, work.parent)) {
-      this.deps.pendingWork.dropped(work.id, "refused");
-    }
-    return true;
+    return waiting.length > 0;
   }
 
   /**
@@ -310,7 +313,7 @@ export class Orchestrations {
   }
 
   private async run(running: Running): Promise<void> {
-    const known = this.results(running.hash);
+    const known = this.results(running);
     const missing = running.plan.items.map((_, index) => index).filter(index => !known.has(index));
     const concurrency = Math.max(1, this.deps.concurrency ?? ORCHESTRATE_CONCURRENCY);
     let next = 0;
@@ -318,7 +321,7 @@ export class Orchestrations {
       while (next < missing.length) {
         const index = missing[next++]!;
         const result = await this.runOne(running, index, itemBrief(running.plan, index));
-        this.keep(running.hash, result);
+        this.keep(running, result);
         known.set(index, result);
       }
     };
@@ -330,7 +333,7 @@ export class Orchestrations {
       summary = known.get(-1);
       if (summary === undefined) {
         summary = await this.runOne(running, -1, reduceBrief(running.plan, items));
-        this.keep(running.hash, summary);
+        this.keep(running, summary);
       }
     }
     const failed = items.filter(result => result.status !== "done").length;

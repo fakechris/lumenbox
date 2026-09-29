@@ -425,7 +425,7 @@ effects are dropped; docs/34 gains a section; `npm test` exits 0 with the floor 
 **Goal**: `Orchestrate` takes a declarative plan (items, a prompt with `{{item}}`, `expect`, optional
 `reduce`) and runs one sub-agent per item plus one reducer behind the turn, delivered as one message;
 counted exactly, confirmed by the person above 20 calls, resumable after a restart without re-running
-answered items. Data, not code (Chris, 2026-09-29): `node:vm` is not a boundary and a sandbox would
+answered items (answers are per run: not memoized across runs, not shared between agents). Data, not code (Chris, 2026-09-29): `node:vm` is not a boundary and a sandbox would
 be a fourth runtime dependency.
 **Success Criteria**: plan validation; concurrency bound; reducer sees every answer; nothing runs
 before confirmation; a duplicate submit does not ask twice; a decline runs nothing; 30 items + a
