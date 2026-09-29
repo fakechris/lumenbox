@@ -34,7 +34,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { defaultBoxConfig } from "../box/docker.ts";
+import { defaultBoxImage } from "../box/docker.ts";
 import { BOXD_PORT, UI_PORT } from "../protocol/index.ts";
 import type { AllocatorKind, BoxHandle, BoxSpec, BoxTokens } from "./allocator.ts";
 import { DEFAULT_RELAY_PROVIDER, StoreBackedAllocator } from "./allocator.ts";
@@ -127,7 +127,16 @@ export class KubernetesAllocator extends StoreBackedAllocator {
 
   private readonly namespace: string;
   private readonly prefix: string;
-  private readonly defaultImage: string;
+  private resolvedDefaultImage: string | undefined;
+  /**
+   * The image an allocation uses when its spec names none — resolved when first needed, not in
+   * the constructor: reading it consults the installation's config file, which a constructor
+   * that only validates names has no business touching (INV-875).
+   */
+  private get defaultImage(): string {
+    this.resolvedDefaultImage ??= this.options.image ?? defaultBoxImage();
+    return this.resolvedDefaultImage;
+  }
   private readonly policy: AllocationPolicy;
   /**
    * One allocation per tenant at a time, in-process: a promise chain the next allocate for the
@@ -168,7 +177,6 @@ export class KubernetesAllocator extends StoreBackedAllocator {
           `the naming scheme needs 50 — shorten the prefix`
       );
     }
-    this.defaultImage = options.image ?? defaultBoxConfig().image;
     this.policy = options.policy ?? staticPolicy();
   }
 

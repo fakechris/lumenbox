@@ -29,7 +29,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 import type { BoxStatus, ContainerState } from "../box/docker.ts";
-import { BoxManager, DockerError, defaultBoxConfig } from "../box/docker.ts";
+import { BoxManager, DockerError, defaultBoxConfig, defaultBoxImage } from "../box/docker.ts";
 import type { AllocatorKind, BoxHandle, BoxSpec, BoxTokens } from "./allocator.ts";
 import { DEFAULT_RELAY_PROVIDER, StoreBackedAllocator } from "./allocator.ts";
 import type { BoxState, ControlStore } from "./store.ts";
@@ -127,7 +127,16 @@ export class ComposeAllocator extends StoreBackedAllocator {
   readonly kind: AllocatorKind = "compose";
 
   private readonly prefix: string;
-  private readonly defaultImage: string;
+  private resolvedDefaultImage: string | undefined;
+  /**
+   * The image an allocation uses when its spec names none — resolved when first needed, not in
+   * the constructor: reading it consults the installation's config file, which a constructor
+   * that only validates names has no business touching (INV-875).
+   */
+  private get defaultImage(): string {
+    this.resolvedDefaultImage ??= this.options.image ?? defaultBoxImage();
+    return this.resolvedDefaultImage;
+  }
 
   constructor(
     store: ControlStore,
@@ -135,7 +144,6 @@ export class ComposeAllocator extends StoreBackedAllocator {
   ) {
     super(store);
     this.prefix = options.prefix ?? "agentbox";
-    this.defaultImage = options.image ?? defaultBoxConfig().image;
   }
 
   /** A manager for one tenant's container. Cheap: it holds configuration, not a connection. */
