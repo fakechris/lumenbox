@@ -1178,6 +1178,8 @@ export const APP_HTML = String.raw`<!doctype html>
         <button class="btn sm" id="setboxup">Start the box</button>
       </div>
       <pre id="setboxlog" style="display:none;max-height:140px;overflow:auto;background:var(--code-bg);color:var(--code-text);border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 12px;font-family:var(--font-mono);font-size:11px;line-height:1.6;margin:0;white-space:pre-wrap"></pre>
+      <input id="setboximage" placeholder="Image override, e.g. mirror.example.com/lumenbox:0.3.0 — empty uses the release default (fakechris/lumenbox, Docker Hub)" spellcheck="false" style="margin-top:8px">
+      <div class="fieldnote" style="margin-top:4px">What docker pulls when this machine has no box image. Point it at a mirror if Docker Hub is slow or unreachable from your network; the first pull is hundreds of megabytes either way.</div>
     </div>
     <div class="field" data-tier="installation" id="setboxeswrap" data-settab="boxes">
       <label>Boxes</label>
@@ -1608,6 +1610,7 @@ function openSettings(tab) {
       if (chosen) sel.value = chosen;
       $("setmodel").value = (data.config && data.config.model) || "";
       $("setbase").value = (data.config && data.config.baseUrl) || "";
+      $("setboximage").value = (data.config && data.config.boxImage) || "";
       $("setkey").value = "";
       var host = data.hostExec || {};
       $("sethostenabled").checked = !!host.enabled;
@@ -2535,6 +2538,8 @@ function saveSettings(thenRestart) {
   body.model = model === "" ? null : model;
   var base = $("setbase").value.trim();
   body.baseUrl = base === "" ? null : base;
+  var boxImage = $("setboximage").value.trim();
+  body.boxImage = boxImage === "" ? null : boxImage;
   var key = $("setkey").value.trim();
   if (key !== "") body.key = key;
   body.hostExec = { enabled: $("sethostenabled").checked, cwd: $("sethostcwd").value.trim() };

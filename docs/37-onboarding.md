@@ -71,6 +71,14 @@ it is; a pull only happens when the version tag is absent.
 If the button says *Cannot reach a Docker engine*, Docker is not running or not installed —
 start it and press again. `docker version` in a terminal is the same check.
 
+**On a network where Docker Hub is slow or unreachable.** The pull can come from a mirror
+instead: Settings → Box has an *image override* — a full `registry/repo:tag` reference —
+saved to `~/.agentbox/config.json` as `boxImage` (empty again means the release default).
+`AGENTBOX_IMAGE` in the environment still wins over it, and configuring Docker Desktop's own
+*registry-mirrors* is the other way to the same effect. A pull that fails says which kind of
+failure it was: the registry answered *no such image* (update the app — a just-released
+version can race its image), or the registry never answered (network; set the mirror).
+
 ### 3b. Docker on another machine
 
 If you keep Docker on a server (a NAS, a homelab box, a cloud VM), point the app at it the way

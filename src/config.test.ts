@@ -256,3 +256,21 @@ test("startupItem can be loaded and saved", () => {
   assert.equal(loadConfig().startupItem, undefined);
 });
 
+
+test("boxImage loads from the file and saveConfig sets and clears it (INV-856)", () => {
+  // The mirror entrance for a Finder-launched app, which has no shell to export
+  // AGENTBOX_IMAGE into: the field rides config.json like provider and baseUrl do.
+  const { warnings } = withHome('{"activityLimit": 10, "boxImage": "mirror.example.com/lumenbox:0.3.0"}');
+  const config = loadConfig(line => warnings.push(line));
+  assert.equal(config.boxImage, "mirror.example.com/lumenbox:0.3.0");
+
+  withHome('{"activityLimit": 10, "boxImage": "mirror.example.com/lumenbox:0.3.0"}');
+  saveConfig({ boxImage: "mirror2.example.com/lumenbox:0.4.0" });
+  assert.equal(loadConfig(() => {}).boxImage, "mirror2.example.com/lumenbox:0.4.0", "a save replaces");
+
+  saveConfig({ boxImage: null });
+  assert.equal(loadConfig(() => {}).boxImage, undefined, "null clears back to the release default");
+
+  const raw = JSON.parse(readFileSync(configPath(), "utf8"));
+  assert.equal("boxImage" in raw, false, "cleared means gone from the file, not empty");
+});
