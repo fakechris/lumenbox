@@ -63,6 +63,7 @@ const TEMPLATES: Record<string, Template> = {
   ReadFeishuDoc: { en: "reading a Feishu document", zh: "阅读飞书文档" },
   connector_request: { en: "calling {detail}", zh: "调用 {detail}" },
   Fork: { en: "sending out {detail} subtasks", zh: "派出 {detail} 个子任务" },
+  Orchestrate: { en: "running a plan over {detail} items", zh: "按计划处理 {detail} 个条目" },
   Delegate: { en: "handing work to a specialist engine", zh: "把工作交给专用引擎" },
   Jobs: { en: "checking on background jobs", zh: "查看后台任务" },
   AskUser: { en: "asking you a question", zh: "向你提问" },
@@ -176,6 +177,10 @@ export function safeDetailOf(tool: string, input: unknown): string | undefined {
     case "Fork": {
       const briefs = Array.isArray(record.briefs) ? record.briefs.length : 0;
       return String(Math.max(briefs, 1));
+    }
+    case "Orchestrate": {
+      const items = Array.isArray(record.items) ? record.items.length : 0;
+      return String(Math.max(items, 1));
     }
     case "SetTodos": {
       const items = Array.isArray(record.items) ? record.items.length : undefined;

@@ -27,6 +27,7 @@ import { ModelRelay } from "./model-relay.ts";
 import { DelegateSessions } from "./delegate-sessions.ts";
 import { EXTENSIONS_SERVER, Extensions, extensionsDir } from "./extensions.ts";
 import { Effects } from "./effects.ts";
+import { Orchestrations } from "./orchestrate.ts";
 import { FileVersions } from "./files.ts";
 import {
   giveUpNote,
@@ -80,7 +81,7 @@ import { type BoxEntry, tokenOf } from "../box/boxes.ts";
 import { classifyBox, type BoxClass } from "../box/access.ts";
 import type { ResolutionConfig } from "../protocol/index.ts";
 import { runTurn, TurnAborted, type TurnDeps, type TurnEvent } from "./turn.ts";
-import type { ToolContext } from "./tools.ts";
+import { readHandoff, type ToolContext } from "./tools.ts";
 import { loadConfig } from "../config.ts";
 import { McpManager } from "./mcp.ts";
 import { mergeServers } from "./mcp-connectors.ts";
@@ -473,6 +474,8 @@ export class Orchestrator {
   readonly extensions: Extensions | undefined;
   /** Acts on what tool results ask for — pause for a person, background jobs, reminders (INV-861). */
   readonly effects: Effects | undefined;
+  /** Fan-out plans (INV-862): one sub-agent per item, run behind the turn, resumable. */
+  readonly orchestrations: Orchestrations | undefined;
 
   /**
    * Which turn each agent is currently resuming, so the ledger entry it writes is linked to the one
@@ -888,6 +891,8 @@ export class Orchestrator {
       else this.steps?.settleApproval(approval.id);
       // A confirmation an extension asked for is continued by its callback (INV-861).
       if (approval.harnessResumes === true) {
+        // A plan's confirmation (INV-862) or an extension's pause (INV-861); each ignores the other's.
+        this.orchestrations?.settleApproval(approval.id, how);
         void this.effects?.settleApproval(approval.id, how).catch(error =>
           console.error(`[effects] ${error instanceof Error ? error.message : String(error)}`)
         );
@@ -965,6 +970,28 @@ export class Orchestrator {
     if (this.extensions !== undefined) {
       this.extensions.onJobDone = (jobId, text, ok) => this.effects?.jobDone(EXTENSIONS_SERVER, jobId, text, ok) ?? false;
     }
+    this.orchestrations =
+      this.pendingWork === undefined
+        ? undefined
+        : new Orchestrations({
+            pendingWork: this.pendingWork,
+            policy: this.policy,
+            // The same run a Fork child gets: its own conversation of the agent, serialised by
+            // the bus, answered in its transcript.
+            runChild: async (agentId, conversation, brief) => {
+              this.bus.sendFromUser(agentId, brief, { conversation, steerable: false });
+              await this.bus.runExclusive(agentId, { conversation });
+              return (this.registry.readTranscript(agentId, conversation) as { role?: string; kind?: string; text?: string }[])
+                .filter(entry => entry.role === "assistant" && entry.kind === undefined && typeof entry.text === "string")
+                .map(entry => entry.text as string)
+                .join("\n\n");
+            },
+            readHandoff,
+            deliver: (agentId, text, conversation) =>
+              this.bus.deliverSystem(agentId, text, conversation) !== undefined || this.bus.inboxless,
+            resultsDir: () => process.env.AGENTBOX_ORCHESTRATIONS ?? join(agentboxHome(), "orchestrations"),
+            log: line => console.error(`[orchestrate] ${line}`),
+          });
     // After the hooks: the face runs them around every delegated call.
     this.mcpFace = new McpFace({
       mcp: () => this.mcp,
@@ -1786,6 +1813,7 @@ export class Orchestrator {
       ...(this.networkEvents !== undefined ? { networkEvents: this.networkEvents } : {}),
       ...(this.pendingWork !== undefined ? { pendingWork: this.pendingWork } : {}),
       ...(this.effects !== undefined ? { effects: this.effects } : {}),
+      ...(this.orchestrations !== undefined ? { orchestrations: this.orchestrations } : {}),
       mcpFace: this.mcpFace,
       modelRelay: this.modelRelay,
       delegateSessions: this.delegateSessions,
@@ -2340,6 +2368,11 @@ export class Orchestrator {
    * extension's recovery callback, confirmations no longer waiting are reported and closed.
    * After the extensions load — the callbacks must exist — and before turns resume.
    */
+  /** Plans started before a restart continue from their unanswered items (INV-862). */
+  recoverOrchestrations(): { resumed: number; closed: number } {
+    return this.orchestrations?.recover() ?? { resumed: 0, closed: 0 };
+  }
+
   async recoverEffects(): Promise<{ resumedJobs: number; lostJobs: number; closedPauses: number }> {
     return (await this.effects?.recover()) ?? { resumedJobs: 0, lostJobs: 0, closedPauses: 0 };
   }
@@ -2449,6 +2482,7 @@ export const ALL_TOOLS: readonly string[] = [
   "Jobs",
   "Delegate",
   "Fork",
+  "Orchestrate",
   "read_file",
   "write_file",
   "edit_file",

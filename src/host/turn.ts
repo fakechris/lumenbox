@@ -25,6 +25,7 @@ import { idempotencyOf } from "../protocol/idempotency.ts";
 import { changedPromptSegments, type PromptFingerprint } from "./resume.ts";
 import type { PendingWork } from "./pending-work.ts";
 import type { Effects } from "./effects.ts";
+import type { Orchestrations } from "./orchestrate.ts";
 import type { McpFace } from "./mcp-face.ts";
 import type { ModelRelay } from "./model-relay.ts";
 import type { DelegateSessions } from "./delegate-sessions.ts";
@@ -569,6 +570,8 @@ export interface TurnDeps {
   pendingWork?: PendingWork;
   /** Acts on the effects a tool result asks for (INV-861). Absent means results are text only. */
   effects?: Effects;
+  /** Runs fan-out plans (INV-862). */
+  orchestrations?: Orchestrations;
   /** The MCP face (docs/33), for Delegate. */
   mcpFace?: McpFace;
   modelRelay?: ModelRelay;
@@ -3265,6 +3268,7 @@ ${outcome.text}`;
             skillProvenance: deps.skillProvenance,
             workId,
             ...(deps.pendingWork !== undefined ? { pendingWork: deps.pendingWork } : {}),
+            ...(deps.orchestrations !== undefined ? { orchestrations: deps.orchestrations } : {}),
             ...(deps.mcpFace !== undefined ? { mcpFace: deps.mcpFace } : {}),
             ...(deps.modelRelay !== undefined ? { modelRelay: deps.modelRelay } : {}),
             ...(deps.delegateSessions !== undefined ? { delegateSessions: deps.delegateSessions } : {}),

@@ -420,3 +420,15 @@ simulated restart and `resumeTool` is called by the sweep; `jobDone` delivers on
 `reminder` is delivered once and survives a restart; unknown effect ignored and logged; a fork's
 effects are dropped; docs/34 gains a section; `npm test` exits 0 with the floor raised.
 **Status**: Complete (2026-09-29) — PR pending
+
+## Stage 37: Fan-out by plan (INV-862, from INV-860)
+**Goal**: `Orchestrate` takes a declarative plan (items, a prompt with `{{item}}`, `expect`, optional
+`reduce`) and runs one sub-agent per item plus one reducer behind the turn, delivered as one message;
+counted exactly, confirmed by the person above 20 calls, resumable after a restart without re-running
+answered items (answers are per run: not memoized across runs, not shared between agents). Data, not code (Chris, 2026-09-29): `node:vm` is not a boundary and a sandbox would
+be a fourth runtime dependency.
+**Success Criteria**: plan validation; concurrency bound; reducer sees every answer; nothing runs
+before confirmation; a duplicate submit does not ask twice; a decline runs nothing; 30 items + a
+summary with a crash after twelve costs exactly 31 sub-agent turns; a fork cannot submit a plan;
+docs/32 §9; `npm test` green with the floor raised.
+**Status**: Complete (2026-09-29) — PR pending. Contract amendment c5732b25 (script → plan) awaiting acceptance.
