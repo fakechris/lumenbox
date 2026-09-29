@@ -61,6 +61,9 @@ export function cacheReadShare(usage: { inputTokens: number; cacheReadTokens: nu
 /** What a row with no kind is reported as. Not a kind: the absence of one. */
 export const UNATTRIBUTED = "unattributed";
 
+/** Additive: old rows without this field keep their historical accounting semantics. */
+export type UsageMetering = "complete" | "cache_unknown" | "missing" | "invalid";
+
 /**
  * A window on what was spent. Rows fall off the back by age and by count, on purpose:
  * the totals a person asks for are recent ones, and the archive of every call ever made
@@ -140,6 +143,8 @@ export interface UsageRecord {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  /** A numeric zero is not evidence that an OpenAI-compatible provider returned usage. */
+  metering?: UsageMetering;
 }
 
 export interface UsageTotals {
@@ -406,7 +411,7 @@ export class UsageLog {
     agentName: string;
     provider: string;
     model: string;
-    usage: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null };
+    usage: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null; metering?: UsageMetering };
     workId?: string;
     conversation?: string;
     /** Who this is on behalf of. Absent when nobody drove it — a wake, a scheduled run. */
@@ -427,6 +432,7 @@ export class UsageLog {
       outputTokens: options.usage.output_tokens ?? 0,
       cacheReadTokens: options.usage.cache_read_input_tokens ?? 0,
       cacheWriteTokens: options.usage.cache_creation_input_tokens ?? 0,
+      ...(options.usage.metering !== undefined ? { metering: options.usage.metering } : {}),
     });
   }
 

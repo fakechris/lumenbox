@@ -167,11 +167,12 @@ test("a task costs what its turns cost, and says when it cannot be known", () =>
       { id: "t12", title: "asked before turnId existed", status: "open", runs: [] },
     ],
     records,
-    {}
+    { "MiniMax-M3": { inputPerM: 1, outputPerM: 2 } }
   );
 
   assert.equal(costed[0]?.totals.outputTokens, 125);
   assert.equal(costed[0]?.turns, 2);
+  assert.ok(Math.abs(costed[0]!.money! - (2_000 + 125 * 2) / 1e6) < 1e-12);
   // A task with no runs is not a free task. It is a task whose cost is not on file, and the
   // dashboard has to show those differently or the column reads as "these ones were cheap".
   assert.equal(costed[1]?.totals.outputTokens, 0);

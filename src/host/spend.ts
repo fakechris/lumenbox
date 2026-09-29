@@ -40,11 +40,13 @@ export type Rates = Record<string, Rate>;
 
 /** What one call cost, or `undefined` when the model has no rate. */
 /** Everything pricing a call needs, and nothing else — so the relay can price its own rows. */
-export type Priceable = Pick<UsageRecord, "model" | "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens">;
+export type Priceable = Pick<UsageRecord, "model" | "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens" | "metering">;
 
 export function priceOf(record: Priceable, rates: Rates): number | undefined {
   const rate = rates[record.model];
-  if (rate === undefined) return undefined;
+  if (rate === undefined || (record.metering !== undefined && record.metering !== "complete") ||
+    (record.cacheReadTokens > 0 && rate.cacheReadPerM === undefined) ||
+    (record.cacheWriteTokens > 0 && rate.cacheWritePerM === undefined)) return undefined;
   const perMillion = (tokens: number, price: number | undefined) =>
     price === undefined ? 0 : (tokens / 1e6) * price;
   return (
@@ -72,6 +74,10 @@ export interface SpendReport {
   money?: number;
   /** Models seen with no rate configured. Non-empty means `money` is withheld. */
   unpriced: string[];
+  /** New rows with unknown cache split or absent/contradictory provider usage. */
+  unmeasured: { status: string; records: number }[];
+  /** A configured model can still lack a price for a nonzero cache class. */
+  unpricedCategories: string[];
   /** Whether the source file has been compacted, which makes every total a floor. */
   compacted: boolean;
   /**
@@ -150,13 +156,25 @@ export function summariseSpend(records: readonly UsageRecord[], query: SpendQuer
   const unpriced = [
     ...new Set(selected.filter(record => rates[record.model] === undefined).map(record => record.model)),
   ].sort();
+  const unmeasured = [...new Set(selected.map(record => record.metering).filter(
+    status => status !== undefined && status !== "complete"
+  ))].sort().map(status => ({
+    status, records: selected.filter(record => record.metering === status).length,
+  }));
+  const unpricedCategories = [...new Set(selected.flatMap(record => {
+    const rate = rates[record.model];
+    return rate === undefined ? [] : [
+      ...(record.cacheReadTokens > 0 && rate.cacheReadPerM === undefined ? [`${record.model}:cacheReadPerM`] : []),
+      ...(record.cacheWriteTokens > 0 && rate.cacheWritePerM === undefined ? [`${record.model}:cacheWritePerM`] : []),
+    ];
+  }))].sort();
   // Withheld rather than partial. A bill missing one model reads low *and reads complete*,
   // which is a number somebody will act on that is wrong by an unknown amount.
   // And not for an empty window either. Nothing to price sums to zero, which renders as a
   // confident $0.00 — a figure that says "this cost nothing" where the truth is "nothing
   // here is costable". Seen on screen the first time a task drill-down was opened.
   const money =
-    unpriced.length > 0 || selected.length === 0
+    unpriced.length > 0 || unmeasured.length > 0 || unpricedCategories.length > 0 || selected.length === 0
       ? undefined
       : selected.reduce((all, record) => all + (priceOf(record, rates) ?? 0), 0);
 
@@ -192,6 +210,8 @@ export function summariseSpend(records: readonly UsageRecord[], query: SpendQuer
     byDoor: group(selected, record => record.door ?? UNATTRIBUTED, "door"),
     ...(money !== undefined ? { money } : {}),
     unpriced,
+    unmeasured,
+    unpricedCategories,
     compacted: query.compacted === true,
     ...(unjoinable !== undefined ? { unjoinable } : {}),
   };
@@ -265,7 +285,7 @@ export function costOfTasks(
       turns: report.turns,
       totals: report.totals,
       ...(report.money !== undefined ? { money: report.money } : {}),
-      unknown: report.records === 0,
+      unknown: report.money === undefined,
     };
   });
 }
@@ -295,6 +315,10 @@ export function describeSpend(report: SpendReport): string[] {
       `  cost not shown: no rate for ${report.unpriced.join(", ")}` +
         ` — set "rates" in config.json to price them`
     );
+  } else if (report.unmeasured.length > 0) {
+    lines.push(`  cost not shown: provider usage unknown (${report.unmeasured.map(x => `${x.status}: ${x.records}`).join(", ")})`);
+  } else if (report.unpricedCategories.length > 0) {
+    lines.push(`  cost not shown: no rate for ${report.unpricedCategories.join(", ")}`);
   }
 
   const section = (title: string, rows: { totals: UsageTotals }[], label: (row: never) => string) => {
