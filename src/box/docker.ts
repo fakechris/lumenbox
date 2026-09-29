@@ -506,16 +506,44 @@ function hostCredentialArgs(): string[] {
   });
 }
 
+/**
+ * What this machine's Docker situation actually is, in a shape a person can act on.
+ *
+ * A boolean "docker available" folds together the two ways a fresh machine fails, and they
+ * want opposite first steps: no `docker` command means *install* Docker Desktop or
+ * OrbStack; a command whose engine does not answer means *start* it. A new user pressing
+ * *Start the box* on a machine with neither got one error naming `docker version`, which
+ * is the product handing them a terminal (INV-855).
+ */
+export type DockerEnvironmentState =
+  | { state: "no-binary"; detail: string }
+  | { state: "no-engine"; detail: string }
+  | { state: "ok"; detail: string };
+
+export async function dockerEnvironment(timeoutMs = 15_000): Promise<DockerEnvironmentState> {
+  try {
+    const { stdout } = await execFileAsync("docker", ["version", "--format", "{{.Server.Version}}"], {
+      timeout: timeoutMs,
+      maxBuffer: 1024 * 1024,
+    });
+    return { state: "ok", detail: `engine ${stdout.trim()}` };
+  } catch (error) {
+    const failure = error as { code?: string; stderr?: string; message?: string };
+    if (failure.code === "ENOENT") {
+      return { state: "no-binary", detail: "the docker command is not on PATH" };
+    }
+    const detail = String(failure.stderr ?? failure.message ?? "")
+      .trim()
+      .replace(/\n[\s\S]*$/, "");
+    return { state: "no-engine", detail: detail || "the docker engine did not answer" };
+  }
+}
+
 export class BoxManager {
   constructor(readonly config: BoxConfig) {}
 
   async dockerAvailable(): Promise<boolean> {
-    try {
-      await docker(["version", "--format", "{{.Server.Version}}"], 15_000);
-      return true;
-    } catch {
-      return false;
-    }
+    return (await dockerEnvironment()).state === "ok";
   }
 
   async state(): Promise<ContainerState> {
@@ -778,9 +806,19 @@ export class BoxManager {
         "No box token configured. Set AGENTBOX_TOKEN, or let `agentbox box up` generate one."
       );
     }
-    if (!(await this.dockerAvailable())) {
+    const environment = await dockerEnvironment();
+    if (environment.state === "no-binary") {
       throw new DockerError(
-        "Cannot reach a Docker engine. Check `docker version`, DOCKER_HOST, and your docker context."
+        "Cannot find the docker command on PATH. Install Docker Desktop " +
+          "(https://www.docker.com/products/docker-desktop/) or OrbStack " +
+          "(https://orbstack.dev/), open it once, then try again."
+      );
+    }
+    if (environment.state === "no-engine") {
+      throw new DockerError(
+        `Docker is installed but its engine did not answer (${environment.detail}). ` +
+          "Start Docker Desktop or OrbStack, then try again — or check `docker version`, " +
+          "DOCKER_HOST, and your docker context, which reach the same check."
       );
     }
 

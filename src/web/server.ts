@@ -208,7 +208,7 @@ import { QuestionWatch } from "../host/question-expiry.ts";
 import { appendLine } from "../host/jsonl.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
 import { firstRunCue } from "../host/prompt.ts";
-import { readBoxToken } from "../box/docker.ts";
+import { dockerEnvironment, readBoxToken, type DockerEnvironmentState } from "../box/docker.ts";
 import { attachedBox, tokenOf } from "../box/boxes.ts";
 import { catalogTemplate, describeTemplate, parseTemplate, resolveBundleRefs, rewriteFrontmatter, templatesEnabled, unresolvedPlaceholders } from "../host/template.ts";
 import { SKILLS_DIR, SKILL_FILENAME, authoringHints, parseSkillFile, slugify } from "../host/skills.ts";
@@ -2415,6 +2415,21 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // Mutable: the UI can bring the box up after this server started without one.
   let box = await orchestrator.connectBox();
   log(box.connected ? `box: ${box.detail}` : `box: unavailable — ${box.detail}`);
+
+  // What the settings page says about Docker while no box is connected (INV-855). Without
+  // this the page could not tell "docker is not installed" from "the engine is not running",
+  // and a new user had one jargon error for both. A real `docker version` runs behind it,
+  // so it is cached briefly — the page polls /api/state every few seconds and the engine's
+  // state does not change faster than that.
+  let dockerEnvironmentCache: { at: number; value: DockerEnvironmentState } | undefined;
+  const dockerEnvironmentForPage = async (): Promise<DockerEnvironmentState> => {
+    if (dockerEnvironmentCache && Date.now() - dockerEnvironmentCache.at < 10_000) {
+      return dockerEnvironmentCache.value;
+    }
+    const value = await dockerEnvironment();
+    dockerEnvironmentCache = { at: Date.now(), value };
+    return value;
+  };
 
   // Recovery happens only now, after the box is connected — a recovered turn captures whatever box
   // the orchestrator holds when it is built, and a turn that started before the box was up would run
@@ -5452,6 +5467,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               ...box,
               ok: box.connected,
               ...auditedClass(classifyBox(provisioner.boxName, loadConfig(), registry.box.name)),
+              // Only while there is no box to describe, and only for a Docker box: an
+              // attached box's health is a network question, not a Docker question.
+              docker:
+                box.connected || provisioner.kind !== "docker"
+                  ? undefined
+                  : await dockerEnvironmentForPage(),
             },
             allTools: ALL_TOOLS,
             // Every box this installation drives, own first (docs/30). An agent's row names its

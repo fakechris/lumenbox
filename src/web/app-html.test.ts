@@ -225,3 +225,17 @@ test("the box image override is settable from the page (INV-856)", () => {
   assert.match(APP_HTML, /data\.config && data\.config\.boxImage/);
   assert.match(APP_HTML, /setboximage"\)\.value\.trim\(\)/);
 });
+
+test("the box section can say what is actually wrong with Docker (INV-855)", () => {
+  // Three environment states, each with its own sentence. The no-binary one carries the
+  // download links, because a fresh machine's next step is installing Docker Desktop or
+  // OrbStack — not reading `docker version`.
+  assert.match(APP_HTML, /dockerState\.state === "no-binary"/);
+  assert.match(APP_HTML, /dockerState\.state === "no-engine"/);
+  assert.match(APP_HTML, /ui\.box\.dockerMissing/);
+  assert.match(APP_HTML, /ui\.box\.dockerStopped/);
+  assert.match(APP_HTML, /https:\/\/www\.docker\.com\/products\/docker-desktop\//);
+  assert.match(APP_HTML, /https:\/\/orbstack\.dev\//);
+  // The welcome note names the prerequisite before the first click, not after a failure.
+  assert.match(APP_HTML, /Docker Desktop or OrbStack must be installed/);
+});
