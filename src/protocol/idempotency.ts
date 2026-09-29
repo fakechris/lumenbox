@@ -30,33 +30,33 @@ export type Idempotency =
   | { kind: "unsafe" };
 
 /**
- * Our own write tools. Reads are not listed: everything absent is `unsafe`, and a read
- * that is wrongly treated as unsafe costs one retry nobody makes.
+ * Our own tools, by the names `buildTools` registers them under (INV-868: this table once said
+ * `Read`/`Write`/`Grep`/`Glob`, which name nothing, so every read fell to `unsafe` and a keyed
+ * write was never replayed; `idempotency-names.test.ts` now fails on a key that is not a tool).
+ * Everything absent is `unsafe`, and a read wrongly treated as unsafe costs one retry nobody makes.
  */
 export const TOOL_IDEMPOTENCY: Readonly<Record<string, Idempotency>> = {
   // Reads and inspections: repeating them changes nothing.
-  Read: { kind: "read" },
-  Grep: { kind: "read" },
-  Glob: { kind: "read" },
-  History: { kind: "read" },
+  read_file: { kind: "read" },
+  list_dir: { kind: "read" },
+  ReadHistory: { kind: "read" },
   Recall: { kind: "read" },
   browser_read: { kind: "read" },
-  browser_outline: { kind: "read" },
-  screenshot: { kind: "read" },
+  browser_snapshot: { kind: "read" },
   // Writes that land the same state however many times they run, keyed by what they name.
-  Write: { kind: "idempotent", key: "path" },
+  write_file: { kind: "idempotent", key: "path" },
   browser_open: { kind: "idempotent", key: "url" },
   Tasks: { kind: "idempotent", key: "id" },
   RememberFact: { kind: "idempotent", key: "text" },
   // Writes that do it again when they run again. Named rather than implied, so that
   // adding one and forgetting this file leaves it `unsafe` anyway.
   bash: { kind: "unsafe" },
+  edit_file: { kind: "unsafe" },
   RunOnHost: { kind: "unsafe" },
   SendToAgent: { kind: "unsafe" },
   AskUser: { kind: "unsafe" },
   connector_request: { kind: "unsafe" },
-  browser_click: { kind: "unsafe" },
-  browser_type: { kind: "unsafe" },
+  browser_act: { kind: "unsafe" },
   browser_fill_secret: { kind: "unsafe" },
 };
 
