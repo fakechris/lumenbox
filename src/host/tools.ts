@@ -38,6 +38,7 @@ import { guardShellCommand } from "./ui-automation-guard.ts";
 import { dedupe, dedupeKey, describeFrom, memoryRef, validateRecord } from "./memory.ts";
 import { type Claims, heldElsewhere } from "./claims.ts";
 import { forkTag, type CommitHow, type PendingWork } from "./pending-work.ts";
+import { type Orchestrations, parsePlan } from "./orchestrate.ts";
 import { MCP_FACE_DIR, MCP_FACE_TOKEN_VARIABLE, type McpFace } from "./mcp-face.ts";
 import type { ModelRelay } from "./model-relay.ts";
 import type { DelegateSessions } from "./delegate-sessions.ts";
@@ -254,6 +255,8 @@ export interface ToolContext {
   workId?: string;
   /** The fork ledger (docs/32). Absent means forks are not recorded — tests, or nobody. */
   pendingWork?: PendingWork;
+  /** Runs fan-out plans (INV-862). Absent means the Orchestrate tool answers that it is unavailable. */
+  orchestrations?: Orchestrations;
   /** The MCP face (docs/33): routes a delegated engine may call the host's MCP tools through. */
   mcpFace?: McpFace;
   /** The model relay: a delegated engine's model traffic through the host, no key in the box. */
@@ -410,6 +413,8 @@ export const FORK_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
   "PackTemplate",
   "Delegate",
   "Fork",
+  // A plan's items are forks; a fork that could submit a plan would be a fan-out with no bottom.
+  "Orchestrate",
   "AskUser",
   "AskSecret",
   "HandOverDesktop",
@@ -859,6 +864,30 @@ export function buildTools(
             },
           },
           required: ["briefs"],
+        },
+      },
+      {
+        name: "Orchestrate",
+        description:
+          "Run the same question over many items — one sub-agent per item, each with fresh context — " +
+          "and, if you give a `reduce` brief, one more that combines their answers. For work that divides " +
+          "into more independent pieces than Fork takes at once (twelve), or that should survive a " +
+          "restart: the plan is kept, and answers already in are reused rather than re-run.\n\n" +
+          "It always runs behind your turn: end your turn after calling it, and the result arrives here " +
+          "as one message. Past 20 sub-agent turns the person is asked to confirm first, and nothing runs " +
+          "until they do. The plan is data — items and briefs, no code. Make each item self-contained " +
+          "(a file, a URL, a name), and say in `expect` exactly what each answer must contain so the " +
+          "reducer can combine them.",
+        input_schema: {
+          type: "object",
+          properties: {
+            brief: { type: "string", description: "What the whole job is for, in one line. The person sees it when asked to confirm." },
+            items: { type: "array", items: { type: "string" }, description: "One entry per sub-agent: the thing it looks at." },
+            prompt: { type: "string", description: "What each sub-agent is asked. Must contain {{item}}, replaced by its item." },
+            expect: { type: "string", description: "What every answer must contain (fields, format, length)." },
+            reduce: { type: "string", description: "Optional: the brief of one final sub-agent that combines the answers. Must contain {{results}}." },
+          },
+          required: ["brief", "items", "prompt"],
         },
       },
       {
@@ -2635,6 +2664,24 @@ export async function dispatchTool(
       return {
         text: formatExec(result, input.timeout_ms ? Number(input.timeout_ms) : undefined),
       };
+    }
+
+    case "Orchestrate": {
+      if (context.orchestrations === undefined) {
+        return { text: "Orchestrate is unavailable here; use Fork for a handful of pieces.", isError: true };
+      }
+      if (isForkConversation(context.conversation)) {
+        return { text: "You are a fork, and a fork cannot start a plan. Do this piece yourself and report back.", isError: true };
+      }
+      const parsed = parsePlan(input);
+      if ("problem" in parsed) return { text: parsed.problem, isError: true };
+      const submitted = context.orchestrations.submit({
+        agentId: context.agent.id,
+        agentName: context.agent.profile.name,
+        parent: context.conversation ?? MAIN_CONVERSATION,
+        plan: parsed.plan,
+      });
+      return { text: submitted.text };
     }
 
     case "Fork": {

@@ -72,6 +72,8 @@ const DECLARED: Record<string, SideEffect> = {
   browser_open: { tier: "self" },
   browser_act: { tier: "self" },
   Fork: { tier: "self" },
+  // The fan-out itself is the agent's own work; a large one asks the person through its own gate.
+  Orchestrate: { tier: "self" },
   Delegate: { tier: "self" },
   SetPlan: { tier: "self" },
   Checkpoint: { tier: "self" },

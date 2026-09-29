@@ -2,7 +2,7 @@
      title: Coordination as protocol, slice one: a fork ledger that survives restarts, and fenced children
      family: decision
      status: current
-     updated: 2026-09-26
+     updated: 2026-09-29
 -->
 # 32 — Coordination as protocol, slice one: a fork ledger that survives restarts, and fenced children
 
@@ -230,4 +230,32 @@ promising a time, and — once the results landed — answering the last fork in
 Tests: `fork.test.ts` (the receipt text), `prompt.test.ts` (every lane carries the rule, one
 copy, stable tier unchanged), and the INV-785 scenario in `scenario.test.ts` (a parent starts
 forks, ends its turn, two results land, the final message is one standalone deliverable).
+
+## 9. Addendum 2026-09-29 (INV-862): fan-out by plan
+
+Fork stops at twelve briefs because each is a full turn and the model schedules them by hand.
+Thirty items and a summary meant batches the model had to track itself, and a restart lost which
+batches had finished. `Orchestrate` takes the whole job as one **plan** — `brief`, `items`, a
+`prompt` with `{{item}}`, an optional `expect` for what every answer must contain, and an optional
+`reduce` brief with `{{results}}` for one combining step — and the harness runs it behind the turn
+(`src/host/orchestrate.ts`).
+
+- **Data, not code.** Chris's choice on 2026-09-29, against the script-in-a-sandbox the item first
+  described (Manus Cue's workflow addon runs model-written JavaScript in QuickJS): `node:vm` is not a
+  boundary — model code reaches `process` through `this.constructor.constructor` — and a real sandbox
+  would be a fourth runtime dependency. A plan runs nothing, and replays deterministically by
+  construction; it gives up branching, which "N items → answers → one summary" does not need.
+- **Counted exactly, asked when large.** Calls = items + the reducer. Over 20 still to run, the person
+  confirms first through the same approval card an extension's pause uses (`Policy.requestConfirmation`,
+  INV-861); nothing runs until they answer, and a decline is reported.
+- **Idempotent by position.** Each answer is kept under the plan's hash and its index
+  (`~/.agentbox/orchestrations/<hash>.jsonl`). After a restart the plan continues from the unanswered
+  items (the fork sweep has already ended the interrupted children); a re-submitted plan reuses what it
+  has. The acceptance scenario — thirty items and a summary, a crash after twelve — costs exactly 31
+  sub-agent turns.
+- **Fenced like a fork.** Items and the reducer run in `fork/…` conversations with the fork prompt and
+  tool fence; `Orchestrate` itself is withheld from forks, so a plan cannot start a plan.
+- **One record, one message.** The pending-work ledger holds one `orchestrate` record per plan
+  (prepared on submit, admitted when it starts, committed when the result is delivered); the result
+  arrives in the conversation as a single message — the summary, or each item's answer.
 

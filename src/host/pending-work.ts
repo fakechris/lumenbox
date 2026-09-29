@@ -28,15 +28,15 @@ export function pendingWorkPath(): string {
 const COMPACT_AT = 500;
 
 export type CommitHow = "done" | "failed" | "late";
-export type DropWhy = "restart" | "unrecorded";
+export type DropWhy = "restart" | "unrecorded" | "refused";
 
 /**
  * `fork` and `delegate` are the fork ledger's own (docs/32). `pause`, `ext-job` and `reminder`
  * are effects a tool result asked for (INV-861, effects.ts): recorded here for the same reason —
  * written before they are acknowledged, settled when delivered — and recovered by effects.ts,
- * not by the fork sweep.
+ * not by the fork sweep. `orchestrate` is a fan-out plan (INV-862), recovered by orchestrate.ts.
  */
-export type WorkKind = "fork" | "delegate" | "pause" | "ext-job" | "reminder";
+export type WorkKind = "fork" | "delegate" | "pause" | "ext-job" | "reminder" | "orchestrate";
 
 /** Whether a kind belongs to the fork ledger proper, which the startup sweep settles. */
 export function isForkLedgerKind(kind: WorkKind): boolean {

@@ -2454,6 +2454,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   if (effects.resumedJobs + effects.lostJobs + effects.closedPauses > 0) {
     log(`effects after restart: ${effects.resumedJobs} background job(s) handed back, ${effects.lostJobs} lost, ${effects.closedPauses} confirmation(s) closed`);
   }
+  // Plans (INV-862) after the fork sweep, which ended their interrupted children; they restart only
+  // the items without an answer.
+  const plans = orchestrator.recoverOrchestrations();
+  if (plans.resumed + plans.closed > 0) log(`plans after restart: ${plans.resumed} continued, ${plans.closed} closed`);
   // Reminders an extension set are delivered when due; a minute is fine-grained enough for a note.
   const reminderTimer = setInterval(() => {
     orchestrator.effects?.deliverDue();
