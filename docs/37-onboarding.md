@@ -68,8 +68,10 @@ From a checkout of this repository you can build that image yourself instead of 
 `fakechris/lumenbox:latest` (it needs `docker login`). An image already on the machine is used as
 it is; a pull only happens when the version tag is absent.
 
-If the button says *Cannot reach a Docker engine*, Docker is not running or not installed —
-start it and press again. `docker version` in a terminal is the same check.
+The Box section says which of the three situations you are in before you press anything:
+no `docker` command on this machine (it names Docker Desktop and OrbStack, with links),
+Docker installed but its engine not answering (start it and press again), or the engine
+fine and only the container missing. `docker version` in a terminal is the same check.
 
 ### 3b. Docker on another machine
 
