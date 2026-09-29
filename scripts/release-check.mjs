@@ -15,6 +15,11 @@
  *   - the daemon bundle contains no absolute path from this machine, which is how a
  *     bundle "works here" and dies in the container
  *   - the image's Dockerfile still pins its base by digest, so a rebuild is reproducible
+ *   - the packaged app in dist-app/ carries the full production dependency closure, and a
+ *     dmg exists beside every zip (the 0.3.0 installers shipped with three packages and
+ *     crashed on every new user's first import — a green check above would not have seen it)
+ *   - the image tag this app pulls at its version exists on Docker Hub, because a fresh
+ *     install's first "Start the box" pulls exactly that tag (skippable per environment)
  *
  * Not here: anything needing a real box or an X server. `npm run smoke` covers those
  * against a running container and takes minutes — it belongs to a release, and this
@@ -22,7 +27,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -95,6 +100,136 @@ check("the box image pins its base by digest, and something unfreezes it", () =>
   if (!/package-ecosystem:\s*docker/.test(config)) {
     throw new Error("dependabot does not watch the docker ecosystem, so the pin will rot");
   }
+});
+
+// ── the two gates 0.3.0 shipped without (INV-854 → INV-858) ─────────────────────────
+//
+// Everything above proves bundles built from this checkout load. Neither proved what
+// electron-builder *packed* — and 0.3.0 published four installers whose app/node_modules
+// held exactly the three top-level packages, so every new user's first launch died on the
+// first import with a green check behind it. And once the app began pulling its box image
+// at the package version, an app published before its image exists breaks every fresh
+// install of that version on the first "Start the box" click.
+
+const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
+// Overridable so a candidate directory can be checked — and so the negative path of this
+// gate itself is runnable against a sabotaged copy rather than a rebuilt app.
+const distDir = process.env.AGENTBOX_DIST_DIR ?? join(root, "dist-app");
+
+/** Every non-dev package name the packaged app imports from, per the lock it builds with. */
+function expectedPackagedPackages() {
+  const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
+  const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  const entry = name => lock.packages?.[`node_modules/${name}`];
+  const expected = new Set();
+  const queue = Object.keys(manifest.dependencies ?? {});
+  while (queue.length > 0) {
+    const name = queue.pop();
+    if (expected.has(name)) continue;
+    expected.add(name);
+    for (const dep of Object.keys(entry(name)?.dependencies ?? {})) queue.push(dep);
+  }
+  return expected;
+}
+
+/** Top-level package names inside an artifact's app/node_modules, from `unzip -l`. */
+function zipPackages(path) {
+  const out = execFileSync("unzip", ["-l", path], {
+    encoding: "utf8",
+    timeout: 120_000,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const names = new Set();
+  for (const match of out.matchAll(/node_modules\/(@[^/\s]+\/[^/\s]+|[^@\s/][^/\s]*)\//g)) {
+    names.add(match[1]);
+  }
+  return names;
+}
+
+check("every packaged app carries the full production dependency closure", () => {
+  const zips = existsSync(distDir)
+    ? readdirSync(distDir).filter(name => name.startsWith(`LumenBox-${version}`) && name.endsWith(".zip"))
+    : [];
+  if (zips.length === 0) {
+    note(`no LumenBox-${version} zip in ${distDir} — nothing built to publish; gate skipped, but do not publish without it`);
+    return;
+  }
+  const expected = expectedPackagedPackages();
+  for (const name of zips) {
+    const packaged = zipPackages(join(distDir, name));
+    const missing = [...expected].filter(pkg => !packaged.has(pkg));
+    if (missing.length > 0) {
+      throw new Error(
+        `${name} is missing ${missing.length} packaged package(s), first few: ` +
+          `${missing.slice(0, 5).join(", ")}. This is the 0.3.0 failure: an app whose ` +
+          `node_modules holds ${packaged.size} top-level packages instead of the ` +
+          `${expected.size} the app imports. Rebuild on a clean node_modules (npm ci, then dist).`
+      );
+    }
+    note(`${name}: ${packaged.size} top-level packages, all ${expected.size} expected present`);
+  }
+});
+
+check("every packaged dmg exists beside its zip (same staged app, same tree)", () => {
+  // The dmg is produced from the same per-arch staged .app as that arch's zip, so the
+  // closure check on the zips covers its contents; what this gate adds is that a dmg
+  // exists to upload at all — half a release (zip-only) shipped silently once before
+  // anyone noticed. Mount-and-verify per dmg would double the cost for that assurance.
+  const files = existsSync(distDir) ? readdirSync(distDir) : [];
+  const zips = files.filter(name => name.startsWith(`LumenBox-${version}`) && name.endsWith(".zip"));
+  if (zips.length === 0) {
+    note(`no artifacts for ${version} in ${distDir}; dmg gate skipped`);
+    return;
+  }
+  const problems = [];
+  for (const zip of zips) {
+    const arch = zip.includes("-arm64") ? "arm64" : "x64";
+    const dmg = arch === "arm64" ? `LumenBox-${version}-arm64.dmg` : `LumenBox-${version}.dmg`;
+    const path = join(distDir, dmg);
+    if (!existsSync(path)) {
+      problems.push(`${dmg} missing for ${zip}`);
+    } else if (statSync(path).size < 50 * 1024 * 1024) {
+      problems.push(`${dmg} is ${statSync(path).size} bytes, which is not the app`);
+    }
+  }
+  if (problems.length > 0) throw new Error(problems.join("; "));
+});
+
+check("the image tag this app pulls exists on Docker Hub before the app ships", () => {
+  if (process.env.RELEASE_CHECK_SKIP_IMAGE === "1") {
+    note("RELEASE_CHECK_SKIP_IMAGE=1 — image gate skipped (CI has no business depending on the Hub per push)");
+    return;
+  }
+  const repo = process.env.AGENTBOX_IMAGE_REPO ?? "fakechris/lumenbox";
+  let body;
+  try {
+    // The Hub tags API, not `docker manifest inspect`: it answers without a docker
+    // daemon or a login, which is the context a release check actually runs in.
+    body = execFileSync(
+      "curl",
+      ["-fsS", "--max-time", "30", `https://hub.docker.com/v2/repositories/${repo}/tags/${version}`],
+      { encoding: "utf8", timeout: 45_000 },
+    );
+  } catch (error) {
+    const status = error?.status ?? "";
+    if (String(status).includes("22") || /HTTP.*404/.test(String(error))) {
+      throw new Error(
+        `Docker Hub has no ${repo}:${version}. A fresh install of this app pulls exactly ` +
+          "that tag on first start — build and push the image first (npm run build:image, " +
+          "npm run push:image), then publish the app."
+      );
+    }
+    throw new Error(
+      `could not reach Docker Hub to confirm ${repo}:${version} exists (${error.message}). ` +
+        "A release must not ship on an unverified tag: check the network, or set " +
+        "RELEASE_CHECK_SKIP_IMAGE=1 only if you have verified the tag another way."
+    );
+  }
+  const tag = JSON.parse(body);
+  if (tag.name !== version) {
+    throw new Error(`Docker Hub answered with tag "${tag.name}" where ${version} was asked for`);
+  }
+  note(`${repo}:${version} is on Docker Hub`);
 });
 
 console.log("");
