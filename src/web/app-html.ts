@@ -1134,8 +1134,9 @@ export const APP_HTML = String.raw`<!doctype html>
     </div>
     <div class="fieldnote" id="setwelcome" style="display:none;border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 12px;color:var(--text-soft)">
       Welcome. LumenBox needs two things before agents can work: a model provider with a
-      key, and the box &mdash; one Linux container with a desktop, a browser and a shell,
-      running on this machine. Both are set up here.
+      key, and the box &mdash; one Linux computer with a desktop, a browser and a shell,
+      running in Docker on this machine, so Docker Desktop or OrbStack must be installed
+      and started first. Both are set up here.
     </div>
     <div class="field" data-tier="installation" data-settab="model">
       <label>Provider</label>
@@ -2427,9 +2428,20 @@ $("setboxes").addEventListener("click", function (e) {
 
 function renderBoxSection() {
   renderBoxes();
-  $("setboxstate").textContent = boxState.ok
-    ? "Running — " + boxState.detail
-    : "Not running. Agents have no desktop, shell or files until it is.";
+  if (boxState.ok) {
+    $("setboxstate").textContent = "Running — " + boxState.detail;
+  } else if (dockerState && dockerState.state === "no-binary") {
+    // The machine has no docker command at all. Say what a box is, name the two things to
+    // install, and link them — the old error told the reader to run docker version, which
+    // assumed a reader who does not exist.
+    $("setboxstate").innerHTML = esc(t("ui.box.dockerMissing")) +
+      ' <a href="https://www.docker.com/products/docker-desktop/" target="_blank" rel="noreferrer">Docker Desktop</a> · ' +
+      '<a href="https://orbstack.dev/" target="_blank" rel="noreferrer">OrbStack</a>';
+  } else if (dockerState && dockerState.state === "no-engine") {
+    $("setboxstate").textContent = t("ui.box.dockerStopped");
+  } else {
+    $("setboxstate").textContent = "Not running. Agents have no desktop, shell or files until it is.";
+  }
   $("setboxactions").style.display = boxState.ok ? "none" : "";
 }
 
@@ -2868,6 +2880,9 @@ var current = null;
 var currentConversation = "main";
 /** The last /api/state box report, for the settings dialog's box section. */
 var boxState = { ok: false, detail: "" };
+// Docker's own state while no box is running: "no-binary" / "no-engine" / "ok". Null once
+// the box is up, and for an attached box, where the question is not Docker's to answer.
+var dockerState = null;
 var onboardChecked = false;
 var busy = new Set();
 /** In-flight assistant text nodes, keyed by agent id, so deltas land in one bubble. */
@@ -4493,6 +4508,7 @@ function refresh() {
     allTools = state.allTools || allTools;
     $("model").innerHTML = "<b>" + esc(state.provider) + "</b>";
     boxState = { ok: !!state.box.ok, detail: String(state.box.detail || "") };
+    dockerState = state.box.docker || null;
     $("boxinfo").textContent = (state.box.ok ? state.box.detail : "box unavailable") +
       (state.boxes && state.boxes.length > 1 ? " · " + state.boxes.length + " boxes (" + state.boxes.filter(function (b) { return b.connected; }).length + " up)" : "");
     $("boxdot").className = "dot " + (state.box.ok ? "ok" : "bad");
