@@ -7,11 +7,10 @@
  * reimplement. Every call is execFile with an argument array — no shell.
  */
 
-import { envNumber, loadConfig } from "../config.ts";
+import { agentboxHome, envNumber, loadConfig } from "../config.ts";
 import { execFile, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -204,14 +203,14 @@ function publishAddress(): string {
 }
 
 export function boxTokenPath(containerName: string): string {
-  const home = process.env.AGENTBOX_HOME ?? join(homedir(), ".agentbox");
-  return join(home, "tokens", containerName);
+  // Through agentboxHome(), not homedir(): a test that asks for a box config without naming a
+  // home must fail loudly rather than write a token into the live installation (INV-875).
+  return join(agentboxHome(), "tokens", containerName);
 }
 
 /** The legacy single token, from before a host could run more than one box. */
 function legacyTokenPath(): string {
-  const home = process.env.AGENTBOX_HOME ?? join(homedir(), ".agentbox");
-  return join(home, "token");
+  return join(agentboxHome(), "token");
 }
 
 export function loadBoxToken(containerName: string = DEFAULT_CONTAINER): string {
@@ -264,14 +263,20 @@ export function readBoxToken(containerName: string = DEFAULT_CONTAINER): string 
   return undefined;
 }
 
+/**
+ * The image a box runs when nobody names one. The environment wins — it is how a checkout pins
+ * an image for one run — then the config file, which is the only entrance an app launched from
+ * Finder has (it has no shell to export AGENTBOX_IMAGE into). Absent both: the release default.
+ */
+export function defaultBoxImage(): string {
+  return process.env.AGENTBOX_IMAGE ?? loadConfig().boxImage ?? boxImageRef();
+}
+
 export function defaultBoxConfig(overrides: Partial<BoxConfig> = {}): BoxConfig {
   const containerName = overrides.containerName ?? process.env.AGENTBOX_CONTAINER ?? DEFAULT_CONTAINER;
   return {
     containerName,
-    // The environment wins — it is how a checkout pins an image for one run — then the
-    // config file, which is the only entrance an app launched from Finder has (it has no
-    // shell to export AGENTBOX_IMAGE into). Absent both: the release default.
-    image: process.env.AGENTBOX_IMAGE ?? loadConfig().boxImage ?? boxImageRef(),
+    image: overrides.image ?? defaultBoxImage(),
     boxdPort: envNumber("AGENTBOX_BOXD_PORT", 0),
     // Keyed by the container it is for, so two boxes never share a key.
     token: loadBoxToken(containerName),
@@ -476,7 +481,7 @@ export function boxUiToken(): string {
 }
 
 function tokenFile(name: string): string {
-  const home = process.env.AGENTBOX_HOME ?? join(homedir(), ".agentbox");
+  const home = agentboxHome();
   const path = join(home, name);
   if (existsSync(path)) {
     const existing = readFileSync(path, "utf8").trim();
