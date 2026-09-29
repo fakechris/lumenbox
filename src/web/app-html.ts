@@ -2723,6 +2723,7 @@ function renderSpend(data) {
     // The single number that says whether the caching lever is doing anything.
     (function () {
       var fresh = totals.inputTokens || 0, cached = totals.cacheReadTokens || 0;
+      if ((report.unmeasured || []).length) return ' &middot; <span title="provider usage incomplete">缓存命中 未知</span>';
       return fresh + cached > 0
         ? ' &middot; <span title="input served from cache vs paid fresh">缓存命中 ' + Math.round(cached / (fresh + cached) * 100) + "%</span>"
         : "";
@@ -2808,6 +2809,13 @@ function renderSpend(data) {
   if ((report.unpriced || []).length) {
     caveats.push("No cost shown: no rate for " + esc(report.unpriced.join(", ")) +
       ". Add a \u201crates\u201d block to config.json to price them.");
+  }
+  if ((report.unmeasured || []).length) {
+    caveats.push("No cost or cache hit rate shown: provider usage is missing, contradictory, or lacks a verified cache breakdown (" +
+      report.unmeasured.map(function (x) { return esc(x.status) + ": " + num(x.records); }).join(", ") + ").");
+  }
+  if ((report.unpricedCategories || []).length) {
+    caveats.push("No cost shown: missing cache class rates for " + esc(report.unpricedCategories.join(", ")) + ".");
   }
   if (report.unjoinable) caveats.push(esc(report.unjoinable));
   // The省钱 levers, named with where each lives, so a big number here is actionable rather than

@@ -13,8 +13,9 @@
  * What does not survive translation, by design rather than accident:
  *   - `thinking` and `output_config.effort` are never sent — providers on this wire
  *     have those capability flags off, so the engine never asks.
- *   - Prompt caching: `cache_control` fields are dropped silently; the wire has no
- *     equivalent and the flag is off.
+ *   - Explicit Anthropic prompt caching: `cache_control` fields are dropped; the wire has
+ *     no equivalent and the flag is off. OpenAI's *automatic* cached token usage, when
+ *     reported, is measured separately below.
  *   - Images inside tool results: chat completions tool messages carry text only, so
  *     screenshots ride in a user message appended immediately after — the same
  *     information, one position later. Vendors that cannot see images have vision
@@ -22,6 +23,7 @@
  */
 
 import type Anthropic from "@anthropic-ai/sdk";
+import type { UsageMetering } from "./usage.ts";
 
 interface OpenAIMessage {
   role: "system" | "user" | "assistant" | "tool";
@@ -195,13 +197,46 @@ interface OpenAIChoiceMessage {
   tool_calls?: OpenAIToolCall[];
 }
 
+/** OpenAI Chat Completions usage, not the differently shaped Responses API usage. */
+interface OpenAIUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  prompt_tokens_details?: { cached_tokens?: number } | null;
+}
+
+/**
+ * OpenAI documents prompt_tokens_details.cached_tokens as tokens *inside*
+ * prompt_tokens (https://developers.openai.com/api/docs/guides/prompt-caching).
+ * Do not apply that rule to arbitrary "compatible" endpoints: their fields,
+ * inclusion relation and write charges are not guaranteed to match.
+ */
+function wireUsage(usage: OpenAIUsage | null | undefined, officialOpenAI: boolean): Anthropic.Usage {
+  const valid = (n: unknown): n is number => Number.isSafeInteger(n) && (n as number) >= 0;
+  const prompt = usage?.prompt_tokens, output = usage?.completion_tokens;
+  const cached = usage?.prompt_tokens_details?.cached_tokens;
+  let metering: UsageMetering;
+  if (!usage || prompt === undefined || output === undefined) metering = "missing";
+  else if (!valid(prompt) || !valid(output) || (cached !== undefined && (!valid(cached) || cached > prompt)))
+    metering = "invalid";
+  else if (!officialOpenAI || cached === undefined) metering = "cache_unknown";
+  else metering = "complete";
+
+  return {
+    input_tokens: valid(prompt) ? (metering === "complete" ? prompt - (cached ?? 0) : prompt) : 0,
+    output_tokens: valid(output) ? output : 0,
+    cache_read_input_tokens: metering === "complete" ? cached! : null,
+    cache_creation_input_tokens: metering === "complete" ? 0 : null,
+    metering,
+  } as unknown as Anthropic.Usage;
+}
+
 /** Chat completion response → Anthropic.Message. Exported for its tests. */
 export function fromOpenAIResponse(body: {
   id?: string;
   model?: string;
   choices?: { message?: OpenAIChoiceMessage; finish_reason?: string }[];
-  usage?: { prompt_tokens?: number; completion_tokens?: number };
-}): Anthropic.Message {
+  usage?: OpenAIUsage | null;
+}, options: { officialOpenAI?: boolean } = {}): Anthropic.Message {
   const choice = body.choices?.[0];
   const content: Anthropic.ContentBlock[] = [];
   const text = choice?.message?.content;
@@ -237,12 +272,7 @@ export function fromOpenAIResponse(body: {
     content,
     stop_reason,
     stop_sequence: null,
-    usage: {
-      input_tokens: body.usage?.prompt_tokens ?? 0,
-      output_tokens: body.usage?.completion_tokens ?? 0,
-      cache_creation_input_tokens: null,
-      cache_read_input_tokens: null,
-    } as Anthropic.Usage,
+    usage: wireUsage(body.usage, options.officialOpenAI === true),
   } as Anthropic.Message;
 }
 
@@ -253,8 +283,7 @@ interface StreamTally {
   text: string;
   calls: Map<number, { id: string; name: string; args: string }>;
   finish: string;
-  promptTokens: number;
-  completionTokens: number;
+  usage?: OpenAIUsage;
 }
 
 /**
@@ -273,9 +302,10 @@ class OpenAIWireStream {
     baseUrl: string,
     key: string | undefined,
     params: CreateParams,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    officialOpenAI = false
   ) {
-    this.done = this.run(baseUrl, key, params, signal);
+    this.done = this.run(baseUrl, key, params, signal, officialOpenAI);
     // A rejection that lands before finalMessage() is awaited must not be an unhandled
     // rejection; finalMessage() re-observes it.
     this.done.catch(() => {});
@@ -295,7 +325,8 @@ class OpenAIWireStream {
     baseUrl: string,
     key: string | undefined,
     params: CreateParams,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    officialOpenAI = false
   ): Promise<Anthropic.Message> {
     const request = {
       ...toOpenAIRequest(params),
@@ -325,8 +356,6 @@ class OpenAIWireStream {
       text: "",
       calls: new Map(),
       finish: "stop",
-      promptTokens: 0,
-      completionTokens: 0,
     };
 
     const decoder = new TextDecoder();
@@ -365,11 +394,8 @@ class OpenAIWireStream {
           finish_reason: tally.finish,
         },
       ],
-      usage: {
-        prompt_tokens: tally.promptTokens,
-        completion_tokens: tally.completionTokens,
-      },
-    });
+      ...(tally.usage !== undefined ? { usage: tally.usage } : {}),
+    }, { officialOpenAI });
   }
 
   private absorb(tally: StreamTally, payload: string): void {
@@ -380,7 +406,7 @@ class OpenAIWireStream {
         delta?: { content?: string | null; tool_calls?: Partial<OpenAIToolCall & { index: number; function: { name?: string; arguments?: string } }>[] };
         finish_reason?: string | null;
       }[];
-      usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
+      usage?: OpenAIUsage | null;
     };
     try {
       parsed = JSON.parse(payload);
@@ -389,10 +415,7 @@ class OpenAIWireStream {
     }
     if (parsed.id) tally.id = parsed.id;
     if (parsed.model) tally.model = parsed.model;
-    if (parsed.usage) {
-      tally.promptTokens = parsed.usage.prompt_tokens ?? tally.promptTokens;
-      tally.completionTokens = parsed.usage.completion_tokens ?? tally.completionTokens;
-    }
+    if (parsed.usage) tally.usage = parsed.usage;
     const choice = parsed.choices?.[0];
     if (!choice) return;
     if (choice.finish_reason) tally.finish = choice.finish_reason;
@@ -430,6 +453,7 @@ export class OpenAIWireClient {
 
   constructor(options: { baseURL: string; key?: string }) {
     const { baseURL, key } = options;
+    const officialOpenAI = new URL(baseURL).hostname === "api.openai.com";
     this.messages = {
       create: async params => {
         const response = await fetch(`${baseURL.replace(/\/$/, "")}/chat/completions`, {
@@ -445,11 +469,12 @@ export class OpenAIWireClient {
           throw new Error(`${response.status} ${detail.slice(0, 2000)}`);
         }
         return fromOpenAIResponse(
-          (await response.json()) as Parameters<typeof fromOpenAIResponse>[0]
+          (await response.json()) as Parameters<typeof fromOpenAIResponse>[0],
+          { officialOpenAI }
         );
       },
       stream: (params, streamOptions) =>
-        new OpenAIWireStream(baseURL, key, params, streamOptions?.signal),
+        new OpenAIWireStream(baseURL, key, params, streamOptions?.signal, officialOpenAI),
     };
   }
 }

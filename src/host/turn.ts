@@ -704,6 +704,7 @@ type TurnEventBody =
       outputTokens: number;
       cacheReadTokens: number;
       cacheWriteTokens: number;
+      metering?: import("./usage.ts").UsageMetering;
     };
 
 /**
@@ -2603,7 +2604,9 @@ ${outcome.text}`;
       cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
       cacheWriteTokens: response.usage.cache_creation_input_tokens ?? 0,
     };
-    emit({ type: "usage", agentId: agent.id, round, ...usage });
+    const metering = (response.usage as { metering?: import("./usage.ts").UsageMetering }).metering;
+    emit({ type: "usage", agentId: agent.id, round, ...usage,
+      ...(metering !== undefined ? { metering } : {}) });
     turnUsage.inputTokens += usage.inputTokens;
     turnUsage.outputTokens += usage.outputTokens;
     turnUsage.cacheReadTokens += usage.cacheReadTokens;
@@ -2611,7 +2614,7 @@ ${outcome.text}`;
     // The turn's opening call, scored for the cache ledger (INV-782): what share came from
     // cache, and — when enough turns in a row came in low with a segment moving — why.
     let cacheShare: number | undefined;
-    if (!cacheShareNoted) {
+    if (!cacheShareNoted && (metering === undefined || metering === "complete")) {
       cacheShareNoted = true;
       const noted = deps.usage?.notePromptCache({
         agentId: agent.id,
@@ -2692,6 +2695,7 @@ ${outcome.text}`;
       model: deps.provider?.model ?? "unknown",
       round,
       ...usage,
+      ...(metering !== undefined ? { metering } : {}),
       ...(cacheShare !== undefined ? { cacheShare } : {}),
     });
 

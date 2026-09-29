@@ -22,6 +22,11 @@ import { APP_HTML } from "./app-html.ts";
 /** Every `id="…"` the document defines. */
 const definedIds = new Set([...APP_HTML.matchAll(/id="([A-Za-z0-9_-]+)"/g)].map(match => match[1]!));
 
+test("unknown provider cache usage cannot display a fabricated cache hit rate", () => {
+  assert.match(APP_HTML, /if \(\(report\.unmeasured \|\| \[\]\)\.length\) return .*缓存命中 未知/);
+  assert.match(APP_HTML, /No cost or cache hit rate shown: provider usage/);
+});
+
 /** Ids the script reaches for in a way that throws when the element is absent. */
 function referencedIds(): { id: string; how: string }[] {
   const found: { id: string; how: string }[] = [];
