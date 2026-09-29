@@ -7,7 +7,7 @@
  * reimplement. Every call is execFile with an argument array — no shell.
  */
 
-import { envNumber } from "../config.ts";
+import { envNumber, loadConfig } from "../config.ts";
 import { execFile, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -268,7 +268,10 @@ export function defaultBoxConfig(overrides: Partial<BoxConfig> = {}): BoxConfig 
   const containerName = overrides.containerName ?? process.env.AGENTBOX_CONTAINER ?? DEFAULT_CONTAINER;
   return {
     containerName,
-    image: process.env.AGENTBOX_IMAGE ?? boxImageRef(),
+    // The environment wins — it is how a checkout pins an image for one run — then the
+    // config file, which is the only entrance an app launched from Finder has (it has no
+    // shell to export AGENTBOX_IMAGE into). Absent both: the release default.
+    image: process.env.AGENTBOX_IMAGE ?? loadConfig().boxImage ?? boxImageRef(),
     boxdPort: envNumber("AGENTBOX_BOXD_PORT", 0),
     // Keyed by the container it is for, so two boxes never share a key.
     token: loadBoxToken(containerName),
@@ -374,8 +377,16 @@ function dockerStream(
  * A machine that has never built the box still has to be able to start one.
  *
  * Present locally: use it, so a checkout's own build is what `box up` runs. Absent: pull the
- * versioned tag from Docker Hub. A pull that fails names `box build`, which is the other half
- * of the same image.
+ * versioned tag from Docker Hub, or from whatever mirror the config names.
+ *
+ * The pull is the one long, silent step of a first run, so it says the size and the wait
+ * before the progress lines start — "is it stuck?" is the reasonable reading of a quiet
+ * minute otherwise. And a failed pull says which of the two failures it was: a registry
+ * that answered *no such image* (a release that raced its image, a mistyped mirror) wants
+ * "update the app or fix the setting", while a registry that never answered — the common
+ * case behind a network where Docker Hub needs a mirror — wants the mirror. Both still
+ * name `box build` last, for the reader who has a checkout; for an app user it is no
+ * way out at all and no longer leads (INV-856).
  */
 export async function ensureLocalImage(
   image: string,
@@ -383,13 +394,26 @@ export async function ensureLocalImage(
   onOutput?: (line: string) => void,
 ): Promise<void> {
   if (await probe.exists()) return;
-  onOutput?.(`image ${image} is not on this machine; pulling it`);
+  onOutput?.(
+    `image ${image} is not on this machine; pulling it — roughly 750MB, a few minutes on a good connection`,
+  );
   try {
     await probe.pull();
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
+    if (/manifest unknown|not found|no such|denied|unauthorized/i.test(detail)) {
+      throw new DockerError(
+        `Could not pull ${image}: the registry answered, but has no such image or tag. ` +
+          "If this app was just released, its image may not be published yet — update the app, " +
+          "or check the image override in Settings → Boxes. From a checkout, `agentbox box build` " +
+          `builds the same image locally. ${detail}`,
+      );
+    }
     throw new DockerError(
-      `Could not pull ${image}. From a checkout, \`agentbox box build\` builds the same image locally. ${detail}`,
+      `Could not pull ${image}: the registry did not answer. Check the network, and if Docker ` +
+        "Hub is unreachable from your network, point Settings → Boxes at a mirror (or configure " +
+        "docker's registry-mirrors). From a checkout, `agentbox box build` builds the same image " +
+        `locally. ${detail}`,
     );
   }
 }
@@ -482,16 +506,44 @@ function hostCredentialArgs(): string[] {
   });
 }
 
+/**
+ * What this machine's Docker situation actually is, in a shape a person can act on.
+ *
+ * A boolean "docker available" folds together the two ways a fresh machine fails, and they
+ * want opposite first steps: no `docker` command means *install* Docker Desktop or
+ * OrbStack; a command whose engine does not answer means *start* it. A new user pressing
+ * *Start the box* on a machine with neither got one error naming `docker version`, which
+ * is the product handing them a terminal (INV-855).
+ */
+export type DockerEnvironmentState =
+  | { state: "no-binary"; detail: string }
+  | { state: "no-engine"; detail: string }
+  | { state: "ok"; detail: string };
+
+export async function dockerEnvironment(timeoutMs = 15_000): Promise<DockerEnvironmentState> {
+  try {
+    const { stdout } = await execFileAsync("docker", ["version", "--format", "{{.Server.Version}}"], {
+      timeout: timeoutMs,
+      maxBuffer: 1024 * 1024,
+    });
+    return { state: "ok", detail: `engine ${stdout.trim()}` };
+  } catch (error) {
+    const failure = error as { code?: string; stderr?: string; message?: string };
+    if (failure.code === "ENOENT") {
+      return { state: "no-binary", detail: "the docker command is not on PATH" };
+    }
+    const detail = String(failure.stderr ?? failure.message ?? "")
+      .trim()
+      .replace(/\n[\s\S]*$/, "");
+    return { state: "no-engine", detail: detail || "the docker engine did not answer" };
+  }
+}
+
 export class BoxManager {
   constructor(readonly config: BoxConfig) {}
 
   async dockerAvailable(): Promise<boolean> {
-    try {
-      await docker(["version", "--format", "{{.Server.Version}}"], 15_000);
-      return true;
-    } catch {
-      return false;
-    }
+    return (await dockerEnvironment()).state === "ok";
   }
 
   async state(): Promise<ContainerState> {
@@ -754,9 +806,19 @@ export class BoxManager {
         "No box token configured. Set AGENTBOX_TOKEN, or let `agentbox box up` generate one."
       );
     }
-    if (!(await this.dockerAvailable())) {
+    const environment = await dockerEnvironment();
+    if (environment.state === "no-binary") {
       throw new DockerError(
-        "Cannot reach a Docker engine. Check `docker version`, DOCKER_HOST, and your docker context."
+        "Cannot find the docker command on PATH. Install Docker Desktop " +
+          "(https://www.docker.com/products/docker-desktop/) or OrbStack " +
+          "(https://orbstack.dev/), open it once, then try again."
+      );
+    }
+    if (environment.state === "no-engine") {
+      throw new DockerError(
+        `Docker is installed but its engine did not answer (${environment.detail}). ` +
+          "Start Docker Desktop or OrbStack, then try again — or check `docker version`, " +
+          "DOCKER_HOST, and your docker context, which reach the same check."
       );
     }
 

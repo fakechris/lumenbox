@@ -49,6 +49,16 @@ export interface AgentboxConfig {
   /** Base URL for the `custom` preset, applied only when `AGENTBOX_BASE_URL` is not set. */
   baseUrl?: string;
   /**
+   * The box image to pull when this machine has none, as a full `repo:tag` reference.
+   *
+   * Absent means the release default, `fakechris/lumenbox:<package version>` on Docker
+   * Hub. The point of the field is the registry part: on a network where Docker Hub is
+   * slow or unreachable, the pull can point at a mirror instead. `AGENTBOX_IMAGE` always
+   * wins when set, but an app launched from Finder has no shell to export it in — this
+   * file is the entrance that launch path actually has.
+   */
+  boxImage?: string;
+  /**
    * Environment variables applied at startup, under the real environment: a variable
    * already set in the shell always wins. This is where an API key lives when it is not
    * exported in a profile — the file is written 0600 and stays on this machine; nothing
@@ -294,6 +304,9 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
       : {}),
     ...(readString(raw.baseUrl, "baseUrl", onWarn) !== undefined
       ? { baseUrl: readString(raw.baseUrl, "baseUrl", onWarn) }
+      : {}),
+    ...(readString(raw.boxImage, "boxImage", onWarn) !== undefined
+      ? { boxImage: readString(raw.boxImage, "boxImage", onWarn) }
       : {}),
     ...(readEnvMap(raw.env, onWarn) !== undefined ? { env: readEnvMap(raw.env, onWarn) } : {}),
     ...(readStringList(raw.channelAllow, "channelAllow", onWarn) !== undefined
@@ -556,7 +569,7 @@ export function applyConfigEnv(config: AgentboxConfig): void {
  * already; the file's own mode says so a second time.
  */
 export function saveConfig(
-  changes: Partial<Record<"provider" | "model" | "baseUrl", string | null>> & {
+  changes: Partial<Record<"provider" | "model" | "baseUrl" | "boxImage", string | null>> & {
     env?: Record<string, string | null>;
     channelAllow?: string[] | null;
     hostExec?: AgentboxConfig["hostExec"] | null;
@@ -579,7 +592,7 @@ export function saveConfig(
     }
   }
 
-  for (const key of ["provider", "model", "baseUrl"] as const) {
+  for (const key of ["provider", "model", "baseUrl", "boxImage"] as const) {
     const value = changes[key];
     if (value === undefined) continue;
     if (value === null) delete raw[key];

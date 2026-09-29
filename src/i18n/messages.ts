@@ -106,6 +106,8 @@ export const MESSAGES: Record<Locale, Record<string, string>> = {
     "ui.setup.workWhy": "在聊天里说一句,或者加一张任务卡;进到待验收就算做完了。",
     "ui.setup.workAct": "打开任务板",
     "ui.boxes.none": "还没有 box。box 是 agent 干活的那台电脑——用上面的按钮建一台 Docker 的,或者在终端里跑 agentbox box up。",
+    "ui.box.dockerMissing": "box 是一台跑在本机 Docker 里的 Linux 电脑。这台机器上还没有 docker 命令——先安装并启动下面的其中一款,再回到这里按「启动 box」:",
+    "ui.box.dockerStopped": "Docker 已安装,但引擎没有响应。启动 Docker Desktop(或 OrbStack),再按「启动 box」。",
   },
   en: {
     "team": "the team",
@@ -190,7 +192,9 @@ export const MESSAGES: Record<Locale, Record<string, string>> = {
     "ui.setup.work": "First work",
     "ui.setup.workWhy": "Say it in chat or add a task; it is done when it reaches review.",
     "ui.setup.workAct": "Open tasks",
-    "ui.boxes.none": "No boxes yet. A box is the computer your agents work on — create the Docker one with the button above, or run agentbox box up in a terminal.",
+    "ui.boxes.none": "No boxes yet. A box is the computer your agents work on — create the Docker box with the button above, or run agentbox box up in a terminal.",
+    "ui.box.dockerMissing": "The box is a Linux computer running in Docker on this machine, and this machine has no docker command yet. Install and start one of the following, then come back and press Start the box:",
+    "ui.box.dockerStopped": "Docker is installed, but its engine did not answer. Start Docker Desktop (or OrbStack), then press Start the box.",
   },
 };
 
