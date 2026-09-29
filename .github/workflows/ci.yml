@@ -59,3 +59,7 @@ jobs:
       # beside it, and every check above stayed green (2026-09-01, docs/27).
       - name: release check
         run: node scripts/release-check.mjs
+        env:
+          # CI has no dist-app artifacts, and every push should not lean on Docker Hub.
+          # The image gate is for the machine that actually publishes (INV-858).
+          RELEASE_CHECK_SKIP_IMAGE: "1"

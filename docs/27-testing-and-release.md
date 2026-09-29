@@ -75,10 +75,24 @@ captured-payload corpus is the cheaper insurance for us than a live tier.
 
 ## What guards a release
 
+The order a release goes out in, mechanical since INV-858 (2026-09-29, after 0.3.0 shipped
+installers with three packages in node_modules and every new user's first launch died):
+
+1. **Build and push the image first**: `npm run build:image`, then `npm run push:image`
+   (needs `docker login`), publishing `fakechris/lumenbox:<version>` and `:latest`.
+   The app pins its pull at the package version — an app published before its tag
+   exists breaks every fresh install of that version on the first start.
+2. **`npm run release:check`**, which now also refuses to bless a release whose packaged
+   zips do not carry the full production dependency closure, whose dmg is missing beside a
+   zip, or whose image tag is absent from Docker Hub (skippable with
+   `RELEASE_CHECK_SKIP_IMAGE=1`, which CI sets — the gate belongs to the publishing machine).
+3. **Build the app** (`npm run dist:mac`, …), and upload only artifacts the check above
+   saw. Overriding `AGENTBOX_DIST_DIR` points the check at a candidate directory.
+
 | | Ours (after today) | OpenClaw | Hermes |
 | --- | --- | --- | --- |
 | CI gate | typecheck, lint, test-floor, build, **release-check** | typecheck/lint/tests; `release-check` **push-only, never on PRs** | 16-workflow aggregator, fail-open change classifier, SHA-pinned actions |
-| Artifact check | **the built CLI is launched and must print usage**; no build-machine paths in the daemon bundle; base image digest-pinned *and* dependabot present | `npm pack` contents asserted; the only real launch check is `openclaw --version` inside the built image | post-build smoke = 25 docker tests against the loaded image |
+| Artifact check | **the built CLI is launched and must print usage**; no build-machine paths in the daemon bundle; base image digest-pinned *and* dependabot present; **packaged zips carry the full prod dependency closure, a dmg beside every zip, and the image tag live on Docker Hub** (INV-858) | `npm pack` contents asserted; the only real launch check is `openclaw --version` inside the built image | post-build smoke = 25 docker tests against the loaded image |
 | Suite-shrink guard | floor 200 → **975, and staleness now reports itself every run** | none | structural: OS-marker lanes fail on "no tests collected" |
 | Release script | none (open) | version alignment, appcast floors, pack contents — and **the gate itself is unit-tested** | a changelog formatter that gates on nothing |
 | Self-heal | `agentbox box doctor` exists, not wired to updates | `doctor --non-interactive --fix` runs **automatically after every update** | `hermes doctor` / `hermes verify`, manual |
