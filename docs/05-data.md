@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: storage
-     updated: 2026-09-27
+     updated: 2026-09-29
 -->
 # Data
 
@@ -1020,8 +1020,15 @@ Honestly, since these are the findings a review should raise:
 
 `memory.jsonl` stays the record of truth on the host. Since 2026-09-02 every change to it, and
 every box connect, also writes a read-only projection into the box at
-`/home/box/work/memory/<agent-slug>/profile.md` (facts and pitfalls, live view, retractions
+`/home/box/work/memory/<agent-id>/profile.md` (facts and pitfalls, live view, retractions
 applied, newest first) and `log/YYYY-MM.md` (notes and episodes by month). The header of every
-file says it is a mirror; `RememberFact` is the only way memory changes. A write the box refuses
+file says it is a mirror; `RememberFact` is the only way memory changes.
+
+Keyed by the agent's id, not a slug of its name (INV-867, 2026-09-29). The slug is lossy — every
+name with no ASCII letters or digits becomes `agent` — so agents named 张三 and 李四 wrote one
+directory, overwrote each other and could read each other's memory; the standing files had been
+fixed the same way (INV-803). On the first sync after a box (re)appears the host removes the old
+`/home/box/work/memory/<slug>/` directory for each agent's name (never one named like an agent id);
+nothing is lost, because the id-keyed mirror is rewritten in full from the host record. A write the box refuses
 is a `[memory-mirror]` log line and nothing else — the host record is unaffected, and the file
 is rewritten on the next change or connect. Unchanged files are not rewritten.

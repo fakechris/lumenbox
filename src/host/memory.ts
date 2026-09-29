@@ -1069,7 +1069,11 @@ export function compactSharedShardLines(
  */
 export const MEMORY_MIRROR_DIR = "/home/box/work/memory";
 
-/** An agent's name as a directory segment: lowercase, dashes, never empty. One home for every mirror path. */
+/**
+ * An agent's name as a directory segment: lowercase, dashes, never empty. Lossy — every name with no
+ * ASCII letters or digits becomes "agent" — so it names nothing that must be one agent's alone. The
+ * mirror used to be keyed by it (see `legacyMemoryMirrorDir`).
+ */
 export function agentSlug(agentName: string): string {
   const slug = agentName
     .toLowerCase()
@@ -1078,7 +1082,18 @@ export function agentSlug(agentName: string): string {
   return slug === "" ? "agent" : slug;
 }
 
-export function memoryMirrorDir(agentName: string): string {
+/**
+ * One agent's mirror directory, keyed by its immutable id (INV-867). It was keyed by `agentSlug(name)`,
+ * which two agents named 张三 and 李四 share: both mirrors landed in `…/memory/agent/`, each overwrote
+ * the other, and either could read what the other remembered. The standing files were fixed the same
+ * way first (INV-803).
+ */
+export function memoryMirrorDir(agentId: string): string {
+  return `${MEMORY_MIRROR_DIR}/${agentId}`;
+}
+
+/** Where the slug-keyed mirror put an agent's files, so a box can be rid of them. */
+export function legacyMemoryMirrorDir(agentName: string): string {
   return `${MEMORY_MIRROR_DIR}/${agentSlug(agentName)}`;
 }
 
@@ -1094,8 +1109,8 @@ export interface MemoryFile {
  * Retractions are applied, not shown: the live view is what the agent knows now. The header on
  * every file says it is a mirror, because a file that looks editable and is not is a trap.
  */
-export function renderMemoryFiles(agentName: string, records: readonly MemoryRecord[]): MemoryFile[] {
-  const dir = memoryMirrorDir(agentName);
+export function renderMemoryFiles(agentId: string, agentName: string, records: readonly MemoryRecord[]): MemoryFile[] {
+  const dir = memoryMirrorDir(agentId);
   const live = dedupe(records);
   const header = (what: string) =>
     [
