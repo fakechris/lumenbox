@@ -200,10 +200,15 @@ export class Effects {
    * record is settled, so a crash in between costs a repeated note rather than a lost one.
    */
   async settleApproval(approvalId: string, how: "allowed" | "refused"): Promise<boolean> {
-    const pause = this.openOf("pause").find(work => work.data?.approvalId === approvalId);
-    if (pause === undefined) return false;
+    // Every pause waiting on it: identical reasons share one approval, and each pause keeps its own
+    // callback and input.
+    const pauses = this.openOf("pause").filter(work => work.data?.approvalId === approvalId);
+    for (const pause of pauses) await this.settlePause(pause, how === "allowed");
+    return pauses.length > 0;
+  }
+
+  private async settlePause(pause: OpenFork, approved: boolean): Promise<void> {
     const reason = String(pause.data?.reason ?? pause.brief);
-    const approved = how === "allowed";
     let text: string;
     let failed = false;
     try {
@@ -217,17 +222,20 @@ export class Effects {
       failed = true;
       text = `The follow-up could not run: ${error instanceof Error ? error.message : String(error)}`;
     }
-    const delivered = this.deps.deliver(
-      pause.agentId,
-      `[You asked the person to confirm "${reason}"; they ${approved ? "confirmed" : "declined"}.] ${text}`,
-      pause.parent
-    );
-    if (!delivered) {
-      this.log(`pause ${pause.id}: the answer could not be delivered to ${pause.agentId}; left open`);
-      return true;
-    }
+    const message = `[You asked the person to confirm "${reason}"; they ${approved ? "confirmed" : "declined"}.] ${text}`;
+    // The callback has run and must not run again, so what it said is made durable before the
+    // pause is closed: a note due now, which `deliverDue` retries until the inbox takes it —
+    // across a restart too, rather than the restart reporting a follow-up that did run as lost.
+    this.deps.pendingWork.prepare({
+      agentId: pause.agentId,
+      kind: "reminder",
+      parent: pause.parent,
+      child: "pause-result",
+      brief: reason,
+      data: { text: message, at: this.now().toISOString(), verbatim: true },
+    });
     this.deps.pendingWork.commit([{ id: pause.id, how: failed ? "failed" : "done" }], this.now());
-    return true;
+    this.deliverDue();
   }
 
   /** An extension says its background job finished. Delivers once; returns whether a job was open. */
@@ -247,7 +255,9 @@ export class Effects {
     for (const reminder of this.openOf("reminder")) {
       const at = new Date(String(reminder.data?.at ?? ""));
       if (Number.isNaN(at.getTime()) || at > now) continue;
-      if (!this.deps.deliver(reminder.agentId, `[Reminder you set: ${String(reminder.data?.text ?? reminder.brief)}]`, reminder.parent)) continue;
+      const body = String(reminder.data?.text ?? reminder.brief);
+      const text = reminder.data?.verbatim === true ? body : `[Reminder you set: ${body}]`;
+      if (!this.deps.deliver(reminder.agentId, text, reminder.parent)) continue;
       this.deps.pendingWork.commit([{ id: reminder.id, how: "done" }], now);
       count += 1;
     }

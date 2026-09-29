@@ -6580,6 +6580,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     backups?.stop();
     clearInterval(boxWatch);
     clearInterval(teachWatch);
+    // Same reason as the backups: an old tick beside a new one delivers a reminder twice (INV-861).
+    clearInterval(reminderTimer);
     channels.stop();
     orchestrator.scheduler.stop();
     server.close();

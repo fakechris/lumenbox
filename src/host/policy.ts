@@ -724,9 +724,11 @@ export class PolicyGate {
    * returns the one already waiting.
    */
   requestConfirmation(input: { agentId: string; agentName: string; description: string; action?: string }): PendingApproval {
-    const fingerprint = fingerprintOf(this.subjectOf(input.agentId), input.description);
+    // Its own fingerprint space: an extension's reason that happens to read like a gated call's
+    // description must neither answer that call's grant nor borrow its approval.
+    const fingerprint = fingerprintOf(this.subjectOf(input.agentId), `extension-confirmation\0${input.description}`);
     const existing = this.awaiting.get(fingerprint);
-    if (existing !== undefined) return existing;
+    if (existing?.harnessResumes === true) return existing;
     const approval: PendingApproval = {
       id: randomUUID(),
       fingerprint,

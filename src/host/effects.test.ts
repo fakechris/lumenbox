@@ -11,7 +11,7 @@ import { Effects, parseEffects } from "./effects.ts";
 import { Extensions } from "./extensions.ts";
 import { McpManager, VirtualServer, type VirtualToolEntry } from "./mcp.ts";
 import { PendingWork } from "./pending-work.ts";
-import { PolicyGate } from "./policy.ts";
+import { fingerprintOf, PolicyGate } from "./policy.ts";
 
 function harness(entries: VirtualToolEntry[], clock = { now: new Date("2026-09-29T08:00:00Z") }) {
   const dir = mkdtempSync(join(tmpdir(), "agentbox-effects-"));
@@ -224,4 +224,57 @@ test("an extension registers a host-only tool and returns effects; jobDone reach
     assert.equal((await mcp.callDetailed("ext__done", {})).text, "true");
     assert.deepEqual(jobs, ["j1:all good"]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("two pauses that share one approval each run their own callback (review)", async () => {
+  const calls: Record<string, unknown>[] = [];
+  const h = harness([{ name: "_resume", description: "", inputSchema: {}, hostOnly: true, run: async input => { calls.push(input); return `did ${String(input.which)}`; } }]);
+  try {
+    const first = h.effects.apply({ ...agent, tool: "ext__publish", effects: [{ type: "pause_turn", reason: "Go live?", resumeTool: "_resume", resumeInput: { which: "a" } }] });
+    const second = h.effects.apply({ ...agent, tool: "ext__publish", effects: [{ type: "pause_turn", reason: "Go live?", resumeTool: "_resume", resumeInput: { which: "b" } }] });
+    assert.equal(first.approval!.id, second.approval!.id, "identical text asks the person once");
+    h.policy.grant(first.approval!.id);
+    await h.effects.settleApproval(first.approval!.id, "allowed");
+    assert.deepEqual(calls.map(call => call.which).sort(), ["a", "b"]);
+    assert.equal(h.delivered.length, 2);
+    assert.equal(h.ledger().open().length, 0);
+  } finally { h.cleanup(); }
+});
+
+test("a callback that ran is not lost when delivery fails: the result survives a restart and the callback does not run again (review)", async () => {
+  const calls: Record<string, unknown>[] = [];
+  const h = harness([{ name: "_resume", description: "", inputSchema: {}, hostOnly: true, run: async input => { calls.push(input); return "went live"; } }]);
+  try {
+    let inboxUp = false;
+    const flaky = new Effects({
+      pendingWork: h.ledger(),
+      policy: h.policy,
+      mcp: () => h.mcp,
+      deliver: (agentId, text, conversation) => { if (!inboxUp) return false; h.delivered.push({ agentId, text, conversation }); return true; },
+      now: () => h.clock.now,
+    });
+    const { approval } = flaky.apply({ ...agent, tool: "ext__publish", effects: [{ type: "pause_turn", reason: "Go live?", resumeTool: "_resume" }] });
+    h.policy.grant(approval!.id);
+    await flaky.settleApproval(approval!.id, "allowed");
+    assert.equal(calls.length, 1);
+    assert.equal(h.delivered.length, 0);
+
+    inboxUp = true;
+    const afterRestart = h.restart();
+    assert.deepEqual(await afterRestart.recover(), { resumedJobs: 0, lostJobs: 0, closedPauses: 0 }, "not reported as a follow-up that did not run");
+    assert.equal(afterRestart.deliverDue(), 1);
+    assert.match(h.delivered[0]!.text, /they confirmed\.\] went live/);
+    assert.equal(calls.length, 1, "the callback ran once");
+  } finally { h.cleanup(); }
+});
+
+test("an extension confirmation never shares an approval with a gated call of the same text (review)", () => {
+  const h = harness([]);
+  try {
+    const approval = h.policy.requestConfirmation({ agentId: "ada", agentName: "Ada", description: "Run a command on the person's own machine" });
+    assert.equal(approval.harnessResumes, true);
+    assert.equal(h.policy.requestConfirmation({ agentId: "ada", agentName: "Ada", description: "Run a command on the person's own machine" }).id, approval.id);
+    // A gated call is fingerprinted over (subject, description); a confirmation of the same text must not land there.
+    assert.notEqual(approval.fingerprint, fingerprintOf("ada", "Run a command on the person's own machine"));
+  } finally { h.cleanup(); }
 });
