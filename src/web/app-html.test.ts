@@ -218,6 +218,18 @@ test("the feed renders the plain-language phrase and falls back to the tool name
   assert.equal(enOnly?.html, "<b>Ada</b> using x");
 });
 
+test("the setup card grades the model key first, and first run has one save button (INV-857)", () => {
+  // The welcome note promises "a provider with a key" — the card has to ask for it too,
+  // before an agent dies on its first word pages away from the cause.
+  assert.match(APP_HTML, /done: s\.key/);
+  assert.match(APP_HTML, /ui\.setup\.key/);
+  assert.match(APP_HTML, /ui\.setup\.keyWhy/);
+  assert.match(APP_HTML, /ui\.setup\.keyAct/);
+  // First run shows Save & restart only; plain Save comes back once onboarded.
+  assert.match(APP_HTML, /\$\("setsave"\)\.style\.display = "none"/);
+  assert.match(APP_HTML, /\$\("setsave"\)\.style\.display = ""/);
+});
+
 test("the box image override is settable from the page (INV-856)", () => {
   // A Finder-launched app has no environment to set AGENTBOX_IMAGE in, so the mirror
   // needs its own input, its load line, and a place in the save body.

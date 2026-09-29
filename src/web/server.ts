@@ -161,7 +161,7 @@ import {
   recordUpgradeConsent,
   upgradeConsentPath,
 } from "../host/upgrade-consent.ts";
-import { PRESET_MODELS, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
+import { PRESET_MODELS, providerConfigured, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { Principals, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
 import { blockedAnnouncement, boardView } from "../channels/board-view.ts";
 import {
@@ -5006,7 +5006,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const agentTurn = registry.list().some(agent => registry.readTranscript(agent.id).length > 0);
           const door = channelRecords.some(record => channelCredentialsSet(record));
           const review = (orchestrator.tasks?.list() ?? []).some(task => task.status === "review" || task.status === "done");
-          send(res, 200, { box: boxes.some(box => box.connected), agentTurn, door, review });
+          // The key is the other thing the welcome note promises, so it grades on the card
+          // too (INV-857): a saved provider or any credential in the environment means the
+          // first message will not die on "no key".
+          const key = providerConfigured(
+            loadConfig().provider,
+            providerNames().map(name => resolveProvider(name))
+          );
+          send(res, 200, { key, box: boxes.some(box => box.connected), agentTurn, door, review });
           return;
         }
 

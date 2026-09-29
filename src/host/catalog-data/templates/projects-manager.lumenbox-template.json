@@ -1,0 +1,26 @@
+{
+ "format": "lumenbox-template/1",
+ "profile": {
+  "name": "Projects Manager",
+  "title": "Projects Manager",
+  "description": "Runs your team's projects from Notion: one row per project, a channel per project, and tasks your specialist bots claim. You decide, agents execute, and it never does the specialist work itself."
+ },
+ "memory": [],
+ "skills": [],
+ "routines": [],
+ "connectors": [
+  "mcp:notion",
+  "mcp:slack"
+ ],
+ "meta": {
+  "createdAt": "2026-09-16T06:07:58.317Z",
+  "createdBy": "Eric Zakariasson",
+  "sourceName": "Projects Manager",
+  "grokListingId": "projects-manager",
+  "grokShareId": "AZKaQOsjrAa51Nb4xvTur",
+  "grokCategories": [
+   "From Grok Bot Team",
+   "Engineering"
+  ]
+ }
+}
