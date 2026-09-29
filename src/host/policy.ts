@@ -130,6 +130,13 @@ export interface PendingApproval {
    */
   action?: string;
   requestedAt: string;
+  /**
+   * Set when the harness itself continues once this is answered (INV-861): an extension asked
+   * the person to confirm, and the answer is handed to the extension's resume callback. The
+   * doors then skip their generic "go ahead now" note, which would tell the agent to retry a
+   * call that is not waiting to be retried.
+   */
+  harnessResumes?: boolean;
 }
 
 // ── limits ────────────────────────────────────────────────────────────────────────────
@@ -264,7 +271,7 @@ type PolicyEvent =
   | { at: string; kind: "rules-loaded"; hash: string; ids: string[]; problems: { id: string; problem: string }[] }
   | { at: string; kind: "stop"; agentId: string; by: string }
   | { at: string; kind: "resume"; agentId: string; by: string }
-  | { at: string; kind: "approval-requested"; id: string; fingerprint: string; agentId: string; description: string; action?: string }
+  | { at: string; kind: "approval-requested"; id: string; fingerprint: string; agentId: string; description: string; action?: string; harnessResumes?: boolean }
   | { at: string; kind: "approval-granted"; id: string; by: string }
   | { at: string; kind: "approval-granted-session"; id: string; by: string }
   | {
@@ -709,6 +716,49 @@ export class PolicyGate {
     };
   }
 
+  /**
+   * Puts a confirmation in front of the person that no rule asked for (INV-861): an extension's
+   * `pause_turn`. The same record and the same doors as a gated call — the card, the chat push,
+   * grant and deny — so a person answers it like any other approval. The harness, not the
+   * agent, continues once it is answered (`harnessResumes`). Asking twice for the same text
+   * returns the one already waiting.
+   */
+  requestConfirmation(input: { agentId: string; agentName: string; description: string; action?: string }): PendingApproval {
+    // Its own fingerprint space: an extension's reason that happens to read like a gated call's
+    // description must neither answer that call's grant nor borrow its approval.
+    const fingerprint = fingerprintOf(this.subjectOf(input.agentId), `extension-confirmation\0${input.description}`);
+    const existing = this.awaiting.get(fingerprint);
+    if (existing?.harnessResumes === true) return existing;
+    const approval: PendingApproval = {
+      id: randomUUID(),
+      fingerprint,
+      agentId: input.agentId,
+      agentName: input.agentName,
+      description: input.description,
+      ...(input.action !== undefined ? { action: input.action } : {}),
+      requestedAt: this.now().toISOString(),
+      harnessResumes: true,
+    };
+    this.awaiting.set(fingerprint, approval);
+    this.append({
+      at: approval.requestedAt,
+      kind: "approval-requested",
+      id: approval.id,
+      fingerprint,
+      agentId: approval.agentId,
+      description: approval.description,
+      ...(approval.action !== undefined ? { action: approval.action } : {}),
+      harnessResumes: true,
+    });
+    this.log(`waiting for a person to confirm: ${input.description}`);
+    try {
+      this.onApprovalRequested?.(approval);
+    } catch {
+      // A notifier's failure must not change a policy decision.
+    }
+    return approval;
+  }
+
   private needsApproval(request: Extract<PolicyRequest, { kind: "tool" }>): boolean {
     // Host execution always asks, by construction rather than by configuration: it is
     // the one tool that runs outside the box, and an operator turning it off is done
@@ -937,6 +987,7 @@ export class PolicyGate {
             agentName: "",
             description: event.description,
             ...(event.action !== undefined ? { action: event.action } : {}),
+            ...(event.harnessResumes === true ? { harnessResumes: true } : {}),
             requestedAt: event.at,
           };
           byId.set(event.id, approval);

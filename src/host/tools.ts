@@ -22,7 +22,7 @@ import { appendLearning, hostOf, learningsDir, readLearnings, renderLearnings } 
 import type { ScopeStore } from "./scopes.ts";
 import type { BundleStore } from "./bundles.ts";
 import { oauthProvider, scrubToken, type OAuthGate } from "./oauth.ts";
-import type { McpManager } from "./mcp.ts";
+import type { McpManager, ToolEffect } from "./mcp.ts";
 import { delegateEnv, delegateModel, PRESETS, presetNamed, quoteForShell, installCommand, withEnginesPath } from "./presets.ts";
 import { namesControlSurface } from "./control-surfaces.ts";
 import { catalogMenu, intersectTools, profilesFor } from "./catalog.ts";
@@ -326,6 +326,12 @@ export interface ToolOutcome {
    * turn on the person's answer rather than answering the call `outcome_unknown`.
    */
   approval?: { id: string };
+  /**
+   * What the result asked the harness to do (INV-861), and which prefixed tool asked — the
+   * turn applies them through effects.ts after the call, never inside a fork.
+   */
+  effects?: ToolEffect[];
+  effectsFrom?: string;
 }
 
 /**
@@ -5058,7 +5064,8 @@ export async function dispatchTool(
       });
       if (inner !== undefined && !inner.allow) return { text: inner.reason, isError: true };
       try {
-        return { text: await context.mcp.call(target, input.arguments ?? {}) };
+        const result = await context.mcp.callDetailed(target, input.arguments ?? {});
+        return { text: result.text, ...(result.effects !== undefined ? { effects: result.effects, effectsFrom: target } : {}) };
       } catch (error) {
         return { text: error instanceof Error ? error.message : String(error), isError: true };
       }
@@ -5070,7 +5077,8 @@ export async function dispatchTool(
       // like every other call, so an external tool is governed exactly as ours are.
       if (context.mcp?.owns(name) === true) {
         try {
-          return { text: await context.mcp.call(name, input) };
+          const result = await context.mcp.callDetailed(name, input);
+          return { text: result.text, ...(result.effects !== undefined ? { effects: result.effects, effectsFrom: name } : {}) };
         } catch (error) {
           return {
             text: error instanceof Error ? error.message : String(error),

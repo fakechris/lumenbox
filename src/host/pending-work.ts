@@ -30,7 +30,18 @@ const COMPACT_AT = 500;
 export type CommitHow = "done" | "failed" | "late";
 export type DropWhy = "restart" | "unrecorded";
 
-export type WorkKind = "fork" | "delegate";
+/**
+ * `fork` and `delegate` are the fork ledger's own (docs/32). `pause`, `ext-job` and `reminder`
+ * are effects a tool result asked for (INV-861, effects.ts): recorded here for the same reason —
+ * written before they are acknowledged, settled when delivered — and recovered by effects.ts,
+ * not by the fork sweep.
+ */
+export type WorkKind = "fork" | "delegate" | "pause" | "ext-job" | "reminder";
+
+/** Whether a kind belongs to the fork ledger proper, which the startup sweep settles. */
+export function isForkLedgerKind(kind: WorkKind): boolean {
+  return kind === "fork" || kind === "delegate";
+}
 
 interface PreparedRecord {
   event: "prepared";
@@ -45,6 +56,8 @@ interface PreparedRecord {
   brief: string;
   at: string;
   build?: { version: string; commit: string };
+  /** What an effect record needs beyond the fork fields (INV-861). */
+  data?: Record<string, unknown>;
 }
 interface AdmittedRecord { event: "admitted"; id: string; inboxSeq?: number; at: string }
 interface CommittedRecord { event: "committed"; id: string; how: CommitHow; at: string }
@@ -63,6 +76,8 @@ export interface OpenFork {
   /** Present once the child's message reached the durable inbox. */
   inboxSeq?: number;
   admitted: boolean;
+  /** What an effect record carries (INV-861). */
+  data?: Record<string, unknown>;
 }
 
 /** What the startup sweep needs from the rest of the host, narrowed so it can be faked. */
@@ -122,6 +137,7 @@ export class PendingWork {
     workId?: string;
     turnId?: string;
     build?: { version: string; commit: string };
+    data?: Record<string, unknown>;
     now?: Date;
   }): string {
     const id = `pw-${randomUUID().slice(0, 12)}`;
@@ -138,6 +154,7 @@ export class PendingWork {
       brief: input.brief.replace(/\s+/g, " ").trim().slice(0, 120),
       at: (input.now ?? new Date()).toISOString(),
       ...(input.build !== undefined ? { build: input.build } : {}),
+      ...(input.data !== undefined ? { data: input.data } : {}),
     };
     mkdirSync(dirname(this.path), { recursive: true });
     appendLineDurably(this.path, JSON.stringify(record));
@@ -187,6 +204,7 @@ export class PendingWork {
           brief: record.brief,
           at: record.at,
           admitted: false,
+          ...(record.data !== undefined ? { data: record.data } : {}),
         });
       } else if (record.event === "admitted") {
         const fork = open.get(record.id);
@@ -216,6 +234,8 @@ export class PendingWork {
     deps.endForkTurns("dropped-fork");
     const dropped: OpenFork[] = [];
     for (const fork of this.open()) {
+      // Effect records outlive a restart on purpose; effects.ts recovers them.
+      if (!isForkLedgerKind(fork.kind)) continue;
       const tag = forkTag(fork.id);
       const exists = deps.agentExists(fork.agentId);
       if (fork.kind === "delegate") {

@@ -23,7 +23,8 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { agentboxHome } from "../config.ts";
 import { refuseHooksFile } from "./hooks.ts";
-import { VirtualServer } from "./mcp.ts";
+import { type ToolCallResult, VirtualServer } from "./mcp.ts";
+import { parseEffects } from "./effects.ts";
 import type { TurnEvent } from "./turn.ts";
 
 export const EXTENSIONS_SERVER = "ext";
@@ -32,12 +33,26 @@ export function extensionsDir(): string {
   return process.env.AGENTBOX_EXTENSIONS ?? join(agentboxHome(), "extensions");
 }
 
-/** What a tool an extension registers looks like. Text in, text out, like every tool here. */
+/**
+ * What a tool's `run` may return besides text (INV-861): the text for the model, and effects the
+ * harness acts on — `pause_turn`, `background_job`, `reminder` (see effects.ts).
+ */
+export interface ExtensionResult {
+  text: string;
+  effects?: unknown[];
+}
+
+/** What a tool an extension registers looks like. Text in, text (or text with effects) out. */
 export interface ExtensionTool {
   name: string;
   description: string;
   inputSchema?: Record<string, unknown>;
-  run: (input: Record<string, unknown>) => Promise<string> | string;
+  /**
+   * A callback only the harness calls (INV-861): the `resumeTool` of a pause or a background
+   * job. Kept out of every agent's list, and refused if a model names it anyway.
+   */
+  hostOnly?: boolean;
+  run: (input: Record<string, unknown>) => Promise<string | ExtensionResult> | string | ExtensionResult;
 }
 
 /** The api handed to each extension's default export. */
@@ -47,6 +62,12 @@ export interface ExtensionApi {
   /** Called with every turn event of the given type (`"*"` for all). Errors are logged, never thrown into the turn. */
   on: (type: TurnEvent["type"] | "*", handler: (event: TurnEvent) => void | Promise<void>) => void;
   log: (line: string) => void;
+  /**
+   * Reports that a background job this extension started (a `background_job` effect) finished,
+   * and what came of it; the agent that started it receives `text`. Returns false when no such
+   * job is open — already reported, or never started.
+   */
+  jobDone: (jobId: string, text: string, ok?: boolean) => boolean;
 }
 
 export interface ExtensionsLoad {
@@ -65,6 +86,8 @@ export class Extensions {
   private listeners: { type: string; handler: (event: TurnEvent) => void | Promise<void> }[] = [];
   private last: ExtensionsLoad = { loaded: [], tools: [], problems: [] };
   private generation = 0;
+  /** Where `api.jobDone` goes; set by the orchestrator to its effects runner (INV-861). */
+  onJobDone: ((jobId: string, text: string, ok: boolean) => boolean) | undefined;
 
   constructor(
     private readonly dir: string = extensionsDir(),
@@ -84,7 +107,14 @@ export class Extensions {
         name: tool.name,
         description: tool.description,
         inputSchema: tool.inputSchema ?? { type: "object", properties: {} },
-        run: async input => String(await tool.run(input)),
+        ...(tool.hostOnly === true ? { hostOnly: true } : {}),
+        run: async (input): Promise<ToolCallResult> => {
+          const result = await tool.run(input);
+          if (typeof result === "string" || result === null || typeof result !== "object") return { text: String(result) };
+          const { effects, problems } = parseEffects(result.effects);
+          for (const problem of problems) this.log(`${tool.name}: ${problem}`);
+          return { text: String(result.text ?? ""), ...(effects.length > 0 ? { effects } : {}) };
+        },
       })),
       `${this.last.loaded.length} extension file(s)`
     );
@@ -137,6 +167,7 @@ export class Extensions {
           if (typeof handler === "function") listeners.push({ type, handler });
         },
         log: line => this.log(`${name}: ${line}`),
+        jobDone: (jobId, text, ok = true) => this.onJobDone?.(String(jobId), String(text), ok !== false) ?? false,
       };
       try {
         // A fresh URL each time is what makes this a reload: ESM caches by specifier.

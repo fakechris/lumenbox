@@ -25,7 +25,8 @@ import { PendingWork, isForkChild, pendingWorkPath } from "./pending-work.ts";
 import { McpFace } from "./mcp-face.ts";
 import { ModelRelay } from "./model-relay.ts";
 import { DelegateSessions } from "./delegate-sessions.ts";
-import { Extensions, extensionsDir } from "./extensions.ts";
+import { EXTENSIONS_SERVER, Extensions, extensionsDir } from "./extensions.ts";
+import { Effects } from "./effects.ts";
 import { FileVersions } from "./files.ts";
 import {
   giveUpNote,
@@ -470,6 +471,8 @@ export class Orchestrator {
   readonly delegateSessions: DelegateSessions;
   /** The extension layer (docs/34): tools and listeners from ~/.agentbox/extensions, hot-reloadable. */
   readonly extensions: Extensions | undefined;
+  /** Acts on what tool results ask for — pause for a person, background jobs, reminders (INV-861). */
+  readonly effects: Effects | undefined;
 
   /**
    * Which turn each agent is currently resuming, so the ledger entry it writes is linked to the one
@@ -883,6 +886,12 @@ export class Orchestrator {
       // ledger as it wakes; any other step waiting on this answer closes here (INV-798).
       if (this.parked.has(approval.id)) this.continueParked(approval.id, how);
       else this.steps?.settleApproval(approval.id);
+      // A confirmation an extension asked for is continued by its callback (INV-861).
+      if (approval.harnessResumes === true) {
+        void this.effects?.settleApproval(approval.id, how).catch(error =>
+          console.error(`[effects] ${error instanceof Error ? error.message : String(error)}`)
+        );
+      }
     };
     this.networkEvents =
       options.networkEvents === null ? undefined : (options.networkEvents ?? new NetworkEventLog());
@@ -941,6 +950,21 @@ export class Orchestrator {
       options.extensions === null
         ? undefined
         : (options.extensions ?? new Extensions(extensionsDir(), line => console.error(`[extensions] ${line}`)));
+    // Effects need somewhere durable to stand; without the pending-work ledger results stay text.
+    this.effects =
+      this.pendingWork === undefined
+        ? undefined
+        : new Effects({
+            pendingWork: this.pendingWork,
+            policy: this.policy,
+            mcp: () => this.mcp,
+            deliver: (agentId, text, conversation) =>
+              this.bus.deliverSystem(agentId, text, conversation) !== undefined || this.bus.inboxless,
+            log: line => console.error(`[effects] ${line}`),
+          });
+    if (this.extensions !== undefined) {
+      this.extensions.onJobDone = (jobId, text, ok) => this.effects?.jobDone(EXTENSIONS_SERVER, jobId, text, ok) ?? false;
+    }
     // After the hooks: the face runs them around every delegated call.
     this.mcpFace = new McpFace({
       mcp: () => this.mcp,
@@ -1761,6 +1785,7 @@ export class Orchestrator {
       ...(this.steps !== undefined ? { steps: this.steps } : {}),
       ...(this.networkEvents !== undefined ? { networkEvents: this.networkEvents } : {}),
       ...(this.pendingWork !== undefined ? { pendingWork: this.pendingWork } : {}),
+      ...(this.effects !== undefined ? { effects: this.effects } : {}),
       mcpFace: this.mcpFace,
       modelRelay: this.modelRelay,
       delegateSessions: this.delegateSessions,
@@ -1859,6 +1884,8 @@ export class Orchestrator {
     if (queued > 0) blockers.push(`${queued} 条请求排队中`);
     blockers.push(...contextTaskBlockers(this.tasks?.forAgent(agentId) ?? [], conversation, options.excludeTaskId));
     for (const work of this.pendingWork?.open() ?? []) {
+      // A reminder is a future wake, not work in flight (INV-861); it does not hold the conversation.
+      if (work.kind === "reminder") continue;
       if (work.agentId === agentId && work.parent === conversation) blockers.push(`委派 ${work.id} 尚未结束`);
     }
     // Approvals predate per-conversation custody, so conservatively block this agent as a whole.
@@ -2308,6 +2335,15 @@ export class Orchestrator {
    * replayed and before interrupted turns are resumed: it is the authority for `fork/*`.
    * Returns how many were dropped.
    */
+  /**
+   * Picks effects back up after a restart (INV-861): background jobs are handed to their
+   * extension's recovery callback, confirmations no longer waiting are reported and closed.
+   * After the extensions load — the callbacks must exist — and before turns resume.
+   */
+  async recoverEffects(): Promise<{ resumedJobs: number; lostJobs: number; closedPauses: number }> {
+    return (await this.effects?.recover()) ?? { resumedJobs: 0, lostJobs: 0, closedPauses: 0 };
+  }
+
   async sweepPendingWork(): Promise<number> {
     if (this.pendingWork === undefined) return 0;
     const unreadable = this.pendingWork.unreadable();
@@ -2516,7 +2552,7 @@ export const STARTER_TEAM: readonly {
 ];
 
 /** The MCP server list as config.json spells it, in the manager's shape. */
-function mcpServersFrom(config: { mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string>; host?: boolean }> }) {
+function mcpServersFrom(config: { mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string>; host?: boolean; hostOnlyTools?: string[] }> }) {
   // The connector doors (mcp-connectors.ts) sit under the operator's entries: a config.json
   // line with the same name overrides a door's default, an env credential turns a door on,
   // and either may exist without the other.
