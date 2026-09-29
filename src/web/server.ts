@@ -1247,6 +1247,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         return "Refused. The turn will not run that action.";
       }
       orchestrator.policy.grant(approvalId, "channel", reply);
+      // An extension's confirmation continues on its own (INV-861); nothing needs retrying.
+      if (target.harnessResumes === true) return "Allowed. It continues from here.";
       return reply === "always"
         ? "Allowed, and I will not ask you for this exact action again. " +
           "Send the agent a message to have it retry."
@@ -2446,6 +2448,17 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // ends what the turn ledger would otherwise resume, for every fork the last process left open.
   const sweptForks = await orchestrator.sweepPendingWork();
   if (sweptForks > 0) log(`dropped ${sweptForks} fork${sweptForks === 1 ? "" : "s"} left open by the last restart; their parents were told`);
+  // Effects next (INV-861): the extensions are loaded, so a background job's recovery callback
+  // exists; a note about a lost one is queued before the inbox replays.
+  const effects = await orchestrator.recoverEffects();
+  if (effects.resumedJobs + effects.lostJobs + effects.closedPauses > 0) {
+    log(`effects after restart: ${effects.resumedJobs} background job(s) handed back, ${effects.lostJobs} lost, ${effects.closedPauses} confirmation(s) closed`);
+  }
+  // Reminders an extension set are delivered when due; a minute is fine-grained enough for a note.
+  const reminderTimer = setInterval(() => {
+    orchestrator.effects?.deliverDue();
+  }, 60_000);
+  reminderTimer.unref();
   const restored = orchestrator.bus.recover();
   if (restored > 0) {
     log(
@@ -5145,7 +5158,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (waiting !== undefined) {
             const allowed = route === "POST /api/approve";
             broadcast({ type: "approval_settled", id, agentId: waiting.agentId, how: allowed ? "allowed" : "refused", ...(allowed ? { scope } : {}) });
-            orchestrator.bus.deliverSystem(
+            // An extension's confirmation is continued by the harness itself (INV-861): the agent
+            // hears the result from there, and a "go ahead" here would send it to retry nothing.
+            if (waiting.harnessResumes !== true) orchestrator.bus.deliverSystem(
               waiting.agentId,
               allowed
                 ? `[The person allowed it${scope === "once" ? " once" : scope === "session" ? " for this session" : ", standing until revoked"}: ${waiting.description}. Go ahead now.]`

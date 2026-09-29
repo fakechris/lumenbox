@@ -24,6 +24,7 @@ import { approvalOutcomeResult, notStartedResult, outcomeUnknownResult } from ".
 import { idempotencyOf } from "../protocol/idempotency.ts";
 import { changedPromptSegments, type PromptFingerprint } from "./resume.ts";
 import type { PendingWork } from "./pending-work.ts";
+import type { Effects } from "./effects.ts";
 import type { McpFace } from "./mcp-face.ts";
 import type { ModelRelay } from "./model-relay.ts";
 import type { DelegateSessions } from "./delegate-sessions.ts";
@@ -566,6 +567,8 @@ export interface TurnDeps {
   networkEvents?: Pick<NetworkEventLog, "query">;
   /** The fork ledger (docs/32): forks are recorded before they start and committed here. */
   pendingWork?: PendingWork;
+  /** Acts on the effects a tool result asks for (INV-861). Absent means results are text only. */
+  effects?: Effects;
   /** The MCP face (docs/33), for Delegate. */
   mcpFace?: McpFace;
   modelRelay?: ModelRelay;
@@ -3286,6 +3289,22 @@ ${outcome.text}`;
       if (outcome.approval !== undefined) {
         deps.steps?.awaitingApproval(turnId, toolUse.id, outcome.approval.id);
         awaitingPerson.add(toolUse.id);
+      }
+      // Effects the result asked for (INV-861). The call ran and its step settles like any other;
+      // what follows — a confirmation, a background job, a reminder — is recorded by effects.ts
+      // and delivered to this conversation later. A fork's effects are dropped: a fork neither
+      // asks a person nor outlives its parent's turn.
+      if (outcome.effects !== undefined && outcome.effects.length > 0) {
+        if (deps.effects !== undefined && !isForkConversation(conversation)) {
+          const applied = deps.effects.apply({
+            agentId: agent.id,
+            agentName: agent.profile.name,
+            conversation,
+            tool: outcome.effectsFrom ?? toolUse.name,
+            effects: outcome.effects,
+          });
+          if (applied.notes.length > 0) outcome = { ...outcome, text: `${outcome.text}\n\n${applied.notes.join("\n")}` };
+        }
       }
 
       emit({

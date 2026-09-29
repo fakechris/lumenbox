@@ -393,3 +393,30 @@ path is gone; docs/54 says what the ledger actually does.
 fake ledger that enforces the token and the target; docs/54 and config updated. Proposed to the
 ledger: `agent_inbox` rows carry `handed_off_from_id` / `handed_off_from_handle`, without
 which a handed-off question reads as a fresh one.
+
+## Stage 36: Extensions that talk back to the loop (INV-861, from INV-860)
+**Goal**: an extension (and, opt-in, an MCP server) can register **host-only** tools the model
+never sees, and a tool result can carry a closed set of **effects** the harness acts on, so
+confirm-then-continue, background work and timed follow-ups stop needing core code per
+extension. Every effect rides machinery that exists: approvals for the pause, pending-work for
+durability and the startup sweep for recovery.
+**Design**:
+- `api.tool({ hostOnly: true })` — kept out of every agent's list and refused if the model names
+  it; MCP servers get the same through `hostOnlyTools: [...]` in their config.
+- `run()` may return `{ text, effects }`. Effects: `pause_turn { reason, resumeTool, resumeInput? }`
+  (an approval card with that reason; when the person answers, the harness calls the host-only
+  `resumeTool` with `{ ...resumeInput, approved }` and delivers its text to the agent),
+  `background_job { jobId, resumeTool, brief? }` (recorded; `api.jobDone(jobId, text)` delivers
+  the result; after a restart the sweep calls `resumeTool({ jobId, recovering: true })`),
+  `reminder { text, at }` (a durable one-shot wake delivered as a system note). Unknown effects are
+  logged and dropped; effects returned inside a fork are dropped (fork fence).
+- Durable records are new pending-work kinds (`pause`, `ext-job`, `reminder`), written before the
+  effect is acknowledged, settled when delivered.
+- Not in this stage: `cancelTool` (nothing would call it yet), effects from remote MCP results.
+**Success Criteria**: hermetic tests — host-only tool absent from the model's list and refused
+when called; `pause_turn` creates an approval, the answer calls `resumeTool` exactly once and the
+agent receives its text, a refused answer passes `approved: false`; `background_job` survives a
+simulated restart and `resumeTool` is called by the sweep; `jobDone` delivers once; a due
+`reminder` is delivered once and survives a restart; unknown effect ignored and logged; a fork's
+effects are dropped; docs/34 gains a section; `npm test` exits 0 with the floor raised.
+**Status**: Complete (2026-09-29) — PR pending

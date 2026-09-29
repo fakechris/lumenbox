@@ -3537,6 +3537,7 @@ test("scoped MCP lookup wrappers reach permitted tools and refuse an unlisted ta
       owns: (name: string) => name.startsWith("fixture__"),
       describeTools: () => { calls.push("lookup"); return "fixture tool catalog"; },
       call: async (name: string) => { calls.push(name); return "fixture result"; },
+      callDetailed: async (name: string) => { calls.push(name); return { text: "fixture result" }; },
     };
     const capture: Capture = { params: [] };
     const { client } = stubClient([
@@ -3784,3 +3785,53 @@ test("the round span carries the three digests and which segments changed (INV-7
     cleanup();
   }
 });
+
+// INV-861: a tool result's effects reach effects.ts from a real turn, and a fork's are dropped.
+async function turnWithEffects(conversation: string | undefined) {
+  const { registry, cleanup } = fixture();
+  const policy = policyFixture();
+  const { McpManager, VirtualServer } = await import("./mcp.ts");
+  const { PendingWork } = await import("./pending-work.ts");
+  const { Effects } = await import("./effects.ts");
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-turn-effects-"));
+  const mcp = new McpManager([]);
+  mcp.setVirtual(new VirtualServer("ext", [
+    { name: "publish", description: "Publish.", inputSchema: { type: "object" }, run: async () => ({ text: "staged", effects: [{ type: "pause_turn", reason: "Publish to production?", resumeTool: "_resume" }] }) },
+    { name: "_resume", description: "cb", inputSchema: { type: "object" }, hostOnly: true, run: async () => "published" },
+  ]));
+  const effects = new Effects({ pendingWork: new PendingWork(join(dir, "pw.jsonl")), policy: policy.gate, mcp: () => mcp, deliver: () => true });
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const capture: Capture = { params: [] };
+    const { client } = stubClient([
+      message([toolUseBlock("ext__publish", {})], "tool_use"),
+      message([textBlock("Waiting for the person.")]),
+    ], capture);
+    await runTurn(ada, [{ id: "m-fx", fromId: "user", fromName: "user", text: "publish it", priority: false, receivedAt: "" }],
+      new AbortController().signal, {
+        client, registry, bus: new AgentBus(registry, async () => {}), box: undefined, resolution: undefined,
+        policy: policy.gate, mcp, effects,
+        ...(conversation !== undefined ? { conversation } : {}),
+      });
+    return { capture, tools: capture.params[0]?.tools?.map(tool => ("name" in tool ? tool.name : "")) ?? [], pending: policy.gate.pending() };
+  } finally {
+    cleanup();
+    policy.cleanup();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("a tool result's pause_turn opens a confirmation, and the model reads why it must stop (INV-861)", async () => {
+  const { capture, tools, pending } = await turnWithEffects(undefined);
+  assert.ok(tools.includes("ext__publish"));
+  assert.ok(!tools.includes("ext___resume"), "a host-only callback is not offered to the model");
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0]!.description, "Publish to production?");
+  assert.match(JSON.stringify(capture.params[1]?.messages), /staged[\s\S]*End your turn now/);
+});
+
+test("a fork's effects are dropped: nothing is put in front of the person (INV-861)", async () => {
+  const { pending } = await turnWithEffects("fork/check-1");
+  assert.equal(pending.length, 0);
+});
+

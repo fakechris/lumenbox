@@ -1601,6 +1601,7 @@ test("an email send through a connector waits for a person when the tier gate en
       isHostTool: () => false,
       owns: (name: string) => name === "google__send_email",
       call: async (_name: string, input: unknown) => { sent.push(input); return "sent"; },
+      callDetailed: async (_name: string, input: unknown) => { sent.push(input); return { text: "sent" }; },
       describeTools: () => "google__send_email",
     };
     let toolResult = "";
@@ -1963,6 +1964,7 @@ test("a reply that claims the email was sent with no send call is sent back, and
     isHostTool: () => false,
     owns: (name: string) => name === "google__send_email",
     call: async (_name: string, input: unknown) => { sent.push(input); return "sent"; },
+    callDetailed: async (_name: string, input: unknown) => { sent.push(input); return { text: "sent" }; },
     describeTools: () => "google__send_email",
   };
   const conduct: string[] = [];
@@ -2003,6 +2005,7 @@ test("a model that keeps claiming with no call is nudged twice, recorded as igno
     isHostTool: () => false,
     owns: (name: string) => name === "google__send_email",
     call: async () => "sent",
+    callDetailed: async () => ({ text: "sent" }),
     describeTools: () => "google__send_email",
   };
   const conduct: string[] = [];
