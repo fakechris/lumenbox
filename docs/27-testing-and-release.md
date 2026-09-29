@@ -87,7 +87,9 @@ installers with three packages in node_modules and every new user's first launch
    zip, or whose image tag is absent from Docker Hub (skippable with
    `RELEASE_CHECK_SKIP_IMAGE=1`, which CI sets — the gate belongs to the publishing machine).
 3. **Build the app** (`npm run dist:mac`, …), and upload only artifacts the check above
-   saw. Overriding `AGENTBOX_DIST_DIR` points the check at a candidate directory.
+   saw. Overriding `AGENTBOX_DIST_DIR` points the check at a candidate directory. The
+   dist scripts stamp the short commit into the packaged `package.json` (`buildCommit`),
+   which is the version line's only source on a machine with no `.git` (INV-876).
 
 | | Ours (after today) | OpenClaw | Hermes |
 | --- | --- | --- | --- |
