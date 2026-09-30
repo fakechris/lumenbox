@@ -239,6 +239,108 @@ export function irreversibleReason(target: ClickTarget): string | undefined {
   return undefined;
 }
 
+/** What a field says about itself, read before anything is typed into it (INV-895). */
+export interface InputField {
+  /** Lower-case tag name. */
+  tag: string;
+  /** The input's `type`, lower-case; empty for a non-input. */
+  type: string;
+  /** The `autocomplete` attribute, lower-case, as the page wrote it. */
+  autocomplete: string;
+  /** `name` and `id`, joined. */
+  name: string;
+  /** What a person reads as the field's label: aria-label, a <label>, the placeholder. */
+  label: string;
+  /** The field sits in a form that also asks for a password: a sign-in, not a hand-over. */
+  signIn: boolean;
+}
+
+/** The kinds of personal data a person has to see go out, and how a field or a value says it is one. */
+const SENSITIVE_KINDS: { kind: string; autocomplete: RegExp; types?: string[]; words: RegExp; value?: (text: string) => boolean }[] = [
+  {
+    kind: "payment card",
+    autocomplete: /\bcc-(?:number|csc|exp|exp-month|exp-year|name|type)\b/,
+    words: /card.?number|credit.?card|debit.?card|\bcvv\b|\bcvc\b|security.?code|银行卡|信用卡|卡号|安全码/i,
+    value: text => {
+      const digits = text.replace(/[\s-]/g, "");
+      return /^\d{13,19}$/.test(digits) && luhn(digits);
+    },
+  },
+  {
+    kind: "identity number",
+    autocomplete: /(?!)/,
+    words: /\bssn\b|social.?security|passport|national.?id|id.?number|身份证|护照|证件号/i,
+    value: text => /^\d{17}[\dXx]$/.test(text.trim()) || /^\d{3}-\d{2}-\d{4}$/.test(text.trim()),
+  },
+  {
+    kind: "date of birth",
+    autocomplete: /\bbday(?:-day|-month|-year)?\b/,
+    words: /birth.?(?:date|day)|date.?of.?birth|\bdob\b|生日|出生/i,
+  },
+  {
+    kind: "postal address",
+    autocomplete: /\b(?:street-address|address-line[123]|address-level[1-4]|postal-code)\b/,
+    words: /street|(?<!e-?mail[\s_-]?)address|postcode|postal.?code|zip.?code|(?<!邮箱)地址|住址|邮编|邮政编码/i,
+  },
+  {
+    kind: "phone number",
+    autocomplete: /\btel(?:-national|-local|-country-code)?\b/,
+    types: ["tel"],
+    words: /phone|mobile|\btel\b|手机|电话/i,
+    value: text => /^(?:\+?86[\s-]?)?1[3-9]\d{9}$/.test(text.replace(/[\s-]/g, "")) || /^\+\d{8,15}$/.test(text.replace(/[\s()-]/g, "")),
+  },
+  {
+    kind: "email address",
+    autocomplete: /\bemail\b/,
+    types: ["email"],
+    words: /e-?mail|邮箱/i,
+    value: text => /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(text.trim()),
+  },
+];
+
+function luhn(digits: string): boolean {
+  let sum = 0;
+  for (let i = 0; i < digits.length; i += 1) {
+    let d = Number(digits[digits.length - 1 - i]);
+    if (i % 2 === 1) {
+      d *= 2;
+      if (d > 9) d -= 9;
+    }
+    sum += d;
+  }
+  return sum % 10 === 0;
+}
+
+/**
+ * Why typing this text into this field needs a person, or undefined when it does not (INV-895).
+ *
+ * Typing is sending: once a value is in a page's field, the page's own script can read it and
+ * post it, whether or not anything is ever submitted. So the person's contact details,
+ * address, identity or card number going into a third-party page is asked about *before* the
+ * keystrokes, the way a payment click is — and the finding names the kind of data and the
+ * site, because "may I continue?" is not something a person can say yes to. Decided here, from
+ * the field and the value, never from the model: a page can talk a model into anything.
+ *
+ * Not asked: a page on this machine, and the email or phone of a sign-in form (a form that also
+ * wants a password) — logging in is what a person asked for when they named the site, and a
+ * password there goes through `fill_secret`, bound to the site it belongs to.
+ */
+export function sensitiveInputReason(field: InputField, text: string, host: string): string | undefined {
+  // A page on this machine, or one with no host: typing into it hands nothing to anybody.
+  if (text.trim() === "" || host === "" || loopback(host.replace(/:\d+$/, ""))) return undefined;
+  const words = `${field.name} ${field.label}`;
+  for (const entry of SENSITIVE_KINDS) {
+    const byField =
+      entry.autocomplete.test(field.autocomplete) || (entry.types?.includes(field.type) ?? false) || entry.words.test(words);
+    const byValue = entry.value?.(text) ?? false;
+    if (!byField && !byValue) continue;
+    if (field.signIn && (entry.kind === "email address" || entry.kind === "phone number")) return undefined;
+    const where = field.label.trim() !== "" ? ` into ${JSON.stringify(field.label.trim().slice(0, 60))}` : "";
+    return `send ${entry.kind} to ${host}: type${where}`;
+  }
+  return undefined;
+}
+
 /** What the target looks like, before and after an action, for `judgeEffect`. */
 export interface TargetState {
   value?: string;
@@ -362,7 +464,7 @@ export interface SecretField {
   submitTargets: readonly string[];
 }
 
-/** A host on this machine: nothing between here and there to read cleartext. */
+/** A host on this machine: nothing between here and there to read cleartext, nobody to hand data to. */
 function loopback(hostname: string): boolean {
   const bare = hostname.replace(/^\[|\]$/g, "").toLowerCase();
   return bare === "localhost" || bare === "::1" || /^127\./.test(bare) || bare.endsWith(".localhost");
@@ -1066,6 +1168,30 @@ class BrowserPage {
     }
   }
 
+  /**
+   * The field and the host its document belongs to, for `sensitiveInputReason`. The field's own
+   * document, not the tab's: a card form in a payment provider's frame sends to that provider.
+   */
+  private async describeInput(objectId: string): Promise<{ field: InputField; host: string }> {
+    const described = (await this.session.send("Runtime.callFunctionOn", {
+      objectId,
+      returnByValue: true,
+      functionDeclaration:
+        "function(){ const t = this; const tag = (t.tagName || '').toLowerCase();" +
+        " const attr = n => String((t.getAttribute && t.getAttribute(n)) || '');" +
+        " const label = attr('aria-label') || (t.labels && t.labels[0] ? t.labels[0].textContent : '') || attr('placeholder');" +
+        " const form = t.form || null;" +
+        " const signIn = !!(form && form.querySelector('input[type=password]'));" +
+        " let host = ''; try { host = t.ownerDocument.location.host; } catch (e) {}" +
+        " return { field: { tag, type: tag === 'input' ? String(t.type || '').toLowerCase() : '', autocomplete: attr('autocomplete').toLowerCase()," +
+        "   name: (attr('name') + ' ' + attr('id')).trim(), label: String(label || '').replace(/\\s+/g, ' ').trim(), signIn }, host }; }",
+    })) as { result?: { value?: { field: InputField; host: string } } };
+    const value = described.result?.value;
+    // Unreadable is not a reason to type blind into what may be a card field.
+    if (value === undefined) throw new CdpError("Could not read that field before typing into it; take a fresh snapshot.");
+    return value;
+  }
+
   /** The target's own words and the text around it, for `irreversibleReason`. */
   private async describeTarget(objectId: string): Promise<ClickTarget> {
     const described = (await this.session.send("Runtime.callFunctionOn", {
@@ -1095,8 +1221,15 @@ class BrowserPage {
     await this.session.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, buttons: 0 });
   }
 
-  async type(ref: string, text: string, replace: boolean): Promise<void> {
+  async type(ref: string, text: string, replace: boolean, confirmed = false): Promise<void> {
     const objectId = await this.resolve(ref);
+    // Before a keystroke: typing is sending (INV-895). Same 428 as an irreversible click, and
+    // the same call comes back `confirmed` once a person has read what would go where.
+    if (!confirmed) {
+      const { field, host } = await this.describeInput(objectId);
+      const reason = sensitiveInputReason(field, text, host);
+      if (reason !== undefined) throw new IrreversibleActionError(`IRREVERSIBLE: ${reason}`);
+    }
     await this.session.send("DOM.focus", { objectId }).catch(async () => {
       // Not everything focusable through a click is focusable through DOM.focus. Confirmed:
       // the click is to focus a field, not to press what the field is.
@@ -1780,7 +1913,7 @@ export class BrowserService {
         await page.hover(ref!);
         break;
       case "type":
-        await page.type(ref!, options.text ?? "", options.replace !== false);
+        await page.type(ref!, options.text ?? "", options.replace !== false, options.confirmed === true);
         break;
       case "key":
         await page.press(options.key ?? "Enter");

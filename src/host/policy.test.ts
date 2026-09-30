@@ -738,6 +738,32 @@ test("a click the box called irreversible must be approved, and the card says wh
   }
 });
 
+// ── typing the person's details is sending them (INV-895) ─────────────────────────
+test("typing personal data into a site asks, and the card names the data, the site and the value", () => {
+  const { gate, cleanup } = fixture();
+  try {
+    const typeAddress: PolicyRequest = {
+      kind: "tool",
+      agentId: "agent-1",
+      agentName: "Ada",
+      tool: "browser_act",
+      input: { action: "type", ref: "e7", text: "上海市徐汇区某路 1 号" },
+      irreversible: 'send postal address to offer.example.com: type into "收货地址"',
+    };
+    const first = gate.check(typeAddress);
+    assert.equal(first.allow, false);
+    const card = gate.pending()[0]?.description ?? "";
+    assert.match(card, /^Ada: browser_act — send postal address to offer\.example\.com: type into "收货地址" — /);
+    assert.match(card, /上海市徐汇区某路 1 号/, "the person sees exactly what would be sent");
+    const id = (!first.allow && first.approval?.id) as string;
+    assert.equal(gate.grant(id, "alice"), true);
+    assert.equal(gate.check(typeAddress).allow, true, "approved, it continues");
+    assert.equal(gate.check({ ...typeAddress, input: { ...typeAddress.input, text: "another address" } }).allow, false, "a different value is a different approval");
+  } finally {
+    cleanup();
+  }
+});
+
 // ── operator rules decide first (INV-427) ─────────────────────────────────────────
 import { RuleStore } from "./rules.ts";
 import { writeFileSync as writeRule } from "node:fs";

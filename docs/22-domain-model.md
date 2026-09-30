@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: identity-and-authority
-     updated: 2026-09-25
+     updated: 2026-09-30
 -->
 # The domain model: people, doors, workers, rooms
 
@@ -351,6 +351,17 @@ person's machine, who can act) — and the box's per-call finding (INV-401) rais
 `irreversible`. A click in a page is `self` until the box says that click pays; counting every
 click would bury the few that matter. A guard test holds the declaration to the real tool list in
 both directions, because the table it replaced named a tool that did not exist.
+
+Typing is sending (INV-895): a value in a page's field is the page's the moment it is typed,
+submitted or not. So the box raises a `type` to `irreversible` too, before the keystrokes, when
+the field (its `autocomplete`, type, name or label) or the value itself (a phone number, an ID or
+card number that checks out) says it is the person's phone, email, address, date of birth, identity
+or card — naming the kind of data and the site that would receive it, and the card shows the value.
+A page on this machine is not asked about, nor the email or phone of a form that also wants a
+password: signing in is what naming the site asked for, and the password itself goes through
+`fill_secret`, bound to the site and the form's submit targets (INV-893). A consent covers that
+value for that site; an earlier "go ahead" in the conversation does not. `computer` typing through
+the desktop is outside this gate; the auto-review reviews it instead (shadow unless enforced).
 
 The gate reads it in three modes (`AGENTBOX_TIER_GATE`): **shadow**, the default, changes no
 decision and writes `tier` and `wouldAsk` on the `checked` row, summarised on the settings page;

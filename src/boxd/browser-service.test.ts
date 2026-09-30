@@ -373,3 +373,30 @@ test("browser verification requires requested state and treats unreadable target
   assert.equal(verifyBrowserExpectation({ gone: true }, undefined, "").status, "unknown", "read failure cannot prove disappearance");
   assert.equal(verifyBrowserExpectation({ appears: "Saved" }, undefined, "Saved successfully").status, "satisfied");
 });
+
+// ── typing is sending (INV-895) ────────────────────────────────────────────────────
+import { sensitiveInputReason, type InputField } from "./browser-service.ts";
+
+test("the person's details going into a third-party page are asked about, naming the data and the site", () => {
+  const field = (over: Partial<InputField>): InputField => ({ tag: "input", type: "text", autocomplete: "", name: "", label: "", signIn: false, ...over });
+  const shop = "shop.example.com";
+  // By the field: autocomplete, type, or the words a person reads.
+  assert.equal(sensitiveInputReason(field({ autocomplete: "tel", label: "Phone" }), "anything", shop), 'send phone number to shop.example.com: type into "Phone"');
+  assert.match(sensitiveInputReason(field({ autocomplete: "shipping street-address" }), "1 Main St", shop) ?? "", /^send postal address to shop\.example\.com/);
+  assert.match(sensitiveInputReason(field({ type: "email" }), "a@b.co", shop) ?? "", /email address/);
+  assert.match(sensitiveInputReason(field({ label: "收货地址" }), "上海市徐汇区", shop) ?? "", /postal address/);
+  assert.match(sensitiveInputReason(field({ label: "Email address" }), "x", shop) ?? "", /email address/, "an email address field is not a postal one");
+  assert.match(sensitiveInputReason(field({ autocomplete: "cc-number" }), "4111", shop) ?? "", /payment card/);
+  assert.match(sensitiveInputReason(field({ name: "birth_date" }), "1990-01-01", shop) ?? "", /date of birth/);
+  // By the value, whatever the field calls itself.
+  assert.match(sensitiveInputReason(field({ label: "Notes" }), "13812345678", shop) ?? "", /phone number/);
+  assert.match(sensitiveInputReason(field({ label: "Notes" }), "4111 1111 1111 1111", shop) ?? "", /payment card/);
+  assert.match(sensitiveInputReason(field({ label: "Notes" }), "11010519491231002X", shop) ?? "", /identity number/);
+  // Not asked: an ordinary field, a number that is not a card, nothing typed, this machine, a sign-in.
+  assert.equal(sensitiveInputReason(field({ label: "Search" }), "running shoes", shop), undefined);
+  assert.equal(sensitiveInputReason(field({ label: "Quantity" }), "4111111111111112", shop), undefined, "fails Luhn: an order number, not a card");
+  assert.equal(sensitiveInputReason(field({ type: "tel" }), "", shop), undefined);
+  assert.equal(sensitiveInputReason(field({ type: "tel" }), "13812345678", "localhost:3000"), undefined);
+  assert.equal(sensitiveInputReason(field({ type: "email", signIn: true }), "me@example.com", "github.com"), undefined, "signing in is what naming the site asked for");
+  assert.match(sensitiveInputReason(field({ autocomplete: "cc-number", signIn: true }), "4111111111111111", shop) ?? "", /payment card/, "a card is still a card on a form with a password");
+});
