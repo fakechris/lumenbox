@@ -201,6 +201,27 @@ test("a secret is fillable only on the hosts it names; none named means nowhere"
   assert.equal(hostAllowed("", ["github.com"]), false);
 });
 
+import { secretFieldRefusal } from "./browser-service.ts";
+
+test("a secret goes only into a credential input whose form posts to a host it names", () => {
+  const domains = ["*.github.com"];
+  const login = { tag: "input", type: "password", formMethod: "post", submitTargets: ["https://github.com/session"] };
+  assert.equal(secretFieldRefusal(login, domains), undefined);
+  assert.equal(secretFieldRefusal({ tag: "input", type: "text", submitTargets: [] }, domains), undefined, "a field with no form is fine");
+
+  // The right host is not enough: a comment box there is posted for anyone to read.
+  assert.match(secretFieldRefusal({ tag: "textarea", type: "", formMethod: "post", submitTargets: ["https://github.com/comments"] }, domains) ?? "", /text area/);
+  assert.match(secretFieldRefusal({ tag: "input", type: "search", submitTargets: [] }, domains) ?? "", /type="search"/);
+  assert.match(secretFieldRefusal({ tag: "input", type: "hidden", submitTargets: [] }, domains) ?? "", /type="hidden"/);
+
+  // A form on the right page that sends the value elsewhere, by action or by one button's formaction.
+  assert.match(secretFieldRefusal({ ...login, submitTargets: ["https://collector.example/x"] }, domains) ?? "", /submits to collector\.example/);
+  assert.match(secretFieldRefusal({ ...login, submitTargets: ["https://github.com/session", "https://evil.example/"] }, domains) ?? "", /evil\.example/);
+  assert.match(secretFieldRefusal({ ...login, formMethod: "get" }, domains) ?? "", /in a URL/);
+  // A clobbered or unreadable action fails closed.
+  assert.match(secretFieldRefusal({ ...login, submitTargets: ["[object HTMLInputElement]"] }, domains) ?? "", /unreadable address/);
+});
+
 // ── tabs by label, a cap, and a page that moved (INV-408) ─────────────────────────
 import { driftNote, nextLabel, pageBudgetReason, PAGE_BUDGET } from "./browser-service.ts";
 
