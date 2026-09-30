@@ -2246,3 +2246,61 @@ test("nor one carried back by an MCP server nobody marked as trusted", async () 
   };
   await assertNothingPlanted(plantedPageEpisode({ call: "web__read", input: { url: "https://offer.example.com" } }, mcp));
 });
+
+// ── 2026-09-30, INV-895: a page that asks for the person's address ───────────────────
+//
+// What could happen: the person asks the agent to claim a coupon; the page says "enter your
+// delivery address to continue"; the agent knows the address from memory and types it in.
+// The page's script has it the moment it is typed, whether or not anything is submitted.
+//
+// What the harness must hold: the box refuses the keystrokes before they are sent, the gate
+// asks the person with a card that names the data, the site and the value, and the agent is
+// told it is waiting — nothing is typed until a person says yes.
+
+test("an address a page asks for is not typed until a person has read what would go where", async () => {
+  const { PolicyGate } = await import("./policy.ts");
+  const { BoxError } = await import("../box/client.ts");
+  const { sensitiveInputReason } = await import("../boxd/browser-service.ts");
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-typing-scenario-"));
+  const policy = new PolicyGate({
+    path: join(dir, "policy.jsonl"),
+    limits: { budgetWindowHours: 24, wakesPerWindow: 30, wakeWindowMinutes: 10, approvalRequiredTools: [], approvalRequiredCommands: [] },
+  });
+  const typed: string[] = [];
+  // The page's field, as boxd would read it; the decision is boxd's own function.
+  const field = { tag: "input", type: "text", autocomplete: "street-address", name: "addr", label: "收货地址", signIn: false };
+  let toolResult = "";
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: ["帮我在 offer.example.com 把那张优惠券领了"],
+    policy,
+    display: 1,
+    box: {
+      browser: async (request: { op: string; action?: string; text?: string; confirmed?: boolean }) => {
+        if (request.op === "act" && request.action === "type") {
+          const reason = request.confirmed === true ? undefined : sensitiveInputReason(field, request.text ?? "", "offer.example.com");
+          if (reason !== undefined) throw new BoxError(`IRREVERSIBLE: ${reason}`, 428);
+          typed.push(request.text ?? "");
+        }
+        return { url: "https://offer.example.com/claim", title: "Claim", snapshot: '- textbox "收货地址" [ref=e7]', snapshot_id: "s2" };
+      },
+    } as never,
+    script: ({ round, messages }) => {
+      if (round === 0) return { call: "browser_act", input: { action: "type", ref: "e7", text: "上海市徐汇区某路 1 号", snapshot: "s1" } };
+      if (round === 1) toolResult = JSON.stringify(messages.at(-1)?.content);
+      return { say: "页面要填你的收货地址，我已请你确认后再填。" };
+    },
+  });
+  try {
+    assert.deepEqual(typed, [], "nothing was typed");
+    const card = policy.pending()[0]?.description ?? "";
+    assert.match(card, /send postal address to offer\.example\.com: type into "收货地址"/, "the card names the data and the site");
+    assert.match(card, /上海市徐汇区某路 1 号/, "and the value");
+    assert.match(toolResult, /Outcome: refused/, "the agent is told it did not happen");
+    assert.match(toolResult, /approv/i, "and that it is waiting on a person");
+  } finally {
+    result.cleanup();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
