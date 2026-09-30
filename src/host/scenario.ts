@@ -30,7 +30,7 @@ import { runTurn } from "./turn.ts";
 import { fakeModel } from "./testing/fake-model.ts";
 import type { BoxClient } from "../box/client.ts";
 import type { HistoryEntry } from "./compaction.ts";
-import { Rememberer, summariseExchange } from "./remember.ts";
+import { readsExternalContent, Rememberer, summariseExchange, turnReadOutside } from "./remember.ts";
 import { MemoryMirror } from "./memory-mirror.ts";
 import { memoryRef } from "./memory.ts";
 import type { ProviderProfile } from "./provider.ts";
@@ -422,7 +422,12 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
   const client = options.client ?? scripted;
 
   const rememberer = options.memory === true
-    ? new Rememberer({ registry, client, provider: { label: "scenario", model: "scenario", maxTokens: 1024 } as ProviderProfile })
+    ? new Rememberer({
+        registry,
+        client,
+        provider: { label: "scenario", model: "scenario", maxTokens: 1024 } as ProviderProfile,
+        externalTool: tool => readsExternalContent(tool) || options.mcp?.pollutesMemory?.(tool) === true,
+      })
     : undefined;
   let goalLoop: GoalLoop | undefined;
   let goalGate: GoalGate | undefined;
@@ -487,7 +492,12 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
     const written = registry.readTranscript(front.id).slice(before) as { role?: string; kind?: string; text?: string; at?: string }[];
     const said = written.filter(entry => entry.role === "assistant" && entry.kind === undefined && entry.text).map(entry => entry.text!).join("\n\n");
     const last = written[written.length - 1];
-    if (said !== "") await rememberer.record({ agentId: front.id, text: summariseExchange(line, said), ref: memoryRef("main", new Date()), conversation: "main", ...(last?.at !== undefined ? { at: last.at } : {}) });
+    const external = turnReadOutside(
+      registry.readTranscript(front.id) as HistoryEntry[],
+      before,
+      tool => readsExternalContent(tool) || options.mcp?.pollutesMemory?.(tool) === true
+    );
+    if (said !== "") await rememberer.record({ agentId: front.id, text: summariseExchange(line, said), ref: memoryRef("main", new Date()), conversation: "main", ...(last?.at !== undefined ? { at: last.at } : {}), ...(external ? { external: true } : {}) });
     await rememberer.settle(front.id);
   };
   if (options.drive !== undefined) await options.drive({ bus, registry, frontId: front.id, files, say, ...(goalLoop !== undefined ? { goalLoop } : {}) });

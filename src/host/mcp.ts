@@ -58,6 +58,12 @@ export interface McpServerConfig {
    * job after a restart — which the model must neither see nor be able to call.
    */
   hostOnlyTools?: string[];
+  /**
+   * Whether this server's results are outside content that must not become memory (INV-894).
+   * Absent means yes: a server is somebody else's words until the operator says otherwise —
+   * `false` for one they maintain and trust, a local knowledge base, their own ticket system.
+   */
+  pollutesMemory?: boolean;
 }
 
 /**
@@ -741,6 +747,15 @@ export class McpManager {
   /** Whether a tool name belongs to one of these servers. */
   owns(name: string): boolean {
     return this.serverFor(name) !== undefined;
+  }
+
+  /**
+   * Whether a tool's results must keep its exchange out of memory extraction (INV-894): any
+   * tool of these servers, unless the operator set `pollutesMemory: false` on its server.
+   */
+  pollutesMemory(name: string): boolean {
+    const server = this.serverFor(name);
+    return server !== undefined && (server.config as { pollutesMemory?: boolean }).pollutesMemory !== false;
   }
 
   /** Whether a tool belongs to a server the operator marked host-level (INV-439). */
