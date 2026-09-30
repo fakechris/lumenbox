@@ -353,11 +353,19 @@ export interface SecretField {
   type: string;
   /** The owning form's `method` (`get`, `post`, `dialog`), or undefined when the field has no form. */
   formMethod?: string;
+  /** Each submitter's `formmethod` override, lower-case: a button can turn a POST form into a GET. */
+  submitMethods?: readonly string[];
   /**
    * Every URL the owning form could submit to, resolved: the form's `action` and each submitter's
    * `formaction`. Empty when the field has no form.
    */
   submitTargets: readonly string[];
+}
+
+/** A host on this machine: nothing between here and there to read cleartext. */
+function loopback(hostname: string): boolean {
+  const bare = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  return bare === "localhost" || bare === "::1" || /^127\./.test(bare) || bare.endsWith(".localhost");
 }
 
 /** Input types a credential is typed into. `search` is not one: its value becomes a URL. */
@@ -380,18 +388,25 @@ export function secretFieldRefusal(field: SecretField, domains: readonly string[
   if (!SECRET_INPUT_TYPES.has(field.type)) {
     return `That input is type="${field.type}"; a secret is filled only into a password, text, email, tel or number input.`;
   }
-  if (field.formMethod !== undefined && field.formMethod !== "post") {
-    return `That field's form submits with method="${field.formMethod}", which would put the secret in a URL; it is not filled.`;
+  for (const method of [field.formMethod, ...(field.submitMethods ?? [])]) {
+    if (method !== undefined && method !== "post") {
+      return `That field's form can submit with method="${method}", which would put the secret in a URL; it is not filled.`;
+    }
   }
   for (const target of field.submitTargets) {
-    let host = "";
+    let url: URL | undefined;
     try {
-      host = new URL(target).host;
+      url = new URL(target);
     } catch {
-      host = "";
+      url = undefined;
     }
+    const host = url?.host ?? "";
     if (!hostAllowed(host, domains)) {
       return `That field's form submits to ${host || "an unreadable address"}, and the secret may only go to ${domains.join(", ")}.`;
+    }
+    // Cleartext is readable by everything between here and there. A page on this machine is exempt.
+    if (url !== undefined && url.protocol !== "https:" && !(url.protocol === "http:" && loopback(url.hostname))) {
+      return `That field's form submits over ${url.protocol.replace(":", "")}, not https, so the secret would travel readable; it is not filled.`;
     }
   }
   return undefined;
@@ -1025,9 +1040,11 @@ class BrowserPage {
         " const type = tag === 'input' ? String(this.type || '').toLowerCase() : '';" +
         " const form = this.form || null; if (!form) return { tag, type, submitTargets: [] };" +
         " const targets = [form.action];" +
+        " const methods = [];" +
         " for (const el of form.querySelectorAll('button, input[type=submit], input[type=image]')) {" +
-        "   if (el.hasAttribute('formaction')) targets.push(el.formAction); }" +
-        " return { tag, type, formMethod: String(form.method || 'get').toLowerCase(), submitTargets: targets }; }",
+        "   if (el.hasAttribute('formaction')) targets.push(el.formAction);" +
+        "   if (el.hasAttribute('formmethod')) methods.push(String(el.formMethod || 'get').toLowerCase()); }" +
+        " return { tag, type, formMethod: String(form.method || 'get').toLowerCase(), submitMethods: methods, submitTargets: targets }; }",
     })) as { result?: { value?: SecretField } };
     const field = described.result?.value;
     if (field === undefined) throw new CdpError("Could not read that field before filling it; take a fresh snapshot.");

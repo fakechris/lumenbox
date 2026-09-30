@@ -218,6 +218,12 @@ test("a secret goes only into a credential input whose form posts to a host it n
   assert.match(secretFieldRefusal({ ...login, submitTargets: ["https://collector.example/x"] }, domains) ?? "", /submits to collector\.example/);
   assert.match(secretFieldRefusal({ ...login, submitTargets: ["https://github.com/session", "https://evil.example/"] }, domains) ?? "", /evil\.example/);
   assert.match(secretFieldRefusal({ ...login, formMethod: "get" }, domains) ?? "", /in a URL/);
+  // A button can override the form: formmethod="get" puts the secret in a URL too.
+  assert.match(secretFieldRefusal({ ...login, submitMethods: ["post", "get"] }, domains) ?? "", /method="get"/);
+  assert.equal(secretFieldRefusal({ ...login, submitMethods: ["post"] }, domains), undefined);
+  // Cleartext to the right host is still cleartext; a page on this machine is exempt.
+  assert.match(secretFieldRefusal({ ...login, submitTargets: ["http://github.com/session"] }, domains) ?? "", /not https/);
+  assert.equal(secretFieldRefusal({ ...login, submitTargets: ["http://localhost:3000/login"] }, ["localhost:3000"]), undefined);
   // A clobbered or unreadable action fails closed.
   assert.match(secretFieldRefusal({ ...login, submitTargets: ["[object HTMLInputElement]"] }, domains) ?? "", /unreadable address/);
 });
