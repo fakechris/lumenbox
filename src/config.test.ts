@@ -274,3 +274,10 @@ test("boxImage loads from the file and saveConfig sets and clears it (INV-856)",
   const raw = JSON.parse(readFileSync(configPath(), "utf8"));
   assert.equal("boxImage" in raw, false, "cleared means gone from the file, not empty");
 });
+
+test("an MCP server may be marked as not polluting memory; anything else is left out (INV-894)", () => {
+  const { warnings } = withHome('{"mcpServers": {"kb": {"command": "kb", "pollutesMemory": false}, "web": {"command": "web", "pollutesMemory": "no"}}}');
+  const servers = loadConfig(line => warnings.push(line)).mcpServers;
+  assert.equal(servers?.kb?.pollutesMemory, false);
+  assert.equal(servers?.web?.pollutesMemory, undefined, "only an explicit false is read; the default is that it pollutes");
+});

@@ -112,6 +112,11 @@ export interface AgentboxConfig {
        * the policy gate; a rule (INV-427) can let the reads through.
        */
       host?: boolean;
+      /**
+       * `false` for a server the operator trusts not to carry somebody else's words, so an
+       * exchange that used it may still be remembered from (INV-894). Absent means it may.
+       */
+      pollutesMemory?: boolean;
     }
   >;
   /**
@@ -415,6 +420,7 @@ function readMcpServers(
       command: entry.command,
       ...(args !== undefined && args.length > 0 ? { args } : {}),
       ...(env !== undefined && Object.keys(env).length > 0 ? { env } : {}),
+      ...(entry.pollutesMemory === false ? { pollutesMemory: false } : {}),
     };
   }
   return Object.keys(servers).length > 0 ? servers : undefined;

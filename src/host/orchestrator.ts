@@ -100,7 +100,7 @@ import { MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
 import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
 import type { OAuthGate } from "./oauth.ts";
-import { Rememberer, summariseExchange } from "./remember.ts";
+import { readsExternalContent, Rememberer, summariseExchange, turnReadOutside } from "./remember.ts";
 import type { HistoryEntry } from "./compaction.ts";
 import { memoryRef } from "./memory.ts";
 import type { PitfallSource } from "./pitfalls.ts";
@@ -782,6 +782,11 @@ export class Orchestrator {
       });
   }
 
+  /** Whether a tool's result is outside content that keeps its exchange out of memory (INV-894). */
+  private readsExternalContent(tool: string): boolean {
+    return readsExternalContent(tool) || this.mcp.pollutesMemory(tool);
+  }
+
   private maybeAudit(task: Task): void {
     if (task.status !== "review" || task.reviewerId === undefined) return;
     if (this.auditing.has(task.id)) return;
@@ -954,6 +959,7 @@ export class Orchestrator {
       provider: remembererRuntime.profile,
       log: line => console.error(`[memory] ${line}`),
       usage: this.usage,
+      externalTool: tool => this.readsExternalContent(tool),
     });
 
     this.extensions =
@@ -2229,13 +2235,17 @@ export class Orchestrator {
       const ref = memoryRef(conversation, new Date(), options.messageId);
       // The transcript time of the exchange, so a compaction flush and the batch agree
       // on which entries each has extracted (INV-778).
-      const last = this.registry.readTranscript(agent.id, conversation).at(-1) as { at?: string } | undefined;
+      const transcript = this.registry.readTranscript(agent.id, conversation);
+      const last = transcript.at(-1) as { at?: string } | undefined;
+      // What this turn called, read from the transcript like the reply is (INV-894).
+      const external = turnReadOutside(transcript as HistoryEntry[], before, tool => this.readsExternalContent(tool));
       void this.rememberer
         .record({
           agentId: agent.id,
           text: summariseExchange(text, said),
           ref,
           conversation,
+          ...(external ? { external: true } : {}),
           ...(last?.at !== undefined ? { at: last.at } : {}),
           // Taking notes on a person's conversation is that person's cost. A batch that
           // spans two people bills to neither — see Rememberer.payerOf.
@@ -2592,7 +2602,7 @@ export const STARTER_TEAM: readonly {
 ];
 
 /** The MCP server list as config.json spells it, in the manager's shape. */
-function mcpServersFrom(config: { mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string>; host?: boolean; hostOnlyTools?: string[] }> }) {
+function mcpServersFrom(config: { mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string>; host?: boolean; hostOnlyTools?: string[]; pollutesMemory?: boolean }> }) {
   // The connector doors (mcp-connectors.ts) sit under the operator's entries: a config.json
   // line with the same name overrides a door's default, an env credential turns a door on,
   // and either may exist without the other.

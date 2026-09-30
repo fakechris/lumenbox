@@ -41,6 +41,7 @@ import {
   compactSharedShardLines,
   importMarkdown,
   MEMORY_COMPACT_AT,
+  recordHasRevokedSource,
   revokedMemorySources,
   type MemoryRecord,
 } from "../host/memory.ts";
@@ -1082,7 +1083,7 @@ export class AgentRegistry {
     const revoked = existsSync(this.memoryRecordsPathFor(agentId))
       ? revokedMemorySources(this.readMemoryRecords(agentId))
       : new Set<string>();
-    const blocked = records.find(record => record.revokedSources === undefined && record.from?.some(source => revoked.has(source)));
+    const blocked = records.find(record => recordHasRevokedSource(record, revoked));
     if (blocked !== undefined) throw new Error("Memory source was withdrawn: refusing to re-import its derived record");
     mkdirSync(this.dirFor(agentId), { recursive: true });
     for (const record of records) {
@@ -1248,7 +1249,7 @@ export class AgentRegistry {
     if (records.length === 0) return;
     refuseCredentialInMemory(records);
     const revoked = revokedMemorySources(this.readSharedMemory(agentId));
-    const blocked = records.find(record => record.revokedSources === undefined && record.from?.some(source => revoked.has(source)));
+    const blocked = records.find(record => recordHasRevokedSource(record, revoked));
     if (blocked !== undefined) throw new Error("Memory source was withdrawn: refusing to re-import its shared derivative");
     mkdirSync(this.sharedMemoryDir(), { recursive: true });
     // The writer's box, from the roster — not from the record, which the tool built.

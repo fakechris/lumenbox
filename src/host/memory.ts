@@ -222,7 +222,7 @@ export function dedupe(records: readonly MemoryRecord[]): MemoryRecord[] {
   const byKey = new Map<string, MemoryRecord>();
   for (const record of records) {
     if (record.revokedSources !== undefined) continue;
-    if (record.from?.some(source => revoked.has(source))) continue;
+    if (recordHasRevokedSource(record, revoked)) continue;
     const key = dedupeKey(record.text);
     if (key === "") continue;
     if (record.kind === "retraction") {
@@ -250,8 +250,27 @@ export function revokedMemorySources(records: readonly MemoryRecord[]): Readonly
   return revoked;
 }
 
+/**
+ * The source that stands for a whole conversation (INV-894): `<conversation>@*` withdraws
+ * every `<conversation>@<time>` place in it, for when a conversation is found to have been
+ * steered by a page, a mail or a tool rather than by the person in it. `message:<id>`
+ * sources are not covered — they name one message and are withdrawn one at a time.
+ */
+export function conversationSource(conversation: string): string {
+  return `${conversation}@*`;
+}
+
+/** Whether a withdrawn source covers one place a record cites: exactly, or by its conversation. */
+export function sourceCovers(withdrawn: string, place: string): boolean {
+  if (withdrawn === place) return true;
+  if (!withdrawn.endsWith("@*")) return false;
+  const prefix = withdrawn.slice(0, -1);
+  return prefix.length > 1 && place.startsWith(prefix);
+}
+
 export function recordHasRevokedSource(record: MemoryRecord, revoked: ReadonlySet<string>): boolean {
-  return record.revokedSources === undefined && record.from?.some(source => revoked.has(source)) === true;
+  if (record.revokedSources !== undefined || record.from === undefined || revoked.size === 0) return false;
+  return record.from.some(place => revoked.has(place) || [...revoked].some(withdrawn => sourceCovers(withdrawn, place)));
 }
 
 /**
