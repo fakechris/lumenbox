@@ -145,8 +145,10 @@ try:
     else:
         expected = request['snapshot']['processes']
         # A missing/restarted component is also uncertain, not a smaller safe set.
-        if current != expected or any((p['name'] not in ALLOWED or not p.get('owned')) for p in current) or not x_empty(current):
-            emit({'stopped': False, 'reason': 'desktop workload or process identity changed'})
+        if any((p['name'] not in ALLOWED or not p.get('owned')) for p in current) or not x_empty(current):
+            emit({'stopped': False, 'reason': 'desktop has an untracked workload'})
+        elif current != expected:
+            emit({'stopped': False, 'retryable': True, 'reason': 'desktop infrastructure changed; awaiting fresh inspection'})
         elif not hasattr(os, 'pidfd_open') or not hasattr(signal, 'pidfd_send_signal'):
             emit({'stopped': False, 'reason': 'stable process handles unavailable'})
         else:
@@ -172,8 +174,11 @@ try:
             x.grab_server()
             x.sync()
             grabbed = True
-            if inventory() != expected or not x_empty(current):
-                emit({'stopped': False, 'reason': 'desktop changed during inspection'})
+            final = inventory()
+            if any((p['name'] not in ALLOWED or not p.get('owned')) for p in final) or not x_empty(final):
+                emit({'stopped': False, 'reason': 'desktop has an untracked workload'})
+            elif final != expected:
+                emit({'stopped': False, 'retryable': True, 'reason': 'desktop infrastructure changed; awaiting fresh inspection'})
             else:
                 emit({'ready': True})
                 if not select.select([sys.stdin], [], [], 5)[0]:

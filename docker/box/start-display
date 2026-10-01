@@ -330,12 +330,15 @@ fi
 # sits on a stale frame while X, the agent and the screenshots all look healthy. Polling
 # the whole framebuffer is reliable and cheap — Xvfb keeps it in RAM. vnc-probe checks
 # that this is actually working rather than merely configured.
+# Avoid x11vnc's unmarked SysV SHM segments: killing a verified empty desktop
+# cannot run its exit handlers, and those segments otherwise outlive both peers.
+# XGetImage keeps the framebuffer buffers process-owned and releases them on exit.
 if skipped x11vnc; then
   log "x11vnc disabled by the supervisor"
 elif ! port_listening "${RFB_PORT}"; then
   log "starting x11vnc on ${RFB_PORT}"
   setsid x11vnc -display "${DISP}" -forever -shared -nopw -quiet -localhost \
-    -capslock -noxdamage -rfbport "${RFB_PORT}" >> "/tmp/x11vnc-${N}.log" 2>&1 &
+    -capslock -noxdamage -noshm -rfbport "${RFB_PORT}" >> "/tmp/x11vnc-${N}.log" 2>&1 &
   repaired+=("x11vnc")
 fi
 
@@ -344,7 +347,7 @@ if skipped x11vnc-ro; then
 elif ! port_listening "${RFB_RO_PORT}"; then
   log "starting view-only x11vnc on ${RFB_RO_PORT}"
   setsid x11vnc -display "${DISP}" -forever -shared -nopw -quiet -localhost -viewonly \
-    -capslock -noxdamage -rfbport "${RFB_RO_PORT}" >> "/tmp/x11vnc-ro-${N}.log" 2>&1 &
+    -capslock -noxdamage -noshm -rfbport "${RFB_RO_PORT}" >> "/tmp/x11vnc-ro-${N}.log" 2>&1 &
   repaired+=("x11vnc-ro")
 fi
 
