@@ -2,7 +2,7 @@
      title: Workbuddy: skills, presets, delegated engines — the hands-on program
      family: decision
      status: current
-     updated: 2026-09-03
+     updated: 2026-10-01
 -->
 # Workbuddy: skills, presets, delegated engines — the hands-on program
 
@@ -103,6 +103,35 @@ stays installed for the week-of-use verdict); the catalog is the shipped
 mechanism. New bundles should go into the catalog, and a catalog row's golden
 tasks — the acceptance face the preset charter promised — are still to be
 attached: the manifests here show the shape.
+
+## Measured: what the engines say when a run fails (INV-908, 2026-10-01)
+
+The host used to settle a delegation from the job's exit code. The pinned engines were run
+against a stub model server that answered ok, 400, 401 or 500, with no credentials and no real
+model. The fixtures in `src/host/fixtures/engine-report/` are their actual output.
+
+| engine, mode | ok | 400 | 401 | 500 |
+|---|---|---|---|---|
+| claude 2.1.250, `--output-format stream-json --verbose` | exit 0; `result` frame, subtype success | exit 1; `result` subtype **success** with `is_error: true` | exit 1 after 10 `api_retry` frames; then the same | exit 1 after 10 retries; the same |
+| pi 0.85.1, text (the preset until now) | exit 0, the answer | **exit 0, no output at all** | exit 1 | exit 1 |
+| pi 0.85.1, `--mode json` | exit 0; `agent_end`, last assistant `stopReason: "stop"` | **exit 0**; `stopReason: "error"` with `errorMessage` | **exit 0**, the same | **exit 0**, the same |
+| opencode 1.18.25, `--format json` | exit 0; last `step_finish` has `reason: "stop"` | exit 1; `{"type":"error"}` events | exit 1; the same | exit 1; the same |
+
+Claude asked to resume a thread it does not have answers with a `result` frame:
+`subtype: "error_during_execution"`, `num_turns: 0`, and
+`errors: ["No conversation found with session ID: …"]`, exit 1.
+
+So an exit code says nothing either way. pi's json mode exits 0 on every failure, and its text
+mode answers a 400 with silence and exit 0. Since INV-908 every preset runs in its
+machine-readable mode, and the host reads the engine's last report from the log
+(`engine-report.ts`). The outcome is `done` only when the engine said it completed, `failed`
+or `aborted` when it said so, and `unknown` when it said nothing. The exit code is kept as
+evidence and decides only a failure the report does not contradict. A resume Claude refuses
+drops the thread capsule; the next run starts fresh and says why.
+
+Not measured: a long run with tool calls on each engine against a real model. The parsers
+read only the final events, and an opencode run cut off after a tool-calls step has no
+completion report, so it is `unknown`.
 
 ## Rules of the program
 

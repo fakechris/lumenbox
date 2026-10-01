@@ -73,7 +73,7 @@ test("pi is driven through a models.json entry that names the relay, and Claude 
   assert.equal(parsed.providers.lumenbox.api, "openai-completions");
   assert.equal(parsed.providers.lumenbox.apiKey, "$LUMENBOX_RELAY_TOKEN", "the token is a reference, never inline");
   assert.deepEqual(parsed.providers.lumenbox.models, [{ id: "MiniMax-M3" }]);
-  assert.match(pi.run("'fix it'", "MiniMax-M3"), /pi -p --no-session --approve --model 'lumenbox\/MiniMax-M3' 'fix it'/);
+  assert.match(pi.run("'fix it'", "MiniMax-M3"), /pi -p --no-session --approve --mode json --model 'lumenbox\/MiniMax-M3' 'fix it'/);
   assert.deepEqual(pi.relayEnv("http://host/relay/abc", "tok"), { LUMENBOX_RELAY_TOKEN: "tok" });
 
   const claude = presetNamed("claude")!;
@@ -110,4 +110,12 @@ test("Claude Code routes permissions to the face when told to, and opens or resu
   assert.match(claude.run("'x'"), /--dangerously-skip-permissions/, "no face, no prompt tool: skipped, as before");
   assert.equal(claude.session!("abc", false), "--session-id abc");
   assert.equal(claude.session!("abc", true), "--resume abc");
+});
+
+test("every engine whose report the host reads is run in the mode that writes it (INV-908)", async () => {
+  const { MACHINE_OUTPUT } = await import("./engine-report.ts");
+  for (const [engine, flag] of Object.entries(MACHINE_OUTPUT)) {
+    const preset = presetNamed(engine)!;
+    assert.ok(preset.run("'go'", "m").includes(` ${flag}`), `${engine} runs with ${flag}`);
+  }
 });

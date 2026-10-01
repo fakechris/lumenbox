@@ -36,6 +36,7 @@ import { memoryRef } from "./memory.ts";
 import type { ProviderProfile } from "./provider.ts";
 import type { PolicyGate } from "./policy.ts";
 import type { McpManager } from "./mcp.ts";
+import type { PendingWork } from "./pending-work.ts";
 import type { TaskStore } from "./tasks.ts";
 import type { GoalLoop, GoalTurnReport } from "./goal-loop.ts";
 import type { GoalGate } from "./goal-gate.ts";
@@ -308,6 +309,8 @@ export interface EpisodeOptions {
   policy?: PolicyGate;
   /** Connected external tools, as the MCP manager offers them; absent means none. */
   mcp?: McpManager;
+  /** The fork ledger (docs/32): what Delegate records and the Jobs tool settles (INV-908). */
+  pendingWork?: PendingWork;
   /** A task board for the turns (INV-769): the Tasks and Goal tools need one to act on. */
   tasks?: TaskStore;
   /**
@@ -452,6 +455,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       ...(options.policy !== undefined ? { policy: options.policy } : {}),
       ...(options.mcp !== undefined ? { mcp: options.mcp } : {}),
       ...(options.tasks !== undefined ? { tasks: options.tasks } : {}),
+      ...(options.pendingWork !== undefined ? { pendingWork: options.pendingWork } : {}),
       registry,
       bus,
       box,

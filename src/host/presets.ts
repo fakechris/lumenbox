@@ -35,6 +35,8 @@
  * delegated engine visible, interruptible and loggable exactly like any other job.
  */
 
+import { MACHINE_OUTPUT } from "./engine-report.ts";
+
 /**
  * Where an engine installed on demand lives: on the work volume, so it survives a box
  * rebuild, under a prefix of its own so nothing else in the box depends on it. The
@@ -152,7 +154,7 @@ PRESETS_MUTABLE.push(...([
     // permission prompt has no one to ask. The model travels as a flag because this
     // engine has no model environment variable (measured on 1.18.25).
     run: (quoted, model, extraArgs) =>
-      `opencode run --auto${model ? ` -m ${model}` : ""}${extraArgs ? ` ${extraArgs}` : ""} ${quoted}`,
+      `opencode run --auto ${MACHINE_OUTPUT.opencode}${model ? ` -m ${model}` : ""}${extraArgs ? ` ${extraArgs}` : ""} ${quoted}`,
     skillsMount: "~/.config/opencode/skill",
     wires: ["anthropic", "openai"],
     // Measured on 1.18.25: opencode ignores ANTHROPIC_BASE_URL/OPENAI_BASE_URL — its
@@ -206,7 +208,7 @@ PRESETS_MUTABLE.push(...([
     // the box the sandbox is the container, not the prompt. Untested until a claude
     // build ships in an image — says so in docs/25.
     run: (quoted, model, extraArgs) =>
-      `claude -p${extraArgs?.includes("--permission-prompt-tool") ? "" : " --dangerously-skip-permissions"}` +
+      `claude -p ${MACHINE_OUTPUT.claude}${extraArgs?.includes("--permission-prompt-tool") ? "" : " --dangerously-skip-permissions"}` +
       `${model ? ` --model ${model}` : ""}${extraArgs ? ` ${extraArgs}` : ""} ${quoted}`,
     permissionArgs: "--permission-prompt-tool mcp__lumenbox__permission",
     session: (id, resumed) => (resumed ? `--resume ${id}` : `--session-id ${id}`),
@@ -261,7 +263,7 @@ PRESETS_MUTABLE.push({
   // The provider is the relay's entry in models.json (relayConfig), so the model is named
   // as `lumenbox/<id>`. Measured on 0.85.1 (README and docs/models.md).
   run: (quoted, model, extraArgs) =>
-    `pi -p --no-session --approve${model ? ` --model ${quoteForShell(`lumenbox/${model}`)}` : ""}${extraArgs ? ` ${extraArgs}` : ""} ${quoted}`,
+    `pi -p --no-session --approve ${MACHINE_OUTPUT.pi}${model ? ` --model ${quoteForShell(`lumenbox/${model}`)}` : ""}${extraArgs ? ` ${extraArgs}` : ""} ${quoted}`,
   skillsMount: "~/.pi/agent/skills",
   wires: ["anthropic", "openai"],
   // pi reads no BASE_URL variables; its providers come from models.json (below). The token

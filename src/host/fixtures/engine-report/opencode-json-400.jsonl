@@ -1,0 +1,2 @@
+{"type":"error","timestamp":1790890585173,"sessionID":"ses_f069a5b1fffeoRk9feCAKqK3Pt","error":{"name":"ContextOverflowError","data":{"message":"prompt is too long","responseBody":"{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"prompt is too long\"}}"}}}
+{"type":"error","timestamp":1790890585195,"sessionID":"ses_f069a5b1fffeoRk9feCAKqK3Pt","error":{"name":"ContextOverflowError","data":{"message":"prompt is too long","responseBody":"{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"prompt is too long\"}}"}}}
