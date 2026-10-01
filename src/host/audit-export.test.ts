@@ -264,3 +264,46 @@ test("network events carry the agent, turn and tool call the relay attributed th
     );
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test("approvals and their decisions travel with the box they were asked for, archive included, and so do delegated calls (INV-812)", () => {
+  const { root, registry, ada, bob } = home();
+  try {
+    const line = (o: unknown) => `${JSON.stringify(o)}\n`;
+    // An archived month and the live file: a decision names only the approval it answers.
+    writeFileSync(join(root, "policy.2026-09.jsonl"), [
+      line({ at: "2026-09-10T09:00:00Z", kind: "approval-requested", id: "ap-ada", fingerprint: "fp-ada", agentId: ada, description: `push with ${SECRET}` }),
+      line({ at: "2026-09-10T09:00:00Z", kind: "approval-requested", id: "ap-bob", fingerprint: "fp-bob", agentId: bob, description: "bob's push" }),
+    ].join(""));
+    writeFileSync(join(root, "policy.jsonl"), [
+      line({ at: "2026-09-10T09:01:00Z", kind: "approval-granted", id: "ap-ada", by: "chris" }),
+      line({ at: "2026-09-10T09:01:00Z", kind: "approval-denied", id: "ap-bob", by: "chris", reason: "no" }),
+      line({ at: "2026-09-10T09:02:00Z", kind: "approval-used", id: "ap-ada" }),
+      line({ at: "2026-09-10T09:03:00Z", kind: "approval-revoked", fingerprint: "fp-ada", by: "chris" }),
+      line({ at: "2026-09-10T09:04:00Z", kind: "checked", request: "tool", agentId: ada, allowed: true }),
+      line({ at: "2026-09-10T09:05:00Z", kind: "rules-loaded", hash: "h", ids: ["r1"], problems: [] }),
+    ].join(""));
+    writeFileSync(join(root, "delegate-calls.jsonl"), [
+      line({ at: "2026-09-10T09:06:00Z", routeKey: "r1", agentId: ada, jobId: "job-1", tool: "github__create_issue", ok: true, ms: 12 }),
+      line({ at: "2026-09-10T09:06:00Z", routeKey: "r2", agentId: bob, jobId: "job-2", tool: "github__create_issue", ok: true, ms: 9 }),
+    ].join(""));
+
+    const out = join(root, "export-policy");
+    const manifest = exportAudit({ home: root, registry, box: registry.box.id, from: "2026-09-01T00:00:00Z", to: "2026-09-30T00:00:00Z", out });
+    const { records } = readAuditExport(out);
+    const policy = records["policy.jsonl"]!;
+    assert.deepEqual(policy.map(record => `${record.kind}:${record.id ?? record.fingerprint ?? ""}`), [
+      "approval-requested:ap-ada",
+      "approval-granted:ap-ada",
+      "approval-used:ap-ada",
+      "approval-revoked:fp-ada",
+      "checked:",
+      "rules-loaded:",
+    ], "the box's request from the archive, every decision about it, nothing of the other box's");
+    assert.doesNotMatch(JSON.stringify(policy), new RegExp(SECRET), "redacted like every other ledger");
+    assert.equal(manifest.files["policy.jsonl"], 6);
+    assert.deepEqual(records["delegate-calls.jsonl"]!.map(record => record.jobId), ["job-1"]);
+    assert.equal(manifest.files["delegate-calls.jsonl"], 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

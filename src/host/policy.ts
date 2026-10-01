@@ -32,7 +32,7 @@
 import { classifyShell } from "./shell-readonly.ts";
 import { envNumber } from "../config.ts";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { appendLine, appendLineDurably, type LedgerKind } from "./jsonl.ts";
+import { appendLine, appendLineDurably, archiveSettled, type LedgerKind } from "./jsonl.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
@@ -40,16 +40,15 @@ import type { RuleStore } from "./rules.ts";
 import { sideEffectOf, tierAsks, tierGateMode, type SideEffectTier, type TierGateMode } from "./side-effects.ts";
 
 /**
- * What was asked of the gate, as a window, with standing grants re-stated ahead of it.
+ * What was asked of the gate and who decided it: a record (INV-812).
  *
- * Labelled `feed` because that is what its compaction does, not because the label is
- * obviously right: a grant given once and used once is an audit fact, and past twenty
- * thousand events it goes. Standing grants are re-stated precisely because losing *those*
- * would change behaviour, which is the argument for calling the rest a record too.
- * Deliberately not changed here (INV-634 converts `ingress` and `turns` only) — flagged so
- * the next person deciding it is deciding rather than inheriting.
+ * It was a `feed` until INV-812, and past twenty thousand events the oldest went — but a grant
+ * given once and used once is an audit fact, and "who approved this" is the first question an
+ * audit asks. Compaction now moves the lines it no longer keeps live into the monthly archive
+ * (jsonl.ts), and still re-states standing grants ahead of the live tail, because the gate
+ * reads only the live file and a standing grant must stay in force.
  */
-export const LEDGER_KIND: LedgerKind = "feed";
+export const LEDGER_KIND: LedgerKind = "record";
 
 // ── what can be asked ─────────────────────────────────────────────────────────────────
 
@@ -1061,6 +1060,8 @@ export class PolicyGate {
         } satisfies PolicyEvent)
       );
       const kept = [...standing, ...lines.slice(-KEEP_ON_COMPACT)];
+      // What leaves the live file goes to the archive first: moved, never lost.
+      archiveSettled(this.path, lines.slice(0, Math.max(0, lines.length - KEEP_ON_COMPACT)));
       const temp = `${this.path}.${process.pid}.tmp`;
       writeFileSync(temp, `${kept.join("\n")}\n`, "utf8");
       renameSync(temp, this.path);
