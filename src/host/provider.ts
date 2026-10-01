@@ -511,12 +511,17 @@ function clientFor(
     throw new MissingCredentialError(profile);
   }
 
+  // The host's transient policy is the only retry layer (INV-811). The SDK retries twice by default,
+  // unseen: no `retrying` event, no ledger line, no Retry-After floor, and multiplied by the host's own
+  // attempts. A caller that wants SDK retries says so, with the reason.
+  const maxRetries = options?.maxRetries ?? 0;
   if (profile.auth === "bearer") {
     return new Anthropic({
       baseURL: profile.baseUrl,
       authToken: key,
       apiKey: null,
       ...options,
+      maxRetries,
     });
   }
 
@@ -524,6 +529,7 @@ function clientFor(
     baseURL: profile.baseUrl,
     ...(key ? { apiKey: key } : {}),
     ...options,
+    maxRetries,
   });
 }
 
