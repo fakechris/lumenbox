@@ -39,6 +39,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
+import { MCP_SEPARATOR } from "./mcp.ts";
 
 export interface Scope {
   id: string;
@@ -72,7 +73,28 @@ export function narrowTools(
 ): string[] | undefined {
   if (chat === undefined) return own === undefined ? undefined : [...own];
   if (own === undefined) return [...chat];
-  return own.filter(tool => chat.includes(tool));
+  // Entries are exact names, `server__*` or `mcp:*`, and any two either nest or are disjoint, so
+  // the intersection is each side's entries that the other side covers.
+  return [...new Set([...own.filter(entry => chat.some(other => covers(other, entry))), ...chat.filter(entry => own.some(other => covers(other, entry)))])];
+}
+
+/**
+ * Every MCP tool the box's bundles carry, as one allowlist entry (INV-759). MCP tools are named
+ * `server__tool` and arrive after the list was written, so a list of exact names could only ever
+ * withhold all of them; this and `server__*` let a list name a service, or every service, instead.
+ */
+export const ALL_MCP_TOOLS = "mcp:*";
+
+/** Whether an allowlist offers this tool. Undefined is no allowlist: everything. */
+export function toolAllowed(list: readonly string[] | undefined, name: string): boolean {
+  return list === undefined || list.some(entry => covers(entry, name));
+}
+
+/** Whether allowlist entry `entry` admits everything `other` does — `other` a name or an entry. */
+function covers(entry: string, other: string): boolean {
+  if (entry === other) return true;
+  if (entry === ALL_MCP_TOOLS) return other.includes(MCP_SEPARATOR);
+  return entry.endsWith(`${MCP_SEPARATOR}*`) && other.startsWith(entry.slice(0, -1));
 }
 
 interface ScopesFile {

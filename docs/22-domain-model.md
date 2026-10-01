@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: identity-and-authority
-     updated: 2026-09-30
+     updated: 2026-10-01
 -->
 # The domain model: people, doors, workers, rooms
 
@@ -340,6 +340,14 @@ bundle the box lists. An agent's *offered* tool set is that union narrowed by it
 an agent and a secret. Bundles stack; a conflict between two bundles (the same MCP server
 name with different configuration) is an error at load, not a silent override. Instructions
 concatenate installation → box → agent, in that order, as separate prompt sections.
+
+MCP tools are named `server__tool` and arrive with the server, after any `tools` list was
+written, so a list of exact names could only withhold every one of them (INV-759). A list
+therefore names a service as `server__*`, or every service the box's bundles carry as
+`mcp:*`. Both only narrow: they match nothing a bundle did not give the box, never a built-in
+tool, and a chat's scope intersects them like any other entry. The starter team and the
+catalog name `mcp:*`, except the reviewers, which may not change what they review and so get
+no service whose tools might write.
 
 ### 8.2a What a call does, and who it reaches (INV-691)
 

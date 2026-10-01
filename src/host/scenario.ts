@@ -292,7 +292,7 @@ function message(content: Anthropic.ContentBlock[], stop: Anthropic.Message["sto
 
 export interface EpisodeOptions {
   /** The agents the episode starts with. The first is the one the person talks to. */
-  team: { name: string; description?: string }[];
+  team: { name: string; description?: string; tools?: readonly string[] }[];
   /** What the person says, in order. Each is sent to the front agent and awaited. */
   says: string[];
   /** What the model does. Unused when `client` is given. */
@@ -377,6 +377,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       name: member.name,
       boxId: registry.box.id,
       ...(member.description !== undefined ? { description: member.description } : {}),
+      ...(member.tools !== undefined ? { tools: member.tools } : {}),
     });
   }
   const front = registry.list()[0]!;

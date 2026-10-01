@@ -1633,6 +1633,42 @@ test("an email send through a connector waits for a person when the tier gate en
   }
 });
 
+test("the starter coordinator sees a connected service and uses it, though its tool list was written before the service existed (INV-759)", async () => {
+  const { STARTER_TEAM } = await import("./orchestrator.ts");
+  const ada = STARTER_TEAM.find(profile => profile.name === "Ada")!;
+  const called: string[] = [];
+  const mcp = {
+    toolsFor: () => [{ name: "linear__list_issues", description: "List the team's open issues.", inputSchema: { type: "object" } }],
+    isHostTool: () => false,
+    owns: (name: string) => name === "linear__list_issues",
+    call: async (name: string) => { called.push(name); return "ENG-1 login broken"; },
+    callDetailed: async (name: string) => { called.push(name); return { text: "ENG-1 login broken" }; },
+    describeTools: () => "linear__list_issues",
+  };
+  let offered: string[] = [];
+  let toolResult = "";
+  const result = await runEpisode({
+    team: [{ name: ada.name, description: ada.description, tools: ada.tools! }],
+    says: ["Linear 上有哪些没关的 issue？"],
+    mcp: mcp as never,
+    script: ({ round, offered: names, messages }) => {
+      if (round === 0) {
+        offered = names;
+        return { call: "linear__list_issues", input: {} };
+      }
+      toolResult = JSON.stringify(messages.at(-1)?.content);
+      return { say: "只有一个：ENG-1 登录坏了。" };
+    },
+  });
+  try {
+    assert.ok(offered.includes("linear__list_issues"), "the connected service is in the coordinator's tools");
+    assert.deepEqual(called, ["linear__list_issues"], "and the call reaches it");
+    assert.match(toolResult, /ENG-1 login broken/, "its answer comes back to the agent");
+  } finally {
+    result.cleanup();
+  }
+});
+
 test("a fan-out names what did not finish — a fork that failed outright included — and the parent retries only those, once (INV-755)", async () => {
   const forkRounds: string[] = [];
   const parentSaw: string[] = [];

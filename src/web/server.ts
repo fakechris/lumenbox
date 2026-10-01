@@ -83,7 +83,9 @@ function readToolList(value: unknown): readonly string[] | null | undefined | Er
   if (!Array.isArray(value) || value.some(item => typeof item !== "string")) {
     return new Error("tools must be an array of tool names");
   }
-  const unknown = (value as string[]).filter(name => !ALL_TOOLS.includes(name));
+  // An MCP tool (`server__tool`) or service (`server__*`) is named before it is connected, so it is
+  // not checked against what is connected now (INV-759).
+  const unknown = (value as string[]).filter(name => !ALL_TOOLS.includes(name) && !name.includes(MCP_SEPARATOR));
   if (unknown.length > 0) {
     return new Error(`Unknown tools: ${unknown.join(", ")}. Known: ${ALL_TOOLS.join(", ")}.`);
   }
@@ -180,7 +182,7 @@ import { type DocReader, docReaderForChat, FeishuDocReader } from "../channels/f
 import { parseProgressFile, progressLine } from "../host/progress-file.ts";
 import { costOfTasks, spendByDay, summariseSpend, type Rates } from "../host/spend.ts";
 import type { UsageRecord } from "../host/usage.ts";
-import { TOOL_BUDGET_WARNING } from "../host/mcp.ts";
+import { MCP_SEPARATOR, TOOL_BUDGET_WARNING } from "../host/mcp.ts";
 import {
   handleMcpRequest,
   mintMcpToken,
