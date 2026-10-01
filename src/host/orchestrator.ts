@@ -79,7 +79,7 @@ import { DisplayLease } from "../box/display-lease.ts";
 import { AttachedBoxProvisioner, resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
 import { type BoxEntry, tokenOf } from "../box/boxes.ts";
 import { classifyBox, type BoxClass } from "../box/access.ts";
-import type { ResolutionConfig } from "../protocol/index.ts";
+import type { ResolutionConfig, DesktopResources } from "../protocol/index.ts";
 import { runTurn, TurnAborted, type TurnDeps, type TurnEvent } from "./turn.ts";
 import { readHandoff, type ToolContext } from "./tools.ts";
 import { loadConfig } from "../config.ts";
@@ -252,6 +252,7 @@ export class Orchestrator {
    * an agent reaches exactly one of these, the one its profile names.
    */
   private readonly boxClients = new Map<string, BoxClient>();
+  private readonly desktopResources = new Map<string, DesktopResources>();
   private readonly resolutions = new Map<string, ResolutionConfig | undefined>();
   private readonly boxAccesses = new Map<string, BoxClass>();
   /** One skills directory per box; the prompt shows an agent its own box's. */
@@ -1246,7 +1247,8 @@ export class Orchestrator {
       const client = this.boxClients.get(entry.id);
       if (client !== undefined) {
         try {
-          await client.health();
+          const health = await client.health();
+          if (health.desktop_resources) this.desktopResources.set(entry.id, health.desktop_resources);
           this.attachedHealthy.add(entry.id);
           continue;
         } catch (error) {
@@ -1263,7 +1265,7 @@ export class Orchestrator {
   }
 
   /** Which boxes are reachable right now, for the state panel and `box list`. */
-  boxStatus(): { id: string; name: string; kind: string; connected: boolean; displayFloor: number; agents: number; endpoint?: string }[] {
+  boxStatus(): { id: string; name: string; kind: string; connected: boolean; displayFloor: number; agents: number; endpoint?: string; resources?: DesktopResources }[] {
     return this.registry.listBoxes().map(entry => ({
       id: entry.id,
       name: entry.name,
@@ -1271,11 +1273,13 @@ export class Orchestrator {
       connected: this.boxClients.has(entry.id),
       displayFloor: entry.displayFloor,
       agents: this.registry.agentsIn(entry.id).length,
+      ...(this.boxClients.has(entry.id) && this.desktopResources.has(entry.id) ? { resources: this.desktopResources.get(entry.id) } : {}),
       ...(entry.endpoint !== undefined ? { endpoint: entry.endpoint.baseUrl } : {}),
     }));
   }
 
   private forgetDesktopsOf(boxId: string): void {
+    this.desktopResources.delete(boxId);
     for (const key of this.startingDisplays.keys()) {
       if (key.startsWith(`${boxId}:`)) this.startingDisplays.delete(key);
     }
@@ -1298,7 +1302,9 @@ export class Orchestrator {
         }
         this.wedge.asked(entry.id, entry.name);
         try {
-          await client.health(timeoutMs);
+          const health = await client.health(timeoutMs);
+          if (health.desktop_resources) this.desktopResources.set(entry.id, health.desktop_resources);
+          else this.desktopResources.delete(entry.id);
         } catch (error) {
           // An error with a body is an answer: the box spoke, and what it said is
           // somebody else's problem. A timeout, an abort or an unreachable address is
@@ -1412,10 +1418,17 @@ export class Orchestrator {
     const pending = this.startingDisplays.get(key);
     if (pending) return pending;
     const start = (async () => {
-      if (this.desktopStarts >= 2) {
-        await new Promise<void>(resolve => this.desktopStartWaiters.push(resolve));
-      } else this.desktopStarts++;
+      let slot = false;
+      const current = () => this.boxFor(agent.id) === box && this.registry.boxOf(agent.id).id === boxId
+        && this.registry.boxOwnerTokenFor(agent.id) === owner;
       try {
+        if (!current()) return undefined;
+        if (typeof box.readyDisplay === "function" && await box.readyDisplay(index, owner) === true) return current() ? index : undefined;
+        if (!current()) return undefined;
+        if (this.desktopStarts >= 2) {
+          await new Promise<void>(resolve => this.desktopStartWaiters.push(resolve));
+        } else this.desktopStarts++;
+        slot = true;
         // A queued request must not start a desktop on a disconnected or reassigned box.
         if (this.boxFor(agent.id) !== box || this.registry.boxOf(agent.id).id !== boxId ||
             this.registry.boxOwnerTokenFor(agent.id) !== owner) return undefined;
@@ -1437,8 +1450,10 @@ export class Orchestrator {
         });
         return undefined;
       } finally {
-        const next = this.desktopStartWaiters.shift();
-        if (next) next(); else this.desktopStarts--;
+        if (slot) {
+          const next = this.desktopStartWaiters.shift();
+          if (next) next(); else this.desktopStarts--;
+        }
       }
     })();
     this.startingDisplays.set(key, start);

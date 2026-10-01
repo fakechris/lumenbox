@@ -295,6 +295,10 @@ WORKDIR /home/box/work
 HEALTHCHECK --interval=10s --timeout=8s --start-period=60s --retries=6 \
   CMD /usr/local/bin/box-healthcheck
 
+# X-Resource client identities are required for fail-closed idle desktop reclamation.
+RUN apt-get update && apt-get install -y --no-install-recommends python3-xlib \
+    && rm -rf /var/lib/apt/lists/*
+
 # ── build-context payloads ───────────────────────────────────────────────────────────
 #
 # Everything COPYed from the build context lives down here, after every apt layer, for one
@@ -320,6 +324,7 @@ COPY catalog-data /opt/hostd/catalog-data
 COPY reference /opt/box-reference
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY start-display /usr/local/bin/start-display
+COPY desktop-processes /usr/local/bin/desktop-processes
 COPY box-chrome /usr/local/bin/box-chrome
 COPY box-ax /usr/local/bin/box-ax
 COPY box-clip /usr/local/bin/box-clip
@@ -330,7 +335,7 @@ COPY wait-compositor /usr/local/bin/wait-compositor
 COPY vnc-probe /usr/local/bin/vnc-probe
 COPY box-keepalive /usr/local/bin/box-keepalive
 COPY xwatchdog /usr/local/bin/xwatchdog
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/start-display \
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/start-display /usr/local/bin/desktop-processes \
       /usr/local/bin/box-chrome /usr/local/bin/box-clip \
       /usr/local/bin/box-doctor /usr/local/bin/box-init \
       /usr/local/bin/box-healthcheck \

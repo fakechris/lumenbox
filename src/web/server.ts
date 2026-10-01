@@ -5419,6 +5419,20 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         // A person takes an agent's desktop over, or hands it back (INV-404). While they hold
         // it the agent's writes are refused as USER_IN_CONTROL; the noVNC tab is opened after.
+        if (route === "POST /api/desktop/pin") {
+          if (refused()) return;
+          const body = await readJson(req);
+          const agentId = String(body.agent ?? "");
+          if (!registry.has(agentId)) { send(res, 404, { error: "No such agent" }); return; }
+          if (refused(agentId)) return;
+          if (typeof body.pinned !== "boolean") { send(res, 400, { error: "pinned must be a boolean" }); return; }
+          const client = orchestrator.boxClient(agentId);
+          if (!client) { send(res, 503, { error: "The box is not available." }); return; }
+          const result = await client.pinDisplay(registry.displayIndexFor(agentId), registry.boxOwnerTokenFor(agentId), body.pinned);
+          send(res, 200, result);
+          return;
+        }
+
         if (route === "POST /api/desktop/control") {
           if (refused()) return;
           const body = await readJson(req);
@@ -5688,6 +5702,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         if (route === "GET /api/boxes") {
+          await orchestrator.probeBoxes(1500);
           // Only the boxes this person is in (INV-538). A box somebody is not a member of
           // is not theirs to see the name of: a list that shows it and refuses to open it
           // tells them it exists, which is the one thing a members set is for.

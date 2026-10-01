@@ -380,6 +380,7 @@ await check("VNC still delivers fresh frames under the compositor", async () => 
   // non-empty incremental update after something changes on screen.
   const flags = await box.exec("pgrep -a x11vnc | head -1");
   assert(flags.stdout.includes("-noxdamage"), `x11vnc is missing -noxdamage: ${flags.stdout}`);
+  assert(flags.stdout.includes("-noshm"), "x11vnc must not leave SysV shared memory after desktop reclamation");
 
   const probe = await box.exec("DISPLAY=:1 vnc-probe 5901 :1");
   assert(probe.stdout.startsWith("fresh:"), probe.stdout || probe.stderr);

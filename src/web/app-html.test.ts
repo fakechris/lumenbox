@@ -285,3 +285,17 @@ test("selecting an agent and refreshing hidden panes do not open desktops", () =
   runInNewContext('showDesktop("a")', context);
   assert.equal(element("vnc").attrs.has("src"), false, "hidden desktop pane releases its viewing connection");
 });
+
+test("resource status distinguishes unavailable, dormant and retained desktops without inventing memory", () => {
+  const source = APP_HTML.slice(APP_HTML.indexOf("function renderDesktopResources(box)"), APP_HTML.indexOf('\ndocument.addEventListener("click", function (event)', APP_HTML.indexOf("function renderDesktopResources(box)")));
+  const context = { agents: [], myRole: "viewer", esc: (value: unknown) => String(value).replaceAll("<", "&lt;") };
+  const unavailable = runInNewContext(`${source}; renderDesktopResources({})`, context);
+  assert.match(unavailable, /unavailable/);
+  assert.doesNotMatch(unavailable, /MiB/);
+  const rendered = runInNewContext(`${source}; renderDesktopResources({resources:{idle_ms:900000,starts:2,reclaims:1,desktops:[{index:2,state:"dormant"},{index:3,state:"ready",retained_reason:"<unknown>"},{index:4,state:"failed"}]}})`, context);
+  assert.match(rendered, /1 running · 1 retained/);
+  assert.match(rendered, /dormant/);
+  assert.match(rendered, /1 failed \(process state unknown\)/);
+  assert.match(rendered, /&lt;unknown>/);
+  assert.doesNotMatch(rendered, /data-pin-agent|MiB/);
+});
