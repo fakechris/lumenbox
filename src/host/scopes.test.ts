@@ -128,3 +128,11 @@ test("toolAllowed: exact names, a service, every service — and mcp:* is never 
   assert.ok(toolAllowed(["notion__search"], "notion__search"));
   assert.ok(!toolAllowed([], "notion__search"));
 });
+
+test("isMcpEntry: a service or a tool, both sides named; nothing else passes for one (INV-759)", async () => {
+  const { isMcpEntry } = await import("./scopes.ts");
+  for (const good of ["notion__*", "notion__search", "my-server__get_page"]) assert.ok(isMcpEntry(good), good);
+  for (const bad of ["notion__", "__search", "__*", "__", "notion_*", "bash", "no*tion__x", "notion__se*arch", "notion__ x"]) {
+    assert.ok(!isMcpEntry(bad), bad);
+  }
+});

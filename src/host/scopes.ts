@@ -85,6 +85,19 @@ export function narrowTools(
  */
 export const ALL_MCP_TOOLS = "mcp:*";
 
+/**
+ * Whether a name is a well-formed MCP allowlist entry: `server__tool` or `server__*`, each side
+ * non-empty. Checked where a person types one, since a malformed entry (`notion__`) would be
+ * stored as a grant that matches nothing and says so nowhere.
+ */
+export function isMcpEntry(name: string): boolean {
+  const at = name.indexOf(MCP_SEPARATOR);
+  if (at <= 0) return false;
+  const server = name.slice(0, at);
+  const tool = name.slice(at + MCP_SEPARATOR.length);
+  return !/[\s*]/.test(server) && !/\s/.test(tool) && (tool === "*" || (tool !== "" && !tool.includes("*")));
+}
+
 /** Whether an allowlist offers this tool. Undefined is no allowlist: everything. */
 export function toolAllowed(list: readonly string[] | undefined, name: string): boolean {
   return list === undefined || list.some(entry => covers(entry, name));
