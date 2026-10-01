@@ -497,3 +497,31 @@ test("the store says where its key came from, and says so when it is beside the 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a database from before estimated relay rows gains the columns, and its old rows read as measured (INV-814)", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-store-old-"));
+  try {
+    const path = join(dir, "control.db");
+    // The table as it shipped, with one row in it.
+    const old = new DatabaseSync(path);
+    old.exec(`create table relay_usage (
+      id integer primary key autoincrement, box_id text not null, tenant_id text not null, at text not null,
+      provider text not null, model text not null, input_tokens integer not null, output_tokens integer not null,
+      cache_read_tokens integer not null, cache_write_tokens integer not null)`);
+    old.exec(`insert into relay_usage (box_id, tenant_id, at, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)
+      values ('b1', 't1', '2026-09-01T00:00:00.000Z', 'anthropic', 'claude-x', 10, 5, 0, 0)`);
+    old.close();
+
+    const store = new SqliteControlStore({ path });
+    const rows = store.relayUsageSince("2026-01-01T00:00:00.000Z");
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]!.estimated, undefined);
+    assert.equal(store.relayTotals("t1").inputTokens, 10);
+    store.appendRelayUsage({ boxId: "b1", tenantId: "t1", at: "2026-09-02T00:00:00.000Z", provider: "anthropic", model: "claude-x", inputTokens: 7, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, estimated: true, estimateReason: "stream_interrupted" });
+    assert.equal(store.relayTotals("t1").inputTokens, 10);
+    assert.equal(store.relayEstimatedTotals("t1").inputTokens, 7);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

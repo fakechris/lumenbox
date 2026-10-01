@@ -334,6 +334,31 @@ test("the meter totals per tenant and says who is over, without acting on it", a
   }
 });
 
+test("estimated relay rows are listed beside the measured ones, never summed in, and still count toward the budget (INV-814)", () => {
+  const { store, add, cleanup } = fixture();
+  try {
+    const acme = add("acme", { monthlyTokens: 1_000 });
+    const row = (tokens: number, estimated?: true) => ({
+      boxId: "box-acme", tenantId: acme.tenantId, at: "2026-08-19T10:00:00.000Z", provider: "anthropic", model: "claude-x",
+      inputTokens: tokens, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
+      ...(estimated === true ? { estimated: true, estimateReason: "no_usage_reported" } : {}),
+    });
+    store.appendRelayUsage(row(600));
+    store.appendRelayUsage(row(500, true));
+
+    const meter = meterTenants(store).find(entry => entry.tenantName === "acme")!;
+    assert.equal(meter.measuredByRelay, true);
+    assert.equal(meter.inputTokens, 600, "the measured total is only what was measured");
+    assert.equal(meter.estimated?.inputTokens, 500, "the estimate is its own line");
+    assert.equal(meter.estimated?.records, 1);
+    assert.equal(meter.overBudget, true, "600 measured plus 500 estimated is over 1000");
+    // And the rows read back as estimates, so a restart's ceiling replays them as such.
+    assert.deepEqual(store.relayUsageSince("2026-08-19T00:00:00.000Z").map(entry => entry.estimated ?? false), [false, true]);
+  } finally {
+    cleanup();
+  }
+});
+
 test("a box whose port moved is relocated, not written off", async () => {
   const { store, add, cleanup } = fixture();
   try {
