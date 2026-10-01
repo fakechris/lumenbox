@@ -452,6 +452,7 @@ export interface TurnDeps {
   box: BoxClient | undefined;
   /** Which desktop this agent drives. Each agent has its own. */
   displayIndex?: number;
+  ensureDesktop?: () => Promise<void>;
   /** Presented on every box call, so the box can refuse another agent's desktop. */
   boxOwner?: string;
   /** Where what a turn cost is written. Absent in tests that do not care. */
@@ -1687,6 +1688,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
           caller: deps.caller,
           ...(deps.callerName !== undefined ? { callerName: deps.callerName } : {}),
           displayIndex: deps.displayIndex,
+          ensureDesktop: deps.ensureDesktop,
           boxOwner: deps.boxOwner,
           tasks: deps.tasks,
           turnId,
@@ -1775,6 +1777,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
             caller: deps.caller,
             ...(deps.callerName !== undefined ? { callerName: deps.callerName } : {}),
             displayIndex: deps.displayIndex,
+            ensureDesktop: deps.ensureDesktop,
             boxOwner: deps.boxOwner,
             tasks: deps.tasks,
             turnId,
@@ -3251,6 +3254,7 @@ ${outcome.text}`;
           ...(deps.callerName !== undefined ? { callerName: deps.callerName } : {}),
             display: deps.display,
             displayIndex: deps.displayIndex,
+            ensureDesktop: deps.ensureDesktop,
             boxOwner: deps.boxOwner,
             // A fork gets no host runner and no MCP client (docs/32 §2): a forged call for
             // either lands on "unknown tool" rather than on a person or a credential.

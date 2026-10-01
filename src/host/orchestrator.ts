@@ -307,7 +307,9 @@ export class Orchestrator {
   private readonly display = new DisplayLease();
   /** Desktops already brought up, so each is started once per process. */
   /** `boxId:index` — two boxes each have a desktop 1. */
-  private readonly readyDisplays = new Set<string>();
+  private readonly startingDisplays = new Map<string, Promise<number | undefined>>();
+  private desktopStarts = 0;
+  private readonly desktopStartWaiters: (() => void)[] = [];
   /**
    * What every turn cost, appended as it happens.
    *
@@ -1274,8 +1276,8 @@ export class Orchestrator {
   }
 
   private forgetDesktopsOf(boxId: string): void {
-    for (const key of [...this.readyDisplays]) {
-      if (key.startsWith(`${boxId}:`)) this.readyDisplays.delete(key);
+    for (const key of this.startingDisplays.keys()) {
+      if (key.startsWith(`${boxId}:`)) this.startingDisplays.delete(key);
     }
   }
 
@@ -1389,7 +1391,7 @@ export class Orchestrator {
   }
 
   /**
-   * The agent's own desktop, brought up if this is its first turn.
+   * The agent's own desktop, brought up only for explicit GUI demand.
    *
    * Created on demand rather than at startup so a box with one active agent does
    * not pay for a desktop per registered agent. A failure is not fatal — the agent
@@ -1405,26 +1407,44 @@ export class Orchestrator {
     if (entry.kind === "host") return undefined;
     const boxId = entry.id;
     const index = this.registry.displayIndexFor(agent.id);
-    const key = `${boxId}:${index}`;
-    if (this.readyDisplays.has(key)) return index;
-
-    try {
-      // Claims the desktop as this agent's while creating it: from here on the box
-      // refuses input for it that does not carry the same token.
-      await box.ensureDisplay(index, this.registry.boxOwnerTokenFor(agent.id));
-      this.readyDisplays.add(key);
-      return index;
-    } catch (error) {
-      this.options.onBusEvent?.({
-        type: "turn_failed",
-        agentId: agent.id,
-        error:
-          `could not start desktop ${index} for ${agent.profile.name}: ` +
-          (error instanceof Error ? error.message : String(error)),
-        // Nothing was dequeued to get here, so nothing is being held back by this failure.
-        waiting: 0,
-      });
-      return undefined;
+    const owner = this.registry.boxOwnerTokenFor(agent.id);
+    const key = `${boxId}:${index}:${owner}`;
+    const pending = this.startingDisplays.get(key);
+    if (pending) return pending;
+    const start = (async () => {
+      if (this.desktopStarts >= 2) {
+        await new Promise<void>(resolve => this.desktopStartWaiters.push(resolve));
+      } else this.desktopStarts++;
+      try {
+        // A queued request must not start a desktop on a disconnected or reassigned box.
+        if (this.boxFor(agent.id) !== box || this.registry.boxOf(agent.id).id !== boxId ||
+            this.registry.boxOwnerTokenFor(agent.id) !== owner) return undefined;
+        // Claims the desktop as this agent's while creating it: from here on the box
+        // refuses input for it that does not carry the same token.
+        await box.ensureDisplay(index, owner);
+        if (this.boxFor(agent.id) !== box || this.registry.boxOf(agent.id).id !== boxId ||
+            this.registry.boxOwnerTokenFor(agent.id) !== owner) return undefined;
+        return index;
+      } catch (error) {
+        this.options.onBusEvent?.({
+          type: "turn_failed",
+          agentId: agent.id,
+          error:
+            `could not start desktop ${index} for ${agent.profile.name}: ` +
+            (error instanceof Error ? error.message : String(error)),
+          // Nothing was dequeued to get here, so nothing is being held back by this failure.
+          waiting: 0,
+        });
+        return undefined;
+      } finally {
+        const next = this.desktopStartWaiters.shift();
+        if (next) next(); else this.desktopStarts--;
+      }
+    })();
+    this.startingDisplays.set(key, start);
+    try { return await start; }
+    finally {
+      if (this.startingDisplays.get(key) === start) this.startingDisplays.delete(key);
     }
   }
 
@@ -1732,23 +1752,9 @@ export class Orchestrator {
     return result;
   }
 
-  /**
-   * Brings up every registered agent's desktop at once.
-   *
-   * On-demand creation is right for the CLI, but not for a person: they can open
-   * any agent's desktop and work in it before that agent has ever taken a turn,
-   * and a desktop that does not exist yet shows a proxy error instead of a screen.
-   * Failures are collected rather than thrown — one agent's desktop failing must
-   * not stop the others from being usable.
-   */
-  async ensureAllDesktops(): Promise<{ name: string; index: number | undefined }[]> {
-    const agents = this.registry.list();
-    return Promise.all(
-      agents.map(async agent => ({
-        name: agent.profile.name,
-        index: await this.ensureDesktop(agent),
-      }))
-    );
+  /** Explicit GUI demand. Listing agents and reconnecting boxes never call this. */
+  async ensureAgentDesktop(agentId: string): Promise<number | undefined> {
+    return this.ensureDesktop(this.registry.get(agentId));
   }
 
   private async executeTurn(
@@ -1766,7 +1772,9 @@ export class Orchestrator {
     // not run (INV-770): the loop reconsiders when the person's turn ends.
     if (this.goalLoop !== undefined && !this.goalLoop.turnStarting(agent.id, conversation, inbound)) return;
 
-    const displayIndex = await this.ensureDesktop(agent);
+    // Reserve identity without starting X/VNC. The first actual GUI operation starts it.
+    const displayIndex = this.registry.boxOf(agent.id).kind === "host"
+      ? undefined : this.registry.displayIndexFor(agent.id);
     // Started on the first turn that could use them, not at boot: a CLI question should
     // not spawn somebody's bridges as a side effect. And kicked off rather than waited
     // on — a turn that blocks until every configured server has finished booting is a
@@ -1784,6 +1792,9 @@ export class Orchestrator {
 
     return runTurn(agent, inbound, signal, {
       displayIndex,
+      ensureDesktop: async () => {
+        if (await this.ensureAgentDesktop(agent.id) === undefined) throw new Error("Could not start this agent's desktop. Check the box connection and retry.");
+      },
       boxOwner: this.registry.boxOwnerTokenFor(agent.id),
       usage: this.usage,
       policy: this.policy,

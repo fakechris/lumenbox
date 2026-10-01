@@ -183,6 +183,8 @@ export interface ToolContext {
    * screenshots cannot cross.
    */
   displayIndex?: number;
+  /** Start this agent's desktop only for an actual GUI request. */
+  ensureDesktop?: () => Promise<void>;
   /**
    * This agent's claim on its own desktop, presented on every box call.
    *
@@ -807,6 +809,7 @@ export function buildTools(
           type: "object",
           properties: {
             command: { type: "string", description: "The command to run." },
+            ...(canUseDesktop ? { desktop: { type: "boolean", description: "Set true when launching a GUI application. Starts your desktop first. Ordinary shell and file work need no desktop." } } : {}),
             cwd: {
               type: "string",
               description: "Directory to run in. Defaults to the box home directory.",
@@ -2470,6 +2473,13 @@ export async function dispatchTool(
     };
   }
 
+  if (name === "computer" || ["browser_open", "browser_snapshot", "browser_read", "browser_act",
+    "browser_scroll", "browser_wait_for", "browser_pages", "browser_upload", "browser_fill_secret",
+    "HandOverDesktop"].includes(name)) {
+    try { await context.ensureDesktop?.(); }
+    catch (error) { return { text: error instanceof Error ? error.message : String(error), isError: true }; }
+  }
+
   switch (name) {
     // Reached only when the turn engine did not intercept it, which means it was not offered:
     // a forged or replayed call on a turn a person is waiting on. The engine ends the turn
@@ -2629,6 +2639,7 @@ export async function dispatchTool(
       const guarded = guardShellCommand(command);
       if (guarded.refusal !== undefined) return { text: guarded.refusal, isError: true };
       const box = requireBox(context);
+      if (input.desktop === true) await context.ensureDesktop?.();
       if (input.background === true) {
         // Minted here so the call token can name the job before it exists (INV-784).
         const jobId = `job-${randomBytes(8).toString("hex")}`;
