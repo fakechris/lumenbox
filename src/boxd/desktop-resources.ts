@@ -7,6 +7,7 @@ export interface DesktopProcessSnapshot {
   processes: { pid: number; start: string; name: string; owned?: boolean }[];
   reason?: string;
   launch_id?: string;
+  retryable?: boolean;
 }
 export interface DesktopResourceRuntime {
   now: () => number;
@@ -14,7 +15,7 @@ export interface DesktopResourceRuntime {
   adopted: (index: number) => boolean;
   create?: (index: number) => Promise<Desktop>;
   capture: (index: number, launchId?: string) => Promise<DesktopProcessSnapshot>;
-  stop: (index: number, snapshot: DesktopProcessSnapshot, authorize: () => boolean) => Promise<{ stopped: boolean; reason?: string; failed?: boolean }>;
+  stop: (index: number, snapshot: DesktopProcessSnapshot, authorize: () => boolean) => Promise<{ stopped: boolean; reason?: string; failed?: boolean; retryable?: boolean }>;
 }
 
 function processCommand<T>(index: number, snapshot?: DesktopProcessSnapshot, authorize?: () => boolean, launchId?: string): Promise<T> {

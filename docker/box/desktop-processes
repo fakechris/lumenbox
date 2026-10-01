@@ -86,7 +86,7 @@ def inventory():
                 if item:
                     item['owned'] = tagged
                     result.append(item)
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
             continue  # exited before observation; never signal this identity
         except (PermissionError, OSError):
             raise RuntimeError('process visibility unavailable')
@@ -200,9 +200,24 @@ try:
                         if endpoint.exists() and endpoint.stat().st_ino == endpoints[path]:
                             endpoint.unlink()
                     emit({'stopped': True})
-except Exception:
-    emit({'stopped': False, 'failed': committed, 'reason': 'partial stop; process state unknown' if committed else 'process inspection incomplete; desktop retained'})
+except Exception as error:
+    emit({'processes': [], 'stopped': False, 'failed': committed, 'retryable': not committed,
+          'diagnostic': type(error).__name__,
+          'reason': 'partial stop; process state unknown' if committed else 'process inspection temporarily unavailable; retained'})
 finally:
+    # Cleanup must not be interrupted between resumes. These pidfd signal calls
+    # do not wait for the target. Only after all resumes may X protocol I/O wait.
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    signal.signal(signal.SIGALRM, signal.SIG_IGN)
+    signal.alarm(0)
+    for fd in frozen:
+        try:
+            signal.pidfd_send_signal(fd, signal.SIGCONT)
+        except ProcessLookupError:
+            pass
+    signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGALRM, interrupted)
+    signal.alarm(2)
     if x is not None and not committed:
         try:
             if grabbed:
@@ -210,11 +225,6 @@ finally:
                 x.sync()
             x.close()
         except Exception:
-            pass
-    for fd in frozen:
-        try:
-            signal.pidfd_send_signal(fd, signal.SIGCONT)
-        except ProcessLookupError:
             pass
     for fd, _ in handles:
         os.close(fd)

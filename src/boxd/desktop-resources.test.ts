@@ -28,7 +28,7 @@ test("an idle managed empty desktop becomes dormant and a new demand starts a ne
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-function fixture(options: { adopted?: boolean; idleMs?: number; failStop?: boolean } = {}) {
+function fixture(options: { adopted?: boolean; idleMs?: number; failStop?: boolean; retryStop?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "desktop-resource-"));
   let now = 0, stops = 0;
   let beforeStop: (() => Promise<void>) | undefined;
@@ -39,7 +39,9 @@ function fixture(options: { adopted?: boolean; idleMs?: number; failStop?: boole
     stop: async (_index, _snapshot, authorize) => {
       await beforeStop?.();
       if (!authorize()) return { stopped: false };
-      stops++; return options.failStop ? { stopped: false, failed: true, reason: "partial stop; process state unknown" } : { stopped: true };
+      stops++;
+      if (options.retryStop && stops === 1) return { stopped: false, retryable: true, reason: "inspection temporarily unavailable" };
+      return options.failStop ? { stopped: false, failed: true, reason: "partial stop; process state unknown" } : { stopped: true };
     },
     adopted: () => options.adopted ?? false,
   });
@@ -140,5 +142,19 @@ test("a partial stop remains failed and new demand cannot reuse an uncertain des
     assert.equal(await f.manager.ready(30), false);
     await assert.rejects(f.manager.ensure(30), /process state is unknown/);
     f.tick(); await f.manager.reapIdle(); assert.equal(f.stops(), 1);
+  } finally { f.dispose(); }
+});
+
+
+test("a pre-commit inspection failure retains the desktop and a later complete proof may retry", async () => {
+  const f = fixture({ retryStop: true });
+  try {
+    await f.manager.ensure(30); f.tick(); await f.manager.reapIdle();
+    assert.equal(f.manager.resources().desktops[0]?.state, "ready");
+    assert.match(f.manager.resources().desktops[0]!.retained_reason!, /temporarily unavailable/);
+    assert.equal(f.manager.resources().reclaims, 0);
+    f.tick(); await f.manager.reapIdle();
+    assert.equal(f.manager.resources().desktops[0]?.state, "dormant");
+    assert.equal(f.manager.resources().reclaims, 1);
   } finally { f.dispose(); }
 });

@@ -280,6 +280,7 @@ interface ResourceState {
   references: number;
   pinned: boolean;
   retained?: string;
+  retryReason?: string;
   snapshot?: DesktopProcessSnapshot;
   launchId?: string;
   stopping?: Promise<void>;
@@ -862,8 +863,10 @@ export class DisplayManager {
         try {
           const snapshot = await this.resourcesRuntime.capture(index, resource.launchId);
           if (resource.generation === generation && !this.retainedReason(index, resource)) {
-            if (snapshot.reason) resource.retained = snapshot.reason;
-            else resource.snapshot = snapshot;
+            if (snapshot.reason) {
+              if (snapshot.retryable) resource.retryReason = snapshot.reason;
+              else resource.retained = snapshot.reason;
+            } else { resource.snapshot = snapshot; resource.retryReason = undefined; }
           }
         } catch { resource.retained = "process ownership unavailable"; }
       }
@@ -1106,7 +1109,7 @@ export class DisplayManager {
       desktops: [...this.resourceStates].sort(([a], [b]) => a - b).map(([index, state]) => ({
         index, state: state.state, generation: state.generation, pinned: state.pinned,
         references: state.references, idle_ms: Math.max(0, this.resourcesRuntime.now() - state.touched),
-        ...(this.retainedReason(index, state) ? { retained_reason: this.retainedReason(index, state) } : {}),
+        ...((this.retainedReason(index, state) ?? state.retryReason) ? { retained_reason: this.retainedReason(index, state) ?? state.retryReason } : {}),
       })),
     };
   }
@@ -1130,6 +1133,7 @@ export class DisplayManager {
         const generation = state.generation;
         const authorize = () => this.resourceStates.get(index) === state && state.generation === generation
           && !this.retainedReason(index, state) && this.resourcesRuntime.now() - state.touched >= this.resourcesRuntime.idleMs;
+        state.retryReason = undefined;
         state.state = "stopping";
         state.stopping = (async () => {
           try {
@@ -1142,7 +1146,10 @@ export class DisplayManager {
               this.reclaims++;
             } else {
               state.state = result.failed ? "failed" : "ready";
-              if (result.reason && authorize()) state.retained = result.reason;
+              if (result.reason && authorize()) {
+                if (result.retryable && !result.failed) state.retryReason = result.reason;
+                else state.retained = result.reason;
+              }
             }
           } catch { state.state = "failed"; state.retained = "reclamation failed; process inspection required"; }
         })();
@@ -1215,8 +1222,11 @@ export class DisplayManager {
         this.desktops.set(index, desktop);
         if (!state.retained) {
           try {
-            state.snapshot = await this.resourcesRuntime.capture(index, state.launchId);
-            if (state.snapshot.reason) state.retained = state.snapshot.reason;
+            const snapshot = await this.resourcesRuntime.capture(index, state.launchId);
+            if (snapshot.reason) {
+              if (snapshot.retryable) state.retryReason = snapshot.reason;
+              else state.retained = snapshot.reason;
+            } else state.snapshot = snapshot;
           } catch { state.retained = "process ownership unavailable"; }
         }
         state.state = "ready";
