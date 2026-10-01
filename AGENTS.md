@@ -35,10 +35,11 @@ acceptable piece of work), linked with `CONTAINS`.
    proposal as agreed work.
 7. **Agents never mark work Done** — with one exception. A completed run moves the item to
    **In Review**; the person decides what Done means. The exception is research: an ISSUE
-   labelled `research` (Type: Research), whose deliverable is the record itself. Once a person
-   has committed it, the agent may move it to Done (`work_update` with `state: DONE`), or propose
-   it with `initial_state: 'DONE'` so the person's commit lands it there. Work the research leads
-   to is proposed separately and stays behind the human gate.
+   labelled `research` (Type: Research), whose deliverable is the record itself. A new research
+   proposal may pass `initial_state: 'DONE'`, so the person's commit lands it in Done. Research a
+   person has already committed may be moved to Done by the agent (`work_update` with
+   `state: DONE`). Work the research leads to is proposed separately and stays behind the human
+   gate.
 
 ## First-Time Onboarding Blueprint (首次接入黄金规范)
 
