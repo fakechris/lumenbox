@@ -809,7 +809,7 @@ export function buildTools(
           type: "object",
           properties: {
             command: { type: "string", description: "The command to run." },
-            desktop: { type: "boolean", description: "Set true when launching a GUI application. Starts your desktop first. Ordinary shell and file work need no desktop." },
+            ...(canUseDesktop ? { desktop: { type: "boolean", description: "Set true when launching a GUI application. Starts your desktop first. Ordinary shell and file work need no desktop." } } : {}),
             cwd: {
               type: "string",
               description: "Directory to run in. Defaults to the box home directory.",

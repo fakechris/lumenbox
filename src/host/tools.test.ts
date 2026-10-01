@@ -1084,3 +1084,12 @@ test("desktop demand: file and shell calls stay lazy; explicit GUI startup prece
   assert.match(refused.text, /desktop offline/);
   assert.deepEqual(calls, ["start"], "no input sent to an unready desktop");
 });
+
+test("bash offers desktop startup only to desktop-capable conversations", () => {
+  for (const canUseDesktop of [false, true]) {
+    const bash = buildTools(true, true, undefined, false, canUseDesktop).find(tool => tool.name === "bash")!;
+    const properties = bash.input_schema.properties as Record<string, unknown>;
+    assert.equal("desktop" in properties, canUseDesktop);
+    assert.ok("command" in properties);
+  }
+});
