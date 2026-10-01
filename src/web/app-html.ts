@@ -934,6 +934,7 @@ export const APP_HTML = String.raw`<!doctype html>
   </div>
   <div id="desktopview">
     <div id="boxnotice" style="display:none"></div>
+    <div class="bar" id="desktopstart"><button class="btn" id="opendesktop" type="button">Open desktop</button><span> Starts when you need it.</span></div>
     <div class="desktopwrap"><iframe id="vnc" title="box desktop"></iframe></div>
     <div class="bar" id="recordings" style="display:none"></div>
     <div class="bar" id="clipbar">
@@ -3835,8 +3836,23 @@ function showBoxClass(box) {
   notice.style.display = box.notice ? "" : "none";
 }
 
-/** Points the desktop pane at one agent's own display. */
+var openedDesktops = new Set();
+$("opendesktop").onclick = function () {
+  if (!current) return;
+  openedDesktops.add(current);
+  showDesktop(current);
+};
+
+/** Points the desktop pane at one agent's own display only after an explicit open. */
 function showDesktop(id) {
+  var frame = $("vnc");
+  var requested = openedDesktops.has(id);
+  $("desktopstart").style.display = requested ? "none" : "";
+  if (!requested || $("desktopview").style.display === "none") {
+    frame.removeAttribute("src");
+    frame.removeAttribute("srcdoc");
+    frame.removeAttribute("data-offline");
+  }
   var agent = null;
   for (var i = 0; i < agents.length; i++) if (agents[i].id === id) agent = agents[i];
   if (!agent || !agent.desktopUrl) {
@@ -3872,6 +3888,7 @@ function showDesktop(id) {
   // #boxnotice already says the same sentence right above this frame, and inside
   // the frame the banner only covered the desktop's top edge. Take over keeps the
   // plain URL — standalone, the banner is the only warning on the page.
+  if (!requested || $("desktopview").style.display === "none") return;
   var embeddedUrl = agent.desktopUrl + "&embedded=1";
   // Only reload when it is a different desktop: re-setting src restarts noVNC and
   // flashes "Connecting…", so switching back and forth must not thrash it.
@@ -4886,6 +4903,7 @@ function showTab(which) {
   $("tabauto").className = "tab" + (which === "auto" ? " on" : "");
   $("tabaudit").className = "tab" + (which === "audit" ? " on" : "");
   $("desktopactions").style.display = which === "desktop" ? "" : "none";
+  if (current) showDesktop(current);
   if (which === "files") refreshFiles();
   if (which === "tasks") refreshTasks();
   if (which === "auto") refreshAutomations();

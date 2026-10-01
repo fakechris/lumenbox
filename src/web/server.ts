@@ -2357,7 +2357,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       for (const change of transitions) {
         log(change.connected ? `box ${change.name} is back: ${change.detail}` : `box ${change.name} stopped answering: ${change.detail}`);
         broadcast({ type: "error", message: change.connected ? `Box ${change.name} is back.` : `Box ${change.name} stopped answering: ${change.detail}` });
-        if (change.connected) void orchestrator.ensureAllDesktops().catch(() => {});
       }
     }).catch(() => {});
     void (async () => {
@@ -2393,9 +2392,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       boxWasHealthy = true;
       log(`box reachable again: ${attempt.detail}`);
       broadcast({ type: "error", message: `The box is back: ${attempt.detail}` });
-      // Desktops are brought up on demand and remembered; a box that was replaced has
-      // none of them, and a remembered one would be a screen that never appears.
-      void orchestrator.ensureAllDesktops().catch(() => {});
+      // A desktop is started by its next GUI request, not by box recovery.
     })();
     // Configurable only so a test can watch a recovery without waiting half a minute
     // for each tick; nothing in production has a reason to change it.
@@ -2511,14 +2508,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         counts: describeTemplate(staged.template),
       });
     };
-    const desktops = await orchestrator.ensureAllDesktops();
-    for (const desktop of desktops) {
-      log(
-        desktop.index === undefined
-          ? `desktop for ${desktop.name}: failed to start`
-          : `desktop for ${desktop.name}: :${desktop.index}`
-      );
-    }
   }
 
 
@@ -2540,6 +2529,26 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    * The lookup is a `docker port` call, cached for a few seconds so a page load's worth
    * of asset requests does not shell out for each one.
    */
+  const desktopPagesReady = new Set<string>();
+  const desktopPageStarts = new Map<string, Promise<void>>();
+  const desktopPageErrors = new Map<string, string>();
+  function prepareDesktopPage(agentId: string): Promise<void> {
+    // Agent deletion must not leave an unbounded readiness/error history behind.
+    for (const id of desktopPagesReady) if (!registry.has(id)) desktopPagesReady.delete(id);
+    for (const id of desktopPageErrors.keys()) if (!registry.has(id)) desktopPageErrors.delete(id);
+    const pending = desktopPageStarts.get(agentId);
+    if (pending) return pending;
+    const start = orchestrator.ensureAgentDesktop(agentId).then(index => {
+      if (index === undefined) throw new Error("Cannot start the desktop. Check the box connection and retry.");
+      desktopPagesReady.add(agentId);
+      desktopPageErrors.delete(agentId);
+    }).catch(error => {
+      desktopPageErrors.set(agentId, error instanceof Error ? error.message : String(error));
+    }).finally(() => desktopPageStarts.delete(agentId));
+    desktopPageStarts.set(agentId, start);
+    return start;
+  }
+
   interface Origin {
     host: string;
     port: number;
@@ -2638,6 +2647,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // until noVNC answers.
         const status = response.statusCode ?? 502;
         if (isPage && status >= 400) {
+          for (const agent of registry.agentsIn(boxId ?? registry.box.id)) desktopPagesReady.delete(agent.id);
           let body = "";
           response.setEncoding("utf8");
           response.on("data", (chunk: string) => { body += chunk; });
@@ -3441,6 +3451,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (!desktop) {
             send(res, 404, { error: `Not a desktop path: ${url.pathname}` });
             return;
+          }
+          const page = /^\/(?:vnc|vnc-ro)\/(\d+)(?:\/(?:vnc\.html)?)?(?:\?|$)/.exec(desktop.upstream);
+          if (page) {
+            const agent = registry.agentsIn(desktop.boxId ?? registry.box.id)
+              .find(entry => registry.displayIndexFor(entry.id) === Number(page[1]));
+            if (agent && !desktopPagesReady.has(agent.id)) {
+              void prepareDesktopPage(agent.id);
+              sendDesktopWaiting(res, desktopPageErrors.get(agent.id) ?? "Starting desktop…");
+              return;
+            }
           }
           await proxyDesktop(req, res, desktop.upstream, false, desktop.boxId);
           return;
@@ -5317,12 +5337,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                 onOutput: line => broadcast({ type: "box_setup", line }),
               });
               box = await orchestrator.connectBox();
-              if (box.connected) {
-                const desktops = await orchestrator.ensureAllDesktops();
-                for (const desktop of desktops) {
-                  log(`desktop for ${desktop.name}: ${desktop.index === undefined ? "failed" : `:${desktop.index}`}`);
-                }
-              }
               broadcast({
                 type: "box_setup",
                 line: box.connected ? `ready — ${box.detail}` : `failed — ${box.detail}`,
@@ -5420,6 +5434,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return;
           }
           try {
+            if (controller === "user" && await orchestrator.ensureAgentDesktop(agentId) === undefined) {
+              send(res, 503, { error: "Could not start the desktop. Retry when the box is ready." });
+              return;
+            }
             const info = await client.setDisplayControl(registry.displayIndexFor(agentId), controller, undefined, { agentId });
             log(`${registry.get(agentId).profile.name}'s desktop: ${controller === "user" ? "a person took over" : "handed back"}`);
             send(res, 200, info);
@@ -6440,7 +6458,19 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       return;
     }
 
-    void openUpgrade(req, clientSocket, head, desktop.upstream, desktop.boxId);
+    void (async () => {
+      // noVNC reconnects its socket without reloading the HTML after a box restart.
+      // That socket is explicit demand too; only its own desktop should be restored.
+      const index = Number(/^\/(?:vnc|vnc-ro)\/(\d+)\//.exec(desktop.upstream)?.[1]);
+      const agent = registry.agentsIn(desktop.boxId ?? registry.box.id)
+        .find(entry => registry.displayIndexFor(entry.id) === index);
+      if (agent && await orchestrator.ensureAgentDesktop(agent.id) === undefined) {
+        clientSocket.end("HTTP/1.1 503 Service Unavailable\r\n\r\n");
+        return;
+      }
+      if (clientSocket.destroyed) return;
+      await openUpgrade(req, clientSocket, head, desktop.upstream, desktop.boxId);
+    })().catch(() => clientSocket.destroy());
   });
 
   /** The RFB socket, joined to whichever host port boxd is published on right now. */

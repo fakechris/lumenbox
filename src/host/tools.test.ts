@@ -1058,3 +1058,29 @@ test("WebFetch keeps the whole page on the host and ends its result with a point
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("desktop demand: file and shell calls stay lazy; explicit GUI startup precedes dispatch and fails closed", async () => {
+  const calls: string[] = [];
+  let failStart = false;
+  const context = {
+    agent: { id: "a1", profile: { name: "Ada" } },
+    registry: {} as never, bus: {} as never,
+    displayIndex: 7, boxOwner: "owner",
+    ensureDesktop: async () => { calls.push("start"); if (failStart) throw new Error("desktop offline"); },
+    box: {
+      exec: async () => { calls.push("exec"); return { stdout: "ok", stderr: "", exit_code: 0 }; },
+      computer: async () => { calls.push("computer"); return { outcome: "ok", results: [] }; },
+    },
+  } as unknown as Parameters<typeof dispatchTool>[2];
+  await dispatchTool("bash", { command: "echo ok" }, context);
+  assert.deepEqual(calls, ["exec"]);
+  calls.length = 0;
+  await dispatchTool("bash", { command: "my-gui", desktop: true }, context);
+  assert.deepEqual(calls, ["start", "exec"]);
+  calls.length = 0;
+  failStart = true;
+  const refused = await dispatchTool("computer", { actions: [{ action: "screenshot" }] }, context);
+  assert.equal(refused.isError, true);
+  assert.match(refused.text, /desktop offline/);
+  assert.deepEqual(calls, ["start"], "no input sent to an unready desktop");
+});

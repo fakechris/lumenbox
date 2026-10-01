@@ -17,6 +17,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { runInNewContext } from "node:vm";
 import { APP_HTML } from "./app-html.ts";
 
 /** Every `id="…"` the document defines. */
@@ -255,4 +256,32 @@ test("the box section can say what is actually wrong with Docker (INV-855)", () 
   assert.match(APP_HTML, /https:\/\/orbstack\.dev\//);
   // The welcome note names the prerequisite before the first click, not after a failure.
   assert.match(APP_HTML, /Docker Desktop or OrbStack must be installed/);
+});
+
+
+test("selecting an agent and refreshing hidden panes do not open desktops", () => {
+  const elements = new Map<string, { style: Record<string, string>; attrs: Map<string, string>; [key: string]: unknown }>();
+  const element = (id: string) => {
+    if (!elements.has(id)) {
+      const attrs = new Map<string, string>();
+      elements.set(id, { style: {}, attrs, getAttribute: (key: string) => attrs.get(key),
+        setAttribute: (key: string, value: string) => attrs.set(key, value), removeAttribute: (key: string) => attrs.delete(key) });
+    }
+    return elements.get(id)!;
+  };
+  const source = APP_HTML.slice(APP_HTML.indexOf("var openedDesktops ="), APP_HTML.indexOf('$("vnc").onload'));
+  assert.ok(source.length > 0);
+  const context = { $: element, current: "a", agents: [
+    { id: "a", name: "Ada", displayIndex: 1, desktopUrl: "/desktop/1/vnc.html?autoconnect=1" },
+    { id: "b", name: "Bea", displayIndex: 2, desktopUrl: "/desktop/2/vnc.html?autoconnect=1" },
+  ], boxesSeen: [] };
+  runInNewContext(`${source}; showDesktop("a");`, context);
+  assert.equal(element("vnc").attrs.has("src"), false);
+  (element("opendesktop").onclick as () => void)();
+  assert.match(element("vnc").attrs.get("src")!, /desktop\/1/);
+  runInNewContext('showDesktop("b")', context);
+  assert.equal(element("vnc").attrs.has("src"), false, "selecting another agent does not prewarm it");
+  element("desktopview").style.display = "none";
+  runInNewContext('showDesktop("a")', context);
+  assert.equal(element("vnc").attrs.has("src"), false, "hidden desktop pane releases its viewing connection");
 });
