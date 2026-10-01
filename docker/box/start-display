@@ -291,7 +291,8 @@ fi
 for selection in PRIMARY CLIPBOARD; do
   if ! command -v autocutsel > /dev/null 2>&1; then break; fi
   if ! running_here "autocutsel -selection ${selection}"; then
-    setsid autocutsel -selection "${selection}" -fork \
+    # Keep the connection-opening PID alive for X-Resource ownership proofs.
+    setsid autocutsel -selection "${selection}" \
       >> "/tmp/autocutsel-${N}.log" 2>&1 &
     repaired+=("autocutsel(${selection})")
   fi

@@ -13,6 +13,7 @@
  * Desktops are created on demand: a box with one agent does not pay for idle ones.
  */
 
+import { desktopResourceRuntime, type DesktopResourceRuntime, type DesktopProcessSnapshot } from "./desktop-resources.ts";
 import { envNumber } from "../config.ts";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -26,6 +27,7 @@ import {
   NOVNC_BASE_PORT,
   NOVNC_VIEW_ONLY_BASE_PORT,
   type DisplayInfo,
+  type DesktopResources,
 } from "../protocol/index.ts";
 import { detectDisplay, type DisplayDetectionResult } from "../cua/display.ts";
 import type { DesktopDriver } from "../cua/driver.ts";
@@ -271,7 +273,25 @@ function ownerConflict(index: number, token: string | undefined): string | undef
   return `Desktop ${index} belongs to another agent — it was claimed before this daemon restarted.`;
 }
 
+interface ResourceState {
+  state: "starting" | "ready" | "stopping" | "dormant" | "failed";
+  generation: number;
+  touched: number;
+  references: number;
+  pinned: boolean;
+  retained?: string;
+  snapshot?: DesktopProcessSnapshot;
+  launchId?: string;
+  stopping?: Promise<void>;
+}
+
 export class DisplayManager {
+  private readonly resourceStates = new Map<number, ResourceState>();
+  private starts = 0;
+  private reclaims = 0;
+  private reaping = false;
+  private supervising = false;
+
   private readonly desktops = new Map<number, Desktop>();
   /** In-flight starts, so concurrent turns on one desktop start it once. */
   private readonly starting = new Map<number, Promise<Desktop>>();
@@ -331,7 +351,8 @@ export class DisplayManager {
 
   constructor(
     private readonly log: (line: string) => void,
-    private readonly dataDir: string = process.env.BOXD_DATA_DIR ?? "/home/box/work/.boxd"
+    private readonly dataDir: string = process.env.BOXD_DATA_DIR ?? "/home/box/work/.boxd",
+    private readonly resourcesRuntime: DesktopResourceRuntime = desktopResourceRuntime()
   ) {
     this.loadControl();
   }
@@ -779,7 +800,7 @@ export class DisplayManager {
   startSupervisor(): void {
     if (this.timer) return;
     this.timer = setInterval(() => {
-      void this.superviseOnce();
+      void this.superviseOnce().then(() => this.reapIdle()).catch(error => this.log(String(error)));
     }, SUPERVISE_INTERVAL_MS);
     this.timer.unref();
     this.log(`supervising desktops every ${Math.round(SUPERVISE_INTERVAL_MS / 1000)}s`);
@@ -792,12 +813,17 @@ export class DisplayManager {
 
   /** One supervision pass. Exposed for the tests and the smoke test. */
   async superviseOnce(): Promise<void> {
+    if (this.supervising || this.reaping) return;
+    this.supervising = true;
+    try {
     for (const index of [...this.desktops.keys()]) {
       // A desktop being started right now is not a desktop to repair.
-      if (this.starting.has(index)) continue;
+      if (this.starting.has(index) || this.resourceStates.get(index)?.state === "stopping" || this.resourceStates.get(index)?.state === "failed") continue;
 
       const desktop = this.desktops.get(index);
       if (!desktop) continue;
+      const resource = this.resourceStates.get(index);
+      const generation = resource?.generation;
 
       try {
         // The skip list is how a decision made over time reaches a script that only sees
@@ -808,7 +834,7 @@ export class DisplayManager {
           [String(index)],
           {
             timeout: START_TIMEOUT_MS,
-            env: { ...process.env, SKIP_COMPONENTS: blocked.join(" ") },
+            env: { ...process.env, SKIP_COMPONENTS: blocked.join(" "), BOXD_DESKTOP_LAUNCH_ID: resource?.launchId ?? "" },
           }
         );
 
@@ -829,8 +855,21 @@ export class DisplayManager {
         this.log(`desktop ${index} could not be repaired: ${message}`);
       }
 
+      // Repair may launch a delayed infrastructure service (for example dconf).
+      // Re-inspect only a pristine, unreferenced desktop. Any workload or new
+      // demand across the await prevents publishing this refreshed inventory.
+      if (resource && !this.retainedReason(index, resource)) {
+        try {
+          const snapshot = await this.resourcesRuntime.capture(index, resource.launchId);
+          if (resource.generation === generation && !this.retainedReason(index, resource)) {
+            if (snapshot.reason) resource.retained = snapshot.reason;
+            else resource.snapshot = snapshot;
+          }
+        } catch { resource.retained = "process ownership unavailable"; }
+      }
       this.rotateLogs(index);
     }
+    } finally { this.supervising = false; }
   }
 
   /**
@@ -978,6 +1017,7 @@ export class DisplayManager {
   }
 
   assertOwner(index: number, presented: string | undefined): void {
+    assertGuardIndex(index);
     // No token is the ungated, single-user path — one owner, everything allowed. Ownership only
     // means something once a gateway is putting an identity on the request.
     if (presented === undefined) return;
@@ -1020,6 +1060,98 @@ export class DisplayManager {
     return recordedOwner(index).status === "owned";
   }
 
+  /** A request holds this before its first await, including while queued. */
+  hold(index: number, workload = false): () => void {
+    assertGuardIndex(index);
+    let state = this.resourceStates.get(index);
+    if (!state) {
+      state = { state: "dormant", generation: 0, touched: this.resourcesRuntime.now(), references: 0, pinned: false };
+      this.resourceStates.set(index, state);
+    }
+    state.references++;
+    state.generation++;
+    state.touched = this.resourcesRuntime.now();
+    if (workload) state.retained = "workload may still be running";
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const current = this.resourceStates.get(index);
+      if (current) { current.references = Math.max(0, current.references - 1); current.touched = this.resourcesRuntime.now(); }
+    };
+  }
+
+  /** Called only after the operation has passed its authority checks. */
+  markWorkload(index: number): void { this.hold(index, true)(); }
+
+  /** Renew an existing desktop only. Never creates or waits behind a cold start. */
+  async ready(index: number, owner?: string): Promise<boolean> {
+    assertGuardIndex(index);
+    if (!this.desktops.has(index) || this.resourceStates.get(index)?.state === "stopping" || this.resourceStates.get(index)?.state === "failed") return false;
+    await this.ensure(index, owner);
+    return true;
+  }
+
+  async waitForReclaim(index: number): Promise<void> { await this.resourceStates.get(index)?.stopping; }
+
+  pin(index: number, pinned: boolean): void {
+    const release = this.hold(index);
+    this.resourceStates.get(index)!.pinned = pinned;
+    release();
+  }
+
+  resources(): DesktopResources {
+    return {
+      idle_ms: this.resourcesRuntime.idleMs, starts: this.starts, reclaims: this.reclaims,
+      desktops: [...this.resourceStates].sort(([a], [b]) => a - b).map(([index, state]) => ({
+        index, state: state.state, generation: state.generation, pinned: state.pinned,
+        references: state.references, idle_ms: Math.max(0, this.resourcesRuntime.now() - state.touched),
+        ...(this.retainedReason(index, state) ? { retained_reason: this.retainedReason(index, state) } : {}),
+      })),
+    };
+  }
+
+  private retainedReason(index: number, state: ResourceState): string | undefined {
+    if (this.resourcesRuntime.idleMs === 0) return "automatic reclamation disabled";
+    if (state.pinned) return "pinned";
+    if (state.references) return "active operation or viewer";
+    if (this.isManaged(index)) return "externally controlled desktop";
+    if (this.userInControl(index)) return "human takeover";
+    return state.retained;
+  }
+
+  async reapIdle(): Promise<void> {
+    if (this.reaping || this.supervising || this.resourcesRuntime.idleMs === 0) return;
+    this.reaping = true;
+    try {
+      for (const [index, state] of this.resourceStates) {
+        if (state.state !== "ready" || this.starting.has(index) || !state.snapshot || this.retainedReason(index, state)) continue;
+        if (this.resourcesRuntime.now() - state.touched < this.resourcesRuntime.idleMs) continue;
+        const generation = state.generation;
+        const authorize = () => this.resourceStates.get(index) === state && state.generation === generation
+          && !this.retainedReason(index, state) && this.resourcesRuntime.now() - state.touched >= this.resourcesRuntime.idleMs;
+        state.state = "stopping";
+        state.stopping = (async () => {
+          try {
+            const result = await this.resourcesRuntime.stop(index, state.snapshot!, authorize);
+            if (result.stopped) {
+              this.desktops.get(index)?.executor?.invalidateElements();
+              this.desktops.delete(index);
+              state.state = "dormant";
+              state.snapshot = undefined;
+              this.reclaims++;
+            } else {
+              state.state = result.failed ? "failed" : "ready";
+              if (result.reason && authorize()) state.retained = result.reason;
+            }
+          } catch { state.state = "failed"; state.retained = "reclamation failed; process inspection required"; }
+        })();
+        await state.stopping;
+        state.stopping = undefined;
+      }
+    } finally { this.reaping = false; }
+  }
+
   async ensure(index = DEFAULT_DISPLAY_INDEX, owner?: string): Promise<Desktop> {
     if (!isDisplayIndex(index)) {
       throw new Error(
@@ -1027,6 +1159,14 @@ export class DisplayManager {
       );
     }
 
+    const resource = this.resourceStates.get(index);
+    if (resource) {
+      resource.touched = this.resourcesRuntime.now();
+      // A demand invalidates a pending stop before waiting for its cleanup.
+      resource.generation++;
+      if (resource.stopping) await resource.stopping;
+    }
+    if (resource?.state === "failed") throw new Error(`Desktop ${index} process state is unknown; inspection required`);
     const existing = this.desktops.get(index);
     if (existing) {
       // Claiming an unclaimed desktop is allowed — that is how the first caller takes
@@ -1055,14 +1195,41 @@ export class DisplayManager {
     }
 
     const pending = this.starting.get(index);
-    if (pending) return pending;
+    if (pending) {
+      await pending;
+      // Recheck ownership for each waiter; never inherit the first caller's claim.
+      return this.ensure(index, owner);
+    }
 
-    const start = this.start(index, owner).finally(() => this.starting.delete(index));
+    const state: ResourceState = {
+      state: "starting", launchId: randomUUID(), generation: (resource?.generation ?? 0) + 1,
+      touched: this.resourcesRuntime.now(), references: resource?.references ?? 0,
+      pinned: resource?.pinned ?? false,
+      ...(resource?.retained ? { retained: resource.retained } : {}),
+      ...(index === DEFAULT_DISPLAY_INDEX || this.resourcesRuntime.adopted(index) ? { retained: "existing or system desktop" } : {}),
+    };
+    this.resourceStates.set(index, state);
+    const start = (async () => {
+      try {
+        const desktop = this.resourcesRuntime.create ? await this.resourcesRuntime.create(index) : await this.start(index, owner, state.launchId);
+        this.desktops.set(index, desktop);
+        if (!state.retained) {
+          try {
+            state.snapshot = await this.resourcesRuntime.capture(index, state.launchId);
+            if (state.snapshot.reason) state.retained = state.snapshot.reason;
+          } catch { state.retained = "process ownership unavailable"; }
+        }
+        state.state = "ready";
+        state.touched = this.resourcesRuntime.now();
+        this.starts++;
+        return desktop;
+      } catch (error) { state.state = "failed"; state.retained = "startup failed; cleanup requires inspection"; throw error; }
+    })().finally(() => this.starting.delete(index));
     this.starting.set(index, start);
     return start;
   }
 
-  private async start(index: number, owner?: string): Promise<Desktop> {
+  private async start(index: number, owner?: string, launchId?: string): Promise<Desktop> {
     this.log(`bringing up desktop ${index}`);
 
     // The script is idempotent, so this also adopts a desktop that the entrypoint
@@ -1070,7 +1237,7 @@ export class DisplayManager {
     const { stdout, stderr } = await execFileAsync(
       START_DISPLAY,
       [String(index)],
-      { timeout: START_TIMEOUT_MS }
+      { timeout: START_TIMEOUT_MS, env: { ...process.env, BOXD_DESKTOP_LAUNCH_ID: launchId ?? "" } }
     );
     for (const line of `${stdout}${stderr}`.trim().split("\n")) {
       if (line) this.log(line);

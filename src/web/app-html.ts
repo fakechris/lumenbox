@@ -2339,6 +2339,36 @@ document.getElementById("setpeople").addEventListener("click", function (event) 
   savePeople();
 });
 
+/** Resource figures belong to the daemon; no per-desktop memory estimates. */
+function renderDesktopResources(box) {
+  var resources = box.resources;
+  if (!resources) return '<div class="dim" style="margin:4px 0 10px 16px">Desktop resource status unavailable.</div>';
+  var desktops = resources.desktops || [];
+  var running = desktops.filter(function (d) { return d.state === "ready" || d.state === "stopping"; }).length;
+  var retained = desktops.filter(function (d) { return d.state === "ready" && d.retained_reason; }).length;
+  var failed = desktops.filter(function (d) { return d.state === "failed"; }).length;
+  var registered = agents.filter(function (a) { return a.boxId === box.id; }).length;
+  var summary = registered + " registered · " + running + " running · " + retained + " retained · " + failed + " failed (process state unknown) · " + resources.starts + " starts · " + resources.reclaims + " reclaimed";
+  if (typeof resources.memory_bytes === "number") summary += " · container " + Math.round(resources.memory_bytes / 1048576) + " MiB";
+  var mode = resources.idle_ms > 0 ? "Empty managed desktops can be reclaimed after " + Math.round(resources.idle_ms / 60000 * 10) / 10 + " minutes. Used or uncertain sessions are kept." : "Automatic desktop reclamation is off.";
+  return '<div class="dim" style="margin:4px 0 10px 16px">' + esc(summary) + '<br>' + esc(mode) +
+    desktops.map(function (d) {
+      var agent = agents.find(function (a) { return a.boxId === box.id && a.displayIndex === d.index; });
+      var button = agent && myRole !== "viewer" ? ' <button class="btn sm ghost" data-pin-agent="' + esc(agent.id) + '" data-pinned="' + (d.pinned ? "false" : "true") + '">' + (d.pinned ? "Unpin" : "Keep desktop") + '</button>' : "";
+      return '<div>' + esc(agent ? agent.name : "Desktop " + d.index) + " · " + esc(d.state) + (d.retained_reason ? " · " + esc(d.retained_reason) : "") + button + '</div>';
+    }).join("") + '</div>';
+}
+
+document.addEventListener("click", function (event) {
+  var button = event.target && event.target.closest ? event.target.closest("[data-pin-agent]") : null;
+  if (!button) return;
+  button.disabled = true;
+  fetch("/api/desktop/pin", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ agent: button.getAttribute("data-pin-agent"), pinned: button.getAttribute("data-pinned") === "true" }) })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "Could not update desktop"); }); })
+    .then(renderBoxes)
+    .catch(function (error) { $("setboxesstatus").textContent = String(error.message || error); button.disabled = false; });
+});
+
 /** The box list in Settings, with attach and detach. */
 function renderBoxes() {
   return fetch("/api/boxes")
@@ -2356,7 +2386,7 @@ function renderBoxes() {
           "</div>" +
           // Who the box is for, in the words the members set produces (docs/22 §5, INV-538).
           // Not free text: a label somebody types is a label that stops being true.
-          '<div class="dim" style="font-size:11.5px;margin:2px 0 8px 16px">' + esc(b.membersLabel || "") + "</div>";
+          '<div class="dim" style="font-size:11.5px;margin:2px 0 8px 16px">' + esc(b.membersLabel || "") + "</div>" + renderDesktopResources(b);
       }).join("") ||
         '<div class="dim" style="font-size:12.5px">' + esc(t("ui.boxes.none")) + "</div>";
     })

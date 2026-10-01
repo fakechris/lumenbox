@@ -579,6 +579,23 @@ export interface HealthResult {
     }[];
   }[];
   displays?: DisplayInfo[];
+  desktop_resources?: DesktopResources;
+}
+
+export interface DesktopResources {
+  idle_ms: number;
+  starts: number;
+  reclaims: number;
+  desktops: {
+    index: number;
+    state: "starting" | "ready" | "stopping" | "dormant" | "failed";
+    generation: number;
+    pinned: boolean;
+    references: number;
+    idle_ms: number;
+    retained_reason?: string;
+  }[];
+  memory_bytes?: number;
 }
 
 export interface DisplayInfo {
