@@ -1183,6 +1183,14 @@ export const APP_HTML = String.raw`<!doctype html>
       <input id="setboximage" placeholder="Image override, e.g. mirror.example.com/lumenbox:0.3.0 — empty uses the release default (fakechris/lumenbox, Docker Hub)" spellcheck="false" style="margin-top:8px">
       <div class="fieldnote" style="margin-top:4px">What docker pulls when this machine has no box image. Point it at a mirror if Docker Hub is slow or unreachable from your network; the first pull is hundreds of megabytes either way.</div>
     </div>
+    <div class="field" data-tier="installation" data-settab="boxes">
+      <label>Personal-box allocation limits</label>
+      <div class="fieldnote">Limits apply when assigning a box to one person. Blank means unlimited by default, or inherit for a person. Lowering a limit keeps existing allocations. Self-service creation is not available yet.</div>
+      <input id="setquotadefault" type="number" min="0" max="99" step="1" placeholder="Default: unlimited">
+      <div id="setquotapeople"></div>
+      <button class="btn sm" id="setquotasave" type="button">Save allocation limits</button>
+      <div class="fieldnote" id="setquotastatus" role="status"></div>
+    </div>
     <div class="field" data-tier="installation" id="setboxeswrap" data-settab="boxes">
       <label>Boxes</label>
       <div id="setboxes" style="display:flex;flex-direction:column;gap:6px"></div>
@@ -1595,6 +1603,32 @@ document.getElementById("settabs").onclick = function (event) {
   showSettingsTab(a.getAttribute("data-settab"));
 };
 
+function loadBoxQuotas() {
+  fetch("/api/quotas").then(function (r) { return r.json(); }).then(function (d) {
+    if (d.error) throw new Error(d.error);
+    $("setquotadefault").value = d.personalBoxQuota === null ? "" : d.personalBoxQuota;
+    $("setquotapeople").innerHTML = d.people.map(function (p) {
+      return '<label style="display:block;margin-top:8px">' + esc(p.name) + ' · ' + p.held + ' held' +
+        '<input data-quota-person="' + esc(p.id) + '" type="number" min="0" max="99" step="1" placeholder="Inherit default" value="' + (p.override === null ? "" : p.override) + '"></label>';
+    }).join("");
+  }).catch(function (e) { $("setquotastatus").textContent = e.message; });
+}
+$("setquotasave").onclick = function () {
+  var button = this;
+  var people = {};
+  var inputs = Array.from($("setquotapeople").querySelectorAll("input"));
+  if ([$("setquotadefault")].concat(inputs).some(function (input) { return !input.reportValidity(); })) return;
+  inputs.forEach(function (input) { people[input.getAttribute("data-quota-person")] = input.value === "" ? null : Number(input.value); });
+  button.disabled = true;
+  fetch("/api/quotas", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+    personalBoxQuota: $("setquotadefault").value === "" ? null : Number($("setquotadefault").value), personBoxQuotas: people
+  }) }).then(function (r) { return r.json(); }).then(function (d) {
+    if (d.error) throw new Error(d.error);
+    $("setquotastatus").textContent = "Saved. Applies to the next allocation; no restart needed.";
+    loadBoxQuotas();
+  }).catch(function (e) { $("setquotastatus").textContent = e.message; }).finally(function () { button.disabled = false; });
+};
+
 function openSettings(tab) {
   showSettingsTab(typeof tab === "string" ? tab : "model");
   // Applied on open as well as on load: the dialog is built once and reopened, and
@@ -1625,6 +1659,7 @@ function openSettings(tab) {
       settingsProviderChanged();
       renderStandingGrants();
       renderBoxSection();
+      if (myRole === "admin") loadBoxQuotas();
       renderChannels();
       renderSecrets(); renderConnectors();
       renderMemorySummary();
