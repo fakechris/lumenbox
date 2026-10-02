@@ -664,12 +664,20 @@ export const SCOPED_INPUT_SCRIPT = `function(value, replace, expected, expiresAt
     const start = this.selectionStart ?? old.length;
     const end = this.selectionEnd ?? old.length;
     setter.call(this, replace ? value : old.slice(0, start) + value + old.slice(end));
+    try { const caret = replace ? value.length : start + value.length; this.setSelectionRange(caret, caret); } catch {}
   } else if (this.isContentEditable) {
-    if (replace) this.textContent = value;
-    else {
-      const selection = this.ownerDocument.getSelection();
+    const selection = this.ownerDocument.getSelection();
+    if (replace) {
+      this.textContent = value;
+      if (selection && this.contains(selection.anchorNode)) {
+        const range = this.ownerDocument.createRange(); range.selectNodeContents(this); range.collapse(false);
+        selection.removeAllRanges(); selection.addRange(range);
+      }
+    } else {
       if (selection && selection.rangeCount && this.contains(selection.anchorNode) && this.contains(selection.focusNode)) {
-        const range = selection.getRangeAt(0); range.deleteContents(); range.insertNode(this.ownerDocument.createTextNode(value));
+        const range = selection.getRangeAt(0); range.deleteContents();
+        const text = this.ownerDocument.createTextNode(value); range.insertNode(text);
+        range.setStartAfter(text); range.collapse(true); selection.removeAllRanges(); selection.addRange(range);
       } else this.appendChild(this.ownerDocument.createTextNode(value));
     }
   } else return 'not editable';
@@ -718,8 +726,8 @@ class BrowserPage {
     const page = new BrowserPage(session, host, port, binding);
 
     session.on("Runtime.executionContextCreated", params => {
-      const context = params.context as { id: number; auxData?: { frameId?: string } };
-      if (context.auxData?.frameId !== undefined) {
+      const context = params.context as { id: number; auxData?: { frameId?: string; isDefault?: boolean } };
+      if (context.auxData?.frameId !== undefined && context.auxData.isDefault === true) {
         page.contexts.set(context.auxData.frameId, context.id);
       }
     });
