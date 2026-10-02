@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startWebServer } from "./server.ts";
@@ -35,7 +35,12 @@ test("admin allocation limits are atomic, enforced by the box update route, and 
     assert.equal((await request("/api/quotas")).data.personalBoxQuota, 1, "invalid patch writes nothing");
     for (const invalid of [-1, 100, 0.5, "2", false]) assert.equal((await request("/api/quotas", { personalBoxQuota: invalid })).status, 400);
     assert.equal((await request("/api/boxes/update", { name: "one", members: ["ada"] })).status, 200);
-    assert.equal((await request("/api/boxes/update", { name: "two", members: ["ada", "ada"] })).status, 409);
+    mkdirSync(join(home, "boxes"), { recursive: true });
+    const tokenFile = join(home, "boxes", "two.token");
+    writeFileSync(tokenFile, "original-test-token");
+    assert.equal((await request("/api/boxes/update", { name: "two", members: ["ada", "ada"], token: "replacement-test-token" })).status, 409);
+    assert.equal(readFileSync(tokenFile, "utf8"), "original-test-token", "rejected allocation cannot mutate credentials");
+    assert.equal(new AgentRegistry(join(home, "agents")).boxById("two")?.members, "everyone", "membership is also unchanged");
     assert.deepEqual((await request("/api/quotas/self", undefined, "member")).data, { quota: 1, held: 1 });
     assert.deepEqual((await request("/api/quotas/self", undefined, "member", "web:bob")).data, { quota: 1, held: 0 });
     assert.equal((await request("/api/quotas", { personalBoxQuota: 0, personBoxQuotas: { ada: 2 } })).status, 200);

@@ -115,7 +115,7 @@ function withinWork(path: string): boolean {
   return normalised === WORK_DIR || normalised.startsWith(`${WORK_DIR}/`);
 }
 
-import { agentboxHome, loadConfig, saveConfig, type AgentboxConfig } from "../config.ts";
+import { agentboxHome, isPersonalBoxQuota, loadConfig, saveConfig, type AgentboxConfig } from "../config.ts";
 
 type AgentboxConfigHostExec = NonNullable<AgentboxConfig["hostExec"]>;
 import { ChannelManager } from "../channels/manager.ts";
@@ -3716,7 +3716,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (refusedRole("admin")) return;
           if (req.method === "POST") {
             const body = await readJson(req);
-            const valid = (value: unknown) => value === null || (typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 99);
+            const valid = (value: unknown) => value === null || isPersonalBoxQuota(value);
             if (body.personalBoxQuota !== undefined && !valid(body.personalBoxQuota)) {
               send(res, 400, { error: "personalBoxQuota must be 0–99 or null (unlimited)." }); return;
             }
@@ -5878,12 +5878,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const name = String(body.name ?? "").trim();
           const baseUrl = typeof body.baseUrl === "string" ? body.baseUrl.trim() : "";
           let tokenFile = typeof body.tokenFile === "string" ? body.tokenFile.trim() : "";
-          if (tokenFile === "" && typeof body.token === "string" && body.token.trim() !== "") {
-            const dir = join(agentboxHome(), "boxes");
-            mkdirSync(dir, { recursive: true, mode: 0o700 });
-            tokenFile = join(dir, `${name}.token`);
-            writeFileSync(tokenFile, `${body.token.trim()}\n`, { mode: 0o600 });
-          }
           try {
             const existing = registry.boxByName(name);
             if (existing === undefined) {
@@ -5901,6 +5895,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             if (members !== undefined) {
               const allocationError = personalAllocationRefusal(registry.listBoxes(), existing, members, loadConfig());
               if (allocationError !== undefined) { send(res, 409, { error: allocationError }); return; }
+            }
+            if (tokenFile === "" && typeof body.token === "string" && body.token.trim() !== "") {
+              const dir = join(agentboxHome(), "boxes");
+              mkdirSync(dir, { recursive: true, mode: 0o700 });
+              tokenFile = join(dir, `${name}.token`);
+              writeFileSync(tokenFile, `${body.token.trim()}\n`, { mode: 0o600 });
             }
             const result = await orchestrator.updateBox(name, {
               ...(baseUrl !== "" ? { endpoint: { baseUrl, tokenFile: tokenFile !== "" ? tokenFile : (existing.endpoint?.tokenFile ?? "") } } : {}),

@@ -387,7 +387,7 @@ function readInvolute(value: unknown, warn: (message: string) => void): Agentbox
 
 function readQuota(value: unknown, name: string, warn: (message: string) => void): number | undefined {
   if (value === undefined) return undefined;
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 99) {
+  if (!isPersonalBoxQuota(value)) {
     warn(`config: ${name} must be a whole number 0–99; refusing new allocations with quota 0`);
     return 0;
   }
