@@ -525,3 +525,22 @@ test("a database from before estimated relay rows gains the columns, and its old
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a start that died between the two relay column additions still adds the second (INV-814)", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-store-half-"));
+  try {
+    const path = join(dir, "control.db");
+    const half = new DatabaseSync(path);
+    half.exec(`create table relay_usage (
+      id integer primary key autoincrement, box_id text not null, tenant_id text not null, at text not null,
+      provider text not null, model text not null, input_tokens integer not null, output_tokens integer not null,
+      cache_read_tokens integer not null, cache_write_tokens integer not null, estimated integer not null default 0)`);
+    half.close();
+    const store = new SqliteControlStore({ path });
+    store.appendRelayUsage({ boxId: "b1", tenantId: "t1", at: "2026-09-02T00:00:00.000Z", provider: "p", model: "m", inputTokens: 1, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, estimated: true, estimateReason: "no_usage_reported" });
+    assert.equal(store.relayUsageSince("2026-01-01T00:00:00.000Z")[0]?.estimateReason, "no_usage_reported");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

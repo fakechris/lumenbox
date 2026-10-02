@@ -359,6 +359,26 @@ test("estimated relay rows are listed beside the measured ones, never summed in,
   }
 });
 
+test("a tenant whose relay rows are all estimates is billed from its box's own report, with the estimates listed beside it (INV-814)", async () => {
+  const { store, add, cleanup } = fixture();
+  try {
+    const acme = add("acme", { monthlyTokens: 1_000 });
+    const collector = new Collector({ store, fetchImpl: fakeFleet({ acme: { health: {}, usage: [{ seq: 1, tokens: 300 }] } }).fetchImpl });
+    await collector.sweep();
+    store.appendRelayUsage({
+      boxId: "box-acme", tenantId: acme.tenantId, at: "2026-08-19T10:00:00.000Z", provider: "anthropic", model: "claude-x",
+      inputTokens: 900, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, estimated: true, estimateReason: "stream_interrupted",
+    });
+    const meter = meterTenants(store).find(entry => entry.tenantName === "acme")!;
+    assert.equal(meter.measuredByRelay, false, "estimates alone are not a measurement to bill from");
+    assert.equal(meter.inputTokens, 300, "the box's own report, not zero");
+    assert.equal(meter.estimated?.inputTokens, 900, "still listed");
+    assert.equal(meter.overBudget, false, "and not added to the box's report, which already covers that traffic");
+  } finally {
+    cleanup();
+  }
+});
+
 test("a box whose port moved is relocated, not written off", async () => {
   const { store, add, cleanup } = fixture();
   try {

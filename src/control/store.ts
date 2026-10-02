@@ -580,9 +580,12 @@ export class SqliteControlStore implements ControlStore {
       this.db.exec("alter table box add column role text not null default 'primary'");
     }
     // Estimated relay rows (INV-814), guarded the same way.
+    // Each column on its own guard, so a start that died between the two still adds the second.
     const relayColumns = this.db.prepare("pragma table_info(relay_usage)").all() as { name: string }[];
     if (!relayColumns.some(column => column.name === "estimated")) {
       this.db.exec("alter table relay_usage add column estimated integer not null default 0");
+    }
+    if (!relayColumns.some(column => column.name === "estimate_reason")) {
       this.db.exec("alter table relay_usage add column estimate_reason text");
     }
     this.db.exec(
@@ -1136,10 +1139,10 @@ export class SqliteControlStore implements ControlStore {
     const row =
       since === undefined
         ? (this.db
-            .prepare("select 1 as found from relay_usage where tenant_id = ? limit 1")
+            .prepare("select 1 as found from relay_usage where tenant_id = ? and estimated = 0 limit 1")
             .get(tenantId) as { found?: number } | undefined)
         : (this.db
-            .prepare("select 1 as found from relay_usage where tenant_id = ? and at >= ? limit 1")
+            .prepare("select 1 as found from relay_usage where tenant_id = ? and at >= ? and estimated = 0 limit 1")
             .get(tenantId, since) as { found?: number } | undefined);
     return row !== undefined;
   }

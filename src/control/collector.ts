@@ -445,15 +445,17 @@ export function meterTenants(store: ControlStore, since?: string): TenantMeter[]
     const limitTokens = typeof limit === "number" && Number.isFinite(limit) ? limit : undefined;
     // Cache reads are counted: they are cheaper, not free, and a tenant whose whole bill is cache
     // reads is still spending. Applying a discount here would bake a price into the wrong file.
-    const estimated = measuredByRelay ? store.relayEstimatedTotals(tenant.id, since) : undefined;
+    // Always listed. Added to the budget only when the relay's series is the one billed: otherwise
+    // the box's own report already covers the same traffic, and adding both would double-count.
+    const estimated = store.relayEstimatedTotals(tenant.id, since);
     const sum = (t: UsageTotals) => t.inputTokens + t.outputTokens + t.cacheReadTokens + t.cacheWriteTokens;
-    const billable = sum(totals) + (estimated !== undefined ? sum(estimated) : 0);
+    const billable = sum(totals) + (measuredByRelay ? sum(estimated) : 0);
     return {
       tenantId: tenant.id,
       tenantName: tenant.name,
       ...totals,
       measuredByRelay,
-      ...(estimated !== undefined && estimated.records > 0 ? { estimated } : {}),
+      ...(estimated.records > 0 ? { estimated } : {}),
       limitTokens,
       overBudget: limitTokens !== undefined && billable > limitTokens,
     };
