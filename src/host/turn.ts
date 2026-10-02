@@ -131,7 +131,7 @@ import { readInstallationInstructions } from "./place.ts";
 import { changeNotice, readStanding, takeChanges } from "./standing.ts";
 import type { McpManager } from "./mcp.ts";
 import { TOOL_BUDGET_WARNING } from "./mcp.ts";
-import { narrowTools } from "./scopes.ts";
+import { narrowTools, toolAllowed } from "./scopes.ts";
 import { conversationIdFor, MAIN_CONVERSATION } from "../agents/registry.ts";
 import { summaryRuntimeFor } from "./provider.ts";
 import type { Effort, ProviderProfile } from "./provider.ts";
@@ -1959,7 +1959,7 @@ ${outcome.text}`;
   // Which servers this agent's box carries (INV-439): named in its bundles, or all.
   const boxServers = deps.bundles?.forBox(registry.boxOf(agent.id))?.mcpServers;
   const allowedMcp = (deps.templateSetup !== undefined ? [] : (deps.mcp?.toolsFor(boxServers) ?? [])).filter(
-    tool => effectiveTools === undefined || effectiveTools.includes(tool.name)
+    tool => toolAllowed(effectiveTools, tool.name)
   );
   // Past a certain number they stop being a list and start being a document that every
   // turn pays for. Then they go behind a lookup pair instead: one round trip when an

@@ -109,4 +109,30 @@ test("a chat binds to one scope, survives the file, and narrows by intersection"
   assert.deepEqual(narrowTools(undefined, ["bash"]), ["bash"], "an unlimited agent is bounded");
   assert.deepEqual(narrowTools(["bash"], undefined), ["bash"], "no binding changes nothing");
   assert.equal(narrowTools(undefined, undefined), undefined, "nobody narrows: stays unlimited");
+  // MCP entries (INV-759): a service or every service still only narrows, both ways round.
+  assert.deepEqual(narrowTools(["bash", "mcp:*"], ["notion__*", "bash"]), ["bash", "notion__*"]);
+  assert.deepEqual(narrowTools(["notion__*"], ["mcp:*"]), ["notion__*"]);
+  assert.deepEqual(narrowTools(["notion__*"], ["notion__search", "slack__post"]), ["notion__search"]);
+  assert.deepEqual(narrowTools(["notion__*"], ["slack__*"]), [], "two services share nothing");
+  assert.deepEqual(narrowTools(["mcp:*"], ["bash"]), [], "every service is not every tool");
+});
+
+test("toolAllowed: exact names, a service, every service — and mcp:* is never a built-in (INV-759)", async () => {
+  const { toolAllowed } = await import("./scopes.ts");
+  assert.ok(toolAllowed(undefined, "anything"));
+  assert.ok(toolAllowed(["notion__*"], "notion__search"));
+  assert.ok(!toolAllowed(["notion__*"], "slack__post"));
+  assert.ok(!toolAllowed(["notion__*"], "notionx__search"), "the separator is part of the prefix");
+  assert.ok(toolAllowed(["mcp:*"], "slack__post"));
+  assert.ok(!toolAllowed(["mcp:*"], "bash"));
+  assert.ok(toolAllowed(["notion__search"], "notion__search"));
+  assert.ok(!toolAllowed([], "notion__search"));
+});
+
+test("isMcpEntry: a service or a tool, both sides named; nothing else passes for one (INV-759)", async () => {
+  const { isMcpEntry } = await import("./scopes.ts");
+  for (const good of ["notion__*", "notion__search", "my-server__get_page"]) assert.ok(isMcpEntry(good), good);
+  for (const bad of ["notion__", "__search", "__*", "__", "notion_*", "bash", "no*tion__x", "notion__se*arch", "notion__ x"]) {
+    assert.ok(!isMcpEntry(bad), bad);
+  }
 });

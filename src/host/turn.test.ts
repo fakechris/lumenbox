@@ -3558,6 +3558,50 @@ test("scoped MCP lookup wrappers reach permitted tools and refuse an unlisted ta
   } finally { cleanup(); }
 });
 
+test("an allowlist names an MCP service with server__* or every service with mcp:*, never a built-in (INV-759)", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const calls: string[] = [];
+    const fakeMcp = {
+      toolsFor: () => ["notion__search", "notion__create_page", "slack__post"].map(name => ({
+        name, description: name, inputSchema: { type: "object" },
+      })),
+      owns: (name: string) => name.includes("__"),
+      describeTools: () => "",
+      call: async (name: string) => { calls.push(name); return "ok"; },
+      callDetailed: async (name: string) => { calls.push(name); return { text: "ok" }; },
+    };
+    const offered = async (tools: string[], script: Anthropic.Message[] = [message([textBlock("Finished.")])]) => {
+      const capture: Capture = { params: [] };
+      const { client } = stubClient(script, capture);
+      await runTurn(registry.create({ name: `A${registry.list().length}`, tools }),
+        [{ id: "m", fromId: "user", fromName: "user", text: "go", priority: false, receivedAt: "" }],
+        new AbortController().signal, {
+          client, registry, bus: new AgentBus(registry, async () => {}), box: undefined, resolution: undefined,
+          mcp: fakeMcp as unknown as NonNullable<Parameters<typeof runTurn>[3]["mcp"]>,
+        });
+      return { names: (capture.params[0]?.tools ?? []).map(tool => ("name" in tool ? tool.name : "")), capture };
+    };
+
+    // Exact names only, as before: every MCP tool withheld, because none was known to name.
+    assert.deepEqual((await offered(["read_file"])).names.filter(name => name.includes("__")), []);
+    // One service.
+    assert.deepEqual((await offered(["read_file", "notion__*"])).names.filter(name => name.includes("__")), ["notion__search", "notion__create_page"]);
+    // Every service the box carries, and still no built-in the list did not name.
+    const all = await offered(["read_file", "mcp:*"]);
+    assert.deepEqual(all.names.filter(name => name.includes("__")), ["notion__search", "notion__create_page", "slack__post"]);
+    assert.ok(!all.names.includes("bash"));
+
+    // Withheld is also refused: a call to a service the list does not name never runs.
+    const refused = await offered(["notion__*"], [
+      message([toolUseBlock("slack__post", {})], "tool_use"),
+      message([textBlock("Finished.")]),
+    ]);
+    assert.deepEqual(calls, []);
+    assert.match(JSON.stringify(refused.capture.params[1]?.messages), /unavailable in the current execution context/);
+  } finally { cleanup(); }
+});
+
 test("a turn traces each LLM call: one span, the turn's trace id, token usage on success", async () => {
   const { registry, cleanup } = fixture();
   try {
