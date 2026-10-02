@@ -341,6 +341,11 @@ for (const expression of ["this Tuesday", "本周二", "这周二"]) {
       assert.equal(good.changes.length, 1, `${origin}: ${JSON.stringify(good.dropped)}`);
       const bad = verifyMaintenanceProposals([proposal(records, "retire", [text], { expiredOn: wrong })], snapshot, records, { now });
       assert.equal(bad.changes.length, 0, `${origin}: next week is not this week`);
+      const rewrite = (date: string) => verifyMaintenanceProposals(
+        [proposal(records, "rewrite", [text], { text: `review: ${date}` })], snapshot, records, { now }
+      );
+      assert.equal(rewrite(expected!).changes.length, 1, `${origin}: this-week rewrite resolves the same date`);
+      assert.equal(rewrite(wrong!).changes.length, 0, `${origin}: a rewrite cannot move this week into next week`);
     }
   });
 }
@@ -353,5 +358,19 @@ test("INV-947: next weekdays retain their future alternatives, separate from thi
       const plan = verifyMaintenanceProposals([proposal(records, "retire", [text], { expiredOn })], snapshotForMaintenance(records), records, { now: new Date("2026-10-10T12:00:00Z") });
       assert.equal(plan.changes.length, accepted ? 1 : 0, `${expression}: ${expiredOn}`);
     }
+  }
+});
+
+
+test("INV-947: this-week rewrite does not loosen another expression's date window or change other words", () => {
+  const records = [fact("review this Tuesday then deploy tomorrow", 0, { at: "2026-09-25T12:00:00Z" })];
+  const text = records[0]!.text;
+  for (const replacement of [
+    "review this Tuesday then deploy 2026-09-22",
+    "review 2026-09-22 then skip tomorrow",
+    "review 2026-09-15 then deploy tomorrow",
+  ]) {
+    const plan = verifyMaintenanceProposals([proposal(records, "rewrite", [text], { text: replacement })], snapshotForMaintenance(records), records, { now: NOW });
+    assert.equal(plan.changes.length, 0, replacement);
   }
 });

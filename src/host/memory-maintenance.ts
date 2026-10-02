@@ -492,16 +492,23 @@ export function verifyMaintenanceProposals(
         refuse(`rewritten text adds more than one date (${newDates.join(", ")})`);
         continue;
       }
-      const origin = Date.parse(source.at);
-      const when = Date.parse(newDates[0]!);
-      if (when < origin - 86_400_000 || when > origin + RELATIVE_HORIZON_DAYS * 86_400_000) {
-        refuse(`${newDates[0]} is not within ${RELATIVE_HORIZON_DAYS} days of the line's own date`);
+      const remainder = normalise(proposal.text.replace(newDates[0]!, " "));
+      const substituted = relative.find(expression => normalise(source.text.replace(expression, " ")) === remainder);
+      if (substituted === undefined) {
+        refuse("rewrite may only replace one relative time with its date; every other word must stay as it was");
         continue;
       }
-      const remainder = normalise(proposal.text.replace(newDates[0]!, " "));
-      const substituted = relative.some(expression => normalise(source.text.replace(expression, " ")) === remainder);
-      if (!substituted) {
-        refuse("rewrite may only replace one relative time with its date; every other word must stay as it was");
+      // A this-week weekday can be several days before `at`. Bind that exception to the
+      // expression actually replaced, using the same date as retirement (INV-947).
+      const thisWeek = /^this\s+\w+day$|^(本周|这周)[一二三四五六日天]$/i.test(substituted);
+      if (thisWeek && !expiryDatesOf({ ...source, text: substituted }).includes(newDates[0]!)) {
+        refuse(`${newDates[0]} is not the relative expression's own date`);
+        continue;
+      }
+      const origin = Date.parse(source.at);
+      const when = Date.parse(newDates[0]!);
+      if ((!thisWeek && when < origin - 86_400_000) || when > origin + RELATIVE_HORIZON_DAYS * 86_400_000) {
+        refuse(`${newDates[0]} is not within ${RELATIVE_HORIZON_DAYS} days of the line's own date`);
         continue;
       }
     }
