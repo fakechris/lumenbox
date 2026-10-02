@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: storage
-     updated: 2026-09-30
+     updated: 2026-10-01
 -->
 # Data
 
@@ -457,10 +457,10 @@ thirteenth that does not.
 
 | kind | what compaction may do | files |
 |---|---|---|
-| `record` | move a line to an archive, never lose one | `ingress.jsonl`, `turns.jsonl` |
+| `record` | move a line to an archive, never lose one | `ingress.jsonl`, `turns.jsonl`, `policy.jsonl` |
 | `queue` | drop what is settled; that was its job | `inbox.jsonl`, `deliveries.jsonl`, `turn-steps.jsonl` |
 | `state` | keep one line per key; older ones are noise | `conversations`, `sent-roots`, `cards`, `claims`, `tasks` |
-| `feed` | let old lines fall off the back | `usage.jsonl`, `activity`, `policy` |
+| `feed` | let old lines fall off the back | `usage.jsonl`, `activity` |
 
 A `record` archives to `<name>.<yyyy-mm>.jsonl` beside itself, append-only and never compacted in
 turn. Two things had been quietly losing history. The catch-up sweep asks whether a message was
@@ -471,10 +471,16 @@ ended; after five thousand turns all of it went, including the month an audit ex
 about. The archives are read on demand — `Ingress.list({ archived: true })`, `decidedAlready`, and
 the audit export — so ordinary reads stay as cheap as they were.
 
-`policy` is labelled `feed` with a note rather than a verdict: a grant given once and used once is
-an audit fact, and past twenty thousand events it goes. Standing grants are re-stated on compaction
-precisely because losing those would change behaviour, which is the argument for calling the rest a
-record too. Left as it is on purpose, flagged so the next person deciding it is deciding.
+`policy.jsonl` became a `record` in INV-812. A grant given once and used once is an audit fact, and
+as a `feed` it went past twenty thousand events. Compaction now moves everything it does not keep
+live into the archive. It still re-states standing grants ahead of the live tail, because the gate
+reads only the live file, and a standing grant that fell into the archive would quietly turn
+"always" back into "ask me". The audit export reads it, archives included, with
+`delegate-calls.jsonl` (what a delegated engine called through the MCP face).
+
+A decision line (`approval-granted`, `-denied`, `-used`) names only the approval it answers, and
+a revocation only its fingerprint. So the export takes a box's decisions by matching the box's own
+requests, not by agent.
 
 ### 2.4 `usage.jsonl`
 

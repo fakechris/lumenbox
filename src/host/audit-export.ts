@@ -193,6 +193,37 @@ export function exportAudit(options: ExportOptions): ExportManifest {
   // Both of these are `record` ledgers, so their archives are read as well as their live
   // files — before INV-634 a compaction had already emptied the month being exported.
   write("ingress.jsonl", select(readRecord(join(options.home, "ingress.jsonl")), () => true));
+  // Who asked for what and who decided it (policy.ts, INV-812), archives included. A request
+  // names its agent; a grant, a denial or a use names only the approval's id, and a revocation
+  // only its fingerprint — so those are the box's when the request they answer is. The rules in
+  // force are the installation's, and every box's audit is read against them.
+  const policyLines = readRecord(join(options.home, "policy.jsonl"));
+  const ourApprovals = new Set<string>();
+  const ourFingerprints = new Set<string>();
+  for (const line of policyLines) {
+    try {
+      const record = JSON.parse(line) as Record<string, unknown>;
+      if (!byAgentId(record)) continue;
+      if (typeof record.id === "string") ourApprovals.add(record.id);
+      if (typeof record.fingerprint === "string") ourFingerprints.add(record.fingerprint);
+    } catch {
+      // An unreadable line is counted by select, which skips it the same way.
+    }
+  }
+  write(
+    "policy.jsonl",
+    select(
+      policyLines,
+      record =>
+        byAgentId(record) ||
+        (typeof record.id === "string" && ourApprovals.has(record.id)) ||
+        (typeof record.fingerprint === "string" && ourFingerprints.has(record.fingerprint)) ||
+        record.kind === "rules-loaded"
+    )
+  );
+  // What a delegated engine called through the MCP face (mcp-face.ts): each call names the agent
+  // whose job it was.
+  write("delegate-calls.jsonl", select(readRecord(join(options.home, "delegate-calls.jsonl")), byAgentId));
   // What people said through the doors, as they said it (messages.ts, INV-613). A message
   // names no agent — the door decides that later — so it is the box's when the
   // conversation it went into belongs to one of the box's agents.

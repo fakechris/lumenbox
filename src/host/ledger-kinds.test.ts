@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Ingress, LEDGER_KIND as INGRESS_KIND } from "../channels/ingress.ts";
 import { TurnLedger, LEDGER_KIND as TURNS_KIND } from "./resume.ts";
+import { PolicyGate, LEDGER_KIND as POLICY_KIND } from "./policy.ts";
 import { archivedLines, archivePathFor, archivePaths, archiveSettled } from "./jsonl.ts";
 
 function dir(): { path: string; cleanup: () => void } {
@@ -183,6 +184,50 @@ test("the archived-decision index is rebuilt when an archive grows, not cached i
     assert.equal(ingress.decidedAlready("second-0"), true, "the index noticed the archive grew");
     assert.equal(ingress.decidedAlready("first-0"), true, "and did not forget the first batch");
     assert.equal(ingress.decidedAlready("never-arrived"), false);
+  } finally {
+    cleanup();
+  }
+});
+
+test("the policy log keeps every approval across a compaction: old lines move to the archive, standing grants stay live (INV-812)", () => {
+  const { path, cleanup } = dir();
+  try {
+    assert.equal(POLICY_KIND, "record");
+    const ledger = join(path, "policy.jsonl");
+    const line = (o: unknown) => JSON.stringify(o);
+    const old = [
+      line({ at: "2026-09-01T00:00:00Z", kind: "approval-requested", id: "ap-1", fingerprint: "fp-1", agentId: "a1", description: "deploy" }),
+      line({ at: "2026-09-01T00:00:01Z", kind: "approval-granted", id: "ap-1", by: "chris" }),
+      line({ at: "2026-09-01T00:00:02Z", kind: "approval-used", id: "ap-1" }),
+      line({ at: "2026-09-01T00:00:03Z", kind: "approval-granted-always", id: "ap-2", by: "chris", fingerprint: "fp-2", description: "read the wiki", agentId: "a1" }),
+    ];
+    // Past the 20,000-event threshold, so opening the gate compacts it.
+    const filler = Array.from({ length: 20_100 }, (_, n) => line({ at: "2026-09-02T00:00:00Z", kind: "checked", request: "model-call", agentId: "a1", allowed: true, n }));
+    writeFileSync(ledger, `${[...old, ...filler].join("\n")}\n`);
+    new PolicyGate({
+      path: ledger,
+      limits: { budgetWindowHours: 24, wakesPerWindow: 30, wakeWindowMinutes: 10, approvalRequiredTools: [], approvalRequiredCommands: [] },
+    });
+
+    const live = readFileSync(ledger, "utf8").trim().split("\n");
+    assert.ok(live.length < 6_000, `compacted: ${live.length} live lines`);
+    // The approval and who granted it are still there to read — in the archive, not gone.
+    const archived = archivedLines(ledger);
+    for (const event of old.slice(0, 3)) assert.ok(archived.includes(event), `archived: ${event}`);
+    assert.equal(archived.length + live.length - 1, old.length + filler.length, "every line is live or archived; the standing grant is re-stated once");
+    // And a standing grant is still live, so the gate still honours it.
+    assert.ok(live.some(entry => entry.includes('"approval-granted-always"') && entry.includes("fp-2")));
+
+    // A second compaction: the re-stated grant leaves the live file again, but is not archived
+    // a second time — the archive holds the grant once, as the person gave it.
+    writeFileSync(ledger, `${[...live, ...filler].join("\n")}\n`);
+    new PolicyGate({
+      path: ledger,
+      limits: { budgetWindowHours: 24, wakesPerWindow: 30, wakeWindowMinutes: 10, approvalRequiredTools: [], approvalRequiredCommands: [] },
+    });
+    const grants = archivedLines(ledger).filter(entry => entry.includes('"approval-granted-always"') && entry.includes("fp-2"));
+    assert.equal(grants.length, 1);
+    assert.match(grants[0]!, /"by":"chris"/);
   } finally {
     cleanup();
   }
