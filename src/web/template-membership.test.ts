@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { createServer } from "node:http";
 import { AgentRegistry } from "../agents/registry.ts";
 import { Principals } from "../host/principals.ts";
 import { catalogTemplate } from "../host/template.ts";
@@ -75,6 +76,53 @@ test("template reads and installation respect both source and target box members
   } finally {
     stop?.();
     if (previous === undefined) delete process.env.AGENTBOX_HOME; else process.env.AGENTBOX_HOME = previous;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+
+test("a remote template fetch cannot outlive revocation of target membership", { timeout: 10000 }, async () => {
+  const home = mkdtempSync(join(tmpdir(), "template-revocation-"));
+  const previous = { home: process.env.AGENTBOX_HOME, control: process.env.AGENTBOX_CONTROL_URL, token: process.env.BOXD_TOKEN };
+  process.env.AGENTBOX_HOME = home;
+  process.env.BOXD_TOKEN = "fixture-box-token";
+  let release: (() => void) | undefined;
+  let entered: (() => void) | undefined;
+  const arrived = new Promise<void>(resolve => { entered = resolve; });
+  const template = catalogTemplate(CATALOG_EXPERTS[0]!);
+  const control = createServer((_req, res) => {
+    release = () => { if (res.writableEnded) return; res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ document: JSON.stringify(template) })); };
+    entered!();
+  });
+  await new Promise<void>(resolve => control.listen(0, "127.0.0.1", resolve));
+  const address = control.address();
+  assert.ok(address && typeof address === "object");
+  process.env.AGENTBOX_CONTROL_URL = `http://127.0.0.1:${address.port}`;
+  let stop: (() => void) | undefined;
+  try {
+    new Principals().save([{ id: "alice", name: "Alice", role: "driver", identities: ["web:alice"] }]);
+    const registry = new AgentRegistry(join(home, "agents"));
+    registry.attachBox({ id: "target", name: "Target", kind: "attached", members: ["alice"], displayFloor: 1, workDir: "/work", createdAt: "2026-10-02" });
+    let base = "";
+    stop = await startWebServer({ port: 0, host: "127.0.0.1", token: "fixture", useBox: false, onLog: () => {}, onReady: url => { base = url; } });
+    const before = new AgentRegistry(join(home, "agents")).list().length;
+    const pending = fetch(base + "/api/templates/import", { method: "POST", headers: {
+      authorization: "Bearer fixture", "content-type": "application/json", "x-agentbox-user": "web:alice", "x-agentbox-role": "member",
+    }, body: JSON.stringify({ boxId: "target", shareId: "a".repeat(21) }) });
+    await arrived;
+    const revoked = await fetch(base + "/api/boxes/update", { method: "POST", headers: { authorization: "Bearer fixture", "content-type": "application/json" }, body: JSON.stringify({ name: "Target", members: [] }) });
+    assert.equal(revoked.status, 200);
+    release!();
+    const result = await pending;
+    assert.equal(result.status, 403);
+    await result.text();
+    assert.equal(new AgentRegistry(join(home, "agents")).list().length, before, "no agent created after revocation during fetch");
+  } finally {
+    release?.(); stop?.(); control.closeAllConnections();
+    await new Promise<void>(resolve => control.close(() => resolve()));
+    for (const [key, value] of Object.entries({ AGENTBOX_HOME: previous.home, AGENTBOX_CONTROL_URL: previous.control, BOXD_TOKEN: previous.token })) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
     rmSync(home, { recursive: true, force: true });
   }
 });
