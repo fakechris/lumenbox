@@ -308,6 +308,7 @@ await check("the box can diagnose itself", async () => {
   const healthy = await box.exec("box-doctor");
   assert(healthy.exit_code === 0, `a healthy box failed its own check:\n${healthy.stdout}`);
   assert(/SUMMARY \d+ passed, 0 failed/.test(healthy.stdout), healthy.stdout);
+  assert(/PASS documents:.*docx\/xlsx\/pptx\/pdf/.test(healthy.stdout), healthy.stdout);
 
   // Broken and checked in one command, because the supervisor repairs things within a tick.
   const broken = await box.exec(

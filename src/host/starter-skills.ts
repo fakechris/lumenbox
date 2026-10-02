@@ -549,6 +549,33 @@ scope: global
 The script that wrote a file ran without an error. That says nothing about whether the
 file is right. Check the file, not the code that made it.
 
+## Writers available in the box
+
+Use Python 3 with the preinstalled libraries. Do not install dependencies into a running
+box or rename markdown to an Office extension. If an import fails, run \`box-doctor\`
+and report that the box image needs rebuilding/upgrading.
+
+- **Word (.docx):** \`from docx import Document\`; save, then reopen with
+  \`Document(path)\` and check paragraphs, tables and images against the request.
+- **Excel (.xlsx):** \`from openpyxl import Workbook, load_workbook\`; reopen with
+  \`load_workbook(path)\` and check sheets, cell values, formulas and formats.
+  openpyxl does not calculate formulas; do not claim cached results were recalculated.
+- **PowerPoint (.pptx):** \`from pptx import Presentation\`; reopen with
+  \`Presentation(path)\` and check slide order, text, pictures and tables.
+- **PDF:** \`from reportlab.pdfgen import canvas\` (or ReportLab Platypus for flowing
+  text). Read back with \`pdftotext\`; render pages with \`pdftoppm\` and inspect them.
+  Choose fonts covering the requested language; successful text extraction alone does
+  not prove glyphs or layout are correct.
+- **Images/charts:** Pillow (\`from PIL import Image\`) and matplotlib (use the
+  \`Agg\` backend for headless rendering). Reopen the saved image and inspect it.
+
+LibreOffice is not bundled. Office-library read-back checks content and structure, not
+Word/PowerPoint's rendered layout. When you cannot render and inspect an Office file,
+say that visual layout remains unverified; do not claim a PDF conversion happened.
+\`box-doctor\` checks library health with sample files, not your actual deliverable.
+
+## Check your actual output
+
 1. **Open what you made, fresh.** Read the file back from disk the way the person will
    get it: unzip a docx/xlsx/pptx and read the text, open a PDF and read a page, render a
    chart or slide to PNG and look at it. Do not reason from what the code should have

@@ -299,6 +299,18 @@ HEALTHCHECK --interval=10s --timeout=8s --start-period=60s --retries=6 \
 RUN apt-get update && apt-get install -y --no-install-recommends python3-xlib \
     && rm -rf /var/lib/apt/lists/*
 
+# Real Office/PDF writers, including their pinned transitive dependencies. Install into
+# Debian's local Python directory: both ordinary python3 and system desktop scripts keep
+# their existing interpreter and apt-provided gi/Xlib. The build-only venv leaves no pip
+# cache or second runtime behind. No LibreOffice here: this layer generates and reads
+# documents; Office-to-PDF layout rendering is a separate capability.
+COPY requirements.txt /opt/box-checks/requirements.txt
+RUN python3 -m venv /tmp/document-deps \
+    && /tmp/document-deps/bin/pip install --no-cache-dir --no-compile --only-binary=:all: \
+      --target="$(python3 -c 'import sysconfig; print(sysconfig.get_path("purelib"))')" \
+      -r /opt/box-checks/requirements.txt \
+    && rm -rf /tmp/document-deps
+
 # ── build-context payloads ───────────────────────────────────────────────────────────
 #
 # Everything COPYed from the build context lives down here, after every apt layer, for one
@@ -329,6 +341,8 @@ COPY box-chrome /usr/local/bin/box-chrome
 COPY box-ax /usr/local/bin/box-ax
 COPY box-clip /usr/local/bin/box-clip
 COPY box-doctor /usr/local/bin/box-doctor
+COPY check-documents.py /opt/box-checks/documents.py
+COPY check-documents.cjs /opt/box-checks/documents.cjs
 COPY box-init /usr/local/bin/box-init
 COPY box-healthcheck /usr/local/bin/box-healthcheck
 COPY wait-compositor /usr/local/bin/wait-compositor
