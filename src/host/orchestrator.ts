@@ -2038,13 +2038,14 @@ export class Orchestrator {
       // older way. One parked on a person's approval waits for the answer, however long.
       const steps = this.steps?.stepsOf(turn.id);
       if (steps?.known === true) {
-        const waiting = steps.open.find(step => step.approvalId !== undefined);
-        if (waiting !== undefined && this.policy.pending().some(item => item.id === waiting.approvalId)) {
+        const pending = new Set(this.policy.pending().map(item => item.id));
+        const waiting = steps.open.find(step => step.approvalId !== undefined && pending.has(step.approvalId));
+        if (waiting !== undefined) {
           this.parked.set(waiting.approvalId!, turn);
           parked += 1;
           continue;
         }
-        this.continueTurn(turn, waiting !== undefined ? { id: waiting.approvalId!, how: "gone" } : undefined);
+        this.continueTurn(turn);
         resumed += 1;
         continue;
       }

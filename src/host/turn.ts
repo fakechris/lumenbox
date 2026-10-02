@@ -1735,10 +1735,17 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     const open = new Map((deps.steps?.stepsOf(turnId).open ?? []).map(step => [step.toolUseId, step] as const));
     /** Steps answered by a result below, so the notice further down does not repeat them. */
     const answeredHere = new Set<string>();
-    /** Steps the current gate put in front of a person: open until the answer lands. */
-    const stillWaiting = new Set<string>();
-    const approvalHow = (approvalId: string): "allowed" | "refused" | "gone" =>
-      deps.resumeOf?.approval?.id === approvalId ? deps.resumeOf!.approval!.how : "gone";
+    /** Existing approvals and any new asks stay open until their own answer lands. */
+    const pendingApprovals = new Set(deps.policy?.pending().map(approval => approval.id) ?? []);
+    const approvalHow = (approvalId: string): "allowed" | "refused" | "gone" | "pending" =>
+      deps.resumeOf?.approval?.id === approvalId
+        ? deps.resumeOf.approval.how
+        : pendingApprovals.has(approvalId) ? "pending" : "gone";
+    const stillWaiting = new Set(
+      [...open.values()]
+        .filter(step => step.approvalId !== undefined && approvalHow(step.approvalId) === "pending")
+        .map(step => step.toolUseId)
+    );
     if ("kind" in last && last.kind === "blocks") {
       const calls = last.blocks.filter(
         (block): block is Anthropic.ToolUseBlockParam => (block as { type?: string }).type === "tool_use"
@@ -1817,7 +1824,7 @@ ${outcome.text}`;
     // the step stays open until the person answers, the turn parks on it, and what they
     // said has to reach the model somewhere.
     const told = [...open.values()]
-      .filter(step => step.approvalId !== undefined && !answeredHere.has(step.toolUseId))
+      .filter(step => step.approvalId !== undefined && !answeredHere.has(step.toolUseId) && !stillWaiting.has(step.toolUseId))
       .map(step => approvalOutcomeResult(step.name, approvalHow(step.approvalId!)));
     if (told.length > 0) {
       const entry = {
@@ -1831,7 +1838,7 @@ ${outcome.text}`;
     }
     // Whatever the transcript now says, these steps are over: either answered above, or
     // their result was on disk already and only the `settled` line was lost. Except the
-    // ones the gate just handed to a person: those close when the person answers.
+    // ones still waiting on a person: those close when their own answer lands.
     for (const step of open.values()) {
       if (!stillWaiting.has(step.toolUseId)) deps.steps?.settled(turnId, step.toolUseId);
     }

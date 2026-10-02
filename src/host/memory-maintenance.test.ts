@@ -309,3 +309,68 @@ test("the pass runs on the condense cadence: after MAINTAIN_EVERY episodes, on t
   await rememberer.settle("ada");
   assert.equal(prompts.filter(isMaintenance).length, 1, "one more episode is below the cadence");
 });
+
+for (const text of ["never deploy on Friday", "周五禁止部署", "星期五禁止部署"]) {
+  test(`INV-946: a bare weekday cannot retire or rewrite a standing constraint: ${text}`, () => {
+    const records = [fact(text, 0, { at: "2026-09-23T12:00:00Z" })];
+    const retire = proposal(records, "retire", [text], { expiredOn: "2026-09-25" });
+    const plan = verifyMaintenanceProposals([retire], snapshotForMaintenance(records), records, { now: NOW });
+    assert.equal(plan.changes.length, 0);
+    assert.equal(plan.dropped.length, 1);
+    assert.deepEqual(dedupe([...records, ...recordsOfPlan(plan)]).map(record => record.text), [text]);
+    const rewrite = proposal(records, "rewrite", [text], { text: text.replace(/Friday|星期五|周五/, "2026-09-25") });
+    assert.equal(verifyMaintenanceProposals([rewrite], snapshotForMaintenance(records), records, { now: NOW }).changes.length, 0);
+  });
+}
+
+for (const expression of ["this Tuesday", "本周二", "这周二"]) {
+  test(`INV-947: ${expression} belongs to the record's Monday-based UTC week`, () => {
+    for (const [origin, expected, wrong] of [
+      ["2026-09-23T12:00:00Z", "2026-09-22", "2026-09-29"],
+      ["2026-09-22T12:00:00Z", "2026-09-22", "2026-09-29"],
+      ["2026-10-01T12:00:00Z", "2026-09-29", "2026-10-06"],
+      ["2027-01-01T12:00:00Z", "2026-12-29", "2027-01-05"],
+      ["2026-09-27T12:00:00Z", "2026-09-22", "2026-09-29"],
+    ]) {
+      const text = `review: ${expression}`;
+      const records = [fact(text, 0, { at: origin })];
+      const snapshot = snapshotForMaintenance(records);
+      // Both dates have passed: rejection must come from source binding, not the clock.
+      const now = new Date("2027-02-01T12:00:00Z");
+      const good = verifyMaintenanceProposals([proposal(records, "retire", [text], { expiredOn: expected })], snapshot, records, { now });
+      assert.equal(good.changes.length, 1, `${origin}: ${JSON.stringify(good.dropped)}`);
+      const bad = verifyMaintenanceProposals([proposal(records, "retire", [text], { expiredOn: wrong })], snapshot, records, { now });
+      assert.equal(bad.changes.length, 0, `${origin}: next week is not this week`);
+      const rewrite = (date: string) => verifyMaintenanceProposals(
+        [proposal(records, "rewrite", [text], { text: `review: ${date}` })], snapshot, records, { now }
+      );
+      assert.equal(rewrite(expected!).changes.length, 1, `${origin}: this-week rewrite resolves the same date`);
+      assert.equal(rewrite(wrong!).changes.length, 0, `${origin}: a rewrite cannot move this week into next week`);
+    }
+  });
+}
+
+test("INV-947: next weekdays retain their future alternatives, separate from this week", () => {
+  for (const expression of ["next Tuesday", "下周二"]) {
+    const text = `review: ${expression}`;
+    const records = [fact(text, 0, { at: "2026-09-23T12:00:00Z" })];
+    for (const [expiredOn, accepted] of [["2026-09-22", false], ["2026-09-29", true], ["2026-10-06", true]] as const) {
+      const plan = verifyMaintenanceProposals([proposal(records, "retire", [text], { expiredOn })], snapshotForMaintenance(records), records, { now: new Date("2026-10-10T12:00:00Z") });
+      assert.equal(plan.changes.length, accepted ? 1 : 0, `${expression}: ${expiredOn}`);
+    }
+  }
+});
+
+
+test("INV-947: this-week rewrite does not loosen another expression's date window or change other words", () => {
+  const records = [fact("review this Tuesday then deploy tomorrow", 0, { at: "2026-09-25T12:00:00Z" })];
+  const text = records[0]!.text;
+  for (const replacement of [
+    "review this Tuesday then deploy 2026-09-22",
+    "review 2026-09-22 then skip tomorrow",
+    "review 2026-09-15 then deploy tomorrow",
+  ]) {
+    const plan = verifyMaintenanceProposals([proposal(records, "rewrite", [text], { text: replacement })], snapshotForMaintenance(records), records, { now: NOW });
+    assert.equal(plan.changes.length, 0, replacement);
+  }
+});
