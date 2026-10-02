@@ -385,6 +385,10 @@ function readInvolute(value: unknown, warn: (message: string) => void): Agentbox
   };
 }
 
+export function isPersonalBoxQuota(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 99;
+}
+
 function readQuota(value: unknown, name: string, warn: (message: string) => void): number | undefined {
   if (value === undefined) return undefined;
   if (!isPersonalBoxQuota(value)) {
