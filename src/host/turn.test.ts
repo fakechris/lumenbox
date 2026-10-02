@@ -2628,9 +2628,14 @@ test("the transcript records when a tool batch started and when its results were
   try {
     const ada = registry.create({ name: "Ada" });
     const bus = new AgentBus(registry, async () => {});
+    // When the tool itself ran, by the same clock the transcript stamps with (INV-745): the
+    // stamps must bracket it, which needs no guess at how long a timer really took.
+    const ran: { start?: number; end?: number } = {};
     const slowBox = {
       computer: async () => {
+        ran.start = Date.now();
         await new Promise(resolve => setTimeout(resolve, 25));
+        ran.end = Date.now();
         return {
           success: true,
           screenshot: Buffer.from("fake-webp-bytes").toString("base64"),
@@ -2660,11 +2665,9 @@ test("the transcript records when a tool batch started and when its results were
     const blocks = transcript.find(entry => "kind" in entry && entry.kind === "blocks");
     const results = transcript.find(entry => "kind" in entry && entry.kind === "results");
     assert.ok(blocks && results, "the exchange must be persisted");
-    const elapsed = Date.parse(results.at!) - Date.parse(blocks.at!);
-    assert.ok(
-      elapsed >= 20,
-      `results.at - blocks.at should cover the tool's ~25ms run, got ${elapsed}ms`
-    );
+    assert.ok(ran.end! > ran.start!, "the tool took time, so a zero duration would be visible");
+    assert.ok(Date.parse(blocks.at!) <= ran.start!, `blocks.at ${blocks.at} is after the tool started`);
+    assert.ok(Date.parse(results.at!) >= ran.end!, `results.at ${results.at} is before the tool finished`);
   } finally {
     cleanup();
   }
@@ -3014,17 +3017,20 @@ test("reads asked for together run together; a shell call between them runs alon
   try {
     const ada = registry.create({ name: "Ada" });
     const bus = new AgentBus(registry, async () => {});
-    const timeline: { name: string; at: number }[] = [];
-    const t0 = Date.now();
+    // Order, not wall-clock time (INV-745): a timer may fire a millisecond before Date.now() says
+    // it should, so "20ms later" flaked on CI. Each call logs when it starts and when it ends.
+    const timeline: string[] = [];
     const box = {
       readFile: async (path: string) => {
-        timeline.push({ name: `read ${path}`, at: Date.now() - t0 });
-        await new Promise(resolve => setTimeout(resolve, 80));
+        timeline.push(`start read ${path}`);
+        await new Promise(resolve => setTimeout(resolve, 20));
+        timeline.push(`end read ${path}`);
         return { content: `contents of ${path}` };
       },
       exec: async (command: string) => {
-        timeline.push({ name: `exec ${command}`, at: Date.now() - t0 });
-        await new Promise(resolve => setTimeout(resolve, 20));
+        timeline.push(`start exec ${command}`);
+        await new Promise(resolve => setTimeout(resolve, 5));
+        timeline.push(`end exec ${command}`);
         return { stdout: "ran", stderr: "", exit_code: 0, timed_out: false };
       },
     } as unknown as BoxClient;
@@ -3045,22 +3051,23 @@ test("reads asked for together run together; a shell call between them runs alon
           : message([textBlock("read them all")]),
       { capture }
     );
-    const started = Date.now();
     await runTurn(
       ada,
       [{ id: "m-par", fromId: "user", fromName: "user", text: "read a, b, c, then d", priority: false, receivedAt: "" }],
       new AbortController().signal,
       { client, registry, bus, box, resolution: undefined }
     );
-    const elapsed = Date.now() - started;
-    // Three reads in parallel (~80ms), then the shell (~20ms), then one read (~80ms): well
-    // under the ~340ms a serial loop would take.
-    assert.ok(elapsed < 300, `took ${elapsed}ms; a serial loop would take ~340ms`);
-    // The shell ran only after the first three reads had all *started*, and /d only after
-    // the shell finished.
-    const startOf = (name: string) => timeline.find(entry => entry.name === name)!.at;
-    assert.ok(startOf("exec touch x") >= Math.max(startOf("read /a"), startOf("read /b"), startOf("read /c")));
-    assert.ok(startOf("read /d") >= startOf("exec touch x") + 20);
+    const at = (event: string) => {
+      const index = timeline.indexOf(event);
+      assert.ok(index >= 0, `${event} never happened: ${timeline.join(", ")}`);
+      return index;
+    };
+    const firstThree = ["/a", "/b", "/c"];
+    // Together: all three reads started before any of them finished.
+    assert.ok(Math.max(...firstThree.map(path => at(`start read ${path}`))) < Math.min(...firstThree.map(path => at(`end read ${path}`))));
+    // The shell alone: after all three reads had finished, and /d only after the shell had.
+    assert.ok(at("start exec touch x") > Math.max(...firstThree.map(path => at(`end read ${path}`))));
+    assert.ok(at("start read /d") > at("end exec touch x"));
     // Results come back in the order the model asked, regardless of finish order.
     const results = capture.params[1]?.messages.at(-1)?.content as { tool_use_id: string }[];
     assert.deepEqual(results.map(block => block.tool_use_id), ["r1", "r2", "r3", "s1", "r4"]);
