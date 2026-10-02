@@ -6,6 +6,7 @@
  * orchestration you see at runtime is emergent, not encoded.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { bindingsOf, CommitmentLedger, describeGaps, parseCommitments, priorCommitmentsPrompt, reconcileCommitments } from "./commitments.ts";
 import { finishRoutineRun, PendingAttachments, RoutineResultLedger, routineResolveMode, type DeliveryOutcome } from "./routine-resolve.ts";
 import { learningsDir } from "./learnings.ts";
@@ -529,8 +530,13 @@ export class Orchestrator {
    */
   private readonly rememberer: Rememberer;
 
-  /** Who last drove each agent, for attributing what it learns. */
-  private readonly callers = new Map<string, { userId?: string }>();
+  /** Authority and attribution belong to this execution, including work across awaits. */
+  private readonly executionCaller = new AsyncLocalStorage<{ agentId: string; caller?: { userId: string } }>();
+
+  private callerFor(agentId: string): { userId: string } | undefined {
+    const execution = this.executionCaller.getStore();
+    return execution?.agentId === agentId ? execution.caller : undefined;
+  }
 
   /**
    * Skills as they were last read from the box.
@@ -777,8 +783,8 @@ export class Orchestrator {
         source,
         attempt: task.description ?? task.title,
         detail,
-        ...(this.callers.get(task.assigneeId)?.userId !== undefined
-          ? { principal: this.callers.get(task.assigneeId)!.userId! }
+        ...(this.callerFor(task.assigneeId)?.userId !== undefined
+          ? { principal: this.callerFor(task.assigneeId)!.userId! }
           : {}),
       })
       .catch(() => {
@@ -1030,18 +1036,27 @@ export class Orchestrator {
       usage: () => this.usage,
       log: line => console.error(`[model-relay] ${line}`),
     });
+    const inbox = options.inbox === null ? undefined : (options.inbox ??
+      new Inbox<InboundMessage>(inboxPath(), line => console.error(`[inbox] ${line}`)));
+    // A crash between turn.begin and inbox.start leaves both records. The turn owns
+    // these exact messages; remove the replay copy before any startup sweep closes it.
+    const ownershipKey = (agentId: string, conversation: string | undefined, messageId: string) =>
+      JSON.stringify([agentId, conversation ?? MAIN_CONVERSATION, messageId]);
+    const ownedMessages = new Set((this.turns?.interrupted({ includeForks: true }) ?? [])
+      .flatMap(turn => (turn.causedBy ?? []).map(id => ownershipKey(turn.agentId, turn.conversation, id))));
+    inbox?.start(inbox.pending().filter(item =>
+      ownedMessages.has(ownershipKey(item.agentId, item.message.conversation, item.message.id))
+    ).map(item => item.seq));
     this.bus = new AgentBus(
       this.registry,
-      (agent, inbound, signal, conversation) => this.executeTurn(agent, inbound, signal, conversation),
+      (agent, inbound, signal, conversation, acknowledge) => this.executeTurn(agent, inbound, signal, conversation, acknowledge),
       event => {
         options.onBusEvent?.(event);
         // A turn ending is what lets a goal consider its next continuation (INV-770).
         if (event.type === "turn_finished") this.goalLoop?.onTurnFinished(event.agentId);
       },
-      options.inbox === null
-        ? undefined
-        : (options.inbox ??
-          new Inbox<InboundMessage>(inboxPath(), line => console.error(`[inbox] ${line}`)))
+      inbox,
+      true
     );
     this.goalLoop = this.tasks === undefined ? undefined : new GoalLoop({
       tasks: this.tasks,
@@ -1777,7 +1792,22 @@ export class Orchestrator {
     agent: AgentRecord,
     inbound: readonly InboundMessage[],
     signal: AbortSignal,
-    conversation: string = MAIN_CONVERSATION
+    conversation: string = MAIN_CONVERSATION,
+    acknowledge?: () => void
+  ): Promise<void> {
+    const principalId = inbound[0]?.principalId;
+    return this.executionCaller.run({
+      agentId: agent.id,
+      ...(principalId !== undefined ? { caller: { userId: principalId } } : {}),
+    }, () => this.executeContextTurn(agent, inbound, signal, conversation, acknowledge));
+  }
+
+  private async executeContextTurn(
+    agent: AgentRecord,
+    inbound: readonly InboundMessage[],
+    signal: AbortSignal,
+    conversation: string,
+    acknowledge?: () => void
   ): Promise<void> {
     // Taken, not read: a resumption marker belongs to exactly one turn. Leaving it in place would
     // make every later turn for this agent look like another attempt at the interrupted one, and
@@ -1807,6 +1837,7 @@ export class Orchestrator {
     const runtime = this.runtimeForAgent(agent);
 
     return runTurn(agent, inbound, signal, {
+      onReady: acknowledge,
       displayIndex,
       ensureDesktop: async () => {
         if (await this.ensureAgentDesktop(agent.id) === undefined) throw new Error("Could not start this agent's desktop. Check the box connection and retry.");
@@ -1814,11 +1845,11 @@ export class Orchestrator {
       boxOwner: this.registry.boxOwnerTokenFor(agent.id),
       usage: this.usage,
       policy: this.policy,
-      caller: this.callers.get(agent.id),
+      caller: this.callerFor(agent.id),
       // The name as the roster shows it, so a rule can be written "principal: Chris"
       // rather than with a uuid nobody can read (INV-156).
-      ...(this.options.principalName !== undefined && this.callers.get(agent.id)?.userId !== undefined
-        ? { callerName: this.options.principalName(this.callers.get(agent.id)!.userId!) }
+      ...(this.options.principalName !== undefined && this.callerFor(agent.id)?.userId !== undefined
+        ? { callerName: this.options.principalName(this.callerFor(agent.id)!.userId!) }
         : {}),
       skills,
       client: runtime.client,
@@ -1896,8 +1927,8 @@ export class Orchestrator {
               source: "loop",
               attempt: inbound.map(message => message.text).join("\n").slice(0, 2_000),
               detail: event.reason,
-              ...(this.callers.get(agent.id)?.userId !== undefined
-                ? { principal: this.callers.get(agent.id)!.userId! }
+              ...(this.callerFor(agent.id)?.userId !== undefined
+                ? { principal: this.callerFor(agent.id)!.userId! }
                 : {}),
             })
             .catch(() => {});
@@ -2136,10 +2167,10 @@ export class Orchestrator {
         provider: profile.label,
         model: profile.model,
         usage: response.usage,
-        // Whoever this agent is currently working for. The same cache the turn reads its
-        // caller from, so a selection made for a person's turn bills to that person.
-        ...(this.callers.get(agent.id)?.userId !== undefined
-          ? { principal: this.callers.get(agent.id)!.userId! }
+        // The execution context survives the provider await; another conversation
+        // cannot change who pays for this selection.
+        ...(this.callerFor(agent.id)?.userId !== undefined
+          ? { principal: this.callerFor(agent.id)!.userId! }
           : {}),
       });
       return response.content
@@ -2226,20 +2257,10 @@ export class Orchestrator {
     const agent = this.registry.resolve(agentIdOrName);
     const conversation = options.conversation ?? MAIN_CONVERSATION;
     return this.registry.withContext(agent.id, conversation, async () => {
-    // Remembered for the turn, so a memory kept during it records who it is about. Per agent because
-    // two people can be driving two agents at once; overwritten on each prompt because the most
-    // recent person to speak to *this* agent is the one its memories are about.
-    //
-    // Cleared — not merely overwritten — when there is no caller. A scheduled run, a
-    // teammate's wake and an audit turn all arrive with none, and the old code left the
-    // last human attached: their budget paid for it, their name went on whatever the turn
-    // remembered, and any standing `principal:*` grant they held was resolvable by an
-    // unattended task. Identity belongs to the turn, and an absent caller is a fact about
-    // this turn rather than a gap to fill from the previous one (audit 2026-09-01, #1).
-    if (caller?.userId !== undefined) this.callers.set(agent.id, caller);
-    else this.callers.delete(agent.id);
     this.bus.sendFromUser(agent.id, text, {
       conversation,
+      ...(caller?.userId !== undefined ? { principalId: caller.userId } : {}),
+      ...(options.synthetic === true ? { synthetic: true } : {}),
       ...(options.steerable === false ? { steerable: false } : {}),
       ...(options.lane !== undefined ? { lane: options.lane } : {}),
       ...(options.messageId !== undefined ? { messageId: options.messageId } : {}),

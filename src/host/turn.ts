@@ -469,6 +469,8 @@ export interface TurnDeps {
   operatorRules?: () => readonly string[];
   /** Who is driving, threaded through so a memory kept this turn records who it is about. */
   caller?: { userId?: string };
+  /** Transfer inbox custody only after the turn recovery record is persisted. */
+  onReady?: () => void;
   /** That person's name, for an operator rule written about them by name (INV-156). */
   callerName?: string;
   /**
@@ -2122,14 +2124,12 @@ ${outcome.text}`;
   let malformedRetries = 0;
   const chinese = readsAsChinese(inbound.map(message => message.text).join("\n"));
 
-  // The ledger opens here, not during setup. Its job is to record that a turn was *executing* — a
-  // model call, a tool — when the process died, so the next startup resumes it. Everything above is
-  // assembly that ran nothing; a death there loses no work (the accepted message is still in the
-  // inbox) and would otherwise have left an open ledger that read a setup failure as an interrupted
-  // turn and resumed one that had already reported failing.
+  // Setup still belongs to the inbox. Persist the message ids before acknowledging
+  // them, so startup can reconcile a crash between these two synchronous writes.
   deps.turns?.begin({
     id: turnId,
     agentId: agent.id,
+    causedBy: inbound.map(message => message.id),
     about: inbound.map(message => message.text).join(" / "),
     workId,
     ...(conversation !== MAIN_CONVERSATION ? { conversation } : {}),
@@ -2152,6 +2152,8 @@ ${outcome.text}`;
       shared: memoryProjectionManifest(sharedMemoryRecall),
     },
   });
+  // If this fails, leave the begin open: recovery, not a second inbox replay, owns it.
+  deps.onReady?.();
 
   try {
     // Continuations are a loop here rather than recursion inside runRounds: each pass gets a fresh

@@ -100,7 +100,7 @@ test("sequence numbers continue across a restart, so a new record cannot cancel 
   }
 });
 
-test("an unwritable inbox does not stop a message being delivered", () => {
+test("an unwritable inbox refuses admission rather than acknowledging volatile work", () => {
   const warnings: string[] = [];
   // A directory that does not exist and cannot be created, because its parent is a file.
   const { path, cleanup } = tempPath("afile");
@@ -110,11 +110,7 @@ test("an unwritable inbox does not stop a message being delivered", () => {
     const blocked = new Inbox<InboundMessage>(join(path, "nested", "inbox.jsonl"), line =>
       warnings.push(line)
     );
-    assert.equal(
-      blocked.admit("a", message("cannot be recorded")),
-      undefined,
-      "no handle, so the turn knows there is nothing to mark started"
-    );
+    assert.throws(() => blocked.admit("a", message("cannot be recorded")), /Cannot persist inbox admission/);
     assert.ok(warnings.some(line => /cannot write/.test(line)), "and it is said, not swallowed");
   } finally {
     cleanup();

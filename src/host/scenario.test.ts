@@ -35,6 +35,31 @@ import { join } from "node:path";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 
+test("two people in one conversation receive separate turns rather than sharing one principal's execution", async () => {
+  const opened: string[] = [];
+  const episode = await runEpisode({
+    team: [{ name: "Ada" }], says: [],
+    script: ({ messages }) => {
+      const content = messages.at(-1)?.content;
+      opened.push(typeof content === "string" ? content : JSON.stringify(content));
+      return { say: "Hello." };
+    },
+    drive: async ({ bus, frontId }) => {
+      bus.sendFromUser(frontId, "ALICE_REQUEST", { principalId: "alice" });
+      bus.sendFromUser(frontId, "BOB_REQUEST", { principalId: "bob" });
+      await bus.wake(frontId);
+    },
+  });
+  try {
+    assert.equal(episode.score.turns, 2);
+    assert.equal(opened.length, 2);
+    assert.match(opened[0]!, /ALICE_REQUEST/);
+    assert.doesNotMatch(opened[0]!, /BOB_REQUEST/);
+    assert.match(opened[1]!, /BOB_REQUEST/);
+    assert.doesNotMatch(opened[1]!, /ALICE_REQUEST/);
+  } finally { episode.cleanup(); }
+});
+
 test("/new through the chat door drops old narrative and plans, retains relevant facts, and preserves follow-up continuity", async () => {
   let calls = 0;
   const result = await runEpisode({

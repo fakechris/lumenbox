@@ -56,6 +56,7 @@ export const LEDGER_KIND: LedgerKind = "record";
 const COMPACT_AT = envNumber("AGENTBOX_TURN_LEDGER_COMPACT_AT", 5_000);
 
 interface BeginRecord {
+  causedBy?: string[];
   id: string;
   event: "begin";
   agentId: string;
@@ -175,6 +176,7 @@ type LedgerRecord = BeginRecord | EndRecord | CleanRecord;
 
 /** A turn that began and never ended. */
 export interface InterruptedTurn {
+  causedBy?: string[];
   id: string;
   agentId: string;
   at: string;
@@ -221,6 +223,7 @@ export class TurnLedger {
 
   /** Records that a turn is starting. Returns the handle its end is reported against. */
   begin(options: {
+    causedBy?: string[];
     agentId: string;
     about: string;
     id: string;
@@ -242,6 +245,7 @@ export class TurnLedger {
     const record: BeginRecord = {
       id: options.id,
       event: "begin",
+      ...(options.causedBy !== undefined ? { causedBy: [...options.causedBy] } : {}),
       agentId: options.agentId,
       at: (options.now ?? new Date()).toISOString(),
       ...(options.resumeOf !== undefined ? { resumeOf: options.resumeOf } : {}),
@@ -259,7 +263,7 @@ export class TurnLedger {
       ...(options.contextMode !== undefined ? { contextMode: options.contextMode } : {}),
       ...(options.memoryProjection !== undefined ? { memoryProjection: options.memoryProjection } : {}),
     };
-    this.append(record);
+    this.append(record, true);
     return record.id;
   }
 
@@ -352,6 +356,7 @@ export class TurnLedger {
       if (record.event === "begin") {
         open.set(record.id, {
           id: record.id,
+          ...(record.causedBy !== undefined ? { causedBy: record.causedBy } : {}),
           agentId: record.agentId,
           at: record.at,
           about: record.about,
@@ -376,7 +381,7 @@ export class TurnLedger {
     );
   }
 
-  private append(record: LedgerRecord): void {
+  private append(record: LedgerRecord, required = false): void {
     if (this.path === undefined) return;
     try {
       mkdirSync(dirname(this.path), { recursive: true });
@@ -387,6 +392,7 @@ export class TurnLedger {
       // was interrupted, which is the behaviour every turn had before this file existed.
       const detail = error instanceof Error ? error.message : String(error);
       this.onWarn(`turns: cannot write ${this.path} (${detail})`);
+      if (required) throw error;
     }
   }
 
