@@ -965,7 +965,7 @@ export interface BrowserRequest extends DisplayGuardProjection {
    */
   confirmed?: boolean;
   /** Host-held consent for a sensitive type; box rechecks target origin/category/value. */
-  inputApproval?: import("./sensitive-input.ts").SensitiveInput;
+  inputApproval?: import("./sensitive-input.ts").SensitiveInputApproval;
   /**
    * For `act`: what the page should look like afterwards (INV-399). Not met is a failure,
    * with what was expected and what was found — "did it change" becomes "did it become

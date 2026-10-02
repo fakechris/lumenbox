@@ -1,5 +1,5 @@
 import { isComputerWrite } from "../cua/execution.ts";
-import { inputValueHash, parseSensitiveInput } from "../protocol/sensitive-input.ts";
+import { SENSITIVE_INPUT_TTL_MS, inputValueHash, parseSensitiveInput } from "../protocol/sensitive-input.ts";
 /**
  * Tool definitions and dispatch.
  *
@@ -3994,7 +3994,7 @@ export async function dispatchTool(
             irreversible: finding,
             ...(sensitive !== undefined && context.turnId !== undefined && context.conversation !== undefined ? {
               inputScope: { ...sensitive, turnId: context.turnId, conversation: context.conversation,
-                principal: context.caller?.userId ?? "", target: `${context.agent.profile.boxId ?? context.registry.box.id}:${context.displayIndex ?? 1}` },
+                principal: context.caller?.userId ?? "", target: `${context.registry.boxOf(context.agent.id).id}:${context.displayIndex ?? 1}` },
             } : {}),
             principalId: context.caller?.userId,
           });
@@ -4002,7 +4002,7 @@ export async function dispatchTool(
             return { text: outcomeLine("refused", decision.reason), isError: true, ...(decision.approval !== undefined ? { approval: { id: decision.approval.id } } : {}) };
           }
           try {
-            return render(await box.browser({ ...request, confirmed: true, ...(sensitive !== undefined ? { inputApproval: sensitive } : {}) }));
+            return render(await box.browser({ ...request, confirmed: true, ...(sensitive !== undefined ? { inputApproval: { ...sensitive, expiresAt: decision.inputExpiresAt ?? Date.now() + SENSITIVE_INPUT_TTL_MS } } : {}) }));
           } catch (again) {
             const why = again instanceof Error ? again.message : String(again);
             return { text: outcomeLine(boxErrorOutcome(again) ?? "failed", why), isError: true };

@@ -24,7 +24,7 @@
 import { actionOutcome } from "../protocol/index.ts";
 import type { ActionVerification, ComputerProgress, Outcome, WaitOutcome, ActExpectation, Effect, PageInfo } from "../protocol/index.ts";
 import { spawn } from "node:child_process";
-import { inputValueHash, sameSensitiveInput, type SensitiveInput } from "../protocol/sensitive-input.ts";
+import { inputValueHash, sameSensitiveInput, type SensitiveInput, type SensitiveInputApproval } from "../protocol/sensitive-input.ts";
 import { realpathSync, statSync } from "node:fs";
 import { CdpError, CdpSession, closeTarget, listTargets, openTarget, type CdpTarget } from "./cdp.ts";
 import { sameEndpointBinding, type BrowserEndpointRegistry, type EndpointBinding } from "./browser-endpoints.ts";
@@ -640,6 +640,44 @@ function frameSuffix(url: string): string {
   return `@f${hash.toString(36).slice(0, 4)}`;
 }
 
+const INPUT_DESCRIPTION = "function(){ const t = this; const tag = (t.tagName || '').toLowerCase();" +
+        " const attr = n => String((t.getAttribute && t.getAttribute(n)) || '');" +
+        " const label = attr('aria-label') || (t.labels && t.labels[0] ? t.labels[0].textContent : '') || attr('placeholder');" +
+        " const form = t.form || null;" +
+        " const signIn = !!(form && form.querySelector('input[type=password]'));" +
+        " let host = '', origin = ''; try { host = t.ownerDocument.location.host; origin = t.ownerDocument.location.origin; } catch (e) {}" +
+        " return { field: { tag, type: tag === 'input' ? String(t.type || '').toLowerCase() : '', autocomplete: attr('autocomplete').toLowerCase()," +
+        "   name: (attr('name') + ' ' + attr('id')).trim(), label: String(label || '').replace(/\\s+/g, ' ').trim(), signIn }, host, origin }; }";
+
+/** Runs in the isolated world: validate and write one bound node without yielding or focusing. */
+export const SCOPED_INPUT_SCRIPT = `function(value, replace, expected, expiresAt) {
+  const current = (${INPUT_DESCRIPTION}).call(this);
+  if (!this.isConnected || !Number.isFinite(expiresAt) || Date.now() >= expiresAt) return 'expired or detached';
+  if (JSON.stringify(current) !== JSON.stringify(expected)) return 'input destination or data scope changed';
+  const proto = this instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype :
+    this instanceof HTMLInputElement ? HTMLInputElement.prototype : undefined;
+  if (this.disabled || this.readOnly) return 'not editable';
+  if (proto) {
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+    if (!setter) return 'no native value setter';
+    const old = this.value;
+    const start = this.selectionStart ?? old.length;
+    const end = this.selectionEnd ?? old.length;
+    setter.call(this, replace ? value : old.slice(0, start) + value + old.slice(end));
+  } else if (this.isContentEditable) {
+    if (replace) this.textContent = value;
+    else {
+      const selection = this.ownerDocument.getSelection();
+      if (selection && selection.rangeCount && this.contains(selection.anchorNode) && this.contains(selection.focusNode)) {
+        const range = selection.getRangeAt(0); range.deleteContents(); range.insertNode(this.ownerDocument.createTextNode(value));
+      } else this.appendChild(this.ownerDocument.createTextNode(value));
+    }
+  } else return 'not editable';
+  this.dispatchEvent(new Event('input', {bubbles:true}));
+  this.dispatchEvent(new Event('change', {bubbles:true}));
+  return 'ok';
+}`;
+
 /**
  * One live connection to one page on one desktop.
  *
@@ -1099,6 +1137,24 @@ class BrowserPage {
     return this.resolve(ref);
   }
 
+  private async isolatedTarget(objectId: string, frameId: string, worldName: string): Promise<string> {
+    const node = (await this.session.send("DOM.describeNode", { objectId })) as { node?: { backendNodeId?: number } };
+    const backendNodeId = node.node?.backendNodeId;
+    if (backendNodeId === undefined) throw new CdpError("That element cannot be addressed for a secret fill; take a fresh snapshot.");
+    const world = (await this.session.send("Page.createIsolatedWorld", {
+      frameId,
+      worldName,
+    })) as { executionContextId?: number };
+    if (world.executionContextId === undefined) throw new CdpError("Could not open an isolated world on this page.");
+    const isolated = (await this.session.send("DOM.resolveNode", {
+      backendNodeId,
+      executionContextId: world.executionContextId,
+    })) as { object?: { objectId?: string } };
+    const target = isolated.object?.objectId;
+    if (target === undefined) throw new CdpError("That element is not reachable from the isolated world; take a fresh snapshot.");
+    return target;
+  }
+
   /**
    * Types a vault secret into a field without the page's own scripts seeing the write
    * (INV-402, browser-use-pi's fillSecret; docs/15 design C).
@@ -1129,20 +1185,7 @@ class BrowserPage {
       );
     }
     if (this.mainFrameId === undefined) throw new CdpError("The page has no main frame to fill into yet; take a snapshot first.");
-    const node = (await this.session.send("DOM.describeNode", { objectId })) as { node?: { backendNodeId?: number } };
-    const backendNodeId = node.node?.backendNodeId;
-    if (backendNodeId === undefined) throw new CdpError("That element cannot be addressed for a secret fill; take a fresh snapshot.");
-    const world = (await this.session.send("Page.createIsolatedWorld", {
-      frameId: this.mainFrameId,
-      worldName: "lumenbox-secret",
-    })) as { executionContextId?: number };
-    if (world.executionContextId === undefined) throw new CdpError("Could not open an isolated world on this page.");
-    const isolated = (await this.session.send("DOM.resolveNode", {
-      backendNodeId,
-      executionContextId: world.executionContextId,
-    })) as { object?: { objectId?: string } };
-    const target = isolated.object?.objectId;
-    if (target === undefined) throw new CdpError("That element is not reachable from the isolated world; take a fresh snapshot.");
+    const target = await this.isolatedTarget(objectId, this.mainFrameId, "lumenbox-secret");
     const described = (await this.session.send("Runtime.callFunctionOn", {
       objectId: target,
       returnByValue: true,
@@ -1185,15 +1228,7 @@ class BrowserPage {
     const described = (await this.session.send("Runtime.callFunctionOn", {
       objectId,
       returnByValue: true,
-      functionDeclaration:
-        "function(){ const t = this; const tag = (t.tagName || '').toLowerCase();" +
-        " const attr = n => String((t.getAttribute && t.getAttribute(n)) || '');" +
-        " const label = attr('aria-label') || (t.labels && t.labels[0] ? t.labels[0].textContent : '') || attr('placeholder');" +
-        " const form = t.form || null;" +
-        " const signIn = !!(form && form.querySelector('input[type=password]'));" +
-        " let host = '', origin = ''; try { host = t.ownerDocument.location.host; origin = t.ownerDocument.location.origin; } catch (e) {}" +
-        " return { field: { tag, type: tag === 'input' ? String(t.type || '').toLowerCase() : '', autocomplete: attr('autocomplete').toLowerCase()," +
-        "   name: (attr('name') + ' ' + attr('id')).trim(), label: String(label || '').replace(/\\s+/g, ' ').trim(), signIn }, host, origin }; }",
+      functionDeclaration: INPUT_DESCRIPTION,
     })) as { result?: { value?: { field: InputField; host: string; origin: string } } };
     const value = described.result?.value;
     // Unreadable is not a reason to type blind into what may be a card field.
@@ -1230,19 +1265,35 @@ class BrowserPage {
     await this.session.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, buttons: 0 });
   }
 
-  async type(ref: string, text: string, replace: boolean, confirmed = false, inputApproval?: SensitiveInput): Promise<void> {
+  async type(ref: string, text: string, replace: boolean, confirmed = false, inputApproval?: SensitiveInputApproval): Promise<void> {
     const objectId = await this.resolve(ref);
+    if (inputApproval !== undefined) {
+      const frame = this.frames.find(candidate => candidate.suffix === (ref.match(/@f[0-9a-z]+$/i)?.[0] ?? ""));
+      const frameId = [...this.contexts].find(([, contextId]) => contextId === frame?.contextId)?.[0];
+      if (frameId === undefined) throw new CdpError("The input frame changed; take a fresh snapshot.");
+      const target = await this.isolatedTarget(objectId, frameId, "lumenbox-input");
+      const described = await this.describeInput(target);
+      const category = sensitiveInputKind(described.field, text, described.host);
+      const scope = category === undefined ? undefined : { origin: described.origin, category, valueHash: inputValueHash(text) };
+      if (scope === undefined || !sameSensitiveInput(inputApproval, scope)) {
+        throw new IrreversibleActionError("IRREVERSIBLE: the input destination or data scope changed; ask again", scope);
+      }
+      const result = await this.session.send("Runtime.callFunctionOn", {
+        objectId: target, returnByValue: true, functionDeclaration: SCOPED_INPUT_SCRIPT,
+        arguments: [{ value: text }, { value: replace }, { value: described }, { value: inputApproval.expiresAt }],
+      }) as { result?: { value?: string } };
+      if (result.result?.value !== "ok") throw new IrreversibleActionError(`IRREVERSIBLE: ${result.result?.value ?? "input could not be checked"}; ask again`, scope);
+      return;
+    }
+
     // Before a keystroke: typing is sending (INV-895). Same 428 as an irreversible click, and
     // the same call comes back `confirmed` once a person has read what would go where.
-    if (!confirmed || inputApproval !== undefined) {
+    if (!confirmed) {
       const { field, host, origin } = await this.describeInput(objectId);
       const reason = sensitiveInputReason(field, text, host);
       const category = sensitiveInputKind(field, text, host);
       const scope = category === undefined ? undefined : { origin, category, valueHash: inputValueHash(text) };
-      if (inputApproval !== undefined && (scope === undefined || !sameSensitiveInput(inputApproval, scope))) {
-        throw new IrreversibleActionError("IRREVERSIBLE: the input destination or data scope changed; ask again", scope);
-      }
-      if (reason !== undefined && inputApproval === undefined) throw new IrreversibleActionError(`IRREVERSIBLE: ${reason}`, scope);
+      if (reason !== undefined) throw new IrreversibleActionError(`IRREVERSIBLE: ${reason}`, scope);
     }
     await this.session.send("DOM.focus", { objectId }).catch(async () => {
       // Not everything focusable through a click is focusable through DOM.focus. Confirmed:
@@ -1892,7 +1943,7 @@ export class BrowserService {
       snapshot?: string;
       find?: { role?: string; name?: string; nth?: number };
       confirmed?: boolean;
-      inputApproval?: SensitiveInput;
+      inputApproval?: SensitiveInputApproval;
       expect?: ActExpectation;
     }
   ): Promise<BrowserResult> {

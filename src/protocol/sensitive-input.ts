@@ -7,6 +7,9 @@ export interface SensitiveInput {
   valueHash: string;
 }
 
+export interface SensitiveInputApproval extends SensitiveInput { expiresAt: number; }
+export const SENSITIVE_INPUT_TTL_MS = 15 * 60_000;
+
 export function inputValueHash(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }

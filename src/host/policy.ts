@@ -29,6 +29,7 @@
  * architecture exists to avoid. Limits arrive as configuration; enforcement is local.
  */
 
+import { SENSITIVE_INPUT_TTL_MS, type SensitiveInput } from "../protocol/sensitive-input.ts";
 import { classifyShell } from "./shell-readonly.ts";
 import { envNumber } from "../config.ts";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -97,14 +98,13 @@ export type PolicyRequest =
        */
       irreversible?: string;
       /** Trusted box observation plus host execution identity, never model input (INV-955). */
-      inputScope?: {
+      inputScope?: SensitiveInput & {
         turnId: string; conversation: string; principal: string; target: string;
-        origin: string; category: string; valueHash: string;
       };
     };
 
 export type PolicyDecision =
-  | { allow: true }
+  | { allow: true; inputExpiresAt?: number }
   /**
    * Refused. `reason` is written for the model to read: it is returned as the tool result or as the
    * turn's ending, so it has to say what would make the difference.
@@ -481,6 +481,9 @@ export class PolicyGate {
     if (!decision.allow) {
       this.log(`refused ${describeRequest(request)}: ${decision.reason}`);
     }
+    if (decision.allow && inputGrant !== undefined) {
+      return { ...decision, inputExpiresAt: this.turnInputs.get(inputGrant.key)?.expires };
+    }
     return decision;
   }
 
@@ -668,7 +671,7 @@ export class PolicyGate {
     for (const [key, grant] of this.turnInputs) if (grant.expires <= this.now().getTime()) this.turnInputs.delete(key);
     if (inputKey !== undefined && !this.turnInputs.has(inputKey)) {
       if (this.turnInputs.size >= 256) this.turnInputs.delete(this.turnInputs.keys().next().value!);
-      this.turnInputs.set(inputKey, { nonce: randomUUID(), expires: this.now().getTime() + 15 * 60_000 });
+      this.turnInputs.set(inputKey, { nonce: randomUUID(), expires: this.now().getTime() + SENSITIVE_INPUT_TTL_MS });
     }
     const reused = inputKey === undefined ? undefined : this.turnInputs.get(inputKey);
     // A process-local nonce also bounds unused/session/standing approvals: replay or expiry
