@@ -1554,6 +1554,60 @@ test("a dropped connection mid-turn is retried, and the turn finishes", async ()
   }
 });
 
+test("an overloaded provider is retried by the host alone: requests equal the host's attempts, each one seen (INV-811)", async () => {
+  const { createServer } = await import("node:http");
+  const { createClient } = await import("./provider.ts");
+  const { CAPACITY_POLICY } = await import("./transient.ts");
+  // A real upstream and a real client, as createClient builds it: the SDK's own retries would show
+  // up here as requests the host never counted.
+  let requests = 0;
+  const server = createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      requests += 1;
+      if (requests < CAPACITY_POLICY.maxAttempts) {
+        res.writeHead(529, { "content-type": "application/json" });
+        res.end(JSON.stringify({ type: "error", error: { type: "overloaded_error", message: "Overloaded" } }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      const send = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      send("message_start", { type: "message_start", message: { id: "msg_1", type: "message", role: "assistant", model: "fake-3", content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 5, output_tokens: 1 } } });
+      send("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+      send("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "through at last" } });
+      send("content_block_stop", { type: "content_block_stop", index: 0 });
+      send("message_delta", { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 3 } });
+      send("message_stop", { type: "message_stop" });
+      res.end();
+    });
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as { port: number }).port;
+  process.env.INV811_FAKE_KEY = "test-key";
+  const { registry, cleanup } = fixture();
+  try {
+    const client = createClient({
+      label: "Fake Anthropic", model: "fake-3", maxTokens: 1000, vision: false, adaptiveThinking: false, effort: false,
+      promptCaching: false, auth: "x-api-key", keyEnv: "INV811_FAKE_KEY", baseUrl: `http://127.0.0.1:${port}`,
+    });
+    const events: { type: string; kind?: string }[] = [];
+    await runTurn(
+      registry.create({ name: "Ada" }),
+      [{ id: "m", fromId: "user", fromName: "user", text: "work", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus: new AgentBus(registry, async () => {}), box: undefined, resolution: undefined, onEvent: event => events.push(event as { type: string; kind?: string }) }
+    );
+    assert.equal(requests, CAPACITY_POLICY.maxAttempts, "one request per host attempt, not the host's attempts times the SDK's");
+    const retries = events.filter(event => event.type === "retrying");
+    assert.equal(retries.length, CAPACITY_POLICY.maxAttempts - 1, "and every retry is one the host made and reported");
+    assert.ok(retries.every(event => event.kind === "capacity"));
+  } finally {
+    delete process.env.INV811_FAKE_KEY;
+    server.close();
+    cleanup();
+  }
+});
+
 test("a rejected request is not retried, and the error is not hidden behind delays", async () => {
   const { registry, cleanup } = fixture();
   try {
