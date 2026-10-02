@@ -207,12 +207,12 @@ const NUMBER_OR_MONTH = /^\d+$|^(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|no
 /**
  * One relative-time expression, as a whole: the words a rewrite may replace with a date
  * and the words a retirement may be dated by. "next Tuesday", "this week", "tomorrow",
- * "下周三". A weekday alone counts; a bare "week", "this" or "next" does not.
+ * "下周三". A weekday needs a relative qualifier; a bare weekday may be a standing rule.
  */
 const WEEKDAY = "monday|tuesday|wednesday|thursday|friday|saturday|sunday";
 const RELATIVE_EXPRESSION = new RegExp(
-  `\\b(?:(?:next|this|coming|upcoming)\\s+(?:week|month|${WEEKDAY})|${WEEKDAY}|tomorrow|tonight|today|soon|upcoming|later|yesterday)\\b` +
-    "|明天|后天|下周[一二三四五六日天]?|本周[一二三四五六日天]?|这周[一二三四五六日天]?|下个月|本月|最近|即将|快到|周[一二三四五六日天]|星期[一二三四五六日天]",
+  `\\b(?:(?:next|this|coming|upcoming)\\s+(?:week|month|${WEEKDAY})|tomorrow|tonight|today|soon|upcoming|later|yesterday)\\b` +
+    "|明天|后天|下周[一二三四五六日天]?|本周[一二三四五六日天]?|这周[一二三四五六日天]?|下个月|本月|最近|即将|快到",
   "gi"
 );
 const relativeExpressionsIn = (text: string): string[] => text.match(RELATIVE_EXPRESSION) ?? [];

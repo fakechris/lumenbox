@@ -309,3 +309,16 @@ test("the pass runs on the condense cadence: after MAINTAIN_EVERY episodes, on t
   await rememberer.settle("ada");
   assert.equal(prompts.filter(isMaintenance).length, 1, "one more episode is below the cadence");
 });
+
+for (const text of ["never deploy on Friday", "周五禁止部署", "星期五禁止部署"]) {
+  test(`INV-946: a bare weekday cannot retire or rewrite a standing constraint: ${text}`, () => {
+    const records = [fact(text, 0, { at: "2026-09-23T12:00:00Z" })];
+    const retire = proposal(records, "retire", [text], { expiredOn: "2026-09-25" });
+    const plan = verifyMaintenanceProposals([retire], snapshotForMaintenance(records), records, { now: NOW });
+    assert.equal(plan.changes.length, 0);
+    assert.equal(plan.dropped.length, 1);
+    assert.deepEqual(dedupe([...records, ...recordsOfPlan(plan)]).map(record => record.text), [text]);
+    const rewrite = proposal(records, "rewrite", [text], { text: text.replace(/Friday|星期五|周五/, "2026-09-25") });
+    assert.equal(verifyMaintenanceProposals([rewrite], snapshotForMaintenance(records), records, { now: NOW }).changes.length, 0);
+  });
+}
