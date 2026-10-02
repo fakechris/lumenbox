@@ -48,6 +48,10 @@ export interface AgentboxConfig {
   upgradeHour?: number;
   /** Base URL for the `custom` preset, applied only when `AGENTBOX_BASE_URL` is not set. */
   baseUrl?: string;
+  /** Maximum single-member boxes per person; absent means no limit. */
+  personalBoxQuota?: number;
+  /** Overrides keyed by canonical principal id. */
+  personBoxQuotas?: Record<string, number>;
   /**
    * The box image to pull when this machine has none, as a full `repo:tag` reference.
    *
@@ -330,6 +334,8 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
     ...(readStringList(raw.skillRoots, "skillRoots", onWarn) !== undefined
       ? { skillRoots: readStringList(raw.skillRoots, "skillRoots", onWarn) }
       : {}),
+    ...(raw.personalBoxQuota !== undefined ? { personalBoxQuota: readQuota(raw.personalBoxQuota, "personalBoxQuota", onWarn) } : {}),
+    ...(raw.personBoxQuotas !== undefined ? { personBoxQuotas: readQuotaMap(raw.personBoxQuotas, "personBoxQuotas", onWarn) } : {}),
     ...(typeof raw.startupItem === "boolean" ? { startupItem: raw.startupItem } : {}),
     ...(readInvolute(raw.involute, onWarn) !== undefined ? { involute: readInvolute(raw.involute, onWarn) } : {}),
   };
@@ -377,6 +383,37 @@ function readInvolute(value: unknown, warn: (message: string) => void): Agentbox
     ...(pollSeconds !== undefined ? { pollSeconds } : {}),
     ...(capacity !== undefined ? { capacity } : {}),
   };
+}
+
+export function isPersonalBoxQuota(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 99;
+}
+
+function readQuota(value: unknown, name: string, warn: (message: string) => void): number | undefined {
+  if (value === undefined) return undefined;
+  if (!isPersonalBoxQuota(value)) {
+    warn(`config: ${name} must be a whole number 0–99; refusing new allocations with quota 0`);
+    return 0;
+  }
+  return value;
+}
+
+/** A quota map: every value a quota, every key kept as written (it names a person). */
+function readQuotaMap(
+  value: unknown,
+  name: string,
+  warn: (message: string) => void
+): Record<string, number> | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`config: ${name} must be an object of principal id to whole number; repair it before allocating boxes`);
+  }
+  const out: Record<string, number> = Object.create(null);
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    const quota = readQuota(raw, `${name}.${key}`, warn);
+    if (quota !== undefined) out[key] = quota;
+  }
+  return out;
 }
 
 function readMcpServers(
@@ -582,6 +619,8 @@ export function saveConfig(
     /** Per-chat patch: a null hour removes that chat's digest, others are left alone. */
     digests?: Record<string, number | null>;
     startupItem?: boolean | null;
+    personalBoxQuota?: number | null;
+    personBoxQuotas?: Record<string, number | null>;
   }
 ): string {
   const path = configPath();
@@ -614,6 +653,25 @@ export function saveConfig(
   if (changes.hostExec !== undefined) {
     if (changes.hostExec === null) delete raw.hostExec;
     else raw.hostExec = changes.hostExec;
+  }
+  if (changes.personalBoxQuota !== undefined) {
+    if (changes.personalBoxQuota === null) delete raw.personalBoxQuota;
+    else raw.personalBoxQuota = changes.personalBoxQuota;
+  }
+  for (const [field, patch] of [
+    ["personBoxQuotas", changes.personBoxQuotas],
+  ] as const) {
+    if (patch === undefined) continue;
+    const current =
+      raw[field] !== null && typeof raw[field] === "object" && !Array.isArray(raw[field])
+        ? { ...(raw[field] as Record<string, unknown>) }
+        : {};
+    for (const [key, quota] of Object.entries(patch)) {
+      if (quota === null) delete current[key];
+      else Object.defineProperty(current, key, { value: quota, enumerable: true, configurable: true, writable: true });
+    }
+    if (Object.keys(current).length === 0) delete raw[field];
+    else raw[field] = current;
   }
   if (changes.digests !== undefined) {
     const current =

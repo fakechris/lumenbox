@@ -281,3 +281,28 @@ test("an MCP server may be marked as not polluting memory; anything else is left
   assert.equal(servers?.kb?.pollutesMemory, false);
   assert.equal(servers?.web?.pollutesMemory, undefined, "only an explicit false is read; the default is that it pollutes");
 });
+
+
+test("personal allocation limits round-trip and null removes the last override", () => {
+  withHome();
+  saveConfig({ personalBoxQuota: 0, personBoxQuotas: { ada: 2, bob: 0 } });
+  assert.equal(loadConfig().personalBoxQuota, 0);
+  assert.equal(loadConfig().personBoxQuotas?.ada, 2);
+  saveConfig({ personBoxQuotas: { ada: null } });
+  assert.equal(loadConfig().personBoxQuotas?.ada, undefined);
+  assert.equal(loadConfig().personBoxQuotas?.bob, 0);
+  saveConfig({ personalBoxQuota: null, personBoxQuotas: { bob: null } });
+  assert.equal(loadConfig().personalBoxQuota, undefined);
+  assert.equal(loadConfig().personBoxQuotas, undefined);
+});
+
+test("malformed quota policy cannot silently become unlimited", () => {
+  withHome('{"personalBoxQuota":-1,"personBoxQuotas":{"ada":"2"}}');
+  const warnings: string[] = [];
+  const config = loadConfig(line => warnings.push(line));
+  assert.equal(config.personalBoxQuota, 0);
+  assert.equal(config.personBoxQuotas?.ada, 0);
+  assert.equal(warnings.length, 2);
+  withHome('{"personBoxQuotas":[]}');
+  assert.throws(() => loadConfig(), /repair it before allocating/);
+});

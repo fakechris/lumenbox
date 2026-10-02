@@ -115,7 +115,7 @@ function withinWork(path: string): boolean {
   return normalised === WORK_DIR || normalised.startsWith(`${WORK_DIR}/`);
 }
 
-import { agentboxHome, loadConfig, saveConfig, type AgentboxConfig } from "../config.ts";
+import { agentboxHome, isPersonalBoxQuota, loadConfig, saveConfig, type AgentboxConfig } from "../config.ts";
 
 type AgentboxConfigHostExec = NonNullable<AgentboxConfig["hostExec"]>;
 import { ChannelManager } from "../channels/manager.ts";
@@ -197,6 +197,7 @@ import { MemoryAdmin } from "../host/memory-admin.ts";
 import { ConnectCodeStore } from "../box/connect-codes.ts";
 import { FollowUpBudget, type FollowUpItem } from "../host/follow-up-budget.ts";
 import { SessionEpochs } from "./session-epochs.ts";
+import { personalAllocationRefusal, personalBoxesOf, personalQuotaFor } from "../host/box-quota.ts";
 import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
 import { attentionFor } from "../host/attention.ts";
 import { InvoluteConsumer } from "../host/involute-inbox.ts";
@@ -3705,6 +3706,42 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // rearrange is not a record of anything.
         // Who the browser is, for the page's own header. Deliberately readable by any
         // authorised request: it says nothing the caller does not already know.
+        if (route === "GET /api/quotas/self") {
+          const principal = caller.userId === undefined ? undefined : principals.resolve(caller.userId);
+          send(res, 200, { quota: principal ? personalQuotaFor(principal.id, loadConfig()) ?? null : null,
+            held: principal ? personalBoxesOf(registry.listBoxes(), principal.id).length : 0 });
+          return;
+        }
+        if (route === "GET /api/quotas" || route === "POST /api/quotas") {
+          if (refusedRole("admin")) return;
+          if (req.method === "POST") {
+            const body = await readJson(req);
+            const valid = (value: unknown) => value === null || isPersonalBoxQuota(value);
+            if (body.personalBoxQuota !== undefined && !valid(body.personalBoxQuota)) {
+              send(res, 400, { error: "personalBoxQuota must be 0–99 or null (unlimited)." }); return;
+            }
+            const overrides = body.personBoxQuotas;
+            if (overrides !== undefined && (overrides === null || typeof overrides !== "object" || Array.isArray(overrides))) {
+              send(res, 400, { error: "personBoxQuotas must be an object." }); return;
+            }
+            const patch: Record<string, number | null> = Object.create(null);
+            for (const [id, value] of Object.entries(overrides ?? {})) {
+              if (!principals.list().some(person => person.id === id) || !valid(value)) {
+                send(res, 400, { error: "Each override must name a known principal and a quota 0–99 or null." }); return;
+              }
+              patch[id] = value as number | null;
+            }
+            saveConfig({ ...(body.personalBoxQuota !== undefined ? { personalBoxQuota: body.personalBoxQuota as number | null } : {}), personBoxQuotas: patch });
+            log(`Personal-box quotas updated by ${caller.userId ?? "operator"}`);
+          }
+          const config = loadConfig();
+          send(res, 200, { personalBoxQuota: config.personalBoxQuota ?? null, people: principals.list().map(person => ({
+            id: person.id, name: person.name, override: Object.hasOwn(config.personBoxQuotas ?? {}, person.id) ? config.personBoxQuotas![person.id] : null,
+            quota: personalQuotaFor(person.id, config) ?? null, held: personalBoxesOf(registry.listBoxes(), person.id).length,
+          })) });
+          return;
+        }
+
         if (route === "GET /api/me") {
           const principal =
             caller.userId === undefined ? undefined : principals.resolve(caller.userId);
@@ -5841,12 +5878,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const name = String(body.name ?? "").trim();
           const baseUrl = typeof body.baseUrl === "string" ? body.baseUrl.trim() : "";
           let tokenFile = typeof body.tokenFile === "string" ? body.tokenFile.trim() : "";
-          if (tokenFile === "" && typeof body.token === "string" && body.token.trim() !== "") {
-            const dir = join(agentboxHome(), "boxes");
-            mkdirSync(dir, { recursive: true, mode: 0o700 });
-            tokenFile = join(dir, `${name}.token`);
-            writeFileSync(tokenFile, `${body.token.trim()}\n`, { mode: 0o600 });
-          }
           try {
             const existing = registry.boxByName(name);
             if (existing === undefined) {
@@ -5861,6 +5892,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                   ? (body.members as unknown[]).filter((id): id is string => typeof id === "string" && id.trim() !== "")
                   : undefined;
             if (members !== undefined && refusedRole("admin")) return;
+            if (members !== undefined) {
+              const allocationError = personalAllocationRefusal(registry.listBoxes(), existing, members, loadConfig());
+              if (allocationError !== undefined) { send(res, 409, { error: allocationError }); return; }
+            }
+            if (tokenFile === "" && typeof body.token === "string" && body.token.trim() !== "") {
+              const dir = join(agentboxHome(), "boxes");
+              mkdirSync(dir, { recursive: true, mode: 0o700 });
+              tokenFile = join(dir, `${name}.token`);
+              writeFileSync(tokenFile, `${body.token.trim()}\n`, { mode: 0o600 });
+            }
             const result = await orchestrator.updateBox(name, {
               ...(baseUrl !== "" ? { endpoint: { baseUrl, tokenFile: tokenFile !== "" ? tokenFile : (existing.endpoint?.tokenFile ?? "") } } : {}),
               ...(Number.isInteger(Number(body.displayFloor)) && Number(body.displayFloor) >= 1 ? { displayFloor: Number(body.displayFloor) } : {}),
