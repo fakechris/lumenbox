@@ -283,3 +283,25 @@ test("the same share imported twice is one bot; a newer version is a conflict un
     cleanup();
   }
 });
+
+test("template identity and updates are scoped to the destination box", async () => {
+  const { root, registry, provenance, cleanup } = fixture();
+  try {
+    const second = registry.attachBox({ id: "other-box", name: "Other", kind: "attached", members: ["other"], displayFloor: 1, workDir: "/work", createdAt: "2026-10-02" });
+    const orchestrator = new Orchestrator({ registry, useBox: false, inbox: null, turns: null, skillProvenance: provenance, hooks: null, claims: null, tasks: null, scopes: null, mcp: null });
+    const v1 = { ...TEMPLATE, meta: { version: 1 } };
+    const options = { shareId: "same-share", learningsDir: join(root, "learnings"), log: () => undefined };
+    const first = orchestrator.importTemplate(v1, options);
+    const other = orchestrator.importTemplate(v1, { ...options, boxId: second.id });
+    await Promise.all([first.settled, other.settled]);
+    assert.notEqual(first.agent.id, other.agent.id, "same name/share in another box is an independent copy");
+    assert.equal(orchestrator.importTemplate(v1, { ...options, boxId: second.id }).agent.id, other.agent.id);
+    const v2 = { ...v1, meta: { version: 2 } };
+    const updated = orchestrator.importTemplate(v2, { ...options, boxId: second.id, update: true });
+    assert.equal(updated.agent.id, other.agent.id, "update never selects the first box's copy");
+    await updated.settled;
+    assert.equal(registry.get(first.agent.id).profile.importedFrom?.version, 1);
+    assert.throws(() => orchestrator.importTemplate(v1, { ...options, boxId: "missing" }), /No such template target box/);
+    assert.equal(registry.list().length, 2);
+  } finally { cleanup(); }
+});
