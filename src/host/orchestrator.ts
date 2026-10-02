@@ -1614,7 +1614,10 @@ export class Orchestrator {
     // The same share, again (INV-411 A3): the version says whether this is the same
     // recipe — one bot, not two — or a newer one, which is the existing bot's to take up
     // on request, never a second install and never a silent overwrite.
-    const already = options.shareId !== undefined ? this.registry.list().find(agent => agent.profile.importedFrom?.id === options.shareId) : undefined;
+    const targetBoxId = options.boxId ?? this.registry.box.id;
+    if (this.registry.boxById(targetBoxId) === undefined) throw new Error("No such template target box.");
+    // Idempotency is local to the destination: another box's copy is not ours to read or update.
+    const already = options.shareId !== undefined ? this.registry.agentsIn(targetBoxId).find(agent => agent.profile.importedFrom?.id === options.shareId) : undefined;
     if (already !== undefined) {
       const have = already.profile.importedFrom?.version;
       const incoming = template.meta?.version;
@@ -1666,7 +1669,7 @@ export class Orchestrator {
       })();
       return { agent: already, id, pending, settled, existing: "updated" };
     }
-    if (this.registry.list().some(agent => agent.profile.name === name)) {
+    if (this.registry.agentsIn(targetBoxId).some(agent => agent.profile.name === name)) {
       throw new Error(`An agent named ${name} already exists here; pass another name.`);
     }
     const wanted = toolsOf(template);

@@ -3440,6 +3440,25 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         return true;
       };
 
+      /** Template reads and writes use the box's membership, including for admins. */
+      const mayReadBox = (boxId: string): boolean => {
+        const box = registry.boxById(boxId);
+        return box !== undefined && (caller.userId === undefined || mayEnterBox(box, principals.resolve(caller.userId).id));
+      };
+      const templateTarget = (requested: unknown): string | undefined => {
+        if (requested !== undefined && typeof requested !== "string") {
+          send(res, 400, { error: "boxId must be a box id." }); return;
+        }
+        const id = requested ?? registry.box.id;
+        if (registry.boxById(id) === undefined) {
+          send(res, 404, { error: "No such box." }); return;
+        }
+        if (!mayReadBox(id)) {
+          send(res, 403, { error: "This box is not available to this caller." }); return;
+        }
+        return id;
+      };
+
       try {
         if (route === "GET /") {
           send(res, 200, APP_HTML, "text/html");
@@ -4939,16 +4958,17 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "POST /api/catalog/install") {
           if (refused()) return;
           const body = await readJson(req);
+          const targetBox = templateTarget(body.boxId);
+          if (targetBox === undefined) return;
           const slug = String(body.slug ?? "").trim();
           const rows = profilesFor(slug);
           if (rows === undefined) {
             send(res, 404, { error: `No catalog entry named ${slug}.` });
             return;
           }
-          const existing = new Set(registry.list().map(agent => agent.profile.name));
+          const existing = new Set(registry.agentsIn(targetBox).map(agent => agent.profile.name));
           const created: { id: string; name: string }[] = [];
           const skipped: string[] = [];
-          const targetBox = typeof body.boxId === "string" && registry.boxById(body.boxId) !== undefined ? body.boxId : undefined;
           for (const row of rows) {
             if (existing.has(row.name)) {
               skipped.push(row.name);
@@ -4974,14 +4994,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         // The shelf (docs/39 §2): everything a person can stamp into a box, in one list.
         if (route === "GET /api/templates/shelf") {
-          const mine = registry.list().flatMap(agent => {
+          const visibleAgents = registry.list().filter(agent => mayReadBox(registry.boxOf(agent.id).id));
+          const mine = visibleAgents.flatMap(agent => {
             const versions = orchestrator.stagedTemplates(agent.id);
             const latest = versions[versions.length - 1];
             if (latest === undefined) return [];
-            const stamped = registry.list().filter(other => other.profile.importedFrom?.name === latest.name).length;
+            const stamped = visibleAgents.filter(other => other.profile.importedFrom?.name === latest.name).length;
             return [{ agentId: agent.id, agentName: agent.profile.name, version: latest.version, name: latest.name, description: latest.description, counts: latest.counts, stagedAt: latest.stagedAt, stamped }];
           });
-          const imported = registry.list()
+          const imported = visibleAgents
             .filter(agent => agent.profile.importedFrom !== undefined && !String(agent.profile.importedFrom.id ?? "").startsWith("catalog:"))
             .map(agent => ({ agentId: agent.id, agentName: agent.profile.name, boxId: registry.boxOf(agent.id).id, from: agent.profile.importedFrom }));
           const marketplace = shelfTemplates().map(t => ({
@@ -4993,7 +5014,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             ...CATALOG_EXPERTS.map(entry => ({ kind: "expert", slug: entry.slug, name: entry.name, title: entry.title, summary: entry.summary, domain: entry.domain })),
             ...CATALOG_CREWS.map(crew => ({ kind: "crew", slug: crew.slug, name: crew.name, title: "", summary: crew.summary, domain: crew.domain, members: crew.members })),
           ];
-          send(res, 200, { mine, imported, catalog, marketplace, boxes: orchestrator.boxStatus() });
+          send(res, 200, { mine, imported, catalog, marketplace, boxes: orchestrator.boxStatus().filter(box => mayReadBox(box.id)) });
           return;
         }
         // Stamp: one template, one box, one new agent (or a crew's several). Wraps the two
@@ -5001,12 +5022,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "POST /api/templates/stamp") {
           if (refused()) return;
           const body = await readJson(req);
-          const boxId = typeof body.boxId === "string" && registry.boxById(body.boxId) !== undefined ? body.boxId : undefined;
+          const boxId = templateTarget(body.boxId);
+          if (boxId === undefined) return;
           const name = typeof body.name === "string" && body.name.trim() !== "" ? body.name.trim() : undefined;
           // A name that is free: the template's own, or the template's own with a number,
           // so nobody is asked to invent one (docs/39 §2 — the shelf's verb is one click).
           const freeName = (wanted: string): string => {
-            const taken = new Set(registry.list().map(agent => agent.profile.name));
+            const taken = new Set(registry.agentsIn(boxId).map(agent => agent.profile.name));
             if (!taken.has(wanted)) return wanted;
             for (let n = 2; n < 100; n += 1) if (!taken.has(`${wanted} ${n}`)) return `${wanted} ${n}`;
             return `${wanted} ${Date.now()}`;
@@ -5059,6 +5081,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 400, { error: "Pass catalogSlug, or agentId (and version) of a staged template." });
             return;
           }
+          if (!mayReadBox(registry.boxOf(sourceAgent.id).id)) {
+            send(res, 403, { error: "This template is not available to this caller." }); return;
+          }
           const versions = orchestrator.stagedTemplates(sourceAgent.id);
           const wanted = typeof body.version === "number" ? versions.find(v => v.version === body.version) : versions[versions.length - 1];
           if (wanted === undefined) {
@@ -5100,17 +5125,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         // For the composer's "/" menu. Names and descriptions only — the same index the agent gets,
         // for the same reason.
-        const mayReadTeachingBox = (boxId: string): boolean => {
-          const box = registry.boxById(boxId);
-          return box !== undefined && (caller.userId === undefined || mayEnterBox(box, principals.resolve(caller.userId).id));
-        };
         if (route === "GET /api/teaching-drafts") {
           if (refusedRole("admin")) return;
           // Authoring hints (INV-755) are derived on read, never stored: advice for the reviewer that
           // must not change a draft's digest or stop it being published.
           send(res, 200, {
             drafts: orchestrator.teachDrafts.list()
-              .filter(draft => mayReadTeachingBox(draft.boxId))
+              .filter(draft => mayReadBox(draft.boxId))
               .map(draft => ({ ...draft, hints: draft.skill ? authoringHints(parseSkillFile(draft.skill)) : [] })),
           });
           return;
@@ -5123,7 +5144,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return;
           }
           try {
-            if (!mayReadTeachingBox(orchestrator.teachDrafts.get(body.id).boxId)) {
+            if (!mayReadBox(orchestrator.teachDrafts.get(body.id).boxId)) {
               send(res, 403, { error: "This teaching box is not available to this caller" });
               return;
             }
@@ -5143,7 +5164,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return;
           }
           try {
-            if (!mayReadTeachingBox(orchestrator.teachDrafts.get(body.id).boxId)) {
+            if (!mayReadBox(orchestrator.teachDrafts.get(body.id).boxId)) {
               send(res, 403, { error: "This teaching box is not available to this caller" });
               return;
             }
@@ -5988,6 +6009,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "POST /api/templates/import") {
           if (refused()) return;
           const body = await readJson(req);
+          const boxId = templateTarget(body.boxId);
+          if (boxId === undefined) return;
           let raw = typeof body.template === "string" ? body.template : body.template !== undefined ? JSON.stringify(body.template) : "";
           let shareId: string | undefined;
           if (raw === "" && typeof body.shareId === "string" && /^[A-Za-z0-9_-]{21}$/.test(body.shareId)) {
@@ -6023,7 +6046,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // The template's bundle references against the target box's own bundles (INV-421):
           // resolved, missing, or a same-named bundle that does not cover the needs. Nothing
           // is attached from a name; the gaps travel to the setup cue and back to the caller.
-          const targetBox = typeof body.boxId === "string" ? registry.boxById(body.boxId) ?? registry.box : registry.box;
+          // Fetching a shared document awaited the network; authority may have changed.
+          if (refused()) return;
+          if (!mayReadBox(boxId)) {
+            send(res, 403, { error: "This box is not available to this caller." }); return;
+          }
+          const targetBox = registry.boxById(boxId)!;
           const bundleResolutions = resolveBundleRefs(parsed.template.bundles, orchestrator.bundles.forBox(targetBox));
           let imported: ReturnType<typeof orchestrator.importTemplate>;
           try {
@@ -6033,7 +6061,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               caller,
               ...(typeof body.name === "string" && body.name.trim() !== "" ? { name: body.name.trim() } : {}),
               ...(shareId !== undefined ? { shareId } : {}),
-              ...(typeof body.boxId === "string" && registry.boxById(body.boxId) !== undefined ? { boxId: body.boxId } : {}),
+              boxId,
               connected,
               log,
             });
@@ -6088,6 +6116,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (agent === undefined) {
             send(res, 404, { error: "No such agent." });
             return;
+          }
+          if (!mayReadBox(registry.boxOf(agent.id).id)) {
+            send(res, 403, { error: "This template is not available to this caller." }); return;
           }
           const share = orchestrator.templateShareOf(agent.id);
           send(res, 200, {
@@ -6194,6 +6225,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // The document itself, as a file a person hands to somebody else.
         if (route === "GET /api/templates/download") {
           const agentId = url.searchParams.get("agent") ?? "";
+          const agent = registry.tryGet(agentId);
+          if (agent === undefined) { send(res, 404, { error: "No such agent." }); return; }
+          if (!mayReadBox(registry.boxOf(agent.id).id)) {
+            send(res, 403, { error: "This template is not available to this caller." }); return;
+          }
           const wanted = Number(url.searchParams.get("version") ?? "");
           const versions = orchestrator.stagedTemplates(agentId);
           const version = Number.isInteger(wanted) && wanted > 0 ? versions.find(entry => entry.version === wanted) : versions.at(-1);
