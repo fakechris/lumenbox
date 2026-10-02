@@ -91,7 +91,7 @@ import { BoxError } from "../box/client.ts";
 import { Receipts } from "./receipts.ts";
 import { WedgeWatch } from "./wedge.ts";
 import { buildAuditPrompt, manifestDiff, MANIFEST_COMMAND, parseManifest } from "./audit.ts";
-import { ScopeStore } from "./scopes.ts";
+import { ALL_MCP_TOOLS, ScopeStore } from "./scopes.ts";
 import { delegateEndedNote, settleDelegate } from "./engine-report.ts";
 import { BundleStore } from "./bundles.ts";
 import { TeachRunner, parseTrace, teachingClarificationCue } from "./teach.ts";
@@ -2570,6 +2570,9 @@ export const ALL_TOOLS: readonly string[] = [
   "Tasks",
   "Goal",
   "RunOnHost",
+  // Every MCP service the box's bundles carry (INV-759). Their tool names are not known when this
+  // list is written, so without it an allowlist withholds all of them.
+  ALL_MCP_TOOLS,
 ];
 
 /**
@@ -2634,7 +2637,9 @@ export const STARTER_TEAM: readonly {
     // work is no longer reviewing it — and the failure is not that it would cheat, it is that
     // "fixed it" and "checked it" become the same act and nobody can tell afterwards which happened.
     // It keeps `bash`, because reproducing a step is its whole job and reproducing needs running.
-    tools: NO_TEAM_BUILDING.filter(tool => tool !== "write_file"),
+    // Nor MCP services: whether a service's tool reads or writes is not something we can tell, and
+    // a reviewer that can post to Slack or edit a Notion page is changing what it checks.
+    tools: NO_TEAM_BUILDING.filter(tool => tool !== "write_file" && tool !== ALL_MCP_TOOLS),
   },
 ];
 

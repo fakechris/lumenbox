@@ -6865,6 +6865,7 @@ function openAgentModal(mode, agent) {
   if (agent) loadStanding(agent.id);
   // null means unrestricted — every tool, including ones that do not exist yet.
   var granted = agent && agent.tools ? agent.tools : null;
+  agentModal.grantedBefore = granted;
   agentModal.tools = {};
   $("agtools").innerHTML = allTools.map(function (tool) {
     var on = granted === null || granted.indexOf(tool) >= 0;
@@ -7017,6 +7018,8 @@ function saveAgentModal() {
     return;
   }
   var granted = allTools.filter(function (tool) { return agentModal.tools[tool]; });
+  // Entries the chips do not show (an MCP service such as notion__*) are kept, not dropped by an edit.
+  var unshown = (agentModal.grantedBefore || []).filter(function (tool) { return allTools.indexOf(tool) < 0; });
   var isNew = agentModal.mode === "new";
   var body = {
     name: name,
@@ -7026,7 +7029,7 @@ function saveAgentModal() {
     tags: $("agtags").value.split(",").map(function (t) { return t.trim(); }).filter(Boolean),
     description: $("agpersona").value,
     // A full set is sent as null — "everything", which stays true for future tools.
-    tools: granted.length === allTools.length ? null : granted,
+    tools: granted.length === allTools.length && unshown.length === 0 ? null : granted.concat(unshown),
     // In a scope, the scope owns the tools; send them anyway as the fallback for if
     // it is ever removed from the scope.
     scopeId: $("agscope").value,

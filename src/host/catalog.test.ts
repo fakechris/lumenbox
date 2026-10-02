@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRegistry } from "../agents/registry.ts";
 import { ALL_TOOLS } from "./orchestrator.ts";
+import { toolAllowed } from "./scopes.ts";
 import {
   CATALOG_CONNECTORS,
   CATALOG_CREWS,
@@ -49,6 +50,9 @@ test("catalog experts are small, distinct, and standing identity", () => {
     for (const tool of entry.tools) {
       assert.ok(ALL_TOOLS.includes(tool), `${entry.slug} offers unknown tool ${tool}`);
     }
+    // A connected service is usable by every expert but the reviewer (INV-759), which reviews
+    // without the means to change what it reviews.
+    assert.equal(toolAllowed(entry.tools, "anyservice__anytool"), entry.slug !== "heng", `${entry.slug} and MCP services`);
     // One exception, on purpose: the Team designer (docs/39 §3) exists to build the team,
     // and stays afterwards, quiet by default (Chris, 2026-09-08). Every other expert is a
     // worker and must not be able to grow the roster.

@@ -133,6 +133,9 @@ export interface RelayUsageRow {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  /** An estimate rather than a measurement (INV-814), and why; see RelayUsage. */
+  estimated?: boolean;
+  estimateReason?: string;
 }
 
 export interface UsageTotals {
@@ -294,7 +297,10 @@ export interface ControlStore {
    * a fresh allowance — a ceiling that resets with uptime is not a ceiling (INV-580).
    */
   relayUsageSince(since: string): RelayUsageRow[];
+  /** What the relay measured: estimated rows are left out, so a total is never part guess. */
   relayTotals(tenantId: string, since?: string): UsageTotals;
+  /** The estimated rows' totals, reported beside the measured ones until reconciled (INV-814). */
+  relayEstimatedTotals(tenantId: string, since?: string): UsageTotals;
   /**
    * Whether this tenant has relay-measured usage in a period, which decides which series to bill.
    *
@@ -572,6 +578,15 @@ export class SqliteControlStore implements ControlStore {
     const columns = this.db.prepare("pragma table_info(box)").all() as { name: string }[];
     if (!columns.some(column => column.name === "role")) {
       this.db.exec("alter table box add column role text not null default 'primary'");
+    }
+    // Estimated relay rows (INV-814), guarded the same way.
+    // Each column on its own guard, so a start that died between the two still adds the second.
+    const relayColumns = this.db.prepare("pragma table_info(relay_usage)").all() as { name: string }[];
+    if (!relayColumns.some(column => column.name === "estimated")) {
+      this.db.exec("alter table relay_usage add column estimated integer not null default 0");
+    }
+    if (!relayColumns.some(column => column.name === "estimate_reason")) {
+      this.db.exec("alter table relay_usage add column estimate_reason text");
     }
     this.db.exec(
       `drop index if exists box_one_live_per_tenant;
@@ -1051,8 +1066,8 @@ export class SqliteControlStore implements ControlStore {
       .prepare(
         `insert into relay_usage
            (box_id, tenant_id, at, provider, model,
-            input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, estimated, estimate_reason)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         row.boxId,
@@ -1063,7 +1078,9 @@ export class SqliteControlStore implements ControlStore {
         row.inputTokens,
         row.outputTokens,
         row.cacheReadTokens,
-        row.cacheWriteTokens
+        row.cacheWriteTokens,
+        row.estimated === true ? 1 : 0,
+        row.estimateReason ?? null
       );
   }
 
@@ -1071,7 +1088,7 @@ export class SqliteControlStore implements ControlStore {
     const rows = this.db
       .prepare(
         `select id, box_id, tenant_id, at, provider, model,
-                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens
+                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, estimated, estimate_reason
          from relay_usage where at >= ? order by at asc`
       )
       .all(since) as Record<string, string | number>[];
@@ -1086,10 +1103,19 @@ export class SqliteControlStore implements ControlStore {
       outputTokens: Number(row.output_tokens),
       cacheReadTokens: Number(row.cache_read_tokens),
       cacheWriteTokens: Number(row.cache_write_tokens),
+      ...(Number(row.estimated) === 1 ? { estimated: true, estimateReason: String(row.estimate_reason ?? "") } : {}),
     }));
   }
 
   relayTotals(tenantId: string, since?: string): UsageTotals {
+    return this.relaySum(tenantId, since, 0);
+  }
+
+  relayEstimatedTotals(tenantId: string, since?: string): UsageTotals {
+    return this.relaySum(tenantId, since, 1);
+  }
+
+  private relaySum(tenantId: string, since: string | undefined, estimated: 0 | 1): UsageTotals {
     const row = this.db
       .prepare(
         `select count(*) as records,
@@ -1097,9 +1123,9 @@ export class SqliteControlStore implements ControlStore {
                 coalesce(sum(output_tokens), 0) as output_tokens,
                 coalesce(sum(cache_read_tokens), 0) as cache_read_tokens,
                 coalesce(sum(cache_write_tokens), 0) as cache_write_tokens
-         from relay_usage where tenant_id = ? and at >= ?`
+         from relay_usage where tenant_id = ? and at >= ? and estimated = ?`
       )
-      .get(tenantId, since ?? "") as Record<string, number>;
+      .get(tenantId, since ?? "", estimated) as Record<string, number>;
     return {
       records: Number(row.records),
       inputTokens: Number(row.input_tokens),
@@ -1113,10 +1139,10 @@ export class SqliteControlStore implements ControlStore {
     const row =
       since === undefined
         ? (this.db
-            .prepare("select 1 as found from relay_usage where tenant_id = ? limit 1")
+            .prepare("select 1 as found from relay_usage where tenant_id = ? and estimated = 0 limit 1")
             .get(tenantId) as { found?: number } | undefined)
         : (this.db
-            .prepare("select 1 as found from relay_usage where tenant_id = ? and at >= ? limit 1")
+            .prepare("select 1 as found from relay_usage where tenant_id = ? and at >= ? and estimated = 0 limit 1")
             .get(tenantId, since) as { found?: number } | undefined);
     return row !== undefined;
   }

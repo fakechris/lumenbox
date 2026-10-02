@@ -83,7 +83,7 @@ export class SpendCeilings {
    * on works immediately — and takes a stored row as happily as a live one, which is how a
    * restart keeps the window it was already in.
    */
-  record(usage: Omit<RelayUsage, "streamed">): void {
+  record(usage: Omit<RelayUsage, "streamed" | "estimated" | "estimateReason"> & { estimated?: boolean; estimateReason?: string }): void {
     this.entries.push({
       at: Date.parse(usage.at),
       boxId: usage.boxId,
