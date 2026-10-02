@@ -96,6 +96,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [71-evidence-provenance-practice](71-evidence-provenance-practice.md) | 证据与溯源的业界实践（2025–2026）：我们领先在哪、缺在哪 | current | 2026-09-22 |
 | [74-goal-mode](74-goal-mode.md) | Goal 模式：一个持久目标、一个有界的续跑循环、一道不归执行者管的完成闸门 | current | 2026-09-27 |
 | [75-cost-per-accepted-task](75-cost-per-accepted-task.md) | Cost per accepted task requires an auditable denominator | current | 2026-09-29 |
+| [76-grokbot-0.63-primary-bot](76-grokbot-0.63-primary-bot.md) | What Grok Bot 0.63's Primary Bot is, and what it says we should change | current | 2026-10-02 |
 
 ## handoff
 
