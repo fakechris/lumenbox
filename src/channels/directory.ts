@@ -80,6 +80,7 @@ export const feishuDirectory: DirectoryProvider = {
               : "0",
         });
       }
+      if (body.data.has_more !== undefined && typeof body.data.has_more !== "boolean") throw new Error("Invalid pagination marker");
       if (body.data.has_more !== true) break;
       if (!body.data.page_token || body.data.page_token === pageToken || page === MAX_PAGES - 1) throw new Error("Incomplete department pagination");
       pageToken = body.data.page_token;
@@ -129,7 +130,8 @@ export const feishuDirectory: DirectoryProvider = {
             ];
           }
         }
-        if (body.data.has_more !== true) break;
+        if (body.data.has_more !== undefined && typeof body.data.has_more !== "boolean") throw new Error("Invalid pagination marker");
+      if (body.data.has_more !== true) break;
         if (!body.data.page_token || body.data.page_token === cursor || page === MAX_PAGES - 1) throw new Error("Incomplete people pagination");
         cursor = body.data.page_token;
       }
@@ -228,7 +230,10 @@ export const dingtalkDirectory: DirectoryProvider = {
         if (!Array.isArray(listed.result?.list)) throw new Error("Invalid people page");
         for (const person of listed.result.list) {
           if (typeof person.userid !== "string" || person.userid === "") throw new Error("Invalid person");
-          const departmentIds = (person.dept_id_list ?? [deptId]).map(String);
+          const rawDepartments = person.dept_id_list ?? [deptId];
+          if (!Array.isArray(rawDepartments) || !rawDepartments.length || rawDepartments.some(id =>
+            !((typeof id === "number" && Number.isSafeInteger(id) && id > 0) || (typeof id === "string" && /^[1-9][0-9]*$/.test(id))))) throw new Error("Invalid department membership");
+          const departmentIds = rawDepartments.map(String);
           const known = bySubject.get(person.userid);
           if (known === undefined) {
             bySubject.set(person.userid, {
@@ -243,6 +248,7 @@ export const dingtalkDirectory: DirectoryProvider = {
             ];
           }
         }
+        if (listed.result?.has_more !== undefined && typeof listed.result.has_more !== "boolean") throw new Error("Invalid pagination marker");
         if (listed.result?.has_more !== true) break;
         if (!Number.isSafeInteger(listed.result.next_cursor) || listed.result.next_cursor! <= cursor || page === MAX_PAGES - 1) throw new Error("Incomplete people pagination");
         cursor = listed.result.next_cursor!;

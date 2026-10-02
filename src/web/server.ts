@@ -691,7 +691,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // person's existing access survives the upgrade rather than being silently revoked.
   const principals = new Principals(undefined, { incarnationOf, warn: line => log(`principals: ${line}`) });
   const directoryQuotaContext = (id: string) => directories.membership(
-    principals.list().find(person => person.id === id)?.identities ?? [id], directorySources());
+    principals.list().find(person => person.id === id)?.identities ?? [id], directorySources(), Date.now(), identity => principals.hasCurrentIdentity(id, identity));
 
   {
     const legacy = loadConfig().channelAllow ?? [];
@@ -3775,7 +3775,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               clientId: credentials.clientId, clientSecret: credentials.clientSecret, fetchFn: options.directoryFetch ?? fetch,
             }), () => directoryCredentials(credentials.source.channelId)?.source);
             send(res, 200, { ok: true });
-          } catch { send(res, 503, { error: "Directory sync failed. Previous complete snapshot retained; new allocations are paused until a successful sync." }); }
+          } catch { send(res, 503, { error: "Directory sync failed. Previous complete snapshot retained; new allocations paused. Check permissions and retry. If the tenant changed, use a new door ID and bind its identities." }); }
           return;
         }
         if (route === "GET /api/quotas/self") {

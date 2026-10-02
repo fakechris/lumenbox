@@ -56,6 +56,10 @@ export class Directories {
   }
   async sync(source: DirectorySource, fetchSnapshot: () => Promise<DirectorySnapshot>, current: () => DirectorySource | undefined = () => source): Promise<DirectoryRecord> {
     if (this.syncing.has(source.channelId)) throw new Error("Directory sync already running");
+    const previousSource = this.of(source.channelId)?.source;
+    if (previousSource && !sameSource(previousSource, source)) {
+      throw new Error("Directory tenant changed. Configure a new door ID and bind its identities before syncing.");
+    }
     this.syncing.add(source.channelId);
     try {
       const snapshot = await fetchSnapshot();
@@ -85,7 +89,7 @@ export class Directories {
     return "ready";
   }
   /** A synced door is authoritative for new allocations via its identities. Missing/departed/stale fails closed. */
-  membership(identities: readonly string[], sources: readonly DirectorySource[], now = Date.now()): { eligible: boolean; departmentKeys: string[] } {
+  membership(identities: readonly string[], sources: readonly DirectorySource[], now = Date.now(), currentIdentity: (identity: string) => boolean = () => true): { eligible: boolean; departmentKeys: string[] } {
     const keys = new Set<string>();
     for (const identity of identities) {
       const colon = identity.indexOf(":");
@@ -93,6 +97,7 @@ export class Directories {
       const channelId = identity.slice(0, colon);
       const record = this.of(channelId);
       if (!record) continue; // Directory policy is opt-in, by syncing this door.
+      if (!currentIdentity(identity)) return { eligible: false, departmentKeys: [] };
       const source = sources.find(item => item.channelId === channelId);
       if (!source || this.status(source, now) !== "ready") return { eligible: false, departmentKeys: [] };
       const person = record.snapshot!.people.find(item => item.vendorSubject === identity.slice(colon + 1));

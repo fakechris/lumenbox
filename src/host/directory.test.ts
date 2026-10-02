@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { Principals } from "./principals.ts";
 import { Directories, directorySource, departmentQuotaKey, DIRECTORY_MAX_AGE_MS } from "./directory.ts";
 
 test("directory snapshots replace atomically, depart/move people, and isolate tenant incarnations", async () => {
@@ -24,6 +25,13 @@ test("directory snapshots replace atomically, depart/move people, and isolate te
     assert.equal(directories.membership(["feishu:ada"], [a], Date.now() + DIRECTORY_MAX_AGE_MS + 1).eligible, false);
     const replacement = directorySource("feishu", 2, "tenant-new", "feishu");
     assert.equal(directories.membership(["feishu:ada"], [replacement]).eligible, false);
+    await assert.rejects(directories.sync(replacement, async () => snapshot), /new door ID/);
+    let incarnation = 1;
+    const principals = new Principals(join(home, "principals.json"), { incarnationOf: () => incarnation });
+    principals.save([{ id: "ada", name: "Ada", role: "driver", identities: ["feishu:ada"] }]);
+    incarnation = 2;
+    principals.reload();
+    assert.equal(directories.membership(principals.list()[0]!.identities, [a], Date.now(), identity => principals.hasCurrentIdentity("ada", identity)).eligible, false);
     await directories.sync(a, async () => ({ ...snapshot, people: [] }));
     assert.equal(directories.membership(["feishu:ada"], [a]).eligible, false, "departed person gets no new allocation");
   } finally { rmSync(home, { recursive: true, force: true }); }

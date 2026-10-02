@@ -216,6 +216,8 @@ test("the registry carries feishu and dingtalk; telegram has no directory", () =
 
 test("feishu rejects truncated pagination and denied department reads", async () => {
   for (const departments of [
+    { items: [], has_more: "true", page_token: "next" },
+    { items: [], has_more: null },
     { items: [], has_more: true },
     { items: [], has_more: true, page_token: "repeat" },
     { items: [] },
@@ -236,6 +238,19 @@ test("dingtalk rejects missing and repeated pagination cursors", async () => {
       { url: /department\/get/, reply: () => ({ errcode: 0, result: { name: "root" } }) },
       { url: /department\/listsub/, reply: () => ({ errcode: 0, result: [] }) },
       { url: /user\/list/, reply: () => ({ errcode: 0, result: { list: [], has_more: true, next_cursor } }) },
+    ]);
+    await assert.rejects(dingtalkDirectory.fetchDirectory({ ...ARGS, fetchFn }));
+  }
+});
+
+
+test("dingtalk rejects malformed department membership before coercion", async () => {
+  for (const dept_id_list of [[null], [{}], [false], [""], []]) {
+    const { fetchFn } = routedFetch([
+      { url: /accessToken$/, reply: () => ({ accessToken: "at" }) },
+      { url: /department\/get/, reply: () => ({ errcode: 0, result: { name: "root" } }) },
+      { url: /department\/listsub/, reply: () => ({ errcode: 0, result: [] }) },
+      { url: /user\/list/, reply: () => ({ errcode: 0, result: { list: [{ userid: "ada", dept_id_list }] } }) },
     ]);
     await assert.rejects(dingtalkDirectory.fetchDirectory({ ...ARGS, fetchFn }));
   }

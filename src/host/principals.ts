@@ -211,6 +211,10 @@ export class Principals {
    * identity — so the system works before anyone is configured, and an unconfigured
    * person can read but not command, which is the safe default.
    */
+  hasCurrentIdentity(principalId: string, identity: string): boolean {
+    return this.byIdentity.get(identity)?.id === principalId;
+  }
+
   resolve(identity: string): Principal {
     const known = this.byIdentity.get(identity);
     if (known !== undefined) return known;
