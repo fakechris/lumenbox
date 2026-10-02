@@ -96,6 +96,11 @@ export type PolicyRequest =
        * (and the fingerprint binds) carries it, so consent is to *that* button on *that* page.
        */
       irreversible?: string;
+      /** Trusted box observation plus host execution identity, never model input (INV-955). */
+      inputScope?: {
+        turnId: string; conversation: string; principal: string; target: string;
+        origin: string; category: string; valueHash: string;
+      };
     };
 
 export type PolicyDecision =
@@ -306,6 +311,7 @@ export interface StandingGrant {
 interface Outcome {
   decision: PolicyDecision;
   consequence?: PolicyEvent;
+  inputGrant?: { key: string; fingerprint: string };
 }
 
 export interface PolicyGateOptions {
@@ -387,6 +393,8 @@ export class PolicyGate {
   private readonly stopped = new Set<string>();
   /** Approvals granted and not yet consumed, by fingerprint. */
   private readonly granted = new Map<string, PendingApproval>();
+  /** Process-local, bounded and short lived; never reconstructed from approval-used rows. */
+  private readonly turnInputs = new Map<string, { nonce: string; expires: number; id?: string; fingerprint?: string }>();
   /** Approvals asked for and not yet answered, by fingerprint. */
   private readonly awaiting = new Map<string, PendingApproval>();
   /**
@@ -427,7 +435,7 @@ export class PolicyGate {
    * reason this is a method and not four scattered conditions.
    */
   check(request: PolicyRequest): PolicyDecision {
-    const { decision, consequence } = this.decide(request);
+    const { decision, consequence, inputGrant } = this.decide(request);
     this.append({
       at: this.now().toISOString(),
       kind: "checked",
@@ -453,12 +461,21 @@ export class PolicyGate {
       // action a second time without asking anyone. Everything else here stands unlogged, because a
       // turn dying over bookkeeping is worse; consent that cannot be recorded is the exception.
       if (!written && consequence.kind === "approval-used") {
+        if (inputGrant !== undefined) this.turnInputs.delete(inputGrant.key);
         const reason =
           `This was approved, but the approval could not be recorded, so it has not been used. ` +
           `Acting on consent that is not on the record would let the same action be approved once ` +
           `and run twice. Ask again once the policy log is writable.`;
         this.log(`refused ${describeRequest(request)}: the approval could not be recorded`);
         return { allow: false, reason };
+      }
+    }
+    // Only a durably recorded human grant can seed reuse. An allowed ordinary call cannot.
+    if (decision.allow && inputGrant !== undefined && consequence?.kind === "approval-used") {
+      const scope = this.turnInputs.get(inputGrant.key);
+      if (scope !== undefined && scope.id === undefined) {
+        scope.id = consequence.id;
+        scope.fingerprint = inputGrant.fingerprint;
       }
     }
     if (!decision.allow) {
@@ -644,7 +661,27 @@ export class PolicyGate {
     const tooLarge = tooLargeToApprove(description);
     if (tooLarge !== undefined) return { decision: { allow: false, reason: tooLarge } };
 
-    const fingerprint = fingerprintOf(this.subjectOf(request.agentId), description);
+    const scope = request.inputScope;
+    const inputKey = request.tool === "browser_act" && request.input.action === "type" && request.irreversible !== undefined &&
+      request.delegated === undefined && scope !== undefined && scope.turnId !== "" && scope.conversation !== "" && scope.target !== ""
+      ? JSON.stringify([request.agentId, request.principalId ?? "", scope]) : undefined;
+    for (const [key, grant] of this.turnInputs) if (grant.expires <= this.now().getTime()) this.turnInputs.delete(key);
+    if (inputKey !== undefined && !this.turnInputs.has(inputKey)) {
+      if (this.turnInputs.size >= 256) this.turnInputs.delete(this.turnInputs.keys().next().value!);
+      this.turnInputs.set(inputKey, { nonce: randomUUID(), expires: this.now().getTime() + 15 * 60_000 });
+    }
+    const reused = inputKey === undefined ? undefined : this.turnInputs.get(inputKey);
+    // A process-local nonce also bounds unused/session/standing approvals: replay or expiry
+    // cannot resurrect consent for the exact original field, not just for a second field.
+    const fingerprint = fingerprintOf(this.subjectOf(request.agentId), description +
+      (inputKey === undefined ? "" : `\0${inputKey}\0${reused!.nonce}`));
+    const inputGrant = inputKey === undefined ? undefined : { key: inputKey, fingerprint };
+    // Operator rules and configured per-call approvals continue to take precedence.
+    if (reused?.id !== undefined && reused.fingerprint !== undefined && rule?.effect !== "ask" && !this.needsApproval({ ...request, irreversible: undefined }) &&
+        !(gate === "enforce" && tierAsks(effect.tier))) {
+      return { decision: { allow: true }, consequence: { at: this.now().toISOString(), kind: "approval-used", id: reused.id },
+        inputGrant: { key: inputKey!, fingerprint: reused.fingerprint } };
+    }
 
     // A standing or session grant covers this exact action without being consumed.
     // Each use still writes an approval-used row, so the audit trail says every time
@@ -653,6 +690,7 @@ export class PolicyGate {
     if (standing !== undefined) {
       return {
         decision: { allow: true },
+        inputGrant,
         consequence: { at: this.now().toISOString(), kind: "approval-used", id: standing.id },
       };
     }
@@ -660,6 +698,7 @@ export class PolicyGate {
     if (sessionGrant !== undefined) {
       return {
         decision: { allow: true },
+        inputGrant,
         consequence: { at: this.now().toISOString(), kind: "approval-used", id: sessionGrant.id },
       };
     }
@@ -670,6 +709,7 @@ export class PolicyGate {
       this.granted.delete(fingerprint);
       return {
         decision: { allow: true },
+        inputGrant,
         consequence: { at: this.now().toISOString(), kind: "approval-used", id: grant.id },
       };
     }
@@ -903,6 +943,7 @@ export class PolicyGate {
   revokeStanding(fingerprint: string, by = "user"): boolean {
     if (!this.always.has(fingerprint)) return false;
     this.always.delete(fingerprint);
+    for (const [key, grant] of this.turnInputs) if (grant.fingerprint === fingerprint) this.turnInputs.delete(key);
     this.append({ at: this.now().toISOString(), kind: "approval-revoked", fingerprint, by });
     this.log(`${by} revoked a standing approval`);
     return true;
@@ -1125,7 +1166,8 @@ export function describeRequest(request: PolicyRequest): string {
         command !== undefined && (request.tool === "RunOnHost" || request.tool === "bash") && classifyShell(command).readOnly
           ? " [read-only]"
           : "";
-      return `${request.agentName}: ${request.tool} — ${detail}${readOnly}`;
+      const reuse = request.inputScope === undefined ? "" : " [same exact value and data category to this origin, in this conversation and turn, for up to 15 minutes]";
+      return `${request.agentName}: ${request.tool} — ${detail}${readOnly}${reuse}`;
     }
   }
 }

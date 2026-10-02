@@ -2385,3 +2385,44 @@ test("an address a page asks for is not typed until a person has read what would
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("one turn can repeat approved sensitive data without a second card, but new data still waits (INV-955)", async () => {
+  const { PolicyGate } = await import("./policy.ts");
+  const { BoxError } = await import("../box/client.ts");
+  const { inputValueHash, sameSensitiveInput } = await import("../protocol/sensitive-input.ts");
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "input-reuse-scenario-"));
+  const policy = new PolicyGate({ path: join(dir, "policy.jsonl") });
+  const typed: string[] = [];
+  let cards = 0;
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: ["把我确认的邮箱填进两个报名栏"], policy, display: 1,
+    box: {
+      browser: async (request: import("../protocol/index.ts").BrowserRequest) => {
+        const scope = { origin: "https://forms.example", category: "email address", valueHash: inputValueHash(request.text ?? "") };
+        if (request.inputApproval === undefined || !sameSensitiveInput(request.inputApproval, scope)) {
+          throw new BoxError("IRREVERSIBLE: send email address to forms.example", 428, "refused", scope);
+        }
+        typed.push(request.text ?? "");
+        return { url: "https://forms.example/", title: "Form", snapshot: "- textbox Email", snapshot_id: "s2" };
+      },
+    } as never,
+    script: ({ round }) => {
+      if (round === 1) {
+        cards = policy.pending().length;
+        assert.equal(cards, 1);
+        policy.grant(policy.pending()[0]!.id);
+      }
+      if (round < 4) return { call: "browser_act", input: { action: "type", ref: round < 2 ? "e1" : "e2",
+        text: round === 3 ? "other@example.com" : "me@example.com" } };
+      return { say: "已填入两次确认过的邮箱，新的邮箱仍需确认。" };
+    },
+  });
+  try {
+    assert.deepEqual(typed, ["me@example.com", "me@example.com"]);
+    assert.equal(cards, 1);
+    assert.equal(policy.pending().length, 1, "only changed data creates another card");
+    assert.match(policy.pending()[0]!.description, /other@example.com/);
+  } finally { result.cleanup(); rmSync(dir, { recursive: true, force: true }); }
+});

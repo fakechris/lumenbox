@@ -24,6 +24,7 @@
 import { actionOutcome } from "../protocol/index.ts";
 import type { ActionVerification, ComputerProgress, Outcome, WaitOutcome, ActExpectation, Effect, PageInfo } from "../protocol/index.ts";
 import { spawn } from "node:child_process";
+import { inputValueHash, sameSensitiveInput, type SensitiveInput } from "../protocol/sensitive-input.ts";
 import { realpathSync, statSync } from "node:fs";
 import { CdpError, CdpSession, closeTarget, listTargets, openTarget, type CdpTarget } from "./cdp.ts";
 import { sameEndpointBinding, type BrowserEndpointRegistry, type EndpointBinding } from "./browser-endpoints.ts";
@@ -191,7 +192,9 @@ export function staleReason(
  * list in the box cannot. Answered as HTTP 428 so the host routes it to the policy gate
  * and comes back with `confirmed` once a person has read what it is.
  */
-export class IrreversibleActionError extends CdpError {}
+export class IrreversibleActionError extends CdpError {
+  constructor(message: string, readonly sensitiveInput?: SensitiveInput) { super(message); }
+}
 
 /** What the box reads off a click target before deciding whether to ask. */
 export interface ClickTarget {
@@ -326,6 +329,13 @@ function luhn(digits: string): boolean {
  * password there goes through `fill_secret`, bound to the site it belongs to.
  */
 export function sensitiveInputReason(field: InputField, text: string, host: string): string | undefined {
+  const kind = sensitiveInputKind(field, text, host);
+  if (kind === undefined) return undefined;
+  const where = field.label.trim() !== "" ? ` into ${JSON.stringify(field.label.trim().slice(0, 60))}` : "";
+  return `send ${kind} to ${host}: type${where}`;
+}
+
+function sensitiveInputKind(field: InputField, text: string, host: string): string | undefined {
   // A page on this machine, or one with no host: typing into it hands nothing to anybody.
   if (text.trim() === "" || host === "" || loopback(host.replace(/:\d+$/, ""))) return undefined;
   const words = `${field.name} ${field.label}`;
@@ -335,8 +345,7 @@ export function sensitiveInputReason(field: InputField, text: string, host: stri
     const byValue = entry.value?.(text) ?? false;
     if (!byField && !byValue) continue;
     if (field.signIn && (entry.kind === "email address" || entry.kind === "phone number")) return undefined;
-    const where = field.label.trim() !== "" ? ` into ${JSON.stringify(field.label.trim().slice(0, 60))}` : "";
-    return `send ${entry.kind} to ${host}: type${where}`;
+    return entry.kind;
   }
   return undefined;
 }
@@ -1172,7 +1181,7 @@ class BrowserPage {
    * The field and the host its document belongs to, for `sensitiveInputReason`. The field's own
    * document, not the tab's: a card form in a payment provider's frame sends to that provider.
    */
-  private async describeInput(objectId: string): Promise<{ field: InputField; host: string }> {
+  private async describeInput(objectId: string): Promise<{ field: InputField; host: string; origin: string }> {
     const described = (await this.session.send("Runtime.callFunctionOn", {
       objectId,
       returnByValue: true,
@@ -1182,10 +1191,10 @@ class BrowserPage {
         " const label = attr('aria-label') || (t.labels && t.labels[0] ? t.labels[0].textContent : '') || attr('placeholder');" +
         " const form = t.form || null;" +
         " const signIn = !!(form && form.querySelector('input[type=password]'));" +
-        " let host = ''; try { host = t.ownerDocument.location.host; } catch (e) {}" +
+        " let host = '', origin = ''; try { host = t.ownerDocument.location.host; origin = t.ownerDocument.location.origin; } catch (e) {}" +
         " return { field: { tag, type: tag === 'input' ? String(t.type || '').toLowerCase() : '', autocomplete: attr('autocomplete').toLowerCase()," +
-        "   name: (attr('name') + ' ' + attr('id')).trim(), label: String(label || '').replace(/\\s+/g, ' ').trim(), signIn }, host }; }",
-    })) as { result?: { value?: { field: InputField; host: string } } };
+        "   name: (attr('name') + ' ' + attr('id')).trim(), label: String(label || '').replace(/\\s+/g, ' ').trim(), signIn }, host, origin }; }",
+    })) as { result?: { value?: { field: InputField; host: string; origin: string } } };
     const value = described.result?.value;
     // Unreadable is not a reason to type blind into what may be a card field.
     if (value === undefined) throw new CdpError("Could not read that field before typing into it; take a fresh snapshot.");
@@ -1221,14 +1230,19 @@ class BrowserPage {
     await this.session.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, buttons: 0 });
   }
 
-  async type(ref: string, text: string, replace: boolean, confirmed = false): Promise<void> {
+  async type(ref: string, text: string, replace: boolean, confirmed = false, inputApproval?: SensitiveInput): Promise<void> {
     const objectId = await this.resolve(ref);
     // Before a keystroke: typing is sending (INV-895). Same 428 as an irreversible click, and
     // the same call comes back `confirmed` once a person has read what would go where.
-    if (!confirmed) {
-      const { field, host } = await this.describeInput(objectId);
+    if (!confirmed || inputApproval !== undefined) {
+      const { field, host, origin } = await this.describeInput(objectId);
       const reason = sensitiveInputReason(field, text, host);
-      if (reason !== undefined) throw new IrreversibleActionError(`IRREVERSIBLE: ${reason}`);
+      const category = sensitiveInputKind(field, text, host);
+      const scope = category === undefined ? undefined : { origin, category, valueHash: inputValueHash(text) };
+      if (inputApproval !== undefined && (scope === undefined || !sameSensitiveInput(inputApproval, scope))) {
+        throw new IrreversibleActionError("IRREVERSIBLE: the input destination or data scope changed; ask again", scope);
+      }
+      if (reason !== undefined && inputApproval === undefined) throw new IrreversibleActionError(`IRREVERSIBLE: ${reason}`, scope);
     }
     await this.session.send("DOM.focus", { objectId }).catch(async () => {
       // Not everything focusable through a click is focusable through DOM.focus. Confirmed:
@@ -1878,6 +1892,7 @@ export class BrowserService {
       snapshot?: string;
       find?: { role?: string; name?: string; nth?: number };
       confirmed?: boolean;
+      inputApproval?: SensitiveInput;
       expect?: ActExpectation;
     }
   ): Promise<BrowserResult> {
@@ -1913,7 +1928,7 @@ export class BrowserService {
         await page.hover(ref!);
         break;
       case "type":
-        await page.type(ref!, options.text ?? "", options.replace !== false, options.confirmed === true);
+        await page.type(ref!, options.text ?? "", options.replace !== false, options.confirmed === true, options.inputApproval);
         break;
       case "key":
         await page.press(options.key ?? "Enter");

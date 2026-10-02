@@ -549,6 +549,7 @@ const browserRoute = async (body: BrowserRequest): Promise<BrowserResponse> => d
           ...(body.snapshot !== undefined ? { snapshot: body.snapshot } : {}),
           ...(body.find !== undefined ? { find: body.find } : {}),
           ...(body.confirmed === true ? { confirmed: true } : {}),
+          ...(body.inputApproval !== undefined ? { inputApproval: body.inputApproval } : {}),
           ...(body.expect !== undefined ? { expect: body.expect } : {}),
         });
       case "scroll":
@@ -1044,7 +1045,8 @@ const server = createServer((req, res) => {
                         ? 422
                         : 500;
       if (status >= 500) log(`error on ${route}: ${describe(error)}`);
-      send(res, status, { error: describe(error) });
+      send(res, status, { error: describe(error),
+        ...(error instanceof IrreversibleActionError && error.sensitiveInput !== undefined ? { sensitiveInput: error.sensitiveInput } : {}) });
     }
   })();
 });
