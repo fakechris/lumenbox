@@ -731,8 +731,10 @@ export function notStartedResult(name: string): string {
 }
 
 /** The host's result for a call that was waiting on a person when the host restarted. */
-export function approvalOutcomeResult(name: string, how: "allowed" | "refused" | "gone"): string {
+export function approvalOutcomeResult(name: string, how: "allowed" | "refused" | "gone" | "pending"): string {
   switch (how) {
+    case "pending":
+      return `This ${name} call is still waiting for the person's approval. It has not run. Wait for its answer; do not ask again or retry it yet.`;
     case "allowed":
       return `The person allowed this ${name} call while the host was restarting. It has not run yet: the grant is held, so call it again now, exactly as before.`;
     case "refused":
