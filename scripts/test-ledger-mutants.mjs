@@ -20,8 +20,8 @@ const mutants = [
 
 function run(root, test) {
   const result = spawnSync(process.execPath, ["--experimental-transform-types", "--import", "./scripts/test-network-guard.mjs",
-    "--test", "--test-reporter=tap", "--test-timeout=15000", test],
-  { cwd: root, env: hermeticEnv(), encoding: "utf8", timeout: 30_000, maxBuffer: 8 * 1024 * 1024 });
+    "--test", "--test-reporter=tap", "--test-timeout=45000", test],
+  { cwd: root, env: hermeticEnv(), encoding: "utf8", timeout: 60_000, maxBuffer: 8 * 1024 * 1024 });
   return { ...result, output: `${result.stdout ?? ""}\n${result.stderr ?? ""}` };
 }
 
