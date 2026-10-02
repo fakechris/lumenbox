@@ -78,6 +78,42 @@ export interface RelayUsage {
   cacheWriteTokens: number;
   /** True when the numbers came from a streamed response, which reports them in pieces. */
   streamed: boolean;
+  /**
+   * The numbers are a conservative estimate, not a measurement (INV-814): the response succeeded
+   * without reporting usage, or its stream was cut before the end. Counted against a ceiling like
+   * any other row, and kept apart from measured totals in a report, to be reconciled.
+   */
+  estimated?: true;
+  estimateReason?: EstimateReason;
+}
+
+export type EstimateReason = "no_usage_reported" | "stream_interrupted";
+
+/** Output assumed when a request named no max_tokens: high, because an estimate here is a ceiling. */
+const DEFAULT_OUTPUT_ESTIMATE = 8_192;
+
+/**
+ * A conservative upper bound for a request whose usage was not reported, or was cut short.
+ *
+ * Input is the request's UTF-8 size over three — about one token per CJK character, and more than
+ * English needs — unless the stream had already reported its input, which is then the measured
+ * figure. Output is the request's max_tokens, or what the stream had reported if that is more.
+ * Over-counting here costs a tenant headroom until it is reconciled; under-counting is a free
+ * request, which is the hole this closes.
+ */
+export function estimateUsage(
+  request: { bytes: number; head: string },
+  seen?: ReturnType<UsageAccumulator["result"]>
+): Omit<RelayUsage, "at" | "tenantId" | "boxId" | "provider" | "streamed" | "estimated" | "estimateReason"> {
+  const maxTokens = Number(/"max_tokens"\s*:\s*(\d+)/.exec(request.head)?.[1] ?? DEFAULT_OUTPUT_ESTIMATE);
+  const model = seen?.model || (/"model"\s*:\s*"([^"]+)"/.exec(request.head)?.[1] ?? "");
+  return {
+    model,
+    inputTokens: seen !== undefined && seen.inputTokens > 0 ? seen.inputTokens : Math.ceil(request.bytes / 3),
+    outputTokens: Math.max(seen?.outputTokens ?? 0, maxTokens),
+    cacheReadTokens: seen?.cacheReadTokens ?? 0,
+    cacheWriteTokens: seen?.cacheWriteTokens ?? 0,
+  };
 }
 
 export interface RelayOptions {
@@ -330,6 +366,16 @@ function forward(
   if (client.upstream.auth === "bearer") headers.authorization = `Bearer ${client.upstream.key}`;
   else headers["x-api-key"] = client.upstream.key;
 
+  // A copy of the request's size and head, for an estimate when the response reports nothing
+  // (INV-814). The head carries model and max_tokens, which the SDK writes first.
+  const request = { bytes: 0, head: "" };
+  req.on("data", (chunk: Buffer) => {
+    request.bytes += chunk.length;
+    if (request.head.length < 65_536) request.head += chunk.toString("utf8");
+  });
+  // Token counting is free and reports no usage; it must not be estimated as a request.
+  const metered = url.pathname === "/v1/messages";
+
   const upstream = send(
     {
       protocol: target.protocol,
@@ -358,34 +404,42 @@ function forward(
         }
       });
 
-      response.on("end", () => {
-        res.end();
+      // Settled once: by the end of the response, or by its closing without one.
+      let settled = false;
+      const settle = (complete: boolean) => {
+        if (settled) return;
+        settled = true;
         try {
           accumulator?.end();
           const measured = accumulator !== undefined ? accumulator.result() : usageFromBody(body);
-          if (measured !== undefined) {
-            deps.onUsage({
-              at: new Date().toISOString(),
-              tenantId: client.tenantId,
-              boxId: client.boxId,
-              provider: client.upstream.label,
-              streamed,
-              ...measured,
-            });
-          } else if ((response.statusCode ?? 0) < 400) {
-            // A successful response that reported nothing is worth a line: it means either a
-            // provider that does not report usage, or a shape this parser does not know — and
-            // silently billing zero is how a metering gap goes unnoticed.
-            deps.log(
-              `${client.upstream.label} answered ${response.statusCode} with no usage to measure`
-            );
+          const row = { at: new Date().toISOString(), tenantId: client.tenantId, boxId: client.boxId, provider: client.upstream.label, streamed };
+          if (complete && measured !== undefined) {
+            deps.onUsage({ ...row, ...measured });
+            return;
           }
+          if (!metered || (response.statusCode ?? 0) >= 400) return;
+          // A successful response that reported nothing, or a stream cut before its end, is not a
+          // free request: billing zero is how a metering gap goes unnoticed, and how a box that
+          // never lets a stream finish would spend without limit. An upper bound is recorded,
+          // marked as such, for the ceiling now and reconciliation later.
+          const estimateReason: EstimateReason = complete ? "no_usage_reported" : "stream_interrupted";
+          deps.onUsage({ ...row, ...estimateUsage(request, measured), estimated: true, estimateReason });
+          deps.log(`${client.upstream.label} answered ${response.statusCode} ${complete ? "with no usage to measure" : "and the stream was cut"}; recorded an estimate (${estimateReason})`);
         } catch (error) {
           deps.log(`could not record usage: ${error instanceof Error ? error.message : String(error)}`);
         }
+      };
+
+      response.on("end", () => {
+        res.end();
+        settle(true);
       });
 
       response.on("error", () => res.end());
+      response.on("close", () => {
+        if (!response.complete) res.end();
+        settle(response.complete);
+      });
     }
   );
 

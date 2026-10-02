@@ -31,7 +31,7 @@
 import type { HealthResult } from "../protocol/index.ts";
 import type { HealthNotifier } from "./notify.ts";
 import type { BoxAllocator, BoxHandle } from "./allocator.ts";
-import type { BoxRow, ControlStore, UsageRow } from "./store.ts";
+import type { BoxRow, ControlStore, UsageRow, UsageTotals } from "./store.ts";
 
 /** What a box's `GET /api/usage` returns. Mirrors `UsageLog.since`. */
 interface BoxUsagePayload {
@@ -416,6 +416,12 @@ export interface TenantMeter {
    * understated and one they could not.
    */
   measuredByRelay: boolean;
+  /**
+   * Relay rows that are estimates (INV-814): a success that reported no usage, or a stream cut
+   * short. Beside the measured totals, never added into them; counted toward the budget, because
+   * an unreconciled request is still spending.
+   */
+  estimated?: UsageTotals;
   /** From `quota.monthlyTokens`, when set. */
   limitTokens: number | undefined;
   overBudget: boolean;
@@ -439,12 +445,17 @@ export function meterTenants(store: ControlStore, since?: string): TenantMeter[]
     const limitTokens = typeof limit === "number" && Number.isFinite(limit) ? limit : undefined;
     // Cache reads are counted: they are cheaper, not free, and a tenant whose whole bill is cache
     // reads is still spending. Applying a discount here would bake a price into the wrong file.
-    const billable = totals.inputTokens + totals.outputTokens + totals.cacheReadTokens + totals.cacheWriteTokens;
+    // Always listed. Added to the budget only when the relay's series is the one billed: otherwise
+    // the box's own report already covers the same traffic, and adding both would double-count.
+    const estimated = store.relayEstimatedTotals(tenant.id, since);
+    const sum = (t: UsageTotals) => t.inputTokens + t.outputTokens + t.cacheReadTokens + t.cacheWriteTokens;
+    const billable = sum(totals) + (measuredByRelay ? sum(estimated) : 0);
     return {
       tenantId: tenant.id,
       tenantName: tenant.name,
       ...totals,
       measuredByRelay,
+      ...(estimated.records > 0 ? { estimated } : {}),
       limitTokens,
       overBudget: limitTokens !== undefined && billable > limitTokens,
     };
