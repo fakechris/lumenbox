@@ -322,3 +322,36 @@ for (const text of ["never deploy on Friday", "周五禁止部署", "星期五�
     assert.equal(verifyMaintenanceProposals([rewrite], snapshotForMaintenance(records), records, { now: NOW }).changes.length, 0);
   });
 }
+
+for (const expression of ["this Tuesday", "本周二", "这周二"]) {
+  test(`INV-947: ${expression} belongs to the record's Monday-based UTC week`, () => {
+    for (const [origin, expected, wrong] of [
+      ["2026-09-23T12:00:00Z", "2026-09-22", "2026-09-29"],
+      ["2026-09-22T12:00:00Z", "2026-09-22", "2026-09-29"],
+      ["2026-10-01T12:00:00Z", "2026-09-29", "2026-10-06"],
+      ["2027-01-01T12:00:00Z", "2026-12-29", "2027-01-05"],
+      ["2026-09-27T12:00:00Z", "2026-09-22", "2026-09-29"],
+    ]) {
+      const text = `review: ${expression}`;
+      const records = [fact(text, 0, { at: origin })];
+      const snapshot = snapshotForMaintenance(records);
+      // Both dates have passed: rejection must come from source binding, not the clock.
+      const now = new Date("2027-02-01T12:00:00Z");
+      const good = verifyMaintenanceProposals([proposal(records, "retire", [text], { expiredOn: expected })], snapshot, records, { now });
+      assert.equal(good.changes.length, 1, `${origin}: ${JSON.stringify(good.dropped)}`);
+      const bad = verifyMaintenanceProposals([proposal(records, "retire", [text], { expiredOn: wrong })], snapshot, records, { now });
+      assert.equal(bad.changes.length, 0, `${origin}: next week is not this week`);
+    }
+  });
+}
+
+test("INV-947: next weekdays retain their future alternatives, separate from this week", () => {
+  for (const expression of ["next Tuesday", "下周二"]) {
+    const text = `review: ${expression}`;
+    const records = [fact(text, 0, { at: "2026-09-23T12:00:00Z" })];
+    for (const [expiredOn, accepted] of [["2026-09-22", false], ["2026-09-29", true], ["2026-10-06", true]] as const) {
+      const plan = verifyMaintenanceProposals([proposal(records, "retire", [text], { expiredOn })], snapshotForMaintenance(records), records, { now: new Date("2026-10-10T12:00:00Z") });
+      assert.equal(plan.changes.length, accepted ? 1 : 0, `${expression}: ${expiredOn}`);
+    }
+  }
+});

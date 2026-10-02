@@ -230,6 +230,11 @@ const endOfMonth = (ms: number, monthsAhead: number): string => {
   const d = new Date(ms);
   return isoDay(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + monthsAhead + 1, 0));
 };
+/** A weekday in the record's Monday-through-Sunday UTC week, including past days. */
+const thisWeekday = (ms: number, weekday: number): string => {
+  const mondayOffset = (new Date(ms).getUTCDay() + 6) % 7;
+  return isoDay(startOfDay(ms) + ((weekday + 6) % 7 - mondayOffset) * 86_400_000);
+};
 /** The next occurrence of `weekday` strictly after the day of `ms`, and the one a week later. */
 const nextWeekday = (ms: number, weekday: number): string[] => {
   const day = new Date(ms).getUTCDay();
@@ -280,15 +285,20 @@ export function expiryDatesOf(record: Pick<MemoryRecord, "text" | "at">): string
     else if (/^next\s+week$/.test(expr) || expr === "下周") dates.add(endOfWeek(origin, 1));
     else if (/^(this|coming)\s+month$/.test(expr) || expr === "本月") dates.add(endOfMonth(origin, 0));
     else if (/^next\s+month$/.test(expr) || expr === "下个月") dates.add(endOfMonth(origin, 1));
-    else if (han !== undefined && /^(下周|本周|这周|周|星期)/.test(expr)) {
+    else if (han !== undefined && /^(本周|这周)/.test(expr)) {
+      dates.add(thisWeekday(origin, HAN_WEEKDAY[han]!));
+    } else if (han !== undefined && expr.startsWith("下周")) {
       const [first, second] = nextWeekday(origin, HAN_WEEKDAY[han]!);
       dates.add(first!);
       if (expr.startsWith("下周")) dates.add(second!);
     } else if (/^(?:(next|this|coming|upcoming)\s+)?(\w+day)$/.test(expr)) {
       const [, qualifier, day] = /^(?:(next|this|coming|upcoming)\s+)?(\w+day)$/.exec(expr)!;
-      const [first, second] = nextWeekday(origin, weekdayIndex(day!));
-      dates.add(first!);
-      if (qualifier === "next") dates.add(second!);
+      if (qualifier === "this") dates.add(thisWeekday(origin, weekdayIndex(day!)));
+      else {
+        const [first, second] = nextWeekday(origin, weekdayIndex(day!));
+        dates.add(first!);
+        if (qualifier === "next") dates.add(second!);
+      }
     } else dates.add(days(RELATIVE_HORIZON_DAYS));
   }
   return [...dates];
