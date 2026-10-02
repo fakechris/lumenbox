@@ -747,3 +747,93 @@ test("killed mid write_file: the keyed write is re-run on resume; an interrupted
     f.cleanup();
   }
 });
+
+for (const answerIndex of [0, 1]) {
+  for (const firstAnswer of ["grant", "deny"] as const) {
+    for (const secondAnswer of ["grant", "deny"] as const) {
+      test(`scenario: INV-948 keeps a second approval open across another restart (${answerIndex} first, ${firstAnswer}/${secondAnswer})`, { timeout: 10_000 }, async () => {
+        const f = stepFixture();
+        process.env.AGENTBOX_APPROVAL_TOOLS = "bash";
+        try {
+          const ada = f.registry.create({ name: "Ada" });
+          let requestReached!: () => void;
+          const requested = new Promise<void>(resolve => { requestReached = resolve; });
+          let round = 0;
+          const first = await f.restart(() => {
+            if (++round === 1) return reply([
+              { type: "tool_use", id: "a", name: "bash", input: { command: "rm -rf build-a" } },
+              { type: "tool_use", id: "b", name: "bash", input: { command: "rm -rf build-b" } },
+            ] as Anthropic.ContentBlock[], "tool_use");
+            requestReached();
+            return new Promise<never>(() => {});
+          });
+          void first.prompt(ada.id, "clean both builds");
+          await requested;
+          assert.equal(first.policy.pending().length, 2);
+          const turnId = f.ledger().interrupted()[0]!.id;
+          const open = f.steps().stepsOf(turnId).open;
+          assert.equal(open.length, 2);
+          const firstId = open[answerIndex]!.approvalId!;
+          const secondId = open[1 - answerIndex]!.approvalId!;
+          let resumeReached!: () => void;
+          const resumed = new Promise<void>(resolve => { resumeReached = resolve; });
+          const second = await f.restart(() => {
+            resumeReached();
+            return new Promise<never>(() => {});
+          });
+          assert.deepEqual(second.resumeInterrupted(), { resumed: 0, abandoned: 0, parked: 1 });
+          assert.equal(second.policy[firstAnswer](firstId, "chris"), true);
+          if (answerIndex === 0) await resumed;
+          assert.deepEqual(f.steps().stepsOf(turnId).open.map(step => step.approvalId), [secondId]);
+          const afterFirst = entriesOf(f.registry, ada.id).filter(entry => entry.text?.startsWith("[host]"));
+          if (answerIndex === 0) assert.ok(afterFirst.some(entry => entry.text?.includes(firstAnswer === "grant" ? "allowed this bash call" : "refused this bash call")));
+          assert.ok(!afterFirst.some(entry => /gone|no longer waiting/.test(entry.text ?? "")), "the unanswered approval was not reported lost");
+
+          // A clean shutdown avoids consuming the crash-loop budget in this two-restart episode.
+          second.noteCleanShutdown();
+          const third = await f.restart(() => say("both answers received"));
+          assert.deepEqual(third.resumeInterrupted(), { resumed: 0, abandoned: 0, parked: 1 });
+          assert.equal(third.policy[secondAnswer](secondId, "chris"), true);
+          await third.settle();
+          assert.deepEqual(f.steps().stepsOf(turnId).open, []);
+          assert.deepEqual(f.ledger().interrupted(), []);
+          assert.deepEqual(f.ran, [], "approval answers never replay the unsafe commands");
+          assert.ok(entriesOf(f.registry, ada.id).some(entry => entry.turnId === turnId && entry.text === "both answers received"));
+        } finally {
+          delete process.env.AGENTBOX_APPROVAL_TOOLS;
+          f.cleanup();
+        }
+      });
+    }
+  }
+}
+
+test("INV-948: an obsolete approval before a live one does not bypass parking", async () => {
+  const f = stepFixture();
+  try {
+    const ada = f.registry.create({ name: "Ada" });
+    const before = await f.restart(() => say("unused"));
+    const asked = before.policy.check({ kind: "tool", agentId: ada.id, agentName: "Ada", tool: "bash", input: { command: "rm -rf b" }, irreversible: "deletes b" });
+    assert.ok(!asked.allow && asked.approval);
+    const liveId = asked.approval.id;
+    leave(f.registry, ada.id, "t1", [blocks("t1",
+      { id: "a", name: "bash", input: { command: "rm -rf a" } },
+      { id: "b", name: "bash", input: { command: "rm -rf b" } },
+    )]);
+    f.ledger().begin({ id: "t1", agentId: ada.id, about: "clean both" });
+    f.steps().pending("t1", "a", "bash");
+    f.steps().awaitingApproval("t1", "a", "obsolete");
+    f.steps().pending("t1", "b", "bash");
+    f.steps().awaitingApproval("t1", "b", liveId);
+    const orch = await f.restart(() => say("understood"));
+    assert.deepEqual(orch.resumeInterrupted(), { resumed: 0, abandoned: 0, parked: 1 });
+    assert.equal(orch.policy.deny(liveId, "chris"), true);
+    await orch.settle();
+    assert.match(resultText(f.registry, ada.id, "a"), /no longer waiting/);
+    assert.match(resultText(f.registry, ada.id, "b"), /refused this bash call/);
+    assert.deepEqual(f.ran, []);
+    assert.deepEqual(f.steps().stepsOf("t1").open, []);
+  } finally {
+    f.cleanup();
+  }
+});

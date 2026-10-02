@@ -207,12 +207,12 @@ const NUMBER_OR_MONTH = /^\d+$|^(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|no
 /**
  * One relative-time expression, as a whole: the words a rewrite may replace with a date
  * and the words a retirement may be dated by. "next Tuesday", "this week", "tomorrow",
- * "下周三". A weekday alone counts; a bare "week", "this" or "next" does not.
+ * "下周三". A weekday needs a relative qualifier; a bare weekday may be a standing rule.
  */
 const WEEKDAY = "monday|tuesday|wednesday|thursday|friday|saturday|sunday";
 const RELATIVE_EXPRESSION = new RegExp(
-  `\\b(?:(?:next|this|coming|upcoming)\\s+(?:week|month|${WEEKDAY})|${WEEKDAY}|tomorrow|tonight|today|soon|upcoming|later|yesterday)\\b` +
-    "|明天|后天|下周[一二三四五六日天]?|本周[一二三四五六日天]?|这周[一二三四五六日天]?|下个月|本月|最近|即将|快到|周[一二三四五六日天]|星期[一二三四五六日天]",
+  `\\b(?:(?:next|this|coming|upcoming)\\s+(?:week|month|${WEEKDAY})|tomorrow|tonight|today|soon|upcoming|later|yesterday)\\b` +
+    "|明天|后天|下周[一二三四五六日天]?|本周[一二三四五六日天]?|这周[一二三四五六日天]?|下个月|本月|最近|即将|快到",
   "gi"
 );
 const relativeExpressionsIn = (text: string): string[] => text.match(RELATIVE_EXPRESSION) ?? [];
@@ -229,6 +229,11 @@ const endOfWeek = (ms: number, weeksAhead: number): string => {
 const endOfMonth = (ms: number, monthsAhead: number): string => {
   const d = new Date(ms);
   return isoDay(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + monthsAhead + 1, 0));
+};
+/** A weekday in the record's Monday-through-Sunday UTC week, including past days. */
+const thisWeekday = (ms: number, weekday: number): string => {
+  const mondayOffset = (new Date(ms).getUTCDay() + 6) % 7;
+  return isoDay(startOfDay(ms) + ((weekday + 6) % 7 - mondayOffset) * 86_400_000);
 };
 /** The next occurrence of `weekday` strictly after the day of `ms`, and the one a week later. */
 const nextWeekday = (ms: number, weekday: number): string[] => {
@@ -280,15 +285,20 @@ export function expiryDatesOf(record: Pick<MemoryRecord, "text" | "at">): string
     else if (/^next\s+week$/.test(expr) || expr === "下周") dates.add(endOfWeek(origin, 1));
     else if (/^(this|coming)\s+month$/.test(expr) || expr === "本月") dates.add(endOfMonth(origin, 0));
     else if (/^next\s+month$/.test(expr) || expr === "下个月") dates.add(endOfMonth(origin, 1));
-    else if (han !== undefined && /^(下周|本周|这周|周|星期)/.test(expr)) {
+    else if (han !== undefined && /^(本周|这周)/.test(expr)) {
+      dates.add(thisWeekday(origin, HAN_WEEKDAY[han]!));
+    } else if (han !== undefined && expr.startsWith("下周")) {
       const [first, second] = nextWeekday(origin, HAN_WEEKDAY[han]!);
       dates.add(first!);
       if (expr.startsWith("下周")) dates.add(second!);
     } else if (/^(?:(next|this|coming|upcoming)\s+)?(\w+day)$/.test(expr)) {
       const [, qualifier, day] = /^(?:(next|this|coming|upcoming)\s+)?(\w+day)$/.exec(expr)!;
-      const [first, second] = nextWeekday(origin, weekdayIndex(day!));
-      dates.add(first!);
-      if (qualifier === "next") dates.add(second!);
+      if (qualifier === "this") dates.add(thisWeekday(origin, weekdayIndex(day!)));
+      else {
+        const [first, second] = nextWeekday(origin, weekdayIndex(day!));
+        dates.add(first!);
+        if (qualifier === "next") dates.add(second!);
+      }
     } else dates.add(days(RELATIVE_HORIZON_DAYS));
   }
   return [...dates];
@@ -482,16 +492,23 @@ export function verifyMaintenanceProposals(
         refuse(`rewritten text adds more than one date (${newDates.join(", ")})`);
         continue;
       }
-      const origin = Date.parse(source.at);
-      const when = Date.parse(newDates[0]!);
-      if (when < origin - 86_400_000 || when > origin + RELATIVE_HORIZON_DAYS * 86_400_000) {
-        refuse(`${newDates[0]} is not within ${RELATIVE_HORIZON_DAYS} days of the line's own date`);
+      const remainder = normalise(proposal.text.replace(newDates[0]!, " "));
+      const substituted = relative.find(expression => normalise(source.text.replace(expression, " ")) === remainder);
+      if (substituted === undefined) {
+        refuse("rewrite may only replace one relative time with its date; every other word must stay as it was");
         continue;
       }
-      const remainder = normalise(proposal.text.replace(newDates[0]!, " "));
-      const substituted = relative.some(expression => normalise(source.text.replace(expression, " ")) === remainder);
-      if (!substituted) {
-        refuse("rewrite may only replace one relative time with its date; every other word must stay as it was");
+      // A this-week weekday can be several days before `at`. Bind that exception to the
+      // expression actually replaced, using the same date as retirement (INV-947).
+      const thisWeek = /^this\s+\w+day$|^(本周|这周)[一二三四五六日天]$/i.test(substituted);
+      if (thisWeek && !expiryDatesOf({ ...source, text: substituted }).includes(newDates[0]!)) {
+        refuse(`${newDates[0]} is not the relative expression's own date`);
+        continue;
+      }
+      const origin = Date.parse(source.at);
+      const when = Date.parse(newDates[0]!);
+      if ((!thisWeek && when < origin - 86_400_000) || when > origin + RELATIVE_HORIZON_DAYS * 86_400_000) {
+        refuse(`${newDates[0]} is not within ${RELATIVE_HORIZON_DAYS} days of the line's own date`);
         continue;
       }
     }
