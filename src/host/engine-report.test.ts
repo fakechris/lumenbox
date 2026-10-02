@@ -20,7 +20,7 @@ test("claude: success is done, with its answer, usage and session", () => {
   const report = parseEngineReport("claude", fixture("claude-ok"))!;
   assert.equal(report.status, "completed");
   assert.equal(report.finalText, "probe ok");
-  assert.deepEqual(report.usage, { input: 11, output: 3 });
+  assert.deepEqual(report.usage, { input: 11, output: 3, cacheRead: 0, cacheWrite: 0 });
   assert.match(report.sessionId ?? "", /^[0-9a-f-]{36}$/);
   assert.equal(judgeDelegate({ exitCode: 0, report }).outcome, "done");
 });
@@ -58,7 +58,7 @@ test("pi: done when its last answer stopped normally; a 400 or 500 is a failure 
   const ok = parseEngineReport("pi", fixture("pi-json-ok"))!;
   assert.equal(ok.status, "completed");
   assert.equal(ok.finalText, "probe ok");
-  assert.deepEqual(ok.usage, { input: 11, output: 3 });
+  assert.deepEqual(ok.usage, { input: 11, output: 3, cacheRead: 0, cacheWrite: 0 });
   for (const name of ["pi-json-400", "pi-json-500"]) {
     const report = parseEngineReport("pi", fixture(name))!;
     assert.equal(report.status, "failed", name);
@@ -145,7 +145,7 @@ test("settleDelegate: an engine that failed with exit 0 is recorded failed, with
     const committed = readFileSync(join(dir, "pending-work.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line) as Record<string, unknown>).find(entry => entry.event === "committed")!;
     assert.equal(committed.how, "failed");
     // pi counted no tokens on a refused request, and said so with zeros; a missing count would be absent.
-    assert.deepEqual(committed.usage, { input: 0, output: 0, source: "engine-report" });
+    assert.deepEqual(committed.usage, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, source: "engine-report" });
     // A second observer finds nothing open.
     assert.equal(await settleDelegate({ pendingWork: ledger, box: box as never }, { job_id: "job-1", exit_code: 0, log_path: "/log" }), undefined);
   } finally {
@@ -234,6 +234,55 @@ test("the orchestrator's job-end note is the engine's outcome, one wording each,
     assert.match(notes[3]!, /whether it did the work is unknown: job-gone.*could not be reached/);
   } finally {
     delete process.env.AGENTBOX_HOME;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("usage counts cache reads and writes apart, and every attempt pi retried, not only the last", () => {
+  const claude = parseEngineReport("claude", JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "ok", session_id: "s",
+    usage: { input_tokens: 10, output_tokens: 4, cache_read_input_tokens: 9000, cache_creation_input_tokens: 300 } }))!;
+  assert.deepEqual(claude.usage, { input: 10, output: 4, cacheRead: 9000, cacheWrite: 300 });
+  const message = (input: number) => ({ type: "message_end", message: { role: "assistant", content: [], stopReason: "error", usage: { input, output: 1, cacheRead: 2, cacheWrite: 0 } } });
+  const retried = [
+    message(5),
+    { type: "agent_end", messages: [message(5).message], willRetry: true },
+    message(7),
+    { type: "agent_end", messages: [{ ...message(7).message, stopReason: "stop", content: [{ type: "text", text: "done" }] }], willRetry: false },
+  ].map(event => JSON.stringify(event)).join("\n");
+  const pi = parseEngineReport("pi", retried)!;
+  assert.equal(pi.status, "completed");
+  assert.deepEqual(pi.usage, { input: 12, output: 2, cacheRead: 4, cacheWrite: 0 });
+});
+
+test("a log too big for the file read is read by its last bytes", async () => {
+  const commands: string[] = [];
+  const box = {
+    exec: async (command: string) => { commands.push(command); return { stdout: `{"cut line\n${fixture("claude-ok")}`, stderr: "", exit_code: 0 }; },
+    readFile: async () => { throw new Error("/log is 9000000 bytes, over the 8388608-byte read limit"); },
+  };
+  const read = await readLogEnd(box as never, "/home/box/work/.jobs/it's.log");
+  assert.ok("text" in read);
+  assert.equal(parseEngineReport("claude", read.text)?.status, "completed", "the cut first line is skipped");
+  assert.match(commands[0]!, /^tail -c \d+ -- '\/home\/box\/work\/\.jobs\/it'\\''s\.log'$/);
+});
+
+test("a delegated job stopped with Jobs kill is recorded aborted, though the kill returns before the close", async () => {
+  const { dispatchTool } = await import("./tools.ts");
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-kill-"));
+  try {
+    const ledger = new PendingWork(join(dir, "pending-work.jsonl"));
+    ledger.prepare({ agentId: "a1", kind: "delegate", parent: "main", child: "job-k", brief: "claude: long work", data: { engine: "claude" } });
+    const box = {
+      killJob: async () => ({ job_id: "job-k", running: true, log_path: "/jobs/k.log", command: "claude", log_bytes: 0 }),
+      waitForJob: async () => ({ job_id: "job-k", reason: "exited", running: false, exit_code: 1, log_path: "/jobs/k.log", log_bytes: 0, tail: "" }),
+      exec: async () => ({ stdout: "", stderr: "", exit_code: 0 }),
+      readFile: async () => ({ content: "", total_lines: 1 }),
+    };
+    const context = { agent: { id: "a1", profile: { name: "Ada" } }, registry: {} as never, bus: {} as never, box, pendingWork: ledger } as unknown as Parameters<typeof dispatchTool>[2];
+    await dispatchTool("Jobs", { action: "kill", job_id: "job-k" }, context);
+    const committed = readFileSync(join(dir, "pending-work.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line) as Record<string, unknown>).filter(entry => entry.event === "committed");
+    assert.deepEqual(committed.map(entry => entry.how), ["aborted"]);
+  } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });

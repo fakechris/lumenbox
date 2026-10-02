@@ -17,8 +17,18 @@
 
 import type { BoxClient } from "../box/client.ts";
 import type { OpenFork, PendingWork } from "./pending-work.ts";
+import { quoteForShell } from "./presets.ts";
+
+export { MACHINE_OUTPUT } from "./presets.ts";
 
 export type EngineName = "claude" | "pi" | "opencode";
+
+export interface EngineUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
 
 /** What the host records for a delegation. Only the engine's report can make it `done`. */
 export type DelegateOutcome = "done" | "failed" | "aborted" | "unknown";
@@ -31,19 +41,15 @@ export interface EngineReport {
   detail?: string;
   /** The answer, as the engine gave it last. */
   finalText?: string;
-  /** Tokens as the engine counted them. Absent when it said nothing, which is not zero. */
-  usage?: { input: number; output: number };
+  /**
+   * Tokens as the engine counted them, cache reads and writes apart from fresh input (they are
+   * usually most of it). Absent when it said nothing, which is not zero.
+   */
+  usage?: EngineUsage;
   sessionId?: string;
   /** The engine refused to resume the thread it was given (Claude: "No conversation found"). */
   resumeFailed?: boolean;
 }
-
-/** The engines whose report the host can read, and the flag that makes each one write it. */
-export const MACHINE_OUTPUT: Readonly<Record<EngineName, string>> = {
-  claude: "--output-format stream-json --verbose",
-  pi: "--mode json",
-  opencode: "--format json",
-};
 
 function events(log: string): Record<string, unknown>[] {
   const parsed: Record<string, unknown>[] = [];
@@ -71,6 +77,8 @@ function claudeReport(all: Record<string, unknown>[]): EngineReport | undefined 
   const usage = result.usage as Record<string, unknown> | undefined;
   const input = num(usage?.input_tokens);
   const output = num(usage?.output_tokens);
+  const cacheRead = num(usage?.cache_read_input_tokens) ?? 0;
+  const cacheWrite = num(usage?.cache_creation_input_tokens) ?? 0;
   const failed = result.is_error === true || (subtype !== undefined && subtype !== "success");
   // A limit the run was given, reached: stopped short rather than broken.
   const stopped = subtype === "error_max_turns" || subtype === "error_max_budget_usd";
@@ -80,7 +88,7 @@ function claudeReport(all: Record<string, unknown>[]): EngineReport | undefined 
     status: !failed ? "completed" : stopped ? "aborted" : "failed",
     ...(failed && detail !== undefined ? { detail } : {}),
     ...(!failed && str(result.result) !== undefined ? { finalText: str(result.result)! } : {}),
-    ...(input !== undefined && output !== undefined ? { usage: { input, output } } : {}),
+    ...(input !== undefined && output !== undefined ? { usage: { input, output, cacheRead, cacheWrite } } : {}),
     ...(str(result.session_id) !== undefined ? { sessionId: str(result.session_id)! } : {}),
     ...(errors.some(error => /No conversation found with session ID/i.test(error)) ? { resumeFailed: true } : {}),
   };
@@ -93,14 +101,19 @@ function piReport(all: Record<string, unknown>[]): EngineReport | undefined {
   const assistant = messages.filter(message => message?.role === "assistant");
   const last = assistant.at(-1);
   const stopReason = str(last?.stopReason);
-  let input = 0;
-  let output = 0;
+  // Every attempt's tokens: after an automatic retry pi starts a new agent_end, which holds only
+  // the retried loop, so usage is summed over every assistant message_end instead.
+  const total: EngineUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   let counted = false;
-  for (const message of assistant) {
+  for (const event of all) {
+    const message = event.type === "message_end" ? (event.message as Record<string, unknown> | undefined) : undefined;
+    if (message?.role !== "assistant") continue;
     const usage = message.usage as Record<string, unknown> | undefined;
     if (num(usage?.input) === undefined || num(usage?.output) === undefined) continue;
-    input += num(usage!.input)!;
-    output += num(usage!.output)!;
+    total.input += num(usage!.input)!;
+    total.output += num(usage!.output)!;
+    total.cacheRead += num(usage!.cacheRead) ?? 0;
+    total.cacheWrite += num(usage!.cacheWrite) ?? 0;
     counted = true;
   }
   const text = Array.isArray(last?.content)
@@ -113,7 +126,7 @@ function piReport(all: Record<string, unknown>[]): EngineReport | undefined {
     status,
     ...(status !== "completed" ? { detail: str(last?.errorMessage) ?? (last === undefined ? "the run ended without an answer" : `stopped: ${stopReason}`) } : {}),
     ...(status === "completed" && str(text) !== undefined ? { finalText: text! } : {}),
-    ...(counted ? { usage: { input, output } } : {}),
+    ...(counted ? { usage: total } : {}),
     ...(str(session?.id) !== undefined ? { sessionId: str(session!.id)! } : {}),
   };
 }
@@ -124,17 +137,19 @@ function opencodeReport(all: Record<string, unknown>[]): EngineReport | undefine
   const error = mine.filter(event => event.type === "error").at(-1);
   const part = (event: Record<string, unknown>) => (event.part ?? {}) as Record<string, unknown>;
   const finishes = mine.filter(event => event.type === "step_finish");
-  let input = 0;
-  let output = 0;
+  const total: EngineUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   let counted = false;
   for (const finish of finishes) {
     const tokens = part(finish).tokens as Record<string, unknown> | undefined;
     if (num(tokens?.input) === undefined || num(tokens?.output) === undefined) continue;
-    input += num(tokens!.input)!;
-    output += num(tokens!.output)!;
+    const cache = (tokens!.cache ?? {}) as Record<string, unknown>;
+    total.input += num(tokens!.input)!;
+    total.output += num(tokens!.output)!;
+    total.cacheRead += num(cache.read) ?? 0;
+    total.cacheWrite += num(cache.write) ?? 0;
     counted = true;
   }
-  const usage = counted ? { usage: { input, output } } : {};
+  const usage = counted ? { usage: total } : {};
   const sessionId = { sessionId: String(mine[0]!.sessionID) };
   if (error !== undefined) {
     const body = (error.error ?? {}) as Record<string, unknown>;
@@ -189,12 +204,27 @@ export function judgeDelegate(input: {
 
 /** How many lines from the end of a log to read: every engine writes its report last. */
 const REPORT_LINES = 400;
+/** How many bytes from the end, when the box can run a command: under exec's 2 MB output cap. */
+const REPORT_BYTES = 1_500_000;
 
 /**
  * The end of a job's log, read through the box. Two reads — the length, then the tail — because
  * the daemon's own job tail is 8 KB, and Claude's `result` line carries the whole final answer.
  */
-export async function readLogEnd(box: Pick<BoxClient, "readFile">, logPath: string): Promise<{ text: string } | { unreadable: string }> {
+export async function readLogEnd(
+  box: Pick<BoxClient, "readFile"> & Partial<Pick<BoxClient, "exec">>,
+  logPath: string
+): Promise<{ text: string } | { unreadable: string }> {
+  // By bytes first: the daemon refuses to read a file over 8 MB at all, and a long stream-json
+  // run passes that. The first line of the tail may be cut, and the parser skips it.
+  if (box.exec !== undefined) {
+    try {
+      const tail = await box.exec(`tail -c ${REPORT_BYTES} -- ${quoteForShell(logPath)}`, { timeoutMs: 15_000 });
+      if (tail.exit_code === 0) return { text: tail.stdout };
+    } catch {
+      // Fall through to the line read, which says why when it fails too.
+    }
+  }
   try {
     const head = await box.readFile(logPath, { startLine: 1, endLine: 1 });
     const total = (head as { total_lines?: number }).total_lines ?? 1;
@@ -208,7 +238,7 @@ export async function readLogEnd(box: Pick<BoxClient, "readFile">, logPath: stri
 /** What `settleDelegate` needs: the ledger, the box the job ran in, and the engine threads. */
 export interface SettleDeps {
   pendingWork: Pick<PendingWork, "open" | "commitDelegate"> | undefined;
-  box: Pick<BoxClient, "readFile"> | undefined;
+  box: (Pick<BoxClient, "readFile"> & Partial<Pick<BoxClient, "exec">>) | undefined;
   /** Forget a thread the engine could not resume, with the reason (DelegateSessions). */
   dropSession?: (id: string, reason: string) => void;
 }

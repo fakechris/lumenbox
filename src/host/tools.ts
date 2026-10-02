@@ -3195,7 +3195,12 @@ export async function dispatchTool(
       if (jobId === "") return { text: "Which job? Pass job_id.", isError: true };
       if (action === "kill") {
         const killed = await box.killJob(jobId);
-        await observe(killed, true);
+        // The kill is sent at once and the status can still say running; the close follows. Waited
+        // for briefly, then settled as stopped either way — it was, by us (INV-908).
+        const ended = killed.running
+          ? await box.waitForJob({ job_id: jobId, timeout_ms: 3_000 }).catch(() => undefined)
+          : undefined;
+        await observe({ ...(ended ?? killed), running: false }, true);
         return { text: `${killed.job_id} stopped. Its output is at ${killed.log_path}.` };
       }
       if (action !== "wait") {

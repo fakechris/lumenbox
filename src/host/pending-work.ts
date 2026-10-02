@@ -39,7 +39,7 @@ export interface CommitNote {
   /** Where the outcome came from, in a sentence. */
   why?: string;
   /** Tokens as the engine reported them; absent when it reported none, which is not zero. */
-  usage?: { input: number; output: number; source: "engine-report" };
+  usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; source: "engine-report" };
 }
 export type DropWhy = "restart" | "unrecorded" | "refused";
 

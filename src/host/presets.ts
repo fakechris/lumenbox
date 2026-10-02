@@ -35,7 +35,15 @@
  * delegated engine visible, interruptible and loggable exactly like any other job.
  */
 
-import { MACHINE_OUTPUT } from "./engine-report.ts";
+/**
+ * The flag that makes each engine write its machine-readable stream, from which the host reads
+ * the engine's own completion report (INV-908, engine-report.ts).
+ */
+export const MACHINE_OUTPUT: Readonly<Record<"claude" | "pi" | "opencode", string>> = {
+  claude: "--output-format stream-json --verbose",
+  pi: "--mode json",
+  opencode: "--format json",
+};
 
 /**
  * Where an engine installed on demand lives: on the work volume, so it survives a box
