@@ -217,6 +217,17 @@ test("the policy log keeps every approval across a compaction: old lines move to
     assert.equal(archived.length + live.length - 1, old.length + filler.length, "every line is live or archived; the standing grant is re-stated once");
     // And a standing grant is still live, so the gate still honours it.
     assert.ok(live.some(entry => entry.includes('"approval-granted-always"') && entry.includes("fp-2")));
+
+    // A second compaction: the re-stated grant leaves the live file again, but is not archived
+    // a second time — the archive holds the grant once, as the person gave it.
+    writeFileSync(ledger, `${[...live, ...filler].join("\n")}\n`);
+    new PolicyGate({
+      path: ledger,
+      limits: { budgetWindowHours: 24, wakesPerWindow: 30, wakeWindowMinutes: 10, approvalRequiredTools: [], approvalRequiredCommands: [] },
+    });
+    const grants = archivedLines(ledger).filter(entry => entry.includes('"approval-granted-always"') && entry.includes("fp-2"));
+    assert.equal(grants.length, 1);
+    assert.match(grants[0]!, /"by":"chris"/);
   } finally {
     cleanup();
   }

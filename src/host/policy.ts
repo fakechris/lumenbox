@@ -1060,8 +1060,13 @@ export class PolicyGate {
         } satisfies PolicyEvent)
       );
       const kept = [...standing, ...lines.slice(-KEEP_ON_COMPACT)];
-      // What leaves the live file goes to the archive first: moved, never lost.
-      archiveSettled(this.path, lines.slice(0, Math.max(0, lines.length - KEEP_ON_COMPACT)));
+      // What leaves the live file goes to the archive first: moved, never lost. Except the
+      // grants an earlier compaction re-stated: each is a copy of a line already archived or
+      // still live, and archiving it would put the same grant in the record once per compaction.
+      archiveSettled(
+        this.path,
+        lines.slice(0, Math.max(0, lines.length - KEEP_ON_COMPACT)).filter(line => !isRestatement(line))
+      );
       const temp = `${this.path}.${process.pid}.tmp`;
       writeFileSync(temp, `${kept.join("\n")}\n`, "utf8");
       renameSync(temp, this.path);
@@ -1070,6 +1075,16 @@ export class PolicyGate {
       const detail = error instanceof Error ? error.message : String(error);
       this.log(`policy: cannot compact ${this.path} (${detail})`);
     }
+  }
+}
+
+/** A standing grant written back by compaction rather than by a person. */
+function isRestatement(line: string): boolean {
+  try {
+    const event = JSON.parse(line) as { kind?: unknown; by?: unknown };
+    return event.kind === "approval-granted-always" && event.by === "compaction";
+  } catch {
+    return false;
   }
 }
 
