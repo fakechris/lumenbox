@@ -38,3 +38,24 @@ test("an engine thread is resumed while nothing that defines it changed, and rot
   const fork = sessions.open({ ...base, conversation: "feishu:oc_1" }, new Date("2026-09-07T10:08:00Z"));
   assert.equal(fork.rotated, undefined);
 });
+
+test("a thread the engine could not resume is not offered again, and the next run says why, across a restart (INV-908)", async () => {
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-capsules-"));
+  try {
+    const path = join(dir, "delegate-sessions.json");
+    const base = { agentId: "a", conversation: "main", preset: "claude", cwd: "/home/box/work/repo", model: "m1" };
+    const sessions = new DelegateSessions(path);
+    const first = sessions.open(base);
+    sessions.drop(first.id, "No conversation found with session ID: x");
+    sessions.drop("someone-else", "ignored");
+    const next = new DelegateSessions(path).open(base);
+    assert.equal(next.resumed, false);
+    assert.notEqual(next.id, first.id);
+    assert.match(next.rotated ?? "", /could not resume its thread \(No conversation found/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

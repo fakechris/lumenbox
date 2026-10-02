@@ -1633,6 +1633,51 @@ test("an email send through a connector waits for a person when the tier gate en
   }
 });
 
+test("a delegated engine that failed but exited 0 is reported failed to the agent, not finished (INV-908)", async () => {
+  const { PendingWork } = await import("./pending-work.ts");
+  const { mkdtempSync, rmSync, readFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-delegate-outcome-"));
+  // pi 0.85.1's own output for a run its provider refused with a 400; pi exited 0 (docs/25).
+  const log = readFileSync(new URL("./fixtures/engine-report/pi-json-400.jsonl", import.meta.url), "utf8").split("\n");
+  let jobId = "";
+  const pendingWork = new PendingWork(join(dir, "pending-work.jsonl"));
+  let jobsResult = "";
+  const result = await runEpisode({
+    team: [{ name: "Nova" }],
+    says: ["让 pi 把 lint 修了"],
+    pendingWork,
+    files: { "/home/box/work/.jobs/delegate.log": log.join("\n") },
+    box: {
+      exec: async () => ({ stdout: "/usr/bin/pi", stderr: "", exit_code: 0, timed_out: false }),
+      startJob: async (_command: string, options: { jobId?: string } = {}) => {
+        jobId = options.jobId ?? "job-scenario";
+        return { job_id: jobId, log_path: "/home/box/work/.jobs/delegate.log", running: true, command: "pi", log_bytes: 0, started_at: "" } as never;
+      },
+      waitForJob: async () =>
+        ({ job_id: jobId, reason: "exited", running: false, exit_code: 0, log_path: "/home/box/work/.jobs/delegate.log", log_bytes: 2380, tail: log.join("\n").slice(-8000) }) as never,
+    },
+    script: ({ round, messages }) => {
+      if (round === 0) return { call: "Delegate", input: { preset: "pi", prompt: "fix the lint" } };
+      if (round === 1) return { call: "Jobs", input: { action: "wait", job_id: jobId } };
+      if (round === 2) {
+        jobsResult = JSON.stringify(messages.at(-1)?.content);
+        return { say: "pi 没修成：模型那边返回了 400。" };
+      }
+      return undefined;
+    },
+  });
+  try {
+    assert.match(jobsResult, /Outcome: failed — pi reported a failure: 400/, "the agent is told it failed, and on whose word");
+    assert.doesNotMatch(jobsResult, /its answer/, "a failure offers no answer to use");
+    const committed = readFileSync(join(dir, "pending-work.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line) as { event: string; how?: string }).filter(entry => entry.event === "committed");
+    assert.deepEqual(committed.map(entry => entry.how), ["failed"], "and the ledger says failed, though the exit code was 0");
+  } finally {
+    result.cleanup();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("the starter coordinator sees a connected service and uses it, though its tool list was written before the service existed (INV-759)", async () => {
   const { STARTER_TEAM } = await import("./orchestrator.ts");
   const ada = STARTER_TEAM.find(profile => profile.name === "Ada")!;

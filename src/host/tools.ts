@@ -38,6 +38,7 @@ import { guardShellCommand } from "./ui-automation-guard.ts";
 import { dedupe, dedupeKey, describeFrom, memoryRef, validateRecord } from "./memory.ts";
 import { type Claims, heldElsewhere } from "./claims.ts";
 import { forkTag, type CommitHow, type PendingWork } from "./pending-work.ts";
+import { engineNamed, parseEngineReport, readLogEnd, settleDelegate } from "./engine-report.ts";
 import { type Orchestrations, parsePlan } from "./orchestrate.ts";
 import { MCP_FACE_DIR, MCP_FACE_TOKEN_VARIABLE, type McpFace } from "./mcp-face.ts";
 import type { ModelRelay } from "./model-relay.ts";
@@ -3014,6 +3015,8 @@ export async function dispatchTool(
             brief: `${preset.name}: ${prompt}`,
             ...(context.workId !== undefined ? { workId: context.workId } : {}),
             ...(context.turnId !== undefined ? { turnId: context.turnId } : {}),
+            // Which engine's report to read when the job ends (INV-908).
+            data: { engine: preset.name },
           });
         } catch (error) {
           return {
@@ -3160,14 +3163,23 @@ export async function dispatchTool(
     case "Jobs": {
       const box = requireBox(context);
       const action = String(input.action ?? "list");
-      // Wherever the host sees a delegated job end, the ledger is settled (docs/32 slice two).
-      const observe = (job: { job_id: string; running: boolean; exit_code?: number; interrupted?: boolean }) => {
-        if (job.running) return;
-        context.pendingWork?.commitDelegate(job.job_id, job.exit_code === 0 && job.interrupted !== true ? "done" : "failed");
+      // Wherever the host sees a delegated job end, the ledger is settled (docs/32 slice two), from
+      // the engine's own report rather than the exit code (INV-908).
+      const observe = async (job: { job_id: string; running: boolean; exit_code?: number; interrupted?: boolean; log_path?: string }, killed = false) => {
+        if (job.running) return undefined;
+        return settleDelegate(
+          {
+            pendingWork: context.pendingWork,
+            box,
+            dropSession: (id, reason) => context.delegateSessions?.drop(id, reason),
+          },
+          job,
+          { killed }
+        );
       };
       if (action === "list") {
         const { jobs } = await box.jobs();
-        for (const job of jobs) observe(job);
+        for (const job of jobs) await observe(job);
         if (jobs.length === 0) return { text: "No background jobs." };
         return {
           text: jobs
@@ -3183,7 +3195,12 @@ export async function dispatchTool(
       if (jobId === "") return { text: "Which job? Pass job_id.", isError: true };
       if (action === "kill") {
         const killed = await box.killJob(jobId);
-        observe(killed);
+        // The kill is sent at once and the status can still say running; the close follows. Waited
+        // for briefly, then settled as stopped either way — it was, by us (INV-908).
+        const ended = killed.running
+          ? await box.waitForJob({ job_id: jobId, timeout_ms: 3_000 }).catch(() => undefined)
+          : undefined;
+        await observe({ ...(ended ?? killed), running: false }, true);
         return { text: `${killed.job_id} stopped. Its output is at ${killed.log_path}.` };
       }
       if (action !== "wait") {
@@ -3194,19 +3211,36 @@ export async function dispatchTool(
         ...(input.until !== undefined ? { until: String(input.until) } : {}),
         ...(input.timeout_ms !== undefined ? { timeout_ms: Number(input.timeout_ms) } : {}),
       });
-      observe(waited);
+      const settled = await observe(waited);
+      // A delegated engine's log is its event stream; what a reader wants from it is the outcome
+      // and the answer, so those come first and the raw tail only when there is no answer.
+      const engine = settled?.report?.engine ?? engineNamed(context.pendingWork?.engineOf(waited.job_id));
+      let report = settled?.report;
+      if (report === undefined && engine !== undefined && waited.reason === "exited") {
+        const read = await readLogEnd(box, waited.log_path);
+        if ("text" in read) report = parseEngineReport(engine, read.text);
+      }
       // The reason is said first and plainly: "still running" and "finished" call for
       // different next moves, and a tail alone does not distinguish them.
       const headline =
         waited.reason === "exited"
-          ? `${waited.job_id} finished with exit code ${waited.exit_code}.`
+          ? `${waited.job_id} finished with exit code ${waited.exit_code}.` +
+            (settled !== undefined
+              ? ` Outcome: ${settled.outcome} — ${settled.why}.`
+              : report !== undefined
+                ? ` ${report.engine} reported it ${report.status}${report.detail !== undefined ? `: ${report.detail}` : ""}.`
+                : engine !== undefined
+                  ? ` ${engine} gave no completion report, so whether it did the work is unknown.`
+                  : "")
           : waited.reason === "matched"
             ? `${waited.job_id} printed what you were waiting for. It is still running.`
             : `${waited.job_id} is still running; the wait timed out.`;
       return {
         text:
           `${headline}\nFull output: ${waited.log_path} (${waited.log_bytes} bytes)\n\n` +
-          `--- the last of it ---\n${waited.tail}`,
+          (report?.finalText !== undefined
+            ? `--- its answer ---\n${report.finalText}`
+            : `--- the last of it ---\n${waited.tail}`),
       };
     }
 

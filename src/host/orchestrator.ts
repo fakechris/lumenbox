@@ -92,6 +92,7 @@ import { Receipts } from "./receipts.ts";
 import { WedgeWatch } from "./wedge.ts";
 import { buildAuditPrompt, manifestDiff, MANIFEST_COMMAND, parseManifest } from "./audit.ts";
 import { ALL_MCP_TOOLS, ScopeStore } from "./scopes.ts";
+import { delegateEndedNote, settleDelegate } from "./engine-report.ts";
 import { BundleStore } from "./bundles.ts";
 import { TeachRunner, parseTrace, teachingClarificationCue } from "./teach.ts";
 import { TeachDrafts, parseTeachingResponse, publishTeachingSkill } from "./teach-drafts.ts";
@@ -1013,7 +1014,7 @@ export class Orchestrator {
       ...(this.hooks !== undefined ? { hooks: this.hooks } : {}),
       jobsOf: agentId => this.boxFor(agentId)?.jobs().then(result => result.jobs),
       onJobEnded: (jobId, status) => {
-        this.noteJobEnded(jobId, status);
+        void this.noteJobEnded(jobId, status).catch(error => console.error(`[delegate] ${jobId}: ${error instanceof Error ? error.message : String(error)}`));
       },
       ...(options.pendingWork === null ? { auditPath: null } : {}),
       log: line => console.error(`[mcp-face] ${line}`),
@@ -2290,16 +2291,25 @@ export class Orchestrator {
    * agent's turn ended was found only if the agent thought to ask (Grok persists these
    * completions as pending wakes for the same reason).
    */
-  noteJobEnded(jobId: string, status: { exit_code?: number; running?: boolean } | undefined): void {
+  async noteJobEnded(
+    jobId: string,
+    status: { exit_code?: number; running?: boolean; interrupted?: boolean; log_path?: string } | undefined
+  ): Promise<boolean> {
     const open = this.pendingWork?.open().find(item => item.kind === "delegate" && item.child === jobId);
-    const committed = this.pendingWork?.commitDelegate(jobId, status?.exit_code === 0 ? "done" : "failed") ?? false;
-    if (!committed || open === undefined) return;
-    const how = status === undefined ? "is gone" : status.exit_code === 0 ? "finished" : `exited ${status.exit_code ?? "?"}`;
-    this.bus.deliverSystem(
-      open.agentId,
-      `[A job you delegated ${how}: ${jobId} (${open.brief.slice(0, 120)}). Read its output with Jobs and fold the result into your work, or say why it does not matter.]`,
-      open.parent
+    if (open === undefined) return false;
+    // The outcome is the engine's report, read from the job's log (INV-908); a job the box no
+    // longer knows has no log to read and no exit code, so how it ended is unknown.
+    const settled = await settleDelegate(
+      {
+        pendingWork: this.pendingWork,
+        box: status === undefined ? undefined : this.boxFor(open.agentId),
+        dropSession: (id, reason) => this.delegateSessions.drop(id, reason),
+      },
+      { job_id: jobId, ...(status ?? {}) }
     );
+    if (settled === undefined) return false;
+    this.bus.deliverSystem(open.agentId, delegateEndedNote(jobId, open.brief, settled), open.parent);
+    return true;
   }
 
   /** Every open delegated job, checked against the box: what ended unattended is noted. */
@@ -2310,7 +2320,7 @@ export class Orchestrator {
     const byAgent = new Map<string, typeof open>();
     for (const item of open) byAgent.set(item.agentId, [...(byAgent.get(item.agentId) ?? []), item]);
     for (const [agentId, items] of byAgent) {
-      let jobs: { job_id: string; running: boolean; exit_code?: number; interrupted?: boolean }[];
+      let jobs: { job_id: string; running: boolean; exit_code?: number; interrupted?: boolean; log_path?: string }[];
       try {
         jobs = (await this.boxFor(agentId)?.jobs())?.jobs ?? [];
       } catch {
@@ -2319,8 +2329,7 @@ export class Orchestrator {
       for (const item of items) {
         const job = jobs.find(candidate => candidate.job_id === item.child);
         if (job === undefined || job.running) continue;
-        this.noteJobEnded(item.child, { exit_code: job.interrupted === true ? 1 : job.exit_code, running: false });
-        noted += 1;
+        if (await this.noteJobEnded(item.child, { ...job, running: false })) noted += 1;
       }
     }
     return noted;
@@ -2436,6 +2445,8 @@ export class Orchestrator {
         this.bus.deliverSystem(agentId, text, conversation) !== undefined || this.bus.inboxless,
       noteQueued: (agentId, conversation, tag) => this.bus.hasQueuedText(agentId, conversation, tag),
       agentExists: agentId => this.registry.tryGet(agentId) !== undefined,
+      // An engine's report is read the same way after a restart as during a run (INV-908).
+      settleExited: async (fork, status) => this.noteJobEnded(fork.child, { ...status, running: false }),
       jobStatus: async (agentId, jobId) => {
         const box = this.boxFor(agentId);
         if (box === undefined) return undefined;

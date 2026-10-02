@@ -19,6 +19,7 @@ import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { agentboxHome } from "../config.ts";
 import { appendLine, appendLineDurably } from "./jsonl.ts";
+import { judgeDelegate } from "./engine-report.ts";
 
 export function pendingWorkPath(): string {
   return process.env.AGENTBOX_PENDING_WORK ?? join(agentboxHome(), "pending-work.jsonl");
@@ -27,7 +28,19 @@ export function pendingWorkPath(): string {
 /** Rewrite the file once settled lines outnumber this, and only when nothing is open. */
 const COMPACT_AT = 500;
 
-export type CommitHow = "done" | "failed" | "late";
+/**
+ * How a piece of work settled. A delegation's is the engine's own report (INV-908): `done` only
+ * when the engine said it completed, `unknown` when it said nothing, whatever the exit code.
+ */
+export type CommitHow = "done" | "failed" | "late" | "aborted" | "unknown";
+
+/** What a settled delegation leaves on the record beyond its outcome (INV-908). */
+export interface CommitNote {
+  /** Where the outcome came from, in a sentence. */
+  why?: string;
+  /** Tokens as the engine reported them; absent when it reported none, which is not zero. */
+  usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; source: "engine-report" };
+}
 export type DropWhy = "restart" | "unrecorded" | "refused";
 
 /**
@@ -60,7 +73,7 @@ interface PreparedRecord {
   data?: Record<string, unknown>;
 }
 interface AdmittedRecord { event: "admitted"; id: string; inboxSeq?: number; at: string }
-interface CommittedRecord { event: "committed"; id: string; how: CommitHow; at: string }
+interface CommittedRecord extends CommitNote { event: "committed"; id: string; how: CommitHow; at: string }
 interface DroppedRecord { event: "dropped"; id: string; why: DropWhy; at: string }
 type Record_ = PreparedRecord | AdmittedRecord | CommittedRecord | DroppedRecord;
 
@@ -101,6 +114,12 @@ export interface SweepDeps {
     agentId: string,
     jobId: string
   ) => Promise<{ running: boolean; exit_code?: number; interrupted?: boolean; log_path?: string } | undefined>;
+  /**
+   * Settles a delegated job that exited while the host was down, from the engine's own report,
+   * and tells the agent (INV-908). Returns whether it was settled; a job it could not settle stays
+   * open for the next observer. Absent, the exit code alone decides, and exit 0 is `unknown`.
+   */
+  settleExited?: (fork: OpenFork, status: { exit_code?: number; log_path?: string }) => Promise<boolean>;
 }
 
 /** The tag every note about a fork carries, so a restart can see one is already queued. */
@@ -168,8 +187,17 @@ export class PendingWork {
   }
 
   /** The findings are durably with the parent: in its transcript, or admitted to its inbox. */
-  commit(entries: readonly { id: string; how: CommitHow }[], now = new Date()): void {
-    for (const entry of entries) this.append({ event: "committed", id: entry.id, how: entry.how, at: now.toISOString() });
+  commit(entries: readonly ({ id: string; how: CommitHow } & CommitNote)[], now = new Date()): void {
+    for (const entry of entries) {
+      this.append({
+        event: "committed",
+        id: entry.id,
+        how: entry.how,
+        ...(entry.why !== undefined ? { why: entry.why } : {}),
+        ...(entry.usage !== undefined ? { usage: entry.usage } : {}),
+        at: now.toISOString(),
+      });
+    }
     this.maybeCompact();
   }
 
@@ -183,11 +211,24 @@ export class PendingWork {
    * the job's end — the `Jobs` tool, the MCP face's lease renewal, the startup sweep — so the
    * first observer commits and the rest find nothing open. Returns whether one was.
    */
-  commitDelegate(jobId: string, how: CommitHow, now = new Date()): boolean {
+  commitDelegate(jobId: string, how: CommitHow, note: CommitNote = {}, now = new Date()): boolean {
     const open = this.open().find(work => work.kind === "delegate" && work.child === jobId);
     if (open === undefined) return false;
-    this.commit([{ id: open.id, how }], now);
+    this.commit([{ id: open.id, how, ...note }], now);
     return true;
+  }
+
+  /**
+   * The engine a delegated job ran, from its record whether still open or already settled, so a
+   * later reader can still read that engine's report. Gone once the file is compacted.
+   */
+  engineOf(jobId: string): string | undefined {
+    for (const record of this.read()) {
+      if (record.event === "prepared" && record.kind === "delegate" && record.child === jobId) {
+        return typeof record.data?.engine === "string" ? record.data.engine : undefined;
+      }
+    }
+    return undefined;
   }
 
   /** Forks prepared and never settled, oldest first. */
@@ -246,7 +287,12 @@ export class PendingWork {
         if (status === undefined) continue;
         if (status.running) continue;
         if (status.interrupted !== true && status.exit_code !== undefined) {
-          this.commit([{ id: fork.id, how: status.exit_code === 0 ? "done" : "failed" }], now);
+          if (deps.settleExited !== undefined) {
+            await deps.settleExited(fork, status);
+            continue;
+          }
+          const judged = judgeDelegate({ exitCode: status.exit_code, report: undefined });
+          this.commit([{ id: fork.id, how: judged.outcome, why: judged.why }], now);
           continue;
         }
         if (exists) {

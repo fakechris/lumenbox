@@ -233,3 +233,40 @@ test("a delegated job in the ledger: running stays open, exited commits, gone or
     cleanup();
   }
 });
+
+test("after a restart an exited delegation is judged by its engine's report; without one, exit 0 is unknown (INV-908)", async () => {
+  const { root, cleanup } = home();
+  try {
+    const path = join(root, "pending-work.jsonl");
+    const ledger = new PendingWork(path);
+    const quiet = ledger.prepare({ agentId: "a1", kind: "delegate", parent: "main", child: "job-00000001", brief: "pi: lint", data: { engine: "pi" } });
+    ledger.prepare({ agentId: "a1", kind: "delegate", parent: "main", child: "job-00000002", brief: "claude: docs", data: { engine: "claude" } });
+    const deps = {
+      dropForkAdmissions: () => 0,
+      endForkTurns: () => 0,
+      lastWordsOf: () => undefined,
+      deliver: () => true,
+      noteQueued: () => false,
+      agentExists: () => true,
+      jobStatus: async () => ({ running: false, exit_code: 0, log_path: "/log" }),
+    };
+    // No judge supplied: the exit code alone, and exit 0 says nothing about the work.
+    await new PendingWork(path).sweep({ ...deps, jobStatus: async (_a: string, jobId: string) => (jobId === "job-00000001" ? { running: false, exit_code: 0 } : { running: true }) });
+    const events = readFileSync(path, "utf8").trim().split("\n").map(line => JSON.parse(line) as { event: string; id: string; how?: string; why?: string });
+    const settled = events.find(entry => entry.event === "committed" && entry.id === quiet);
+    assert.equal(settled?.how, "unknown");
+    assert.match(settled?.why ?? "", /no completion report/);
+
+    // With the host's judge, the judge settles it, and one it cannot settle stays open.
+    const judged: string[] = [];
+    await new PendingWork(path).sweep({ ...deps, settleExited: async fork => { judged.push(fork.child); return false; } });
+    assert.deepEqual(judged, ["job-00000002"]);
+    assert.deepEqual(new PendingWork(path).open().map(work => work.child), ["job-00000002"]);
+
+    // The engine stays readable after the record is settled.
+    assert.equal(new PendingWork(path).engineOf("job-00000001"), "pi");
+    assert.equal(new PendingWork(path).engineOf("job-nope"), undefined);
+  } finally {
+    cleanup();
+  }
+});
