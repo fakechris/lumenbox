@@ -488,17 +488,6 @@ export class Orchestrator {
   readonly orchestrations: Orchestrations | undefined;
 
   /**
-   * Which turn each agent is currently resuming, so the ledger entry it writes is linked to the one
-   * it is picking up rather than looking like fresh work.
-   *
-   * Without the link, every resumption would start its own chain and a turn that kills the process
-   * would be retried forever — the count is the whole of the crash-loop guard.
-   */
-  private readonly resuming = new Map<
-    string,
-    { id: string; attempt: number; workId?: string; continues?: true; approval?: { id: string; how: "allowed" | "refused" | "gone" } }
-  >();
-  /**
    * Turns parked on a person's approval when the process died (INV-774), by approval id.
    * Continued from that step when the answer arrives, from whichever door it comes.
    */
@@ -1043,7 +1032,12 @@ export class Orchestrator {
     const ownershipKey = (agentId: string, conversation: string | undefined, messageId: string) =>
       JSON.stringify([agentId, conversation ?? MAIN_CONVERSATION, messageId]);
     const ownedMessages = new Set((this.turns?.interrupted({ includeForks: true }) ?? [])
-      .flatMap(turn => (turn.causedBy ?? []).map(id => ownershipKey(turn.agentId, turn.conversation, id))));
+      .flatMap(turn => {
+        const entries = this.registry.tryGet(turn.agentId) === undefined ? [] :
+          this.registry.readTranscript(turn.agentId, turn.conversation ?? MAIN_CONVERSATION) as { turnId?: string; causedBy?: string[] }[];
+        const ids = [...(turn.causedBy ?? []), ...entries.filter(entry => entry.turnId === turn.id).flatMap(entry => entry.causedBy ?? [])];
+        return ids.map(id => ownershipKey(turn.agentId, turn.conversation, id));
+      }));
     inbox?.start(inbox.pending().filter(item =>
       ownedMessages.has(ownershipKey(item.agentId, item.message.conversation, item.message.id))
     ).map(item => item.seq));
@@ -1809,11 +1803,7 @@ export class Orchestrator {
     conversation: string,
     acknowledge?: () => void
   ): Promise<void> {
-    // Taken, not read: a resumption marker belongs to exactly one turn. Leaving it in place would
-    // make every later turn for this agent look like another attempt at the interrupted one, and
-    // the attempt count is the whole of the crash-loop guard.
-    const resumeOf = this.resuming.get(agent.id);
-    this.resuming.delete(agent.id);
+    const resumeOf = inbound[0]?.resumeOf;
     // A continuation that a person's message overtook, or whose goal stopped meanwhile, is
     // not run (INV-770): the loop reconsiders when the person's turn ends.
     if (this.goalLoop !== undefined && !this.goalLoop.turnStarting(agent.id, conversation, inbound)) return;
@@ -2009,6 +1999,8 @@ export class Orchestrator {
     let parked = 0;
 
     for (const turn of outstanding) {
+      // Inbox replay already queued this durable continuation after a second crash.
+      if (this.bus.hasPendingResume(turn.id)) continue;
       const agent = this.registry.tryGet(turn.agentId);
       if (agent === undefined) {
         // The agent was deleted while it was working. Nothing to resume onto, and nothing lost that
@@ -2057,21 +2049,11 @@ export class Orchestrator {
         continue;
       }
 
-      // Closed before the new one opens, so a crash during the resumption leaves exactly one
-      // unfinished turn rather than two.
-      this.turns?.end(turn.id, "resumed");
-      // The work id comes across with the attempt. Carrying the one without the other is how
-      // the field would end up written on every record and grouping nothing: the resumed turn
-      // would mint a fresh one and the report would still see two pieces of work.
-      this.resuming.set(agent.id, {
-        id: turn.id,
-        // A clean shutdown resumes for free: the attempt budget measures how often this
-        // turn kills the process, and an operator's restart is not that.
-        attempt: turn.cleanExit ? turn.attempt : turn.attempt + 1,
-        ...(turn.workId !== undefined ? { workId: turn.workId } : {}),
-      });
       this.bus.sendFromUser(agent.id, resumePrompt(turn.about, turn.at), {
         synthetic: true,
+        ...(turn.principalId !== undefined ? { principalId: turn.principalId } : {}),
+        resumeOf: { id: turn.id, attempt: turn.cleanExit ? turn.attempt : turn.attempt + 1,
+          ...(turn.workId !== undefined ? { workId: turn.workId } : {}) },
         // The turn resumes in the conversation it was interrupted in: an answer to a
         // group chat's question must not surface in the team room.
         ...(turn.conversation !== undefined ? { conversation: turn.conversation } : {}),
@@ -2079,6 +2061,8 @@ export class Orchestrator {
         // running work would bury the recovery in an unrelated reply.
         steerable: false,
       });
+      // Relinquish the old owner only after the continuation is durably admitted.
+      this.turns?.end(turn.id, "resumed");
       // Enqueuing is not running. sendFromUser only queues; without this the resumed turn sat until
       // some unrelated later traffic happened to wake the agent. recover() wakes for the inbox; this
       // path did not.
@@ -2103,19 +2087,16 @@ export class Orchestrator {
    * answers the open step from the transcript before asking the model anything.
    */
   private continueTurn(turn: InterruptedTurn, approval?: { id: string; how: "allowed" | "refused" | "gone" }): void {
-    this.turns?.end(turn.id, "continued");
-    this.resuming.set(turn.agentId, {
-      id: turn.id,
-      attempt: turn.cleanExit ? turn.attempt : turn.attempt + 1,
-      ...(turn.workId !== undefined ? { workId: turn.workId } : {}),
-      continues: true,
-      ...(approval !== undefined ? { approval } : {}),
-    });
     this.bus.sendFromUser(turn.agentId, continuationNote(turn.about), {
       synthetic: true,
+      ...(turn.principalId !== undefined ? { principalId: turn.principalId } : {}),
       ...(turn.conversation !== undefined ? { conversation: turn.conversation } : {}),
       steerable: false,
+      resumeOf: { id: turn.id, attempt: turn.cleanExit ? turn.attempt : turn.attempt + 1,
+        ...(turn.workId !== undefined ? { workId: turn.workId } : {}),
+        continues: true, ...(approval !== undefined ? { approval } : {}) },
     });
+    this.turns?.end(turn.id, "continued");
     void this.bus.wake(turn.agentId);
   }
 

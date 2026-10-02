@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PendingWork, type SweepDeps } from "./pending-work.ts";
 import { Inbox } from "../agents/inbox.ts";
+import { StepLedger } from "./resume.ts";
 
 function schedule(seed: number): string[] {
   const windows = ["refuse-delivery", "throw-before-delivery", "crash-after-delivery", "settled"];
@@ -20,6 +21,13 @@ function schedule(seed: number): string[] {
 
 test("fixed seed gives a reproducible fault order", () => {
   assert.deepEqual(schedule(884), ["refuse-delivery", "throw-before-delivery", "crash-after-delivery", "settled"]);
+});
+
+test("dispatch refuses to proceed when its step checkpoint cannot be stored", () => {
+  const root = mkdtempSync(join(tmpdir(), "step-write-fault-"));
+  try {
+    assert.throws(() => new StepLedger(root).pending("turn-1", "call-1", "bash"), /EISDIR/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 for (const seed of [884, 42, 1, 65535]) {

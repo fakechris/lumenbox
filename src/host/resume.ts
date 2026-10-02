@@ -56,6 +56,7 @@ export const LEDGER_KIND: LedgerKind = "record";
 const COMPACT_AT = envNumber("AGENTBOX_TURN_LEDGER_COMPACT_AT", 5_000);
 
 interface BeginRecord {
+  principalId?: string;
   causedBy?: string[];
   id: string;
   event: "begin";
@@ -174,8 +175,18 @@ interface CleanRecord {
 
 type LedgerRecord = BeginRecord | EndRecord | CleanRecord;
 
+/** Persisted on the recovery admission, so a second restart retains its lineage. */
+export interface ResumeMarker {
+  id: string;
+  attempt: number;
+  workId?: string;
+  continues?: true;
+  approval?: { id: string; how: "allowed" | "refused" | "gone" };
+}
+
 /** A turn that began and never ended. */
 export interface InterruptedTurn {
+  principalId?: string;
   causedBy?: string[];
   id: string;
   agentId: string;
@@ -223,6 +234,7 @@ export class TurnLedger {
 
   /** Records that a turn is starting. Returns the handle its end is reported against. */
   begin(options: {
+    principalId?: string;
     causedBy?: string[];
     agentId: string;
     about: string;
@@ -245,6 +257,7 @@ export class TurnLedger {
     const record: BeginRecord = {
       id: options.id,
       event: "begin",
+      ...(options.principalId !== undefined ? { principalId: options.principalId } : {}),
       ...(options.causedBy !== undefined ? { causedBy: [...options.causedBy] } : {}),
       agentId: options.agentId,
       at: (options.now ?? new Date()).toISOString(),
@@ -354,8 +367,10 @@ export class TurnLedger {
     const open = new Map<string, InterruptedTurn>();
     for (const record of this.read()) {
       if (record.event === "begin") {
+        if (record.resumeOf !== undefined && record.resumeOf !== record.id) open.delete(record.resumeOf);
         open.set(record.id, {
           id: record.id,
+          ...(record.principalId !== undefined ? { principalId: record.principalId } : {}),
           ...(record.causedBy !== undefined ? { causedBy: record.causedBy } : {}),
           agentId: record.agentId,
           at: record.at,
@@ -583,7 +598,7 @@ export class StepLedger {
 
   /** Written before the call is dispatched. */
   pending(turnId: string, toolUseId: string, name: string, now = new Date()): void {
-    this.append({ turnId, event: "pending", toolUseId, name, at: now.toISOString() });
+    this.append({ turnId, event: "pending", toolUseId, name, at: now.toISOString() }, true);
   }
 
   /** Written after the call's result is in the transcript. */
@@ -652,17 +667,19 @@ export class StepLedger {
     return turns;
   }
 
-  private append(record: StepRecord): void {
+  private append(record: StepRecord, required = false): void {
     if (this.path === undefined) return;
     try {
       mkdirSync(dirname(this.path), { recursive: true });
       appendLine(this.path, JSON.stringify(record));
       this.lines += 1;
     } catch (error) {
-      // Never fail a turn over bookkeeping: what is lost is the ability to continue this
-      // turn in place, and the turn ledger still resumes it the older way.
+      // Dispatch must stop if its checkpoint is missing. Otherwise a previously known
+      // turn could recover an executed call as not_started. Settled results already
+      // have a transcript receipt and can conservatively remain open.
       const detail = error instanceof Error ? error.message : String(error);
       this.onWarn(`turn-steps: cannot write ${this.path} (${detail})`);
+      if (required) throw error;
     }
   }
 

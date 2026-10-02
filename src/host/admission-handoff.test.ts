@@ -26,8 +26,9 @@ function fixture(existingRoot?: string) {
   const agent = registry.list()[0] ?? registry.create({ name: "Ada" });
   const inboxPath = join(root, "inbox.jsonl");
   const turnsPath = join(root, "turns.jsonl");
+  const inbox = new Inbox<InboundMessage>(inboxPath);
   const orch = new Orchestrator({
-    registry, useBox: false, inbox: new Inbox<InboundMessage>(inboxPath),
+    registry, useBox: false, inbox,
     turns: new TurnLedger(turnsPath), mcp: null, hooks: null, tasks: null,
     extensions: null, pendingWork: null,
     client: fakeModel(() => ({
@@ -36,7 +37,7 @@ function fixture(existingRoot?: string) {
       usage: { input_tokens: 10, output_tokens: 2 },
     } as never)),
   });
-  return { root, agent, registry, orch, inboxPath, turnsPath, cleanup: () => {
+  return { root, agent, registry, orch, inbox, inboxPath, turnsPath, cleanup: () => {
     if (previousHome === undefined) delete process.env.AGENTBOX_HOME;
     else process.env.AGENTBOX_HOME = previousHome;
     rmSync(root, { recursive: true, force: true });
@@ -64,7 +65,7 @@ test("scenario: accepted request remains recoverable while turn setup waits on s
   }
 });
 
-for (const point of ["setup", "begin-before-start", "model"] as const) {
+for (const point of ["setup", "begin-before-start", "model", "steering"] as const) {
   test(`SIGKILL at ${point}: restart has exactly one owner and delivers one reply`, async () => {
     const root = mkdtempSync(join(tmpdir(), "admission-kill-"));
     const killed = spawnSync(process.execPath, ["--experimental-transform-types",
@@ -82,13 +83,52 @@ for (const point of ["setup", "begin-before-start", "model"] as const) {
       const resumed = f.orch.resumeInterrupted();
       assert.equal(resumed.resumed, point === "setup" ? 0 : 1);
       await f.orch.settle();
-      const replies = f.registry.readTranscript(f.agent.id).filter(x => (x as { role?: string }).role === "assistant");
+      const transcript = f.registry.readTranscript(f.agent.id) as { role?: string; text?: string }[];
+      const replies = transcript.filter(x => x.role === "assistant" && x.text !== undefined);
       assert.equal(replies.length, 1, "the accepted request has only one recovery executor");
+      const usage = readFileSync(join(root, "usage.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+      assert.ok(usage.filter(row => row.kind === "turn").every(row => row.principal === "alice"), "recovery retains the admitted principal");
+      if (point === "steering") assert.equal(transcript.filter(x => x.text?.includes("STEERING_RECOVERY")).length, 1);
       assert.deepEqual(new Inbox<InboundMessage>(f.inboxPath).pending(), []);
       assert.deepEqual(new TurnLedger(f.turnsPath).interrupted(), []);
     } finally { f.cleanup(); }
   });
 }
+
+for (const point of ["resume-setup", "resume-before-close"]) {
+  test(`a second SIGKILL at ${point} preserves the admitted continuation and principal`, async () => {
+    const root = mkdtempSync(join(tmpdir(), "resume-kill-"));
+    for (const stage of ["begin-before-start", point]) {
+      const killed = spawnSync(process.execPath, ["--experimental-transform-types",
+        fileURLToPath(new URL("./testing/admission-crash.ts", import.meta.url)), root, stage],
+      { env: { ...process.env, AGENTBOX_HOME: root }, encoding: "utf8", timeout: 10_000 });
+      assert.equal(killed.signal, "SIGKILL", killed.stderr);
+    }
+    const f = fixture(root);
+    try {
+      assert.equal(f.orch.bus.recover(), 1);
+      assert.equal(f.orch.resumeInterrupted().resumed, 0, "the queued continuation already owns recovery");
+      await f.orch.settle();
+      assert.deepEqual(new TurnLedger(f.turnsPath).interrupted(), []);
+      const rows = readFileSync(join(root, "usage.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+      assert.deepEqual(rows.filter(row => row.kind === "turn").map(row => row.principal), ["alice"]);
+    } finally { f.cleanup(); }
+  });
+}
+
+test("recovery admission failure leaves the old turn open for a later retry", async t => {
+  const f = fixture();
+  try {
+    new TurnLedger(f.turnsPath).begin({ id: "old", agentId: f.agent.id, about: "hello", principalId: "alice" });
+    const failure = t.mock.method(f.inbox, "admit", () => { throw new Error("injected disk failure"); });
+    assert.throws(() => f.orch.resumeInterrupted(), /injected disk failure/);
+    assert.deepEqual(new TurnLedger(f.turnsPath).interrupted().map(x => x.id), ["old"]);
+    failure.mock.restore();
+    assert.equal(f.orch.resumeInterrupted().resumed, 1);
+    await f.orch.settle();
+    assert.deepEqual(new TurnLedger(f.turnsPath).interrupted(), []);
+  } finally { f.cleanup(); }
+});
 
 test("a failed turn begin leaves admission recoverable and runs no model", async () => {
   const f = fixture();

@@ -11,6 +11,7 @@
  * inside one turn, so its transcript and profile have a single writer.
  */
 
+import type { ResumeMarker } from "../host/resume.ts";
 import type { GoalMarker } from "../host/goal-mode.ts";
 import { randomUUID } from "node:crypto";
 import { envNumber } from "../config.ts";
@@ -39,6 +40,8 @@ export const AGENT_WAKE_CUE = "[agent]";
 export const SYSTEM_SENDER = "system";
 
 export interface InboundMessage {
+  /** Host-only continuation lineage, persisted with the admission. */
+  resumeOf?: ResumeMarker;
   /** Authenticated host identity, frozen at admission; never supplied by an agent tool. */
   principalId?: string;
   fromId: string;
@@ -310,8 +313,6 @@ export class AgentBus {
         `minute(s) ago and it is queued or delivered. Wait for their reply, or say something new.`
       );
     }
-    recent.push({ text, at: now });
-    this.recentSends.set(recentKey, recent.slice(-20));
 
     const message: InboundMessage = {
       id: randomUUID(),
@@ -324,6 +325,8 @@ export class AgentBus {
     };
 
     this.enqueue(input.toId, message);
+    recent.push({ text, at: now });
+    this.recentSends.set(recentKey, recent.slice(-20));
     this.onEvent({
       type: "message_sent",
       fromId: input.fromId,
@@ -493,10 +496,12 @@ export class AgentBus {
       /** A goal continuation's marker; see `InboundMessage.goal`. */
       goal?: GoalMarker;
       principalId?: string;
+      resumeOf?: ResumeMarker;
     } = {}
   ): number | undefined {
     return this.enqueue(agentId, {
       id: options.messageId ?? randomUUID(),
+      ...(options.resumeOf !== undefined ? { resumeOf: options.resumeOf } : {}),
       ...(options.principalId !== undefined ? { principalId: options.principalId } : {}),
       fromId: "user",
       fromName: "user",
@@ -556,6 +561,10 @@ export class AgentBus {
     return taken;
   }
 
+  hasPendingResume(turnId: string): boolean {
+    return [...this.pending.values()].some(queue => queue.some(message => message.resumeOf?.id === turnId));
+  }
+
   pendingCount(agentId: string): number {
     return this.pending.get(agentId)?.length ?? 0;
   }
@@ -570,7 +579,7 @@ export class AgentBus {
    * Taken messages are marked started in the durable inbox exactly as a drain marks
    * them: whoever consumes a message owns that bookkeeping.
    */
-  takeSteering(agentId: string, conversation: string = MAIN_CONVERSATION): InboundMessage[] {
+  takeSteering(agentId: string, conversation: string = MAIN_CONVERSATION, record?: (messages: readonly InboundMessage[]) => void): InboundMessage[] {
     const queue = this.pending.get(agentId) ?? [];
     const taken = queue.filter(
       message =>
@@ -578,6 +587,7 @@ export class AgentBus {
         message.principalId === this.active.get(workerKey(agentId, conversation))?.principalId
     );
     if (taken.length === 0) return [];
+    record?.(taken);
     const left = queue.filter(message => !taken.includes(message));
     if (left.length === 0) this.pending.delete(agentId);
     else this.pending.set(agentId, left);
