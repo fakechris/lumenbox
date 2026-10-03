@@ -1,11 +1,14 @@
 import type { BoxEntry } from "../box/boxes.ts";
 import type { AgentboxConfig } from "../config.ts";
 
-export function personalQuotaFor(principalId: string, config: AgentboxConfig): number | undefined {
-  // Existing installations did not have a limit. Enforce only an explicit policy.
-  return Object.hasOwn(config.personBoxQuotas ?? {}, principalId)
-    ? config.personBoxQuotas![principalId]
-    : config.personalBoxQuota;
+export interface DirectoryQuotaContext { eligible: boolean; departmentKeys: readonly string[] }
+
+export function personalQuotaFor(principalId: string, config: AgentboxConfig, directory?: DirectoryQuotaContext): number | undefined {
+  if (directory?.eligible === false) return 0;
+  if (Object.hasOwn(config.personBoxQuotas ?? {}, principalId)) return config.personBoxQuotas![principalId];
+  const quotas = (directory?.departmentKeys ?? []).filter(key => Object.hasOwn(config.departmentBoxQuotas ?? {}, key))
+    .map(key => config.departmentBoxQuotas![key]!);
+  return quotas.length ? Math.min(...quotas) : config.personalBoxQuota;
 }
 
 export function personalBoxesOf(entries: readonly BoxEntry[], principalId: string): BoxEntry[] {
@@ -13,13 +16,13 @@ export function personalBoxesOf(entries: readonly BoxEntry[], principalId: strin
 }
 
 /** Applied before membership changes, without taking away an existing allocation. */
-export function personalAllocationRefusal(entries: readonly BoxEntry[], box: BoxEntry, members: "everyone" | string[], config: AgentboxConfig): string | undefined {
+export function personalAllocationRefusal(entries: readonly BoxEntry[], box: BoxEntry, members: "everyone" | string[], config: AgentboxConfig, directory?: DirectoryQuotaContext): string | undefined {
   if (members === "everyone") return;
   const unique = [...new Set(members)];
   if (unique.length !== 1) return;
   const owner = unique[0]!;
   const held = personalBoxesOf(entries, owner);
   if (held.some(entry => entry.id === box.id)) return;
-  const quota = personalQuotaFor(owner, config);
+  const quota = personalQuotaFor(owner, config, directory);
   if (quota !== undefined && held.length >= quota) return `Personal-box quota ${quota} reached (${held.length} held). An admin must change the quota before allocating another box.`;
 }
