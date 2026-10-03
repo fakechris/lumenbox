@@ -49,9 +49,13 @@ export const SKILL_FILENAME = "SKILL.md";
  * 301,610-character system prompt for every agent on every turn, and the overflow ladder could shed
  * conversation but never skills (audit 2026-09-01 #4). A description is a sentence or two about
  * when a skill applies — anything past a paragraph is body text in the wrong field.
+ *
+ * The index was 12,000 until the skills a fresh box starts with alone took 11,577 of it; five
+ * packages more (2026-10-02) would have pushed four of them out to a bare name. 13,500 holds
+ * what ships with room left for skills an agent writes; a test fails when it no longer does.
  */
 export const MAX_DESCRIPTION_CHARS = 400;
-export const SKILL_INDEX_CHARS = 12_000;
+export const SKILL_INDEX_CHARS = 13_500;
 
 export interface Skill {
   /** The directory name, which is the id. Stable, and what a path is built from. */
