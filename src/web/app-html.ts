@@ -1397,6 +1397,7 @@ export const APP_HTML = String.raw`<!doctype html>
   <div class="modal" style="width:680px">
     <h3>Templates</h3>
     <div class="fieldnote">A template is a saved agent: persona, skills, routines, conventions — never history, never people. Stamping one makes a new agent in a box.</div>
+    <div class="field"><label>My personal boxes</label><div id="personalboxes"></div><button class="btn sm" id="personalcreate">Create personal box</button><div class="fieldnote" id="personalstatus"></div></div>
     <div class="field"><label>Stamp into</label><select id="shelfbox" style="height:32px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 8px"></select></div>
     <div id="shelfbody" class="scroll" style="max-height:52vh"></div>
     <div class="fieldnote" id="shelfstatus"></div>
@@ -7205,14 +7206,62 @@ function shelfCard(head, sub, action, dataAttr, preview) {
     "</div>";
 }
 
-function openShelf() {
+var personalRequestId = null;
+var personalPoll = null;
+function renderPersonalBoxes(d) {
+  $("personalstatus").textContent = d.held + " allocated / " + (d.quota === null ? "unlimited" : d.quota) + " quota";
+  $("personalcreate").disabled = d.quota !== null && d.held >= d.quota;
+  $("personalboxes").innerHTML = (d.boxes || []).map(function (b) {
+    return '<div style="padding:6px 0"><span>' + esc(b.name) + ' — ' + esc(b.status) + '</span>' +
+      (b.error ? '<div class="fieldnote">' + esc(b.error) + '</div>' : '') +
+      (['failed', 'interrupted', 'detached', 'deleting'].indexOf(b.status) >= 0 ? ' <button class="btn sm" data-personal-retry="' + esc(b.id) + '">Retry / recover</button>' : '') +
+      (['ready', 'failed', 'detached'].indexOf(b.status) >= 0 ? ' <button class="btn sm ghost" data-personal-keep="' + esc(b.id) + '">Remove, keep data</button> <button class="btn sm ghost" data-personal-delete="' + esc(b.id) + '">Delete box and data</button>' : '') + '</div>';
+  }).join('');
+  clearTimeout(personalPoll);
+  if ((d.boxes || []).some(function (b) { return b.status === 'provisioning' || b.status === 'deleting'; })) personalPoll = setTimeout(loadPersonalBoxes, 2000);
+}
+function loadPersonalBoxes() {
+  if ($("shelfwrap").style.display === "none") return;
+  fetch('/api/personal-boxes').then(function (r) { return r.json(); }).then(function (d) {
+    if (d.error) { $("personalstatus").textContent = d.error; $("personalcreate").disabled = true; $("personalboxes").innerHTML = ''; return; }
+    renderPersonalBoxes(d);
+  }).catch(function () { $("personalstatus").textContent = 'Could not load personal boxes. Reopen Templates to retry.'; });
+}
+function personalAction(action, body) {
+  $("personalstatus").textContent = 'Working…';
+  $("personalcreate").disabled = true;
+  fetch('/api/personal-boxes/' + action, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    .then(function (r) { return r.json(); }).then(function (d) {
+      if (d.error) { $("personalstatus").textContent = d.error; $("personalcreate").disabled = false; return; }
+      if (action === 'create') personalRequestId = null;
+      renderPersonalBoxes(d);
+      openShelf(d.boxId);
+    }).catch(function () { $("personalstatus").textContent = 'Connection interrupted. Retry uses the same request; no duplicate box.'; $("personalcreate").disabled = false; });
+}
+$("personalcreate").onclick = function () {
+  if (!personalRequestId) personalRequestId = crypto.randomUUID();
+  personalAction('create', { requestId: personalRequestId });
+};
+$("personalboxes").onclick = function (event) {
+  var button = event.target.closest('button');
+  if (!button) return;
+  var retry = button.getAttribute('data-personal-retry');
+  var keep = button.getAttribute('data-personal-keep');
+  var erase = button.getAttribute('data-personal-delete');
+  if (retry) personalAction('retry', { id: retry });
+  if (keep) personalAction('remove', { id: keep, deleteData: false });
+  if (erase && confirm('Permanently delete this personal box and its saved data? Remove its agents first.')) personalAction('remove', { id: erase, deleteData: true });
+};
+
+function openShelf(preferredBox) {
   $("shelfwrap").style.display = "";
+  loadPersonalBoxes();
   $("shelfstatus").textContent = "";
   $("shelfbody").innerHTML = '<div class="dim">Loading…</div>';
   fetch("/api/templates/shelf").then(function (r) { return r.json(); }).then(function (d) {
     var boxes = d.boxes || [];
     $("shelfbox").innerHTML = boxes.map(function (b) {
-      return '<option value="' + esc(b.id) + '"' + (b.id === currentBox ? " selected" : "") + ">" + esc(b.name) + (b.kind === "docker" ? " (docker)" : " (attached)") + "</option>";
+      return '<option value="' + esc(b.id) + '"' + (b.id === (preferredBox || currentBox) ? " selected" : "") + ">" + esc(b.name) + (b.kind === "docker" ? " (docker)" : " (attached)") + "</option>";
     }).join("");
     var html = "";
     var market = d.marketplace || [];
