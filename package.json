@@ -11,7 +11,7 @@
     "build": "npm run build:cli && npm run build:boxd",
     "build:hostd": "esbuild src/cli.ts --bundle --platform=node --target=node22 --format=esm --outfile=docker/box/hostd.mjs && node scripts/copy-catalog-data.mjs",
     "build:cli": "esbuild src/cli.ts --bundle --platform=node --target=node22 --format=esm --packages=external --outfile=dist/cli.js && node scripts/copy-catalog-data.mjs",
-    "build:boxd": "esbuild src/boxd/main.ts --bundle --platform=node --target=node22 --format=cjs --outfile=docker/box/boxd.cjs",
+    "build:boxd": "esbuild src/boxd/main.ts --bundle --platform=node --target=node22 --format=cjs --outfile=docker/box/boxd.cjs && esbuild src/boxd/check-documents.ts --bundle --platform=node --target=node22 --format=cjs --outfile=docker/box/check-documents.cjs",
     "build:xwatchdog": "node scripts/build-xwatchdog.mjs",
     "build:box": "npm run build:boxd && npm run build:hostd && npm run build:xwatchdog",
     "pack:dropin": "npm run build:boxd && node scripts/pack-dropin.mjs",

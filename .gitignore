@@ -11,6 +11,7 @@ dist/
 # control-plane bug rather than a stale image.
 docker/box/boxd.cjs
 docker/box/hostd.mjs
+docker/box/check-documents.cjs
 
 *.log
 *.webp
