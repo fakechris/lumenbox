@@ -54,6 +54,12 @@ test("personal creation reserves quota before awaiting, deduplicates requests an
     assert.equal(entries[0]!.members[0], "alice");
     const reopened = new PersonalBoxes(options);
     assert.equal(reopened.list("alice")[0]!.status, "ready");
+    const writer = new DatabaseSync(join(home, "personal-boxes.sqlite"));
+    try {
+      writer.exec("BEGIN IMMEDIATE");
+      assert.equal(reopened.unavailable().has(entries[0]!.id), false, "visibility reads do not contend for the reservation write lock");
+    } finally { writer.close(); }
+
     assert.equal(reopened.list("bob").length, 0);
     await assert.rejects(reopened.retry("bob", entries[0]!.id), /not found/i);
   } finally {

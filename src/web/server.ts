@@ -3559,6 +3559,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (revision !== eventRevision) {
           principals.reload(); unavailableBoxes = personalBoxes.unavailable(); eventRevision = revision;
         }
+        if (!principals.isKnown(caller.userId)) return false;
         return mayReadScopedEvent(event, { agent: mayReadAgent, box: mayReadBox, defaultBox: registry.box.id,
           task: id => { const task = orchestrator.tasks?.get(id); return task !== undefined && (task.assigneeId ? mayReadAgent(task.assigneeId) : task.requester === principals.resolve(caller.userId!).id); } });
       };
@@ -5887,6 +5888,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 404, { error: `No agent ${id}` });
             return;
           }
+          if (refused(id)) return;
           const conversation = typeof body.conversation === "string" && body.conversation !== "" ? body.conversation : MAIN_CONVERSATION;
           const index = Number(body.index);
           if (!Number.isInteger(index) || index < 0) {

@@ -126,6 +126,26 @@ test("member provisioning uses canonical owner, rejects injected host options, e
     );
     const entry = new AgentRegistry(join(home, "agents")).boxById(box.id);
     assert.deepEqual(entry?.members, ["alice"]);
+    assert.equal((await request("/api/reactions", { agent: secretAgent.id, index: 0, emoji: null }, "web:bob")).status, 403);
+    const sharedAgent = diskRegistry.create({ name: "Shared stream fixture", boxId: diskRegistry.box.id });
+    const streamAbort = new AbortController();
+    const stream = await fetch(base + "/api/events", { headers: { authorization: "Bearer personal-test", "x-agentbox-user": "web:alice", "x-agentbox-role": "member" }, signal: streamAbort.signal });
+    const reader = stream.body!.getReader();
+    try {
+      await reader.read(); // Initial connected comment.
+      const react = () => fetch(base + "/api/reactions", { method: "POST", headers: { authorization: "Bearer personal-test", "content-type": "application/json" }, body: JSON.stringify({ agent: sharedAgent.id, index: 0, emoji: null }) });
+      assert.equal((await react()).status, 200);
+      assert.match(new TextDecoder().decode((await reader.read()).value), /reaction/);
+      new Principals().save([]);
+      assert.equal((await react()).status, 200);
+      const received = reader.read().then(() => "event", () => "closed");
+      assert.equal(await Promise.race([received, new Promise<string>(resolve => setTimeout(() => resolve("silent"), 250))]), "silent", "an already-open SSE stream stops receiving shared-box events after principal removal");
+    } finally { streamAbort.abort(); await reader.cancel().catch(() => {}); }
+    diskRegistry.remove(sharedAgent.id, { archive: false });
+    new Principals().save([
+      { id: "alice", name: "Alice", role: "driver", identities: ["web:alice", "web:alice-alt"] },
+      { id: "bob", name: "Bob", role: "driver", identities: ["web:bob"] },
+    ]);
     new UsageLog().record({
       agentId: secretAgent.id,
       agentName: "Private Alice",
