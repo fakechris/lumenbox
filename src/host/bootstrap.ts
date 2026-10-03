@@ -35,7 +35,7 @@ export class BootstrapAdmins {
       if (roster.principals.length || roster.bootstrap?.disabled || roster.bootstrap?.redeemedAt !== undefined) return false;
       if (live(roster, now)) return true;
       // Corrupt state is not an invitation to re-arm a privileged credential.
-      if (roster.bootstrap && (!roster.bootstrap.hash || typeof roster.bootstrap.expiresAt !== "number")) throw new Error("Repair bootstrap state");
+      if (roster.bootstrap && (typeof roster.bootstrap.hash !== "string" || !/^[a-f0-9]{64}$/.test(roster.bootstrap.hash) || typeof roster.bootstrap.expiresAt !== "number" || !Number.isFinite(roster.bootstrap.expiresAt))) throw new Error("Repair bootstrap state");
       const code = randomBytes(32).toString("base64url");
       const temp = `${this.codePath}.${randomUUID()}.tmp`;
       writeFileSync(temp, `${code}\n`, { mode: 0o600 });

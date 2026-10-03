@@ -3181,9 +3181,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       const infoResponse = await (options.loginFetch ?? fetch)(`https://${apiHost}/open-apis/authen/v1/user_info`, {
         headers: { authorization: `Bearer ${tokenBody.access_token}` },
       });
-      const info = (await infoResponse.json()) as { data?: { open_id?: string; name?: string } };
+      const info = (await infoResponse.json()) as { code?: number; data?: { open_id?: string; name?: string } };
       const openId = info.data?.open_id;
-      if (!infoResponse.ok || typeof openId !== "string" || openId === "") throw new Error("user_info returned no authenticated identity");
+      if (!infoResponse.ok || info.code !== 0 || typeof openId !== "string" || openId === "") throw new Error("user_info returned no authenticated identity");
       const identity = `${channelId}:${openId}`;
       const currentDoor = channelRecords.find(entry => entry.id === channelId);
       const currentEnv = loadConfig().env ?? {};

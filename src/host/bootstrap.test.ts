@@ -40,6 +40,10 @@ test("nonempty and corrupt rosters cannot issue bootstrap, expired codes cannot 
     new Principals(path).save([{ id: "bob", name: "Bob", role: "viewer", identities: ["feishu:bob"] }]);
     assert.equal(bootstrap.ensure(), false);
     assert.equal(bootstrap.redeem(code, "feishu:alice", "Alice", 1, 101), false);
+    for (const state of [{ hash: "broken", expiresAt: 1 }, { hash: "a".repeat(64), expiresAt: null }, {}]) {
+      writeFileSync(path, JSON.stringify({ principals: [], bootstrap: state }));
+      assert.throws(() => bootstrap.ensure());
+    }
     writeFileSync(path, "broken");
     assert.throws(() => bootstrap.ensure());
   } finally { rmSync(home, { recursive: true, force: true }); }

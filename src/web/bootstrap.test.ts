@@ -12,13 +12,14 @@ test("bootstrap HTTP flow uses only vendor identity, never leaks the code and ad
   process.env.AGENTBOX_HOME = home; process.env.AGENTBOX_PUBLIC_URL = "http://127.0.0.1:7890";
   let stop: (() => void) | undefined;
   const logs: string[] = [];
+  let vendorCode = 0;
   try {
     writeFileSync(join(home, "channels.json"), JSON.stringify({ channels: [{ id: "fixture", name: "Fixture", type: "feishu", incarnation: 1, boxId: "default", createdAt: new Date().toISOString() }] }));
     writeFileSync(join(home, "config.json"), JSON.stringify({ env: { FIXTURE_APP_ID: "app", FIXTURE_APP_SECRET: "secret" } }));
     const loginFetch = (async (input: string | URL | Request, init?: RequestInit) => {
       if (String(input).endsWith("oauth/token")) return Response.json({ access_token: JSON.parse(String(init!.body)).code });
       const subject = new Headers(init?.headers).get("authorization")!.slice(7);
-      return Response.json({ code: 0, data: { open_id: subject, name: subject } });
+      return Response.json({ code: vendorCode, data: { open_id: subject, name: subject } });
     }) as typeof fetch;
     let base = "";
     const start = async () => startWebServer({ port: 0, host: "127.0.0.1", token: "fixture", useBox: false, loginFetch, onLog: line => logs.push(line), onReady: url => { base = url; } });
@@ -27,6 +28,13 @@ test("bootstrap HTTP flow uses only vendor identity, never leaks the code and ad
     assert.equal((await fetch(base + "/bootstrap")).status, 200);
     const begin = async (bootstrapCode: string) => fetch(base + "/auth/fixture", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ bootstrapCode, identity: "attacker:chosen", role: "admin" }), redirect: "manual" });
     assert.equal((await begin("wrong")).status, 400);
+    const refusedStart = await begin(code);
+    const refusedData = await refusedStart.json() as { url: string };
+    const refusedState = new URL(refusedData.url).searchParams.get("state")!;
+    vendorCode = 999;
+    assert.equal((await fetch(base + `/auth/fixture/callback?state=${refusedState}&code=not-authenticated`, { redirect: "manual" })).status, 502);
+    assert.equal(new Principals().list().length, 0, "vendor error cannot create an admin or consume the bootstrap");
+    vendorCode = 0;
     const states: string[] = [];
     for (let i = 0; i < 2; i++) {
       const response = await begin(code); assert.equal(response.status, 200);
