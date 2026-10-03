@@ -6,6 +6,7 @@
 
 import { BOXD_PROTOCOL, type DisplayInfo, type DesktopResources, type TeachQueueList, type TeachClaimResult, type TeachBinding } from "../protocol/index.ts";
 import { isComputerWrite } from "../cua/execution.ts";
+import { parseSensitiveInput, type SensitiveInput } from "../protocol/sensitive-input.ts";
 import type {
   BrowserRequest,
   BrowserResponse,
@@ -62,7 +63,8 @@ export class BoxError extends Error {
   constructor(
     message: string,
     readonly status?: number,
-    readonly kind: BoxFailure = "protocol"
+    readonly kind: BoxFailure = "protocol",
+    readonly sensitiveInput?: SensitiveInput
   ) {
     super(message);
     this.name = "BoxError";
@@ -168,7 +170,8 @@ export class BoxClient {
           `${path}: ${message}. The box refused this; sending it again unchanged will ` +
             `be refused again.`,
           response.status,
-          "refused"
+          "refused",
+          response.status === 428 ? parseSensitiveInput((parsed as { sensitiveInput?: unknown }).sensitiveInput) : undefined
         );
       }
       return parsed as T;

@@ -1,4 +1,5 @@
 import { isComputerWrite } from "../cua/execution.ts";
+import { SENSITIVE_INPUT_TTL_MS, inputValueHash, parseSensitiveInput } from "../protocol/sensitive-input.ts";
 /**
  * Tool definitions and dispatch.
  *
@@ -3975,6 +3976,8 @@ export async function dispatchTool(
         // asking again does not help until a person answers.
         if (error instanceof BoxError && error.status === 428) {
           const finding = message.replace(/^IRREVERSIBLE:\s*/, "");
+          const observed = name === "browser_act" && request.action === "type" ? parseSensitiveInput(error.sensitiveInput) : undefined;
+          const sensitive = observed !== undefined && observed.valueHash === inputValueHash(request.text ?? "") ? observed : undefined;
           if (context.policy === undefined) {
             // No gate to ask: fail closed, and let the finding travel so it is read.
             return {
@@ -3989,12 +3992,17 @@ export async function dispatchTool(
             tool: name,
             input,
             irreversible: finding,
+            ...(sensitive !== undefined && context.turnId !== undefined && context.conversation !== undefined ? {
+              inputScope: { ...sensitive, turnId: context.turnId, conversation: context.conversation,
+                principal: context.caller?.userId ?? "", target: `${context.registry.boxOf(context.agent.id).id}:${context.displayIndex ?? 1}` },
+            } : {}),
+            principalId: context.caller?.userId,
           });
           if (!decision.allow) {
             return { text: outcomeLine("refused", decision.reason), isError: true, ...(decision.approval !== undefined ? { approval: { id: decision.approval.id } } : {}) };
           }
           try {
-            return render(await box.browser({ ...request, confirmed: true }));
+            return render(await box.browser({ ...request, confirmed: true, ...(sensitive !== undefined ? { inputApproval: { ...sensitive, expiresAt: decision.inputExpiresAt ?? Date.now() + SENSITIVE_INPUT_TTL_MS } } : {}) }));
           } catch (again) {
             const why = again instanceof Error ? again.message : String(again);
             return { text: outcomeLine(boxErrorOutcome(again) ?? "failed", why), isError: true };
