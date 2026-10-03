@@ -102,6 +102,8 @@ export function networkNameFor(containerName: string): string {
 }
 
 export interface BoxConfig {
+  /** Member-owned boxes never inherit installation credentials or publication settings. */
+  isolated?: boolean;
   /**
    * Run the orchestrator inside the box, instead of on this machine.
    *
@@ -694,7 +696,7 @@ export class BoxManager {
       // A remote Docker engine is the one case that needs a routable publication, and it
       // is opt-in: AGENTBOX_BOXD_PUBLISH_ADDRESS, set by someone who has read this.
       "--publish",
-      publishOn(publishAddress(), config.boxdPort, BOXD_PORT),
+      publishOn(config.isolated ? "127.0.0.1" : publishAddress(), config.boxdPort, BOXD_PORT),
       // Its own bridge, so a box is not on the same subnet as every other container.
       //
       // Worth having and **not sufficient**, which is measured rather than assumed.
@@ -744,7 +746,7 @@ export class BoxManager {
       // the same name, and on a Linux engine the name exists only through this mapping.
       "--add-host",
       "host.docker.internal:host-gateway",
-      ...(process.env.AGENTBOX_EGRESS_RELAY
+      ...(!config.isolated && process.env.AGENTBOX_EGRESS_RELAY
         ? [
             "--env",
             `AGENTBOX_EGRESS_RELAY=${process.env.AGENTBOX_EGRESS_RELAY}`,

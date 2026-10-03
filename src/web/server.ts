@@ -200,6 +200,8 @@ import { FollowUpBudget, type FollowUpItem } from "../host/follow-up-budget.ts";
 import { SessionEpochs } from "./session-epochs.ts";
 import { Directories, directorySource, departmentQuotaKey } from "../host/directory.ts";
 import { directoryProviders } from "../channels/directory.ts";
+import { PersonalBoxes, type PersonalBoxDriver } from "../host/personal-boxes.ts";
+import { PersonalDocker } from "../box/personal.ts";
 import { personalAllocationRefusal, personalBoxesOf, personalQuotaFor } from "../host/box-quota.ts";
 import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
 import { attentionFor } from "../host/attention.ts";
@@ -230,6 +232,7 @@ import { editDiffOf } from "./line-diff.ts";
 export interface WebOptions {
   loginFetch?: typeof fetch;
   directoryFetch?: typeof fetch;
+  personalBoxDriver?: PersonalBoxDriver;
   port: number;
   /**
    * Shared secret for the UI. Anyone holding it can drive the agents, which is the whole
@@ -376,6 +379,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   /** One docker bring-up at a time; a second click joins the first via the events. */
   let boxUpInFlight = false;
   const clients = new Set<ServerResponse>();
+  const clientFilters = new WeakMap<ServerResponse, (event: OutboundEvent) => boolean>();
 
   /**
    * Recent activity, so the feed is not blank on arrival.
@@ -419,6 +423,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     remember(event);
     const payload = `data: ${JSON.stringify(event)}\n\n`;
     for (const client of clients) {
+      if (clientFilters.get(client)?.(event) === false) continue;
       // A slow or dead client must not take the server down with it.
       try {
         client.write(payload);
@@ -698,6 +703,20 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   } catch { log("First-admin bootstrap disabled: repair the local roster/bootstrap state."); }
   const directoryQuotaContext = (id: string) => directories.membership(
     principals.list().find(person => person.id === id)?.identities ?? [id], directorySources(), Date.now(), identity => principals.hasCurrentIdentity(id, identity));
+
+  let personalBoxesStopping = false;
+  const personalBoxes = new PersonalBoxes({
+    home: join(agentboxHome(), "personal-boxes"), entries: () => registry.listBoxes(),
+    quota: owner => personalQuotaFor(owner, loadConfig(), directoryQuotaContext(owner)),
+    authorize: owner => {
+      principals.reload();
+      const person = principals.list().find(person => person.id === owner);
+      return !personalBoxesStopping && person !== undefined && person.identities.length > 0 && roleAtLeast(person.role, "driver") && directoryQuotaContext(owner).eligible;
+    },
+    attach: entry => { if (registry.boxById(entry.id)) registry.updateBox(entry.id, { endpoint: entry.endpoint, members: entry.members }); else registry.attachBox(entry); },
+    detach: id => { orchestrator.detachBox(id); }, residents: id => registry.agentsIn(id).length,
+    driver: options.personalBoxDriver ?? new PersonalDocker(),
+  });
 
   {
     const legacy = loadConfig().channelAllow ?? [];
@@ -3519,6 +3538,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         const box = registry.boxById(boxId);
         return box !== undefined && (caller.userId === undefined || mayEnterBox(box, principals.resolve(caller.userId).id));
       };
+      const mayReadAgent = (id: string): boolean => registry.has(id) && mayReadBox(registry.boxOf(id).id);
+      const mayReadEvent = (event: unknown): boolean => {
+        if (caller.userId === undefined) return true;
+        principals.reload();
+        if (!principals.isKnown(caller.userId)) return false;
+        const value = event as Record<string, unknown>;
+        const ids = [value.agentId, value.fromId, value.toId].filter((id): id is string => typeof id === "string" && registry.has(id));
+        return ids.length > 0 && ids.every(mayReadAgent);
+      };
       const templateTarget = (requested: unknown): string | undefined => {
         if (requested !== undefined && typeof requested !== "string") {
           send(res, 400, { error: "boxId must be a box id." }); return;
@@ -3534,6 +3562,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       };
 
       try {
+        if (req.method === "GET") {
+          const requestedAgent = url.searchParams.get("agent") ?? url.searchParams.get("agentId");
+          const requestedBox = url.searchParams.get("boxId");
+          if ((requestedAgent && registry.has(requestedAgent) && !mayReadAgent(requestedAgent)) ||
+            (requestedBox && !mayReadBox(requestedBox))) { send(res, 403, { error: "This box is not available to this caller." }); return; }
+        }
         if (route === "GET /") {
           send(res, 200, APP_HTML, "text/html");
           return;
@@ -3549,6 +3583,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 404, { error: `Not a desktop path: ${url.pathname}` });
             return;
           }
+          if (!mayReadBox(desktop.boxId ?? registry.box.id)) { send(res, 403, { error: "This desktop is not available to this caller." }); return; }
           const page = /^\/(?:vnc|vnc-ro)\/(\d+)(?:\/(?:vnc\.html)?)?(?:\?|$)/.exec(desktop.upstream);
           if (page) {
             const agent = registry.agentsIn(desktop.boxId ?? registry.box.id)
@@ -3824,10 +3859,40 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           } catch { send(res, 503, { error: "Directory sync failed. Previous complete snapshot retained; new allocations paused. Check permissions and retry. If the tenant changed, use a new door ID and bind its identities." }); }
           return;
         }
+        if (url.pathname === "/api/personal-boxes" || url.pathname.startsWith("/api/personal-boxes/")) {
+          principals.reload();
+          const identity = caller.userId;
+          if (!identity || !principals.isKnown(identity)) { send(res, 403, { error: "Sign in as a member to manage personal boxes." }); return; }
+          const view = (owner: string) => ({ boxes: personalBoxes.list(owner),
+            quota: personalQuotaFor(owner, loadConfig(), directoryQuotaContext(owner)) ?? null,
+            held: personalBoxesOf(personalBoxes.quotaEntries(), owner).length });
+          if (route === "GET /api/personal-boxes") { send(res, 200, view(principals.resolve(identity).id)); return; }
+          if (!["POST /api/personal-boxes/create", "POST /api/personal-boxes/retry", "POST /api/personal-boxes/remove"].includes(route)) { send(res, 404, { error: "No personal box action." }); return; }
+          const body = await readJson(req);
+          principals.reload();
+          if (!principals.isKnown(identity) || !roleAtLeast(principals.roleOf(identity), "driver")) { send(res, 403, { error: "Personal box permission revoked." }); return; }
+          const owner = principals.resolve(identity).id;
+          const stillAuthorized = () => { principals.reload(); return principals.isKnown(identity) && principals.resolve(identity).id === owner && roleAtLeast(principals.roleOf(identity), "driver"); };
+          const allowed = route.endsWith("/create") ? ["requestId"] : route.endsWith("/remove") ? ["id", "deleteData"] : ["id"];
+          if (Object.keys(body).some(key => !allowed.includes(key)) ||
+            (route.endsWith("/create") ? typeof body.requestId !== "string" : typeof body.id !== "string") ||
+            (route.endsWith("/remove") && typeof body.deleteData !== "boolean")) { send(res, 400, { error: "Invalid personal box parameters." }); return; }
+          try {
+            const record = route.endsWith("/create") ? await personalBoxes.create(owner, body.requestId as string, stillAuthorized)
+              : route.endsWith("/retry") ? await personalBoxes.retry(owner, body.id as string, stillAuthorized)
+                : await personalBoxes.remove(owner, body.id as string, body.deleteData as boolean);
+            if (record.status === "ready") {
+              const entry = registry.boxById(record.id);
+              if (entry) await orchestrator.reconnectBox(entry);
+            }
+            send(res, 200, view(owner));
+          } catch (error) { send(res, 409, { error: error instanceof Error ? error.message : "Personal box operation failed." }); }
+          return;
+        }
         if (route === "GET /api/quotas/self") {
           const principal = caller.userId === undefined ? undefined : principals.resolve(caller.userId);
           send(res, 200, { quota: principal ? personalQuotaFor(principal.id, loadConfig(), directoryQuotaContext(principal.id)) ?? null : null,
-            held: principal ? personalBoxesOf(registry.listBoxes(), principal.id).length : 0 });
+            held: principal ? personalBoxesOf(personalBoxes.quotaEntries(), principal.id).length : 0 });
           return;
         }
         if (route === "GET /api/quotas" || route === "POST /api/quotas") {
@@ -3937,7 +4002,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         if (route === "GET /api/tasks") {
           const board = orchestrator.tasks;
-          send(res, 200, { tasks: board === undefined ? [] : board.list() });
+          send(res, 200, { tasks: board === undefined ? [] : board.list().filter(task => caller.userId === undefined || (task.assigneeId ? mayReadAgent(task.assigneeId) : task.requester === principals.resolve(caller.userId).id)) });
           return;
         }
 
@@ -3948,15 +4013,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // Each routine's last result rides along (INV-776): a run that was judged not worth
           // delivering is still a run, and this is where a person sees what it found.
           const lastResults = new Map<string, ReturnType<typeof orchestrator.routineResults.list>[number]>();
-          for (const entry of orchestrator.routineResults.list()) if (!lastResults.has(entry.slug)) lastResults.set(entry.slug, entry);
+          for (const entry of orchestrator.routineResults.list().filter(entry => mayReadAgent(entry.agentId))) if (!lastResults.has(entry.slug)) lastResults.set(entry.slug, entry);
           send(res, 200, {
-            schedules: (await orchestrator.scheduler.status()).map(entry => {
+            schedules: (await orchestrator.scheduler.status()).filter(entry => mayReadBox(entry.boxId ?? registry.box.id)).map(entry => {
               const last = lastResults.get(entry.slug);
               return last === undefined ? entry : { ...entry, lastResult: { at: last.at, verdict: last.verdict, reason: last.reason, text: last.text.slice(0, 600) } };
             }),
             armed: process.env.AGENTBOX_SCHEDULER !== "0",
             // The places (INV-430): the view groups routines by the box they live in.
-            boxes: registry.listBoxes().map(box => ({ id: box.id, name: box.name })),
+            boxes: registry.listBoxes().filter(box => mayReadBox(box.id)).map(box => ({ id: box.id, name: box.name })),
             defaultBox: registry.box.id,
           });
           return;
@@ -3967,7 +4032,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "GET /api/schedules/results") {
           const slug = url.searchParams.get("slug") ?? undefined;
           const limit = Math.max(1, Math.min(200, Number(url.searchParams.get("limit") ?? 50) || 50));
-          send(res, 200, { results: orchestrator.routineResults.list({ ...(slug !== undefined ? { slug } : {}), limit }) });
+          send(res, 200, { results: orchestrator.routineResults.list({ ...(slug !== undefined ? { slug } : {}), limit }).filter(entry => mayReadAgent(entry.agentId)) });
           return;
         }
 
@@ -4130,7 +4195,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         // Secrets an agent asked for (AskSecret): names and descriptions, never values.
         if (route === "GET /api/secrets/requests") {
-          send(res, 200, { requests: [...pendingSecrets.values()] });
+          send(res, 200, { requests: [...pendingSecrets.values()].filter(entry => mayReadAgent(entry.agentId)) });
           return;
         }
         if (route === "POST /api/secrets/requests/answer") {
@@ -4179,7 +4244,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         // Desktops handed to the person (HandOverDesktop), and the hand-back.
         if (route === "GET /api/handover") {
-          send(res, 200, { pending: [...pendingHandovers.values()] });
+          send(res, 200, { pending: [...pendingHandovers.values()].filter(entry => mayReadAgent(entry.agentId)) });
           return;
         }
         if (route === "POST /api/handover/back") {
@@ -4414,7 +4479,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const visible = registry
             .list()
             .filter(agent => agent.profile.hidden !== true && refusalToDrive(known) === undefined && myBoxes(agent));
-          const boxes = registry.listBoxes().map(box => ({ id: box.id, name: box.name }));
+          const boxes = registry.listBoxes().filter(box => mayReadBox(box.id)).map(box => ({ id: box.id, name: box.name }));
           send(res, 200, { boxes, agents: memoryAdmin.summary(visible) });
           return;
         }
@@ -5712,8 +5777,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             allTools: ALL_TOOLS,
             // Every box this installation drives, own first (docs/30). An agent's row names its
             // box and its desktop path is on that box.
-            boxes: orchestrator.boxStatus(),
-            agents: registry.list().map(record => {
+            boxes: orchestrator.boxStatus().filter(box => mayReadBox(box.id)),
+            agents: registry.list().filter(record => mayReadBox(registry.boxOf(record.id).id)).map(record => {
               const index = registry.displayIndexFor(record.id);
               const boxEntry = registry.boxOf(record.id);
               const own = boxEntry.id === registry.box.id;
@@ -5747,7 +5812,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         if (route === "GET /api/activity") {
-          send(res, 200, activity.list());
+          send(res, 200, activity.list().filter(mayReadEvent));
           return;
         }
 
@@ -5864,7 +5929,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const answer = attentionFor({
             principalId: me?.id ?? "",
             identities: me?.identities ?? [],
-            tasks: board === undefined ? [] : board.list(),
+            tasks: board === undefined ? [] : board.list().filter(task => caller.userId === undefined || (task.assigneeId ? mayReadAgent(task.assigneeId) : task.requester === principals.resolve(caller.userId).id)),
             questions: questions.list(),
             nameOf: id => registry.tryGet(id)?.profile.name ?? principals.list().find(person => person.id === id)?.name ?? id,
             unanswered: involuteUnanswered,
@@ -6017,6 +6082,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               send(res, 404, { error: `No box named ${name}.` });
               return;
             }
+            if (personalBoxes.manages(existing.id)) { send(res, 409, { error: "Use personal box actions to manage this box." }); return; }
             // Changing who a box is for is an admin's act, and only an admin's (INV-538).
             const members =
               body.members === "everyone"
@@ -6026,7 +6092,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                   : undefined;
             if (members !== undefined && refusedRole("admin")) return;
             if (members !== undefined) {
-              const allocationError = personalAllocationRefusal(registry.listBoxes(), existing, members, loadConfig(), Array.isArray(members) && members[0] ? directoryQuotaContext(members[0]) : undefined);
+              const allocationError = personalAllocationRefusal(personalBoxes.quotaEntries(), existing, members, loadConfig(), Array.isArray(members) && members[0] ? directoryQuotaContext(members[0]) : undefined);
               if (allocationError !== undefined) { send(res, 409, { error: allocationError }); return; }
             }
             if (tokenFile === "" && typeof body.token === "string" && body.token.trim() !== "") {
@@ -6055,6 +6121,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (refused()) return;
           const body = await readJson(req);
           try {
+            const target = registry.boxByName(String(body.name ?? "")) ?? registry.boxById(String(body.name ?? ""));
+            if (target && personalBoxes.manages(target.id)) { send(res, 409, { error: "Use personal box removal to choose whether data is retained." }); return; }
             const entry = orchestrator.detachBox(String(body.name ?? ""));
             log(`detached box ${entry.name} (${entry.id})`);
             send(res, 200, { ok: true, box: entry });
@@ -6096,7 +6164,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             bundles: orchestrator.bundles.list().map(bundle => ({ ...bundle, secretIds: [...bundle.secretIds] })),
             attachments: orchestrator.bundles.attachments(),
             dangling: orchestrator.bundles.dangling(),
-            boxes: registry.listBoxes().map(box => ({ id: box.id, name: box.name })),
+            boxes: registry.listBoxes().filter(box => mayReadBox(box.id)).map(box => ({ id: box.id, name: box.name })),
           });
           return;
         }
@@ -6605,6 +6673,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             connection: "keep-alive",
           });
           res.write(": connected\n\n");
+          clientFilters.set(res, mayReadEvent);
           clients.add(res);
 
           // Proxies and idle timeouts kill a silent stream; a comment keeps it open
@@ -6663,6 +6732,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     if (!desktop) {
       clientSocket.destroy();
       return;
+    }
+
+    const gateway = callerOf(req.headers, upgradeDecision.allow);
+    const identity = gateway.userId ?? readSession(parseCookies(req.headers.cookie).get(SESSION_COOKIE), sessionSecret)?.identity;
+    principals.reload();
+    const targetBox = registry.boxById(desktop.boxId ?? registry.box.id);
+    if (!targetBox || (identity !== undefined && !mayEnterBox(targetBox, principals.resolve(identity).id))) {
+      clientSocket.end("HTTP/1.1 403 Forbidden\r\n\r\n"); return;
     }
 
     void (async () => {
@@ -6819,6 +6896,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   process.once("SIGTERM", markCleanExit);
 
   return () => {
+    personalBoxesStopping = true;
     for (const client of clients) client.end();
     // The backup timer, or an embedding that restarts the server in one process leaves the old one
     // firing alongside the new — two backups a tick, sharing a timestamp and a partial directory.
