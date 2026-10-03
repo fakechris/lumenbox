@@ -19,7 +19,7 @@ import type { DisplayLease } from "../box/display-lease.ts";
 import type { PolicyGate } from "./policy.ts";
 import type { Claims } from "./claims.ts";
 import type { FileVersions } from "./files.ts";
-import type { StepLedger, TurnLedger } from "./resume.ts";
+import type { StepLedger, TurnLedger, ResumeMarker } from "./resume.ts";
 import { approvalOutcomeResult, notStartedResult, outcomeUnknownResult } from "./resume.ts";
 import { idempotencyOf } from "../protocol/idempotency.ts";
 import { changedPromptSegments, type PromptFingerprint } from "./resume.ts";
@@ -469,6 +469,8 @@ export interface TurnDeps {
   operatorRules?: () => readonly string[];
   /** Who is driving, threaded through so a memory kept this turn records who it is about. */
   caller?: { userId?: string };
+  /** Transfer inbox custody only after the turn recovery record is persisted. */
+  onReady?: () => void;
   /** That person's name, for an operator rule written about them by name (INV-156). */
   callerName?: string;
   /**
@@ -588,19 +590,7 @@ export interface TurnDeps {
    * Threaded in rather than derived, because only the caller doing the resuming knows which turn
    * this continues and how many attempts have gone before.
    */
-  resumeOf?: {
-    id: string;
-    attempt: number;
-    workId?: string;
-    /**
-     * Continue *this* turn rather than open a new one told about it (INV-774): same
-     * turnId, no user message, and the step ledger's open calls answered before the
-     * model is asked again. Only set for turns the step ledger recorded.
-     */
-    continues?: true;
-    /** How the person answered the approval an open step was waiting on, when one was. */
-    approval?: { id: string; how: "allowed" | "refused" | "gone" };
-  };
+  resumeOf?: ResumeMarker;
   onEvent?: (event: TurnEvent) => void;
   /** A goal continuation turn ended (INV-770): what it did and how, for the loop's accounting. */
   onGoalTurn?: (report: GoalTurnReport) => void;
@@ -2129,14 +2119,13 @@ ${outcome.text}`;
   let malformedRetries = 0;
   const chinese = readsAsChinese(inbound.map(message => message.text).join("\n"));
 
-  // The ledger opens here, not during setup. Its job is to record that a turn was *executing* — a
-  // model call, a tool — when the process died, so the next startup resumes it. Everything above is
-  // assembly that ran nothing; a death there loses no work (the accepted message is still in the
-  // inbox) and would otherwise have left an open ledger that read a setup failure as an interrupted
-  // turn and resumed one that had already reported failing.
+  // Setup still belongs to the inbox. Persist the message ids before acknowledging
+  // them, so startup can reconcile a crash between these two synchronous writes.
   deps.turns?.begin({
     id: turnId,
     agentId: agent.id,
+    causedBy: inbound.map(message => message.id),
+    ...(deps.caller?.userId !== undefined ? { principalId: deps.caller.userId } : {}),
     about: inbound.map(message => message.text).join(" / "),
     workId,
     ...(conversation !== MAIN_CONVERSATION ? { conversation } : {}),
@@ -2159,6 +2148,8 @@ ${outcome.text}`;
       shared: memoryProjectionManifest(sharedMemoryRecall),
     },
   });
+  // If this fails, leave the begin open: recovery, not a second inbox replay, owns it.
+  deps.onReady?.();
 
   try {
     // Continuations are a loop here rather than recursion inside runRounds: each pass gets a fresh
@@ -2303,7 +2294,16 @@ ${outcome.text}`;
       messages.push({ role: "user", content: lastCall });
       forceTools = { type: "none" };
     }
-    const steered = finishing ? [] : deps.bus.takeSteering(agent.id, conversation);
+    const steered = finishing ? [] : deps.bus.takeSteering(agent.id, conversation, messages => {
+      // The transcript takes custody before inbox.start. Startup reconciles causedBy
+      // against this open turn, including a crash between the two writes.
+      registry.appendTranscript(agent.id, {
+        role: "user", text: buildTurnPrompt(messages), at: new Date().toISOString(),
+        causedBy: messages.map(message => message.id),
+        ...(messages.some(message => message.fromId === "user" && message.synthetic !== true) ? { fromPerson: true as const } : {}),
+        turnId,
+      } satisfies TranscriptEntry, conversation);
+    });
     if (steered.length > 0) {
       // A person who speaks into a turn nobody was waiting on is now waited on (review R6):
       // silence is withdrawn — the tool refuses from here — and the guards read the rest of
@@ -2313,16 +2313,6 @@ ${outcome.text}`;
         silenceOffered = false;
       }
       const steerText = buildTurnPrompt(steered);
-      registry.appendTranscript(agent.id, {
-        role: "user",
-        text: steerText,
-        at: new Date().toISOString(),
-        causedBy: steered.map(message => message.id),
-        // Stamped like the opening message (INV-799): a steer is the person typing mid-turn, and
-        // the anchor harvest keeps only what carries the stamp.
-        ...(steered.some(message => message.fromId === "user" && message.synthetic !== true) ? { fromPerson: true as const } : {}),
-        turnId,
-      } satisfies TranscriptEntry, conversation);
       messages.push({ role: "user", content: steerText });
     }
     // Asked before spending anything. A stop or an exhausted budget ends the turn here, at a round
