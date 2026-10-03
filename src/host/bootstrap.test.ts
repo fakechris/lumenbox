@@ -12,12 +12,16 @@ test("bootstrap is single-use, atomic with the first admin, private on disk and 
     const path = join(home, "principals.json"), codePath = join(home, "bootstrap-code");
     const bootstrap = new BootstrapAdmins(path, codePath);
     assert.equal(bootstrap.ensure(), true);
-    const code = readFileSync(codePath, "utf8").trim();
+    let code = readFileSync(codePath, "utf8").trim();
     assert.equal(statSync(codePath).mode & 0o777, 0o600);
     assert.equal(readFileSync(path, "utf8").includes(code), false);
     const restarted = new BootstrapAdmins(path, codePath);
     assert.equal(restarted.ensure(), true);
     assert.equal(readFileSync(codePath, "utf8").trim(), code);
+    rmSync(codePath);
+    assert.equal(restarted.ensure(), true, "missing local code after an interrupted issuance can be recovered");
+    assert.equal(restarted.accepts(code), false, "recovery rotates the unredeemed credential");
+    code = readFileSync(codePath, "utf8").trim();
     const result = await Promise.all(["alice", "bob"].map(async subject => restarted.redeem(code, `feishu:${subject}`, subject, 1)));
     assert.equal(result.filter(Boolean).length, 1);
     assert.equal(new Principals(path).list().length, 1);

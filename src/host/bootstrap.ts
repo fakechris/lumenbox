@@ -33,7 +33,7 @@ export class BootstrapAdmins {
     return withRosterLock(this.path, () => {
       const roster = read(this.path);
       if (roster.principals.length || roster.bootstrap?.disabled || roster.bootstrap?.redeemedAt !== undefined) return false;
-      if (live(roster, now)) return true;
+      if (live(roster, now) && existsSync(this.codePath) && digest(readFileSync(this.codePath, "utf8").trim()) === roster.bootstrap!.hash) return true;
       // Corrupt state is not an invitation to re-arm a privileged credential.
       if (roster.bootstrap && (typeof roster.bootstrap.hash !== "string" || !/^[a-f0-9]{64}$/.test(roster.bootstrap.hash) || typeof roster.bootstrap.expiresAt !== "number" || !Number.isFinite(roster.bootstrap.expiresAt))) throw new Error("Repair bootstrap state");
       const code = randomBytes(32).toString("base64url");
