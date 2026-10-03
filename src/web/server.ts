@@ -4727,6 +4727,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         if (route === "GET /api/channels") {
+          if (refusedRole("admin")) return;
           for (const [code, invite] of invites) {
             if (invite.expiresAt < Date.now()) invites.delete(code);
           }

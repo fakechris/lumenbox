@@ -100,6 +100,7 @@ test("member provisioning uses canonical owner, rejects injected host options, e
     const bobState = await request("/api/state", undefined, "web:bob");
     assert.equal(bobState.status, 200);
     assert.ok(!JSON.stringify(bobState.data).includes(box.id));
+    assert.equal((await request("/api/channels", undefined, "web:bob")).status, 403, "channel administration cannot expose another member or invitation credentials");
     assert.ok(
       !(await request("/api/templates/shelf", undefined, "web:bob")).data.boxes.some(
         (b: { id: string }) => b.id === box.id,

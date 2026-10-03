@@ -69,6 +69,8 @@ test("installation and organisation are an admin's; a person's own access is the
       ).status;
 
     // What the installation is, and what the organisation is: an admin's.
+    assert.equal(await status("/api/channels", dana), 403, "channel roster and invitation secrets");
+    assert.equal(await status("/api/channels", vic), 403, "viewers cannot read invitation secrets");
     assert.equal(await status("/api/config", dana, { provider: "anthropic" }), 403, "provider");
     assert.equal(await status("/api/scopes", dana, { scopes: [] }), 403, "scopes");
     assert.equal(await status("/api/principals", dana, { principals: [] }), 403, "roster");
