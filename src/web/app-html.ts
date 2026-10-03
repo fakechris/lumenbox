@@ -7235,7 +7235,7 @@ function personalAction(action, body) {
       if (d.error) { $("personalstatus").textContent = d.error; $("personalcreate").disabled = false; return; }
       if (action === 'create') personalRequestId = null;
       renderPersonalBoxes(d);
-      openShelf();
+      openShelf(d.boxId);
     }).catch(function () { $("personalstatus").textContent = 'Connection interrupted. Retry uses the same request; no duplicate box.'; $("personalcreate").disabled = false; });
 }
 $("personalcreate").onclick = function () {
@@ -7253,7 +7253,7 @@ $("personalboxes").onclick = function (event) {
   if (erase && confirm('Permanently delete this personal box and its saved data? Remove its agents first.')) personalAction('remove', { id: erase, deleteData: true });
 };
 
-function openShelf() {
+function openShelf(preferredBox) {
   $("shelfwrap").style.display = "";
   loadPersonalBoxes();
   $("shelfstatus").textContent = "";
@@ -7261,7 +7261,7 @@ function openShelf() {
   fetch("/api/templates/shelf").then(function (r) { return r.json(); }).then(function (d) {
     var boxes = d.boxes || [];
     $("shelfbox").innerHTML = boxes.map(function (b) {
-      return '<option value="' + esc(b.id) + '"' + (b.id === currentBox ? " selected" : "") + ">" + esc(b.name) + (b.kind === "docker" ? " (docker)" : " (attached)") + "</option>";
+      return '<option value="' + esc(b.id) + '"' + (b.id === (preferredBox || currentBox) ? " selected" : "") + ">" + esc(b.name) + (b.kind === "docker" ? " (docker)" : " (attached)") + "</option>";
     }).join("");
     var html = "";
     var market = d.marketplace || [];

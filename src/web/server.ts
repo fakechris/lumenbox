@@ -3901,7 +3901,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               const entry = registry.boxById(record.id);
               if (entry) await orchestrator.reconnectBox(entry);
             }
-            send(res, 200, view(owner));
+            send(res, 200, { ...view(owner), boxId: record.id });
           } catch (error) { send(res, 409, { error: error instanceof Error ? error.message : "Personal box operation failed." }); }
           return;
         }
