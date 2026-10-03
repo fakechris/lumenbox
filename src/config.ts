@@ -52,6 +52,7 @@ export interface AgentboxConfig {
   personalBoxQuota?: number;
   /** Overrides keyed by canonical principal id. */
   personBoxQuotas?: Record<string, number>;
+  departmentBoxQuotas?: Record<string, number>;
   /**
    * The box image to pull when this machine has none, as a full `repo:tag` reference.
    *
@@ -336,6 +337,7 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
       : {}),
     ...(raw.personalBoxQuota !== undefined ? { personalBoxQuota: readQuota(raw.personalBoxQuota, "personalBoxQuota", onWarn) } : {}),
     ...(raw.personBoxQuotas !== undefined ? { personBoxQuotas: readQuotaMap(raw.personBoxQuotas, "personBoxQuotas", onWarn) } : {}),
+    ...(raw.departmentBoxQuotas !== undefined ? { departmentBoxQuotas: readQuotaMap(raw.departmentBoxQuotas, "departmentBoxQuotas", onWarn) } : {}),
     ...(typeof raw.startupItem === "boolean" ? { startupItem: raw.startupItem } : {}),
     ...(readInvolute(raw.involute, onWarn) !== undefined ? { involute: readInvolute(raw.involute, onWarn) } : {}),
   };
@@ -621,6 +623,7 @@ export function saveConfig(
     startupItem?: boolean | null;
     personalBoxQuota?: number | null;
     personBoxQuotas?: Record<string, number | null>;
+    departmentBoxQuotas?: Record<string, number | null>;
   }
 ): string {
   const path = configPath();
@@ -660,6 +663,7 @@ export function saveConfig(
   }
   for (const [field, patch] of [
     ["personBoxQuotas", changes.personBoxQuotas],
+    ["departmentBoxQuotas", changes.departmentBoxQuotas],
   ] as const) {
     if (patch === undefined) continue;
     const current =

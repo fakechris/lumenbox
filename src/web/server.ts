@@ -198,6 +198,8 @@ import { MemoryAdmin } from "../host/memory-admin.ts";
 import { ConnectCodeStore } from "../box/connect-codes.ts";
 import { FollowUpBudget, type FollowUpItem } from "../host/follow-up-budget.ts";
 import { SessionEpochs } from "./session-epochs.ts";
+import { Directories, directorySource, departmentQuotaKey } from "../host/directory.ts";
+import { directoryProviders } from "../channels/directory.ts";
 import { personalAllocationRefusal, personalBoxesOf, personalQuotaFor } from "../host/box-quota.ts";
 import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
 import { attentionFor } from "../host/attention.ts";
@@ -227,6 +229,7 @@ import { editDiffOf } from "./line-diff.ts";
 
 export interface WebOptions {
   loginFetch?: typeof fetch;
+  directoryFetch?: typeof fetch;
   port: number;
   /**
    * Shared secret for the UI. Anyone holding it can drive the agents, which is the whole
@@ -342,6 +345,28 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     if (record.type === "dingtalk") return has(`${base}_CLIENT_ID`) && has(`${base}_CLIENT_SECRET`);
     return has(`${base}_APP_ID`) && has(`${base}_APP_SECRET`);
   };
+  const directories = new Directories();
+  const directoryCredentials = (id: string) => {
+    const record = channelRecords.find(item => item.id === id);
+    if (!record || record.type === "telegram") return;
+    const env = loadConfig().env ?? {};
+    const base = channelEnvBase(id);
+    const value = (key: string) => process.env[key] ?? env[key];
+    const clientId = value(base + (record.type === "feishu" ? "_APP_ID" : "_CLIENT_ID"));
+    const clientSecret = value(base + (record.type === "feishu" ? "_APP_SECRET" : "_CLIENT_SECRET"));
+    if (!clientId || !clientSecret) return;
+    return { source: directorySource(id, record.incarnation, clientId, record.type === "feishu" ? process.env.FEISHU_DOMAIN ?? "feishu" : "dingtalk"), clientId, clientSecret, provider: directoryProviders[record.type]! };
+  };
+  const directorySources = () => channelRecords.flatMap(record => {
+    const credentials = directoryCredentials(record.id);
+    return credentials ? [credentials.source] : [];
+  });
+  const directoryDepartments = () => directorySources().flatMap(source => {
+    if (directories.status(source) !== "ready") return [];
+    return directories.of(source.channelId)!.snapshot!.departments.map(department => ({
+      key: departmentQuotaKey(source, department.vendorId), name: department.name, channelId: source.channelId,
+    }));
+  });
   /** Read once on first request; it never changes while the server is up. */
   let vendorScript: Buffer | undefined;
   /** The woff2 faces, read once each. Seven files, ~400 KB total. */
@@ -671,6 +696,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   try {
     if (bootstrap.ensure()) log("First-admin bootstrap is available at /bootstrap; retrieve the code from the local bootstrap-code file (24h, one use).");
   } catch { log("First-admin bootstrap disabled: repair the local roster/bootstrap state."); }
+  const directoryQuotaContext = (id: string) => directories.membership(
+    principals.list().find(person => person.id === id)?.identities ?? [id], directorySources(), Date.now(), identity => principals.hasCurrentIdentity(id, identity));
 
   {
     const legacy = loadConfig().channelAllow ?? [];
@@ -3765,9 +3792,34 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // rearrange is not a record of anything.
         // Who the browser is, for the page's own header. Deliberately readable by any
         // authorised request: it says nothing the caller does not already know.
+        if (route === "GET /api/directories") {
+          if (refusedRole("admin")) return;
+          send(res, 200, { directories: channelRecords.filter(record => record.type !== "telegram").map(record => {
+            const credentials = directoryCredentials(record.id);
+            const stored = directories.of(record.id);
+            return { channelId: record.id, status: credentials ? directories.status(credentials.source) : "credentials-missing",
+              syncedAt: stored?.syncedAt ?? null, failedAt: stored?.failedAt ?? null,
+              people: stored?.snapshot?.people.length ?? 0, departments: stored?.snapshot?.departments.length ?? 0 };
+          }) });
+          return;
+        }
+        if (route === "POST /api/directories/sync") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          if (refusedRole("admin")) return;
+          const credentials = directoryCredentials(String(body.channelId ?? ""));
+          if (!credentials) { send(res, 400, { error: "Choose a configured Feishu or DingTalk door." }); return; }
+          try {
+            await directories.sync(credentials.source, () => credentials.provider.fetchDirectory({
+              clientId: credentials.clientId, clientSecret: credentials.clientSecret, fetchFn: options.directoryFetch ?? fetch,
+            }), () => directoryCredentials(credentials.source.channelId)?.source);
+            send(res, 200, { ok: true });
+          } catch { send(res, 503, { error: "Directory sync failed. Previous complete snapshot retained; new allocations paused. Check permissions and retry. If the tenant changed, use a new door ID and bind its identities." }); }
+          return;
+        }
         if (route === "GET /api/quotas/self") {
           const principal = caller.userId === undefined ? undefined : principals.resolve(caller.userId);
-          send(res, 200, { quota: principal ? personalQuotaFor(principal.id, loadConfig()) ?? null : null,
+          send(res, 200, { quota: principal ? personalQuotaFor(principal.id, loadConfig(), directoryQuotaContext(principal.id)) ?? null : null,
             held: principal ? personalBoxesOf(registry.listBoxes(), principal.id).length : 0 });
           return;
         }
@@ -3790,13 +3842,26 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               }
               patch[id] = value as number | null;
             }
-            saveConfig({ ...(body.personalBoxQuota !== undefined ? { personalBoxQuota: body.personalBoxQuota as number | null } : {}), personBoxQuotas: patch });
+            if (refusedRole("admin")) return;
+            const departmentPatch: Record<string, number | null> = Object.create(null);
+            const departmentOverrides = body.departmentBoxQuotas;
+            if (departmentOverrides !== undefined && (!departmentOverrides || typeof departmentOverrides !== "object" || Array.isArray(departmentOverrides))) {
+              send(res, 400, { error: "departmentBoxQuotas must be an object." }); return;
+            }
+            const knownDepartments = new Set(directoryDepartments().map(item => item.key));
+            for (const [key, value] of Object.entries(departmentOverrides ?? {})) {
+              if (!valid(value) || (!knownDepartments.has(key) && !(value === null && Object.hasOwn(loadConfig().departmentBoxQuotas ?? {}, key)))) {
+                send(res, 400, { error: "Choose a department from a current complete directory and a quota 0–99 or null." }); return;
+              }
+              departmentPatch[key] = value as number | null;
+            }
+            saveConfig({ ...(body.personalBoxQuota !== undefined ? { personalBoxQuota: body.personalBoxQuota as number | null } : {}), personBoxQuotas: patch, departmentBoxQuotas: departmentPatch });
             log(`Personal-box quotas updated by ${caller.userId ?? "operator"}`);
           }
           const config = loadConfig();
-          send(res, 200, { personalBoxQuota: config.personalBoxQuota ?? null, people: principals.list().map(person => ({
+          send(res, 200, { departments: directoryDepartments().map(item => ({ ...item, override: config.departmentBoxQuotas?.[item.key] ?? null })), personalBoxQuota: config.personalBoxQuota ?? null, people: principals.list().map(person => ({
             id: person.id, name: person.name, override: Object.hasOwn(config.personBoxQuotas ?? {}, person.id) ? config.personBoxQuotas![person.id] : null,
-            quota: personalQuotaFor(person.id, config) ?? null, held: personalBoxesOf(registry.listBoxes(), person.id).length,
+            quota: personalQuotaFor(person.id, config, directoryQuotaContext(person.id)) ?? null, held: personalBoxesOf(registry.listBoxes(), person.id).length,
           })) });
           return;
         }
@@ -5954,7 +6019,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                   : undefined;
             if (members !== undefined && refusedRole("admin")) return;
             if (members !== undefined) {
-              const allocationError = personalAllocationRefusal(registry.listBoxes(), existing, members, loadConfig());
+              const allocationError = personalAllocationRefusal(registry.listBoxes(), existing, members, loadConfig(), Array.isArray(members) && members[0] ? directoryQuotaContext(members[0]) : undefined);
               if (allocationError !== undefined) { send(res, 409, { error: allocationError }); return; }
             }
             if (tokenFile === "" && typeof body.token === "string" && body.token.trim() !== "") {

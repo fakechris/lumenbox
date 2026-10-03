@@ -1187,6 +1187,9 @@ export const APP_HTML = String.raw`<!doctype html>
       <label>Personal-box allocation limits</label>
       <div class="fieldnote">Limits apply when assigning a box to one person. Blank means unlimited by default, or inherit for a person. Lowering a limit keeps existing allocations. Self-service creation is not available yet.</div>
       <input id="setquotadefault" type="number" min="0" max="99" step="1" placeholder="Default: unlimited">
+      <div id="setdirectories"></div>
+      <div class="fieldnote">Sync enrolls a door in directory allocation checks. Resync within 24 hours; stale or failed sync pauses new allocations. Existing boxes remain. Person overrides take priority; multiple departments use the smallest configured limit.</div>
+      <div id="setquotadepartments"></div>
       <div id="setquotapeople"></div>
       <button class="btn sm" id="setquotasave" type="button">Save allocation limits</button>
       <div class="fieldnote" id="setquotastatus" role="status"></div>
@@ -1604,8 +1607,20 @@ document.getElementById("settabs").onclick = function (event) {
 };
 
 function loadBoxQuotas() {
+  fetch("/api/directories").then(function (r) { return r.json(); }).then(function (d) {
+    if (d.error) throw new Error(d.error);
+    $("setdirectories").innerHTML = d.directories.map(function (item) {
+      return '<p>' + esc(item.channelId) + ' · ' + esc(item.status) + ' · ' + item.people + ' people / ' + item.departments + ' departments' +
+        (item.syncedAt ? ' · last complete ' + esc(item.syncedAt) : '') +
+        '<button type="button" class="btn sm" data-directory-sync="' + esc(item.channelId) + '">Sync directory</button></p>';
+    }).join("");
+  }).catch(function (e) { $("setquotastatus").textContent = e.message; });
   fetch("/api/quotas").then(function (r) { return r.json(); }).then(function (d) {
     if (d.error) throw new Error(d.error);
+    $("setquotadepartments").innerHTML = (d.departments || []).map(function (item) {
+      return '<label style="display:block;margin-top:8px">' + esc(item.channelId) + ' / ' + esc(item.name) +
+        '<input data-quota-department="' + esc(item.key) + '" type="number" min="0" max="99" step="1" placeholder="Inherit installation default" value="' + (item.override === null ? "" : item.override) + '"></label>';
+    }).join("");
     $("setquotadefault").value = d.personalBoxQuota === null ? "" : d.personalBoxQuota;
     $("setquotapeople").innerHTML = d.people.map(function (p) {
       return '<label style="display:block;margin-top:8px">' + esc(p.name) + ' · ' + p.held + ' held' +
@@ -1613,15 +1628,29 @@ function loadBoxQuotas() {
     }).join("");
   }).catch(function (e) { $("setquotastatus").textContent = e.message; });
 }
+$("setdirectories").onclick = function (event) {
+  var button = event.target.closest("[data-directory-sync]");
+  if (!button) return;
+  button.disabled = true;
+  $("setquotastatus").textContent = "Syncing directory…";
+  fetch("/api/directories/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ channelId: button.getAttribute("data-directory-sync") }) })
+    .then(function (r) { return r.json(); }).then(function (d) {
+      if (d.error) throw new Error(d.error);
+      $("setquotastatus").textContent = "Directory synced.";
+    }).catch(function (e) { $("setquotastatus").textContent = e.message; }).finally(loadBoxQuotas);
+};
 $("setquotasave").onclick = function () {
   var button = this;
   var people = {};
+  var departments = {};
+  var departmentInputs = Array.from($("setquotadepartments").querySelectorAll("input"));
   var inputs = Array.from($("setquotapeople").querySelectorAll("input"));
-  if ([$("setquotadefault")].concat(inputs).some(function (input) { return !input.reportValidity(); })) return;
+  if ([$("setquotadefault")].concat(inputs, departmentInputs).some(function (input) { return !input.reportValidity(); })) return;
   inputs.forEach(function (input) { people[input.getAttribute("data-quota-person")] = input.value === "" ? null : Number(input.value); });
+  departmentInputs.forEach(function (input) { departments[input.getAttribute("data-quota-department")] = input.value === "" ? null : Number(input.value); });
   button.disabled = true;
   fetch("/api/quotas", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
-    personalBoxQuota: $("setquotadefault").value === "" ? null : Number($("setquotadefault").value), personBoxQuotas: people
+    personalBoxQuota: $("setquotadefault").value === "" ? null : Number($("setquotadefault").value), personBoxQuotas: people, departmentBoxQuotas: departments
   }) }).then(function (r) { return r.json(); }).then(function (d) {
     if (d.error) throw new Error(d.error);
     $("setquotastatus").textContent = "Saved. Applies to the next allocation; no restart needed.";

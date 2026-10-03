@@ -213,6 +213,10 @@ export class Principals {
    * identity — so the system works before anyone is configured, and an unconfigured
    * person can read but not command, which is the safe default.
    */
+  hasCurrentIdentity(principalId: string, identity: string): boolean {
+    return this.byIdentity.get(identity)?.id === principalId;
+  }
+
   resolve(identity: string): Principal {
     const known = this.byIdentity.get(identity);
     if (known !== undefined) return known;
@@ -273,7 +277,7 @@ export class Principals {
     const previousFile = existsSync(this.path) ? JSON.parse(readFileSync(this.path, "utf8")) as PrincipalsFile : undefined;
     const bootstrap = previousFile?.bootstrap ?? (previousFile?.principals?.length ? { disabled: true } : undefined);
     const file: PrincipalsFile = {
-      ...(bootstrap ? { bootstrap } : cleaned.length ? { bootstrap: { disabled: true } } : {}),
+      ...(cleaned.length ? { bootstrap: { disabled: true, ...(bootstrap?.redeemedAt !== undefined ? { redeemedAt: bootstrap.redeemedAt, redeemedBy: bootstrap.redeemedBy } : {}) } } : bootstrap ? { bootstrap } : {}),
       principals: cleaned.map(principal => ({
         id: principal.id,
         name: principal.name,
