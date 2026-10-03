@@ -164,7 +164,8 @@ import {
   upgradeConsentPath,
 } from "../host/upgrade-consent.ts";
 import { PRESET_MODELS, providerConfigured, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
-import { Principals, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
+import { BootstrapAdmins } from "../host/bootstrap.ts";
+import { Principals, principalsPath, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
 import { blockedAnnouncement, boardView } from "../channels/board-view.ts";
 import {
   DESKTOP_NOT_PUBLIC,
@@ -225,6 +226,7 @@ import { isReactionEmoji, readReactions, setReaction } from "./reactions.ts";
 import { editDiffOf } from "./line-diff.ts";
 
 export interface WebOptions {
+  loginFetch?: typeof fetch;
   port: number;
   /**
    * Shared secret for the UI. Anyone holding it can drive the agents, which is the whole
@@ -665,6 +667,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // identity that used to be a bare channel grant becomes a driver principal, so a
   // person's existing access survives the upgrade rather than being silently revoked.
   const principals = new Principals(undefined, { incarnationOf, warn: line => log(`principals: ${line}`) });
+  const bootstrap = new BootstrapAdmins(principalsPath(), join(agentboxHome(), "bootstrap-code"));
+  try {
+    if (bootstrap.ensure()) log("First-admin bootstrap is available at /bootstrap; retrieve the code from the local bootstrap-code file (24h, one use).");
+  } catch { log("First-admin bootstrap disabled: repair the local roster/bootstrap state."); }
+
   {
     const legacy = loadConfig().channelAllow ?? [];
     const unclaimed = legacy.filter(identity => !principals.isKnown(identity));
@@ -707,7 +714,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    * nonce; in memory like the invite codes, and for the same reason — a dance that
    * does not survive a restart costs the person one more click.
    */
-  const oauthStates = new Map<string, { channelId: string; next: string; at: number }>();
+  const oauthStates = new Map<string, { channelId: string; next: string; at: number; appId: string; incarnation: number; bootstrapCode?: string }>();
   const invites = new Map<string, { role: Role; principalId?: string; expiresAt: number }>();
   const INVITE_TTL_MS = 15 * 60_000;
   const newInviteCode = (): string => {
@@ -3063,7 +3070,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    * same string knock/bind linked to their Principal. Nothing new is trusted: an
    * open_id whose identity nobody linked gets the knock instructions, not a session.
    */
-  async function handleFeishuAuth(url: URL, res: ServerResponse): Promise<void> {
+  async function handleFeishuAuth(url: URL, res: ServerResponse, bootstrapCode?: string): Promise<void> {
     const parts = url.pathname.split("/").filter(Boolean); // ["auth", door, "callback"?]
     const channelId = parts[1] ?? "";
     const record = channelRecords.find(
@@ -3092,6 +3099,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     const redirectUri = `${publicBase}/auth/${channelId}/callback`;
 
     if (parts[2] === undefined) {
+      if (bootstrapCode !== undefined && !bootstrap.accepts(bootstrapCode)) {
+        send(res, 400, { error: "The first-admin code is invalid, expired or already used." }); return;
+      }
       // Entry: remember where they were going, hand them to the vendor.
       for (const [key, pending] of oauthStates) {
         if (Date.now() - pending.at > 10 * 60_000) oauthStates.delete(key);
@@ -3099,10 +3109,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // A path on this origin only: anything else would make this an open redirect (INV-724).
       const next = safeNext(url.searchParams.get("next")) ?? "/";
       const state = randomBytes(16).toString("hex");
-      oauthStates.set(state, { channelId, next, at: Date.now() });
+      oauthStates.set(state, { channelId, next, at: Date.now(), appId, incarnation: record.incarnation, ...(bootstrapCode !== undefined ? { bootstrapCode } : {}) });
       const target =
         `https://${accountsHost}/open-apis/authen/v1/authorize?client_id=${encodeURIComponent(appId)}` +
         `&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`;
+      if (bootstrapCode !== undefined) { send(res, 200, { url: target }); return; }
       res.writeHead(302, { location: target });
       res.end();
       return;
@@ -3115,13 +3126,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     const state = url.searchParams.get("state") ?? "";
     const pending = oauthStates.get(state);
     oauthStates.delete(state);
-    if (code === null || pending === undefined || pending.channelId !== channelId ||
+    if (code === null || pending === undefined || pending.channelId !== channelId || pending.appId !== appId || pending.incarnation !== record.incarnation ||
         Date.now() - pending.at > 10 * 60_000) {
       send(res, 400, { error: "This sign-in expired or was not started here. Open the link again." });
       return;
     }
     try {
-      const tokenResponse = await fetch(`https://${apiHost}/open-apis/authen/v2/oauth/token`, {
+      const tokenResponse = await (options.loginFetch ?? fetch)(`https://${apiHost}/open-apis/authen/v2/oauth/token`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -3137,16 +3148,29 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         error_description?: string;
         error?: string;
       };
-      if (tokenBody.access_token === undefined) {
+      if (!tokenResponse.ok || tokenBody.access_token === undefined) {
         throw new Error(tokenBody.error_description ?? tokenBody.error ?? `HTTP ${tokenResponse.status}`);
       }
-      const infoResponse = await fetch(`https://${apiHost}/open-apis/authen/v1/user_info`, {
+      const infoResponse = await (options.loginFetch ?? fetch)(`https://${apiHost}/open-apis/authen/v1/user_info`, {
         headers: { authorization: `Bearer ${tokenBody.access_token}` },
       });
       const info = (await infoResponse.json()) as { data?: { open_id?: string; name?: string } };
       const openId = info.data?.open_id;
-      if (openId === undefined || openId === "") throw new Error("user_info returned no open_id");
+      if (!infoResponse.ok || typeof openId !== "string" || openId === "") throw new Error("user_info returned no authenticated identity");
       const identity = `${channelId}:${openId}`;
+      const currentDoor = channelRecords.find(entry => entry.id === channelId);
+      const currentEnv = loadConfig().env ?? {};
+      if (!currentDoor || currentDoor.incarnation !== pending.incarnation || (process.env[`${base}_APP_ID`] ?? currentEnv[`${base}_APP_ID`]) !== pending.appId) {
+        send(res, 409, { error: "The sign-in door changed; start again." }); return;
+      }
+      if (pending.bootstrapCode !== undefined) {
+        if (!bootstrap.redeem(pending.bootstrapCode, identity, info.data?.name ?? openId, currentDoor.incarnation)) {
+          send(res, 409, { error: "First-admin bootstrap is no longer available." }); return;
+        }
+        principals.reload();
+        log("First administrator enrolled through authenticated sign-in.");
+      }
+
       if (!principals.isKnown(identity)) {
         // Signed in with the vendor, unknown here: the answer is the knock path, said
         // as a page a person can act on — not a session for whoever the vendor knows.
@@ -3188,6 +3212,22 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // code has no token yet, and a sign-in page that requires being signed in is a
       // locked door with the key inside. These two routes are the only exemption, and
       // the code is what authenticates them.
+      if (route === "GET /bootstrap") {
+        if (!bootstrap.pending()) { send(res, 404, "First-admin bootstrap is unavailable."); return; }
+        const doors = channelRecords.filter(record => record.type === "feishu" && channelCredentialsSet(record));
+        const escapeHtml = (value: string) => value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
+        res.setHeader("cache-control", "no-store");
+        res.setHeader("referrer-policy", "no-referrer");
+        send(res, 200, `<!doctype html><meta charset="utf-8"><title>First administrator</title><body style="font:16px system-ui;max-width:600px;margin:80px auto;padding:20px"><h1>First administrator</h1><p>Retrieve the one-use code from the installation's local bootstrap-code file. Sign in with Feishu to become its first administrator.</p><form id="bootstrap"><label>Code <input id="code" type="password" autocomplete="off" maxlength="128" required></label><label> Door <select id="door">${doors.map(door => `<option value="${escapeHtml(door.id)}">${escapeHtml(door.name)}</option>`).join("")}</select></label><button ${doors.length ? "" : "disabled"}>Sign in with Feishu</button></form><p id="status">${doors.length ? "The code expires after 24 hours and works once." : "Configure a Feishu door and public URL on this installation first."}</p><script>document.getElementById('bootstrap').onsubmit=async function(event){event.preventDefault();var button=this.querySelector('button');button.disabled=true;try{var response=await fetch('/auth/'+encodeURIComponent(document.getElementById('door').value),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bootstrapCode:document.getElementById('code').value})});var data=await response.json();if(!response.ok)throw new Error(data.error);document.getElementById('code').value='';location.assign(data.url);}catch(error){document.getElementById('status').textContent=error.message;button.disabled=false;}};</script></body>`, "text/html");
+        return;
+      }
+      if (req.method === "POST" && /^\/auth\/[^/]+$/.test(url.pathname)) {
+        const body = await readJson(req);
+        const code = typeof body.bootstrapCode === "string" ? body.bootstrapCode.trim() : "";
+        if (code.length > 128) { send(res, 400, { error: "Invalid bootstrap code." }); return; }
+        await handleFeishuAuth(url, res, code);
+        return;
+      }
       if (route === "GET /login") {
         send(res, 200, LOGIN_HTML, "text/html");
         return;

@@ -7466,6 +7466,7 @@ export const LOGIN_HTML = `<!doctype html>
 <div class="card">
   <h1>Sign in to LumenBox</h1>
   <p class="sub">An admin gives you a code &mdash; the same one that works in chat.</p>
+  <p class="note"><a href="/bootstrap">Set up the first administrator</a> on a new installation.</p>
   <label for="code">Invite code</label>
   <input id="code" autocomplete="off" spellcheck="false" placeholder="4F7KQZ" autofocus>
   <label for="name">Your name</label>

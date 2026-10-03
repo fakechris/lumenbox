@@ -34,6 +34,7 @@
  * it.
  */
 
+import { withRosterLock } from "./roster-lock.ts";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
@@ -84,6 +85,7 @@ interface StoredPrincipal {
 }
 
 interface PrincipalsFile {
+  bootstrap?: Record<string, unknown>;
   principals: Array<{
     id: string;
     name: string;
@@ -236,6 +238,7 @@ export class Principals {
    * the file never stores the conflict `reload` would have to resolve.
    */
   save(principals: Principal[]): void {
+    withRosterLock(this.path, () => {
     const previous = new Map<string, number>();
     for (const principal of this.stored) {
       for (const link of principal.links) {
@@ -267,7 +270,10 @@ export class Principals {
       }));
     mkdirSync(dirname(this.path), { recursive: true });
     const temp = `${this.path}.${process.pid}.tmp`;
+    const previousFile = existsSync(this.path) ? JSON.parse(readFileSync(this.path, "utf8")) as PrincipalsFile : undefined;
+    const bootstrap = previousFile?.bootstrap ?? (previousFile?.principals?.length ? { disabled: true } : undefined);
     const file: PrincipalsFile = {
+      ...(bootstrap ? { bootstrap } : cleaned.length ? { bootstrap: { disabled: true } } : {}),
       principals: cleaned.map(principal => ({
         id: principal.id,
         name: principal.name,
@@ -283,6 +289,7 @@ export class Principals {
     renameSync(temp, this.path);
     chmodSync(this.path, 0o600);
     this.reload();
+    });
   }
 
   /**
