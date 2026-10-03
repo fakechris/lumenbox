@@ -24,6 +24,10 @@ test("bootstrap HTTP flow uses only vendor identity, never leaks the code and ad
     let base = "";
     const start = async () => startWebServer({ port: 0, host: "127.0.0.1", token: "fixture", useBox: false, loginFetch, onLog: line => logs.push(line), onReady: url => { base = url; } });
     stop = await start();
+    for (const body of ["{", "null", "[]"]) {
+      const malformed = await fetch(base + "/auth/fixture", { method: "POST", headers: { "content-type": "application/json" }, body, signal: AbortSignal.timeout(1500) });
+      assert.equal(malformed.status, 400);
+    }
     const code = readFileSync(join(home, "bootstrap-code"), "utf8").trim();
     assert.equal((await fetch(base + "/bootstrap")).status, 200);
     const begin = async (bootstrapCode: string) => fetch(base + "/auth/fixture", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ bootstrapCode, identity: "attacker:chosen", role: "admin" }), redirect: "manual" });
@@ -52,6 +56,9 @@ test("bootstrap HTTP flow uses only vendor identity, never leaks the code and ad
     stop(); stop = await start();
     assert.equal((await fetch(base + "/bootstrap")).status, 404);
     assert.equal((await begin(code)).status, 400);
+    writeFileSync(join(home, "principals.json"), "broken");
+    assert.equal((await fetch(base + "/bootstrap")).status, 503);
+    assert.equal((await begin(code)).status, 503);
   } finally {
     stop?.();
     if (previousHome === undefined) delete process.env.AGENTBOX_HOME; else process.env.AGENTBOX_HOME = previousHome;

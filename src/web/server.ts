@@ -3240,19 +3240,26 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // locked door with the key inside. These two routes are the only exemption, and
       // the code is what authenticates them.
       if (route === "GET /bootstrap") {
+        try {
         if (!bootstrap.pending()) { send(res, 404, "First-admin bootstrap is unavailable."); return; }
         const doors = channelRecords.filter(record => record.type === "feishu" && channelCredentialsSet(record));
         const escapeHtml = (value: string) => value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
         res.setHeader("cache-control", "no-store");
         res.setHeader("referrer-policy", "no-referrer");
         send(res, 200, `<!doctype html><meta charset="utf-8"><title>First administrator</title><body style="font:16px system-ui;max-width:600px;margin:80px auto;padding:20px"><h1>First administrator</h1><p>Retrieve the one-use code from the installation's local bootstrap-code file. Sign in with Feishu to become its first administrator.</p><form id="bootstrap"><label>Code <input id="code" type="password" autocomplete="off" maxlength="128" required></label><label> Door <select id="door">${doors.map(door => `<option value="${escapeHtml(door.id)}">${escapeHtml(door.name)}</option>`).join("")}</select></label><button ${doors.length ? "" : "disabled"}>Sign in with Feishu</button></form><p id="status">${doors.length ? "The code expires after 24 hours and works once." : "Configure a Feishu door and public URL on this installation first."}</p><script>document.getElementById('bootstrap').onsubmit=async function(event){event.preventDefault();var button=this.querySelector('button');button.disabled=true;try{var response=await fetch('/auth/'+encodeURIComponent(document.getElementById('door').value),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bootstrapCode:document.getElementById('code').value})});var data=await response.json();if(!response.ok)throw new Error(data.error);document.getElementById('code').value='';location.assign(data.url);}catch(error){document.getElementById('status').textContent=error.message;button.disabled=false;}};</script></body>`, "text/html");
+        } catch { if (!res.headersSent) send(res, 503, { error: "First-admin bootstrap is unavailable." }); }
         return;
       }
       if (req.method === "POST" && /^\/auth\/[^/]+$/.test(url.pathname)) {
-        const body = await readJson(req);
+        let body: Record<string, unknown>;
+        try {
+          body = await readJson(req);
+          if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("Invalid body");
+        } catch { send(res, 400, { error: "Invalid request body." }); return; }
         const code = typeof body.bootstrapCode === "string" ? body.bootstrapCode.trim() : "";
         if (code.length > 128) { send(res, 400, { error: "Invalid bootstrap code." }); return; }
-        await handleFeishuAuth(url, res, code);
+        try { await handleFeishuAuth(url, res, code); }
+        catch { if (!res.headersSent) send(res, 503, { error: "First-admin bootstrap is unavailable." }); }
         return;
       }
       if (route === "GET /login") {
