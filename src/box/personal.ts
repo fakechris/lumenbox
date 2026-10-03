@@ -7,8 +7,19 @@ const execute = promisify(execFile);
 
 /** Explicit construction: defaultBoxConfig() consults installation tokens and host settings. */
 export function personalBoxConfig(record: PersonalBoxRecord): BoxConfig {
-  return { containerName: record.name, image: defaultBoxImage(), boxdPort: 0, token: readFileSync(record.tokenFile, "utf8").trim(),
-    host: "127.0.0.1", displayWidth: 1280, displayHeight: 800, withHost: false, isolated: true, relayed: true, runArgs: [] };
+  return {
+    containerName: record.name,
+    image: defaultBoxImage(),
+    boxdPort: 0,
+    token: readFileSync(record.tokenFile, "utf8").trim(),
+    host: "127.0.0.1",
+    displayWidth: 1280,
+    displayHeight: 800,
+    withHost: false,
+    isolated: true,
+    relayed: true,
+    runArgs: [],
+  };
 }
 export class PersonalDocker implements PersonalBoxDriver {
   async start(record: PersonalBoxRecord): Promise<string> {
@@ -20,11 +31,16 @@ export class PersonalDocker implements PersonalBoxDriver {
     await new BoxManager(personalBoxConfig(record)).down({ remove: true });
     const networks = await execute("docker", ["network", "ls", "--format", "{{.Name}}"], { timeout: 30_000 });
     const network = networkNameFor(record.name);
-    if (networks.stdout.split("\n").includes(network)) await execute("docker", ["network", "rm", network], { timeout: 30_000 });
-    if (deleteData) for (const suffix of ["work", "config"]) {
-      const name = `${record.name}-${suffix}`;
-      const listed = await execute("docker", ["volume", "ls", "--format", "{{.Name}}"], { timeout: 30_000 });
-      if (listed.stdout.split("\n").includes(name)) await execute("docker", ["volume", "rm", name], { timeout: 30_000 });
-    }
+    if (networks.stdout.split("\n").includes(network))
+      await execute("docker", ["network", "rm", network], { timeout: 30_000 });
+    if (deleteData)
+      for (const suffix of ["work", "config"]) {
+        const name = `${record.name}-${suffix}`;
+        const listed = await execute("docker", ["volume", "ls", "--format", "{{.Name}}"], {
+          timeout: 30_000,
+        });
+        if (listed.stdout.split("\n").includes(name))
+          await execute("docker", ["volume", "rm", name], { timeout: 30_000 });
+      }
   }
 }

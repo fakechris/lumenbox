@@ -539,7 +539,7 @@ export class UsageLog {
     return [...counts.entries()].map(([anomaly, count]) => ({ anomaly, count })).sort((a, b) => b.count - a.count);
   }
 
-  private sum(records: readonly UsageRecord[]): UsageTotals {
+  sum(records: readonly UsageRecord[]): UsageTotals {
     return records.reduce<UsageTotals>(
       (sum, record) => ({
         records: sum.records + 1,

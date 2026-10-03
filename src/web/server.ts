@@ -3431,6 +3431,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // (headers, the deployed shape), then a web session somebody redeemed an invite
       // code for. Both are only read on an authorised request, and the second is signed
       // by a key derived from the token that authorised it.
+      principals.reload();
       const gatewayCaller = callerOf(req.headers, decision.allow);
       const webIdentity = decision.allow
         ? readSession(parseCookies(req.headers.cookie).get(SESSION_COOKIE), sessionSecret)?.identity
@@ -3536,7 +3537,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       /** Template reads and writes use the box's membership, including for admins. */
       const mayReadBox = (boxId: string): boolean => {
         const box = registry.boxById(boxId);
-        return box !== undefined && (caller.userId === undefined || mayEnterBox(box, principals.resolve(caller.userId).id));
+        return box !== undefined && personalBoxes.available(boxId) && (caller.userId === undefined || ((box.members === "everyone" || principals.isKnown(caller.userId)) && mayEnterBox(box, principals.resolve(caller.userId).id)));
       };
       const mayReadAgent = (id: string): boolean => registry.has(id) && mayReadBox(registry.boxOf(id).id);
       const mayReadEvent = (event: unknown): boolean => {
@@ -3718,9 +3719,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "GET /api/usage") {
           const since = Number(url.searchParams.get("since") ?? 0);
           const afterSeq = Number.isFinite(since) && since > 0 ? since : 0;
+          const visible = orchestrator.usage.since(afterSeq, Number.MAX_SAFE_INTEGER).filter(record => caller.userId === undefined || mayReadAgent(record.agentId));
           send(res, 200, {
-            records: orchestrator.usage.since(afterSeq, 500),
-            totals: orchestrator.usage.totals(afterSeq),
+            records: visible.slice(0, 500),
+            totals: orchestrator.usage.sum(visible),
           });
           return;
         }
@@ -3859,6 +3861,20 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           } catch { send(res, 503, { error: "Directory sync failed. Previous complete snapshot retained; new allocations paused. Check permissions and retry. If the tenant changed, use a new door ID and bind its identities." }); }
           return;
         }
+        if (route === "GET /api/personal-boxes/admin-cleanup" || route === "POST /api/personal-boxes/admin-cleanup") {
+          principals.reload();
+          const administrator = () => caller.userId === undefined || (principals.isKnown(caller.userId) && principals.roleOf(caller.userId) === "admin");
+          if (!administrator()) { send(res, 403, { error: "Administrator cleanup only." }); return; }
+          if (req.method === "POST") {
+            const body = await readJson(req);
+            principals.reload();
+            if (!administrator()) { send(res, 403, { error: "Administrator cleanup only." }); return; }
+            if (typeof body.id !== "string" || typeof body.deleteData !== "boolean" || Object.keys(body).some(key => !["id", "deleteData"].includes(key))) { send(res, 400, { error: "Cleanup requires id and an explicit deleteData choice." }); return; }
+            try { await personalBoxes.cleanup(body.id, body.deleteData); }
+            catch { send(res, 409, { error: "Cleanup could not finish. Remove resident agents or retry when Docker is available." }); return; }
+          }
+          send(res, 200, { boxes: personalBoxes.cleanupList() }); return;
+        }
         if (url.pathname === "/api/personal-boxes" || url.pathname.startsWith("/api/personal-boxes/")) {
           principals.reload();
           const identity = caller.userId;
@@ -3870,7 +3886,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (!["POST /api/personal-boxes/create", "POST /api/personal-boxes/retry", "POST /api/personal-boxes/remove"].includes(route)) { send(res, 404, { error: "No personal box action." }); return; }
           const body = await readJson(req);
           principals.reload();
-          if (!principals.isKnown(identity) || !roleAtLeast(principals.roleOf(identity), "driver")) { send(res, 403, { error: "Personal box permission revoked." }); return; }
+          if (!principals.isKnown(identity) || (!route.endsWith("/remove") && !roleAtLeast(principals.roleOf(identity), "driver"))) { send(res, 403, { error: "Personal box permission revoked." }); return; }
           const owner = principals.resolve(identity).id;
           const stillAuthorized = () => { principals.reload(); return principals.isKnown(identity) && principals.resolve(identity).id === owner && roleAtLeast(principals.roleOf(identity), "driver"); };
           const allowed = route.endsWith("/create") ? ["requestId"] : route.endsWith("/remove") ? ["id", "deleteData"] : ["id"];
@@ -5750,10 +5766,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           send(res, 200, {
             provider: describeProvider(provider),
             build,
-            usageToday: orchestrator.usage.totalsSince(midnight.getTime()),
+            usageToday: caller.userId === undefined ? orchestrator.usage.totalsSince(midnight.getTime()) : orchestrator.usage.sum(orchestrator.usage.since(0, Number.MAX_SAFE_INTEGER).filter(record => Date.parse(record.at) >= midnight.getTime() && mayReadAgent(record.agentId))),
             // Broken out by person, with a readable name where the id is a principal.
             usageByPrincipal: orchestrator.usage
               .byPrincipalSince(midnight.getTime())
+              .filter(entry => caller.userId === undefined || entry.principal === principals.resolve(caller.userId).id)
               .map(entry => ({
                 principal: entry.principal,
                 name: entry.principal === "" ? "unattributed" : principals.resolve(entry.principal).name,
@@ -6479,6 +6496,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 400, { error: `No box with id ${boxId}.` });
             return;
           }
+          if (!mayReadBox(boxId ?? registry.box.id)) { send(res, 403, { error: "This box is not available to this caller." }); return; }
           const created = registry.create({
             name,
             description: String(body.description ?? ""),

@@ -15,8 +15,17 @@ test("personal Docker configuration never inherits installation credentials, hos
     process.env.AGENTBOX_EGRESS_RELAY = "http://installation.invalid";
     process.env.AGENTBOX_EGRESS_TOKEN = "installation-egress-fixture";
     process.env.AGENTBOX_BOXD_PUBLISH_ADDRESS = "0.0.0.0";
-    const tokenFile = join(home, "personal.token"); writeFileSync(tokenFile, "unique-personal-fixture");
-    const config = personalBoxConfig({ id: "box_fixture", name: "personal-fixture", owner: "alice", request: "one", tokenFile, status: "provisioning", createdAt: new Date().toISOString() });
+    const tokenFile = join(home, "personal.token");
+    writeFileSync(tokenFile, "unique-personal-fixture");
+    const config = personalBoxConfig({
+      id: "box_fixture",
+      name: "personal-fixture",
+      owner: "alice",
+      request: "one",
+      tokenFile,
+      status: "provisioning",
+      createdAt: new Date().toISOString(),
+    });
     const args = new BoxManager(config).runArguments();
     assert.equal(config.withHost, false);
     assert.deepEqual(config.runArgs, []);
@@ -24,6 +33,9 @@ test("personal Docker configuration never inherits installation credentials, hos
     assert.ok(args.includes("127.0.0.1::1337"));
     assert.ok(!args.join(" ").includes("installation"));
     assert.ok(!args.includes("--privileged"));
-    assert.ok(!args.some(a => a.includes("docker.sock")));
-  } finally { process.env = previous; rmSync(home, { recursive: true, force: true }); }
+    assert.ok(!args.some((a) => a.includes("docker.sock")));
+  } finally {
+    process.env = previous;
+    rmSync(home, { recursive: true, force: true });
+  }
 });
