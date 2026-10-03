@@ -25,3 +25,13 @@ test("quota blocks new allocations, including duplicate member IDs, but permits 
   assert.equal(personalAllocationRefusal([one], one, "everyone", config), undefined);
   assert.equal(personalAllocationRefusal([one], one, [], config), undefined);
 });
+
+test("department quotas take the minimum, person override wins, stale directory blocks new allocation", () => {
+  const config = { ...DEFAULT_CONFIG, personalBoxQuota: 3, departmentBoxQuotas: { engineering: 1, support: 0 } };
+  const directory = { eligible: true, departmentKeys: ["engineering", "support"] };
+  assert.equal(personalQuotaFor("ada", config, directory), 0);
+  assert.equal(personalQuotaFor("ada", config, { ...directory, departmentKeys: ["engineering"] }), 1);
+  assert.equal(personalQuotaFor("ada", { ...config, personBoxQuotas: { ada: 2 } }, directory), 2);
+  assert.equal(personalQuotaFor("ada", { ...config, personBoxQuotas: { ada: 2 } }, { ...directory, eligible: false }), 0);
+  assert.equal(personalQuotaFor("ada", config, { eligible: true, departmentKeys: [] }), 3);
+});
