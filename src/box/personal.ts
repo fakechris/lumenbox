@@ -6,12 +6,12 @@ import type { PersonalBoxDriver, PersonalBoxRecord } from "../host/personal-boxe
 const execute = promisify(execFile);
 
 /** Explicit construction: defaultBoxConfig() consults installation tokens and host settings. */
-export function personalBoxConfig(record: PersonalBoxRecord): BoxConfig {
+export function personalBoxConfig(record: PersonalBoxRecord, token?: string): BoxConfig {
   return {
     containerName: record.name,
     image: defaultBoxImage(),
     boxdPort: 0,
-    token: readFileSync(record.tokenFile, "utf8").trim(),
+    token: token ?? readFileSync(record.tokenFile, "utf8").trim(),
     host: "127.0.0.1",
     displayWidth: 1280,
     displayHeight: 800,
@@ -28,7 +28,7 @@ export class PersonalDocker implements PersonalBoxDriver {
     return result.status.boxdUrl;
   }
   async remove(record: PersonalBoxRecord, deleteData: boolean): Promise<void> {
-    await new BoxManager(personalBoxConfig(record)).down({ remove: true });
+    await new BoxManager(personalBoxConfig(record, "")).down({ remove: true });
     const networks = await execute("docker", ["network", "ls", "--format", "{{.Name}}"], { timeout: 30_000 });
     const network = networkNameFor(record.name);
     if (networks.stdout.split("\n").includes(network))

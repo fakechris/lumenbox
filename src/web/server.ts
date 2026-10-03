@@ -21,7 +21,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { connect as netConnect, type Socket } from "node:net";
 import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,7 +35,7 @@ import type { BusEvent } from "../agents/bus.ts";
 import { BoxManager, defaultBoxConfig } from "../box/docker.ts";
 import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
 import { classifyBox, auditNotice } from "../box/access.ts";
-import { envNumber } from "../config.ts";
+import { configPath, envNumber } from "../config.ts";
 import { buildInfo } from "../host/build-info.ts";
 import { faceBaseUrl, RENEW_EVERY_MS, ROUTE_PATH } from "../host/mcp-face.ts";
 import { RELAY_PATH } from "../host/model-relay.ts";
@@ -200,6 +200,7 @@ import { FollowUpBudget, type FollowUpItem } from "../host/follow-up-budget.ts";
 import { SessionEpochs } from "./session-epochs.ts";
 import { Directories, directorySource, departmentQuotaKey } from "../host/directory.ts";
 import { directoryProviders } from "../channels/directory.ts";
+import { mayReadScopedEvent } from "./event-visibility.ts";
 import { PersonalBoxes, type PersonalBoxDriver } from "../host/personal-boxes.ts";
 import { PersonalDocker } from "../box/personal.ts";
 import { personalAllocationRefusal, personalBoxesOf, personalQuotaFor } from "../host/box-quota.ts";
@@ -258,7 +259,7 @@ type OutboundEvent =
   | TurnEvent
   | BusEvent
   | { type: "prompt"; agentId: string; text: string; userId?: string; conversation?: string }
-  | { type: "error"; message: string }
+  | { type: "error"; message: string; agentId?: string; boxId?: string; taskId?: string }
   /** An agent asked the person something; the page shows a card with the answers as buttons. */
   | { type: "question"; agentId: string; agentName: string; question: string; options?: string[]; fallback?: string; conversation?: string }
   | { type: "question_expired"; agentId: string; agentName: string; question: string; verdict: "default" | "skipped" }
@@ -423,11 +424,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     remember(event);
     const payload = `data: ${JSON.stringify(event)}\n\n`;
     for (const client of clients) {
-      if (clientFilters.get(client)?.(event) === false) continue;
       // A slow or dead client must not take the server down with it.
       try {
+        if (clientFilters.get(client)?.(event) === false) continue;
         client.write(payload);
       } catch {
+        client.end();
         clients.delete(client);
       }
     }
@@ -1300,7 +1302,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (target === undefined) return undefined;
       if (reply === "deny") {
         orchestrator.policy.deny(approvalId, "channel");
-        broadcast({ type: "error", message: `${target.agentName} was refused from a chat.` });
+        broadcast({ type: "error", agentId: target.agentId, message: `${target.agentName} was refused from a chat.` });
         return "Refused. The turn will not run that action.";
       }
       orchestrator.policy.grant(approvalId, "channel", reply);
@@ -1983,7 +1985,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       for (const stuck of rescued) {
         log(`rescued ${stuck.task.id}: ${stuck.task.title}`);
         const message = rescueMessage(stuck);
-        broadcast({ type: "error", message });
+        broadcast({ type: "error", taskId: stuck.task.id, message });
         // A task carries a *conversation id* — the chatKey with every unsafe character
         // flattened to `-` — and `pushToChat` finds its adapter by the `feishu:` prefix.
         // `feishu-oc_…` never matched, so every rescue notice this code exists to send
@@ -2312,7 +2314,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       });
       for (const verdict of orchestrator.wedge.changed(wedgeStates)) {
         log(`box health: ${verdict.detail}`);
-        broadcast({ type: "error", message: verdict.detail });
+        broadcast({ type: "error", boxId: verdict.boxId, message: verdict.detail });
         // An act, not an ask (INV-535): the host is reporting what it found, so it is
         // said whatever the day's budget is — and to the people who can restart a box.
         if (verdict.state === "wedged") {
@@ -2371,7 +2373,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             : undefined;
         upgradeToldAbout = availability.built;
         const text = upgradeMessage(decision, "Your box");
-        broadcast({ type: "error", message: text });
+        broadcast({ type: "error", boxId: registry.box.id, message: text });
         for (const { adapter, identity } of adminRecipients(principals.list())) {
           void channels.push(adapter, identity, text);
         }
@@ -2413,7 +2415,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     void orchestrator.checkAttachedBoxes().then(transitions => {
       for (const change of transitions) {
         log(change.connected ? `box ${change.name} is back: ${change.detail}` : `box ${change.name} stopped answering: ${change.detail}`);
-        broadcast({ type: "error", message: change.connected ? `Box ${change.name} is back.` : `Box ${change.name} stopped answering: ${change.detail}` });
+        broadcast({ type: "error", boxId: registry.boxByName(change.name)?.id ?? "", message: change.connected ? `Box ${change.name} is back.` : `Box ${change.name} stopped answering: ${change.detail}` });
       }
     }).catch(() => {});
     void (async () => {
@@ -2433,7 +2435,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (boxWasHealthy) {
             boxWasHealthy = false;
             log(`box stopped answering: ${detail}`);
-            broadcast({ type: "error", message: `The box stopped answering: ${detail}` });
+            broadcast({ type: "error", boxId: registry.box.id, message: `The box stopped answering: ${detail}` });
           }
         }
       }
@@ -2448,7 +2450,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (!attempt.connected) return;
       boxWasHealthy = true;
       log(`box reachable again: ${attempt.detail}`);
-      broadcast({ type: "error", message: `The box is back: ${attempt.detail}` });
+      broadcast({ type: "error", boxId: registry.box.id, message: `The box is back: ${attempt.detail}` });
       // A desktop is started by its next GUI request, not by box recovery.
     })();
     // Configurable only so a test can watch a recovery without waiting half a minute
@@ -3534,19 +3536,31 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         return true;
       };
 
-      /** Template reads and writes use the box's membership, including for admins. */
+      let unavailableBoxes: Set<string> | undefined;
+      const agentBoxes = new Map<string, string>();
       const mayReadBox = (boxId: string): boolean => {
+        unavailableBoxes ??= personalBoxes.unavailable();
         const box = registry.boxById(boxId);
-        return box !== undefined && personalBoxes.available(boxId) && (caller.userId === undefined || ((box.members === "everyone" || principals.isKnown(caller.userId)) && mayEnterBox(box, principals.resolve(caller.userId).id)));
+        return box !== undefined && !unavailableBoxes.has(boxId) && (caller.userId === undefined || ((box.members === "everyone" || principals.isKnown(caller.userId)) && mayEnterBox(box, principals.resolve(caller.userId).id)));
       };
-      const mayReadAgent = (id: string): boolean => registry.has(id) && mayReadBox(registry.boxOf(id).id);
+      const mayReadAgent = (id: string): boolean => {
+        let boxId = agentBoxes.get(id);
+        if (!boxId && registry.has(id)) { boxId = registry.boxOf(id).id; agentBoxes.set(id, boxId); }
+        return boxId !== undefined && mayReadBox(boxId);
+      };
+      const fileRevision = (path: string): string => {
+        try { const stat = statSync(path, { bigint: true }); return `${stat.ino}:${stat.mtimeNs}:${stat.ctimeNs}`; }
+        catch { return "missing"; }
+      };
+      let eventRevision = "";
       const mayReadEvent = (event: unknown): boolean => {
         if (caller.userId === undefined) return true;
-        principals.reload();
-        if (!principals.isKnown(caller.userId)) return false;
-        const value = event as Record<string, unknown>;
-        const ids = [value.agentId, value.fromId, value.toId].filter((id): id is string => typeof id === "string" && registry.has(id));
-        return ids.length > 0 && ids.every(mayReadAgent);
+        const revision = `${fileRevision(principalsPath())}/${fileRevision(configPath())}/${personalBoxes.revision()}`;
+        if (revision !== eventRevision) {
+          principals.reload(); unavailableBoxes = personalBoxes.unavailable(); eventRevision = revision;
+        }
+        return mayReadScopedEvent(event, { agent: mayReadAgent, box: mayReadBox, defaultBox: registry.box.id,
+          task: id => { const task = orchestrator.tasks?.get(id); return task !== undefined && (task.assigneeId ? mayReadAgent(task.assigneeId) : task.requester === principals.resolve(caller.userId!).id); } });
       };
       const templateTarget = (requested: unknown): string | undefined => {
         if (requested !== undefined && typeof requested !== "string") {
@@ -6679,7 +6693,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             .catch((error: unknown) => {
               const message = error instanceof Error ? error.message : String(error);
               log(`turn failed: ${message}`);
-              broadcast({ type: "error", message });
+              broadcast({ type: "error", agentId, message });
             });
           return;
         }

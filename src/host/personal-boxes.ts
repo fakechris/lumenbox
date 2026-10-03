@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { BoxEntry } from "../box/boxes.ts";
@@ -73,6 +73,7 @@ export class PersonalBoxes {
     if (!lock) throw new Error("Personal box operation is still running");
     this.locks.set(id, lock);
   }
+  // Lock files and deleted tombstones retain the stable deduplication namespace; never unlink a live lock.
   private release(id: string): void {
     this.locks.get(id)?.close();
     this.locks.delete(id);
@@ -136,14 +137,30 @@ export class PersonalBoxes {
         entries.push(this.entry(row));
     return entries;
   }
-  available(id: string): boolean {
-    return this.transaction((db) => {
-      const row = this.records(db).find((row) => row.id === id);
-      return row === undefined || row.status === "ready";
-    });
+  private read<T>(action: (db: DatabaseSync) => T): T {
+    const db = new DatabaseSync(this.path, { readOnly: true });
+    try {
+      return action(db);
+    } finally {
+      db.close();
+    }
+  }
+  revision(): string {
+    const stat = statSync(this.path, { bigint: true });
+    return `${stat.ino}:${stat.mtimeNs}:${stat.ctimeNs}`;
+  }
+  unavailable(): Set<string> {
+    return this.read(
+      (db) =>
+        new Set(
+          this.records(db)
+            .filter((row) => row.status !== "ready")
+            .map((row) => row.id),
+        ),
+    );
   }
   manages(id: string): boolean {
-    return this.transaction((db) => this.records(db).some((row) => row.id === id));
+    return this.read((db) => this.records(db).some((row) => row.id === id));
   }
   list(
     owner: string,
@@ -334,6 +351,7 @@ export class PersonalBoxes {
       try {
         this.detach(row);
         await this.options.driver.remove(row, row.deleteData === true);
+        if (row.deleteData) rmSync(row.tokenFile, { force: true });
         row.status = row.deleteData ? "deleted" : "detached";
         delete row.error;
       } catch {

@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { personalQuotaFor } from "./box-quota.ts";
@@ -105,6 +105,7 @@ test("failed starts release reservations; retry preserves identity and removal e
     assert.equal((await boxes.retry("alice", failed.id)).id, failed.id);
     assert.equal((await boxes.remove("alice", failed.id, true)).status, "deleted");
     assert.deepEqual(boxes.list("alice"), []);
+    assert.equal(existsSync(failed.tokenFile), false, "permanent deletion removes the bearer secret");
     assert.deepEqual(removed, [false, false, true]);
     assert.equal(
       (await boxes.create("alice", "one")).status,
