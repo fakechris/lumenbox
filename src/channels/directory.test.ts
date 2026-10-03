@@ -50,7 +50,7 @@ test("feishu: token, the department tree, then people per department including r
       },
     },
     {
-      url: /contact\/v3\/departments\/find_by_page/,
+      url: /contact\/v3\/departments\/0\/children/,
       reply: url =>
         url.includes("page_token=p2")
           ? { code: 0, data: { items: [{ department_id: "od_2", name: "市场部", parent_department_id: "od_0" }] } }
@@ -224,7 +224,7 @@ test("feishu rejects truncated pagination and denied department reads", async ()
   ]) {
     const { fetchFn } = routedFetch([
       { url: /tenant_access_token/, reply: () => ({ code: 0, tenant_access_token: "tt" }) },
-      { url: /departments\/find_by_page/, reply: () => ({ code: 0, data: departments }) },
+      { url: /departments\/0\/children/, reply: () => ({ code: 0, data: departments }) },
       { url: /users\/find_by_department/, reply: () => ({ code: 230002 }) },
     ]);
     await assert.rejects(feishuDirectory.fetchDirectory({ ...ARGS, fetchFn }));

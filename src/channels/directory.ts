@@ -47,14 +47,14 @@ export const feishuDirectory: DirectoryProvider = {
     }
     const auth = { authorization: `Bearer ${tokenBody.tenant_access_token}` };
 
-    // Departments, paged. find_by_page lists the departments the app can see;
+    // Departments, paged. children recursively lists the departments the app can see;
     // the root (`0`) is implied and never in the list itself.
     const departments: DirectorySnapshot["departments"] = [];
     let pageToken: string | undefined;
     for (let page = 0; page < MAX_PAGES; page++) {
-      const query = new URLSearchParams({ page_size: "50", department_id_type: "department_id" });
+      const query = new URLSearchParams({ page_size: "50", department_id_type: "department_id", fetch_child: "true" });
       if (pageToken !== undefined) query.set("page_token", pageToken);
-      const response = await fetchFn(`https://${api}/open-apis/contact/v3/departments/find_by_page?${query}`, {
+      const response = await fetchFn(`https://${api}/open-apis/contact/v3/departments/0/children?${query}`, {
         headers: auth,
         signal: AbortSignal.timeout(TIMEOUT_MS),
       });
