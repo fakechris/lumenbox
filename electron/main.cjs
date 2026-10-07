@@ -34,6 +34,7 @@ const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
 const { desktopAuth } = require("./ui-auth.cjs");
+const { syncLoginItem } = require("./login-item.cjs");
 const uiAuth = desktopAuth();
 
 const PORT = Number(process.env.LUMENBOX_PORT || 7777);
@@ -62,18 +63,8 @@ function configFilePath() {
 function applyStartupItemSettings() {
   if (process.platform !== "darwin" && process.platform !== "win32") return;
   try {
-    const file = configFilePath();
-    if (!fs.existsSync(file)) return;
-    const cfg = JSON.parse(fs.readFileSync(file, "utf8"));
-    if (typeof cfg.startupItem === "boolean") {
-      app.setLoginItemSettings({
-        openAtLogin: cfg.startupItem,
-        path: process.execPath.includes("/Applications/LumenBox.app")
-          ? "/Applications/LumenBox.app"
-          : process.execPath,
-      });
-      log(`applied startup item setting: openAtLogin = ${cfg.startupItem}`);
-    }
+    const result = syncLoginItem(app, configFilePath());
+    if (result === "on" || result === "off") log(`startup item turned ${result}`);
   } catch (err) {
     log(`could not apply startup item: ${err.message}`);
   }
