@@ -246,8 +246,10 @@ test("startupItem can be loaded and saved", () => {
   saveConfig({ startupItem: true });
   assert.equal(loadConfig().startupItem, true);
 
+  // Off is kept, not deleted: the desktop shell leaves an absent key alone, so a deleted
+  // false would never remove the login item from the OS.
   saveConfig({ startupItem: false });
-  assert.equal(loadConfig().startupItem, undefined);
+  assert.equal(loadConfig().startupItem, false);
 
   saveConfig({ startupItem: true });
   assert.equal(loadConfig().startupItem, true);

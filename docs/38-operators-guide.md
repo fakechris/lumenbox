@@ -746,6 +746,14 @@ wrong:
   Typing plain text does not; committing a line does.
 - **A window manager is not optional.** Without `xfwm4`, dialogs open unmapped and
   keyboard focus never lands, so typing silently goes nowhere.
+- **Launch at login registers once, not every launch.** The desktop shell applies
+  `startupItem` from `config.json` on start and after every settings restart, but calls
+  `setLoginItemSettings` only when `getLoginItemSettings()` disagrees. Registering every
+  time left one row per update in Login Items (26 on one Mac): after an in-place bundle
+  replacement macOS can record the registration against that build's cdhash instead of
+  its signing identity, so it is never deduplicated. Electron's `path` option does not
+  help — it is Windows-only. An absent `startupItem` means "not managed here", so off is
+  saved as `false`; deleting it would leave the login item on forever.
 - **Prompt caching.** Prompt sections are assembled in a fixed order with one cache
   breakpoint at the end of the system prompt, which covers the tool definitions too.
   Volatile content — the time, the inbound message — lives in the message turns,

@@ -690,11 +690,9 @@ export function saveConfig(
     else delete raw.digests;
   }
   if (changes.startupItem !== undefined) {
-    if (changes.startupItem === null || changes.startupItem === false) {
-      delete raw.startupItem;
-    } else {
-      raw.startupItem = true;
-    }
+    // false is written, not deleted: the desktop shell leaves an absent key alone.
+    if (changes.startupItem === null) delete raw.startupItem;
+    else raw.startupItem = changes.startupItem;
   }
   if (changes.env !== undefined) {
     const current =
