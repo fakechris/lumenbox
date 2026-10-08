@@ -57,6 +57,18 @@ export function isTaskStatus(value: string): value is TaskStatus {
 }
 
 /** A status under which a task still needs somebody. */
+/**
+ * Why a task is not closed by its turn ending, or undefined for the one-shot ask that is
+ * (INV-817). A due date, something it waits on, or acceptance criteria each mean a check was
+ * promised; the turn ending is not that check.
+ */
+export function heldForReview(task: Pick<Task, "due" | "waitingOn" | "contract">): string | undefined {
+  if (task.contract?.acceptance !== undefined) return "it has acceptance criteria";
+  if (task.due !== undefined) return `it is due ${task.due}`;
+  if (task.waitingOn !== undefined) return `it is waiting on ${task.waitingOn}`;
+  return undefined;
+}
+
 export function isLive(status: TaskStatus): boolean {
   return status !== "done" && status !== "dropped";
 }
@@ -488,7 +500,16 @@ export class TaskStore {
     if (task.pursuit !== undefined) return { task };
     // Attributed to whoever the work belongs to, so the gate sees the same thing it sees
     // when that agent marks its own task done — because that is what is happening.
-    return this.update(id, { status: "done" }, task.assigneeId ?? "channel", undefined, now);
+    const by = task.assigneeId ?? "channel";
+    // The one-shot chat ask closes when its turn ends (docs/16); a task that carries a date,
+    // an outside dependency or acceptance criteria does not. Those were written down because
+    // somebody will check them, and "stopped" is not "checked" (INV-817): it waits in review
+    // for the requester, the named reviewer, or the audit.
+    const held = heldForReview(task);
+    if (held !== undefined) {
+      return this.update(id, { status: "review", note: `turn ended; not closed because ${held} — stopped, not verified` }, by, undefined, now);
+    }
+    return this.update(id, { status: "done" }, by, undefined, now);
   }
 
   update(
