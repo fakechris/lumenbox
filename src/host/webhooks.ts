@@ -190,11 +190,42 @@ export function secretMatches(presented: string, actual: string): boolean {
  * The body must be the bytes as received — re-serialising JSON changes whitespace and breaks
  * every signature — which is why the handler holds the raw text.
  */
-export function signatureMatches(body: string, presented: string, secret: string): boolean {
+export function signatureMatches(body: string, presented: string, secret: string, timestamp?: string): boolean {
   const offered = presented.trim().replace(/^sha256=/i, "");
   if (!/^[0-9a-f]{64}$/i.test(offered)) return false;
-  const expected = createHmac("sha256", secret).update(body, "utf8").digest("hex");
+  // Stripe's shape when a timestamp is sent: the signature covers `<timestamp>.<body>`, so the
+  // timestamp is bound to the body and cannot be freshened by a replayer. Without one, the
+  // signature is over the body alone — GitHub's shape, which has no timestamp to bind.
+  const signed = timestamp === undefined ? body : `${timestamp.trim()}.${body}`;
+  const expected = createHmac("sha256", secret).update(signed, "utf8").digest("hex");
   return timingSafeEqual(Buffer.from(expected, "hex"), Buffer.from(offered.toLowerCase(), "hex"));
+}
+
+/** How far from now a signed timestamp may be: Stripe's default, and enough for any clock a phone keeps. */
+export const REPLAY_WINDOW_MS = 5 * 60_000;
+
+/** The timestamp a sender offered beside its signature, as unix seconds (Stripe) or an ISO instant. */
+export function presentedTimestamp(
+  headers: Record<string, string | string[] | undefined>
+): string | undefined {
+  const value = headers["x-lumenbox-timestamp"] ?? headers["x-signature-timestamp"];
+  return Array.isArray(value) ? value[0] : value;
+}
+
+/**
+ * Whether a signed timestamp is close enough to now to be a live request (INV-115).
+ *
+ * A signature proves who sent a body, not when: a captured request replays until the rate limit
+ * bites. A sender that puts the time into what it signs lets the door refuse anything older than
+ * the window — and anything from the future, which is the same replay with a clock set forward.
+ * Unparsable is refused: a timestamp that cannot be read protects nothing.
+ */
+export function withinReplayWindow(timestamp: string, now: Date = new Date(), windowMs: number = REPLAY_WINDOW_MS): boolean {
+  const text = timestamp.trim();
+  const seconds = /^\d{9,11}$/.test(text) ? Number(text) * 1000 : undefined;
+  const at = seconds ?? Date.parse(text);
+  if (!Number.isFinite(at)) return false;
+  return Math.abs(now.getTime() - at) <= windowMs;
 }
 
 /** The signature a sender offered, in any of the header names the common senders use. */
