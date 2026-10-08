@@ -50,6 +50,15 @@ test("unknown keys are ignored, so a newer config still loads", () => {
   assert.deepEqual(warnings, []);
 });
 
+test("connectorVersions pins a door to an exact version, and a range is refused with a word (INV-813)", () => {
+  const { warnings } = withHome('{"connectorVersions": {"notion": "2.6.0", "slack": "^1.3.0", "figma": 7}}');
+  const config = loadConfig(line => warnings.push(line));
+  assert.deepEqual(config.connectorVersions, { notion: "2.6.0" });
+  assert.equal(warnings.length, 2);
+  assert.match(warnings[0]!, /connectorVersions\.slack must be an exact version/);
+  assert.match(warnings[1]!, /connectorVersions\.figma must be an exact version/);
+});
+
 test("broken JSON falls back to the defaults and says so", () => {
   const { warnings } = withHome('{"activityLimit": 400,}');
   assert.deepEqual(loadConfig(line => warnings.push(line)), DEFAULT_CONFIG);

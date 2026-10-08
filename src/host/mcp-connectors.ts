@@ -29,7 +29,19 @@ export interface ConnectorDoor {
   credential: string;
   /** The template connectors this door satisfies — one server may stand for several slugs. */
   provides: readonly string[];
-  /** The server spec once the credential is present; `${VAR}` expands from the environment. */
+  /**
+   * For a stdio door started through `npx`: the package and the version it is pinned to
+   * (INV-813). Unpinned, every upstream release could change tool names, descriptions and
+   * schemas under a running installation — and add a destructive tool — with nothing to say
+   * which version did it and no way back. Upgrading is a change to this file, with a PR; an
+   * operator may pin differently with `connectorVersions` in config.json.
+   */
+  package?: string;
+  version?: string;
+  /**
+   * The server spec once the credential is present; `${VAR}` expands from the environment and
+   * the bare `package` in `args` becomes `package@version`.
+   */
   spec: Omit<McpServerConfig, "name">;
   /** Where the credential comes from, in the words an operator needs. */
   setup: string;
@@ -44,6 +56,8 @@ export const CONNECTOR_DOORS: readonly ConnectorDoor[] = [
     summary: "Search, read, create and update Notion pages and databases.",
     credential: "NOTION_API_KEY",
     provides: ["mcp:notion"],
+    package: "@notionhq/notion-mcp-server",
+    version: "2.5.2",
     spec: {
       command: "npx",
       args: ["-y", "@notionhq/notion-mcp-server"],
@@ -59,6 +73,8 @@ export const CONNECTOR_DOORS: readonly ConnectorDoor[] = [
     summary: "Read channels and threads, search, post and react as the bot's Slack app.",
     credential: "SLACK_BOT_TOKEN",
     provides: ["mcp:slack"],
+    package: "slack-mcp-server",
+    version: "1.3.0",
     spec: {
       command: "npx",
       args: ["-y", "slack-mcp-server"],
@@ -87,6 +103,8 @@ export const CONNECTOR_DOORS: readonly ConnectorDoor[] = [
     summary: "Gmail search/read/send and Calendar events, under one OAuth grant.",
     credential: "GOOGLE_OAUTH_REFRESH_TOKEN",
     provides: ["mcp:gmail", "mcp:google-calendar"],
+    package: "@alanxchen/google-workspace-mcp",
+    version: "2.0.1",
     spec: {
       command: "npx",
       args: ["-y", "@alanxchen/google-workspace-mcp"],
@@ -106,6 +124,8 @@ export const CONNECTOR_DOORS: readonly ConnectorDoor[] = [
     summary: "Read Figma files, frames and design data through the REST API.",
     credential: "FIGMA_API_KEY",
     provides: ["mcp:figma"],
+    package: "figma-developer-mcp",
+    version: "0.13.2",
     spec: {
       command: "npx",
       args: ["-y", "figma-developer-mcp", "--stdio", "--figma-api-key=${FIGMA_API_KEY}"],
@@ -120,6 +140,8 @@ export const CONNECTOR_DOORS: readonly ConnectorDoor[] = [
     summary: "Post, search and read timelines through the X API.",
     credential: "X_API_BEARER_TOKEN",
     provides: ["mcp:x"],
+    package: "@enescinar/twitter-mcp",
+    version: "0.2.0",
     spec: {
       command: "npx",
       args: ["-y", "@enescinar/twitter-mcp"],
@@ -157,7 +179,7 @@ export interface DoorsState {
  * the import flow will say `mcp:notion is not connected here`, which is true, rather than
  * starting a server that fails on every call.
  */
-export function doorServers(env: NodeJS.ProcessEnv = process.env): DoorsState {
+export function doorServers(env: NodeJS.ProcessEnv = process.env, versions: Readonly<Record<string, string>> = {}): DoorsState {
   const configs: McpServerConfig[] = [];
   const doors: DoorsState["doors"] = [];
   for (const door of CONNECTOR_DOORS) {
@@ -170,7 +192,10 @@ export function doorServers(env: NodeJS.ProcessEnv = process.env): DoorsState {
       config.headers = Object.fromEntries(Object.entries(door.spec.headers ?? {}).map(([key, value]) => [key, expandEnv(value, env)]));
     } else {
       config.command = expandEnv(door.spec.command ?? "", env);
-      config.args = (door.spec.args ?? []).map(arg => expandEnv(arg, env));
+      const version = versions[door.slug] ?? door.version;
+      config.args = (door.spec.args ?? []).map(arg =>
+        expandEnv(door.package !== undefined && arg === door.package && version !== undefined ? `${door.package}@${version}` : arg, env)
+      );
       config.env = Object.fromEntries(Object.entries(door.spec.env ?? {}).map(([key, value]) => [key, expandEnv(value, env)]));
     }
     configs.push(config);
@@ -185,9 +210,10 @@ export function doorServers(env: NodeJS.ProcessEnv = process.env): DoorsState {
  */
 export function mergeServers(
   fromConfig: readonly { name: string; command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string> }[],
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  versions: Readonly<Record<string, string>> = {}
 ): McpServerConfig[] {
-  const { configs } = doorServers(env);
+  const { configs } = doorServers(env, versions);
   const merged = [...configs];
   for (const entry of fromConfig) {
     const at = merged.findIndex(server => server.name === entry.name);
@@ -212,4 +238,16 @@ export function connectorSatisfied(slug: string, serverNames: readonly string[],
     if (door.provides.includes(slug) && (env[door.credential] ?? "").trim() !== "") return true;
   }
   return false;
+}
+
+/**
+ * The `package@version` an `npx` server is pinned to, from its arguments — what the capability
+ * ledger records beside a server's tool hash, so a changed hash can be read against a version.
+ */
+export function pinnedPackage(args: readonly string[] | undefined): { package: string; version: string } | undefined {
+  for (const arg of args ?? []) {
+    const match = /^(@?[^@\s]+)@(\d[^\s]*)$/.exec(arg);
+    if (match !== null) return { package: match[1]!, version: match[2]! };
+  }
+  return undefined;
 }

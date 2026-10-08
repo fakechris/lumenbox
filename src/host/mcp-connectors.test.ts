@@ -8,7 +8,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
-import { CONNECTOR_DOORS, connectorSatisfied, doorServers, expandEnv, mergeServers } from "./mcp-connectors.ts";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { CapabilityLedger, capabilityHash } from "./mcp-capabilities.ts";
+import { CONNECTOR_DOORS, connectorSatisfied, doorServers, expandEnv, mergeServers, pinnedPackage } from "./mcp-connectors.ts";
 import { McpManager, RemoteMcpServer } from "./mcp.ts";
 
 const ENV = {
@@ -68,15 +72,83 @@ test("connectorSatisfied: direct name match, bare name match, door coverage, and
   assert.ok(!connectorSatisfied("mcp:notion", [], { LINEAR_API_KEY: "lin_api_test" }), "an unrelated live door does not satisfy");
 });
 
+test("every npx door is pinned to an exact version, and the pin reaches the spawned arguments (INV-813)", () => {
+  // The guard: an unpinned `npx -y <pkg>` is whatever upstream published this morning.
+  for (const door of CONNECTOR_DOORS) {
+    if (door.spec.command !== "npx") continue;
+    assert.ok(door.package !== undefined && door.version !== undefined, `${door.slug}: an npx door names its package and version`);
+    assert.match(door.version, /^\d+\.\d+\.\d+/, `${door.slug}: an exact version, not a range`);
+    assert.ok(door.spec.args?.includes(door.package), `${door.slug}: the bare package is in args, so the pin is applied in one place`);
+  }
+  for (const config of doorServers(ENV).configs) {
+    if (config.command !== "npx") continue;
+    const pinned = pinnedPackage(config.args);
+    assert.ok(pinned !== undefined, `${config.name}: the spawned args carry package@version (${config.args?.join(" ")})`);
+    assert.ok(!config.args!.some(arg => /^@?[^@\s]+$/.test(arg) && CONNECTOR_DOORS.some(door => door.package === arg)), `${config.name}: no bare package left`);
+  }
+  assert.deepEqual(pinnedPackage(["-y", "@notionhq/notion-mcp-server@2.5.2"]), { package: "@notionhq/notion-mcp-server", version: "2.5.2" });
+  assert.deepEqual(pinnedPackage(["-y", "slack-mcp-server@1.3.0", "--stdio"]), { package: "slack-mcp-server", version: "1.3.0" });
+  assert.equal(pinnedPackage(["-y", "slack-mcp-server"]), undefined);
+});
+
+test("an operator pins a door to another version in config without replacing its spec (INV-813)", () => {
+  const notion = mergeServers([], ENV, { notion: "9.9.9" }).find(config => config.name === "mcp:notion");
+  assert.deepEqual(pinnedPackage(notion?.args), { package: "@notionhq/notion-mcp-server", version: "9.9.9" });
+  assert.equal(notion?.env?.NOTION_API_KEY, "ntn_test", "the rest of the spec is untouched");
+  const slack = mergeServers([], ENV, { notion: "9.9.9" }).find(config => config.name === "mcp:slack");
+  assert.equal(pinnedPackage(slack?.args)?.version, CONNECTOR_DOORS.find(door => door.slug === "slack")?.version, "other doors keep the catalog's pin");
+});
+
+test("the capability hash sees the tool set, not its order or its key order", () => {
+  const search = { name: "s__search", description: "Finds things.", inputSchema: { type: "object", properties: { q: { type: "string" } } } };
+  const create = { name: "s__create", description: "Makes things.", inputSchema: { properties: { title: { type: "string" } }, type: "object" } };
+  assert.equal(capabilityHash([search, create]), capabilityHash([create, search]));
+  assert.equal(
+    capabilityHash([{ ...create, inputSchema: { type: "object", properties: { title: { type: "string" } } } }]),
+    capabilityHash([create])
+  );
+  assert.notEqual(capabilityHash([search]), capabilityHash([search, create]), "a new tool is a change");
+  assert.notEqual(capabilityHash([search]), capabilityHash([{ ...search, description: "Finds and deletes things." }]), "a description is a change");
+});
+
+test("the ledger writes a line when a server's tools change and nothing when they do not (INV-813)", () => {
+  const home = mkdtempSync(join(tmpdir(), "agentbox-mcp-ledger-"));
+  const path = join(home, "mcp-capabilities.jsonl");
+  const lines: string[] = [];
+  try {
+    const ledger = new CapabilityLedger(path, line => lines.push(line));
+    const search = { name: "mcp:x__search", description: "Finds.", inputSchema: {} };
+    const first = ledger.record("mcp:x", [search], { package: "x-mcp", version: "1.0.0" }, new Date("2026-10-08T08:00:00Z"));
+    assert.equal(first.changed, true);
+    assert.equal(ledger.record("mcp:x", [search], { package: "x-mcp", version: "1.0.0" }).changed, false, "same tools, no line");
+    assert.equal(readFileSync(path, "utf8").trim().split("\n").length, 1);
+    const second = ledger.record("mcp:x", [search, { name: "mcp:x__delete_all", description: "Deletes.", inputSchema: {} }], { package: "x-mcp", version: "1.1.0" });
+    assert.equal(second.changed, true);
+    assert.equal(second.previous, first.hash);
+    const records = ledger.list();
+    assert.equal(records.length, 2);
+    assert.deepEqual(records[1]!.tools, ["mcp:x__delete_all", "mcp:x__search"]);
+    assert.equal(records[1]!.version, "1.1.0");
+    assert.equal(records[1]!.previous, first.hash);
+    assert.match(lines[1]!, /CHANGED .* added mcp:x__delete_all/, "the reason is in the log, with the version");
+    // Another server's record does not count as this one's history.
+    assert.equal(ledger.record("mcp:y", [search], undefined).changed, true);
+    assert.equal(ledger.latest("mcp:x")?.hash, second.hash);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("expandEnv leaves an unknown variable visible rather than silently empty", () => {
   assert.equal(expandEnv("Bearer ${GOOD}", { GOOD: "t" }), "Bearer t");
   assert.equal(expandEnv("Bearer ${MISSING}", {}), "Bearer ${MISSING}");
 });
 
 /** A minimal Streamable-HTTP MCP server: initialize, tools/list, tools/call. */
-function withRemoteMcp(): Promise<{ url: string; requests: { method?: string; session?: string }[]; close: () => void }> {
+function withRemoteMcp(): Promise<{ url: string; requests: { method?: string; session?: string }[]; close: () => void; offer: (tools: unknown[]) => void }> {
   const requests: { method?: string; session?: string }[] = [];
   let session: string | undefined;
+  let offered: unknown[] = [{ name: "search", description: "Finds things.", inputSchema: { type: "object", properties: { q: { type: "string" } } } }];
   return new Promise(resolve => {
     const server: Server = createServer((request, response) => {
       let body = "";
@@ -98,9 +170,7 @@ function withRemoteMcp(): Promise<{ url: string; requests: { method?: string; se
           response.writeHead(202);
           response.end();
         } else if (message.method === "tools/list") {
-          reply({
-            tools: [{ name: "search", description: "Finds things.", inputSchema: { type: "object", properties: { q: { type: "string" } } } }],
-          });
+          reply({ tools: offered });
         } else if (message.method === "tools/call") {
           reply({ content: [{ type: "text", text: `found: ${message.params.arguments?.q ?? ""}` }] });
         } else if (message.method === "tools/fail") {
@@ -113,7 +183,7 @@ function withRemoteMcp(): Promise<{ url: string; requests: { method?: string; se
     });
     server.listen(0, "127.0.0.1", () => {
       const { port } = server.address() as { port: number };
-      resolve({ url: `http://127.0.0.1:${port}/mcp`, requests, close: () => server.close() });
+      resolve({ url: `http://127.0.0.1:${port}/mcp`, requests, close: () => server.close(), offer: tools => (offered = tools) });
     });
   });
 }
@@ -139,6 +209,44 @@ test("a remote server lists its tools and calls one, carrying the session and th
     manager.stop();
   } finally {
     remote.close();
+  }
+});
+
+test("a started server lands in the ledger, and a changed tools/list after a restart adds a line (INV-813)", async () => {
+  const remote = await withRemoteMcp();
+  const home = mkdtempSync(join(tmpdir(), "agentbox-mcp-ledger-live-"));
+  const path = join(home, "mcp-capabilities.jsonl");
+  try {
+    const ledger = new CapabilityLedger(path);
+    const config = { name: "mcp:linear", url: remote.url };
+    const first = new McpManager([config], () => {}, { ledger });
+    await first.ready();
+    assert.equal(ledger.list().length, 1, "first sighting is recorded");
+    assert.deepEqual(ledger.latest("mcp:linear")?.tools, ["mcp:linear__search"]);
+    first.stop();
+
+    // The same server again, unchanged: no new line.
+    const same = new McpManager([config], () => {}, { ledger });
+    await same.ready();
+    assert.equal(ledger.list().length, 1, "nothing changed, nothing written");
+    same.stop();
+
+    // Upstream grew a tool: the next start records it, naming what was added.
+    remote.offer([
+      { name: "search", description: "Finds things.", inputSchema: { type: "object", properties: { q: { type: "string" } } } },
+      { name: "delete_issue", description: "Deletes an issue.", inputSchema: { type: "object" } },
+    ]);
+    const changed = new McpManager([config], () => {}, { ledger });
+    await changed.ready();
+    const records = ledger.list();
+    assert.equal(records.length, 2);
+    assert.deepEqual(records[1]!.tools, ["mcp:linear__delete_issue", "mcp:linear__search"]);
+    assert.equal(records[1]!.previous, records[0]!.hash);
+    assert.notEqual(records[1]!.hash, records[0]!.hash);
+    changed.stop();
+  } finally {
+    remote.close();
+    rmSync(home, { recursive: true, force: true });
   }
 });
 
