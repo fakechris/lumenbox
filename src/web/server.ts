@@ -148,6 +148,7 @@ import {
   Webhooks,
   webhooksPath,
   presentedSecret,
+  liveSecrets,
   presentedSignature,
   presentedTimestamp,
   secretMatches,
@@ -2823,11 +2824,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // secret — uniformly, so the refusal says nothing about which check failed.
     const timestamp = presentedTimestamp(req.headers);
     const live = timestamp === undefined || withinReplayWindow(timestamp);
+    // Against every secret that is live: the current one and, inside the overlap after a
+    // rotation, the previous one (INV-116).
     const authorised =
       record !== undefined &&
       live &&
-      ((presented !== undefined && secretMatches(presented, record.secret)) ||
-        (signature !== undefined && signatureMatches(body, signature, record.secret, timestamp)));
+      liveSecrets(record).some(
+        secret =>
+          (presented !== undefined && secretMatches(presented, secret)) ||
+          (signature !== undefined && signatureMatches(body, signature, secret, timestamp))
+      );
     if (!authorised) {
       if (record !== undefined) webhooks.record(id, "bad-secret");
       log(`webhook ${id}: refused`);
@@ -4113,6 +4119,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               name: routine.name,
               url: `${publicBase()}/hooks/${record.id}`,
               secret: record.secret,
+              // Until when the pre-rotation secret still works (INV-116); null when none is live.
+              previousUntil: liveSecrets(record).length > 1 ? record.previousUntil : null,
               fired: record.fired ?? 0,
               lastFiredAt: record.lastFiredAt ?? null,
               lastResult: record.lastResult ?? null,
@@ -4133,8 +4141,24 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return;
           }
           const rotated = webhooks.rotate(record.id);
-          log(`webhook ${record.id} (${slug}): secret rotated`);
-          send(res, 200, { secret: rotated?.secret });
+          log(`webhook ${record.id} (${slug}): secret rotated; the previous one works until ${rotated?.previousUntil}`);
+          send(res, 200, { secret: rotated?.secret, previousUntil: rotated?.previousUntil ?? null });
+          return;
+        }
+
+        // The rotation was because of a leak: end the overlap now rather than in a day.
+        if (route === "POST /api/hooks/revoke-previous") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          const slug = String(body.slug ?? "");
+          const record = webhooks.list().find(row => row.slug === slug);
+          if (record === undefined) {
+            send(res, 404, { error: `No webhook routine "${slug}".` });
+            return;
+          }
+          webhooks.revokePrevious(record.id);
+          log(`webhook ${record.id} (${slug}): previous secret revoked`);
+          send(res, 200, { ok: true });
           return;
         }
 

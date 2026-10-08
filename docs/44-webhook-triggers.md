@@ -127,11 +127,17 @@ than five minutes from its own clock, in either direction, and refuses it the sa
 a bad secret. Without the header the body-only signature is accepted as before, because GitHub
 does not send one; the replay window is the sender's to opt into, and a shortcut on a phone can.
 
+## Rotation has an overlap (INV-116)
+
+"New secret" keeps the old one working for a day. A secret that went into a phone is updated
+when somebody gets to the phone, and a rotation that cut it off at that instant broke every
+shortcut until then. A second rotation inside the day replaces the previous secret — there are
+never three — and "Stop it now" beside the old secret's expiry ends the overlap at once, for the
+rotation that was because of a leak.
+
 ## Still open
 
-- **One secret per routine, no second one during rotation.** Rotating breaks anything still using
-  the old secret at that instant; two live secrets with an overlap window would make rotation
-  free.
+(Nothing recorded here at the moment.)
 
 
 ## Commitments a routine writes down are checked (INV-528, 2026-09-14)
