@@ -5248,6 +5248,10 @@ function automationRow(s, rows) {
           '<button class="btn ghost sm" data-reveal="' + esc(s.slug) + '">Show</button>' +
           '<button class="btn ghost sm" data-copyhook="' + esc(s.slug) + '">Copy</button>' +
           '<button class="btn ghost sm" data-rotate="' + esc(s.slug) + '">New secret</button>' +
+          (s.previousUntil
+            ? ' <span class="dim" style="font-size:11px">old secret works until ' + esc(new Date(s.previousUntil).toLocaleString()) + '</span>' +
+              ' <button class="btn ghost sm" data-revoke-previous="' + esc(s.slug) + '">Stop it now</button>'
+            : "") +
         "</div>" +
         '<div class="dim" style="font-size:11px;margin-top:4px">' +
           (hook.fired ? "called " + hook.fired + " time" + (hook.fired === 1 ? "" : "s") : "never called") +
@@ -5352,9 +5356,20 @@ document.getElementById("autolist").addEventListener("click", function (e) {
   var rotate = get("data-rotate");
   if (rotate) {
     e.preventDefault();
-    if (!confirm("Make a new secret for this routine? Anything using the old one stops working.")) return;
+    if (!confirm("Make a new secret for this routine? The old one keeps working for 24 hours so you can update what uses it.")) return;
     e.target.disabled = true;
     fetch("/api/hooks/rotate", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: rotate }) })
+      .then(function (r) { return r.json(); })
+      .then(function (data) { if (data.error) alert(data.error); return refreshAutomations(); })
+      .catch(function () { return refreshAutomations(); });
+    return;
+  }
+  var revokePrevious = get("data-revoke-previous");
+  if (revokePrevious) {
+    e.preventDefault();
+    if (!confirm("Stop the old secret now? Anything still using it stops working.")) return;
+    e.target.disabled = true;
+    fetch("/api/hooks/revoke-previous", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: revokePrevious }) })
       .then(function (r) { return r.json(); })
       .then(function (data) { if (data.error) alert(data.error); return refreshAutomations(); })
       .catch(function () { return refreshAutomations(); });
