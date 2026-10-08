@@ -31,6 +31,14 @@ export interface WebhookRecord {
   /** The routine this fires. */
   slug: string;
   secret: string;
+  /**
+   * The secret before the last rotation, still accepted until `previousUntil` (INV-116). A
+   * rotation that cut the old secret off at that instant broke every shortcut on every phone
+   * until each was updated; an overlap makes rotating free and leaking still revocable — a
+   * second rotation inside the window replaces the previous secret, so there are never three.
+   */
+  previousSecret?: string;
+  previousUntil?: string;
   createdAt: string;
   /** When it last fired, and how it went. For the automations list. */
   lastFiredAt?: string;
@@ -121,12 +129,29 @@ export class Webhooks {
     return this.rows.map(row => ({ ...row }));
   }
 
-  /** A new secret for the same URL, so a leaked one is revoked without rebuilding the shortcut. */
-  rotate(id: string): WebhookRecord | undefined {
+  /**
+   * A new secret for the same URL, so a leaked one is revoked without rebuilding the shortcut.
+   * The old one keeps working for the overlap window (INV-116), so what is on a phone has time
+   * to be updated; `revoke` ends it sooner when the rotation is because of a leak.
+   */
+  rotate(id: string, now: Date = new Date()): WebhookRecord | undefined {
     this.reload();
     const row = this.rows.find(candidate => candidate.id === id);
     if (row === undefined) return undefined;
+    row.previousSecret = row.secret;
+    row.previousUntil = new Date(now.getTime() + ROTATION_OVERLAP_MS).toISOString();
     row.secret = newSecret();
+    this.save();
+    return { ...row };
+  }
+
+  /** Ends the overlap now: the previous secret stops working at once. */
+  revokePrevious(id: string): WebhookRecord | undefined {
+    this.reload();
+    const row = this.rows.find(candidate => candidate.id === id);
+    if (row === undefined) return undefined;
+    delete row.previousSecret;
+    delete row.previousUntil;
     this.save();
     return { ...row };
   }
@@ -166,6 +191,22 @@ export class Webhooks {
 
 function newSecret(): string {
   return `lmbxhook_${randomBytes(24).toString("base64url")}`;
+}
+
+/** How long the previous secret keeps working after a rotation: a day, enough to reach every phone. */
+export const ROTATION_OVERLAP_MS = 24 * 60 * 60_000;
+
+/**
+ * The secrets a hook accepts right now: the current one, and the previous one while its overlap
+ * lasts (INV-116). Everything that authenticates a request checks against each of these, so the
+ * two proofs (presented secret, signed body) and the overlap compose without a second code path.
+ */
+export function liveSecrets(record: Pick<WebhookRecord, "secret" | "previousSecret" | "previousUntil">, now: Date = new Date()): readonly string[] {
+  const previousLive =
+    record.previousSecret !== undefined &&
+    record.previousUntil !== undefined &&
+    Date.parse(record.previousUntil) > now.getTime();
+  return previousLive ? [record.secret, record.previousSecret!] : [record.secret];
 }
 
 /**

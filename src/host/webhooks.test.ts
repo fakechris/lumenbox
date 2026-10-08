@@ -17,7 +17,9 @@ import {
   secretMatches,
   presentedSecret,
   webhookPrompt,
+  liveSecrets,
   presentedTimestamp,
+  ROTATION_OVERLAP_MS,
   signatureMatches,
   withinReplayWindow,
   presentedSignature,
@@ -25,9 +27,10 @@ import {
 } from "./webhooks.ts";
 import { parseSkillFile, skillFrom } from "./skills.ts";
 
-function store(): { hooks: Webhooks; cleanup: () => void } {
+function store(): { hooks: Webhooks; path: string; cleanup: () => void } {
   const home = mkdtempSync(join(tmpdir(), "agentbox-webhooks-"));
-  return { hooks: new Webhooks(webhooksPath(home)), cleanup: () => rmSync(home, { recursive: true, force: true }) };
+  const path = webhooksPath(home);
+  return { hooks: new Webhooks(path), path, cleanup: () => rmSync(home, { recursive: true, force: true }) };
 }
 
 test("a routine's URL is minted once and never changes", () => {
@@ -45,6 +48,37 @@ test("a routine's URL is minted once and never changes", () => {
     const rotated = hooks.rotate(first.id);
     assert.equal(rotated?.id, first.id);
     assert.notEqual(rotated?.secret, first.secret);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a rotated secret keeps working through the overlap, then stops; a leak can end it now (INV-116)", () => {
+  const { hooks, path, cleanup } = store();
+  try {
+    const first = hooks.ensure("box-1", "file-it");
+    const at = new Date("2026-10-08T08:00:00Z");
+    const rotated = hooks.rotate(first.id, at)!;
+    // Both live inside the window: the phone has a day to be updated.
+    assert.deepEqual(liveSecrets(rotated, at), [rotated.secret, first.secret]);
+    assert.deepEqual(liveSecrets(rotated, new Date(at.getTime() + ROTATION_OVERLAP_MS - 1)), [rotated.secret, first.secret]);
+    // After it, only the new one.
+    assert.deepEqual(liveSecrets(rotated, new Date(at.getTime() + ROTATION_OVERLAP_MS + 1)), [rotated.secret]);
+    // A second rotation inside the window replaces the previous secret: never three.
+    const again = hooks.rotate(first.id, new Date(at.getTime() + 60_000))!;
+    assert.deepEqual(liveSecrets(again, at), [again.secret, rotated.secret]);
+    assert.ok(!liveSecrets(again, at).includes(first.secret), "the first secret is gone");
+    // The rotation was because of a leak: the overlap ends at once.
+    const revoked = hooks.revokePrevious(first.id)!;
+    assert.deepEqual(liveSecrets(revoked, at), [again.secret]);
+    assert.equal(revoked.previousSecret, undefined);
+    // A record written before this field existed reads as one secret.
+    assert.deepEqual(liveSecrets({ secret: "only" }), ["only"]);
+    // The overlap is on disk, so the door's own process sees it.
+    hooks.rotate(first.id, at);
+    const reread = new Webhooks(path).byId(first.id)!;
+    assert.equal(reread.previousSecret, again.secret);
+    assert.deepEqual(liveSecrets(reread, at), [reread.secret, again.secret]);
   } finally {
     cleanup();
   }
@@ -171,6 +205,15 @@ test("the endpoint refuses a wrong secret and an unknown id the same way, and ru
       body,
     });
     assert.equal(timely.status, 409, "authenticated; only the routine is missing here");
+
+    // After a rotation the old secret still opens the door for the overlap (INV-116).
+    const beforeRotation = record.secret;
+    hooks.rotate(record.id);
+    const oldStillWorks = await fetch(`${base}/hooks/${record.id}`, { method: "POST", headers: { authorization: `Bearer ${beforeRotation}` }, body: "https://example.com/c" });
+    assert.equal(oldStillWorks.status, 409, "the old secret authenticates during the overlap");
+    hooks.revokePrevious(record.id);
+    const oldRevoked = await fetch(`${base}/hooks/${record.id}`, { method: "POST", headers: { authorization: `Bearer ${beforeRotation}` }, body: "https://example.com/c" });
+    assert.equal(oldRevoked.status, 401, "and not once the overlap is ended");
 
     // A GET is not a trigger: a link preview or a crawler must not start work.
     const got = await fetch(`${base}/hooks/${record.id}`, { headers: { authorization: `Bearer ${record.secret}` } });
