@@ -15,6 +15,7 @@ import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
 import type { AgentBus, InboundMessage } from "../agents/bus.ts";
 import type { BoxClient } from "../box/client.ts";
 import type { Tracer } from "./trace.ts";
+import { GENAI_SEMCONV, genAiProviderName } from "./trace.ts";
 import type { DisplayLease } from "../box/display-lease.ts";
 import type { PolicyGate } from "./policy.ts";
 import type { Claims } from "./claims.ts";
@@ -2420,8 +2421,10 @@ ${outcome.text}`;
     const span = deps.tracer?.start(
       "llm.round",
       {
-        "gen_ai.system": provider.label,
-        "gen_ai.request.model": provider.model,
+        // semconv 1.37.0 names (INV-815); the deprecated `gen_ai.system` rides along until 0.5.0.
+        [GENAI_SEMCONV.attributes.providerName]: genAiProviderName(provider.label),
+        [GENAI_SEMCONV.attributes.legacySystem]: provider.label,
+        [GENAI_SEMCONV.attributes.requestModel]: provider.model,
         "agentbox.agent_id": agent.id,
         "agentbox.agent_name": agent.profile.name,
         "agentbox.work_id": workId,
@@ -2638,8 +2641,8 @@ ${outcome.text}`;
       if (noted?.reason !== undefined) console.error(`[usage] ${agent.profile.name}: ${noted.reason}`);
     }
     span?.end({
-      "gen_ai.usage.input_tokens": usage.inputTokens,
-      "gen_ai.usage.output_tokens": usage.outputTokens,
+      [GENAI_SEMCONV.attributes.usageInputTokens]: usage.inputTokens,
+      [GENAI_SEMCONV.attributes.usageOutputTokens]: usage.outputTokens,
       "agentbox.usage.cache_read_tokens": usage.cacheReadTokens,
       "agentbox.usage.cache_write_tokens": usage.cacheWriteTokens,
       ...(cacheShare !== undefined ? { "agentbox.usage.cache_read_share": cacheShare } : {}),
