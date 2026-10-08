@@ -246,6 +246,48 @@ test("a finished turn still closes work the agent said nothing about", () => {
   }
 });
 
+test("a finished turn holds a task with a date, a dependency or acceptance criteria in review (INV-817)", () => {
+  // Stopped is not verified. Each of these was written down because somebody will check it,
+  // and the turn ending is not that check; the one-shot ask with none of them still closes.
+  const { store, cleanup } = tempStore();
+  try {
+    const cases: [string, Parameters<typeof store.create>[0], Parameters<typeof store.update>[1]][] = [
+      ["it has acceptance criteria", { title: "ship the report", requester: "feishu:ou_1", assigneeId: "ada", contract: { acceptance: "the vendor confirms receipt" } }, { status: "doing" }],
+      ["it is due", { title: "renew the cert", requester: "feishu:ou_1", assigneeId: "ada", due: "2026-10-31" }, { status: "doing" }],
+      ["it is waiting on", { title: "chase the quote", requester: "feishu:ou_1", assigneeId: "ada" }, { status: "doing", waitingOn: "the supplier" }],
+    ];
+    for (const [why, input, start] of cases) {
+      const task = store.create(input)!;
+      store.update(task.id, start, "channel");
+      const settled = store.turnFinished(task.id);
+      assert.equal(settled?.task.status, "review", why);
+      assert.match(settled!.task.history[settled!.task.history.length - 1]!.note ?? "", /stopped, not verified/);
+    }
+    const oneShot = store.create({ title: "say hello", requester: "feishu:ou_1", assigneeId: "ada" })!;
+    store.update(oneShot.id, { status: "doing" }, "channel");
+    assert.equal(store.turnFinished(oneShot.id)?.task.status, "done", "a one-shot ask still closes (docs/16)");
+  } finally {
+    cleanup();
+  }
+});
+
+test("a held task is accepted by the requester, not by the turn ending (INV-817)", () => {
+  // The scenario end to end at the store: the executor stops, the task waits in review, the
+  // person's word closes it — and the assignee's own word does not.
+  const { store, cleanup } = tempStore();
+  try {
+    const task = store.create({ title: "ship the report", requester: "feishu:ou_1", assigneeId: "ada", contract: { acceptance: "the vendor confirms receipt" } })!;
+    store.update(task.id, { status: "doing" }, "channel");
+    store.turnFinished(task.id);
+    assert.equal(store.get(task.id)?.status, "review");
+    store.turnFinished(task.id);
+    assert.equal(store.get(task.id)?.status, "review", "a second turn ending changes nothing");
+    assert.equal(store.update(task.id, { status: "done" }, "feishu:ou_1")?.task.status, "done", "the requester accepts");
+  } finally {
+    cleanup();
+  }
+});
+
 test("a finished turn goes through the review gate like everyone else", () => {
   const { store, cleanup } = tempStore();
   try {

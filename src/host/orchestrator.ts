@@ -91,7 +91,7 @@ import { TaskStore, type Task } from "./tasks.ts";
 import { BoxError } from "../box/client.ts";
 import { Receipts } from "./receipts.ts";
 import { WedgeWatch } from "./wedge.ts";
-import { buildAuditPrompt, manifestDiff, MANIFEST_COMMAND, parseManifest } from "./audit.ts";
+import { buildAuditPrompt, manifestDiff, MANIFEST_COMMAND, parseManifest, settleAudit } from "./audit.ts";
 import { ALL_MCP_TOOLS, ScopeStore } from "./scopes.ts";
 import { delegateEndedNote, settleDelegate } from "./engine-report.ts";
 import { BundleStore } from "./bundles.ts";
@@ -802,6 +802,7 @@ export class Orchestrator {
     void (async () => {
       try {
         const before = await this.workspaceManifest();
+        const spoken = this.registry.readTranscript(reviewer.id).length;
         await this.prompt(
           reviewer.id,
           buildAuditPrompt({
@@ -827,8 +828,16 @@ export class Orchestrator {
               },
               "audit-guard"
             );
+            return;
           }
         }
+        // The verdict is parsed, not read (INV-817): the same parser as the goal gate, and
+        // no verdict is not a pass. Only a task the reviewer left in review is settled here —
+        // a reviewer that moved it back to doing itself has already said what it found.
+        const current = this.tasks?.get(task.id);
+        if (current?.status !== "review") return;
+        const settled = settleAudit(current, this.replySince(reviewer.id, spoken));
+        this.tasks?.update(task.id, { status: settled.status, note: settled.note }, "audit-guard");
       } catch (error) {
         console.error(
           `[audit] ${task.id}: ${error instanceof Error ? error.message : String(error)}`
