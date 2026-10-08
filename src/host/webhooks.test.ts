@@ -17,7 +17,9 @@ import {
   secretMatches,
   presentedSecret,
   webhookPrompt,
+  presentedTimestamp,
   signatureMatches,
+  withinReplayWindow,
   presentedSignature,
   HookRate,
 } from "./webhooks.ts";
@@ -150,6 +152,26 @@ test("the endpoint refuses a wrong secret and an unknown id the same way, and ru
     assert.equal(right.status, 409);
     assert.match(((await right.json()) as { error: string }).error, /No webhook routine "file-it"/);
 
+    // A signed request with a stale timestamp is a replay, refused in the same words as a wrong
+    // secret; the same signature with a live timestamp reaches the routine lookup (INV-115).
+    const { createHmac } = await import("node:crypto");
+    const body = "https://example.com/b";
+    const stale = String(Math.floor(Date.now() / 1000) - 3600);
+    const replayed = await fetch(`${base}/hooks/${record.id}`, {
+      method: "POST",
+      headers: { "x-lumenbox-timestamp": stale, "x-lumenbox-signature": createHmac("sha256", record.secret).update(`${stale}.${body}`).digest("hex") },
+      body,
+    });
+    assert.equal(replayed.status, 401);
+    assert.equal(((await replayed.json()) as { error: string }).error, said.error, "a replay is refused like a bad secret");
+    const fresh = String(Math.floor(Date.now() / 1000));
+    const timely = await fetch(`${base}/hooks/${record.id}`, {
+      method: "POST",
+      headers: { "x-lumenbox-timestamp": fresh, "x-lumenbox-signature": createHmac("sha256", record.secret).update(`${fresh}.${body}`).digest("hex") },
+      body,
+    });
+    assert.equal(timely.status, 409, "authenticated; only the routine is missing here");
+
     // A GET is not a trigger: a link preview or a crawler must not start work.
     const got = await fetch(`${base}/hooks/${record.id}`, { headers: { authorization: `Bearer ${record.secret}` } });
     assert.equal(got.status, 405);
@@ -196,6 +218,36 @@ test("a body signed with the secret is accepted, and a tampered one is not", asy
   assert.equal(presentedSignature({ "x-hub-signature-256": "sha256=abc" }), "sha256=abc");
   assert.equal(presentedSignature({ "x-lumenbox-signature": "abc" }), "abc");
   assert.equal(presentedSignature({}), undefined);
+});
+
+test("a signed timestamp binds the request to a moment, and an old one is a replay (INV-115)", async () => {
+  const { createHmac } = await import("node:crypto");
+  const secret = "lmbxhook_test";
+  const body = JSON.stringify({ url: "https://example.com/v" });
+  const now = new Date("2026-10-08T08:00:00Z");
+  const seconds = String(Math.floor(now.getTime() / 1000));
+  const signedWithTime = createHmac("sha256", secret).update(`${seconds}.${body}`, "utf8").digest("hex");
+  const signedBodyOnly = createHmac("sha256", secret).update(body, "utf8").digest("hex");
+
+  // Stripe's shape: the signature covers `<timestamp>.<body>`.
+  assert.equal(signatureMatches(body, signedWithTime, secret, seconds), true);
+  // The timestamp is in the signature, so a replayer cannot freshen it.
+  assert.equal(signatureMatches(body, signedWithTime, secret, String(Number(seconds) + 600)), false);
+  // And a body-only signature does not pass once a timestamp is claimed.
+  assert.equal(signatureMatches(body, signedBodyOnly, secret, seconds), false);
+
+  // The window: five minutes either side, unparsable refused.
+  assert.equal(withinReplayWindow(seconds, now), true);
+  assert.equal(withinReplayWindow(String(Number(seconds) - 299), now), true);
+  assert.equal(withinReplayWindow(String(Number(seconds) - 301), now), false, "older than the window is a replay");
+  assert.equal(withinReplayWindow(String(Number(seconds) + 301), now), false, "the future is the same replay with the clock moved");
+  assert.equal(withinReplayWindow("2026-10-08T07:58:00Z", now), true, "an ISO instant is read too");
+  assert.equal(withinReplayWindow("yesterday", now), false);
+  assert.equal(withinReplayWindow("", now), false);
+
+  assert.equal(presentedTimestamp({ "x-lumenbox-timestamp": seconds }), seconds);
+  assert.equal(presentedTimestamp({ "x-signature-timestamp": [seconds] }), seconds);
+  assert.equal(presentedTimestamp({}), undefined);
 });
 
 test("a hook has a ceiling on how often it fires, and the refusal says when to come back", () => {

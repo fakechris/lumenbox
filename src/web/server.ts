@@ -148,8 +148,10 @@ import {
   webhooksPath,
   presentedSecret,
   presentedSignature,
+  presentedTimestamp,
   secretMatches,
   signatureMatches,
+  withinReplayWindow,
   HookRate,
 } from "../host/webhooks.ts";
 import { ConversationDirectory, conversationsPath } from "../channels/conversations.ts";
@@ -2814,10 +2816,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // never crosses the wire.
     const presented = presentedSecret(req.headers);
     const signature = presentedSignature(req.headers);
+    // A sender that signs a timestamp with the body gets a replay window (INV-115): a captured
+    // request is good for five minutes, not forever. A stale timestamp is refused like a bad
+    // secret — uniformly, so the refusal says nothing about which check failed.
+    const timestamp = presentedTimestamp(req.headers);
+    const live = timestamp === undefined || withinReplayWindow(timestamp);
     const authorised =
       record !== undefined &&
+      live &&
       ((presented !== undefined && secretMatches(presented, record.secret)) ||
-        (signature !== undefined && signatureMatches(body, signature, record.secret)));
+        (signature !== undefined && signatureMatches(body, signature, record.secret, timestamp)));
     if (!authorised) {
       if (record !== undefined) webhooks.record(id, "bad-secret");
       log(`webhook ${id}: refused`);
