@@ -3122,6 +3122,21 @@ function agentsInView() {
 var groupBy = (function () {
   try { return localStorage.getItem("lumenbox.groupBy") || "teams"; } catch (error) { return "teams"; }
 })();
+/** The one team shown, or "" for all (INV-120). Both this and groupBy follow the person (INV-121). */
+var teamFilter = "";
+
+/** Tells the server what this person chose, so the next browser starts there; localStorage is the offline echo. */
+function savePreference(patch) {
+  try { localStorage.setItem("lumenbox.groupBy", groupBy); } catch (error) {}
+  fetch("/api/me/preferences", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) }).catch(function () {});
+}
+
+function applyPreferences(prefs) {
+  if (!prefs) return;
+  if (prefs.groupBy === "teams" || prefs.groupBy === "az") groupBy = prefs.groupBy;
+  teamFilter = typeof prefs.team === "string" ? prefs.team : "";
+  renderAgents();
+}
 
 function oneAgentRow(a, index) {
   return '<div class="agent ' + (a.id === current ? "on" : "") + '" data-id="' + esc(a.id) + '">' +
@@ -3151,7 +3166,15 @@ function renderAgents() {
 
   var html = "";
   var index = 0;
-  if (groupBy !== "teams" || !tagged) {
+  // Filtering is not grouping (INV-120): one team, its members only, and a line saying which
+  // team is being looked at so a short list is never mistaken for the whole roster.
+  if (teamFilter) {
+    var only = list.filter(function (a) { return (a.tags || []).indexOf(teamFilter) >= 0; });
+    html += '<div class="teamhead" id="teamviewing">viewing team ' + esc(teamFilter) + ' <span class="count">' + only.length + "</span>" +
+      ' <a href="#" id="teamall" class="dim" style="float:right;text-transform:none;letter-spacing:0" title="Show every agent again">all</a></div>';
+    if (only.length === 0) html += '<div class="dim" style="padding:8px 12px;font-size:12px">No agent is in this team' + (boxesSeen.length > 1 ? " in this box" : "") + ".</div>";
+    for (var f = 0; f < only.length; f++) html += oneAgentRow(only[f], index++);
+  } else if (groupBy !== "teams" || !tagged) {
     for (var i = 0; i < list.length; i++) html += oneAgentRow(list[i], index++);
   } else {
     var groups = {};
@@ -3169,7 +3192,11 @@ function renderAgents() {
     order.sort();
     for (var g = 0; g < order.length; g++) {
       var members = groups[order[g]];
-      html += '<div class="teamhead">' + esc(order[g]) + ' <span class="count">' + members.length + "</span></div>";
+      // The heading is the filter (INV-120); the pencil is the rename, for an admin (INV-119).
+      html += '<div class="teamhead"><a href="#" class="teamonly" data-team="' + esc(order[g]) + '" title="Show only this team" style="color:inherit;text-decoration:none">' + esc(order[g]) + "</a>" +
+        ' <span class="count">' + members.length + "</span>" +
+        (myRole === "admin" ? ' <a href="#" class="teamrename dim" data-team="' + esc(order[g]) + '" title="Rename this team on every member" style="float:right;text-transform:none;letter-spacing:0">rename</a>' : "") +
+        "</div>";
       for (var m = 0; m < members.length; m++) html += oneAgentRow(members[m], index++);
     }
     if (loose.length > 0) {
@@ -3182,12 +3209,40 @@ function renderAgents() {
   for (var j = 0; j < nodes.length; j++) {
     nodes[j].onclick = function () { select(this.dataset.id); };
   }
+  var onlyLinks = document.querySelectorAll(".teamonly");
+  for (var o = 0; o < onlyLinks.length; o++) {
+    onlyLinks[o].onclick = function (event) {
+      event.preventDefault();
+      teamFilter = this.dataset.team;
+      savePreference({ team: teamFilter });
+      renderAgents();
+    };
+  }
+  var all = document.getElementById("teamall");
+  if (all) all.onclick = function (event) { event.preventDefault(); teamFilter = ""; savePreference({ team: null }); renderAgents(); };
+  var renames = document.querySelectorAll(".teamrename");
+  for (var r = 0; r < renames.length; r++) {
+    renames[r].onclick = function (event) {
+      event.preventDefault();
+      var from = this.dataset.team;
+      var to = prompt("Rename team \u201c" + from + "\u201d on every member to:", from);
+      if (to === null || to.trim() === "" || to.trim() === from) return;
+      fetch("/api/teams/rename", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ from: from, to: to.trim() }) })
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+          if (data.error) { alert(data.error); return; }
+          if (teamFilter === from) { teamFilter = to.trim().toLowerCase().replace(/\s+/g, "-"); savePreference({ team: teamFilter }); }
+          return refresh();
+        })
+        .catch(function () {});
+    };
+  }
 }
 
 document.getElementById("groupby").addEventListener("click", function (event) {
   event.preventDefault();
   groupBy = groupBy === "teams" ? "az" : "teams";
-  try { localStorage.setItem("lumenbox.groupBy", groupBy); } catch (error) {}
+  savePreference({ groupBy: groupBy });
   renderAgents();
 });
 
@@ -7158,6 +7213,7 @@ fetch("/api/me")
     $("whoami").textContent = me.name ? me.name + " · " + me.role : "";
     $("whoami").title = me.identity ? "signed in as " + me.identity : "";
     applyRole();
+    applyPreferences(me.preferences);
   })
   .catch(function () {});
 

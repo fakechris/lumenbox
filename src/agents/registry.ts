@@ -599,6 +599,40 @@ export class AgentRegistry {
     renameSync(temp, path);
   }
 
+  /**
+   * Renames a team on every member at once, or refuses with the reason (INV-119).
+   *
+   * A team name lives on each member, so a rename is one write per member — and a rename that
+   * reaches one agent and not four is worse than none. Everything is checked before anything
+   * is written; the writes are per-file temp-and-rename; and should one fail part-way, the
+   * profiles already written are put back before the error is reported.
+   */
+  renameTeam(from: string, to: string): { renamed: string[] } | { refused: string } {
+    const [source] = normaliseTags([from]);
+    const [target] = normaliseTags([to]);
+    if (source === undefined) return { refused: `"${from}" is not a team name.` };
+    if (target === undefined) return { refused: `"${to}" is not a usable team name — letters, digits and hyphens, up to ${MAX_TAG_CHARS} characters.` };
+    if (source === target) return { refused: `"${source}" is already the team's name.` };
+    const members = this.list().filter(record => (record.profile.tags ?? []).includes(source));
+    if (members.length === 0) return { refused: `No agent is in a team called "${source}".` };
+    if (this.list().some(record => (record.profile.tags ?? []).includes(target))) {
+      return { refused: `A team called "${target}" already exists; merging two teams is not a rename. Move the agents with their Teams field instead.` };
+    }
+    const written: { id: string; before: AgentProfile }[] = [];
+    try {
+      for (const record of members) {
+        const before = { ...record.profile };
+        const tags = (record.profile.tags ?? []).map(tag => (tag === source ? target : tag));
+        this.writeProfile(record.id, { ...record.profile, tags });
+        written.push({ id: record.id, before });
+      }
+    } catch (error) {
+      for (const { id, before } of written) this.writeProfile(id, before);
+      return { refused: `Renaming stopped at ${written.length + 1} of ${members.length} members and was rolled back: ${error instanceof Error ? error.message : String(error)}` };
+    }
+    return { renamed: members.map(record => record.id) };
+  }
+
   has(agentId: string): boolean {
     return existsSync(this.profilePathFor(agentId));
   }
