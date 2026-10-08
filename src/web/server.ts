@@ -64,6 +64,7 @@ import {
   sessionCookie,
   sessionKey,
 } from "./session.ts";
+import { PreferenceStore } from "./preferences.ts";
 
 /**
  * The one directory a person may browse, and the one that survives a rebuild.
@@ -313,6 +314,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // incarnation of the channel they were observed under (docs/22 §4), so the
   // lookup has to exist before the principals file is read.
   const channelRecordsPath = join(agentboxHome(), CHANNEL_RECORDS_FILENAME);
+  const preferences = new PreferenceStore(join(agentboxHome(), "preferences.json"));
   const channelRecords = ensureChannelRecords(channelRecordsPath, registry.box.id);
   const channelIncarnations = new Map(channelRecords.map(record => [record.id, record.incarnation]));
   /** Web token subjects and unknown prefixes are incarnation 1 forever. */
@@ -3978,7 +3980,29 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             // No identity at all is the direct operator: the token holder, unrestricted,
             // exactly as this UI has always behaved.
             role: caller.userId === undefined ? "admin" : (principal?.role ?? "viewer"),
+            // How this person arranges the list, wherever they open it from (INV-121).
+            preferences: preferences.get(caller.userId),
           });
+          return;
+        }
+
+        if (route === "POST /api/me/preferences") {
+          const body = await readJson(req);
+          send(res, 200, { preferences: preferences.set(caller.userId, body) });
+          return;
+        }
+
+        // A team's name lives on each member; this renames it on all of them or none (INV-119).
+        if (route === "POST /api/teams/rename") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          const result = orchestrator.registry.renameTeam(String(body.from ?? ""), String(body.to ?? ""));
+          if ("refused" in result) {
+            send(res, 400, { error: result.refused });
+            return;
+          }
+          log(`team "${body.from}" renamed to "${body.to}" on ${result.renamed.length} agent(s)`);
+          send(res, 200, { renamed: result.renamed });
           return;
         }
 

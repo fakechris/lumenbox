@@ -50,3 +50,30 @@ test("an agent is born with teams, keeps them, and can be in several", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("renaming a team changes every member at once, or refuses and says why (INV-119)", () => {
+  const root = mkdtempSync(join(tmpdir(), "agentbox-tags-rename-"));
+  try {
+    const registry = new AgentRegistry(root);
+    const a = registry.create({ name: "a", boxId: registry.box.id, tags: ["media", "ops"] });
+    const b = registry.create({ name: "b", boxId: registry.box.id, tags: ["media"] });
+    const c = registry.create({ name: "c", boxId: registry.box.id, tags: ["infra"] });
+
+    const renamed = registry.renameTeam("Media", "Content Team");
+    assert.deepEqual(renamed, { renamed: [a.id, b.id] });
+    assert.deepEqual(registry.get(a.id).profile.tags, ["content-team", "ops"], "other teams on the member stay");
+    assert.deepEqual(registry.get(b.id).profile.tags, ["content-team"]);
+    assert.deepEqual(registry.get(c.id).profile.tags, ["infra"], "an agent outside the team is untouched");
+    // And it is on disk, which is where every other process reads it from.
+    assert.deepEqual(new AgentRegistry(root).get(b.id).profile.tags, ["content-team"]);
+
+    // The refusals, each with the reason a person can act on.
+    assert.match((registry.renameTeam("nobody", "x") as { refused: string }).refused, /No agent is in a team called "nobody"/);
+    assert.match((registry.renameTeam("infra", "content-team") as { refused: string }).refused, /already exists; merging/);
+    assert.match((registry.renameTeam("infra", "infra") as { refused: string }).refused, /already the team's name/);
+    assert.match((registry.renameTeam("infra", "!!!") as { refused: string }).refused, /not a usable team name/);
+    assert.deepEqual(registry.get(c.id).profile.tags, ["infra"], "a refused rename changes nothing");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

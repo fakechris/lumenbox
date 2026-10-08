@@ -61,17 +61,28 @@ do not become three departments. Five teams per agent, 24 characters each. Any l
 
 ## In the list
 
-A `teams` / `a–z` toggle above the sidebar, remembered per browser. Teams are shown
-alphabetically with a count; everything untagged falls into a last "no team" group rather than
-disappearing. The toggle hides itself entirely when nothing is tagged: somebody with six agents
-and no teams should not be made to look at headings.
+A `teams` / `a–z` toggle above the sidebar. Teams are shown alphabetically with a count;
+everything untagged falls into a last "no team" group rather than disappearing. The toggle hides
+itself entirely when nothing is tagged: somebody with six agents and no teams should not be made
+to look at headings.
+
+**The arrangement follows the person, not the browser (INV-121, 2026-10-08).** The toggle and
+the filter below are stored on the server against the identity the request carries — the
+operator with no identity has a seat of their own — so a second browser, or another machine,
+starts where that person left off. localStorage keeps an echo for the moment before `/api/me`
+answers.
+
+**Filtering is not grouping (INV-120).** Clicking a team's heading shows only its members, under
+a line that says *viewing team media · 5* with an *all* link beside it, so a short list is never
+mistaken for the whole roster. The filter is a preference like the toggle.
+
+**Renaming a team renames it on every member or on none (INV-119).** An admin's *rename* link on
+the heading asks for the new name; the registry checks everything first — the name is usable,
+the team exists, no team of the new name exists (merging is not a rename) — then writes each
+member's profile, and puts the already-written ones back if a write fails part-way. A refusal
+says why in a sentence.
 
 ## Not done
 
-- **No renaming a team.** Renaming means editing every member; a rename that touches one agent
-  and leaves four behind is worse than no rename at all.
-- **The toggle is per browser, not per person.** Two people on one installation each choose their
-  own, which is right, but a new browser starts at the default rather than at what that person
-  chose last time.
-- **No filtering.** Grouping is not the same as "show me only this team", and a person with forty
-  agents will want the second one.
+- **No team-level permissions.** A team is a label for finding agents, not a boundary; docs/36 is
+  where boundaries live.
