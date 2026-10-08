@@ -125,6 +125,11 @@ export interface AgentboxConfig {
     }
   >;
   /**
+   * A connector door's package pinned to another version than the catalog's (INV-813), by
+   * door slug: `{ "notion": "2.6.0" }`. Operator-only, like `mcpServers`.
+   */
+  connectorVersions?: Record<string, string>;
+  /**
    * Skill directories beyond the box's own `/home/box/work/skills`, as paths inside the
    * box, searched in this order after it (R26). The box's own directory always wins a
    * slug collision — a skill you wrote beats one you installed — and a collision is
@@ -295,6 +300,7 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
   // for a silent parse and not for one that warns — a single malformed box would be
   // reported to the user twice.
   const boxes = readBoxes(raw.boxes, onWarn);
+  const connectorVersions = readConnectorVersions(raw.connectorVersions, onWarn);
   return {
     activityLimit: readInteger(
       raw.activityLimit,
@@ -329,6 +335,7 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
     ...(readDigests(raw.digests, onWarn) !== undefined
       ? { digests: readDigests(raw.digests, onWarn) }
       : {}),
+    ...(connectorVersions !== undefined ? { connectorVersions } : {}),
     ...(readMcpServers(raw.mcpServers, onWarn) !== undefined
       ? { mcpServers: readMcpServers(raw.mcpServers, onWarn) }
       : {}),
@@ -416,6 +423,24 @@ function readQuotaMap(
     if (quota !== undefined) out[key] = quota;
   }
   return out;
+}
+
+function readConnectorVersions(value: unknown, warn: (message: string) => void): Record<string, string> | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    warn("config: connectorVersions must be an object of door slug to version, ignoring it");
+    return undefined;
+  }
+  const versions: Record<string, string> = {};
+  for (const [slug, version] of Object.entries(value as Record<string, unknown>)) {
+    // A version, not a range: a range is the unpinned state this key exists to end.
+    if (typeof version !== "string" || !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) {
+      warn(`config: connectorVersions.${slug} must be an exact version such as 1.2.3, ignoring it`);
+      continue;
+    }
+    versions[slug] = version;
+  }
+  return Object.keys(versions).length > 0 ? versions : undefined;
 }
 
 function readMcpServers(

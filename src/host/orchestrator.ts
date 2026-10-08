@@ -86,6 +86,7 @@ import { readHandoff, type ToolContext } from "./tools.ts";
 import { loadConfig } from "../config.ts";
 import { McpManager } from "./mcp.ts";
 import { mergeServers } from "./mcp-connectors.ts";
+import { CapabilityLedger } from "./mcp-capabilities.ts";
 import { PolicyGate } from "./policy.ts";
 import { TaskStore, type Task } from "./tasks.ts";
 import { BoxError } from "../box/client.ts";
@@ -886,7 +887,10 @@ export class Orchestrator {
       options.mcp === null || options.mcp === undefined
         ? new McpManager(
             options.mcp === null ? [] : mcpServersFrom(loadConfig()),
-            line => console.error(`[mcp] ${line}`)
+            line => console.error(`[mcp] ${line}`),
+            // What each server offered, by version, over time (INV-813): a changed tool list is
+            // on the record with the package version that changed it.
+            options.mcp === null ? undefined : { ledger: new CapabilityLedger(join(agentboxHome(), "mcp-capabilities.jsonl")) }
           )
         : options.mcp;
     this.claims =
@@ -2659,9 +2663,10 @@ export const STARTER_TEAM: readonly {
 ];
 
 /** The MCP server list as config.json spells it, in the manager's shape. */
-function mcpServersFrom(config: { mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string>; host?: boolean; hostOnlyTools?: string[]; pollutesMemory?: boolean }> }) {
+function mcpServersFrom(config: { mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string>; host?: boolean; hostOnlyTools?: string[]; pollutesMemory?: boolean }>; connectorVersions?: Record<string, string> }) {
   // The connector doors (mcp-connectors.ts) sit under the operator's entries: a config.json
   // line with the same name overrides a door's default, an env credential turns a door on,
-  // and either may exist without the other.
-  return mergeServers(Object.entries(config.mcpServers ?? {}).map(([name, server]) => ({ name, ...server })));
+  // and either may exist without the other. `connectorVersions` pins a door's package
+  // differently from the catalog without replacing its spec (INV-813).
+  return mergeServers(Object.entries(config.mcpServers ?? {}).map(([name, server]) => ({ name, ...server })), process.env, config.connectorVersions ?? {});
 }

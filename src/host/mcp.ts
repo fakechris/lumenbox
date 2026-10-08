@@ -24,6 +24,8 @@
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import type { CapabilityLedger } from "./mcp-capabilities.ts";
+import { pinnedPackage } from "./mcp-connectors.ts";
 
 /** A description's first sentence, clamped — enough to choose by, not to call by. */
 function firstSentence(text: string): string {
@@ -137,7 +139,9 @@ class McpServer {
 
   constructor(
     readonly config: McpServerConfig,
-    private readonly log: (line: string) => void
+    private readonly log: (line: string) => void,
+    /** Told the tool list each time it is learned, so the manager can keep the ledger (INV-813). */
+    private readonly onListed: (tools: readonly McpTool[]) => void = () => {}
   ) {}
 
   status(): McpServerStatus {
@@ -213,6 +217,7 @@ class McpServer {
       }));
     this.detail = `${this.tools.length} tool${this.tools.length === 1 ? "" : "s"}`;
     this.log(`mcp ${this.config.name}: ${this.detail}`);
+    this.onListed(this.tools);
     if (this.tools.length > TOOL_BUDGET_WARNING) {
       this.log(
         `mcp ${this.config.name}: ${this.tools.length} tools is a lot — every one of them ` +
@@ -359,7 +364,8 @@ export class RemoteMcpServer implements ToolServer {
 
   constructor(
     options: McpServerConfig,
-    private readonly log: (line: string) => void
+    private readonly log: (line: string) => void,
+    private readonly onListed: (tools: readonly McpTool[]) => void = () => {}
   ) {
     if (options.url === undefined) throw new Error(`${options.name}: a remote server needs a url`);
     this.config = options;
@@ -406,6 +412,7 @@ export class RemoteMcpServer implements ToolServer {
       }));
     this.detail = `${this.tools.length} tool${this.tools.length === 1 ? "" : "s"} (remote)`;
     this.log(`mcp ${this.config.name}: ${this.detail}`);
+    this.onListed(this.tools);
   }
 
   /** Calls a tool by its bare (unprefixed) name and returns the result as text. */
@@ -574,17 +581,25 @@ export class VirtualServer implements ToolServer {
 
 export class McpManager {
   private servers: ToolServer[];
+  private readonly ledger: CapabilityLedger | undefined;
 
   constructor(
     configs: readonly McpServerConfig[],
-    private readonly log: (line: string) => void = () => {}
+    private readonly log: (line: string) => void = () => {},
+    options: { ledger?: CapabilityLedger } = {}
   ) {
+    this.ledger = options.ledger;
     this.servers = configs.map(config => this.create(config));
   }
 
   /** stdio when a command is named, remote when a url is; the manager treats them alike. */
   private create(config: McpServerConfig): ToolServer {
-    return config.url !== undefined ? new RemoteMcpServer(config, this.log) : new McpServer(config, this.log);
+    // Each time a server reports its tools, the ledger hears about it: a line when the set
+    // changed from what was last recorded for that name, nothing when it did not (INV-813).
+    const onListed = (tools: readonly McpTool[]) => {
+      this.ledger?.record(config.name, tools, pinnedPackage(config.args));
+    };
+    return config.url !== undefined ? new RemoteMcpServer(config, this.log, onListed) : new McpServer(config, this.log, onListed);
   }
 
   /**
