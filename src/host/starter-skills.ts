@@ -289,6 +289,10 @@ where kind is one of: documents, images, video, audio, archives, code, other.
   },
   {
     slug: "morning-summary",
+    // The version shipped before 2026-10-08 suggested `schedule: daily 08:30`, which
+    // parseSchedule refuses (two fields, not five). A box that followed the example got a
+    // skill that never ran; naming the digest lets the fix reach it unasked (INV-966).
+    supersedes: ["d5c43334"],
     content: `---
 name: morning-summary
 description: Summarise yesterday's work directory changes into one morning note.
@@ -306,7 +310,9 @@ Write \`/home/box/work/notes/morning-<date>.md\` covering the last 24 hours:
 4. Reply with the note's path and the needs-a-decision list, nothing else.
 
 To run this every morning without being asked, add a schedule line to the
-frontmatter above, for example: \`schedule: daily 08:30\`. Scheduled runs are
+frontmatter above using five cron fields, for example \`schedule: "30 8 * * *"\`
+(08:30 every day; \`@daily\` also works). The hour is read on the host's clock
+unless you add \`timezone: Asia/Shanghai\` next to it. Scheduled runs are
 announced when they finish, and a missed window is skipped, never replayed.
 `,
   },
