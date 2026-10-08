@@ -343,7 +343,7 @@ in that thread, posted by Iris — not by "the bot", not by whoever's token the 
    right as speaking for an actor on a thread.
 
 2. **Put the token in this installation's vault**, never in a config file:
-   Settings → Vault, or `POST /api/vault` with `{id: "INVOLUTE_IRIS", value: "<token>",
+   Settings → Team → Secrets, or `POST /api/vault` with `{id: "INVOLUTE_IRIS", value: "<token>",
    grants: [{holder: "agent:<agentId>"}]}`.
 
 3. **Name the pairing** in `~/.agentbox/config.json`:

@@ -299,3 +299,13 @@ test("resource status distinguishes unavailable, dormant and retained desktops w
   assert.match(rendered, /&lt;unknown>/);
   assert.doesNotMatch(rendered, /data-pin-agent|MiB/);
 });
+
+test("the Secrets form can say where a secret may be typed, and the list says so back (INV-967)", () => {
+  // browser_fill_secret refuses a secret with no sites; before this the only way to add them was
+  // the admin API, and the refusal pointed at a tab that did not exist.
+  assert.match(APP_HTML, /<a href="#" class="tab" data-settab="team">Team<\/a>/);
+  assert.match(APP_HTML, /id="setsecsites"/);
+  assert.match(APP_HTML, /domains: sites/);
+  assert.match(APP_HTML, /not fillable in a browser \(no sites\)/);
+  assert.doesNotMatch(APP_HTML, /Settings → Vault/);
+});

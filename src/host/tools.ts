@@ -3778,7 +3778,7 @@ export async function dispatchTool(
       });
       if (value === undefined) {
         return {
-          text: outcomeLine("refused", `${secretId} is not a secret granted to you (or does not exist). Ask the person to grant it in Settings → Vault`),
+          text: outcomeLine("refused", `${secretId} is not a secret granted to you (or does not exist). Ask the person to add it under Settings → Team → Secrets, granted to you and with the sites it may be filled into`),
           isError: true,
         };
       }
