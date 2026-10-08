@@ -18,6 +18,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ALL_MCP_TOOLS } from "./scopes.ts";
 
 /** On disk next to this module: hub skills and expert personas. */
 export function catalogDataDir(): string {
@@ -114,6 +115,8 @@ export const DESK_TOOLS: readonly string[] = [
   "OtherThreads",
   "Tasks",
   "ClaimWork",
+  // The MCP services the box carries (INV-759); without it a connected Notion or Linear is invisible.
+  ALL_MCP_TOOLS,
 ];
 
 /** Desk plus the open web. For work that has to cite a page. */
@@ -199,7 +202,9 @@ export const CATALOG_EXPERTS: readonly CatalogExpert[] = [
     title: "审查",
     summary: "Reviews a change for correctness and security; writes the review, does not rewrite the repo.",
     description: persona("heng"),
-    tools: DESK_TOOLS,
+    // No MCP services, like the starter team's reviewer: a service's tool may write, and a review
+    // that can change what it reviews is no longer one.
+    tools: DESK_TOOLS.filter(tool => tool !== ALL_MCP_TOOLS),
     skills: ["code-review", "diagnose", "fullstack-dev"],
   },
   {

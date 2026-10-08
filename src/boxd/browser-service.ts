@@ -24,6 +24,7 @@
 import { actionOutcome } from "../protocol/index.ts";
 import type { ActionVerification, ComputerProgress, Outcome, WaitOutcome, ActExpectation, Effect, PageInfo } from "../protocol/index.ts";
 import { spawn } from "node:child_process";
+import { inputValueHash, sameSensitiveInput, type SensitiveInput, type SensitiveInputApproval } from "../protocol/sensitive-input.ts";
 import { realpathSync, statSync } from "node:fs";
 import { CdpError, CdpSession, closeTarget, listTargets, openTarget, type CdpTarget } from "./cdp.ts";
 import { sameEndpointBinding, type BrowserEndpointRegistry, type EndpointBinding } from "./browser-endpoints.ts";
@@ -191,7 +192,9 @@ export function staleReason(
  * list in the box cannot. Answered as HTTP 428 so the host routes it to the policy gate
  * and comes back with `confirmed` once a person has read what it is.
  */
-export class IrreversibleActionError extends CdpError {}
+export class IrreversibleActionError extends CdpError {
+  constructor(message: string, readonly sensitiveInput?: SensitiveInput) { super(message); }
+}
 
 /** What the box reads off a click target before deciding whether to ask. */
 export interface ClickTarget {
@@ -235,6 +238,114 @@ export function irreversibleReason(target: ClickTarget): string | undefined {
     if (amount !== null) {
       return `confirm with money on the page: click ${what} next to ${JSON.stringify(amount[0].trim())}`;
     }
+  }
+  return undefined;
+}
+
+/** What a field says about itself, read before anything is typed into it (INV-895). */
+export interface InputField {
+  /** Lower-case tag name. */
+  tag: string;
+  /** The input's `type`, lower-case; empty for a non-input. */
+  type: string;
+  /** The `autocomplete` attribute, lower-case, as the page wrote it. */
+  autocomplete: string;
+  /** `name` and `id`, joined. */
+  name: string;
+  /** What a person reads as the field's label: aria-label, a <label>, the placeholder. */
+  label: string;
+  /** The field sits in a form that also asks for a password: a sign-in, not a hand-over. */
+  signIn: boolean;
+}
+
+/** The kinds of personal data a person has to see go out, and how a field or a value says it is one. */
+const SENSITIVE_KINDS: { kind: string; autocomplete: RegExp; types?: string[]; words: RegExp; value?: (text: string) => boolean }[] = [
+  {
+    kind: "payment card",
+    autocomplete: /\bcc-(?:number|csc|exp|exp-month|exp-year|name|type)\b/,
+    words: /card.?number|credit.?card|debit.?card|\bcvv\b|\bcvc\b|security.?code|银行卡|信用卡|卡号|安全码/i,
+    value: text => {
+      const digits = text.replace(/[\s-]/g, "");
+      return /^\d{13,19}$/.test(digits) && luhn(digits);
+    },
+  },
+  {
+    kind: "identity number",
+    autocomplete: /(?!)/,
+    words: /\bssn\b|social.?security|passport|national.?id|id.?number|身份证|护照|证件号/i,
+    value: text => /^\d{17}[\dXx]$/.test(text.trim()) || /^\d{3}-\d{2}-\d{4}$/.test(text.trim()),
+  },
+  {
+    kind: "date of birth",
+    autocomplete: /\bbday(?:-day|-month|-year)?\b/,
+    words: /birth.?(?:date|day)|date.?of.?birth|\bdob\b|生日|出生/i,
+  },
+  {
+    kind: "postal address",
+    autocomplete: /\b(?:street-address|address-line[123]|address-level[1-4]|postal-code)\b/,
+    words: /street|(?<!e-?mail[\s_-]?)address|postcode|postal.?code|zip.?code|(?<!邮箱)地址|住址|邮编|邮政编码/i,
+  },
+  {
+    kind: "phone number",
+    autocomplete: /\btel(?:-national|-local|-country-code)?\b/,
+    types: ["tel"],
+    words: /phone|mobile|\btel\b|手机|电话/i,
+    value: text => /^(?:\+?86[\s-]?)?1[3-9]\d{9}$/.test(text.replace(/[\s-]/g, "")) || /^\+\d{8,15}$/.test(text.replace(/[\s()-]/g, "")),
+  },
+  {
+    kind: "email address",
+    autocomplete: /\bemail\b/,
+    types: ["email"],
+    words: /e-?mail|邮箱/i,
+    value: text => /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(text.trim()),
+  },
+];
+
+function luhn(digits: string): boolean {
+  let sum = 0;
+  for (let i = 0; i < digits.length; i += 1) {
+    let d = Number(digits[digits.length - 1 - i]);
+    if (i % 2 === 1) {
+      d *= 2;
+      if (d > 9) d -= 9;
+    }
+    sum += d;
+  }
+  return sum % 10 === 0;
+}
+
+/**
+ * Why typing this text into this field needs a person, or undefined when it does not (INV-895).
+ *
+ * Typing is sending: once a value is in a page's field, the page's own script can read it and
+ * post it, whether or not anything is ever submitted. So the person's contact details,
+ * address, identity or card number going into a third-party page is asked about *before* the
+ * keystrokes, the way a payment click is — and the finding names the kind of data and the
+ * site, because "may I continue?" is not something a person can say yes to. Decided here, from
+ * the field and the value, never from the model: a page can talk a model into anything.
+ *
+ * Not asked: a page on this machine, and the email or phone of a sign-in form (a form that also
+ * wants a password) — logging in is what a person asked for when they named the site, and a
+ * password there goes through `fill_secret`, bound to the site it belongs to.
+ */
+export function sensitiveInputReason(field: InputField, text: string, host: string): string | undefined {
+  const kind = sensitiveInputKind(field, text, host);
+  if (kind === undefined) return undefined;
+  const where = field.label.trim() !== "" ? ` into ${JSON.stringify(field.label.trim().slice(0, 60))}` : "";
+  return `send ${kind} to ${host}: type${where}`;
+}
+
+function sensitiveInputKind(field: InputField, text: string, host: string): string | undefined {
+  // A page on this machine, or one with no host: typing into it hands nothing to anybody.
+  if (text.trim() === "" || host === "" || loopback(host.replace(/:\d+$/, ""))) return undefined;
+  const words = `${field.name} ${field.label}`;
+  for (const entry of SENSITIVE_KINDS) {
+    const byField =
+      entry.autocomplete.test(field.autocomplete) || (entry.types?.includes(field.type) ?? false) || entry.words.test(words);
+    const byValue = entry.value?.(text) ?? false;
+    if (!byField && !byValue) continue;
+    if (field.signIn && (entry.kind === "email address" || entry.kind === "phone number")) return undefined;
+    return entry.kind;
   }
   return undefined;
 }
@@ -343,6 +454,73 @@ export function hostAllowed(host: string, domains: readonly string[]): boolean {
     }
     return target === pattern;
   });
+}
+
+/** What a field says about itself, read in the isolated world before a secret goes into it. */
+export interface SecretField {
+  /** Lower-case tag name. */
+  tag: string;
+  /** The input's `type`, lower-case; empty for anything that is not an input. */
+  type: string;
+  /** The owning form's `method` (`get`, `post`, `dialog`), or undefined when the field has no form. */
+  formMethod?: string;
+  /** Each submitter's `formmethod` override, lower-case: a button can turn a POST form into a GET. */
+  submitMethods?: readonly string[];
+  /**
+   * Every URL the owning form could submit to, resolved: the form's `action` and each submitter's
+   * `formaction`. Empty when the field has no form.
+   */
+  submitTargets: readonly string[];
+}
+
+/** A host on this machine: nothing between here and there to read cleartext, nobody to hand data to. */
+function loopback(hostname: string): boolean {
+  const bare = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  return bare === "localhost" || bare === "::1" || /^127\./.test(bare) || bare.endsWith(".localhost");
+}
+
+/** Input types a credential is typed into. `search` is not one: its value becomes a URL. */
+const SECRET_INPUT_TYPES = new Set(["password", "text", "email", "tel", "number"]);
+
+/**
+ * Why a secret may not go into this field, or undefined when it may.
+ *
+ * The page's host is checked separately (`hostAllowed`); this is the rest of the binding. A host
+ * match alone lets a secret be typed into a comment box on the right site and posted for anyone
+ * to read, or into a login form whose `action` sends it somewhere else. So: a single-line input
+ * of a credential type, in no form or a form that posts, and every place that form can submit
+ * to is a host the secret names. Script-driven submission (`fetch` from the page) is outside
+ * what a field can tell us; docs/49 lists it as a bypass surface.
+ */
+export function secretFieldRefusal(field: SecretField, domains: readonly string[]): string | undefined {
+  if (field.tag !== "input") {
+    return `That element is a ${field.tag || "non-field"}; a secret is filled only into a single-line input, never a text area or editable region whose content gets posted.`;
+  }
+  if (!SECRET_INPUT_TYPES.has(field.type)) {
+    return `That input is type="${field.type}"; a secret is filled only into a password, text, email, tel or number input.`;
+  }
+  for (const method of [field.formMethod, ...(field.submitMethods ?? [])]) {
+    if (method !== undefined && method !== "post") {
+      return `That field's form can submit with method="${method}", which would put the secret in a URL; it is not filled.`;
+    }
+  }
+  for (const target of field.submitTargets) {
+    let url: URL | undefined;
+    try {
+      url = new URL(target);
+    } catch {
+      url = undefined;
+    }
+    const host = url?.host ?? "";
+    if (!hostAllowed(host, domains)) {
+      return `That field's form submits to ${host || "an unreadable address"}, and the secret may only go to ${domains.join(", ")}.`;
+    }
+    // Cleartext is readable by everything between here and there. A page on this machine is exempt.
+    if (url !== undefined && url.protocol !== "https:" && !(url.protocol === "http:" && loopback(url.hostname))) {
+      return `That field's form submits over ${url.protocol.replace(":", "")}, not https, so the secret would travel readable; it is not filled.`;
+    }
+  }
+  return undefined;
 }
 
 /** How many tabs one desktop's agent may hold open. Beyond this, close one first. */
@@ -462,6 +640,52 @@ function frameSuffix(url: string): string {
   return `@f${hash.toString(36).slice(0, 4)}`;
 }
 
+const INPUT_DESCRIPTION = "function(){ const t = this; const tag = (t.tagName || '').toLowerCase();" +
+        " const attr = n => String((t.getAttribute && t.getAttribute(n)) || '');" +
+        " const label = attr('aria-label') || (t.labels && t.labels[0] ? t.labels[0].textContent : '') || attr('placeholder');" +
+        " const form = t.form || null;" +
+        " const signIn = !!(form && form.querySelector('input[type=password]'));" +
+        " let host = '', origin = ''; try { host = t.ownerDocument.location.host; origin = t.ownerDocument.location.origin; } catch (e) {}" +
+        " return { field: { tag, type: tag === 'input' ? String(t.type || '').toLowerCase() : '', autocomplete: attr('autocomplete').toLowerCase()," +
+        "   name: (attr('name') + ' ' + attr('id')).trim(), label: String(label || '').replace(/\\s+/g, ' ').trim(), signIn }, host, origin }; }";
+
+/** Runs in the isolated world: validate and write one bound node without yielding or focusing. */
+export const SCOPED_INPUT_SCRIPT = `function(value, replace, expected, expiresAt) {
+  const current = (${INPUT_DESCRIPTION}).call(this);
+  if (!this.isConnected || !Number.isFinite(expiresAt) || Date.now() >= expiresAt) return 'expired or detached';
+  if (JSON.stringify(current) !== JSON.stringify(expected)) return 'input destination or data scope changed';
+  const proto = this instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype :
+    this instanceof HTMLInputElement ? HTMLInputElement.prototype : undefined;
+  if (this.disabled || this.readOnly) return 'not editable';
+  if (proto) {
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+    if (!setter) return 'no native value setter';
+    const old = this.value;
+    const start = this.selectionStart ?? old.length;
+    const end = this.selectionEnd ?? old.length;
+    setter.call(this, replace ? value : old.slice(0, start) + value + old.slice(end));
+    try { const caret = replace ? value.length : start + value.length; this.setSelectionRange(caret, caret); } catch {}
+  } else if (this.isContentEditable) {
+    const selection = this.ownerDocument.getSelection();
+    if (replace) {
+      this.textContent = value;
+      if (selection && this.contains(selection.anchorNode)) {
+        const range = this.ownerDocument.createRange(); range.selectNodeContents(this); range.collapse(false);
+        selection.removeAllRanges(); selection.addRange(range);
+      }
+    } else {
+      if (selection && selection.rangeCount && this.contains(selection.anchorNode) && this.contains(selection.focusNode)) {
+        const range = selection.getRangeAt(0); range.deleteContents();
+        const text = this.ownerDocument.createTextNode(value); range.insertNode(text);
+        range.setStartAfter(text); range.collapse(true); selection.removeAllRanges(); selection.addRange(range);
+      } else this.appendChild(this.ownerDocument.createTextNode(value));
+    }
+  } else return 'not editable';
+  this.dispatchEvent(new Event('input', {bubbles:true}));
+  this.dispatchEvent(new Event('change', {bubbles:true}));
+  return 'ok';
+}`;
+
 /**
  * One live connection to one page on one desktop.
  *
@@ -502,8 +726,8 @@ class BrowserPage {
     const page = new BrowserPage(session, host, port, binding);
 
     session.on("Runtime.executionContextCreated", params => {
-      const context = params.context as { id: number; auxData?: { frameId?: string } };
-      if (context.auxData?.frameId !== undefined) {
+      const context = params.context as { id: number; auxData?: { frameId?: string; isDefault?: boolean } };
+      if (context.auxData?.frameId !== undefined && context.auxData.isDefault === true) {
         page.contexts.set(context.auxData.frameId, context.id);
       }
     });
@@ -921,11 +1145,31 @@ class BrowserPage {
     return this.resolve(ref);
   }
 
+  private async isolatedTarget(objectId: string, frameId: string, worldName: string): Promise<string> {
+    const node = (await this.session.send("DOM.describeNode", { objectId })) as { node?: { backendNodeId?: number } };
+    const backendNodeId = node.node?.backendNodeId;
+    if (backendNodeId === undefined) throw new CdpError("That element cannot be addressed for a secret fill; take a fresh snapshot.");
+    const world = (await this.session.send("Page.createIsolatedWorld", {
+      frameId,
+      worldName,
+    })) as { executionContextId?: number };
+    if (world.executionContextId === undefined) throw new CdpError("Could not open an isolated world on this page.");
+    const isolated = (await this.session.send("DOM.resolveNode", {
+      backendNodeId,
+      executionContextId: world.executionContextId,
+    })) as { object?: { objectId?: string } };
+    const target = isolated.object?.objectId;
+    if (target === undefined) throw new CdpError("That element is not reachable from the isolated world; take a fresh snapshot.");
+    return target;
+  }
+
   /**
    * Types a vault secret into a field without the page's own scripts seeing the write
    * (INV-402, browser-use-pi's fillSecret; docs/15 design C).
    *
-   * Main document only, and only on a host the secret names. The value is set in an
+   * Main document only, only on a host the secret names, and only into a field
+   * `secretFieldRefusal` accepts: a credential-type input whose form, if any, posts to a
+   * host the secret names too. The value is set in an
    * isolated world through the native setter — the page's monkey-patched `value` setter,
    * if it has one, never runs — then `input` and `change` are dispatched so the app takes
    * it, and the field is marked so the outline redacts it. Nothing here goes through
@@ -949,20 +1193,25 @@ class BrowserPage {
       );
     }
     if (this.mainFrameId === undefined) throw new CdpError("The page has no main frame to fill into yet; take a snapshot first.");
-    const node = (await this.session.send("DOM.describeNode", { objectId })) as { node?: { backendNodeId?: number } };
-    const backendNodeId = node.node?.backendNodeId;
-    if (backendNodeId === undefined) throw new CdpError("That element cannot be addressed for a secret fill; take a fresh snapshot.");
-    const world = (await this.session.send("Page.createIsolatedWorld", {
-      frameId: this.mainFrameId,
-      worldName: "lumenbox-secret",
-    })) as { executionContextId?: number };
-    if (world.executionContextId === undefined) throw new CdpError("Could not open an isolated world on this page.");
-    const isolated = (await this.session.send("DOM.resolveNode", {
-      backendNodeId,
-      executionContextId: world.executionContextId,
-    })) as { object?: { objectId?: string } };
-    const target = isolated.object?.objectId;
-    if (target === undefined) throw new CdpError("That element is not reachable from the isolated world; take a fresh snapshot.");
+    const target = await this.isolatedTarget(objectId, this.mainFrameId, "lumenbox-secret");
+    const described = (await this.session.send("Runtime.callFunctionOn", {
+      objectId: target,
+      returnByValue: true,
+      functionDeclaration:
+        "function(){ const tag = (this.tagName || '').toLowerCase();" +
+        " const type = tag === 'input' ? String(this.type || '').toLowerCase() : '';" +
+        " const form = this.form || null; if (!form) return { tag, type, submitTargets: [] };" +
+        " const targets = [form.action];" +
+        " const methods = [];" +
+        " for (const el of form.querySelectorAll('button, input[type=submit], input[type=image]')) {" +
+        "   if (el.hasAttribute('formaction')) targets.push(el.formAction);" +
+        "   if (el.hasAttribute('formmethod')) methods.push(String(el.formMethod || 'get').toLowerCase()); }" +
+        " return { tag, type, formMethod: String(form.method || 'get').toLowerCase(), submitMethods: methods, submitTargets: targets }; }",
+    })) as { result?: { value?: SecretField } };
+    const field = described.result?.value;
+    if (field === undefined) throw new CdpError("Could not read that field before filling it; take a fresh snapshot.");
+    const refusal = secretFieldRefusal(field, domains);
+    if (refusal !== undefined) throw new CdpError(refusal);
     const outcome = (await this.session.send("Runtime.callFunctionOn", {
       objectId: target,
       arguments: [{ value }],
@@ -977,6 +1226,22 @@ class BrowserPage {
     if (outcome.result?.value !== "ok") {
       throw new CdpError(`That element is ${outcome.result?.value ?? "not fillable"}: fill_secret needs an input or a textarea.`);
     }
+  }
+
+  /**
+   * The field and the host its document belongs to, for `sensitiveInputReason`. The field's own
+   * document, not the tab's: a card form in a payment provider's frame sends to that provider.
+   */
+  private async describeInput(objectId: string): Promise<{ field: InputField; host: string; origin: string }> {
+    const described = (await this.session.send("Runtime.callFunctionOn", {
+      objectId,
+      returnByValue: true,
+      functionDeclaration: INPUT_DESCRIPTION,
+    })) as { result?: { value?: { field: InputField; host: string; origin: string } } };
+    const value = described.result?.value;
+    // Unreadable is not a reason to type blind into what may be a card field.
+    if (value === undefined) throw new CdpError("Could not read that field before typing into it; take a fresh snapshot.");
+    return value;
   }
 
   /** The target's own words and the text around it, for `irreversibleReason`. */
@@ -1008,8 +1273,36 @@ class BrowserPage {
     await this.session.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, buttons: 0 });
   }
 
-  async type(ref: string, text: string, replace: boolean): Promise<void> {
+  async type(ref: string, text: string, replace: boolean, confirmed = false, inputApproval?: SensitiveInputApproval): Promise<void> {
     const objectId = await this.resolve(ref);
+    if (inputApproval !== undefined) {
+      const frame = this.frames.find(candidate => candidate.suffix === (ref.match(/@f[0-9a-z]+$/i)?.[0] ?? ""));
+      const frameId = [...this.contexts].find(([, contextId]) => contextId === frame?.contextId)?.[0];
+      if (frameId === undefined) throw new CdpError("The input frame changed; take a fresh snapshot.");
+      const target = await this.isolatedTarget(objectId, frameId, "lumenbox-input");
+      const described = await this.describeInput(target);
+      const category = sensitiveInputKind(described.field, text, described.host);
+      const scope = category === undefined ? undefined : { origin: described.origin, category, valueHash: inputValueHash(text) };
+      if (scope === undefined || !sameSensitiveInput(inputApproval, scope)) {
+        throw new IrreversibleActionError("IRREVERSIBLE: the input destination or data scope changed; ask again", scope);
+      }
+      const result = await this.session.send("Runtime.callFunctionOn", {
+        objectId: target, returnByValue: true, functionDeclaration: SCOPED_INPUT_SCRIPT,
+        arguments: [{ value: text }, { value: replace }, { value: described }, { value: inputApproval.expiresAt }],
+      }) as { result?: { value?: string } };
+      if (result.result?.value !== "ok") throw new IrreversibleActionError(`IRREVERSIBLE: ${result.result?.value ?? "input could not be checked"}; ask again`, scope);
+      return;
+    }
+
+    // Before a keystroke: typing is sending (INV-895). Same 428 as an irreversible click, and
+    // the same call comes back `confirmed` once a person has read what would go where.
+    if (!confirmed) {
+      const { field, host, origin } = await this.describeInput(objectId);
+      const reason = sensitiveInputReason(field, text, host);
+      const category = sensitiveInputKind(field, text, host);
+      const scope = category === undefined ? undefined : { origin, category, valueHash: inputValueHash(text) };
+      if (reason !== undefined) throw new IrreversibleActionError(`IRREVERSIBLE: ${reason}`, scope);
+    }
     await this.session.send("DOM.focus", { objectId }).catch(async () => {
       // Not everything focusable through a click is focusable through DOM.focus. Confirmed:
       // the click is to focus a field, not to press what the field is.
@@ -1658,6 +1951,7 @@ export class BrowserService {
       snapshot?: string;
       find?: { role?: string; name?: string; nth?: number };
       confirmed?: boolean;
+      inputApproval?: SensitiveInputApproval;
       expect?: ActExpectation;
     }
   ): Promise<BrowserResult> {
@@ -1693,7 +1987,7 @@ export class BrowserService {
         await page.hover(ref!);
         break;
       case "type":
-        await page.type(ref!, options.text ?? "", options.replace !== false);
+        await page.type(ref!, options.text ?? "", options.replace !== false, options.confirmed === true, options.inputApproval);
         break;
       case "key":
         await page.press(options.key ?? "Enter");

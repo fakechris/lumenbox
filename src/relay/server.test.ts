@@ -16,6 +16,7 @@ import {
   startRelay,
   UsageAccumulator,
   usageFromBody,
+  estimateUsage,
   type RelayClient,
   type RelayUsage,
   type Upstream,
@@ -394,4 +395,131 @@ test("with no ceiling the relay forwards exactly as before (INV-580 A3)", async 
     relay.close();
     provider.close();
   }
+});
+
+/** An upstream whose answer the test writes: what INV-814's gaps look like from the relay's side. */
+async function scriptedProvider(answer: (res: import("node:http").ServerResponse, path: string) => void): Promise<{ url: string; close: () => void }> {
+  const server: Server = createServer((req, res) => {
+    req.resume();
+    req.on("end", () => answer(res, req.url ?? ""));
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  return { url: `http://127.0.0.1:${(server.address() as { port: number }).port}`, close: () => server.close() };
+}
+
+const settleRelay = () => new Promise(resolve => setTimeout(resolve, 150));
+
+test("a success that reports no usage is recorded as an estimate, not as nothing (INV-814)", async () => {
+  const provider = await scriptedProvider(res => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ model: "claude-x", content: [{ type: "text", text: "hi" }] }));
+  });
+  const relay = await relayFor({ label: "quiet", baseUrl: provider.url, key: "K", auth: "x-api-key" }, { "box-token": { tenantId: "t1", boxId: "b1" } });
+  try {
+    const body = JSON.stringify({ model: "claude-x", max_tokens: 1500, messages: [{ role: "user", content: "x".repeat(3000) }] });
+    const response = await fetch(`${relay.url}/v1/messages`, { method: "POST", headers: { "x-api-key": "box-token", "content-type": "application/json" }, body });
+    assert.equal(response.status, 200);
+    await response.text();
+    await settleRelay();
+    assert.equal(relay.usage.length, 1);
+    const row = relay.usage[0]!;
+    assert.equal(row.estimated, true);
+    assert.equal(row.estimateReason, "no_usage_reported");
+    assert.equal(row.inputTokens, Math.ceil(Buffer.byteLength(body) / 3), "the request's size, conservatively");
+    assert.equal(row.outputTokens, 1500, "and the most it could have produced");
+    assert.equal(row.model, "claude-x");
+  } finally {
+    relay.close();
+    provider.close();
+  }
+});
+
+test("a stream cut before its end is recorded from what it reported plus an upper bound (INV-814)", async () => {
+  const provider = await scriptedProvider(res => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write('event: message_start\ndata: {"type":"message_start","message":{"model":"claude-x","usage":{"input_tokens":900,"output_tokens":1}}}\n\n');
+    setTimeout(() => res.socket?.destroy(), 50);
+  });
+  const relay = await relayFor({ label: "flaky", baseUrl: provider.url, key: "K", auth: "x-api-key" }, { "box-token": { tenantId: "t1", boxId: "b1" } });
+  try {
+    const response = await fetch(`${relay.url}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": "box-token", "content-type": "application/json" },
+      body: JSON.stringify({ model: "claude-x", max_tokens: 2000, stream: true, messages: [] }),
+    });
+    await response.text().catch(() => "");
+    await settleRelay();
+    assert.equal(relay.usage.length, 1, "a cut stream used to leave no row at all");
+    const row = relay.usage[0]!;
+    assert.equal(row.estimateReason, "stream_interrupted");
+    assert.equal(row.inputTokens, 900, "the input it had already reported is measured, not guessed");
+    assert.equal(row.outputTokens, 2000);
+  } finally {
+    relay.close();
+    provider.close();
+  }
+});
+
+test("a box that hangs up mid-stream is still measured in full: the relay reads the stream to its end (INV-814)", async () => {
+  const provider = await scriptedProvider(res => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write('event: message_start\ndata: {"type":"message_start","message":{"model":"claude-x","usage":{"input_tokens":900,"output_tokens":1}}}\n\n');
+    setTimeout(() => {
+      res.write('event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":400}}\n\n');
+      res.end('event: message_stop\ndata: {"type":"message_stop"}\n\n');
+    }, 200);
+  });
+  const relay = await relayFor({ label: "anthropic", baseUrl: provider.url, key: "K", auth: "x-api-key" }, { "box-token": { tenantId: "t1", boxId: "b1" } });
+  try {
+    const controller = new AbortController();
+    const response = await fetch(`${relay.url}/v1/messages`, {
+      method: "POST",
+      signal: controller.signal,
+      headers: { "x-api-key": "box-token", "content-type": "application/json" },
+      body: JSON.stringify({ model: "claude-x", max_tokens: 2000, stream: true, messages: [] }),
+    });
+    const reader = response.body!.getReader();
+    await reader.read();
+    controller.abort();
+    await new Promise(resolve => setTimeout(resolve, 400));
+    assert.equal(relay.usage.length, 1);
+    assert.equal(relay.usage[0]!.estimated, undefined, "measured, because the provider finished and said so");
+    assert.equal(relay.usage[0]!.outputTokens, 400);
+  } finally {
+    relay.close();
+    provider.close();
+  }
+});
+
+test("counting tokens reports no usage and is never estimated as a request (INV-814)", async () => {
+  const provider = await scriptedProvider(res => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ input_tokens: 42 }));
+  });
+  const relay = await relayFor({ label: "anthropic", baseUrl: provider.url, key: "K", auth: "x-api-key" }, { "box-token": { tenantId: "t1", boxId: "b1" } });
+  try {
+    const response = await fetch(`${relay.url}/v1/messages/count_tokens`, {
+      method: "POST",
+      headers: { "x-api-key": "box-token", "content-type": "application/json" },
+      body: JSON.stringify({ model: "claude-x", messages: [] }),
+    });
+    await response.text();
+    await settleRelay();
+    assert.equal(relay.usage.length, 0);
+  } finally {
+    relay.close();
+    provider.close();
+  }
+});
+
+test("an estimate without max_tokens assumes a high output, and prefers what a stream already reported", () => {
+  assert.equal(estimateUsage({ bytes: 30, head: '{"model":"m"}' }).outputTokens, 8192);
+  const seen = { model: "m", inputTokens: 10, outputTokens: 9000, cacheReadTokens: 0, cacheWriteTokens: 0 };
+  assert.deepEqual(estimateUsage({ bytes: 300, head: '{"max_tokens": 100}' }, seen), { ...seen, outputTokens: 9000 });
+});
+
+test("the ceiling counts an estimated row like any other", () => {
+  const ceilings = new SpendCeilings({ ceilingFor: () => ({ limitTokens: 1000 }) });
+  ceilings.record({ at: new Date().toISOString(), tenantId: "t1", boxId: "b1", provider: "p", model: "m", inputTokens: 600, outputTokens: 600, cacheReadTokens: 0, cacheWriteTokens: 0, estimated: true, estimateReason: "no_usage_reported" });
+  assert.equal(ceilings.check({ boxId: "b1", tenantId: "t1" }).ok, false);
 });

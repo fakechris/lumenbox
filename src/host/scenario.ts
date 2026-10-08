@@ -30,12 +30,13 @@ import { runTurn } from "./turn.ts";
 import { fakeModel } from "./testing/fake-model.ts";
 import type { BoxClient } from "../box/client.ts";
 import type { HistoryEntry } from "./compaction.ts";
-import { Rememberer, summariseExchange } from "./remember.ts";
+import { readsExternalContent, Rememberer, summariseExchange, turnReadOutside } from "./remember.ts";
 import { MemoryMirror } from "./memory-mirror.ts";
 import { memoryRef } from "./memory.ts";
 import type { ProviderProfile } from "./provider.ts";
 import type { PolicyGate } from "./policy.ts";
 import type { McpManager } from "./mcp.ts";
+import type { PendingWork } from "./pending-work.ts";
 import type { TaskStore } from "./tasks.ts";
 import type { GoalLoop, GoalTurnReport } from "./goal-loop.ts";
 import type { GoalGate } from "./goal-gate.ts";
@@ -57,6 +58,8 @@ export interface ScriptContext {
   opened: string;
   /** Which tools were offered this call, by name. */
   offered: string[];
+  /** Exact JSON bytes of params.tools in this scripted model request, not billed tokens. */
+  toolSchemaBytes: number;
   /** The actual model-visible context, for replay/compaction regressions. */
   messages: Anthropic.MessageParam[];
 }
@@ -290,7 +293,7 @@ function message(content: Anthropic.ContentBlock[], stop: Anthropic.Message["sto
 
 export interface EpisodeOptions {
   /** The agents the episode starts with. The first is the one the person talks to. */
-  team: { name: string; description?: string }[];
+  team: { name: string; description?: string; tools?: readonly string[] }[];
   /** What the person says, in order. Each is sent to the front agent and awaited. */
   says: string[];
   /** What the model does. Unused when `client` is given. */
@@ -306,6 +309,8 @@ export interface EpisodeOptions {
   policy?: PolicyGate;
   /** Connected external tools, as the MCP manager offers them; absent means none. */
   mcp?: McpManager;
+  /** The fork ledger (docs/32): what Delegate records and the Jobs tool settles (INV-908). */
+  pendingWork?: PendingWork;
   /** A task board for the turns (INV-769): the Tasks and Goal tools need one to act on. */
   tasks?: TaskStore;
   /**
@@ -375,6 +380,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       name: member.name,
       boxId: registry.box.id,
       ...(member.description !== undefined ? { description: member.description } : {}),
+      ...(member.tools !== undefined ? { tools: member.tools } : {}),
     });
   }
   const front = registry.list()[0]!;
@@ -402,7 +408,8 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
     const first = params.messages[0];
     const opened = typeof first?.content === "string" ? first.content : "";
     const offered = (params.tools ?? []).map(tool => ("name" in tool ? String(tool.name) : ""));
-    const reply = await options.script!({ agent, system, round, opened, offered, messages: params.messages });
+    const toolSchemaBytes = Buffer.byteLength(JSON.stringify(params.tools ?? []), "utf8");
+    const reply = await options.script!({ agent, system, round, opened, offered, toolSchemaBytes, messages: params.messages });
     if (reply === undefined) return message([{ type: "text", text: "" } as Anthropic.ContentBlock], "end_turn");
     if ("say" in reply) {
       observations.push({ at: clock++, agent, kind: "say", text: reply.say });
@@ -419,7 +426,12 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
   const client = options.client ?? scripted;
 
   const rememberer = options.memory === true
-    ? new Rememberer({ registry, client, provider: { label: "scenario", model: "scenario", maxTokens: 1024 } as ProviderProfile })
+    ? new Rememberer({
+        registry,
+        client,
+        provider: { label: "scenario", model: "scenario", maxTokens: 1024 } as ProviderProfile,
+        externalTool: tool => readsExternalContent(tool) || options.mcp?.pollutesMemory?.(tool) === true,
+      })
     : undefined;
   let goalLoop: GoalLoop | undefined;
   let goalGate: GoalGate | undefined;
@@ -444,6 +456,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       ...(options.policy !== undefined ? { policy: options.policy } : {}),
       ...(options.mcp !== undefined ? { mcp: options.mcp } : {}),
       ...(options.tasks !== undefined ? { tasks: options.tasks } : {}),
+      ...(options.pendingWork !== undefined ? { pendingWork: options.pendingWork } : {}),
       registry,
       bus,
       box,
@@ -484,7 +497,12 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
     const written = registry.readTranscript(front.id).slice(before) as { role?: string; kind?: string; text?: string; at?: string }[];
     const said = written.filter(entry => entry.role === "assistant" && entry.kind === undefined && entry.text).map(entry => entry.text!).join("\n\n");
     const last = written[written.length - 1];
-    if (said !== "") await rememberer.record({ agentId: front.id, text: summariseExchange(line, said), ref: memoryRef("main", new Date()), conversation: "main", ...(last?.at !== undefined ? { at: last.at } : {}) });
+    const external = turnReadOutside(
+      registry.readTranscript(front.id) as HistoryEntry[],
+      before,
+      tool => readsExternalContent(tool) || options.mcp?.pollutesMemory?.(tool) === true
+    );
+    if (said !== "") await rememberer.record({ agentId: front.id, text: summariseExchange(line, said), ref: memoryRef("main", new Date()), conversation: "main", ...(last?.at !== undefined ? { at: last.at } : {}), ...(external ? { external: true } : {}) });
     await rememberer.settle(front.id);
   };
   if (options.drive !== undefined) await options.drive({ bus, registry, frontId: front.id, files, say, ...(goalLoop !== undefined ? { goalLoop } : {}) });

@@ -97,8 +97,53 @@ export const FLUSH_TIMEOUT_MS = envNumber("AGENTBOX_FLUSH_TIMEOUT_MS", 30_000);
 const FLUSH_CHAR_CAP = 12_000;
 const FLUSH_EXCHANGE_CHARS = 4_000;
 
+/**
+ * Built-in tools whose results carry somebody else's words into the conversation (INV-894):
+ * a page, a search result, a shared document, a third-party API's answer. An exchange that
+ * called one is not extracted from. The agent's reply to it may repeat what the page said —
+ * "remember to send reports to x@example" — and extraction reads the reply as the agent's
+ * own understanding, so an instruction planted in a page would become a standing preference.
+ *
+ * Decided by which tools ran, never by the model saying so. Not here, knowingly: `computer`
+ * (a screenshot can show a page too, but the desktop is the agent's own and marking every
+ * desktop turn would leave desktop agents learning nothing) and `bash` (a `curl` is outside
+ * content, but so is nothing else it does, and the call cannot tell which). MCP tools are
+ * decided per server: see `McpManager.pollutesMemory`.
+ */
+const EXTERNAL_CONTENT_TOOLS = new Set(["WebFetch", "WebSearch", "ReadFeishuDoc", "connector_request"]);
+
+/** Whether a built-in tool's result is outside content (INV-894). Every `browser_*` tool returns page state. */
+export function readsExternalContent(tool: string): boolean {
+  return EXTERNAL_CONTENT_TOOLS.has(tool) || tool.startsWith("browser_");
+}
+
+/** Whether any of these transcript entries called a tool the predicate calls outside content. */
+export function touchesExternalContent(entries: readonly HistoryEntry[], external: (tool: string) => boolean): boolean {
+  return entries.some(
+    entry =>
+      "kind" in entry &&
+      entry.kind === "blocks" &&
+      entry.blocks.some(block => (block as { type?: string }).type === "tool_use" && external((block as { name: string }).name))
+  );
+}
+
+/**
+ * Whether the turn that wrote everything after `before` in this transcript read outside
+ * content — the after-turn check every caller of `record` makes. A transcript shorter than
+ * `before` was compacted during the turn, and what the turn called may be in the part the
+ * summary replaced: unknown is treated as outside.
+ */
+export function turnReadOutside(transcript: readonly HistoryEntry[], before: number, external: (tool: string) => boolean): boolean {
+  return transcript.length < before || touchesExternalContent(transcript.slice(before), external);
+}
+
 export interface Exchange {
   agentId: string;
+  /**
+   * The exchange called a tool that reads outside content (INV-894). It is not extracted
+   * from; see `readsExternalContent`.
+   */
+  external?: boolean;
   /** What arrived, and what the agent said back. Trimmed: the extractor needs the gist, not the log. */
   text: string;
   /** Who the exchange was with, when a person drove it. Carried so the note-taking is billed. */
@@ -140,6 +185,12 @@ export interface RememberDeps {
   log?: (line: string) => void;
   /** How long a pre-compaction flush may run; defaults to `FLUSH_TIMEOUT_MS`. A test sets it short. */
   flushTimeoutMs?: number;
+  /**
+   * Whether a tool's result is outside content (INV-894), for the compaction flush, which
+   * reads tool calls from the transcript itself. Defaults to `readsExternalContent`; the
+   * orchestrator adds the MCP servers that pollute memory.
+   */
+  externalTool?: (tool: string) => boolean;
 }
 
 /**
@@ -253,6 +304,10 @@ export class Rememberer {
     if (EXTRACT_EVERY <= 0) return;
     // Already covered by a compaction flush: batching it again would extract it twice.
     if (this.behindWatermark(exchange.agentId, exchange.conversation, exchange.at)) return;
+    if (exchange.external === true) {
+      this.log(`not extracting from an exchange that read outside content (${exchange.ref ?? exchange.conversation ?? "unplaced"})`);
+      return;
+    }
     const batch = this.pending.get(exchange.agentId) ?? [];
     batch.push({
       text: exchange.text,
@@ -299,7 +354,7 @@ export class Rememberer {
       const at = (entry as { at?: string }).at;
       return at === undefined || watermark === undefined || at > watermark;
     });
-    const exchanges = exchangesOf(fresh, conversation);
+    const exchanges = exchangesOf(fresh, conversation, this.deps.externalTool ?? readsExternalContent);
     if (exchanges.length === 0) return;
     const skipped = entries.length - fresh.length;
     this.log(
@@ -588,11 +643,15 @@ function watermarkKey(agentId: string, conversation: string): string {
  */
 export function exchangesOf(
   entries: readonly HistoryEntry[],
-  conversation: string
+  conversation: string,
+  external: (tool: string) => boolean = readsExternalContent
 ): { text: string; ref: string; at: string }[] {
-  const groups: { lines: string[]; first: string; last: string }[] = [];
+  const groups: { lines: string[]; first: string; last: string; external: boolean }[] = [];
   for (const entry of entries) {
     const at = (entry as { at?: string }).at ?? "";
+    // An exchange that read outside content is dropped whole (INV-894); the tool call
+    // itself is not a line, so it is noted on the exchange it belongs to.
+    const readsOutside = touchesExternalContent([entry], external);
     let line: string | undefined;
     if (!("kind" in entry)) {
       line = `${entry.role === "user" ? "They said" : "You replied"}: ${entry.text.trim()}`;
@@ -604,17 +663,23 @@ export function exchangesOf(
         .join("\n");
       if (said !== "") line = `You replied: ${said}`;
     }
+    if (readsOutside) {
+      const current = groups[groups.length - 1];
+      if (current !== undefined) current.external = true;
+      else groups.push({ lines: [], first: at, last: at, external: true });
+    }
     if (line === undefined || line.trim() === "") continue;
     const opensExchange = !("kind" in entry) && entry.role === "user";
     const current = groups[groups.length - 1];
-    if (opensExchange || current === undefined) groups.push({ lines: [line], first: at, last: at });
+    if (opensExchange || current === undefined) groups.push({ lines: [line], first: at, last: at, external: readsOutside });
     else {
       current.lines.push(line);
       if (at > current.last) current.last = at;
     }
   }
-  const share = Math.max(400, Math.min(FLUSH_EXCHANGE_CHARS, Math.floor(FLUSH_CHAR_CAP / Math.max(1, groups.length))));
-  return groups.map(group => {
+  const kept = groups.filter(group => !group.external && group.lines.length > 0);
+  const share = Math.max(400, Math.min(FLUSH_EXCHANGE_CHARS, Math.floor(FLUSH_CHAR_CAP / Math.max(1, kept.length))));
+  return kept.map(group => {
     const joined = group.lines.join("\n\n");
     const text = joined.length > share ? `${joined.slice(0, share)}…` : joined;
     const when = group.first === "" ? new Date() : new Date(group.first);

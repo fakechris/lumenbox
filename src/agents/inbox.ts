@@ -12,11 +12,10 @@
  * is the one where nothing has executed yet: no tool has run, no money has been spent, nothing has
  * been written. Replaying it cannot duplicate a side effect because there are none to duplicate.
  *
- * The other choice — marking a message done when its *turn* completes — would replay half-finished
- * turns, and a turn that deployed something before dying would deploy it twice. Resuming that turn
- * properly needs per-step checkpoints, which do not exist yet; until they do, the honest boundary is
- * "started". A turn interrupted mid-flight leaves its prompt in the transcript, so the work is not
- * invisible, but it is not silently re-run either.
+ * The orchestrator defers `start` until the turn ledger has taken custody, carrying the
+ * admitted message ids. Startup reconciles that handoff before either ledger replays.
+ * Standalone bus runners without a recovery ledger keep the original start-before-run boundary.
+ * Appends are process-crash checkpoints, not a power-loss/fsync guarantee.
  */
 
 import { envNumber } from "../config.ts";
@@ -122,7 +121,7 @@ export class Inbox<T> {
       at: now.toISOString(),
       message,
     };
-    if (!this.append(record)) return undefined;
+    if (!this.append(record)) throw new Error("Cannot persist inbox admission");
     this.outstanding += 1;
     this.pendingSeqs.add(seq);
     return seq;
@@ -132,7 +131,9 @@ export class Inbox<T> {
   start(seqs: readonly (number | undefined)[]): void {
     for (const seq of seqs) {
       if (seq === undefined) continue;
-      if (this.append({ seq, event: "started" }) && this.pendingSeqs.delete(seq)) {
+      if (!this.pendingSeqs.has(seq)) continue;
+      if (!this.append({ seq, event: "started" })) throw new Error("Cannot persist inbox start");
+      if (this.pendingSeqs.delete(seq)) {
         this.outstanding = Math.max(0, this.outstanding - 1);
       }
     }
@@ -174,9 +175,8 @@ export class Inbox<T> {
       this.lines += 1;
       return true;
     } catch (error) {
-      // Never fail an enqueue over bookkeeping. A message that could not be recorded is still
-      // delivered in this process; what is lost is its ability to survive a restart, which is the
-      // behaviour every message had before this file existed.
+      // Admission and start callers fail closed; a drop can report false to its sweep.
+      // Logging a failed write must never be mistaken for durable acknowledgement.
       const detail = error instanceof Error ? error.message : String(error);
       this.onWarn(`inbox: cannot write ${this.path} (${detail})`);
       return false;

@@ -24,6 +24,8 @@
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import type { CapabilityLedger } from "./mcp-capabilities.ts";
+import { pinnedPackage } from "./mcp-connectors.ts";
 
 /** A description's first sentence, clamped — enough to choose by, not to call by. */
 function firstSentence(text: string): string {
@@ -52,6 +54,33 @@ export interface McpServerConfig {
   headers?: Record<string, string>;
   /** Host-level (INV-439): reviewed like a host command; writes need the gate's consent. */
   host?: boolean;
+  /**
+   * Bare names of this server's tools that only the harness may call (INV-861): callbacks a
+   * server registers for the harness to invoke — resume after a person answered, recover a
+   * job after a restart — which the model must neither see nor be able to call.
+   */
+  hostOnlyTools?: string[];
+  /**
+   * Whether this server's results are outside content that must not become memory (INV-894).
+   * Absent means yes: a server is somebody else's words until the operator says otherwise —
+   * `false` for one they maintain and trust, a local knowledge base, their own ticket system.
+   */
+  pollutesMemory?: boolean;
+}
+
+/**
+ * What a tool result may ask the harness to do (INV-861). A closed set: anything else is
+ * logged and dropped, never interpreted. See `effects.ts` for what each one does.
+ */
+export type ToolEffect =
+  | { type: "pause_turn"; reason: string; resumeTool: string; resumeInput?: Record<string, unknown> }
+  | { type: "background_job"; jobId: string; resumeTool: string; brief?: string }
+  | { type: "reminder"; text: string; at: string };
+
+/** A tool's result with the effects it asked for, when its server can express them. */
+export interface ToolCallResult {
+  text: string;
+  effects?: ToolEffect[];
 }
 
 export interface McpTool {
@@ -110,7 +139,9 @@ class McpServer {
 
   constructor(
     readonly config: McpServerConfig,
-    private readonly log: (line: string) => void
+    private readonly log: (line: string) => void,
+    /** Told the tool list each time it is learned, so the manager can keep the ledger (INV-813). */
+    private readonly onListed: (tools: readonly McpTool[]) => void = () => {}
   ) {}
 
   status(): McpServerStatus {
@@ -186,6 +217,7 @@ class McpServer {
       }));
     this.detail = `${this.tools.length} tool${this.tools.length === 1 ? "" : "s"}`;
     this.log(`mcp ${this.config.name}: ${this.detail}`);
+    this.onListed(this.tools);
     if (this.tools.length > TOOL_BUDGET_WARNING) {
       this.log(
         `mcp ${this.config.name}: ${this.tools.length} tools is a lot — every one of them ` +
@@ -332,7 +364,8 @@ export class RemoteMcpServer implements ToolServer {
 
   constructor(
     options: McpServerConfig,
-    private readonly log: (line: string) => void
+    private readonly log: (line: string) => void,
+    private readonly onListed: (tools: readonly McpTool[]) => void = () => {}
   ) {
     if (options.url === undefined) throw new Error(`${options.name}: a remote server needs a url`);
     this.config = options;
@@ -379,6 +412,7 @@ export class RemoteMcpServer implements ToolServer {
       }));
     this.detail = `${this.tools.length} tool${this.tools.length === 1 ? "" : "s"} (remote)`;
     this.log(`mcp ${this.config.name}: ${this.detail}`);
+    this.onListed(this.tools);
   }
 
   /** Calls a tool by its bare (unprefixed) name and returns the result as text. */
@@ -486,26 +520,33 @@ export class RemoteMcpServer implements ToolServer {
  * MCP face as a real server's, and nothing downstream has to know the difference.
  */
 export interface ToolServer {
-  readonly config: { name: string };
+  readonly config: { name: string; hostOnlyTools?: string[] };
   status(): McpServerStatus;
   listTools(): McpTool[];
   ensureStarted(): Promise<void>;
   call(bareName: string, input: unknown): Promise<string>;
+  /** The result with its effects; servers that cannot express effects omit this. */
+  callDetailed?(bareName: string, input: unknown): Promise<ToolCallResult>;
   stop(): void;
+}
+
+/** A virtual server's entry: a tool with a run, optionally host-only, optionally with effects. */
+export interface VirtualToolEntry {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  hostOnly?: boolean;
+  run: (input: Record<string, unknown>) => Promise<string | ToolCallResult>;
 }
 
 /** An in-process server: tools with a `run` each, no child, nothing to start or stop. */
 export class VirtualServer implements ToolServer {
-  readonly config: { name: string };
-  private readonly runs = new Map<string, (input: Record<string, unknown>) => Promise<string>>();
+  readonly config: { name: string; hostOnlyTools: string[] };
+  private readonly runs = new Map<string, (input: Record<string, unknown>) => Promise<string | ToolCallResult>>();
   private readonly tools: McpTool[] = [];
 
-  constructor(
-    name: string,
-    entries: readonly { name: string; description: string; inputSchema: Record<string, unknown>; run: (input: Record<string, unknown>) => Promise<string> }[],
-    private readonly detail = "in-process"
-  ) {
-    this.config = { name };
+  constructor(name: string, entries: readonly VirtualToolEntry[], private readonly detail = "in-process") {
+    this.config = { name, hostOnlyTools: entries.filter(entry => entry.hostOnly === true).map(entry => entry.name) };
     for (const entry of entries) {
       this.tools.push({ name: `${name}${MCP_SEPARATOR}${entry.name}`, description: entry.description, inputSchema: entry.inputSchema });
       this.runs.set(entry.name, entry.run);
@@ -525,9 +566,14 @@ export class VirtualServer implements ToolServer {
   }
 
   async call(bareName: string, input: unknown): Promise<string> {
+    return (await this.callDetailed(bareName, input)).text;
+  }
+
+  async callDetailed(bareName: string, input: unknown): Promise<ToolCallResult> {
     const run = this.runs.get(bareName);
     if (run === undefined) throw new Error(`${this.config.name} has no tool named ${bareName}.`);
-    return run((input ?? {}) as Record<string, unknown>);
+    const result = await run((input ?? {}) as Record<string, unknown>);
+    return typeof result === "string" ? { text: result } : result;
   }
 
   stop(): void {}
@@ -535,17 +581,25 @@ export class VirtualServer implements ToolServer {
 
 export class McpManager {
   private servers: ToolServer[];
+  private readonly ledger: CapabilityLedger | undefined;
 
   constructor(
     configs: readonly McpServerConfig[],
-    private readonly log: (line: string) => void = () => {}
+    private readonly log: (line: string) => void = () => {},
+    options: { ledger?: CapabilityLedger } = {}
   ) {
+    this.ledger = options.ledger;
     this.servers = configs.map(config => this.create(config));
   }
 
   /** stdio when a command is named, remote when a url is; the manager treats them alike. */
   private create(config: McpServerConfig): ToolServer {
-    return config.url !== undefined ? new RemoteMcpServer(config, this.log) : new McpServer(config, this.log);
+    // Each time a server reports its tools, the ledger hears about it: a line when the set
+    // changed from what was last recorded for that name, nothing when it did not (INV-813).
+    const onListed = (tools: readonly McpTool[]) => {
+      this.ledger?.record(config.name, tools, pinnedPackage(config.args));
+    };
+    return config.url !== undefined ? new RemoteMcpServer(config, this.log, onListed) : new McpServer(config, this.log, onListed);
   }
 
   /**
@@ -632,9 +686,21 @@ export class McpManager {
     return true;
   }
 
-  /** Every tool from every started server, prefixed by server name. */
+  /**
+   * Every tool a model may see, from every started server, prefixed by server name. Host-only
+   * tools (INV-861) are left out here, so every list built from this one — the prompt, the
+   * lookup pair, a box's bundle, the MCP face — leaves them out too.
+   */
   tools(): McpTool[] {
-    return this.servers.flatMap(server => server.listTools());
+    return this.servers.flatMap(server => server.listTools().filter(tool => !this.isHostOnly(tool.name)));
+  }
+
+  /** Whether a prefixed tool name is one only the harness may call (INV-861). */
+  isHostOnly(name: string): boolean {
+    const server = this.serverFor(name);
+    if (server === undefined) return false;
+    const bare = name.slice(name.indexOf(MCP_SEPARATOR) + MCP_SEPARATOR.length);
+    return server.config.hostOnlyTools?.includes(bare) === true;
   }
 
   statuses(): McpServerStatus[] {
@@ -698,6 +764,15 @@ export class McpManager {
     return this.serverFor(name) !== undefined;
   }
 
+  /**
+   * Whether a tool's results must keep its exchange out of memory extraction (INV-894): any
+   * tool of these servers, unless the operator set `pollutesMemory: false` on its server.
+   */
+  pollutesMemory(name: string): boolean {
+    const server = this.serverFor(name);
+    return server !== undefined && (server.config as { pollutesMemory?: boolean }).pollutesMemory !== false;
+  }
+
   /** Whether a tool belongs to a server the operator marked host-level (INV-439). */
   isHostTool(name: string): boolean {
     return (this.serverFor(name)?.config as { host?: boolean } | undefined)?.host === true;
@@ -727,9 +802,26 @@ export class McpManager {
 
   /** Runs a prefixed tool. Throws with a message worth relaying to the model. */
   async call(name: string, input: unknown): Promise<string> {
+    return (await this.callDetailed(name, input)).text;
+  }
+
+  /** Runs a prefixed tool for a model, with the effects its result asks for. Host-only tools are refused. */
+  async callDetailed(name: string, input: unknown): Promise<ToolCallResult> {
+    if (this.isHostOnly(name)) throw new Error(`${name} is called by the harness, not by agents.`);
+    return this.run(name, input);
+  }
+
+  /** Runs a prefixed tool on the harness's behalf — the only way a host-only tool runs (INV-861). */
+  async callFromHost(name: string, input: unknown): Promise<ToolCallResult> {
+    return this.run(name, input);
+  }
+
+  private async run(name: string, input: unknown): Promise<ToolCallResult> {
     const server = this.serverFor(name);
     if (server === undefined) throw new Error(`No MCP server offers ${name}.`);
-    return server.call(name.slice(name.indexOf(MCP_SEPARATOR) + MCP_SEPARATOR.length), input);
+    const bare = name.slice(name.indexOf(MCP_SEPARATOR) + MCP_SEPARATOR.length);
+    if (server.callDetailed !== undefined) return server.callDetailed(bare, input);
+    return { text: await server.call(bare, input) };
   }
 
   stop(): void {

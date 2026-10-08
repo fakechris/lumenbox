@@ -447,6 +447,28 @@ export function effectiveProviderFor(
   return profile;
 }
 
+/**
+ * Whether this installation has a way to answer its first message.
+ *
+ * The welcome note promises "a model provider with a key" as one of the two things to set
+ * up, and the setup card grades that promise — so "no provider saved and no credential
+ * anywhere in the environment" is the one state it has to call out (INV-857). A saved
+ * provider alone counts: the key may arrive on the next save or restart, and nagging
+ * about it again buys nothing. Pure in the environment, so a test can say so.
+ */
+export function providerConfigured(
+  savedProvider: string | undefined,
+  presets: readonly { keyEnv: string }[],
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (savedProvider !== undefined && savedProvider.trim() !== "") return true;
+  return presets.some(
+    preset =>
+      env[preset.keyEnv] !== undefined ||
+      (preset.keyEnv === "ANTHROPIC_API_KEY" && env.ANTHROPIC_AUTH_TOKEN !== undefined)
+  );
+}
+
 export class MissingCredentialError extends Error {
   constructor(profile: ProviderProfile) {
     super(
@@ -489,12 +511,17 @@ function clientFor(
     throw new MissingCredentialError(profile);
   }
 
+  // The host's transient policy is the only retry layer (INV-811). The SDK retries twice by default,
+  // unseen: no `retrying` event, no ledger line, no Retry-After floor, and multiplied by the host's own
+  // attempts. A caller that wants SDK retries says so, with the reason.
+  const maxRetries = options?.maxRetries ?? 0;
   if (profile.auth === "bearer") {
     return new Anthropic({
       baseURL: profile.baseUrl,
       authToken: key,
       apiKey: null,
       ...options,
+      maxRetries,
     });
   }
 
@@ -502,6 +529,7 @@ function clientFor(
     baseURL: profile.baseUrl,
     ...(key ? { apiKey: key } : {}),
     ...options,
+    maxRetries,
   });
 }
 

@@ -68,6 +68,21 @@ test("the policy gate is asked from the few places that act, and nowhere else", 
   assert.deepEqual(offenders, [], "a new caller of policy.check: add it here on purpose, with the reason");
 });
 
+test("every Anthropic client says how many times the SDK may retry, so the host stays the only retry layer (INV-811)", () => {
+  // The SDK's default is two hidden retries per call, multiplied by the host's own attempts. Each
+  // constructor call must carry maxRetries; finding one without it means a client that retries
+  // where nobody can see it.
+  const offenders: string[] = [];
+  for (const file of sources()) {
+    for (const match of file.text.matchAll(/new Anthropic\(/g)) {
+      const call = file.text.slice(match.index, match.index + 600);
+      const end = call.indexOf("});");
+      if (!(end >= 0 ? call.slice(0, end) : call).includes("maxRetries")) offenders.push(`${file.path}:${file.text.slice(0, match.index).split("\n").length}`);
+    }
+  }
+  assert.deepEqual(offenders, [], "a new Anthropic client without an explicit maxRetries");
+});
+
 test("an engine skips permissions only where presets.ts decides so", () => {
   const offenders = sources()
     .filter(file => file.text.includes("--dangerously-skip-permissions") && file.path !== "host/presets.ts")

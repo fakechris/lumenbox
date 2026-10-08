@@ -50,6 +50,15 @@ test("unknown keys are ignored, so a newer config still loads", () => {
   assert.deepEqual(warnings, []);
 });
 
+test("connectorVersions pins a door to an exact version, and a range is refused with a word (INV-813)", () => {
+  const { warnings } = withHome('{"connectorVersions": {"notion": "2.6.0", "slack": "^1.3.0", "figma": 7}}');
+  const config = loadConfig(line => warnings.push(line));
+  assert.deepEqual(config.connectorVersions, { notion: "2.6.0" });
+  assert.equal(warnings.length, 2);
+  assert.match(warnings[0]!, /connectorVersions\.slack must be an exact version/);
+  assert.match(warnings[1]!, /connectorVersions\.figma must be an exact version/);
+});
+
 test("broken JSON falls back to the defaults and says so", () => {
   const { warnings } = withHome('{"activityLimit": 400,}');
   assert.deepEqual(loadConfig(line => warnings.push(line)), DEFAULT_CONFIG);
@@ -246,8 +255,10 @@ test("startupItem can be loaded and saved", () => {
   saveConfig({ startupItem: true });
   assert.equal(loadConfig().startupItem, true);
 
+  // Off is kept, not deleted: the desktop shell leaves an absent key alone, so a deleted
+  // false would never remove the login item from the OS.
   saveConfig({ startupItem: false });
-  assert.equal(loadConfig().startupItem, undefined);
+  assert.equal(loadConfig().startupItem, false);
 
   saveConfig({ startupItem: true });
   assert.equal(loadConfig().startupItem, true);
@@ -256,3 +267,53 @@ test("startupItem can be loaded and saved", () => {
   assert.equal(loadConfig().startupItem, undefined);
 });
 
+
+test("boxImage loads from the file and saveConfig sets and clears it (INV-856)", () => {
+  // The mirror entrance for a Finder-launched app, which has no shell to export
+  // AGENTBOX_IMAGE into: the field rides config.json like provider and baseUrl do.
+  const { warnings } = withHome('{"activityLimit": 10, "boxImage": "mirror.example.com/lumenbox:0.3.0"}');
+  const config = loadConfig(line => warnings.push(line));
+  assert.equal(config.boxImage, "mirror.example.com/lumenbox:0.3.0");
+
+  withHome('{"activityLimit": 10, "boxImage": "mirror.example.com/lumenbox:0.3.0"}');
+  saveConfig({ boxImage: "mirror2.example.com/lumenbox:0.4.0" });
+  assert.equal(loadConfig(() => {}).boxImage, "mirror2.example.com/lumenbox:0.4.0", "a save replaces");
+
+  saveConfig({ boxImage: null });
+  assert.equal(loadConfig(() => {}).boxImage, undefined, "null clears back to the release default");
+
+  const raw = JSON.parse(readFileSync(configPath(), "utf8"));
+  assert.equal("boxImage" in raw, false, "cleared means gone from the file, not empty");
+});
+
+test("an MCP server may be marked as not polluting memory; anything else is left out (INV-894)", () => {
+  const { warnings } = withHome('{"mcpServers": {"kb": {"command": "kb", "pollutesMemory": false}, "web": {"command": "web", "pollutesMemory": "no"}}}');
+  const servers = loadConfig(line => warnings.push(line)).mcpServers;
+  assert.equal(servers?.kb?.pollutesMemory, false);
+  assert.equal(servers?.web?.pollutesMemory, undefined, "only an explicit false is read; the default is that it pollutes");
+});
+
+
+test("personal allocation limits round-trip and null removes the last override", () => {
+  withHome();
+  saveConfig({ personalBoxQuota: 0, personBoxQuotas: { ada: 2, bob: 0 } });
+  assert.equal(loadConfig().personalBoxQuota, 0);
+  assert.equal(loadConfig().personBoxQuotas?.ada, 2);
+  saveConfig({ personBoxQuotas: { ada: null } });
+  assert.equal(loadConfig().personBoxQuotas?.ada, undefined);
+  assert.equal(loadConfig().personBoxQuotas?.bob, 0);
+  saveConfig({ personalBoxQuota: null, personBoxQuotas: { bob: null } });
+  assert.equal(loadConfig().personalBoxQuota, undefined);
+  assert.equal(loadConfig().personBoxQuotas, undefined);
+});
+
+test("malformed quota policy cannot silently become unlimited", () => {
+  withHome('{"personalBoxQuota":-1,"personBoxQuotas":{"ada":"2"}}');
+  const warnings: string[] = [];
+  const config = loadConfig(line => warnings.push(line));
+  assert.equal(config.personalBoxQuota, 0);
+  assert.equal(config.personBoxQuotas?.ada, 0);
+  assert.equal(warnings.length, 2);
+  withHome('{"personBoxQuotas":[]}');
+  assert.throws(() => loadConfig(), /repair it before allocating/);
+});

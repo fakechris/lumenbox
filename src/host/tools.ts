@@ -1,4 +1,5 @@
 import { isComputerWrite } from "../cua/execution.ts";
+import { SENSITIVE_INPUT_TTL_MS, inputValueHash, parseSensitiveInput } from "../protocol/sensitive-input.ts";
 /**
  * Tool definitions and dispatch.
  *
@@ -24,7 +25,7 @@ import { appendLearning, hostOf, learningsDir, readLearnings, renderLearnings } 
 import type { ScopeStore } from "./scopes.ts";
 import type { BundleStore } from "./bundles.ts";
 import { oauthProvider, scrubToken, tokenHeaders, type OAuthGate, type OAuthProvider } from "./oauth.ts";
-import type { McpManager } from "./mcp.ts";
+import type { McpManager, ToolEffect } from "./mcp.ts";
 import { delegateEnv, delegateModel, PRESETS, presetNamed, quoteForShell, installCommand, withEnginesPath } from "./presets.ts";
 import { namesControlSurface } from "./control-surfaces.ts";
 import { catalogMenu, intersectTools, profilesFor } from "./catalog.ts";
@@ -40,6 +41,8 @@ import { guardShellCommand } from "./ui-automation-guard.ts";
 import { dedupe, dedupeKey, describeFrom, memoryRef, validateRecord } from "./memory.ts";
 import { type Claims, heldElsewhere } from "./claims.ts";
 import { forkTag, type CommitHow, type PendingWork } from "./pending-work.ts";
+import { engineNamed, parseEngineReport, readLogEnd, settleDelegate } from "./engine-report.ts";
+import { type Orchestrations, parsePlan } from "./orchestrate.ts";
 import { MCP_FACE_DIR, MCP_FACE_TOKEN_VARIABLE, type McpFace } from "./mcp-face.ts";
 import type { ModelRelay } from "./model-relay.ts";
 import type { DelegateSessions } from "./delegate-sessions.ts";
@@ -186,6 +189,8 @@ export interface ToolContext {
    * screenshots cannot cross.
    */
   displayIndex?: number;
+  /** Start this agent's desktop only for an actual GUI request. */
+  ensureDesktop?: () => Promise<void>;
   /**
    * This agent's claim on its own desktop, presented on every box call.
    *
@@ -258,6 +263,8 @@ export interface ToolContext {
   workId?: string;
   /** The fork ledger (docs/32). Absent means forks are not recorded — tests, or nobody. */
   pendingWork?: PendingWork;
+  /** Runs fan-out plans (INV-862). Absent means the Orchestrate tool answers that it is unavailable. */
+  orchestrations?: Orchestrations;
   /** The MCP face (docs/33): routes a delegated engine may call the host's MCP tools through. */
   mcpFace?: McpFace;
   /** The model relay: a delegated engine's model traffic through the host, no key in the box. */
@@ -330,6 +337,12 @@ export interface ToolOutcome {
    * turn on the person's answer rather than answering the call `outcome_unknown`.
    */
   approval?: { id: string };
+  /**
+   * What the result asked the harness to do (INV-861), and which prefixed tool asked — the
+   * turn applies them through effects.ts after the call, never inside a fork.
+   */
+  effects?: ToolEffect[];
+  effectsFrom?: string;
 }
 
 /**
@@ -408,6 +421,8 @@ export const FORK_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
   "PackTemplate",
   "Delegate",
   "Fork",
+  // A plan's items are forks; a fork that could submit a plan would be a fan-out with no bottom.
+  "Orchestrate",
   "AskUser",
   "AskSecret",
   "HandOverDesktop",
@@ -855,6 +870,7 @@ export function buildTools(
           type: "object",
           properties: {
             command: { type: "string", description: "The command to run." },
+            ...(canUseDesktop ? { desktop: { type: "boolean", description: "Set true when launching a GUI application. Starts your desktop first. Ordinary shell and file work need no desktop." } } : {}),
             cwd: {
               type: "string",
               description: "Directory to run in. Defaults to the box home directory.",
@@ -912,6 +928,30 @@ export function buildTools(
             },
           },
           required: ["briefs"],
+        },
+      },
+      {
+        name: "Orchestrate",
+        description:
+          "Run the same question over many items — one sub-agent per item, each with fresh context — " +
+          "and, if you give a `reduce` brief, one more that combines their answers. For work that divides " +
+          "into more independent pieces than Fork takes at once (twelve), or that should survive a " +
+          "restart: the plan is kept, and answers already in are reused rather than re-run.\n\n" +
+          "It always runs behind your turn: end your turn after calling it, and the result arrives here " +
+          "as one message. Past 20 sub-agent turns the person is asked to confirm first, and nothing runs " +
+          "until they do. The plan is data — items and briefs, no code. Make each item self-contained " +
+          "(a file, a URL, a name), and say in `expect` exactly what each answer must contain so the " +
+          "reducer can combine them.",
+        input_schema: {
+          type: "object",
+          properties: {
+            brief: { type: "string", description: "What the whole job is for, in one line. The person sees it when asked to confirm." },
+            items: { type: "array", items: { type: "string" }, description: "One entry per sub-agent: the thing it looks at." },
+            prompt: { type: "string", description: "What each sub-agent is asked. Must contain {{item}}, replaced by its item." },
+            expect: { type: "string", description: "What every answer must contain (fields, format, length)." },
+            reduce: { type: "string", description: "Optional: the brief of one final sub-agent that combines the answers. Must contain {{results}}." },
+          },
+          required: ["brief", "items", "prompt"],
         },
       },
       {
@@ -2552,6 +2592,13 @@ export async function dispatchTool(
     };
   }
 
+  if (name === "computer" || ["browser_open", "browser_snapshot", "browser_read", "browser_act",
+    "browser_scroll", "browser_wait_for", "browser_pages", "browser_upload", "browser_fill_secret",
+    "HandOverDesktop"].includes(name)) {
+    try { await context.ensureDesktop?.(); }
+    catch (error) { return { text: error instanceof Error ? error.message : String(error), isError: true }; }
+  }
+
   switch (name) {
     // Reached only when the turn engine did not intercept it, which means it was not offered:
     // a forged or replayed call on a turn a person is waiting on. The engine ends the turn
@@ -2711,6 +2758,7 @@ export async function dispatchTool(
       const guarded = guardShellCommand(command);
       if (guarded.refusal !== undefined) return { text: guarded.refusal, isError: true };
       const box = requireBox(context);
+      if (input.desktop === true) await context.ensureDesktop?.();
       if (input.background === true) {
         // Minted here so the call token can name the job before it exists (INV-784).
         const jobId = `job-${randomBytes(8).toString("hex")}`;
@@ -2746,6 +2794,24 @@ export async function dispatchTool(
       return {
         text: formatExec(result, input.timeout_ms ? Number(input.timeout_ms) : undefined),
       };
+    }
+
+    case "Orchestrate": {
+      if (context.orchestrations === undefined) {
+        return { text: "Orchestrate is unavailable here; use Fork for a handful of pieces.", isError: true };
+      }
+      if (isForkConversation(context.conversation)) {
+        return { text: "You are a fork, and a fork cannot start a plan. Do this piece yourself and report back.", isError: true };
+      }
+      const parsed = parsePlan(input);
+      if ("problem" in parsed) return { text: parsed.problem, isError: true };
+      const submitted = context.orchestrations.submit({
+        agentId: context.agent.id,
+        agentName: context.agent.profile.name,
+        parent: context.conversation ?? MAIN_CONVERSATION,
+        plan: parsed.plan,
+      });
+      return { text: submitted.text };
     }
 
     case "Fork": {
@@ -3067,6 +3133,8 @@ export async function dispatchTool(
             brief: `${preset.name}: ${prompt}`,
             ...(context.workId !== undefined ? { workId: context.workId } : {}),
             ...(context.turnId !== undefined ? { turnId: context.turnId } : {}),
+            // Which engine's report to read when the job ends (INV-908).
+            data: { engine: preset.name },
           });
         } catch (error) {
           return {
@@ -3213,14 +3281,23 @@ export async function dispatchTool(
     case "Jobs": {
       const box = requireBox(context);
       const action = String(input.action ?? "list");
-      // Wherever the host sees a delegated job end, the ledger is settled (docs/32 slice two).
-      const observe = (job: { job_id: string; running: boolean; exit_code?: number; interrupted?: boolean }) => {
-        if (job.running) return;
-        context.pendingWork?.commitDelegate(job.job_id, job.exit_code === 0 && job.interrupted !== true ? "done" : "failed");
+      // Wherever the host sees a delegated job end, the ledger is settled (docs/32 slice two), from
+      // the engine's own report rather than the exit code (INV-908).
+      const observe = async (job: { job_id: string; running: boolean; exit_code?: number; interrupted?: boolean; log_path?: string }, killed = false) => {
+        if (job.running) return undefined;
+        return settleDelegate(
+          {
+            pendingWork: context.pendingWork,
+            box,
+            dropSession: (id, reason) => context.delegateSessions?.drop(id, reason),
+          },
+          job,
+          { killed }
+        );
       };
       if (action === "list") {
         const { jobs } = await box.jobs();
-        for (const job of jobs) observe(job);
+        for (const job of jobs) await observe(job);
         if (jobs.length === 0) return { text: "No background jobs." };
         return {
           text: jobs
@@ -3236,7 +3313,12 @@ export async function dispatchTool(
       if (jobId === "") return { text: "Which job? Pass job_id.", isError: true };
       if (action === "kill") {
         const killed = await box.killJob(jobId);
-        observe(killed);
+        // The kill is sent at once and the status can still say running; the close follows. Waited
+        // for briefly, then settled as stopped either way — it was, by us (INV-908).
+        const ended = killed.running
+          ? await box.waitForJob({ job_id: jobId, timeout_ms: 3_000 }).catch(() => undefined)
+          : undefined;
+        await observe({ ...(ended ?? killed), running: false }, true);
         return { text: `${killed.job_id} stopped. Its output is at ${killed.log_path}.` };
       }
       if (action !== "wait") {
@@ -3247,19 +3329,36 @@ export async function dispatchTool(
         ...(input.until !== undefined ? { until: String(input.until) } : {}),
         ...(input.timeout_ms !== undefined ? { timeout_ms: Number(input.timeout_ms) } : {}),
       });
-      observe(waited);
+      const settled = await observe(waited);
+      // A delegated engine's log is its event stream; what a reader wants from it is the outcome
+      // and the answer, so those come first and the raw tail only when there is no answer.
+      const engine = settled?.report?.engine ?? engineNamed(context.pendingWork?.engineOf(waited.job_id));
+      let report = settled?.report;
+      if (report === undefined && engine !== undefined && waited.reason === "exited") {
+        const read = await readLogEnd(box, waited.log_path);
+        if ("text" in read) report = parseEngineReport(engine, read.text);
+      }
       // The reason is said first and plainly: "still running" and "finished" call for
       // different next moves, and a tail alone does not distinguish them.
       const headline =
         waited.reason === "exited"
-          ? `${waited.job_id} finished with exit code ${waited.exit_code}.`
+          ? `${waited.job_id} finished with exit code ${waited.exit_code}.` +
+            (settled !== undefined
+              ? ` Outcome: ${settled.outcome} — ${settled.why}.`
+              : report !== undefined
+                ? ` ${report.engine} reported it ${report.status}${report.detail !== undefined ? `: ${report.detail}` : ""}.`
+                : engine !== undefined
+                  ? ` ${engine} gave no completion report, so whether it did the work is unknown.`
+                  : "")
           : waited.reason === "matched"
             ? `${waited.job_id} printed what you were waiting for. It is still running.`
             : `${waited.job_id} is still running; the wait timed out.`;
       return {
         text:
           `${headline}\nFull output: ${waited.log_path} (${waited.log_bytes} bytes)\n\n` +
-          `--- the last of it ---\n${waited.tail}`,
+          (report?.finalText !== undefined
+            ? `--- its answer ---\n${report.finalText}`
+            : `--- the last of it ---\n${waited.tail}`),
       };
     }
 
@@ -4161,6 +4260,8 @@ export async function dispatchTool(
         // asking again does not help until a person answers.
         if (error instanceof BoxError && error.status === 428) {
           const finding = message.replace(/^IRREVERSIBLE:\s*/, "");
+          const observed = name === "browser_act" && request.action === "type" ? parseSensitiveInput(error.sensitiveInput) : undefined;
+          const sensitive = observed !== undefined && observed.valueHash === inputValueHash(request.text ?? "") ? observed : undefined;
           if (context.policy === undefined) {
             // No gate to ask: fail closed, and let the finding travel so it is read.
             return {
@@ -4175,12 +4276,17 @@ export async function dispatchTool(
             tool: name,
             input,
             irreversible: finding,
+            ...(sensitive !== undefined && context.turnId !== undefined && context.conversation !== undefined ? {
+              inputScope: { ...sensitive, turnId: context.turnId, conversation: context.conversation,
+                principal: context.caller?.userId ?? "", target: `${context.registry.boxOf(context.agent.id).id}:${context.displayIndex ?? 1}` },
+            } : {}),
+            principalId: context.caller?.userId,
           });
           if (!decision.allow) {
             return { text: outcomeLine("refused", decision.reason), isError: true, ...(decision.approval !== undefined ? { approval: { id: decision.approval.id } } : {}) };
           }
           try {
-            return render(await box.browser({ ...request, confirmed: true }));
+            return render(await box.browser({ ...request, confirmed: true, ...(sensitive !== undefined ? { inputApproval: { ...sensitive, expiresAt: decision.inputExpiresAt ?? Date.now() + SENSITIVE_INPUT_TTL_MS } } : {}) }));
           } catch (again) {
             const why = again instanceof Error ? again.message : String(again);
             return { text: outcomeLine(boxErrorOutcome(again) ?? "failed", why), isError: true };
@@ -5342,7 +5448,8 @@ export async function dispatchTool(
       });
       if (inner !== undefined && !inner.allow) return { text: inner.reason, isError: true };
       try {
-        return { text: await context.mcp.call(target, input.arguments ?? {}) };
+        const result = await context.mcp.callDetailed(target, input.arguments ?? {});
+        return { text: result.text, ...(result.effects !== undefined ? { effects: result.effects, effectsFrom: target } : {}) };
       } catch (error) {
         return { text: error instanceof Error ? error.message : String(error), isError: true };
       }
@@ -5354,7 +5461,8 @@ export async function dispatchTool(
       // like every other call, so an external tool is governed exactly as ours are.
       if (context.mcp?.owns(name) === true) {
         try {
-          return { text: await context.mcp.call(name, input) };
+          const result = await context.mcp.callDetailed(name, input);
+          return { text: result.text, ...(result.effects !== undefined ? { effects: result.effects, effectsFrom: name } : {}) };
         } catch (error) {
           return {
             text: error instanceof Error ? error.message : String(error),

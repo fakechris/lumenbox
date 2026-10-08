@@ -5,37 +5,46 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  auditAccepts,
-  buildAuditPrompt,
-  manifestDiff,
-  parseAuditReport,
-  parseManifest,
-} from "./audit.ts";
+import { buildAuditPrompt, manifestDiff, parseManifest, settleAudit } from "./audit.ts";
 import type { Task } from "./tasks.ts";
 
-test("the three header lines parse through preamble, and malformed reports do not", () => {
-  const report = parseAuditReport(
-    "I checked the deploy.\nStatus: complete\nIntegrity: clean\nContract audit: aligned\n\n" +
-      "Reproduced the build; the artifact matches."
-  );
-  assert.deepEqual(
-    { status: report?.status, integrity: report?.integrity, contract: report?.contract },
-    { status: "complete", integrity: "clean", contract: "aligned" }
-  );
+const withAcceptance = { contract: { acceptance: "the xlsx is in the vendor's inbox, not just attached" } };
 
-  assert.equal(parseAuditReport("Status: done\nIntegrity: clean\nContract audit: aligned"), undefined, "done is not a status");
-  assert.equal(parseAuditReport("Status: complete\nIntegrity: clean"), undefined, "all three or nothing");
-  assert.equal(parseAuditReport("looks good to me!"), undefined);
+test("an audit reply the parser cannot read is no verdict, and no verdict is not a pass (INV-817)", () => {
+  // Fail-closed: the task does not move forward on prose, however approving.
+  for (const reply of ["looks good to me!", "Status: done\nIntegrity: clean", "Status: complete"]) {
+    const settled = settleAudit(withAcceptance, reply);
+    assert.equal(settled.status, "review", reply);
+    assert.equal(settled.verdict, undefined);
+    assert.match(settled.note, /no verdict/);
+    assert.match(settled.note, /not accepted/);
+  }
 });
 
-test("the completion guard accepts only complete, clean, and a contract not in revision", () => {
-  const base = { status: "complete", integrity: "clean", contract: "aligned", body: "" } as const;
-  assert.ok(auditAccepts({ ...base }));
-  assert.ok(auditAccepts({ ...base, contract: "unknown" }), "unknown contract is not a veto");
-  assert.ok(!auditAccepts({ ...base, status: "incomplete" }));
-  assert.ok(!auditAccepts({ ...base, integrity: "suspect" }));
-  assert.ok(!auditAccepts({ ...base, contract: "needs_revision" }));
+test("a parsed rejection sends the work back to doing with the findings", () => {
+  const settled = settleAudit(
+    withAcceptance,
+    "I checked.\nStatus: incomplete\nIntegrity: clean\nContract audit: aligned\n" +
+      "Item acceptance: contradicted — the inbox shows no message\nNext action: send it\n"
+  );
+  assert.equal(settled.status, "doing");
+  assert.match(settled.note, /acceptance contradicted \(the inbox shows no message\)/);
+  assert.match(settled.note, /next: send it/);
+});
+
+test("a parsed pass leaves the task in review: done is the requester's word", () => {
+  const settled = settleAudit(
+    withAcceptance,
+    "Status: complete\nIntegrity: clean\nContract audit: aligned\nItem acceptance: proven — message id 42 in the inbox\nNext action: none\n"
+  );
+  assert.equal(settled.status, "review");
+  assert.equal(settled.verdict?.passed, true);
+  // The headers alone are not a pass when an acceptance item was asked for and not answered.
+  const unanswered = settleAudit(withAcceptance, "Status: complete\nIntegrity: clean\nContract audit: aligned\n");
+  assert.equal(unanswered.status, "doing", "an acceptance item left unverified is not proven");
+  // Without acceptance criteria the headers are the whole verdict, as before.
+  assert.equal(settleAudit({}, "Status: complete\nIntegrity: clean\nContract audit: aligned\n").status, "review");
+  assert.equal(settleAudit({}, "Status: complete\nIntegrity: suspect\nContract audit: aligned\n").status, "doing");
 });
 
 test("the audit prompt carries its load-bearing sentences", () => {
@@ -65,6 +74,29 @@ test("the audit prompt carries its load-bearing sentences", () => {
   assert.doesNotMatch(prompt, /to done only if/);
   assert.match(prompt, /Weekly numbers to the vendor/, "the original request travels verbatim");
   assert.match(prompt, /Status: complete\|incomplete\|blocked/);
+  assert.match(prompt, /no verdict is not a pass/);
+  assert.doesNotMatch(prompt, /Item acceptance/, "no criteria, no item line");
+});
+
+test("acceptance criteria come before the history, and are asked for as an item (INV-817)", () => {
+  const task: Task = {
+    id: "t9",
+    title: "ship the report",
+    description: "Weekly numbers to the vendor.",
+    status: "review",
+    requester: "chris",
+    assigneeId: "agent-rex",
+    reviewerId: "agent-vera",
+    contract: { acceptance: "the vendor confirms receipt in the thread" },
+    createdAt: "",
+    updatedAt: "",
+    history: [],
+  };
+  const prompt = buildAuditPrompt({ task, assigneeName: "Rex" });
+  const criteria = prompt.indexOf("the vendor confirms receipt in the thread");
+  const history = prompt.indexOf("ReadHistory");
+  assert.ok(criteria !== -1 && history !== -1 && criteria < history, "the standard is read before the work (docs/20 §3)");
+  assert.match(prompt, /Item acceptance: proven\|contradicted\|incomplete\|unverified/);
 });
 
 test("the manifest reads sha256sum output and the diff names every kind of change", () => {

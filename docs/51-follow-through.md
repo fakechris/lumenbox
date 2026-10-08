@@ -21,7 +21,7 @@ PR #151–#156），本文按修完之后的事实重写；§5 记录了 review 
 一条推不进群的提醒、一个被问的人根本没看到的默认、一张 blocked 在别人那里的卡，都不构成
 "这个人没回应"。系统只能对**确实到达了某个人、而那个人确实没动**的东西行使到期权力。
 
-## 1. 别人怎么做（本地源码核对，引用见 docs/research/）
+## 1. 别人怎么做（本地源码核对，引用见 research/）
 
 | 维度 | Hermes（`~/sdcard/source/hermes-agent`） | OpenClaw（`~/sdcard/source/openclaw`） | Grok Bot（research/GROKBOT-*） | Argus（research/ARGUS-*） |
 |---|---|---|---|---|
@@ -32,9 +32,9 @@ PR #151–#156），本文按修完之后的事实重写；§5 记录了 review 
 
 **共同点**：都把"问题超时→按默认继续"做成了硬机制；都**没有** due 日期；都把工作项的老化做成被动诊断而不是推送；都没有把口头承诺对账成 job；都不让 agent 自己把工作关掉。**我们的差异**：我们已经有例程（`schedule:`/`@at`/`trigger:`）、任务板、提问卡、reconcile 这条 rail（docs/29 模板）——缺的正是"对象带表"和"沉默的解释"。
 
-WorkBuddy / 豆包 Work（binary 静态检查，docs/research/2026-09-14-workbuddy-doubao-binaries.md）：**WorkBuddy 5.5.6** 的 asar 里有完整的一套：审批 `DEFAULT_APPROVAL_TIMEOUT_MS = 120s`、`autoRejectOnTimeout: true`、注释写明「文本审批超时：自动拒绝，并同步通知 agent 与 IM」，UI 叫「授权超时未确认」；无人值守的定时任务遇到 AskUserQuestion 直接 `cancelQuestion`（「后台定时任务无人值守…已自动跳过」）；定时任务是一等功能（`automation.tab.scheduledTasks`，按固定时间拉数据批量建待办）；待办有 `dueDate`，但**没有**找到逾期推送、自动归档或老化提醒的字符串。即：沉默在它那里=**拒绝**，比 Hermes/OpenClaw 更保守，而挂着的工作同样只有 due、没有推送。**豆包 Work** 是站点化 Chromium 壳，逻辑在服务端，本地无可核对的产物，扫 Service Worker 缓存只命中无关内容——不下结论，也不算作反证。
+WorkBuddy / 豆包 Work（binary 静态检查，research/2026-09-14-workbuddy-doubao-binaries.md）：**WorkBuddy 5.5.6** 的 asar 里有完整的一套：审批 `DEFAULT_APPROVAL_TIMEOUT_MS = 120s`、`autoRejectOnTimeout: true`、注释写明「文本审批超时：自动拒绝，并同步通知 agent 与 IM」，UI 叫「授权超时未确认」；无人值守的定时任务遇到 AskUserQuestion 直接 `cancelQuestion`（「后台定时任务无人值守…已自动跳过」）；定时任务是一等功能（`automation.tab.scheduledTasks`，按固定时间拉数据批量建待办）；待办有 `dueDate`，但**没有**找到逾期推送、自动归档或老化提醒的字符串。即：沉默在它那里=**拒绝**，比 Hermes/OpenClaw 更保守，而挂着的工作同样只有 due、没有推送。**豆包 Work** 是站点化 Chromium 壳，逻辑在服务端，本地无可核对的产物，扫 Service Worker 缓存只命中无关内容——不下结论，也不算作反证。
 
-Octop（`~/sdcard/source/Octop`，TencentCloud，Python，多用户多 agent，docs/research/2026-09-14-octop-follow-through.md）：
+Octop（`~/sdcard/source/Octop`，TencentCloud，Python，多用户多 agent，research/2026-09-14-octop-follow-through.md）：
 形状与我们最近的一家。HITL pending 表 TTL 30 分钟、**惰性过期、到点什么都不做**（不按默认、
 也不拒绝，人晚了回来只看到"已过期"）；一会话只允许一个 pending，新的把旧的显式置为
 `expired` 而不是覆盖；问题有 id，`/approve <id>`；`resolve_ask_pending` 的 docstring 写着
@@ -182,6 +182,6 @@ agent 去执行那个承诺。"有人负责 / 已调度 / 已执行"三者还没
 有送达前提、24 小时门槛与指纹失效三重限制）；把 `/api/attention` 做全（缩成 §3.3）；
 把所有老化统一进一个 sweep（§4 D 砍掉）。
 
-引用：docs/research/2026-09-14-hermes-follow-through.md、docs/research/2026-09-14-openclaw-follow-through.md、
-docs/research/2026-09-14-octop-follow-through.md、docs/research/2026-09-14-workbuddy-doubao-binaries.md、
+引用：research/2026-09-14-hermes-follow-through.md、research/2026-09-14-openclaw-follow-through.md、
+research/2026-09-14-octop-follow-through.md、research/2026-09-14-workbuddy-doubao-binaries.md、
 research/GROKBOT-2026-09-07-TEAM-WORKFLOW.md、research/ARGUS-COMPARISON.md。

@@ -523,6 +523,11 @@ test("a create that fails half-way removes what it made, but keeps the volumes",
 });
 
 test("a control plane pointed at another namespace is told so, not told the box is gone", async () => {
+  // The drifted allocator names no image, so it falls through to defaultBoxConfig() —
+  // which reads config.json since INV-856, whose path guard refuses the real home under
+  // test. A temp home is the honest answer, the same one the docker tests give.
+  const previousHome = process.env.AGENTBOX_HOME;
+  process.env.AGENTBOX_HOME = mkdtempSync(join(tmpdir(), "agentbox-kubernetes-home-"));
   const { store, allocator, fake, cleanup } = fixture();
   try {
     const acme = store.upsertTenant({ name: "acme" });
@@ -536,6 +541,9 @@ test("a control plane pointed at another namespace is told so, not told the box 
     await assert.rejects(drifted.find(acme.id), /AGENTBOX_K8S_NAMESPACE=agentbox/);
   } finally {
     cleanup();
+    rmSync(process.env.AGENTBOX_HOME!, { recursive: true, force: true });
+    if (previousHome === undefined) delete process.env.AGENTBOX_HOME;
+    else process.env.AGENTBOX_HOME = previousHome;
   }
 });
 
@@ -698,6 +706,10 @@ test("restart over a surviving pod deletes it first and waits for the name to fr
 });
 
 test("prefix and namespace are validated as DNS-1123 before anything talks to a cluster", () => {
+  // One allocator here takes no image, so defaultBoxConfig() runs and reads config.json
+  // (INV-856) — under test that path refuses the real home, so give it a temp one.
+  const previousHome = process.env.AGENTBOX_HOME;
+  process.env.AGENTBOX_HOME = mkdtempSync(join(tmpdir(), "agentbox-kubernetes-home-"));
   const { store, fake, cleanup } = fixture();
   try {
     assert.throws(
@@ -717,6 +729,9 @@ test("prefix and namespace are validated as DNS-1123 before anything talks to a 
     assert.ok(new KubernetesAllocator(store, { api: fake.api, prefix: "a".repeat(13) }));
   } finally {
     cleanup();
+    rmSync(process.env.AGENTBOX_HOME!, { recursive: true, force: true });
+    if (previousHome === undefined) delete process.env.AGENTBOX_HOME;
+    else process.env.AGENTBOX_HOME = previousHome;
   }
 });
 

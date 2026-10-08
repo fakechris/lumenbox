@@ -9,7 +9,12 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { unseededStarters } from "./starter-skills.ts";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { starterSkillsWithEvals, unseededStarters } from "./starter-skills.ts";
+import { catalogDataDir, hubSkillSlugs } from "./catalog.ts";
+import { parseSkillFile, renderSkills, skillFrom } from "./skills.ts";
+import { parseSchedule } from "./schedule.ts";
 
 const starters = [{ slug: "alpha" }, { slug: "beta" }, { slug: "gamma" }];
 
@@ -34,4 +39,38 @@ test("a pre-marker install is only offered what it has never had", () => {
 
 test("a torn or padded marker still reads", () => {
   assert.deepEqual(unseededStarters("  alpha  \n\n\nbeta", ["other-skill"], starters), ["gamma"]);
+});
+
+test("every skill a fresh box starts with is described in the index, not just named", () => {
+  // Past the budget a skill is listed by name only, and an agent opens what it can see is
+  // relevant. Adding a package that pushed a shipped one down to its name would go unnoticed.
+  const skills = [
+    ...starterSkillsWithEvals().map(starter => skillFrom(starter.slug, parseSkillFile(starter.content))),
+    ...hubSkillSlugs().map(slug => {
+      const dir = join(catalogDataDir(), "skills", slug);
+      const helpers = readdirSync(dir).filter(name => name !== "SKILL.md");
+      return skillFrom(slug, parseSkillFile(readFileSync(join(dir, "SKILL.md"), "utf8")), helpers);
+    }),
+  ].map(result => {
+    assert.ok("skill" in result, "problem" in result ? result.problem : "");
+    return result.skill;
+  });
+  const rendered = renderSkills(skills);
+  assert.doesNotMatch(rendered, /more not described here because the index is full/);
+});
+
+test("every schedule example a starter shows its reader is one parseSchedule accepts", () => {
+  // morning-summary once said `schedule: daily 08:30`; a reader who copied it got a skill that
+  // loaded with one problem and never ran (INV-966). Any example a starter prints must parse.
+  const examples: { slug: string; text: string }[] = [];
+  for (const starter of starterSkillsWithEvals()) {
+    for (const match of starter.content.matchAll(/`schedule:\s*("?)([^`"]+)\1`/g)) {
+      examples.push({ slug: starter.slug, text: match[2]!.trim() });
+    }
+  }
+  assert.ok(examples.length > 0, "the test found no schedule example to check");
+  for (const example of examples) {
+    const result = parseSchedule(example.text);
+    assert.ok("schedule" in result, `${example.slug}: ${"problem" in result ? result.problem : ""}`);
+  }
 });

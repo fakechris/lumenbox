@@ -48,6 +48,21 @@ export interface AgentboxConfig {
   upgradeHour?: number;
   /** Base URL for the `custom` preset, applied only when `AGENTBOX_BASE_URL` is not set. */
   baseUrl?: string;
+  /** Maximum single-member boxes per person; absent means no limit. */
+  personalBoxQuota?: number;
+  /** Overrides keyed by canonical principal id. */
+  personBoxQuotas?: Record<string, number>;
+  departmentBoxQuotas?: Record<string, number>;
+  /**
+   * The box image to pull when this machine has none, as a full `repo:tag` reference.
+   *
+   * Absent means the release default, `fakechris/lumenbox:<package version>` on Docker
+   * Hub. The point of the field is the registry part: on a network where Docker Hub is
+   * slow or unreachable, the pull can point at a mirror instead. `AGENTBOX_IMAGE` always
+   * wins when set, but an app launched from Finder has no shell to export it in — this
+   * file is the entrance that launch path actually has.
+   */
+  boxImage?: string;
   /**
    * Environment variables applied at startup, under the real environment: a variable
    * already set in the shell always wins. This is where an API key lives when it is not
@@ -102,8 +117,18 @@ export interface AgentboxConfig {
        * the policy gate; a rule (INV-427) can let the reads through.
        */
       host?: boolean;
+      /**
+       * `false` for a server the operator trusts not to carry somebody else's words, so an
+       * exchange that used it may still be remembered from (INV-894). Absent means it may.
+       */
+      pollutesMemory?: boolean;
     }
   >;
+  /**
+   * A connector door's package pinned to another version than the catalog's (INV-813), by
+   * door slug: `{ "notion": "2.6.0" }`. Operator-only, like `mcpServers`.
+   */
+  connectorVersions?: Record<string, string>;
   /**
    * Skill directories beyond the box's own `/home/box/work/skills`, as paths inside the
    * box, searched in this order after it (R26). The box's own directory always wins a
@@ -275,6 +300,7 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
   // for a silent parse and not for one that warns — a single malformed box would be
   // reported to the user twice.
   const boxes = readBoxes(raw.boxes, onWarn);
+  const connectorVersions = readConnectorVersions(raw.connectorVersions, onWarn);
   return {
     activityLimit: readInteger(
       raw.activityLimit,
@@ -295,6 +321,9 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
     ...(readString(raw.baseUrl, "baseUrl", onWarn) !== undefined
       ? { baseUrl: readString(raw.baseUrl, "baseUrl", onWarn) }
       : {}),
+    ...(readString(raw.boxImage, "boxImage", onWarn) !== undefined
+      ? { boxImage: readString(raw.boxImage, "boxImage", onWarn) }
+      : {}),
     ...(readEnvMap(raw.env, onWarn) !== undefined ? { env: readEnvMap(raw.env, onWarn) } : {}),
     ...(readStringList(raw.channelAllow, "channelAllow", onWarn) !== undefined
       ? { channelAllow: readStringList(raw.channelAllow, "channelAllow", onWarn) }
@@ -306,12 +335,16 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
     ...(readDigests(raw.digests, onWarn) !== undefined
       ? { digests: readDigests(raw.digests, onWarn) }
       : {}),
+    ...(connectorVersions !== undefined ? { connectorVersions } : {}),
     ...(readMcpServers(raw.mcpServers, onWarn) !== undefined
       ? { mcpServers: readMcpServers(raw.mcpServers, onWarn) }
       : {}),
     ...(readStringList(raw.skillRoots, "skillRoots", onWarn) !== undefined
       ? { skillRoots: readStringList(raw.skillRoots, "skillRoots", onWarn) }
       : {}),
+    ...(raw.personalBoxQuota !== undefined ? { personalBoxQuota: readQuota(raw.personalBoxQuota, "personalBoxQuota", onWarn) } : {}),
+    ...(raw.personBoxQuotas !== undefined ? { personBoxQuotas: readQuotaMap(raw.personBoxQuotas, "personBoxQuotas", onWarn) } : {}),
+    ...(raw.departmentBoxQuotas !== undefined ? { departmentBoxQuotas: readQuotaMap(raw.departmentBoxQuotas, "departmentBoxQuotas", onWarn) } : {}),
     ...(typeof raw.startupItem === "boolean" ? { startupItem: raw.startupItem } : {}),
     ...(readInvolute(raw.involute, onWarn) !== undefined ? { involute: readInvolute(raw.involute, onWarn) } : {}),
   };
@@ -361,6 +394,55 @@ function readInvolute(value: unknown, warn: (message: string) => void): Agentbox
   };
 }
 
+export function isPersonalBoxQuota(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 99;
+}
+
+function readQuota(value: unknown, name: string, warn: (message: string) => void): number | undefined {
+  if (value === undefined) return undefined;
+  if (!isPersonalBoxQuota(value)) {
+    warn(`config: ${name} must be a whole number 0–99; refusing new allocations with quota 0`);
+    return 0;
+  }
+  return value;
+}
+
+/** A quota map: every value a quota, every key kept as written (it names a person). */
+function readQuotaMap(
+  value: unknown,
+  name: string,
+  warn: (message: string) => void
+): Record<string, number> | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`config: ${name} must be an object of principal id to whole number; repair it before allocating boxes`);
+  }
+  const out: Record<string, number> = Object.create(null);
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    const quota = readQuota(raw, `${name}.${key}`, warn);
+    if (quota !== undefined) out[key] = quota;
+  }
+  return out;
+}
+
+function readConnectorVersions(value: unknown, warn: (message: string) => void): Record<string, string> | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    warn("config: connectorVersions must be an object of door slug to version, ignoring it");
+    return undefined;
+  }
+  const versions: Record<string, string> = {};
+  for (const [slug, version] of Object.entries(value as Record<string, unknown>)) {
+    // A version, not a range: a range is the unpinned state this key exists to end.
+    if (typeof version !== "string" || !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) {
+      warn(`config: connectorVersions.${slug} must be an exact version such as 1.2.3, ignoring it`);
+      continue;
+    }
+    versions[slug] = version;
+  }
+  return Object.keys(versions).length > 0 ? versions : undefined;
+}
+
 function readMcpServers(
   value: unknown,
   warn: (message: string) => void
@@ -402,6 +484,7 @@ function readMcpServers(
       command: entry.command,
       ...(args !== undefined && args.length > 0 ? { args } : {}),
       ...(env !== undefined && Object.keys(env).length > 0 ? { env } : {}),
+      ...(entry.pollutesMemory === false ? { pollutesMemory: false } : {}),
     };
   }
   return Object.keys(servers).length > 0 ? servers : undefined;
@@ -556,13 +639,16 @@ export function applyConfigEnv(config: AgentboxConfig): void {
  * already; the file's own mode says so a second time.
  */
 export function saveConfig(
-  changes: Partial<Record<"provider" | "model" | "baseUrl", string | null>> & {
+  changes: Partial<Record<"provider" | "model" | "baseUrl" | "boxImage", string | null>> & {
     env?: Record<string, string | null>;
     channelAllow?: string[] | null;
     hostExec?: AgentboxConfig["hostExec"] | null;
     /** Per-chat patch: a null hour removes that chat's digest, others are left alone. */
     digests?: Record<string, number | null>;
     startupItem?: boolean | null;
+    personalBoxQuota?: number | null;
+    personBoxQuotas?: Record<string, number | null>;
+    departmentBoxQuotas?: Record<string, number | null>;
   }
 ): string {
   const path = configPath();
@@ -579,7 +665,7 @@ export function saveConfig(
     }
   }
 
-  for (const key of ["provider", "model", "baseUrl"] as const) {
+  for (const key of ["provider", "model", "baseUrl", "boxImage"] as const) {
     const value = changes[key];
     if (value === undefined) continue;
     if (value === null) delete raw[key];
@@ -596,6 +682,26 @@ export function saveConfig(
     if (changes.hostExec === null) delete raw.hostExec;
     else raw.hostExec = changes.hostExec;
   }
+  if (changes.personalBoxQuota !== undefined) {
+    if (changes.personalBoxQuota === null) delete raw.personalBoxQuota;
+    else raw.personalBoxQuota = changes.personalBoxQuota;
+  }
+  for (const [field, patch] of [
+    ["personBoxQuotas", changes.personBoxQuotas],
+    ["departmentBoxQuotas", changes.departmentBoxQuotas],
+  ] as const) {
+    if (patch === undefined) continue;
+    const current =
+      raw[field] !== null && typeof raw[field] === "object" && !Array.isArray(raw[field])
+        ? { ...(raw[field] as Record<string, unknown>) }
+        : {};
+    for (const [key, quota] of Object.entries(patch)) {
+      if (quota === null) delete current[key];
+      else Object.defineProperty(current, key, { value: quota, enumerable: true, configurable: true, writable: true });
+    }
+    if (Object.keys(current).length === 0) delete raw[field];
+    else raw[field] = current;
+  }
   if (changes.digests !== undefined) {
     const current =
       raw.digests !== null && typeof raw.digests === "object" && !Array.isArray(raw.digests)
@@ -609,11 +715,9 @@ export function saveConfig(
     else delete raw.digests;
   }
   if (changes.startupItem !== undefined) {
-    if (changes.startupItem === null || changes.startupItem === false) {
-      delete raw.startupItem;
-    } else {
-      raw.startupItem = true;
-    }
+    // false is written, not deleted: the desktop shell leaves an absent key alone.
+    if (changes.startupItem === null) delete raw.startupItem;
+    else raw.startupItem = changes.startupItem;
   }
   if (changes.env !== undefined) {
     const current =

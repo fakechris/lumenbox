@@ -17,10 +17,16 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { runInNewContext } from "node:vm";
 import { APP_HTML } from "./app-html.ts";
 
 /** Every `id="…"` the document defines. */
 const definedIds = new Set([...APP_HTML.matchAll(/id="([A-Za-z0-9_-]+)"/g)].map(match => match[1]!));
+
+test("unknown provider cache usage cannot display a fabricated cache hit rate", () => {
+  assert.match(APP_HTML, /if \(\(report\.unmeasured \|\| \[\]\)\.length\) return .*缓存命中 未知/);
+  assert.match(APP_HTML, /No cost or cache hit rate shown: provider usage/);
+});
 
 /** Ids the script reaches for in a way that throws when the element is absent. */
 function referencedIds(): { id: string; how: string }[] {
@@ -168,6 +174,19 @@ test("every CSS content escape is what a browser will accept", () => {
   assert.deepEqual(wrong, [], "a CSS unicode escape is one backslash and four hex digits");
 });
 
+test("desktop context stays discoverable and opens the desktop tab", () => {
+  assert.match(APP_HTML, /<a href="#" id="desktoptitle"><\/a>/);
+  assert.match(APP_HTML, /"desktoptitle"\)\.title = desktopLabel \+ " — open Desktop tab"/);
+  assert.match(APP_HTML, /getElementById\("desktoptitle"\)\.addEventListener\("click", function \(e\) \{ e\.preventDefault\(\); showTab\("desktop"\); \}\)/);
+  assert.match(APP_HTML, /badge\.textContent = box\.badge;/, "the shared-box badge must not inherit a potentially long group name");
+  assert.match(APP_HTML, /badge\.title = \(box\.group \? box\.group/, "the full group must remain available on hover");
+});
+
+test("long waiting lists scroll within Tasks instead of overlapping Activity", () => {
+  assert.match(APP_HTML, /#attention \{ flex: none; max-height: 60%; overflow-y: auto; \}/);
+  assert.match(APP_HTML, /<div class="scroll" id="tasklist"><\/div>/);
+});
+
 test("the feed renders the plain-language phrase and falls back to the tool name (INV-783)", () => {
   // A browser cannot run here, so the page's activityLine is lifted out and run with the
   // helpers it reaches for stubbed: the contract is "phrase in the reader's language when
@@ -203,4 +222,80 @@ test("the feed renders the plain-language phrase and falls back to the tool name
   // A phrase without the page's language falls to English rather than to nothing.
   const enOnly = activityLine({ type: "tool_start", agentName: "Ada", tool: "x", phrase: { en: "using x" } });
   assert.equal(enOnly?.html, "<b>Ada</b> using x");
+});
+
+test("the setup card grades the model key first, and first run has one save button (INV-857)", () => {
+  // The welcome note promises "a provider with a key" — the card has to ask for it too,
+  // before an agent dies on its first word pages away from the cause.
+  assert.match(APP_HTML, /done: s\.key/);
+  assert.match(APP_HTML, /ui\.setup\.key/);
+  assert.match(APP_HTML, /ui\.setup\.keyWhy/);
+  assert.match(APP_HTML, /ui\.setup\.keyAct/);
+  // First run shows Save & restart only; plain Save comes back once onboarded.
+  assert.match(APP_HTML, /\$\("setsave"\)\.style\.display = "none"/);
+  assert.match(APP_HTML, /\$\("setsave"\)\.style\.display = ""/);
+});
+
+test("the box image override is settable from the page (INV-856)", () => {
+  // A Finder-launched app has no environment to set AGENTBOX_IMAGE in, so the mirror
+  // needs its own input, its load line, and a place in the save body.
+  assert.match(APP_HTML, /id="setboximage"/);
+  assert.match(APP_HTML, /data\.config && data\.config\.boxImage/);
+  assert.match(APP_HTML, /setboximage"\)\.value\.trim\(\)/);
+});
+
+test("the box section can say what is actually wrong with Docker (INV-855)", () => {
+  // Three environment states, each with its own sentence. The no-binary one carries the
+  // download links, because a fresh machine's next step is installing Docker Desktop or
+  // OrbStack — not reading `docker version`.
+  assert.match(APP_HTML, /dockerState\.state === "no-binary"/);
+  assert.match(APP_HTML, /dockerState\.state === "no-engine"/);
+  assert.match(APP_HTML, /ui\.box\.dockerMissing/);
+  assert.match(APP_HTML, /ui\.box\.dockerStopped/);
+  assert.match(APP_HTML, /https:\/\/www\.docker\.com\/products\/docker-desktop\//);
+  assert.match(APP_HTML, /https:\/\/orbstack\.dev\//);
+  // The welcome note names the prerequisite before the first click, not after a failure.
+  assert.match(APP_HTML, /Docker Desktop or OrbStack must be installed/);
+});
+
+
+test("selecting an agent and refreshing hidden panes do not open desktops", () => {
+  const elements = new Map<string, { style: Record<string, string>; attrs: Map<string, string>; [key: string]: unknown }>();
+  const element = (id: string) => {
+    if (!elements.has(id)) {
+      const attrs = new Map<string, string>();
+      elements.set(id, { style: {}, attrs, getAttribute: (key: string) => attrs.get(key),
+        setAttribute: (key: string, value: string) => attrs.set(key, value), removeAttribute: (key: string) => attrs.delete(key) });
+    }
+    return elements.get(id)!;
+  };
+  const source = APP_HTML.slice(APP_HTML.indexOf("var openedDesktops ="), APP_HTML.indexOf('$("vnc").onload'));
+  assert.ok(source.length > 0);
+  const context = { $: element, current: "a", agents: [
+    { id: "a", name: "Ada", displayIndex: 1, desktopUrl: "/desktop/1/vnc.html?autoconnect=1" },
+    { id: "b", name: "Bea", displayIndex: 2, desktopUrl: "/desktop/2/vnc.html?autoconnect=1" },
+  ], boxesSeen: [] };
+  runInNewContext(`${source}; showDesktop("a");`, context);
+  assert.equal(element("vnc").attrs.has("src"), false);
+  (element("opendesktop").onclick as () => void)();
+  assert.match(element("vnc").attrs.get("src")!, /desktop\/1/);
+  runInNewContext('showDesktop("b")', context);
+  assert.equal(element("vnc").attrs.has("src"), false, "selecting another agent does not prewarm it");
+  element("desktopview").style.display = "none";
+  runInNewContext('showDesktop("a")', context);
+  assert.equal(element("vnc").attrs.has("src"), false, "hidden desktop pane releases its viewing connection");
+});
+
+test("resource status distinguishes unavailable, dormant and retained desktops without inventing memory", () => {
+  const source = APP_HTML.slice(APP_HTML.indexOf("function renderDesktopResources(box)"), APP_HTML.indexOf('\ndocument.addEventListener("click", function (event)', APP_HTML.indexOf("function renderDesktopResources(box)")));
+  const context = { agents: [], myRole: "viewer", esc: (value: unknown) => String(value).replaceAll("<", "&lt;") };
+  const unavailable = runInNewContext(`${source}; renderDesktopResources({})`, context);
+  assert.match(unavailable, /unavailable/);
+  assert.doesNotMatch(unavailable, /MiB/);
+  const rendered = runInNewContext(`${source}; renderDesktopResources({resources:{idle_ms:900000,starts:2,reclaims:1,desktops:[{index:2,state:"dormant"},{index:3,state:"ready",retained_reason:"<unknown>"},{index:4,state:"failed"}]}})`, context);
+  assert.match(rendered, /1 running · 1 retained/);
+  assert.match(rendered, /dormant/);
+  assert.match(rendered, /1 failed \(process state unknown\)/);
+  assert.match(rendered, /&lt;unknown>/);
+  assert.doesNotMatch(rendered, /data-pin-agent|MiB/);
 });

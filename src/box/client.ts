@@ -4,8 +4,9 @@
  * Everything the agent does inside the box goes through here.
  */
 
-import { BOXD_PROTOCOL, type DisplayInfo, type TeachQueueList, type TeachClaimResult, type TeachBinding } from "../protocol/index.ts";
+import { BOXD_PROTOCOL, type DisplayInfo, type DesktopResources, type TeachQueueList, type TeachClaimResult, type TeachBinding } from "../protocol/index.ts";
 import { isComputerWrite } from "../cua/execution.ts";
+import { parseSensitiveInput, type SensitiveInput } from "../protocol/sensitive-input.ts";
 import type {
   BrowserRequest,
   BrowserResponse,
@@ -62,7 +63,8 @@ export class BoxError extends Error {
   constructor(
     message: string,
     readonly status?: number,
-    readonly kind: BoxFailure = "protocol"
+    readonly kind: BoxFailure = "protocol",
+    readonly sensitiveInput?: SensitiveInput
   ) {
     super(message);
     this.name = "BoxError";
@@ -168,7 +170,8 @@ export class BoxClient {
           `${path}: ${message}. The box refused this; sending it again unchanged will ` +
             `be refused again.`,
           response.status,
-          "refused"
+          "refused",
+          response.status === 428 ? parseSensitiveInput((parsed as { sensitiveInput?: unknown }).sensitiveInput) : undefined
         );
       }
       return parsed as T;
@@ -291,6 +294,15 @@ export class BoxClient {
   }
 
   /** Brings up an agent's desktop, or adopts it if already running. */
+  async readyDisplay(index: number, owner?: string): Promise<boolean> {
+    try { return (await this.post<{ ready: boolean }>("/displays/ready", { index, owner }, 10_000)).ready === true; }
+    catch (error) { if (error instanceof BoxError && error.status === 404) return false; throw error; }
+  }
+
+  async pinDisplay(index: number, owner: string, pinned: boolean): Promise<DesktopResources> {
+    return this.post("/displays/pin", { index, owner, pinned }, 10_000);
+  }
+
   ensureDisplay(index: number, owner?: string): Promise<EnsureDisplayResult> {
     // Starting Xvfb, a window manager, VNC and noVNC takes a moment.
     return this.post<EnsureDisplayResult>("/displays/ensure", { index, owner }, 120_000);

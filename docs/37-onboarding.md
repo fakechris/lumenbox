@@ -58,12 +58,28 @@ Everything else — agents, chat channels, skills — has defaults and can wait.
 
 Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) or
 [OrbStack](https://orbstack.dev/) and start it. Back in LumenBox Settings, press *Start the
-box*: it pulls the image (a few minutes the first time), starts one container named
-`agentbox-box`, and the page turns green when the desktop inside it is up. Nothing else to
-configure; the box is only reachable from this machine.
+box*. The first time, it pulls `fakechris/lumenbox:<version>` from Docker Hub — the same version
+as the app — which takes a few minutes. Then it starts one container named `agentbox-box`,
+and the page turns green when the desktop inside it is up. Nothing else to configure; the
+box is only reachable from this machine.
 
-If the button says *Cannot reach a Docker engine*, Docker is not running or not installed —
-start it and press again. `docker version` in a terminal is the same check.
+From a checkout of this repository you can build that image yourself instead of pulling it:
+`npm run build:image`. `npm run push:image` publishes `fakechris/lumenbox:<version>` and
+`fakechris/lumenbox:latest` (it needs `docker login`). An image already on the machine is used as
+it is; a pull only happens when the version tag is absent.
+
+The Box section says which of the three situations you are in before you press anything:
+no `docker` command on this machine (it names Docker Desktop and OrbStack, with links),
+Docker installed but its engine not answering (start it and press again), or the engine
+fine and only the container missing. `docker version` in a terminal is the same check.
+
+**On a network where Docker Hub is slow or unreachable.** The pull can come from a mirror
+instead: Settings → Box has an *image override* — a full `registry/repo:tag` reference —
+saved to `~/.agentbox/config.json` as `boxImage` (empty again means the release default).
+`AGENTBOX_IMAGE` in the environment still wins over it, and configuring Docker Desktop's own
+*registry-mirrors* is the other way to the same effect. A pull that fails says which kind of
+failure it was: the registry answered *no such image* (update the app — a just-released
+version can race its image), or the registry never answered (network; set the mirror).
 
 ### 3b. Docker on another machine
 

@@ -9,6 +9,14 @@
 # Grouped rather than one PR per image: a base bump is reviewed and rebuilt as a unit.
 version: 2
 updates:
+  - package-ecosystem: pip
+    directory: "/docker/box"
+    schedule:
+      interval: weekly
+    groups:
+      document-libraries:
+        patterns: ["*"]
+
   - package-ecosystem: docker
     directory: "/docker/box"
     schedule:

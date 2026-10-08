@@ -286,7 +286,7 @@ async function refreshMirrors(stores: ForgetStores, needle: string, agentIds: re
   for (const agentId of agentIds) {
     const agent = stores.registry.tryGet(agentId);
     if (agent === undefined) continue;
-    for (const file of renderMemoryFiles(agent.profile.name, stores.registry.readMemoryRecords(agentId))) {
+    for (const file of renderMemoryFiles(agentId, agent.profile.name, stores.registry.readMemoryRecords(agentId))) {
       await stores.box.writeFile(file.path, file.content);
       written += 1;
     }

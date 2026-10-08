@@ -59,6 +59,98 @@ const toolRequest = (command: string): PolicyRequest => ({
   input: { command },
 });
 
+test("sensitive input consent covers a second field only within the same turn and approved data scope (INV-955)", () => {
+  const f = fixture();
+  const request = {
+    kind: "tool", agentId: "a", agentName: "Ada", tool: "browser_act",
+    input: { action: "type", ref: "e1", text: "me@example.com" },
+    irreversible: "send email address to forms.example",
+    inputScope: { turnId: "turn-1", conversation: "chat-1", principal: "person-1", target: "box-1:1",
+      origin: "https://forms.example", category: "email address", valueHash: "b".repeat(64) },
+  } as PolicyRequest;
+  try {
+    assert.equal(f.gate.check(request).allow, false);
+    assert.equal(f.gate.grant(f.gate.pending()[0]!.id), true);
+    assert.equal(f.gate.check(request).allow, true);
+    const repeated = { ...request, input: { action: "type", ref: "e2", text: "me@example.com" } } as PolicyRequest;
+    assert.equal(f.gate.check(repeated).allow, true, "a different field within approved scope needs no second card");
+    assert.equal(f.gate.pending().length, 0);
+    assert.equal(f.restart().check(repeated).allow, false, "turn reuse does not survive a process restart");
+  } finally { f.cleanup(); }
+});
+
+test("sensitive input grants isolate unconsumed and reused consent across every authority boundary (INV-955)", () => {
+  const f = fixture();
+  const request: Extract<PolicyRequest, { kind: "tool" }> = {
+    kind: "tool", agentId: "a", agentName: "Ada", tool: "browser_act",
+    input: { action: "type", ref: "e1", text: "me@example.com" }, irreversible: "send email address",
+    inputScope: { turnId: "turn-1", conversation: "chat-1", principal: "person-1", target: "box:1",
+      origin: "https://forms.example", category: "email address", valueHash: "a".repeat(64) },
+  };
+  try {
+    f.gate.check(request);
+    f.gate.grant(f.gate.pending()[0]!.id);
+    const changes = { turnId: "turn-2", conversation: "chat-2", principal: "person-2", target: "box:2",
+      origin: "http://forms.example", category: "postal address", valueHash: "b".repeat(64) };
+    for (const [key, value] of Object.entries(changes)) {
+      assert.equal(f.gate.check({ ...request, inputScope: { ...request.inputScope!, [key]: value } }).allow, false, `unused grant: ${key}`);
+    }
+    assert.equal(f.gate.check(request).allow, true);
+    for (const [key, value] of Object.entries(changes)) {
+      assert.equal(f.gate.check({ ...request, inputScope: { ...request.inputScope!, [key]: value } }).allow, false, `reused grant: ${key}`);
+    }
+    assert.equal(f.gate.check({ ...request, agentId: "other" }).allow, false);
+    f.gate.stop("a");
+    assert.equal(f.gate.check(request).allow, false, "stop outranks reuse");
+  } finally { f.cleanup(); }
+});
+
+test("sensitive input reuse expires without extending on use and fails closed on audit failure (INV-955)", () => {
+  const f = fixture();
+  let now = new Date("2026-10-02T00:00:00Z");
+  const gate = new PolicyGate({ path: f.path, now: () => now });
+  const request: Extract<PolicyRequest, { kind: "tool" }> = {
+    kind: "tool", agentId: "a", agentName: "Ada", tool: "browser_act",
+    input: { action: "type", ref: "e1", text: "me@example.com" }, irreversible: "send email address",
+    inputScope: { turnId: "turn", conversation: "chat", principal: "person", target: "box:1",
+      origin: "https://forms.example", category: "email address", valueHash: "a".repeat(64) },
+  };
+  try {
+    gate.check(request); gate.grant(gate.pending()[0]!.id);
+    assert.equal(gate.check(request).allow, true);
+    now = new Date("2026-10-02T00:14:00Z");
+    assert.equal(gate.check({ ...request, input: { ...request.input, ref: "e2" } }).allow, true);
+    now = new Date("2026-10-02T00:15:00Z");
+    assert.equal(gate.check(request).allow, false);
+    gate.grant(gate.pending()[0]!.id);
+    // A directory where the log belongs makes append fail, without mocking internals.
+    rmSync(f.path); mkdirSync(f.path);
+    assert.equal(gate.check(request).allow, false);
+    assert.equal(gate.check({ ...request, input: { ...request.input, ref: "e3" } }).allow, false);
+  } finally { f.cleanup(); }
+});
+
+test("session and standing choices cannot extend turn input consent past expiry or restart (INV-955)", () => {
+  for (const choice of ["session", "always"] as const) {
+    const f = fixture();
+    let now = new Date("2026-10-02T00:00:00Z");
+    const gate = new PolicyGate({ path: f.path, now: () => now });
+    const request: Extract<PolicyRequest, { kind: "tool" }> = {
+      kind: "tool", agentId: "a", agentName: "Ada", tool: "browser_act",
+      input: { action: "type", ref: "e1", text: "me@example.com" }, irreversible: "send email address",
+      inputScope: { turnId: "turn", conversation: "chat", principal: "person", target: "box:1",
+        origin: "https://forms.example", category: "email address", valueHash: "a".repeat(64) },
+    };
+    try {
+      gate.check(request); gate.grant(gate.pending()[0]!.id, "user", choice);
+      assert.equal(gate.check(request).allow, true);
+      assert.equal(new PolicyGate({ path: f.path, now: () => now }).check(request).allow, false, choice + " after restart");
+      now = new Date("2026-10-02T00:15:00Z");
+      assert.equal(gate.check(request).allow, false, choice + " after expiry, including original field");
+    } finally { f.cleanup(); }
+  }
+});
+
 test("a stop refuses everything, not just the next model call", () => {
   const { gate, cleanup } = fixture();
   try {
@@ -733,6 +825,32 @@ test("a click the box called irreversible must be approved, and the card says wh
     assert.equal(other.allow, false, "a different finding is a different approval");
     assert.equal(gate.check(pay).allow, true, "the approved click runs");
     assert.equal(gate.check(pay).allow, false, "once");
+  } finally {
+    cleanup();
+  }
+});
+
+// ── typing the person's details is sending them (INV-895) ─────────────────────────
+test("typing personal data into a site asks, and the card names the data, the site and the value", () => {
+  const { gate, cleanup } = fixture();
+  try {
+    const typeAddress: PolicyRequest = {
+      kind: "tool",
+      agentId: "agent-1",
+      agentName: "Ada",
+      tool: "browser_act",
+      input: { action: "type", ref: "e7", text: "上海市徐汇区某路 1 号" },
+      irreversible: 'send postal address to offer.example.com: type into "收货地址"',
+    };
+    const first = gate.check(typeAddress);
+    assert.equal(first.allow, false);
+    const card = gate.pending()[0]?.description ?? "";
+    assert.match(card, /^Ada: browser_act — send postal address to offer\.example\.com: type into "收货地址" — /);
+    assert.match(card, /上海市徐汇区某路 1 号/, "the person sees exactly what would be sent");
+    const id = (!first.allow && first.approval?.id) as string;
+    assert.equal(gate.grant(id, "alice"), true);
+    assert.equal(gate.check(typeAddress).allow, true, "approved, it continues");
+    assert.equal(gate.check({ ...typeAddress, input: { ...typeAddress.input, text: "another address" } }).allow, false, "a different value is a different approval");
   } finally {
     cleanup();
   }

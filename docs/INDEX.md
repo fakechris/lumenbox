@@ -22,11 +22,11 @@ this file and the headers disagree. Edit the header, not this table.
 | [02-product](02-product.md) | Product | current | 2026-08-19 |
 | [03-architecture](03-architecture.md) | Architecture | current | 2026-09-22 |
 | [04-design](04-design.md) | Design | current | 2026-09-27 |
-| [05-data](05-data.md) | Data | current | 2026-09-27 |
+| [05-data](05-data.md) | Data | current | 2026-10-01 |
 | [08-control-plane](08-control-plane.md) | Control plane | current | 2026-09-12 |
-| [11-roadmap](11-roadmap.md) | Roadmap and backlog | current | 2026-09-26 |
+| [11-roadmap](11-roadmap.md) | Roadmap and backlog | current | 2026-09-28 |
 | [21-dingtalk-wire](21-dingtalk-wire.md) | The DingTalk wire | current | 2026-08-28 |
-| [22-domain-model](22-domain-model.md) | The domain model: people, doors, workers, rooms | current | 2026-09-25 |
+| [22-domain-model](22-domain-model.md) | The domain model: people, doors, workers, rooms | current | 2026-10-01 |
 | [27-testing-and-release](27-testing-and-release.md) | Testing and release stability: ours, against OpenClaw and Hermes | current | 2026-09-01 |
 | [57-agent-consumer-contract](57-agent-consumer-contract.md) | Agent 消费者合同：谁去拉，谁保证，不同架构怎么统一 | current | 2026-09-15 |
 
@@ -34,17 +34,16 @@ this file and the headers disagree. Edit the header, not this table.
 
 | doc | title | status | updated |
 |---|---|---|---|
-| [06-deployment](06-deployment.md) | Deployment | current | 2026-09-07 |
-| [12-upgrades](12-upgrades.md) | Upgrading somebody's box | current | 2026-08-24 |
+| [06-deployment](06-deployment.md) | Deployment | current | 2026-09-28 |
+| [12-upgrades](12-upgrades.md) | Upgrading somebody's box | current | 2026-09-28 |
 | [13-design-review](13-design-review.md) | What goes to adversarial review before it is built | current | 2026-08-25 |
 | [17-two-agents](17-two-agents.md) | Two agents on one repository | current | 2026-08-26 |
 | [19-pitfalls](19-pitfalls.md) | Pitfalls: remembering how things went wrong | current | 2026-08-28 |
 | [37-onboarding](37-onboarding.md) | Getting started, every way in | current | 2026-09-28 |
-| [38-operators-guide](38-operators-guide.md) | The operator's guide (what the README used to be) | current | 2026-09-26 |
+| [38-operators-guide](38-operators-guide.md) | The operator's guide (what the README used to be) | current | 2026-09-29 |
 | [55-external-desktops](55-external-desktops.md) | External browsers and desktop control | current | 2026-09-15 |
 | [56-teaching-upgrade](56-teaching-upgrade.md) | Teaching draft upgrade | current | 2026-09-15 |
 | [70-cua-linux-validation](70-cua-linux-validation.md) | Linux CUA 回归矩阵与状态验收 | current | 2026-09-22 |
-| [73-outside-research-map](73-outside-research-map.md) | 外部调研全景：读过哪些项目、记在哪、拿走了什么 | current | 2026-09-26 |
 
 ## decision
 
@@ -60,15 +59,15 @@ this file and the headers disagree. Edit the header, not this table.
 | [20-completion-standard](20-completion-standard.md) | The standard of completion, written before the work | current | 2026-09-14 |
 | [23-context-compaction](23-context-compaction.md) | Why the agent kept compacting, and what long-horizon systems do instead | current | 2026-09-27 |
 | [24-context-memory](24-context-memory.md) | Context, memory and compaction: ours, against Hermes and OpenClaw | current | 2026-09-26 |
-| [25-workbuddy](25-workbuddy.md) | Workbuddy: skills, presets, delegated engines — the hands-on program | current | 2026-09-03 |
+| [25-workbuddy](25-workbuddy.md) | Workbuddy: skills, presets, delegated engines — the hands-on program | current | 2026-10-01 |
 | [26-inbound-reliability](26-inbound-reliability.md) | Inbound reliability: what a message goes through, and what mature harnesses do | current | 2026-09-01 |
 | [28-grokbot-0.30-delta](28-grokbot-0.30-delta.md) | What Grok Bot 0.30.0 changed, and what it says we should change | current | 2026-09-01 |
 | [29-bot-templates](29-bot-templates.md) | Bot templates: the bot packs itself, the new bot installs itself | current | 2026-09-14 |
 | [30-multi-box](30-multi-box.md) | Many boxes, one host: the multi-box mode | current | 2026-09-14 |
 | [31-harness-review](31-harness-review.md) | The turn engine, reviewed against the incident and three references | current | 2026-09-26 |
-| [32-coordination-protocol](32-coordination-protocol.md) | Coordination as protocol, slice one: a fork ledger that survives restarts, and fenced children | current | 2026-09-26 |
+| [32-coordination-protocol](32-coordination-protocol.md) | Coordination as protocol, slice one: a fork ledger that survives restarts, and fenced children | current | 2026-09-29 |
 | [33-mcp-face](33-mcp-face.md) | The box gets an MCP face: a per-job route on the host, never a credential in the box | current | 2026-09-03 |
-| [34-extensions](34-extensions.md) | Extensions: the edges you can edit without restarting the core (R36) | current | 2026-09-03 |
+| [34-extensions](34-extensions.md) | Extensions: the edges you can edit without restarting the core (R36) | current | 2026-09-29 |
 | [35-grok-onboarding](35-grok-onboarding.md) | Onboarding a Grok Bot box: the bot prepares its own box, the person connects from the laptop | current | 2026-09-03 |
 | [35-multiuser](35-multiuser.md) | Multiuser: doors as login, the org as the roster, boxes as the boundary | superseded by [36-enterprise](36-enterprise.md) — §4 revises the stage plan; §0 answers the edition question | 2026-09-03 |
 | [36-enterprise](36-enterprise.md) | The enterprise use case, and the editions that share one core | current | 2026-09-11 |
@@ -92,17 +91,12 @@ this file and the headers disagree. Edit the header, not this table.
 | [59-daily-digest-review](59-daily-digest-review.md) | 每日 research 总结的方案 review：参考 OVP 还是结合 OVP | current | 2026-09-19 |
 | [60-ovp-bridge-design](60-ovp-bridge-design.md) | OVP 接入程序（ovp-bridge）详细方案：哪个 vault、什么触发、保证什么 | superseded by [61-ovp-bridge-design-v2](61-ovp-bridge-design-v2.md) — §15 复审后按九项修订重写；第二版一个 id 贯穿、每个对象有终态、对 OVP 只提通用改动 | 2026-09-19 |
 | [61-ovp-bridge-design-v2](61-ovp-bridge-design-v2.md) | OVP 接入程序第二版：一个 id 贯穿、每个输入有终态、对 OVP 只提通用改动 | current | 2026-09-20 |
-| [62-cua-driver-research](62-cua-driver-research.md) | CUA 三方研究：执行合同、依赖取舍与渐进改造 | current | 2026-09-22 |
-| [63-jev-integration-research](63-jev-integration-research.md) | Jev 接入研究：先改善记忆与交付判断，再考虑执行加速 | current | 2026-09-22 |
-| [64-jev-memory-evaluation](64-jev-memory-evaluation.md) | Jev 第二轮研究：记忆实测、召回边界与可替换判断接口 | current | 2026-09-22 |
 | [65-context-recovery-design](65-context-recovery-design.md) | 上下文恢复方案（提案）：新会话、干净会话与任务重建 | current | 2026-09-22 |
-| [66-awesome-jev-lumenbox-opportunities](66-awesome-jev-lumenbox-opportunities.md) | Awesome Jev 全域研究：LumenBox 业务角色、运行时与 CUA 的结合点 | current | 2026-09-22 |
-| [67-jev-business-pilot](67-jev-business-pilot.md) | Jev 业务判断实测：引用检查、资料筛选与线索边界 | current | 2026-09-22 |
-| [68-jev-report-audit](68-jev-report-audit.md) | Jev 研究报告复核：证据边界与只读引用审查合同 | current | 2026-09-22 |
 | [69-fidelity-and-evidence-root-causes](69-fidelity-and-evidence-root-causes.md) | 采集失真与证据蒸发：两类问题的根因、复发路径与卡口 | current | 2026-09-22 |
 | [71-evidence-provenance-practice](71-evidence-provenance-practice.md) | 证据与溯源的业界实践（2025–2026）：我们领先在哪、缺在哪 | current | 2026-09-22 |
-| [72-laya-vs-jev-language-evaluation](72-laya-vs-jev-language-evaluation.md) | laya 与 Jev 的中英文对比实测：差距在任务类型，不在语言 | current | 2026-09-23 |
 | [74-goal-mode](74-goal-mode.md) | Goal 模式：一个持久目标、一个有界的续跑循环、一道不归执行者管的完成闸门 | current | 2026-09-27 |
+| [75-cost-per-accepted-task](75-cost-per-accepted-task.md) | Cost per accepted task requires an auditable denominator | current | 2026-09-29 |
+| [76-grokbot-0.63-primary-bot](76-grokbot-0.63-primary-bot.md) | What Grok Bot 0.63's Primary Bot is, and what it says we should change | current | 2026-10-02 |
 
 ## handoff
 

@@ -15,6 +15,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type Anthropic from "@anthropic-ai/sdk";
 import { OpenAIWireClient, fromOpenAIResponse, toOpenAIRequest } from "./openai-wire.ts";
+import { priceOf, summariseSpend } from "./spend.ts";
 
 test("a full conversation round-trips: system, tools, tool results, screenshots", () => {
   const request = toOpenAIRequest({
@@ -148,6 +149,77 @@ test("responses map to Anthropic shape: tool calls, finish reasons, usage", () =
       .stop_reason,
     "max_tokens"
   );
+});
+
+test("only verified OpenAI cached_tokens is subtracted from inclusive prompt_tokens", () => {
+  const response = { usage: { prompt_tokens: 100, completion_tokens: 7,
+    prompt_tokens_details: { cached_tokens: 40 } } };
+  const direct = fromOpenAIResponse(response, { officialOpenAI: true });
+  const compatible = fromOpenAIResponse(response);
+  assert.equal(direct.usage.input_tokens, 60);
+  assert.equal(direct.usage.cache_read_input_tokens, 40);
+  assert.equal(direct.usage.cache_creation_input_tokens, 0);
+  assert.equal((direct.usage as { metering?: string }).metering, "complete");
+  assert.equal(direct.usage.input_tokens + (direct.usage.cache_read_input_tokens ?? 0), 100);
+  assert.equal((compatible.usage as { metering?: string }).metering, "cache_unknown");
+  assert.equal(compatible.usage.cache_read_input_tokens, null);
+
+  const money = priceOf({ model: "test", inputTokens: 60, outputTokens: 7,
+    cacheReadTokens: 40, cacheWriteTokens: 0, metering: "complete" },
+  { test: { inputPerM: 2, cacheReadPerM: .2, cacheWritePerM: 3, outputPerM: 4 } });
+  assert.equal(money, (60 * 2 + 40 * .2 + 7 * 4) / 1e6);
+});
+
+test("absent, conflicting and unsupported provider metering withhold money", () => {
+  const samples = [
+    [undefined, "missing"],
+    [{ prompt_tokens: 1, completion_tokens: 2 }, "cache_unknown"],
+    [{ prompt_tokens: 2, completion_tokens: 3, prompt_tokens_details: { cached_tokens: 3 } }, "invalid"],
+    [{ prompt_tokens: -1, completion_tokens: 3 }, "invalid"],
+  ] as const;
+  for (const [usage, expected] of samples) {
+    const parsed = fromOpenAIResponse({ usage }, { officialOpenAI: true });
+    assert.equal((parsed.usage as { metering?: string }).metering, expected);
+    const row = { seq: 1, at: "2026-09-29T00:00:00Z", agentId: "a", agentName: "a",
+      provider: "openai", model: "test", round: 0, inputTokens: parsed.usage.input_tokens,
+      outputTokens: parsed.usage.output_tokens, cacheReadTokens: parsed.usage.cache_read_input_tokens ?? 0,
+      cacheWriteTokens: parsed.usage.cache_creation_input_tokens ?? 0,
+      metering: expected as "missing" | "invalid" | "cache_unknown" };
+    const report = summariseSpend([row], { rates: { test: { inputPerM: 2, outputPerM: 4 } } });
+    assert.equal(report.money, undefined);
+    assert.equal(report.unmeasured[0]?.status, expected);
+  }
+  const oldRow = { seq: 0, at: "2026-09-29T00:00:00Z", agentId: "a", agentName: "a",
+    provider: "old", model: "test", round: 0, inputTokens: 1, outputTokens: 0,
+    cacheReadTokens: 0, cacheWriteTokens: 0 };
+  assert.equal(summariseSpend([oldRow], { rates: { test: { inputPerM: 2, outputPerM: 4 } } }).money, 2 / 1e6);
+});
+
+test("SSE tail usage wins after choices; missing tail never means a free call", async () => {
+  const original = globalThis.fetch;
+  try {
+    for (const tail of [
+      { usage: { prompt_tokens: 10, completion_tokens: 3, prompt_tokens_details: { cached_tokens: 4 } }, expected: "complete" },
+      { usage: undefined, expected: "missing" },
+    ]) {
+      globalThis.fetch = async () => new Response(
+        `data: ${JSON.stringify({ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] })}\n\n` +
+        (tail.usage ? `data: ${JSON.stringify({ choices: [], usage: tail.usage })}\n\n` : "") +
+        "data: [DONE]\n\n",
+        { status: 200, headers: { "content-type": "text/event-stream" } }
+      );
+      const wire = new OpenAIWireClient({ baseURL: "https://api.openai.com/v1" });
+      const message = await wire.messages.stream({ model: "m", max_tokens: 10,
+        messages: [{ role: "user", content: "hi" }] } as Anthropic.MessageCreateParamsNonStreaming).finalMessage();
+      assert.equal((message.usage as { metering?: string }).metering, tail.expected);
+      if (tail.usage) {
+        assert.equal(message.usage.input_tokens, 6);
+        assert.equal(message.usage.cache_read_input_tokens, 4);
+      }
+    }
+  } finally {
+    globalThis.fetch = original;
+  }
 });
 
 test("the stream shim assembles deltas and fires the engine's progress signals", async () => {

@@ -17,15 +17,20 @@ import {
   secretMatches,
   presentedSecret,
   webhookPrompt,
+  liveSecrets,
+  presentedTimestamp,
+  ROTATION_OVERLAP_MS,
   signatureMatches,
+  withinReplayWindow,
   presentedSignature,
   HookRate,
 } from "./webhooks.ts";
 import { parseSkillFile, skillFrom } from "./skills.ts";
 
-function store(): { hooks: Webhooks; cleanup: () => void } {
+function store(): { hooks: Webhooks; path: string; cleanup: () => void } {
   const home = mkdtempSync(join(tmpdir(), "agentbox-webhooks-"));
-  return { hooks: new Webhooks(webhooksPath(home)), cleanup: () => rmSync(home, { recursive: true, force: true }) };
+  const path = webhooksPath(home);
+  return { hooks: new Webhooks(path), path, cleanup: () => rmSync(home, { recursive: true, force: true }) };
 }
 
 test("a routine's URL is minted once and never changes", () => {
@@ -43,6 +48,37 @@ test("a routine's URL is minted once and never changes", () => {
     const rotated = hooks.rotate(first.id);
     assert.equal(rotated?.id, first.id);
     assert.notEqual(rotated?.secret, first.secret);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a rotated secret keeps working through the overlap, then stops; a leak can end it now (INV-116)", () => {
+  const { hooks, path, cleanup } = store();
+  try {
+    const first = hooks.ensure("box-1", "file-it");
+    const at = new Date("2026-10-08T08:00:00Z");
+    const rotated = hooks.rotate(first.id, at)!;
+    // Both live inside the window: the phone has a day to be updated.
+    assert.deepEqual(liveSecrets(rotated, at), [rotated.secret, first.secret]);
+    assert.deepEqual(liveSecrets(rotated, new Date(at.getTime() + ROTATION_OVERLAP_MS - 1)), [rotated.secret, first.secret]);
+    // After it, only the new one.
+    assert.deepEqual(liveSecrets(rotated, new Date(at.getTime() + ROTATION_OVERLAP_MS + 1)), [rotated.secret]);
+    // A second rotation inside the window replaces the previous secret: never three.
+    const again = hooks.rotate(first.id, new Date(at.getTime() + 60_000))!;
+    assert.deepEqual(liveSecrets(again, at), [again.secret, rotated.secret]);
+    assert.ok(!liveSecrets(again, at).includes(first.secret), "the first secret is gone");
+    // The rotation was because of a leak: the overlap ends at once.
+    const revoked = hooks.revokePrevious(first.id)!;
+    assert.deepEqual(liveSecrets(revoked, at), [again.secret]);
+    assert.equal(revoked.previousSecret, undefined);
+    // A record written before this field existed reads as one secret.
+    assert.deepEqual(liveSecrets({ secret: "only" }), ["only"]);
+    // The overlap is on disk, so the door's own process sees it.
+    hooks.rotate(first.id, at);
+    const reread = new Webhooks(path).byId(first.id)!;
+    assert.equal(reread.previousSecret, again.secret);
+    assert.deepEqual(liveSecrets(reread, at), [reread.secret, again.secret]);
   } finally {
     cleanup();
   }
@@ -150,6 +186,35 @@ test("the endpoint refuses a wrong secret and an unknown id the same way, and ru
     assert.equal(right.status, 409);
     assert.match(((await right.json()) as { error: string }).error, /No webhook routine "file-it"/);
 
+    // A signed request with a stale timestamp is a replay, refused in the same words as a wrong
+    // secret; the same signature with a live timestamp reaches the routine lookup (INV-115).
+    const { createHmac } = await import("node:crypto");
+    const body = "https://example.com/b";
+    const stale = String(Math.floor(Date.now() / 1000) - 3600);
+    const replayed = await fetch(`${base}/hooks/${record.id}`, {
+      method: "POST",
+      headers: { "x-lumenbox-timestamp": stale, "x-lumenbox-signature": createHmac("sha256", record.secret).update(`${stale}.${body}`).digest("hex") },
+      body,
+    });
+    assert.equal(replayed.status, 401);
+    assert.equal(((await replayed.json()) as { error: string }).error, said.error, "a replay is refused like a bad secret");
+    const fresh = String(Math.floor(Date.now() / 1000));
+    const timely = await fetch(`${base}/hooks/${record.id}`, {
+      method: "POST",
+      headers: { "x-lumenbox-timestamp": fresh, "x-lumenbox-signature": createHmac("sha256", record.secret).update(`${fresh}.${body}`).digest("hex") },
+      body,
+    });
+    assert.equal(timely.status, 409, "authenticated; only the routine is missing here");
+
+    // After a rotation the old secret still opens the door for the overlap (INV-116).
+    const beforeRotation = record.secret;
+    hooks.rotate(record.id);
+    const oldStillWorks = await fetch(`${base}/hooks/${record.id}`, { method: "POST", headers: { authorization: `Bearer ${beforeRotation}` }, body: "https://example.com/c" });
+    assert.equal(oldStillWorks.status, 409, "the old secret authenticates during the overlap");
+    hooks.revokePrevious(record.id);
+    const oldRevoked = await fetch(`${base}/hooks/${record.id}`, { method: "POST", headers: { authorization: `Bearer ${beforeRotation}` }, body: "https://example.com/c" });
+    assert.equal(oldRevoked.status, 401, "and not once the overlap is ended");
+
     // A GET is not a trigger: a link preview or a crawler must not start work.
     const got = await fetch(`${base}/hooks/${record.id}`, { headers: { authorization: `Bearer ${record.secret}` } });
     assert.equal(got.status, 405);
@@ -196,6 +261,36 @@ test("a body signed with the secret is accepted, and a tampered one is not", asy
   assert.equal(presentedSignature({ "x-hub-signature-256": "sha256=abc" }), "sha256=abc");
   assert.equal(presentedSignature({ "x-lumenbox-signature": "abc" }), "abc");
   assert.equal(presentedSignature({}), undefined);
+});
+
+test("a signed timestamp binds the request to a moment, and an old one is a replay (INV-115)", async () => {
+  const { createHmac } = await import("node:crypto");
+  const secret = "lmbxhook_test";
+  const body = JSON.stringify({ url: "https://example.com/v" });
+  const now = new Date("2026-10-08T08:00:00Z");
+  const seconds = String(Math.floor(now.getTime() / 1000));
+  const signedWithTime = createHmac("sha256", secret).update(`${seconds}.${body}`, "utf8").digest("hex");
+  const signedBodyOnly = createHmac("sha256", secret).update(body, "utf8").digest("hex");
+
+  // Stripe's shape: the signature covers `<timestamp>.<body>`.
+  assert.equal(signatureMatches(body, signedWithTime, secret, seconds), true);
+  // The timestamp is in the signature, so a replayer cannot freshen it.
+  assert.equal(signatureMatches(body, signedWithTime, secret, String(Number(seconds) + 600)), false);
+  // And a body-only signature does not pass once a timestamp is claimed.
+  assert.equal(signatureMatches(body, signedBodyOnly, secret, seconds), false);
+
+  // The window: five minutes either side, unparsable refused.
+  assert.equal(withinReplayWindow(seconds, now), true);
+  assert.equal(withinReplayWindow(String(Number(seconds) - 299), now), true);
+  assert.equal(withinReplayWindow(String(Number(seconds) - 301), now), false, "older than the window is a replay");
+  assert.equal(withinReplayWindow(String(Number(seconds) + 301), now), false, "the future is the same replay with the clock moved");
+  assert.equal(withinReplayWindow("2026-10-08T07:58:00Z", now), true, "an ISO instant is read too");
+  assert.equal(withinReplayWindow("yesterday", now), false);
+  assert.equal(withinReplayWindow("", now), false);
+
+  assert.equal(presentedTimestamp({ "x-lumenbox-timestamp": seconds }), seconds);
+  assert.equal(presentedTimestamp({ "x-signature-timestamp": [seconds] }), seconds);
+  assert.equal(presentedTimestamp({}), undefined);
 });
 
 test("a hook has a ceiling on how often it fires, and the refusal says when to come back", () => {

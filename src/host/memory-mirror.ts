@@ -8,12 +8,14 @@
 
 import { createHash } from "node:crypto";
 import type { AgentRegistry } from "../agents/registry.ts";
-import { renderMemoryFiles } from "./memory.ts";
+import { legacyMemoryMirrorDir, renderMemoryFiles } from "./memory.ts";
 import { standingBoxFiles } from "./standing.ts";
 
 export interface MemoryMirrorBox {
   writeFile(path: string, content: string): Promise<unknown>;
   readFile(path: string, range?: { startLine?: number; endLine?: number }): Promise<{ content: string }>;
+  /** Used once per box to remove the slug-keyed directories (INV-867); a box without it keeps them. */
+  exec?(command: string, options?: { actor?: string; timeoutMs?: number }): Promise<unknown>;
 }
 
 /** Past every line a standing file can hold (8 KiB), so the read back is the whole file. */
@@ -33,6 +35,11 @@ export interface MemoryMirrorDeps {
 export class MemoryMirror {
   /** What each path last held, so an unchanged file is not rewritten on every remembered fact. */
   private readonly written = new Map<string, string>();
+  /**
+   * Slug-keyed directories already removed from each box (the orchestrator hands out one client
+   * per box), so each goes once per box however many agents' names map to it.
+   */
+  private readonly cleaned = new WeakMap<MemoryMirrorBox, Set<string>>();
 
   constructor(private readonly deps: MemoryMirrorDeps) {}
 
@@ -47,7 +54,7 @@ export class MemoryMirror {
     // the last-write hash says nothing about them (INV-803). Each is read back every sync and
     // rewritten from the host copy — the canonical one — when it differs or is gone, with one line
     // of log; the box copy is never adopted.
-    const memory = renderMemoryFiles(agent.profile.name, this.deps.registry.readMemoryRecords(agentId));
+    const memory = renderMemoryFiles(agentId, agent.profile.name, this.deps.registry.readMemoryRecords(agentId));
     const standing = standingBoxFiles(this.deps.registry.dirFor(agentId), agentId, agent.profile.name);
     let written = 0;
     for (const file of [...memory, ...standing]) {
@@ -100,6 +107,42 @@ export class MemoryMirror {
   /** Every agent, for when the box (re)appears. A fresh box has none of the files. */
   async syncAll(): Promise<void> {
     this.written.clear();
-    for (const agent of this.deps.registry.list()) await this.sync(agent.id);
+    const agents = this.deps.registry.list();
+    // An agent removed while this runs (it is fired without being awaited) is skipped, not an
+    // unhandled rejection: the mirror is best-effort, and a deleted agent has nothing to mirror.
+    for (const agent of agents) {
+      try {
+        await this.removeLegacy(agent.id, agents);
+        await this.sync(agent.id);
+      } catch (error) {
+        this.deps.log?.(`${agent.profile.name}: mirror skipped (${error instanceof Error ? error.message : String(error)})`);
+      }
+    }
+  }
+
+  /**
+   * Removes the slug-keyed mirror directory an agent's name maps to (INV-867). Those directories are
+   * where two agents' memories were mixed; they are derived from the host record, which the id-keyed
+   * mirror rewrites in full, so nothing is lost. Only the exact directory is removed — its name is
+   * `[a-z0-9-]` by construction — and never one that is some agent's id.
+   */
+  private async removeLegacy(agentId: string, agents: readonly { id: string; profile: { name: string } }[]): Promise<void> {
+    const box = this.deps.box(agentId);
+    const agent = agents.find(entry => entry.id === agentId);
+    if (box?.exec === undefined || agent === undefined) return;
+    const dir = legacyMemoryMirrorDir(agent.profile.name);
+    if (agents.some(entry => dir.endsWith(`/${entry.id}`))) return;
+    const done = this.cleaned.get(box) ?? new Set<string>();
+    if (done.has(dir)) return;
+    done.add(dir);
+    this.cleaned.set(box, done);
+    // Only where the old mirror is actually there: it always wrote profile.md. A fresh box, or one
+    // already rid of it, gets no command at all.
+    if ((await this.boxCopy(box, `${dir}/profile.md`)) === undefined) return;
+    try {
+      await box.exec(`rm -rf -- '${dir}'`, { actor: "host:memory-mirror", timeoutMs: 30_000 });
+    } catch (error) {
+      this.deps.log?.(`could not remove the old shared mirror ${dir} (${error instanceof Error ? error.message : String(error)})`);
+    }
   }
 }

@@ -26,6 +26,15 @@ function harness() {
   const seen: { conversation: string; text: string }[] = [];
   let concurrent = 0;
   let peak = 0;
+  // A SLOW brief does not sleep for a fixed time: it waits until the test opens this gate.
+  // The test then asserts on the order of events rather than on how many milliseconds a
+  // loaded event loop happened to take (INV-934).
+  let openGate: () => void = () => {};
+  const gate = new Promise<void>(resolve => {
+    openGate = resolve;
+  });
+  let slowFinished = false;
+  const finished: string[] = [];
 
   const bus = new AgentBus(
     registry,
@@ -34,7 +43,12 @@ function harness() {
       peak = Math.max(peak, concurrent);
       const brief = inbound.map(message => message.text).join(" ");
       seen.push({ conversation, text: brief });
-      await new Promise(resolve => setTimeout(resolve, brief.includes("SLOW") ? 300 : 30));
+      if (brief.includes("SLOW")) {
+        await gate;
+        slowFinished = true;
+      } else {
+        await new Promise(resolve => setTimeout(resolve, 30));
+      }
       concurrent -= 1;
       if (brief.includes("BREAK")) throw new Error("this piece was unreadable");
       registry.appendTranscript(
@@ -42,6 +56,7 @@ function harness() {
         { role: "assistant", text: `read ${brief}`, at: new Date().toISOString() },
         conversation
       );
+      finished.push(brief);
     }
   );
 
@@ -53,8 +68,23 @@ function harness() {
     context,
     seen,
     peak: () => peak,
-    cleanup: () => rmSync(root, { recursive: true, force: true }),
+    finished,
+    releaseSlow: () => openGate(),
+    slowFinished: () => slowFinished,
+    cleanup: () => {
+      openGate();
+      rmSync(root, { recursive: true, force: true });
+    },
   };
+}
+
+/** Polls until `condition` holds; the timeout is a safety net, not the thing asserted. */
+async function until(condition: () => boolean, what: string, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error(`gave up waiting for ${what}`);
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
 }
 
 test("forks run at once, each in its own conversation, and only answers come back", async () => {
@@ -128,14 +158,21 @@ test("a fork cannot fork, and a hundred at once is refused with a number", async
 });
 
 test("an instruction arriving mid-join wakes the coordinator; late forks report as messages (R8)", async () => {
-  const { context, seen, cleanup } = harness();
+  const { context, seen, finished, releaseSlow, slowFinished, cleanup } = harness();
   try {
-    const started = Date.now();
     const pending = dispatchTool("Fork", { briefs: ["quick one", "SLOW SLOW SLOW"] }, context);
-    // The person speaks while fork 2 is still working.
-    setTimeout(() => context.bus.sendFromUser(context.agent.id, "actually, stop and summarise"), 60);
-    const result = await pending;
-    assert.ok(Date.now() - started < 250, `the join returned on the steer, not on the slow fork (${Date.now() - started}ms)`);
+    // The person speaks once the quick fork has answered and while fork 2 is still working:
+    // fork 2 cannot finish until the test lets it, so the join can only return on the steer.
+    await until(() => finished.includes("quick one"), "the quick fork to finish");
+    context.bus.sendFromUser(context.agent.id, "actually, stop and summarise");
+    // A join that waits for the slow fork would wait for the gate forever: fail it instead.
+    const result = await Promise.race([
+      pending,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("the join did not return on the steer")), 10_000).unref()
+      ),
+    ]);
+    assert.equal(slowFinished(), false, "the join returned on the steer, not on the slow fork");
     assert.match(result.text, /join was cut short: 1 of 2 finished/);
     assert.match(result.text, /fork 2 is still running/);
     assert.match(result.text, /read quick one/);
@@ -144,8 +181,11 @@ test("an instruction arriving mid-join wakes the coordinator; late forks report 
     assert.equal(context.bus.pendingCount(context.agent.id), 1);
 
     // The slow fork lands later, as a system message into the conversation that forked.
-    await new Promise(resolve => setTimeout(resolve, 400));
-    const late = seen.find(entry => entry.conversation === "main" && entry.text.includes("fork 2"));
+    releaseSlow();
+    const isLate = (entry: { conversation: string; text: string }) =>
+      entry.conversation === "main" && entry.text.includes("fork 2");
+    await until(() => seen.some(isLate), "the late fork to report into the parent conversation");
+    const late = seen.find(isLate);
     assert.ok(late, "the late fork's findings were delivered into the parent conversation");
     assert.match(late.text, /has finished/);
   } finally {
@@ -166,8 +206,9 @@ test("the background receipt forbids polling, predicting and narrating the deleg
     assert.match(result.text, /do not keep writing about the delegated work/);
     // And what will happen instead: the result arrives as its own message.
     assert.match(result.text, /Each result reaches you as its own message/);
-    await new Promise(resolve => setTimeout(resolve, 200));
-    assert.ok(seen.some(entry => entry.conversation === "main" && /has finished/.test(entry.text)), "the fork landed as a message");
+    const landed = () => seen.some(entry => entry.conversation === "main" && /has finished/.test(entry.text));
+    await until(landed, "the background fork to land as a message");
+    assert.ok(landed(), "the fork landed as a message");
   } finally {
     cleanup();
   }

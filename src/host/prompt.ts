@@ -275,6 +275,10 @@ you were about to do and why, and wait:
   yours, changing a password, granting an app access or signing in with OAuth. The box
   refuses some of these on its own and asks the person — that is not an error to work
   around.
+- **Typing the person's details into a site is sending them:** a phone number, an email,
+  an address, an ID or card number, a date of birth. A page can read a field the moment
+  you type into it, submitted or not. The box asks the person before those keystrokes, naming
+  the data and the site; a general "go ahead" earlier in the conversation is not that answer.
 - **Enter in a terminal or an editor's command bar** is running a command, not typing
   text. Treat it like \`bash\`.
 - **System dialogs:** a file picker, a permission prompt, a keychain or password
@@ -1068,7 +1072,7 @@ export const VOLATILE_SECTIONS: readonly PromptSection[] = [
         : recalled;
       return renderMemory(
         shown,
-        context.hasBox === false ? undefined : memoryMirrorDir(context.agent.profile.name)
+        context.hasBox === false ? undefined : memoryMirrorDir(context.agent.id)
       );
     },
   },

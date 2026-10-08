@@ -145,19 +145,27 @@ test("two boxes: files, skills, desktops and memory follow the agent's box; a sc
     await orchestrator.prompt(vera.id, "hi");
     assert.equal(grokFiles.get("/home/box/work/note.md"), "hello from my own box", `grok: ${[...grokFiles.keys()].join(",")} own: ${[...ownFiles.keys()].join(",")} events: ${events.join(" | ")}`);
     assert.equal(ownFiles.has("/home/box/work/note.md"), false, "nothing crossed to the own box");
-    assert.deepEqual(grokDisplays, [10], "her desktop is grok's :10");
+    assert.deepEqual(grokDisplays, [], "file-only turns must not start a desktop");
     assert.deepEqual(ownDisplays, []);
     assert.match(seenSkills[0]!, /Grok only/);
     assert.doesNotMatch(seenSkills[0]!, /Own only/);
-    assert.equal([...grokFiles.keys()].some(key => key.startsWith("/home/box/work/memory/vera/")), true, "the mirror followed her");
-    assert.equal([...ownFiles.keys()].some(key => key.startsWith("/home/box/work/memory/vera/")), false);
+    assert.equal([...grokFiles.keys()].some(key => key.startsWith(`/home/box/work/memory/${vera.id}/`)), true, "the mirror followed her");
+    assert.equal([...ownFiles.keys()].some(key => key.startsWith(`/home/box/work/memory/${vera.id}/`)), false);
 
     // Ada's turn is on the own box, with the own box's skills and desktop 1.
     await orchestrator.prompt(ada.id, "hi");
     assert.equal(ownFiles.get("/home/box/work/note.md"), "hello from my own box");
-    assert.deepEqual(ownDisplays, [1]);
+    assert.deepEqual(ownDisplays, [], "file-only turns must not start a desktop");
     assert.match(seenSkills[1]!, /Own only/);
     assert.doesNotMatch(seenSkills[1]!, /Grok only/);
+
+    // Explicit demand is scoped to that agent and concurrent opens share one startup.
+    const opened = await Promise.all(Array.from({ length: 20 }, () => orchestrator.ensureAgentDesktop(vera.id)));
+    assert.deepEqual(opened, Array(20).fill(10));
+    assert.deepEqual(grokDisplays, [10]);
+    assert.deepEqual(ownDisplays, []);
+    assert.equal(await orchestrator.ensureAgentDesktop(ada.id), 1);
+    assert.deepEqual(ownDisplays, [1]);
 
     // The scheduler sees both boxes' skills and sends grok's to an agent of grok.
     const scheduled = await orchestrator.scheduler.status();

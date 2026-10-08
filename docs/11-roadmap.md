@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: roadmap
-     updated: 2026-09-26
+     updated: 2026-09-28
 -->
 # Roadmap and backlog
 
@@ -2102,6 +2102,64 @@ item 1 is small enough that it does not have to be chosen against anything.
   principal. It records the turn loop only, from one write site, with `principal` optional.
 
 ---
+
+## What outside research decided (the studies themselves stay out of the repo)
+
+Eight studies of other products used to live here as docs 62, 63, 64, 66, 67, 68, 72 and 73.
+Research is not shipped (c11f918; AGENTS.md), so on 2026-09-28 their bodies moved to the local
+`research/docs/` and what they *decided* is kept below, as rules about our own system. Where a
+study measured something, the number stays with the study; what carries over is the decision
+and the boundary on it. The index of what was read lives on INV-599, not in the repo.
+
+**The desktop execution contract (was docs/62; INV-635–640).** Keep host → boxd. Fix
+correctness inside boxd's observe → locate → act → verify contract before anything else:
+snapshot-bound element references, an explicit window target, refusals that can be verified,
+and an action's *effect* kept apart from the task's *postcondition* ([03](03-architecture.md)
+owns the contract). No outside computer-use runtime becomes a default hard dependency. Order:
+correctness first, then a driver layer behind a capability interface, then — only when a real
+native macOS/Windows need exists — an optional out-of-process backend trial, measured on task
+success rather than adopted for completeness. A lightweight semantic backend is evaluated as a
+pinned helper process, never embedded in the host; outside benchmarks are offline-only and
+bring no second agent loop, fleet control plane or session identity. [70](70-cua-linux-validation.md)
+is the validation matrix that follows from this.
+
+**A judgment service, not a judgment agent (was docs/63 and 66; INV-600, INV-642).** Small
+structured judgments (rank these, does this support that) go through one host-managed interface
+with a replaceable backend, behind an A/B switch that can be turned off per use. They are not
+delegated to a conversational agent per decision — the queueing and context assembly would eat
+the gain — and they never take over the registry, the bus, the policy gate or the turn loop.
+Order of trial: memory candidate ranking; evidence check before delivery; then advisory-only
+uses. Not to be done with it: absorbing a new message into an old task automatically, letting
+a confidence score authorise a payment, publish or delete, reading screenshots, writing prose,
+deleting records by score, or marking work Done.
+
+**Memory selection promotes; it does not remove (was docs/64).** `chooseRelevant` lifts
+candidates into the budget and leaves the rest where they were — so a better selector improves
+"the useful fact gets in" and says nothing about "nothing stale gets in". Keeping unrelated
+memory out of the prompt needs its own projection contract and its own test (the strict memory
+projection in [65](65-context-recovery-design.md) is that). A selector that did better on the
+development fixtures is evidence to keep experimenting, not a production claim: the fixtures are
+not a held-out set, and three runs are not three times the sample.
+
+**Business judgments start read-only (was docs/67 and 68).** The first product use is a
+read-only citation review: which sentence cites which source, whether the source supports it,
+where evidence is missing. Screening material only promotes or ranks; it never excludes a source
+permanently, and high confidence is not permission to filter. A quote the checker cannot find in
+the fetched text is `quote_not_located` — never evidence that the source was fabricated
+(`quote-check.ts` uses this vocabulary). Two models agreeing is not ground truth; a label both
+call unknown usually means our label lacked evidence.
+
+**Route small models by task shape, not by language (was docs/72).** A small local classifier
+was as good in Chinese as in English, and close to the stronger judge on flat multi-class
+routing (triage, intent) — that cell may use it. On relational yes/no gating (authorisation,
+tool risk) it was indistinguishable from chance and failed open with high confidence; that cell
+stays with the stronger judge. A single blended accuracy hides exactly this split, so none is
+reported.
+
+**How research is kept (was docs/73).** A new study is an ISSUE under INV-599 carrying what the
+thing is, what we take, what we do not and why; candidates derive from it. Its notes, raw
+results and probe scripts go in `research/` at the repo root, which is ignored. Licences are
+recorded on the ISSUE: copyleft and source-available code is read for design, never copied.
 
 ## Explicitly not now, with the reason
 

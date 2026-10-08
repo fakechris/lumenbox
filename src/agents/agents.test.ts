@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRegistry } from "./registry.ts";
 import { STARTER_TEAM } from "../host/orchestrator.ts";
+import { toolAllowed } from "../host/scopes.ts";
 import { buildTools, dispatchTool } from "../host/tools.ts";
 import { AGENT_MESSAGE_MAX_LENGTH, AgentBus, type BusEvent, type InboundMessage } from "./bus.ts";
 
@@ -696,6 +697,9 @@ test("every tool is accounted for in the coordinator's set", () => {
     [],
     "a tool exists that the starter team's own lists have never heard of"
   );
+  // MCP tools too (INV-759). Their names arrive with the server, so the list has to name them by
+  // service; a coordinator that cannot see a connected service is the omission this guards against.
+  assert.ok(toolAllowed(coordinator, "anyservice__anytool"), "the coordinator's list withholds connected MCP services");
 });
 
 test("a restricted agent cannot create an unrestricted one", async () => {

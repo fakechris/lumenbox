@@ -289,6 +289,10 @@ where kind is one of: documents, images, video, audio, archives, code, other.
   },
   {
     slug: "morning-summary",
+    // The version shipped before 2026-10-08 suggested `schedule: daily 08:30`, which
+    // parseSchedule refuses (two fields, not five). A box that followed the example got a
+    // skill that never ran; naming the digest lets the fix reach it unasked (INV-966).
+    supersedes: ["d5c43334"],
     content: `---
 name: morning-summary
 description: Summarise yesterday's work directory changes into one morning note.
@@ -306,7 +310,9 @@ Write \`/home/box/work/notes/morning-<date>.md\` covering the last 24 hours:
 4. Reply with the note's path and the needs-a-decision list, nothing else.
 
 To run this every morning without being asked, add a schedule line to the
-frontmatter above, for example: \`schedule: daily 08:30\`. Scheduled runs are
+frontmatter above using five cron fields, for example \`schedule: "30 8 * * *"\`
+(08:30 every day; \`@daily\` also works). The hour is read on the host's clock
+unless you add \`timezone: Asia/Shanghai\` next to it. Scheduled runs are
 announced when they finish, and a missed window is skipped, never replayed.
 `,
   },
@@ -548,6 +554,33 @@ scope: global
 
 The script that wrote a file ran without an error. That says nothing about whether the
 file is right. Check the file, not the code that made it.
+
+## Writers available in the box
+
+Use Python 3 with the preinstalled libraries. Do not install dependencies into a running
+box or rename markdown to an Office extension. If an import fails, run \`box-doctor\`
+and report that the box image needs rebuilding/upgrading.
+
+- **Word (.docx):** \`from docx import Document\`; save, then reopen with
+  \`Document(path)\` and check paragraphs, tables and images against the request.
+- **Excel (.xlsx):** \`from openpyxl import Workbook, load_workbook\`; reopen with
+  \`load_workbook(path)\` and check sheets, cell values, formulas and formats.
+  openpyxl does not calculate formulas; do not claim cached results were recalculated.
+- **PowerPoint (.pptx):** \`from pptx import Presentation\`; reopen with
+  \`Presentation(path)\` and check slide order, text, pictures and tables.
+- **PDF:** \`from reportlab.pdfgen import canvas\` (or ReportLab Platypus for flowing
+  text). Read back with \`pdftotext\`; render pages with \`pdftoppm\` and inspect them.
+  Choose fonts covering the requested language; successful text extraction alone does
+  not prove glyphs or layout are correct.
+- **Images/charts:** Pillow (\`from PIL import Image\`) and matplotlib (use the
+  \`Agg\` backend for headless rendering). Reopen the saved image and inspect it.
+
+LibreOffice is not bundled. Office-library read-back checks content and structure, not
+Word/PowerPoint's rendered layout. When you cannot render and inspect an Office file,
+say that visual layout remains unverified; do not claim a PDF conversion happened.
+\`box-doctor\` checks library health with sample files, not your actual deliverable.
+
+## Check your actual output
 
 1. **Open what you made, fresh.** Read the file back from disk the way the person will
    get it: unzip a docx/xlsx/pptx and read the text, open a PDF and read a page, render a

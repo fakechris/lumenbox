@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: identity-and-authority
-     updated: 2026-09-25
+     updated: 2026-10-01
 -->
 # The domain model: people, doors, workers, rooms
 
@@ -156,9 +156,14 @@ build items 1–4 cannot produce one; see §7.
 - **Document reading is a box capability, not a door property.** A per-channel
   doc reader authorizes with that app's credentials, so two doors on one box
   would give the same worker different document reach depending on ingress —
-  doors selecting authority, exactly what this model forbids. The box names its
-  document-reading credential (default: the grandfathered channel's); which door
-  a link arrived through is irrelevant to whether it can be read.
+  doors selecting authority, exactly what this model forbids. The box's
+  document-reading credential is the set of every configured door app, tried in
+  turn (INV-871): which door a link arrived through is irrelevant to whether it
+  can be read — the readable set is the union of what each app's tenant grants,
+  the same through every door, and no credential enters the prompt. One app
+  alone (the grandfathered channel's, the earlier rule) holds within one tenant
+  and fails across two: tenant A's app cannot see tenant B's documents at all.
+  The arriving door's app is tried first only because it is likeliest to succeed.
 
 ## 4. Names are labels; ids are identity; incarnations revoke
 
@@ -268,9 +273,10 @@ the box's *identity* arrives first; its *membership machinery* stays late.
    lines included; dingtalk and telegram equivalents) become `${channelId}:`.
 4. Per-door routing: `defaultAgent`, box-roster `@Name`, roster verb, unknown-`@`
    correction from the same list. Document reading becomes the box capability of
-   §3 — the box's configured doc credential serves every door, replacing the
-   orchestrator singleton; a per-channel reader lookup is exactly the
-   door-selects-authority bug and is not the implementation.
+   §3 — every door app, tried in turn, serves every door, replacing the
+   orchestrator singleton. A per-channel reader lookup (each door reads only
+   with its own app) is exactly the door-selects-authority bug and is not the
+   implementation; the arriving door only orders the attempts.
 5. The `members` set on the box record; bind writing box membership (and
    link-only, never mint, on single-member boxes); the knock/bind CAS of §4.
 6. **Grant subjects to the box — by inventory, not by category.** The shipped
@@ -335,6 +341,14 @@ an agent and a secret. Bundles stack; a conflict between two bundles (the same M
 name with different configuration) is an error at load, not a silent override. Instructions
 concatenate installation → box → agent, in that order, as separate prompt sections.
 
+MCP tools are named `server__tool` and arrive with the server, after any `tools` list was
+written, so a list of exact names could only withhold every one of them (INV-759). A list
+therefore names a service as `server__*`, or every service the box's bundles carry as
+`mcp:*`. Both only narrow: they match nothing a bundle did not give the box, never a built-in
+tool, and a chat's scope intersects them like any other entry. The starter team and the
+catalog name `mcp:*`, except the reviewers, which may not change what they review and so get
+no service whose tools might write.
+
 ### 8.2a What a call does, and who it reaches (INV-691)
 
 Consent is spent where an action reaches past the box and the person who asked, not where it
@@ -345,6 +359,17 @@ person's machine, who can act) — and the box's per-call finding (INV-401) rais
 `irreversible`. A click in a page is `self` until the box says that click pays; counting every
 click would bury the few that matter. A guard test holds the declaration to the real tool list in
 both directions, because the table it replaced named a tool that did not exist.
+
+Typing is sending (INV-895): a value in a page's field is the page's the moment it is typed,
+submitted or not. So the box raises a `type` to `irreversible` too, before the keystrokes, when
+the field (its `autocomplete`, type, name or label) or the value itself (a phone number, an ID or
+card number that checks out) says it is the person's phone, email, address, date of birth, identity
+or card — naming the kind of data and the site that would receive it, and the card shows the value.
+A page on this machine is not asked about, nor the email or phone of a form that also wants a
+password: signing in is what naming the site asked for, and the password itself goes through
+`fill_secret`, bound to the site and the form's submit targets (INV-893). A consent covers that
+value for that site; an earlier "go ahead" in the conversation does not. `computer` typing through
+the desktop is outside this gate; the auto-review reviews it instead (shadow unless enforced).
 
 The gate reads it in three modes (`AGENTBOX_TIER_GATE`): **shadow**, the default, changes no
 decision and writes `tier` and `wouldAsk` on the `checked` row, summarised on the settings page;

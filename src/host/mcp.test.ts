@@ -299,3 +299,18 @@ test("a box sees only the servers its bundles name, and a host-level server's to
     cleanup();
   }
 });
+
+test("an MCP server's results keep an exchange out of memory unless the operator trusts it (INV-894)", () => {
+  const manager = new McpManager([
+    { name: "web", command: process.execPath },
+    { name: "kb", command: process.execPath, pollutesMemory: false },
+  ]);
+  try {
+    assert.equal(manager.pollutesMemory(`web${MCP_SEPARATOR}search`), true, "a server is somebody else's words by default");
+    assert.equal(manager.pollutesMemory(`kb${MCP_SEPARATOR}lookup`), false);
+    assert.equal(manager.pollutesMemory("bash"), false, "not an MCP tool: decided elsewhere");
+    assert.equal(manager.pollutesMemory(`gone${MCP_SEPARATOR}x`), false);
+  } finally {
+    manager.stop();
+  }
+});

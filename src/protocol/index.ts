@@ -579,6 +579,23 @@ export interface HealthResult {
     }[];
   }[];
   displays?: DisplayInfo[];
+  desktop_resources?: DesktopResources;
+}
+
+export interface DesktopResources {
+  idle_ms: number;
+  starts: number;
+  reclaims: number;
+  desktops: {
+    index: number;
+    state: "starting" | "ready" | "stopping" | "dormant" | "failed";
+    generation: number;
+    pinned: boolean;
+    references: number;
+    idle_ms: number;
+    retained_reason?: string;
+  }[];
+  memory_bytes?: number;
 }
 
 export interface DisplayInfo {
@@ -947,6 +964,8 @@ export interface BrowserRequest extends DisplayGuardProjection {
    * check is satisfied. Set by the host after the policy gate said so; never by the model.
    */
   confirmed?: boolean;
+  /** Host-held consent for a sensitive type; box rechecks target origin/category/value. */
+  inputApproval?: import("./sensitive-input.ts").SensitiveInputApproval;
   /**
    * For `act`: what the page should look like afterwards (INV-399). Not met is a failure,
    * with what was expected and what was found — "did it change" becomes "did it become

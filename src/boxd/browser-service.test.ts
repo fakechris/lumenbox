@@ -201,6 +201,33 @@ test("a secret is fillable only on the hosts it names; none named means nowhere"
   assert.equal(hostAllowed("", ["github.com"]), false);
 });
 
+import { secretFieldRefusal } from "./browser-service.ts";
+
+test("a secret goes only into a credential input whose form posts to a host it names", () => {
+  const domains = ["*.github.com"];
+  const login = { tag: "input", type: "password", formMethod: "post", submitTargets: ["https://github.com/session"] };
+  assert.equal(secretFieldRefusal(login, domains), undefined);
+  assert.equal(secretFieldRefusal({ tag: "input", type: "text", submitTargets: [] }, domains), undefined, "a field with no form is fine");
+
+  // The right host is not enough: a comment box there is posted for anyone to read.
+  assert.match(secretFieldRefusal({ tag: "textarea", type: "", formMethod: "post", submitTargets: ["https://github.com/comments"] }, domains) ?? "", /text area/);
+  assert.match(secretFieldRefusal({ tag: "input", type: "search", submitTargets: [] }, domains) ?? "", /type="search"/);
+  assert.match(secretFieldRefusal({ tag: "input", type: "hidden", submitTargets: [] }, domains) ?? "", /type="hidden"/);
+
+  // A form on the right page that sends the value elsewhere, by action or by one button's formaction.
+  assert.match(secretFieldRefusal({ ...login, submitTargets: ["https://collector.example/x"] }, domains) ?? "", /submits to collector\.example/);
+  assert.match(secretFieldRefusal({ ...login, submitTargets: ["https://github.com/session", "https://evil.example/"] }, domains) ?? "", /evil\.example/);
+  assert.match(secretFieldRefusal({ ...login, formMethod: "get" }, domains) ?? "", /in a URL/);
+  // A button can override the form: formmethod="get" puts the secret in a URL too.
+  assert.match(secretFieldRefusal({ ...login, submitMethods: ["post", "get"] }, domains) ?? "", /method="get"/);
+  assert.equal(secretFieldRefusal({ ...login, submitMethods: ["post"] }, domains), undefined);
+  // Cleartext to the right host is still cleartext; a page on this machine is exempt.
+  assert.match(secretFieldRefusal({ ...login, submitTargets: ["http://github.com/session"] }, domains) ?? "", /not https/);
+  assert.equal(secretFieldRefusal({ ...login, submitTargets: ["http://localhost:3000/login"] }, ["localhost:3000"]), undefined);
+  // A clobbered or unreadable action fails closed.
+  assert.match(secretFieldRefusal({ ...login, submitTargets: ["[object HTMLInputElement]"] }, domains) ?? "", /unreadable address/);
+});
+
 // ── tabs by label, a cap, and a page that moved (INV-408) ─────────────────────────
 import { driftNote, nextLabel, pageBudgetReason, PAGE_BUDGET } from "./browser-service.ts";
 
@@ -345,4 +372,31 @@ test("browser verification requires requested state and treats unreadable target
   assert.equal(verifyBrowserExpectation({ value: "hello" }, state({ value: "other" }), "").status, "unsatisfied");
   assert.equal(verifyBrowserExpectation({ gone: true }, undefined, "").status, "unknown", "read failure cannot prove disappearance");
   assert.equal(verifyBrowserExpectation({ appears: "Saved" }, undefined, "Saved successfully").status, "satisfied");
+});
+
+// ── typing is sending (INV-895) ────────────────────────────────────────────────────
+import { sensitiveInputReason, type InputField } from "./browser-service.ts";
+
+test("the person's details going into a third-party page are asked about, naming the data and the site", () => {
+  const field = (over: Partial<InputField>): InputField => ({ tag: "input", type: "text", autocomplete: "", name: "", label: "", signIn: false, ...over });
+  const shop = "shop.example.com";
+  // By the field: autocomplete, type, or the words a person reads.
+  assert.equal(sensitiveInputReason(field({ autocomplete: "tel", label: "Phone" }), "anything", shop), 'send phone number to shop.example.com: type into "Phone"');
+  assert.match(sensitiveInputReason(field({ autocomplete: "shipping street-address" }), "1 Main St", shop) ?? "", /^send postal address to shop\.example\.com/);
+  assert.match(sensitiveInputReason(field({ type: "email" }), "a@b.co", shop) ?? "", /email address/);
+  assert.match(sensitiveInputReason(field({ label: "收货地址" }), "上海市徐汇区", shop) ?? "", /postal address/);
+  assert.match(sensitiveInputReason(field({ label: "Email address" }), "x", shop) ?? "", /email address/, "an email address field is not a postal one");
+  assert.match(sensitiveInputReason(field({ autocomplete: "cc-number" }), "4111", shop) ?? "", /payment card/);
+  assert.match(sensitiveInputReason(field({ name: "birth_date" }), "1990-01-01", shop) ?? "", /date of birth/);
+  // By the value, whatever the field calls itself.
+  assert.match(sensitiveInputReason(field({ label: "Notes" }), "13812345678", shop) ?? "", /phone number/);
+  assert.match(sensitiveInputReason(field({ label: "Notes" }), "4111 1111 1111 1111", shop) ?? "", /payment card/);
+  assert.match(sensitiveInputReason(field({ label: "Notes" }), "11010519491231002X", shop) ?? "", /identity number/);
+  // Not asked: an ordinary field, a number that is not a card, nothing typed, this machine, a sign-in.
+  assert.equal(sensitiveInputReason(field({ label: "Search" }), "running shoes", shop), undefined);
+  assert.equal(sensitiveInputReason(field({ label: "Quantity" }), "4111111111111112", shop), undefined, "fails Luhn: an order number, not a card");
+  assert.equal(sensitiveInputReason(field({ type: "tel" }), "", shop), undefined);
+  assert.equal(sensitiveInputReason(field({ type: "tel" }), "13812345678", "localhost:3000"), undefined);
+  assert.equal(sensitiveInputReason(field({ type: "email", signIn: true }), "me@example.com", "github.com"), undefined, "signing in is what naming the site asked for");
+  assert.match(sensitiveInputReason(field({ autocomplete: "cc-number", signIn: true }), "4111111111111111", shop) ?? "", /payment card/, "a card is still a card on a form with a password");
 });

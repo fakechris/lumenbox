@@ -155,4 +155,4 @@ M1–M5 各一条，产品面 C2.1/C2.2/C2.3 各一条，外加 docs/22 §3 的�
 
 引用：docs/22-domain-model.md（规范）、docs/36-enterprise.md §0/§1/§4、docs/50-enterprise-primitives.md、
 docs/37-onboarding.md、docs/39-ui-objects.md、docs/45-teams.md、docs/51-follow-through.md §3.3、
-docs/research/2026-09-14-octop-follow-through.md。
+research/2026-09-14-octop-follow-through.md。

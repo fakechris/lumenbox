@@ -54,8 +54,10 @@ keep a task board of what they owe you.
 2. **Give it a key.** Settings opens by itself: pick a model provider and paste a key
    (Anthropic, MiniMax, DeepSeek, Zhipu, Moonshot, OpenAI, or any OpenAI-compatible endpoint).
 3. **Give it a computer.** Install [Docker Desktop](https://www.docker.com/products/docker-desktop/)
-   or [OrbStack](https://orbstack.dev/), then press *Start the box* in Settings. No Docker? A box
-   can live on another machine of yours, or be a Grok Bot's box — see
+   or [OrbStack](https://orbstack.dev/), then press *Start the box* in Settings. The first time,
+   that pulls `fakechris/lumenbox` at this app's version from Docker Hub. From a checkout,
+   `npm run build:image` builds it locally instead. No Docker? A box can live on another
+   machine of yours, or be a Grok Bot's box — see
    [Getting started](docs/37-onboarding.md) for every path.
 4. **Say hello.** Ada answers. Ask for something real.
 
@@ -74,6 +76,13 @@ The box does not have to be on your Mac.
 - **Any Linux machine.** One script, `lumen-bridge.sh`, from the releases page.
 
 Agents are created into a box and stay there; each box keeps its own desktops, skills and memory.
+Desktops start on demand. A newly created, unused desktop can release its processes after
+15 idle minutes; viewing, pinning or using it prevents automatic cleanup. Existing sessions
+and uncertain workloads are kept. Settings shows the resource state and why a desktop is
+retained. **Keep desktop** pins it for the current daemon session. Files and browser profiles
+are never deleted by reclamation. Operators can set `BOXD_DESKTOP_IDLE_MS` in the box environment;
+`0` disables automatic reclamation. A failed stop is shown as an unknown process state and
+requires inspection before that desktop can be reused.
 
 ## How it is different
 

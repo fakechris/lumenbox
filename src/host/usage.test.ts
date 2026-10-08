@@ -290,6 +290,17 @@ test("rows written before kinds existed are counted, not dropped", () => {
   assert.equal(row?.totals.outputTokens, 20);
 });
 
+test("an unmeasured aside keeps its uncertainty after a ledger reload", () => {
+  const path = logPath();
+  const log = new UsageLog(path);
+  log.recordAside({ kind: "summarize", agentId: "a", agentName: "a",
+    provider: "compatible", model: "m", usage: { input_tokens: 42,
+      output_tokens: 0, metering: "cache_unknown" } });
+  const [row] = new UsageLog(path).since(0, 10);
+  assert.equal(row?.inputTokens, 42);
+  assert.equal(row?.metering, "cache_unknown");
+});
+
 test("a file that lost its beginning says so", () => {
   const path = logPath();
   const log = new UsageLog(path);

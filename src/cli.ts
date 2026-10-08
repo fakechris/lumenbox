@@ -19,6 +19,7 @@ import { ScopeStore } from "./host/scopes.ts";
 import { attachedBox, tokenOf } from "./box/boxes.ts";
 import {
   BACKUP_CARRIES,
+  BOX_IMAGE_REPO,
   type BoxConfig,
   BoxManager,
   type BoxStatus,
@@ -96,6 +97,24 @@ async function cmdBoxBuild(): Promise<number> {
   out(`Building ${config.image}. This takes a few minutes the first time.`);
   await manager.build(context, line => out(dim(line)));
   out("Done. Start it with `agentbox box up`.");
+  out(`Publish it with \`agentbox box push\` (needs \`docker login\`).`);
+  return 0;
+}
+
+async function cmdBoxPush(): Promise<number> {
+  const manager = new BoxManager(boxConfig());
+  if (!(await manager.imageExists())) {
+    err(`Image ${manager.config.image} is not on this machine. Run \`npm run build:image\` first.`);
+    return 1;
+  }
+  try {
+    await manager.push(line => out(dim(line)));
+  } catch (error) {
+    err(error instanceof Error ? error.message : String(error));
+    err("A push to Docker Hub needs `docker login` on an account that can write fakechris/lumenbox.");
+    return 1;
+  }
+  out(`Pushed ${manager.config.image} and ${BOX_IMAGE_REPO}:latest.`);
   return 0;
 }
 
@@ -165,7 +184,7 @@ async function cmdBoxUp(argv: string[]): Promise<number> {
       if (rolled === undefined) {
         err("");
         err(
-          "There is no `agentbox/box:previous` to go back to, so the box has been left as " +
+          `There is no \`${BOX_IMAGE_REPO}:previous\` to go back to, so the box has been left as ` +
             "it is. Rebuild a working image and run `agentbox box up --recreate` again. " +
             "Your data is in the backup taken a moment ago."
         );
@@ -213,7 +232,7 @@ async function rollBack(
   withHost: boolean,
   onOutput: (line: string) => void
 ): Promise<BoxStatus | undefined> {
-  const image = `${process.env.AGENTBOX_IMAGE_REPO ?? "agentbox/box"}:previous`;
+  const image = `${process.env.AGENTBOX_IMAGE_REPO ?? BOX_IMAGE_REPO}:previous`;
   const manager = new BoxManager(boxConfig({ withHost, image }));
   if (!(await manager.imageExists())) return undefined;
   onOutput(`going back to ${image}`);
@@ -374,7 +393,7 @@ async function cmdBoxRollback(argv: string[]): Promise<number> {
   const withHost = argv.includes("--with-host");
   const status = await rollBack(withHost, line => out(dim(line)));
   if (status === undefined) {
-    err("There is no `agentbox/box:previous` image, so there is nothing to go back to.");
+    err(`There is no \`${BOX_IMAGE_REPO}:previous\` image, so there is nothing to go back to.`);
     return 1;
   }
   out("");
@@ -1412,11 +1431,14 @@ const USAGE = `agentbox — multi-agent orchestrator with a Docker box and Linux
 Usage: agentbox <command> [args]
 
 Box:
-  box build                 Build the box image (needs \`npm run build:boxd\` first)
+  box build                 Build fakechris/lumenbox:<version> and tag :latest
+                            (needs \`npm run build:boxd\` first)
+  box push                  Push that version and :latest to Docker Hub
   box upgrade [--yes]       Upgrade if it costs nobody anything; explain if not.
                             Safe to run on a timer.
-  box rollback              Put the box back on agentbox/box:previous
-  box up [--recreate]       Start the box and wait for its desktop
+  box rollback              Put the box back on fakechris/lumenbox:previous
+  box up [--recreate]       Start the box and wait for its desktop.
+                            Pulls fakechris/lumenbox:<version> when it is not local.
                             --recreate upgrades: destroys and rebuilds the
                             container from the image. Only the work and config
                             volumes survive. It backs them up first and refuses
@@ -1544,7 +1566,7 @@ Environment:
   AGENTBOX_PROVIDER         Which provider to use (see above)
   AGENTBOX_HOME             State directory (default ~/.agentbox)
   AGENTBOX_CONFIG           Config file (default <state>/config.json)
-  AGENTBOX_IMAGE            Box image tag (default agentbox/box:latest)
+  AGENTBOX_IMAGE            Box image tag (default fakechris/lumenbox:<package version>)
   AGENTBOX_BOX_HOST         Override where published ports are reachable
   AGENTBOX_WIDTH/HEIGHT     Box display size (default 1280x800)
   AGENTBOX_CONTROL_USERS    user:password:tenant,... for \`control up\`
@@ -1590,6 +1612,8 @@ async function main(): Promise<number> {
           return cmdBoxList();
         case "build":
           return cmdBoxBuild();
+        case "push":
+          return cmdBoxPush();
         case "up":
           return cmdBoxUp(boxArgs);
         case "connect":

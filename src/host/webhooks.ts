@@ -31,6 +31,14 @@ export interface WebhookRecord {
   /** The routine this fires. */
   slug: string;
   secret: string;
+  /**
+   * The secret before the last rotation, still accepted until `previousUntil` (INV-116). A
+   * rotation that cut the old secret off at that instant broke every shortcut on every phone
+   * until each was updated; an overlap makes rotating free and leaking still revocable — a
+   * second rotation inside the window replaces the previous secret, so there are never three.
+   */
+  previousSecret?: string;
+  previousUntil?: string;
   createdAt: string;
   /** When it last fired, and how it went. For the automations list. */
   lastFiredAt?: string;
@@ -121,12 +129,29 @@ export class Webhooks {
     return this.rows.map(row => ({ ...row }));
   }
 
-  /** A new secret for the same URL, so a leaked one is revoked without rebuilding the shortcut. */
-  rotate(id: string): WebhookRecord | undefined {
+  /**
+   * A new secret for the same URL, so a leaked one is revoked without rebuilding the shortcut.
+   * The old one keeps working for the overlap window (INV-116), so what is on a phone has time
+   * to be updated; `revoke` ends it sooner when the rotation is because of a leak.
+   */
+  rotate(id: string, now: Date = new Date()): WebhookRecord | undefined {
     this.reload();
     const row = this.rows.find(candidate => candidate.id === id);
     if (row === undefined) return undefined;
+    row.previousSecret = row.secret;
+    row.previousUntil = new Date(now.getTime() + ROTATION_OVERLAP_MS).toISOString();
     row.secret = newSecret();
+    this.save();
+    return { ...row };
+  }
+
+  /** Ends the overlap now: the previous secret stops working at once. */
+  revokePrevious(id: string): WebhookRecord | undefined {
+    this.reload();
+    const row = this.rows.find(candidate => candidate.id === id);
+    if (row === undefined) return undefined;
+    delete row.previousSecret;
+    delete row.previousUntil;
     this.save();
     return { ...row };
   }
@@ -168,6 +193,22 @@ function newSecret(): string {
   return `lmbxhook_${randomBytes(24).toString("base64url")}`;
 }
 
+/** How long the previous secret keeps working after a rotation: a day, enough to reach every phone. */
+export const ROTATION_OVERLAP_MS = 24 * 60 * 60_000;
+
+/**
+ * The secrets a hook accepts right now: the current one, and the previous one while its overlap
+ * lasts (INV-116). Everything that authenticates a request checks against each of these, so the
+ * two proofs (presented secret, signed body) and the overlap compose without a second code path.
+ */
+export function liveSecrets(record: Pick<WebhookRecord, "secret" | "previousSecret" | "previousUntil">, now: Date = new Date()): readonly string[] {
+  const previousLive =
+    record.previousSecret !== undefined &&
+    record.previousUntil !== undefined &&
+    Date.parse(record.previousUntil) > now.getTime();
+  return previousLive ? [record.secret, record.previousSecret!] : [record.secret];
+}
+
 /**
  * Whether a presented secret is the right one.
  *
@@ -190,11 +231,42 @@ export function secretMatches(presented: string, actual: string): boolean {
  * The body must be the bytes as received — re-serialising JSON changes whitespace and breaks
  * every signature — which is why the handler holds the raw text.
  */
-export function signatureMatches(body: string, presented: string, secret: string): boolean {
+export function signatureMatches(body: string, presented: string, secret: string, timestamp?: string): boolean {
   const offered = presented.trim().replace(/^sha256=/i, "");
   if (!/^[0-9a-f]{64}$/i.test(offered)) return false;
-  const expected = createHmac("sha256", secret).update(body, "utf8").digest("hex");
+  // Stripe's shape when a timestamp is sent: the signature covers `<timestamp>.<body>`, so the
+  // timestamp is bound to the body and cannot be freshened by a replayer. Without one, the
+  // signature is over the body alone — GitHub's shape, which has no timestamp to bind.
+  const signed = timestamp === undefined ? body : `${timestamp.trim()}.${body}`;
+  const expected = createHmac("sha256", secret).update(signed, "utf8").digest("hex");
   return timingSafeEqual(Buffer.from(expected, "hex"), Buffer.from(offered.toLowerCase(), "hex"));
+}
+
+/** How far from now a signed timestamp may be: Stripe's default, and enough for any clock a phone keeps. */
+export const REPLAY_WINDOW_MS = 5 * 60_000;
+
+/** The timestamp a sender offered beside its signature, as unix seconds (Stripe) or an ISO instant. */
+export function presentedTimestamp(
+  headers: Record<string, string | string[] | undefined>
+): string | undefined {
+  const value = headers["x-lumenbox-timestamp"] ?? headers["x-signature-timestamp"];
+  return Array.isArray(value) ? value[0] : value;
+}
+
+/**
+ * Whether a signed timestamp is close enough to now to be a live request (INV-115).
+ *
+ * A signature proves who sent a body, not when: a captured request replays until the rate limit
+ * bites. A sender that puts the time into what it signs lets the door refuse anything older than
+ * the window — and anything from the future, which is the same replay with a clock set forward.
+ * Unparsable is refused: a timestamp that cannot be read protects nothing.
+ */
+export function withinReplayWindow(timestamp: string, now: Date = new Date(), windowMs: number = REPLAY_WINDOW_MS): boolean {
+  const text = timestamp.trim();
+  const seconds = /^\d{9,11}$/.test(text) ? Number(text) * 1000 : undefined;
+  const at = seconds ?? Date.parse(text);
+  if (!Number.isFinite(at)) return false;
+  return Math.abs(now.getTime() - at) <= windowMs;
 }
 
 /** The signature a sender offered, in any of the header names the common senders use. */

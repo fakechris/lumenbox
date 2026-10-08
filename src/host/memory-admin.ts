@@ -20,7 +20,7 @@ import { createHash } from "node:crypto";
 import { appendLine } from "./jsonl.ts";
 import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
 import { describeMaintenanceSource } from "./memory-maintenance.ts";
-import { dedupeKey, recordHasRevokedSource, revokedMemorySources, validateRecord, type MemoryRecord } from "./memory.ts";
+import { dedupeKey, recordHasRevokedSource, revokedMemorySources, sourceCovers, validateRecord, type MemoryRecord } from "./memory.ts";
 
 export interface MemoryView {
   /** The dedupe key: what a retraction or a re-record is matched on. */
@@ -97,9 +97,13 @@ export function memoryView(records: readonly MemoryRecord[]): MemoryView[] {
       status: recordHasRevokedSource(record, revoked) ? "retracted" : "live",
     };
     if (view.status === "retracted") {
-      const tombstone = record.from?.map(source => revokedAt.get(source)).find(Boolean);
+      const hit = record.from
+        ?.map(place => [...revokedAt].find(([withdrawn]) => sourceCovers(withdrawn, place)))
+        .find(Boolean);
+      const tombstone = hit?.[1];
       view.retractedAt = tombstone?.at;
-      view.retractedBy = tombstone?.source ?? "source withdrawn";
+      // Who, and which source: `main@*` says a whole conversation was withdrawn (INV-894).
+      view.retractedBy = hit === undefined ? "source withdrawn" : `${tombstone?.source ?? "someone"} withdrew source ${hit[0]}`;
       views.push(view);
       continue;
     }
@@ -188,10 +192,14 @@ export class MemoryAdmin {
     };
   }
 
-  /** Preview the exact live derivatives a source withdrawal would disable. */
+  /**
+   * Preview the exact live derivatives a source withdrawal would disable. `source` is one
+   * place (`main@2026-09-30T10:12`, `message:<id>`) or a whole conversation (`main@*`,
+   * INV-894) — see `sourceCovers`.
+   */
   sourceImpact(agentId: string, source: string): SourceImpact {
     const matching = (records: readonly MemoryRecord[]) => memoryView(records)
-      .filter(view => view.status === "live" && view.from?.includes(source));
+      .filter(view => view.status === "live" && view.from?.some(place => sourceCovers(source, place)) === true);
     const own = matching(this.registry.readMemoryRecords(agentId));
     const shared = matching(this.registry.readSharedMemory(agentId));
     const version = createHash("sha256")

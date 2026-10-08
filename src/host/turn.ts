@@ -19,11 +19,13 @@ import type { DisplayLease } from "../box/display-lease.ts";
 import type { PolicyGate } from "./policy.ts";
 import type { Claims } from "./claims.ts";
 import type { FileVersions } from "./files.ts";
-import type { StepLedger, TurnLedger } from "./resume.ts";
+import type { StepLedger, TurnLedger, ResumeMarker } from "./resume.ts";
 import { approvalOutcomeResult, notStartedResult, outcomeUnknownResult } from "./resume.ts";
 import { idempotencyOf } from "../protocol/idempotency.ts";
 import { changedPromptSegments, type PromptFingerprint } from "./resume.ts";
 import type { PendingWork } from "./pending-work.ts";
+import type { Effects } from "./effects.ts";
+import type { Orchestrations } from "./orchestrate.ts";
 import type { McpFace } from "./mcp-face.ts";
 import type { ModelRelay } from "./model-relay.ts";
 import type { DelegateSessions } from "./delegate-sessions.ts";
@@ -129,7 +131,7 @@ import { readInstallationInstructions } from "./place.ts";
 import { changeNotice, readStanding, takeChanges } from "./standing.ts";
 import type { McpManager } from "./mcp.ts";
 import { TOOL_BUDGET_WARNING } from "./mcp.ts";
-import { narrowTools } from "./scopes.ts";
+import { narrowTools, toolAllowed } from "./scopes.ts";
 import { conversationIdFor, MAIN_CONVERSATION } from "../agents/registry.ts";
 import { summaryRuntimeFor } from "./provider.ts";
 import type { Effort, ProviderProfile } from "./provider.ts";
@@ -450,6 +452,7 @@ export interface TurnDeps {
   box: BoxClient | undefined;
   /** Which desktop this agent drives. Each agent has its own. */
   displayIndex?: number;
+  ensureDesktop?: () => Promise<void>;
   /** Presented on every box call, so the box can refuse another agent's desktop. */
   boxOwner?: string;
   /** Where what a turn cost is written. Absent in tests that do not care. */
@@ -466,6 +469,8 @@ export interface TurnDeps {
   operatorRules?: () => readonly string[];
   /** Who is driving, threaded through so a memory kept this turn records who it is about. */
   caller?: { userId?: string };
+  /** Transfer inbox custody only after the turn recovery record is persisted. */
+  onReady?: () => void;
   /** That person's name, for an operator rule written about them by name (INV-156). */
   callerName?: string;
   /** Every door identity the person driving this turn speaks from (INV-754). */
@@ -568,6 +573,10 @@ export interface TurnDeps {
   networkEvents?: Pick<NetworkEventLog, "query">;
   /** The fork ledger (docs/32): forks are recorded before they start and committed here. */
   pendingWork?: PendingWork;
+  /** Acts on the effects a tool result asks for (INV-861). Absent means results are text only. */
+  effects?: Effects;
+  /** Runs fan-out plans (INV-862). */
+  orchestrations?: Orchestrations;
   /** The MCP face (docs/33), for Delegate. */
   mcpFace?: McpFace;
   modelRelay?: ModelRelay;
@@ -583,19 +592,7 @@ export interface TurnDeps {
    * Threaded in rather than derived, because only the caller doing the resuming knows which turn
    * this continues and how many attempts have gone before.
    */
-  resumeOf?: {
-    id: string;
-    attempt: number;
-    workId?: string;
-    /**
-     * Continue *this* turn rather than open a new one told about it (INV-774): same
-     * turnId, no user message, and the step ledger's open calls answered before the
-     * model is asked again. Only set for turns the step ledger recorded.
-     */
-    continues?: true;
-    /** How the person answered the approval an open step was waiting on, when one was. */
-    approval?: { id: string; how: "allowed" | "refused" | "gone" };
-  };
+  resumeOf?: ResumeMarker;
   onEvent?: (event: TurnEvent) => void;
   /** A goal continuation turn ended (INV-770): what it did and how, for the loop's accounting. */
   onGoalTurn?: (report: GoalTurnReport) => void;
@@ -706,6 +703,7 @@ type TurnEventBody =
       outputTokens: number;
       cacheReadTokens: number;
       cacheWriteTokens: number;
+      metering?: import("./usage.ts").UsageMetering;
     };
 
 /**
@@ -1683,6 +1681,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
           ...(deps.callerName !== undefined ? { callerName: deps.callerName } : {}),
           ...(deps.callerIdentities !== undefined ? { callerIdentities: deps.callerIdentities } : {}),
           displayIndex: deps.displayIndex,
+          ensureDesktop: deps.ensureDesktop,
           boxOwner: deps.boxOwner,
           tasks: deps.tasks,
           turnId,
@@ -1739,10 +1738,17 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     const open = new Map((deps.steps?.stepsOf(turnId).open ?? []).map(step => [step.toolUseId, step] as const));
     /** Steps answered by a result below, so the notice further down does not repeat them. */
     const answeredHere = new Set<string>();
-    /** Steps the current gate put in front of a person: open until the answer lands. */
-    const stillWaiting = new Set<string>();
-    const approvalHow = (approvalId: string): "allowed" | "refused" | "gone" =>
-      deps.resumeOf?.approval?.id === approvalId ? deps.resumeOf!.approval!.how : "gone";
+    /** Existing approvals and any new asks stay open until their own answer lands. */
+    const pendingApprovals = new Set(deps.policy?.pending().map(approval => approval.id) ?? []);
+    const approvalHow = (approvalId: string): "allowed" | "refused" | "gone" | "pending" =>
+      deps.resumeOf?.approval?.id === approvalId
+        ? deps.resumeOf.approval.how
+        : pendingApprovals.has(approvalId) ? "pending" : "gone";
+    const stillWaiting = new Set(
+      [...open.values()]
+        .filter(step => step.approvalId !== undefined && approvalHow(step.approvalId) === "pending")
+        .map(step => step.toolUseId)
+    );
     if ("kind" in last && last.kind === "blocks") {
       const calls = last.blocks.filter(
         (block): block is Anthropic.ToolUseBlockParam => (block as { type?: string }).type === "tool_use"
@@ -1771,6 +1777,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
             caller: deps.caller,
             ...(deps.callerName !== undefined ? { callerName: deps.callerName } : {}),
             displayIndex: deps.displayIndex,
+            ensureDesktop: deps.ensureDesktop,
             boxOwner: deps.boxOwner,
             tasks: deps.tasks,
             turnId,
@@ -1820,7 +1827,7 @@ ${outcome.text}`;
     // the step stays open until the person answers, the turn parks on it, and what they
     // said has to reach the model somewhere.
     const told = [...open.values()]
-      .filter(step => step.approvalId !== undefined && !answeredHere.has(step.toolUseId))
+      .filter(step => step.approvalId !== undefined && !answeredHere.has(step.toolUseId) && !stillWaiting.has(step.toolUseId))
       .map(step => approvalOutcomeResult(step.name, approvalHow(step.approvalId!)));
     if (told.length > 0) {
       const entry = {
@@ -1834,7 +1841,7 @@ ${outcome.text}`;
     }
     // Whatever the transcript now says, these steps are over: either answered above, or
     // their result was on disk already and only the `settled` line was lost. Except the
-    // ones the gate just handed to a person: those close when the person answers.
+    // ones still waiting on a person: those close when their own answer lands.
     for (const step of open.values()) {
       if (!stillWaiting.has(step.toolUseId)) deps.steps?.settled(turnId, step.toolUseId);
     }
@@ -1952,7 +1959,7 @@ ${outcome.text}`;
   // Which servers this agent's box carries (INV-439): named in its bundles, or all.
   const boxServers = deps.bundles?.forBox(registry.boxOf(agent.id))?.mcpServers;
   const allowedMcp = (deps.templateSetup !== undefined ? [] : (deps.mcp?.toolsFor(boxServers) ?? [])).filter(
-    tool => effectiveTools === undefined || effectiveTools.includes(tool.name)
+    tool => toolAllowed(effectiveTools, tool.name)
   );
   // Past a certain number they stop being a list and start being a document that every
   // turn pays for. Then they go behind a lookup pair instead: one round trip when an
@@ -2115,14 +2122,13 @@ ${outcome.text}`;
   let malformedRetries = 0;
   const chinese = readsAsChinese(inbound.map(message => message.text).join("\n"));
 
-  // The ledger opens here, not during setup. Its job is to record that a turn was *executing* — a
-  // model call, a tool — when the process died, so the next startup resumes it. Everything above is
-  // assembly that ran nothing; a death there loses no work (the accepted message is still in the
-  // inbox) and would otherwise have left an open ledger that read a setup failure as an interrupted
-  // turn and resumed one that had already reported failing.
+  // Setup still belongs to the inbox. Persist the message ids before acknowledging
+  // them, so startup can reconcile a crash between these two synchronous writes.
   deps.turns?.begin({
     id: turnId,
     agentId: agent.id,
+    causedBy: inbound.map(message => message.id),
+    ...(deps.caller?.userId !== undefined ? { principalId: deps.caller.userId } : {}),
     about: inbound.map(message => message.text).join(" / "),
     workId,
     ...(conversation !== MAIN_CONVERSATION ? { conversation } : {}),
@@ -2145,6 +2151,8 @@ ${outcome.text}`;
       shared: memoryProjectionManifest(sharedMemoryRecall),
     },
   });
+  // If this fails, leave the begin open: recovery, not a second inbox replay, owns it.
+  deps.onReady?.();
 
   try {
     // Continuations are a loop here rather than recursion inside runRounds: each pass gets a fresh
@@ -2289,7 +2297,16 @@ ${outcome.text}`;
       messages.push({ role: "user", content: lastCall });
       forceTools = { type: "none" };
     }
-    const steered = finishing ? [] : deps.bus.takeSteering(agent.id, conversation);
+    const steered = finishing ? [] : deps.bus.takeSteering(agent.id, conversation, messages => {
+      // The transcript takes custody before inbox.start. Startup reconciles causedBy
+      // against this open turn, including a crash between the two writes.
+      registry.appendTranscript(agent.id, {
+        role: "user", text: buildTurnPrompt(messages), at: new Date().toISOString(),
+        causedBy: messages.map(message => message.id),
+        ...(messages.some(message => message.fromId === "user" && message.synthetic !== true) ? { fromPerson: true as const } : {}),
+        turnId,
+      } satisfies TranscriptEntry, conversation);
+    });
     if (steered.length > 0) {
       // A person who speaks into a turn nobody was waiting on is now waited on (review R6):
       // silence is withdrawn — the tool refuses from here — and the guards read the rest of
@@ -2299,16 +2316,6 @@ ${outcome.text}`;
         silenceOffered = false;
       }
       const steerText = buildTurnPrompt(steered);
-      registry.appendTranscript(agent.id, {
-        role: "user",
-        text: steerText,
-        at: new Date().toISOString(),
-        causedBy: steered.map(message => message.id),
-        // Stamped like the opening message (INV-799): a steer is the person typing mid-turn, and
-        // the anchor harvest keeps only what carries the stamp.
-        ...(steered.some(message => message.fromId === "user" && message.synthetic !== true) ? { fromPerson: true as const } : {}),
-        turnId,
-      } satisfies TranscriptEntry, conversation);
       messages.push({ role: "user", content: steerText });
     }
     // Asked before spending anything. A stop or an exhausted budget ends the turn here, at a round
@@ -2606,7 +2613,9 @@ ${outcome.text}`;
       cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
       cacheWriteTokens: response.usage.cache_creation_input_tokens ?? 0,
     };
-    emit({ type: "usage", agentId: agent.id, round, ...usage });
+    const metering = (response.usage as { metering?: import("./usage.ts").UsageMetering }).metering;
+    emit({ type: "usage", agentId: agent.id, round, ...usage,
+      ...(metering !== undefined ? { metering } : {}) });
     turnUsage.inputTokens += usage.inputTokens;
     turnUsage.outputTokens += usage.outputTokens;
     turnUsage.cacheReadTokens += usage.cacheReadTokens;
@@ -2614,7 +2623,7 @@ ${outcome.text}`;
     // The turn's opening call, scored for the cache ledger (INV-782): what share came from
     // cache, and — when enough turns in a row came in low with a segment moving — why.
     let cacheShare: number | undefined;
-    if (!cacheShareNoted) {
+    if (!cacheShareNoted && (metering === undefined || metering === "complete")) {
       cacheShareNoted = true;
       const noted = deps.usage?.notePromptCache({
         agentId: agent.id,
@@ -2695,6 +2704,7 @@ ${outcome.text}`;
       model: deps.provider?.model ?? "unknown",
       round,
       ...usage,
+      ...(metering !== undefined ? { metering } : {}),
       ...(cacheShare !== undefined ? { cacheShare } : {}),
     });
 
@@ -3245,6 +3255,7 @@ ${outcome.text}`;
           ...(deps.callerIdentities !== undefined ? { callerIdentities: deps.callerIdentities } : {}),
             display: deps.display,
             displayIndex: deps.displayIndex,
+            ensureDesktop: deps.ensureDesktop,
             boxOwner: deps.boxOwner,
             // A fork gets no host runner and no MCP client (docs/32 §2): a forged call for
             // either lands on "unknown tool" rather than on a person or a credential.
@@ -3262,6 +3273,7 @@ ${outcome.text}`;
             skillProvenance: deps.skillProvenance,
             workId,
             ...(deps.pendingWork !== undefined ? { pendingWork: deps.pendingWork } : {}),
+            ...(deps.orchestrations !== undefined ? { orchestrations: deps.orchestrations } : {}),
             ...(deps.mcpFace !== undefined ? { mcpFace: deps.mcpFace } : {}),
             ...(deps.modelRelay !== undefined ? { modelRelay: deps.modelRelay } : {}),
             ...(deps.delegateSessions !== undefined ? { delegateSessions: deps.delegateSessions } : {}),
@@ -3286,6 +3298,22 @@ ${outcome.text}`;
       if (outcome.approval !== undefined) {
         deps.steps?.awaitingApproval(turnId, toolUse.id, outcome.approval.id);
         awaitingPerson.add(toolUse.id);
+      }
+      // Effects the result asked for (INV-861). The call ran and its step settles like any other;
+      // what follows — a confirmation, a background job, a reminder — is recorded by effects.ts
+      // and delivered to this conversation later. A fork's effects are dropped: a fork neither
+      // asks a person nor outlives its parent's turn.
+      if (outcome.effects !== undefined && outcome.effects.length > 0) {
+        if (deps.effects !== undefined && !isForkConversation(conversation)) {
+          const applied = deps.effects.apply({
+            agentId: agent.id,
+            agentName: agent.profile.name,
+            conversation,
+            tool: outcome.effectsFrom ?? toolUse.name,
+            effects: outcome.effects,
+          });
+          if (applied.notes.length > 0) outcome = { ...outcome, text: `${outcome.text}\n\n${applied.notes.join("\n")}` };
+        }
       }
 
       emit({

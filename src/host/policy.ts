@@ -29,10 +29,11 @@
  * architecture exists to avoid. Limits arrive as configuration; enforcement is local.
  */
 
+import { SENSITIVE_INPUT_TTL_MS, type SensitiveInput } from "../protocol/sensitive-input.ts";
 import { classifyShell } from "./shell-readonly.ts";
 import { envNumber } from "../config.ts";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { appendLine, appendLineDurably, type LedgerKind } from "./jsonl.ts";
+import { appendLine, appendLineDurably, archiveSettled, type LedgerKind } from "./jsonl.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
@@ -40,16 +41,15 @@ import type { RuleStore } from "./rules.ts";
 import { sideEffectOf, tierAsks, tierGateMode, type SideEffectTier, type TierGateMode } from "./side-effects.ts";
 
 /**
- * What was asked of the gate, as a window, with standing grants re-stated ahead of it.
+ * What was asked of the gate and who decided it: a record (INV-812).
  *
- * Labelled `feed` because that is what its compaction does, not because the label is
- * obviously right: a grant given once and used once is an audit fact, and past twenty
- * thousand events it goes. Standing grants are re-stated precisely because losing *those*
- * would change behaviour, which is the argument for calling the rest a record too.
- * Deliberately not changed here (INV-634 converts `ingress` and `turns` only) — flagged so
- * the next person deciding it is deciding rather than inheriting.
+ * It was a `feed` until INV-812, and past twenty thousand events the oldest went — but a grant
+ * given once and used once is an audit fact, and "who approved this" is the first question an
+ * audit asks. Compaction now moves the lines it no longer keeps live into the monthly archive
+ * (jsonl.ts), and still re-states standing grants ahead of the live tail, because the gate
+ * reads only the live file and a standing grant must stay in force.
  */
-export const LEDGER_KIND: LedgerKind = "feed";
+export const LEDGER_KIND: LedgerKind = "record";
 
 // ── what can be asked ─────────────────────────────────────────────────────────────────
 
@@ -97,10 +97,14 @@ export type PolicyRequest =
        * (and the fingerprint binds) carries it, so consent is to *that* button on *that* page.
        */
       irreversible?: string;
+      /** Trusted box observation plus host execution identity, never model input (INV-955). */
+      inputScope?: SensitiveInput & {
+        turnId: string; conversation: string; principal: string; target: string;
+      };
     };
 
 export type PolicyDecision =
-  | { allow: true }
+  | { allow: true; inputExpiresAt?: number }
   /**
    * Refused. `reason` is written for the model to read: it is returned as the tool result or as the
    * turn's ending, so it has to say what would make the difference.
@@ -130,6 +134,13 @@ export interface PendingApproval {
    */
   action?: string;
   requestedAt: string;
+  /**
+   * Set when the harness itself continues once this is answered (INV-861): an extension asked
+   * the person to confirm, and the answer is handed to the extension's resume callback. The
+   * doors then skip their generic "go ahead now" note, which would tell the agent to retry a
+   * call that is not waiting to be retried.
+   */
+  harnessResumes?: boolean;
 }
 
 // ── limits ────────────────────────────────────────────────────────────────────────────
@@ -264,7 +275,7 @@ type PolicyEvent =
   | { at: string; kind: "rules-loaded"; hash: string; ids: string[]; problems: { id: string; problem: string }[] }
   | { at: string; kind: "stop"; agentId: string; by: string }
   | { at: string; kind: "resume"; agentId: string; by: string }
-  | { at: string; kind: "approval-requested"; id: string; fingerprint: string; agentId: string; description: string; action?: string }
+  | { at: string; kind: "approval-requested"; id: string; fingerprint: string; agentId: string; description: string; action?: string; harnessResumes?: boolean }
   | { at: string; kind: "approval-granted"; id: string; by: string }
   | { at: string; kind: "approval-granted-session"; id: string; by: string }
   | {
@@ -300,6 +311,7 @@ export interface StandingGrant {
 interface Outcome {
   decision: PolicyDecision;
   consequence?: PolicyEvent;
+  inputGrant?: { key: string; fingerprint: string };
 }
 
 export interface PolicyGateOptions {
@@ -381,6 +393,8 @@ export class PolicyGate {
   private readonly stopped = new Set<string>();
   /** Approvals granted and not yet consumed, by fingerprint. */
   private readonly granted = new Map<string, PendingApproval>();
+  /** Process-local, bounded and short lived; never reconstructed from approval-used rows. */
+  private readonly turnInputs = new Map<string, { nonce: string; expires: number; id?: string; fingerprint?: string }>();
   /** Approvals asked for and not yet answered, by fingerprint. */
   private readonly awaiting = new Map<string, PendingApproval>();
   /**
@@ -421,7 +435,7 @@ export class PolicyGate {
    * reason this is a method and not four scattered conditions.
    */
   check(request: PolicyRequest): PolicyDecision {
-    const { decision, consequence } = this.decide(request);
+    const { decision, consequence, inputGrant } = this.decide(request);
     this.append({
       at: this.now().toISOString(),
       kind: "checked",
@@ -447,6 +461,7 @@ export class PolicyGate {
       // action a second time without asking anyone. Everything else here stands unlogged, because a
       // turn dying over bookkeeping is worse; consent that cannot be recorded is the exception.
       if (!written && consequence.kind === "approval-used") {
+        if (inputGrant !== undefined) this.turnInputs.delete(inputGrant.key);
         const reason =
           `This was approved, but the approval could not be recorded, so it has not been used. ` +
           `Acting on consent that is not on the record would let the same action be approved once ` +
@@ -455,8 +470,19 @@ export class PolicyGate {
         return { allow: false, reason };
       }
     }
+    // Only a durably recorded human grant can seed reuse. An allowed ordinary call cannot.
+    if (decision.allow && inputGrant !== undefined && consequence?.kind === "approval-used") {
+      const scope = this.turnInputs.get(inputGrant.key);
+      if (scope !== undefined && scope.id === undefined) {
+        scope.id = consequence.id;
+        scope.fingerprint = inputGrant.fingerprint;
+      }
+    }
     if (!decision.allow) {
       this.log(`refused ${describeRequest(request)}: ${decision.reason}`);
+    }
+    if (decision.allow && inputGrant !== undefined) {
+      return { ...decision, inputExpiresAt: this.turnInputs.get(inputGrant.key)?.expires };
     }
     return decision;
   }
@@ -638,7 +664,27 @@ export class PolicyGate {
     const tooLarge = tooLargeToApprove(description);
     if (tooLarge !== undefined) return { decision: { allow: false, reason: tooLarge } };
 
-    const fingerprint = fingerprintOf(this.subjectOf(request.agentId), description);
+    const scope = request.inputScope;
+    const inputKey = request.tool === "browser_act" && request.input.action === "type" && request.irreversible !== undefined &&
+      request.delegated === undefined && scope !== undefined && scope.turnId !== "" && scope.conversation !== "" && scope.target !== ""
+      ? JSON.stringify([request.agentId, request.principalId ?? "", scope]) : undefined;
+    for (const [key, grant] of this.turnInputs) if (grant.expires <= this.now().getTime()) this.turnInputs.delete(key);
+    if (inputKey !== undefined && !this.turnInputs.has(inputKey)) {
+      if (this.turnInputs.size >= 256) this.turnInputs.delete(this.turnInputs.keys().next().value!);
+      this.turnInputs.set(inputKey, { nonce: randomUUID(), expires: this.now().getTime() + SENSITIVE_INPUT_TTL_MS });
+    }
+    const reused = inputKey === undefined ? undefined : this.turnInputs.get(inputKey);
+    // A process-local nonce also bounds unused/session/standing approvals: replay or expiry
+    // cannot resurrect consent for the exact original field, not just for a second field.
+    const fingerprint = fingerprintOf(this.subjectOf(request.agentId), description +
+      (inputKey === undefined ? "" : `\0${inputKey}\0${reused!.nonce}`));
+    const inputGrant = inputKey === undefined ? undefined : { key: inputKey, fingerprint };
+    // Operator rules and configured per-call approvals continue to take precedence.
+    if (reused?.id !== undefined && reused.fingerprint !== undefined && rule?.effect !== "ask" && !this.needsApproval({ ...request, irreversible: undefined }) &&
+        !(gate === "enforce" && tierAsks(effect.tier))) {
+      return { decision: { allow: true }, consequence: { at: this.now().toISOString(), kind: "approval-used", id: reused.id },
+        inputGrant: { key: inputKey!, fingerprint: reused.fingerprint } };
+    }
 
     // A standing or session grant covers this exact action without being consumed.
     // Each use still writes an approval-used row, so the audit trail says every time
@@ -647,6 +693,7 @@ export class PolicyGate {
     if (standing !== undefined) {
       return {
         decision: { allow: true },
+        inputGrant,
         consequence: { at: this.now().toISOString(), kind: "approval-used", id: standing.id },
       };
     }
@@ -654,6 +701,7 @@ export class PolicyGate {
     if (sessionGrant !== undefined) {
       return {
         decision: { allow: true },
+        inputGrant,
         consequence: { at: this.now().toISOString(), kind: "approval-used", id: sessionGrant.id },
       };
     }
@@ -664,6 +712,7 @@ export class PolicyGate {
       this.granted.delete(fingerprint);
       return {
         decision: { allow: true },
+        inputGrant,
         consequence: { at: this.now().toISOString(), kind: "approval-used", id: grant.id },
       };
     }
@@ -707,6 +756,49 @@ export class PolicyGate {
         ...(approval.action !== undefined ? { action: approval.action } : {}),
       },
     };
+  }
+
+  /**
+   * Puts a confirmation in front of the person that no rule asked for (INV-861): an extension's
+   * `pause_turn`. The same record and the same doors as a gated call — the card, the chat push,
+   * grant and deny — so a person answers it like any other approval. The harness, not the
+   * agent, continues once it is answered (`harnessResumes`). Asking twice for the same text
+   * returns the one already waiting.
+   */
+  requestConfirmation(input: { agentId: string; agentName: string; description: string; action?: string }): PendingApproval {
+    // Its own fingerprint space: an extension's reason that happens to read like a gated call's
+    // description must neither answer that call's grant nor borrow its approval.
+    const fingerprint = fingerprintOf(this.subjectOf(input.agentId), `extension-confirmation\0${input.description}`);
+    const existing = this.awaiting.get(fingerprint);
+    if (existing?.harnessResumes === true) return existing;
+    const approval: PendingApproval = {
+      id: randomUUID(),
+      fingerprint,
+      agentId: input.agentId,
+      agentName: input.agentName,
+      description: input.description,
+      ...(input.action !== undefined ? { action: input.action } : {}),
+      requestedAt: this.now().toISOString(),
+      harnessResumes: true,
+    };
+    this.awaiting.set(fingerprint, approval);
+    this.append({
+      at: approval.requestedAt,
+      kind: "approval-requested",
+      id: approval.id,
+      fingerprint,
+      agentId: approval.agentId,
+      description: approval.description,
+      ...(approval.action !== undefined ? { action: approval.action } : {}),
+      harnessResumes: true,
+    });
+    this.log(`waiting for a person to confirm: ${input.description}`);
+    try {
+      this.onApprovalRequested?.(approval);
+    } catch {
+      // A notifier's failure must not change a policy decision.
+    }
+    return approval;
   }
 
   private needsApproval(request: Extract<PolicyRequest, { kind: "tool" }>): boolean {
@@ -854,6 +946,7 @@ export class PolicyGate {
   revokeStanding(fingerprint: string, by = "user"): boolean {
     if (!this.always.has(fingerprint)) return false;
     this.always.delete(fingerprint);
+    for (const [key, grant] of this.turnInputs) if (grant.fingerprint === fingerprint) this.turnInputs.delete(key);
     this.append({ at: this.now().toISOString(), kind: "approval-revoked", fingerprint, by });
     this.log(`${by} revoked a standing approval`);
     return true;
@@ -937,6 +1030,7 @@ export class PolicyGate {
             agentName: "",
             description: event.description,
             ...(event.action !== undefined ? { action: event.action } : {}),
+            ...(event.harnessResumes === true ? { harnessResumes: true } : {}),
             requestedAt: event.at,
           };
           byId.set(event.id, approval);
@@ -1010,6 +1104,13 @@ export class PolicyGate {
         } satisfies PolicyEvent)
       );
       const kept = [...standing, ...lines.slice(-KEEP_ON_COMPACT)];
+      // What leaves the live file goes to the archive first: moved, never lost. Except the
+      // grants an earlier compaction re-stated: each is a copy of a line already archived or
+      // still live, and archiving it would put the same grant in the record once per compaction.
+      archiveSettled(
+        this.path,
+        lines.slice(0, Math.max(0, lines.length - KEEP_ON_COMPACT)).filter(line => !isRestatement(line))
+      );
       const temp = `${this.path}.${process.pid}.tmp`;
       writeFileSync(temp, `${kept.join("\n")}\n`, "utf8");
       renameSync(temp, this.path);
@@ -1018,6 +1119,16 @@ export class PolicyGate {
       const detail = error instanceof Error ? error.message : String(error);
       this.log(`policy: cannot compact ${this.path} (${detail})`);
     }
+  }
+}
+
+/** A standing grant written back by compaction rather than by a person. */
+function isRestatement(line: string): boolean {
+  try {
+    const event = JSON.parse(line) as { kind?: unknown; by?: unknown };
+    return event.kind === "approval-granted-always" && event.by === "compaction";
+  } catch {
+    return false;
   }
 }
 
@@ -1058,7 +1169,8 @@ export function describeRequest(request: PolicyRequest): string {
         command !== undefined && (request.tool === "RunOnHost" || request.tool === "bash") && classifyShell(command).readOnly
           ? " [read-only]"
           : "";
-      return `${request.agentName}: ${request.tool} — ${detail}${readOnly}`;
+      const reuse = request.inputScope === undefined ? "" : " [same exact value and data category to this origin, in this conversation and turn, for up to 15 minutes]";
+      return `${request.agentName}: ${request.tool} — ${detail}${readOnly}${reuse}`;
     }
   }
 }

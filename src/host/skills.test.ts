@@ -371,8 +371,9 @@ test("the index stops at its budget and names what it left out", () => {
     return result.skill;
   });
   const rendered = renderSkills(skills);
-  // The slack is the framing paragraphs and the one line that names the unlisted skills.
-  assert.ok(rendered.length < SKILL_INDEX_CHARS + 3_000, `index is ${rendered.length} chars`);
+  // The slack is the framing paragraphs (about 2,700 characters) and the one line that names the
+  // unlisted skills.
+  assert.ok(rendered.length < SKILL_INDEX_CHARS + 3_500, `index is ${rendered.length} chars`);
   assert.match(rendered, /\*\*skill 0\*\*/);
   assert.match(rendered, /more not described here because the index is full/);
   assert.match(rendered, /skill-59/);

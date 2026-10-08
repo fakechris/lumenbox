@@ -8,7 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRegistry } from "./registry.ts";
@@ -100,7 +100,7 @@ test("sequence numbers continue across a restart, so a new record cannot cancel 
   }
 });
 
-test("an unwritable inbox does not stop a message being delivered", () => {
+test("an unwritable inbox refuses admission rather than acknowledging volatile work", () => {
   const warnings: string[] = [];
   // A directory that does not exist and cannot be created, because its parent is a file.
   const { path, cleanup } = tempPath("afile");
@@ -110,15 +110,30 @@ test("an unwritable inbox does not stop a message being delivered", () => {
     const blocked = new Inbox<InboundMessage>(join(path, "nested", "inbox.jsonl"), line =>
       warnings.push(line)
     );
-    assert.equal(
-      blocked.admit("a", message("cannot be recorded")),
-      undefined,
-      "no handle, so the turn knows there is nothing to mark started"
-    );
+    assert.throws(() => blocked.admit("a", message("cannot be recorded")), /Cannot persist inbox admission/);
     assert.ok(warnings.some(line => /cannot write/.test(line)), "and it is said, not swallowed");
   } finally {
     cleanup();
   }
+});
+
+test("failed peer admission can retry identical text after storage recovers", async () => {
+  const { path, cleanup } = tempPath();
+  try {
+    const registry = new AgentRegistry(`${path}-agents`);
+    const a = registry.create({ name: "A" });
+    const b = registry.create({ name: "B" });
+    mkdirSync(path);
+    const delivered: string[] = [];
+    const bus = new AgentBus(registry, async (_agent, messages) => { delivered.push(...messages.map(m => m.text)); },
+      () => {}, new Inbox<InboundMessage>(path));
+    const message = { fromId: a.id, toId: b.id, text: "check the report" };
+    assert.throws(() => bus.send(message), /Cannot persist inbox admission/);
+    rmSync(path, { recursive: true });
+    assert.match(bus.send(message), /Recorded and queued/);
+    await bus.runExclusive(b.id);
+    assert.deepEqual(delivered, ["check the report"]);
+  } finally { cleanup(); }
 });
 
 test("no inbox configured means no file and no handles", () => {

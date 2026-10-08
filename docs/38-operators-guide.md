@@ -2,7 +2,7 @@
      title: The operator's guide (what the README used to be)
      family: guide
      status: current
-     updated: 2026-09-26
+     updated: 2026-09-29
 -->
 # 38 — The operator's guide (what the README used to be)
 
@@ -152,7 +152,8 @@ while a wrong "no" only costs a feature and says so. Opt in once you have checke
   thread; `chat: feishu:oc_…` narrows it to one chat. A skill runs as the agent the host saw
   write it or as the default agent, never as someone else.
 - **Memory files.** Each agent's memory is mirrored read-only into the box at
-  `~/work/memory/<name>/profile.md` and `log/YYYY-MM.md`, so `grep` works on it.
+  `~/work/memory/<agent-id>/profile.md` and `log/YYYY-MM.md`, so `grep` works on it. The prompt
+  tells each agent its own path; the id is on the agent's settings page.
 - **Hooks.** `~/.agentbox/hooks.json` in Claude Code's format (a `settings.json` or its bare
   `hooks` object) runs `PreToolUse`, `PostToolUse`, `Stop` and `PreCompact` commands with the
   same stdin payload and the same answers: exit 2 with stderr as the reason, or a decision JSON.
@@ -745,6 +746,14 @@ wrong:
   Typing plain text does not; committing a line does.
 - **A window manager is not optional.** Without `xfwm4`, dialogs open unmapped and
   keyboard focus never lands, so typing silently goes nowhere.
+- **Launch at login registers once, not every launch.** The desktop shell applies
+  `startupItem` from `config.json` on start and after every settings restart, but calls
+  `setLoginItemSettings` only when `getLoginItemSettings()` disagrees. Registering every
+  time left one row per update in Login Items (26 on one Mac): after an in-place bundle
+  replacement macOS can record the registration against that build's cdhash instead of
+  its signing identity, so it is never deduplicated. Electron's `path` option does not
+  help — it is Windows-only. An absent `startupItem` means "not managed here", so off is
+  saved as `false`; deleting it would leave the login item on forever.
 - **Prompt caching.** Prompt sections are assembled in a fixed order with one cache
   breakpoint at the end of the system prompt, which covers the tool definitions too.
   Volatile content — the time, the inbound message — lives in the message turns,

@@ -9,7 +9,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { describeProvider, effectiveProviderFor, providerNames, resolveProvider } from "./provider.ts";
+import { describeProvider, effectiveProviderFor, providerConfigured, providerNames, resolveProvider } from "./provider.ts";
 import { buildTools } from "./tools.ts";
 import { buildSystemPrompt } from "./prompt.ts";
 import { AgentRegistry } from "../agents/registry.ts";
@@ -218,4 +218,25 @@ test("effectiveProviderFor: an agent's override wins; no override reuses the def
   const other = effectiveProviderFor({ provider: "minimax", model: "MiniMax-M2" }, fallback);
   assert.equal(other.label, "MiniMax (China)");
   assert.equal(other.model, "MiniMax-M2");
+});
+
+test("providerConfigured: a saved provider or any credential counts; neither does not (INV-857)", () => {
+  // The setup card's first step grades this, so the states have to be exact: a saved
+  // provider with no key yet still counts (the key rides the next save), but an
+  // installation with neither has no way to answer its first message and must say so.
+  const presets = providerNames().map(name => resolveProvider(name));
+  assert.equal(providerConfigured(undefined, presets, {}), false);
+  assert.equal(providerConfigured("", presets, {}), false);
+  assert.equal(providerConfigured("minimax", presets, {}), true, "saved provider alone counts");
+  assert.equal(
+    providerConfigured(undefined, presets, { ANTHROPIC_API_KEY: "sk-…" }),
+    true,
+    "a credential in the environment counts without a saved provider"
+  );
+  assert.equal(
+    providerConfigured(undefined, presets, { ANTHROPIC_AUTH_TOKEN: "…" }),
+    true,
+    "the anthropic auth-token alias counts too, as the presets view does"
+  );
+  assert.equal(providerConfigured(undefined, [{ keyEnv: "NO_SUCH_KEY" }], {}), false);
 });

@@ -11,6 +11,7 @@
  * inside one turn, so its transcript and profile have a single writer.
  */
 
+import type { ResumeMarker } from "../host/resume.ts";
 import type { GoalMarker } from "../host/goal-mode.ts";
 import { randomUUID } from "node:crypto";
 import { envNumber } from "../config.ts";
@@ -39,6 +40,10 @@ export const AGENT_WAKE_CUE = "[agent]";
 export const SYSTEM_SENDER = "system";
 
 export interface InboundMessage {
+  /** Host-only continuation lineage, persisted with the admission. */
+  resumeOf?: ResumeMarker;
+  /** Authenticated host identity, frozen at admission; never supplied by an agent tool. */
+  principalId?: string;
   fromId: string;
   fromName: string;
   text: string;
@@ -66,8 +71,8 @@ export interface InboundMessage {
   /**
    * Its handle in the durable inbox, so the turn that takes it can mark it started.
    *
-   * Absent when nothing was recorded — no inbox configured, or a write that failed. The message is
-   * still delivered in this process; what it loses is the ability to survive a restart.
+   * Absent only when no inbox is configured. A configured inbox must persist admission
+   * before the caller receives success.
    */
   admission?: number;
   /**
@@ -182,10 +187,12 @@ export type TurnRunner = (
   agent: AgentRecord,
   inbound: readonly InboundMessage[],
   signal: AbortSignal,
-  conversation: string
+  conversation: string,
+  acknowledge: () => void
 ) => Promise<void>;
 
 interface ActiveTurn {
+  principalId?: string;
   controller: AbortController;
   /** True while the running turn was started by the user, not by a wake. */
   userDriven: boolean;
@@ -240,7 +247,9 @@ export class AgentBus {
      * 202 and an inter-agent message answered with "Sent to Bob" existed only in the map above —
      * accepted, acknowledged, and gone if the process died a millisecond later.
      */
-    private readonly inbox: Inbox<InboundMessage> | undefined = undefined
+    private readonly inbox: Inbox<InboundMessage> | undefined = undefined,
+    /** The runner acknowledges only after its recovery ledger has taken custody. */
+    private readonly deferredStart = false
   ) {}
 
   /**
@@ -304,8 +313,6 @@ export class AgentBus {
         `minute(s) ago and it is queued or delivered. Wait for their reply, or say something new.`
       );
     }
-    recent.push({ text, at: now });
-    this.recentSends.set(recentKey, recent.slice(-20));
 
     const message: InboundMessage = {
       id: randomUUID(),
@@ -318,6 +325,8 @@ export class AgentBus {
     };
 
     this.enqueue(input.toId, message);
+    recent.push({ text, at: now });
+    this.recentSends.set(recentKey, recent.slice(-20));
     this.onEvent({
       type: "message_sent",
       fromId: input.fromId,
@@ -400,7 +409,9 @@ export class AgentBus {
 
     if (isSteering(message)) {
       const key = workerKey(agentId, message.conversation ?? MAIN_CONVERSATION);
-      for (const listener of this.steeringListeners.get(key) ?? []) listener();
+      if (message.principalId === this.active.get(key)?.principalId) {
+        for (const listener of this.steeringListeners.get(key) ?? []) listener();
+      }
     }
 
     if (!message.priority) return admission;
@@ -484,10 +495,14 @@ export class AgentBus {
       toolScope?: readonly string[];
       /** A goal continuation's marker; see `InboundMessage.goal`. */
       goal?: GoalMarker;
+      principalId?: string;
+      resumeOf?: ResumeMarker;
     } = {}
   ): number | undefined {
     return this.enqueue(agentId, {
       id: options.messageId ?? randomUUID(),
+      ...(options.resumeOf !== undefined ? { resumeOf: options.resumeOf } : {}),
+      ...(options.principalId !== undefined ? { principalId: options.principalId } : {}),
       fromId: "user",
       fromName: "user",
       ...(options.synthetic === true ? { synthetic: true } : {}),
@@ -534,13 +549,20 @@ export class AgentBus {
     // answer each with half the context. Before this, three links queued behind a
     // running turn were drained into one turn together, and the three cards that
     // promised three answers all showed the same one.
-    const firstKickoff = inLane.findIndex(message => message.steerable === false);
+    // Different principals must never share the authority of a batched turn.
+    const otherPrincipal = inLane.findIndex(message => message.principalId !== inLane[0]?.principalId);
+    const samePrincipal = otherPrincipal < 0 ? inLane : inLane.slice(0, otherPrincipal);
+    const firstKickoff = samePrincipal.findIndex(message => message.steerable === false);
     const taken =
-      firstKickoff === 0 ? inLane.slice(0, 1) : firstKickoff > 0 ? inLane.slice(0, firstKickoff) : inLane;
+      firstKickoff === 0 ? samePrincipal.slice(0, 1) : firstKickoff > 0 ? samePrincipal.slice(0, firstKickoff) : samePrincipal;
     const left = queue.filter(message => !taken.includes(message));
     if (left.length === 0) this.pending.delete(agentId);
     else this.pending.set(agentId, left);
     return taken;
+  }
+
+  hasPendingResume(turnId: string): boolean {
+    return [...this.pending.values()].some(queue => queue.some(message => message.resumeOf?.id === turnId));
   }
 
   pendingCount(agentId: string): number {
@@ -557,13 +579,15 @@ export class AgentBus {
    * Taken messages are marked started in the durable inbox exactly as a drain marks
    * them: whoever consumes a message owns that bookkeeping.
    */
-  takeSteering(agentId: string, conversation: string = MAIN_CONVERSATION): InboundMessage[] {
+  takeSteering(agentId: string, conversation: string = MAIN_CONVERSATION, record?: (messages: readonly InboundMessage[]) => void): InboundMessage[] {
     const queue = this.pending.get(agentId) ?? [];
     const taken = queue.filter(
       message =>
-        (message.conversation ?? MAIN_CONVERSATION) === conversation && isSteering(message)
+        (message.conversation ?? MAIN_CONVERSATION) === conversation && isSteering(message) &&
+        message.principalId === this.active.get(workerKey(agentId, conversation))?.principalId
     );
     if (taken.length === 0) return [];
+    record?.(taken);
     const left = queue.filter(message => !taken.includes(message));
     if (left.length === 0) this.pending.delete(agentId);
     else this.pending.set(agentId, left);
@@ -589,7 +613,8 @@ export class AgentBus {
     this.steeringListeners.set(key, listeners);
     const queued = (this.pending.get(agentId) ?? []).some(
       message =>
-        (message.conversation ?? MAIN_CONVERSATION) === conversation && isSteering(message)
+        (message.conversation ?? MAIN_CONVERSATION) === conversation && isSteering(message) &&
+        message.principalId === this.active.get(workerKey(agentId, conversation))?.principalId
     );
     if (queued) listener();
     return () => {
@@ -687,13 +712,19 @@ export class AgentBus {
         // while this call waited on the chain. Burning a model call on an empty
         // prompt would answer a question nobody is still asking.
         if (inbound.length === 0) return;
-        // Marked started before the turn runs, not after it finishes. After would mean replaying
-        // half-finished turns, and a turn that deployed something before dying would deploy it
-        // twice; resuming one properly needs per-step checkpoints, which do not exist yet.
-        this.inbox?.start(inbound.map(message => message.admission));
+        this.active.get(key)!.principalId = inbound[0]?.principalId;
+        let acknowledged = false;
+        const acknowledge = () => {
+          if (acknowledged) return;
+          this.inbox?.start(inbound.map(message => message.admission));
+          acknowledged = true;
+        };
+        if (!this.deferredStart) acknowledge();
         this.onEvent({ type: "turn_started", agentId, inboundCount: inbound.length });
         started = true;
-        await this.runTurn(agent, inbound, controller.signal, conversation);
+        await this.runTurn(agent, inbound, controller.signal, conversation, acknowledge);
+        // A rejected goal wake may return without opening a turn. It is consumed too.
+        acknowledge();
       } catch (error) {
         // The senders are told. Their acknowledgement said the message would be delivered, and it
         // was — into a turn that then failed, which they would otherwise wait on forever. This is

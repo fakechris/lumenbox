@@ -319,11 +319,13 @@ export const APP_HTML = String.raw`<!doctype html>
     display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 18px;
   }
   .paneheader .lead { display: flex; align-items: center; gap: 5px; min-width: 0; }
-  /* Right pane only: a crowded lead clips inside its own box instead of painting
-     under the actions — the badge shrinks first (it repeats what the notice banner
-     says in full), the tabs never do. NOT the left pane's lead: the conversation
-     dropdown is absolutely positioned inside it, and overflow:hidden beheads it. */
-  #rightpane .paneheader .lead { overflow: hidden; }
+  /* Tabs and actions take the first row; the desktop identity and box class get
+     their own row rather than shrinking the shared-box warning to a sliver. */
+  #rightpane .paneheader { height: auto; min-height: 52px; flex-wrap: wrap; padding: 6px 18px; gap: 4px 10px; }
+  #rightpane .paneheader .lead { flex: 1 1 250px; flex-wrap: wrap; gap: 2px; }
+  #rightpane .paneheader .headactions { margin-left: auto; }
+  .desktopcontext { display: flex; align-items: center; gap: 8px; flex: 1 0 100%; min-width: 0; }
+  .desktopcontext:has(#desktoptitle:empty):has(#boxclass[style*="display: none"]) { display: none; }
   #title { font-weight: 600; font-size: 1rem; }
   .roundpill {
     display: flex; align-items: center; gap: 7px; font-family: var(--font-mono); font-size: 12px;
@@ -720,15 +722,17 @@ export const APP_HTML = String.raw`<!doctype html>
   }
   .tab:hover { text-decoration: none; background: var(--surface-hover); }
   .tab.on { background: var(--accent-soft); color: var(--accent); }
-  /* The one thing that yields space when the tabs need it, so the last tab is never clipped. */
-  #desktoptitle { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1 1 auto; min-width: 0; }
+  #desktoptitle { font-size: 12px; color: var(--accent-2); text-decoration: underline;
+    text-decoration-color: var(--border-strong); text-underline-offset: 2px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1 1 auto; min-width: 0; }
+  #desktoptitle:hover { text-decoration-color: currentColor; }
+  #desktoptitle:empty { display: none; }
   /* Always rendered, never dismissible: docs/18 §3.1. A shared box is warn-toned because
      what it says changes what a person should be willing to type; a private one is quiet
      because it is only stating the ordinary case. */
   .boxclass {
     font-size: 11px; padding: 2px 8px; border-radius: var(--radius-pill);
-    white-space: nowrap; flex: 0 1 auto; min-width: 0; overflow: hidden;
-    text-overflow: ellipsis; cursor: default;
+    white-space: nowrap; flex: none; cursor: default;
   }
   .boxclass.shared { background: var(--warn-soft); color: var(--warn); border: 1px solid var(--warn-border); }
   .boxclass.private { background: var(--surface-hover); color: var(--muted); }
@@ -763,6 +767,9 @@ export const APP_HTML = String.raw`<!doctype html>
 
   .activityhead { border-top: 1px solid var(--border); padding-top: 12px; }
   .feed { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 0 8px; }
+  /* Waiting items can outnumber the visible board. Keep them scrollable inside
+     Tasks so neither the board nor the Activity feed is painted over. */
+  #attention { flex: none; max-height: 60%; overflow-y: auto; }
   .ev {
     padding: 4px 16px; font-size: 12px; line-height: 1.55; color: var(--muted);
     border-top: 1px solid var(--border);
@@ -914,17 +921,20 @@ export const APP_HTML = String.raw`<!doctype html>
       <a href="#" id="tabtasks" class="tab">Tasks</a>
       <a href="#" id="tabauto" class="tab">Automations</a>
       <a href="#" id="tabaudit" class="tab">Audit</a>
-      <span id="desktoptitle"></span>
-      <span id="boxclass" class="boxclass" style="display:none"></span>
     </span>
     <span class="headactions" id="desktopactions">
       <a id="rec" href="#" title="Record this desktop">&#9679;</a>
       <a id="full" href="#" target="_blank" rel="noopener" class="btn sm" style="text-decoration:none">Take over</a>
       <a id="handback" href="#" class="btn sm" style="text-decoration:none;display:none" title="Give the desktop back to the agent">Hand back</a>
     </span>
+    <span class="desktopcontext">
+      <a href="#" id="desktoptitle"></a>
+      <span id="boxclass" class="boxclass" style="display:none"></span>
+    </span>
   </div>
   <div id="desktopview">
     <div id="boxnotice" style="display:none"></div>
+    <div class="bar" id="desktopstart"><button class="btn" id="opendesktop" type="button">Open desktop</button><span> Starts when you need it.</span></div>
     <div class="desktopwrap"><iframe id="vnc" title="box desktop"></iframe></div>
     <div class="bar" id="recordings" style="display:none"></div>
     <div class="bar" id="clipbar">
@@ -1125,8 +1135,9 @@ export const APP_HTML = String.raw`<!doctype html>
     </div>
     <div class="fieldnote" id="setwelcome" style="display:none;border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 12px;color:var(--text-soft)">
       Welcome. LumenBox needs two things before agents can work: a model provider with a
-      key, and the box &mdash; one Linux container with a desktop, a browser and a shell,
-      running on this machine. Both are set up here.
+      key, and the box &mdash; one Linux computer with a desktop, a browser and a shell,
+      running in Docker on this machine, so Docker Desktop or OrbStack must be installed
+      and started first. Both are set up here.
     </div>
     <div class="field" data-tier="installation" data-settab="model">
       <label>Provider</label>
@@ -1169,6 +1180,19 @@ export const APP_HTML = String.raw`<!doctype html>
         <button class="btn sm" id="setboxup">Start the box</button>
       </div>
       <pre id="setboxlog" style="display:none;max-height:140px;overflow:auto;background:var(--code-bg);color:var(--code-text);border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 12px;font-family:var(--font-mono);font-size:11px;line-height:1.6;margin:0;white-space:pre-wrap"></pre>
+      <input id="setboximage" placeholder="Image override, e.g. mirror.example.com/lumenbox:0.3.0 — empty uses the release default (fakechris/lumenbox, Docker Hub)" spellcheck="false" style="margin-top:8px">
+      <div class="fieldnote" style="margin-top:4px">What docker pulls when this machine has no box image. Point it at a mirror if Docker Hub is slow or unreachable from your network; the first pull is hundreds of megabytes either way.</div>
+    </div>
+    <div class="field" data-tier="installation" data-settab="boxes">
+      <label>Personal-box allocation limits</label>
+      <div class="fieldnote">Limits apply when assigning a box to one person. Blank means unlimited by default, or inherit for a person. Lowering a limit keeps existing allocations. Self-service creation is not available yet.</div>
+      <input id="setquotadefault" type="number" min="0" max="99" step="1" placeholder="Default: unlimited">
+      <div id="setdirectories"></div>
+      <div class="fieldnote">Sync enrolls a door in directory allocation checks. Resync within 24 hours; stale or failed sync pauses new allocations. Existing boxes remain. Person overrides take priority; multiple departments use the smallest configured limit.</div>
+      <div id="setquotadepartments"></div>
+      <div id="setquotapeople"></div>
+      <button class="btn sm" id="setquotasave" type="button">Save allocation limits</button>
+      <div class="fieldnote" id="setquotastatus" role="status"></div>
     </div>
     <div class="field" data-tier="installation" id="setboxeswrap" data-settab="boxes">
       <label>Boxes</label>
@@ -1373,6 +1397,7 @@ export const APP_HTML = String.raw`<!doctype html>
   <div class="modal" style="width:680px">
     <h3>Templates</h3>
     <div class="fieldnote">A template is a saved agent: persona, skills, routines, conventions — never history, never people. Stamping one makes a new agent in a box.</div>
+    <div class="field"><label>My personal boxes</label><div id="personalboxes"></div><button class="btn sm" id="personalcreate">Create personal box</button><div class="fieldnote" id="personalstatus"></div></div>
     <div class="field"><label>Stamp into</label><select id="shelfbox" style="height:32px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 8px"></select></div>
     <div id="shelfbody" class="scroll" style="max-height:52vh"></div>
     <div class="fieldnote" id="shelfstatus"></div>
@@ -1582,6 +1607,58 @@ document.getElementById("settabs").onclick = function (event) {
   showSettingsTab(a.getAttribute("data-settab"));
 };
 
+function loadBoxQuotas() {
+  fetch("/api/directories").then(function (r) { return r.json(); }).then(function (d) {
+    if (d.error) throw new Error(d.error);
+    $("setdirectories").innerHTML = d.directories.map(function (item) {
+      return '<p>' + esc(item.channelId) + ' · ' + esc(item.status) + ' · ' + item.people + ' people / ' + item.departments + ' departments' +
+        (item.syncedAt ? ' · last complete ' + esc(item.syncedAt) : '') +
+        '<button type="button" class="btn sm" data-directory-sync="' + esc(item.channelId) + '">Sync directory</button></p>';
+    }).join("");
+  }).catch(function (e) { $("setquotastatus").textContent = e.message; });
+  fetch("/api/quotas").then(function (r) { return r.json(); }).then(function (d) {
+    if (d.error) throw new Error(d.error);
+    $("setquotadepartments").innerHTML = (d.departments || []).map(function (item) {
+      return '<label style="display:block;margin-top:8px">' + esc(item.channelId) + ' / ' + esc(item.name) +
+        '<input data-quota-department="' + esc(item.key) + '" type="number" min="0" max="99" step="1" placeholder="Inherit installation default" value="' + (item.override === null ? "" : item.override) + '"></label>';
+    }).join("");
+    $("setquotadefault").value = d.personalBoxQuota === null ? "" : d.personalBoxQuota;
+    $("setquotapeople").innerHTML = d.people.map(function (p) {
+      return '<label style="display:block;margin-top:8px">' + esc(p.name) + ' · ' + p.held + ' held' +
+        '<input data-quota-person="' + esc(p.id) + '" type="number" min="0" max="99" step="1" placeholder="Inherit default" value="' + (p.override === null ? "" : p.override) + '"></label>';
+    }).join("");
+  }).catch(function (e) { $("setquotastatus").textContent = e.message; });
+}
+$("setdirectories").onclick = function (event) {
+  var button = event.target.closest("[data-directory-sync]");
+  if (!button) return;
+  button.disabled = true;
+  $("setquotastatus").textContent = "Syncing directory…";
+  fetch("/api/directories/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ channelId: button.getAttribute("data-directory-sync") }) })
+    .then(function (r) { return r.json(); }).then(function (d) {
+      if (d.error) throw new Error(d.error);
+      $("setquotastatus").textContent = "Directory synced.";
+    }).catch(function (e) { $("setquotastatus").textContent = e.message; }).finally(loadBoxQuotas);
+};
+$("setquotasave").onclick = function () {
+  var button = this;
+  var people = {};
+  var departments = {};
+  var departmentInputs = Array.from($("setquotadepartments").querySelectorAll("input"));
+  var inputs = Array.from($("setquotapeople").querySelectorAll("input"));
+  if ([$("setquotadefault")].concat(inputs, departmentInputs).some(function (input) { return !input.reportValidity(); })) return;
+  inputs.forEach(function (input) { people[input.getAttribute("data-quota-person")] = input.value === "" ? null : Number(input.value); });
+  departmentInputs.forEach(function (input) { departments[input.getAttribute("data-quota-department")] = input.value === "" ? null : Number(input.value); });
+  button.disabled = true;
+  fetch("/api/quotas", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+    personalBoxQuota: $("setquotadefault").value === "" ? null : Number($("setquotadefault").value), personBoxQuotas: people, departmentBoxQuotas: departments
+  }) }).then(function (r) { return r.json(); }).then(function (d) {
+    if (d.error) throw new Error(d.error);
+    $("setquotastatus").textContent = "Saved. Applies to the next allocation; no restart needed.";
+    loadBoxQuotas();
+  }).catch(function (e) { $("setquotastatus").textContent = e.message; }).finally(function () { button.disabled = false; });
+};
+
 function openSettings(tab) {
   showSettingsTab(typeof tab === "string" ? tab : "model");
   // Applied on open as well as on load: the dialog is built once and reopened, and
@@ -1599,6 +1676,7 @@ function openSettings(tab) {
       if (chosen) sel.value = chosen;
       $("setmodel").value = (data.config && data.config.model) || "";
       $("setbase").value = (data.config && data.config.baseUrl) || "";
+      $("setboximage").value = (data.config && data.config.boxImage) || "";
       $("setkey").value = "";
       var host = data.hostExec || {};
       $("sethostenabled").checked = !!host.enabled;
@@ -1611,6 +1689,7 @@ function openSettings(tab) {
       settingsProviderChanged();
       renderStandingGrants();
       renderBoxSection();
+      if (myRole === "admin") loadBoxQuotas();
       renderChannels();
       renderSecrets(); renderConnectors();
       renderMemorySummary();
@@ -2325,6 +2404,36 @@ document.getElementById("setpeople").addEventListener("click", function (event) 
   savePeople();
 });
 
+/** Resource figures belong to the daemon; no per-desktop memory estimates. */
+function renderDesktopResources(box) {
+  var resources = box.resources;
+  if (!resources) return '<div class="dim" style="margin:4px 0 10px 16px">Desktop resource status unavailable.</div>';
+  var desktops = resources.desktops || [];
+  var running = desktops.filter(function (d) { return d.state === "ready" || d.state === "stopping"; }).length;
+  var retained = desktops.filter(function (d) { return d.state === "ready" && d.retained_reason; }).length;
+  var failed = desktops.filter(function (d) { return d.state === "failed"; }).length;
+  var registered = agents.filter(function (a) { return a.boxId === box.id; }).length;
+  var summary = registered + " registered · " + running + " running · " + retained + " retained · " + failed + " failed (process state unknown) · " + resources.starts + " starts · " + resources.reclaims + " reclaimed";
+  if (typeof resources.memory_bytes === "number") summary += " · container " + Math.round(resources.memory_bytes / 1048576) + " MiB";
+  var mode = resources.idle_ms > 0 ? "Empty managed desktops can be reclaimed after " + Math.round(resources.idle_ms / 60000 * 10) / 10 + " minutes. Used or uncertain sessions are kept." : "Automatic desktop reclamation is off.";
+  return '<div class="dim" style="margin:4px 0 10px 16px">' + esc(summary) + '<br>' + esc(mode) +
+    desktops.map(function (d) {
+      var agent = agents.find(function (a) { return a.boxId === box.id && a.displayIndex === d.index; });
+      var button = agent && myRole !== "viewer" ? ' <button class="btn sm ghost" data-pin-agent="' + esc(agent.id) + '" data-pinned="' + (d.pinned ? "false" : "true") + '">' + (d.pinned ? "Unpin" : "Keep desktop") + '</button>' : "";
+      return '<div>' + esc(agent ? agent.name : "Desktop " + d.index) + " · " + esc(d.state) + (d.retained_reason ? " · " + esc(d.retained_reason) : "") + button + '</div>';
+    }).join("") + '</div>';
+}
+
+document.addEventListener("click", function (event) {
+  var button = event.target && event.target.closest ? event.target.closest("[data-pin-agent]") : null;
+  if (!button) return;
+  button.disabled = true;
+  fetch("/api/desktop/pin", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ agent: button.getAttribute("data-pin-agent"), pinned: button.getAttribute("data-pinned") === "true" }) })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "Could not update desktop"); }); })
+    .then(renderBoxes)
+    .catch(function (error) { $("setboxesstatus").textContent = String(error.message || error); button.disabled = false; });
+});
+
 /** The box list in Settings, with attach and detach. */
 function renderBoxes() {
   return fetch("/api/boxes")
@@ -2342,7 +2451,7 @@ function renderBoxes() {
           "</div>" +
           // Who the box is for, in the words the members set produces (docs/22 §5, INV-538).
           // Not free text: a label somebody types is a label that stops being true.
-          '<div class="dim" style="font-size:11.5px;margin:2px 0 8px 16px">' + esc(b.membersLabel || "") + "</div>";
+          '<div class="dim" style="font-size:11.5px;margin:2px 0 8px 16px">' + esc(b.membersLabel || "") + "</div>" + renderDesktopResources(b);
       }).join("") ||
         '<div class="dim" style="font-size:12.5px">' + esc(t("ui.boxes.none")) + "</div>";
     })
@@ -2418,9 +2527,20 @@ $("setboxes").addEventListener("click", function (e) {
 
 function renderBoxSection() {
   renderBoxes();
-  $("setboxstate").textContent = boxState.ok
-    ? "Running — " + boxState.detail
-    : "Not running. Agents have no desktop, shell or files until it is.";
+  if (boxState.ok) {
+    $("setboxstate").textContent = "Running — " + boxState.detail;
+  } else if (dockerState && dockerState.state === "no-binary") {
+    // The machine has no docker command at all. Say what a box is, name the two things to
+    // install, and link them — the old error told the reader to run docker version, which
+    // assumed a reader who does not exist.
+    $("setboxstate").innerHTML = esc(t("ui.box.dockerMissing")) +
+      ' <a href="https://www.docker.com/products/docker-desktop/" target="_blank" rel="noreferrer">Docker Desktop</a> · ' +
+      '<a href="https://orbstack.dev/" target="_blank" rel="noreferrer">OrbStack</a>';
+  } else if (dockerState && dockerState.state === "no-engine") {
+    $("setboxstate").textContent = t("ui.box.dockerStopped");
+  } else {
+    $("setboxstate").textContent = "Not running. Agents have no desktop, shell or files until it is.";
+  }
   $("setboxactions").style.display = boxState.ok ? "none" : "";
 }
 
@@ -2439,6 +2559,10 @@ function maybeOnboard() {
       if ((!configured && !anyKey) || !boxState.ok) {
         openSettings();
         $("setwelcome").style.display = "";
+        // First run has one sensible ending: save and restart, so what was typed is what
+        // runs. A second, weaker button beside it invites the save that does not take
+        // effect, and the next message dies on the key that was entered but never loaded.
+        $("setsave").style.display = "none";
       }
     })
     .catch(function () {});
@@ -2447,6 +2571,8 @@ function maybeOnboard() {
 function markOnboarded() {
   try { localStorage.setItem("lumen-onboarded", "1"); } catch (error) {}
   $("setwelcome").style.display = "none";
+  // The welcome is over; plain Save is a valid choice again for later visits.
+  $("setsave").style.display = "";
 }
 
 $("setboxup").onclick = function () {
@@ -2526,6 +2652,8 @@ function saveSettings(thenRestart) {
   body.model = model === "" ? null : model;
   var base = $("setbase").value.trim();
   body.baseUrl = base === "" ? null : base;
+  var boxImage = $("setboximage").value.trim();
+  body.boxImage = boxImage === "" ? null : boxImage;
   var key = $("setkey").value.trim();
   if (key !== "") body.key = key;
   body.hostExec = { enabled: $("sethostenabled").checked, cwd: $("sethostcwd").value.trim() };
@@ -2691,6 +2819,7 @@ function renderSpend(data) {
     // The single number that says whether the caching lever is doing anything.
     (function () {
       var fresh = totals.inputTokens || 0, cached = totals.cacheReadTokens || 0;
+      if ((report.unmeasured || []).length) return ' &middot; <span title="provider usage incomplete">缓存命中 未知</span>';
       return fresh + cached > 0
         ? ' &middot; <span title="input served from cache vs paid fresh">缓存命中 ' + Math.round(cached / (fresh + cached) * 100) + "%</span>"
         : "";
@@ -2777,6 +2906,13 @@ function renderSpend(data) {
     caveats.push("No cost shown: no rate for " + esc(report.unpriced.join(", ")) +
       ". Add a \u201crates\u201d block to config.json to price them.");
   }
+  if ((report.unmeasured || []).length) {
+    caveats.push("No cost or cache hit rate shown: provider usage is missing, contradictory, or lacks a verified cache breakdown (" +
+      report.unmeasured.map(function (x) { return esc(x.status) + ": " + num(x.records); }).join(", ") + ").");
+  }
+  if ((report.unpricedCategories || []).length) {
+    caveats.push("No cost shown: missing cache class rates for " + esc(report.unpricedCategories.join(", ")) + ".");
+  }
   if (report.unjoinable) caveats.push(esc(report.unjoinable));
   // The省钱 levers, named with where each lives, so a big number here is actionable rather than
   // just alarming: cheaper provider, tighter compaction, per-person budget.
@@ -2859,6 +2995,9 @@ var current = null;
 var currentConversation = "main";
 /** The last /api/state box report, for the settings dialog's box section. */
 var boxState = { ok: false, detail: "" };
+// Docker's own state while no box is running: "no-binary" / "no-engine" / "ok". Null once
+// the box is up, and for an attached box, where the question is not Docker's to answer.
+var dockerState = null;
 var onboardChecked = false;
 var busy = new Set();
 /** In-flight assistant text nodes, keyed by agent id, so deltas land in one bubble. */
@@ -2983,6 +3122,21 @@ function agentsInView() {
 var groupBy = (function () {
   try { return localStorage.getItem("lumenbox.groupBy") || "teams"; } catch (error) { return "teams"; }
 })();
+/** The one team shown, or "" for all (INV-120). Both this and groupBy follow the person (INV-121). */
+var teamFilter = "";
+
+/** Tells the server what this person chose, so the next browser starts there; localStorage is the offline echo. */
+function savePreference(patch) {
+  try { localStorage.setItem("lumenbox.groupBy", groupBy); } catch (error) {}
+  fetch("/api/me/preferences", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) }).catch(function () {});
+}
+
+function applyPreferences(prefs) {
+  if (!prefs) return;
+  if (prefs.groupBy === "teams" || prefs.groupBy === "az") groupBy = prefs.groupBy;
+  teamFilter = typeof prefs.team === "string" ? prefs.team : "";
+  renderAgents();
+}
 
 function oneAgentRow(a, index) {
   return '<div class="agent ' + (a.id === current ? "on" : "") + '" data-id="' + esc(a.id) + '">' +
@@ -3012,7 +3166,15 @@ function renderAgents() {
 
   var html = "";
   var index = 0;
-  if (groupBy !== "teams" || !tagged) {
+  // Filtering is not grouping (INV-120): one team, its members only, and a line saying which
+  // team is being looked at so a short list is never mistaken for the whole roster.
+  if (teamFilter) {
+    var only = list.filter(function (a) { return (a.tags || []).indexOf(teamFilter) >= 0; });
+    html += '<div class="teamhead" id="teamviewing">viewing team ' + esc(teamFilter) + ' <span class="count">' + only.length + "</span>" +
+      ' <a href="#" id="teamall" class="dim" style="float:right;text-transform:none;letter-spacing:0" title="Show every agent again">all</a></div>';
+    if (only.length === 0) html += '<div class="dim" style="padding:8px 12px;font-size:12px">No agent is in this team' + (boxesSeen.length > 1 ? " in this box" : "") + ".</div>";
+    for (var f = 0; f < only.length; f++) html += oneAgentRow(only[f], index++);
+  } else if (groupBy !== "teams" || !tagged) {
     for (var i = 0; i < list.length; i++) html += oneAgentRow(list[i], index++);
   } else {
     var groups = {};
@@ -3030,7 +3192,11 @@ function renderAgents() {
     order.sort();
     for (var g = 0; g < order.length; g++) {
       var members = groups[order[g]];
-      html += '<div class="teamhead">' + esc(order[g]) + ' <span class="count">' + members.length + "</span></div>";
+      // The heading is the filter (INV-120); the pencil is the rename, for an admin (INV-119).
+      html += '<div class="teamhead"><a href="#" class="teamonly" data-team="' + esc(order[g]) + '" title="Show only this team" style="color:inherit;text-decoration:none">' + esc(order[g]) + "</a>" +
+        ' <span class="count">' + members.length + "</span>" +
+        (myRole === "admin" ? ' <a href="#" class="teamrename dim" data-team="' + esc(order[g]) + '" title="Rename this team on every member" style="float:right;text-transform:none;letter-spacing:0">rename</a>' : "") +
+        "</div>";
       for (var m = 0; m < members.length; m++) html += oneAgentRow(members[m], index++);
     }
     if (loose.length > 0) {
@@ -3043,12 +3209,40 @@ function renderAgents() {
   for (var j = 0; j < nodes.length; j++) {
     nodes[j].onclick = function () { select(this.dataset.id); };
   }
+  var onlyLinks = document.querySelectorAll(".teamonly");
+  for (var o = 0; o < onlyLinks.length; o++) {
+    onlyLinks[o].onclick = function (event) {
+      event.preventDefault();
+      teamFilter = this.dataset.team;
+      savePreference({ team: teamFilter });
+      renderAgents();
+    };
+  }
+  var all = document.getElementById("teamall");
+  if (all) all.onclick = function (event) { event.preventDefault(); teamFilter = ""; savePreference({ team: null }); renderAgents(); };
+  var renames = document.querySelectorAll(".teamrename");
+  for (var r = 0; r < renames.length; r++) {
+    renames[r].onclick = function (event) {
+      event.preventDefault();
+      var from = this.dataset.team;
+      var to = prompt("Rename team \u201c" + from + "\u201d on every member to:", from);
+      if (to === null || to.trim() === "" || to.trim() === from) return;
+      fetch("/api/teams/rename", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ from: from, to: to.trim() }) })
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+          if (data.error) { alert(data.error); return; }
+          if (teamFilter === from) { teamFilter = to.trim().toLowerCase().replace(/\s+/g, "-"); savePreference({ team: teamFilter }); }
+          return refresh();
+        })
+        .catch(function () {});
+    };
+  }
 }
 
 document.getElementById("groupby").addEventListener("click", function (event) {
   event.preventDefault();
   groupBy = groupBy === "teams" ? "az" : "teams";
-  try { localStorage.setItem("lumenbox.groupBy", groupBy); } catch (error) {}
+  savePreference({ groupBy: groupBy });
   renderAgents();
 });
 
@@ -3779,41 +3973,93 @@ function showBoxClass(box) {
     notice.style.display = "none";
     return;
   }
-  badge.textContent = box.badge + (box.group ? " · " + box.group : "");
+  badge.textContent = box.badge;
   // Warn-toned unless the class is actually enforced. A box labelled private with nothing
   // behind it must not read as the calm case; it is the shared case with a wrong label.
   badge.className = "boxclass " + (box.enforced === false ? "shared" : box.access);
   // The notice, or nothing. This used to fall through to "只有你能打开这台箱子" — the
   // strongest privacy claim in the product, arriving as an || fallback nobody decided on,
   // and false for every box that exists.
-  badge.title = box.notice || "";
+  badge.title = (box.group ? box.group + " · " : "") + (box.notice || "");
   badge.style.display = "";
   notice.textContent = box.notice || "";
   notice.style.display = box.notice ? "" : "none";
 }
 
-/** Points the desktop pane at one agent's own display. */
+var openedDesktops = new Set();
+$("opendesktop").onclick = function () {
+  if (!current) return;
+  openedDesktops.add(current);
+  showDesktop(current);
+};
+
+/** Points the desktop pane at one agent's own display only after an explicit open. */
 function showDesktop(id) {
+  var frame = $("vnc");
+  var requested = openedDesktops.has(id);
+  $("desktopstart").style.display = requested ? "none" : "";
+  if (!requested || $("desktopview").style.display === "none") {
+    frame.removeAttribute("src");
+    frame.removeAttribute("srcdoc");
+    frame.removeAttribute("data-offline");
+  }
   var agent = null;
   for (var i = 0; i < agents.length; i++) if (agents[i].id === id) agent = agents[i];
   if (!agent || !agent.desktopUrl) {
     $("desktoptitle").textContent = "";
+    $("desktoptitle").removeAttribute("title");
     $("full").style.display = "none";
     return;
   }
-  $("desktoptitle").textContent = agent.name + " · d" + agent.displayIndex + (boxesSeen.length > 1 && agent.boxName ? " · " + agent.boxName : "");
+  var box = null;
+  for (var j = 0; j < boxesSeen.length; j++) if (boxesSeen[j].id === agent.boxId) box = boxesSeen[j];
+  var offline = !!(box && box.connected === false);
+  var desktopLabel = "Desktop: " + agent.name + " · display " + agent.displayIndex + (boxesSeen.length > 1 && agent.boxName ? " · " + agent.boxName : "") + (offline ? " · offline" : "");
+  $("desktoptitle").textContent = desktopLabel;
+  $("desktoptitle").title = desktopLabel + " — open Desktop tab";
+  var frame = $("vnc");
+  if (offline) {
+    // The box is not reachable, and the pane says so *now*. Pointing the frame at the proxy
+    // would leave the previous document on screen until the proxy gave up — which, with the
+    // grok VM off the tailnet (2026-09-28), was the own box's Linux desktop shown under the
+    // attached agent's name. The state refresh calls back here every few seconds, so the
+    // real desktop takes over as soon as the box is connected again.
+    $("full").style.display = "none";
+    if (frame.getAttribute("data-offline") !== agent.boxId) {
+      frame.removeAttribute("src");
+      frame.setAttribute("srcdoc", desktopOfflineDoc(box.name));
+      frame.setAttribute("data-offline", agent.boxId);
+    }
+    return;
+  }
   $("full").href = agent.desktopUrl;
   $("full").style.display = "";
   // The iframe rides with embedded=1 so the proxy skips the box-class banner:
   // #boxnotice already says the same sentence right above this frame, and inside
   // the frame the banner only covered the desktop's top edge. Take over keeps the
   // plain URL — standalone, the banner is the only warning on the page.
+  if (!requested || $("desktopview").style.display === "none") return;
   var embeddedUrl = agent.desktopUrl + "&embedded=1";
   // Only reload when it is a different desktop: re-setting src restarts noVNC and
   // flashes "Connecting…", so switching back and forth must not thrash it.
-  if ($("vnc").getAttribute("src") !== embeddedUrl) {
-    $("vnc").setAttribute("src", embeddedUrl);
+  if (frame.getAttribute("src") !== embeddedUrl) {
+    frame.removeAttribute("data-offline");
+    frame.removeAttribute("srcdoc");
+    // A browser keeps the old document visible until the new one commits, so between two
+    // desktops the pane would show the previous agent's screen under this one's name. Blank
+    // until the new page has loaded (the load event fires for the waiting page as well).
+    frame.style.opacity = "0";
+    frame.setAttribute("src", embeddedUrl);
   }
+}
+$("vnc").onload = function () { this.style.opacity = ""; };
+
+/** The document the pane shows for a box that is not connected: black like the desktop, no picture. */
+function desktopOfflineDoc(boxName) {
+  return "<!doctype html><html><head><meta charset=\"utf-8\"><style>html,body{margin:0;height:100%;background:#000;color:#8a8a8a;" +
+    "font:13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}body{display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;box-sizing:border-box}" +
+    "small{display:block;margin-top:8px;color:#555}</style></head><body><div>Box " + esc(boxName) +
+    " is not connected<small>No desktop to show. The picture returns when the box is reachable again.</small></div></body></html>";
 }
 
 /**
@@ -4448,6 +4694,7 @@ function refresh() {
     allTools = state.allTools || allTools;
     $("model").innerHTML = "<b>" + esc(state.provider) + "</b>";
     boxState = { ok: !!state.box.ok, detail: String(state.box.detail || "") };
+    dockerState = state.box.docker || null;
     $("boxinfo").textContent = (state.box.ok ? state.box.detail : "box unavailable") +
       (state.boxes && state.boxes.length > 1 ? " · " + state.boxes.length + " boxes (" + state.boxes.filter(function (b) { return b.connected; }).length + " up)" : "");
     $("boxdot").className = "dot " + (state.box.ok ? "ok" : "bad");
@@ -4806,12 +5053,14 @@ function showTab(which) {
   $("tabauto").className = "tab" + (which === "auto" ? " on" : "");
   $("tabaudit").className = "tab" + (which === "audit" ? " on" : "");
   $("desktopactions").style.display = which === "desktop" ? "" : "none";
+  if (current) showDesktop(current);
   if (which === "files") refreshFiles();
   if (which === "tasks") refreshTasks();
   if (which === "auto") refreshAutomations();
   if (which === "audit") startAudit(); else stopAudit();
 }
 document.getElementById("tabdesktop").addEventListener("click", function (e) { e.preventDefault(); showTab("desktop"); });
+document.getElementById("desktoptitle").addEventListener("click", function (e) { e.preventDefault(); showTab("desktop"); });
 document.getElementById("tabfiles").addEventListener("click", function (e) { e.preventDefault(); showTab("files"); });
 document.getElementById("tabtasks").addEventListener("click", function (e) { e.preventDefault(); showTab("tasks"); });
 document.getElementById("tabauto").addEventListener("click", function (e) { e.preventDefault(); showTab("auto"); });
@@ -5054,6 +5303,10 @@ function automationRow(s, rows) {
           '<button class="btn ghost sm" data-reveal="' + esc(s.slug) + '">Show</button>' +
           '<button class="btn ghost sm" data-copyhook="' + esc(s.slug) + '">Copy</button>' +
           '<button class="btn ghost sm" data-rotate="' + esc(s.slug) + '">New secret</button>' +
+          (s.previousUntil
+            ? ' <span class="dim" style="font-size:11px">old secret works until ' + esc(new Date(s.previousUntil).toLocaleString()) + '</span>' +
+              ' <button class="btn ghost sm" data-revoke-previous="' + esc(s.slug) + '">Stop it now</button>'
+            : "") +
         "</div>" +
         '<div class="dim" style="font-size:11px;margin-top:4px">' +
           (hook.fired ? "called " + hook.fired + " time" + (hook.fired === 1 ? "" : "s") : "never called") +
@@ -5158,9 +5411,20 @@ document.getElementById("autolist").addEventListener("click", function (e) {
   var rotate = get("data-rotate");
   if (rotate) {
     e.preventDefault();
-    if (!confirm("Make a new secret for this routine? Anything using the old one stops working.")) return;
+    if (!confirm("Make a new secret for this routine? The old one keeps working for 24 hours so you can update what uses it.")) return;
     e.target.disabled = true;
     fetch("/api/hooks/rotate", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: rotate }) })
+      .then(function (r) { return r.json(); })
+      .then(function (data) { if (data.error) alert(data.error); return refreshAutomations(); })
+      .catch(function () { return refreshAutomations(); });
+    return;
+  }
+  var revokePrevious = get("data-revoke-previous");
+  if (revokePrevious) {
+    e.preventDefault();
+    if (!confirm("Stop the old secret now? Anything still using it stops working.")) return;
+    e.target.disabled = true;
+    fetch("/api/hooks/revoke-previous", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: revokePrevious }) })
       .then(function (r) { return r.json(); })
       .then(function (data) { if (data.error) alert(data.error); return refreshAutomations(); })
       .catch(function () { return refreshAutomations(); });
@@ -6736,6 +7000,7 @@ function openAgentModal(mode, agent) {
   if (agent) loadStanding(agent.id);
   // null means unrestricted — every tool, including ones that do not exist yet.
   var granted = agent && agent.tools ? agent.tools : null;
+  agentModal.grantedBefore = granted;
   agentModal.tools = {};
   $("agtools").innerHTML = allTools.map(function (tool) {
     var on = granted === null || granted.indexOf(tool) >= 0;
@@ -6888,6 +7153,8 @@ function saveAgentModal() {
     return;
   }
   var granted = allTools.filter(function (tool) { return agentModal.tools[tool]; });
+  // Entries the chips do not show (an MCP service such as notion__*) are kept, not dropped by an edit.
+  var unshown = (agentModal.grantedBefore || []).filter(function (tool) { return allTools.indexOf(tool) < 0; });
   var isNew = agentModal.mode === "new";
   var body = {
     name: name,
@@ -6897,7 +7164,7 @@ function saveAgentModal() {
     tags: $("agtags").value.split(",").map(function (t) { return t.trim(); }).filter(Boolean),
     description: $("agpersona").value,
     // A full set is sent as null — "everything", which stays true for future tools.
-    tools: granted.length === allTools.length ? null : granted,
+    tools: granted.length === allTools.length && unshown.length === 0 ? null : granted.concat(unshown),
     // In a scope, the scope owns the tools; send them anyway as the fallback for if
     // it is ever removed from the scope.
     scopeId: $("agscope").value,
@@ -6961,6 +7228,7 @@ fetch("/api/me")
     $("whoami").textContent = me.name ? me.name + " · " + me.role : "";
     $("whoami").title = me.identity ? "signed in as " + me.identity : "";
     applyRole();
+    applyPreferences(me.preferences);
   })
   .catch(function () {});
 
@@ -7009,14 +7277,62 @@ function shelfCard(head, sub, action, dataAttr, preview) {
     "</div>";
 }
 
-function openShelf() {
+var personalRequestId = null;
+var personalPoll = null;
+function renderPersonalBoxes(d) {
+  $("personalstatus").textContent = d.held + " allocated / " + (d.quota === null ? "unlimited" : d.quota) + " quota";
+  $("personalcreate").disabled = d.quota !== null && d.held >= d.quota;
+  $("personalboxes").innerHTML = (d.boxes || []).map(function (b) {
+    return '<div style="padding:6px 0"><span>' + esc(b.name) + ' — ' + esc(b.status) + '</span>' +
+      (b.error ? '<div class="fieldnote">' + esc(b.error) + '</div>' : '') +
+      (['failed', 'interrupted', 'detached', 'deleting'].indexOf(b.status) >= 0 ? ' <button class="btn sm" data-personal-retry="' + esc(b.id) + '">Retry / recover</button>' : '') +
+      (['ready', 'failed', 'detached'].indexOf(b.status) >= 0 ? ' <button class="btn sm ghost" data-personal-keep="' + esc(b.id) + '">Remove, keep data</button> <button class="btn sm ghost" data-personal-delete="' + esc(b.id) + '">Delete box and data</button>' : '') + '</div>';
+  }).join('');
+  clearTimeout(personalPoll);
+  if ((d.boxes || []).some(function (b) { return b.status === 'provisioning' || b.status === 'deleting'; })) personalPoll = setTimeout(loadPersonalBoxes, 2000);
+}
+function loadPersonalBoxes() {
+  if ($("shelfwrap").style.display === "none") return;
+  fetch('/api/personal-boxes').then(function (r) { return r.json(); }).then(function (d) {
+    if (d.error) { $("personalstatus").textContent = d.error; $("personalcreate").disabled = true; $("personalboxes").innerHTML = ''; return; }
+    renderPersonalBoxes(d);
+  }).catch(function () { $("personalstatus").textContent = 'Could not load personal boxes. Reopen Templates to retry.'; });
+}
+function personalAction(action, body) {
+  $("personalstatus").textContent = 'Working…';
+  $("personalcreate").disabled = true;
+  fetch('/api/personal-boxes/' + action, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    .then(function (r) { return r.json(); }).then(function (d) {
+      if (d.error) { $("personalstatus").textContent = d.error; $("personalcreate").disabled = false; return; }
+      if (action === 'create') personalRequestId = null;
+      renderPersonalBoxes(d);
+      openShelf(d.boxId);
+    }).catch(function () { $("personalstatus").textContent = 'Connection interrupted. Retry uses the same request; no duplicate box.'; $("personalcreate").disabled = false; });
+}
+$("personalcreate").onclick = function () {
+  if (!personalRequestId) personalRequestId = crypto.randomUUID();
+  personalAction('create', { requestId: personalRequestId });
+};
+$("personalboxes").onclick = function (event) {
+  var button = event.target.closest('button');
+  if (!button) return;
+  var retry = button.getAttribute('data-personal-retry');
+  var keep = button.getAttribute('data-personal-keep');
+  var erase = button.getAttribute('data-personal-delete');
+  if (retry) personalAction('retry', { id: retry });
+  if (keep) personalAction('remove', { id: keep, deleteData: false });
+  if (erase && confirm('Permanently delete this personal box and its saved data? Remove its agents first.')) personalAction('remove', { id: erase, deleteData: true });
+};
+
+function openShelf(preferredBox) {
   $("shelfwrap").style.display = "";
+  loadPersonalBoxes();
   $("shelfstatus").textContent = "";
   $("shelfbody").innerHTML = '<div class="dim">Loading…</div>';
   fetch("/api/templates/shelf").then(function (r) { return r.json(); }).then(function (d) {
     var boxes = d.boxes || [];
     $("shelfbox").innerHTML = boxes.map(function (b) {
-      return '<option value="' + esc(b.id) + '"' + (b.id === currentBox ? " selected" : "") + ">" + esc(b.name) + (b.kind === "docker" ? " (docker)" : " (attached)") + "</option>";
+      return '<option value="' + esc(b.id) + '"' + (b.id === (preferredBox || currentBox) ? " selected" : "") + ">" + esc(b.name) + (b.kind === "docker" ? " (docker)" : " (attached)") + "</option>";
     }).join("");
     var html = "";
     var market = d.marketplace || [];
@@ -7108,7 +7424,11 @@ function refreshSetup() {
     // Each step also names the command that does the same thing (INV-542): an
     // installation run on a server has no window to click in, and the person setting it
     // up over ssh was reading a page that assumed a mouse.
+    // The key goes first (INV-857), because the welcome note promises it as one of two
+    // things and every later step is dead without it: an agent with no key cannot say
+    // its first word, and the failure surfaced pages away from the cause.
     var steps = [
+      { done: s.key, head: t("ui.setup.key"), sub: t("ui.setup.keyWhy"), act: t("ui.setup.keyAct"), cli: "Settings → Model", go: function () { openSettings("model"); } },
       { done: s.box, head: t("ui.setup.box"), sub: t("ui.setup.boxWhy"), act: t("ui.setup.boxAct"), cli: "agentbox box up", go: function () { openSettings("boxes"); } },
       { done: s.agentTurn, head: t("ui.setup.agent"), sub: t("ui.setup.agentWhy"), act: t("ui.setup.agentAct"), cli: "agentbox agent new <name>", go: openShelf },
       { done: s.door, head: t("ui.setup.door"), sub: t("ui.setup.doorWhy"), act: t("ui.setup.doorAct"), cli: "Settings → Doors (no CLI yet)", go: function () { openSettings("doors"); } },
@@ -7295,6 +7615,7 @@ export const LOGIN_HTML = `<!doctype html>
 <div class="card">
   <h1>Sign in to LumenBox</h1>
   <p class="sub">An admin gives you a code &mdash; the same one that works in chat.</p>
+  <p class="note"><a href="/bootstrap">Set up the first administrator</a> on a new installation.</p>
   <label for="code">Invite code</label>
   <input id="code" autocomplete="off" spellcheck="false" placeholder="4F7KQZ" autofocus>
   <label for="name">Your name</label>

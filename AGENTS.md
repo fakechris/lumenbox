@@ -33,8 +33,13 @@ acceptable piece of work), linked with `CONTAINS`.
 6. **Agents propose, humans commit.** `work_propose` creates a **candidate**. Nothing an agent
    proposes enters the active queue until a person commits it in the Web UI. Never treat your own
    proposal as agreed work.
-7. **Agents never mark work Done.** A completed run moves the item to **In Review**. The person
-   decides what Done means.
+7. **Agents never mark work Done** — with one exception. A completed run moves the item to
+   **In Review**; the person decides what Done means. The exception is research: an ISSUE
+   labelled `research` (Type: Research), whose deliverable is the record itself. A new research
+   proposal may pass `initial_state: 'DONE'`, so the person's commit lands it in Done. Research a
+   person has already committed may be moved to Done by the agent (`work_update` with
+   `state: DONE`). Work the research leads to is proposed separately and stays behind the human
+   gate.
 
 ## First-Time Onboarding Blueprint (首次接入黄金规范)
 
@@ -126,6 +131,11 @@ Every file in `docs/` opens with a header block naming what it is:
 - **Verify on the artifact, not in your head.** Print the byte, read the field, take the
   screenshot (`node scripts/ui-shot.mjs`). Sound reasoning has disagreed with reality here more
   than once.
+- **Research and competitive analysis stay out of the repo.** Notes, reports, raw results and
+  probe scripts about other products go in `/research/` at the repo root, which is ignored —
+  not `docs/research/`, not `scripts/research/` (both ignored too; `docs-lint.test.mjs` fails
+  if any of the three is tracked). What a study decided belongs in a design doc, a commit
+  message or a code comment, and says what we do and why without naming anyone.
 - **Never print or store a token, key or secret** — not in a message, not in a commit, not in a
   transcript. Name it and say where it lives.
 - **Another agent may be working in this checkout.** Check the branch, commit only your own

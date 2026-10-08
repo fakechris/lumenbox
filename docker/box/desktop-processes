@@ -1,0 +1,235 @@
+#!/usr/bin/python3
+"""Prove a fresh desktop still contains only its recorded infrastructure.
+
+No name-based killing: pidfds bind every signal to the exact inspected process.
+The daemon must authorize the final stop after the prepared process set is frozen.
+An EOF, timeout or failed proof resumes every frozen process without destroying it.
+"""
+import json
+import re
+from Xlib import display as xdisplay
+from Xlib.ext import res
+import os
+import pathlib
+import select
+import signal
+import sys
+import time
+
+INDEX = int(sys.argv[1])
+if not 1 <= INDEX <= 32:
+    raise SystemExit(2)
+DISPLAY = ':' + str(INDEX)
+ALLOWED = {'Xvfb', 'xfwm4', 'picom', 'plank', 'pcmanfm', 'autocutsel',
+           'x11vnc', 'websockify', 'dbus-launch', 'dbus-daemon',
+           'at-spi-bus-launcher', 'at-spi2-registryd', 'xfconfd',
+           'bamfdaemon', 'bamfdaemon-dbus-runner', 'dconf-service'}
+frozen = []
+handles = []
+committed = False
+x = None
+grabbed = False
+launch_id = None
+
+
+def emit(value):
+    print(json.dumps(value), flush=True)
+
+
+def interrupted(_signal, _frame):
+    raise RuntimeError('inspection interrupted')
+
+
+signal.signal(signal.SIGTERM, interrupted)
+signal.signal(signal.SIGALRM, interrupted)
+signal.alarm(12)
+
+
+def identity(pid):
+    p = pathlib.Path('/proc') / str(pid)
+    stat = (p / 'stat').read_text()
+    fields = stat[stat.rfind(')') + 2:].split()
+    if fields[0] == 'Z':
+        return None
+    executable = os.readlink(p / 'exe')
+    name = os.path.basename(executable)
+    if not executable.startswith(('/usr/bin/', '/usr/lib/', '/usr/libexec/')):
+        name = 'untrusted executable'
+    if name == 'bash':
+        argv = (p / 'cmdline').read_bytes().split(b'\0')
+        if argv[1:2] == [b'/usr/libexec/bamf/bamfdaemon-dbus-runner']:
+            name = 'bamfdaemon-dbus-runner'
+    if name.startswith('python'):
+        argv = (p / 'cmdline').read_bytes().split(b'\0')
+        if any(x in (b'/usr/bin/websockify', b'/usr/local/bin/websockify') for x in argv[1:3]):
+            name = 'websockify'
+    return {'pid': pid, 'start': fields[19], 'name': name}
+
+
+def inventory():
+    result = []
+    for p in pathlib.Path('/proc').iterdir():
+        if not p.name.isdigit() or int(p.name) == os.getpid():
+            continue
+        try:
+            if p.stat().st_uid != os.getuid():
+                continue
+            env = (p / 'environ').read_bytes().split(b'\0')
+            argv = (p / 'cmdline').read_bytes().split(b'\0')
+            belongs = any(re.fullmatch(rb'DISPLAY=(?:unix/|unix)?:' + str(INDEX).encode() + rb'(?:\.\d+)?', value) for value in env)
+            tagged = ('BOXD_DESKTOP_LAUNCH_ID=' + launch_id).encode() in env
+            belongs |= tagged
+            # Xvfb is started before DISPLAY is exported by older launchers.
+            belongs |= bool(argv and os.path.basename(os.fsdecode(argv[0])) == 'Xvfb' and DISPLAY.encode() in argv[1:2])
+            if belongs:
+                item = identity(int(p.name))
+                if item:
+                    item['owned'] = tagged
+                    result.append(item)
+        except (FileNotFoundError, ProcessLookupError):
+            continue  # exited before observation; never signal this identity
+        except (PermissionError, OSError):
+            raise RuntimeError('process visibility unavailable')
+    return sorted(result, key=lambda row: row['pid'])
+
+
+def x_empty(current):
+    # Query *all* X clients, including background and override-redirect clients.
+    # Every connection must resolve to one of the exact recorded processes, or us.
+    allowed = {p['pid'] for p in current} | {os.getpid()}
+    for client in x.res_query_clients().clients:
+        if client.resource_base == 0:  # server pseudo-client; 0 queries every client ID
+            continue
+        ids = x.res_query_client_ids([{'client': client.resource_base,
+                                      'mask': res.LocalClientPIDMask}]).ids
+        if len(ids) != 1 or len(ids[0].value) != 1 or ids[0].value[0] not in allowed:
+            return False
+    root = x.screen().root
+    clients = root.get_full_property(x.intern_atom('_NET_CLIENT_LIST'), 0)
+    for wid in clients.value if clients else []:
+        window = x.create_resource_object('window', int(wid))
+        kind = window.get_full_property(x.intern_atom('_NET_WM_WINDOW_TYPE'), 0)
+        permitted = {x.intern_atom('_NET_WM_WINDOW_TYPE_DESKTOP'), x.intern_atom('_NET_WM_WINDOW_TYPE_DOCK')}
+        if not kind or not set(kind.value).intersection(permitted):
+            return False
+    return True
+
+
+def stopped(item):
+    # SIGSTOP is asynchronous and group-wide. Wait for every thread, not just the leader.
+    tasks = pathlib.Path('/proc') / str(item['pid']) / 'task'
+    states = []
+    for task in tasks.iterdir():
+        stat = (task / 'stat').read_text()
+        states.append(stat[stat.rfind(')') + 2:].split()[0])
+    return bool(states) and all(state in ('T', 't') for state in states)
+
+
+try:
+    request = json.loads(sys.stdin.readline())
+    launch_id = request.get('launch_id') if request['mode'] == 'capture' else request['snapshot'].get('launch_id')
+    if not isinstance(launch_id, str) or not launch_id:
+        raise RuntimeError('launcher provenance unavailable')
+    x = xdisplay.Display(DISPLAY)
+    version = x.res_query_version()
+    if (version.server_major, version.server_minor) < (1, 2):
+        raise RuntimeError('complete X client identity unavailable')
+    current = inventory()
+    if request['mode'] == 'capture':
+        reason = None
+        if not current or not any(p['name'] == 'Xvfb' for p in current):
+            reason = 'desktop process identity unavailable'
+        elif any((p['name'] not in ALLOWED or not p.get('owned')) for p in current) or not x_empty(current):
+            reason = 'desktop has an untracked workload'
+        emit({'processes': current, 'launch_id': launch_id, **({'reason': reason} if reason else {})})
+    else:
+        expected = request['snapshot']['processes']
+        # A missing/restarted component is also uncertain, not a smaller safe set.
+        if any((p['name'] not in ALLOWED or not p.get('owned')) for p in current) or not x_empty(current):
+            emit({'stopped': False, 'reason': 'desktop has an untracked workload'})
+        elif current != expected:
+            emit({'stopped': False, 'retryable': True, 'reason': 'desktop infrastructure changed; awaiting fresh inspection'})
+        elif not hasattr(os, 'pidfd_open') or not hasattr(signal, 'pidfd_send_signal'):
+            emit({'stopped': False, 'reason': 'stable process handles unavailable'})
+        else:
+            for item in current:
+                fd = os.pidfd_open(item['pid'])
+                handles.append((fd, item))
+                if identity(item['pid']) != {key: item[key] for key in ('pid', 'start', 'name')}:
+                    raise RuntimeError('process identity changed')
+            endpoints = {path: pathlib.Path(path).stat().st_ino for path in (f'/tmp/.X{INDEX}-lock', f'/tmp/.X11-unix/X{INDEX}')}
+            # Freeze launch-capable infrastructure; leave X responsive for the final
+            # window proof. No user workload is ever frozen: it failed the proof above.
+            for fd, item in handles:
+                if item['name'] != 'Xvfb':
+                    frozen.append(fd)
+                    signal.pidfd_send_signal(fd, signal.SIGSTOP)
+            deadline = time.monotonic() + 2
+            while not all(stopped(item) for _, item in handles if item['name'] != 'Xvfb'):
+                if time.monotonic() >= deadline:
+                    raise RuntimeError('infrastructure did not freeze')
+                time.sleep(.01)
+            # Keep the server grabbed through commit: other clients cannot submit
+            # work between the final identity proof and the bound process stop.
+            x.grab_server()
+            x.sync()
+            grabbed = True
+            final = inventory()
+            if any((p['name'] not in ALLOWED or not p.get('owned')) for p in final) or not x_empty(final):
+                emit({'stopped': False, 'reason': 'desktop has an untracked workload'})
+            elif final != expected:
+                emit({'stopped': False, 'retryable': True, 'reason': 'desktop infrastructure changed; awaiting fresh inspection'})
+            else:
+                emit({'ready': True})
+                if not select.select([sys.stdin], [], [], 5)[0]:
+                    raise RuntimeError('daemon authorization timed out')
+                approval = json.loads(sys.stdin.readline() or '{}')
+                if approval.get('commit') is not True:
+                    emit({'stopped': False})
+                else:
+                    # All lifecycle requests wait on this stop once committed. PID
+                    # handles prevent a recycled PID receiving any of these signals.
+                    committed = True
+                    for fd, _item in handles:
+                        signal.pidfd_send_signal(fd, signal.SIGKILL)
+                    frozen.clear()
+                    deadline = time.monotonic() + 2
+                    while any(not select.select([fd], [], [], 0)[0] for fd, _ in handles):
+                        if time.monotonic() >= deadline:
+                            raise RuntimeError('desktop process did not exit')
+                        time.sleep(.01)
+                    # Owned processes are gone. Only ephemeral X endpoint files are
+                    # removed; home, browser profiles, recordings and owner claims stay.
+                    for path in (f'/tmp/.X{INDEX}-lock', f'/tmp/.X11-unix/X{INDEX}'):
+                        endpoint = pathlib.Path(path)
+                        if endpoint.exists() and endpoint.stat().st_ino == endpoints[path]:
+                            endpoint.unlink()
+                    emit({'stopped': True})
+except Exception as error:
+    emit({'processes': [], 'stopped': False, 'failed': committed, 'retryable': not committed,
+          'diagnostic': type(error).__name__,
+          'reason': 'partial stop; process state unknown' if committed else 'process inspection temporarily unavailable; retained'})
+finally:
+    # Cleanup must not be interrupted between resumes. These pidfd signal calls
+    # do not wait for the target. Only after all resumes may X protocol I/O wait.
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    signal.signal(signal.SIGALRM, signal.SIG_IGN)
+    signal.alarm(0)
+    for fd in frozen:
+        try:
+            signal.pidfd_send_signal(fd, signal.SIGCONT)
+        except ProcessLookupError:
+            pass
+    signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGALRM, interrupted)
+    signal.alarm(2)
+    if x is not None and not committed:
+        try:
+            if grabbed:
+                x.ungrab_server()
+                x.sync()
+            x.close()
+        except Exception:
+            pass
+    for fd, _ in handles:
+        os.close(fd)

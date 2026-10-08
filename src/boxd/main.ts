@@ -74,7 +74,7 @@ import {
 import { DisplayManager, DisplayOwnershipError, DisplayGuardError, UserInControlError } from "./displays.ts";
 import { CdpError } from "./cdp.ts";
 import { TeachService, TeachBindingConflict, defaultInputSpawner } from "./teach-service.ts";
-import { copyTeachBinding } from "../protocol/index.ts";
+import { copyTeachBinding, isDisplayIndex } from "../protocol/index.ts";
 import { HEADLESS_NOTE, headlessFetch, withRecovery } from "./browser-recovery.ts";
 import { detectDisplay, getDisplay, parseDisplayNum } from "../cua/display.ts";
 import { readClipboard, writeClipboard } from "./clipboard-service.ts";
@@ -194,6 +194,13 @@ function recentCrashes(): HealthResult["crashes"] {
   }
 }
 
+function containerMemory(): { memory_bytes?: number } {
+  try {
+    const bytes = Number(readFileSync("/sys/fs/cgroup/memory.current", "utf8").trim());
+    return Number.isSafeInteger(bytes) && bytes >= 0 ? { memory_bytes: bytes } : {};
+  } catch { return {}; }
+}
+
 async function handleHealth(): Promise<HealthResult> {
   // Never block on a desktop coming up: shell and fs work without one, and the
   // container health check must not hang while Xvfb starts.
@@ -224,6 +231,7 @@ async function handleHealth(): Promise<HealthResult> {
     uptime_seconds: Math.round((Date.now() - startedAt) / 1000),
     displays: running,
     desktop_health: displays.health(),
+    desktop_resources: { ...displays.resources(), ...containerMemory() },
     crashes: recentCrashes(),
   };
 }
@@ -254,6 +262,7 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
     }
   };
   authorize();
+  if (body.actions.some(isComputerWrite)) displays.markWorkload(index);
   const desktop = await displays.ensure(index, body.owner);
   authorize();
   const x11 = desktop.executor;
@@ -365,6 +374,12 @@ function proxyVnc(req: IncomingMessage, res: ServerResponse, path: string): void
     return;
   }
 
+  const releaseResource = displays.hold(parsed.index);
+  res.once("close", releaseResource);
+  if (displays.resources().desktops.find(entry => entry.index === parsed.index)?.state === "stopping") {
+    send(res, 503, { error: "Desktop is being reclaimed; retry the open request." });
+    return;
+  }
   const query = req.url?.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
   const port = vncPortOf(parsed);
   const upstream = httpRequest(
@@ -503,6 +518,7 @@ const browserRoute = async (body: BrowserRequest): Promise<BrowserResponse> => d
       if (!["snapshot", "read", "wait", "check"].includes(body.op)) displays.assertAgentControls(display);
     };
     authorize();
+    displays.markWorkload(display);
     const desktop = await displays.ensure(display);
     if (!["snapshot", "read", "wait", "check", "pages"].includes(body.op)) desktop.executor.invalidateElements();
     const localRecovery = endpoints.resolve(display).kind === "local";
@@ -533,6 +549,7 @@ const browserRoute = async (body: BrowserRequest): Promise<BrowserResponse> => d
           ...(body.snapshot !== undefined ? { snapshot: body.snapshot } : {}),
           ...(body.find !== undefined ? { find: body.find } : {}),
           ...(body.confirmed === true ? { confirmed: true } : {}),
+          ...(body.inputApproval !== undefined ? { inputApproval: body.inputApproval } : {}),
           ...(body.expect !== undefined ? { expect: body.expect } : {}),
         });
       case "scroll":
@@ -626,6 +643,7 @@ const routes: Record<string, Handler> = {
       // A shell given a display can type into it; while a person holds that display, no.
       displays.assertAgentControls(body.display);
     }
+    displays.markWorkload(body.display ?? defaultDisplayIndex);
     // Every shell command, with who asked for it. Nothing recorded this before, so the
     // box could not answer "who ran that" for the one endpoint where the answer matters
     // most. Truncated because a log is not a transcript; the spool files hold output.
@@ -676,6 +694,24 @@ const routes: Record<string, Handler> = {
   // someone else's desktop is driving their screen, whichever protocol it goes over.
   "GET /displays": async (): Promise<DisplayInfo[]> => displays.list(),
   "POST /displays": async (): Promise<DisplayInfo[]> => displays.list(),
+  "POST /displays/ready": async (body: EnsureDisplayRequest) => {
+    if (!isDisplayIndex(body.index)) throw new HttpError(400, "Invalid display index");
+    if (displays.resources().desktops.some(entry => entry.index === body.index && entry.state === "stopping")) return { ready: false };
+    if (body.epoch !== undefined) {
+      displays.armControl(body.index, body.epoch, body.op_token, body.reconcile_token, body.scope_complete === true);
+    } else if (displays.isManaged(body.index)) {
+      throw new DisplayGuardError("managed desktop readiness requires the control projection");
+    }
+    displays.assertOwner(body.index, body.owner);
+    return { ready: await displays.ready(body.index, body.owner) };
+  },
+  "POST /displays/pin": async (body: EnsureDisplayRequest & { pinned: boolean }) => {
+    if (typeof body.pinned !== "boolean") throw new HttpError(400, "pinned must be a boolean");
+    displays.assertControl(body.index, body);
+    displays.assertOwner(body.index, body.owner);
+    displays.pin(body.index, body.pinned);
+    return displays.resources();
+  },
   // A person takes a desktop over, or hands it back (INV-404). Not gated on the agent's
   // owner token: the host asks on the person's behalf, with its own token. The route is
   // also the trusted guard entry: a call carrying the projection moves the guard
@@ -694,6 +730,7 @@ const routes: Record<string, Handler> = {
     }
     if (body.controller === "user") {
       displays.takeOver(body.index, body.ttl_seconds !== undefined ? body.ttl_seconds * 1000 : undefined);
+      displays.markWorkload(body.index);
       // The takeover is the demonstration (INV-405). Started after the lease, so a
       // takeover that is refused records nothing; not awaited past its start.
       await teach.begin(body.index, body.epoch, teaching);
@@ -712,6 +749,7 @@ const routes: Record<string, Handler> = {
   }),
   "POST /clipboard/write": async (body: ClipboardWriteRequest): Promise<ClipboardResult> => {
     const text = typeof body.text === "string" ? body.text : "";
+    displays.markWorkload(body.display ?? defaultDisplayIndex);
     await writeClipboard(body.display ?? defaultDisplayIndex, text);
     return { text };
   },
@@ -719,6 +757,7 @@ const routes: Record<string, Handler> = {
   // than trusting the request: a recording of a display that is not up is an empty file.
   "POST /record/start": async (body: RecordStartRequest): Promise<RecordingInfo> => {
     displays.assertControl(body.display ?? defaultDisplayIndex, body);
+    displays.markWorkload(body.display ?? defaultDisplayIndex);
     const desktop = await displays.ensure(body.display ?? defaultDisplayIndex);
     return recorder.start({
       display: desktop.index,
@@ -970,7 +1009,18 @@ const server = createServer((req, res) => {
       }
 
       const body = req.method === "GET" ? {} : await readBody(req);
-      send(res, 200, await handler(body));
+      // Hold before any queue or OS await. The stop's final authorization observes
+      // this generation change; a stop already committed finishes before new effects.
+      const resourceRoute = ["POST /computer", "POST /browser", "POST /exec", "POST /clipboard/read", "POST /clipboard/write", "POST /record/start", "POST /record/stop", "POST /displays/ensure", "POST /displays/control", "POST /displays/pin"].includes(route);
+      const scopedBody = typeof body === "object" && body !== null ? body as Record<string, unknown> : {};
+      const candidate = route.startsWith("POST /displays/") ? scopedBody.index : (scopedBody.display ?? defaultDisplayIndex);
+      const index = typeof candidate === "number" ? candidate : Number.NaN;
+      if (resourceRoute && !isDisplayIndex(index)) throw new HttpError(400, "Invalid display index");
+      const releaseResource = resourceRoute ? displays.hold(index) : () => {};
+      try {
+        if (resourceRoute) await displays.waitForReclaim(index);
+        send(res, 200, await handler(body));
+      } finally { releaseResource(); }
     } catch (error) {
       // The status is the verdict the host reads (INV-400): 403 is refused, 4xx is
       // failed, 5xx is unknown. A CdpError is the browser saying no — a stale ref, an
@@ -995,7 +1045,8 @@ const server = createServer((req, res) => {
                         ? 422
                         : 500;
       if (status >= 500) log(`error on ${route}: ${describe(error)}`);
-      send(res, status, { error: describe(error) });
+      send(res, status, { error: describe(error),
+        ...(error instanceof IrreversibleActionError && error.sensitiveInput !== undefined ? { sensitiveInput: error.sensitiveInput } : {}) });
     }
   })();
 });
@@ -1042,6 +1093,15 @@ server.on("upgrade", (req, clientSocket: Socket, head: Buffer) => {
     return;
   }
 
+  const releaseResource = displays.hold(parsed.index, !parsed.viewOnly);
+  // Modifier cleanup is itself an in-flight X operation. Keep the reference until
+  // its child exits, so a supervisor capture cannot mistake it for an unknown app.
+  clientSocket.once("close", () => { void releaseModifiers(parsed.index).finally(releaseResource); });
+  if (displays.resources().desktops.find(entry => entry.index === parsed.index)?.state === "stopping") {
+    clientSocket.end("HTTP/1.1 503 Service Unavailable\r\n\r\n");
+    return;
+  }
+
   const query = (req.url ?? "").includes("?")
     ? (req.url ?? "").slice((req.url ?? "").indexOf("?"))
     : "";
@@ -1053,7 +1113,7 @@ server.on("upgrade", (req, clientSocket: Socket, head: Buffer) => {
   // drag (2026-09-02, seen on the Grok VM). So the display's modifiers are released on both
   // edges; a person holding a key at that instant loses nothing they wanted.
   void releaseModifiers(parsed.index);
-  clientSocket.once("close", () => void releaseModifiers(parsed.index));
+
 
   const upstream = netConnect(port, "127.0.0.1", () => {
     const headers = Object.entries(req.headers)

@@ -26,6 +26,8 @@ export interface Capsule {
   runs: number;
   createdAt: string;
   lastAt: string;
+  /** Set when the engine could not resume this thread (INV-908); the next run starts fresh, saying why. */
+  dropped?: string;
 }
 
 /** Runs before a thread is rotated regardless: a long thread is a full context, not a memory. */
@@ -64,7 +66,8 @@ export class DelegateSessions {
     const previous = this.capsules[key];
     let rotated: string | undefined;
     if (previous !== undefined) {
-      if (previous.cwd !== input.cwd) rotated = `working directory changed (${previous.cwd} → ${input.cwd})`;
+      if (previous.dropped !== undefined) rotated = `the engine could not resume its thread (${previous.dropped})`;
+      else if (previous.cwd !== input.cwd) rotated = `working directory changed (${previous.cwd} → ${input.cwd})`;
       else if (previous.model !== input.model) rotated = `model changed (${previous.model} → ${input.model})`;
       else if (previous.runs >= CAPSULE_RUN_CEILING) rotated = `${previous.runs} runs on one thread is the ceiling`;
       else if (now.getTime() - Date.parse(previous.createdAt) > CAPSULE_AGE_MS) rotated = "the thread is older than twelve hours";
@@ -91,12 +94,18 @@ export class DelegateSessions {
     return { id: capsule.id, resumed: false, ...(rotated !== undefined ? { rotated } : {}) };
   }
 
-  /** Forget a thread: the engine said it could not resume it, so the next run starts fresh. */
-  drop(id: string): void {
-    for (const [key, capsule] of Object.entries(this.capsules)) {
-      if (capsule.id === id) delete this.capsules[key];
+  /**
+   * Forget a thread: the engine said it could not resume it, so the next run starts fresh and
+   * says why. Kept as a marked capsule rather than deleted, so the reason outlives a restart.
+   */
+  drop(id: string, reason: string): void {
+    let found = false;
+    for (const capsule of Object.values(this.capsules)) {
+      if (capsule.id !== id) continue;
+      capsule.dropped = reason.replace(/\s+/g, " ").trim().slice(0, 200);
+      found = true;
     }
-    this.save();
+    if (found) this.save();
   }
 
   private save(): void {

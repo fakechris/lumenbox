@@ -7,12 +7,12 @@
  * reimplement. Every call is execFile with an argument array — no shell.
  */
 
-import { envNumber } from "../config.ts";
-import { execFile } from "node:child_process";
+import { agentboxHome, envNumber, loadConfig } from "../config.ts";
+import { execFile, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { BOXD_PORT, UI_PORT } from "../protocol/index.ts";
 import { BoxClient } from "./client.ts";
@@ -50,8 +50,45 @@ export const BACKUP_CARRIES =
   "credential a tool in the box wrote to ~/.config. That is deliberate: it is how a login " +
   "survives a rebuild. Treat a copy of one as you would treat those logins.";
 
-export const DEFAULT_IMAGE = "agentbox/box:latest";
+/**
+ * The image other people pull.
+ *
+ * Docker Hub has an organization named lumenbox that is not this project. The account that
+ * can publish is `fakechris`, so the repository is `fakechris/lumenbox`. The package and the
+ * command are still `agentbox`, and a box already running keeps the container name it was
+ * created with.
+ */
+export const BOX_IMAGE_REPO = "fakechris/lumenbox";
 export const DEFAULT_CONTAINER = "agentbox-box";
+
+/** package.json's version, walking up from this file so a bundle in dist/ still finds it. */
+export function packageVersion(): string {
+  let dir = dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 6; i++) {
+    try {
+      const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as {
+        name?: unknown;
+        version?: unknown;
+      };
+      if (pkg.name === "agentbox" && typeof pkg.version === "string" && pkg.version !== "") {
+        return pkg.version;
+      }
+    } catch {
+      // Not this directory. The next parent might be the repo root.
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return "0.0.0";
+}
+
+/** `fakechris/lumenbox:0.3.0`. A release pins this; `:latest` is only the moving alias. */
+export function boxImageRef(version: string = packageVersion()): string {
+  return `${BOX_IMAGE_REPO}:${version}`;
+}
+
+export const DEFAULT_IMAGE = boxImageRef();
 
 /**
  * The private network a box lives on. One per container, named after it.
@@ -65,6 +102,8 @@ export function networkNameFor(containerName: string): string {
 }
 
 export interface BoxConfig {
+  /** Member-owned boxes never inherit installation credentials or publication settings. */
+  isolated?: boolean;
   /**
    * Run the orchestrator inside the box, instead of on this machine.
    *
@@ -166,14 +205,14 @@ function publishAddress(): string {
 }
 
 export function boxTokenPath(containerName: string): string {
-  const home = process.env.AGENTBOX_HOME ?? join(homedir(), ".agentbox");
-  return join(home, "tokens", containerName);
+  // Through agentboxHome(), not homedir(): a test that asks for a box config without naming a
+  // home must fail loudly rather than write a token into the live installation (INV-875).
+  return join(agentboxHome(), "tokens", containerName);
 }
 
 /** The legacy single token, from before a host could run more than one box. */
 function legacyTokenPath(): string {
-  const home = process.env.AGENTBOX_HOME ?? join(homedir(), ".agentbox");
-  return join(home, "token");
+  return join(agentboxHome(), "token");
 }
 
 export function loadBoxToken(containerName: string = DEFAULT_CONTAINER): string {
@@ -226,11 +265,20 @@ export function readBoxToken(containerName: string = DEFAULT_CONTAINER): string 
   return undefined;
 }
 
+/**
+ * The image a box runs when nobody names one. The environment wins — it is how a checkout pins
+ * an image for one run — then the config file, which is the only entrance an app launched from
+ * Finder has (it has no shell to export AGENTBOX_IMAGE into). Absent both: the release default.
+ */
+export function defaultBoxImage(): string {
+  return process.env.AGENTBOX_IMAGE ?? loadConfig().boxImage ?? boxImageRef();
+}
+
 export function defaultBoxConfig(overrides: Partial<BoxConfig> = {}): BoxConfig {
   const containerName = overrides.containerName ?? process.env.AGENTBOX_CONTAINER ?? DEFAULT_CONTAINER;
   return {
     containerName,
-    image: process.env.AGENTBOX_IMAGE ?? DEFAULT_IMAGE,
+    image: overrides.image ?? defaultBoxImage(),
     boxdPort: envNumber("AGENTBOX_BOXD_PORT", 0),
     // Keyed by the container it is for, so two boxes never share a key.
     token: loadBoxToken(containerName),
@@ -300,6 +348,83 @@ async function docker(
   }
 }
 
+/** docker pull/push talk on stderr for the whole transfer. A person waiting needs those lines. */
+function dockerStream(
+  args: readonly string[],
+  timeoutMs: number,
+  onOutput?: (line: string) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("docker", [...args], { stdio: ["ignore", "pipe", "pipe"] });
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(new DockerError(`docker ${args[0]} timed out after ${timeoutMs / 1000}s`));
+    }, timeoutMs);
+    const emit = (chunk: Buffer) => {
+      for (const line of chunk.toString().split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (trimmed !== "") onOutput?.(trimmed);
+      }
+    };
+    child.stdout?.on("data", emit);
+    child.stderr?.on("data", emit);
+    child.on("error", error => {
+      clearTimeout(timer);
+      reject(new DockerError(`docker ${args[0]} failed: ${error.message}`));
+    });
+    child.on("close", code => {
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(new DockerError(`docker ${args[0]} failed (exit ${code ?? "?"})`));
+    });
+  });
+}
+
+/**
+ * A machine that has never built the box still has to be able to start one.
+ *
+ * Present locally: use it, so a checkout's own build is what `box up` runs. Absent: pull the
+ * versioned tag from Docker Hub, or from whatever mirror the config names.
+ *
+ * The pull is the one long, silent step of a first run, so it says the size and the wait
+ * before the progress lines start — "is it stuck?" is the reasonable reading of a quiet
+ * minute otherwise. And a failed pull says which of the two failures it was: a registry
+ * that answered *no such image* (a release that raced its image, a mistyped mirror) wants
+ * "update the app or fix the setting", while a registry that never answered — the common
+ * case behind a network where Docker Hub needs a mirror — wants the mirror. Both still
+ * name `box build` last, for the reader who has a checkout; for an app user it is no
+ * way out at all and no longer leads (INV-856).
+ */
+export async function ensureLocalImage(
+  image: string,
+  probe: { exists(): Promise<boolean>; pull(): Promise<void> },
+  onOutput?: (line: string) => void,
+): Promise<void> {
+  if (await probe.exists()) return;
+  onOutput?.(
+    `image ${image} is not on this machine; pulling it — roughly 750MB, a few minutes on a good connection`,
+  );
+  try {
+    await probe.pull();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    if (/manifest unknown|not found|no such|denied|unauthorized/i.test(detail)) {
+      throw new DockerError(
+        `Could not pull ${image}: the registry answered, but has no such image or tag. ` +
+          "If this app was just released, its image may not be published yet — update the app, " +
+          "or check the image override in Settings → Boxes. From a checkout, `agentbox box build` " +
+          `builds the same image locally. ${detail}`,
+      );
+    }
+    throw new DockerError(
+      `Could not pull ${image}: the registry did not answer. Check the network, and if Docker ` +
+        "Hub is unreachable from your network, point Settings → Boxes at a mirror (or configure " +
+        "docker's registry-mirrors). From a checkout, `agentbox box build` builds the same image " +
+        `locally. ${detail}`,
+    );
+  }
+}
+
 export type ContainerState =
   | "missing"
   | "created"
@@ -358,7 +483,7 @@ export function boxUiToken(): string {
 }
 
 function tokenFile(name: string): string {
-  const home = process.env.AGENTBOX_HOME ?? join(homedir(), ".agentbox");
+  const home = agentboxHome();
   const path = join(home, name);
   if (existsSync(path)) {
     const existing = readFileSync(path, "utf8").trim();
@@ -388,16 +513,44 @@ function hostCredentialArgs(): string[] {
   });
 }
 
+/**
+ * What this machine's Docker situation actually is, in a shape a person can act on.
+ *
+ * A boolean "docker available" folds together the two ways a fresh machine fails, and they
+ * want opposite first steps: no `docker` command means *install* Docker Desktop or
+ * OrbStack; a command whose engine does not answer means *start* it. A new user pressing
+ * *Start the box* on a machine with neither got one error naming `docker version`, which
+ * is the product handing them a terminal (INV-855).
+ */
+export type DockerEnvironmentState =
+  | { state: "no-binary"; detail: string }
+  | { state: "no-engine"; detail: string }
+  | { state: "ok"; detail: string };
+
+export async function dockerEnvironment(timeoutMs = 15_000): Promise<DockerEnvironmentState> {
+  try {
+    const { stdout } = await execFileAsync("docker", ["version", "--format", "{{.Server.Version}}"], {
+      timeout: timeoutMs,
+      maxBuffer: 1024 * 1024,
+    });
+    return { state: "ok", detail: `engine ${stdout.trim()}` };
+  } catch (error) {
+    const failure = error as { code?: string; stderr?: string; message?: string };
+    if (failure.code === "ENOENT") {
+      return { state: "no-binary", detail: "the docker command is not on PATH" };
+    }
+    const detail = String(failure.stderr ?? failure.message ?? "")
+      .trim()
+      .replace(/\n[\s\S]*$/, "");
+    return { state: "no-engine", detail: detail || "the docker engine did not answer" };
+  }
+}
+
 export class BoxManager {
   constructor(readonly config: BoxConfig) {}
 
   async dockerAvailable(): Promise<boolean> {
-    try {
-      await docker(["version", "--format", "{{.Server.Version}}"], 15_000);
-      return true;
-    } catch {
-      return false;
-    }
+    return (await dockerEnvironment()).state === "ok";
   }
 
   async state(): Promise<ContainerState> {
@@ -472,11 +625,40 @@ export class BoxManager {
     }
     // Build output is large and streaming it needs spawn, but the CLI already
     // prints progress to stderr; we surface only the outcome.
+    const tags = ["-t", this.config.image];
+    // `:latest` is the alias a person types. The version tag is the one a release pulls.
+    if (this.config.image.startsWith(`${BOX_IMAGE_REPO}:`) && !this.config.image.endsWith(":latest")) {
+      tags.push("-t", `${BOX_IMAGE_REPO}:latest`);
+    }
     await docker(
-      ["build", ...engineArgs, "-t", this.config.image, contextDir],
+      ["build", ...engineArgs, ...tags, contextDir],
       20 * 60_000
     );
     onOutput?.(`built ${this.config.image}`);
+  }
+
+  /** Pulls this box's tag. Callers that already know the image is missing use `ensureLocalImage`. */
+  async pull(onOutput?: (line: string) => void): Promise<void> {
+    await dockerStream(["pull", this.config.image], 30 * 60_000, onOutput);
+  }
+
+  /**
+   * Publishes the version tag and moves `:latest` to it.
+   *
+   * Both, because a release that only moves `:latest` cannot be named later, and a release
+   * that only pushes the version leaves `docker pull fakechris/lumenbox` on an older alias.
+   */
+  async push(onOutput?: (line: string) => void): Promise<void> {
+    const versionTag = this.config.image;
+    const latest = `${BOX_IMAGE_REPO}:latest`;
+    if (versionTag.startsWith(`${BOX_IMAGE_REPO}:`) && versionTag !== latest) {
+      await docker(["tag", versionTag, latest], 30_000);
+    }
+    const tags = versionTag === latest ? [latest] : [versionTag, latest];
+    for (const tag of tags) {
+      onOutput?.(`pushing ${tag}`);
+      await dockerStream(["push", tag], 30 * 60_000, onOutput);
+    }
   }
 
   /** Exposed for the test that pins where the daemon is published. */
@@ -514,7 +696,7 @@ export class BoxManager {
       // A remote Docker engine is the one case that needs a routable publication, and it
       // is opt-in: AGENTBOX_BOXD_PUBLISH_ADDRESS, set by someone who has read this.
       "--publish",
-      publishOn(publishAddress(), config.boxdPort, BOXD_PORT),
+      publishOn(config.isolated ? "127.0.0.1" : publishAddress(), config.boxdPort, BOXD_PORT),
       // Its own bridge, so a box is not on the same subnet as every other container.
       //
       // Worth having and **not sufficient**, which is measured rather than assumed.
@@ -564,7 +746,7 @@ export class BoxManager {
       // the same name, and on a Linux engine the name exists only through this mapping.
       "--add-host",
       "host.docker.internal:host-gateway",
-      ...(process.env.AGENTBOX_EGRESS_RELAY
+      ...(!config.isolated && process.env.AGENTBOX_EGRESS_RELAY
         ? [
             "--env",
             `AGENTBOX_EGRESS_RELAY=${process.env.AGENTBOX_EGRESS_RELAY}`,
@@ -631,9 +813,19 @@ export class BoxManager {
         "No box token configured. Set AGENTBOX_TOKEN, or let `agentbox box up` generate one."
       );
     }
-    if (!(await this.dockerAvailable())) {
+    const environment = await dockerEnvironment();
+    if (environment.state === "no-binary") {
       throw new DockerError(
-        "Cannot reach a Docker engine. Check `docker version`, DOCKER_HOST, and your docker context."
+        "Cannot find the docker command on PATH. Install Docker Desktop " +
+          "(https://www.docker.com/products/docker-desktop/) or OrbStack " +
+          "(https://orbstack.dev/), open it once, then try again."
+      );
+    }
+    if (environment.state === "no-engine") {
+      throw new DockerError(
+        `Docker is installed but its engine did not answer (${environment.detail}). ` +
+          "Start Docker Desktop or OrbStack, then try again — or check `docker version`, " +
+          "DOCKER_HOST, and your docker context, which reach the same check."
       );
     }
 
@@ -654,11 +846,11 @@ export class BoxManager {
     }
 
     if (state === "missing") {
-      if (!(await this.imageExists())) {
-        throw new DockerError(
-          `Image ${this.config.image} not found. Run \`agentbox box build\` first.`
-        );
-      }
+      await ensureLocalImage(
+        this.config.image,
+        { exists: () => this.imageExists(), pull: () => this.pull(onOutput) },
+        onOutput,
+      );
       onOutput?.(`starting container ${this.config.containerName}`);
       await this.ensureNetwork();
       await docker(this.runArguments(), 120_000);

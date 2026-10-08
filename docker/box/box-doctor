@@ -200,6 +200,13 @@ if [ "${AGENTBOX_HOST_ENABLED:-0}" = "1" ]; then
   fi
 fi
 
+# ── files the agent can actually make ─────────────────────────────────────────────
+if documents=$(node /opt/box-checks/documents.cjs 2>&1); then
+  pass documents "${documents}"
+else
+  fail documents "${documents}"
+fi
+
 # ── room to work ──────────────────────────────────────────────────────────────────
 # A full volume breaks everything downstream in ways that read as unrelated bugs.
 avail_kb=$(df -Pk /home/box/work 2>/dev/null | awk 'NR==2 {print $4}')

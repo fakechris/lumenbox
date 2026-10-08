@@ -6,6 +6,7 @@
  * orchestration you see at runtime is emergent, not encoded.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { bindingsOf, CommitmentLedger, describeGaps, parseCommitments, priorCommitmentsPrompt, reconcileCommitments } from "./commitments.ts";
 import { finishRoutineRun, PendingAttachments, RoutineResultLedger, routineResolveMode, type DeliveryOutcome } from "./routine-resolve.ts";
 import { learningsDir } from "./learnings.ts";
@@ -25,7 +26,9 @@ import { PendingWork, isForkChild, pendingWorkPath } from "./pending-work.ts";
 import { McpFace } from "./mcp-face.ts";
 import { ModelRelay } from "./model-relay.ts";
 import { DelegateSessions } from "./delegate-sessions.ts";
-import { Extensions, extensionsDir } from "./extensions.ts";
+import { EXTENSIONS_SERVER, Extensions, extensionsDir } from "./extensions.ts";
+import { Effects } from "./effects.ts";
+import { Orchestrations } from "./orchestrate.ts";
 import { FileVersions } from "./files.ts";
 import {
   giveUpNote,
@@ -77,19 +80,21 @@ import { DisplayLease } from "../box/display-lease.ts";
 import { AttachedBoxProvisioner, resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
 import { type BoxEntry, tokenOf } from "../box/boxes.ts";
 import { classifyBox, type BoxClass } from "../box/access.ts";
-import type { ResolutionConfig } from "../protocol/index.ts";
+import type { ResolutionConfig, DesktopResources } from "../protocol/index.ts";
 import { runTurn, TurnAborted, type TurnDeps, type TurnEvent } from "./turn.ts";
-import type { ToolContext } from "./tools.ts";
+import { readHandoff, type ToolContext } from "./tools.ts";
 import { loadConfig } from "../config.ts";
 import { McpManager } from "./mcp.ts";
 import { mergeServers } from "./mcp-connectors.ts";
+import { CapabilityLedger } from "./mcp-capabilities.ts";
 import { PolicyGate } from "./policy.ts";
 import { TaskStore, type Task } from "./tasks.ts";
 import { BoxError } from "../box/client.ts";
 import { Receipts } from "./receipts.ts";
 import { WedgeWatch } from "./wedge.ts";
-import { buildAuditPrompt, manifestDiff, MANIFEST_COMMAND, parseManifest } from "./audit.ts";
-import { ScopeStore } from "./scopes.ts";
+import { buildAuditPrompt, manifestDiff, MANIFEST_COMMAND, parseManifest, settleAudit } from "./audit.ts";
+import { ALL_MCP_TOOLS, ScopeStore } from "./scopes.ts";
+import { delegateEndedNote, settleDelegate } from "./engine-report.ts";
 import { BundleStore } from "./bundles.ts";
 import { TeachRunner, parseTrace, teachingClarificationCue } from "./teach.ts";
 import { TeachDrafts, parseTeachingResponse, publishTeachingSkill } from "./teach-drafts.ts";
@@ -98,7 +103,7 @@ import { MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
 import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
 import type { OAuthGate } from "./oauth.ts";
-import { Rememberer, summariseExchange } from "./remember.ts";
+import { readsExternalContent, Rememberer, summariseExchange, turnReadOutside } from "./remember.ts";
 import type { HistoryEntry } from "./compaction.ts";
 import { memoryRef } from "./memory.ts";
 import type { PitfallSource } from "./pitfalls.ts";
@@ -252,6 +257,7 @@ export class Orchestrator {
    * an agent reaches exactly one of these, the one its profile names.
    */
   private readonly boxClients = new Map<string, BoxClient>();
+  private readonly desktopResources = new Map<string, DesktopResources>();
   private readonly resolutions = new Map<string, ResolutionConfig | undefined>();
   private readonly boxAccesses = new Map<string, BoxClass>();
   /** One skills directory per box; the prompt shows an agent its own box's. */
@@ -307,7 +313,9 @@ export class Orchestrator {
   private readonly display = new DisplayLease();
   /** Desktops already brought up, so each is started once per process. */
   /** `boxId:index` — two boxes each have a desktop 1. */
-  private readonly readyDisplays = new Set<string>();
+  private readonly startingDisplays = new Map<string, Promise<number | undefined>>();
+  private desktopStarts = 0;
+  private readonly desktopStartWaiters: (() => void)[] = [];
   /**
    * What every turn cost, appended as it happens.
    *
@@ -414,6 +422,11 @@ export class Orchestrator {
    * channels, after this object exists.
    */
   docReader: TurnDeps["docReader"];
+  /**
+   * Picks the document reader for a conversation — every door app in turn, the conversation's
+   * own door first (INV-871). Set by the web server, which knows the doors; absent means `docReader`.
+   */
+  docReaderFor: ((conversation: string) => TurnDeps["docReader"] | undefined) | undefined;
 
   /**
    * The tools other people wrote, if an operator configured any.
@@ -472,18 +485,11 @@ export class Orchestrator {
   readonly delegateSessions: DelegateSessions;
   /** The extension layer (docs/34): tools and listeners from ~/.agentbox/extensions, hot-reloadable. */
   readonly extensions: Extensions | undefined;
+  /** Acts on what tool results ask for — pause for a person, background jobs, reminders (INV-861). */
+  readonly effects: Effects | undefined;
+  /** Fan-out plans (INV-862): one sub-agent per item, run behind the turn, resumable. */
+  readonly orchestrations: Orchestrations | undefined;
 
-  /**
-   * Which turn each agent is currently resuming, so the ledger entry it writes is linked to the one
-   * it is picking up rather than looking like fresh work.
-   *
-   * Without the link, every resumption would start its own chain and a turn that kills the process
-   * would be retried forever — the count is the whole of the crash-loop guard.
-   */
-  private readonly resuming = new Map<
-    string,
-    { id: string; attempt: number; workId?: string; continues?: true; approval?: { id: string; how: "allowed" | "refused" | "gone" } }
-  >();
   /**
    * Turns parked on a person's approval when the process died (INV-774), by approval id.
    * Continued from that step when the answer arrives, from whichever door it comes.
@@ -516,8 +522,13 @@ export class Orchestrator {
    */
   private readonly rememberer: Rememberer;
 
-  /** Who last drove each agent, for attributing what it learns. */
-  private readonly callers = new Map<string, { userId?: string }>();
+  /** Authority and attribution belong to this execution, including work across awaits. */
+  private readonly executionCaller = new AsyncLocalStorage<{ agentId: string; caller?: { userId: string } }>();
+
+  private callerFor(agentId: string): { userId: string } | undefined {
+    const execution = this.executionCaller.getStore();
+    return execution?.agentId === agentId ? execution.caller : undefined;
+  }
 
   /**
    * Skills as they were last read from the box.
@@ -764,13 +775,18 @@ export class Orchestrator {
         source,
         attempt: task.description ?? task.title,
         detail,
-        ...(this.callers.get(task.assigneeId)?.userId !== undefined
-          ? { principal: this.callers.get(task.assigneeId)!.userId! }
+        ...(this.callerFor(task.assigneeId)?.userId !== undefined
+          ? { principal: this.callerFor(task.assigneeId)!.userId! }
           : {}),
       })
       .catch(() => {
         // Already logged inside; a failure to take notes is not the person's problem.
       });
+  }
+
+  /** Whether a tool's result is outside content that keeps its exchange out of memory (INV-894). */
+  private readsExternalContent(tool: string): boolean {
+    return readsExternalContent(tool) || this.mcp.pollutesMemory(tool);
   }
 
   private maybeAudit(task: Task): void {
@@ -789,6 +805,7 @@ export class Orchestrator {
     void (async () => {
       try {
         const before = await this.workspaceManifest();
+        const spoken = this.registry.readTranscript(reviewer.id).length;
         await this.prompt(
           reviewer.id,
           buildAuditPrompt({
@@ -814,8 +831,16 @@ export class Orchestrator {
               },
               "audit-guard"
             );
+            return;
           }
         }
+        // The verdict is parsed, not read (INV-817): the same parser as the goal gate, and
+        // no verdict is not a pass. Only a task the reviewer left in review is settled here —
+        // a reviewer that moved it back to doing itself has already said what it found.
+        const current = this.tasks?.get(task.id);
+        if (current?.status !== "review") return;
+        const settled = settleAudit(current, this.replySince(reviewer.id, spoken));
+        this.tasks?.update(task.id, { status: settled.status, note: settled.note }, "audit-guard");
       } catch (error) {
         console.error(
           `[audit] ${task.id}: ${error instanceof Error ? error.message : String(error)}`
@@ -864,7 +889,10 @@ export class Orchestrator {
       options.mcp === null || options.mcp === undefined
         ? new McpManager(
             options.mcp === null ? [] : mcpServersFrom(loadConfig()),
-            line => console.error(`[mcp] ${line}`)
+            line => console.error(`[mcp] ${line}`),
+            // What each server offered, by version, over time (INV-813): a changed tool list is
+            // on the record with the package version that changed it.
+            options.mcp === null ? undefined : { ledger: new CapabilityLedger(join(agentboxHome(), "mcp-capabilities.jsonl")) }
           )
         : options.mcp;
     this.claims =
@@ -885,6 +913,14 @@ export class Orchestrator {
       // ledger as it wakes; any other step waiting on this answer closes here (INV-798).
       if (this.parked.has(approval.id)) this.continueParked(approval.id, how);
       else this.steps?.settleApproval(approval.id);
+      // A confirmation an extension asked for is continued by its callback (INV-861).
+      if (approval.harnessResumes === true) {
+        // A plan's confirmation (INV-862) or an extension's pause (INV-861); each ignores the other's.
+        this.orchestrations?.settleApproval(approval.id, how);
+        void this.effects?.settleApproval(approval.id, how).catch(error =>
+          console.error(`[effects] ${error instanceof Error ? error.message : String(error)}`)
+        );
+      }
     };
     this.networkEvents =
       options.networkEvents === null ? undefined : (options.networkEvents ?? new NetworkEventLog());
@@ -937,12 +973,50 @@ export class Orchestrator {
       provider: remembererRuntime.profile,
       log: line => console.error(`[memory] ${line}`),
       usage: this.usage,
+      externalTool: tool => this.readsExternalContent(tool),
     });
 
     this.extensions =
       options.extensions === null
         ? undefined
         : (options.extensions ?? new Extensions(extensionsDir(), line => console.error(`[extensions] ${line}`)));
+    // Effects need somewhere durable to stand; without the pending-work ledger results stay text.
+    this.effects =
+      this.pendingWork === undefined
+        ? undefined
+        : new Effects({
+            pendingWork: this.pendingWork,
+            policy: this.policy,
+            mcp: () => this.mcp,
+            deliver: (agentId, text, conversation) =>
+              this.bus.deliverSystem(agentId, text, conversation) !== undefined || this.bus.inboxless,
+            log: line => console.error(`[effects] ${line}`),
+          });
+    if (this.extensions !== undefined) {
+      this.extensions.onJobDone = (jobId, text, ok) => this.effects?.jobDone(EXTENSIONS_SERVER, jobId, text, ok) ?? false;
+    }
+    this.orchestrations =
+      this.pendingWork === undefined
+        ? undefined
+        : new Orchestrations({
+            pendingWork: this.pendingWork,
+            policy: this.policy,
+            // The same run a Fork child gets: its own conversation of the agent, serialised by
+            // the bus, answered in its transcript.
+            runChild: async (agentId, conversation, brief) => {
+              this.bus.sendFromUser(agentId, brief, { conversation, steerable: false });
+              await this.bus.runExclusive(agentId, { conversation });
+              return (this.registry.readTranscript(agentId, conversation) as { role?: string; kind?: string; text?: string }[])
+                .filter(entry => entry.role === "assistant" && entry.kind === undefined && typeof entry.text === "string")
+                .map(entry => entry.text as string)
+                .join("\n\n");
+            },
+            readHandoff,
+            deliver: (agentId, text, conversation) =>
+              this.bus.deliverSystem(agentId, text, conversation) !== undefined || this.bus.inboxless,
+            resultsDir: () => process.env.AGENTBOX_ORCHESTRATIONS ?? join(agentboxHome(), "orchestrations"),
+            log: line => console.error(`[orchestrate] ${line}`),
+          });
     // After the hooks: the face runs them around every delegated call.
     this.mcpFace = new McpFace({
       mcp: () => this.mcp,
@@ -950,7 +1024,7 @@ export class Orchestrator {
       ...(this.hooks !== undefined ? { hooks: this.hooks } : {}),
       jobsOf: agentId => this.boxFor(agentId)?.jobs().then(result => result.jobs),
       onJobEnded: (jobId, status) => {
-        this.noteJobEnded(jobId, status);
+        void this.noteJobEnded(jobId, status).catch(error => console.error(`[delegate] ${jobId}: ${error instanceof Error ? error.message : String(error)}`));
       },
       ...(options.pendingWork === null ? { auditPath: null } : {}),
       log: line => console.error(`[mcp-face] ${line}`),
@@ -966,18 +1040,32 @@ export class Orchestrator {
       usage: () => this.usage,
       log: line => console.error(`[model-relay] ${line}`),
     });
+    const inbox = options.inbox === null ? undefined : (options.inbox ??
+      new Inbox<InboundMessage>(inboxPath(), line => console.error(`[inbox] ${line}`)));
+    // A crash between turn.begin and inbox.start leaves both records. The turn owns
+    // these exact messages; remove the replay copy before any startup sweep closes it.
+    const ownershipKey = (agentId: string, conversation: string | undefined, messageId: string) =>
+      JSON.stringify([agentId, conversation ?? MAIN_CONVERSATION, messageId]);
+    const ownedMessages = new Set((this.turns?.interrupted({ includeForks: true }) ?? [])
+      .flatMap(turn => {
+        const entries = this.registry.tryGet(turn.agentId) === undefined ? [] :
+          this.registry.readTranscript(turn.agentId, turn.conversation ?? MAIN_CONVERSATION) as { turnId?: string; causedBy?: string[] }[];
+        const ids = [...(turn.causedBy ?? []), ...entries.filter(entry => entry.turnId === turn.id).flatMap(entry => entry.causedBy ?? [])];
+        return ids.map(id => ownershipKey(turn.agentId, turn.conversation, id));
+      }));
+    inbox?.start(inbox.pending().filter(item =>
+      ownedMessages.has(ownershipKey(item.agentId, item.message.conversation, item.message.id))
+    ).map(item => item.seq));
     this.bus = new AgentBus(
       this.registry,
-      (agent, inbound, signal, conversation) => this.executeTurn(agent, inbound, signal, conversation),
+      (agent, inbound, signal, conversation, acknowledge) => this.executeTurn(agent, inbound, signal, conversation, acknowledge),
       event => {
         options.onBusEvent?.(event);
         // A turn ending is what lets a goal consider its next continuation (INV-770).
         if (event.type === "turn_finished") this.goalLoop?.onTurnFinished(event.agentId);
       },
-      options.inbox === null
-        ? undefined
-        : (options.inbox ??
-          new Inbox<InboundMessage>(inboxPath(), line => console.error(`[inbox] ${line}`)))
+      inbox,
+      true
     );
     this.goalLoop = this.tasks === undefined ? undefined : new GoalLoop({
       tasks: this.tasks,
@@ -1184,7 +1272,8 @@ export class Orchestrator {
       const client = this.boxClients.get(entry.id);
       if (client !== undefined) {
         try {
-          await client.health();
+          const health = await client.health();
+          if (health.desktop_resources) this.desktopResources.set(entry.id, health.desktop_resources);
           this.attachedHealthy.add(entry.id);
           continue;
         } catch (error) {
@@ -1201,7 +1290,7 @@ export class Orchestrator {
   }
 
   /** Which boxes are reachable right now, for the state panel and `box list`. */
-  boxStatus(): { id: string; name: string; kind: string; connected: boolean; displayFloor: number; agents: number; endpoint?: string }[] {
+  boxStatus(): { id: string; name: string; kind: string; connected: boolean; displayFloor: number; agents: number; endpoint?: string; resources?: DesktopResources }[] {
     return this.registry.listBoxes().map(entry => ({
       id: entry.id,
       name: entry.name,
@@ -1209,13 +1298,15 @@ export class Orchestrator {
       connected: this.boxClients.has(entry.id),
       displayFloor: entry.displayFloor,
       agents: this.registry.agentsIn(entry.id).length,
+      ...(this.boxClients.has(entry.id) && this.desktopResources.has(entry.id) ? { resources: this.desktopResources.get(entry.id) } : {}),
       ...(entry.endpoint !== undefined ? { endpoint: entry.endpoint.baseUrl } : {}),
     }));
   }
 
   private forgetDesktopsOf(boxId: string): void {
-    for (const key of [...this.readyDisplays]) {
-      if (key.startsWith(`${boxId}:`)) this.readyDisplays.delete(key);
+    this.desktopResources.delete(boxId);
+    for (const key of this.startingDisplays.keys()) {
+      if (key.startsWith(`${boxId}:`)) this.startingDisplays.delete(key);
     }
   }
 
@@ -1236,7 +1327,9 @@ export class Orchestrator {
         }
         this.wedge.asked(entry.id, entry.name);
         try {
-          await client.health(timeoutMs);
+          const health = await client.health(timeoutMs);
+          if (health.desktop_resources) this.desktopResources.set(entry.id, health.desktop_resources);
+          else this.desktopResources.delete(entry.id);
         } catch (error) {
           // An error with a body is an answer: the box spoke, and what it said is
           // somebody else's problem. A timeout, an abort or an unreachable address is
@@ -1329,7 +1422,7 @@ export class Orchestrator {
   }
 
   /**
-   * The agent's own desktop, brought up if this is its first turn.
+   * The agent's own desktop, brought up only for explicit GUI demand.
    *
    * Created on demand rather than at startup so a box with one active agent does
    * not pay for a desktop per registered agent. A failure is not fatal — the agent
@@ -1345,26 +1438,53 @@ export class Orchestrator {
     if (entry.kind === "host") return undefined;
     const boxId = entry.id;
     const index = this.registry.displayIndexFor(agent.id);
-    const key = `${boxId}:${index}`;
-    if (this.readyDisplays.has(key)) return index;
-
-    try {
-      // Claims the desktop as this agent's while creating it: from here on the box
-      // refuses input for it that does not carry the same token.
-      await box.ensureDisplay(index, this.registry.boxOwnerTokenFor(agent.id));
-      this.readyDisplays.add(key);
-      return index;
-    } catch (error) {
-      this.options.onBusEvent?.({
-        type: "turn_failed",
-        agentId: agent.id,
-        error:
-          `could not start desktop ${index} for ${agent.profile.name}: ` +
-          (error instanceof Error ? error.message : String(error)),
-        // Nothing was dequeued to get here, so nothing is being held back by this failure.
-        waiting: 0,
-      });
-      return undefined;
+    const owner = this.registry.boxOwnerTokenFor(agent.id);
+    const key = `${boxId}:${index}:${owner}`;
+    const pending = this.startingDisplays.get(key);
+    if (pending) return pending;
+    const start = (async () => {
+      let slot = false;
+      const current = () => this.boxFor(agent.id) === box && this.registry.boxOf(agent.id).id === boxId
+        && this.registry.boxOwnerTokenFor(agent.id) === owner;
+      try {
+        if (!current()) return undefined;
+        if (typeof box.readyDisplay === "function" && await box.readyDisplay(index, owner) === true) return current() ? index : undefined;
+        if (!current()) return undefined;
+        if (this.desktopStarts >= 2) {
+          await new Promise<void>(resolve => this.desktopStartWaiters.push(resolve));
+        } else this.desktopStarts++;
+        slot = true;
+        // A queued request must not start a desktop on a disconnected or reassigned box.
+        if (this.boxFor(agent.id) !== box || this.registry.boxOf(agent.id).id !== boxId ||
+            this.registry.boxOwnerTokenFor(agent.id) !== owner) return undefined;
+        // Claims the desktop as this agent's while creating it: from here on the box
+        // refuses input for it that does not carry the same token.
+        await box.ensureDisplay(index, owner);
+        if (this.boxFor(agent.id) !== box || this.registry.boxOf(agent.id).id !== boxId ||
+            this.registry.boxOwnerTokenFor(agent.id) !== owner) return undefined;
+        return index;
+      } catch (error) {
+        this.options.onBusEvent?.({
+          type: "turn_failed",
+          agentId: agent.id,
+          error:
+            `could not start desktop ${index} for ${agent.profile.name}: ` +
+            (error instanceof Error ? error.message : String(error)),
+          // Nothing was dequeued to get here, so nothing is being held back by this failure.
+          waiting: 0,
+        });
+        return undefined;
+      } finally {
+        if (slot) {
+          const next = this.desktopStartWaiters.shift();
+          if (next) next(); else this.desktopStarts--;
+        }
+      }
+    })();
+    this.startingDisplays.set(key, start);
+    try { return await start; }
+    finally {
+      if (this.startingDisplays.get(key) === start) this.startingDisplays.delete(key);
     }
   }
 
@@ -1518,7 +1638,10 @@ export class Orchestrator {
     // The same share, again (INV-411 A3): the version says whether this is the same
     // recipe — one bot, not two — or a newer one, which is the existing bot's to take up
     // on request, never a second install and never a silent overwrite.
-    const already = options.shareId !== undefined ? this.registry.list().find(agent => agent.profile.importedFrom?.id === options.shareId) : undefined;
+    const targetBoxId = options.boxId ?? this.registry.box.id;
+    if (this.registry.boxById(targetBoxId) === undefined) throw new Error("No such template target box.");
+    // Idempotency is local to the destination: another box's copy is not ours to read or update.
+    const already = options.shareId !== undefined ? this.registry.agentsIn(targetBoxId).find(agent => agent.profile.importedFrom?.id === options.shareId) : undefined;
     if (already !== undefined) {
       const have = already.profile.importedFrom?.version;
       const incoming = template.meta?.version;
@@ -1570,7 +1693,7 @@ export class Orchestrator {
       })();
       return { agent: already, id, pending, settled, existing: "updated" };
     }
-    if (this.registry.list().some(agent => agent.profile.name === name)) {
+    if (this.registry.agentsIn(targetBoxId).some(agent => agent.profile.name === name)) {
       throw new Error(`An agent named ${name} already exists here; pass another name.`);
     }
     const wanted = toolsOf(template);
@@ -1672,41 +1795,40 @@ export class Orchestrator {
     return result;
   }
 
-  /**
-   * Brings up every registered agent's desktop at once.
-   *
-   * On-demand creation is right for the CLI, but not for a person: they can open
-   * any agent's desktop and work in it before that agent has ever taken a turn,
-   * and a desktop that does not exist yet shows a proxy error instead of a screen.
-   * Failures are collected rather than thrown — one agent's desktop failing must
-   * not stop the others from being usable.
-   */
-  async ensureAllDesktops(): Promise<{ name: string; index: number | undefined }[]> {
-    const agents = this.registry.list();
-    return Promise.all(
-      agents.map(async agent => ({
-        name: agent.profile.name,
-        index: await this.ensureDesktop(agent),
-      }))
-    );
+  /** Explicit GUI demand. Listing agents and reconnecting boxes never call this. */
+  async ensureAgentDesktop(agentId: string): Promise<number | undefined> {
+    return this.ensureDesktop(this.registry.get(agentId));
   }
 
   private async executeTurn(
     agent: AgentRecord,
     inbound: readonly InboundMessage[],
     signal: AbortSignal,
-    conversation: string = MAIN_CONVERSATION
+    conversation: string = MAIN_CONVERSATION,
+    acknowledge?: () => void
   ): Promise<void> {
-    // Taken, not read: a resumption marker belongs to exactly one turn. Leaving it in place would
-    // make every later turn for this agent look like another attempt at the interrupted one, and
-    // the attempt count is the whole of the crash-loop guard.
-    const resumeOf = this.resuming.get(agent.id);
-    this.resuming.delete(agent.id);
+    const principalId = inbound[0]?.principalId;
+    return this.executionCaller.run({
+      agentId: agent.id,
+      ...(principalId !== undefined ? { caller: { userId: principalId } } : {}),
+    }, () => this.executeContextTurn(agent, inbound, signal, conversation, acknowledge));
+  }
+
+  private async executeContextTurn(
+    agent: AgentRecord,
+    inbound: readonly InboundMessage[],
+    signal: AbortSignal,
+    conversation: string,
+    acknowledge?: () => void
+  ): Promise<void> {
+    const resumeOf = inbound[0]?.resumeOf;
     // A continuation that a person's message overtook, or whose goal stopped meanwhile, is
     // not run (INV-770): the loop reconsiders when the person's turn ends.
     if (this.goalLoop !== undefined && !this.goalLoop.turnStarting(agent.id, conversation, inbound)) return;
 
-    const displayIndex = await this.ensureDesktop(agent);
+    // Reserve identity without starting X/VNC. The first actual GUI operation starts it.
+    const displayIndex = this.registry.boxOf(agent.id).kind === "host"
+      ? undefined : this.registry.displayIndexFor(agent.id);
     // Started on the first turn that could use them, not at boot: a CLI question should
     // not spawn somebody's bridges as a side effect. And kicked off rather than waited
     // on — a turn that blocks until every configured server has finished booting is a
@@ -1723,18 +1845,22 @@ export class Orchestrator {
     const runtime = this.runtimeForAgent(agent);
 
     return runTurn(agent, inbound, signal, {
+      onReady: acknowledge,
       displayIndex,
+      ensureDesktop: async () => {
+        if (await this.ensureAgentDesktop(agent.id) === undefined) throw new Error("Could not start this agent's desktop. Check the box connection and retry.");
+      },
       boxOwner: this.registry.boxOwnerTokenFor(agent.id),
       usage: this.usage,
       policy: this.policy,
-      caller: this.callers.get(agent.id),
+      caller: this.callerFor(agent.id),
       // The name as the roster shows it, so a rule can be written "principal: Chris"
       // rather than with a uuid nobody can read (INV-156).
-      ...(this.options.principalName !== undefined && this.callers.get(agent.id)?.userId !== undefined
-        ? { callerName: this.options.principalName(this.callers.get(agent.id)!.userId!) }
+      ...(this.options.principalName !== undefined && this.callerFor(agent.id)?.userId !== undefined
+        ? { callerName: this.options.principalName(this.callerFor(agent.id)!.userId!) }
         : {}),
-      ...(this.options.principalIdentities !== undefined && this.callers.get(agent.id)?.userId !== undefined
-        ? { callerIdentities: this.options.principalIdentities(this.callers.get(agent.id)!.userId!) ?? [] }
+      ...(this.options.principalIdentities !== undefined && this.callerFor(agent.id)?.userId !== undefined
+        ? { callerIdentities: this.options.principalIdentities(this.callerFor(agent.id)!.userId!) ?? [] }
         : {}),
       skills,
       client: runtime.client,
@@ -1757,7 +1883,8 @@ export class Orchestrator {
       askUser: this.options.askUser,
       askSecret: this.options.askSecret,
       handOver: this.options.handOver,
-      docReader: this.options.docReader ?? this.docReader,
+      // The reader for the door this conversation's messages come through (INV-871).
+      docReader: this.options.docReader ?? this.docReaderFor?.(conversation) ?? this.docReader,
       conversation,
       provider: runtime.provider,
       effort: this.options.effort,
@@ -1766,6 +1893,8 @@ export class Orchestrator {
       ...(this.steps !== undefined ? { steps: this.steps } : {}),
       ...(this.networkEvents !== undefined ? { networkEvents: this.networkEvents } : {}),
       ...(this.pendingWork !== undefined ? { pendingWork: this.pendingWork } : {}),
+      ...(this.effects !== undefined ? { effects: this.effects } : {}),
+      ...(this.orchestrations !== undefined ? { orchestrations: this.orchestrations } : {}),
       mcpFace: this.mcpFace,
       modelRelay: this.modelRelay,
       delegateSessions: this.delegateSessions,
@@ -1809,8 +1938,8 @@ export class Orchestrator {
               source: "loop",
               attempt: inbound.map(message => message.text).join("\n").slice(0, 2_000),
               detail: event.reason,
-              ...(this.callers.get(agent.id)?.userId !== undefined
-                ? { principal: this.callers.get(agent.id)!.userId! }
+              ...(this.callerFor(agent.id)?.userId !== undefined
+                ? { principal: this.callerFor(agent.id)!.userId! }
                 : {}),
             })
             .catch(() => {});
@@ -1864,6 +1993,8 @@ export class Orchestrator {
     if (queued > 0) blockers.push(`${queued} 条请求排队中`);
     blockers.push(...contextTaskBlockers(this.tasks?.forAgent(agentId) ?? [], conversation, options.excludeTaskId));
     for (const work of this.pendingWork?.open() ?? []) {
+      // A reminder is a future wake, not work in flight (INV-861); it does not hold the conversation.
+      if (work.kind === "reminder") continue;
       if (work.agentId === agentId && work.parent === conversation) blockers.push(`委派 ${work.id} 尚未结束`);
     }
     // Approvals predate per-conversation custody, so conservatively block this agent as a whole.
@@ -1889,6 +2020,8 @@ export class Orchestrator {
     let parked = 0;
 
     for (const turn of outstanding) {
+      // Inbox replay already queued this durable continuation after a second crash.
+      if (this.bus.hasPendingResume(turn.id)) continue;
       const agent = this.registry.tryGet(turn.agentId);
       if (agent === undefined) {
         // The agent was deleted while it was working. Nothing to resume onto, and nothing lost that
@@ -1926,32 +2059,23 @@ export class Orchestrator {
       // older way. One parked on a person's approval waits for the answer, however long.
       const steps = this.steps?.stepsOf(turn.id);
       if (steps?.known === true) {
-        const waiting = steps.open.find(step => step.approvalId !== undefined);
-        if (waiting !== undefined && this.policy.pending().some(item => item.id === waiting.approvalId)) {
+        const pending = new Set(this.policy.pending().map(item => item.id));
+        const waiting = steps.open.find(step => step.approvalId !== undefined && pending.has(step.approvalId));
+        if (waiting !== undefined) {
           this.parked.set(waiting.approvalId!, turn);
           parked += 1;
           continue;
         }
-        this.continueTurn(turn, waiting !== undefined ? { id: waiting.approvalId!, how: "gone" } : undefined);
+        this.continueTurn(turn);
         resumed += 1;
         continue;
       }
 
-      // Closed before the new one opens, so a crash during the resumption leaves exactly one
-      // unfinished turn rather than two.
-      this.turns?.end(turn.id, "resumed");
-      // The work id comes across with the attempt. Carrying the one without the other is how
-      // the field would end up written on every record and grouping nothing: the resumed turn
-      // would mint a fresh one and the report would still see two pieces of work.
-      this.resuming.set(agent.id, {
-        id: turn.id,
-        // A clean shutdown resumes for free: the attempt budget measures how often this
-        // turn kills the process, and an operator's restart is not that.
-        attempt: turn.cleanExit ? turn.attempt : turn.attempt + 1,
-        ...(turn.workId !== undefined ? { workId: turn.workId } : {}),
-      });
       this.bus.sendFromUser(agent.id, resumePrompt(turn.about, turn.at), {
         synthetic: true,
+        ...(turn.principalId !== undefined ? { principalId: turn.principalId } : {}),
+        resumeOf: { id: turn.id, attempt: turn.cleanExit ? turn.attempt : turn.attempt + 1,
+          ...(turn.workId !== undefined ? { workId: turn.workId } : {}) },
         // The turn resumes in the conversation it was interrupted in: an answer to a
         // group chat's question must not surface in the team room.
         ...(turn.conversation !== undefined ? { conversation: turn.conversation } : {}),
@@ -1959,6 +2083,8 @@ export class Orchestrator {
         // running work would bury the recovery in an unrelated reply.
         steerable: false,
       });
+      // Relinquish the old owner only after the continuation is durably admitted.
+      this.turns?.end(turn.id, "resumed");
       // Enqueuing is not running. sendFromUser only queues; without this the resumed turn sat until
       // some unrelated later traffic happened to wake the agent. recover() wakes for the inbox; this
       // path did not.
@@ -1983,19 +2109,16 @@ export class Orchestrator {
    * answers the open step from the transcript before asking the model anything.
    */
   private continueTurn(turn: InterruptedTurn, approval?: { id: string; how: "allowed" | "refused" | "gone" }): void {
-    this.turns?.end(turn.id, "continued");
-    this.resuming.set(turn.agentId, {
-      id: turn.id,
-      attempt: turn.cleanExit ? turn.attempt : turn.attempt + 1,
-      ...(turn.workId !== undefined ? { workId: turn.workId } : {}),
-      continues: true,
-      ...(approval !== undefined ? { approval } : {}),
-    });
     this.bus.sendFromUser(turn.agentId, continuationNote(turn.about), {
       synthetic: true,
+      ...(turn.principalId !== undefined ? { principalId: turn.principalId } : {}),
       ...(turn.conversation !== undefined ? { conversation: turn.conversation } : {}),
       steerable: false,
+      resumeOf: { id: turn.id, attempt: turn.cleanExit ? turn.attempt : turn.attempt + 1,
+        ...(turn.workId !== undefined ? { workId: turn.workId } : {}),
+        continues: true, ...(approval !== undefined ? { approval } : {}) },
     });
+    this.turns?.end(turn.id, "continued");
     void this.bus.wake(turn.agentId);
   }
 
@@ -2047,10 +2170,10 @@ export class Orchestrator {
         provider: profile.label,
         model: profile.model,
         usage: response.usage,
-        // Whoever this agent is currently working for. The same cache the turn reads its
-        // caller from, so a selection made for a person's turn bills to that person.
-        ...(this.callers.get(agent.id)?.userId !== undefined
-          ? { principal: this.callers.get(agent.id)!.userId! }
+        // The execution context survives the provider await; another conversation
+        // cannot change who pays for this selection.
+        ...(this.callerFor(agent.id)?.userId !== undefined
+          ? { principal: this.callerFor(agent.id)!.userId! }
           : {}),
       });
       return response.content
@@ -2137,20 +2260,10 @@ export class Orchestrator {
     const agent = this.registry.resolve(agentIdOrName);
     const conversation = options.conversation ?? MAIN_CONVERSATION;
     return this.registry.withContext(agent.id, conversation, async () => {
-    // Remembered for the turn, so a memory kept during it records who it is about. Per agent because
-    // two people can be driving two agents at once; overwritten on each prompt because the most
-    // recent person to speak to *this* agent is the one its memories are about.
-    //
-    // Cleared — not merely overwritten — when there is no caller. A scheduled run, a
-    // teammate's wake and an audit turn all arrive with none, and the old code left the
-    // last human attached: their budget paid for it, their name went on whatever the turn
-    // remembered, and any standing `principal:*` grant they held was resolvable by an
-    // unattended task. Identity belongs to the turn, and an absent caller is a fact about
-    // this turn rather than a gap to fill from the previous one (audit 2026-09-01, #1).
-    if (caller?.userId !== undefined) this.callers.set(agent.id, caller);
-    else this.callers.delete(agent.id);
     this.bus.sendFromUser(agent.id, text, {
       conversation,
+      ...(caller?.userId !== undefined ? { principalId: caller.userId } : {}),
+      ...(options.synthetic === true ? { synthetic: true } : {}),
       ...(options.steerable === false ? { steerable: false } : {}),
       ...(options.lane !== undefined ? { lane: options.lane } : {}),
       ...(options.messageId !== undefined ? { messageId: options.messageId } : {}),
@@ -2173,13 +2286,17 @@ export class Orchestrator {
       const ref = memoryRef(conversation, new Date(), options.messageId);
       // The transcript time of the exchange, so a compaction flush and the batch agree
       // on which entries each has extracted (INV-778).
-      const last = this.registry.readTranscript(agent.id, conversation).at(-1) as { at?: string } | undefined;
+      const transcript = this.registry.readTranscript(agent.id, conversation);
+      const last = transcript.at(-1) as { at?: string } | undefined;
+      // What this turn called, read from the transcript like the reply is (INV-894).
+      const external = turnReadOutside(transcript as HistoryEntry[], before, tool => this.readsExternalContent(tool));
       void this.rememberer
         .record({
           agentId: agent.id,
           text: summariseExchange(text, said),
           ref,
           conversation,
+          ...(external ? { external: true } : {}),
           ...(last?.at !== undefined ? { at: last.at } : {}),
           // Taking notes on a person's conversation is that person's cost. A batch that
           // spans two people bills to neither — see Rememberer.payerOf.
@@ -2198,16 +2315,25 @@ export class Orchestrator {
    * agent's turn ended was found only if the agent thought to ask (Grok persists these
    * completions as pending wakes for the same reason).
    */
-  noteJobEnded(jobId: string, status: { exit_code?: number; running?: boolean } | undefined): void {
+  async noteJobEnded(
+    jobId: string,
+    status: { exit_code?: number; running?: boolean; interrupted?: boolean; log_path?: string } | undefined
+  ): Promise<boolean> {
     const open = this.pendingWork?.open().find(item => item.kind === "delegate" && item.child === jobId);
-    const committed = this.pendingWork?.commitDelegate(jobId, status?.exit_code === 0 ? "done" : "failed") ?? false;
-    if (!committed || open === undefined) return;
-    const how = status === undefined ? "is gone" : status.exit_code === 0 ? "finished" : `exited ${status.exit_code ?? "?"}`;
-    this.bus.deliverSystem(
-      open.agentId,
-      `[A job you delegated ${how}: ${jobId} (${open.brief.slice(0, 120)}). Read its output with Jobs and fold the result into your work, or say why it does not matter.]`,
-      open.parent
+    if (open === undefined) return false;
+    // The outcome is the engine's report, read from the job's log (INV-908); a job the box no
+    // longer knows has no log to read and no exit code, so how it ended is unknown.
+    const settled = await settleDelegate(
+      {
+        pendingWork: this.pendingWork,
+        box: status === undefined ? undefined : this.boxFor(open.agentId),
+        dropSession: (id, reason) => this.delegateSessions.drop(id, reason),
+      },
+      { job_id: jobId, ...(status ?? {}) }
     );
+    if (settled === undefined) return false;
+    this.bus.deliverSystem(open.agentId, delegateEndedNote(jobId, open.brief, settled), open.parent);
+    return true;
   }
 
   /** Every open delegated job, checked against the box: what ended unattended is noted. */
@@ -2218,7 +2344,7 @@ export class Orchestrator {
     const byAgent = new Map<string, typeof open>();
     for (const item of open) byAgent.set(item.agentId, [...(byAgent.get(item.agentId) ?? []), item]);
     for (const [agentId, items] of byAgent) {
-      let jobs: { job_id: string; running: boolean; exit_code?: number; interrupted?: boolean }[];
+      let jobs: { job_id: string; running: boolean; exit_code?: number; interrupted?: boolean; log_path?: string }[];
       try {
         jobs = (await this.boxFor(agentId)?.jobs())?.jobs ?? [];
       } catch {
@@ -2227,8 +2353,7 @@ export class Orchestrator {
       for (const item of items) {
         const job = jobs.find(candidate => candidate.job_id === item.child);
         if (job === undefined || job.running) continue;
-        this.noteJobEnded(item.child, { exit_code: job.interrupted === true ? 1 : job.exit_code, running: false });
-        noted += 1;
+        if (await this.noteJobEnded(item.child, { ...job, running: false })) noted += 1;
       }
     }
     return noted;
@@ -2313,6 +2438,20 @@ export class Orchestrator {
    * replayed and before interrupted turns are resumed: it is the authority for `fork/*`.
    * Returns how many were dropped.
    */
+  /**
+   * Picks effects back up after a restart (INV-861): background jobs are handed to their
+   * extension's recovery callback, confirmations no longer waiting are reported and closed.
+   * After the extensions load — the callbacks must exist — and before turns resume.
+   */
+  /** Plans started before a restart continue from their unanswered items (INV-862). */
+  recoverOrchestrations(): { resumed: number; closed: number } {
+    return this.orchestrations?.recover() ?? { resumed: 0, closed: 0 };
+  }
+
+  async recoverEffects(): Promise<{ resumedJobs: number; lostJobs: number; closedPauses: number }> {
+    return (await this.effects?.recover()) ?? { resumedJobs: 0, lostJobs: 0, closedPauses: 0 };
+  }
+
   async sweepPendingWork(): Promise<number> {
     if (this.pendingWork === undefined) return 0;
     const unreadable = this.pendingWork.unreadable();
@@ -2330,6 +2469,8 @@ export class Orchestrator {
         this.bus.deliverSystem(agentId, text, conversation) !== undefined || this.bus.inboxless,
       noteQueued: (agentId, conversation, tag) => this.bus.hasQueuedText(agentId, conversation, tag),
       agentExists: agentId => this.registry.tryGet(agentId) !== undefined,
+      // An engine's report is read the same way after a restart as during a run (INV-908).
+      settleExited: async (fork, status) => this.noteJobEnded(fork.child, { ...status, running: false }),
       jobStatus: async (agentId, jobId) => {
         const box = this.boxFor(agentId);
         if (box === undefined) return undefined;
@@ -2418,6 +2559,7 @@ export const ALL_TOOLS: readonly string[] = [
   "Jobs",
   "Delegate",
   "Fork",
+  "Orchestrate",
   "read_file",
   "write_file",
   "edit_file",
@@ -2457,6 +2599,9 @@ export const ALL_TOOLS: readonly string[] = [
   "connector_request",
   "FeishuWrite",
   "DingTalkWrite",
+  // Every MCP service the box's bundles carry (INV-759). Their tool names are not known when this
+  // list is written, so without it an allowlist withholds all of them.
+  ALL_MCP_TOOLS,
 ];
 
 /**
@@ -2521,14 +2666,17 @@ export const STARTER_TEAM: readonly {
     // work is no longer reviewing it — and the failure is not that it would cheat, it is that
     // "fixed it" and "checked it" become the same act and nobody can tell afterwards which happened.
     // It keeps `bash`, because reproducing a step is its whole job and reproducing needs running.
-    tools: NO_TEAM_BUILDING.filter(tool => tool !== "write_file"),
+    // Nor MCP services: whether a service's tool reads or writes is not something we can tell, and
+    // a reviewer that can post to Slack or edit a Notion page is changing what it checks.
+    tools: NO_TEAM_BUILDING.filter(tool => tool !== "write_file" && tool !== ALL_MCP_TOOLS),
   },
 ];
 
 /** The MCP server list as config.json spells it, in the manager's shape. */
-function mcpServersFrom(config: { mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string>; host?: boolean }> }) {
+function mcpServersFrom(config: { mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string>; host?: boolean; hostOnlyTools?: string[]; pollutesMemory?: boolean }>; connectorVersions?: Record<string, string> }) {
   // The connector doors (mcp-connectors.ts) sit under the operator's entries: a config.json
   // line with the same name overrides a door's default, an env credential turns a door on,
-  // and either may exist without the other.
-  return mergeServers(Object.entries(config.mcpServers ?? {}).map(([name, server]) => ({ name, ...server })));
+  // and either may exist without the other. `connectorVersions` pins a door's package
+  // differently from the catalog without replacing its spec (INV-813).
+  return mergeServers(Object.entries(config.mcpServers ?? {}).map(([name, server]) => ({ name, ...server })), process.env, config.connectorVersions ?? {});
 }

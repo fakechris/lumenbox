@@ -1554,6 +1554,60 @@ test("a dropped connection mid-turn is retried, and the turn finishes", async ()
   }
 });
 
+test("an overloaded provider is retried by the host alone: requests equal the host's attempts, each one seen (INV-811)", async () => {
+  const { createServer } = await import("node:http");
+  const { createClient } = await import("./provider.ts");
+  const { CAPACITY_POLICY } = await import("./transient.ts");
+  // A real upstream and a real client, as createClient builds it: the SDK's own retries would show
+  // up here as requests the host never counted.
+  let requests = 0;
+  const server = createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      requests += 1;
+      if (requests < CAPACITY_POLICY.maxAttempts) {
+        res.writeHead(529, { "content-type": "application/json" });
+        res.end(JSON.stringify({ type: "error", error: { type: "overloaded_error", message: "Overloaded" } }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      const send = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      send("message_start", { type: "message_start", message: { id: "msg_1", type: "message", role: "assistant", model: "fake-3", content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 5, output_tokens: 1 } } });
+      send("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+      send("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "through at last" } });
+      send("content_block_stop", { type: "content_block_stop", index: 0 });
+      send("message_delta", { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 3 } });
+      send("message_stop", { type: "message_stop" });
+      res.end();
+    });
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as { port: number }).port;
+  process.env.INV811_FAKE_KEY = "test-key";
+  const { registry, cleanup } = fixture();
+  try {
+    const client = createClient({
+      label: "Fake Anthropic", model: "fake-3", maxTokens: 1000, vision: false, adaptiveThinking: false, effort: false,
+      promptCaching: false, auth: "x-api-key", keyEnv: "INV811_FAKE_KEY", baseUrl: `http://127.0.0.1:${port}`,
+    });
+    const events: { type: string; kind?: string }[] = [];
+    await runTurn(
+      registry.create({ name: "Ada" }),
+      [{ id: "m", fromId: "user", fromName: "user", text: "work", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus: new AgentBus(registry, async () => {}), box: undefined, resolution: undefined, onEvent: event => events.push(event as { type: string; kind?: string }) }
+    );
+    assert.equal(requests, CAPACITY_POLICY.maxAttempts, "one request per host attempt, not the host's attempts times the SDK's");
+    const retries = events.filter(event => event.type === "retrying");
+    assert.equal(retries.length, CAPACITY_POLICY.maxAttempts - 1, "and every retry is one the host made and reported");
+    assert.ok(retries.every(event => event.kind === "capacity"));
+  } finally {
+    delete process.env.INV811_FAKE_KEY;
+    server.close();
+    cleanup();
+  }
+});
+
 test("a rejected request is not retried, and the error is not hidden behind delays", async () => {
   const { registry, cleanup } = fixture();
   try {
@@ -2628,9 +2682,14 @@ test("the transcript records when a tool batch started and when its results were
   try {
     const ada = registry.create({ name: "Ada" });
     const bus = new AgentBus(registry, async () => {});
+    // When the tool itself ran, by the same clock the transcript stamps with (INV-745): the
+    // stamps must bracket it, which needs no guess at how long a timer really took.
+    const ran: { start?: number; end?: number } = {};
     const slowBox = {
       computer: async () => {
+        ran.start = Date.now();
         await new Promise(resolve => setTimeout(resolve, 25));
+        ran.end = Date.now();
         return {
           success: true,
           screenshot: Buffer.from("fake-webp-bytes").toString("base64"),
@@ -2660,11 +2719,9 @@ test("the transcript records when a tool batch started and when its results were
     const blocks = transcript.find(entry => "kind" in entry && entry.kind === "blocks");
     const results = transcript.find(entry => "kind" in entry && entry.kind === "results");
     assert.ok(blocks && results, "the exchange must be persisted");
-    const elapsed = Date.parse(results.at!) - Date.parse(blocks.at!);
-    assert.ok(
-      elapsed >= 20,
-      `results.at - blocks.at should cover the tool's ~25ms run, got ${elapsed}ms`
-    );
+    assert.ok(ran.end! > ran.start!, "the tool took time, so a zero duration would be visible");
+    assert.ok(Date.parse(blocks.at!) <= ran.start!, `blocks.at ${blocks.at} is after the tool started`);
+    assert.ok(Date.parse(results.at!) >= ran.end!, `results.at ${results.at} is before the tool finished`);
   } finally {
     cleanup();
   }
@@ -3014,17 +3071,20 @@ test("reads asked for together run together; a shell call between them runs alon
   try {
     const ada = registry.create({ name: "Ada" });
     const bus = new AgentBus(registry, async () => {});
-    const timeline: { name: string; at: number }[] = [];
-    const t0 = Date.now();
+    // Order, not wall-clock time (INV-745): a timer may fire a millisecond before Date.now() says
+    // it should, so "20ms later" flaked on CI. Each call logs when it starts and when it ends.
+    const timeline: string[] = [];
     const box = {
       readFile: async (path: string) => {
-        timeline.push({ name: `read ${path}`, at: Date.now() - t0 });
-        await new Promise(resolve => setTimeout(resolve, 80));
+        timeline.push(`start read ${path}`);
+        await new Promise(resolve => setTimeout(resolve, 20));
+        timeline.push(`end read ${path}`);
         return { content: `contents of ${path}` };
       },
       exec: async (command: string) => {
-        timeline.push({ name: `exec ${command}`, at: Date.now() - t0 });
-        await new Promise(resolve => setTimeout(resolve, 20));
+        timeline.push(`start exec ${command}`);
+        await new Promise(resolve => setTimeout(resolve, 5));
+        timeline.push(`end exec ${command}`);
         return { stdout: "ran", stderr: "", exit_code: 0, timed_out: false };
       },
     } as unknown as BoxClient;
@@ -3045,22 +3105,23 @@ test("reads asked for together run together; a shell call between them runs alon
           : message([textBlock("read them all")]),
       { capture }
     );
-    const started = Date.now();
     await runTurn(
       ada,
       [{ id: "m-par", fromId: "user", fromName: "user", text: "read a, b, c, then d", priority: false, receivedAt: "" }],
       new AbortController().signal,
       { client, registry, bus, box, resolution: undefined }
     );
-    const elapsed = Date.now() - started;
-    // Three reads in parallel (~80ms), then the shell (~20ms), then one read (~80ms): well
-    // under the ~340ms a serial loop would take.
-    assert.ok(elapsed < 300, `took ${elapsed}ms; a serial loop would take ~340ms`);
-    // The shell ran only after the first three reads had all *started*, and /d only after
-    // the shell finished.
-    const startOf = (name: string) => timeline.find(entry => entry.name === name)!.at;
-    assert.ok(startOf("exec touch x") >= Math.max(startOf("read /a"), startOf("read /b"), startOf("read /c")));
-    assert.ok(startOf("read /d") >= startOf("exec touch x") + 20);
+    const at = (event: string) => {
+      const index = timeline.indexOf(event);
+      assert.ok(index >= 0, `${event} never happened: ${timeline.join(", ")}`);
+      return index;
+    };
+    const firstThree = ["/a", "/b", "/c"];
+    // Together: all three reads started before any of them finished.
+    assert.ok(Math.max(...firstThree.map(path => at(`start read ${path}`))) < Math.min(...firstThree.map(path => at(`end read ${path}`))));
+    // The shell alone: after all three reads had finished, and /d only after the shell had.
+    assert.ok(at("start exec touch x") > Math.max(...firstThree.map(path => at(`end read ${path}`))));
+    assert.ok(at("start read /d") > at("end exec touch x"));
     // Results come back in the order the model asked, regardless of finish order.
     const results = capture.params[1]?.messages.at(-1)?.content as { tool_use_id: string }[];
     assert.deepEqual(results.map(block => block.tool_use_id), ["r1", "r2", "r3", "s1", "r4"]);
@@ -3537,6 +3598,7 @@ test("scoped MCP lookup wrappers reach permitted tools and refuse an unlisted ta
       owns: (name: string) => name.startsWith("fixture__"),
       describeTools: () => { calls.push("lookup"); return "fixture tool catalog"; },
       call: async (name: string) => { calls.push(name); return "fixture result"; },
+      callDetailed: async (name: string) => { calls.push(name); return { text: "fixture result" }; },
     };
     const capture: Capture = { params: [] };
     const { client } = stubClient([
@@ -3554,6 +3616,50 @@ test("scoped MCP lookup wrappers reach permitted tools and refuse an unlisted ta
     assert.deepEqual(capture.params[0]?.tools?.map(tool => "name" in tool ? tool.name : undefined), ["FindMcpTool", "UseMcpTool"]);
     assert.deepEqual(calls, ["lookup", permitted[0]]);
     assert.match(JSON.stringify(capture.params[3]?.messages), /external tool is unavailable in the current execution context/);
+  } finally { cleanup(); }
+});
+
+test("an allowlist names an MCP service with server__* or every service with mcp:*, never a built-in (INV-759)", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const calls: string[] = [];
+    const fakeMcp = {
+      toolsFor: () => ["notion__search", "notion__create_page", "slack__post"].map(name => ({
+        name, description: name, inputSchema: { type: "object" },
+      })),
+      owns: (name: string) => name.includes("__"),
+      describeTools: () => "",
+      call: async (name: string) => { calls.push(name); return "ok"; },
+      callDetailed: async (name: string) => { calls.push(name); return { text: "ok" }; },
+    };
+    const offered = async (tools: string[], script: Anthropic.Message[] = [message([textBlock("Finished.")])]) => {
+      const capture: Capture = { params: [] };
+      const { client } = stubClient(script, capture);
+      await runTurn(registry.create({ name: `A${registry.list().length}`, tools }),
+        [{ id: "m", fromId: "user", fromName: "user", text: "go", priority: false, receivedAt: "" }],
+        new AbortController().signal, {
+          client, registry, bus: new AgentBus(registry, async () => {}), box: undefined, resolution: undefined,
+          mcp: fakeMcp as unknown as NonNullable<Parameters<typeof runTurn>[3]["mcp"]>,
+        });
+      return { names: (capture.params[0]?.tools ?? []).map(tool => ("name" in tool ? tool.name : "")), capture };
+    };
+
+    // Exact names only, as before: every MCP tool withheld, because none was known to name.
+    assert.deepEqual((await offered(["read_file"])).names.filter(name => name.includes("__")), []);
+    // One service.
+    assert.deepEqual((await offered(["read_file", "notion__*"])).names.filter(name => name.includes("__")), ["notion__search", "notion__create_page"]);
+    // Every service the box carries, and still no built-in the list did not name.
+    const all = await offered(["read_file", "mcp:*"]);
+    assert.deepEqual(all.names.filter(name => name.includes("__")), ["notion__search", "notion__create_page", "slack__post"]);
+    assert.ok(!all.names.includes("bash"));
+
+    // Withheld is also refused: a call to a service the list does not name never runs.
+    const refused = await offered(["notion__*"], [
+      message([toolUseBlock("slack__post", {})], "tool_use"),
+      message([textBlock("Finished.")]),
+    ]);
+    assert.deepEqual(calls, []);
+    assert.match(JSON.stringify(refused.capture.params[1]?.messages), /unavailable in the current execution context/);
   } finally { cleanup(); }
 });
 
@@ -3784,3 +3890,53 @@ test("the round span carries the three digests and which segments changed (INV-7
     cleanup();
   }
 });
+
+// INV-861: a tool result's effects reach effects.ts from a real turn, and a fork's are dropped.
+async function turnWithEffects(conversation: string | undefined) {
+  const { registry, cleanup } = fixture();
+  const policy = policyFixture();
+  const { McpManager, VirtualServer } = await import("./mcp.ts");
+  const { PendingWork } = await import("./pending-work.ts");
+  const { Effects } = await import("./effects.ts");
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-turn-effects-"));
+  const mcp = new McpManager([]);
+  mcp.setVirtual(new VirtualServer("ext", [
+    { name: "publish", description: "Publish.", inputSchema: { type: "object" }, run: async () => ({ text: "staged", effects: [{ type: "pause_turn", reason: "Publish to production?", resumeTool: "_resume" }] }) },
+    { name: "_resume", description: "cb", inputSchema: { type: "object" }, hostOnly: true, run: async () => "published" },
+  ]));
+  const effects = new Effects({ pendingWork: new PendingWork(join(dir, "pw.jsonl")), policy: policy.gate, mcp: () => mcp, deliver: () => true });
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const capture: Capture = { params: [] };
+    const { client } = stubClient([
+      message([toolUseBlock("ext__publish", {})], "tool_use"),
+      message([textBlock("Waiting for the person.")]),
+    ], capture);
+    await runTurn(ada, [{ id: "m-fx", fromId: "user", fromName: "user", text: "publish it", priority: false, receivedAt: "" }],
+      new AbortController().signal, {
+        client, registry, bus: new AgentBus(registry, async () => {}), box: undefined, resolution: undefined,
+        policy: policy.gate, mcp, effects,
+        ...(conversation !== undefined ? { conversation } : {}),
+      });
+    return { capture, tools: capture.params[0]?.tools?.map(tool => ("name" in tool ? tool.name : "")) ?? [], pending: policy.gate.pending() };
+  } finally {
+    cleanup();
+    policy.cleanup();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("a tool result's pause_turn opens a confirmation, and the model reads why it must stop (INV-861)", async () => {
+  const { capture, tools, pending } = await turnWithEffects(undefined);
+  assert.ok(tools.includes("ext__publish"));
+  assert.ok(!tools.includes("ext___resume"), "a host-only callback is not offered to the model");
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0]!.description, "Publish to production?");
+  assert.match(JSON.stringify(capture.params[1]?.messages), /staged[\s\S]*End your turn now/);
+});
+
+test("a fork's effects are dropped: nothing is put in front of the person (INV-861)", async () => {
+  const { pending } = await turnWithEffects("fork/check-1");
+  assert.equal(pending.length, 0);
+});
+

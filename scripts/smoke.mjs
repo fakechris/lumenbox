@@ -308,6 +308,7 @@ await check("the box can diagnose itself", async () => {
   const healthy = await box.exec("box-doctor");
   assert(healthy.exit_code === 0, `a healthy box failed its own check:\n${healthy.stdout}`);
   assert(/SUMMARY \d+ passed, 0 failed/.test(healthy.stdout), healthy.stdout);
+  assert(/PASS documents:.*docx\/xlsx\/pptx\/pdf/.test(healthy.stdout), healthy.stdout);
 
   // Broken and checked in one command, because the supervisor repairs things within a tick.
   const broken = await box.exec(
@@ -380,6 +381,7 @@ await check("VNC still delivers fresh frames under the compositor", async () => 
   // non-empty incremental update after something changes on screen.
   const flags = await box.exec("pgrep -a x11vnc | head -1");
   assert(flags.stdout.includes("-noxdamage"), `x11vnc is missing -noxdamage: ${flags.stdout}`);
+  assert(flags.stdout.includes("-noshm"), "x11vnc must not leave SysV shared memory after desktop reclamation");
 
   const probe = await box.exec("DISPLAY=:1 vnc-probe 5901 :1");
   assert(probe.stdout.startsWith("fresh:"), probe.stdout || probe.stderr);

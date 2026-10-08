@@ -15,12 +15,132 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { BACKUP_EXCLUDES, BoxManager, boxTokenPath, boxUiToken, loadBoxToken, networkNameFor, readBoxToken, uiToken } from "./docker.ts";
+import { BACKUP_EXCLUDES, BOX_IMAGE_REPO, BoxManager, boxImageRef, boxTokenPath, boxUiToken, defaultBoxConfig, dockerEnvironment, DockerError, ensureLocalImage, loadBoxToken, networkNameFor, packageVersion, readBoxToken, uiToken } from "./docker.ts";
 import { SPILL_AT_BYTES, SPOOL_DIR } from "../boxd/shell-service.ts";
 import { DURABLE_RESULT_CHARS } from "../protocol/index.ts";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+test("the published image is fakechris/lumenbox at this package's version", () => {
+  const version = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version;
+  assert.equal(packageVersion(), version);
+  assert.equal(boxImageRef(), `${BOX_IMAGE_REPO}:${version}`);
+  assert.equal(BOX_IMAGE_REPO, "fakechris/lumenbox");
+  const home = mkdtempSync(join(tmpdir(), "agentbox-image-"));
+  const previousImage = process.env.AGENTBOX_IMAGE;
+  const previousHome = process.env.AGENTBOX_HOME;
+  delete process.env.AGENTBOX_IMAGE;
+  process.env.AGENTBOX_HOME = home;
+  try {
+    assert.equal(defaultBoxConfig().image, `fakechris/lumenbox:${version}`);
+  } finally {
+    if (previousImage === undefined) delete process.env.AGENTBOX_IMAGE;
+    else process.env.AGENTBOX_IMAGE = previousImage;
+    if (previousHome === undefined) delete process.env.AGENTBOX_HOME;
+    else process.env.AGENTBOX_HOME = previousHome;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a missing image is pulled, and a failed pull says how to build it", async () => {
+  let pulled = false;
+  const lines: string[] = [];
+  const note = (line: string) => {
+    lines.push(line);
+  };
+  await ensureLocalImage(
+    "fakechris/lumenbox:0.3.0",
+    { exists: async () => true, pull: async () => { pulled = true; } },
+    note,
+  );
+  assert.equal(pulled, false);
+  assert.deepEqual(lines, []);
+
+  await ensureLocalImage(
+    "fakechris/lumenbox:0.3.0",
+    { exists: async () => false, pull: async () => { pulled = true; } },
+    note,
+  );
+  assert.equal(pulled, true);
+  // The size and the wait travel with the announcement (INV-856): the pull is the one
+  // long silent step of a first run, and a quiet minute reads as "stuck".
+  const announcement = lines[0] ?? "";
+  assert.match(announcement, /^image fakechris\/lumenbox:0\.3\.0 is not on this machine; pulling it/);
+  assert.match(announcement, /750MB|a few minutes/);
+
+  // "denied" is a registry that answered — classified as no-such-image, and it still
+  // names `box build` for the reader who has a checkout (last, not first).
+  await assert.rejects(
+    () => ensureLocalImage("fakechris/lumenbox:0.3.0", {
+      exists: async () => false,
+      pull: async () => { throw new Error("denied"); },
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof DockerError);
+      assert.match(error.message, /agentbox box build/);
+      assert.match(error.message, /fakechris\/lumenbox:0\.3\.0/);
+      return true;
+    },
+  );
+});
+
+test("a pull failure says whether the registry answered or never answered (INV-856)", async () => {
+  // A registry with no such tag: a just-released app racing its image, or a mistyped
+  // mirror. The fix is "update the app or fix the setting", not a network lecture.
+  await assert.rejects(
+    () => ensureLocalImage("fakechris/lumenbox:9.9.9", {
+      exists: async () => false,
+      pull: async () => { throw new Error("manifest for fakechris/lumenbox:9.9.9 not found"); },
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof DockerError);
+      assert.match(error.message, /no such image or tag/);
+      assert.match(error.message, /update the app/);
+      return true;
+    },
+  );
+
+  // A registry that never answered — the common case behind a network where Docker Hub
+  // needs a mirror. The message leads with the network and names the mirror entrance.
+  await assert.rejects(
+    () => ensureLocalImage("fakechris/lumenbox:0.3.0", {
+      exists: async () => false,
+      pull: async () => { throw new Error("Client.Timeout during request"); },
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof DockerError);
+      assert.match(error.message, /registry did not answer/);
+      assert.match(error.message, /mirror/i);
+      assert.match(error.message, /agentbox box build/);
+      return true;
+    },
+  );
+});
+
+test("the image comes from the config file when the environment does not name one (INV-856)", () => {
+  // A Finder-launched app has no shell to export AGENTBOX_IMAGE into, so config.json is
+  // the entrance a mirror has to use — and the environment still wins when it is set.
+  const home = mkdtempSync(join(tmpdir(), "agentbox-boximage-"));
+  const previousHome = process.env.AGENTBOX_HOME;
+  const previousImage = process.env.AGENTBOX_IMAGE;
+  process.env.AGENTBOX_HOME = home;
+  delete process.env.AGENTBOX_IMAGE;
+  try {
+    const version = packageVersion();
+    assert.equal(defaultBoxConfig().image, `fakechris/lumenbox:${version}`, "no config, no override");
+    writeFileSync(join(home, "config.json"), JSON.stringify({ boxImage: "mirror.example.com/lumenbox:0.3.0" }));
+    assert.equal(defaultBoxConfig().image, "mirror.example.com/lumenbox:0.3.0", "config override holds");
+    process.env.AGENTBOX_IMAGE = "pinned.example.com/lumenbox:0.3.0";
+    assert.equal(defaultBoxConfig().image, "pinned.example.com/lumenbox:0.3.0", "environment wins");
+  } finally {
+    if (previousHome === undefined) delete process.env.AGENTBOX_HOME;
+    else process.env.AGENTBOX_HOME = previousHome;
+    if (previousImage === undefined) delete process.env.AGENTBOX_IMAGE;
+    else process.env.AGENTBOX_IMAGE = previousImage;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
 
 test("the daemon is published to loopback, because its VNC upgrade is unauthenticated", () => {
   // Measured on a running installation, 2026-08-28, before this was fixed: from the
@@ -206,5 +326,38 @@ test("the machine's web and the box's web hold different secrets (INV-572)", () 
     if (previous === undefined) delete process.env.AGENTBOX_HOME;
     else process.env.AGENTBOX_HOME = previous;
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("dockerEnvironment separates a missing install from a stopped engine", async () => {
+  // A fake `docker` on PATH, three ways: absent, present-and-failing, present-and-happy.
+  // These are the three things a fresh machine can be, and the settings page has one
+  // sentence for each (INV-855) — a test pins the mapping, because the easy refactor is
+  // folding them back into one boolean and one jargon error.
+  const empty = mkdtempSync(join(tmpdir(), "agentbox-nodocker-"));
+  const bin = mkdtempSync(join(tmpdir(), "agentbox-fakedocker-"));
+  const previousPath = process.env.PATH;
+  try {
+    process.env.PATH = empty;
+    const missing = await dockerEnvironment(2_000);
+    assert.equal(missing.state, "no-binary");
+    assert.match(missing.detail, /PATH/);
+
+    const failing = join(bin, "docker");
+    writeFileSync(failing, "#!/bin/sh\necho 'Cannot connect to the Docker daemon' >&2\nexit 1\n", { mode: 0o755 });
+    process.env.PATH = `${bin}:${previousPath ?? ""}`;
+    const stopped = await dockerEnvironment(2_000);
+    assert.equal(stopped.state, "no-engine");
+    assert.match(stopped.detail, /Cannot connect/);
+
+    writeFileSync(failing, "#!/bin/sh\necho 27.0.1\n", { mode: 0o755 });
+    const ok = await dockerEnvironment(2_000);
+    assert.equal(ok.state, "ok");
+    assert.match(ok.detail, /27\.0\.1/);
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    rmSync(empty, { recursive: true, force: true });
+    rmSync(bin, { recursive: true, force: true });
   }
 });
