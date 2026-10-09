@@ -61,7 +61,6 @@ this file and the headers disagree. Edit the header, not this table.
 | [24-context-memory](24-context-memory.md) | Context, memory and compaction: ours, against Hermes and OpenClaw | current | 2026-09-26 |
 | [25-workbuddy](25-workbuddy.md) | Workbuddy: skills, presets, delegated engines — the hands-on program | current | 2026-10-01 |
 | [26-inbound-reliability](26-inbound-reliability.md) | Inbound reliability: what a message goes through, and what mature harnesses do | current | 2026-09-01 |
-| [28-grokbot-0.30-delta](28-grokbot-0.30-delta.md) | What Grok Bot 0.30.0 changed, and what it says we should change | current | 2026-09-01 |
 | [29-bot-templates](29-bot-templates.md) | Bot templates: the bot packs itself, the new bot installs itself | current | 2026-09-14 |
 | [30-multi-box](30-multi-box.md) | Many boxes, one host: the multi-box mode | current | 2026-09-14 |
 | [31-harness-review](31-harness-review.md) | The turn engine, reviewed against the incident and three references | current | 2026-09-26 |
@@ -96,7 +95,6 @@ this file and the headers disagree. Edit the header, not this table.
 | [71-evidence-provenance-practice](71-evidence-provenance-practice.md) | 证据与溯源的业界实践（2025–2026）：我们领先在哪、缺在哪 | current | 2026-09-22 |
 | [74-goal-mode](74-goal-mode.md) | Goal 模式：一个持久目标、一个有界的续跑循环、一道不归执行者管的完成闸门 | current | 2026-09-27 |
 | [75-cost-per-accepted-task](75-cost-per-accepted-task.md) | Cost per accepted task requires an auditable denominator | current | 2026-09-29 |
-| [76-grokbot-0.63-primary-bot](76-grokbot-0.63-primary-bot.md) | What Grok Bot 0.63's Primary Bot is, and what it says we should change | current | 2026-10-02 |
 
 ## handoff
 
