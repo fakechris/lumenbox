@@ -114,7 +114,7 @@ upstream.
 
 ## S-9 — `hooks.json` is arbitrary command execution from the state directory
 
-Since 0.30 (docs/28 item 9) `~/.agentbox/hooks.json` runs shell commands at PreToolUse,
+Since 2026-09-02 (docs/11, the 2026-09-01 delta, item 9) `~/.agentbox/hooks.json` runs shell commands at PreToolUse,
 PostToolUse, Stop and PreCompact, with the orchestrator's privileges, re-read on every mtime
 change. That is the design — Claude Code's, kept exactly — and it means *whoever can write
 that file runs commands as the operator*. What is exposed today: the file is not signed, and

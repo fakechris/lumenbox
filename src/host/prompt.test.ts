@@ -501,7 +501,7 @@ test("a box labelled private with nothing behind it is described to the agent as
 });
 
 test("the conduct section is stable, ablatable, and carries the four rules that were incidents", () => {
-  // docs/28 item 2 and 12: reply first / ack ≠ delivery, tone and length, never
+  // docs/11, the 2026-09-01 delta, items 2 and 12: reply first / ack ≠ delivery, tone and length, never
   // fabricate data, ask decisions as questions. Stable so a cached prefix keeps it free.
   const context = {
     agent: { id: "a1", profile: { name: "Ada", description: "" } } as never,
