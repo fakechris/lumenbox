@@ -1188,7 +1188,7 @@ class BrowserPage {
     if (!hostAllowed(host, domains)) {
       throw new CdpError(
         domains.length === 0
-          ? `This secret names no domains it may be filled into, so it cannot be typed anywhere. An operator adds them in Settings → Vault.`
+          ? `This secret names no sites it may be filled into, so it cannot be typed anywhere. An admin adds them under Settings → Team → Secrets (the sites field).`
           : `This page is ${host || "(no host)"}, and the secret may only be filled into ${domains.join(", ")}.`
       );
     }

@@ -798,6 +798,9 @@ test("browser_fill_secret resolves through the vault, sends the value only to th
   // Not granted: refused, with where to fix it. Nothing reaches the box.
   const denied = await dispatchTool("browser_fill_secret", { ref: "e2", secret: "OTHER" }, context);
   assert.match(denied.text, /^Outcome: refused — OTHER is not a secret granted to you/);
+  // The entry it names exists (INV-967): the Secrets field under the Team tab, with its sites field.
+  assert.match(denied.text, /Settings → Team → Secrets/);
+  assert.doesNotMatch(denied.text, /Vault/);
   assert.equal(requests.length, 1);
 
   // No vault at all: refused, not thrown.
