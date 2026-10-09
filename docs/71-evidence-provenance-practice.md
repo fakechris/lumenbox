@@ -357,7 +357,9 @@ Klein 等 2014（PLOS ONE）：STM 论文中**五分之一**存在引用腐坏�
    **零 GitHub release、零 tag**，CHANGELOG 只有 Towncrier 头加 **47 条未发布片段（8 条破坏性）**，
    README 的 Schema URL 一节写的是 **`TODO`**。今天没法 pin 一个 GenAI semconv 版本。
 
-**`gen_ai.system` 已经不存在**，现在是 `gen_ai.provider.name`。
+**`gen_ai.system` 已经不存在**，现在是 `gen_ai.provider.name`。*已关闭（INV-815，2026-10-08）：
+`src/host/trace.ts` 的 `GENAI_SEMCONV` 钉在 semconv 1.37.0（带来改名的那个核心版本），导出带
+schema_url，`llm.round` 写 `gen_ai.provider.name`（枚举值，如 `anthropic`），旧名并写到 0.5.0。*
 
 ### `execute_tool` span 的实际字段
 

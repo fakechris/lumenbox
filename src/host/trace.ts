@@ -13,6 +13,54 @@ import { randomBytes } from "node:crypto";
 
 export type SpanAttributeValue = string | number | boolean;
 
+/**
+ * The OpenTelemetry semantic conventions these spans follow (INV-815), pinned.
+ *
+ * `gen_ai.system` was renamed `gen_ai.provider.name` in semconv 1.37.0 and a backend that
+ * aggregates by the new name files the old one under "unknown provider". The GenAI
+ * conventions have no release of their own yet (docs/71 §5: every page is Development, the
+ * schema URL is TODO), so the pin is the core semconv release that carries the rename, and
+ * the schema URL on every export says which vocabulary the attribute names belong to.
+ */
+export const GENAI_SEMCONV = {
+  version: "1.37.0",
+  schemaUrl: "https://opentelemetry.io/schemas/1.37.0",
+  attributes: {
+    providerName: "gen_ai.provider.name",
+    requestModel: "gen_ai.request.model",
+    usageInputTokens: "gen_ai.usage.input_tokens",
+    usageOutputTokens: "gen_ai.usage.output_tokens",
+    /** Deprecated in 1.37.0; still written beside providerName until 0.5.0 so dashboards keyed on it keep working. */
+    legacySystem: "gen_ai.system",
+  },
+} as const;
+
+/**
+ * The well-known `gen_ai.provider.name` value for a provider label, per semconv 1.37.0's
+ * enumeration (`anthropic`, `openai`, `deepseek`, …); a label outside it becomes a lowercase
+ * token so the attribute is still one word a backend can group by.
+ */
+export function genAiProviderName(label: string): string {
+  const bare = label.replace(/\(.*?\)/g, "").trim().toLowerCase();
+  const known: Record<string, string> = {
+    anthropic: "anthropic",
+    openai: "openai",
+    deepseek: "deepseek",
+    "x.ai": "x_ai",
+    xai: "x_ai",
+    groq: "groq",
+    mistral: "mistral_ai",
+    "mistral ai": "mistral_ai",
+    perplexity: "perplexity",
+    cohere: "cohere",
+    "aws bedrock": "aws.bedrock",
+    "azure openai": "azure.ai.openai",
+    gemini: "gcp.gemini",
+    "vertex ai": "gcp.vertex_ai",
+  };
+  return known[bare] ?? bare.replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
 export interface SpanHandle {
   /**
    * Closes the span and queues it for delivery. `error` marks it failed and
@@ -129,7 +177,8 @@ export function otlpTracer(baseUrl: string, options?: OtlpTracerOptions): Tracer
           resourceSpans: [
             {
               resource: { attributes: resource },
-              scopeSpans: [{ scope: { name: "agentbox-host" }, spans: batch }],
+              schemaUrl: GENAI_SEMCONV.schemaUrl,
+              scopeSpans: [{ scope: { name: "agentbox-host" }, spans: batch, schemaUrl: GENAI_SEMCONV.schemaUrl }],
             },
           ],
         }),

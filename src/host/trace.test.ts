@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { otlpTracer, tracerFromEnv, tracesEndpoint } from "./trace.ts";
+import { otlpTracer, tracerFromEnv, tracesEndpoint, GENAI_SEMCONV, genAiProviderName } from "./trace.ts";
 
 interface Posted {
   url: string;
@@ -61,6 +61,10 @@ test("a span is posted as OTLP JSON with the turn's trace id and encoded attribu
       a.key === "service.name" && a.value.stringValue === "agentbox-host"),
     "the resource names this service"
   );
+
+  // The vocabulary is named on the export (INV-815), at both levels OTLP allows.
+  assert.equal(posted[0]!.body.resourceSpans[0].schemaUrl, GENAI_SEMCONV.schemaUrl);
+  assert.equal(posted[0]!.body.resourceSpans[0].scopeSpans[0].schemaUrl, GENAI_SEMCONV.schemaUrl);
 
   const [sent] = posted[0]!.body.resourceSpans[0].scopeSpans[0].spans;
   assert.equal(sent.name, "llm.round");
@@ -125,4 +129,25 @@ test("a collector answering 500 is a failure, not a delivery", async () => {
   tracer.start("llm.round").end();
   await tracer.flush();
   assert.match(logged[0]!, /collector returned 500/);
+});
+
+test("the attribute names are semconv 1.37.0's, and provider labels map to its enumeration (INV-815)", () => {
+  // The table is what the turn engine writes; this pins it to the release the schema URL names.
+  assert.equal(GENAI_SEMCONV.schemaUrl, `https://opentelemetry.io/schemas/${GENAI_SEMCONV.version}`);
+  assert.deepEqual(
+    { ...GENAI_SEMCONV.attributes },
+    {
+      providerName: "gen_ai.provider.name",
+      requestModel: "gen_ai.request.model",
+      usageInputTokens: "gen_ai.usage.input_tokens",
+      usageOutputTokens: "gen_ai.usage.output_tokens",
+      legacySystem: "gen_ai.system",
+    }
+  );
+  assert.equal(genAiProviderName("Anthropic"), "anthropic");
+  assert.equal(genAiProviderName("OpenAI"), "openai");
+  assert.equal(genAiProviderName("DeepSeek"), "deepseek");
+  assert.equal(genAiProviderName("MiniMax (global)"), "minimax", "a regional suffix is not a different provider");
+  assert.equal(genAiProviderName("GLM (global · Z.ai)"), "glm");
+  assert.equal(genAiProviderName("SiliconFlow (China)"), "siliconflow");
 });
