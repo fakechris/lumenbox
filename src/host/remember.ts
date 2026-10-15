@@ -322,15 +322,37 @@ export class Rememberer {
 
     this.pending.set(exchange.agentId, []);
     this.advanceWatermark(exchange.agentId, batch);
-    await this.enqueue(exchange.agentId, () =>
-      this.extract(
+    // A batch is per agent, so it can span conversations and epochs. Requiring every
+    // member's guard threw the whole batch away once any member's conversation moved to a
+    // new context — after the watermark had passed every member, so the live ones were then
+    // never extracted by anyone (INV-1214). Now a member already stale when extraction
+    // starts is left out of the prompt entirely (it cannot hitchhike, INV-672), and one that
+    // goes stale during the model call loses only the records citing it; an uncited record
+    // could be from it, so it goes too.
+    const run = () => this.enqueue(exchange.agentId, () => {
+      const members = batch.filter(item => item.guard());
+      const dropped = batch.length - members.length;
+      if (dropped > 0) this.log(`left ${dropped} exchange${dropped === 1 ? "" : "s"} from a conversation now in a new context out of extraction`);
+      if (members.length === 0) return Promise.resolve();
+      const keep = (record: MemoryRecord): boolean => {
+        const stale = members.filter(item => !item.guard());
+        if (stale.length === 0) return true;
+        if (record.from === undefined || record.from.length === 0) return false;
+        const staleRefs = new Set(stale.map(item => item.ref).filter((ref): ref is string => ref !== undefined));
+        return !record.from.some(ref => staleRefs.has(ref));
+      };
+      return this.extract(
         exchange.agentId,
-        batch.map(item => item.text),
-        payerOf(batch.map(item => item.principal)),
-        batch.map(item => item.ref),
-        () => batch.every(item => item.guard())
-      )
-    );
+        members.map(item => item.text),
+        payerOf(members.map(item => item.principal)),
+        members.map(item => item.ref),
+        () => members.some(item => item.guard()),
+        { keep, episodeGuard: () => members.every(item => item.guard()) }
+      );
+    });
+    // The guards were captured per member; the scope this call runs in is only the last
+    // member's, so the write runs outside it.
+    await (this.deps.registry.withoutContext?.(run) ?? run());
   }
 
   /**
@@ -439,7 +461,13 @@ export class Rememberer {
     principal?: string,
     refs: readonly (string | undefined)[] = [],
     guard: () => boolean = () => true,
-    options: { stateChangesFirst?: boolean } = {}
+    options: {
+      stateChangesFirst?: boolean;
+      /** Per record, after the model answers: false drops it (INV-1214). */
+      keep?: (record: MemoryRecord) => boolean;
+      /** What an episode built from these exchanges must still satisfy; defaults to `guard`. */
+      episodeGuard?: () => boolean;
+    } = {}
   ): Promise<void> {
     if (!guard()) return;
     // Citable only when every exchange has a place: a numbering with holes would let the
@@ -478,6 +506,13 @@ export class Rememberer {
     }
 
     if (!guard()) return;
+    if (options.keep !== undefined) {
+      const kept = records.filter(options.keep);
+      if (kept.length < records.length) {
+        this.log(`dropped ${records.length - kept.length} extracted memor${records.length - kept.length === 1 ? "y" : "ies"} from a conversation that moved to a new context mid-extraction`);
+      }
+      records = kept;
+    }
     if (records.length > 0) {
       this.deps.registry.appendMemoryRecords(agentId, records);
       this.log(`kept ${records.length} memor${records.length === 1 ? "y" : "ies"} from ${exchanges.length} exchanges`);
@@ -492,7 +527,7 @@ export class Rememberer {
     const seenRefs = this.extractionRefs.get(agentId) ?? [];
     seenRefs.push(...citable);
     const seenGuards = this.extractionGuards.get(agentId) ?? [];
-    seenGuards.push(guard);
+    seenGuards.push(options.episodeGuard ?? guard);
     if (seen.length < EPISODE_EVERY) {
       this.extractions.set(agentId, seen);
       this.extractionPayers.set(agentId, seenPayers);

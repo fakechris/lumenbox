@@ -304,3 +304,55 @@ test("a recorded exchange marked external never reaches the extractor", async ()
   assert.equal(h.prompts.length, 1, "ordinary exchanges still batch");
   assert.doesNotMatch(h.prompts[0]!, /evil/);
 });
+
+// ── INV-1214: a /new in one conversation does not throw away another's extraction ──────────
+
+for (const moved of ["chat-a", "chat-b"] as const) test(`a batch spanning conversations keeps the live ones' memories when ${moved} moves to a new context mid-extraction`, async () => {
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { AgentRegistry } = await import("../agents/registry.ts");
+  const root = mkdtempSync(join(tmpdir(), "remember-mixed-"));
+  try {
+    const registry = new AgentRegistry(root);
+    const agent = registry.create({ name: "Ada", boxId: registry.box.id });
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    let entered!: () => void;
+    const inside = new Promise<void>(resolve => { entered = resolve; });
+    const client = {
+      messages: {
+        create: async () => {
+          entered();
+          await held;
+          return {
+            content: [{ type: "text", text: "The user prefers tea. [1]\nThe user lives in Hangzhou. [2]\nThe user wants weekly reports. [3]" }],
+            usage: { input_tokens: 1, output_tokens: 1 },
+          };
+        },
+      },
+    } as never;
+    const rememberer = new Rememberer({ registry, client, provider: { label: "stub", model: "stub", maxTokens: 1024 } as never, log: () => {} });
+    const at = (minute: number) => `2026-10-15T10:0${minute}:00.000Z`;
+    const say = (conversation: string, minute: number, text: string) =>
+      registry.withContext(agent.id, conversation, () =>
+        rememberer.record({ agentId: agent.id, text, principal: undefined, conversation, at: at(minute), ref: `${conversation}@${minute}` }));
+    // B, B, then A fills the batch — the batch runs in A's context, the one that will move.
+    void say("chat-b", 1, "They said: I like tea\nYou replied: noted");
+    void say("chat-b", 2, "They said: I live in Hangzhou\nYou replied: noted");
+    const filled = say("chat-a", 3, "They said: weekly reports please\nYou replied: ok");
+    await inside;
+    registry.contextStore(agent.id, moved).advance(`new-${moved}`, 0);
+    release();
+    await filled;
+    await rememberer.settle(agent.id);
+    const texts = registry.readMemoryRecords(agent.id).map(record => record.text);
+    const fromB = ["The user prefers tea.", "The user lives in Hangzhou."];
+    const fromA = ["The user wants weekly reports."];
+    const [kept, dropped] = moved === "chat-a" ? [fromB, fromA] : [fromA, fromB];
+    for (const text of kept) assert.ok(texts.includes(text), `${text} kept: ${JSON.stringify(texts)}`);
+    for (const text of dropped) assert.ok(!texts.includes(text), `${text} stays out: the moved conversation's memory is isolated (INV-799)`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
