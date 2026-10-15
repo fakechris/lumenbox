@@ -151,6 +151,15 @@ export interface SummaryEntry {
    */
   pinned?: HistoryEntry[];
   /**
+   * What the person said in the summarised range, word for word, newest kept first within the
+   * survivor budget and rendered oldest first (INV-1187). Kept here and not in `text` because
+   * `text` is the model's paraphrase and the next pass paraphrases it again; these are carried
+   * forward as they are, de-duplicated by the entry they came from.
+   */
+  personWords?: PersonWord[];
+  /** How many of the person's messages the budget left out, so the render can say so. */
+  personWordsOmitted?: number;
+  /**
    * Which entries this stands in for, and how many times they have been through this.
    *
    * `covers` says *how many* were replaced; it never said *which*, so a claim in a summary
@@ -210,6 +219,10 @@ export function estimateTokens(entries: readonly HistoryEntry[]): number {
       const pinned = (entry as SummaryEntry).pinned;
       if (pinned !== undefined && pinned.length > 0) {
         chars += estimateTokens(pinned) * CHARS_PER_TOKEN;
+      }
+      const words = (entry as SummaryEntry).personWords;
+      if (words !== undefined && words.length > 0) {
+        chars += renderPersonWords(words, (entry as SummaryEntry).personWordsOmitted ?? 0).length + MESSAGE_OVERHEAD_CHARS;
       }
       continue;
     }
@@ -464,9 +477,16 @@ export function isHostAuthored(entry: HistoryEntry): boolean {
 
 export function choosePinnedEntries(
   older: readonly HistoryEntry[],
-  tail: readonly HistoryEntry[]
+  tail: readonly HistoryEntry[],
+  options: {
+    /** What is left of the survivor budget once the person's own words are in (INV-1187). */
+    budgetTokens?: number;
+    /** The person's words are carried verbatim, so their newest ask need not be pinned twice. */
+    personWordsCarried?: boolean;
+  } = {}
 ): HistoryEntry[] {
   const pinned: HistoryEntry[] = [];
+  const budget = options.budgetTokens ?? PINNED_TOKEN_CAP;
 
   // A summary that has already been folded MAX_SUMMARY_GENERATIONS times is carried
   // through as it is rather than paraphrased again.
@@ -492,6 +512,9 @@ export function choosePinnedEntries(
     for (let index = older.length - 1; index >= 0; index--) {
       const entry = older[index]!;
       if (isAsk(entry)) {
+        // Already among the person's words, verbatim and with its anchor: pinning it again
+        // would spend the budget twice on one message.
+        if (options.personWordsCarried === true && personAuthoredText(entry) !== undefined) break;
         const text = (entry as { text: string; at: string }).text;
         pinned.push({
           role: "user",
@@ -559,7 +582,7 @@ export function choosePinnedEntries(
 
   // A hard weight cap over everything pinned: insurance that costs more than the
   // risk it covers is not insurance. Oldest pairs go first; the ask stays.
-  while (pinned.length > 0 && estimateTokens(pinned) > PINNED_TOKEN_CAP) {
+  while (pinned.length > 0 && estimateTokens(pinned) > budget) {
     const firstPair = pinned.findIndex(entry => "kind" in entry);
     if (firstPair === -1) break;
     pinned.splice(firstPair, 2);
@@ -583,36 +606,11 @@ function resultText(block: unknown): string {
 /** Cap on the mechanical anchor section: an index, not a second transcript. */
 export const ANCHOR_CHAR_CAP = 2_000;
 
-/** How a user's own sentence is marked in the anchor section, and how it is recognised on the next pass. */
-export const USER_ANCHOR_PREFIX = "the person said: ";
-/** At most this many of the person's sentences ride as anchors, each at most this long. */
-export const USER_ANCHOR_CAP = 6;
-export const USER_ANCHOR_CHARS = 140;
-
 /**
- * The sentences in a person's message that read as an instruction, a constraint or a
- * preference (INV-778): the ones a summary paraphrases into "they had some formatting
- * preferences" and a later turn cannot act on. Bounded in length and in number, and
- * only ever taken from user-role messages — a tool result that says "always run X" is
- * data, not a person.
- *
- * A pattern, not a judgement: it over-collects a little (a question phrased with
- * "never" rides along) and that costs a line of the anchor budget; under-collecting
- * costs the instruction.
+ * How a person's sentence was marked in the anchor section before INV-1187. Summaries written
+ * then still carry such lines; they are read back as person words so nothing they kept is lost.
  */
-export function userInstructionSentences(text: string): string[] {
-  const imperative =
-    /^(always|never|don't|do not|must|only|from now on|going forward|in future|please (?:always|never|don't|do not|only)|stop |keep |use |prefer |no more|not )|\b(must not|mustn't|should never|should always|never again|only ever)\b|(以后|今后|从现在起|从今往后|一律|必须|务必|不要|别再|禁止|不准|不能|总是|都用|只用|只能|请一直|请不要|不许|记住)/iu;
-  const out: string[] = [];
-  for (const raw of text.split(/(?<=[.!?。！？;；])\s*|\n+/u)) {
-    const sentence = raw.trim();
-    if (sentence === "" || sentence.length > USER_ANCHOR_CHARS || !imperative.test(sentence)) continue;
-    if (/^(?:https?:\/\/|\/|~\/)/.test(sentence)) continue;
-    out.push(sentence);
-    if (out.length >= USER_ANCHOR_CAP) break;
-  }
-  return out;
-}
+export const USER_ANCHOR_PREFIX = "the person said: ";
 
 /**
  * The separator `buildTurnPrompt` writes between the person's messages and the teammate wake
@@ -638,6 +636,92 @@ export function personAuthoredText(entry: HistoryEntry): string | undefined {
   return boundary === -1 ? entry.text : entry.text.slice(0, boundary);
 }
 
+/** One thing the person said in a summarised range, verbatim, and where it lives. */
+export interface PersonWord {
+  /** A ReadHistory anchor (`#42`, `e1#42`), or "earlier summary" for a line carried from before anchors. */
+  source: string;
+  text: string;
+  at: string;
+}
+
+/** One message of the person's is kept up to this; ReadHistory around its anchor has the rest. */
+export const PERSON_WORD_CHARS = 800;
+
+/**
+ * Everything that survives a summary verbatim shares this (INV-1187): the person's words first,
+ * then the pinned ask and tool exemplars in what is left. One budget, so adding a class of
+ * survivor never quietly grows the request.
+ */
+export const SURVIVOR_TOKEN_CAP = 4_000;
+
+const PERSON_WORDS_HEADING =
+  "[What the person said in the part summarised above, word for word, oldest first. A later message of theirs overrides an earlier one. ReadHistory around an anchor shows the whole message.]";
+
+/** The block the person's words are sent as. */
+export function renderPersonWords(words: readonly PersonWord[], omitted = 0): string {
+  const lines = words.map(word => `[${word.source} · ${word.at.slice(0, 16).replace("T", " ")}] ${word.text}`);
+  const more = omitted > 0 ? [`(${omitted} earlier message${omitted === 1 ? "" : "s"} from the person are not shown; ReadHistory finds them.)`] : [];
+  return [PERSON_WORDS_HEADING, ...more, ...lines].join("\n");
+}
+
+/**
+ * The person's words from a range about to be summarised, carried forward (INV-1187).
+ *
+ * The source is `personAuthoredText` and nothing else: a teammate's wake, a timer's or a
+ * webhook's prompt, a fork delivery, a host note and every tool result share the user role
+ * and none of them is the person (INV-799). A previous summary's words ride forward first,
+ * then this range's own; one entry is one source, so the same message is never carried
+ * twice across passes. Newest are kept first within the budget, because the newest word
+ * on a subject is the one that holds.
+ */
+export function choosePersonWords(
+  older: readonly HistoryEntry[],
+  sourceOf: (entry: HistoryEntry) => string | undefined,
+  budgetTokens: number = SURVIVOR_TOKEN_CAP
+): { words: PersonWord[]; omitted: number } {
+  const all: PersonWord[] = [];
+  for (const entry of older) {
+    if ("kind" in entry) {
+      if (entry.kind !== "summary") continue;
+      // A bare `#i` was written before anchors named their epoch, which only happened in
+      // epoch 0; qualify it, or it would resolve against whatever epoch is current later.
+      all.push(...((entry as SummaryEntry).personWords ?? []).map(word =>
+        /^#\d+$/.test(word.source) ? { ...word, source: `e0${word.source}` } : word));
+      for (const line of entry.text.split("\n")) {
+        if (line.startsWith(USER_ANCHOR_PREFIX)) {
+          all.push({ source: "earlier summary", text: line.slice(USER_ANCHOR_PREFIX.length).trim(), at: entry.at });
+        }
+      }
+      continue;
+    }
+    const spoken = personAuthoredText(entry)?.trim();
+    if (spoken === undefined || spoken === "") continue;
+    all.push({
+      source: sourceOf(entry) ?? "earlier",
+      text: spoken.length > PERSON_WORD_CHARS ? `${spoken.slice(0, PERSON_WORD_CHARS)}…` : spoken,
+      at: entry.at,
+    });
+  }
+  // One source, one entry: the later copy wins, in the position of the later one.
+  const seen = new Set<string>();
+  const unique: PersonWord[] = [];
+  for (let index = all.length - 1; index >= 0; index--) {
+    const word = all[index]!;
+    const key = /^(?:e\d+)?#\d+$/.test(word.source) ? word.source : `${word.source}\u0000${word.text}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(word);
+  }
+  // `unique` is newest first: fill the budget from the newest end.
+  const kept: PersonWord[] = [];
+  for (const word of unique) {
+    const next = [word, ...kept];
+    if (Math.ceil(renderPersonWords(next).length / CHARS_PER_TOKEN) > budgetTokens) break;
+    kept.unshift(word);
+  }
+  return { words: kept, omitted: unique.length - kept.length };
+}
+
 /**
  * Exact strings the summariser must not be trusted to keep (docs/24 v3 P0 #3).
  *
@@ -655,7 +739,7 @@ export function extractAnchors(entries: readonly HistoryEntry[]): string[] {
   // artefact paths, and a pointer to the whole of something that was cut is the opposite
   // of noise — it is the most expensive thing in the window to lose. A turn that read
   // fifteen pages used to carry ten of them into the summary and silently drop five.
-  const CATEGORY_CAPS: Record<string, number> = { spill: Infinity, user: USER_ANCHOR_CAP, path: 25, id: 10, url: 10, hex: 8 };
+  const CATEGORY_CAPS: Record<string, number> = { spill: Infinity, path: 25, id: 10, url: 10, hex: 8 };
   const take = (value: string, category: string): void => {
     const trimmed = value.trim();
     if (trimmed === "" || seen.has(trimmed)) return;
@@ -700,21 +784,12 @@ export function extractAnchors(entries: readonly HistoryEntry[]): string[] {
   };
   for (const entry of entries) {
     if (!("kind" in entry)) {
-      // The person's own words (INV-778): an instruction, a constraint, a preference they
-      // stated is kept verbatim, from what the person authored only. Tool output and pages
-      // are never a source of these — that is where injection lives — and neither is a
-      // teammate's wake, a timer's prompt or a host note, which share the user role (INV-799).
-      const spoken = personAuthoredText(entry);
-      if (spoken !== undefined) for (const sentence of userInstructionSentences(spoken)) take(`${USER_ANCHOR_PREFIX}${sentence}`, "user");
+      // The person's own words are no longer sentences here: they ride whole, as
+      // `personWords` (INV-1187), which replaced the six "the person said" lines.
       scan(entry.text);
       continue;
     }
     if (entry.kind === "summary") {
-      // A previous summary's user anchors ride forward as they are, so the second pass keeps
-      // what the first kept.
-      for (const line of entry.text.split("\n")) {
-        if (line.startsWith(USER_ANCHOR_PREFIX)) take(line.trim(), "user");
-      }
       scan(entry.text);
       continue;
     }
@@ -727,7 +802,7 @@ export function extractAnchors(entries: readonly HistoryEntry[]): string[] {
   }
   let used = 0;
   const bounded: string[] = [];
-  for (const category of ["spill", "user", "path", "id", "url", "hex"]) {
+  for (const category of ["spill", "path", "id", "url", "hex"]) {
     for (const anchor of byCategory.get(category) ?? []) {
       if (used + anchor.length > ANCHOR_CHAR_CAP) return bounded;
       bounded.push(anchor);
