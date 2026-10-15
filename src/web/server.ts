@@ -28,6 +28,8 @@ import { fileURLToPath } from "node:url";
 import { AgentRegistry, MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
 import { isContextCommand, newContext } from "../host/context-recovery.ts";
 import { readHandoffDraft } from "../host/handoff-draft.ts";
+import { ContextSteward } from "../host/context-steward.ts";
+import { policyForModel } from "../host/compaction.ts";
 import { goalCommand, isGoalCommand } from "../host/goal-mode.ts";
 import { isStandingName, readStanding, STANDING_BYTE_CAP, STANDING_FILES, writeStanding } from "../host/standing.ts";
 import { isRecoveryCommand, recoverTask } from "../host/task-recovery.ts";
@@ -955,7 +957,24 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // durable, and it lives in the consent ledger.
   let upgradeWaiting: { image: string; losses: string } | undefined;
 
+  // Prepares a handoff for a long private chat at rest; never switches it (INV-1190).
+  const steward = new ContextSteward({
+    registry,
+    ask: (agentId, request) => orchestrator.askBounded(agentId, request),
+    triggerTokens: () => policyForModel(orchestrator.provider.model).triggerTokens,
+    followUps,
+    push: async (chatKey, text) => (chats === undefined ? { delivered: false } : chats.tryPushToChat(chatKey, text)),
+    log,
+  });
+
   const channels = new ChannelManager({
+    contextIdle: input => {
+      let agent: ReturnType<typeof registry.resolve> | undefined;
+      try { agent = input.agentName === undefined ? registry.list()[0] : registry.resolve(input.agentName); }
+      catch { return; }
+      if (agent === undefined) return;
+      void steward.consider({ agentId: agent.id, conversation: conversationIdFor(input.conversationKey), chatKey: input.chatKey });
+    },
     contextMode: input => {
       try {
         const agent = input.agentName === undefined ? registry.list()[0] : registry.resolve(input.agentName);
@@ -2154,7 +2173,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         continue;
       }
       const target = chats;
-      void target.tryPushToChat(chatKey, message.text).then(result => {
+      followUps.reserve(chatKey);
+      void target.tryPushToChat(chatKey, message.text).finally(() => followUps.release(chatKey)).then(result => {
         if (!result.delivered) {
           log(`tasks: ${chatKey} was not told (${result.why ?? "no reason given"}); nothing counted`);
           return;

@@ -334,3 +334,15 @@ test("other tool calls carry no diff", () => {
   const [tools] = toDisplayEntries([{ role: "assistant", kind: "blocks", blocks: [{ type: "tool_use", id: "c2", name: "bash", input: { command: "ls" } }] }], []);
   assert.equal("diff" in (tools as unknown as { tools: Record<string, unknown>[] }).tools[0]!, false);
 });
+
+test("a handoff that opened the context is shown as a quiet host row, never as the person speaking (INV-1190)", () => {
+  const display = toDisplayEntries([
+    { role: "user", kind: "summary", covers: 0, handoff: { fromEpoch: 0 }, text: "[Handoff from the previous context …]\n\n## Goals\n- ship", at: "2026-10-15T00:00:00.000Z" },
+    { role: "user", kind: "summary", covers: 0, handoff: { lost: true }, text: "[Handoff … was lost]", at: "2026-10-15T00:00:00.000Z" },
+  ], []);
+  assert.deepEqual(display.map(entry => [entry.kind, (entry as { label?: string }).label]), [
+    ["trigger", "carried over from the previous context"],
+    ["trigger", "handoff lost in the switch"],
+  ]);
+  assert.ok(!display.some(entry => entry.kind === "text"), "not a user bubble");
+});

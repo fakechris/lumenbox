@@ -104,3 +104,18 @@ export function readHandoffDraft(registry: AgentRegistry, agentId: string, conve
   const differs = sameSnapshot(draft.snapshot, now);
   return differs === undefined ? { status: "valid", opening: draft.opening } : { status: "stale", reason: differs };
 }
+
+/**
+ * The once-per-context latch for the suggestion message (INV-1190). True when this call took
+ * the latch; false when it was already taken — by an earlier look or another process.
+ */
+export function latchSuggestion(registry: AgentRegistry, agentId: string, conversation: string, epoch: number): boolean {
+  const path = join(registry.contextStore(agentId, conversation).root, "drafts", `suggested-${epoch}`);
+  mkdirSync(join(path, ".."), { recursive: true });
+  try {
+    writeFileSync(path, new Date().toISOString(), { flag: "wx", mode: 0o600 });
+    return true;
+  } catch {
+    return false;
+  }
+}
