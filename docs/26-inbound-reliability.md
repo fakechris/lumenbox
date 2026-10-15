@@ -107,3 +107,30 @@ evidence of anything, and the floor is a send-time watermark below the oldest li
 undecided arrival. Every restart still costs a reconnect; the loss is now bounded by
 the watchdog (45 s) plus one sweep (≤10 min), and a message in either container inside
 two hours is answered.
+
+## 2026-10-15: a correction that arrives while the turn is still working (INV-1189)
+
+Raft's server refuses an agent's send when the conversation has messages the agent has not
+read, and hands the draft back. We had no such check, and the claim that steering covered it
+did not survive review: channel requests are never steerable (`steerable: false`, by the
+INV-611/630 rule that every channel message gets its own tracked turn), steering only runs at
+a round boundary, and it is skipped while a turn is finishing.
+
+Measured, not argued — `scenario.test.ts`, "INV-1189: a correction sent …", three moments,
+one scripted conversation ("按方案 A 做", then "改成 B"):
+
+| The correction arrives | What the person receives | Did the first turn ever see it? |
+|---|---|---|
+| while the final answer is being generated | A, then B from its own turn | no |
+| between a tool result and the next model call | A, then B from its own turn | no |
+| after the answer exists, before it is delivered | A, then B from its own turn | no |
+
+So the gap is real: an answer the person has already overruled is delivered before the
+answer to the overruling. What does **not** follow is the obvious fix, folding the new
+message into the running turn before it delivers. That is the Nova incident's shape
+([handoff-2026-09-22-nova-incident](handoff-2026-09-22-nova-incident.md)): an unrelated
+request swallowed into an old task. Any unconditional fold at delivery time reproduces it
+whenever an unrelated request happens to land near the end of a turn. The fix has to leave
+the new message's own turn alone and only let the first turn know it is about to answer
+something the person may already have moved past; that variant is proposed as an amendment
+to INV-1189 rather than built against the original wording.
