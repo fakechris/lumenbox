@@ -683,7 +683,10 @@ export function choosePersonWords(
   for (const entry of older) {
     if ("kind" in entry) {
       if (entry.kind !== "summary") continue;
-      all.push(...((entry as SummaryEntry).personWords ?? []));
+      // A bare `#i` was written before anchors named their epoch, which only happened in
+      // epoch 0; qualify it, or it would resolve against whatever epoch is current later.
+      all.push(...((entry as SummaryEntry).personWords ?? []).map(word =>
+        /^#\d+$/.test(word.source) ? { ...word, source: `e0${word.source}` } : word));
       for (const line of entry.text.split("\n")) {
         if (line.startsWith(USER_ANCHOR_PREFIX)) {
           all.push({ source: "earlier summary", text: line.slice(USER_ANCHOR_PREFIX.length).trim(), at: entry.at });

@@ -1087,7 +1087,9 @@ export async function compactHistory(options: {
   const epoch = registry.contextVersion(agent.id, conversation);
   const sourceOf = (entry: HistoryEntry): string | undefined => {
     const index = positionOf.get(entry);
-    return index === undefined ? undefined : anchorOf(index, epoch > 0 ? epoch : undefined);
+    // Always qualified, even in epoch 0: these anchors are carried forward, and after a /new
+    // a bare `#i` would resolve against the newest epoch, not the one it was written in.
+    return index === undefined ? undefined : anchorOf(index, epoch);
   };
   // Everything kept verbatim shares one budget: the person's words first, then the pinned
   // ask and the tool exemplars in what is left (INV-1187).

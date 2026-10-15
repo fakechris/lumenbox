@@ -242,3 +242,10 @@ test("from/to count within the current version unless another is named", () => {
   assert.deepEqual(readEpochHistory(parts, { from: 0, to: 5 }).lines.map(line => line.split(" ")[0]), ["e1#0"]);
   assert.deepEqual(readEpochHistory(parts, { from: 0, to: 5, epoch: 0 }).lines.map(line => line.split(" ")[0]), ["e0#0", "e0#1"]);
 });
+
+test("an epoch-qualified anchor written before a /new still opens the original entry after it", () => {
+  const parts = [{ epoch: 0, entries: [spoke("the original constraint")] }, { epoch: 1, entries: [spoke("the handoff")] }];
+  const result = readEpochHistory(parts, { around: "e0#0" });
+  assert.ok(result.lines.some(line => line.startsWith("e0#0 ") && line.includes("the original constraint")));
+  assert.ok(!result.lines.some(line => line.includes("the handoff")), "not redirected to the newest epoch");
+});

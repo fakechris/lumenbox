@@ -191,11 +191,11 @@ test("INV-1187: what the person said survives two summaries that omitted it, ver
   const once = await h.run(history);
   const first = activeWindow(once as never)[0]! as { text: string; personWords?: { source: string; text: string }[] };
   assert.doesNotMatch(first.text, /公制/, "the scripted summariser dropped it from the prose");
-  assert.deepEqual(first.personWords?.map(word => [word.source, word.text]), [["#0", NEVER]], "carried whole, with its anchor");
+  assert.deepEqual(first.personWords?.map(word => [word.source, word.text]), [["e0#0", NEVER]], "carried whole, with an anchor that names its epoch");
   const twice = await h.run([...once, ...Array.from({ length: 12 }, (_, i) => pair(100 + i)).flat()]);
   const second = activeWindow(twice as never)[0]! as { personWords?: { text: string }[] };
   assert.equal(second.personWords?.filter(word => word.text === NEVER).length, 1, "carried by the second pass, not doubled");
   const request = JSON.stringify(historyToMessages(twice));
   assert.ok(request.includes(JSON.stringify(NEVER).slice(1, -1)), "the next request holds the person's words verbatim");
-  assert.match(request, /\[#0 · /, "with the anchor ReadHistory understands");
+  assert.match(request, /\[e0#0 · /, "with the anchor ReadHistory understands, even after a /new");
 });

@@ -1063,9 +1063,10 @@ test("a source carried by an earlier summary is not carried twice", () => {
   const carried = { role: "user" as const, kind: "summary" as const, covers: 3, at, text: "**Threads**", personWords: [{ source: "#1", text: "keep it short", at }] };
   const again: HistoryEntry = { role: "user", text: "keep it short", at, fromPerson: true };
   const fresh: HistoryEntry = { role: "user", text: "and in Chinese", at, fromPerson: true };
-  const sources = new Map<HistoryEntry, string>([[again, "#1"], [fresh, "#7"]]);
+  // Fresh sources are always epoch-qualified; a legacy bare one carried forward is read as epoch 0.
+  const sources = new Map<HistoryEntry, string>([[again, "e0#1"], [fresh, "e0#7"]]);
   const { words } = choosePersonWords([carried as HistoryEntry, again, fresh], entry => sources.get(entry));
-  assert.deepEqual(words.map(word => word.source), ["#1", "#7"]);
+  assert.deepEqual(words.map(word => word.source), ["e0#1", "e0#7"]);
 });
 
 test("pins take what the person's words leave, and the person's ask is not pinned twice", () => {
@@ -1079,4 +1080,10 @@ test("pins take what the person's words leave, and the person's ask is not pinne
   const carried = choosePinnedEntries([ask, call, result], tail, { personWordsCarried: true });
   assert.ok(!carried.some(entry => !("kind" in entry)), "with them, it is not pinned again");
   assert.deepEqual(choosePinnedEntries([ask, call, result], tail, { budgetTokens: 0, personWordsCarried: true }), [], "and no budget means no exemplars");
+});
+
+test("a bare anchor carried from before anchors named their epoch is read as epoch 0, so a later /new cannot redirect it", () => {
+  const at = "2026-10-15T00:00:00.000Z";
+  const carried = { role: "user" as const, kind: "summary" as const, covers: 3, at, text: "**Threads**", personWords: [{ source: "#3", text: "never push to main", at }] };
+  assert.deepEqual(choosePersonWords([carried as HistoryEntry], () => undefined).words.map(word => word.source), ["e0#3"]);
 });
