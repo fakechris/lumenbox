@@ -138,15 +138,21 @@ test("an in-flight extraction cannot reintroduce the old context after new", asy
 test("a buffered old exchange cannot hitchhike in a later new-epoch extraction batch", async () => {
   const f = fixture();
   try {
-    let calls = 0;
+    // The old exchange must never reach the extractor; the new ones may (INV-1214: dropping
+    // them along with it was the bug, not the protection).
+    const prompts: string[] = [];
     const rememberer = new Rememberer({ registry: f.registry, provider: {} as never,
-      client: { messages: { create: async () => { calls++; throw new Error("must not extract stale batch"); } } } as never });
+      client: { messages: { create: async (request: { messages: { content: string }[] }) => {
+        prompts.push(request.messages.map(message => message.content).join("\n"));
+        return { content: [{ type: "text", text: "NOTHING" }], usage: { input_tokens: 1, output_tokens: 1 } };
+      } } } as never });
     await f.registry.withContext(f.agent.id, f.input.conversation, () => rememberer.record({ agentId: f.agent.id, text: "OLD" }));
     f.registry.contextStore(f.agent.id, f.input.conversation).advance("new", 0);
     for (let i = 1; i < EXTRACT_EVERY; i++) {
       await f.registry.withContext(f.agent.id, f.input.conversation, () => rememberer.record({ agentId: f.agent.id, text: "NEW" }));
     }
-    assert.equal(calls, 0);
+    await rememberer.settle(f.agent.id);
+    assert.equal(prompts.some(prompt => prompt.includes("OLD")), false, "the old-epoch exchange never reaches the extractor");
   } finally { f.cleanup(); }
 });
 

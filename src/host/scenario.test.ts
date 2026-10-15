@@ -2451,3 +2451,66 @@ test("one turn can repeat approved sensitive data without a second card, but new
     assert.match(policy.pending()[0]!.description, /other@example.com/);
   } finally { result.cleanup(); rmSync(dir, { recursive: true, force: true }); }
 });
+
+// INV-1189 step one: a correction the person sends while a channel turn is still working.
+// Measured at three moments — while the final answer is being generated, between a tool and
+// the next model call, and after the answer exists but before it is delivered — so the gap
+// Raft's "held send" closes is stated from the code's behaviour, not argued from its design.
+for (const phase of ["generating", "between-rounds", "before-delivery"] as const) {
+  test(`INV-1189: a correction sent ${phase} gets its own turn; the first reply is delivered stale`, { timeout: 15_000 }, async () => {
+    let entered!: () => void;
+    let release!: () => void;
+    const reached = new Promise<void>(resolve => { entered = resolve; });
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const sent: string[] = [];
+    const seenByFirstTurn: boolean[] = [];
+    const result = await runEpisode({
+      team: [{ name: "Nova" }], says: [],
+      script: async ({ round, messages }) => {
+        // `round` counts this conversation's model calls: the first turn is round 0, or 0–1
+        // when it calls a tool first; everything after is the correction's own turn.
+        const first = phase === "between-rounds" ? round <= 1 : round === 0;
+        if (first) seenByFirstTurn.push(JSON.stringify(messages).includes("改成 B"));
+        if (first && phase === "between-rounds" && round === 0) return { call: "SetTodos", input: { todos: [] } };
+        const finalCall = phase === "between-rounds" ? round === 1 : round === 0;
+        if (first && finalCall && phase !== "before-delivery") { entered(); await held; }
+        return { say: first ? "方案 A：按 A 做好了。" : "收到，改成 B：按 B 重做了。" };
+      },
+      drive: async ({ registry, bus, frontId }) => {
+        const conversation = conversationIdFor("feishu:private");
+        let receive!: (message: ChannelMessage) => Promise<string | undefined>;
+        let firstSend = true;
+        const manager = new ChannelManager({
+          mayDrive: () => true, log: () => {},
+          ask: async (_name, text, _identity, _chat, _progress, _thread, _task, _interim, _stream, origin) => {
+            bus.sendFromUser(frontId, text, { conversation, steerable: false, messageId: origin!.messageId });
+            await bus.runExclusive(frontId, { conversation, userDriven: true });
+            return replyForMessage(registry.readTranscript(frontId, conversation), origin!.messageId);
+          },
+        });
+        manager.register({
+          name: "feishu",
+          start: async handler => { receive = handler; },
+          stop() {},
+          send: async (_chat: string, text: string) => {
+            if (phase === "before-delivery" && firstSend && /方案 A/.test(text)) { firstSend = false; entered(); await held; }
+            sent.push(text);
+            return undefined;
+          },
+        }, true, "test");
+        manager.start(); await new Promise(resolve => setImmediate(resolve));
+        const room = { identity: "feishu:user", chatKey: "feishu:private", privateChat: true, senderLabel: "user" };
+        try {
+          await receive({ ...room, text: "按方案 A 做", messageId: "m-a" });
+          await reached;
+          await receive({ ...room, text: "改成 B", messageId: "m-b" });
+        } finally { release(); await manager.idle(); manager.stop(); }
+      },
+    });
+    try {
+      const replies = sent.filter(text => /方案 A|改成 B/.test(text));
+      assert.deepEqual(replies.map(text => (/方案 A/.test(text) ? "A" : "B")), ["A", "B"], "A is delivered first, then B in its own turn");
+      assert.equal(seenByFirstTurn.some(Boolean), false, "the first turn never saw the correction, at any model call");
+    } finally { result.cleanup(); }
+  });
+}

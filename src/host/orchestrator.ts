@@ -49,6 +49,7 @@ import { AutoReviewer } from "./auto-review.ts";
 import { SkillProvenance } from "./skill-provenance.ts";
 import { HookRunner } from "./hooks.ts";
 import { appendLine } from "./jsonl.ts";
+import { redactDeep } from "./secret-redaction.ts";
 import { NetworkEventLog } from "../egress/events.ts";
 import { agentboxHome } from "../config.ts";
 import { join } from "node:path";
@@ -1914,7 +1915,7 @@ export class Orchestrator {
       autoReview: new AutoReviewer({
         ask: prompt => this.askCheaply(agent, prompt, "review"),
         log: line => console.error(`[auto-review] ${line}`),
-        record: entry => appendLine(join(agentboxHome(), "auto-review.jsonl"), JSON.stringify(entry)),
+        record: entry => appendLine(join(agentboxHome(), "auto-review.jsonl"), JSON.stringify(redactDeep(entry))),
       }),
       resumeOf,
       // Watched on the way past rather than subscribed to elsewhere: a turn that gave up
@@ -2273,7 +2274,7 @@ export class Orchestrator {
     return new AnswerReviewer({
       ask: prompt => this.askCheaply(agent!, prompt, "review"),
       mode: () => answerReviewMode(),
-      record: entry => appendLine(join(agentboxHome(), "answer-review.jsonl"), JSON.stringify(entry)),
+      record: entry => appendLine(join(agentboxHome(), "answer-review.jsonl"), JSON.stringify(redactDeep(entry))),
     }).review({ ...input, agentName: agent.profile.name });
   }
 

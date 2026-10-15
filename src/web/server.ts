@@ -200,6 +200,7 @@ import {
   type McpServerTool,
 } from "./mcp-server.ts";
 import { Vault, type Grant } from "../host/vault.ts";
+import { setRedactionSource } from "../host/secret-redaction.ts";
 import { OAuthGate } from "../host/oauth.ts";
 import { MemoryAdmin } from "../host/memory-admin.ts";
 import { ConnectCodeStore } from "../box/connect-codes.ts";
@@ -517,6 +518,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // The credential vault. Read fresh on each edit through the routes; the orchestrator
   // holds this one instance, so a granted secret is usable on the next host command.
   const vault = new Vault();
+  // Every record write and model request hides what this vault holds (INV-1186).
+  setRedactionSource(() => vault.redactionEntries());
   // The OAuth gate over it (INV-422): tokens minted and refreshed here, never shown.
   const oauth = new OAuthGate(vault);
   // Memory as a person sees and corrects it (INV-426): reads the registry's files, writes
