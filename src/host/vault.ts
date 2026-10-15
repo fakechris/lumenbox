@@ -98,8 +98,24 @@ function oauthOfRaw(raw: unknown): OAuthMeta | undefined {
   };
 }
 
+/**
+ * A value that was replaced or deleted, kept only so redaction still hides it (INV-1186).
+ * The transcript and kept results written while it was live still hold copies; forgetting
+ * the value the moment it rotates would put those copies back in clear on the next request.
+ * Never resolvable, never listed, and dropped after RETIRED_KEEP_MS.
+ */
+interface RetiredValue {
+  id: string;
+  value: string;
+  until: string;
+}
+
+/** How long a rotated or deleted value is still redacted. */
+export const RETIRED_KEEP_MS = 30 * 24 * 3_600_000;
+
 interface VaultFile {
   secrets: Secret[];
+  retired?: RetiredValue[];
 }
 
 export function vaultPath(): string {
@@ -132,6 +148,7 @@ function grantCovers(
 
 export class Vault {
   private secrets: Secret[] = [];
+  private retired: RetiredValue[] = [];
 
   constructor(
     private readonly path: string = vaultPath(),
@@ -142,9 +159,12 @@ export class Vault {
 
   reload(): void {
     this.secrets = [];
+    this.retired = [];
     if (!existsSync(this.path)) return;
     try {
       const parsed = JSON.parse(readFileSync(this.path, "utf8")) as VaultFile;
+      this.retired = (Array.isArray(parsed.retired) ? parsed.retired : [])
+        .filter((r): r is RetiredValue => typeof r?.id === "string" && typeof r?.value === "string" && typeof r?.until === "string");
       for (const raw of parsed.secrets ?? []) {
         if (typeof raw?.id !== "string" || typeof raw?.value !== "string") continue;
         this.secrets.push({
@@ -235,13 +255,49 @@ export class Vault {
         : {}),
       ...((input.oauth ?? existing?.oauth) !== undefined ? { oauth: { ...(input.oauth ?? existing?.oauth)! } } : {}),
     };
+    if (existing !== undefined) this.retire(existing, secret);
     this.secrets = [...this.secrets.filter(s => s.id !== id), secret];
     this.persist();
   }
 
   removeSecret(id: string): void {
+    const existing = this.secrets.find(secret => secret.id === id);
+    if (existing !== undefined) this.retire(existing);
     this.secrets = this.secrets.filter(secret => secret.id !== id);
     this.persist();
+  }
+
+  /**
+   * Every value redaction must hide, named by secret id: live values, OAuth refresh tokens
+   * and client secrets (credentials themselves), and recently retired values. For the
+   * redactor only (secret-redaction.ts); like `resolve` it hands values out, unlike it no
+   * agent is the caller, so there is nothing to audit.
+   */
+  redactionEntries(now: Date = new Date()): { name: string; value: string }[] {
+    const live = this.secrets.flatMap(secret => [
+      { name: secret.id, value: secret.value },
+      ...(secret.oauth?.refreshToken !== undefined ? [{ name: `${secret.id}.refresh`, value: secret.oauth.refreshToken }] : []),
+      ...(secret.oauth?.clientSecret !== undefined ? [{ name: `${secret.id}.client`, value: secret.oauth.clientSecret }] : []),
+    ]);
+    const retired = this.retired
+      .filter(entry => Date.parse(entry.until) > now.getTime())
+      .map(entry => ({ name: entry.id, value: entry.value }));
+    return [...live, ...retired];
+  }
+
+  /** Keeps the values a replaced or deleted secret held, for redaction only. */
+  private retire(old: Secret, next?: Secret, now: Date = new Date()): void {
+    const until = new Date(now.getTime() + RETIRED_KEEP_MS).toISOString();
+    const values = [
+      old.value,
+      ...(old.oauth?.refreshToken !== undefined ? [old.oauth.refreshToken] : []),
+      ...(old.oauth?.clientSecret !== undefined ? [old.oauth.clientSecret] : []),
+    ];
+    const kept = new Set(next === undefined ? [] : [next.value, next.oauth?.refreshToken, next.oauth?.clientSecret]);
+    for (const value of values) {
+      if (value === "" || kept.has(value)) continue;
+      this.retired = [...this.retired.filter(entry => entry.value !== value), { id: old.id, value, until }];
+    }
   }
 
   /**
@@ -281,7 +337,10 @@ export class Vault {
   private persist(): void {
     mkdirSync(dirname(this.path), { recursive: true });
     const temp = `${this.path}.${process.pid}.tmp`;
-    writeFileSync(temp, `${JSON.stringify({ secrets: this.secrets }, null, 2)}\n`, {
+    const now = Date.now();
+    this.retired = this.retired.filter(entry => Date.parse(entry.until) > now);
+    const file: VaultFile = { secrets: this.secrets, ...(this.retired.length > 0 ? { retired: this.retired } : {}) };
+    writeFileSync(temp, `${JSON.stringify(file, null, 2)}\n`, {
       encoding: "utf8",
       mode: 0o600,
     });

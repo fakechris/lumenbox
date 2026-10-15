@@ -28,6 +28,23 @@ stores the model's *own* content blocks, unedited, which is what makes an agent'
 The shape that probably works is detection plus a marker — store the result, note that it matched a
 credential pattern, and let a reader decide — rather than silent removal.
 
+**Exact copies of vault values are now hidden (INV-1186, 2026-10-14).** Every value the vault
+holds — live secrets, OAuth refresh tokens and client secrets, and for 30 days any value that was
+rotated or deleted — is replaced with `[secret:<id>]` before a transcript entry, a kept tool result,
+a kept page, the turn ledger, `auto-review.jsonl`, `answer-review.jsonl` or `delegate-calls.jsonl`
+is written, and in `system` and `messages` of every model request on both wires (the turn, the
+summary, the selectors and reviewers — one hook in `provider.ts`). It is exact-value only, never a
+pattern (§15 measured patterns at 0% precision), and structural: ids, roles, tool names, signed
+thinking and images pass byte-for-byte, so tool pairing and the prefix cache survive. Values
+under 12 characters are replaced only where they stand alone; an all-digit one never inside a
+date, time, version or path. **This is hygiene, not containment** ([15](15-secrets-in-the-record.md)):
+a value the model re-emits base64'd, split or reversed passes through, and a credential the
+agent reads that the vault does not hold is untouched. Because a tool result reaches the model only inside the next
+request, an exact copy a `RunOnHost` command printed is replaced before the model reads it, not
+only in the record. One fact this entry previously left out: `browser_fill_secret` sends the
+value into the box's browser by design (INV-402); the page then holds it, and what the box does
+with that page is the box's boundary, not the vault's.
+
 **And the MCP face keeps it so (docs/33, 2026-09-03):** a delegated engine in the box reaches the
 host's MCP tools through a per-job route on the web server — a key in the path, a bearer in the
 job's environment, exact tool names snapshotted at mint, a lease the host renews from the box's
