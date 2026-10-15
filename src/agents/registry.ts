@@ -349,6 +349,16 @@ export class AgentRegistry {
     }
   }
 
+  /**
+   * Runs outside any captured context. For a producer that carries its own per-input guards
+   * (a learning batch that spans conversations, INV-1214): the scope it happened to start in
+   * belongs to one member, and that member moving to a new context must not refuse the
+   * others' writes.
+   */
+  withoutContext<T>(run: () => T): T {
+    return this.contextScope.exit(run);
+  }
+
   /** Saved with asynchronous learning inputs, including batches that mix conversations. */
   contextWriteGuard(): () => boolean {
     const captured = this.contextScope.getStore();
