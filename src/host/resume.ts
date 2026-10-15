@@ -26,6 +26,7 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { appendLine, archiveSettled, type LedgerKind } from "./jsonl.ts";
+import { redactDeep } from "./secret-redaction.ts";
 import { dirname, join } from "node:path";
 import { agentboxHome, envNumber } from "../config.ts";
 
@@ -400,7 +401,7 @@ export class TurnLedger {
     if (this.path === undefined) return;
     try {
       mkdirSync(dirname(this.path), { recursive: true });
-      appendLine(this.path, JSON.stringify(record));
+      appendLine(this.path, JSON.stringify(redactDeep(record)));
       this.lines += 1;
     } catch (error) {
       // Never fail a turn over bookkeeping. What is lost is the ability to notice that this turn
@@ -671,7 +672,7 @@ export class StepLedger {
     if (this.path === undefined) return;
     try {
       mkdirSync(dirname(this.path), { recursive: true });
-      appendLine(this.path, JSON.stringify(record));
+      appendLine(this.path, JSON.stringify(redactDeep(record)));
       this.lines += 1;
     } catch (error) {
       // Dispatch must stop if its checkpoint is missing. Otherwise a previously known

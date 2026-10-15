@@ -46,6 +46,7 @@ import {
   type MemoryRecord,
 } from "../host/memory.ts";
 import { envNumber } from "../config.ts";
+import { redactDeep } from "../host/secret-redaction.ts";
 
 export const AGENT_NAME_MAX_LENGTH = 72;
 export const AGENT_DESCRIPTION_MAX_LENGTH = 12_000;
@@ -1358,7 +1359,8 @@ export class AgentRegistry {
 
   appendTranscript(agentId: string, entry: unknown, conversation = MAIN_CONVERSATION): void {
     mkdirSync(dirname(this.transcriptPathFor(agentId, conversation)), { recursive: true });
-    appendLine(this.transcriptPathFor(agentId, conversation), JSON.stringify(entry));
+    // Vault values never land in the record in clear (INV-1186): hygiene, not containment.
+    appendLine(this.transcriptPathFor(agentId, conversation), JSON.stringify(redactDeep(entry)));
   }
 
   readTranscript(agentId: string, conversation = MAIN_CONVERSATION): unknown[] {

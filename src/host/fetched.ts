@@ -23,6 +23,7 @@ import { join } from "node:path";
 import { agentboxHome } from "../config.ts";
 import type { LedgerKind } from "./jsonl.ts";
 import type { PageMeta } from "./web.ts";
+import { redactText } from "./secret-redaction.ts";
 
 export const FETCHED_DIRNAME = "fetched";
 /** The words a pointer to a kept page is written with. Read back by `storableResult`. */
@@ -217,8 +218,10 @@ export function readFrontmatter(text: string): Record<string, string> {
 export function keepFetchedPage(input: KeepPageInput, home = agentboxHome()): KeptPage {
   const path = keptPathFor(input, home);
   mkdirSync(join(path, ".."), { recursive: true });
-  const digest = sha256(input.text);
-  writeFileSync(path, `${fetchedFrontmatter(input, digest)}${input.text}\n`, { mode: 0o600 });
+  // A page can echo a key back (an API console, a settings page): not kept in clear (INV-1186).
+  const text = redactText(input.text);
+  const digest = sha256(text);
+  writeFileSync(path, `${fetchedFrontmatter(input, digest)}${text}\n`, { mode: 0o600 });
   return { path, sha256: digest };
 }
 
