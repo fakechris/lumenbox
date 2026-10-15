@@ -8,10 +8,19 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { AgentRegistry } from "../agents/registry.ts";
 import {
+  AROUND_ENTRY_CHARS,
+  AROUND_NEIGHBOURS,
+  AROUND_TOTAL_CHARS,
   describeHistory,
   hasSummary,
   MAX_ENTRIES,
+  parseAnchor,
+  readEpochHistory,
   readHistory,
   renderEntry,
   renderHistoryBlock,
@@ -143,4 +152,93 @@ test("an empty range says what the transcript actually holds", () => {
   const result = readHistory([said("one")], { from: 50, to: 60 });
   // Rather than an empty answer, which reads as "there is no history".
   assert.match(describeHistory(result, { from: 50 }), /holds 1 entries/);
+});
+
+// ---------------------------------------------------------------------------
+// Anchors, around and partial hits (INV-1188)
+
+const spoke = (text: string, role: "user" | "assistant" = "user") => ({ role, text, at: "2026-10-14T10:00:00.000Z" });
+
+
+test("one context version keeps plain #N anchors; several name their version", () => {
+  const single = readEpochHistory([{ epoch: 0, entries: [spoke("alpha"), spoke("beta")] }], {});
+  assert.match(single.lines[1]!, /^#1 /);
+  const multi = readEpochHistory(
+    [{ epoch: 0, entries: [spoke("alpha")] }, { epoch: 1, entries: [spoke("beta")] }],
+    { search: "beta" }
+  );
+  assert.match(multi.lines[0]!, /^e1#0 /);
+});
+
+test("anchors are parsed in every written form", () => {
+  assert.deepEqual(parseAnchor("#42"), { index: 42 });
+  assert.deepEqual(parseAnchor("42"), { index: 42 });
+  assert.deepEqual(parseAnchor("e1#42"), { epoch: 1, index: 42 });
+  assert.deepEqual(parseAnchor("E2 #7"), { epoch: 2, index: 7 });
+  assert.equal(parseAnchor("part two"), undefined);
+});
+
+test("around shows the entry whole and its neighbours cut, and stays under its cap", () => {
+  const long = "x".repeat(AROUND_ENTRY_CHARS - 100);
+  const entries = Array.from({ length: 20 }, (_, i) => spoke(i === 10 ? long : `line ${i} ${"y".repeat(900)}`));
+  const result = readEpochHistory([{ epoch: 0, entries }], { around: "#10" });
+  assert.equal(result.around, "#10");
+  const center = result.lines.find(line => line.startsWith("#10 "))!;
+  assert.ok(center.includes(long), "the asked-for entry is not cut");
+  assert.ok(result.lines.length <= 2 * AROUND_NEIGHBOURS + 1);
+  assert.ok(result.lines.join("\n").length <= AROUND_TOTAL_CHARS);
+  assert.match(describeHistory(result, { around: "#10" }), /^Around #10/);
+});
+
+test("around names what is wrong with a bad or missing anchor", () => {
+  const parts = [{ epoch: 0, entries: [spoke("a")] }, { epoch: 1, entries: [spoke("b")] }];
+  assert.match(describeHistory(readEpochHistory(parts, { around: "nope" }), { around: "nope" }), /not an entry anchor/);
+  assert.match(describeHistory(readEpochHistory(parts, { around: "e1#9" }), { around: "e1#9" }), /no entry e1#9.*e0#0–e0#0, e1#0–e1#0/);
+});
+
+test("when no entry holds every word, the ones holding the most come back, best first, and say so", () => {
+  const entries = [spoke("deploy staging failed"), spoke("deploy production ok"), spoke("nothing relevant")];
+  const query = { search: "deploy staging rollback" };
+  const result = readEpochHistory([{ epoch: 0, entries }], query);
+  assert.equal(result.partial, true);
+  assert.match(result.lines[0]!, /^#0 .*\[2\/3 words\]/);
+  assert.match(result.lines[1]!, /^#1 .*\[1\/3 words\]/);
+  assert.equal(result.lines.length, 2);
+  assert.match(describeHistory(result, query), /No entry holds every word/);
+  assert.equal(readEpochHistory([{ epoch: 0, entries }], { search: "deploy staging" }).partial, undefined);
+});
+
+test("an anchor survives a restart and a late write into an older version", async () => {
+  const root = mkdtempSync(join(tmpdir(), "history-anchor-"));
+  try {
+    const registry = new AgentRegistry(root);
+    const agent = registry.create({ name: "Nova", boxId: registry.box.id });
+    registry.appendTranscript(agent.id, spoke("first version"));
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const late = registry.withContext(agent.id, "main", async () => {
+      await gate;
+      registry.appendTranscript(agent.id, spoke("late write into version zero", "assistant"));
+    });
+    registry.contextStore(agent.id).advance("op1", 0);
+    registry.appendTranscript(agent.id, spoke("second version, entry zero"));
+    const before = readEpochHistory(registry.readContextTranscriptsByEpoch(agent.id), { around: "e1#0" });
+    release();
+    await late;
+    const reopened = new AgentRegistry(root);
+    const after = readEpochHistory(reopened.readContextTranscriptsByEpoch(agent.id), { around: "e1#0" });
+    const centerOf = (lines: string[]) => lines.find(line => line.startsWith("e1#0 "));
+    assert.ok(centerOf(before.lines)?.includes("second version, entry zero"));
+    assert.equal(centerOf(after.lines), centerOf(before.lines), "same anchor, same entry");
+    const old = readEpochHistory(reopened.readContextTranscriptsByEpoch(agent.id), { around: "e0#1" });
+    assert.ok(old.lines.some(line => line.startsWith("e0#1 ") && line.includes("late write")), "the late write is e0#1, not a shift of e1");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("from/to count within the current version unless another is named", () => {
+  const parts = [{ epoch: 0, entries: [spoke("old a"), spoke("old b")] }, { epoch: 1, entries: [spoke("new a")] }];
+  assert.deepEqual(readEpochHistory(parts, { from: 0, to: 5 }).lines.map(line => line.split(" ")[0]), ["e1#0"]);
+  assert.deepEqual(readEpochHistory(parts, { from: 0, to: 5, epoch: 0 }).lines.map(line => line.split(" ")[0]), ["e0#0", "e0#1"]);
 });

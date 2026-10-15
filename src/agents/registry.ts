@@ -1372,6 +1372,16 @@ export class AgentRegistry {
     return store.versions().flatMap(epoch => this.readTranscriptFile(store.path("transcript", epoch)));
   }
 
+  /**
+   * The same history, each context version kept apart (INV-1188). An entry's place is
+   * (epoch, index within that epoch): a flat index is not stable, because a late write
+   * still lands in an old epoch (INV-672) and would shift every later number by one.
+   */
+  readContextTranscriptsByEpoch(agentId: string, conversation = MAIN_CONVERSATION): { epoch: number; entries: unknown[] }[] {
+    const store = this.contextStore(agentId, conversation);
+    return store.versions().map(epoch => ({ epoch, entries: this.readTranscriptFile(store.path("transcript", epoch)) }));
+  }
+
   private readTranscriptFile(path: string): unknown[] {
     if (!existsSync(path)) return [];
     return readFileSync(path, "utf8")
