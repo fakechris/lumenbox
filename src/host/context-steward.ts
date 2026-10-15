@@ -48,7 +48,7 @@ export type StewardOutcome =
 
 export interface StewardDeps {
   registry: AgentRegistry;
-  ask: (agentId: string, request: { system: string; prompt: string; maxTokens: number; timeoutMs: number; kind: "steward" | "handoff" }) => Promise<{ text: string; truncated: boolean } | undefined>;
+  ask: (agentId: string, request: { system: string; prompt: string; maxTokens: number; timeoutMs: number; kind: "steward" | "handoff"; principal?: string }) => Promise<{ text: string; truncated: boolean } | undefined>;
   /** The compaction trigger for this agent's model, in estimated tokens. */
   triggerTokens: (agentId: string) => number;
   followUps: FollowUpBudget;
@@ -62,6 +62,8 @@ export interface StewardInput {
   conversation: string;
   /** Where a suggestion would be delivered; the private chat's own key. */
   chatKey: string;
+  /** Who the private chat belongs to: the steward's calls are billed to them. */
+  principal?: string;
 }
 
 export const STEWARD_SYSTEM = [
@@ -178,12 +180,13 @@ export class ContextSteward {
       maxTokens: 600,
       timeoutMs: 60_000,
       kind: "steward",
+      ...(input.principal !== undefined ? { principal: input.principal } : {}),
     });
     const action = decision === undefined ? undefined : parseStewardDecision(decision.text);
     if (action === undefined) return "no-decision";
     if (action === "compact") return "compact";
 
-    const note = await this.writeNote(input.agentId, noteView);
+    const note = await this.writeNote(input.agentId, noteView, input.principal);
     if (note === undefined) return "note-failed";
     const parts = registry.readContextTranscriptsByEpoch(input.agentId, input.conversation);
     const checked = keepRealAnchors(note, anchor => {
@@ -197,7 +200,7 @@ export class ContextSteward {
     return (await this.suggest(input, epoch)) ? "prepared-and-suggested" : "prepared";
   }
 
-  private async writeNote(agentId: string, view: string): Promise<string | undefined> {
+  private async writeNote(agentId: string, view: string, principal?: string): Promise<string | undefined> {
     let retry = "";
     for (let attempt = 0; attempt < 2; attempt++) {
       const reply = await this.deps.ask(agentId, {
@@ -206,6 +209,7 @@ export class ContextSteward {
         maxTokens: 3_000,
         timeoutMs: 120_000,
         kind: "handoff",
+        ...(principal !== undefined ? { principal } : {}),
       });
       if (reply === undefined) return undefined;
       const text = reply.text.trim();

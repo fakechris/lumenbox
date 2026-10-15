@@ -28,7 +28,7 @@ function harness(options: { decide?: string; notes?: { text: string; truncated?:
   for (let i = 0; i < 6; i++) {
     registry.appendTranscript(agent.id, { role: "assistant", text: `step ${i} ${"z".repeat(400)}`, at: `2026-10-15T00:0${i}:30.000Z` }, CONVERSATION);
   }
-  const asks: { kind: string; prompt: string }[] = [];
+  const asks: { kind: string; prompt: string; principal?: string }[] = [];
   const notes = [...(options.notes ?? [{ text: NOTE }])];
   const pushed: string[] = [];
   const followUps = new FollowUpBudget();
@@ -37,7 +37,7 @@ function harness(options: { decide?: string; notes?: { text: string; truncated?:
   const steward = new ContextSteward({
     registry,
     ask: async (_id, request) => {
-      asks.push({ kind: request.kind, prompt: request.prompt });
+      asks.push({ kind: request.kind, prompt: request.prompt, ...(request.principal !== undefined ? { principal: request.principal } : {}) });
       if (request.kind === "steward") return { text: options.decide ?? '{"action":"switch","reason":"done"}', truncated: false };
       options.during?.();
       const next = notes.shift();
@@ -49,7 +49,7 @@ function harness(options: { decide?: string; notes?: { text: string; truncated?:
     log: () => {},
     now: () => clock,
   });
-  const look = () => steward.consider({ agentId: agent.id, conversation: CONVERSATION, chatKey: "feishu:private" });
+  const look = () => steward.consider({ agentId: agent.id, conversation: CONVERSATION, chatKey: "feishu:private", principal: "p-chris" });
   return {
     registry, agent, asks, pushed, followUps, look,
     advance: (ms: number) => { clock += ms; },
@@ -93,6 +93,7 @@ test("a prepared handoff is bound to its context, labelled for ReadHistory, and 
   try {
     assert.equal(await h.look(), "prepared-and-suggested");
     assert.deepEqual(h.pushed, [SUGGESTION_TEXT]);
+    assert.ok(h.asks.every(ask => ask.principal === "p-chris"), "both calls are billed to the person whose chat it is");
     assert.match(h.asks[0]!.prompt, /\[?e0#0 /, "the steward reads entries by the labels ReadHistory resolves");
     const draft = readHandoffDraft(h.registry, h.agent.id, CONVERSATION);
     assert.equal(draft?.status, "valid");

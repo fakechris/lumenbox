@@ -976,7 +976,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       try { agent = input.agentName === undefined ? registry.list()[0] : registry.resolve(input.agentName); }
       catch { return; }
       if (agent === undefined) return;
-      void steward.consider({ agentId: agent.id, conversation: conversationIdFor(input.conversationKey), chatKey: input.chatKey });
+      void steward.consider({ agentId: agent.id, conversation: conversationIdFor(input.conversationKey), chatKey: input.chatKey, principal: principals.resolve(input.identity).id });
     },
     contextMode: input => {
       try {

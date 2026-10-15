@@ -2189,7 +2189,7 @@ export class Orchestrator {
    */
   async askBounded(
     agentId: string,
-    request: { system: string; prompt: string; maxTokens: number; timeoutMs: number; kind: "steward" | "handoff"; signal?: AbortSignal }
+    request: { system: string; prompt: string; maxTokens: number; timeoutMs: number; kind: "steward" | "handoff"; signal?: AbortSignal; principal?: string }
   ): Promise<{ text: string; truncated: boolean } | undefined> {
     const agent = this.registry.tryGet(agentId);
     if (agent === undefined) return undefined;
@@ -2214,6 +2214,8 @@ export class Orchestrator {
         provider: profile.label,
         model: profile.model,
         usage: response.usage,
+        // The person whose chat this is pays, as a turn in it would: per-person caps count it.
+        ...(request.principal !== undefined ? { principal: request.principal } : {}),
       });
       const text = response.content
         .filter((block): block is Anthropic.TextBlock => block.type === "text")
