@@ -207,6 +207,14 @@ export function toDisplayEntries(
     const text = typeof entry.text === "string" ? entry.text : "";
     if (!text.trim()) continue;
 
+    // A handoff that opened this context (INV-1190): host context, not the person speaking.
+    // Folded like any other harness cue, so the page shows a quiet row that opens to the note.
+    if (entry.kind === "summary" && typeof entry.handoff === "object" && entry.handoff !== null) {
+      const lost = (entry.handoff as { lost?: unknown }).lost === true;
+      display.push({ kind: "trigger", label: lost ? "handoff lost in the switch" : "carried over from the previous context", text, ...stamp(raw) });
+      continue;
+    }
+
     if (entry.role === "user") {
       const peers = parseWakePrompt(text, knownNames);
       if (peers) { display.push({ kind: "peer", messages: peers }); continue; }

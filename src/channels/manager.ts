@@ -363,6 +363,8 @@ export type AskReply = string | { silent: { reason: string } };
 
 export interface ChannelManagerDeps {
   newContext?: (input: { agentName: string | undefined; identity: string; conversationKey: string; operationId: string; privateChat: boolean; blockers: string[]; mode: "normal" | "clean" }) => string;
+  /** A private chat's task delivered and settled; the host may prepare a handoff (INV-1190). */
+  contextIdle?: (input: { agentName: string | undefined; identity: string; conversationKey: string; chatKey: string }) => void;
   contextMode?: (input: { agentName: string | undefined; conversationKey: string }) => "normal" | "clean" | "recover" | undefined;
   recover?: {
     prepare: (input: { agentName: string | undefined; identity: string; conversationKey: string; operationId: string; privateChat: boolean; blockers: string[]; taskId: string }) => RecoverTaskResult;
@@ -1802,13 +1804,14 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     const textForTurn = answering === undefined ? addition?.text ?? finalText : `[Answer to question ${answering.id}: ${answering.question}]\n\n${answering.text}`;
 
     // "屏幕" is a look, not a task: no turn runs, the desktop is captured as it is.
+    let succeeded = false;
     const work =
       parseScreenRequest(text) && this.deps.screenshot !== undefined
         ? this.runScreenshot(adapter, message, addressed)
         : (async () => {
             const files = message.files?.length ? await this.storeFiles(adapter, message) : undefined;
             if (message.files?.length && files === undefined) return;
-            await this.runTask(adapter, message, addressed, textForTurn, files, { questionId: answering?.id });
+            await this.runTask(adapter, message, addressed, textForTurn, files, { questionId: answering?.id, onSucceeded: () => { succeeded = true; } });
           })();
 
     // The work runs behind this return; the decisions above stay synchronous because
@@ -1818,6 +1821,13 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     }).finally(() => {
       this.inflight.delete(task);
       this.inflightContexts.delete(task);
+      // A candidate, not an authorisation: the host decides whether anything is worth doing,
+      // and nothing it does switches the conversation (INV-1190).
+      if (succeeded && message.privateChat === true) {
+        try {
+          this.deps.contextIdle?.({ agentName: addressed, identity: message.identity, conversationKey, chatKey: message.chatKey ?? message.identity });
+        } catch { /* optional */ }
+      }
     });
     this.inflight.add(task);
     this.inflightContexts.set(task, conversationKey);
@@ -2091,7 +2101,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     agentName: string | undefined,
     text: string,
     droppedFiles?: readonly string[],
-    options?: { questionId?: string; existingTaskId?: string; cardTitle?: string; recoveryOperationId?: string; skipTask?: boolean }
+    options?: { questionId?: string; existingTaskId?: string; cardTitle?: string; recoveryOperationId?: string; skipTask?: boolean; onSucceeded?: () => void }
   ): Promise<void> {
     const chatKey = message.chatKey ?? message.identity;
     const runningKey = message.threadKey ?? chatKey;
@@ -2330,6 +2340,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         if (taskId !== undefined && options?.recoveryOperationId !== undefined) this.deps.recover?.finished(taskId, options.recoveryOperationId, "completed");
         finishCard(settled === "review" ? "review" : "done");
         mark("done");
+        options?.onSucceeded?.();
         return;
       }
       const reply = asked;
@@ -2372,6 +2383,8 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       if (taskId !== undefined && options?.recoveryOperationId !== undefined) this.deps.recover?.finished(taskId, options.recoveryOperationId, "completed");
       finishCard(settled === "review" ? "review" : "done");
       mark("done");
+      // Only now — reply and files delivered, task settled — is the conversation idle (INV-1190).
+      options?.onSucceeded?.();
       // The desk as the task left it: evidence at a glance — but only when the turn
       // actually used the desktop (a poster of an untouched desk is noise), only for
       // work long enough to have been acknowledged — a quick answer does not need a
