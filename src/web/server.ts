@@ -27,6 +27,7 @@ import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AgentRegistry, MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
 import { isContextCommand, newContext } from "../host/context-recovery.ts";
+import { readHandoffDraft } from "../host/handoff-draft.ts";
 import { goalCommand, isGoalCommand } from "../host/goal-mode.ts";
 import { isStandingName, readStanding, STANDING_BYTE_CAP, STANDING_FILES, writeStanding } from "../host/standing.ts";
 import { isRecoveryCommand, recoverTask } from "../host/task-recovery.ts";
@@ -977,6 +978,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       };
       return newContext({
         registry,
+        handoffDraft: () => readHandoffDraft(registry, agent.id, request.conversation),
         mayReset: () => mayEnterBox(registry.boxOf(agent.id), principal.id),
         blockers: () => [
           ...input.blockers,

@@ -92,3 +92,80 @@ test("conversation discovery lists an epoch-backed chat once and ignores unrelat
     assert.deepEqual(registry.listConversations(agent.id).map(item => item.id), ["main", "private-chat"]);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+// ── INV-1190: a switch that carries a handoff, and only ever moves forward ─────────────────
+
+const OPENING = `${JSON.stringify({ role: "user", kind: "summary", covers: 0, handoff: { fromEpoch: 0 }, text: "## Goals\nship it", at: "2026-10-15T00:00:00.000Z" })}\n`;
+
+test("a handoff becomes entry 0 of the new epoch, and the operation records it", () => {
+  const f = fixture();
+  try {
+    writeFileSync(f.paths.transcript, "old transcript\n");
+    const next = f.store.advance("h1", 0, "normal", { opening: OPENING });
+    assert.deepEqual([next.epoch, next.opening], [1, "handoff"]);
+    assert.equal(readFileSync(f.store.path("transcript", 1), "utf8"), OPENING);
+    assert.equal(readFileSync(f.store.path("transcript", 0), "utf8"), "old transcript\n", "legacy bytes preserved");
+    assert.equal(new ContextEpochStore(f.paths).previousOperation("h1")?.opening, "handoff", "a replayed /new can say what it carried");
+    assert.equal(existsSync(join(`${f.paths.transcript}.epochs`, "staging", "h1.jsonl")), false, "staging is cleaned up");
+  } finally { f.cleanup(); }
+});
+
+test("a crash after prepare finishes the switch with its handoff on restart", () => {
+  const f = fixture();
+  try {
+    writeFileSync(f.paths.transcript, "old\n");
+    const crashing = new ContextEpochStore(f.paths, () => { throw new Error("crash after prepare"); });
+    assert.throws(() => crashing.advance("h2", 0, "normal", { opening: OPENING }), /crash/);
+    const restarted = new ContextEpochStore(f.paths);
+    assert.equal(restarted.current().epoch, 1);
+    assert.equal(readFileSync(restarted.path("transcript", 1), "utf8"), OPENING, "never an empty current epoch");
+    assert.equal(readFileSync(restarted.path("transcript", 0), "utf8"), "old\n");
+  } finally { f.cleanup(); }
+});
+
+test("a staged handoff lost after prepare completes forward with a placeholder, never a rollback", () => {
+  const f = fixture();
+  try {
+    writeFileSync(f.paths.transcript, "old\n");
+    const staging = join(`${f.paths.transcript}.epochs`, "staging", "h3.jsonl");
+    const crashing = new ContextEpochStore(f.paths, () => { rmSync(staging); throw new Error("crash"); });
+    assert.throws(() => crashing.advance("h3", 0, "normal", { opening: OPENING }), /crash/);
+    const restarted = new ContextEpochStore(f.paths);
+    assert.equal(restarted.current().epoch, 1, "moved forward");
+    assert.match(readFileSync(restarted.path("transcript", 1), "utf8"), /Handoff from the previous context was lost/);
+    assert.equal(restarted.previousOperation("h3")?.opening, "placeholder", "the reply can say so");
+    assert.equal(readFileSync(restarted.path("transcript", 0), "utf8"), "old\n", "legacy history still readable");
+  } finally { f.cleanup(); }
+});
+
+test("an opening already installed is kept when its staging is gone", () => {
+  const f = fixture();
+  try {
+    writeFileSync(f.paths.transcript, "old\n");
+    const root = `${f.paths.transcript}.epochs`;
+    const crashing = new ContextEpochStore(f.paths, () => {
+      mkdirSync(join(root, "1"), { recursive: true });
+      writeFileSync(join(root, "1", "transcript"), OPENING);
+      rmSync(join(root, "staging", "h4.jsonl"));
+      throw new Error("crash");
+    });
+    assert.throws(() => crashing.advance("h4", 0, "normal", { opening: OPENING }), /crash/);
+    const restarted = new ContextEpochStore(f.paths);
+    assert.equal(readFileSync(restarted.path("transcript", 1), "utf8"), OPENING);
+    assert.equal(restarted.previousOperation("h4")?.opening, "handoff");
+  } finally { f.cleanup(); }
+});
+
+test("a handoff that cannot be staged changes nothing, and never rides a clean switch", async () => {
+  const { OpeningStagingError } = await import("./context-epoch.ts");
+  const f = fixture();
+  try {
+    writeFileSync(f.paths.transcript, "old\n");
+    mkdirSync(`${f.paths.transcript}.epochs`, { recursive: true });
+    writeFileSync(join(`${f.paths.transcript}.epochs`, "staging"), "not a directory");
+    assert.throws(() => f.store.advance("h5", 0, "normal", { opening: OPENING }), (error: unknown) => error instanceof OpeningStagingError);
+    assert.equal(f.store.current().epoch, 0, "no prepare was written");
+    assert.equal(readFileSync(f.paths.transcript, "utf8"), "old\n", "no migration happened");
+    assert.throws(() => f.store.advance("h6", 0, "clean", { opening: OPENING }), /only rides a normal switch/);
+  } finally { f.cleanup(); }
+});
