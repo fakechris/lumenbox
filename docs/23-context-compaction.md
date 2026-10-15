@@ -163,6 +163,21 @@ scripted summariser, so what is tested is the machinery, not the model's prose:
   rather than `user:` for them; `extractAnchors` takes no "the person said" sentence from
   them. Scenario: a legacy continuation prompt, 170 tool pairs, a compaction — the
   person's request is in the next request verbatim and the prompt is not.
+- **INV-1187 (2026-10-15)** the six sentences became whole messages. A person's
+  constraint, correction or request that sat in the summarised range used to survive only
+  as the summariser's paraphrase plus, if it read as an imperative under 140 characters,
+  one `the person said:` anchor line; a longer instruction, or one phrased as a question,
+  was paraphrase only. Now the summary entry carries `personWords`: every message the
+  person typed in that range (`personAuthoredText`, so no teammate, timer, webhook, fork or
+  host text), each up to 800 characters with its ReadHistory anchor (`#42`, `e1#42`),
+  newest kept first, rendered oldest first right after the summary, with a line saying how
+  many older ones were left out. They are carried forward by the next pass as they are,
+  one copy per source entry, never re-summarised. They share one budget
+  (`SURVIVOR_TOKEN_CAP`, 4,000 tokens) with the pinned ask and the tool exemplars — the
+  person's words first, the exemplars in what is left — and the person's newest ask is not
+  pinned a second time. Summaries written before this still carry `the person said:`
+  lines; they are read back as person words. Scenario: "永远不要直接推 main", two
+  compactions later, verbatim in the next request, once.
 - **A4** `clampSummaryToBudget`: whatever the summariser answered, summary + tail fits
   the trigger, by clipping with a visible mark — one step, no further model call. The
   summariser is asked at most three times per pass (draft, shape retry, fresh cut).

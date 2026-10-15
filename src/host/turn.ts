@@ -71,6 +71,11 @@ import {
   calibratedTokens,
   CompactionGuard,
   choosePinnedEntries,
+  choosePersonWords,
+  renderPersonWords,
+  CHARS_PER_TOKEN,
+  PINNED_TOKEN_CAP,
+  SURVIVOR_TOKEN_CAP,
   sanitizePinnedEntry,
   droppedEntry,
   estimateRequestTokens,
@@ -84,6 +89,7 @@ import {
   replacedRange,
   type SummaryEntry,
 } from "./compaction.ts";
+import { anchorOf } from "./history.ts";
 import { DURABLE_RESULT_CHARS, type ResolutionConfig } from "../protocol/index.ts";
 import type { KeptEvidence } from "./resume.ts";
 import { keepToolResult, readKeptSources, RESULT_KEPT_MARKER } from "./results.ts";
@@ -1074,6 +1080,30 @@ export async function compactHistory(options: {
   // and a summary prepared for the team room must never be adopted by a Telegram chat.
   const summaryKey = `${agent.id}/${conversation}`;
   const active = activeWindow(history as HistoryEntry[]);
+  // Where each entry lives, as ReadHistory names it, so the person's carried words point
+  // back at the whole message (INV-1187). Entries in `active` are the same objects as in
+  // `history`, which is this context version's transcript in file order.
+  const positionOf = new Map<unknown, number>(history.map((entry, index) => [entry, index]));
+  const epoch = registry.contextVersion(agent.id, conversation);
+  const sourceOf = (entry: HistoryEntry): string | undefined => {
+    const index = positionOf.get(entry);
+    return index === undefined ? undefined : anchorOf(index, epoch > 0 ? epoch : undefined);
+  };
+  // Everything kept verbatim shares one budget: the person's words first, then the pinned
+  // ask and the tool exemplars in what is left (INV-1187).
+  const withSurvivors = <T extends HistoryEntry>(summary: T, older: readonly HistoryEntry[], tail: readonly HistoryEntry[]): T => {
+    const { words, omitted } = choosePersonWords(older, sourceOf);
+    const wordsTokens = words.length === 0 ? 0 : Math.ceil(renderPersonWords(words, omitted).length / CHARS_PER_TOKEN);
+    const pins = choosePinnedEntries(older, tail, {
+      budgetTokens: Math.max(0, Math.min(PINNED_TOKEN_CAP, SURVIVOR_TOKEN_CAP - wordsTokens)),
+      personWordsCarried: words.length > 0,
+    });
+    return {
+      ...summary,
+      ...(pins.length > 0 ? { pinned: pins } : {}),
+      ...(words.length > 0 ? { personWords: words, ...(omitted > 0 ? { personWordsOmitted: omitted } : {}) } : {}),
+    };
+  };
   // Derived from the model's real window once one response has reported it, so the same code is
   // right for a 200k model and a 1M one.
   const policy = policyForModel(provider.model);
@@ -1178,17 +1208,15 @@ export async function compactHistory(options: {
     // than the cut just computed, and the assembled tail is active.slice(covers) —
     // choosing pins against the fresh cut's tail let a pair between the two land in
     // the request twice, with duplicate tool_use ids the API rejects.
-    const pinnedEntries = choosePinnedEntries(
-      active.slice(0, entry.covers),
-      active.slice(entry.covers)
-    );
-    if (pinnedEntries.length > 0) entry = { ...entry, pinned: pinnedEntries };
+    entry = withSurvivors(entry, active.slice(0, entry.covers), active.slice(entry.covers));
     // And the adopted result must actually fit: summary + pins + real tail under the
     // trigger, or pins are shed first and a still-oversized adoption is refused in
     // favour of the fresh cut.
     if (estimateTokens([entry, ...active.slice(entry.covers)]) > policy.triggerTokens) {
       const bare = { ...entry };
       delete (bare as { pinned?: unknown }).pinned;
+      delete (bare as { personWords?: unknown }).personWords;
+      delete (bare as { personWordsOmitted?: unknown }).personWordsOmitted;
       if (
         entry.covers !== cut.index &&
         estimateTokens([bare, ...active.slice(entry.covers)]) > policy.triggerTokens
@@ -1197,8 +1225,7 @@ export async function compactHistory(options: {
         const fresh = await summarise(olderEntries, cut.index, summaryRuntime.client, summaryProvider, meter);
         if (fresh === undefined) throw new Error("the summariser returned no text");
         entry = fresh;
-        const freshPins = choosePinnedEntries(active.slice(0, entry.covers), active.slice(entry.covers));
-        if (freshPins.length > 0) entry = { ...entry, pinned: freshPins };
+        entry = withSurvivors(entry, active.slice(0, entry.covers), active.slice(entry.covers));
       } else {
         entry = bare as typeof entry;
       }
@@ -1251,8 +1278,7 @@ export async function compactHistory(options: {
     entry = { ...entry, replaced: replacedRange(history.slice(0, cut.index), 0) };
     // Insurance matters *more* when the summary failed: the dropped marker carries the
     // pinned ask and tool exemplars even though it carries no narrative.
-    const pinnedEntries = choosePinnedEntries(olderEntries, active.slice(cut.index));
-    if (pinnedEntries.length > 0) entry = { ...entry, pinned: pinnedEntries };
+    entry = withSurvivors(entry, olderEntries, active.slice(cut.index));
     const detail = `could not summarise (${reason}); dropped ${cut.index} entries instead`;
     log(detail);
     onCompacted({
@@ -1282,7 +1308,7 @@ export async function compactHistory(options: {
   return [...history, entry as TranscriptEntry];
 }
 
-function historyToMessages(
+export function historyToMessages(
   entries: readonly TranscriptEntry[]
 ): Anthropic.MessageParam[] {
   // From the newest summary onwards. Everything before it stays in the transcript on disk — the
@@ -1342,6 +1368,11 @@ function historyToMessages(
     if ("kind" in entry) {
       if (entry.kind === "summary") {
         messages.push({ role: "user", content: entry.text });
+        // The person's own words from the summarised range, verbatim (INV-1187).
+        const words = (entry as SummaryEntry).personWords;
+        if (words !== undefined && words.length > 0) {
+          messages.push({ role: "user", content: renderPersonWords(words, (entry as SummaryEntry).personWordsOmitted ?? 0) });
+        }
         // The verbatim survivors ride between summary and tail: the pinned ask, and
         // one successful call/result pair per tool the tail no longer demonstrates —
         // the in-context examples a weak model imitates schemas from (docs/24 v3).
