@@ -24,9 +24,9 @@ export const STEWARD_COOLDOWN_MS = 30 * 60_000;
 /** What the steward reads: the latest messages, newest kept first. */
 const STEWARD_VIEW_CHARS = 15_000;
 /** What the note writer reads. */
-const NOTE_VIEW_CHARS = 80_000;
+export const NOTE_VIEW_CHARS = 80_000;
 /** One entry, as the writer sees it. Long enough to keep a path or a figure whole. */
-const NOTE_ENTRY_CHARS = 2_000;
+export const NOTE_ENTRY_CHARS = 2_000;
 
 export const HANDOFF_HEADINGS = [
   "Goals",
@@ -78,7 +78,7 @@ export const STEWARD_SYSTEM = [
   'End with one line of JSON only: {"action":"switch"|"compact","reason":"one short sentence"}',
 ].join("\n");
 
-const NOTE_SYSTEM = [
+export const NOTE_SYSTEM = [
   "You write a handoff note to yourself. The conversation below is about to continue in a fresh context that starts with this note and the person's own recent words; everything else stays on record and can be looked up with ReadHistory by the labels shown in brackets, such as [e1#42].",
   "Output EXACTLY these Markdown headings, in English, in this order, each as a line starting with ##, and write the content in the language the person writes in, as terse bullets. Write (none) under a heading with nothing to say.",
   ...HANDOFF_HEADINGS.map(heading => `## ${heading}`),
@@ -86,7 +86,7 @@ const NOTE_SYSTEM = [
 ].join("\n");
 
 /** Each entry with the label ReadHistory resolves, newest kept first within the budget. */
-function labelledView(transcript: readonly unknown[], active: readonly HistoryEntry[], epoch: number, budget: number, entryChars: number): string {
+export function labelledView(transcript: readonly unknown[], active: readonly HistoryEntry[], epoch: number, budget: number, entryChars: number): string {
   const position = new Map<unknown, number>(transcript.map((entry, index) => [entry, index]));
   const lines: string[] = [];
   let used = 0;
