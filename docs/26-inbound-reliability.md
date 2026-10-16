@@ -134,3 +134,17 @@ whenever an unrelated request happens to land near the end of a turn. The fix ha
 the new message's own turn alone and only let the first turn know it is about to answer
 something the person may already have moved past; that variant is proposed as an amendment
 to INV-1189 rather than built against the original wording.
+
+**Step two, built (INV-1189 amendment accepted 2026-10-15).** Before a person-opened turn
+delivers its final reply, it checks the queue for channel messages (`steerable: false`) from the
+same person in this conversation that arrived at or after its last model request went out (`bus.newerFromPerson`,
+which reads and never takes). If there are any, the turn takes one more look: the messages are
+shown as a host note ("it will be answered in its own turn — revise or annotate only if this
+reply is now wrong"), `tool_choice` is `none`, and any tool call the model makes anyway is
+dropped, never run. That is enforced in the loop, because `none` is a request a model can ignore.
+The new message is not consumed: it still gets its own tracked turn, so the INV-611/630 rule
+holds. The look happens at most once per turn. Steerable messages (the web chat) are not looked
+at: steering takes those at round boundaries, and while a turn is finishing R8 leaves them for
+the next turn on purpose. One window stays open, and the scenario pins it:
+a correction that lands after the answer exists, while it is being sent, cannot be seen by it.
+
