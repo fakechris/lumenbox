@@ -2871,6 +2871,9 @@ ${outcome.text}`;
         console.error(`[conduct] ${agent.profile.name}: tool call during the newer-message look dropped, not run`);
         const said = response.content.filter((block): block is Anthropic.TextBlock => block.type === "text");
         response.content = said.some(block => block.text.trim() !== "") ? said : [{ type: "text", text: looked, citations: null }];
+        // The stored copy too: an unpaired tool_use left in history is rejected if anything
+        // (a Stop hook) sends the model round again.
+        messages[messages.length - 1] = { role: "assistant", content: response.content };
       }
     }
     const toolUses = response.content.filter(
@@ -3056,6 +3059,8 @@ ${outcome.text}`;
           forceTools = { type: "none" };
           newerLook = finalText;
           finishing = false;
+          // The look must not be what runs the turn out of rounds: on the last one, it gets one more.
+          if (round === MAX_ROUNDS - 1) round -= 1;
           continue;
         }
       }
