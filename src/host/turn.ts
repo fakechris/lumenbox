@@ -2298,6 +2298,12 @@ ${outcome.text}`;
   // about to stop is a dangling turn the model never really answers; left queued, it opens
   // the next turn with the whole of the model's attention instead.
   let finishing = false;
+  // When the latest model request went out, and whether the newer-message gate already looked
+  // (INV-1189): what arrived after this instant is what the answer could not have seen.
+  let roundStartedAt = new Date().toISOString();
+  let newerChecked = false;
+  // Set while the newer-message look is the round in flight: the reply it is about.
+  let newerLook: string | undefined;
   // A one-round demand that the next response contain a tool call (docs/31 layer 1d/1e):
   // set by a guard, spent by the next request, never carried further.
   let forceTools: Anthropic.MessageCreateParams["tool_choice"] | undefined;
@@ -2474,6 +2480,7 @@ ${outcome.text}`;
       },
       { traceId: turnId }
     );
+    roundStartedAt = new Date().toISOString();
     const stream = client.messages.stream(
       {
         model: provider.model,
@@ -2854,6 +2861,18 @@ ${outcome.text}`;
     // blocks have to be echoed back unchanged for the next round to be valid.
     messages.push({ role: "assistant", content: response.content });
 
+    // The newer-message look is a no-tools round (INV-1189). tool_choice "none" is a request a
+    // model can ignore, so here it is enforced: calls are dropped, never run, and an empty
+    // reply falls back to the answer the look was about.
+    if (newerLook !== undefined) {
+      const looked = newerLook;
+      newerLook = undefined;
+      if (response.content.some(block => block.type === "tool_use")) {
+        console.error(`[conduct] ${agent.profile.name}: tool call during the newer-message look dropped, not run`);
+        const said = response.content.filter((block): block is Anthropic.TextBlock => block.type === "text");
+        response.content = said.some(block => block.text.trim() !== "") ? said : [{ type: "text", text: looked, citations: null }];
+      }
+    }
     const toolUses = response.content.filter(
       (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"
     );
@@ -3009,6 +3028,33 @@ ${outcome.text}`;
             turnId,
           } satisfies TranscriptEntry, conversation);
           messages.push({ role: "user", content: report });
+          finishing = false;
+          continue;
+        }
+      }
+
+      // The newer-message gate (INV-1189): the person wrote again while this answer was being
+      // generated. Their message keeps its own turn — folding it in here is how an unrelated
+      // request once got swallowed into an old task (INV-611/630) — but this reply is about to
+      // go out first, so the model sees it once, with no tools, and may revise or annotate what
+      // it is about to say. Once per turn; nothing is taken from the queue.
+      if (finalText.trim() && personOpened && goal === undefined && !newerChecked) {
+        newerChecked = true;
+        const newer = deps.bus.newerFromPerson?.(agent.id, conversation, roundStartedAt) ?? [];
+        if (newer.length > 0) {
+          console.error(`[conduct] ${agent.profile.name}: ${newer.length} newer message(s) arrived while answering; one look before delivery`);
+          registry.appendTranscript(agent.id, {
+            role: "assistant",
+            kind: "blocks",
+            blocks: response.content.filter((block): block is Anthropic.TextBlock => block.type === "text"),
+            at: new Date().toISOString(),
+            turnId,
+          } satisfies TranscriptEntry, conversation);
+          const note = newerMessageNote(newer.map(message => message.text), chinese);
+          registry.appendTranscript(agent.id, { role: "user", text: note, at: new Date().toISOString(), turnId, host: true } satisfies TranscriptEntry, conversation);
+          messages.push({ role: "user", content: note });
+          forceTools = { type: "none" };
+          newerLook = finalText;
           finishing = false;
           continue;
         }
@@ -3651,4 +3697,15 @@ export function promptHashOf(...parts: readonly string[]): string {
   const hash = createHash("sha256");
   for (const part of parts) hash.update(part).update("\u0000");
   return hash.digest("hex").slice(0, 16);
+}
+
+/**
+ * The one look a turn takes at what the person wrote while it was answering (INV-1189). Their
+ * message is answered in its own turn; this only lets the reply about to go out stop being wrong.
+ */
+export function newerMessageNote(texts: readonly string[], chinese: boolean): string {
+  const quoted = texts.map(text => `> ${text.replace(/\n/g, "\n> ")}`).join("\n\n");
+  return chinese
+    ? `[newer message] 你在作答时，对方又发来了：\n\n${quoted}\n\n这条会在本回合之后单独处理，现在不要回答它。只在你即将发出的回复因此变错或已不需要时修改或加一句说明；否则把回复原样再给一次。不要调用工具。`
+    : `[newer message] While you were answering, the person wrote:\n\n${quoted}\n\nIt will be answered in its own turn right after this one — do not answer it now. Revise or annotate the reply you are about to send only if it is now wrong or no longer needed; otherwise give it again unchanged. No tools.`;
 }

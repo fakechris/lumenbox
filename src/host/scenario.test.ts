@@ -369,7 +369,17 @@ test("/new with a running answer and two queued requests refuses without swallow
       } finally { release(); await manager.idle(); manager.stop(); }
     },
   });
-  try { assert.equal(calls, 3); assert.equal(result.score.said.length, 3); }
+  // Four model calls for three answers: the first answer takes one look at the two requests
+  // queued behind it before it is delivered (INV-1189); each still gets its own turn and reply.
+  try {
+    assert.equal(calls, 4);
+    // The model answered four times; the person was answered three times — the first answer's
+    // pre-look version stays on the record as blocks, which are never delivered.
+    const front = result.registry.list()[0]!;
+    const delivered = (result.registry.readTranscript(front.id, conversationIdFor("feishu:private")) as { role?: string; kind?: string; text?: string }[])
+      .filter(entry => entry.role === "assistant" && entry.kind === undefined && entry.text);
+    assert.equal(delivered.length, 3);
+  }
   finally { result.cleanup(); }
 });
 
@@ -2452,29 +2462,31 @@ test("one turn can repeat approved sensitive data without a second card, but new
   } finally { result.cleanup(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-// INV-1189 step one: a correction the person sends while a channel turn is still working.
-// Measured at three moments — while the final answer is being generated, between a tool and
-// the next model call, and after the answer exists but before it is delivered — so the gap
-// Raft's "held send" closes is stated from the code's behaviour, not argued from its design.
+// INV-1189: a correction the person sends while a channel turn is still working. Step one measured
+// it at three moments; step two lets the turn about to deliver see the correction once, with no
+// tools, and revise or annotate its reply — while the correction still gets its own turn.
 for (const phase of ["generating", "between-rounds", "before-delivery"] as const) {
-  test(`INV-1189: a correction sent ${phase} gets its own turn; the first reply is delivered stale`, { timeout: 15_000 }, async () => {
+  test(`INV-1189: a correction sent ${phase} keeps its own turn${phase === "before-delivery" ? "; arriving after the answer exists, it is not seen by it" : ", and the first reply acknowledges it"}`, { timeout: 15_000 }, async () => {
     let entered!: () => void;
     let release!: () => void;
     const reached = new Promise<void>(resolve => { entered = resolve; });
     const held = new Promise<void>(resolve => { release = resolve; });
     const sent: string[] = [];
-    const seenByFirstTurn: boolean[] = [];
+    let blocked = false;
+    let toolUsed = false;
+    const offeredInGate: string[][] = [];
     const result = await runEpisode({
       team: [{ name: "Nova" }], says: [],
-      script: async ({ round, messages }) => {
-        // `round` counts this conversation's model calls: the first turn is round 0, or 0–1
-        // when it calls a tool first; everything after is the correction's own turn.
-        const first = phase === "between-rounds" ? round <= 1 : round === 0;
-        if (first) seenByFirstTurn.push(JSON.stringify(messages).includes("改成 B"));
-        if (first && phase === "between-rounds" && round === 0) return { call: "SetTodos", input: { todos: [] } };
-        const finalCall = phase === "between-rounds" ? round === 1 : round === 0;
-        if (first && finalCall && phase !== "before-delivery") { entered(); await held; }
-        return { say: first ? "方案 A：按 A 做好了。" : "收到，改成 B：按 B 重做了。" };
+      script: async ({ messages, offered }) => {
+        const last = JSON.stringify(messages[messages.length - 1]?.content ?? "");
+        if (last.includes("[newer message]")) {
+          offeredInGate.push(offered);
+          return { say: "方案 A 已经按 A 做好了；看到你说改成 B，下一条我按 B 处理。" };
+        }
+        if (last.includes("改成 B")) return { say: "收到，改成 B：按 B 重做了。" };
+        if (phase === "between-rounds" && !toolUsed) { toolUsed = true; return { call: "SetTodos", input: { todos: [] } }; }
+        if (phase !== "before-delivery" && !blocked) { blocked = true; entered(); await held; }
+        return { say: "方案 A：按 A 做好了。" };
       },
       drive: async ({ registry, bus, frontId }) => {
         const conversation = conversationIdFor("feishu:private");
@@ -2504,13 +2516,74 @@ for (const phase of ["generating", "between-rounds", "before-delivery"] as const
           await receive({ ...room, text: "按方案 A 做", messageId: "m-a" });
           await reached;
           await receive({ ...room, text: "改成 B", messageId: "m-b" });
+          // The correction is admitted to the queue in a few milliseconds in real life, while the
+          // answer takes seconds; here both are instant, so wait for the admission before letting
+          // the first answer finish.
+          if (phase !== "before-delivery") {
+            for (let i = 0; i < 200 && bus.queuedCount(frontId, conversation) === 0; i++) await new Promise(resolve => setTimeout(resolve, 5));
+          }
         } finally { release(); await manager.idle(); manager.stop(); }
       },
     });
     try {
       const replies = sent.filter(text => /方案 A|改成 B/.test(text));
-      assert.deepEqual(replies.map(text => (/方案 A/.test(text) ? "A" : "B")), ["A", "B"], "A is delivered first, then B in its own turn");
-      assert.equal(seenByFirstTurn.some(Boolean), false, "the first turn never saw the correction, at any model call");
+      assert.equal(replies.length, 2, `two replies: ${JSON.stringify(replies)}`);
+      assert.match(replies[1]!, /^收到，改成 B/, "the correction is still answered in its own turn");
+      if (phase === "before-delivery") {
+        assert.equal(replies[0], "方案 A：按 A 做好了。", "an answer already generated cannot see what came after it");
+        assert.deepEqual(offeredInGate, []);
+      } else {
+        assert.match(replies[0]!, /看到你说改成 B/, "the first reply no longer goes out as if B was never said");
+        assert.equal(offeredInGate.length, 1, "the look happens once");
+      }
     } finally { result.cleanup(); }
   });
 }
+
+test("INV-1189: a tool call during the newer-message look is dropped, never run, and the reply it was about still goes out", { timeout: 15_000 }, async () => {
+  let entered!: () => void;
+  let release!: () => void;
+  const reached = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const sent: string[] = [];
+  let blocked = false;
+  let todosAfter: unknown;
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: [],
+    script: async ({ messages }) => {
+      const last = JSON.stringify(messages[messages.length - 1]?.content ?? "");
+      // A model that ignores tool_choice "none" during the look.
+      if (last.includes("[newer message]")) return { call: "SetTodos", input: { todos: [{ text: "SHOULD NOT EXIST", status: "pending" }] } };
+      if (last.includes("改成 B")) return { say: "收到，改成 B：按 B 重做了。" };
+      if (!blocked) { blocked = true; entered(); await held; }
+      return { say: "方案 A：按 A 做好了。" };
+    },
+    drive: async ({ registry, bus, frontId }) => {
+      const conversation = conversationIdFor("feishu:private");
+      let receive!: (message: ChannelMessage) => Promise<string | undefined>;
+      const manager = new ChannelManager({
+        mayDrive: () => true, log: () => {},
+        ask: async (_name, text, _identity, _chat, _progress, _thread, _task, _interim, _stream, origin) => {
+          bus.sendFromUser(frontId, text, { conversation, steerable: false, messageId: origin!.messageId });
+          await bus.runExclusive(frontId, { conversation, userDriven: true });
+          return replyForMessage(registry.readTranscript(frontId, conversation), origin!.messageId);
+        },
+      });
+      manager.register({ name: "feishu", start: async handler => { receive = handler; }, stop() {}, send: async (_chat: string, text: string) => { sent.push(text); return undefined; } }, true, "test");
+      manager.start(); await new Promise(resolve => setImmediate(resolve));
+      const room = { identity: "feishu:user", chatKey: "feishu:private", privateChat: true, senderLabel: "user" };
+      try {
+        await receive({ ...room, text: "按方案 A 做", messageId: "m-a" });
+        await reached;
+        await receive({ ...room, text: "改成 B", messageId: "m-b" });
+        for (let i = 0; i < 200 && bus.queuedCount(frontId, conversation) === 0; i++) await new Promise(resolve => setTimeout(resolve, 5));
+      } finally { release(); await manager.idle(); manager.stop(); }
+      todosAfter = registry.readDurableState(frontId, conversation);
+    },
+  });
+  try {
+    const replies = sent.filter(text => /方案 A|改成 B/.test(text));
+    assert.equal(replies[0], "方案 A：按 A 做好了。", "the look's tool call was dropped; the original reply stands");
+    assert.doesNotMatch(JSON.stringify(todosAfter ?? {}), /SHOULD NOT EXIST/, "and the tool never ran");
+  } finally { result.cleanup(); }
+});
