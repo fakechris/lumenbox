@@ -34,6 +34,11 @@ export interface OAuthProvider {
   apiBase: string;
   /** Headers every request to the API carries beside the bearer. */
   apiHeaders?: Record<string, string>;
+  /**
+   * The header the token travels in when it is not `Authorization: Bearer` — DingTalk's API reads
+   * `x-acs-dingtalk-access-token` (INV-754). Absent means bearer.
+   */
+  tokenHeader?: string;
   defaultScopes: string[];
   /** One line for the settings surface: where the client id and secret come from. */
   setup: string;
@@ -60,7 +65,23 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
     defaultScopes: [],
     setup: "open.feishu.cn → your app → Credentials: App ID and App Secret. The tenant token is minted here and re-minted when it lapses.",
   },
+  {
+    // An internal (enterprise) DingTalk app, for writing documents and calendar events (INV-754).
+    id: "dingtalk",
+    title: "DingTalk",
+    kind: "client_credentials",
+    tokenUrl: "https://api.dingtalk.com/v1.0/oauth2/accessToken",
+    apiBase: "https://api.dingtalk.com",
+    tokenHeader: "x-acs-dingtalk-access-token",
+    defaultScopes: [],
+    setup: "open.dingtalk.com → your internal app → Credentials: AppKey and AppSecret; grant it the document and calendar write permissions. The token is minted here and re-minted when it lapses.",
+  },
 ];
+
+/** The headers that carry a connection's token to its API. */
+export function tokenHeaders(provider: OAuthProvider, token: string): Record<string, string> {
+  return provider.tokenHeader !== undefined ? { [provider.tokenHeader]: token } : { Authorization: `Bearer ${token}` };
+}
 
 export function oauthProvider(id: string): OAuthProvider | undefined {
   return OAUTH_PROVIDERS.find(provider => provider.id === id);
@@ -284,6 +305,19 @@ export class OAuthGate {
         throw new Error(`${provider.title} refused the app credentials (code ${String(reply.code ?? response.status)})`);
       }
       return { accessToken: reply.tenant_access_token, ...this.expiry(reply.expire) };
+    }
+    if (provider.id === "dingtalk") {
+      // Flat JSON both ways: {appKey, appSecret} in, {accessToken, expireIn} out (seconds).
+      const response = await this.fetchFn(provider.tokenUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json; charset=utf-8" },
+        body: JSON.stringify({ appKey: clientId, appSecret: clientSecret }),
+      });
+      const reply = parseTokenReply(await response.text());
+      if (response.status !== 200 || typeof reply.accessToken !== "string" || reply.accessToken === "") {
+        throw new Error(`${provider.title} refused the app credentials (${String(reply.code ?? reply.message ?? response.status)})`);
+      }
+      return { accessToken: reply.accessToken, ...this.expiry(reply.expireIn) };
     }
     return this.tokenRequest(provider, { grant_type: "client_credentials", client_id: clientId, client_secret: clientSecret });
   }
