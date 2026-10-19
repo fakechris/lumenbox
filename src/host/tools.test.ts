@@ -200,7 +200,7 @@ test("ReadHistory reads the conversation the agent is in, not the team room", as
     registry: {
       tryGet: () => undefined,
       list: () => [],
-      readAllContextTranscripts: (_id: string, conversation?: string) => {
+      readContextTranscriptsByEpoch: (_id: string, conversation?: string) => {
         asked.push(conversation);
         return [];
       },

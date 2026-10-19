@@ -50,6 +50,8 @@ export interface FollowUpMessage {
 
 export class FollowUpBudget {
   private readonly sent = new Map<string, number[]>();
+  /** Messages composed and on their way, counted against the room until they land or fail. */
+  private readonly pending = new Map<string, number>();
 
   constructor(private readonly path?: string) {
     if (path !== undefined) this.restore(path);
@@ -63,7 +65,7 @@ export class FollowUpBudget {
   compose(room: string, items: readonly FollowUpItem[], now = Date.now()): FollowUpMessage | undefined {
     const acts = items.filter(item => item.kind === "act");
     const asks = items.filter(item => item.kind === "ask");
-    const spent = (this.sent.get(room) ?? []).filter(at => now - at < FOLLOW_UP_WINDOW_MS).length;
+    const spent = (this.sent.get(room) ?? []).filter(at => now - at < FOLLOW_UP_WINDOW_MS).length + (this.pending.get(room) ?? 0);
     // An act is going out regardless, and a message that is already being sent carries
     // whatever asks fit: the ask costs nothing extra once somebody is being spoken to.
     const mayAsk = acts.length > 0 || spent < FOLLOW_UP_MESSAGES_PER_DAY;
@@ -78,6 +80,21 @@ export class FollowUpBudget {
       sent: [...acts, ...taking].map(item => item.ref).filter((ref): ref is string => ref !== undefined),
       held,
     };
+  }
+
+  /**
+   * Holds an allowance for a message composed but not yet delivered. Call in the same tick as
+   * `compose`, then `release` when the send settles (and `record` if it landed): two senders
+   * racing for a room's last allowance cannot both take it.
+   */
+  reserve(room: string): void {
+    this.pending.set(room, (this.pending.get(room) ?? 0) + 1);
+  }
+
+  release(room: string): void {
+    const left = (this.pending.get(room) ?? 0) - 1;
+    if (left > 0) this.pending.set(room, left);
+    else this.pending.delete(room);
   }
 
   /** One message reached one room: it counts, and is remembered across a restart. */

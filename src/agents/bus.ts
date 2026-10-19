@@ -645,6 +645,28 @@ export class AgentBus {
     return seq;
   }
 
+  /**
+   * The person's messages for this conversation that arrived after `since` and are still queued,
+   * read without taking them (INV-1189). A turn about to deliver uses this to notice it is
+   * answering something already overtaken; the messages keep their own turn regardless.
+   * Only the person driving this turn counts: a teammate or another person is new work.
+   */
+  newerFromPerson(agentId: string, conversation: string, since: string): readonly { text: string; receivedAt: string }[] {
+    const driver = this.active.get(workerKey(agentId, conversation))?.principalId;
+    return (this.pending.get(agentId) ?? [])
+      .filter(message =>
+        (message.conversation ?? MAIN_CONVERSATION) === conversation &&
+        message.fromId === "user" && message.synthetic !== true &&
+        // Only what steering will not take: a channel request (steerable false) keeps its own
+        // turn and so is never seen by this one. A steerable message is steering's, and while a
+        // turn is finishing R8 leaves it for the next turn on purpose.
+        message.steerable === false &&
+        // Inclusive: a message stamped in the same millisecond the request went out was not in it.
+        message.receivedAt >= since &&
+        (driver === undefined || message.principalId === driver))
+      .map(message => ({ text: message.text, receivedAt: message.receivedAt }));
+  }
+
   queuedCount(agentId: string, conversation: string = MAIN_CONVERSATION): number {
     const queue = this.pending.get(agentId);
     if (queue === undefined) return 0;
