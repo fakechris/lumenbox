@@ -12,6 +12,8 @@ dist/
 docker/box/boxd.cjs
 docker/box/hostd.mjs
 docker/box/check-documents.cjs
+/vendor/
+docker/box/a2ui.js
 
 *.log
 *.webp

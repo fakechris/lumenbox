@@ -54,6 +54,7 @@ export const TEMPLATE_SETUP_TOOLS: readonly string[] = [
   "AskUser",
   "AskSecret",
   "HandOverDesktop",
+  "ShowUI",
   "OtherThreads",
 ];
 

@@ -65,6 +65,14 @@ check("the CLI runs and prints its usage", () => {
   if (!/agentbox/i.test(out)) throw new Error("usage text did not mention agentbox");
 });
 
+check("the ShowUI browser bundle exists (docs/79)", () => {
+  // Not committed, built from src/; a release without it shows no cards and logs a 404.
+  const path = join(root, "vendor/a2ui.js");
+  if (!existsSync(path)) throw new Error(`${path} is missing — run npm run build:vendor`);
+  const size = statSync(path).size;
+  if (size < 100_000) throw new Error(`${path} is ${size} bytes, which is not the A2UI bundle`);
+});
+
 check("the box daemon bundle loads", () => {
   const path = join(root, "docker/box/boxd.cjs");
   if (!existsSync(path)) throw new Error(`${path} is missing — run npm run build:boxd`);

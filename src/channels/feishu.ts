@@ -24,7 +24,10 @@ import {
   consentTitle,
   fileFetchFailed,
   questionTitle,
+  surfaceTitle,
 } from "./strings.ts";
+import type { SurfaceButton, SurfaceCardState } from "./surface-card.ts";
+import { actionText } from "../host/show-ui-catalog.ts";
 import type {
   ApprovalCardState,
   ApprovalReply,
@@ -126,6 +129,54 @@ export function renderQuestionCard(card: QuestionCardState, chatKey?: string): o
       },
     ],
   };
+}
+
+/**
+ * A card the agent composed (docs/79), as Feishu renders it: the title, the lines as one
+ * Markdown block, each press as a button. A button's value names the agent and the
+ * action it speaks, so the press comes back as `@Agent [Action …]` — the same door a
+ * typed message takes, and the same line the page would send.
+ */
+export function renderSurfaceCard(card: SurfaceCardState, chatKey?: string): object {
+  const button = (press: SurfaceButton) => ({
+    tag: "button",
+    text: { tag: "plain_text", content: press.label.slice(0, 40) },
+    type: "default",
+    value: {
+      act: press.name,
+      surface: card.surfaceId,
+      agent: card.agentName,
+      ...(press.context !== undefined ? { context: JSON.stringify(press.context) } : {}),
+      ...(chatKey !== undefined ? { chatKey } : {}),
+    },
+  });
+  const body = card.lines.join("\n");
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      title: { tag: "plain_text", content: card.title ?? surfaceTitle(card.agentName) },
+      template: "blue",
+    },
+    elements: [
+      ...(body !== "" ? [{ tag: "div", text: { tag: "lark_md", content: body } }] : []),
+      // Six at most, as the question card does; past that the words path is better.
+      ...(card.buttons.length > 0 ? [{ tag: "action", actions: card.buttons.slice(0, 6).map(button) }] : []),
+    ],
+  };
+}
+
+/** The message a pressed surface button speaks: the action line, addressed to the agent that drew the card. */
+export function surfacePressText(value: { act: string; surface: string; agent: string; context?: string }): string {
+  let context: Record<string, unknown> | undefined;
+  if (value.context !== undefined) {
+    try {
+      const parsed = JSON.parse(value.context) as unknown;
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) context = parsed as Record<string, unknown>;
+    } catch {
+      // A button whose context does not parse still speaks its name.
+    }
+  }
+  return `@${value.agent} ${actionText({ name: value.act, surfaceId: value.surface, ...(context !== undefined ? { context } : {}) })}`;
 }
 
 /**
@@ -1079,7 +1130,7 @@ export class FeishuChannel implements ChannelAdapter {
       // ordinary message — the SDK's own response to the event is just the ack.
       "card.action.trigger": (data: {
         operator?: { open_id?: string };
-        action?: { value?: { approval?: string; reply?: string; ask?: string; chatKey?: string; questionId?: string } };
+        action?: { value?: { approval?: string; reply?: string; ask?: string; chatKey?: string; questionId?: string; act?: string; surface?: string; agent?: string; context?: string } };
         context?: { open_chat_id?: string; open_message_id?: string };
         open_message_id?: string;
       }) => {
@@ -1092,7 +1143,12 @@ export class FeishuChannel implements ChannelAdapter {
         // A pressed answer button is the person saying that answer. It goes through the
         // same door a typed reply would, so everything downstream — waking the agent,
         // the task flow, the transcript — is one path, not two.
-        const chosen = data.action?.value?.ask;
+        // A pressed card button (docs/79) is the person saying the action line to the
+        // agent that drew the card; from here on it is the answer-button path.
+        const pressed = data.action?.value;
+        const chosen = pressed?.act !== undefined && pressed.surface !== undefined && pressed.agent !== undefined
+          ? surfacePressText({ act: pressed.act, surface: pressed.surface, agent: pressed.agent, ...(pressed.context !== undefined ? { context: pressed.context } : {}) })
+          : data.action?.value?.ask;
         if (chosen !== undefined && openId !== undefined && this.messageHandler !== undefined) {
           const resolvedChatKey = buttonChatKey ?? (chatId !== undefined ? `${this.name}:${chatId}` : undefined);
           const { chatId: targetChatId, rootId } = resolvedChatKey
@@ -2206,6 +2262,14 @@ export class FeishuChannel implements ChannelAdapter {
    * wherever this identity's messages come from otherwise. A question loose at the
    * bottom of the room reads as being about everything at once.
    */
+  async postSurfaceCard(identity: string, card: SurfaceCardState, chatKey?: string): Promise<void> {
+    const thread = chatKey !== undefined ? splitChatKey(chatKey) : undefined;
+    const chatId = thread?.chatId !== undefined && thread.chatId !== "" ? thread.chatId : this.chats.get(identity);
+    if (chatId === undefined || this.apiClient === undefined) return;
+    const effectiveChatKey = chatKey ?? `${this.name}:${chatId}`;
+    await this.post(chatId, "interactive", JSON.stringify(renderSurfaceCard(card, effectiveChatKey)), thread?.rootId, chatKey);
+  }
+
   async postQuestionCard(identity: string, card: QuestionCardState, chatKey?: string): Promise<void> {
     const thread = chatKey !== undefined ? splitChatKey(chatKey) : undefined;
     const chatId = thread?.chatId !== undefined && thread.chatId !== ""

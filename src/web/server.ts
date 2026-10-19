@@ -223,6 +223,7 @@ import { resolveLocale } from "../i18n/locale.ts";
 import { activityPhrase, activityPhrases } from "../host/activity-phrase.ts";
 import { MESSAGES } from "../i18n/messages.ts";
 import { QuestionWatch } from "../host/question-expiry.ts";
+import { compileSurface, SurfaceLedger, surfaceLedgerPath, type A2uiMessage } from "../host/show-ui.ts";
 import { appendLine } from "../host/jsonl.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
 import { firstRunCue } from "../host/prompt.ts";
@@ -233,7 +234,7 @@ import { SKILLS_DIR, SKILL_FILENAME, authoringHints, parseSkillFile, slugify } f
 import { catchUpFloor } from "../channels/ingress.ts";
 import { REPLAY_MAX_AGE_MS } from "../channels/feishu.ts";
 import { ActivityLog } from "./activity.ts";
-import { vendorPath } from "./markdown.ts";
+import { a2uiPath, vendorPath } from "./markdown.ts";
 import { toDisplayEntries } from "./transcript.ts";
 import { isReactionEmoji, readReactions, setReaction } from "./reactions.ts";
 import { editDiffOf } from "./line-diff.ts";
@@ -271,6 +272,8 @@ type OutboundEvent =
   /** An agent asked the person something; the page shows a card with the answers as buttons. */
   | { type: "question"; agentId: string; agentName: string; question: string; options?: string[]; fallback?: string; conversation?: string }
   | { type: "question_expired"; agentId: string; agentName: string; question: string; verdict: "default" | "skipped" }
+  /** An agent drew or updated a card (docs/79); `messages` are the A2UI messages the page's processor takes. */
+  | { type: "surface"; agentId: string; agentName: string; surfaceId: string; title?: string; messages: A2uiMessage[]; conversation?: string }
   | { type: "task_aging"; taskId: string; title: string; kind: "nudge" | "archived" | "closed"; text: string }
   /** A reaction set or cleared on one message of one thread (INV-111), so every open page shows it. */
   | { type: "reaction"; agentId: string; conversation: string; index: number; emoji: string | null; by: string }
@@ -382,6 +385,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   });
   /** Read once on first request; it never changes while the server is up. */
   let vendorScript: Buffer | undefined;
+  let a2uiScript: Buffer | undefined;
   /** The woff2 faces, read once each. Seven files, ~400 KB total. */
   const fontCache = new Map<string, Buffer>();
   /** Asked once: the answer cannot change while this process runs. */
@@ -531,6 +535,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // Questions that expire (INV-526): every AskUser is watched; unanswered past its window,
   // the agent is woken to proceed on its default or to decide, and the chat is told.
   const questions = new QuestionWatch(join(agentboxHome(), "questions.jsonl"));
+  const surfaces = new SurfaceLedger(surfaceLedgerPath(), message => log(message));
   // What the host has already said to each room today, so four rails do not each start
   // their own conversation (INV-535). Kept across a restart: a budget that resets when
   // the process does is not a budget.
@@ -616,6 +621,50 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       });
       broadcast({ type: "handover_pending", agentId: input.agentId, agentName: input.agentName, instruction: input.instruction, reason: input.reason });
       return "in the app";
+    },
+    // A card the agent composed (docs/79). Checked here against the catalog with the page's
+    // own processor, so the page never gets a surface it would refuse; kept whole in the
+    // ledger so a later process can redraw it. The press comes back as an ordinary message.
+    showUI: async input => {
+      const conversation = input.conversation ?? "main";
+      const existing = surfaces.get(input.agentId, conversation, input.surface);
+      const compiled = compileSurface(input, existing);
+      if (!compiled.ok) return { error: compiled.reason };
+      const title = input.title ?? existing?.title;
+      if (input.close === true) {
+        surfaces.close(input.agentId, conversation, input.surface);
+      } else {
+        surfaces.record({
+          agentId: input.agentId,
+          agentName: input.agentName,
+          conversation,
+          surfaceId: input.surface,
+          ...(title !== undefined ? { title } : {}),
+          messages: compiled.full,
+          at: new Date().toISOString(),
+        });
+      }
+      broadcast({
+        type: "surface",
+        agentId: input.agentId,
+        agentName: input.agentName,
+        surfaceId: input.surface,
+        ...(title !== undefined ? { title } : {}),
+        messages: compiled.send,
+        conversation,
+      });
+      // To the chat that drove the agent too, as a card or as words (docs/79 §3).
+      const where = chats?.showSurface({
+        conversation,
+        ...(input.principalId !== undefined ? { principalId: input.principalId } : {}),
+        agentId: input.agentId,
+        agentName: input.agentName,
+        surfaceId: input.surface,
+        ...(title !== undefined ? { title } : {}),
+        messages: compiled.full,
+        ...(input.close === true ? { close: true } : {}),
+      });
+      return { where: where ?? "in the app" };
     },
     askUser: async input => {
       // A question is a card in the chat with the answers as buttons (docs/41 §4), not an
@@ -3658,6 +3707,24 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         // The Markdown renderer, read from node_modules. Served from here rather than
         // a CDN so the UI works with no network and stays on the locked version.
+        // The ShowUI bundle (docs/79), built into vendor/ from src/. Loaded by the page the
+        // first time a card appears; a missing file means `npm run build:vendor` was not run.
+        if (route === "GET /vendor/a2ui.js") {
+          try {
+            a2uiScript ??= readFileSync(a2uiPath());
+            res.writeHead(200, {
+              "content-type": "application/javascript; charset=utf-8",
+              "content-length": a2uiScript.length,
+              "cache-control": "no-store",
+            });
+            res.end(a2uiScript);
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error);
+            log(`the ShowUI bundle is unavailable (run npm run build:vendor): ${detail}`);
+            send(res, 404, { error: detail });
+          }
+          return;
+        }
         if (route === "GET /vendor/markdown-it.js") {
           try {
             vendorScript ??= readFileSync(vendorPath());

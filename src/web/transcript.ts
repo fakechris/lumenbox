@@ -14,6 +14,7 @@
 
 import { parseWakePrompt, type WakeMessage } from "../host/prompt.ts";
 import { optionLabel } from "../host/ask-options.ts";
+import { type SurfaceDraw, surfaceDrawOf } from "../host/show-ui-catalog.ts";
 import { type EditDiff, editDiffOf } from "./line-diff.ts";
 
 export interface DisplayTool {
@@ -25,6 +26,8 @@ export interface DisplayTool {
   isError?: boolean;
   /** For AskUser: the question and its answers, so the page can draw the card again on reload. */
   question?: { question: string; options?: string[]; fallback?: string };
+  /** For ShowUI: the card as A2UI messages, so the page can draw it again on reload (docs/79). */
+  surface?: SurfaceDraw;
   /** For edit_file: what changed, as `-`/`+` lines, so the row reads as a diff rather than two paragraphs (INV-112). */
   diff?: EditDiff;
 }
@@ -176,6 +179,9 @@ export function toDisplayEntries(
         detail: toolDetail(String(block.name ?? ""), block.input, roster),
         ...(block.name === "AskUser" && questionOf(block.input) !== undefined
           ? { question: questionOf(block.input)! }
+          : {}),
+        ...(block.name === "ShowUI" && surfaceDrawOf(block.input) !== undefined
+          ? { surface: surfaceDrawOf(block.input)! }
           : {}),
         ...(editDiffOf(String(block.name ?? ""), block.input) !== undefined ? { diff: editDiffOf(String(block.name ?? ""), block.input)! } : {}),
       }));

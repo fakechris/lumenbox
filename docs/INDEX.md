@@ -97,6 +97,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [75-cost-per-accepted-task](75-cost-per-accepted-task.md) | Cost per accepted task requires an auditable denominator | current | 2026-09-29 |
 | [77-agent-state-drift](77-agent-state-drift.md) | 状态漂移：同样的代码和模型，agent 为什么会滚成仪式——根因、归因实验与方案 | current | 2026-10-09 |
 | [78-context-handoff](78-context-handoff.md) | 建议换代：空闲时备好交接，人发 /new 时装入 | current | 2026-10-15 |
+| [79-genui](79-genui.md) | ShowUI：agent 用 A2UI 组装卡片，网页渲染，飞书/钉钉降级 | current | 2026-10-19 |
 
 ## handoff
 
@@ -120,3 +121,4 @@ this file and the headers disagree. Edit the header, not this table.
 | [handoff-2026-09-24-context-retry](handoff-2026-09-24-context-retry.md) | Handoff — 上下文恢复第六项：通用无副作用 /retry | current | 2026-09-24 |
 | [handoff-2026-09-24-memory-provenance](handoff-2026-09-24-memory-provenance.md) | Handoff — 上下文恢复第五项：记忆来源纠错与防回灌 | current | 2026-09-24 |
 | [handoff-2026-09-24-task-recover](handoff-2026-09-24-task-recover.md) | Handoff — 上下文恢复第四项：同任务只读 /recover | current | 2026-09-24 |
+| [handoff-2026-10-19-showui](handoff-2026-10-19-showui.md) | Handoff — ShowUI：agent 用 A2UI 组装卡片（INV-1269，docs/79） | current | 2026-10-19 |

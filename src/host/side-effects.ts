@@ -88,6 +88,7 @@ const DECLARED: Record<string, SideEffect> = {
   AskUser: { tier: "self" },
   AskSecret: { tier: "self" },
   HandOverDesktop: { tier: "self" },
+  ShowUI: { tier: "self" },
   // Staged only; nothing is shared until the person publishes it from the card.
   PackTemplate: { tier: "self" },
   // Deletes the person's own copies, at their request. Its gate is its own two-turn protocol — a plan,

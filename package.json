@@ -8,12 +8,13 @@
     "agentbox": "./dist/cli.js"
   },
   "scripts": {
-    "build": "npm run build:cli && npm run build:boxd",
+    "build": "npm run build:cli && npm run build:boxd && npm run build:vendor",
+    "build:vendor": "node scripts/build-vendor.mjs",
     "build:hostd": "esbuild src/cli.ts --bundle --platform=node --target=node22 --format=esm --outfile=docker/box/hostd.mjs && node scripts/copy-catalog-data.mjs",
     "build:cli": "esbuild src/cli.ts --bundle --platform=node --target=node22 --format=esm --packages=external --outfile=dist/cli.js && node scripts/copy-catalog-data.mjs",
     "build:boxd": "esbuild src/boxd/main.ts --bundle --platform=node --target=node22 --format=cjs --outfile=docker/box/boxd.cjs && esbuild src/boxd/check-documents.ts --bundle --platform=node --target=node22 --format=cjs --outfile=docker/box/check-documents.cjs",
     "build:xwatchdog": "node scripts/build-xwatchdog.mjs",
-    "build:box": "npm run build:boxd && npm run build:hostd && npm run build:xwatchdog",
+    "build:box": "npm run build:boxd && npm run build:hostd && npm run build:vendor && npm run build:xwatchdog",
     "pack:dropin": "npm run build:boxd && node scripts/pack-dropin.mjs",
     "build:image": "npm run build:box && node scripts/build-image.mjs",
     "push:image": "node --experimental-transform-types src/cli.ts box push",
@@ -36,6 +37,8 @@
     "release:scorecard": "node --experimental-transform-types scripts/scorecard.mjs"
   },
   "dependencies": {
+    "@a2ui/lit": "^0.14.0",
+    "@a2ui/web_core": "^0.14.0",
     "@anthropic-ai/sdk": "^0.133.0",
     "@larksuiteoapi/node-sdk": "^1.74.0",
     "markdown-it": "^15.0.2"
@@ -68,6 +71,7 @@
       "electron/**",
       "src/**",
       "assets/**",
+      "vendor/**",
       "package.json",
       "!src/**/*.test.ts"
     ],

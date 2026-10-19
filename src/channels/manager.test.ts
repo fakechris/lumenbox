@@ -2626,3 +2626,40 @@ test("an admitted message is written to the message ledger with the id the turn 
   assert.equal(origins.length, 1);
   void steered;
 });
+
+test("a card the agent composed goes to the chat that drove it: a card where the wire has cards, words elsewhere (docs/79)", async () => {
+  const posted: { surfaceId: string; lines: string[]; buttons: { label: string }[] }[] = [];
+  const adapter = cardAdapter();
+  (adapter as unknown as { postSurfaceCard: unknown }).postSurfaceCard = async (_identity: string, card: { surfaceId: string; lines: string[]; buttons: { label: string }[] }) => {
+    posted.push({ surfaceId: card.surfaceId, lines: card.lines, buttons: card.buttons.map(button => ({ label: button.label })) });
+  };
+  const manager = new ChannelManager({ mayDrive: () => true, ask: async () => "ok", log: () => {} });
+  manager.register(adapter, true, "test");
+  await started(manager);
+  const messages = [
+    { version: "v0.9" as const, createSurface: { surfaceId: "plan", catalogId: "x" } },
+    { version: "v0.9" as const, updateComponents: { surfaceId: "plan", components: [
+      { id: "root", component: "Column", children: ["t", "b"] },
+      { id: "t", component: "Text", text: "Ready?" },
+      { id: "b", component: "Button", child: "bl", action: { event: { name: "go" } } },
+      { id: "bl", component: "Text", text: "Go" },
+    ] } },
+  ];
+  assert.equal(manager.showSurface({ agentId: "a1", agentName: "Ada", surfaceId: "plan", messages }), undefined, "nobody drove the agent from a chat");
+  manager.remember("a1", adapter.name, "feishu:ou_1");
+  assert.equal(manager.showSurface({ agentId: "a1", agentName: "Ada", surfaceId: "plan", messages }), "feishu:ou_1");
+  await manager.idle();
+  assert.deepEqual(posted, [{ surfaceId: "plan", lines: ["Ready?"], buttons: [{ label: "Go" }] }]);
+  assert.ok(!adapter.sent.some(entry => /Ready\?/.test(entry.text)), "the card replaces the text push");
+  // No card on this wire: the words, with what to type for the press.
+  delete (adapter as unknown as { postSurfaceCard?: unknown }).postSurfaceCard;
+  manager.showSurface({ agentId: "a1", agentName: "Ada", surfaceId: "plan", messages });
+  await manager.idle();
+  const words = adapter.sent.find(entry => /Ready\?/.test(entry.text));
+  assert.ok(words !== undefined && /Go：回复 \[Action "go" on card plan\]/.test(words.text), words?.text ?? "no words were sent");
+  // A close says nothing; the chat keeps what was shown.
+  const before = adapter.sent.length;
+  manager.showSurface({ agentId: "a1", agentName: "Ada", surfaceId: "plan", messages: [], close: true });
+  await manager.idle();
+  assert.equal(adapter.sent.length, before);
+});

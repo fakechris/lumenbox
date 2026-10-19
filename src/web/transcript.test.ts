@@ -346,3 +346,38 @@ test("a handoff that opened the context is shown as a quiet host row, never as t
   ]);
   assert.ok(!display.some(entry => entry.kind === "text"), "not a user bubble");
 });
+
+test("a ShowUI call replays as the card's messages; a refused one carries the error so the page draws nothing (docs/79)", () => {
+  const components = [{ id: "root", component: "Text", text: "hi" }];
+  const entries = [
+    {
+      role: "assistant",
+      kind: "blocks",
+      blocks: [
+        { type: "tool_use", id: "1", name: "ShowUI", input: { surface: "plan", title: "Plan", components, data: { n: 1 } } },
+        { type: "tool_use", id: "2", name: "ShowUI", input: { surface: "bad", components: [{ id: "root", component: "Image" }] } },
+        { type: "tool_use", id: "3", name: "ShowUI", input: { surface: "plan", close: true } },
+      ],
+      at: "t",
+    },
+    {
+      role: "user",
+      kind: "results",
+      blocks: [
+        { type: "tool_result", tool_use_id: "1", content: "Shown in the app as card plan." },
+        { type: "tool_result", tool_use_id: "2", content: "Not shown: Component \"Image\" (root) is not in the catalog.", is_error: true },
+        { type: "tool_result", tool_use_id: "3", content: "Closed card plan." },
+      ],
+      at: "t",
+    },
+  ];
+  const display = toDisplayEntries(entries, [{ id: "id-Ada", name: "Ada" }]);
+  const tools = (display.find(entry => entry.kind === "tools") as { tools: { surface?: { surfaceId: string; title?: string; messages: unknown[]; close?: boolean }; isError?: boolean }[] }).tools;
+  assert.equal(tools[0]?.surface?.surfaceId, "plan");
+  assert.equal(tools[0]?.surface?.title, "Plan");
+  assert.deepEqual(tools[0]?.surface?.messages.map(message => Object.keys(message as object)[1]), ["createSurface", "updateComponents", "updateDataModel"]);
+  assert.equal(tools[1]?.surface?.surfaceId, "bad", "the replay does not validate; the error flag is what stops the draw");
+  assert.equal(tools[1]?.isError, true);
+  assert.equal(tools[2]?.surface?.close, true);
+  assert.deepEqual(tools[2]?.surface?.messages, [{ version: "v0.9", deleteSurface: { surfaceId: "plan" } }]);
+});

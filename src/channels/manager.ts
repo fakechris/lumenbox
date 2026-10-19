@@ -33,6 +33,8 @@ import { boxPathsNamed, undelivered } from "../host/named-files.ts";
 import { checkDeliverable, isBroken } from "../host/deliverables.ts";
 import { boardText, type BoardView } from "./board-view.ts";
 import { parseContinuation } from "./continuation.ts";
+import type { A2uiMessage } from "../host/show-ui-catalog.ts";
+import { type SurfaceCardState, surfaceCard, surfaceText } from "./surface-card.ts";
 import { isContextCommand } from "../host/context-recovery.ts";
 import { isGoalCommand } from "../host/goal-mode.ts";
 import { isRecoveryCommand, parseRecoveryCommand, type RecoverTaskResult } from "../host/task-recovery.ts";
@@ -254,6 +256,8 @@ export interface ChannelAdapter {
    * room where nobody can tell which task is asking.
    */
   postQuestionCard?(identity: string, card: QuestionCardState, chatKey?: string): Promise<void>;
+  /** A card the agent composed (docs/79), its buttons speaking action lines. Absent means words. */
+  postSurfaceCard?(identity: string, card: SurfaceCardState, chatKey?: string): Promise<void>;
   /** The board as a card, to a chat. Absent means "看板" answers as plain text. */
   postBoardCard?(chatKey: string, view: BoardView): Promise<void>;
   /**
@@ -1087,6 +1091,42 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         : asker.adapter.send(asker.identity, text);
     void push.catch(() => {
       // The web page shows it too; a failed push is not a lost question.
+    });
+    return asker.identity;
+  }
+
+  /**
+   * Puts a card the agent composed (docs/79) to whoever drove it from a chat: as a card
+   * where the wire has them, as words elsewhere. A press speaks an action line addressed
+   * to the agent, so it goes through the same door as a typed message and nothing here
+   * has to remember the card. A close says nothing — the chat keeps what was shown.
+   */
+  showSurface(input: {
+    conversation?: string;
+    principalId?: string;
+    agentId: string;
+    agentName: string;
+    surfaceId: string;
+    title?: string;
+    messages: readonly A2uiMessage[];
+    close?: boolean;
+  }): string | undefined {
+    const asker = input.conversation !== undefined
+      ? this.questionAskers.get(JSON.stringify([input.agentId, input.conversation, input.principalId]))
+      : this.lastAsker.get(input.agentId);
+    if (asker === undefined) return undefined;
+    if (input.close === true) return asker.identity;
+    const card = surfaceCard({ surfaceId: input.surfaceId, agentName: input.agentName, ...(input.title !== undefined ? { title: input.title } : {}), messages: input.messages });
+    const push = asker.adapter.postSurfaceCard !== undefined
+      ? asker.adapter.postSurfaceCard(asker.identity, card, asker.chatKey)
+      : asker.chatKey !== undefined && asker.adapter.sendToChat !== undefined
+        ? asker.adapter.sendToChat(asker.chatKey, surfaceText(card))
+        : asker.adapter.send(asker.identity, surfaceText(card));
+    void push.catch((error: unknown) => {
+      // The web page shows it too, so a failed push is not a lost card — but it is a line in
+      // the log, because a card that never reached the chat looks exactly like one nobody pressed.
+      const detail = error instanceof Error ? error.message : String(error);
+      this.deps.log(`channel ${asker.adapter.name}: card ${input.surfaceId} not delivered (${detail})`);
     });
     return asker.identity;
   }

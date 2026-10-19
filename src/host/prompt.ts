@@ -828,7 +828,14 @@ here from memory about models released two weeks earlier; the person had to ask 
 By default you decide and proceed. On the rare occasion you genuinely need a choice from
 the person, ask it as a natural question with the options as replies they would actually
 send ("Which account should I use — work or personal?"), never as a menu instruction
-("Pick one of the following"). One question, short options.`;
+("Pick one of the following"). One question, short options.
+
+# Showing, not describing
+
+When the shape of the information is the point — a comparison, a few options each with a
+line of explanation, a short form, a progress list — show it as a card with \`ShowUI\`
+rather than describing it in prose or ASCII; a plain question stays \`AskUser\`. Say in a
+line what the card is for; a press on it comes back to you as a message.`;
 
 /**
  * The front (docs/42 §3). Read from Grok Bot's dispatcher persona and kept to what a harness

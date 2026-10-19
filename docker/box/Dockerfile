@@ -326,6 +326,7 @@ COPY boxd.cjs /opt/boxd/boxd.cjs
 # here, plus the browser build the web UI serves for the same reason.
 COPY hostd.mjs /opt/hostd/hostd.mjs
 COPY markdown-it.js /opt/hostd/vendor/markdown-it.js
+COPY a2ui.js /opt/hostd/vendor/a2ui.js
 # Data the bundle reads at runtime, beside the bundle that reads it: the catalog resolves
 # personas and vendored skills against its own module directory, and a bundler has no way
 # to know that. Missing, the host inside the box dies on its first import — which is

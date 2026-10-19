@@ -68,6 +68,7 @@ const TEMPLATES: Record<string, Template> = {
   Jobs: { en: "checking on background jobs", zh: "查看后台任务" },
   AskUser: { en: "asking you a question", zh: "向你提问" },
   AskSecret: { en: "asking you for a credential", zh: "向你请求凭据" },
+  ShowUI: { en: "showing you a card", zh: "给你看一张卡片" },
   Teammates: { en: "looking up teammates", zh: "查看队友" },
   SendToAgent: { en: "messaging a teammate", zh: "给队友发消息" },
   CreateAgent: { en: "creating a teammate", zh: "创建队友" },
