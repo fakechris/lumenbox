@@ -48,15 +48,19 @@ export class LumenboxTableElement extends A2uiLitElement<typeof TableApi> {
     });
     const selected = new Set(Array.isArray(props.value) ? props.value.map(String) : []);
     const keyOf = (row: Row): string => String(row[keyField] ?? "");
+    // Read the selection at click time, not at render time: two presses before a re-render
+    // (seen live: two ticks in one script, only the second survived) must not lose the first.
+    const current = (): Set<string> => { const value = (this.controller?.props as unknown as { value?: unknown } | undefined)?.value; return new Set(Array.isArray(value) ? value.map(String) : []); };
     const toggle = (row: Row) => {
       const key = keyOf(row);
-      const next = new Set(selected);
+      const next = current();
       if (next.has(key)) next.delete(key); else next.add(key);
       props.setValue?.([...next]);
     };
     const toggleAll = () => {
       const all = sorted.map(keyOf);
-      props.setValue?.(all.every(key => selected.has(key)) ? [] : all);
+      const now = current();
+      props.setValue?.(all.every(key => now.has(key)) ? [] : all);
     };
     const sortOn = (key: string) => {
       if (!sortable) return;
