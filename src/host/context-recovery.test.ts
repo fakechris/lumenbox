@@ -138,14 +138,104 @@ test("an in-flight extraction cannot reintroduce the old context after new", asy
 test("a buffered old exchange cannot hitchhike in a later new-epoch extraction batch", async () => {
   const f = fixture();
   try {
-    let calls = 0;
+    // The old exchange must never reach the extractor; the new ones may (INV-1214: dropping
+    // them along with it was the bug, not the protection).
+    const prompts: string[] = [];
     const rememberer = new Rememberer({ registry: f.registry, provider: {} as never,
-      client: { messages: { create: async () => { calls++; throw new Error("must not extract stale batch"); } } } as never });
+      client: { messages: { create: async (request: { messages: { content: string }[] }) => {
+        prompts.push(request.messages.map(message => message.content).join("\n"));
+        return { content: [{ type: "text", text: "NOTHING" }], usage: { input_tokens: 1, output_tokens: 1 } };
+      } } } as never });
     await f.registry.withContext(f.agent.id, f.input.conversation, () => rememberer.record({ agentId: f.agent.id, text: "OLD" }));
     f.registry.contextStore(f.agent.id, f.input.conversation).advance("new", 0);
     for (let i = 1; i < EXTRACT_EVERY; i++) {
       await f.registry.withContext(f.agent.id, f.input.conversation, () => rememberer.record({ agentId: f.agent.id, text: "NEW" }));
     }
-    assert.equal(calls, 0);
+    await rememberer.settle(f.agent.id);
+    assert.equal(prompts.some(prompt => prompt.includes("OLD")), false, "the old-epoch exchange never reaches the extractor");
+  } finally { f.cleanup(); }
+});
+
+// ── INV-1190: a /new that carries the handoff prepared for the context it leaves ───────────
+
+import { readHandoffDraft, snapshotOf, writeHandoffDraft } from "./handoff-draft.ts";
+import { historyToMessages } from "./turn.ts";
+
+const handoffLine = (text: string) =>
+  `${JSON.stringify({ role: "user", kind: "summary", covers: 0, handoff: { fromEpoch: 0 }, text, personWords: [{ source: "e0#0", text: "永远不要直接推 main", at: "2026-10-15T00:00:00.000Z" }], at: "2026-10-15T00:00:00.000Z" })}\n`;
+
+function draftFixture() {
+  const f = fixture();
+  f.registry.appendTranscript(f.agent.id, { role: "user", text: "永远不要直接推 main", at: "2026-10-15T00:00:00.000Z", fromPerson: true }, f.input.conversation);
+  f.registry.appendTranscript(f.agent.id, { role: "assistant", text: "好的", at: "2026-10-15T00:00:01.000Z" }, f.input.conversation);
+  const deps = (extra: string[] = []) => ({
+    registry: f.registry,
+    mayReset: () => true,
+    blockers: () => extra,
+    handoffDraft: () => readHandoffDraft(f.registry, f.agent.id, f.input.conversation),
+  });
+  return { ...f, deps };
+}
+
+test("a /new installs the matching handoff as entry 0 of the new context, and the next request opens with it", () => {
+  const f = draftFixture();
+  try {
+    const captured = snapshotOf(f.registry, f.agent.id, f.input.conversation);
+    assert.equal(writeHandoffDraft(f.registry, f.agent.id, f.input.conversation, captured, handoffLine("## Goals\n发布报告")), true);
+    const result = newContext(f.deps(), f.input);
+    assert.equal(result.status, "switched");
+    assert.match(result.text, /已带入上一段对话的交接笔记/);
+    const fresh = f.registry.readTranscript(f.agent.id, f.input.conversation);
+    assert.equal(fresh.length, 1);
+    const request = JSON.stringify(historyToMessages(fresh as never));
+    assert.match(request, /发布报告/);
+    assert.match(request, /永远不要直接推 main/, "the person's words ride along verbatim");
+    // A replayed /new says the same thing it did the first time.
+    assert.match(newContext(f.deps(), f.input).text, /已带入上一段对话的交接笔记/);
+  } finally { f.cleanup(); }
+});
+
+test("a handoff written before the conversation went on is not carried, and the reply says why", () => {
+  const f = draftFixture();
+  try {
+    const captured = snapshotOf(f.registry, f.agent.id, f.input.conversation);
+    writeHandoffDraft(f.registry, f.agent.id, f.input.conversation, captured, handoffLine("old note"));
+    f.registry.appendTranscript(f.agent.id, { role: "user", text: "还有一件事", at: "2026-10-15T00:01:00.000Z", fromPerson: true }, f.input.conversation);
+    const result = newContext(f.deps(), f.input);
+    assert.equal(result.status, "switched");
+    assert.match(result.text, /交接笔记没有带入：写好之后对话又继续了/);
+    assert.deepEqual(f.registry.readTranscript(f.agent.id, f.input.conversation), [], "a plain new context");
+  } finally { f.cleanup(); }
+});
+
+test("an old note is never saved as current: a draft whose context moved during writing is refused", () => {
+  const f = draftFixture();
+  try {
+    const captured = snapshotOf(f.registry, f.agent.id, f.input.conversation);
+    f.registry.appendTranscript(f.agent.id, { role: "user", text: "meanwhile", at: "2026-10-15T00:02:00.000Z", fromPerson: true }, f.input.conversation);
+    assert.equal(writeHandoffDraft(f.registry, f.agent.id, f.input.conversation, captured, handoffLine("note")), false);
+    assert.equal(readHandoffDraft(f.registry, f.agent.id, f.input.conversation), undefined);
+  } finally { f.cleanup(); }
+});
+
+test("/new --clean never carries a handoff, even a matching one", () => {
+  const f = draftFixture();
+  try {
+    const captured = snapshotOf(f.registry, f.agent.id, f.input.conversation);
+    writeHandoffDraft(f.registry, f.agent.id, f.input.conversation, captured, handoffLine("note"));
+    const result = newContext(f.deps(), { ...f.input, mode: "clean" as const });
+    assert.match(result.text, /已进入干净上下文/);
+    assert.deepEqual(f.registry.readTranscript(f.agent.id, f.input.conversation), []);
+  } finally { f.cleanup(); }
+});
+
+test("a handoff never bypasses the blockers of a /new", () => {
+  const f = draftFixture();
+  try {
+    const captured = snapshotOf(f.registry, f.agent.id, f.input.conversation);
+    writeHandoffDraft(f.registry, f.agent.id, f.input.conversation, captured, handoffLine("note"));
+    const result = newContext(f.deps(["任务 t1：doing"]), f.input);
+    assert.equal(result.status, "refused");
+    assert.equal(f.registry.contextVersion(f.agent.id, f.input.conversation), 0);
   } finally { f.cleanup(); }
 });

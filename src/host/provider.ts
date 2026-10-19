@@ -20,6 +20,7 @@
 import { envNumber } from "../config.ts";
 import Anthropic from "@anthropic-ai/sdk";
 import { OpenAIWireClient } from "./openai-wire.ts";
+import { currentRedactor } from "./secret-redaction.ts";
 
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -495,6 +496,44 @@ export class MissingCredentialError extends Error {
  * cost every reader more than this one comment.
  */
 function clientFor(
+  profile: ProviderProfile,
+  key: string | undefined,
+  options?: { maxRetries?: number; timeout?: number }
+): Anthropic {
+  return withRedaction(wireClientFor(profile, key, options));
+}
+
+/**
+ * Every request leaves with the vault's values replaced (INV-1186). Here and not at each
+ * call site because there are many — the turn, the summary, the memory selector and
+ * extractor, the reviewers — and one that forgot would be the leak. Only `system` and
+ * `messages` are rewritten, structurally (secret-redaction.ts): tool schemas are ours, and
+ * ids and signed blocks must reach the provider byte-for-byte. The table is deterministic,
+ * so the same history redacts to the same bytes and the prefix cache still holds.
+ */
+export function withRedaction(client: Anthropic): Anthropic {
+  const messages = client.messages as unknown as Record<string, unknown>;
+  for (const method of ["create", "stream"] as const) {
+    const original = messages[method];
+    if (typeof original !== "function") continue;
+    const bound = (original as (...args: unknown[]) => unknown).bind(messages);
+    messages[method] = (params: unknown, ...rest: unknown[]) => bound(redactParams(params), ...rest);
+  }
+  return client;
+}
+
+function redactParams(params: unknown): unknown {
+  const redactor = currentRedactor();
+  if (redactor.empty || typeof params !== "object" || params === null) return params;
+  const request = params as { system?: unknown; messages?: unknown };
+  return {
+    ...request,
+    ...(request.system !== undefined ? { system: redactor.deep(request.system) } : {}),
+    ...(request.messages !== undefined ? { messages: redactor.deep(request.messages) } : {}),
+  };
+}
+
+function wireClientFor(
   profile: ProviderProfile,
   key: string | undefined,
   options?: { maxRetries?: number; timeout?: number }

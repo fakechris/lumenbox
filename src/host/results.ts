@@ -28,6 +28,7 @@ import { join } from "node:path";
 import { agentboxHome } from "../config.ts";
 import { fetchedDir, pruneFetched, readFrontmatter, retentionDays, sha256 } from "./fetched.ts";
 import { TurnLedger } from "./resume.ts";
+import { redactText } from "./secret-redaction.ts";
 
 export const RESULTS_DIRNAME = "results";
 
@@ -119,8 +120,10 @@ export function resultFrontmatter(input: KeepResultInput, bodySha256: string): s
 export function keepToolResult(input: KeepResultInput, home = agentboxHome()): KeptResult {
   const path = keptResultPath(input, home);
   mkdirSync(join(path, ".."), { recursive: true });
-  const digest = sha256(input.text);
-  writeFileSync(path, `${resultFrontmatter(input, digest)}${input.text}\n`, { mode: 0o600 });
+  // Kept whole for ReadHistory, so kept without vault values in clear (INV-1186).
+  const text = redactText(input.text);
+  const digest = sha256(text);
+  writeFileSync(path, `${resultFrontmatter(input, digest)}${text}\n`, { mode: 0o600 });
   pruneKeptOccasionally(line => console.error(line), home, input.at, referencedKeptPaths(home));
   return { path, sha256: digest };
 }

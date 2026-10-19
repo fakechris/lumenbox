@@ -14,7 +14,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type Anthropic from "@anthropic-ai/sdk";
 import { activeWindow, estimateTokens, noteContextWindow, policyForModel, buildSummaryPrompt, clampSummaryToBudget, summaryEntry } from "./compaction.ts";
-import { compactHistory, type CompactedEvent, type TranscriptEntry } from "./turn.ts";
+import { compactHistory, historyToMessages, type CompactedEvent, type TranscriptEntry } from "./turn.ts";
 import type { ProviderProfile } from "./provider.ts";
 import type { AgentRegistry } from "../agents/registry.ts";
 import type { AgentRecord } from "../agents/registry.ts";
@@ -65,6 +65,7 @@ function harness(name: string, options: { appendFails?: () => boolean; flushThro
   const logs: string[] = [];
   const seen: string[] = [];
   const registry = {
+    contextVersion: () => 0,
     appendTranscript: (_agent: string, entry: TranscriptEntry) => {
       if (options.appendFails?.() === true) throw new Error("disk full");
       persisted.push(entry);
@@ -183,13 +184,18 @@ test("clampSummaryToBudget leaves a fitting summary untouched and marks a clippe
   assert.match(clipped.text, /\[summary clipped to fit the context window/);
 });
 
-test("INV-778: a user instruction survives two summaries that omitted it, as an anchor", async () => {
-  const h = harness("user-anchor");
-  const history: TranscriptEntry[] = [user("以后报告都用公制。"), ...Array.from({ length: 14 }, (_, i) => pair(i)).flat()];
+test("INV-1187: what the person said survives two summaries that omitted it, verbatim, once, and reaches the next request", async () => {
+  const h = harness("person-words");
+  const NEVER = "以后报告都用公制。永远不要直接推 main。";
+  const history: TranscriptEntry[] = [user(NEVER), ...Array.from({ length: 14 }, (_, i) => pair(i)).flat()];
   const once = await h.run(history);
-  const first = text(activeWindow(once as never)[0]!);
-  assert.doesNotMatch(first.split("**Exact references")[0]!, /公制/, "the scripted summariser dropped it from the prose");
-  assert.match(first, /the person said: 以后报告都用公制。/, "the anchor carried it");
+  const first = activeWindow(once as never)[0]! as { text: string; personWords?: { source: string; text: string }[] };
+  assert.doesNotMatch(first.text, /公制/, "the scripted summariser dropped it from the prose");
+  assert.deepEqual(first.personWords?.map(word => [word.source, word.text]), [["e0#0", NEVER]], "carried whole, with an anchor that names its epoch");
   const twice = await h.run([...once, ...Array.from({ length: 12 }, (_, i) => pair(100 + i)).flat()]);
-  assert.match(text(activeWindow(twice as never)[0]!), /the person said: 以后报告都用公制。/, "and the second pass carried the first pass's anchor");
+  const second = activeWindow(twice as never)[0]! as { personWords?: { text: string }[] };
+  assert.equal(second.personWords?.filter(word => word.text === NEVER).length, 1, "carried by the second pass, not doubled");
+  const request = JSON.stringify(historyToMessages(twice));
+  assert.ok(request.includes(JSON.stringify(NEVER).slice(1, -1)), "the next request holds the person's words verbatim");
+  assert.match(request, /\[e0#0 · /, "with the anchor ReadHistory understands, even after a /new");
 });
