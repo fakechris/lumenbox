@@ -42,7 +42,11 @@
   `[Action "pick" on card plan2: {"choice":"b"}]` 并回复"收到 plan2 的选择：方案 B"。
   模型自己对失败的解释（"要多包一层 `[[...]]`"）是错的，不要写进任何提示词。
   引擎不是 Claude Code（现场配置是 MiniMax），验收第 5 条按现场引擎走。
-- **未做**：飞书点一次。要一个人在飞书里向 agent 要一张带按钮的卡并按下。
+- **飞书实测（2026-10-19 07:29–07:44）**：Chris 在飞书群里向 Ada 要卡，`ShowUI` 返回
+  `Shown feishu:ou_434ef… as card pick`，飞书里出现蓝头卡片"pick — 选一个"、一行说明、两个按钮；
+  按"左"后 Ada 的飞书会话 transcript 收到 `[Action "pick" on card pick: {"which":"left"}]`
+  （fromPerson，正确的会话键，manager 没记任何状态）。验收第 5 条两端都走通。
+  顺带：card 投递失败原先被静默吞掉，现在会写一行日志（`card <id> not delivered`）。
 
 ## 留给下一手
 
