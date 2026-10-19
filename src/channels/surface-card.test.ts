@@ -63,3 +63,20 @@ test("a closed surface reads as nothing; a cycle in children does not loop", () 
   });
   assert.deepEqual(loop.lines, []);
 });
+
+test("a Table reads as a heading line and the first rows, then how many more are in the app (INV-1280)", () => {
+  const rows = Array.from({ length: 10 }, (_, i) => ({ name: `f${i}.txt`, size: i * 10 }));
+  const card = surfaceCard({
+    surfaceId: "files",
+    agentName: "Ada",
+    messages: [
+      { version: "v0.9", updateComponents: { surfaceId: "files", components: [{ id: "root", component: "Table", columns: [{ key: "name", label: "Name" }, { key: "size", label: "Size" }], rows: { path: "/rows" }, caption: "bytes" }] } },
+      { version: "v0.9", updateDataModel: { surfaceId: "files", path: "/", value: { rows } } },
+    ],
+  });
+  assert.equal(card.lines[0], "**Name** | **Size**");
+  assert.equal(card.lines[1], "f0.txt | 0");
+  assert.equal(card.lines[8], "f7.txt | 70");
+  assert.equal(card.lines[9], "… 2 more rows in the app");
+  assert.equal(card.lines[10], "bytes");
+});

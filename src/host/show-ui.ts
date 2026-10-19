@@ -14,6 +14,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { BASIC_COMPONENTS, Catalog, MessageProcessor, STRICT_VALIDATION } from "@a2ui/web_core/v0_9";
+import { LUMENBOX_COMPONENTS } from "./show-ui-components.ts";
 import { agentboxHome, envNumber } from "../config.ts";
 import { appendLine, type LedgerKind } from "./jsonl.ts";
 
@@ -25,13 +26,13 @@ export { type A2uiMessage, actionText, SHOW_UI_CATALOG_ID, SHOW_UI_COMPONENTS, S
 export const SHOW_UI_MAX_COMPONENTS = 80;
 
 const names = new Set(SHOW_UI_COMPONENTS);
-type ShowUiCatalog = Catalog<(typeof BASIC_COMPONENTS)[number]>;
+type ShowUiCatalog = Catalog<(typeof BASIC_COMPONENTS)[number] | (typeof LUMENBOX_COMPONENTS)[number]>;
 let catalog: ShowUiCatalog | undefined;
 
 /** The lumenbox catalog, built once from the basic catalog's component definitions. */
 export function showUiCatalog(): ShowUiCatalog {
   if (catalog === undefined) {
-    catalog = new Catalog(SHOW_UI_CATALOG_ID, SHOW_UI_PROTOCOL, BASIC_COMPONENTS.filter(api => names.has(api.name)));
+    catalog = new Catalog(SHOW_UI_CATALOG_ID, SHOW_UI_PROTOCOL, [...BASIC_COMPONENTS.filter(api => names.has(api.name)), ...LUMENBOX_COMPONENTS]);
   }
   return catalog;
 }

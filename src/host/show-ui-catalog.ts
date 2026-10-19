@@ -7,9 +7,16 @@ export const SHOW_UI_CATALOG_ID = "https://lumenbox.dev/a2ui/catalog.json";
 export const SHOW_UI_PROTOCOL = "v0.9";
 
 /** The components a card may use, in the order the basic catalog lists them. */
-export const SHOW_UI_COMPONENTS: readonly string[] = [
+/** The basic-catalog components a card may use, in the order the catalog lists them. */
+export const SHOW_UI_BASIC_COMPONENTS: readonly string[] = [
   "Text", "Row", "Column", "List", "Card", "Divider", "Button", "TextField", "CheckBox", "ChoicePicker",
 ];
+
+/** lumenbox's own (INV-1280), schemas in show-ui-components.ts. */
+export const SHOW_UI_LUMENBOX_COMPONENTS: readonly string[] = ["Table"];
+
+/** Every component a card may use. */
+export const SHOW_UI_COMPONENTS: readonly string[] = [...SHOW_UI_BASIC_COMPONENTS, ...SHOW_UI_LUMENBOX_COMPONENTS];
 
 /** The component the surface renders first; A2UI's convention, made a rule here. */
 export const SHOW_UI_ROOT = "root";

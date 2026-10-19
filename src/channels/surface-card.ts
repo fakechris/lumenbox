@@ -120,6 +120,18 @@ export function surfaceCard(input: { surfaceId: string; agentName: string; title
         }
         break;
       }
+      case "Table": {
+        // A chat gets the heading and the first rows as words; sorting and selection are the page's.
+        const columns = (Array.isArray(component.columns) ? component.columns : []) as { key: string; label: string }[];
+        const rows = resolve(component.rows, data);
+        const list = Array.isArray(rows) ? (rows as Record<string, unknown>[]) : [];
+        if (columns.length > 0) lines.push(columns.map(column => `**${column.label}**`).join(" | "));
+        for (const row of list.slice(0, 8)) lines.push(columns.map(column => text(row?.[column.key], data)).join(" | "));
+        if (list.length > 8) lines.push(`… ${list.length - 8} more rows in the app`);
+        const caption = text(component.caption, data);
+        if (caption !== "") lines.push(caption);
+        break;
+      }
       case "TextField": {
         const label = text(component.label, data);
         lines.push(`${label !== "" ? label : "…"}：在聊天里回复`);

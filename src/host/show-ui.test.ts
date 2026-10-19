@@ -150,3 +150,18 @@ test("what the first live run sent is read as what it meant: `{item: [...]}` arr
   const one = compileSurface({ surface: "s", components: [{ id: "root", component: "Column", children: { item: "t" } }, { id: "t", component: "Text", text: "x" }] }, undefined);
   assert.ok(one.ok, one.ok ? "" : one.reason);
 });
+
+test("a Table is in the catalog with its rows and selection bound to the data model; a wrong shape is refused by name (INV-1280)", () => {
+  const card = [
+    { id: "root", component: "Column", children: ["t", "go"] },
+    { id: "t", component: "Table", columns: [{ key: "name", label: "Name" }, { key: "size", label: "Size", align: "end" }], rows: { path: "/rows" }, selectable: true, value: { path: "/picked" }, caption: "bytes" },
+    { id: "go", component: "Button", child: "gl", action: { event: { name: "pick", context: { rows: { path: "/picked" } } } } },
+    { id: "gl", component: "Text", text: "Use these" },
+  ];
+  const ok = compileSurface({ surface: "files", components: card, data: { rows: [{ name: "a.txt", size: 12 }], picked: [] } }, undefined);
+  assert.ok(ok.ok, ok.ok ? "" : ok.reason);
+  const bad = compileSurface({ surface: "files", components: [{ id: "root", component: "Table", columns: "Name", rows: [] }] }, undefined);
+  assert.ok(!bad.ok && /Table.*columns/.test(bad.reason), bad.ok ? "" : bad.reason);
+  const invented = compileSurface({ surface: "files", components: [{ id: "root", component: "Table", columns: [{ key: "a", label: "A" }], rows: [], striped: true }] }, undefined);
+  assert.ok(!invented.ok && /striped/.test(invented.reason), invented.ok ? "" : invented.reason);
+});
