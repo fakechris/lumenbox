@@ -23,7 +23,7 @@ import type { Task } from "./tasks.ts";
 import type { WatchedQuestion } from "./question-expiry.ts";
 
 export interface AttentionItem {
-  kind: "question" | "close-proposal" | "review" | "nudged" | "waiting" | "unanswered";
+  kind: "question" | "close-proposal" | "review" | "nudged" | "waiting" | "unanswered" | "paused";
   /** What to open: a task id, or the conversation a question was asked in. */
   ref: string;
   title: string;
@@ -57,6 +57,8 @@ export interface AttentionInput {
    * be a strange kind of privacy.
    */
   unanswered?: readonly { work: string; agent: string; detail: string; deadline?: string }[];
+  /** Teammate chains the bus stopped (INV-1277): shown to everyone, since no person is in them by definition. */
+  paused?: readonly { fromName: string; toName: string; hops: number; at: string; fromId: string }[];
   /**
    * No person: the installation's own credential, which is the operator. They get
    * everything with a clock on it rather than nothing — an empty page for the one caller
@@ -89,6 +91,18 @@ export function attentionFor(input: AttentionInput): Attention {
           : `${question.agentName} is waiting; with no answer it decides and says which way`,
       deadline: new Date(question.expiresAt).toISOString(),
       with: question.agentName,
+    });
+  }
+
+  // A chain the budget stopped: two agents were talking past the limit with nobody in the
+  // loop. Anyone can bring a person back in by speaking to either of them.
+  for (const chain of input.paused ?? []) {
+    mine.push({
+      kind: "paused",
+      ref: chain.fromId,
+      title: `${chain.fromName} ↔ ${chain.toName}: paused after ${chain.hops} turns with no person`,
+      detail: `${chain.fromName} wanted to message ${chain.toName} again; message either of them to decide`,
+      with: chain.fromName,
     });
   }
 

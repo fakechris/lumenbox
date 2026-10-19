@@ -760,6 +760,8 @@ export type TranscriptEntry =
        * them (docs/42 §2) — a worker nobody has spoken to has no chat anyone is reading.
        */
       fromPerson?: true;
+      /** Turns from a person when a teammate opened this one (INV-1277); absent means 0. */
+      hops?: number;
       /**
        * The turn that wrote this line — the id `turns.jsonl` records — so a message, the
        * turn it caused and the reply that turn gave can be walked as ids rather than
@@ -1892,6 +1894,14 @@ ${outcome.text}`;
   const personIsHere =
     personOpened || personHasSpoken(registry.readTranscript(agent.id, conversation) as TranscriptEntry[]);
   /**
+   * How far this turn is from a person (INV-1277): 0 when a person opened it, else one past the
+   * deepest teammate message that woke it. Every message this turn sends carries it, and the bus
+   * stops the chain past the budget. A schedule or a system note is not a hop: it keeps 0.
+   */
+  const chainHops = personOpened
+    ? 0
+    : inbound.reduce((deepest, message) => (registry.tryGet(message.fromId) === undefined ? deepest : Math.max(deepest, (message.hops ?? 0) + 1)), 0);
+  /**
    * Whether this is a turn nobody is waiting on (INV-775): a teammate's wake, a fork landing,
    * a schedule, a webhook, a listener, or a room message that named nobody. Only then is
    * `NothingToSay` offered. A person's own turn is never one — nor a resume of one, which
@@ -1963,6 +1973,7 @@ ${outcome.text}`;
     // not be walked backwards however precisely everything was timed.
     causedBy: inbound.map(message => message.id),
     ...(personOpened ? { fromPerson: true as const } : {}),
+    ...(chainHops > 0 ? { hops: chainHops } : {}),
     // A continuation wake is the host's text; compaction must never pin it as the ask (INV-766).
     ...(goal !== undefined ? { host: true as const } : {}),
     turnId,
@@ -2136,7 +2147,7 @@ ${outcome.text}`;
     if (peerRecord === undefined) return;
     const names = [peer.fromId.toLowerCase(), (peerRecord?.profile.name ?? peer.fromName).toLowerCase()];
     if (names.some(name => messagedThisTurn.has(name))) return;
-    const ack = deps.bus.send({ fromId: agent.id, toId: peer.fromId, text, relayed: true });
+    const ack = deps.bus.send({ fromId: agent.id, toId: peer.fromId, text, relayed: true, hops: chainHops });
     console.error(`[turn] ${agent.profile.name}: prose reply carried to ${peer.fromName}: ${ack.slice(0, 80)}`);
   };
   // How many tool calls this turn has made, across continuations: the structural signal the
@@ -3355,6 +3366,7 @@ ${outcome.text}`;
             scopes: deps.scopes,
             mcp: isForkConversation(conversation) ? undefined : deps.mcp,
             askUser: deps.askUser,
+            chainHops,
             showUI: deps.showUI,
             askSecret: deps.askSecret,
             handOver: deps.handOver,

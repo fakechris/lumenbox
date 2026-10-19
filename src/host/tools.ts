@@ -198,6 +198,8 @@ export interface ToolContext {
   claims?: Claims;
   registry: AgentRegistry;
   bus: AgentBus;
+  /** Turns from a person for this turn (INV-1277); every send carries it. */
+  chainHops?: number;
   box: BoxClient | undefined;
   /**
    * Which desktop this agent drives. Each agent has its own, so their input and
@@ -2545,6 +2547,7 @@ function tellAssignee(
   if (assigneeId === undefined || assigneeId === context.agent.id) return "";
   const ack = context.bus.send({
     fromId: context.agent.id,
+    hops: context.chainHops ?? 0,
     toId: assigneeId,
     text:
       `Task ${taskId} is assigned to you: "${title}". Read it with Tasks (action: read, id: ${taskId}), ` +
@@ -2562,6 +2565,7 @@ function tellAssignee(
 function greetNewAgent(context: ToolContext, newId: string): void {
   context.bus.send({
     fromId: context.agent.id,
+    hops: context.chainHops ?? 0,
     toId: newId,
     text:
       `You were just created by ${context.agent.profile.name}. Your description says what you own. ` +
@@ -4777,6 +4781,7 @@ export async function dispatchTool(
         toId: targetId,
         text: String(input.message ?? ""),
         priority: input.priority === true,
+        hops: context.chainHops ?? 0,
       });
       return { text: ack };
     }

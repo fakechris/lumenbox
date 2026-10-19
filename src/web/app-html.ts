@@ -5834,6 +5834,7 @@ function renderAttention() {
           item.kind === "close-proposal" ? '<button class="btn sm ghost" data-att-keep="' + esc(item.ref) + '">' + esc(t("ui.attention.keepOpen")) + "</button>" :
           item.kind === "nudged" ? '<button class="btn sm ghost" data-att-drop="' + esc(item.ref) + '">' + esc(t("ui.attention.close")) + '</button><button class="btn sm ghost" data-att-snooze="' + esc(item.ref) + '">' + esc(t("ui.attention.notNow")) + "</button>" :
           item.kind === "question" ? '<button class="btn sm ghost" data-att-open="' + esc(item.ref) + '">' + esc(t("ui.attention.answer")) + "</button>" :
+          item.kind === "paused" ? '<button class="btn sm ghost" data-att-open="' + esc(item.ref) + '">' + esc(t("ui.attention.open")) + "</button>" :
           '<button class="btn sm ghost" data-att-task="' + esc(item.ref) + '">' + esc(t("ui.attention.open")) + "</button>";
         return '<div style="display:flex;gap:8px;align-items:baseline;padding:3px 0;font-size:12.5px">' +
           '<span class="dim mono" style="font-size:11px;min-width:58px">' + esc(item.deadline ? whenOf(item.deadline) : "") + "</span>" +
@@ -6274,6 +6275,7 @@ function activityLine(e) {
   }
   if (e.type === "error") return { html: esc(e.message), cls: "err" };
   if (e.type === "question") return { html: who(e.agentName) + " asked: " + esc(String(e.question).slice(0, 90)), cls: "warn" };
+  if (e.type === "chain_paused") return { html: who(e.fromName) + " &rarr; " + esc(e.toName) + ": paused after " + esc(String(e.hops)) + " turns with no person &mdash; message either of them to decide", cls: "warn" };
   if (e.type === "surface") return { html: who(e.agentName) + " showed a card: " + esc(String(e.title || e.surfaceId).slice(0, 90)), cls: "info" };
   if (e.type === "template_import") {
     return { html: who(e.agentName) + " &larr; template: " + esc(e.summary), cls: e.complete && /but not all/.test(e.summary) ? "warn" : "" };
