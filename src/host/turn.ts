@@ -71,6 +71,11 @@ import {
   calibratedTokens,
   CompactionGuard,
   choosePinnedEntries,
+  choosePersonWords,
+  renderPersonWords,
+  CHARS_PER_TOKEN,
+  PINNED_TOKEN_CAP,
+  SURVIVOR_TOKEN_CAP,
   sanitizePinnedEntry,
   droppedEntry,
   estimateRequestTokens,
@@ -84,6 +89,7 @@ import {
   replacedRange,
   type SummaryEntry,
 } from "./compaction.ts";
+import { anchorOf } from "./history.ts";
 import { DURABLE_RESULT_CHARS, type ResolutionConfig } from "../protocol/index.ts";
 import type { KeptEvidence } from "./resume.ts";
 import { keepToolResult, readKeptSources, RESULT_KEPT_MARKER } from "./results.ts";
@@ -1074,6 +1080,32 @@ export async function compactHistory(options: {
   // and a summary prepared for the team room must never be adopted by a Telegram chat.
   const summaryKey = `${agent.id}/${conversation}`;
   const active = activeWindow(history as HistoryEntry[]);
+  // Where each entry lives, as ReadHistory names it, so the person's carried words point
+  // back at the whole message (INV-1187). Entries in `active` are the same objects as in
+  // `history`, which is this context version's transcript in file order.
+  const positionOf = new Map<unknown, number>(history.map((entry, index) => [entry, index]));
+  const epoch = registry.contextVersion(agent.id, conversation);
+  const sourceOf = (entry: HistoryEntry): string | undefined => {
+    const index = positionOf.get(entry);
+    // Always qualified, even in epoch 0: these anchors are carried forward, and after a /new
+    // a bare `#i` would resolve against the newest epoch, not the one it was written in.
+    return index === undefined ? undefined : anchorOf(index, epoch);
+  };
+  // Everything kept verbatim shares one budget: the person's words first, then the pinned
+  // ask and the tool exemplars in what is left (INV-1187).
+  const withSurvivors = <T extends HistoryEntry>(summary: T, older: readonly HistoryEntry[], tail: readonly HistoryEntry[]): T => {
+    const { words, omitted } = choosePersonWords(older, sourceOf);
+    const wordsTokens = words.length === 0 ? 0 : Math.ceil(renderPersonWords(words, omitted).length / CHARS_PER_TOKEN);
+    const pins = choosePinnedEntries(older, tail, {
+      budgetTokens: Math.max(0, Math.min(PINNED_TOKEN_CAP, SURVIVOR_TOKEN_CAP - wordsTokens)),
+      personWordsCarried: words.length > 0,
+    });
+    return {
+      ...summary,
+      ...(pins.length > 0 ? { pinned: pins } : {}),
+      ...(words.length > 0 ? { personWords: words, ...(omitted > 0 ? { personWordsOmitted: omitted } : {}) } : {}),
+    };
+  };
   // Derived from the model's real window once one response has reported it, so the same code is
   // right for a 200k model and a 1M one.
   const policy = policyForModel(provider.model);
@@ -1178,17 +1210,15 @@ export async function compactHistory(options: {
     // than the cut just computed, and the assembled tail is active.slice(covers) —
     // choosing pins against the fresh cut's tail let a pair between the two land in
     // the request twice, with duplicate tool_use ids the API rejects.
-    const pinnedEntries = choosePinnedEntries(
-      active.slice(0, entry.covers),
-      active.slice(entry.covers)
-    );
-    if (pinnedEntries.length > 0) entry = { ...entry, pinned: pinnedEntries };
+    entry = withSurvivors(entry, active.slice(0, entry.covers), active.slice(entry.covers));
     // And the adopted result must actually fit: summary + pins + real tail under the
     // trigger, or pins are shed first and a still-oversized adoption is refused in
     // favour of the fresh cut.
     if (estimateTokens([entry, ...active.slice(entry.covers)]) > policy.triggerTokens) {
       const bare = { ...entry };
       delete (bare as { pinned?: unknown }).pinned;
+      delete (bare as { personWords?: unknown }).personWords;
+      delete (bare as { personWordsOmitted?: unknown }).personWordsOmitted;
       if (
         entry.covers !== cut.index &&
         estimateTokens([bare, ...active.slice(entry.covers)]) > policy.triggerTokens
@@ -1197,8 +1227,7 @@ export async function compactHistory(options: {
         const fresh = await summarise(olderEntries, cut.index, summaryRuntime.client, summaryProvider, meter);
         if (fresh === undefined) throw new Error("the summariser returned no text");
         entry = fresh;
-        const freshPins = choosePinnedEntries(active.slice(0, entry.covers), active.slice(entry.covers));
-        if (freshPins.length > 0) entry = { ...entry, pinned: freshPins };
+        entry = withSurvivors(entry, active.slice(0, entry.covers), active.slice(entry.covers));
       } else {
         entry = bare as typeof entry;
       }
@@ -1251,8 +1280,7 @@ export async function compactHistory(options: {
     entry = { ...entry, replaced: replacedRange(history.slice(0, cut.index), 0) };
     // Insurance matters *more* when the summary failed: the dropped marker carries the
     // pinned ask and tool exemplars even though it carries no narrative.
-    const pinnedEntries = choosePinnedEntries(olderEntries, active.slice(cut.index));
-    if (pinnedEntries.length > 0) entry = { ...entry, pinned: pinnedEntries };
+    entry = withSurvivors(entry, olderEntries, active.slice(cut.index));
     const detail = `could not summarise (${reason}); dropped ${cut.index} entries instead`;
     log(detail);
     onCompacted({
@@ -1282,7 +1310,7 @@ export async function compactHistory(options: {
   return [...history, entry as TranscriptEntry];
 }
 
-function historyToMessages(
+export function historyToMessages(
   entries: readonly TranscriptEntry[]
 ): Anthropic.MessageParam[] {
   // From the newest summary onwards. Everything before it stays in the transcript on disk — the
@@ -1342,6 +1370,11 @@ function historyToMessages(
     if ("kind" in entry) {
       if (entry.kind === "summary") {
         messages.push({ role: "user", content: entry.text });
+        // The person's own words from the summarised range, verbatim (INV-1187).
+        const words = (entry as SummaryEntry).personWords;
+        if (words !== undefined && words.length > 0) {
+          messages.push({ role: "user", content: renderPersonWords(words, (entry as SummaryEntry).personWordsOmitted ?? 0) });
+        }
         // The verbatim survivors ride between summary and tail: the pinned ask, and
         // one successful call/result pair per tool the tail no longer demonstrates —
         // the in-context examples a weak model imitates schemas from (docs/24 v3).
@@ -2265,6 +2298,12 @@ ${outcome.text}`;
   // about to stop is a dangling turn the model never really answers; left queued, it opens
   // the next turn with the whole of the model's attention instead.
   let finishing = false;
+  // When the latest model request went out, and whether the newer-message gate already looked
+  // (INV-1189): what arrived after this instant is what the answer could not have seen.
+  let roundStartedAt = new Date().toISOString();
+  let newerChecked = false;
+  // Set while the newer-message look is the round in flight: the reply it is about.
+  let newerLook: string | undefined;
   // A one-round demand that the next response contain a tool call (docs/31 layer 1d/1e):
   // set by a guard, spent by the next request, never carried further.
   let forceTools: Anthropic.MessageCreateParams["tool_choice"] | undefined;
@@ -2441,6 +2480,7 @@ ${outcome.text}`;
       },
       { traceId: turnId }
     );
+    roundStartedAt = new Date().toISOString();
     const stream = client.messages.stream(
       {
         model: provider.model,
@@ -2821,6 +2861,21 @@ ${outcome.text}`;
     // blocks have to be echoed back unchanged for the next round to be valid.
     messages.push({ role: "assistant", content: response.content });
 
+    // The newer-message look is a no-tools round (INV-1189). tool_choice "none" is a request a
+    // model can ignore, so here it is enforced: calls are dropped, never run, and an empty
+    // reply falls back to the answer the look was about.
+    if (newerLook !== undefined) {
+      const looked = newerLook;
+      newerLook = undefined;
+      if (response.content.some(block => block.type === "tool_use")) {
+        console.error(`[conduct] ${agent.profile.name}: tool call during the newer-message look dropped, not run`);
+        const said = response.content.filter((block): block is Anthropic.TextBlock => block.type === "text");
+        response.content = said.some(block => block.text.trim() !== "") ? said : [{ type: "text", text: looked, citations: null }];
+        // The stored copy too: an unpaired tool_use left in history is rejected if anything
+        // (a Stop hook) sends the model round again.
+        messages[messages.length - 1] = { role: "assistant", content: response.content };
+      }
+    }
     const toolUses = response.content.filter(
       (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"
     );
@@ -2977,6 +3032,35 @@ ${outcome.text}`;
           } satisfies TranscriptEntry, conversation);
           messages.push({ role: "user", content: report });
           finishing = false;
+          continue;
+        }
+      }
+
+      // The newer-message gate (INV-1189): the person wrote again while this answer was being
+      // generated. Their message keeps its own turn — folding it in here is how an unrelated
+      // request once got swallowed into an old task (INV-611/630) — but this reply is about to
+      // go out first, so the model sees it once, with no tools, and may revise or annotate what
+      // it is about to say. Once per turn; nothing is taken from the queue.
+      if (finalText.trim() && personOpened && goal === undefined && !newerChecked) {
+        newerChecked = true;
+        const newer = deps.bus.newerFromPerson?.(agent.id, conversation, roundStartedAt) ?? [];
+        if (newer.length > 0) {
+          console.error(`[conduct] ${agent.profile.name}: ${newer.length} newer message(s) arrived while answering; one look before delivery`);
+          registry.appendTranscript(agent.id, {
+            role: "assistant",
+            kind: "blocks",
+            blocks: response.content.filter((block): block is Anthropic.TextBlock => block.type === "text"),
+            at: new Date().toISOString(),
+            turnId,
+          } satisfies TranscriptEntry, conversation);
+          const note = newerMessageNote(newer.map(message => message.text), chinese);
+          registry.appendTranscript(agent.id, { role: "user", text: note, at: new Date().toISOString(), turnId, host: true } satisfies TranscriptEntry, conversation);
+          messages.push({ role: "user", content: note });
+          forceTools = { type: "none" };
+          newerLook = finalText;
+          finishing = false;
+          // The look must not be what runs the turn out of rounds: on the last one, it gets one more.
+          if (round === MAX_ROUNDS - 1) round -= 1;
           continue;
         }
       }
@@ -3618,4 +3702,15 @@ export function promptHashOf(...parts: readonly string[]): string {
   const hash = createHash("sha256");
   for (const part of parts) hash.update(part).update("\u0000");
   return hash.digest("hex").slice(0, 16);
+}
+
+/**
+ * The one look a turn takes at what the person wrote while it was answering (INV-1189). Their
+ * message is answered in its own turn; this only lets the reply about to go out stop being wrong.
+ */
+export function newerMessageNote(texts: readonly string[], chinese: boolean): string {
+  const quoted = texts.map(text => `> ${text.replace(/\n/g, "\n> ")}`).join("\n\n");
+  return chinese
+    ? `[newer message] 你在作答时，对方又发来了：\n\n${quoted}\n\n这条会在本回合之后单独处理，现在不要回答它。只在你即将发出的回复因此变错或已不需要时修改或加一句说明；否则把回复原样再给一次。不要调用工具。`
+    : `[newer message] While you were answering, the person wrote:\n\n${quoted}\n\nIt will be answered in its own turn right after this one — do not answer it now. Revise or annotate the reply you are about to send only if it is now wrong or no longer needed; otherwise give it again unchanged. No tools.`;
 }
