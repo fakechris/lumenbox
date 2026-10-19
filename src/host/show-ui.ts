@@ -174,17 +174,27 @@ export function normalizeComponent(component: Record<string, unknown>): Record<s
   return unwrapped;
 }
 
+/** The boolean properties across the catalog; a provider that sends them as strings is read as meant. */
+const BOOLEAN_KEYS = new Set(["selectable", "sortable", "filterable", "enableDate", "enableTime", "close", "sendDataModel"]);
+
 function unwrapItems(value: unknown): unknown {
   if (value === null || typeof value !== "object") return value;
   if (Array.isArray(value)) return value.map(unwrapItems);
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record);
   if (keys.length === 1 && keys[0] === "item") {
+    // Seen 2026-10-19: a list of four columns arrived as {item: [A, {item: [B, {item: [C, {item: D}]}]}]},
+    // a chain; unwrapping each link leaves nested arrays, and the list is their flattening. No
+    // catalog property is an array of arrays, so flattening cannot eat a real shape.
     const inner = unwrapItems(record.item);
-    return Array.isArray(inner) ? inner : [inner];
+    return Array.isArray(inner) ? inner.flat(Infinity) : [inner];
   }
   const out: Record<string, unknown> = {};
-  for (const key of keys) out[key] = unwrapItems(record[key]);
+  for (const key of keys) {
+    const value = unwrapItems(record[key]);
+    // "true"/"false" where the schema says boolean (also seen live): read as what was meant.
+    out[key] = BOOLEAN_KEYS.has(key) && (value === "true" || value === "false") ? value === "true" : value;
+  }
   return out;
 }
 
