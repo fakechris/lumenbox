@@ -123,3 +123,4 @@ this file and the headers disagree. Edit the header, not this table.
 | [handoff-2026-09-24-memory-provenance](handoff-2026-09-24-memory-provenance.md) | Handoff — 上下文恢复第五项：记忆来源纠错与防回灌 | current | 2026-09-24 |
 | [handoff-2026-09-24-task-recover](handoff-2026-09-24-task-recover.md) | Handoff — 上下文恢复第四项：同任务只读 /recover | current | 2026-09-24 |
 | [handoff-2026-10-19-showui](handoff-2026-10-19-showui.md) | Handoff — ShowUI：agent 用 A2UI 组装卡片（INV-1269，docs/79） | current | 2026-10-19 |
+| [handoff-2026-10-19-showui-stage-two](handoff-2026-10-19-showui-stage-two.md) | Handoff — ShowUI 第二阶段：网页端成为交互面（INV-1280） | current | 2026-10-19 |
