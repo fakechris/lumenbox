@@ -29,7 +29,7 @@ import type { McpManager, ToolEffect } from "./mcp.ts";
 import { delegateEnv, delegateModel, PRESETS, presetNamed, quoteForShell, installCommand, withEnginesPath } from "./presets.ts";
 import { namesControlSurface } from "./control-surfaces.ts";
 import { catalogMenu, intersectTools, profilesFor } from "./catalog.ts";
-import { describeHistory, ENTRY_CHARS, readHistory } from "./history.ts";
+import { AROUND_ENTRY_CHARS, describeHistory, ENTRY_CHARS, readEpochHistory, readHistory } from "./history.ts";
 import { canSearch, fetchPage, type FetchedPage, guardUrl, isSearchEngine, MAX_TEXT, pageReadOutcome, searchWeb, WebError } from "./web.ts";
 import { readOutcome, textShape, withReadOutcome } from "./read-outcome.ts";
 import { fetchXPost, XResolversUnavailable, xStatusRef } from "./x-post.ts";
@@ -1447,7 +1447,9 @@ export function buildTools(
         "called, and what came back. Useful when the start of a conversation has been summarised " +
         "to fit: the originals were kept, and a summary is a paraphrase. Also how you check what a " +
         "teammate actually did rather than taking their account of it. Returns a bounded, compact " +
-        "reading with entry numbers, not the raw content, so it will not undo the summarising.",
+        "reading with entry anchors (#42, or e1#42 once a conversation has started over with /new), " +
+        "not the raw content, so it will not undo the summarising. Pass an anchor as around to read " +
+        "that entry in full with what was said just before and after it.",
       input_schema: {
         type: "object",
         properties: {
@@ -1459,6 +1461,18 @@ export function buildTools(
           },
           from: { type: "number", description: "First entry number to read, when reading a range." },
           to: { type: "number", description: "One past the last entry number." },
+          epoch: {
+            type: "number",
+            description:
+              "Which context version from/to count in, when anchors show one (the 1 in e1#42). " +
+              "Omit for the current one. A search without from/to looks in every version.",
+          },
+          around: {
+            type: "string",
+            description:
+              "An anchor from an earlier answer, such as #42 or e1#42: shows that entry in full and " +
+              "the few entries around it. Use it instead of searching again for the rest of a long message.",
+          },
           agent: {
             type: "string",
             description:
@@ -4062,7 +4076,7 @@ export async function dispatchTool(
       });
       if (value === undefined) {
         return {
-          text: outcomeLine("refused", `${secretId} is not a secret granted to you (or does not exist). Ask the person to grant it in Settings → Vault`),
+          text: outcomeLine("refused", `${secretId} is not a secret granted to you (or does not exist). Ask the person to add it under Settings → Team → Secrets, granted to you and with the sites it may be filled into`),
           isError: true,
         };
       }
@@ -4957,22 +4971,29 @@ export async function dispatchTool(
       // bound chat asking what was said earlier was handed the *team room's* history, which
       // is a different room it may never have been in. Silent, because a wrong history
       // reads exactly like a thin one.
-      const entries = context.registry.readAllContextTranscripts(target.id, context.conversation);
+      // Each context version apart, so an anchor is (epoch, index) and stays put (INV-1188).
+      const parts = context.registry.readContextTranscriptsByEpoch(target.id, context.conversation);
       const query = {
         ...(typeof input.search === "string" && input.search.trim() !== ""
           ? { search: input.search.trim() }
           : {}),
         ...(typeof input.from === "number" ? { from: input.from } : {}),
         ...(typeof input.to === "number" ? { to: input.to } : {}),
+        ...(typeof input.epoch === "number" ? { epoch: input.epoch } : {}),
+        ...(typeof input.around === "string" && input.around.trim() !== ""
+          ? { around: input.around.trim() }
+          : typeof input.around === "number" ? { around: String(input.around) } : {}),
       };
       const whose = target.id === context.agent.id ? "" : `${target.profile.name}: `;
-      const history = readHistory(entries, query);
+      const history = readEpochHistory(parts, query);
       return {
         text: withReadOutcome(
           {
             completeness: history.matched > history.lines.length ? "clipped" : "full",
             shape: { entries: history.lines.length, totalEntries: history.matched },
-            note: `each entry is cut to ${ENTRY_CHARS} chars`,
+            note: history.around !== undefined
+              ? `${history.around} is shown up to ${AROUND_ENTRY_CHARS} chars, its neighbours to ${ENTRY_CHARS}`
+              : `each entry is cut to ${ENTRY_CHARS} chars`,
             hint: "the transcript on disk holds the whole of every entry",
           },
           whose + describeHistory(history, query)

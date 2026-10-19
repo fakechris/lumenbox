@@ -3701,7 +3701,8 @@ test("a turn traces each LLM call: one span, the turn's trace id, token usage on
     assert.equal(span!.error, undefined, "a clean round ends clean");
     assert.match(span!.traceId!, /^[0-9a-f-]{36}$/, "the trace id is the turnId, a uuid");
     assert.equal(span!.attrs["gen_ai.request.model"], "claude-opus-5");
-    assert.equal(span!.attrs["gen_ai.system"], "Anthropic");
+    assert.equal(span!.attrs["gen_ai.provider.name"], "anthropic", "semconv 1.37.0's name and enumeration value (INV-815)");
+    assert.equal(span!.attrs["gen_ai.system"], "Anthropic", "the deprecated name rides along until 0.5.0");
     assert.equal(span!.attrs["gen_ai.usage.input_tokens"], 10);
     assert.equal(span!.attrs["gen_ai.usage.output_tokens"], 5);
     assert.equal(span!.attrs["agentbox.round"], 0);

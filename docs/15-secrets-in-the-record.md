@@ -453,3 +453,17 @@ rests on. So the action is not a fix. It is a statement:
 
 That is the whole action, and it is smaller than either critical suggested — which is the
 argument for measuring first rather than designing from a threat model.
+
+## Exact-value hygiene, built (INV-1186, 2026-10-14)
+
+The at-rest half the review left standing is built, wider than "the transcript append site":
+`src/host/secret-redaction.ts` replaces every value the vault holds in every record the host
+writes and in every model request, on both wires. It is labelled hygiene in the code and in
+[docs/10](10-security-backlog.md) S-1, for the reason Critical 1 gave: storage-time redaction
+cannot stop a model that holds the raw value from re-emitting it transformed. Containment is
+still R4's. Three choices in it answer this document's own findings: exact values only (design
+A's patterns stay rejected); short values only where they stand alone, digit-only ones never
+inside a date — because the cost of a false positive here is a corrupted record, not a noisy
+alert; and a rotated value is kept for 30 days, for redaction only, because the copies written
+while it was live are still in the transcript.
+

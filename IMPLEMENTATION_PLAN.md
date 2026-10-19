@@ -1,6 +1,6 @@
-# Implementation plan — after the Grok Bot 0.30 delta and the 2026-09-01 audits
+# Implementation plan — after the 2026-09-01 delta and audits
 
-Source of items: docs/28 (twelve ranked), docs/reviews/2026-09-01-runtime-audit.md (#4,
+Source of items: the 2026-09-01 delta (twelve ranked; docs/11 keeps what it decided), docs/reviews/2026-09-01-runtime-audit.md (#4,
 #6 open; #2's real fix), docs/26 (DingTalk sweep), docs/27 (adapter contract). Ordered by
 measured pain × dependency; each stage ships green on its own.
 

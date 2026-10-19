@@ -19,6 +19,7 @@ import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
 import type { HookRunner } from "./hooks.ts";
 import { appendLine } from "./jsonl.ts";
+import { redactDeep } from "./secret-redaction.ts";
 import { MCP_SEPARATOR, type McpTool } from "./mcp.ts";
 import type { PolicyGate } from "./policy.ts";
 import type { McpServerTool } from "../web/mcp-server.ts";
@@ -415,7 +416,7 @@ export class McpFace {
     if (path === null) return;
     try {
       mkdirSync(dirname(path), { recursive: true });
-      appendLine(path, JSON.stringify(record));
+      appendLine(path, JSON.stringify(redactDeep(record)));
     } catch (error) {
       this.deps.log?.(`cannot write ${path}: ${error instanceof Error ? error.message : String(error)}`);
     }

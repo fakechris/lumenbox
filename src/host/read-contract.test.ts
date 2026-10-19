@@ -146,6 +146,22 @@ test("ReadHistory says how many entries it showed of how many matched, and that 
   }
 });
 
+test("ReadHistory around returns the asked-for entry whole and says so (INV-1188)", async () => {
+  const { registry, agent, context, cleanup } = fixture();
+  try {
+    const long = `draft ${"z".repeat(3_000)} end-of-draft`;
+    for (let n = 0; n < 10; n++) {
+      registry.appendTranscript(agent.id, { role: "user", text: n === 5 ? long : `note ${n}`, at: new Date(Date.UTC(2026, 9, 15, 0, n)).toISOString() });
+    }
+    const result = await dispatchTool("ReadHistory", { around: "#5" }, context);
+    assert.match(result.text, /Around #5/);
+    assert.match(result.text, /end-of-draft/, "a long entry is not cut at 600 chars when asked for by anchor");
+    assert.match(result.text, /#5 is shown up to 8000 chars/);
+  } finally {
+    cleanup();
+  }
+});
+
 test("browser_read reports what came back, and says so plainly when nothing did", async () => {
   const prose = "The page says something long enough to be counted as a block of prose here.";
   const read = fixture({

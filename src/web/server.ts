@@ -27,6 +27,9 @@ import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AgentRegistry, MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
 import { isContextCommand, newContext } from "../host/context-recovery.ts";
+import { readHandoffDraft } from "../host/handoff-draft.ts";
+import { ContextSteward } from "../host/context-steward.ts";
+import { policyForModel } from "../host/compaction.ts";
 import { goalCommand, isGoalCommand } from "../host/goal-mode.ts";
 import { isStandingName, readStanding, STANDING_BYTE_CAP, STANDING_FILES, writeStanding } from "../host/standing.ts";
 import { isRecoveryCommand, recoverTask } from "../host/task-recovery.ts";
@@ -197,6 +200,7 @@ import {
   type McpServerTool,
 } from "./mcp-server.ts";
 import { Vault, type Grant } from "../host/vault.ts";
+import { setRedactionSource } from "../host/secret-redaction.ts";
 import { OAuthGate } from "../host/oauth.ts";
 import { MemoryAdmin } from "../host/memory-admin.ts";
 import { ConnectCodeStore } from "../box/connect-codes.ts";
@@ -514,6 +518,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // The credential vault. Read fresh on each edit through the routes; the orchestrator
   // holds this one instance, so a granted secret is usable on the next host command.
   const vault = new Vault();
+  // Every record write and model request hides what this vault holds (INV-1186).
+  setRedactionSource(() => vault.redactionEntries());
   // The OAuth gate over it (INV-422): tokens minted and refreshed here, never shown.
   const oauth = new OAuthGate(vault);
   // Memory as a person sees and corrects it (INV-426): reads the registry's files, writes
@@ -955,7 +961,24 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // durable, and it lives in the consent ledger.
   let upgradeWaiting: { image: string; losses: string } | undefined;
 
+  // Prepares a handoff for a long private chat at rest; never switches it (INV-1190).
+  const steward = new ContextSteward({
+    registry,
+    ask: (agentId, request) => orchestrator.askBounded(agentId, request),
+    triggerTokens: () => policyForModel(orchestrator.provider.model).triggerTokens,
+    followUps,
+    push: async (chatKey, text) => (chats === undefined ? { delivered: false } : chats.tryPushToChat(chatKey, text)),
+    log,
+  });
+
   const channels = new ChannelManager({
+    contextIdle: input => {
+      let agent: ReturnType<typeof registry.resolve> | undefined;
+      try { agent = input.agentName === undefined ? registry.list()[0] : registry.resolve(input.agentName); }
+      catch { return; }
+      if (agent === undefined) return;
+      void steward.consider({ agentId: agent.id, conversation: conversationIdFor(input.conversationKey), chatKey: input.chatKey, principal: principals.resolve(input.identity).id });
+    },
     contextMode: input => {
       try {
         const agent = input.agentName === undefined ? registry.list()[0] : registry.resolve(input.agentName);
@@ -978,6 +1001,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       };
       return newContext({
         registry,
+        handoffDraft: () => readHandoffDraft(registry, agent.id, request.conversation),
         mayReset: () => mayEnterBox(registry.boxOf(agent.id), principal.id),
         blockers: () => [
           ...input.blockers,
@@ -2153,7 +2177,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         continue;
       }
       const target = chats;
-      void target.tryPushToChat(chatKey, message.text).then(result => {
+      followUps.reserve(chatKey);
+      void target.tryPushToChat(chatKey, message.text).finally(() => followUps.release(chatKey)).then(result => {
         if (!result.delivered) {
           log(`tasks: ${chatKey} was not told (${result.why ?? "no reason given"}); nothing counted`);
           return;

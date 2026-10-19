@@ -46,6 +46,7 @@ import {
   type MemoryRecord,
 } from "../host/memory.ts";
 import { envNumber } from "../config.ts";
+import { redactDeep } from "../host/secret-redaction.ts";
 
 export const AGENT_NAME_MAX_LENGTH = 72;
 export const AGENT_DESCRIPTION_MAX_LENGTH = 12_000;
@@ -346,6 +347,16 @@ export class AgentRegistry {
     if (context !== undefined && this.contextStore(context.agentId, context.conversation).current().epoch !== context.epoch) {
       throw new Error("Stale context: refusing to publish into current memory");
     }
+  }
+
+  /**
+   * Runs outside any captured context. For a producer that carries its own per-input guards
+   * (a learning batch that spans conversations, INV-1214): the scope it happened to start in
+   * belongs to one member, and that member moving to a new context must not refuse the
+   * others' writes.
+   */
+  withoutContext<T>(run: () => T): T {
+    return this.contextScope.exit(run);
   }
 
   /** Saved with asynchronous learning inputs, including batches that mix conversations. */
@@ -1358,7 +1369,8 @@ export class AgentRegistry {
 
   appendTranscript(agentId: string, entry: unknown, conversation = MAIN_CONVERSATION): void {
     mkdirSync(dirname(this.transcriptPathFor(agentId, conversation)), { recursive: true });
-    appendLine(this.transcriptPathFor(agentId, conversation), JSON.stringify(entry));
+    // Vault values never land in the record in clear (INV-1186): hygiene, not containment.
+    appendLine(this.transcriptPathFor(agentId, conversation), JSON.stringify(redactDeep(entry)));
   }
 
   readTranscript(agentId: string, conversation = MAIN_CONVERSATION): unknown[] {
@@ -1370,6 +1382,16 @@ export class AgentRegistry {
   readAllContextTranscripts(agentId: string, conversation = MAIN_CONVERSATION): unknown[] {
     const store = this.contextStore(agentId, conversation);
     return store.versions().flatMap(epoch => this.readTranscriptFile(store.path("transcript", epoch)));
+  }
+
+  /**
+   * The same history, each context version kept apart (INV-1188). An entry's place is
+   * (epoch, index within that epoch): a flat index is not stable, because a late write
+   * still lands in an old epoch (INV-672) and would shift every later number by one.
+   */
+  readContextTranscriptsByEpoch(agentId: string, conversation = MAIN_CONVERSATION): { epoch: number; entries: unknown[] }[] {
+    const store = this.contextStore(agentId, conversation);
+    return store.versions().map(epoch => ({ epoch, entries: this.readTranscriptFile(store.path("transcript", epoch)) }));
   }
 
   private readTranscriptFile(path: string): unknown[] {

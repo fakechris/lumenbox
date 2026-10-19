@@ -49,6 +49,7 @@ import { AutoReviewer } from "./auto-review.ts";
 import { SkillProvenance } from "./skill-provenance.ts";
 import { HookRunner } from "./hooks.ts";
 import { appendLine } from "./jsonl.ts";
+import { redactDeep } from "./secret-redaction.ts";
 import { NetworkEventLog } from "../egress/events.ts";
 import { agentboxHome } from "../config.ts";
 import { join } from "node:path";
@@ -1919,7 +1920,7 @@ export class Orchestrator {
       autoReview: new AutoReviewer({
         ask: prompt => this.askCheaply(agent, prompt, "review"),
         log: line => console.error(`[auto-review] ${line}`),
-        record: entry => appendLine(join(agentboxHome(), "auto-review.jsonl"), JSON.stringify(entry)),
+        record: entry => appendLine(join(agentboxHome(), "auto-review.jsonl"), JSON.stringify(redactDeep(entry))),
       }),
       resumeOf,
       // Watched on the way past rather than subscribed to elsewhere: a turn that gave up
@@ -2186,6 +2187,52 @@ export class Orchestrator {
   }
 
   /**
+   * A bounded, tool-free model call for host-side writers that are not a turn (INV-1190): the
+   * context steward and the handoff note. Explicit output cap and deadline, cancellable, no
+   * tools offered, and metered under its own kind. Undefined on any failure — the callers are
+   * optional improvements and must degrade, never throw.
+   */
+  async askBounded(
+    agentId: string,
+    request: { system: string; prompt: string; maxTokens: number; timeoutMs: number; kind: "steward" | "handoff"; signal?: AbortSignal; principal?: string }
+  ): Promise<{ text: string; truncated: boolean } | undefined> {
+    const agent = this.registry.tryGet(agentId);
+    if (agent === undefined) return undefined;
+    try {
+      const { client, profile } = summaryRuntimeFor(this.provider, this.client);
+      const signal = request.signal === undefined
+        ? AbortSignal.timeout(request.timeoutMs)
+        : AbortSignal.any([request.signal, AbortSignal.timeout(request.timeoutMs)]);
+      const response = await client.messages.create(
+        {
+          model: profile.model,
+          max_tokens: Math.min(request.maxTokens, profile.maxTokens),
+          system: request.system,
+          messages: [{ role: "user", content: request.prompt }],
+        },
+        { signal }
+      );
+      this.usage.recordAside({
+        kind: request.kind,
+        agentId: agent.id,
+        agentName: agent.profile.name,
+        provider: profile.label,
+        model: profile.model,
+        usage: response.usage,
+        // The person whose chat this is pays, as a turn in it would: per-person caps count it.
+        ...(request.principal !== undefined ? { principal: request.principal } : {}),
+      });
+      const text = response.content
+        .filter((block): block is Anthropic.TextBlock => block.type === "text")
+        .map(block => block.text)
+        .join("\n");
+      return { text, truncated: response.stop_reason === "max_tokens" };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * Rewrites a task's title into a short name, from the request that opened it.
    *
    * A board row titled with the first line of a request is a request, not a name —
@@ -2234,7 +2281,7 @@ export class Orchestrator {
     return new AnswerReviewer({
       ask: prompt => this.askCheaply(agent!, prompt, "review"),
       mode: () => answerReviewMode(),
-      record: entry => appendLine(join(agentboxHome(), "answer-review.jsonl"), JSON.stringify(entry)),
+      record: entry => appendLine(join(agentboxHome(), "answer-review.jsonl"), JSON.stringify(redactDeep(entry))),
     }).review({ ...input, agentName: agent.profile.name });
   }
 

@@ -1245,12 +1245,15 @@ export const APP_HTML = String.raw`<!doctype html>
         <input id="setsecid" placeholder="GITHUB_TOKEN" spellcheck="false" style="flex:1;min-width:110px">
         <input id="setsecval" type="password" placeholder="value" spellcheck="false" autocomplete="off" style="flex:1;min-width:110px">
         <input id="setsecgrant" placeholder="* or agent:id or principal:id" spellcheck="false" style="flex:1.3;min-width:130px;font-family:var(--font-sans);font-size:12px">
+        <input id="setsecsites" placeholder="sites: github.com, *.example.com" spellcheck="false" title="Where a browser may type this secret. Empty means it can be used in a host command but never filled into a web page." style="flex:1.3;min-width:150px;font-family:var(--font-sans);font-size:12px">
         <button class="btn sm" id="setsecadd">Add</button>
       </div>
       <div class="fieldnote">A credential, given to who may use it. It is delivered only through
         a host command (RunOnHost) — placed in that one command's environment on your machine,
-        never written into the box. The agent uses it by name and never sees the value. Every use
-        is audited in ~/.agentbox/vault-audit.jsonl.</div>
+        never written into the box — or typed into a web page by the browser, and only on the
+        sites listed. The agent uses it by name and never sees the value. Every use is audited in
+        ~/.agentbox/vault-audit.jsonl. To change who holds it or its sites, add it again under the
+        same name; the value is kept when you leave that box empty.</div>
       <div class="fieldnote" id="setsecstatus"></div>
     </div>
     <div class="field" data-tier="installation" data-settab="doors">
@@ -1797,9 +1800,12 @@ function renderSecrets() {
       }
       $("setsecrets").innerHTML = secrets.map(function (s, i) {
         var who = (s.grants || []).map(function (g) { return g.holder + (g.expiresAt ? " (until " + g.expiresAt.slice(0,10) + ")" : ""); }).join(", ") || "nobody yet";
+        // Where a browser may type it (INV-967): named, or said to be nowhere, so the person
+        // who reads a refusal here sees the same fact the refusal was about.
+        var sites = (s.domains || []).length ? "sites: " + s.domains.join(", ") : "not fillable in a browser (no sites)";
         return '<div style="display:flex;gap:8px;align-items:center;font-size:13px">' +
           '<span class="mono" style="min-width:110px;font-weight:600">' + esc(s.id) + "</span>" +
-          '<span class="dim" style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis">' + esc(who) + "</span>" +
+          '<span class="dim" style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis">' + esc(who) + " · " + esc(sites) + "</span>" +
           '<a href="#" data-secrm="' + i + '" style="color:var(--danger);font-size:12px">Remove</a></div>';
       }).join("");
     })
@@ -1810,15 +1816,20 @@ $("setsecadd").onclick = function () {
   var id = $("setsecid").value.trim();
   var value = $("setsecval").value;
   var grant = $("setsecgrant").value.trim();
-  if (!id || !value) { $("setsecstatus").textContent = "A secret needs a name and a value."; return; }
+  var sites = $("setsecsites").value.split(",").map(function (d) { return d.trim(); }).filter(Boolean);
+  // A secret that exists may be re-saved without its value, to change its grants or sites.
+  var exists = secrets.some(function (s) { return s.id === id; });
+  if (!id || (!value && !exists)) { $("setsecstatus").textContent = "A secret needs a name and a value."; return; }
   $("setsecstatus").textContent = "Saving…";
+  var body = { id: id, grants: grant ? [{ holder: grant }] : [], domains: sites };
+  if (value) body.value = value;
   fetch("/api/vault", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ id: id, value: value, grants: grant ? [{ holder: grant }] : [] })
+    body: JSON.stringify(body)
   })
     .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "save failed"); return d; }); })
-    .then(function () { $("setsecid").value = ""; $("setsecval").value = ""; $("setsecgrant").value = ""; $("setsecstatus").textContent = "Saved."; renderSecrets(); })
+    .then(function () { $("setsecid").value = ""; $("setsecval").value = ""; $("setsecgrant").value = ""; $("setsecsites").value = ""; $("setsecstatus").textContent = "Saved."; renderSecrets(); })
     .catch(function (error) { $("setsecstatus").textContent = error.message; });
 };
 

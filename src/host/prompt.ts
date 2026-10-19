@@ -784,8 +784,7 @@ const TOOLLESS_RECAP = `# Before you answer
  * are what a weekly-report follow-up needed on 2026-09-01, when the agent opened with a
  * wall of clarifying questions and a person read silence; "never fabricate data" and
  * "record what was said" are the alwyzon correction; "ask as a question, not a menu" is
- * how a decision widget stops reading like a form. Grok Bot 0.30 carries the same four
- * sections in the same order, which is evidence they earn their tokens (docs/28).
+ * how a decision widget stops reading like a form (docs/11, the 2026-09-01 delta).
  */
 const CONDUCT_PROMPT = `# How a turn works
 

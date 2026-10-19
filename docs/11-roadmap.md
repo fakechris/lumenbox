@@ -1876,9 +1876,9 @@ where it belongs rather than restated here:
   budget; query-aware memory in continuations) and one design item that gates multi-user:
   provenance for skill files, because the scheduler reads writable content as
   configuration.
-- **docs/28** — Grok Bot 0.30.0 re-analysed at source (app + the public box image);
-  twelve ranked changes for us, from an auto-review classifier in shadow mode to
-  greppable memory files. The full write-up and artifacts are archived outside the repo.
+- **The 2026-09-01 delta** (was docs/28) — twelve ranked changes, from an auto-review
+  classifier in shadow mode to greppable memory files; what it decided is under "What outside
+  research decided" below.
 - **docs/handoff-2026-09-01.md** — the state of the running installation.
 
 ## What to do next, as of 2026-08-27
@@ -2110,6 +2110,7 @@ Research is not shipped (c11f918; AGENTS.md), so on 2026-09-28 their bodies move
 `research/docs/` and what they *decided* is kept below, as rules about our own system. Where a
 study measured something, the number stays with the study; what carries over is the decision
 and the boundary on it. The index of what was read lives on INV-599, not in the repo.
+On 2026-10-09 docs 28 and 76 followed the same way; their numbers are retired, not reused.
 
 **The desktop execution contract (was docs/62; INV-635–640).** Keep host → boxd. Fix
 correctness inside boxd's observe → locate → act → verify contract before anything else:
@@ -2155,6 +2156,35 @@ routing (triage, intent) — that cell may use it. On relational yes/no gating (
 tool risk) it was indistinguishable from chance and failed open with high confidence; that cell
 stays with the stronger judge. A single blended accuracy hides exactly this split, so none is
 reported.
+
+**The 2026-09-01 delta, twelve changes (was docs/28; shipped 2026-09-02, `IMPLEMENTATION_PLAN.md`
+stages 1–5).** Shipped: (1) an auto-review classifier for tool calls, shadow by default
+(`auto-review.ts`), deciding from the person's trusted intent — content from a page, an MCP
+result, a document or another agent never authorises anything, and "draft it" never authorises
+"send it"; (2, 12) the stable `conduct` prompt section: reply first, acknowledgement is not
+delivery, tone and length, never fabricate data, ask decisions as a question rather than a menu;
+(3) routines that fire on a matching channel message, gated on skill provenance — a skill runs
+as the agent the host saw write it or as the default agent; (4) memory projected into the box as
+greppable `profile.md` + `log/YYYY-MM.md` per agent; (5) the turn's memory selection carried
+into its continuation so the prompt prefix stays stable; (6) prompt size printed per turn as the
+baseline for any cut; (7) per-window owner tokens for desktops; (8) a read-only shell
+classifier (`shell-readonly.ts`) that tags an approval `[read-only]` only when certain;
+(9) `hooks.json` in Claude Code's hook dialect (its risk is docs/10 S-9). Not done, by choice:
+cross-tool skill discovery and a persisted browser identity. Not for us: routing box egress
+through the person's laptop, voice calls, virtual cards, iMessage, a bot marketplace.
+
+**An explicit primary agent per owner (was docs/76; INV-951, candidates INV-952–954).** Today
+the first agent created silently answers unaddressed messages and runs skills that name nobody;
+nobody chose that and nobody is shown it. Proposed, in order: (1) one `primaryAgent` pointer per
+owner, used after the door's `defaultAgent` and before the box's first agent; deleting the agent
+clears it and the roster says there is none, rather than the role moving down the list; the
+roster shows it first. (2) A person sets it from the web roster; an agent changes it only when
+asked — list the candidates with a line each, wait for the answer, confirm in one sentence — and
+the change is audited. (3) Proactive turns (heartbeats) are quiet by default: they reach the room
+only through an explicit hand-off with the exact words, counted against `follow-up-budget.ts`;
+measure a week of unanswered heartbeat posts first. (4) The primary stays personal: moving it
+out of a person's ownership is refused with the reason. Onboarding already makes the starter
+team's coordinator the de-facto primary (docs/37 §4); (1) makes that explicit at install.
 
 **How research is kept (was docs/73).** A new study is an ISSUE under INV-599 carrying what the
 thing is, what we take, what we do not and why; candidates derive from it. Its notes, raw
