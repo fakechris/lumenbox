@@ -234,7 +234,7 @@ import { SKILLS_DIR, SKILL_FILENAME, authoringHints, parseSkillFile, slugify } f
 import { catchUpFloor } from "../channels/ingress.ts";
 import { REPLAY_MAX_AGE_MS } from "../channels/feishu.ts";
 import { ActivityLog } from "./activity.ts";
-import { vendorPath } from "./markdown.ts";
+import { a2uiPath, vendorPath } from "./markdown.ts";
 import { toDisplayEntries } from "./transcript.ts";
 import { isReactionEmoji, readReactions, setReaction } from "./reactions.ts";
 import { editDiffOf } from "./line-diff.ts";
@@ -385,6 +385,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   });
   /** Read once on first request; it never changes while the server is up. */
   let vendorScript: Buffer | undefined;
+  let a2uiScript: Buffer | undefined;
   /** The woff2 faces, read once each. Seven files, ~400 KB total. */
   const fontCache = new Map<string, Buffer>();
   /** Asked once: the answer cannot change while this process runs. */
@@ -3694,6 +3695,24 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         // The Markdown renderer, read from node_modules. Served from here rather than
         // a CDN so the UI works with no network and stays on the locked version.
+        // The ShowUI bundle (docs/79), built into vendor/ from src/. Loaded by the page the
+        // first time a card appears; a missing file means `npm run build:vendor` was not run.
+        if (route === "GET /vendor/a2ui.js") {
+          try {
+            a2uiScript ??= readFileSync(a2uiPath());
+            res.writeHead(200, {
+              "content-type": "application/javascript; charset=utf-8",
+              "content-length": a2uiScript.length,
+              "cache-control": "no-store",
+            });
+            res.end(a2uiScript);
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error);
+            log(`the ShowUI bundle is unavailable (run npm run build:vendor): ${detail}`);
+            send(res, 404, { error: detail });
+          }
+          return;
+        }
         if (route === "GET /vendor/markdown-it.js") {
           try {
             vendorScript ??= readFileSync(vendorPath());

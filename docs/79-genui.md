@@ -88,8 +88,9 @@ A2UI 的 `action` 载荷是 `{name, surfaceId, sourceComponentId, timestamp, con
 网页：`<a2ui-surface>` 的 actionHandler → `POST /api/prompt`，文本如上。
 飞书：按钮 value `{surfaceId, action, context}` → `card.action.trigger` → `messageHandler`，
 文本如上，经 `/act` 续接解析。
-`TextField`/`CheckBox` 的值只在网页上有：点击按钮时把当前数据模型（`getRendererDataModel`）
-并入 `context`，所以表单的值随按钮一起回去。
+`TextField`/`CheckBox` 的值只在网页上有：按钮的 `context` 用 A2UI 自己的绑定取值
+（`"context": {"name": {"path": "/name"}}`），渲染器在派发时解析，所以表单的值随按钮一起回去。
+这是规范原生的做法，不另造一条"把整个数据模型附上"的路。
 
 卡片在聊天里保留已操作状态：最后一次 action 的名字显示在卡片底部（docs/41 §1 的 card 规则）。
 

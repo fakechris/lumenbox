@@ -21,7 +21,7 @@ replays it from the transcript, and posts actions as `[Action "name" on card id:
 **Success Criteria**: `app-html.test.ts` covers the surface item markup and update path;
 `transcript.test.ts` covers ShowUI tool_use → `surface` on the display tool; vendor route test;
 `npm run check` green; manual: a card renders in the running web (main checkout, ask first).
-**Status**: Not Started
+**Status**: Complete (2026-10-19) — verified in a real browser on a static harness: the bundle loads, ten components, a TextField + ChoicePicker + Button card renders, and the press yields `[Action "pick" on card plan: {"plan":["b"],"name":"Chris"}]`; the running web is still to be checked at Stage 4.
 
 ## Stage 3: Channels — Feishu card, text fallback, action callback
 **Goal**: Feishu adapter translates the catalog subset to an interactive card; button press comes

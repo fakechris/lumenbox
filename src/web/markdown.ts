@@ -20,7 +20,8 @@
 
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * The options the page runs with. Exported because they are the security boundary —
@@ -55,4 +56,19 @@ export function vendorPath(spec: string = VENDOR_MARKDOWN_IT): string {
     if (existsSync(copied)) return copied;
   }
   return createRequire(import.meta.url).resolve(spec);
+}
+
+/**
+ * The ShowUI bundle (docs/79): built from src/ by `npm run build:vendor` into vendor/,
+ * not resolved from node_modules. Same precedence as the Markdown build — the box's
+ * copy first, then the repository's. Returned whether or not it exists, so the caller's
+ * read says what is missing.
+ */
+export function a2uiPath(): string {
+  const dir = process.env.AGENTBOX_VENDOR_DIR;
+  if (dir) {
+    const copied = join(dir, "a2ui.js");
+    if (existsSync(copied)) return copied;
+  }
+  return join(dirname(fileURLToPath(import.meta.url)), "..", "..", "vendor", "a2ui.js");
 }

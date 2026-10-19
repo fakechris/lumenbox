@@ -17,19 +17,12 @@ import { BASIC_COMPONENTS, Catalog, MessageProcessor, STRICT_VALIDATION } from "
 import { agentboxHome, envNumber } from "../config.ts";
 import { appendLine, type LedgerKind } from "./jsonl.ts";
 
-export const SHOW_UI_CATALOG_ID = "https://lumenbox.dev/a2ui/catalog.json";
-export const SHOW_UI_PROTOCOL = "v0.9";
+import { type A2uiMessage, actionText, SHOW_UI_CATALOG_ID, SHOW_UI_COMPONENTS, SHOW_UI_PROTOCOL, SHOW_UI_ROOT } from "./show-ui-catalog.ts";
 
-/** The components a card may use, in the order the basic catalog lists them. */
-export const SHOW_UI_COMPONENTS: readonly string[] = [
-  "Text", "Row", "Column", "List", "Card", "Divider", "Button", "TextField", "CheckBox", "ChoicePicker",
-];
+export { type A2uiMessage, actionText, SHOW_UI_CATALOG_ID, SHOW_UI_COMPONENTS, SHOW_UI_PROTOCOL, SHOW_UI_ROOT };
 
 /** More than this is not a card; it is a page, and the page would crawl. */
 export const SHOW_UI_MAX_COMPONENTS = 80;
-
-/** The component the surface renders first; A2UI's convention, made a rule here. */
-export const SHOW_UI_ROOT = "root";
 
 const names = new Set(SHOW_UI_COMPONENTS);
 type ShowUiCatalog = Catalog<(typeof BASIC_COMPONENTS)[number]>;
@@ -42,13 +35,6 @@ export function showUiCatalog(): ShowUiCatalog {
   }
   return catalog;
 }
-
-/** One A2UI v0.9 server-to-client message, as the page's processor takes it. */
-export type A2uiMessage =
-  | { version: "v0.9"; createSurface: { surfaceId: string; catalogId: string } }
-  | { version: "v0.9"; updateComponents: { surfaceId: string; components: Record<string, unknown>[] } }
-  | { version: "v0.9"; updateDataModel: { surfaceId: string; path: string; value: unknown } }
-  | { version: "v0.9"; deleteSurface: { surfaceId: string } };
 
 /** What the tool takes, after the handler's shape checks. */
 export interface ShowUiInput {
@@ -153,12 +139,6 @@ export function proveSurface(messages: readonly A2uiMessage[]): string | undefin
   } finally {
     processor.dispose();
   }
-}
-
-/** How a person's click on a card reaches the agent: as one line of an ordinary message. */
-export function actionText(action: { name: string; surfaceId: string; context?: Record<string, unknown> }): string {
-  const context = action.context !== undefined && Object.keys(action.context).length > 0 ? `: ${JSON.stringify(action.context)}` : "";
-  return `[Action "${action.name}" on card ${action.surfaceId}${context}]`;
 }
 
 export const ACTION_LINE = /^\[Action "([^"]+)" on card ([^\s:\]]+)(?:: (.*))?\]$/s;

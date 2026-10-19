@@ -1095,7 +1095,8 @@ export function buildTools(
           "\"root\". Nothing else is in the catalog; a component outside it is refused with " +
           "the reason.\n\n" +
           "When they press a button, you get a message like `[Action \"pick\" on card s1: " +
-          "{\"choice\": \"a\"}]` — the event name and context you wrote, plus the form's values. " +
+          "{\"choice\": \"a\"}]` — the event name and context you wrote. To get a field's value " +
+          "back, bind it in the context: `\"context\": {\"name\": {\"path\": \"/name\"}}`. " +
           "Your turn does not end: say what the card is for in a line and continue, or stop if " +
           "you are waiting on it. Call again with the same `surface` to update the card in " +
           "place; `close: true` removes it. Use AskUser for a plain question; use this when the " +

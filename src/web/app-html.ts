@@ -461,6 +461,13 @@ export const APP_HTML = String.raw`<!doctype html>
   .question .qfree { display: flex; gap: 8px; }
   .question .qfree input { flex: 1; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); color: var(--text); font: inherit; }
   .question .qdone { font-size: 12px; color: var(--text-soft); }
+  /* A card the agent composed (docs/79): the same frame as a question, the body drawn by A2UI. */
+  .surface { border: 1px solid var(--border-strong); background: var(--surface-2, var(--surface)); border-radius: var(--radius-card); padding: 14px 16px; margin: 10px 0; display: flex; flex-direction: column; gap: 10px; }
+  .surface .stitle { font-weight: 600; font-size: 0.95rem; }
+  .surface .sbody { font-size: 0.95rem; --a2ui-color-primary: var(--accent); --a2ui-font-family: inherit; }
+  .surface .sbody .loading { font-size: 12px; color: var(--text-soft); }
+  .surface .sdone { font-size: 12px; color: var(--text-soft); }
+  .surface.closed .sbody { display: none; }
   .divider::before, .divider::after { content: "\200b"; flex: 1; border-top: 1px solid var(--border); }
   .divider.new { color: var(--accent); }
   .divider.on { color: var(--accent); }
@@ -4095,9 +4102,88 @@ var openQuestion = null;  // the question item still waiting for an answer, if a
 var cards = new Map();    // approval / secret / computer cards on screen, by key
 var workingItem = null;   // the "on it" row shown between turn start and the first word
 
+var surfaces = new Map(); // cards the agent composed (docs/79), by surface id, for the thread on screen
+
 function resetThread() {
-  thread = []; openAgent = null; openWork = null; openCall.clear(); openQuestion = null; workingItem = null; cards.clear();
+  thread = []; openAgent = null; openWork = null; openCall.clear(); openQuestion = null; workingItem = null; cards.clear(); surfaces.clear();
   $("chat").innerHTML = "";
+}
+
+/**
+ * The A2UI bundle is loaded the first time a card appears, not with the page: most
+ * threads never show one, and it is as big as the Markdown renderer. Callers queue until
+ * it is there; a failed load says so once and the cards stay as their title line.
+ */
+var a2uiWaiting = [];
+var a2uiState = "idle";
+function a2uiReady(fn) {
+  if (window.A2UI) { fn(); return; }
+  a2uiWaiting.push(fn);
+  if (a2uiState !== "idle") return;
+  a2uiState = "loading";
+  var script = document.createElement("script");
+  script.src = "/vendor/a2ui.js";
+  script.onload = function () { a2uiState = "ready"; var fns = a2uiWaiting; a2uiWaiting = []; fns.forEach(function (f) { f(); }); };
+  script.onerror = function () { a2uiState = "failed"; a2uiWaiting = []; feed("cards cannot be drawn: /vendor/a2ui.js did not load (run npm run build:vendor)", "err"); };
+  document.head.appendChild(script);
+}
+
+/**
+ * A card the agent drew or updated. One item per surface id for as long as the thread is
+ * on screen: a second event for the same id updates it in place, which is what makes an
+ * agent's progress card one card and not a column of them. The messages are kept on the
+ * item and applied to its processor in order, so a redraw never replays what is drawn.
+ */
+function showSurface(e) {
+  var item = surfaces.get(e.surfaceId);
+  if (!item) {
+    closeOpen();
+    item = pushItem({ kind: "surface", surfaceId: e.surfaceId, title: e.title, agentName: e.agentName, messages: [], applied: 0, at: e.at || new Date().toISOString() });
+    surfaces.set(e.surfaceId, item);
+  } else if (e.title) item.title = e.title;
+  item.messages = item.messages.concat(e.messages || []);
+  if (item.node && item.node.isConnected) a2uiReady(function () { mountSurface(item); });
+  return item;
+}
+
+/** Applies the item's messages the processor has not seen, and puts the surface element in the body. */
+function mountSurface(item) {
+  if (!window.A2UI || !item.node || !item.node.isConnected) return;
+  if (!item.processor) {
+    item.processor = new window.A2UI.MessageProcessor([window.A2UI.catalog], function (action) { sendSurfaceAction(item, action); }, { validationConfig: window.A2UI.validation });
+    item.processor.onSurfaceDeleted(function () { item.closed = true; item.el = null; redrawItem(item); });
+  }
+  while (item.applied < item.messages.length) {
+    try { item.processor.processMessages([item.messages[item.applied]]); }
+    catch (error) { feed("card " + esc(item.surfaceId) + ": " + esc(error.message), "err"); }
+    item.applied++;
+  }
+  var body = item.node.querySelector(".sbody");
+  if (!body || item.closed) return;
+  if (!item.el) {
+    var surface = item.processor.getSurface(item.surfaceId);
+    if (!surface) return;
+    item.el = document.createElement("a2ui-surface");
+    item.el.surface = surface;
+  }
+  if (item.el.parentNode !== body) { body.textContent = ""; body.appendChild(item.el); }
+}
+
+/** A press on a card goes to the agent as one line of an ordinary message, like an answer. */
+function sendSurfaceAction(item, action) {
+  if (!current || !action || !action.name) return;
+  var context = action.context && Object.keys(action.context).length ? ": " + JSON.stringify(action.context) : "";
+  var text = '[Action "' + action.name + '" on card ' + item.surfaceId + context + "]";
+  item.lastAction = action.name;
+  var done = item.node && item.node.querySelector(".sdone");
+  if (done) done.textContent = "you pressed: " + action.name;
+  fetch("/api/prompt", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ agent: current, text: text, conversation: currentConversation })
+  }).then(function (res) {
+    if (!res.ok) return res.text().then(function (t) { feed("action rejected: " + esc(t), "err"); });
+  }).catch(function (error) { feed("action failed: " + esc(error.message), "err"); });
 }
 
 /**
@@ -4374,6 +4460,22 @@ function drawItem(item) {
     };
     return div;
   }
+  if (item.kind === "surface") {
+    div.className = "surface" + (item.closed ? " closed" : "");
+    if (item.at) div.setAttribute("data-at", String(item.at));
+    div.setAttribute("data-surface", String(item.surfaceId));
+    div.innerHTML = whoLine(item.agentName || nameOf(current), item.at, ["card"]) +
+      '<div class="stitle"></div><div class="sbody"><span class="loading">drawing the card…</span></div><div class="sdone"></div>';
+    div.querySelector(".stitle").textContent = item.title || "";
+    if (!item.title) div.querySelector(".stitle").remove();
+    var sdone = div.querySelector(".sdone");
+    if (item.closed) sdone.textContent = "closed";
+    else if (item.lastAction) sdone.textContent = "you pressed: " + item.lastAction;
+    else sdone.remove();
+    // The body is filled once the node is in the document; see mountSurface.
+    setTimeout(function () { a2uiReady(function () { mountSurface(item); }); }, 0);
+    return div;
+  }
   div.className = "divider" + (item.isNew ? " new" : "");
   div.textContent = item.label || "";
   if (item.day) div.setAttribute("data-day", item.day);
@@ -4439,12 +4541,16 @@ function replayEntry(id, entry, index, unread) {
       openWork = pushItem({ kind: "work", calls: [], startAt: before && before.at ? before.at : entry.at, done: false });
     }
     var asked = null;
+    var drawn = [];
     for (var t = 0; t < entry.tools.length; t++) {
       var c = entry.tools[t];
       openWork.calls.push({ name: c.name, detail: c.detail, result: c.result, isError: c.isError });
       if (c.question) asked = c.question;
+      // A refused ShowUI drew nothing then, so it draws nothing now.
+      if (c.surface && !c.isError) drawn.push(c.surface);
     }
     redrawItem(openWork);
+    for (var s = 0; s < drawn.length; s++) showSurface({ surfaceId: drawn[s].surfaceId, title: drawn[s].title, messages: drawn[s].messages, at: entry.at });
     if (asked) {
       closeOpen();
       openQuestion = pushItem({ kind: "question", question: asked.question, options: asked.options || [], fallback: asked.fallback, at: entry.at });
@@ -6168,6 +6274,7 @@ function activityLine(e) {
   }
   if (e.type === "error") return { html: esc(e.message), cls: "err" };
   if (e.type === "question") return { html: who(e.agentName) + " asked: " + esc(String(e.question).slice(0, 90)), cls: "warn" };
+  if (e.type === "surface") return { html: who(e.agentName) + " showed a card: " + esc(String(e.title || e.surfaceId).slice(0, 90)), cls: "info" };
   if (e.type === "template_import") {
     return { html: who(e.agentName) + " &larr; template: " + esc(e.summary), cls: e.complete && /but not all/.test(e.summary) ? "warn" : "" };
   }
@@ -6315,6 +6422,12 @@ stream.onmessage = function (raw) {
     if (!inView(e)) return;
     closeOpen();
     openQuestion = pushItem({ kind: "question", question: e.question, options: e.options || [], fallback: e.fallback, at: new Date().toISOString() });
+    return;
+  }
+
+  if (e.type === "surface") {
+    if (!inView(e)) return;
+    showSurface({ surfaceId: e.surfaceId, title: e.title, agentName: e.agentName, messages: e.messages });
     return;
   }
 

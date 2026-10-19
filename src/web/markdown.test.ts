@@ -12,7 +12,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import markdownit from "markdown-it";
-import { MARKDOWN_OPTIONS, vendorPath } from "./markdown.ts";
+import { a2uiPath, MARKDOWN_OPTIONS, vendorPath } from "./markdown.ts";
 
 const md = markdownit(MARKDOWN_OPTIONS);
 
@@ -79,4 +79,16 @@ test("the vendored browser build is present", () => {
   assert.ok(existsSync(path), `not found: ${path}`);
   // Must be the UMD build: the page expects a global, and the ESM build defines none.
   assert.ok(path.endsWith("markdown-it.umd.min.js"), path);
+});
+
+test("the ShowUI bundle is looked for in the box's vendor dir first, then the repository's vendor/ (docs/79)", () => {
+  const saved = process.env.AGENTBOX_VENDOR_DIR;
+  try {
+    delete process.env.AGENTBOX_VENDOR_DIR;
+    assert.ok(a2uiPath().endsWith("/vendor/a2ui.js"), a2uiPath());
+    process.env.AGENTBOX_VENDOR_DIR = "/nonexistent-vendor-dir";
+    assert.ok(a2uiPath().endsWith("/vendor/a2ui.js"), "a missing box copy falls through to the repository's");
+  } finally {
+    if (saved === undefined) delete process.env.AGENTBOX_VENDOR_DIR; else process.env.AGENTBOX_VENDOR_DIR = saved;
+  }
 });

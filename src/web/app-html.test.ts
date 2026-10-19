@@ -309,3 +309,18 @@ test("the Secrets form can say where a secret may be typed, and the list says so
   assert.match(APP_HTML, /not fillable in a browser \(no sites\)/);
   assert.doesNotMatch(APP_HTML, /Settings → Vault/);
 });
+
+test("a card the agent composed is one item per surface, loaded lazily, and a press is one action line (docs/79)", () => {
+  // The bundle is not in the page's <script> tags: most threads show no card, and it is as big as markdown-it.
+  assert.doesNotMatch(APP_HTML, /<script src="\/vendor\/a2ui\.js">/);
+  assert.match(APP_HTML, /script\.src = "\/vendor\/a2ui\.js"/);
+  // The same surface id updates in place rather than stacking.
+  assert.match(APP_HTML, /var item = surfaces\.get\(e\.surfaceId\);/);
+  assert.match(APP_HTML, /if \(e\.type === "surface"\) \{\s*if \(!inView\(e\)\) return;/);
+  // The replay and the live stream draw through the same function, and a refused call draws nothing.
+  assert.match(APP_HTML, /if \(c\.surface && !c\.isError\) drawn\.push\(c\.surface\);/);
+  assert.equal((APP_HTML.match(/showSurface\(\{/g) ?? []).length, 2, "replay and live both call showSurface");
+  // The action line is the host's format (show-ui-catalog.ts actionText), byte for byte.
+  assert.match(APP_HTML, /'\[Action "' \+ action\.name \+ '" on card ' \+ item\.surfaceId \+ context \+ "\]"/);
+  assert.match(APP_HTML, /\.surface \{ border: 1px solid var\(--border-strong\)/);
+});
