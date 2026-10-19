@@ -153,6 +153,7 @@ export interface ToolContext {
    * components against the catalog and says where it went, or why it was refused.
    */
   showUI?: (input: {
+    principalId?: string;
     agentId: string;
     agentName: string;
     conversation?: string;
@@ -3496,6 +3497,7 @@ export async function dispatchTool(
         return { text: "There is nobody to show a card to on this run. Say it in words instead.", isError: true };
       }
       const shown = await context.showUI({
+        ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}),
         agentId: context.agent.id,
         agentName: context.agent.profile.name,
         ...(context.conversation !== undefined ? { conversation: context.conversation } : {}),

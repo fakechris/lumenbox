@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { FeishuChannel, SOCKET_RETRY_MS, classifySocketLine, conversationKeyFor, isAddressed, withDeadline, meetingInvitePrompt, parseMeetingInvite, looksLikeMarkdown, markdownPost, renderApprovalCard, renderCard, renderQuestionCard, splitChatKey } from "./feishu.ts";
+import { FeishuChannel, SOCKET_RETRY_MS, classifySocketLine, conversationKeyFor, isAddressed, withDeadline, meetingInvitePrompt, parseMeetingInvite, looksLikeMarkdown, markdownPost, renderApprovalCard, renderCard, renderQuestionCard, renderSurfaceCard, splitChatKey, surfacePressText } from "./feishu.ts";
 import type { TaskCardState } from "./manager.ts";
 
 interface CardShape {
@@ -1024,4 +1024,34 @@ test("the socket's state is kept and said; reconnect rebuilds it with the reason
   adapter.reconnect("silent for hours while the account answers");
   assert.deepEqual(reasons, ["silent for hours while the account answers"]);
   assert.ok(lines.some(l => /rebuilding the socket — silent for hours/.test(l)));
+});
+
+test("a surface card draws the lines as one block and each press as a button that speaks the action line to its agent (docs/79)", () => {
+  const card = renderSurfaceCard(
+    {
+      surfaceId: "plan",
+      agentName: "Ada",
+      title: "Plans",
+      lines: ["**Which plan?**", "· Plan A", "· Plan B"],
+      buttons: [{ label: "Plan A", name: "choose", context: { pick: ["a"] } }, { label: "Skip", name: "skip" }],
+    },
+    "feishu:oc_room"
+  ) as {
+    header: { title: { content: string }; template: string };
+    elements: { tag: string; text?: { content: string }; actions?: { text: { content: string }; value: Record<string, string> }[] }[];
+  };
+  assert.equal(card.header.title.content, "Plans");
+  assert.equal(card.header.template, "blue");
+  assert.equal(card.elements[0]!.text!.content, "**Which plan?**\n· Plan A\n· Plan B");
+  const actions = card.elements.find(element => element.tag === "action")!.actions!;
+  assert.deepEqual(actions.map(action => action.value), [
+    { act: "choose", surface: "plan", agent: "Ada", context: '{"pick":["a"]}', chatKey: "feishu:oc_room" },
+    { act: "skip", surface: "plan", agent: "Ada", chatKey: "feishu:oc_room" },
+  ]);
+  // The press is the page's line, addressed to the agent, so the manager routes it as a typed message.
+  assert.equal(surfacePressText(actions[0]!.value as { act: string; surface: string; agent: string; context?: string }), '@Ada [Action "choose" on card plan: {"pick":["a"]}]');
+  assert.equal(surfacePressText({ act: "skip", surface: "plan", agent: "Ada", context: "not json" }), '@Ada [Action "skip" on card plan]');
+  const untitled = renderSurfaceCard({ surfaceId: "s", agentName: "Ada", lines: [], buttons: [] }) as { header: { title: { content: string } }; elements: unknown[] };
+  assert.match(untitled.header.title.content, /Ada 给你看一张卡片/);
+  assert.equal(untitled.elements.length, 0);
 });

@@ -29,7 +29,7 @@ back as the action message; DingTalk/Telegram get the text rendering; the manage
 `/act` continuation; restart redraws from the ledger are not required (post-once, like questions).
 **Success Criteria**: `feishu.test.ts` fixture for a Text+Button+ChoicePicker surface; callback
 test yields the action text; `manager.test.ts` `/act` parsing; `strings`/i18n entries; green.
-**Status**: Not Started
+**Status**: Complete (2026-10-19) — the press is `@Agent [Action …]`, so the manager routes it as a typed message with no new state; DingTalk and Telegram get the words path (no DingTalk card template yet).
 
 ## Stage 4: Scenario, prompt, docs, live check
 **Goal**: scenario harness stub `ShowUI:delivered`, a scenario test fake-engine → ShowUI → action

@@ -137,6 +137,10 @@ export function questionTitle(agentName: string, locale: Locale = DEFAULT_LOCALE
   return tr("question.title", locale, { agent: agentName || tr("team", locale) });
 }
 
+export function surfaceTitle(agentName: string, locale: Locale = DEFAULT_LOCALE): string {
+  return tr("surface.title", locale, { agent: agentName || tr("team", locale) });
+}
+
 export function questionText(agentName: string, question: string, choices: string, locale: Locale = DEFAULT_LOCALE): string {
   return tr("question.text", locale, { agent: agentName || tr("team", locale), question, choices });
 }

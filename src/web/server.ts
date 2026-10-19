@@ -653,7 +653,18 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         messages: compiled.send,
         conversation,
       });
-      return { where: "in the app" };
+      // To the chat that drove the agent too, as a card or as words (docs/79 §3).
+      const where = chats?.showSurface({
+        conversation,
+        ...(input.principalId !== undefined ? { principalId: input.principalId } : {}),
+        agentId: input.agentId,
+        agentName: input.agentName,
+        surfaceId: input.surface,
+        ...(title !== undefined ? { title } : {}),
+        messages: compiled.full,
+        ...(input.close === true ? { close: true } : {}),
+      });
+      return { where: where ?? "in the app" };
     },
     askUser: async input => {
       // A question is a card in the chat with the answers as buttons (docs/41 §4), not an
