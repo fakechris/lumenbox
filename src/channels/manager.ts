@@ -33,7 +33,7 @@ import { boxPathsNamed, undelivered } from "../host/named-files.ts";
 import { checkDeliverable, isBroken } from "../host/deliverables.ts";
 import { boardText, type BoardView } from "./board-view.ts";
 import { parseContinuation } from "./continuation.ts";
-import { type A2uiMessage } from "../host/show-ui-catalog.ts";
+import type { A2uiMessage } from "../host/show-ui-catalog.ts";
 import { type SurfaceCardState, surfaceCard, surfaceText } from "./surface-card.ts";
 import { isContextCommand } from "../host/context-recovery.ts";
 import { isGoalCommand } from "../host/goal-mode.ts";

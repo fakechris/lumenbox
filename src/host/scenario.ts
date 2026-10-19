@@ -40,6 +40,7 @@ import type { PendingWork } from "./pending-work.ts";
 import type { TaskStore } from "./tasks.ts";
 import type { GoalLoop, GoalTurnReport } from "./goal-loop.ts";
 import type { GoalGate } from "./goal-gate.ts";
+import { compileSurface, type SurfaceRecord } from "./show-ui.ts";
 
 /** One model reply, in the shape the script writes it. */
 export type ScriptedReply =
@@ -91,6 +92,8 @@ export interface Scorecard {
   questions: number;
   /** AskUser calls the tools refused (over budget, or withheld on a peer turn). */
   questionsRefused: number;
+  /** ShowUI calls the host accepted and delivered (docs/79). */
+  cards: number;
   /** Tool calls before this episode did anything the person asked for. */
   callsBeforeFirstAnswer: number;
   /** Messages between agents. */
@@ -368,6 +371,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
   // and the prompt expect them, exactly as the orchestrator syncs them.
   const mirror = new MemoryMirror({ registry, box: () => box });
   const observations: Observation[] = [];
+  const shownSurfaces = new Map<string, SurfaceRecord>();
   const rounds = new Map<string, number>();
   let clock = 0;
   let calls = 0;
@@ -473,6 +477,16 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
         observations.push({ at: clock++, agent: input.agentName, kind: "call", name: "AskUser:delivered", input: { question: input.question } });
         return "in the app";
       },
+      // The host's own validation (docs/79), so a scenario proves what a box would accept.
+      showUI: async (input: { agentId: string; agentName: string; conversation?: string; surface: string; components?: unknown; data?: unknown; title?: string; close?: boolean }) => {
+        const key = `${input.agentId}/${input.conversation ?? "main"}/${input.surface}`;
+        const compiled = compileSurface(input, shownSurfaces.get(key));
+        if (!compiled.ok) return { error: compiled.reason };
+        if (input.close === true) shownSurfaces.delete(key);
+        else shownSurfaces.set(key, { agentId: input.agentId, agentName: input.agentName, conversation: input.conversation ?? "main", surfaceId: input.surface, messages: compiled.full, at: "" });
+        observations.push({ at: clock++, agent: input.agentName, kind: "call", name: "ShowUI:delivered", input: { surface: input.surface, messages: compiled.send.length } });
+        return { where: "in the app" };
+      },
       onGoalTurn: (report: GoalTurnReport) => {
         if (report.marker.verify !== undefined) void goalGate?.verifierEnded(report);
         else void goalLoop?.turnEnded(report);
@@ -537,6 +551,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
     turns: observations.filter(o => o.kind === "turn").length,
     questions: trail.filter(name => name.endsWith(":AskUser:delivered")).length,
     questionsRefused,
+    cards: trail.filter(name => name.endsWith(":ShowUI:delivered")).length,
     callsBeforeFirstAnswer:
       firstAnswer < 0
         ? trail.length

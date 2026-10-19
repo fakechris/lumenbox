@@ -108,3 +108,6 @@ one should say so.
 ## License
 
 GPL-3.0. The CLI and internal names still say `agentbox`, the working name.
+
+Bundled into the page and the box image, under their own licences: markdown-it (MIT), and for
+ShowUI cards (docs/79) @a2ui/web_core and @a2ui/lit (Apache-2.0) with lit (BSD-3-Clause).

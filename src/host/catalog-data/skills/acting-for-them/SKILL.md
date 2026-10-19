@@ -35,4 +35,4 @@ Most of your work is yours: you write in your own voice and change things in you
 
 ## Tools this touches
 
-`AskUser`, `AskSecret`, `browser_fill_secret`, `HandOverDesktop`, `WaitForControl`, `RunOnHost`, `connector_request`, `RememberFact`, `NothingToSay`, the `browser_*` tools, and tools from connected services (named `<service>__<tool>`, or found with `FindMcpTool` when there are many). Only the tools listed for you on this turn exist; if one named here is missing, that route is not open to you.
+`AskUser`, `ShowUI`, `AskSecret`, `browser_fill_secret`, `HandOverDesktop`, `WaitForControl`, `RunOnHost`, `connector_request`, `RememberFact`, `NothingToSay`, the `browser_*` tools, and tools from connected services (named `<service>__<tool>`, or found with `FindMcpTool` when there are many). Only the tools listed for you on this turn exist; if one named here is missing, that route is not open to you.

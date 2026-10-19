@@ -26,7 +26,7 @@ import {
   questionTitle,
   surfaceTitle,
 } from "./strings.ts";
-import { type SurfaceButton, type SurfaceCardState } from "./surface-card.ts";
+import type { SurfaceButton, SurfaceCardState } from "./surface-card.ts";
 import { actionText } from "../host/show-ui-catalog.ts";
 import type {
   ApprovalCardState,

@@ -2587,3 +2587,49 @@ test("INV-1189: a tool call during the newer-message look is dropped, never run,
     assert.doesNotMatch(JSON.stringify(todosAfter ?? {}), /SHOULD NOT EXIST/, "and the tool never ran");
   } finally { result.cleanup(); }
 });
+
+// ── docs/79: a card the agent composed, and the press that comes back ────────────────────
+
+test("a ShowUI card is validated by the host and delivered; the press returns as a message the agent reads next turn", async () => {
+  const seen: string[] = [];
+  const script: Script = ({ agent, round, opened, messages }) => {
+    if (agent !== "Shower") return { say: "ok" };
+    // `opened` is the conversation's first message; the press is the last user message in context.
+    const last = messages.filter(message => message.role === "user").at(-1);
+    const latest = last === undefined ? "" : typeof last.content === "string" ? last.content : last.content.map(block => ("text" in block ? block.text : "")).join(" ");
+    seen.push(latest);
+    if (round === 1 && !/\[Action/.test(opened)) return { call: "ShowUI", input: { surface: "bad", components: [{ id: "root", component: "Image", url: "x" }] } };
+    if (round === 2 && !/\[Action/.test(opened)) return { say: "pick one on the card" };
+    if (round === 0 && !/\[Action/.test(opened)) {
+      return {
+        call: "ShowUI",
+        input: {
+          surface: "plan",
+          title: "Which plan?",
+          components: [
+            { id: "root", component: "Column", children: ["a", "b"] },
+            { id: "a", component: "Button", child: "al", action: { event: { name: "pick", context: { choice: "a" } } } },
+            { id: "al", component: "Text", text: "Plan A" },
+            { id: "b", component: "Button", child: "bl", action: { event: { name: "pick", context: { choice: "b" } } } },
+            { id: "bl", component: "Text", text: "Plan B" },
+          ],
+        },
+      };
+    }
+    return { say: /\[Action "pick" on card plan: \{"choice":"b"\}\]/.test(latest) ? "going with B" : "unclear" };
+  };
+  const episode = await runEpisode({
+    team: [{ name: "Shower" }],
+    says: ["which plan should we take?", '[Action "pick" on card plan: {"choice":"b"}]'],
+    script,
+    maxRounds: 12,
+  });
+  try {
+    assert.equal(episode.score.cards, 1, `one card reached the person, not ${episode.score.cards}: ${episode.score.trail.join(" | ")}`);
+    assert.match(episode.score.refusals.join(" "), /"Image" \(root\) is not in the catalog/, `the host's catalog refused the second card with the reason; trail: ${episode.score.trail.join(" | ")}; refusals: ${episode.score.refusals.join(" | ")}`);
+    const said = episode.observations.filter(o => o.kind === "say").map(o => o.text ?? "");
+    assert.ok(said.includes("going with B"), `the press reached the next turn as a message: ${said.join(" | ")}; opened: ${JSON.stringify(seen)}`);
+  } finally {
+    episode.cleanup();
+  }
+});
