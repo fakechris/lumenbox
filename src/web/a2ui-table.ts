@@ -9,6 +9,7 @@
 import { html, nothing, css, type TemplateResult } from "lit";
 import { A2uiLitElement } from "@a2ui/web_core/universal";
 import { TableApi } from "../host/show-ui-components.ts";
+import { badge, linkTarget } from "./a2ui-bits.ts";
 
 type Row = Record<string, unknown>;
 
@@ -27,7 +28,7 @@ export class LumenboxTableElement extends A2uiLitElement<typeof TableApi> {
 
   override render(): TemplateResult | typeof nothing {
     const props = this.controller?.props as unknown as {
-      columns: { key: string; label: string; align?: "start" | "end" }[];
+      columns: { key: string; label: string; align?: "start" | "end"; kind?: "text" | "badge" | "number" | "link" }[];
       rows: unknown;
       rowKey?: string;
       selectable?: boolean;
@@ -71,12 +72,12 @@ export class LumenboxTableElement extends A2uiLitElement<typeof TableApi> {
       <table class="lb-table">
         <thead><tr>
           ${props.selectable ? html`<th class="lb-sel"><input type="checkbox" .checked=${sorted.length > 0 && sorted.every(row => selected.has(keyOf(row)))} @change=${toggleAll} title="all"></th>` : nothing}
-          ${columns.map(column => html`<th class=${column.align === "end" ? "lb-end" : ""} @click=${() => sortOn(column.key)} style=${sortable ? "cursor:pointer" : ""}>${column.label}${this.sortBy === column.key ? (this.sortDesc ? " ↓" : " ↑") : ""}</th>`)}
+          ${columns.map(column => html`<th class=${column.align === "end" || column.kind === "number" ? "lb-end" : ""} @click=${() => sortOn(column.key)} style=${sortable ? "cursor:pointer" : ""}>${column.label}${this.sortBy === column.key ? (this.sortDesc ? " ↓" : " ↑") : ""}</th>`)}
         </tr></thead>
         <tbody>
           ${sorted.map(row => html`<tr class=${selected.has(keyOf(row)) ? "lb-picked" : ""}>
             ${props.selectable ? html`<td class="lb-sel"><input type="checkbox" .checked=${selected.has(keyOf(row))} @change=${() => toggle(row)}></td>` : nothing}
-            ${columns.map(column => html`<td class=${column.align === "end" ? "lb-end" : ""}>${cell(row[column.key])}</td>`)}
+            ${columns.map(column => html`<td class=${column.align === "end" || column.kind === "number" ? "lb-end" : ""}>${cellOf(column.kind, row[column.key])}</td>`)}
           </tr>`)}
           ${sorted.length === 0 ? html`<tr><td class="lb-empty" colspan=${columns.length + (props.selectable ? 1 : 0)}>—</td></tr>` : nothing}
         </tbody>
@@ -89,4 +90,14 @@ function cell(value: unknown): string {
   if (value === null || value === undefined) return "";
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
+}
+
+/** A cell by its column's kind: a status word as a Badge, a number tabular, a link as a link. */
+function cellOf(kind: string | undefined, value: unknown): unknown {
+  if (kind === "badge") return value === undefined || value === null || value === "" ? "" : badge(value);
+  if (kind === "link" && typeof value === "string" && value !== "") {
+    const target = linkTarget(value);
+    return html`<a class=${`lb-link lb-link-${target.kind}`} href=${target.href} target=${target.kind === "url" ? "_blank" : "_self"} rel="noopener">${target.kind === "file" ? value.split("/").pop() : value}</a>`;
+  }
+  return cell(value);
 }

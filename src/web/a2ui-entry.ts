@@ -14,7 +14,8 @@ import { injectBasicCatalogStyles } from "@a2ui/web_core/v0_9/basic_catalog";
 import { registerUniversalElement } from "@a2ui/web_core/universal";
 import { SHOW_UI_BASIC_COMPONENTS, SHOW_UI_CATALOG_ID, SHOW_UI_PROTOCOL } from "../host/show-ui-catalog.ts";
 import { SHOW_UI_FUNCTIONS } from "../host/show-ui-functions.ts";
-import { ApproveApi, ChartApi, CodeApi, FilePreviewApi, MarkdownApi, ProgressApi, TableApi } from "../host/show-ui-components.ts";
+import { ApproveApi, BadgeApi, CalloutApi, ChartApi, CodeApi, FilePreviewApi, KeyValueApi, LinkApi, MarkdownApi, ProgressApi, StatApi, TableApi } from "../host/show-ui-components.ts";
+import { LumenboxBadgeElement, LumenboxCalloutElement, LumenboxKeyValueElement, LumenboxLinkElement, LumenboxStatElement } from "./a2ui-bits.ts";
 import { LumenboxChartElement } from "./a2ui-chart.ts";
 import { LumenboxFilePreviewElement } from "./a2ui-file.ts";
 import { LumenboxTableElement } from "./a2ui-table.ts";
@@ -33,6 +34,11 @@ const lumenbox = [
   { ...ApproveApi, tagName: LumenboxApproveElement.tagName, element: LumenboxApproveElement },
   { ...ChartApi, tagName: LumenboxChartElement.tagName, element: LumenboxChartElement },
   { ...FilePreviewApi, tagName: LumenboxFilePreviewElement.tagName, element: LumenboxFilePreviewElement },
+  { ...BadgeApi, tagName: LumenboxBadgeElement.tagName, element: LumenboxBadgeElement },
+  { ...KeyValueApi, tagName: LumenboxKeyValueElement.tagName, element: LumenboxKeyValueElement },
+  { ...StatApi, tagName: LumenboxStatElement.tagName, element: LumenboxStatElement },
+  { ...CalloutApi, tagName: LumenboxCalloutElement.tagName, element: LumenboxCalloutElement },
+  { ...LinkApi, tagName: LumenboxLinkElement.tagName, element: LumenboxLinkElement },
 ];
 for (const component of lumenbox) registerUniversalElement(component);
 const catalog = new Catalog(

@@ -189,6 +189,32 @@ export function surfaceCard(input: { surfaceId: string; agentName: string; title
         lines.push(`${title !== "" ? `${title}: ` : ""}${String(component.path ?? "")}（在应用里打开）`);
         break;
       }
+      case "Badge": {
+        const label = text(component.text, data);
+        if (label !== "") lines.push(`[${label}]`);
+        break;
+      }
+      case "KeyValue": {
+        const items = resolve(component.items, data);
+        for (const item of (Array.isArray(items) ? items : []) as Record<string, unknown>[]) lines.push(`${text(item?.key, data)}：${text(item?.value, data)}`);
+        break;
+      }
+      case "Stat": {
+        const unit = typeof component.unit === "string" ? component.unit : "";
+        const delta = text(component.delta, data);
+        lines.push(`${text(component.label, data)}：**${text(component.value, data)}${unit}**${delta !== "" ? ` (${delta})` : ""}`);
+        break;
+      }
+      case "Callout": {
+        const title = text(component.title, data);
+        const body = text(component.text, data);
+        lines.push(`> ${title !== "" ? `**${title}** ` : ""}${body.split("\n").join(" ")}`);
+        break;
+      }
+      case "Link": {
+        lines.push(`${text(component.text, data)} → ${String(component.to ?? "")}`);
+        break;
+      }
       case "Slider":
       case "DateTimeInput": {
         const label = text(component.label, data);

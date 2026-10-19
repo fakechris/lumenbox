@@ -121,3 +121,18 @@ test("a Chart is its points in a line and a FilePreview is its path, in a chat (
   });
   assert.deepEqual(card.lines, ["**Latency**", "p50 12ms · p99 80ms", "Report: /home/box/work/report.md（在应用里打开）"]);
 });
+
+test("the small components read as words in a chat: badge in brackets, key：value, a bold stat, a quoted callout, an arrow link (INV-1286)", () => {
+  const card = surfaceCard({
+    surfaceId: "b", agentName: "Mia",
+    messages: [{ version: "v0.9", updateComponents: { surfaceId: "b", components: [
+      { id: "root", component: "Column", children: ["bd", "kv", "st", "co", "ln"] },
+      { id: "bd", component: "Badge", text: "blocked", tone: "danger" },
+      { id: "kv", component: "KeyValue", items: [{ key: "负责人", value: "Bob" }] },
+      { id: "st", component: "Stat", label: "review", value: "6", delta: "+2" },
+      { id: "co", component: "Callout", title: "注意", text: "先清历史\n再合" },
+      { id: "ln", component: "Link", text: "晨报", to: "/home/box/work/notes/morning.md" },
+    ] } }],
+  });
+  assert.deepEqual(card.lines, ["[blocked]", "负责人：Bob", "review：**6** (+2)", "> **注意** 先清历史 再合", "晨报 → /home/box/work/notes/morning.md"]);
+});

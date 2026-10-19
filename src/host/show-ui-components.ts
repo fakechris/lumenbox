@@ -22,7 +22,13 @@ export const TableApi = {
     .object({
       weight: z.number().optional(),
       /** Column order and headings; `key` names the field in each row object. */
-      columns: z.array(z.object({ key: z.string().min(1), label: z.string(), align: z.enum(["start", "end"]).optional() }).strict()).min(1),
+      columns: z.array(z.object({
+        key: z.string().min(1),
+        label: z.string(),
+        align: z.enum(["start", "end"]).optional(),
+        /** How a cell is drawn: text, a status Badge (tone from the value), a right-aligned number, or a Link. */
+        kind: z.enum(["text", "badge", "number", "link"]).optional(),
+      }).strict()).min(1),
       /** The rows: an array of objects, inline or bound with {"path": "/rows"}. */
       rows: DynamicValueSchema,
       /** Which row field identifies a row; defaults to the first column's key. */
@@ -146,5 +152,69 @@ export const FilePreviewApi = {
     .strict(),
 };
 
+
+/** A short status label. The tone is the colour; the text is the word. */
+export const ToneSchema = z.enum(["ok", "warn", "danger", "info", "neutral"]);
+export const BadgeApi = {
+  name: "Badge",
+  schema: z.object({ weight: z.number().optional(), text: DynamicStringSchema, tone: ToneSchema.optional() }).strict(),
+};
+
+/** Key: value pairs in two columns; a value may carry a tone. */
+export const KeyValueApi = {
+  name: "KeyValue",
+  schema: z
+    .object({
+      weight: z.number().optional(),
+      /** [{key, value, tone?}], inline or bound. */
+      items: DynamicValueSchema,
+    })
+    .strict(),
+};
+
+/** One number that matters, with its label; several in a Row make a strip. */
+export const StatApi = {
+  name: "Stat",
+  schema: z
+    .object({
+      weight: z.number().optional(),
+      label: DynamicStringSchema,
+      value: DynamicStringSchema,
+      unit: z.string().optional(),
+      /** A change to show beside the value, e.g. "+3" or "-12%". */
+      delta: DynamicStringSchema.optional(),
+      tone: ToneSchema.optional(),
+    })
+    .strict(),
+};
+
+/** A note the person should not miss: a tone, a title, Markdown. */
+export const CalloutApi = {
+  name: "Callout",
+  schema: z
+    .object({
+      weight: z.number().optional(),
+      tone: ToneSchema.optional(),
+      title: DynamicStringSchema.optional(),
+      text: DynamicStringSchema,
+    })
+    .strict(),
+};
+
+/**
+ * A link: to a file in the box (an absolute path under /home/box/work), a task (t12), or an
+ * http(s) URL. An external URL shows its host beside the text and never opens by itself.
+ */
+export const LinkApi = {
+  name: "Link",
+  schema: z
+    .object({
+      weight: z.number().optional(),
+      text: DynamicStringSchema,
+      to: z.string().min(1),
+    })
+    .strict(),
+};
+
 /** Every lumenbox component, in the order they were added. */
-export const LUMENBOX_COMPONENTS = [TableApi, ProgressApi, MarkdownApi, CodeApi, ApproveApi, ChartApi, FilePreviewApi] as const;
+export const LUMENBOX_COMPONENTS = [TableApi, ProgressApi, MarkdownApi, CodeApi, ApproveApi, ChartApi, FilePreviewApi, BadgeApi, KeyValueApi, StatApi, CalloutApi, LinkApi] as const;

@@ -246,3 +246,23 @@ test("the data model gets the {item: [...]} reading too: a Table bound to wrappe
   assert.ok(patched.ok, patched.ok ? "" : patched.reason);
   assert.deepEqual((patched.send[0] as { updateDataModel: { value: unknown } }).updateDataModel.value, [{ card: "t3" }]);
 });
+
+test("Badge, KeyValue, Stat, Callout and Link are in the catalog; a Link goes to a box file, a task or http(s) only (INV-1286)", () => {
+  const ok = compileSurface({ surface: "b", components: [
+    { id: "root", component: "Column", children: ["s", "k", "c", "l1", "l2", "l3", "t"] },
+    { id: "s", component: "Stat", label: "review", value: "6", delta: "+2", tone: "warn" },
+    { id: "k", component: "KeyValue", items: [{ key: "owner", value: "Bob" }, { key: "state", value: "blocked", tone: "danger" }] },
+    { id: "c", component: "Callout", tone: "warn", title: "Mind", text: "t245 **first**" },
+    { id: "l1", component: "Link", text: "report", to: "/home/box/work/report.md" },
+    { id: "l2", component: "Link", text: "t245", to: "t245" },
+    { id: "l3", component: "Link", text: "spec", to: "https://a2ui.org/" },
+    { id: "t", component: "Table", columns: [{ key: "task", label: "卡", kind: "link" }, { key: "st", label: "状态", kind: "badge" }, { key: "n", label: "N", kind: "number" }], rows: [{ task: "t1", st: "review", n: 3 }] },
+  ] }, undefined);
+  assert.ok(ok.ok, ok.ok ? "" : ok.reason);
+  for (const to of ["/etc/hosts", "javascript:alert(1)", "ftp://x/y", "task-12"]) {
+    const bad = compileSurface({ surface: "b", components: [{ id: "root", component: "Link", text: "x", to }] }, undefined);
+    assert.ok(!bad.ok && /none of these/.test(bad.reason), `${to}: ${bad.ok ? "accepted" : bad.reason}`);
+  }
+  const kind = compileSurface({ surface: "b", components: [{ id: "root", component: "Table", columns: [{ key: "a", label: "A", kind: "pill" }], rows: [] }] }, undefined);
+  assert.ok(!kind.ok && /kind/.test(kind.reason));
+});
