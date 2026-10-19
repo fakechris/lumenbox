@@ -491,6 +491,14 @@ export const APP_HTML = String.raw`<!doctype html>
   .surface .lb-approve-title { font-weight: 600; }
   .surface .lb-approve-row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
   .surface .lb-markdown p:first-child { margin-top: 0; } .surface .lb-markdown p:last-child { margin-bottom: 0; }
+  .surface .lb-chart-title { font-weight: 600; margin-bottom: 4px; }
+  .surface .lb-chart svg { display: block; }
+  .surface .lb-chart-label, .surface .lb-chart-axis, .surface .lb-chart-value { font-size: 11px; fill: var(--text-soft); }
+  .surface .lb-file { border: 1px solid var(--border); border-radius: var(--radius-md); padding: 6px 8px; margin: 6px 0; }
+  .surface .lb-file-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .surface .lb-file-name { font-weight: 600; }
+  .surface .lb-file-body { margin: 6px 0 0; font-size: 12.5px; max-height: 320px; overflow: auto; }
+  .surface .lb-file-image { max-width: 100%; margin-top: 6px; border-radius: var(--radius-md); }
   .divider::before, .divider::after { content: "\200b"; flex: 1; border-top: 1px solid var(--border); }
   .divider.new { color: var(--accent); }
   .divider.on { color: var(--accent); }

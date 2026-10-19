@@ -105,5 +105,46 @@ export const ApproveApi = {
     .strict(),
 };
 
+
+/**
+ * A small chart, drawn as SVG on the page with nothing fetched: bars or a line over
+ * `points` of {label, value}, inline or bound.
+ */
+export const ChartApi = {
+  name: "Chart",
+  schema: z
+    .object({
+      weight: z.number().optional(),
+      kind: z.enum(["bar", "line"]).optional(),
+      title: DynamicStringSchema.optional(),
+      /** [{label, value}], inline or bound {"path": "/points"}. */
+      points: DynamicValueSchema,
+      /** Shown after each value, e.g. "ms" or "%". */
+      unit: z.string().optional(),
+      /** Pixels; default 160. */
+      height: z.number().min(60).max(600).optional(),
+    })
+    .strict(),
+};
+
+/**
+ * A file in the box: a link that opens it through the page's own file route, and for text
+ * a preview of its first lines. Only paths under the work directory; nothing outside the
+ * box is reachable from a card.
+ */
+export const FilePreviewApi = {
+  name: "FilePreview",
+  schema: z
+    .object({
+      weight: z.number().optional(),
+      /** An absolute path under /home/box/work. */
+      path: z.string().min(1),
+      title: DynamicStringSchema.optional(),
+      /** How many lines of a text file to show; default 20, 0 for the link only. */
+      lines: z.number().int().min(0).max(200).optional(),
+    })
+    .strict(),
+};
+
 /** Every lumenbox component, in the order they were added. */
-export const LUMENBOX_COMPONENTS = [TableApi, ProgressApi, MarkdownApi, CodeApi, ApproveApi] as const;
+export const LUMENBOX_COMPONENTS = [TableApi, ProgressApi, MarkdownApi, CodeApi, ApproveApi, ChartApi, FilePreviewApi] as const;

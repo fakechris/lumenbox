@@ -212,3 +212,16 @@ test("a data-only or patch call moves an existing card without resending compone
   const image = compileSurface({ surface: "i", components: [{ id: "root", component: "Image", url: "https://x/y.png" }] }, undefined);
   assert.ok(!image.ok && /not in the catalog/.test(image.reason));
 });
+
+test("Chart and FilePreview are in the catalog; a FilePreview path outside the work directory is refused with the bound (INV-1280)", () => {
+  const ok = compileSurface({ surface: "r", components: [
+    { id: "root", component: "Column", children: ["c", "f"] },
+    { id: "c", component: "Chart", kind: "bar", title: "Latency", points: { path: "/p" }, unit: "ms" },
+    { id: "f", component: "FilePreview", path: "/home/box/work/report.md", lines: 10 },
+  ], data: { p: [{ label: "p50", value: 12 }] } }, undefined);
+  assert.ok(ok.ok, ok.ok ? "" : ok.reason);
+  for (const path of ["/etc/passwd", "/home/box/work/../secret", "report.md"]) {
+    const bad = compileSurface({ surface: "r", components: [{ id: "root", component: "FilePreview", path }] }, undefined);
+    assert.ok(!bad.ok && /under \/home\/box\/work/.test(bad.reason), `${path}: ${bad.ok ? "accepted" : bad.reason}`);
+  }
+});

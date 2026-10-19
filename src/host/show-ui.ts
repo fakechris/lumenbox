@@ -26,6 +26,9 @@ export { type A2uiMessage, actionText, SHOW_UI_CATALOG_ID, SHOW_UI_COMPONENTS, S
 /** More than this is not a card; it is a page, and the page would crawl. */
 export const SHOW_UI_MAX_COMPONENTS = 80;
 
+/** Where a FilePreview may point: the box's work directory, the same bound as the Files panel. */
+export const SHOW_UI_WORK_DIR = "/home/box/work";
+
 const names = new Set(SHOW_UI_COMPONENTS);
 type ShowUiCatalog = Catalog<(typeof BASIC_COMPONENTS)[number] | (typeof LUMENBOX_COMPONENTS)[number]>;
 let catalog: ShowUiCatalog | undefined;
@@ -113,6 +116,13 @@ export function compileSurface(input: ShowUiInput, existing: SurfaceRecord | und
         reason: `Component "${String(component.component)}" (${component.id}) is not in the catalog. Available: ${SHOW_UI_COMPONENTS.join(", ")}.`,
       };
     }
+    if (component.component === "FilePreview") {
+      // The page's file route guards the work directory too; refusing here tells the agent why.
+      const path = String(component.path ?? "");
+      if (!path.startsWith(`${SHOW_UI_WORK_DIR}/`) || path.split("/").includes("..")) {
+        return { ok: false, reason: `FilePreview ${component.id}: \`path\` is an absolute path under ${SHOW_UI_WORK_DIR}; "${path}" is not.` };
+      }
+    }
     const local = localFunction(component);
     if (local !== undefined) return { ok: false, reason: `Component ${component.id}: "${local}" is not a function a card may call. Available: ${SHOW_UI_FUNCTIONS.join(", ")}; actions are events (\`{"event": {"name": ...}}\`).` };
     components.push(component);
@@ -142,6 +152,7 @@ export function normalizeComponent(component: Record<string, unknown>): Record<s
   const unwrapped = unwrapItems(component) as Record<string, unknown>;
   // An Approve is always the same pair of presses (INV-1280); the agent names them only when
   // it wants a context on them.
+  if ((unwrapped.component ?? unwrapped.type) === "FilePreview" && typeof unwrapped.path === "string") unwrapped.path = unwrapped.path.trim();
   if ((unwrapped.component ?? unwrapped.type) === "Approve") {
     if (unwrapped.onApprove === undefined) unwrapped.onApprove = { event: { name: "approve" } };
     if (unwrapped.onReject === undefined) unwrapped.onReject = { event: { name: "reject" } };

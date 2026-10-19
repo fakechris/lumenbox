@@ -175,6 +175,20 @@ export function surfaceCard(input: { surfaceId: string; agentName: string; title
         }
         break;
       }
+      case "Chart": {
+        const title = text(component.title, data);
+        const points = resolve(component.points, data);
+        const list = Array.isArray(points) ? (points as Record<string, unknown>[]) : [];
+        const unit = typeof component.unit === "string" ? component.unit : "";
+        if (title !== "") lines.push(`**${title}**`);
+        if (list.length > 0) lines.push(list.slice(0, 12).map(point => `${text(point?.label, data)} ${text(point?.value, data)}${unit}`).join(" · "));
+        break;
+      }
+      case "FilePreview": {
+        const title = text(component.title, data);
+        lines.push(`${title !== "" ? `${title}: ` : ""}${String(component.path ?? "")}（在应用里打开）`);
+        break;
+      }
       case "Slider":
       case "DateTimeInput": {
         const label = text(component.label, data);

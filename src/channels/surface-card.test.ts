@@ -109,3 +109,15 @@ test("Tabs show every tab in turn and a Modal's content inline in a chat (INV-12
   });
   assert.deepEqual(card.lines, ["first", "open", "inside"]);
 });
+
+test("a Chart is its points in a line and a FilePreview is its path, in a chat (INV-1280)", () => {
+  const card = surfaceCard({
+    surfaceId: "r", agentName: "Ada",
+    messages: [{ version: "v0.9", updateComponents: { surfaceId: "r", components: [
+      { id: "root", component: "Column", children: ["c", "f"] },
+      { id: "c", component: "Chart", title: "Latency", points: [{ label: "p50", value: 12 }, { label: "p99", value: 80 }], unit: "ms" },
+      { id: "f", component: "FilePreview", path: "/home/box/work/report.md", title: "Report" },
+    ] } }],
+  });
+  assert.deepEqual(card.lines, ["**Latency**", "p50 12ms · p99 80ms", "Report: /home/box/work/report.md（在应用里打开）"]);
+});
