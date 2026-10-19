@@ -37,3 +37,21 @@
 - FilePreview 的图片预览走 `/api/file`，只在真实 app 里能看，静态页没有验证图片分支。
 - Chart 只有柱/线，没有图例和多系列。
 - 飞书端的新组件只是文字；要卡片就得做 INV-1271 那类模板工作，Chris 已暂缓。
+
+## 补：视觉与组件补全（INV-1286，同日）
+
+Chris 看到 Mia 的晨报卡"土而且缺组件"。一半是 bug：MiniMax 把 `data` 里的数组也编成 `{"item": [...]}`，
+表格是空的（INV-1285，PR #366）。另一半是设计：A2UI basic 元素的默认样式是示例级的，且 agent 没有
+表达"状态/指标/键值/提示"的组件。
+
+做了（PR #367、#368）：
+- `.surface .sbody` 把 A2UI 主题变量映射到 lumenbox 的 token（字号比例、网格、颜色、圆角、按钮字重），
+  basic 元素的 shadow DOM 随页面走，深浅两套主题都过了。
+- 五个组件：`Badge`、`KeyValue`、`Stat`、`Callout`、`Link`；Table 列加 `kind`（badge / number / link），
+  状态词自己上色（blocked→danger、review→warn、done→ok）。
+- 主机再吸收两种 provider 编码：链式 `{item: [A, {item: [B, …]}]}` 展平为列表；`"true"`/`"false"` 在布尔
+  属性上读作布尔。Mia 的第二次重画被这两样拒了三次后停手（守了"最后一次"的规矩）；修后第三次一次画成。
+- 实测：真实 app 里 Mia 重画 `morning-board-v3`——三个 Stat、8 行带 link/badge 列的 Table、Callout、
+  Progress、Approve，一次通过（截图在本地 research/live-board-v3-2026-10-19.png）。验收第 3 条等 Chris 看。
+
+留给下一手：卡片 `title` 与 agent 自己写的 h4 容易重复（工具描述已提示"不要重复标题"）；Chart 没有图例。
