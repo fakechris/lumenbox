@@ -73,7 +73,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [39-ui-objects](39-ui-objects.md) | The objects a person can see: box, agent, template | current | 2026-09-07 |
 | [40-chat-area](40-chat-area.md) | The chat area: what a person can do with a message | current | 2026-09-08 |
 | [41-chat-grammar](41-chat-grammar.md) | The chat column, rebuilt: one grammar for everything that appears in it | current | 2026-09-08 |
-| [42-front-and-workers](42-front-and-workers.md) | One front, invisible workers | current | 2026-09-08 |
+| [42-front-and-workers](42-front-and-workers.md) | One front, invisible workers | current | 2026-10-19 |
 | [43-scenarios](43-scenarios.md) | Episodes as tests | current | 2026-09-26 |
 | [44-webhook-triggers](44-webhook-triggers.md) | Webhook triggers | current | 2026-09-14 |
 | [45-teams](45-teams.md) | Teams | current | 2026-09-09 |

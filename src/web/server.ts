@@ -6116,6 +6116,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             questions: questions.list(),
             nameOf: id => registry.tryGet(id)?.profile.name ?? principals.list().find(person => person.id === id)?.name ?? id,
             unanswered: involuteUnanswered,
+            paused: orchestrator.bus.pausedChains(),
             ...(me === undefined ? { all: true } : {}),
           });
           send(res, 200, { ...answer, who: me?.name ?? "this installation" });

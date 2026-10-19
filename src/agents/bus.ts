@@ -28,6 +28,27 @@ export const AGENT_MESSAGE_MAX_LENGTH = 8000;
 /** How long an identical agent-to-agent message counts as a repeat. */
 export const DUPLICATE_SEND_WINDOW_MS = 10 * 60_000;
 
+/**
+ * Teammate chain budget (INV-1277): the most turns a conversation may bounce between agents
+ * with no person in it before the bus stops the next send. Three is one round trip and a
+ * reply; the 2026-10-19 loop (38 messages, Bob at 370 tool calls) would have stopped at the
+ * fourth. Overridable per installation.
+ */
+export function teammateHopBudget(): number {
+  const raw = Number(process.env.AGENTBOX_TEAMMATE_HOPS ?? 3);
+  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 3;
+}
+
+/** A chain the bus stopped: who was about to message whom, how deep, and when. */
+export interface PausedChain {
+  fromId: string;
+  fromName: string;
+  toId: string;
+  toName: string;
+  hops: number;
+  at: string;
+}
+
 /** Prefix that marks a turn as woken by a teammate rather than the user. */
 export const AGENT_WAKE_CUE = "[agent]";
 
@@ -56,6 +77,13 @@ export interface InboundMessage {
    * agents from bouncing "noted" at each other forever (docs/11, 2026-09-08).
    */
   relayed?: boolean;
+  /**
+   * How many turns this message is from a person (INV-1277): 0 when the sending turn was
+   * opened by a person, else one more than the inbound that woke the sender. The bus refuses a
+   * send past the budget, so two agents correcting each other's numbers stop and wait for
+   * someone instead of running until their context is cut.
+   */
+  hops?: number;
   /**
    * This message, identified, so both ends can point at the same thing.
    *
@@ -219,6 +247,8 @@ function isSteering(message: InboundMessage): boolean {
 export class AgentBus {
   /** Recent sends per sender→recipient, for the repeat check in `send`. */
   private readonly recentSends = new Map<string, { text: string; at: number }[]>();
+  /** Chains the budget stopped, keyed sender→recipient; cleared when a person-opened turn sends. */
+  private readonly paused = new Map<string, PausedChain>();
   private readonly pending = new Map<string, InboundMessage[]>();
   /** Tail of each (agent, conversation) serialized turn chain, by workerKey. Never rejects. */
   private readonly chains = new Map<string, Promise<void>>();
@@ -278,12 +308,24 @@ export class AgentBus {
    *
    * Returns the acknowledgement string the sending agent sees as its tool result.
    */
+  /** The chains the budget stopped and nobody has cleared, oldest first. */
+  pausedChains(): PausedChain[] {
+    return [...this.paused.values()].sort((a, b) => a.at.localeCompare(b.at));
+  }
+
   send(input: {
     fromId: string;
     toId: string;
     text: string;
     priority?: boolean;
     relayed?: boolean;
+  /**
+   * How many turns this message is from a person (INV-1277): 0 when the sending turn was
+   * opened by a person, else one more than the inbound that woke the sender. The bus refuses a
+   * send past the budget, so two agents correcting each other's numbers stop and wait for
+   * someone instead of running until their context is cut.
+   */
+  hops?: number;
   }): string {
     const text = clampMessage(input.text ?? "", AGENT_MESSAGE_MAX_LENGTH);
     if (text.length === 0) return "Message was empty; nothing was sent.";
@@ -314,6 +356,23 @@ export class AgentBus {
       );
     }
 
+    // The chain budget (INV-1277). Checked here rather than in the SendToAgent tool so the
+    // prose relay and the host's own notices are covered too; a send from a person-opened turn
+    // (hops 0) clears what this pair had paused, because the person is back in the loop.
+    const hops = input.hops ?? 0;
+    if (hops === 0) {
+      for (const key of [...this.paused.keys()]) if (key.startsWith(`${input.fromId}→`) || key.endsWith(`→${input.fromId}`)) this.paused.delete(key);
+    } else if (hops > teammateHopBudget()) {
+      const record: PausedChain = { fromId: input.fromId, fromName, toId: target.id, toName: target.profile.name, hops, at: new Date().toISOString() };
+      this.paused.set(recentKey, record);
+      this.onEvent({ type: "chain_paused", ...record });
+      return (
+        `Not sent: this exchange has gone ${hops} turns between agents with no person in it, which is the limit. ` +
+        `Stop here. Write what you have and what is undecided as your reply, so the person sees it; they will ` +
+        `bring ${target.profile.name} back in if they want to. Do not message anyone else about it either.`
+      );
+    }
+
     const message: InboundMessage = {
       id: randomUUID(),
       fromId: input.fromId,
@@ -322,6 +381,7 @@ export class AgentBus {
       priority,
       receivedAt: new Date().toISOString(),
       ...(input.relayed === true ? { relayed: true } : {}),
+      ...(hops > 0 ? { hops } : {}),
     };
 
     this.enqueue(input.toId, message);
@@ -886,4 +946,6 @@ export type BusEvent =
        */
       waiting: number;
     }
-  | { type: "turn_interrupted"; agentId: string; reason: string };
+  | { type: "turn_interrupted"; agentId: string; reason: string }
+  /** The teammate chain budget stopped a send (INV-1277); the attention panel shows the pair. */
+  | ({ type: "chain_paused" } & PausedChain);

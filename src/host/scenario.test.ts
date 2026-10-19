@@ -2634,6 +2634,31 @@ test("a ShowUI card is validated by the host and delivered; the press returns as
   }
 });
 
+// ── INV-1277: two agents that keep messaging each other stop at the budget and wait for a person ──
+
+test("a bot-to-bot chain with no person stops at the budget, and a person's word restarts it", async () => {
+  const sends: string[] = [];
+  const script: Script = ({ agent, round, messages }) => {
+    const last = messages.at(-1)?.content;
+    const lastText = typeof last === "string" ? last : JSON.stringify(last ?? "");
+    // The tool's own answer: a refusal is read and obeyed, a success is bounced back.
+    if (/Not sent: this exchange has gone/.test(lastText)) { sends.push(`${agent}:refused`); return { say: "Stopping here; this is for the person to decide." }; }
+    if (/^Sent|has been told|queued|delivered/i.test(lastText) && round > 0 && /tool_result/.test(lastText)) return { say: "sent" };
+    const other = agent === "Ping" ? "Pong" : "Ping";
+    sends.push(`${agent}→${other}#${round}`);
+    return { call: "SendToAgent", input: { target_id: other, message: `recount ${agent} ${round}: still differs` }, then: { say: "waiting on them" } };
+  };
+  const episode = await runEpisode({ team: [{ name: "Ping" }, { name: "Pong" }], says: ["check the numbers with Pong"], script, maxRounds: 40 });
+  try {
+    // Four messages at most reach the other side: 0 → 1 → 2 → 3 hops, the fifth is refused.
+    assert.ok(episode.score.peerMessages <= 4, `peer messages: ${episode.score.peerMessages}; sends: ${sends.join(" ")}`);
+    assert.ok(sends.some(entry => entry.endsWith(":refused")), `somebody was refused: ${sends.join(" ")}`);
+    assert.ok(episode.score.turns < 40, "the episode settled rather than hitting the cap");
+  } finally {
+    episode.cleanup();
+  }
+});
+
 // ── INV-1276: an explicit tool list that lets the agent ask the person lets it show a card ──
 
 test("an explicit list with AskUser is offered ShowUI; one without AskUser is not (INV-1276)", async () => {

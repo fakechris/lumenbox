@@ -2,7 +2,7 @@
      title: One front, invisible workers
      family: decision
      status: current
-     updated: 2026-09-08
+     updated: 2026-10-19
 -->
 # 42 · One front, invisible workers
 
@@ -70,7 +70,11 @@ teammates, and `CreateAgent` told not to interview.
 4. **A persona is drafted, not interviewed for.** `CreateAgent` from a brief writes the four
    parts itself from the brief and the catalog; the new agent's own first turn asks the person
    its one question. The creator never asks on the new agent's behalf.
-5. **A question budget per task.** Two `AskUser` calls per task contract; the third is refused
-   with "decide and say which way you went".
+. **A teammate chain budget (INV-1277).** Every message an agent sends carries how many turns
+   it is from a person: 0 from a person-opened turn, one more than the deepest inbound otherwise.
+   Past `AGENTBOX_TEAMMATE_HOPS` (default 3) the bus refuses the send with "stop here, write what
+   you have for the person", records the pair in the attention panel as *paused*, and a
+   person-opened turn from either side clears it. 2026-10-19: five agents cross-checked each
+   other's numbers for an hour (38 messages, contexts cut three times) with nobody in the loop.
 
 Order: 1 and 2 together (they are one mechanism), then 3, then 4 and 5 as prompt/tool text.

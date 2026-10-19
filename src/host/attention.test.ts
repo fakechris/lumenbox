@@ -80,3 +80,20 @@ test("the operator's own credential sees everything with a clock on it", () => {
   });
   assert.deepEqual(answer.mine.map(item => item.kind), ["question", "nudged"]);
 });
+
+test("a paused teammate chain is everyone's to see, with either agent as the way back in (INV-1277)", () => {
+  const answer = attentionFor({
+    principalId: "p-mia",
+    identities: [],
+    tasks: [],
+    questions: [],
+    nameOf,
+    paused: [{ fromId: "a1", fromName: "Ada", toName: "Bob", hops: 4, at: "2026-10-19T08:30:00.000Z" }],
+    now: new Date(T0),
+  });
+  const row = answer.mine.find(item => item.kind === "paused");
+  assert.ok(row !== undefined, "shown without being the operator");
+  assert.equal(row.ref, "a1");
+  assert.match(row.title, /Ada ↔ Bob: paused after 4 turns with no person/);
+  assert.match(row.detail, /message either of them/);
+});
