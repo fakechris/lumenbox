@@ -2633,3 +2633,19 @@ test("a ShowUI card is validated by the host and delivered; the press returns as
     episode.cleanup();
   }
 });
+
+// ── INV-1276: an explicit tool list that lets the agent ask the person lets it show a card ──
+
+test("an explicit list with AskUser is offered ShowUI; one without AskUser is not (INV-1276)", async () => {
+  const offeredTo = async (tools: string[]) => {
+    let offered: string[] | undefined;
+    const script: Script = ({ offered: list }) => { offered ??= list; return { say: "ok" }; };
+    const episode = await runEpisode({ team: [{ name: "Agent", tools }], says: ["hi"], script, maxRounds: 4 });
+    episode.cleanup();
+    return offered ?? [];
+  };
+  const asker = await offeredTo(["bash", "read_file", "AskUser"]);
+  assert.ok(asker.includes("ShowUI") && asker.includes("AskUser"), `offered: ${asker.join(", ")}`);
+  const quiet = await offeredTo(["bash", "read_file"]);
+  assert.ok(quiet.includes("bash") && !quiet.includes("ShowUI"), `offered: ${quiet.join(", ")}`);
+});
