@@ -154,8 +154,13 @@ export function normalizeComponent(component: Record<string, unknown>): Record<s
   // it wants a context on them.
   if ((unwrapped.component ?? unwrapped.type) === "FilePreview" && typeof unwrapped.path === "string") unwrapped.path = unwrapped.path.trim();
   if ((unwrapped.component ?? unwrapped.type) === "Approve") {
-    if (unwrapped.onApprove === undefined) unwrapped.onApprove = { event: { name: "approve" } };
-    if (unwrapped.onReject === undefined) unwrapped.onReject = { event: { name: "reject" } };
+    // `context` at the top of an Approve is what a model writes first (seen live, 2026-10-19:
+    // refused twice, then the agent dropped the context and the press came back empty). It is
+    // the context of both presses.
+    const shared = unwrapped.context !== null && typeof unwrapped.context === "object" && !Array.isArray(unwrapped.context) ? (unwrapped.context as Record<string, unknown>) : undefined;
+    delete unwrapped.context;
+    if (unwrapped.onApprove === undefined) unwrapped.onApprove = { event: { name: "approve", ...(shared !== undefined ? { context: shared } : {}) } };
+    if (unwrapped.onReject === undefined) unwrapped.onReject = { event: { name: "reject", ...(shared !== undefined ? { context: shared } : {}) } };
   }
   if (typeof unwrapped.component !== "string" && typeof unwrapped.type === "string") {
     const { type, ...rest } = unwrapped;

@@ -225,3 +225,12 @@ test("Chart and FilePreview are in the catalog; a FilePreview path outside the w
     assert.ok(!bad.ok && /under \/home\/box\/work/.test(bad.reason), `${path}: ${bad.ok ? "accepted" : bad.reason}`);
   }
 });
+
+test("an Approve's top-level context is the context of both presses (seen live, 2026-10-19)", () => {
+  const ok = compileSurface({ surface: "f", components: [{ id: "root", component: "Approve", title: "Use these?", context: { rows: { path: "/picked" } } }], data: { picked: ["a"] } }, undefined);
+  assert.ok(ok.ok, ok.ok ? "" : ok.reason);
+  const comp = (ok.full[1] as { updateComponents: { components: Record<string, unknown>[] } }).updateComponents.components[0]!;
+  assert.deepEqual(comp.onApprove, { event: { name: "approve", context: { rows: { path: "/picked" } } } });
+  assert.deepEqual(comp.onReject, { event: { name: "reject", context: { rows: { path: "/picked" } } } });
+  assert.ok(!("context" in comp));
+});
