@@ -82,7 +82,10 @@ export function surfaceCard(input: { surfaceId: string; agentName: string; title
     if (component === undefined) return;
     // Only layout walks into its children: a Button's child is its label, drawn with the button.
     const layout = component.component === "Row" || component.component === "Column" || component.component === "List" || component.component === "Card";
-    const children = (layout ? component.children ?? (typeof component.child === "string" ? [component.child] : []) : []) as unknown;
+    // Tabs and a Modal are layout too: a chat shows every tab in turn, and a modal's content inline.
+    const tabChildren = component.component === "Tabs" && Array.isArray(component.tabs) ? (component.tabs as Record<string, unknown>[]).map(tab => tab.child) : undefined;
+    const modalChildren = component.component === "Modal" ? [component.trigger, component.content] : undefined;
+    const children = (layout ? component.children ?? (typeof component.child === "string" ? [component.child] : []) : tabChildren ?? modalChildren ?? []) as unknown;
     switch (component.component) {
       case "Text": {
         const content = text(component.text, data);
@@ -118,6 +121,78 @@ export function surfaceCard(input: { surfaceId: string; agentName: string; title
           lines.push(`· ${optionLabel}`);
           buttons.push({ label: optionLabel, name: "choose", context: { [id]: [value] } });
         }
+        break;
+      }
+      case "Table": {
+        // A chat gets the heading and the first rows as words; sorting and selection are the page's.
+        const columns = (Array.isArray(component.columns) ? component.columns : []) as { key: string; label: string }[];
+        const rows = resolve(component.rows, data);
+        const list = Array.isArray(rows) ? (rows as Record<string, unknown>[]) : [];
+        if (columns.length > 0) lines.push(columns.map(column => `**${column.label}**`).join(" | "));
+        for (const row of list.slice(0, 8)) lines.push(columns.map(column => text(row?.[column.key], data)).join(" | "));
+        if (list.length > 8) lines.push(`… ${list.length - 8} more rows in the app`);
+        const caption = text(component.caption, data);
+        if (caption !== "") lines.push(caption);
+        break;
+      }
+      case "Progress": {
+        const steps = resolve(component.steps, data);
+        const list = Array.isArray(steps) ? (steps as Record<string, unknown>[]) : [];
+        const done = list.filter(step => step?.status === "done").length;
+        const title = text(component.title, data);
+        const value = resolve(component.value, data);
+        const head = [title, list.length > 0 ? `${done}/${list.length}` : typeof value === "number" ? `${Math.round(value)}%` : ""].filter(part => part !== "").join(" ");
+        if (head !== "") lines.push(`**${head}**`);
+        for (const step of list) lines.push(`${step?.status === "done" ? "[x]" : step?.status === "doing" ? "[~]" : step?.status === "failed" ? "[!]" : "[ ]"} ${text(step?.label, data)}`);
+        const label = text(component.label, data);
+        if (label !== "") lines.push(label);
+        break;
+      }
+      case "Markdown": {
+        const content = text(component.text, data);
+        for (const line of content.split("\n").slice(0, 12)) lines.push(line);
+        break;
+      }
+      case "Code": {
+        const content = text(component.text, data);
+        const title = text(component.title, data);
+        if (title !== "") lines.push(`**${title}**`);
+        const body = content.split("\n");
+        lines.push("```", ...body.slice(0, 12), ...(body.length > 12 ? [`… ${body.length - 12} more lines in the app`] : []), "```");
+        break;
+      }
+      case "Approve": {
+        const title = text(component.title, data);
+        const detail = text(component.detail, data);
+        if (title !== "") lines.push(`**${title}**`);
+        if (detail !== "") lines.push(detail);
+        for (const [field, fallback] of [["onApprove", "approve"], ["onReject", "reject"]] as const) {
+          const event = ((component[field] as Record<string, unknown> | undefined)?.event ?? undefined) as Record<string, unknown> | undefined;
+          const name = typeof event?.name === "string" ? event.name : fallback;
+          const context: Record<string, unknown> = {};
+          for (const [key, value] of Object.entries((event?.context as Record<string, unknown> | undefined) ?? {})) { const resolved = resolve(value, data); if (resolved !== undefined) context[key] = resolved; }
+          buttons.push({ label: text(component[field === "onApprove" ? "approveLabel" : "rejectLabel"], data) || (field === "onApprove" ? "Allow" : "Reject"), name, ...(Object.keys(context).length > 0 ? { context } : {}) });
+        }
+        break;
+      }
+      case "Chart": {
+        const title = text(component.title, data);
+        const points = resolve(component.points, data);
+        const list = Array.isArray(points) ? (points as Record<string, unknown>[]) : [];
+        const unit = typeof component.unit === "string" ? component.unit : "";
+        if (title !== "") lines.push(`**${title}**`);
+        if (list.length > 0) lines.push(list.slice(0, 12).map(point => `${text(point?.label, data)} ${text(point?.value, data)}${unit}`).join(" · "));
+        break;
+      }
+      case "FilePreview": {
+        const title = text(component.title, data);
+        lines.push(`${title !== "" ? `${title}: ` : ""}${String(component.path ?? "")}（在应用里打开）`);
+        break;
+      }
+      case "Slider":
+      case "DateTimeInput": {
+        const label = text(component.label, data);
+        lines.push(`${label !== "" ? label : "…"}：在聊天里回复`);
         break;
       }
       case "TextField": {

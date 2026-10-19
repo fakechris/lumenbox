@@ -130,3 +130,38 @@ NOTICE 记 Apache-2.0。
 见 INV-1269 的 acceptance/verification：主机校验测试、surface 状态机、网页挂载与更新、
 飞书 fixture、scenario（fake engine 调 ShowUI → 点按钮 → 下一轮收到 action）、
 `npm test`/`npm run check`/`release:check`，真实 box 里网页点一次、飞书点一次。
+
+## 11. 第二阶段（INV-1280，2026-10-19）：网页端是交互面，飞书停在摘要卡
+
+第一层把回路和校验走通后，Chris 的判断：飞书/钉钉只能装"标题 + 行 + 按钮"，真正的交互面是
+lumenbox 自己的网页，不然意义不大。于是在同一套 A2UI 上，网页端放开：
+
+**lumenbox 自己的目录**（`src/host/show-ui-components.ts` 的 Zod schema，主机校验与页面渲染共用；
+元素在 `src/web/a2ui-*.ts`，随 `vendor/a2ui.js` 打包；按 Chris 定的顺序）：
+
+| 组件 | 做什么 | 飞书里 |
+|---|---|---|
+| `Table` | `columns` + `rows`（绑定或内联），可排序，`selectable` 时选中的行键绑到 `value`，按钮 context 带回 | 表头行 + 前 8 行文字 |
+| `Progress` | `steps`[{label, status}] 或 `value` 0–100，agent 用 `data`/`patch` 原地推进 | `[x]`/`[~]`/`[ ]` 清单 |
+| `Markdown` | 走页面自己的 markdown-it（html 关） | 前 12 行 |
+| `Code` | 代码块带复制，`variant: diff` 上色 | 围栏代码 |
+| `Approve` | 允许/拒绝一对，主机补默认事件 `approve`/`reject` | 两个按钮 |
+| `Chart` | `points`[{label, value}]，bar/line，纯 SVG | 一行"label value" |
+| `FilePreview` | box 内文件：经 `/api/file` 的链接，文本预览前 N 行，图片直接显示；路径限 `/home/box/work` 下，主机拒绝其它 | 路径一行 |
+
+**放开的 basic 目录**：`Tabs`、`Modal`、`Slider`、`DateTimeInput`、`Icon`。`Image` 按 Chris 的决定不开
+（外链是 CSP 与隐私面；box 内图片走 `FilePreview`）。
+
+**局部更新**：`ShowUI({surface, data})` 只发 `updateDataModel("/")`；`ShowUI({surface, patch: [{path, value}]})`
+按路径改。两者都不重发组件，页面原地更新（实测：Progress 的 `<ol>` 节点不变、Chart 的柱子重算高度）。
+主机把编辑追加到 surface 的全量消息后重放校验，坏的编辑在发出前被拒。
+
+**客户端函数**：`SHOW_UI_FUNCTIONS`（`src/host/show-ui-functions.ts`）——`formatString`、`formatNumber`、
+`formatDate`、`formatCurrency`、`pluralize`、`and`/`or`/`not` 和校验函数——在页面上作为表达式求值，
+主机与页面从同一份清单建目录。`openUrl` 不在其中：卡片不自己开链接，人开。
+
+**实测记录**（本地静态页 + Playwright）：Table 排序、勾两行、按按钮 →
+`[Action "pick" on card files: {"rows":["a.txt","c.txt"]}]`；Progress 数据更新不重建节点；Markdown 转义
+`<script>`；diff 上色；Approve → `[Action "approve" on card d: {"env":"prod"}]`；Tabs + Slider +
+`formatString` 绑定值 + 路径 patch；Chart 柱/线与 patch 后重算；FilePreview 链接指向 `/api/file`。
+真实 app 的 Table + Approve 一次实测在合并、装新版后做（验收第 5 条）。

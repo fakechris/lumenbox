@@ -63,3 +63,61 @@ test("a closed surface reads as nothing; a cycle in children does not loop", () 
   });
   assert.deepEqual(loop.lines, []);
 });
+
+test("a Table reads as a heading line and the first rows, then how many more are in the app (INV-1280)", () => {
+  const rows = Array.from({ length: 10 }, (_, i) => ({ name: `f${i}.txt`, size: i * 10 }));
+  const card = surfaceCard({
+    surfaceId: "files",
+    agentName: "Ada",
+    messages: [
+      { version: "v0.9", updateComponents: { surfaceId: "files", components: [{ id: "root", component: "Table", columns: [{ key: "name", label: "Name" }, { key: "size", label: "Size" }], rows: { path: "/rows" }, caption: "bytes" }] } },
+      { version: "v0.9", updateDataModel: { surfaceId: "files", path: "/", value: { rows } } },
+    ],
+  });
+  assert.equal(card.lines[0], "**Name** | **Size**");
+  assert.equal(card.lines[1], "f0.txt | 0");
+  assert.equal(card.lines[8], "f7.txt | 70");
+  assert.equal(card.lines[9], "… 2 more rows in the app");
+  assert.equal(card.lines[10], "bytes");
+});
+
+test("an Approve is two presses in a chat, Progress is a checklist, Code is fenced (INV-1280)", () => {
+  const card = surfaceCard({
+    surfaceId: "d", agentName: "Ada",
+    messages: [{ version: "v0.9", updateComponents: { surfaceId: "d", components: [
+      { id: "root", component: "Column", children: ["p", "c", "a"] },
+      { id: "p", component: "Progress", title: "Deploy", steps: [{ label: "build", status: "done" }, { label: "test", status: "doing" }] },
+      { id: "c", component: "Code", text: "x", title: "f.ts" },
+      { id: "a", component: "Approve", title: "Ship it?", onApprove: { event: { name: "approve" } }, onReject: { event: { name: "reject", context: { why: "no" } } } },
+    ] } }],
+  });
+  assert.deepEqual(card.lines.slice(0, 3), ["**Deploy 1/2**", "[x] build", "[~] test"]);
+  assert.deepEqual(card.lines.slice(3, 7), ["**f.ts**", "```", "x", "```"]);
+  assert.equal(card.lines[7], "**Ship it?**");
+  assert.deepEqual(card.buttons, [{ label: "Allow", name: "approve" }, { label: "Reject", name: "reject", context: { why: "no" } }]);
+  assert.equal(buttonText(card, card.buttons[0]!), '[Action "approve" on card d]');
+});
+
+test("Tabs show every tab in turn and a Modal's content inline in a chat (INV-1280)", () => {
+  const card = surfaceCard({
+    surfaceId: "t", agentName: "Ada",
+    messages: [{ version: "v0.9", updateComponents: { surfaceId: "t", components: [
+      { id: "root", component: "Tabs", tabs: [{ title: "One", child: "a" }, { title: "Two", child: "b" }] },
+      { id: "a", component: "Text", text: "first" }, { id: "b", component: "Modal", trigger: "tr", content: "c" },
+      { id: "tr", component: "Text", text: "open" }, { id: "c", component: "Text", text: "inside" },
+    ] } }],
+  });
+  assert.deepEqual(card.lines, ["first", "open", "inside"]);
+});
+
+test("a Chart is its points in a line and a FilePreview is its path, in a chat (INV-1280)", () => {
+  const card = surfaceCard({
+    surfaceId: "r", agentName: "Ada",
+    messages: [{ version: "v0.9", updateComponents: { surfaceId: "r", components: [
+      { id: "root", component: "Column", children: ["c", "f"] },
+      { id: "c", component: "Chart", title: "Latency", points: [{ label: "p50", value: 12 }, { label: "p99", value: 80 }], unit: "ms" },
+      { id: "f", component: "FilePreview", path: "/home/box/work/report.md", title: "Report" },
+    ] } }],
+  });
+  assert.deepEqual(card.lines, ["**Latency**", "p50 12ms · p99 80ms", "Report: /home/box/work/report.md（在应用里打开）"]);
+});
