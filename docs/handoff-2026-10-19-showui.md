@@ -33,9 +33,16 @@
 - 静态页面上用真实浏览器（agent-browser）跑过 `vendor/a2ui.js`：十个组件的目录建立，
   TextField + ChoicePicker + Button 的卡片渲染，填名字、选 Plan B、按 Choose 得到
   `[Action "pick" on card plan: {"plan":["b"],"name":"Chris"}]`。
-- **未做**：在运行中的 web 和真实 box 里用 Claude Code 引擎走一遍，网页点一次、飞书点一次。
-  运行中的系统属于主检出（[17](17-two-agents.md)），要先合并或在主检出上起分支再做。
-  这是 INV-1269 验收第 5 条，没做之前不算可用。
+- **网页实测（2026-10-19，主检出从 src 起的 web，MiniMax-M3.1-Flash-Preview，真实 box）**：
+  第一轮暴露了一个真问题——MiniMax 的 Anthropic 兼容端把组件对象里嵌套的数组一律编码成
+  `{"item": [...]}`，第一次调用还把 `component` 写成 `type`；模型改写 27 轮都过不了校验，
+  只有不用 `children` 的卡（Text 根、Button 根、Card+child）画出来了。修复：主机把
+  `{item: …}` 展开、`type` 读作 `component`（`normalizeComponent`，有测试），工具描述带一个
+  完整四组件例子。第二轮：Column + Row + 两个按钮的卡 `plan2` 画出来，按"方案 B"后 Ada 收到
+  `[Action "pick" on card plan2: {"choice":"b"}]` 并回复"收到 plan2 的选择：方案 B"。
+  模型自己对失败的解释（"要多包一层 `[[...]]`"）是错的，不要写进任何提示词。
+  引擎不是 Claude Code（现场配置是 MiniMax），验收第 5 条按现场引擎走。
+- **未做**：飞书点一次。要一个人在飞书里向 agent 要一张带按钮的卡并按下。
 
 ## 留给下一手
 

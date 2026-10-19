@@ -37,4 +37,4 @@ test yields the action text; `manager.test.ts` `/act` parsing; `strings`/i18n en
 INDEX final; NOTICE entry; `release:check`; one real-box run (web click + Feishu click) in a
 handoff note.
 **Success Criteria**: all of the above; INV-1269 acceptance items 1–5 ticked with evidence.
-**Status**: Code complete (2026-10-19): scenario, conduct line, skill doc, README licence note, handoff. Open: the real-box run (web click + Feishu click), which needs the running system of the main checkout — INV-1269 acceptance item 5.
+**Status**: Code complete (2026-10-19): scenario, conduct line, skill doc, README licence note, handoff. Live web run done 2026-10-19 (card drawn, press returned, one provider-encoding fix found and shipped); Feishu press still open — INV-1269 acceptance item 5.
