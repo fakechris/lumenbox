@@ -1122,8 +1122,11 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       : asker.chatKey !== undefined && asker.adapter.sendToChat !== undefined
         ? asker.adapter.sendToChat(asker.chatKey, surfaceText(card))
         : asker.adapter.send(asker.identity, surfaceText(card));
-    void push.catch(() => {
-      // The web page shows it too; a failed push is not a lost card.
+    void push.catch((error: unknown) => {
+      // The web page shows it too, so a failed push is not a lost card — but it is a line in
+      // the log, because a card that never reached the chat looks exactly like one nobody pressed.
+      const detail = error instanceof Error ? error.message : String(error);
+      this.deps.log(`channel ${asker.adapter.name}: card ${input.surfaceId} not delivered (${detail})`);
     });
     return asker.identity;
   }
