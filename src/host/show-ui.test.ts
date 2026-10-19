@@ -266,3 +266,19 @@ test("Badge, KeyValue, Stat, Callout and Link are in the catalog; a Link goes to
   const kind = compileSurface({ surface: "b", components: [{ id: "root", component: "Table", columns: [{ key: "a", label: "A", kind: "pill" }], rows: [] }] }, undefined);
   assert.ok(!kind.ok && /kind/.test(kind.reason));
 });
+
+test("a chained {item: [A, {item: [B, …]}]} list flattens to the list, and \"true\" is true where a boolean is meant (seen live, 2026-10-19)", () => {
+  const sent = {
+    surface: "mb", components: [
+      { id: "root", component: "Column", children: { item: { item: ["t"] } } },
+      { id: "t", component: "Table", selectable: "true", sortable: "false", rows: { path: "/rows" },
+        columns: { item: { item: [{ key: "task", label: "卡" }, { item: [{ key: "owner", label: "owner" }, { item: [{ key: "status", label: "状态", kind: "badge" }, { item: { key: "need", label: "等你" } }] }] }] } } },
+    ], data: { rows: [] },
+  };
+  const ok = compileSurface(sent, undefined);
+  assert.ok(ok.ok, ok.ok ? "" : ok.reason);
+  const table = (ok.full[1] as { updateComponents: { components: Record<string, unknown>[] } }).updateComponents.components[1]!;
+  assert.deepEqual((table.columns as { key: string }[]).map(column => column.key), ["task", "owner", "status", "need"]);
+  assert.equal(table.selectable, true);
+  assert.equal(table.sortable, false);
+});
