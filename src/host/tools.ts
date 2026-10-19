@@ -1159,7 +1159,13 @@ export function buildTools(
           "`value` 0–100, `label`; update it in place by calling again with the same `surface` and new `data`), " +
           "Markdown (`text`), Code (`text`, `language`, `variant` code|diff, `title`), Approve (`title`, `detail`, and a `context` that rides on both presses, e.g. " +
           "`\"context\": {\"rows\": {\"path\": \"/picked\"}}`; presses come back as `approve`/`reject` with it), Chart (`kind` bar|line, `points` [{label, value}], `unit`), " +
-          "FilePreview (`path` under /home/box/work, `lines`). One component must have id " +
+          "FilePreview (`path` under /home/box/work, `lines`), Badge (`text`, `tone` ok|warn|danger|info|neutral), " +
+          "KeyValue (`items` [{key, value, tone?}]), Stat (`label`, `value`, `unit`, `delta`, `tone`; several in a Row), " +
+          "Callout (`tone`, `title`, `text` Markdown), Link (`text`, `to`: a box file path, a task id like t12, or an http(s) URL). " +
+          "A Table column may say `kind`: badge (status words colour themselves), number, link.\n\n" +
+          "Do not repeat `title` as a heading inside the card. A board card, as one example: a Row of three Stat; a Table with columns [{key:\"task\",label:\"卡\",kind:\"link\"}, " +
+          "{key:\"owner\",label:\"负责人\"}, {key:\"status\",label:\"状态\",kind:\"badge\"}, {key:\"need\",label:\"等你\"}] and rows bound " +
+          "{\"path\": \"/rows\"}; a Callout for the one thing that must not be missed; an Approve. One component must have id " +
           "\"root\". Nothing else is in the catalog; a component outside it is refused with " +
           "the reason. `children` is a plain JSON array of ids. A complete card:\n" +
           "[{\"id\":\"root\",\"component\":\"Column\",\"children\":[\"t\",\"go\"]}," +

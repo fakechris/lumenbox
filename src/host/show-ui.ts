@@ -123,6 +123,11 @@ export function compileSurface(input: ShowUiInput, existing: SurfaceRecord | und
         return { ok: false, reason: `FilePreview ${component.id}: \`path\` is an absolute path under ${SHOW_UI_WORK_DIR}; "${path}" is not.` };
       }
     }
+    if (component.component === "Link") {
+      const to = String(component.to ?? "");
+      const okTarget = (to.startsWith(`${SHOW_UI_WORK_DIR}/`) && !to.split("/").includes("..")) || /^t\d+$/.test(to) || /^https?:\/\/\S+$/.test(to);
+      if (!okTarget) return { ok: false, reason: `Link ${component.id}: \`to\` is a file under ${SHOW_UI_WORK_DIR}, a task id like t12, or an http(s) URL; "${to}" is none of these.` };
+    }
     const local = localFunction(component);
     if (local !== undefined) return { ok: false, reason: `Component ${component.id}: "${local}" is not a function a card may call. Available: ${SHOW_UI_FUNCTIONS.join(", ")}; actions are events (\`{"event": {"name": ...}}\`).` };
     components.push(component);
