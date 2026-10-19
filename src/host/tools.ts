@@ -1153,7 +1153,11 @@ export function buildTools(
           "bound as {\"path\": \"/field\"}), CheckBox, ChoicePicker (`options` of {label, value}, " +
           "`variant` mutuallyExclusive or multipleSelection). One component must have id " +
           "\"root\". Nothing else is in the catalog; a component outside it is refused with " +
-          "the reason.\n\n" +
+          "the reason. `children` is a plain JSON array of ids. A complete card:\n" +
+          "[{\"id\":\"root\",\"component\":\"Column\",\"children\":[\"t\",\"go\"]}," +
+          "{\"id\":\"t\",\"component\":\"Text\",\"text\":\"Ready?\"}," +
+          "{\"id\":\"go\",\"component\":\"Button\",\"child\":\"gol\",\"action\":{\"event\":{\"name\":\"go\"}}}," +
+          "{\"id\":\"gol\",\"component\":\"Text\",\"text\":\"Go\"}]\n\n" +
           "When they press a button, you get a message like `[Action \"pick\" on card s1: " +
           "{\"choice\": \"a\"}]` — the event name and context you wrote. To get a field's value " +
           "back, bind it in the context: `\"context\": {\"name\": {\"path\": \"/name\"}}`. " +

@@ -126,3 +126,27 @@ test("the tool hands the card to the host and reports where it went; a refusal i
   assert.ok(nobody.isError && /nobody to show/.test(nobody.text));
   assert.ok(PERSON_FACING_TOOLS.has("ShowUI") && FORK_WITHHELD_TOOLS.has("ShowUI"));
 });
+
+test("what the first live run sent is read as what it meant: `{item: [...]}` arrays unwrapped, `type` as `component` (2026-10-19)", () => {
+  const sent = {
+    surface: "pick-option",
+    components: [
+      { id: "root", type: "Column", children: { item: ["intro", "row"] } },
+      { id: "intro", type: "Text", text: "点下面一个按钮。" },
+      { id: "row", type: "Row", children: { item: { item: ["btnA", "btnB"] } } },
+      { id: "btnA", type: "Button", action: { event: { name: "pick", context: { choice: "a" } } }, child: "al" },
+      { id: "al", type: "Text", text: "方案 A" },
+      { id: "btnB", type: "Button", action: { event: { name: "pick", context: { choice: "b" } } }, child: "bl" },
+      { id: "bl", type: "Text", text: "方案 B" },
+    ],
+  };
+  const compiled = compileSurface(sent, undefined);
+  assert.ok(compiled.ok, compiled.ok ? "" : compiled.reason);
+  const components = (compiled.full[1] as { updateComponents: { components: Record<string, unknown>[] } }).updateComponents.components;
+  assert.deepEqual(components[0], { id: "root", component: "Column", children: ["intro", "row"] });
+  assert.deepEqual(components[2]!.children, ["btnA", "btnB"]);
+  assert.ok(components.every(component => !("type" in component)));
+  // A single wrapped id is still a list of one.
+  const one = compileSurface({ surface: "s", components: [{ id: "root", component: "Column", children: { item: "t" } }, { id: "t", component: "Text", text: "x" }] }, undefined);
+  assert.ok(one.ok, one.ok ? "" : one.reason);
+});

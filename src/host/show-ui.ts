@@ -84,7 +84,7 @@ export function compileSurface(input: ShowUiInput, existing: SurfaceRecord | und
   const components: Record<string, unknown>[] = [];
   for (const raw of input.components) {
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, reason: "Every component is an object with `id` and `component`." };
-    const component = raw as Record<string, unknown>;
+    const component = normalizeComponent(raw as Record<string, unknown>);
     if (typeof component.id !== "string" || component.id === "") return { ok: false, reason: "Every component needs a string `id`." };
     if (typeof component.component !== "string" || !names.has(component.component)) {
       return {
@@ -108,6 +108,38 @@ export function compileSurface(input: ShowUiInput, existing: SurfaceRecord | und
   const reason = proveSurface(full);
   if (reason !== undefined) return { ok: false, reason };
   return { ok: true, send: existing === undefined ? full : full.slice(1), full };
+}
+
+/**
+ * What a model actually sends, read as what it meant. Two shapes seen on the first live run
+ * (2026-10-19, MiniMax through its Anthropic-compatible endpoint): every array nested inside
+ * the untyped component object arrived as `{"item": [...]}` — the provider's encoding, not
+ * the model's choice, and the model could not fix it however it rewrote the call — and the
+ * first attempt named the kind `type` rather than `component`. A schema does not bind a
+ * model; the reader takes what was meant. No catalog property is called `item`, so the
+ * unwrap cannot eat a real value.
+ */
+export function normalizeComponent(component: Record<string, unknown>): Record<string, unknown> {
+  const unwrapped = unwrapItems(component) as Record<string, unknown>;
+  if (typeof unwrapped.component !== "string" && typeof unwrapped.type === "string") {
+    const { type, ...rest } = unwrapped;
+    return { ...rest, component: type };
+  }
+  return unwrapped;
+}
+
+function unwrapItems(value: unknown): unknown {
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(unwrapItems);
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record);
+  if (keys.length === 1 && keys[0] === "item") {
+    const inner = unwrapItems(record.item);
+    return Array.isArray(inner) ? inner : [inner];
+  }
+  const out: Record<string, unknown> = {};
+  for (const key of keys) out[key] = unwrapItems(record[key]);
+  return out;
 }
 
 /** The name of a client-side function call anywhere in a component's actions, if one is there. */
