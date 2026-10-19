@@ -13,7 +13,7 @@ export const SHOW_UI_BASIC_COMPONENTS: readonly string[] = [
 ];
 
 /** lumenbox's own (INV-1280), schemas in show-ui-components.ts. */
-export const SHOW_UI_LUMENBOX_COMPONENTS: readonly string[] = ["Table"];
+export const SHOW_UI_LUMENBOX_COMPONENTS: readonly string[] = ["Table", "Progress", "Markdown", "Code", "Approve"];
 
 /** Every component a card may use. */
 export const SHOW_UI_COMPONENTS: readonly string[] = [...SHOW_UI_BASIC_COMPONENTS, ...SHOW_UI_LUMENBOX_COMPONENTS];

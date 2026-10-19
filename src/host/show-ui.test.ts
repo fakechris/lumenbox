@@ -165,3 +165,23 @@ test("a Table is in the catalog with its rows and selection bound to the data mo
   const invented = compileSurface({ surface: "files", components: [{ id: "root", component: "Table", columns: [{ key: "a", label: "A" }], rows: [], striped: true }] }, undefined);
   assert.ok(!invented.ok && /striped/.test(invented.reason), invented.ok ? "" : invented.reason);
 });
+
+test("Progress, Markdown, Code and Approve are in the catalog; an Approve without actions gets approve/reject events (INV-1280)", () => {
+  const card = [
+    { id: "root", component: "Column", children: ["p", "m", "c", "a"] },
+    { id: "p", component: "Progress", title: "Deploy", steps: { path: "/steps" }, label: "building" },
+    { id: "m", component: "Markdown", text: "# Hi\n\n- one\n- two" },
+    { id: "c", component: "Code", text: "-a\n+b", variant: "diff", title: "x.ts" },
+    { id: "a", component: "Approve", title: "Ship it?", detail: "to prod" },
+  ];
+  const ok = compileSurface({ surface: "d", components: card, data: { steps: [{ label: "build", status: "doing" }] } }, undefined);
+  assert.ok(ok.ok, ok.ok ? "" : ok.reason);
+  const approve = (ok.full[1] as { updateComponents: { components: Record<string, unknown>[] } }).updateComponents.components.find(c => c.id === "a")!;
+  assert.deepEqual(approve.onApprove, { event: { name: "approve" } });
+  assert.deepEqual(approve.onReject, { event: { name: "reject" } });
+  const kept = compileSurface({ surface: "d", components: [{ id: "root", component: "Approve", onApprove: { event: { name: "ship", context: { env: "prod" } } } }] }, undefined);
+  assert.ok(kept.ok, kept.ok ? "" : kept.reason);
+  const comp = (kept.full[1] as { updateComponents: { components: Record<string, unknown>[] } }).updateComponents.components[0]!;
+  assert.deepEqual(comp.onApprove, { event: { name: "ship", context: { env: "prod" } } }, "the agent's own event is kept");
+  assert.deepEqual(comp.onReject, { event: { name: "reject" } });
+});

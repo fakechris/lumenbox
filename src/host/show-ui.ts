@@ -122,6 +122,12 @@ export function compileSurface(input: ShowUiInput, existing: SurfaceRecord | und
  */
 export function normalizeComponent(component: Record<string, unknown>): Record<string, unknown> {
   const unwrapped = unwrapItems(component) as Record<string, unknown>;
+  // An Approve is always the same pair of presses (INV-1280); the agent names them only when
+  // it wants a context on them.
+  if ((unwrapped.component ?? unwrapped.type) === "Approve") {
+    if (unwrapped.onApprove === undefined) unwrapped.onApprove = { event: { name: "approve" } };
+    if (unwrapped.onReject === undefined) unwrapped.onReject = { event: { name: "reject" } };
+  }
   if (typeof unwrapped.component !== "string" && typeof unwrapped.type === "string") {
     const { type, ...rest } = unwrapped;
     return { ...rest, component: type };

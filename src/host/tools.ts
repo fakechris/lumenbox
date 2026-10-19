@@ -1155,7 +1155,10 @@ export function buildTools(
           "bound as {\"path\": \"/field\"}), CheckBox, ChoicePicker (`options` of {label, value}, " +
           "`variant` mutuallyExclusive or multipleSelection), and lumenbox's own Table (`columns` of {key, label}, " +
           "`rows` inline or bound {\"path\": \"/rows\"}, `selectable` with the chosen keys in `value` bound " +
-          "{\"path\": \"/picked\"}, `caption`). One component must have id " +
+          "{\"path\": \"/picked\"}, `caption`), Progress (`title`, `steps` [{label, status todo|doing|done|failed}] or " +
+          "`value` 0–100, `label`; update it in place by calling again with the same `surface` and new `data`), " +
+          "Markdown (`text`), Code (`text`, `language`, `variant` code|diff, `title`), Approve (`title`, `detail`; " +
+          "presses come back as `approve`/`reject`). One component must have id " +
           "\"root\". Nothing else is in the catalog; a component outside it is refused with " +
           "the reason. `children` is a plain JSON array of ids. A complete card:\n" +
           "[{\"id\":\"root\",\"component\":\"Column\",\"children\":[\"t\",\"go\"]}," +

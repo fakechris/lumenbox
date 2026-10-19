@@ -80,3 +80,20 @@ test("a Table reads as a heading line and the first rows, then how many more are
   assert.equal(card.lines[9], "… 2 more rows in the app");
   assert.equal(card.lines[10], "bytes");
 });
+
+test("an Approve is two presses in a chat, Progress is a checklist, Code is fenced (INV-1280)", () => {
+  const card = surfaceCard({
+    surfaceId: "d", agentName: "Ada",
+    messages: [{ version: "v0.9", updateComponents: { surfaceId: "d", components: [
+      { id: "root", component: "Column", children: ["p", "c", "a"] },
+      { id: "p", component: "Progress", title: "Deploy", steps: [{ label: "build", status: "done" }, { label: "test", status: "doing" }] },
+      { id: "c", component: "Code", text: "x", title: "f.ts" },
+      { id: "a", component: "Approve", title: "Ship it?", onApprove: { event: { name: "approve" } }, onReject: { event: { name: "reject", context: { why: "no" } } } },
+    ] } }],
+  });
+  assert.deepEqual(card.lines.slice(0, 3), ["**Deploy 1/2**", "[x] build", "[~] test"]);
+  assert.deepEqual(card.lines.slice(3, 7), ["**f.ts**", "```", "x", "```"]);
+  assert.equal(card.lines[7], "**Ship it?**");
+  assert.deepEqual(card.buttons, [{ label: "Allow", name: "approve" }, { label: "Reject", name: "reject", context: { why: "no" } }]);
+  assert.equal(buttonText(card, card.buttons[0]!), '[Action "approve" on card d]');
+});

@@ -132,6 +132,46 @@ export function surfaceCard(input: { surfaceId: string; agentName: string; title
         if (caption !== "") lines.push(caption);
         break;
       }
+      case "Progress": {
+        const steps = resolve(component.steps, data);
+        const list = Array.isArray(steps) ? (steps as Record<string, unknown>[]) : [];
+        const done = list.filter(step => step?.status === "done").length;
+        const title = text(component.title, data);
+        const value = resolve(component.value, data);
+        const head = [title, list.length > 0 ? `${done}/${list.length}` : typeof value === "number" ? `${Math.round(value)}%` : ""].filter(part => part !== "").join(" ");
+        if (head !== "") lines.push(`**${head}**`);
+        for (const step of list) lines.push(`${step?.status === "done" ? "[x]" : step?.status === "doing" ? "[~]" : step?.status === "failed" ? "[!]" : "[ ]"} ${text(step?.label, data)}`);
+        const label = text(component.label, data);
+        if (label !== "") lines.push(label);
+        break;
+      }
+      case "Markdown": {
+        const content = text(component.text, data);
+        for (const line of content.split("\n").slice(0, 12)) lines.push(line);
+        break;
+      }
+      case "Code": {
+        const content = text(component.text, data);
+        const title = text(component.title, data);
+        if (title !== "") lines.push(`**${title}**`);
+        const body = content.split("\n");
+        lines.push("```", ...body.slice(0, 12), ...(body.length > 12 ? [`… ${body.length - 12} more lines in the app`] : []), "```");
+        break;
+      }
+      case "Approve": {
+        const title = text(component.title, data);
+        const detail = text(component.detail, data);
+        if (title !== "") lines.push(`**${title}**`);
+        if (detail !== "") lines.push(detail);
+        for (const [field, fallback] of [["onApprove", "approve"], ["onReject", "reject"]] as const) {
+          const event = ((component[field] as Record<string, unknown> | undefined)?.event ?? undefined) as Record<string, unknown> | undefined;
+          const name = typeof event?.name === "string" ? event.name : fallback;
+          const context: Record<string, unknown> = {};
+          for (const [key, value] of Object.entries((event?.context as Record<string, unknown> | undefined) ?? {})) { const resolved = resolve(value, data); if (resolved !== undefined) context[key] = resolved; }
+          buttons.push({ label: text(component[field === "onApprove" ? "approveLabel" : "rejectLabel"], data) || (field === "onApprove" ? "Allow" : "Reject"), name, ...(Object.keys(context).length > 0 ? { context } : {}) });
+        }
+        break;
+      }
       case "TextField": {
         const label = text(component.label, data);
         lines.push(`${label !== "" ? label : "…"}：在聊天里回复`);

@@ -9,7 +9,7 @@
  */
 
 import { z } from "zod";
-import { DynamicStringListSchema, DynamicStringSchema, DynamicValueSchema } from "@a2ui/web_core/v0_9";
+import { ActionSchema, DynamicNumberSchema, DynamicStringListSchema, DynamicStringSchema, DynamicValueSchema } from "@a2ui/web_core/v0_9";
 
 /**
  * A table: columns the agent names, rows from the data model (or inline), optional row
@@ -39,5 +39,71 @@ export const TableApi = {
     .strict(),
 };
 
+/**
+ * A progress card: steps with a status each, or a plain percentage. The agent updates it in
+ * place between tool calls with `ShowUI({surface, data})`, which is the point of it.
+ */
+export const ProgressApi = {
+  name: "Progress",
+  schema: z
+    .object({
+      weight: z.number().optional(),
+      title: DynamicStringSchema.optional(),
+      /** Steps: [{label, status: todo|doing|done|failed|skipped, note?}], inline or bound. */
+      steps: DynamicValueSchema.optional(),
+      /** 0–100, when there are no steps or alongside them. */
+      value: DynamicNumberSchema.optional(),
+      /** One line under the bar: what is happening now. */
+      label: DynamicStringSchema.optional(),
+    })
+    .strict(),
+};
+
+/** Markdown prose (markdown-it, html off): headings, lists, links, inline code. */
+export const MarkdownApi = {
+  name: "Markdown",
+  schema: z
+    .object({
+      weight: z.number().optional(),
+      text: DynamicStringSchema,
+    })
+    .strict(),
+};
+
+/** A code block with a copy button; `diff` colours +/- lines. */
+export const CodeApi = {
+  name: "Code",
+  schema: z
+    .object({
+      weight: z.number().optional(),
+      text: DynamicStringSchema,
+      language: z.string().optional(),
+      variant: z.enum(["code", "diff"]).optional(),
+      /** A file name or path shown above the block. */
+      title: DynamicStringSchema.optional(),
+    })
+    .strict(),
+};
+
+/**
+ * Allow / reject, as one component so the pair is always drawn the same way. The host fills
+ * `onApprove`/`onReject` with events named `approve`/`reject` when the agent leaves them out,
+ * so the usual card carries no actions at all.
+ */
+export const ApproveApi = {
+  name: "Approve",
+  schema: z
+    .object({
+      weight: z.number().optional(),
+      title: DynamicStringSchema.optional(),
+      detail: DynamicStringSchema.optional(),
+      approveLabel: DynamicStringSchema.optional(),
+      rejectLabel: DynamicStringSchema.optional(),
+      onApprove: ActionSchema.optional(),
+      onReject: ActionSchema.optional(),
+    })
+    .strict(),
+};
+
 /** Every lumenbox component, in the order they were added. */
-export const LUMENBOX_COMPONENTS = [TableApi] as const;
+export const LUMENBOX_COMPONENTS = [TableApi, ProgressApi, MarkdownApi, CodeApi, ApproveApi] as const;
