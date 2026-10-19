@@ -234,3 +234,15 @@ test("an Approve's top-level context is the context of both presses (seen live, 
   assert.deepEqual(comp.onReject, { event: { name: "reject", context: { rows: { path: "/picked" } } } });
   assert.ok(!("context" in comp));
 });
+
+test("the data model gets the {item: [...]} reading too: a Table bound to wrapped rows has rows (INV-1285)", () => {
+  const ok = compileSurface({ surface: "m", components: [{ id: "root", component: "Table", columns: [{ key: "card", label: "卡" }], rows: { path: "/rows" } }], data: { rows: { item: [{ card: "t1" }, { card: "t2" }] }, steps: { item: { item: [{ label: "a", status: "done" }] } } } }, undefined);
+  assert.ok(ok.ok, ok.ok ? "" : ok.reason);
+  const value = (ok.full[2] as { updateDataModel: { value: Record<string, unknown> } }).updateDataModel.value;
+  assert.deepEqual(value.rows, [{ card: "t1" }, { card: "t2" }]);
+  assert.deepEqual(value.steps, [{ label: "a", status: "done" }]);
+  const existing: SurfaceRecord = { agentId: "a", agentName: "Mia", conversation: "main", surfaceId: "m", messages: ok.full, at: "t" };
+  const patched = compileSurface({ surface: "m", patch: [{ path: "/rows", value: { item: [{ card: "t3" }] } }] }, existing);
+  assert.ok(patched.ok, patched.ok ? "" : patched.reason);
+  assert.deepEqual((patched.send[0] as { updateDataModel: { value: unknown } }).updateDataModel.value, [{ card: "t3" }]);
+});

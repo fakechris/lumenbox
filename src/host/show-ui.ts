@@ -193,16 +193,19 @@ export { SHOW_UI_FUNCTIONS };
 /** The data-model messages one call carries: `data` as the whole model, `patch` as paths. */
 function dataMessages(surfaceId: string, input: ShowUiInput): { ok: true; send: A2uiMessage[] } | { ok: false; reason: string } {
   const send: A2uiMessage[] = [];
+  // The data model gets the same reading as component properties: a provider that wraps
+  // every nested array as {"item": [...]} (INV-1285) otherwise leaves a Table with no rows.
   if (input.data !== undefined) {
-    if (input.data === null || typeof input.data !== "object" || Array.isArray(input.data)) return { ok: false, reason: "`data` is an object; components bind to it with {\"path\": \"/key\"}." };
-    send.push({ version: "v0.9", updateDataModel: { surfaceId, path: "/", value: input.data } });
+    const data = unwrapItems(input.data);
+    if (data === null || typeof data !== "object" || Array.isArray(data)) return { ok: false, reason: "`data` is an object; components bind to it with {\"path\": \"/key\"}." };
+    send.push({ version: "v0.9", updateDataModel: { surfaceId, path: "/", value: data } });
   }
   if (input.patch !== undefined) {
     if (!Array.isArray(input.patch)) return { ok: false, reason: "`patch` is an array of {path, value}, paths like \"/steps/1/status\"." };
     for (const raw of input.patch as unknown[]) {
       const edit = (raw ?? {}) as { path?: unknown; value?: unknown };
       if (typeof edit.path !== "string" || !edit.path.startsWith("/")) return { ok: false, reason: "Every patch has a `path` starting with \"/\" and a `value`." };
-      send.push({ version: "v0.9", updateDataModel: { surfaceId, path: edit.path, value: edit.value } });
+      send.push({ version: "v0.9", updateDataModel: { surfaceId, path: edit.path, value: unwrapItems(edit.value) } });
     }
   }
   return { ok: true, send };
