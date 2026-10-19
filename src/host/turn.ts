@@ -512,6 +512,7 @@ export interface TurnDeps {
   mcp?: McpManager;
   /** Puts a question to whoever drove this agent. Absent means there is nobody to ask. */
   askUser?: ToolContext["askUser"];
+  showUI?: ToolContext["showUI"];
   askSecret?: ToolContext["askSecret"];
   handOver?: ToolContext["handOver"];
   /**
@@ -3350,6 +3351,7 @@ ${outcome.text}`;
             scopes: deps.scopes,
             mcp: isForkConversation(conversation) ? undefined : deps.mcp,
             askUser: deps.askUser,
+            showUI: deps.showUI,
             askSecret: deps.askSecret,
             handOver: deps.handOver,
             docReader: deps.docReader,

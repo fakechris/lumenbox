@@ -36,6 +36,8 @@
     "release:scorecard": "node --experimental-transform-types scripts/scorecard.mjs"
   },
   "dependencies": {
+    "@a2ui/lit": "^0.14.0",
+    "@a2ui/web_core": "^0.14.0",
     "@anthropic-ai/sdk": "^0.127.0",
     "@larksuiteoapi/node-sdk": "^1.74.0",
     "markdown-it": "^15.0.2"

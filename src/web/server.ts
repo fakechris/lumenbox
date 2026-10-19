@@ -223,6 +223,7 @@ import { resolveLocale } from "../i18n/locale.ts";
 import { activityPhrase, activityPhrases } from "../host/activity-phrase.ts";
 import { MESSAGES } from "../i18n/messages.ts";
 import { QuestionWatch } from "../host/question-expiry.ts";
+import { compileSurface, SurfaceLedger, surfaceLedgerPath, type A2uiMessage } from "../host/show-ui.ts";
 import { appendLine } from "../host/jsonl.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
 import { firstRunCue } from "../host/prompt.ts";
@@ -271,6 +272,8 @@ type OutboundEvent =
   /** An agent asked the person something; the page shows a card with the answers as buttons. */
   | { type: "question"; agentId: string; agentName: string; question: string; options?: string[]; fallback?: string; conversation?: string }
   | { type: "question_expired"; agentId: string; agentName: string; question: string; verdict: "default" | "skipped" }
+  /** An agent drew or updated a card (docs/79); `messages` are the A2UI messages the page's processor takes. */
+  | { type: "surface"; agentId: string; agentName: string; surfaceId: string; title?: string; messages: A2uiMessage[]; conversation?: string }
   | { type: "task_aging"; taskId: string; title: string; kind: "nudge" | "archived" | "closed"; text: string }
   /** A reaction set or cleared on one message of one thread (INV-111), so every open page shows it. */
   | { type: "reaction"; agentId: string; conversation: string; index: number; emoji: string | null; by: string }
@@ -531,6 +534,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // Questions that expire (INV-526): every AskUser is watched; unanswered past its window,
   // the agent is woken to proceed on its default or to decide, and the chat is told.
   const questions = new QuestionWatch(join(agentboxHome(), "questions.jsonl"));
+  const surfaces = new SurfaceLedger(surfaceLedgerPath(), message => log(message));
   // What the host has already said to each room today, so four rails do not each start
   // their own conversation (INV-535). Kept across a restart: a budget that resets when
   // the process does is not a budget.
@@ -616,6 +620,39 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       });
       broadcast({ type: "handover_pending", agentId: input.agentId, agentName: input.agentName, instruction: input.instruction, reason: input.reason });
       return "in the app";
+    },
+    // A card the agent composed (docs/79). Checked here against the catalog with the page's
+    // own processor, so the page never gets a surface it would refuse; kept whole in the
+    // ledger so a later process can redraw it. The press comes back as an ordinary message.
+    showUI: async input => {
+      const conversation = input.conversation ?? "main";
+      const existing = surfaces.get(input.agentId, conversation, input.surface);
+      const compiled = compileSurface(input, existing);
+      if (!compiled.ok) return { error: compiled.reason };
+      const title = input.title ?? existing?.title;
+      if (input.close === true) {
+        surfaces.close(input.agentId, conversation, input.surface);
+      } else {
+        surfaces.record({
+          agentId: input.agentId,
+          agentName: input.agentName,
+          conversation,
+          surfaceId: input.surface,
+          ...(title !== undefined ? { title } : {}),
+          messages: compiled.full,
+          at: new Date().toISOString(),
+        });
+      }
+      broadcast({
+        type: "surface",
+        agentId: input.agentId,
+        agentName: input.agentName,
+        surfaceId: input.surface,
+        ...(title !== undefined ? { title } : {}),
+        messages: compiled.send,
+        conversation,
+      });
+      return { where: "in the app" };
     },
     askUser: async input => {
       // A question is a card in the chat with the answers as buttons (docs/41 §4), not an

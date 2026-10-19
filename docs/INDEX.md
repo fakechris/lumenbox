@@ -97,6 +97,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [75-cost-per-accepted-task](75-cost-per-accepted-task.md) | Cost per accepted task requires an auditable denominator | current | 2026-09-29 |
 | [77-agent-state-drift](77-agent-state-drift.md) | 状态漂移：同样的代码和模型，agent 为什么会滚成仪式——根因、归因实验与方案 | current | 2026-10-09 |
 | [78-context-handoff](78-context-handoff.md) | 建议换代：空闲时备好交接，人发 /new 时装入 | current | 2026-10-15 |
+| [79-genui](79-genui.md) | ShowUI：agent 用 A2UI 组装卡片，网页渲染，飞书/钉钉降级 | current | 2026-10-19 |
 
 ## handoff
 

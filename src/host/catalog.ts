@@ -112,6 +112,7 @@ export const DESK_TOOLS: readonly string[] = [
   "AskUser",
   "AskSecret",
   "HandOverDesktop",
+  "ShowUI",
   "OtherThreads",
   "Tasks",
   "ClaimWork",

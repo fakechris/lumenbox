@@ -148,6 +148,20 @@ export interface ToolContext {
     reason: "auth" | "captcha" | "payment" | "other";
     conversation?: string;
   }) => string | undefined;
+  /**
+   * Shows the person a card the agent composed (docs/79). The host checks the
+   * components against the catalog and says where it went, or why it was refused.
+   */
+  showUI?: (input: {
+    agentId: string;
+    agentName: string;
+    conversation?: string;
+    surface: string;
+    components?: unknown;
+    data?: unknown;
+    title?: string;
+    close?: boolean;
+  }) => Promise<{ where: string } | { error: string }>;
   askUser?: (input: {
     principalId?: string;
     agentId: string;
@@ -422,6 +436,7 @@ export const FORK_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
   "AskUser",
   "AskSecret",
   "HandOverDesktop",
+  "ShowUI",
   "OtherThreads",
   // A fork's one channel is its final message with its handoff line; silence would read as `unstated`.
   SILENCE_TOOL,
@@ -429,7 +444,7 @@ export const FORK_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
 
 /** Whether a conversation name is a fork child's. */
 /** The tools that reach the person. Withheld on a turn teammates opened (docs/42 §2). */
-export const PERSON_FACING_TOOLS: ReadonlySet<string> = new Set(["AskUser", "AskSecret", "HandOverDesktop"]);
+export const PERSON_FACING_TOOLS: ReadonlySet<string> = new Set(["AskUser", "AskSecret", "HandOverDesktop", "ShowUI"]);
 
 export function isForkConversation(conversation: string | undefined): boolean {
   return (conversation ?? "").startsWith(FORK_PREFIX);
@@ -1063,6 +1078,42 @@ export function buildTools(
             },
           },
           required: ["question"],
+        },
+      },
+      {
+        name: "ShowUI",
+        description:
+          "Show the person a card you compose — a comparison table, a few options with a " +
+          "line of explanation each, a short form, a progress list — when prose would make " +
+          "them squint. It renders in the app and, as far as it can, in their chat.\n\n" +
+          "`components` is an A2UI v0.9 component list. Available: Text (variant h1–h5, body, " +
+          "caption; simple Markdown), Row, Column, List, Card (layout; `children` is a list of " +
+          "ids, Card has one `child`), Divider, Button (`child` is the id of a Text; `action` is " +
+          "`{\"event\": {\"name\": \"...\", \"context\": {...}}}`), TextField (`label`, `value` " +
+          "bound as {\"path\": \"/field\"}), CheckBox, ChoicePicker (`options` of {label, value}, " +
+          "`variant` mutuallyExclusive or multipleSelection). One component must have id " +
+          "\"root\". Nothing else is in the catalog; a component outside it is refused with " +
+          "the reason.\n\n" +
+          "When they press a button, you get a message like `[Action \"pick\" on card s1: " +
+          "{\"choice\": \"a\"}]` — the event name and context you wrote, plus the form's values. " +
+          "Your turn does not end: say what the card is for in a line and continue, or stop if " +
+          "you are waiting on it. Call again with the same `surface` to update the card in " +
+          "place; `close: true` removes it. Use AskUser for a plain question; use this when the " +
+          "shape of the information is the point.",
+        input_schema: {
+          type: "object",
+          properties: {
+            surface: { type: "string", description: "Your id for this card: short, stable, e.g. \"plan\" or \"options-1\"." },
+            components: {
+              type: "array",
+              description: "The A2UI components, one of them with id \"root\". Every call carries the whole card.",
+              items: { type: "object" },
+            },
+            data: { type: "object", description: "Optional data model; components bind to it with {\"path\": \"/key\"}." },
+            title: { type: "string", description: "The card's title line. Defaults to your name." },
+            close: { type: "boolean", description: "Remove the card instead of drawing it." },
+          },
+          required: ["surface"],
         },
       },
       {
@@ -3432,6 +3483,34 @@ export async function dispatchTool(
         text:
           `Requested ${id} from the person securely (${where}). You will never see its value. When they save it ` +
           `you will be told; until then, continue with what does not need it, or end your turn saying what is waiting.`,
+      };
+    }
+
+    case "ShowUI": {
+      const surface = String(input.surface ?? "").trim();
+      if (surface === "" || !/^[A-Za-z0-9_.-]{1,64}$/.test(surface)) {
+        return { text: "Give the card a short `surface` id: letters, digits, `-`, `_`, `.`, up to 64.", isError: true };
+      }
+      if (context.showUI === undefined) {
+        return { text: "There is nobody to show a card to on this run. Say it in words instead.", isError: true };
+      }
+      const shown = await context.showUI({
+        agentId: context.agent.id,
+        agentName: context.agent.profile.name,
+        ...(context.conversation !== undefined ? { conversation: context.conversation } : {}),
+        surface,
+        ...(input.components !== undefined ? { components: input.components } : {}),
+        ...(input.data !== undefined ? { data: input.data } : {}),
+        ...(typeof input.title === "string" && input.title.trim() !== "" ? { title: input.title.trim() } : {}),
+        ...(input.close === true ? { close: true } : {}),
+      });
+      if ("error" in shown) return { text: `Not shown: ${shown.error}`, isError: true };
+      if (input.close === true) return { text: `Closed card ${surface}.` };
+      return {
+        text:
+          `Shown ${shown.where} as card ${surface}. Their presses arrive as messages like ` +
+          `[Action "<name>" on card ${surface}: {...}]. Say in one line what the card is for; ` +
+          `continue, or stop if you are waiting on it.`,
       };
     }
 
