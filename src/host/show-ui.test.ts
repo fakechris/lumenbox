@@ -34,7 +34,8 @@ test("the catalog is the named subset of the basic catalog, and nothing more", (
   assert.equal(catalog.id, SHOW_UI_CATALOG_ID);
   const names = [...catalog.components.keys()].sort();
   assert.deepEqual(names, [...SHOW_UI_COMPONENTS].sort());
-  assert.ok(!names.includes("Image") && !names.includes("Modal"));
+  assert.ok(!names.includes("Image") && !names.includes("Video"), "nothing that carries an external URL");
+  assert.ok(names.includes("Table") && names.includes("Tabs"), "lumenbox's own and the wider basic set (INV-1280)");
 });
 
 test("a first call creates the surface; the same surface again only updates it; close deletes it", () => {
@@ -65,7 +66,7 @@ test("what the catalog refuses, with the reason the agent reads", () => {
     { surface: "s", components: [{ id: "root", component: "Button", child: "l", action: { functionCall: { call: "openUrl", args: {} } } }, { id: "l", component: "Text", text: "go" }] },
     undefined
   );
-  assert.ok(!local.ok && /events only/.test(local.reason) && /openUrl/.test(local.reason));
+  assert.ok(!local.ok && /openUrl/.test(local.reason) && /not a function a card may call/.test(local.reason));
   const empty = compileSurface({ surface: "s", components: [] }, undefined);
   assert.ok(!empty.ok && /non-empty/.test(empty.reason));
 });
@@ -184,4 +185,30 @@ test("Progress, Markdown, Code and Approve are in the catalog; an Approve withou
   const comp = (kept.full[1] as { updateComponents: { components: Record<string, unknown>[] } }).updateComponents.components[0]!;
   assert.deepEqual(comp.onApprove, { event: { name: "ship", context: { env: "prod" } } }, "the agent's own event is kept");
   assert.deepEqual(comp.onReject, { event: { name: "reject" } });
+});
+
+test("a data-only or patch call moves an existing card without resending components; a card may call catalog functions but not openUrl (INV-1280)", () => {
+  const first = compileSurface({ surface: "p", components: [{ id: "root", component: "Progress", title: "Deploy", steps: { path: "/steps" } }], data: { steps: [{ label: "build", status: "doing" }] } }, undefined);
+  assert.ok(first.ok, first.ok ? "" : first.reason);
+  const existing: SurfaceRecord = { agentId: "a", agentName: "Ada", conversation: "main", surfaceId: "p", messages: first.full, at: "t" };
+  const moved = compileSurface({ surface: "p", patch: [{ path: "/steps/0/status", value: "done" }] }, existing);
+  assert.ok(moved.ok, moved.ok ? "" : moved.reason);
+  assert.deepEqual(moved.send, [{ version: "v0.9", updateDataModel: { surfaceId: "p", path: "/steps/0/status", value: "done" } }]);
+  assert.equal(moved.full.length, first.full.length + 1, "the full list grows by the edit");
+  const whole = compileSurface({ surface: "p", data: { steps: [] } }, existing);
+  assert.ok(whole.ok && whole.send.length === 1 && "updateDataModel" in whole.send[0]!);
+  const badPatch = compileSurface({ surface: "p", patch: [{ path: "steps", value: 1 }] }, existing);
+  assert.ok(!badPatch.ok && /starting with/.test(badPatch.reason));
+  const nothingYet = compileSurface({ surface: "q", data: { x: 1 } }, undefined);
+  assert.ok(!nothingYet.ok && /Pass `components`/.test(nothingYet.reason), "no card to move yet");
+  // Functions: a catalog function in a property is fine; openUrl is not a thing a card does.
+  const fn = compileSurface({ surface: "f", components: [{ id: "root", component: "Text", text: { call: "formatNumber", args: { value: 1234.5 } } }] }, undefined);
+  assert.ok(fn.ok, fn.ok ? "" : fn.reason);
+  const open = compileSurface({ surface: "f", components: [{ id: "root", component: "Button", child: "l", action: { functionCall: { call: "openUrl", args: { url: "https://x" } } } }, { id: "l", component: "Text", text: "go" }] }, undefined);
+  assert.ok(!open.ok && /openUrl/.test(open.reason) && /Available/.test(open.reason), open.ok ? "" : open.reason);
+  // The wider basic catalog, without Image.
+  const tabs = compileSurface({ surface: "t", components: [{ id: "root", component: "Tabs", tabs: [{ title: "A", child: "a" }] }, { id: "a", component: "Text", text: "x" }] }, undefined);
+  assert.ok(tabs.ok, tabs.ok ? "" : tabs.reason);
+  const image = compileSurface({ surface: "i", components: [{ id: "root", component: "Image", url: "https://x/y.png" }] }, undefined);
+  assert.ok(!image.ok && /not in the catalog/.test(image.reason));
 });

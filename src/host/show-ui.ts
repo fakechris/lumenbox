@@ -13,8 +13,9 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { BASIC_COMPONENTS, Catalog, MessageProcessor, STRICT_VALIDATION } from "@a2ui/web_core/v0_9";
+import { BASIC_COMPONENTS, BASIC_FUNCTIONS, Catalog, MessageProcessor, STRICT_VALIDATION } from "@a2ui/web_core/v0_9";
 import { LUMENBOX_COMPONENTS } from "./show-ui-components.ts";
+import { SHOW_UI_FUNCTIONS } from "./show-ui-functions.ts";
 import { agentboxHome, envNumber } from "../config.ts";
 import { appendLine, type LedgerKind } from "./jsonl.ts";
 
@@ -32,7 +33,12 @@ let catalog: ShowUiCatalog | undefined;
 /** The lumenbox catalog, built once from the basic catalog's component definitions. */
 export function showUiCatalog(): ShowUiCatalog {
   if (catalog === undefined) {
-    catalog = new Catalog(SHOW_UI_CATALOG_ID, SHOW_UI_PROTOCOL, [...BASIC_COMPONENTS.filter(api => names.has(api.name)), ...LUMENBOX_COMPONENTS]);
+    catalog = new Catalog(
+      SHOW_UI_CATALOG_ID,
+      SHOW_UI_PROTOCOL,
+      [...BASIC_COMPONENTS.filter(api => names.has(api.name)), ...LUMENBOX_COMPONENTS],
+      BASIC_FUNCTIONS.filter(fn => SHOW_UI_FUNCTIONS.includes(fn.name))
+    );
   }
   return catalog;
 }
@@ -42,6 +48,8 @@ export interface ShowUiInput {
   surface: string;
   components?: unknown;
   data?: unknown;
+  /** Data-model edits by path, without resending components: [{path: "/steps/1/status", value: "done"}]. */
+  patch?: unknown;
   title?: string;
   close?: boolean;
 }
@@ -76,8 +84,20 @@ export function compileSurface(input: ShowUiInput, existing: SurfaceRecord | und
     if (existing === undefined) return { ok: false, reason: `There is no card "${surfaceId}" to close.` };
     return { ok: true, send: [{ version: "v0.9", deleteSurface: { surfaceId } }], full: [] };
   }
+  // A data-only call (INV-1280): the card stays, the numbers move. `data` replaces the whole
+  // model; `patch` edits paths. Either is proved by replaying the surface with it appended.
+  if (input.components === undefined && existing !== undefined && (input.data !== undefined || input.patch !== undefined)) {
+    const edits = dataMessages(surfaceId, input);
+    if (!edits.ok) return edits;
+    const full = [...existing.messages, ...edits.send];
+    const reason = proveSurface(full);
+    if (reason !== undefined) return { ok: false, reason };
+    return { ok: true, send: edits.send, full };
+  }
   if (!Array.isArray(input.components) || input.components.length === 0) {
-    return { ok: false, reason: "Pass `components`: a non-empty array of A2UI components, one of them with id \"root\"." };
+    return { ok: false, reason: existing === undefined
+      ? "Pass `components`: a non-empty array of A2UI components, one of them with id \"root\"."
+      : "Pass `components` to redraw the card, or `data` / `patch` to move what it shows." };
   }
   if (input.components.length > SHOW_UI_MAX_COMPONENTS) {
     return { ok: false, reason: `A card holds at most ${SHOW_UI_MAX_COMPONENTS} components; this one has ${input.components.length}. Split it, or show less.` };
@@ -94,18 +114,16 @@ export function compileSurface(input: ShowUiInput, existing: SurfaceRecord | und
       };
     }
     const local = localFunction(component);
-    if (local !== undefined) return { ok: false, reason: `Component ${component.id}: actions are events only (\`{"event": {"name": ...}}\`); "${local}" is not allowed.` };
+    if (local !== undefined) return { ok: false, reason: `Component ${component.id}: "${local}" is not a function a card may call. Available: ${SHOW_UI_FUNCTIONS.join(", ")}; actions are events (\`{"event": {"name": ...}}\`).` };
     components.push(component);
   }
   if (!components.some(component => component.id === SHOW_UI_ROOT)) {
     return { ok: false, reason: `One component must have id "${SHOW_UI_ROOT}"; it is the one the card shows.` };
   }
-  if (input.data !== undefined && (input.data === null || typeof input.data !== "object" || Array.isArray(input.data))) {
-    return { ok: false, reason: "`data` is an object; components bind to it with {\"path\": \"/key\"}." };
-  }
+  const edits = dataMessages(surfaceId, input);
+  if (!edits.ok) return edits;
   const update: A2uiMessage = { version: "v0.9", updateComponents: { surfaceId, components } };
-  const full: A2uiMessage[] = [{ version: "v0.9", createSurface: { surfaceId, catalogId: SHOW_UI_CATALOG_ID } }, update];
-  if (input.data !== undefined) full.push({ version: "v0.9", updateDataModel: { surfaceId, path: "/", value: input.data } });
+  const full: A2uiMessage[] = [{ version: "v0.9", createSurface: { surfaceId, catalogId: SHOW_UI_CATALOG_ID } }, update, ...edits.send];
   const reason = proveSurface(full);
   if (reason !== undefined) return { ok: false, reason };
   return { ok: true, send: existing === undefined ? full : full.slice(1), full };
@@ -149,6 +167,31 @@ function unwrapItems(value: unknown): unknown {
   return out;
 }
 
+/**
+ * The basic-catalog functions a card may call on the page: formatting, checks and logic, which
+ * run as expressions in the renderer. `openUrl` is left out — a card does not open links by
+ * itself; the person does (docs/79).
+ */
+export { SHOW_UI_FUNCTIONS };
+
+/** The data-model messages one call carries: `data` as the whole model, `patch` as paths. */
+function dataMessages(surfaceId: string, input: ShowUiInput): { ok: true; send: A2uiMessage[] } | { ok: false; reason: string } {
+  const send: A2uiMessage[] = [];
+  if (input.data !== undefined) {
+    if (input.data === null || typeof input.data !== "object" || Array.isArray(input.data)) return { ok: false, reason: "`data` is an object; components bind to it with {\"path\": \"/key\"}." };
+    send.push({ version: "v0.9", updateDataModel: { surfaceId, path: "/", value: input.data } });
+  }
+  if (input.patch !== undefined) {
+    if (!Array.isArray(input.patch)) return { ok: false, reason: "`patch` is an array of {path, value}, paths like \"/steps/1/status\"." };
+    for (const raw of input.patch as unknown[]) {
+      const edit = (raw ?? {}) as { path?: unknown; value?: unknown };
+      if (typeof edit.path !== "string" || !edit.path.startsWith("/")) return { ok: false, reason: "Every patch has a `path` starting with \"/\" and a `value`." };
+      send.push({ version: "v0.9", updateDataModel: { surfaceId, path: edit.path, value: edit.value } });
+    }
+  }
+  return { ok: true, send };
+}
+
 /** The name of a client-side function call anywhere in a component's actions, if one is there. */
 function localFunction(value: unknown): string | undefined {
   if (value === null || typeof value !== "object") return undefined;
@@ -157,8 +200,11 @@ function localFunction(value: unknown): string | undefined {
     return undefined;
   }
   const record = value as Record<string, unknown>;
-  const call = record.functionCall;
-  if (call !== null && typeof call === "object") return String((call as Record<string, unknown>).call ?? "functionCall");
+  const call = record.functionCall ?? (typeof record.call === "string" ? record : undefined);
+  if (call !== null && typeof call === "object") {
+    const name = String((call as Record<string, unknown>).call ?? "functionCall");
+    if (!SHOW_UI_FUNCTIONS.includes(name)) return name;
+  }
   for (const key of Object.keys(record)) {
     if (key === "component" || key === "id") continue;
     const found = localFunction(record[key]);

@@ -13,6 +13,7 @@ import { basicCatalog } from "@a2ui/lit/v0_9";
 import { injectBasicCatalogStyles } from "@a2ui/web_core/v0_9/basic_catalog";
 import { registerUniversalElement } from "@a2ui/web_core/universal";
 import { SHOW_UI_BASIC_COMPONENTS, SHOW_UI_CATALOG_ID, SHOW_UI_PROTOCOL } from "../host/show-ui-catalog.ts";
+import { SHOW_UI_FUNCTIONS } from "../host/show-ui-functions.ts";
 import { ApproveApi, CodeApi, MarkdownApi, ProgressApi, TableApi } from "../host/show-ui-components.ts";
 import { LumenboxTableElement } from "./a2ui-table.ts";
 import { LumenboxProgressElement } from "./a2ui-progress.ts";
@@ -33,7 +34,8 @@ for (const component of lumenbox) registerUniversalElement(component);
 const catalog = new Catalog(
   SHOW_UI_CATALOG_ID,
   SHOW_UI_PROTOCOL,
-  [...[...basicCatalog.components.values()].filter(component => names.has(component.name)), ...lumenbox]
+  [...[...basicCatalog.components.values()].filter(component => names.has(component.name)), ...lumenbox],
+  [...basicCatalog.functions.values()].filter(fn => SHOW_UI_FUNCTIONS.includes(fn.name))
 );
 
 injectBasicCatalogStyles(document);

@@ -1169,8 +1169,10 @@ export function buildTools(
           "{\"choice\": \"a\"}]` — the event name and context you wrote. To get a field's value " +
           "back, bind it in the context: `\"context\": {\"name\": {\"path\": \"/name\"}}`. " +
           "Your turn does not end: say what the card is for in a line and continue, or stop if " +
-          "you are waiting on it. Call again with the same `surface` to update the card in " +
-          "place; `close: true` removes it. Use AskUser for a plain question; use this when the " +
+          "you are waiting on it. Call again with the same `surface` and new `components` to redraw; with only `data` or " +
+          "`patch` to move what it shows (a Progress between tool calls, a Table's rows); `close: true` removes it. " +
+          "Layout also has Tabs, Modal, Slider, DateTimeInput, Icon; functions like formatNumber/formatDate/and/or/not " +
+          "may be called in properties as {\"call\": \"formatNumber\", \"args\": {...}}. Use AskUser for a plain question; use this when the " +
           "shape of the information is the point.",
         input_schema: {
           type: "object",
@@ -1181,7 +1183,8 @@ export function buildTools(
               description: "The A2UI components, one of them with id \"root\". Every call carries the whole card.",
               items: { type: "object" },
             },
-            data: { type: "object", description: "Optional data model; components bind to it with {\"path\": \"/key\"}." },
+            data: { type: "object", description: "Optional data model; components bind to it with {\"path\": \"/key\"}. With `surface` alone (no components) it moves an existing card in place." },
+            patch: { type: "array", description: "Edit an existing card's data by path without resending components: [{\"path\": \"/steps/1/status\", \"value\": \"done\"}].", items: { type: "object" } },
             title: { type: "string", description: "The card's title line. Defaults to your name." },
             close: { type: "boolean", description: "Remove the card instead of drawing it." },
           },

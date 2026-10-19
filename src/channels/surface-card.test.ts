@@ -97,3 +97,15 @@ test("an Approve is two presses in a chat, Progress is a checklist, Code is fenc
   assert.deepEqual(card.buttons, [{ label: "Allow", name: "approve" }, { label: "Reject", name: "reject", context: { why: "no" } }]);
   assert.equal(buttonText(card, card.buttons[0]!), '[Action "approve" on card d]');
 });
+
+test("Tabs show every tab in turn and a Modal's content inline in a chat (INV-1280)", () => {
+  const card = surfaceCard({
+    surfaceId: "t", agentName: "Ada",
+    messages: [{ version: "v0.9", updateComponents: { surfaceId: "t", components: [
+      { id: "root", component: "Tabs", tabs: [{ title: "One", child: "a" }, { title: "Two", child: "b" }] },
+      { id: "a", component: "Text", text: "first" }, { id: "b", component: "Modal", trigger: "tr", content: "c" },
+      { id: "tr", component: "Text", text: "open" }, { id: "c", component: "Text", text: "inside" },
+    ] } }],
+  });
+  assert.deepEqual(card.lines, ["first", "open", "inside"]);
+});

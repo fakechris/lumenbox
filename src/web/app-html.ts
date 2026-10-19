@@ -468,6 +468,29 @@ export const APP_HTML = String.raw`<!doctype html>
   .surface .sbody .loading { font-size: 12px; color: var(--text-soft); }
   .surface .sdone { font-size: 12px; color: var(--text-soft); }
   .surface.closed .sbody { display: none; }
+  .surface .lb-table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+  .surface .lb-table th, .surface .lb-table td { border-bottom: 1px solid var(--border); padding: 6px 8px; text-align: left; vertical-align: top; }
+  .surface .lb-table th { font-weight: 600; color: var(--text-soft); user-select: none; }
+  .surface .lb-table .lb-end { text-align: right; font-variant-numeric: tabular-nums; }
+  .surface .lb-table .lb-sel { width: 24px; }
+  .surface .lb-table tr.lb-picked td { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .surface .lb-table caption { caption-side: bottom; font-size: 12px; color: var(--text-soft); padding-top: 6px; text-align: left; }
+  .surface .lb-progress-title { font-weight: 600; }
+  .surface .lb-bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; margin: 6px 0; }
+  .surface .lb-bar-fill { height: 100%; background: var(--accent); transition: width 300ms ease; }
+  .surface .lb-steps { list-style: none; padding: 0; margin: 4px 0; }
+  .surface .lb-step { padding: 2px 0; }
+  .surface .lb-step-done { color: var(--text-soft); }
+  .surface .lb-step-doing { color: var(--accent); font-weight: 600; }
+  .surface .lb-step-failed { color: var(--danger, #b00020); }
+  .surface .lb-mark { display: inline-block; width: 1.2em; }
+  .surface .lb-code { border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; margin: 6px 0; }
+  .surface .lb-code-head { display: flex; justify-content: space-between; align-items: center; padding: 4px 8px; background: var(--surface); font-size: 12px; color: var(--text-soft); }
+  .surface .lb-code-body { margin: 0; padding: 8px 10px; overflow-x: auto; font-size: 12.5px; line-height: 1.45; }
+  .surface .lb-add { color: var(--ok, #0a7a3a); } .surface .lb-del { color: var(--danger, #b00020); } .surface .lb-hunk { color: var(--text-soft); }
+  .surface .lb-approve-title { font-weight: 600; }
+  .surface .lb-approve-row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+  .surface .lb-markdown p:first-child { margin-top: 0; } .surface .lb-markdown p:last-child { margin-bottom: 0; }
   .divider::before, .divider::after { content: "\200b"; flex: 1; border-top: 1px solid var(--border); }
   .divider.new { color: var(--accent); }
   .divider.on { color: var(--accent); }

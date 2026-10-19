@@ -10,6 +10,7 @@ export const SHOW_UI_PROTOCOL = "v0.9";
 /** The basic-catalog components a card may use, in the order the catalog lists them. */
 export const SHOW_UI_BASIC_COMPONENTS: readonly string[] = [
   "Text", "Row", "Column", "List", "Card", "Divider", "Button", "TextField", "CheckBox", "ChoicePicker",
+  "Tabs", "Modal", "Slider", "DateTimeInput", "Icon",
 ];
 
 /** lumenbox's own (INV-1280), schemas in show-ui-components.ts. */

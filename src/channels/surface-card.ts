@@ -82,7 +82,10 @@ export function surfaceCard(input: { surfaceId: string; agentName: string; title
     if (component === undefined) return;
     // Only layout walks into its children: a Button's child is its label, drawn with the button.
     const layout = component.component === "Row" || component.component === "Column" || component.component === "List" || component.component === "Card";
-    const children = (layout ? component.children ?? (typeof component.child === "string" ? [component.child] : []) : []) as unknown;
+    // Tabs and a Modal are layout too: a chat shows every tab in turn, and a modal's content inline.
+    const tabChildren = component.component === "Tabs" && Array.isArray(component.tabs) ? (component.tabs as Record<string, unknown>[]).map(tab => tab.child) : undefined;
+    const modalChildren = component.component === "Modal" ? [component.trigger, component.content] : undefined;
+    const children = (layout ? component.children ?? (typeof component.child === "string" ? [component.child] : []) : tabChildren ?? modalChildren ?? []) as unknown;
     switch (component.component) {
       case "Text": {
         const content = text(component.text, data);
@@ -170,6 +173,12 @@ export function surfaceCard(input: { surfaceId: string; agentName: string; title
           for (const [key, value] of Object.entries((event?.context as Record<string, unknown> | undefined) ?? {})) { const resolved = resolve(value, data); if (resolved !== undefined) context[key] = resolved; }
           buttons.push({ label: text(component[field === "onApprove" ? "approveLabel" : "rejectLabel"], data) || (field === "onApprove" ? "Allow" : "Reject"), name, ...(Object.keys(context).length > 0 ? { context } : {}) });
         }
+        break;
+      }
+      case "Slider":
+      case "DateTimeInput": {
+        const label = text(component.label, data);
+        lines.push(`${label !== "" ? label : "…"}：在聊天里回复`);
         break;
       }
       case "TextField": {
