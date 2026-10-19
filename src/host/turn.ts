@@ -1990,7 +1990,11 @@ ${outcome.text}`;
     conversation === MAIN_CONVERSATION
       ? undefined
       : deps.scopes?.boundTo(conversation, conversationIdFor);
-  const narrowed = narrowTools(scope?.tools ?? agent.profile.tools, chatScope?.tools);
+  const listed = narrowTools(scope?.tools ?? agent.profile.tools, chatScope?.tools);
+  // An explicit list written before ShowUI existed froze without it (INV-1276): eight agents on one
+  // box said "that is Ada's tool". A list that lets the agent ask the person lets it show them a
+  // card — the same class of tool — so the upgrade happens here, at resolution, not on disk.
+  const narrowed = listed !== undefined && listed.includes("AskUser") && !listed.includes("ShowUI") ? [...listed, "ShowUI"] : listed;
   // A template setup turn holds files and memory and a way to ask, nothing that reaches out
   // (docs/29 §5.3): the recipe it is installing is third-party text, and installing yourself
   // is not a reason to message anyone. The same narrowing applies when offering and executing tools.

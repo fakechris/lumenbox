@@ -4170,12 +4170,22 @@ function mountSurface(item) {
 }
 
 /** A press on a card goes to the agent as one line of an ordinary message, like an answer. */
+var SURFACE_PRESS_WINDOW_MS = 5000;
 function sendSurfaceAction(item, action) {
   if (!current || !action || !action.name) return;
   var context = action.context && Object.keys(action.context).length ? ": " + JSON.stringify(action.context) : "";
   var text = '[Action "' + action.name + '" on card ' + item.surfaceId + context + "]";
-  item.lastAction = action.name;
   var done = item.node && item.node.querySelector(".sdone");
+  // The same press again within the window is the person checking it landed, not a second
+  // choice (INV-1275): say so on the card and send nothing. A progress card can still be
+  // pressed again once the window has passed.
+  var now = Date.now();
+  if (item.lastSent && item.lastSent.text === text && now - item.lastSent.at < SURFACE_PRESS_WINDOW_MS) {
+    if (done) done.textContent = "sent: " + action.name + " (already sent, waiting for " + nameOf(current) + ")";
+    return;
+  }
+  item.lastSent = { text: text, at: now };
+  item.lastAction = action.name;
   if (done) done.textContent = "you pressed: " + action.name;
   fetch("/api/prompt", {
     method: "POST",
@@ -4468,10 +4478,11 @@ function drawItem(item) {
       '<div class="stitle"></div><div class="sbody"><span class="loading">drawing the card…</span></div><div class="sdone"></div>';
     div.querySelector(".stitle").textContent = item.title || "";
     if (!item.title) div.querySelector(".stitle").remove();
+    // The feedback line stays in the DOM even when empty (INV-1275): the first press writes into
+    // it, and a card that said nothing when pressed was pressed twelve times.
     var sdone = div.querySelector(".sdone");
     if (item.closed) sdone.textContent = "closed";
     else if (item.lastAction) sdone.textContent = "you pressed: " + item.lastAction;
-    else sdone.remove();
     // The body is filled once the node is in the document; see mountSurface.
     setTimeout(function () { a2uiReady(function () { mountSurface(item); }); }, 0);
     return div;

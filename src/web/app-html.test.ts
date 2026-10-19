@@ -324,3 +324,13 @@ test("a card the agent composed is one item per surface, loaded lazily, and a pr
   assert.match(APP_HTML, /'\[Action "' \+ action\.name \+ '" on card ' \+ item\.surfaceId \+ context \+ "\]"/);
   assert.match(APP_HTML, /\.surface \{ border: 1px solid var\(--border-strong\)/);
 });
+
+test("a card press always has a line to land on, and the same press again within the window sends nothing (INV-1275)", () => {
+  // The feedback element is never removed: the first press writes into it.
+  assert.doesNotMatch(APP_HTML, /else sdone\.remove\(\);/);
+  assert.match(APP_HTML, /var SURFACE_PRESS_WINDOW_MS = 5000;/);
+  assert.match(APP_HTML, /item\.lastSent\.text === text && now - item\.lastSent\.at < SURFACE_PRESS_WINDOW_MS/);
+  // A repeat inside the window returns before the fetch.
+  const body = APP_HTML.slice(APP_HTML.indexOf("function sendSurfaceAction"), APP_HTML.indexOf("function pushItem"));
+  assert.ok(body.indexOf("already sent") < body.indexOf('fetch("/api/prompt"'), "the repeat check comes before the send");
+});
