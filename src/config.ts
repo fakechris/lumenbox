@@ -667,6 +667,13 @@ export function reapplyConfigEnv(config: AgentboxConfig): { locked: string[] } {
   return { locked };
 }
 
+/** The keys a config file names that the shell has set to something else: what a settings page must call locked. */
+export function lockedConfigEnv(config: AgentboxConfig): string[] {
+  return configEnvEntries(config)
+    .filter(([key, value]) => process.env[key] !== undefined && !appliedFromConfig.has(key) && process.env[key] !== value)
+    .map(([key]) => key);
+}
+
 /** Test seam: forget which keys came from config, so one test's apply does not leak into the next. */
 export function resetConfigEnvForTests(): void {
   appliedFromConfig.clear();
