@@ -61,8 +61,31 @@ export function cacheReadShare(usage: { inputTokens: number; cacheReadTokens: nu
 /** What a row with no kind is reported as. Not a kind: the absence of one. */
 export const UNATTRIBUTED = "unattributed";
 
-/** Additive: old rows without this field keep their historical accounting semantics. */
+/**
+ * Additive: old rows without this field keep their historical accounting semantics — which
+ * means a cache figure of 0 on a row written before 2026-10-20 may be a reported zero or a
+ * field the provider never sent; the two were written identically. From that date a row whose
+ * provider omitted (or nulled) a cache field carries `cache_unknown`, its cache counts stay 0,
+ * and spend.ts lists it as unmeasured instead of pricing the 0 (INV-1260).
+ */
 export type UsageMetering = "complete" | "cache_unknown" | "missing" | "invalid";
+
+/**
+ * What a provider's usage block says about its own cache fields. The wire's own verdict wins
+ * when it gave one (openai-wire.ts sets `metering` itself); otherwise a missing or null
+ * cache field is `cache_unknown`, and both present is no mark — the row reads as complete.
+ * A zero must mean "reported zero", never "did not say".
+ */
+export function cacheMetering(usage: {
+  cache_read_input_tokens?: number | null;
+  cache_creation_input_tokens?: number | null;
+  metering?: UsageMetering;
+}): UsageMetering | undefined {
+  if (usage.metering !== undefined) return usage.metering;
+  const read = usage.cache_read_input_tokens;
+  const write = usage.cache_creation_input_tokens;
+  return read === undefined || read === null || write === undefined || write === null ? "cache_unknown" : undefined;
+}
 
 /**
  * A window on what was spent. Rows fall off the back by age and by count, on purpose:
@@ -432,7 +455,7 @@ export class UsageLog {
       outputTokens: options.usage.output_tokens ?? 0,
       cacheReadTokens: options.usage.cache_read_input_tokens ?? 0,
       cacheWriteTokens: options.usage.cache_creation_input_tokens ?? 0,
-      ...(options.usage.metering !== undefined ? { metering: options.usage.metering } : {}),
+      ...(cacheMetering(options.usage) !== undefined ? { metering: cacheMetering(options.usage) } : {}),
     });
   }
 
