@@ -2,7 +2,7 @@
      title: Deployment
      family: guide
      status: current
-     updated: 2026-09-28
+     updated: 2026-10-20
 -->
 # Deployment
 
@@ -203,6 +203,39 @@ State it plainly, because a deployment decision depends on it.
 - **In the self-contained topology the model credential is in the container**, and therefore
   reachable by an agent that goes looking. The uid split prevents the accident, not the act.
 - **Egress is off unless configured**, and the relay refuses to run without a token.
+- **Through the egress relay, two targets are refused before any allow list** (INV-1224,
+  `src/egress/hard-deny.ts`): every cloud metadata address (169.254.0.0/16, `fd00:ec2::254`,
+  `metadata.google.internal`), and the host itself — loopback, `host.docker.internal` and its
+  kin — except the ports that are channels on purpose: the web port (MCP face and model relay)
+  and the relay's own (`agentbox egress relay --host-ports 7777,…`). Every stream is one line
+  in `network-events.jsonl` at the decision (host, port, box, who asked, allowed or why not)
+  and one more when it closes (bytes each way, duration); the file rotates at 20 MB keeping one
+  previous generation. The relay is a tunnel, so an HTTPS request's method and status are not
+  seen there — only what crossed.
+
+### What the box reaches *without* the relay (measured 2026-10-20)
+
+The relay decides only for traffic sent through it (the box's browser, and whatever an agent
+points at the proxy). A command in the box that connects directly is decided by the container
+network alone, and that differs by platform. Probed from inside the running box with
+`curl -m 3` (exit 28 = timed out, 1 = connected to a non-HTTP service):
+
+| target | OrbStack (this Mac) | box@cursor (cloud VM, Linux Docker) |
+|---|---|---|
+| `http://169.254.169.254/latest/meta-data/` | timed out — no metadata service on a Mac | **not measured today**: the VM was unreachable (tailscale offline). Expected reachable: Docker's default bridge routes link-local through the host; a request there returns the instance's credentials |
+| `host.docker.internal:7777` (web, a channel) | 401 — reachable, as intended | expected reachable |
+| `host.docker.internal:11434` (Ollama, bound to 127.0.0.1 on the host) | **200 — reachable** | expected unreachable: a 127.0.0.1-bound host port is not routed to a bridge container |
+| `host.docker.internal:3306` (MySQL, 127.0.0.1-bound) | **connected** (curl exit 1) | expected unreachable, as above |
+| `host.docker.internal:7000` / `:5000` (bound to `*`) | 403 — reachable | reachable |
+| container capabilities | default set (no `NET_ADMIN`); no `iptables`/`ip` in the image | same |
+
+So on OrbStack `host.docker.internal` reaches the host's loopback-bound services, which a
+Linux bridge would not; and the container cannot add its own firewall rules without
+`NET_ADMIN`, which this deployment does not grant and INV-1224 does not add. The remaining
+risk, stated: **direct connections from the box to the host's loopback ports (OrbStack) and
+to the metadata service (a cloud VM) are not refused by anything in this repository.** What
+would close it is on the host side — a `DOCKER-USER` iptables chain on a Linux engine, or
+OrbStack's own network settings — and is the operator's to add; the relay path is closed here.
 
 For anything shared, the three things to add are identities, per-tenant boxes, and a credential
 relay so the model key never enters a box. The seams are named in
