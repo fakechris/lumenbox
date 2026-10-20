@@ -45,6 +45,8 @@ jobs:
 
       - name: lint
         run: npm run lint
+      - name: Architecture ratchet (arch-baseline.json only shrinks)
+        run: npm run arch
 
       - name: test
         run: npm run test:ci

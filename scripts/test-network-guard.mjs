@@ -24,6 +24,9 @@
 
 import http from "node:http";
 import https from "node:https";
+import { syncBuiltinESMExports } from "node:module";
+import net from "node:net";
+import tls from "node:tls";
 
 const LOOPBACK = /^(?:localhost|127(?:\.\d+){3}|\[?::1\]?|0\.0\.0\.0)$/i;
 
@@ -75,3 +78,34 @@ for (const [module, name] of [
     return realGet.apply(module, args);
   };
 }
+
+// net and tls, for anything below HTTP (INV-1238): a raw socket, a database driver, an SDK
+// with its own transport. `connect(port, host)`, `connect({host})`, `connect(path)` — a
+// Unix socket is local by nature and passes; no host at all means localhost and passes.
+const targetOf = args => {
+  const first = args[0];
+  if (typeof first === "object" && first !== null) return first.path !== undefined ? undefined : (first.host ?? first.hostname ?? "localhost");
+  if (typeof first === "number") return typeof args[1] === "string" ? args[1] : "localhost";
+  return undefined; // a path: a Unix socket
+};
+for (const [module, name, method] of [
+  [net, "net", "connect"],
+  [net, "net", "createConnection"],
+  [tls, "tls", "connect"],
+]) {
+  const real = module[method];
+  module[method] = (...args) => {
+    const host = targetOf(args);
+    if (host !== undefined && !allowed(host)) throw new BlockedByTestGuard(`${name}://${host}`);
+    return real.apply(module, args);
+  };
+}
+const realSocketConnect = net.Socket.prototype.connect;
+net.Socket.prototype.connect = function connect(...args) {
+  const host = targetOf(args);
+  if (host !== undefined && !allowed(host)) throw new BlockedByTestGuard(`net://${host}`);
+  return realSocketConnect.apply(this, args);
+};
+// A module that imports `{ connect } from "node:net"` holds the ESM binding, which does not
+// follow a patch on the CommonJS object until told to; so it is told to.
+syncBuiltinESMExports();
