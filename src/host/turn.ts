@@ -30,7 +30,7 @@ import type { Orchestrations } from "./orchestrate.ts";
 import type { McpFace } from "./mcp-face.ts";
 import type { ModelRelay } from "./model-relay.ts";
 import type { DelegateSessions } from "./delegate-sessions.ts";
-import { classifyFailure, type FailureCategory } from "./failure-taxonomy.ts";
+import { classifyFailureOf, keepFirstSpecific, type FailureCategory } from "./failure-taxonomy.ts";
 import { visibleTo, type Skill } from "./skills.ts";
 import {
   classifyLimit,
@@ -1550,6 +1550,13 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   let lastFinalText: string | undefined;
   /** The whole turn's spend, for a goal's budget (INV-772). */
   const turnUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+  // The first specific failure class this turn saw, kept across retries (INV-1235): the class the
+  // turn is filed under is the thing that first went wrong, not the last wrapper around it.
+  let failureSeen: FailureCategory | undefined;
+  const noteFailureClass = (error: unknown): FailureCategory => {
+    failureSeen = keepFirstSpecific(failureSeen, classifyFailureOf(error));
+    return failureSeen;
+  };
   const finish = (how: string, category?: FailureCategory) => {
     if (ended) return;
     ended = true;
@@ -2278,7 +2285,7 @@ ${outcome.text}`;
     // the next startup try to resume something that already reported itself.
     finish(
       error instanceof TurnAborted ? "aborted" : "failed",
-      error instanceof TurnAborted ? undefined : classifyFailure(error instanceof Error ? error.message : String(error))
+      error instanceof TurnAborted ? undefined : noteFailureClass(error)
     );
     throw error;
   } finally {
@@ -2633,6 +2640,7 @@ ${outcome.text}`;
       });
       if (retry.retry) {
         attempts += 1;
+        noteFailureClass(error);
         const detail =
           `${error instanceof Error ? error.message : String(error)} — ${retry.reason}` +
           (outputProduced ? "; the partial answer above is being discarded" : "");
