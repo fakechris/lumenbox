@@ -28,6 +28,8 @@ import { oauthProvider, scrubToken, tokenHeaders, type OAuthGate, type OAuthProv
 import type { McpManager, ToolEffect } from "./mcp.ts";
 import { delegateEnv, delegateModel, PRESETS, presetNamed, quoteForShell, installCommand, withEnginesPath } from "./presets.ts";
 import type { AcpDelegates } from "./acp-delegate.ts";
+import { actOnDelegateSession } from "./delegate-session-actions.ts";
+import { deliveryInstructions } from "./delegate-report.ts";
 import { namesControlSurface } from "./control-surfaces.ts";
 import { catalogMenu, intersectTools, profilesFor } from "./catalog.ts";
 import { AROUND_ENTRY_CHARS, describeHistory, ENTRY_CHARS, readEpochHistory, readHistory } from "./history.ts";
@@ -3163,40 +3165,9 @@ export async function dispatchTool(
         };
       }
       const prompt = String(input.prompt ?? "").trim();
-      // Acting on an open session (docs/81): steer, cancel, close, or the next brief. The
-      // session must be this agent's; a session id someone else holds is not a handle.
+      // Acting on an open session (docs/81): steer, cancel, close, or the next brief.
       if (typeof input.session_id === "string" && input.session_id !== "") {
-        const sessions = context.acpDelegates;
-        const sessionId = input.session_id;
-        const held = sessions?.get(sessionId);
-        if (sessions === undefined || held === undefined || held.agentId !== context.agent.id) {
-          return { text: `${sessionId} is not an open delegate session of yours. Delegate with mode "session" opens one.`, isError: true };
-        }
-        try {
-          if (input.close === true) {
-            await sessions.close(sessionId);
-            return { text: `${sessionId} closed.${held.inFlight !== undefined ? " The brief it was working on is recorded as stopped." : ""}` };
-          }
-          if (input.cancel === true) {
-            const sent = await sessions.cancel(sessionId);
-            return { text: sent ? `${sessionId}: cancel sent; the engine will confirm, and you will be told the brief was stopped.` : `${sessionId} has no brief in flight; nothing to cancel.` };
-          }
-          if (typeof input.steer === "string" && input.steer.trim() !== "") {
-            const verdict = await sessions.steer(sessionId, input.steer.trim());
-            if (verdict === "idle") {
-              await sessions.continueWith(sessionId, input.steer.trim(), { engine: preset.name, ...(context.workId !== undefined ? { workId: context.workId } : {}), ...(context.turnId !== undefined ? { turnId: context.turnId } : {}) });
-              return { text: `${sessionId} had no brief in flight, so the text went in as a new brief; you will be told when it finishes.` };
-            }
-            return { text: verdict === "delivered" ? `${sessionId}: the engine took the steer into its current brief. Taken is not followed — check what it does with it.` : `${sessionId}: that steer was already delivered; not sent twice.` };
-          }
-          if (prompt !== "") {
-            await sessions.continueWith(sessionId, prompt, { engine: preset.name, ...(context.workId !== undefined ? { workId: context.workId } : {}), ...(context.turnId !== undefined ? { turnId: context.turnId } : {}) });
-            return { text: `${sessionId}: next brief sent; you will be told when it finishes.` };
-          }
-          return { text: `With session_id, say what to do: prompt (the next brief), steer, cancel or close.`, isError: true };
-        } catch (error) {
-          return { text: error instanceof Error ? error.message : String(error), isError: true };
-        }
+        return actOnDelegateSession(context, preset.name, input as Record<string, unknown>, prompt);
       }
       if (prompt === "") {
         return { text: "Delegating needs a brief; the engine cannot ask you what you meant.", isError: true };
@@ -3300,7 +3271,8 @@ export async function dispatchTool(
               command: withEnginesPath(preset.acp!.command(relayModel ?? delegateModel())),
               cwd: input.cwd ? String(input.cwd) : "/home/box/work",
               env,
-              prompt,
+              // A session has no face yet; the report comes back as a file (INV-1261).
+              prompt: `${prompt}\n\n${deliveryInstructions("file", jobId)}`,
               ...(context.workId !== undefined ? { workId: context.workId } : {}),
               ...(context.turnId !== undefined ? { turnId: context.turnId } : {}),
               ...callFor(context, jobId),
@@ -3359,7 +3331,12 @@ export async function dispatchTool(
       // reached; otherwise the run skips them, and says so — the box is the sandbox either way.
       const wantsPermission =
         preset.permissionArgs !== undefined && context.mcpFace !== undefined && context.boxKind !== "attached";
-      if (requested.length > 0 || wantsPermission) {
+      // The report's way in (INV-1261): through the face for engines with an MCP client, else a
+      // file the brief names; either way the brief says how.
+      const wantsSubmit = preset.report === "mcp" && context.mcpFace !== undefined && context.boxKind !== "attached";
+      const reportChannel: "mcp" | "file" = wantsSubmit ? "mcp" : "file";
+      const briefed = `${prompt}\n\n${deliveryInstructions(reportChannel, jobId)}`;
+      if (requested.length > 0 || wantsPermission || wantsSubmit) {
         if (context.mcpFace === undefined) {
           return { text: "This installation has no MCP face, so an engine cannot be lent tools.", isError: true };
         }
@@ -3374,6 +3351,7 @@ export async function dispatchTool(
             requested,
             allowedMcp: context.allowedMcpTools ?? [],
             ...(wantsPermission ? { permission: true } : {}),
+            ...(wantsSubmit ? { submit: true } : {}),
           });
           if ("error" in minted) {
             if (pendingId !== undefined) context.pendingWork?.dropped(pendingId, "unrecorded");
@@ -3437,7 +3415,7 @@ export async function dispatchTool(
 
       let started: Awaited<ReturnType<typeof box.startJob>>;
       try {
-        started = await box.startJob(withEnginesPath(preset.run(quoteForShell(prompt), relayModel ?? delegateModel(), extraArgs)), {
+        started = await box.startJob(withEnginesPath(preset.run(quoteForShell(briefed), relayModel ?? delegateModel(), extraArgs)), {
           ...(input.cwd ? { cwd: String(input.cwd) } : {}),
           ...(Object.keys(jobEnv).length > 0 ? { env: jobEnv } : {}),
           ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
@@ -3491,6 +3469,7 @@ export async function dispatchTool(
             pendingWork: context.pendingWork,
             box,
             dropSession: (id, reason) => context.delegateSessions?.drop(id, reason),
+            ...(context.mcpFace !== undefined ? { report: id => context.mcpFace!.takeReport(id) } : {}),
           },
           job,
           { killed }

@@ -22,6 +22,7 @@ import { appendLine } from "./jsonl.ts";
 import { redactDeep } from "./secret-redaction.ts";
 import { MCP_SEPARATOR, type McpTool } from "./mcp.ts";
 import { awaitDelegatedConsent } from "./delegated-consent.ts";
+import { type DelegateReport, validateDelegateReport } from "./delegate-report.ts";
 import type { PolicyGate } from "./policy.ts";
 import type { McpServerTool } from "../web/mcp-server.ts";
 
@@ -69,6 +70,8 @@ export interface McpRoute {
   allowed: string[];
   /** The route also answers the engine's permission prompts through the policy gate. */
   permission?: true;
+  /** The route also takes the engine's report through `delegate_submit` (INV-1261). */
+  submit?: true;
   createdAt: number;
   leaseUntil: number;
   ceiling: number;
@@ -153,6 +156,8 @@ export class McpFace {
     allowedMcp: readonly string[];
     /** Serve the engine's permission prompts too (Claude Code's `--permission-prompt-tool`). */
     permission?: boolean;
+    /** Serve `delegate_submit`, the report's way in (INV-1261). */
+    submit?: boolean;
   }): { route: McpRoute; url: string } | { error: string } {
     if (input.conversation.startsWith("fork/")) {
       return { error: "A fork cannot delegate with tools: a child never has more than its parent." };
@@ -161,7 +166,7 @@ export class McpFace {
       return { error: "The MCP face has no address yet (the web server has not said where the box can reach it)." };
     }
     const expanded =
-      input.requested.length === 0 && input.permission === true
+      input.requested.length === 0 && (input.permission === true || input.submit === true)
         ? { allowed: [] as string[] }
         : expandRequested(input.requested, input.allowedMcp);
     if ("error" in expanded) return expanded;
@@ -175,6 +180,7 @@ export class McpFace {
       ...(input.workId !== undefined ? { workId: input.workId } : {}),
       allowed: expanded.allowed,
       ...(input.permission === true ? { permission: true as const } : {}),
+      ...(input.submit === true ? { submit: true as const } : {}),
       createdAt: now,
       leaseUntil: now + LEASE_MS,
       ceiling: now + CEILING_MS,
@@ -252,6 +258,16 @@ export class McpFace {
   }
 
   /** The MCP tools a route serves, each running through the gate, the hooks and the ledger. */
+  /** Reports accepted through `delegate_submit`, by job id, until settling takes them. */
+  private readonly reports = new Map<string, DelegateReport>();
+
+  /** The report the engine delivered for this job, once; absent when it delivered none. */
+  takeReport(jobId: string): DelegateReport | undefined {
+    const report = this.reports.get(jobId);
+    this.reports.delete(jobId);
+    return report;
+  }
+
   toolsFor(route: McpRoute): McpServerTool[] {
     const manager = this.deps.mcp();
     const live = new Map((manager?.tools() ?? []).map(tool => [tool.name, tool]));
@@ -277,7 +293,40 @@ export class McpFace {
             },
           ]
         : [];
-    return [...permission, ...route.allowed.map(name => {
+    // The report's way in (INV-1261): checked here, while the run is on; a bad one is an error
+    // the engine reads and corrects. An accepted one is kept by job id past the route's end,
+    // because the route is revoked when the job ends and settling comes after.
+    const submit: McpServerTool[] =
+      route.submit === true
+        ? [
+            {
+              name: "delegate_submit",
+              description:
+                "Deliver your report for this delegated run: what was done (each item with evidence that can be " +
+                "looked at — a command and its output, a path, or a diff summary), what was not done, problems, " +
+                "and a verdict of done, partial or failed. Answers accepted, or lists what to fix; call again until accepted.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  done: { type: "array", items: { type: "object", properties: { what: { type: "string" }, evidence: { type: "object" } }, required: ["what", "evidence"] } },
+                  not_done: { type: "array", items: { type: "object", properties: { what: { type: "string" }, why: { type: "string" } }, required: ["what"] } },
+                  problems: { type: "array", items: { type: "string" } },
+                  verdict: { type: "string", enum: ["done", "partial", "failed"] },
+                },
+                required: ["done", "not_done", "problems", "verdict"],
+              },
+              readOnly: false,
+              run: async input => {
+                const checked = validateDelegateReport(input);
+                if ("errors" in checked) throw new Error(`Report not accepted:\n- ${checked.errors.join("\n- ")}\nFix these and call delegate_submit again.`);
+                if (route.jobId !== undefined) this.reports.set(route.jobId, checked.report);
+                this.deps.log?.(`route ${route.key}: report accepted (${checked.report.verdict}, ${checked.report.done.length} done, ${checked.report.not_done.length} not done)`);
+                return "Report accepted. The run can end now.";
+              },
+            },
+          ]
+        : [];
+    return [...permission, ...submit, ...route.allowed.map(name => {
       const tool = live.get(name);
       return {
         name,

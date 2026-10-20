@@ -22,6 +22,7 @@
 import type { BoxClient } from "../box/client.ts";
 import type { OpenFork, PendingWork } from "./pending-work.ts";
 import { quoteForShell } from "./presets.ts";
+import { type DelegateReport, judgeWithReport, reportPath, summariseReport, validateDelegateReport } from "./delegate-report.ts";
 import { describeWorktree, worktreeDirty, worktreeState, type WorktreeState } from "./worktree-state.ts";
 
 export { MACHINE_OUTPUT } from "./presets.ts";
@@ -271,6 +272,8 @@ export interface SettleDeps {
   box: (Pick<BoxClient, "readFile"> & Partial<Pick<BoxClient, "exec">>) | undefined;
   /** Forget a thread the engine could not resume, with the reason (DelegateSessions). */
   dropSession?: (id: string, reason: string) => void;
+  /** The report the engine delivered through the MCP face, once (INV-1261). */
+  report?: (jobId: string) => DelegateReport | undefined;
 }
 
 export interface Settled {
@@ -280,6 +283,8 @@ export interface Settled {
   report?: EngineReport;
   /** The repository the engine worked in, as git saw it after the run (INV-1258); absent when no cwd was recorded. */
   worktree?: WorktreeState;
+  /** The engine's own report, when it delivered one that checked out (INV-1261). */
+  delivery?: DelegateReport;
 }
 
 /**
@@ -305,13 +310,17 @@ export async function settleDelegate(
     if ("text" in read) report = parseEngineReport(engine, read.text);
     else missing = `its log could not be read (${read.unreadable})`;
   }
-  const judged = judgeDelegate({
+  const fromEvent = judgeDelegate({
     exitCode: job.exit_code,
     ...(job.interrupted === true ? { interrupted: true } : {}),
     ...(options.killed === true ? { killed: true } : {}),
     report,
     ...(missing !== undefined ? { missing } : {}),
   });
+  // The engine's own report (INV-1261): through the face if it delivered one there, else the
+  // file an engine without an MCP client writes. Read before the event decides anything.
+  const delivery = deps.report?.(job.job_id) ?? (deps.box !== undefined ? await readReportFile(deps.box, job.job_id) : undefined);
+  const judged = judgeWithReport(fromEvent, delivery);
   if (report?.resumeFailed === true && report.sessionId !== undefined) {
     deps.dropSession?.(report.sessionId, report.detail ?? "the engine could not resume it");
   }
@@ -325,12 +334,24 @@ export async function settleDelegate(
     ...(worktree !== undefined ? { worktree: describeWorktree(worktree) } : {}),
   });
   if (!committed) return undefined;
-  return { open, ...judged, ...(report !== undefined ? { report } : {}), ...(worktree !== undefined ? { worktree } : {}) };
+  return { open, ...judged, ...(report !== undefined ? { report } : {}), ...(worktree !== undefined ? { worktree } : {}), ...(delivery !== undefined ? { delivery } : {}) };
+}
+
+/** The report file an engine without an MCP client leaves; unreadable or malformed is no report. */
+export async function readReportFile(box: Pick<BoxClient, "readFile">, jobId: string): Promise<DelegateReport | undefined> {
+  try {
+    const file = await box.readFile(reportPath(jobId));
+    const checked = validateDelegateReport(JSON.parse(file.content));
+    return "report" in checked ? checked.report : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** The note the agent that delegated gets when the job ends: what happened, and on whose word. */
-export function delegateEndedNote(jobId: string, brief: string, settled: Pick<Settled, "outcome" | "why" | "worktree">): string {
+export function delegateEndedNote(jobId: string, brief: string, settled: Pick<Settled, "outcome" | "why" | "worktree" | "delivery">): string {
   const what = `${jobId} (${brief.slice(0, 120)})`;
+  const delivered = settled.delivery !== undefined ? ` Its report: ${summariseReport(settled.delivery)}.` : "";
   // The repository's state rides with the outcome and never replaces it: "done" with changes
   // still loose in the tree is said as exactly that (INV-1258).
   const tree =
@@ -341,13 +362,13 @@ export function delegateEndedNote(jobId: string, brief: string, settled: Pick<Se
         : ` Repository: ${describeWorktree(settled.worktree)}.`;
   switch (settled.outcome) {
     case "done":
-      return `[A job you delegated finished: ${what}. ${capitalize(settled.why)}.${tree} Read its output with Jobs and fold the result into your work, or say why it does not matter.]`;
+      return `[A job you delegated finished: ${what}. ${capitalize(settled.why)}.${delivered}${tree} Read its output with Jobs and fold the result into your work, or say why it does not matter.]`;
     case "failed":
-      return `[A job you delegated failed: ${what}. ${capitalize(settled.why)}.${tree} Do not use its output as a result; read its log to see what went wrong, then fix the cause or say what is blocked.]`;
+      return `[A job you delegated failed: ${what}. ${capitalize(settled.why)}.${delivered}${tree} Do not use its output as a result; read its log to see what went wrong, then fix the cause or say what is blocked.]`;
     case "aborted":
-      return `[A job you delegated was stopped before it finished: ${what}. ${capitalize(settled.why)}.${tree} What it left is partial; check it before relying on any of it.]`;
+      return `[A job you delegated was stopped before it finished: ${what}. ${capitalize(settled.why)}.${delivered}${tree} What it left is partial; check it before relying on any of it.]`;
     default:
-      return `[A job you delegated ended, and whether it did the work is unknown: ${what}. ${capitalize(settled.why)}.${tree} Read its log before you use anything from it, and say what you found.]`;
+      return `[A job you delegated ended, and whether it did the work is unknown: ${what}. ${capitalize(settled.why)}.${delivered}${tree} Read its log before you use anything from it, and say what you found.]`;
   }
 }
 

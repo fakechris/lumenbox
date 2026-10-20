@@ -228,7 +228,8 @@ test("the orchestrator's job-end note is the engine's outcome, one wording each,
     assert.equal(await orchestrator.noteJobEnded("job-gone", undefined), true);
     assert.equal(await orchestrator.noteJobEnded("job-done", { exit_code: 0, running: false, log_path: "/jobs/done.log" }), false, "settled once");
 
-    assert.match(notes[0]!, /finished: job-done.*Claude reported it completed/);
+    // A done event with no report is a claim with nothing behind it (INV-1261).
+    assert.match(notes[0]!, /whether it did the work is unknown: job-done.*Claude reported it completed.*delivered no report/);
     assert.match(notes[1]!, /failed: job-failed.*Pi reported a failure: 400.*exit code 0/);
     assert.match(notes[2]!, /whether it did the work is unknown: job-quiet.*no completion report/);
     assert.match(notes[3]!, /whether it did the work is unknown: job-gone.*could not be reached/);
@@ -335,7 +336,8 @@ test("a delegation that recorded its cwd ends with the repository's state beside
         return { stdout: fixture("claude-ok"), stderr: "", exit_code: 0, timed_out: false };
       },
     };
-    const settled = await settleDelegate({ pendingWork: ledger, box: box as never }, { job_id: "job-1", exit_code: 0, log_path: "/log" });
+    const okReport = { done: [{ what: "fixed", evidence: { kind: "path", path: "src/a.ts" } }], not_done: [], problems: [], verdict: "done" } as never;
+    const settled = await settleDelegate({ pendingWork: ledger, box: box as never, report: () => okReport }, { job_id: "job-1", exit_code: 0, log_path: "/log" });
     assert.equal(settled?.outcome, "done", "the engine's report decides the outcome");
     assert.deepEqual(settled?.worktree, { kind: "repo", modified: 2, untracked: 1, unpushed: 1 });
     const note = delegateEndedNote("job-1", "claude: fix", settled!);
@@ -348,12 +350,55 @@ test("a delegation that recorded its cwd ends with the repository's state beside
     // No cwd recorded: nothing asked, nothing said.
     const id2 = ledger.prepare({ agentId: "a", kind: "delegate", parent: "main", child: "job-2", brief: "claude: fix", data: { engine: "claude" } });
     ledger.admitted(id2, undefined);
-    const plain = await settleDelegate({ pendingWork: ledger, box: box as never }, { job_id: "job-2", exit_code: 0, log_path: "/log" });
+    const plain = await settleDelegate({ pendingWork: ledger, box: box as never, report: () => okReport }, { job_id: "job-2", exit_code: 0, log_path: "/log" });
     assert.equal(plain?.worktree, undefined);
     assert.doesNotMatch(delegateEndedNote("job-2", "claude: fix", plain!), /Repository/);
     // Clean, or not a repo: said plainly, in the ordinary sentence.
     assert.match(delegateEndedNote("job-3", "x", { outcome: "done", why: "ok", worktree: { kind: "repo", modified: 0, untracked: 0, unpushed: 0 } }), /Repository: clean\./);
     assert.match(delegateEndedNote("job-3", "x", { outcome: "failed", why: "no", worktree: { kind: "not-a-repo" } }), /Repository: not a git repo\./);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("settling reads the engine's report first: from the face, else the file; a done event with none is unknown; a clash is unknown with both named (INV-1261)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-report-"));
+  try {
+    const ledger = new PendingWork(join(dir, "pending-work.jsonl"));
+    const prepare = (child: string, engine: string) => { const id = ledger.prepare({ agentId: "a", kind: "delegate", parent: "main", child, brief: `${engine}: fix`, data: { engine } }); ledger.admitted(id, undefined); };
+    const okReport = { done: [{ what: "lint clean", evidence: { kind: "command", command: "npm run lint", output: "0 problems" } }], not_done: [], problems: [], verdict: "done" };
+    const files = new Map<string, string>([["/log", fixture("claude-ok")]]);
+    const box = { readFile: async (path: string) => { const content = files.get(path); if (content === undefined) throw new Error("no such file"); return { path, content, total_lines: 1, truncated: false }; } };
+
+    // Through the face.
+    prepare("job-1", "claude");
+    const viaFace = await settleDelegate({ pendingWork: ledger, box: box as never, report: id => (id === "job-1" ? (okReport as never) : undefined) }, { job_id: "job-1", exit_code: 0, log_path: "/log" });
+    assert.equal(viaFace?.outcome, "done");
+    assert.match(viaFace?.why ?? "", /report says done, with 1 done item\(s\) carrying evidence/);
+    assert.match(delegateEndedNote("job-1", "claude: fix", viaFace!), /Its report: verdict done\. done: lint clean \(`npm run lint` → 0 problems\)/);
+
+    // From the file, for an engine without an MCP client.
+    prepare("job-2", "pi");
+    files.set("/log", fixture("pi-json-ok"));
+    files.set("/home/box/work/.lumenbox/reports/job-2.json", JSON.stringify(okReport));
+    const viaFile = await settleDelegate({ pendingWork: ledger, box: box as never }, { job_id: "job-2", exit_code: 0, log_path: "/log" });
+    assert.equal(viaFile?.outcome, "done");
+    assert.equal(viaFile?.delivery?.verdict, "done");
+
+    // A malformed file is no report; the engine's done is then a claim with nothing behind it.
+    prepare("job-3", "pi");
+    files.set("/home/box/work/.lumenbox/reports/job-3.json", '{"verdict":"done"}');
+    const malformed = await settleDelegate({ pendingWork: ledger, box: box as never }, { job_id: "job-3", exit_code: 0, log_path: "/log" });
+    assert.equal(malformed?.outcome, "unknown");
+    assert.match(malformed?.why ?? "", /delivered no report — a completion claim with no evidence is not a result/);
+
+    // A clash: the report says done, the event says failed.
+    prepare("job-4", "pi");
+    files.set("/log", fixture("pi-json-400"));
+    files.set("/home/box/work/.lumenbox/reports/job-4.json", JSON.stringify(okReport));
+    const clash = await settleDelegate({ pendingWork: ledger, box: box as never }, { job_id: "job-4", exit_code: 0, log_path: "/log" });
+    assert.equal(clash?.outcome, "unknown");
+    assert.match(clash?.why ?? "", /report says done but its completion event says failed/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
