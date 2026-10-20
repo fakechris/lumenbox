@@ -90,7 +90,9 @@ export interface Preset {
    *
    * Non-interactive by construction: a delegated engine that stops to ask a question
    * would hang a job nobody is watching. v1 is deliberately one-shot; a session
-   * protocol (ACP) is the upgrade, and it changes this line and nothing else.
+   * protocol (ACP) is the upgrade, and it changes this line and nothing else. What that
+   * upgrade is, measured on mcode's ACP, is docs/81 (INV-1234): a session per delegation,
+   * permission questions to the policy gate, steer and cancel as the engine's own calls.
    */
   run: (quotedPrompt: string, model?: string, extraArgs?: string) => string;
   /**
