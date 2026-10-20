@@ -11,7 +11,7 @@ own requests since a sequence number), reply (answer an engine request), close. 
 persist on the work volume so a restarted boxd can `session/load` the same id in the same cwd.
 **Success Criteria**: boxd unit test with a fake ACP engine script: open → prompt → updates
 streamed → engine request answered → close; a crashed child reports a definite failure.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: host — session-mode Delegate
 **Goal**: `Delegate` for a preset with an ACP form opens a session instead of a one-shot job;
@@ -23,7 +23,7 @@ with both or fails definitely. Metering untouched (relay rows).
 **Success Criteria**: scenario tests with the fake ACP engine: open, steer accepted /
 duplicate / refused idle, cancel → aborted, permission → gate → allow-once / deny, unanswered
 → timeout → cancel, restart → load same cwd ok / other cwd definite failure.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: the real box
 **Goal**: the box image with mcode; one delegation in session mode, one steer mid-turn, one
@@ -31,4 +31,4 @@ cancel; profile has `permissionMode: default` and `goal.verification: subagent`;
 directory is removed at close.
 **Success Criteria**: evidence in the PR (job log, approval shown and answered, stub/relay
 requests), `npm run release:check`.
-**Status**: Not Started
+**Status**: Complete against the built boxd + real mcode acp with the stub model (stage3-run.txt); the live box is not recreated

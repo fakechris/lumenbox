@@ -346,7 +346,10 @@ function mcodeProfileShell(model: string | undefined, permissionMode?: "default"
   // default, `auto`, which classifies in MiniMax's cloud (docs/81 §1).
   const mode = permissionMode !== undefined ? `permissionMode: ${permissionMode}\\n` : "";
   return (
-    `d=$(mktemp -d /tmp/mcode.XXXXXX) && trap 'rm -rf "$d"' EXIT && umask 077 && m=${id} && ` +
+    // TERM is trapped as well as EXIT: boxd ends a session with a TERM to the process group, and
+    // bash runs no EXIT trap for a signal it was not told about — the profile would outlive the
+    // engine. With TERM named, bash waits for the engine to go, then removes the directory.
+    `d=$(mktemp -d /tmp/mcode.XXXXXX) && trap 'rm -rf "$d"' EXIT && trap 'rm -rf "$d"; exit 143' TERM INT HUP && umask 077 && m=${id} && ` +
     `printf 'custom_provider:\\n  lumenbox:\\n    api: %s\\n    options:\\n      apiKey: %s\\n      baseURL: %s\\n    models:\\n      %s: {}\\ndefaultModel: custom_provider:lumenbox/%s\\n${mode}goal:\\n  verification: subagent\\n' ` +
     `"\${LUMENBOX_RELAY_API:-anthropic-messages}" "\${LUMENBOX_RELAY_TOKEN:?mcode needs the relay token}" "\${LUMENBOX_RELAY_URL:?mcode needs the relay url}" "$m" "$m" > "$d/config.yaml" && ` +
     `export MINIMAX_DATA_DIR="$d"`

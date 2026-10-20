@@ -51,6 +51,21 @@ flag: the working directory is `session/new.cwd`, the profile is `config.yaml` i
 What the stub saw across all runs: `POST /v1/messages/count_tokens` (answered 404, tolerated)
 and `POST /v1/messages` with `x-api-key`. Nothing else, and nothing could have left the network.
 
+**The whole stack, step two (2026-10-20, `research/2026-10-20-acp-spike/stage3-run.txt`):** the
+built boxd in the box image holding a real `mcode acp` 0.6.12, driven by the host's own
+`BoxClient` → `AcpDelegates` → `PolicyGate` → `PendingWork`, model still the stub:
+`SLOW` brief → steer at 4 s `delivered`, again `duplicate`, cancel → the brief's note said
+*stopped before it finished, the engine confirmed the cancel* 50 ms later, ledger `aborted`;
+steer while idle → `idle`; next brief with a `curl` tool call → the gate asked
+`[delegated engine job-…] Stage3: bash — curl …`, a grant answered the engine `allow-once`,
+the brief settled `done` with the engine's answer in the note. One more measured fact: the
+**same command again in the same session was not asked about a second time** — after one
+`allow-once` the engine ran the identical `bash curl` without a question. The host cannot
+make the engine ask twice; what it can do is what it does: never answer `allow-always`.
+After `close` the profile directory was removed by the trap and the engine's own exit then
+re-created an empty `v2/` under the same path — no `config.yaml`, no credential in the box
+(`grep -rl <token> /home/box /tmp` → nothing); a stale empty directory is what is left.
+
 Two defaults that would have been wrong silently, both confirmed on the wire:
 
 - `permissionMode` defaults to `auto` ("smart"), which classifies in MiniMax's cloud. The
@@ -99,7 +114,15 @@ Two defaults that would have been wrong silently, both confirmed on the wire:
 - A second ACP engine. Claude Code and pi have other session shapes (`--resume`, pi's
   `sendUserMessage`); INV-1256's table covers them. One engine first.
 
-## 3. Step two's acceptance, written from the measurements
+## 3. Step two's acceptance, written from the measurements — delivered 2026-10-20
+
+What landed: `boxd/acp-service.ts` (the engine kept and polled), `host/acp-delegate.ts` (the
+keeper), `host/delegated-consent.ts` (the one consent wait, shared with the MCP face),
+`Delegate` with `mode: "session"` and `session_id` + `steer` / `cancel` / `prompt` / `close`,
+the record's `data.{mode, engineSessionId, cwd, promptRpcId}`, and the restart path. Tests:
+`boxd/acp-service.test.ts`, `host/acp-delegate.test.ts`, the session scenario in
+`host/scenario.test.ts`, all against `boxd/testing/fake-acp-engine.mjs`. Not landed: the
+live box on this machine still runs the pre-mcode image; the next image release carries it.
 
 - scenario tests with a fake ACP engine (hermetic): open, prompt, steer accepted / duplicate /
   refused-idle, cancel → `cancelled`, a permission question → the gate → `allow-once` /
