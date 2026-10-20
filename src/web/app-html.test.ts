@@ -56,7 +56,7 @@ test("every element the script dereferences exists in the document", () => {
 test("the ids this has already caught are present", () => {
   // Named individually, because the general check above passes vacuously if the parsing
   // ever stops finding references, and this is the feature that was silently lost.
-  for (const id of ["setmcpadd", "setmcplabel", "setmcpnew", "setmcptokens"]) {
+  for (const id of ["setmcpadd", "setmcplabel", "setmcpnew", "setmcptokens", "setvision", "setsummarymodel", "seteffective"]) {
     assert.ok(definedIds.has(id), `${id} is missing from the settings dialog`);
   }
 });

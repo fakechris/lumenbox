@@ -10,14 +10,14 @@ Rememberer's summary pair together; a running turn keeps the pair it started wit
 **Success Criteria**: unit test — swap mid-turn, the turn's later rounds and its usage rows still
 name the old model, the next turn names the new one; askCheaply/askBounded/relay/Rememberer read
 the new one; a `switch` row lands in usage.jsonl.
-**Status**: In Progress
+**Status**: Complete
 
 ## Stage 2: Config — re-apply after a save, shell wins
 **Goal**: `reapplyConfigEnv(config)` sets the variables the file speaks for, removes the ones it
 dropped, never touches a shell-exported one, and reports those as `locked`.
 **Success Criteria**: config.test.ts — config-applied key follows the file; shell key stays and is
 listed; dropped key is removed.
-**Status**: In Progress
+**Status**: Complete
 
 ## Stage 3: Server — save applies, no restart for model fields
 **Goal**: `POST /api/config` saves, re-applies env, resolves the provider, swaps it; on a resolve
@@ -26,13 +26,13 @@ failure it keeps the old runtime and answers 400. Accepts `vision` (auto/on/off)
 `restartNeeded` only when hostExec/startupItem/boxImage changed.
 **Success Criteria**: server test — save a new model, `/api/state` shows it without restart, pid
 unchanged; invalid provider → 400 and state unchanged.
-**Status**: Not Started
+**Status**: Complete (src/web/config-switch.test.ts)
 
 ## Stage 4: Settings page
 **Goal**: model input (suggestions incl. MiniMax-M3.1-Flash-Preview), vision three-way, summary
 model, "now running" line with locked notes; Save applies, Save & restart only when needed.
 **Success Criteria**: app-html static checks for the new ids; the save path reads `restartNeeded`.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 5: Release check and the live switch
 **Goal**: `npm run release:check`; switch the model in the desktop app on this Mac; evidence in the

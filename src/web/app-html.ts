@@ -1237,13 +1237,30 @@ export const APP_HTML = String.raw`<!doctype html>
       <input id="setbase" placeholder="https://&hellip;" spellcheck="false">
     </div>
     <div class="field" data-tier="installation" data-settab="model">
+      <label>Can see images</label>
+      <select id="setvision">
+        <option value="auto">Follow the model's default</option>
+        <option value="on">Yes, even if the preset says no</option>
+        <option value="off">No, withhold the screen</option>
+      </select>
+      <div class="fieldnote">Decides whether agents get the computer tool and screenshots. "Yes" is how a newly
+        capable model is switched on without a release.</div>
+    </div>
+    <div class="field" data-tier="installation" data-settab="model">
+      <label>Summary model</label>
+      <input id="setsummarymodel" placeholder="cheaper model for compaction, memory and review (optional)" spellcheck="false">
+    </div>
+    <div class="fieldnote" id="seteffective"></div>
+    <div class="field" data-tier="installation" data-settab="model">
       <label>API key</label>
       <input id="setkey" type="password" spellcheck="false" autocomplete="off">
       <div class="fieldnote" id="setkeynote"></div>
     </div>
     <div class="fieldnote">Saved to ~/.agentbox/config.json on this machine, mode 0600. A key stored
       here is used only when the environment does not already provide one, and is never placed
-      inside the box. Changes take effect when the server restarts.</div>
+      inside the box. Provider, model, vision and summary model take effect on save; turns already
+      running finish on the previous model. The host door, startup item and box image wait for a
+      restart.</div>
     <div class="field" data-tier="installation" data-settab="memory">
       <label>Memory</label>
       <div class="fieldnote" style="margin:0">What each agent has kept, by box. Open an agent to read the lines, withdraw one, or
@@ -1772,7 +1789,11 @@ function openSettings(tab) {
         ? (host.unavailableReason ? "Enabled, but: " + host.unavailableReason : "Enabled and ready.")
         : "";
       $("setstartupitem").checked = !!(data.config && data.config.startupItem);
-      $("setstatus").textContent = "Now running: " + (data.current || "");
+      var settings = data.settings || {};
+      $("setvision").value = settings.vision || "auto";
+      $("setsummarymodel").value = settings.summaryModel || "";
+      renderEffective(data.effective, data.current);
+      $("setstatus").textContent = "";
       settingsProviderChanged();
       renderStandingGrants();
       renderBoxSection();
@@ -2720,6 +2741,17 @@ document.getElementById("setgrants").addEventListener("click", function (event) 
   }).then(renderStandingGrants);
 });
 
+// What is in force right now, and which saved values the server's own environment overrides.
+function renderEffective(effective, current) {
+  var line = "Now running: " + (current || "");
+  if (effective && effective.summaryModel) line += " · summaries on " + effective.summaryModel;
+  if (effective && effective.locked && effective.locked.length) {
+    line += " · locked by the server's environment: " + effective.locked.join(", ") +
+      " (the saved value applies once the server starts without it)";
+  }
+  $("seteffective").textContent = line;
+}
+
 function settingsProviderChanged() {
   var name = $("setprovider").value;
   $("setbasewrap").style.display = name === "custom" ? "" : "none";
@@ -2751,6 +2783,9 @@ function saveSettings(thenRestart) {
   body.boxImage = boxImage === "" ? null : boxImage;
   var key = $("setkey").value.trim();
   if (key !== "") body.key = key;
+  body.vision = $("setvision").value || "auto";
+  var summaryModel = $("setsummarymodel").value.trim();
+  body.summaryModel = summaryModel === "" ? null : summaryModel;
   body.hostExec = { enabled: $("sethostenabled").checked, cwd: $("sethostcwd").value.trim() };
   body.startupItem = $("setstartupitem").checked;
   $("setstatus").textContent = "Saving…";
@@ -2765,10 +2800,12 @@ function saveSettings(thenRestart) {
         return d;
       });
     })
-    .then(function () {
+    .then(function (d) {
       markOnboarded();
-      if (!thenRestart) {
-        $("setstatus").textContent = "Saved. Takes effect when the server restarts.";
+      renderEffective({ locked: d.locked || [] }, d.current);
+      // Model settings are in force already; a restart is only for what still needs one.
+      if (!thenRestart || !d.restartNeeded) {
+        $("setstatus").textContent = d.note || "Saved and in force.";
         return;
       }
       $("setstatus").textContent = "Restarting…";
