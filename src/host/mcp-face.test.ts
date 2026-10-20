@@ -376,3 +376,22 @@ test("an engine's permission prompt is answered by the gate: allowed calls pass,
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("delegate_submit: a report that does not check out is sent back with every reason; an accepted one waits for settling by job id (INV-1261)", async () => {
+  const face = new McpFace({ mcp: () => fakeManager([]), jobsOf: () => undefined, auditPath: null });
+  face.baseUrl = "http://127.0.0.1:1";
+  const minted = face.mint({ agentId: "a1", agentName: "Ada", conversation: "main", requested: [], allowedMcp: [], submit: true });
+  assert.ok("route" in minted);
+  face.bindJob(minted.route.key, "job-9");
+  const tools = face.toolsFor(minted.route);
+  assert.deepEqual(tools.map(tool => tool.name), ["delegate_submit"]);
+  const submit = tools[0]!;
+  await assert.rejects(submit.run({ done: [{ what: "it works" }], not_done: [], problems: [], verdict: "done" }, "a1"), /Report not accepted:[\s\S]*done\[0\]\.evidence is missing[\s\S]*call delegate_submit again/);
+  assert.equal(face.takeReport("job-9"), undefined, "nothing kept from a refused report");
+  const accepted = await submit.run({ done: [{ what: "tests pass", evidence: { kind: "command", command: "npm test", output: "ok" } }], not_done: [], problems: [], verdict: "done" }, "a1");
+  assert.match(accepted, /Report accepted/);
+  face.revoke(minted.route.key, "job ended");
+  const report = face.takeReport("job-9");
+  assert.equal(report?.verdict, "done", "kept past the route's end, for settling");
+  assert.equal(face.takeReport("job-9"), undefined, "taken once");
+});

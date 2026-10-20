@@ -112,7 +112,7 @@ import { SkillCache } from "./skills.ts";
 import { parseSchedule, type Schedule, type Scheduled, Scheduler } from "./schedule.ts";
 import { heartbeatAgentOf, heartbeatItems, heartbeatSlug, readStanding, standingBoxDir } from "./standing.ts";
 import { UsageLog } from "./usage.ts";
-import { AcpDelegates, type SessionData } from "./acp-delegate.ts";
+import { AcpDelegates } from "./acp-delegate.ts";
 import { worktreeState } from "./worktree-state.ts";
 import { tracerFromEnv, type Tracer } from "./trace.ts";
 import {
@@ -2442,6 +2442,7 @@ export class Orchestrator {
         pendingWork: this.pendingWork,
         box: status === undefined ? undefined : this.boxFor(open.agentId),
         dropSession: (id, reason) => this.delegateSessions.drop(id, reason),
+        report: id => this.mcpFace.takeReport(id),
       },
       { job_id: jobId, ...(status ?? {}) }
     );
@@ -2606,25 +2607,7 @@ export class Orchestrator {
 
   /** Briefs recorded as sessions (docs/81): watched again, loaded, or settled as the box allows. */
   async reattachSessions(): Promise<void> {
-    const open = this.pendingWork?.open().filter(item => item.kind === "delegate" && item.data?.mode === "session") ?? [];
-    const byAgent = new Map<string, typeof open>();
-    for (const item of open) byAgent.set(item.agentId, [...(byAgent.get(item.agentId) ?? []), item]);
-    for (const [agentId, items] of byAgent) {
-      const box = this.boxFor(agentId);
-      const agent = this.registry.tryGet(agentId);
-      if (box === undefined || agent === undefined) continue;
-      await this.acpDelegates.reattach(
-        box,
-        items.map(item => ({
-          agentId,
-          agentName: agent.profile.name,
-          conversation: item.parent,
-          jobId: item.child,
-          brief: item.brief,
-          data: item.data as unknown as SessionData & { engine: string },
-        }))
-      );
-    }
+    await this.acpDelegates.reattachAll(this.pendingWork, agentId => this.boxFor(agentId), agentId => this.registry.tryGet(agentId)?.profile.name);
   }
 
   /** Waits for every agent woken as a side effect of the last prompt. */

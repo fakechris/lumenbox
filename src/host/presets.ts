@@ -116,6 +116,12 @@ export interface Preset {
    */
   wires: readonly ("anthropic" | "openai")[];
   /**
+   * How the engine delivers its report (INV-1261): `mcp` through the face's `delegate_submit`
+   * (checked while the run is on, resubmitted until accepted), `file` by writing
+   * `reportPath(jobId)` before it exits (checked when the run settles).
+   */
+  report: "mcp" | "file";
+  /**
    * A config file some engines need before a relay URL means anything to them (pi's
    * models.json, opencode's provider catalog). Written into the box before the job starts,
    * with the token as an environment reference, never inline.
@@ -163,6 +169,7 @@ export const PRESETS: readonly Preset[] = PRESETS_MUTABLE;
 PRESETS_MUTABLE.push(...([
   {
     name: "opencode",
+    report: "mcp",
     summary: "A coding agent: reads a repository, edits files, runs tests, iterates.",
     probe: "command -v opencode",
     install: {
@@ -218,6 +225,7 @@ PRESETS_MUTABLE.push(...([
   },
   {
     name: "claude",
+    report: "mcp",
     summary: "Claude Code: the same shape, for repositories it already knows well.",
     probe: "command -v claude",
     install: {
@@ -271,6 +279,7 @@ export const PI_MODELS_FILE = "/home/box/.pi/agent/models.json";
 
 PRESETS_MUTABLE.push({
   name: "pi",
+  report: "file",
   summary: "pi: a small coding agent with sessions and skills; good for scoped edits and scripts.",
   probe: "command -v pi",
   install: {
@@ -358,6 +367,7 @@ function mcodeProfileShell(model: string | undefined, permissionMode?: "default"
 
 PRESETS_MUTABLE.push({
   name: "mcode",
+  report: "file",
   summary: "MiniMax Code: MiniMax's own coding agent, tuned for the M3 family; explore / worker / verifier sub-agents, strict about finishing.",
   probe: "command -v mcode",
   // Not --ignore-scripts: the engine needs better-sqlite3's native binding, which its install

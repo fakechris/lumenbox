@@ -24,12 +24,13 @@ import { createHash } from "node:crypto";
 import type { AcpEvent } from "../protocol/index.ts";
 import type { BoxClient } from "../box/client.ts";
 import { awaitDelegatedConsent } from "./delegated-consent.ts";
-import { delegateEndedNote } from "./engine-report.ts";
+import { delegateEndedNote, readReportFile } from "./engine-report.ts";
+import { judgeWithReport } from "./delegate-report.ts";
 import { describeWorktree, worktreeState } from "./worktree-state.ts";
 import type { PendingWork } from "./pending-work.ts";
 import type { PolicyGate } from "./policy.ts";
 
-export type AcpBox = Pick<BoxClient, "acpOpen" | "acpSend" | "acpReply" | "acpEvents" | "acpClose" | "acpSessions"> & Partial<Pick<BoxClient, "exec">>;
+export type AcpBox = Pick<BoxClient, "acpOpen" | "acpSend" | "acpReply" | "acpEvents" | "acpClose" | "acpSessions"> & Partial<Pick<BoxClient, "exec" | "readFile">>;
 
 export interface AcpDelegateDeps {
   pendingWork?: PendingWork;
@@ -268,6 +269,22 @@ export class AcpDelegates {
     }
   }
 
+  /** Every brief the ledger records as a session, grouped by agent, handed to `reattach` with that agent's box. */
+  async reattachAll(pendingWork: PendingWork | undefined, boxFor: (agentId: string) => AcpBox | undefined, nameOf: (agentId: string) => string | undefined): Promise<void> {
+    const open = pendingWork?.open().filter(item => item.kind === "delegate" && item.data?.mode === "session") ?? [];
+    const byAgent = new Map<string, typeof open>();
+    for (const item of open) byAgent.set(item.agentId, [...(byAgent.get(item.agentId) ?? []), item]);
+    for (const [agentId, items] of byAgent) {
+      const box = boxFor(agentId);
+      const agentName = nameOf(agentId);
+      if (box === undefined || agentName === undefined) continue;
+      await this.reattach(
+        box,
+        items.map(item => ({ agentId, agentName, conversation: item.parent, jobId: item.child, brief: item.brief, data: item.data as unknown as SessionData & { engine: string } }))
+      );
+    }
+  }
+
   private async answerTo(watch: Watch, rpcId: number, timeoutMs: number): Promise<Record<string, unknown> | undefined> {
     // A cursor of its own: the loop's cursor is the loop's. Events are kept, so both see all.
     const deadline = (this.deps.now ?? Date.now)() + timeoutMs;
@@ -378,12 +395,15 @@ export class AcpDelegates {
     // Asked after the engine's word, never instead of it (INV-1258); the commit waits for git.
     void (async () => {
       const worktree = watch.box.exec !== undefined ? await worktreeState(watch.box as Pick<BoxClient, "exec">, watch.cwd) : undefined;
-      const committed = this.deps.pendingWork?.commitDelegate(watch.jobId, outcome, { why, ...(worktree !== undefined ? { worktree: describeWorktree(worktree) } : {}) }) ?? true;
+      // The report comes back as a file in the session form (INV-1261); read before the event decides.
+      const delivery = watch.box.readFile !== undefined ? await readReportFile(watch.box as Pick<BoxClient, "readFile">, watch.jobId) : undefined;
+      const judged = judgeWithReport({ outcome, why }, delivery);
+      const committed = this.deps.pendingWork?.commitDelegate(watch.jobId, judged.outcome, { why: judged.why, ...(worktree !== undefined ? { worktree: describeWorktree(worktree) } : {}) }) ?? true;
       if (!committed) return;
-      const answer = outcome === "done" && inFlight.text.trim() !== "" ? ` Its answer: ${inFlight.text.trim().slice(0, 1_500)}` : "";
+      const answer = judged.outcome === "done" && inFlight.text.trim() !== "" ? ` Its answer: ${inFlight.text.trim().slice(0, 1_500)}` : "";
       this.deps.deliver(
         watch.agentId,
-        `${delegateEndedNote(watch.jobId, inFlight.brief, { outcome, why, ...(worktree !== undefined ? { worktree } : {}) })}${answer} [The session stays open: continue it with Delegate session_id=${watch.jobId}, or close it.]`,
+        `${delegateEndedNote(watch.jobId, inFlight.brief, { ...judged, ...(worktree !== undefined ? { worktree } : {}), ...(delivery !== undefined ? { delivery } : {}) })}${answer} [The session stays open: continue it with Delegate session_id=${watch.jobId}, or close it.]`,
         watch.conversation
       );
     })();

@@ -163,6 +163,30 @@ What the preset does and why, each read in the engine's source and then watched 
   (`limit_exceeded`, exit 7, read as aborted), and a MiniMax endpoint's answer to
   `count_tokens` through the real relay (the stub's 404 was tolerated).
 
+## The engine's own report, checked at the gate (INV-1261, 2026-10-20)
+
+A completion event says finished or failed; it does not say what was done or why that counts.
+Every brief now ends with delivery instructions, and settling reads the report before the event:
+
+- **Shape** (`delegate-report.ts`): `done[{what, evidence}]` where evidence is a command with
+  its output, a path, or a diff summary — the engine's own sentence is not evidence;
+  `not_done[{what, why}]`; `problems[]`; `verdict` done / partial / failed. `unknown` is the
+  host's word, never the engine's. Bounded (32 items, 2k chars a string, 64 KB) and redacted.
+- **Two ways in.** Engines with an MCP client (claude, opencode) get the face's
+  `delegate_submit`: checked while the run is on, refused with every reason, called again until
+  accepted, kept by job id past the route's end. Engines without one (pi; mcode's one-shot form,
+  which loads no MCP servers; the session form) write `/home/box/work/.lumenbox/reports/<job>.json`
+  before they exit; the host reads and checks it when the run settles, and a malformed file is no
+  report. `preset.report` says which.
+- **Settling** (`judgeWithReport`): the report's verdict decides when the event agrees or has
+  nothing to say; a **contradiction is `unknown` with both named**; a **done event with no report
+  is `unknown`** — a completion claim with nothing behind it — while a failure or a stop stands on
+  the event alone. The note to the agent carries the report's summary beside the outcome and the
+  working tree (INV-1258).
+
+Not yet run against a real model on each engine; the delivery text and the file path are what
+the engine sees, and the fixtures above are what it says back.
+
 Not measured: a long run with tool calls on each engine against a real model. The parsers
 read only the final events, and an opencode run cut off after a tool-calls step has no
 completion report, so it is `unknown`.

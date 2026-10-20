@@ -23,9 +23,17 @@ const ENGINE = fileURLToPath(new URL("../boxd/testing/fake-acp-engine.mjs", impo
 const command = `node ${ENGINE}`;
 
 /** The box client's ACP face, served by the real service. */
+/** What the engine "wrote" as its report file, for the keeper to read at settling (INV-1261); undefined is no file. */
+let anyReport: string | undefined;
+const OK_REPORT = JSON.stringify({ done: [{ what: "said hello", evidence: { kind: "command", command: "echo hi", output: "hi" } }], not_done: [], problems: [], verdict: "done" });
+
 function boxOver(acp: AcpService, env: Record<string, string> = {}): AcpBox {
   const base = { nice: 0, scrubbedEnv: { PATH: process.env.PATH ?? "", ...env } as NodeJS.ProcessEnv };
   return {
+    readFile: async (path: string) => {
+      if (anyReport === undefined || !path.includes("/.lumenbox/reports/")) throw new Error(`${path} does not exist`);
+      return { path, content: anyReport, total_lines: 1, truncated: false };
+    },
     acpOpen: async request => acp.open({ ...request, ...base }),
     acpSend: async request => acp.send(request),
     acpReply: async request => {
@@ -77,9 +85,11 @@ function fixture(options: { commandsNeedingConsent?: string[]; consentWaitMs?: n
 test("a brief settles on the engine's end_turn: done, the answer in the note, the record marked a session", async () => {
   const f = fixture();
   try {
+    anyReport = OK_REPORT;
     const started = await f.start("say hello");
     const note = await f.settledNote();
     assert.match(note.text, /finished: job-.*fake: say hello/);
+    assert.match(note.text, /Its report: verdict done\. done: said hello/);
     assert.match(note.text, /Its answer: Done\./);
     assert.match(note.text, /session stays open: continue it with Delegate session_id=/);
     const records = f.committed();
@@ -90,9 +100,12 @@ test("a brief settles on the engine's end_turn: done, the answer in the note, th
     assert.equal(records.find(r => r.event === "committed")?.how, "done");
     assert.equal(f.delegates.get(started.jobId)?.inFlight, undefined, "nothing in flight after the answer");
     // The next brief on the same session: a second record, settled the same way.
+    // The next brief delivers no report: its end_turn is a claim with nothing behind it.
+    anyReport = undefined;
     await f.delegates.continueWith(started.jobId, "and again", { engine: "fake" });
-    await f.settledNote(text => /and again/.test(text));
-    assert.equal(f.committed().filter(r => r.event === "committed").length, 2);
+    const second = await f.settledNote(text => /and again/.test(text));
+    assert.match(second.text, /whether it did the work is unknown.*delivered no report/);
+    assert.deepEqual(f.committed().filter(r => r.event === "committed").map(r => r.how), ["done", "unknown"]);
     await f.delegates.close(started.jobId);
   } finally {
     f.cleanup();
@@ -129,15 +142,16 @@ test("the engine's permission question goes to the gate: granted is allow-once, 
     assert.match(pending!.description, /\[delegated engine job-.*\] Ada: bash — curl http:\/\/example\.com/);
     f.policy.grant(pending!.id, "test");
     const granted = await f.settledNote();
-    assert.match(granted.text, /finished/);
-    assert.match(granted.text, /ran it\./, "the engine was answered allow-once and ran the tool");
+    assert.match(granted.text, /unknown.*delivered no report/, "end_turn without a report is a claim, not a result (INV-1261)");
+    // The engine's answer is only quoted for a done brief; that the tool ran is in the session log below.
 
     f.notes.length = 0;
     await f.delegates.continueWith(started.jobId, "ASK again", { engine: "fake" });
-    while (f.policy.pending().length === 0) await new Promise(resolve => setTimeout(resolve, 10));
+    const askedAgain = Date.now() + 5_000;
+    while (f.policy.pending().length === 0 && Date.now() < askedAgain) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(f.policy.pending().length, 1, "asked again");
     f.policy.deny(f.policy.pending()[0]!.id, "test", "no");
-    const refused = await f.settledNote();
-    assert.match(refused.text, /not allowed\./, "the engine was answered deny and said so");
+    await f.settledNote();
     assert.equal(f.policy.pending().length, 0, "the re-check's request was withdrawn");
     const log = readFileSync(join(f.dir, `${started.jobId}.log`), "utf8");
     const answers = log.split("\n").filter(line => line.startsWith(">> ") && line.includes('"outcome"'));
@@ -158,8 +172,8 @@ test("a permission question nobody answers ends the turn: deny, then session/can
     const note = await f.settledNote();
     // The engine was answered deny and the turn was told to end; whichever the engine confirms
     // first settles the brief — what must not happen is a turn held open on a silent question.
-    assert.match(note.text, /stopped before it finished|finished/);
-    assert.ok(["aborted", "done"].includes(f.committed().find(r => r.event === "committed")?.how ?? ""));
+    assert.match(note.text, /stopped before it finished|unknown.*delivered no report/);
+    assert.ok(["aborted", "unknown"].includes(f.committed().find(r => r.event === "committed")?.how ?? ""));
     assert.equal(f.policy.pending().length, 0);
     const log = readFileSync(join(f.dir, `${started.jobId}.log`), "utf8");
     assert.match(log, />> .*"session\/cancel"/, "the host ended the turn rather than leave it waiting");
@@ -212,7 +226,8 @@ test("after a host restart a running session is watched again; after a box resta
     await second.reattach(boxOver(f.acp), [item()]);
     const until = Date.now() + 10_000;
     while (notes2.length === 0 && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 20));
-    assert.match(notes2[0] ?? "", /finished: job-.*SLOW remembered/);
+    assert.match(notes2[0] ?? "", /job-.*SLOW remembered/);
+    assert.match(notes2[0] ?? "", /unknown.*delivered no report|finished/);
     await second.close(started.jobId);
 
     // Box restart: the service is new, the record is detached. Loaded in the same cwd → the brief
@@ -228,6 +243,9 @@ test("after a host restart a running session is watched again; after a box resta
     const third = new AcpDelegates({ pendingWork: f.pendingWork, policy: f.policy, deliver: (_a, text) => notes3.push(text), eventsTimeoutMs: 300 });
     const brief2 = f.pendingWork.open().find(i => i.child === again.jobId)!;
     await third.reattach(boxOver(reborn, { FAKE_ACP_STATE: state }), [item(brief2)]);
+    // Settling reads the report file and the tree before it speaks; give it a moment.
+    const spoke = Date.now() + 5_000;
+    while (notes3.length === 0 && Date.now() < spoke) await new Promise(resolve => setTimeout(resolve, 20));
     assert.match(notes3[0] ?? "", /whether it did the work is unknown.*session was loaded again/);
     assert.ok(third.get(again.jobId), "the session is open again");
     await third.close(again.jobId);
@@ -240,6 +258,8 @@ test("after a host restart a running session is watched again; after a box resta
     const notes4: string[] = [];
     const fourth = new AcpDelegates({ pendingWork: f.pendingWork, policy: f.policy, deliver: (_a, text) => notes4.push(text), eventsTimeoutMs: 300 });
     await fourth.reattach(boxOver(reborn), [{ ...bad, brief: "fake: lost" }]);
+    const spoke4 = Date.now() + 5_000;
+    while (notes4.length === 0 && Date.now() < spoke4) await new Promise(resolve => setTimeout(resolve, 20));
     assert.match(notes4[0] ?? "", /failed.*no longer has this session/i);
     reborn.shutdown();
   } finally {
