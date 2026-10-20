@@ -15,6 +15,8 @@ import { statSync } from "node:fs";
 import {
   DEFAULT_CONFIG,
   applyConfigEnv,
+  reapplyConfigEnv,
+  resetConfigEnvForTests,
   configPath,
   ensureConfigFile,
   envNumber,
@@ -316,4 +318,34 @@ test("malformed quota policy cannot silently become unlimited", () => {
   assert.equal(warnings.length, 2);
   withHome('{"personBoxQuotas":[]}');
   assert.throws(() => loadConfig(), /repair it before allocating/);
+});
+
+test("re-applying a saved config follows the file for what the file set, and leaves the shell's own alone (INV-1268)", () => {
+  withHome();
+  resetConfigEnvForTests();
+  for (const key of ["AGENTBOX_TEST_C1", "AGENTBOX_TEST_C2", "AGENTBOX_TEST_S1", "AGENTBOX_MODEL"]) delete process.env[key];
+  const savedModel = process.env.AGENTBOX_MODEL;
+  process.env.AGENTBOX_TEST_S1 = "shell";
+  try {
+    applyConfigEnv({ activityLimit: 400, model: "m-one", env: { AGENTBOX_TEST_C1: "one", AGENTBOX_TEST_C2: "two", AGENTBOX_TEST_S1: "config" } });
+    assert.equal(process.env.AGENTBOX_MODEL, "m-one");
+
+    // The file changes: C1 edited, C2 dropped, model changed, S1 still contested by the file.
+    const { locked } = reapplyConfigEnv({ activityLimit: 400, model: "m-two", env: { AGENTBOX_TEST_C1: "one-b", AGENTBOX_TEST_S1: "config" } });
+    assert.equal(process.env.AGENTBOX_TEST_C1, "one-b", "a config-owned key follows the file");
+    assert.equal(process.env.AGENTBOX_TEST_C2, undefined, "a key the file dropped is removed");
+    assert.equal(process.env.AGENTBOX_MODEL, "m-two", "the model is one of the file's variables");
+    assert.equal(process.env.AGENTBOX_TEST_S1, "shell", "an exported variable is never overwritten");
+    assert.deepEqual(locked, ["AGENTBOX_TEST_S1"], "and is reported, so the page can say so");
+
+    // Dropping the model from the file removes the variable this process took from it.
+    reapplyConfigEnv({ activityLimit: 400, env: { AGENTBOX_TEST_C1: "one-b" } });
+    assert.equal(process.env.AGENTBOX_MODEL, undefined);
+    // A shell key the file no longer contests is not locked.
+    assert.deepEqual(reapplyConfigEnv({ activityLimit: 400, env: { AGENTBOX_TEST_S1: "shell" } }).locked, []);
+  } finally {
+    for (const key of ["AGENTBOX_TEST_C1", "AGENTBOX_TEST_C2", "AGENTBOX_TEST_S1"]) delete process.env[key];
+    if (savedModel === undefined) delete process.env.AGENTBOX_MODEL; else process.env.AGENTBOX_MODEL = savedModel;
+    resetConfigEnvForTests();
+  }
 });

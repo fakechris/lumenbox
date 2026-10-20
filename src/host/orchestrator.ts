@@ -115,6 +115,7 @@ import { UsageLog } from "./usage.ts";
 import { tracerFromEnv, type Tracer } from "./trace.ts";
 import {
   createClient,
+  describeProvider,
   summaryRuntimeFor,
   resolveProvider,
   effectiveProviderFor,
@@ -251,7 +252,8 @@ const HEARTBEAT_SCHEDULE: Schedule = (() => {
 export class Orchestrator {
   readonly registry: AgentRegistry;
   readonly bus: AgentBus;
-  private readonly client: Anthropic;
+  /** The installation's default client. Replaced whole by `setDefaultProvider`, never mutated. */
+  private client: Anthropic;
   /** The installation's own box, once connected. Kept as the default so one-box callers read as before. */
   private box: BoxClient | undefined;
   /**
@@ -371,7 +373,17 @@ export class Orchestrator {
     } as unknown as RuleStore,
   });
 
-  readonly provider: ProviderProfile;
+  /**
+   * The installation's default provider. A turn takes `runtimeForAgent` once when it starts and
+   * keeps that pair for every round, so a swap here (INV-1268) reaches the next turn and never a
+   * running one; everything else that reads it does so per call.
+   */
+  get provider(): ProviderProfile {
+    return this.defaultProvider;
+  }
+  private defaultProvider: ProviderProfile;
+  /** The summary-side pair for the default provider: the Rememberer reads it through getters. */
+  private remembererRuntime: { client: Anthropic; profile: ProviderProfile };
   /** Where LLM-call spans go (trace.ts); undefined when no collector is configured. */
   private readonly tracer: Tracer | undefined;
 
@@ -961,18 +973,20 @@ export class Orchestrator {
     this.registry.onMemoryChanged = agentId => {
       void this.memoryMirror.sync(agentId);
     };
-    this.provider = options.provider ?? resolveProvider();
+    this.defaultProvider = options.provider ?? resolveProvider();
     // `null` is how a test says "no tracer even if the environment names one";
     // omitted reads AGENTBOX_TRACE_URL, which unset means the feature does not exist.
     this.tracer = options.tracer === null ? undefined : (options.tracer ?? tracerFromEnv());
-    this.client = options.client ?? createClient(this.provider);
+    this.client = options.client ?? createClient(this.defaultProvider);
     // The Rememberer gets the *paired* summary runtime — the same review finding as
     // compaction: a profile naming another provider must not ride the primary client.
-    const remembererRuntime = summaryRuntimeFor(this.provider, this.client);
+    // Read through getters, so a swapped default (INV-1268) reaches it without a rebuild.
+    this.remembererRuntime = summaryRuntimeFor(this.defaultProvider, this.client);
+    const self = this;
     this.rememberer = new Rememberer({
       registry: this.registry,
-      client: remembererRuntime.client,
-      provider: remembererRuntime.profile,
+      get client() { return self.remembererRuntime.client; },
+      get provider() { return self.remembererRuntime.profile; },
       log: line => console.error(`[memory] ${line}`),
       usage: this.usage,
       externalTool: tool => this.readsExternalContent(tool),
@@ -2146,6 +2160,39 @@ export class Orchestrator {
     const runtime = { client: createClient(provider), provider };
     this.runtimeCache.set(key, runtime);
     return runtime;
+  }
+
+  /**
+   * Replace the installation's default provider without a restart (INV-1268).
+   *
+   * The new client and summary pair are built first, then the three references are swapped
+   * together, so no caller sees the old profile with the new client. A turn already running
+   * keeps the pair it took at its start; the next turn, and every per-call reader (askCheaply,
+   * askBounded, the model relay, the Rememberer), get the new one. The swap itself is a
+   * zero-token row in the usage ledger, so a bill that changes shape has a line that says why.
+   */
+  setDefaultProvider(profile: ProviderProfile, client?: Anthropic): { previous: ProviderProfile } {
+    const previous = this.defaultProvider;
+    const nextClient = client ?? createClient(profile);
+    const nextRememberer = summaryRuntimeFor(profile, nextClient);
+    this.defaultProvider = profile;
+    this.client = nextClient;
+    this.remembererRuntime = nextRememberer;
+    console.error(`[provider] default switched: ${describeProvider(previous)} → ${describeProvider(profile)}`);
+    this.usage.record({
+      kind: "switch",
+      agentId: "host",
+      agentName: "host",
+      provider: profile.label,
+      model: profile.model,
+      round: 0,
+      reason: `from ${previous.label} ${previous.model} to ${profile.label} ${profile.model}`,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    });
+    return { previous };
   }
 
   /**

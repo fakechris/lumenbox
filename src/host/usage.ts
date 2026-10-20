@@ -31,7 +31,7 @@ import { agentboxHome } from "../config.ts";
  *
  * `turn` is the agent thinking. The other three are the harness keeping house around it.
  */
-export type UsageKind = "turn" | "summarize" | "memory" | "select" | "review" | "delegate" | "anomaly" | "steward" | "handoff";
+export type UsageKind = "turn" | "summarize" | "memory" | "select" | "review" | "delegate" | "anomaly" | "steward" | "handoff" | "switch";
 
 /**
  * Something the model did that spent nothing and should still be counted (INV-775).
