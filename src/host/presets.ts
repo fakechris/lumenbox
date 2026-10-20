@@ -103,6 +103,12 @@ export interface Preset {
   /** Environment that points the engine's model traffic at our relay, and names the model where the engine reads one. */
   relayEnv: (baseUrl: string, token: string, model?: string) => Record<string, string>;
   /**
+   * The session form (docs/81): the command that runs the engine's ACP surface on its stdio,
+   * for boxd to keep alive and the host to speak to. Absent for engines without one; the
+   * one-shot `run` stays the whole story for them.
+   */
+  acp?: { command: (model?: string) => string };
+  /**
    * The wires this engine can speak to a model over. The built-in relay forwards bytes as
    * sent, so an engine that only speaks Anthropic's API cannot be pointed at an OpenAI-wire
    * provider through it; the Delegate tool checks this and says so instead of starting a run
@@ -333,11 +339,15 @@ export const MCODE_MAX_STEPS = 200;
  * finished — and must be `subagent` here (INV-1232, verification-policy.ts). Read from
  * minimax-code 9a93560 / 0.6.12; the permission policy is on the command line below.
  */
-function mcodeProfileShell(model: string | undefined): string {
+function mcodeProfileShell(model: string | undefined, permissionMode?: "default"): string {
   const id = model !== undefined ? quoteForShell(model) : '"${LUMENBOX_RELAY_MODEL:?mcode needs a model name}"';
+  // The session form names its permission policy in the profile (there is no flag for `acp`):
+  // `default` is Ask, which is what routes the question to this host. Never the engine's own
+  // default, `auto`, which classifies in MiniMax's cloud (docs/81 §1).
+  const mode = permissionMode !== undefined ? `permissionMode: ${permissionMode}\\n` : "";
   return (
     `d=$(mktemp -d /tmp/mcode.XXXXXX) && trap 'rm -rf "$d"' EXIT && umask 077 && m=${id} && ` +
-    `printf 'custom_provider:\\n  lumenbox:\\n    api: %s\\n    options:\\n      apiKey: %s\\n      baseURL: %s\\n    models:\\n      %s: {}\\ndefaultModel: custom_provider:lumenbox/%s\\ngoal:\\n  verification: subagent\\n' ` +
+    `printf 'custom_provider:\\n  lumenbox:\\n    api: %s\\n    options:\\n      apiKey: %s\\n      baseURL: %s\\n    models:\\n      %s: {}\\ndefaultModel: custom_provider:lumenbox/%s\\n${mode}goal:\\n  verification: subagent\\n' ` +
     `"\${LUMENBOX_RELAY_API:-anthropic-messages}" "\${LUMENBOX_RELAY_TOKEN:?mcode needs the relay token}" "\${LUMENBOX_RELAY_URL:?mcode needs the relay url}" "$m" "$m" > "$d/config.yaml" && ` +
     `export MINIMAX_DATA_DIR="$d"`
   );
@@ -364,6 +374,10 @@ PRESETS_MUTABLE.push({
   run: (quoted, model, extraArgs) =>
     `${mcodeProfileShell(model)} && mcode exec --config "$d/config.yaml" ${MACHINE_OUTPUT.mcode} --permission full --max-steps ${MCODE_MAX_STEPS}` +
     ` --model "custom_provider:lumenbox/$m"${extraArgs ? ` ${extraArgs}` : ""} ${quoted}`,
+  // The session form: the same profile, Ask as the permission policy, and the engine's ACP
+  // surface on its stdio for boxd to hold (docs/81). The model goes in the profile's
+  // defaultModel; `mcode acp` has no --model flag.
+  acp: { command: model => `${mcodeProfileShell(model, "default")} && mcode acp` },
   skillsMount: "~/.agents/skills",
   wires: ["anthropic", "openai"],
   // mcode reads no BASE_URL or API_KEY variables at all (bash-subprocess-env.ts scrubs them from

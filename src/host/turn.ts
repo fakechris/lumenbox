@@ -29,6 +29,7 @@ import type { Effects } from "./effects.ts";
 import type { Orchestrations } from "./orchestrate.ts";
 import type { McpFace } from "./mcp-face.ts";
 import type { ModelRelay } from "./model-relay.ts";
+import type { AcpDelegates } from "./acp-delegate.ts";
 import type { DelegateSessions } from "./delegate-sessions.ts";
 import { classifyFailureOf, keepFirstSpecific, type FailureCategory } from "./failure-taxonomy.ts";
 import { visibleTo, type Skill } from "./skills.ts";
@@ -589,6 +590,8 @@ export interface TurnDeps {
   mcpFace?: McpFace;
   modelRelay?: ModelRelay;
   delegateSessions?: DelegateSessions;
+  /** Engines kept alive as sessions (docs/81). */
+  acpDelegates?: AcpDelegates;
   /** Told what a compaction summary is about to replace, so memory can keep what matters. */
   onSummarised?: (agentId: string, conversation: string, entries: readonly TranscriptEntry[]) => void;
   /** What kind of box this agent's is, for Delegate's face decision. */
@@ -3392,6 +3395,7 @@ ${outcome.text}`;
             ...(deps.mcpFace !== undefined ? { mcpFace: deps.mcpFace } : {}),
             ...(deps.modelRelay !== undefined ? { modelRelay: deps.modelRelay } : {}),
             ...(deps.delegateSessions !== undefined ? { delegateSessions: deps.delegateSessions } : {}),
+            ...(deps.acpDelegates !== undefined ? { acpDelegates: deps.acpDelegates } : {}),
             ...(deps.boxKind !== undefined ? { boxKind: deps.boxKind } : {}),
             allowedMcpTools: allowedMcp.map(tool => tool.name),
             ...(deps.templateSetup !== undefined ? { templateSetup: deps.templateSetup } : {}),

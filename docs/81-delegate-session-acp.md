@@ -69,8 +69,9 @@ Two defaults that would have been wrong silently, both confirmed on the wire:
    host-side approval with the tool call as the thing being approved; the gate's answer maps
    `allow` → `allow-once`, `deny` → `deny`. `allow-always` is never sent: a standing grant
    inside an engine is a grant the host cannot see. The profile sets `permissionMode: default`.
-   An unanswered question holds the turn open indefinitely (measured), so the host's approval
-   timeout (`AGENTBOX_APPROVAL_*`) ends with `session/cancel`, not with silence.
+   An unanswered question holds the turn open indefinitely (measured), so the host's consent
+   wait (the same ten minutes the MCP face gives a person, `delegated-consent.ts`) ends with a
+   deny to the engine and `session/cancel`, not with silence; the stale request is withdrawn.
 3. **steer = `mcode/session/steer`, with the host's own idempotency key.** The reply
    `steered` is an acceptance, not an adoption; the host records it as "delivered to the
    engine" and nothing more (the constraint in INV-1234). `duplicate` is a no-op. With no turn

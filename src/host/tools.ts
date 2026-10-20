@@ -27,6 +27,7 @@ import type { BundleStore } from "./bundles.ts";
 import { oauthProvider, scrubToken, tokenHeaders, type OAuthGate, type OAuthProvider } from "./oauth.ts";
 import type { McpManager, ToolEffect } from "./mcp.ts";
 import { delegateEnv, delegateModel, PRESETS, presetNamed, quoteForShell, installCommand, withEnginesPath } from "./presets.ts";
+import type { AcpDelegates } from "./acp-delegate.ts";
 import { namesControlSurface } from "./control-surfaces.ts";
 import { catalogMenu, intersectTools, profilesFor } from "./catalog.ts";
 import { AROUND_ENTRY_CHARS, describeHistory, ENTRY_CHARS, readEpochHistory, readHistory } from "./history.ts";
@@ -288,6 +289,8 @@ export interface ToolContext {
   modelRelay?: ModelRelay;
   /** Session capsules: when an engine's own thread is resumed and when it is rotated. */
   delegateSessions?: DelegateSessions;
+  /** Engines kept alive as sessions (docs/81), for presets with an ACP form. */
+  acpDelegates?: AcpDelegates;
   /** The MCP tool names this turn itself may call — profile ∩ scope ∩ chat scope, as the turn computed them. */
   allowedMcpTools?: readonly string[];
   /** What kind of box the agent's is: an attached one cannot reach the host's loopback. */
@@ -983,7 +986,13 @@ export function buildTools(
           "wait for it and read what it did. Say what done looks like — the engine cannot " +
           "ask you a question, so an ambiguous brief comes back as confident work on the " +
           "wrong thing. It works in the directory you name and can change files there. " +
-          "What it spends is billed to whoever asked you, like everything else you do.",
+          "What it spends is billed to whoever asked you, like everything else you do." +
+          "\n\nWith mode \"session\" (engines that support it: " +
+          PRESETS.filter(preset => preset.acp !== undefined).map(preset => preset.name).join(", ") +
+          ") the engine stays up between briefs: you get a session id, you are told when a brief " +
+          "finishes, and meanwhile you can `steer` it with a correction, `cancel` the brief, give it " +
+          "the next brief with `session_id` + `prompt`, or `close` it. Its permission questions go " +
+          "to the person through the usual approval.",
         input_schema: {
           type: "object",
           properties: {
@@ -1024,8 +1033,20 @@ export function buildTools(
                 "the work volume (it survives a rebuild). Takes a few minutes and runs as a job; " +
                 "ask the person first, then call again with the brief once the job has finished.",
             },
+            mode: {
+              type: "string",
+              enum: ["job", "session"],
+              description: "job (default): one run, read with Jobs. session: the engine stays up and can be steered, cancelled and given further briefs.",
+            },
+            session_id: {
+              type: "string",
+              description: "An open session of yours to act on: with `prompt` the next brief; with `steer` a correction into the running brief; with `cancel` or `close`.",
+            },
+            steer: { type: "string", description: "Text for the engine to take into the brief it is working on now. Delivered is not adopted; check its output." },
+            cancel: { type: "boolean", description: "Stop the brief in flight; the session stays open." },
+            close: { type: "boolean", description: "End the session; a brief in flight is stopped." },
           },
-          required: ["preset", "prompt"],
+          required: ["preset"],
         },
       },
       {
@@ -3137,8 +3158,50 @@ export async function dispatchTool(
         };
       }
       const prompt = String(input.prompt ?? "").trim();
+      // Acting on an open session (docs/81): steer, cancel, close, or the next brief. The
+      // session must be this agent's; a session id someone else holds is not a handle.
+      if (typeof input.session_id === "string" && input.session_id !== "") {
+        const sessions = context.acpDelegates;
+        const sessionId = input.session_id;
+        const held = sessions?.get(sessionId);
+        if (sessions === undefined || held === undefined || held.agentId !== context.agent.id) {
+          return { text: `${sessionId} is not an open delegate session of yours. Delegate with mode "session" opens one.`, isError: true };
+        }
+        try {
+          if (input.close === true) {
+            await sessions.close(sessionId);
+            return { text: `${sessionId} closed.${held.inFlight !== undefined ? " The brief it was working on is recorded as stopped." : ""}` };
+          }
+          if (input.cancel === true) {
+            const sent = await sessions.cancel(sessionId);
+            return { text: sent ? `${sessionId}: cancel sent; the engine will confirm, and you will be told the brief was stopped.` : `${sessionId} has no brief in flight; nothing to cancel.` };
+          }
+          if (typeof input.steer === "string" && input.steer.trim() !== "") {
+            const verdict = await sessions.steer(sessionId, input.steer.trim());
+            if (verdict === "idle") {
+              await sessions.continueWith(sessionId, input.steer.trim(), { engine: preset.name, ...(context.workId !== undefined ? { workId: context.workId } : {}), ...(context.turnId !== undefined ? { turnId: context.turnId } : {}) });
+              return { text: `${sessionId} had no brief in flight, so the text went in as a new brief; you will be told when it finishes.` };
+            }
+            return { text: verdict === "delivered" ? `${sessionId}: the engine took the steer into its current brief. Taken is not followed — check what it does with it.` : `${sessionId}: that steer was already delivered; not sent twice.` };
+          }
+          if (prompt !== "") {
+            await sessions.continueWith(sessionId, prompt, { engine: preset.name, ...(context.workId !== undefined ? { workId: context.workId } : {}), ...(context.turnId !== undefined ? { turnId: context.turnId } : {}) });
+            return { text: `${sessionId}: next brief sent; you will be told when it finishes.` };
+          }
+          return { text: `With session_id, say what to do: prompt (the next brief), steer, cancel or close.`, isError: true };
+        } catch (error) {
+          return { text: error instanceof Error ? error.message : String(error), isError: true };
+        }
+      }
       if (prompt === "") {
         return { text: "Delegating needs a brief; the engine cannot ask you what you meant.", isError: true };
+      }
+      const sessionMode = input.mode === "session";
+      if (sessionMode && preset.acp === undefined) {
+        return { text: `${preset.name} has no session form; run it as a job, or pick ${PRESETS.filter(p => p.acp !== undefined).map(p => p.name).join(", ") || "an engine that has one"}.`, isError: true };
+      }
+      if (sessionMode && context.acpDelegates === undefined) {
+        return { text: "This installation does not keep delegate sessions; run the engine as a job.", isError: true };
       }
       // Checked rather than assumed, and said as an install problem rather than as a
       // failed run: an engine that is not there produces a shell error the model would
@@ -3212,6 +3275,47 @@ export async function dispatchTool(
       // The job id is ours (docs/32 slice two): minted here, recorded in the ledger before the
       // box hears of it, and handed to boxd, which makes a repeated start idempotent.
       const jobId = `job-${randomBytes(8).toString("hex")}`;
+
+      // The session form (docs/81): the engine opened and kept by boxd, the brief recorded by
+      // the session keeper with the engine's session id on it, and watched from here on. No
+      // MCP face in this form yet; the relay is the same per-delegation route.
+      if (sessionMode) {
+        if (context.boxKind === "attached") {
+          if (relayKey !== undefined) context.modelRelay?.revoke(relayKey, "session form needs the host's relay");
+          return { text: "A session needs the host's relay, which an attached box cannot reach; run the engine as a job.", isError: true };
+        }
+        try {
+          const started = await context.acpDelegates!.start(
+            {
+              box,
+              agentId: context.agent.id,
+              agentName: context.agent.profile.name,
+              conversation: context.conversation ?? MAIN_CONVERSATION,
+              engine: preset.name,
+              command: withEnginesPath(preset.acp!.command(relayModel ?? delegateModel())),
+              cwd: input.cwd ? String(input.cwd) : "/home/box/work",
+              env,
+              prompt,
+              ...(context.workId !== undefined ? { workId: context.workId } : {}),
+              ...(context.turnId !== undefined ? { turnId: context.turnId } : {}),
+              ...callFor(context, jobId),
+            },
+            jobId
+          );
+          if (relayKey !== undefined) context.modelRelay?.bindJob(relayKey, started.jobId);
+          return {
+            text:
+              `Opened a ${preset.name} session as ${started.jobId} and gave it the brief.\n` +
+              `Everything it says and does goes to ${started.logPath}.\n` +
+              (relayKey !== undefined ? `Its model traffic goes through this host to ${relayModel ?? "the configured model"}; its spend is recorded here as yours.\n` : "") +
+              `You will be told when the brief finishes. Meanwhile: Delegate with session_id=${started.jobId} and steer=… to correct it, cancel=true to stop the brief, prompt=… for the next brief once this one is done, close=true to end it. ` +
+              `Its permission questions reach the person through the usual approval; one nobody answers in time ends the brief.`,
+          };
+        } catch (error) {
+          if (relayKey !== undefined) context.modelRelay?.revoke(relayKey, "session failed to open");
+          return { text: `Could not open the session: ${error instanceof Error ? error.message : String(error)}`, isError: true };
+        }
+      }
       let pendingId: string | undefined;
       if (context.pendingWork !== undefined) {
         try {

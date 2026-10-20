@@ -283,6 +283,9 @@ export class PendingWork {
         // A delegated job outlives the host: boxd runs it, and boxd now says what became
         // of it (docs/32 slice two). Running stays open; exited is committed; interrupted or
         // gone is dropped, with the log's path so the parent can read what it left.
+        // A session (docs/81) is not a job the box lists; the host reattaches or settles it
+        // itself (acp-delegate.ts reattach), so the job sweep leaves it alone.
+        if (fork.data?.mode === "session") continue;
         const status = await deps.jobStatus(fork.agentId, fork.child);
         if (status === undefined) continue;
         if (status.running) continue;

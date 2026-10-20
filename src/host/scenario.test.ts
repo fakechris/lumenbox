@@ -2675,3 +2675,66 @@ test("an explicit list with AskUser is offered ShowUI; one without AskUser is no
   const quiet = await offeredTo(["bash", "read_file"]);
   assert.ok(quiet.includes("bash") && !quiet.includes("ShowUI"), `offered: ${quiet.join(", ")}`);
 });
+
+test("Delegate in session mode: opened, steered, cancelled and closed through the tool, on the engine's own word (docs/81)", async () => {
+  const { PendingWork } = await import("./pending-work.ts");
+  const { AcpService } = await import("../boxd/acp-service.ts");
+  const { mkdtempSync, rmSync, readFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { fileURLToPath } = await import("node:url");
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-delegate-session-"));
+  const pendingWork = new PendingWork(join(dir, "pending-work.jsonl"));
+  // The box: the real ACP service, running the fake engine instead of mcode's own command.
+  const engine = `node ${fileURLToPath(new URL("../boxd/testing/fake-acp-engine.mjs", import.meta.url))}`;
+  const acp = new AcpService(dir);
+  const base = { nice: 0, scrubbedEnv: { PATH: process.env.PATH ?? "" } as NodeJS.ProcessEnv };
+  const results: string[] = [];
+  let sessionId = "";
+  const result = await runEpisode({
+    team: [{ name: "Nova" }],
+    says: ["让 mcode 盯着这个仓库改"],
+    pendingWork,
+    box: {
+      exec: async () => ({ stdout: "/usr/local/bin/mcode", stderr: "", exit_code: 0, timed_out: false }),
+      acpOpen: async (request: Parameters<InstanceType<typeof AcpService>["open"]>[0]) => acp.open({ ...request, command: engine, ...base }),
+      acpSend: async (request: Parameters<InstanceType<typeof AcpService>["send"]>[0]) => acp.send(request),
+      acpReply: async (request: Parameters<InstanceType<typeof AcpService>["reply"]>[0]) => {
+        acp.reply(request);
+        return { ok: true };
+      },
+      acpEvents: async (request: Parameters<InstanceType<typeof AcpService>["events"]>[0]) => acp.events(request),
+      acpClose: async (request: Parameters<InstanceType<typeof AcpService>["close"]>[0]) => (await acp.close(request))!,
+      acpSessions: async () => ({ sessions: acp.list() }),
+    } as never,
+    script: ({ round, messages }) => {
+      if (round > 0) results.push(JSON.stringify(messages.at(-1)?.content));
+      if (round === 0) return { call: "Delegate", input: { preset: "mcode", mode: "session", prompt: "SLOW: refactor the parser", cwd: dir } };
+      if (round === 1) {
+        sessionId = /as (job-[0-9a-f]+)/.exec(results[0] ?? "")?.[1] ?? "";
+        return { call: "Delegate", input: { preset: "mcode", session_id: sessionId, steer: "keep the public API" } };
+      }
+      if (round === 2) return { call: "Delegate", input: { preset: "mcode", session_id: sessionId, cancel: true } };
+      if (round === 3) return { call: "Delegate", input: { preset: "mcode", session_id: "job-00000000", steer: "nope" } };
+      if (round === 4) return { call: "Delegate", input: { preset: "mcode", session_id: sessionId, close: true } };
+      return { say: "开了一个会话，纠偏过一次，然后停了。" };
+    },
+  });
+  try {
+    assert.match(results[0] ?? "", /Opened a mcode session as job-[0-9a-f]+ and gave it the brief/);
+    assert.match(results[0] ?? "", /permission questions reach the person/);
+    assert.match(results[1] ?? "", /took the steer into its current brief/);
+    assert.match(results[2] ?? "", /cancel sent/);
+    assert.match(results[3] ?? "", /not an open delegate session of yours/, "someone else's or an unknown session is not a handle");
+    assert.match(results[4] ?? "", /closed/);
+    const until = Date.now() + 5_000;
+    const committed = () => readFileSync(join(dir, "pending-work.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line) as { event: string; how?: string; data?: { mode?: string } });
+    while (!committed().some(entry => entry.event === "committed") && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 20));
+    const entries = committed();
+    assert.equal(entries.find(entry => entry.event === "prepared")?.data?.mode, "session");
+    assert.deepEqual(entries.filter(entry => entry.event === "committed").map(entry => entry.how), ["aborted"], "the engine confirmed the cancel, so the brief is aborted");
+  } finally {
+    result.cleanup();
+    acp.shutdown();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
