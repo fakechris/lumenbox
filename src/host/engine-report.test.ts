@@ -319,3 +319,42 @@ test("mcode 0.6.12's real output: a succeeded run and a relay it could not reach
   assert.match(refused.detail ?? "", /upstream error: Connection error/);
   assert.equal(refused.usage, undefined, "usageSource unavailable is not zero");
 });
+
+test("a delegation that recorded its cwd ends with the repository's state beside the outcome, which the engine's word still decides (INV-1258)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-worktree-"));
+  try {
+    const ledger = new PendingWork(join(dir, "pending-work.jsonl"));
+    const id = ledger.prepare({ agentId: "a", kind: "delegate", parent: "main", child: "job-1", brief: "claude: fix", data: { engine: "claude", cwd: "/home/box/work/repo" } });
+    ledger.admitted(id, undefined);
+    const commands: string[] = [];
+    const box = {
+      readFile: async () => ({ path: "/log", content: fixture("claude-ok"), total_lines: 1, truncated: false }),
+      exec: async (command: string) => {
+        commands.push(command);
+        if (command.includes("git status")) return { stdout: "__STATUS__\n M src/a.ts\n M src/b.ts\n?? tmp.txt\n__UNPUSHED__\n1\n", stderr: "", exit_code: 0, timed_out: false };
+        return { stdout: fixture("claude-ok"), stderr: "", exit_code: 0, timed_out: false };
+      },
+    };
+    const settled = await settleDelegate({ pendingWork: ledger, box: box as never }, { job_id: "job-1", exit_code: 0, log_path: "/log" });
+    assert.equal(settled?.outcome, "done", "the engine's report decides the outcome");
+    assert.deepEqual(settled?.worktree, { kind: "repo", modified: 2, untracked: 1, unpushed: 1 });
+    const note = delegateEndedNote("job-1", "claude: fix", settled!);
+    assert.match(note, /finished: job-1/);
+    assert.match(note, /repository is not clean: 2 modified, 1 untracked, 1 unpushed — the engine reported success, but those changes are not committed/);
+    const committed = readFileSync(join(dir, "pending-work.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line) as Record<string, unknown>).find(entry => entry.event === "committed")!;
+    assert.equal(committed.worktree, "2 modified, 1 untracked, 1 unpushed");
+    assert.ok(commands.every(command => !/git (stash|commit|push)/.test(command)), "read-only");
+
+    // No cwd recorded: nothing asked, nothing said.
+    const id2 = ledger.prepare({ agentId: "a", kind: "delegate", parent: "main", child: "job-2", brief: "claude: fix", data: { engine: "claude" } });
+    ledger.admitted(id2, undefined);
+    const plain = await settleDelegate({ pendingWork: ledger, box: box as never }, { job_id: "job-2", exit_code: 0, log_path: "/log" });
+    assert.equal(plain?.worktree, undefined);
+    assert.doesNotMatch(delegateEndedNote("job-2", "claude: fix", plain!), /Repository/);
+    // Clean, or not a repo: said plainly, in the ordinary sentence.
+    assert.match(delegateEndedNote("job-3", "x", { outcome: "done", why: "ok", worktree: { kind: "repo", modified: 0, untracked: 0, unpushed: 0 } }), /Repository: clean\./);
+    assert.match(delegateEndedNote("job-3", "x", { outcome: "failed", why: "no", worktree: { kind: "not-a-repo" } }), /Repository: not a git repo\./);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

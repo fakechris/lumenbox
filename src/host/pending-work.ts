@@ -40,6 +40,8 @@ export interface CommitNote {
   why?: string;
   /** Tokens as the engine reported them; absent when it reported none, which is not zero. */
   usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; source: "engine-report" };
+  /** The repository's state after the run, in words (INV-1258). */
+  worktree?: string;
 }
 export type DropWhy = "restart" | "unrecorded" | "refused";
 
@@ -195,6 +197,7 @@ export class PendingWork {
         how: entry.how,
         ...(entry.why !== undefined ? { why: entry.why } : {}),
         ...(entry.usage !== undefined ? { usage: entry.usage } : {}),
+        ...(entry.worktree !== undefined ? { worktree: entry.worktree } : {}),
         at: now.toISOString(),
       });
     }

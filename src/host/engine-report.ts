@@ -22,6 +22,7 @@
 import type { BoxClient } from "../box/client.ts";
 import type { OpenFork, PendingWork } from "./pending-work.ts";
 import { quoteForShell } from "./presets.ts";
+import { describeWorktree, worktreeDirty, worktreeState, type WorktreeState } from "./worktree-state.ts";
 
 export { MACHINE_OUTPUT } from "./presets.ts";
 
@@ -277,6 +278,8 @@ export interface Settled {
   outcome: DelegateOutcome;
   why: string;
   report?: EngineReport;
+  /** The repository the engine worked in, as git saw it after the run (INV-1258); absent when no cwd was recorded. */
+  worktree?: WorktreeState;
 }
 
 /**
@@ -312,26 +315,39 @@ export async function settleDelegate(
   if (report?.resumeFailed === true && report.sessionId !== undefined) {
     deps.dropSession?.(report.sessionId, report.detail ?? "the engine could not resume it");
   }
+  // Did the code land? Asked of git in the box, read-only, after the report — information
+  // beside the outcome, never a change to it: the engine's word still decides (INV-908).
+  const cwd = typeof open.data?.cwd === "string" ? open.data.cwd : undefined;
+  const worktree = cwd !== undefined && deps.box?.exec !== undefined ? await worktreeState(deps.box as Pick<BoxClient, "exec">, cwd) : undefined;
   const committed = deps.pendingWork!.commitDelegate(job.job_id, judged.outcome, {
     why: judged.why,
     ...(report?.usage !== undefined ? { usage: { ...report.usage, source: "engine-report" as const } } : {}),
+    ...(worktree !== undefined ? { worktree: describeWorktree(worktree) } : {}),
   });
   if (!committed) return undefined;
-  return { open, ...judged, ...(report !== undefined ? { report } : {}) };
+  return { open, ...judged, ...(report !== undefined ? { report } : {}), ...(worktree !== undefined ? { worktree } : {}) };
 }
 
 /** The note the agent that delegated gets when the job ends: what happened, and on whose word. */
-export function delegateEndedNote(jobId: string, brief: string, settled: Pick<Settled, "outcome" | "why">): string {
+export function delegateEndedNote(jobId: string, brief: string, settled: Pick<Settled, "outcome" | "why" | "worktree">): string {
   const what = `${jobId} (${brief.slice(0, 120)})`;
+  // The repository's state rides with the outcome and never replaces it: "done" with changes
+  // still loose in the tree is said as exactly that (INV-1258).
+  const tree =
+    settled.worktree === undefined
+      ? ""
+      : settled.outcome === "done" && worktreeDirty(settled.worktree)
+        ? ` Its repository is not clean: ${describeWorktree(settled.worktree)} — the engine reported success, but those changes are not committed; commit, review or discard them before counting this as landed.`
+        : ` Repository: ${describeWorktree(settled.worktree)}.`;
   switch (settled.outcome) {
     case "done":
-      return `[A job you delegated finished: ${what}. ${capitalize(settled.why)}. Read its output with Jobs and fold the result into your work, or say why it does not matter.]`;
+      return `[A job you delegated finished: ${what}. ${capitalize(settled.why)}.${tree} Read its output with Jobs and fold the result into your work, or say why it does not matter.]`;
     case "failed":
-      return `[A job you delegated failed: ${what}. ${capitalize(settled.why)}. Do not use its output as a result; read its log to see what went wrong, then fix the cause or say what is blocked.]`;
+      return `[A job you delegated failed: ${what}. ${capitalize(settled.why)}.${tree} Do not use its output as a result; read its log to see what went wrong, then fix the cause or say what is blocked.]`;
     case "aborted":
-      return `[A job you delegated was stopped before it finished: ${what}. ${capitalize(settled.why)}. What it left is partial; check it before relying on any of it.]`;
+      return `[A job you delegated was stopped before it finished: ${what}. ${capitalize(settled.why)}.${tree} What it left is partial; check it before relying on any of it.]`;
     default:
-      return `[A job you delegated ended, and whether it did the work is unknown: ${what}. ${capitalize(settled.why)}. Read its log before you use anything from it, and say what you found.]`;
+      return `[A job you delegated ended, and whether it did the work is unknown: ${what}. ${capitalize(settled.why)}.${tree} Read its log before you use anything from it, and say what you found.]`;
   }
 }
 
