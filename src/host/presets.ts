@@ -19,14 +19,18 @@
  *     we keep: our agent is the one that decides, the preset is the one that works.
  *   - **Skills.** The box's skills directory is projected where the engine looks for
  *     it, so a method written once is available to whoever executes it.
- *   - **Metering.** The *seam* for it: `relayEnv` points the engine's model traffic at
- *     whatever relay the two environment variables below name, so the key can stay
- *     outside the box. Nothing in this repository provides that relay yet — the egress
- *     relay forwards bytes and never parses traffic, so it cannot substitute a key or
- *     count a token — and with the variables unset `delegateEnv` returns `{}` and the
- *     engine has no credential at all. Honest, and loud at startup (see absences.ts),
- *     but not metering. This bullet described the destination as the present tense
- *     until docs/14 checked it.
+ *   - **Metering.** `relayEnv` points the engine's model traffic at a relay, so the
+ *     provider's key stays outside the box. Two paths, and the operator's wins:
+ *     with `AGENTBOX_RELAY_URL` and `AGENTBOX_RELAY_TOKEN` both set, `delegateEnv`
+ *     hands the engine that external relay as-is (nothing here meters it). With them
+ *     unset, Delegate asks the host's own relay (model-relay.ts) to mint a route for
+ *     this one job — a bearer good only for that route, leased while it is used — and
+ *     the real key is attached on the host side when the bytes are forwarded
+ *     (tools.ts, the `modelRelay.mint` branch). That relay reads the provider's
+ *     stream as it passes only to count tokens, and records each call as a `delegate`
+ *     row in usage.jsonl with the agent, work and job on it. An attached box cannot
+ *     reach the host, so it gets no route and is told so. Setting exactly one of the
+ *     two variables is the misconfiguration absences.ts reports at startup.
  *   - **Acceptance.** A preset carries the golden tasks that prove it still works, so
  *     an upgrade or a provider change is re-checked rather than assumed.
  *

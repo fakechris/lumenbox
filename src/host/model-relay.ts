@@ -3,8 +3,8 @@
  *
  * Claude Code, pi and opencode all speak to a model over HTTP with a credential in the
  * environment. The rule here is that no credential enters the box (docs/08 §7), and the
- * presets file has said since docs/25 that the seam for that is a relay "nothing in this
- * repository provides yet". This provides it: a route minted per delegation, a bearer that
+ * presets file said from docs/25 until this landed that the seam for that is a relay "nothing
+ * in this repository provides yet". This provides it: a route minted per delegation, a bearer that
  * is only good for that route, a lease the engine keeps alive by using it, and one place
  * where the provider's real key is attached. The engine is told `ANTHROPIC_BASE_URL` (or
  * the OpenAI equivalent, or a models.json entry) pointing here, and it never learns more.
