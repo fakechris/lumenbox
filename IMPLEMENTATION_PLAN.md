@@ -1,28 +1,24 @@
-# Implementation plan — mcode preset (INV-1233)
+# Implementation plan — Delegate as a session (INV-1234)
 
-Branch `feat/inv-1233-delegate-minimax-code-mcode-preset-model`, worktree `agentbox-quick`.
-The previous plan (INV-1268, hot-swapping the default model) is complete: PR #374, In Review.
+Branch `feat/inv-1234-delegate-acp-job-steer-mcode-spike`, worktree `agentbox-quick`.
+The previous plan (INV-1233, the mcode preset) is complete: PR #375, In Review.
 
-## Stage 1: Preset, report parser, image layer
-**Goal**: `mcode` in PRESETS (one-shot `exec`, `--permission full`, per-run `MINIMAX_DATA_DIR`
-with the profile written from the environment and removed on exit, `goal.verification: subagent`);
-`engine-report.ts` reads `exec.completed`; Dockerfile `MCODE_VERSION` layer and Node 22.20;
-`build-image.mjs` lists unpinned engines and refuses a release build with one;
-`release-check.mjs` reads the image contract.
-**Success Criteria**: presets/engine-report tests; `npm run check` green.
+## Stage 1: Spike — measure mcode's ACP in the box image
+**Goal**: drive `mcode acp` with a minimal stdio JSON-RPC client against a stub model on an
+internal network; measure initialize, session/new, prompt, steer (idle / running / duplicate),
+cancel, request_permission (answered / unanswered), bypass, list, load (same cwd / other cwd /
+unknown), SIGTERM. Raw logs in `research/2026-10-20-acp-spike/` (ignored).
+**Success Criteria**: every row in docs/81 §1 is a measured value; the two dangerous defaults
+confirmed on the wire.
 **Status**: Complete
 
-## Stage 2: Run it for real
-**Goal**: build the box image with all four pins; run `mcode exec` through the preset's exact
-command against the host relay (or a stub model on an internal docker network with no route to
-the outside), with egress logged.
-**Success Criteria**: the run completes with a report; the only outbound calls are the model
-calls through the relay (no `/mavis/api/v1/permission/check`); the temporary data dir is gone
-after the run and no file in the box contains the token; real output becomes the fixture in
-`src/host/fixtures/engine-report/mcode-*.jsonl`.
-**Status**: Complete (stub run, docs/25 §mcode; a real-model run is still open)
-
-## Stage 3: Docs and pins
-**Goal**: docs/25 gains the mcode row (measured facts), the release-engine-pins memory names
-MCODE_VERSION; PR.
+## Stage 2: Decision — what enters the host
+**Goal**: docs/81 §2–3: session per delegation for ACP presets, permission → policy gate
+(`allow-once` / `deny`, never `allow-always`), steer = engine steer with host idempotency key,
+cancel = `session/cancel` then wait for `cancelled`, restart = `session/load` same id + cwd
+or definite failure, metering stays with the relay. presets.ts comment points at docs/81.
 **Status**: Complete
+
+## Stage 3: Implementation (step two of INV-1234)
+**Goal**: as docs/81 §3. Not started here; needs the person's go after reading the decision.
+**Status**: Not Started
