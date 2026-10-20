@@ -218,3 +218,31 @@ test("the verifier's spend lands on the goal's bill (INV-772)", async () => {
   } finally { h.cleanup(); }
 });
 
+
+test("a repo-clean item is answered by git: tracked changes refuse the claim with the counts, a clean or unknown tree does not (INV-1258)", async () => {
+  let state: Awaited<ReturnType<NonNullable<GoalGateDeps["worktree"]>>> = { kind: "repo", modified: 2, untracked: 1, unpushed: 3 };
+  const asked: string[] = [];
+  const h = harness({ worktree: async path => { asked.push(path); return state; } });
+  try {
+    h.tasks.setPursuit(h.task.id, pursuit => ({ ...pursuit, checklist: [...pursuit.checklist, { id: "c9", text: "everything committed", check: { kind: "repo-clean", path: "/home/box/work/repo" } }] }), "repo-clean item");
+    const dirty = await h.gate.claim(h.task.id, "nova", EVIDENCE);
+    assert.equal(dirty.accepted, false);
+    assert.match(dirty.text, /Commit \(or deliberately discard\) the tracked changes still in \/home\/box\/work\/repo \(2 modified, 1 untracked, 3 unpushed\)/);
+    assert.deepEqual(asked, ["/home/box/work/repo"]);
+    assert.equal(h.pursuit().spent.rejections, 1, "a host check is a rejection");
+    assert.equal(h.pursuit().checklist.find(item => item.id === "c9")?.verdict, "contradicted");
+    assert.equal(h.wakes.length, 0, "no verifier started");
+
+    // Untracked files and unpushed commits alone are said, not refused.
+    state = { kind: "repo", modified: 0, untracked: 4, unpushed: 2 };
+    assert.equal((await h.gate.claim(h.task.id, "nova", EVIDENCE)).accepted, true);
+  } finally { h.cleanup(); }
+});
+
+test("a repo-clean item over a tree git cannot see is unknown, and unknown refuses nothing (INV-1258)", async () => {
+  const h = harness({ worktree: async () => ({ kind: "unknown", why: "git did not answer within 10s" }) });
+  try {
+    h.tasks.setPursuit(h.task.id, pursuit => ({ ...pursuit, checklist: [...pursuit.checklist, { id: "c9", text: "committed", check: { kind: "repo-clean", path: "/r" } }] }), "repo-clean item");
+    assert.equal((await h.gate.claim(h.task.id, "nova", EVIDENCE)).accepted, true);
+  } finally { h.cleanup(); }
+});
