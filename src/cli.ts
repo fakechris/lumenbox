@@ -1306,6 +1306,14 @@ async function cmdEgress(argv: string[]): Promise<number> {
   const portFlag = flags.get("--port");
   const hostFlag = flags.get("--host");
   const allowFlag = flags.get("--allow");
+  // Host ports a box may reach through the relay (INV-1224): the web port by default, where the
+  // MCP face and the model relay live; the relay adds its own. Everything else on the host is
+  // refused before the allow list, as is every cloud metadata address.
+  const hostPortsFlag = flags.get("--host-ports");
+  const channelPorts =
+    typeof hostPortsFlag === "string"
+      ? hostPortsFlag.split(",").map(entry => Number(entry.trim())).filter(port => Number.isInteger(port) && port > 0)
+      : [Number(process.env.AGENTBOX_PORT ?? 7777)];
 
   try {
     // Each box by its own token, with what its bundles let it reach (INV-423). The
@@ -1324,6 +1332,7 @@ async function cmdEgress(argv: string[]): Promise<number> {
           ? allowFlag.split(",").map(entry => entry.trim()).filter(Boolean)
           : undefined,
       boxes,
+      channelPorts,
       // Every decision to disk, for `agentbox egress events` and the web (INV-432).
       onEvent: event => events.append(event),
       log: line => out(dim(line)),

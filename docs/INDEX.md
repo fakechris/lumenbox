@@ -34,7 +34,7 @@ this file and the headers disagree. Edit the header, not this table.
 
 | doc | title | status | updated |
 |---|---|---|---|
-| [06-deployment](06-deployment.md) | Deployment | current | 2026-09-28 |
+| [06-deployment](06-deployment.md) | Deployment | current | 2026-10-20 |
 | [12-upgrades](12-upgrades.md) | Upgrading somebody's box | current | 2026-09-28 |
 | [13-design-review](13-design-review.md) | What goes to adversarial review before it is built | current | 2026-08-25 |
 | [17-two-agents](17-two-agents.md) | Two agents on one repository | current | 2026-08-26 |

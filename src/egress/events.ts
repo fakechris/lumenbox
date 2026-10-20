@@ -12,11 +12,14 @@
  * an operator's setting (INV-462 did the same for xwatchdog) and belongs beside it.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { agentboxHome } from "../config.ts";
 import { appendLine } from "../host/jsonl.ts";
 import type { NetworkEvent } from "./relay.ts";
+
+/** When the event file rotates: twenty megabytes is weeks of a busy box, and two of them are kept. */
+export const NETWORK_EVENTS_MAX_BYTES = 20 * 1024 * 1024;
 
 export function networkEventsPath(): string {
   return process.env.AGENTBOX_NETWORK_EVENTS ?? join(agentboxHome(), "network-events.jsonl");
@@ -41,13 +44,23 @@ export const DEFAULT_EVENT_LIMIT = 200;
 
 export class NetworkEventLog {
   /** Resolved on first use, not at construction: a log nobody reads must not need a home. */
-  constructor(private readonly at?: string) {}
+  constructor(private readonly at?: string, private readonly maxBytes = NETWORK_EVENTS_MAX_BYTES) {}
 
   get path(): string {
     return this.at ?? networkEventsPath();
   }
 
+  /**
+   * One line per event. Rotation is one generation (INV-1224): past `maxBytes` the file is
+   * renamed to `<path>.1`, replacing the previous `.1`, and a fresh file starts — bounded disk,
+   * and the last two windows still readable by hand.
+   */
   append(event: NetworkEvent): void {
+    try {
+      if (existsSync(this.path) && statSync(this.path).size >= this.maxBytes) renameSync(this.path, `${this.path}.1`);
+    } catch {
+      // Rotation that fails leaves the file growing, which is the lesser harm than losing the line.
+    }
     appendLine(this.path, JSON.stringify(event));
   }
 

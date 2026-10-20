@@ -83,7 +83,8 @@ test("the relay stamps the event with the call the stream named, allowed or refu
   await new Promise<void>(resolve => upstream.listen(0, "127.0.0.1", resolve));
   const upstreamPort = (upstream.address() as { port: number }).port;
   const events: NetworkEvent[] = [];
-  const relay = startEgressRelay({ token: "relay-token-1234567890", allow: ["127.0.0.1"], port: 0, onEvent: event => events.push(event) });
+  // The upstream is on loopback, which the relay refuses outright unless the port is a channel (INV-1224).
+  const relay = startEgressRelay({ token: "relay-token-1234567890", allow: ["127.0.0.1"], port: 0, channelPorts: [upstreamPort], onEvent: event => events.push(event) });
   await new Promise<void>(resolve => relay.once("listening", resolve));
   const relayPort = (relay.address() as { port: number }).port;
   const token = encodeCall({ agentId: "ada", turnId: "t-1", toolUseId: "toolu_1" });
@@ -99,6 +100,8 @@ test("the relay stamps the event with the call the stream named, allowed or refu
     await stream("127.0.0.1", token);
     await stream("evil.test", token);
     await stream("127.0.0.1");
+    // Decisions only: the two allowed streams also report a `closed` event with their bytes.
+    events.splice(0, events.length, ...events.filter(event => event.closed !== true));
     assert.equal(events.length, 3);
     assert.equal(events[0]!.allowed, true);
     assert.deepEqual([events[0]!.attribution, events[0]!.agentId, events[0]!.turnId, events[0]!.toolUseId], ["call", "ada", "t-1", "toolu_1"]);
@@ -106,6 +109,42 @@ test("the relay stamps the event with the call the stream named, allowed or refu
     assert.equal(events[1]!.toolUseId, "toolu_1", "a refusal is attributed too: that is what the tool result reports");
     assert.equal(events[2]!.attribution, "unattributed");
     assert.equal(events[2]!.agentId, undefined);
+  } finally {
+    relay.close();
+    upstream.close();
+  }
+});
+
+test("a cloud metadata address or a host port off the channel list is refused before the allow list, and an allowed stream reports its bytes when it closes (INV-1224)", async () => {
+  const upstream = createServer(socket => socket.end("hi there"));
+  await new Promise<void>(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  const upstreamPort = (upstream.address() as { port: number }).port;
+  const events: NetworkEvent[] = [];
+  // Anywhere allowed, and the upstream's port named a channel: the hard denial is the only thing in the way.
+  const relay = startEgressRelay({ token: "relay-token-1234567890", allow: ["*"], port: 0, channelPorts: [upstreamPort], onEvent: event => events.push(event) });
+  await new Promise<void>(resolve => relay.once("listening", resolve));
+  const relayPort = (relay.address() as { port: number }).port;
+  const stream = (host: string, port: number) =>
+    new Promise<string>(resolve => {
+      let answer = "";
+      const socket = connect(relayPort, "127.0.0.1", () => socket.write(encodeRequest({ token: "relay-token-1234567890", host, port })));
+      socket.on("data", chunk => { answer += chunk.toString(); if (answer.includes("hi there")) socket.end(); });
+      socket.on("close", () => resolve(answer));
+      socket.on("error", () => resolve(answer));
+    });
+  try {
+    await stream("169.254.169.254", 80);
+    await stream("127.0.0.1", 9);
+    const ok = await stream("127.0.0.1", upstreamPort);
+    assert.match(ok, /hi there/);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.deepEqual(events.map(e => [e.allowed, e.reason, e.closed]), [[false, "hard-denied", undefined], [false, "hard-denied", undefined], [true, undefined, undefined], [true, undefined, true]]);
+    assert.equal(events[0]!.detail, "cloud metadata address");
+    assert.match(events[1]!.detail ?? "", /host port 9 is not an explicit channel/);
+    const closed = events[3]!;
+    assert.ok((closed.bytesDown ?? 0) >= "hi there".length, "bytes down counted");
+    assert.ok(typeof closed.ms === "number");
+    assert.equal(closed.host, "127.0.0.1");
   } finally {
     relay.close();
     upstream.close();

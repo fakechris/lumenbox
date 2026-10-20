@@ -14,6 +14,7 @@
  */
 
 import { createServer, connect as netConnect, type Server } from "node:net";
+import { hardDenied } from "./hard-deny.ts";
 import { decodeCall } from "./call.ts";
 import {
   EgressProtocolError,
@@ -44,6 +45,12 @@ export interface RelayOptions {
   boxes?: readonly RelayBox[];
   /** Every decision, allowed or not, for the network event log (INV-432). */
   onEvent?: (event: NetworkEvent) => void;
+  /**
+   * Host ports that are channels on purpose (INV-1224): the web port behind which the MCP
+   * face and the model relay live, and this relay's own. Everything else on the host, and
+   * every cloud metadata address, is refused before any allow list is read.
+   */
+  channelPorts?: readonly number[];
   log?: (line: string) => void;
 }
 
@@ -62,8 +69,18 @@ export interface NetworkEvent {
   host: string;
   port: number;
   allowed: boolean;
-  /** Why it was refused, when it was. */
-  reason?: "unauthorized" | "not allowed";
+  /** Why it was refused, when it was. `hard-denied` is a target no list could allow (hard-deny.ts). */
+  reason?: "unauthorized" | "not allowed" | "hard-denied";
+  /** For a hard denial: which rule. */
+  detail?: string;
+  /**
+   * The same stream, when it closed (INV-1224): bytes each way and how long it lived. The
+   * relay is a tunnel, so method and status are not seen here — only what crossed.
+   */
+  closed?: true;
+  bytesUp?: number;
+  bytesDown?: number;
+  ms?: number;
   /**
    * Whether the stream named the call it belongs to (INV-784, call.ts). `call` means the
    * four fields below say who; `unattributed` is a stream from a proxy that predates the
@@ -170,6 +187,22 @@ export function startEgressRelay(options: RelayOptions): Server {
         box.end(encodeResponse(false, "unauthorized"));
         return;
       }
+      const denied = hardDenied(request.host, request.port, { channelPorts: channelPorts(options) });
+      if (denied !== undefined) {
+        log(`relay: ${who.box}: ${request.host}:${request.port} refused outright: ${denied}`);
+        options.onEvent?.({
+          at: new Date().toISOString(),
+          box: who.box,
+          host: request.host,
+          port: request.port,
+          allowed: false,
+          reason: "hard-denied",
+          detail: denied,
+          ...attributionOf(request.call),
+        });
+        box.end(encodeResponse(false, `hard-denied: ${denied}`));
+        return;
+      }
       if (!permitted(request, who.allow)) {
         log(`relay: ${who.box}: ${request.host}:${request.port} is not in the allow list`);
         event(false, "not allowed");
@@ -178,7 +211,35 @@ export function startEgressRelay(options: RelayOptions): Server {
       }
       event(true);
 
+      const opened = Date.now();
+      let bytesUp = 0;
+      let bytesDown = 0;
       const upstream = netConnect(request.port, request.host);
+      upstream.on("data", (chunk: Buffer) => { bytesDown += chunk.length; });
+      box.on("data", (chunk: Buffer) => { bytesUp += chunk.length; });
+      let closedOnce = false;
+      const closed = () => {
+        if (closedOnce) return;
+        closedOnce = true;
+        try {
+          options.onEvent?.({
+            at: new Date().toISOString(),
+            box: who.box,
+            host: request.host,
+            port: request.port,
+            allowed: true,
+            closed: true,
+            bytesUp,
+            bytesDown,
+            ms: Date.now() - opened,
+            ...attributionOf(request.call),
+          });
+        } catch {
+          // The log must never decide a stream.
+        }
+      };
+      upstream.on("close", closed);
+      box.on("close", closed);
       upstream.setNoDelay(true);
 
       upstream.on("connect", () => {
@@ -222,6 +283,11 @@ export function startEgressRelay(options: RelayOptions): Server {
  * against the requested host rather than the resolved address: the point is to express intent
  * ("only these services"), and an address check would be a different, weaker promise.
  */
+/** The host ports a stream may reach: the operator's list, plus the port this relay listens on. */
+function channelPorts(options: RelayOptions): number[] {
+  return [...new Set([...(options.channelPorts ?? []), options.port ?? DEFAULT_PORT])];
+}
+
 export function permitted(
   request: Pick<StreamRequest, "host" | "port">,
   allow: readonly string[]

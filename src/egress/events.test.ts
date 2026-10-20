@@ -83,3 +83,26 @@ test("the refusal line is one line, hosts once each, nothing when nothing was re
   const many = ["h1", "h2", "h3"].map(host => event(host, false));
   assert.equal(refusedLine(many, 2), "3 outbound connections refused: h1, h2 and 1 more");
 });
+
+test("the event file rotates once past its cap, keeping one previous generation (INV-1224)", async () => {
+  const { mkdtempSync, existsSync, readFileSync, rmSync, statSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { NetworkEventLog } = await import("./events.ts");
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-network-events-"));
+  try {
+    const path = join(dir, "network-events.jsonl");
+    const log = new NetworkEventLog(path, 400);
+    const event = (n: number) => ({ at: `2026-10-20T00:00:${String(n).padStart(2, "0")}.000Z`, box: "b", host: "example.com", port: 443, allowed: true, attribution: "unattributed" as const });
+    for (let n = 0; n < 12; n++) log.append(event(n));
+    assert.ok(existsSync(`${path}.1`), "the full file was rotated aside");
+    // The cap is checked before each append, so a file is at most the cap plus one line.
+    assert.ok(statSync(path).size < 400 + 200, "and a fresh one started");
+    assert.ok(statSync(`${path}.1`).size >= 400, "what was rotated aside was a full window");
+    assert.ok(readFileSync(path, "utf8").includes('"2026-10-20T00:00:11.000Z"'), "the newest line is in the current file");
+    for (let n = 12; n < 30; n++) log.append(event(n));
+    assert.ok(statSync(`${path}.1`).size < 400 + 200, "one generation only: the .1 is replaced, not appended to");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
