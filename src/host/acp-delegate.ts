@@ -25,10 +25,11 @@ import type { AcpEvent } from "../protocol/index.ts";
 import type { BoxClient } from "../box/client.ts";
 import { awaitDelegatedConsent } from "./delegated-consent.ts";
 import { delegateEndedNote } from "./engine-report.ts";
+import { describeWorktree, worktreeState } from "./worktree-state.ts";
 import type { PendingWork } from "./pending-work.ts";
 import type { PolicyGate } from "./policy.ts";
 
-export type AcpBox = Pick<BoxClient, "acpOpen" | "acpSend" | "acpReply" | "acpEvents" | "acpClose" | "acpSessions">;
+export type AcpBox = Pick<BoxClient, "acpOpen" | "acpSend" | "acpReply" | "acpEvents" | "acpClose" | "acpSessions"> & Partial<Pick<BoxClient, "exec">>;
 
 export interface AcpDelegateDeps {
   pendingWork?: PendingWork;
@@ -374,13 +375,17 @@ export class AcpDelegates {
     const inFlight = watch.inFlight;
     watch.inFlight = undefined;
     if (inFlight === undefined) return;
-    const committed = this.deps.pendingWork?.commitDelegate(watch.jobId, outcome, { why }) ?? true;
-    if (!committed) return;
-    const answer = outcome === "done" && inFlight.text.trim() !== "" ? ` Its answer: ${inFlight.text.trim().slice(0, 1_500)}` : "";
-    this.deps.deliver(
-      watch.agentId,
-      `${delegateEndedNote(watch.jobId, inFlight.brief, { outcome, why })}${answer} [The session stays open: continue it with Delegate session_id=${watch.jobId}, or close it.]`,
-      watch.conversation
-    );
+    // Asked after the engine's word, never instead of it (INV-1258); the commit waits for git.
+    void (async () => {
+      const worktree = watch.box.exec !== undefined ? await worktreeState(watch.box as Pick<BoxClient, "exec">, watch.cwd) : undefined;
+      const committed = this.deps.pendingWork?.commitDelegate(watch.jobId, outcome, { why, ...(worktree !== undefined ? { worktree: describeWorktree(worktree) } : {}) }) ?? true;
+      if (!committed) return;
+      const answer = outcome === "done" && inFlight.text.trim() !== "" ? ` Its answer: ${inFlight.text.trim().slice(0, 1_500)}` : "";
+      this.deps.deliver(
+        watch.agentId,
+        `${delegateEndedNote(watch.jobId, inFlight.brief, { outcome, why, ...(worktree !== undefined ? { worktree } : {}) })}${answer} [The session stays open: continue it with Delegate session_id=${watch.jobId}, or close it.]`,
+        watch.conversation
+      );
+    })();
   }
 }

@@ -2738,3 +2738,27 @@ test("Delegate in session mode: opened, steered, cancelled and closed through th
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("the read-load note: once per turn when a turn has read a lot, never when it has not (INV-1222)", async () => {
+  const big = "x".repeat(70_000);
+  const run = async (reads: number) => {
+    const seen: string[] = [];
+    const episode = await runEpisode({
+      team: [{ name: "Reader" }], says: ["read the files"],
+      files: { "/home/box/work/a.txt": big, "/home/box/work/b.txt": big, "/home/box/work/c.txt": "small" },
+      script: ({ round, messages }) => {
+        const last = messages.at(-1)?.content;
+        if (Array.isArray(last)) for (const block of last) if (block.type === "text" && /\[host\]|\[宿主提示\]/.test(block.text)) seen.push(block.text);
+        if (round < reads) return { call: "read_file", input: { path: `/home/box/work/${["a", "b", "c", "c", "c"][round]}.txt` } };
+        return { say: "read enough" };
+      },
+    });
+    episode.cleanup();
+    return seen;
+  };
+  const crossed = await run(5);
+  assert.equal(crossed.length, 1, "told once, not on every later round");
+  assert.match(crossed[0]!, /has read about 14\dk characters of tool results so far \(2 tool rounds\)/);
+  assert.match(crossed[0]!, /Fork with background: true/);
+  assert.deepEqual(await run(1), [], "one small read is not a lot");
+});

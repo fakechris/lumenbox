@@ -113,6 +113,7 @@ import { parseSchedule, type Schedule, type Scheduled, Scheduler } from "./sched
 import { heartbeatAgentOf, heartbeatItems, heartbeatSlug, readStanding, standingBoxDir } from "./standing.ts";
 import { UsageLog } from "./usage.ts";
 import { AcpDelegates, type SessionData } from "./acp-delegate.ts";
+import { worktreeState } from "./worktree-state.ts";
 import { tracerFromEnv, type Tracer } from "./trace.ts";
 import {
   createClient,
@@ -1126,6 +1127,11 @@ export class Orchestrator {
       registry: this.registry,
       bus: this.bus,
       manifest: () => this.workspaceManifest(),
+      // A repo-clean checklist item is answered by git in the box, read-only (INV-1258).
+      worktree: async (path: string) => {
+        const box = this.boxClient();
+        return box === undefined ? { kind: "unknown", why: "no box to ask" } : worktreeState(box, path);
+      },
       notify: async (task, text) => {
         const chatKey = task.pursuit?.chatKey;
         if (chatKey === undefined) {

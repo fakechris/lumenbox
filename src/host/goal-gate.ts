@@ -32,6 +32,7 @@ import {
   verifierPrompt,
 } from "./goal-mode.ts";
 import type { GoalTurnReport } from "./goal-loop.ts";
+import { describeWorktree, worktreeDirty, type WorktreeState } from "./worktree-state.ts";
 
 export interface GoalGateDeps {
   tasks: TaskStore;
@@ -42,6 +43,8 @@ export interface GoalGateDeps {
   };
   /** The workspace as path→hash, when there is a box to ask. */
   manifest?: () => Promise<Map<string, string> | undefined>;
+  /** A repository's working-tree state, read-only, when there is a box to ask (INV-1258). */
+  worktree?: (path: string) => Promise<WorktreeState>;
   notify: (task: Task, text: string) => Promise<void>;
   log: (line: string) => void;
   now?: () => Date;
@@ -107,6 +110,31 @@ export class GoalGate {
       };
       this.reject(task.id, verdict, `claim ${claimNo} rejected by the host's artifact check`, "rejected");
       return { accepted: false, text: `Not claimed: ${verdict.nextAction}. The goal stays active.` };
+    }
+
+    // The repository check (INV-1258): declared per item, answered by git in the box, no model.
+    // Tracked changes left uncommitted refuse the claim; untracked and unpushed are said, not
+    // refused; a repository that cannot be asked is unknown, which refuses nothing.
+    const repoItems = pursuit.checklist.filter(item => item.check?.kind === "repo-clean");
+    if (repoItems.length > 0 && this.deps.worktree !== undefined) {
+      const dirty: { item: (typeof repoItems)[number]; state: WorktreeState }[] = [];
+      for (const item of repoItems) {
+        const state = await this.deps.worktree((item.check as { path: string }).path);
+        if (worktreeDirty(state)) dirty.push({ item, state });
+      }
+      if (dirty.length > 0) {
+        const verdict: GoalVerdict = {
+          passed: false,
+          items: pursuit.checklist.map(item => {
+            const hit = dirty.find(entry => entry.item === item);
+            return { id: item.id, verdict: hit !== undefined ? "contradicted" : "unverified", ...(hit !== undefined ? { evidence: `${(item.check as { path: string }).path}: ${describeWorktree(hit.state)}` } : {}) };
+          }),
+          nextAction: `Commit (or deliberately discard) the tracked changes still in ${dirty.map(entry => `${(entry.item.check as { path: string }).path} (${describeWorktree(entry.state)})`).join(", ")}`,
+          body: "host check: working tree dirty",
+        };
+        this.reject(task.id, verdict, `claim ${claimNo} rejected by the host's repository check`, "rejected");
+        return { accepted: false, text: `Not claimed: ${verdict.nextAction}. The goal stays active.` };
+      }
     }
 
     const verifyConversation = verifierConversation(task.id, claimNo);

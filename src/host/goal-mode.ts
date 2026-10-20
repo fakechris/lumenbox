@@ -39,7 +39,11 @@ export interface ChecklistItem {
    * runs a model-written command on their behalf (review R3). An `artifact` is a path
    * that must exist and open, judged against a manifest taken before completion is claimed.
    */
-  check?: { kind: "command"; command: string; expectExit: number } | { kind: "artifact"; path: string };
+  check?:
+    | { kind: "command"; command: string; expectExit: number }
+    | { kind: "artifact"; path: string }
+    /** The repository at `path` has no tracked change left uncommitted; read-only, no model (INV-1258). */
+    | { kind: "repo-clean"; path: string };
   /** The person said yes to this item's command. Only the person sets it. */
   confirmed?: true;
   verdict?: "proven" | "contradicted" | "incomplete" | "unverified";
@@ -287,7 +291,10 @@ export function checklistAdditions(
     const item: ChecklistItem = { id: `c${next}`, text };
     const command = typeof record.command === "string" ? record.command.trim().slice(0, 500) : "";
     const artifact = typeof record.artifact === "string" ? record.artifact.trim().slice(0, 500) : "";
-    if (command !== "") {
+    const repoClean = typeof record.repo_clean === "string" ? record.repo_clean.trim().slice(0, 500) : "";
+    if (repoClean !== "") {
+      item.check = { kind: "repo-clean", path: repoClean };
+    } else if (command !== "") {
       const expectExit = typeof record.expect_exit === "number" && Number.isInteger(record.expect_exit) ? record.expect_exit : 0;
       item.check = { kind: "command", command, expectExit };
     } else if (artifact !== "") {
@@ -585,6 +592,8 @@ export function verifierPrompt(task: Pick<Task, "id" | "pursuit">, chinese: bool
         ? "judge it from the current state"
         : item.check.kind === "artifact"
           ? `artifact must exist and open: ${item.check.path}`
+          : item.check.kind === "repo-clean"
+            ? `the repository at ${item.check.path} has no uncommitted tracked change (the host checks this with git)`
           : item.confirmed
             ? `run exactly: ${item.check.command} — proven when it exits ${item.check.expectExit}`
             : `a command was proposed but the person did not confirm it; judge the item from the current state instead`;

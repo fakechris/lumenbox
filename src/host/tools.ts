@@ -922,7 +922,9 @@ export function buildTools(
           "what each one found. Two uses. With `background: true` it is how you keep your own " +
           "turns short: any heavy piece — an investigation, many files, a long command " +
           "sequence — runs behind your reply and reports into this conversation as a message " +
-          "when it lands, while you keep answering the person. Without it, this call waits for " +
+          "when it lands, while you keep answering the person. When a [host] note says this turn " +
+          "has read a lot, that is the moment: hand what remains and stands alone to a background " +
+          "fork rather than reading on. Without it, this call waits for " +
           "the forks and returns their findings, for when the material is too large to read " +
           "yourself and divides into independent pieces: slice it first with the shell (ls, " +
           "grep, split) so each brief names its own piece, then fork over the slices.\n\n" +
@@ -986,7 +988,9 @@ export function buildTools(
           "wait for it and read what it did. Say what done looks like — the engine cannot " +
           "ask you a question, so an ambiguous brief comes back as confident work on the " +
           "wrong thing. It works in the directory you name and can change files there. " +
-          "What it spends is billed to whoever asked you, like everything else you do." +
+          "What it spends is billed to whoever asked you, like everything else you do. When a " +
+          "[host] note says this turn has read a lot and the work left is deep work in one " +
+          "repository, this is where it goes." +
           "\n\nWith mode \"session\" (engines that support it: " +
           PRESETS.filter(preset => preset.acp !== undefined).map(preset => preset.name).join(", ") +
           ") the engine stays up between briefs: you get a session id, you are told when a brief " +
@@ -1716,6 +1720,7 @@ export function buildTools(
                 command: { type: "string", description: "Optional: a shell command whose exit code proves it. A proposal until the person confirms it." },
                 expect_exit: { type: "integer", description: "For command: the exit code that means proven (default 0)." },
                 artifact: { type: "string", description: "Optional: a file path that must exist when the goal is done." },
+                repo_clean: { type: "string", description: "Optional: a repository path whose tracked changes must all be committed when the goal is done; the host asks git, no model involved." },
               },
               required: ["text"],
             },
@@ -3328,7 +3333,9 @@ export async function dispatchTool(
             ...(context.workId !== undefined ? { workId: context.workId } : {}),
             ...(context.turnId !== undefined ? { turnId: context.turnId } : {}),
             // Which engine's report to read when the job ends (INV-908).
-            data: { engine: preset.name },
+            // The engine, and where it worked: what settling needs to read its report and
+            // ask git whether the code landed (INV-1258).
+            data: { engine: preset.name, ...(input.cwd ? { cwd: String(input.cwd) } : {}) },
           });
         } catch (error) {
           return {

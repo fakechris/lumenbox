@@ -112,6 +112,7 @@ import {
 } from "./guards.ts";
 import { malformedNudge, malformedOutput, sanitizeHistoryText } from "./output-integrity.ts";
 import { type GoalTurnReport, isWorkingTool } from "./goal-loop.ts";
+import { isReadTool, readLoadNudge, readLoadNudgeDue } from "./read-load.ts";
 import { commandIsConfirmed, type GoalGate } from "./goal-gate.ts";
 import { DEFAULT_TOKEN_WEIGHTS, weightedCost } from "./goal-mode.ts";
 import {
@@ -1493,6 +1494,8 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   /** Every tool this turn has called so far. The Tasks tool reads it: a reviewer that has
    *  looked at nothing may not accept (Argus's harness makes the same check). */
   const toolsUsedThisTurn = new Set<string>();
+  // What this turn has read, for the one host note that says "this is getting heavy" (INV-1222).
+  const readLoad = { chars: 0, toolRounds: 0, nudged: false };
   const callsThisTurn: string[] = [];
   /** Who this turn addressed with SendToAgent, by the name or id it used, lowercased. */
   const messagedThisTurn = new Set<string>();
@@ -3557,7 +3560,32 @@ ${outcome.text}`;
     const toCommit = done.flatMap(entry => entry?.commit ?? []);
     if (toCommit.length > 0) deps.pendingWork?.commit(toCommit);
 
-    messages.push({ role: "user", content: results });
+    // The read-load signal (INV-1222): once per turn, when the results so far are a lot or the
+    // context is most of the way to compaction while the turn is still reading, a host note
+    // joins this round's results — not a fork's turn (its whole point is to be heavy and
+    // disposable), not a goal continuation (the host already paces those).
+    readLoad.toolRounds += 1;
+    let readLoadNote: Anthropic.TextBlockParam | undefined;
+    for (const block of results) {
+      if (block.type !== "tool_result") continue;
+      readLoad.chars += typeof block.content === "string"
+        ? block.content.length
+        : (block.content ?? []).reduce((n, part) => n + (part.type === "text" ? part.text.length : 0), 0);
+    }
+    {
+      const load = {
+        chars: readLoad.chars,
+        toolRounds: readLoad.toolRounds,
+        share: policyForModel(provider.model).triggerTokens > 0 ? estimated / policyForModel(provider.model).triggerTokens : 0,
+        reading: toolUses.some(use => isReadTool(use.name)),
+      };
+      if (readLoadNudgeDue(load, { nudged: readLoad.nudged, fork: isForkConversation(conversation), goal: goal !== undefined })) {
+        readLoad.nudged = true;
+        readLoadNote = { type: "text", text: readLoadNudge(load, chinese) };
+        console.error(`[read-load] ${agent.profile.name}: ${Math.round(load.chars / 1000)}k chars over ${load.toolRounds} rounds, ${Math.round(load.share * 100)}% of the trigger; the model was told once`);
+      }
+    }
+    messages.push({ role: "user", content: readLoadNote === undefined ? results : [...results, readLoadNote] });
 
     // What this round did, reduced to what decides whether anything is happening. Recorded after the
     // tools ran, so a todo ticked off during the round counts as the change it is.
