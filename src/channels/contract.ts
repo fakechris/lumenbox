@@ -23,7 +23,7 @@ import assert from "node:assert/strict";
 import type { InboundMessage } from "./manager.ts";
 
 /** Every adapter class under contract, by class name. Add here and write its contract test. */
-export const CONTRACTED_ADAPTERS = ["FeishuChannel", "DingTalkChannel", "TelegramChannel"] as const;
+export const CONTRACTED_ADAPTERS = ["FeishuChannel", "DingTalkChannel", "TelegramChannel", "TailmsgDoor"] as const;
 
 export interface AdapterCapabilities {
   /** `chatKey` is set and distinct from the identity in a group. */

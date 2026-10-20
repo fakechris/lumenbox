@@ -263,4 +263,5 @@ export const directoryProviders: Readonly<Record<ChannelType, DirectoryProvider 
   feishu: feishuDirectory,
   dingtalk: dingtalkDirectory,
   telegram: undefined,
+  tailmsg: undefined,
 };

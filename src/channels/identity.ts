@@ -22,7 +22,20 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
-export type ChannelType = "feishu" | "dingtalk" | "telegram";
+export interface TailmsgRecordConfig {
+  port?: number;
+  /** Peers (hostname or FQDN, `tag:x`, `user:x`) that may write. Empty means nobody. */
+  allow: string[];
+  deny?: string[];
+  wake?: {
+    senderMax?: { sender: string; max: "now" | "batch" | "none" }[];
+    defaultMax?: "now" | "batch" | "none";
+    quietHours?: { start: number; end: number };
+    ratePerHour?: number;
+  };
+}
+
+export type ChannelType = "feishu" | "dingtalk" | "telegram" | "tailmsg";
 
 export const GRANDFATHERED_TYPES: readonly ChannelType[] = ["feishu", "dingtalk", "telegram"];
 
@@ -74,6 +87,8 @@ export interface ChannelRecord {
    * operator meant to keep out.
    */
   autoJoin?: { allow: string[]; deny: string[] };
+  /** A tailmsg door's own settings (INV-1288): who may write, how loudly each may wake, the port. */
+  tailmsg?: TailmsgRecordConfig;
   /**
    * Whether an identity nobody has linked may knock here (INV-429).
    *
@@ -187,6 +202,7 @@ export function upsertChannelRecord(
     groupMessages?: "all" | "addressed";
     autoJoin?: { allow: string[]; deny: string[] };
     guest?: "on" | "off";
+    tailmsg?: TailmsgRecordConfig;
   },
   boxId: string
 ): ChannelRecord[] {
@@ -222,6 +238,7 @@ export function upsertChannelRecord(
             ...(input.groupMessages !== undefined ? { groupMessages: input.groupMessages } : {}),
             ...(input.autoJoin !== undefined ? { autoJoin: input.autoJoin } : {}),
             ...(input.guest !== undefined ? { guest: input.guest } : {}),
+            ...(input.tailmsg !== undefined ? { tailmsg: input.tailmsg } : {}),
           }
     );
   } else {
@@ -240,6 +257,7 @@ export function upsertChannelRecord(
         incarnation: 1,
         boxId,
         ...(input.defaultAgent ? { defaultAgent: input.defaultAgent } : {}),
+        ...(input.tailmsg !== undefined ? { tailmsg: input.tailmsg } : {}),
         createdAt: new Date().toISOString(),
       },
     ];

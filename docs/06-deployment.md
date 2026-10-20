@@ -27,6 +27,7 @@ The image is Debian 12, about 1.6GB, and builds on `amd64` and `arm64`.
 | 6080+N | container loopback | no | noVNC per desktop, proxied through 1337 |
 | 8791 | container loopback | no | The egress proxy |
 | 8790 | the operator's machine | n/a | The egress relay |
+| 7766 | the operator's tailnet IPv4 | n/a | The tailmsg door (docs/82), only when a `tailmsg` channel record exists |
 
 Only 1337 and, in the self-contained shape, 7777 leave the container. Everything per-desktop is
 proxied, so adding a desktop does not need a port mapping decided at create time.

@@ -122,8 +122,8 @@ export interface InboundMessage {
    * purpose: a bot that stays silent when spoken to is the worse failure.
    */
   addressed?: boolean;
-  /** Positive evidence from the wire, never inferred from being addressed or authorised. */
-  privateChat?: boolean;
+  privateChat?: boolean; // positive evidence from the wire, never inferred
+  admittedByDoor?: true; // the door admitted the sender itself (INV-1288, a tailmsg peer on its allow list); the drive list is not consulted, and the letter is still never an approval
 }
 
 /** Where a push should sit: anchored under a message, or loose in the chat. */
@@ -1459,7 +1459,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       return undefined;
     }
 
-    if (!this.deps.mayDrive(message.identity)) {
+    if (message.admittedByDoor !== true && !this.deps.mayDrive(message.identity)) {
       if (message.messageId !== undefined) {
         this.deps.ingress?.decided(message.messageId, "refused", message.identity);
       }
