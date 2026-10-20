@@ -21,6 +21,7 @@ import type { HookRunner } from "./hooks.ts";
 import { appendLine } from "./jsonl.ts";
 import { redactDeep } from "./secret-redaction.ts";
 import { MCP_SEPARATOR, type McpTool } from "./mcp.ts";
+import { awaitDelegatedConsent } from "./delegated-consent.ts";
 import type { PolicyGate } from "./policy.ts";
 import type { McpServerTool } from "../web/mcp-server.ts";
 
@@ -301,39 +302,15 @@ export class McpFace {
    * `{"behavior":"deny","message":…}`.
    */
   private async permit(route: McpRoute, engineTool: string, input: Record<string, unknown>): Promise<string> {
-    const tool = mapEngineTool(engineTool, input);
     const allow = JSON.stringify({ behavior: "allow", updatedInput: input });
     const deny = (message: string) => JSON.stringify({ behavior: "deny", message });
-    const policy = this.deps.policy;
-    if (policy === undefined) return allow;
-    const ask = () =>
-      policy.check({
-        kind: "tool",
-        agentId: route.agentId,
-        agentName: route.agentName,
-        tool,
-        input,
-        delegated: { ...(route.jobId !== undefined ? { jobId: route.jobId } : {}), ask: true },
-      });
-    const first = ask();
-    if (first.allow) return allow;
-    if (first.approval === undefined) return deny(first.reason);
-    const waitingFor = first.approval.id;
-    const deadline = this.now() + PERMISSION_WAIT_MS;
-    this.deps.log?.(`route ${route.key}: waiting for a person on ${engineTool} (${waitingFor})`);
-    while (this.now() < deadline) {
-      await new Promise(resolve => setTimeout(resolve, this.deps.pollMs ?? PERMISSION_POLL_MS));
-      if (policy.pending().some(pending => pending.id === waitingFor)) continue;
-      // Answered one way or the other: a grant makes the re-check pass and consumes it; a
-      // refusal makes the re-check open a *new* request, which is the tell, and is withdrawn.
-      const again = ask();
-      if (again.allow) return allow;
-      if (again.approval !== undefined && again.approval.id !== waitingFor) {
-        policy.deny(again.approval.id, "mcp-face", "the person refused the delegated call");
-      }
-      return deny("A person refused this call.");
-    }
-    return deny("Nobody answered the request for consent in time; the call is not made.");
+    // The waiting is shared with the ACP session's permission question (delegated-consent.ts).
+    const consent = await awaitDelegatedConsent(
+      this.deps.policy,
+      { agentId: route.agentId, agentName: route.agentName, ...(route.jobId !== undefined ? { jobId: route.jobId } : {}), engineTool, input },
+      { now: () => this.now(), pollMs: this.deps.pollMs, log: line => this.deps.log?.(`route ${route.key}: ${line}`), by: "mcp-face" }
+    );
+    return consent.allow ? allow : deny(consent.reason);
   }
 
   private async call(route: McpRoute, name: string, input: Record<string, unknown>): Promise<string> {

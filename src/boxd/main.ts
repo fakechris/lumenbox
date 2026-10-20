@@ -42,6 +42,15 @@ import {
   type JobStatus,
   type JobWaitRequest,
   type JobWaitResult,
+  type AcpOpenRequest,
+  type AcpOpenResult,
+  type AcpSendRequest,
+  type AcpSendResult,
+  type AcpReplyRequest,
+  type AcpEventsRequest,
+  type AcpEventsResult,
+  type AcpCloseRequest,
+  type AcpSessionStatus,
   type DisplayInfo,
   type EnsureDisplayRequest,
   type EnsureDisplayResult,
@@ -82,6 +91,7 @@ import { DEFAULT_PORT as EGRESS_PROXY_PORT, startEgressProxy } from "../egress/p
 import { CALL_ENV, CallRegistry, callEnvironment } from "../egress/call.ts";
 import { RecordService, RECORDINGS_DIR } from "./record-service.ts";
 import { AGENT_NICE, reapSpool, runShell, withoutBoxToken } from "./shell-service.ts";
+import { AcpOpenError, AcpService } from "./acp-service.ts";
 import { JobService } from "./job-service.ts";
 import { BrowserService, StaleSnapshotError, IrreversibleActionError } from "./browser-service.ts";
 import { BrowserEndpointRegistry, EndpointConflictError } from "./browser-endpoints.ts";
@@ -415,6 +425,8 @@ type Handler = (body: any) => Promise<unknown>;
 
 /** Background jobs live for the life of the daemon, like the shell sessions do. */
 const jobs = new JobService();
+/** Delegated engines kept alive between prompts (INV-1234); same directory as the jobs. */
+const acp = new AcpService();
 
 // Yesterday's spilled output is dead weight; today's is evidence.
 //
@@ -690,6 +702,49 @@ const routes: Record<string, Handler> = {
     if (result === undefined) throw new Error(`No job ${body.job_id}`);
     return result;
   },
+  // An engine kept alive and spoken to (docs/81). Opened like a job — same nice, same scrubbed
+  // environment, same vouch to the egress proxy for as long as it lives — then polled.
+  "POST /acp/open": async (body: AcpOpenRequest): Promise<AcpOpenResult> => {
+    log(`acp open [${body.session_id}]${body.engine_session_id !== undefined ? ` load ${body.engine_session_id}` : ""} in ${body.cwd}`);
+    const release = body.call !== undefined ? calls.begin(body.call) : () => {};
+    try {
+      return await acp.open({
+        ...body,
+        env: { ...body.env, ...environmentForCall(body.call) },
+        nice: AGENT_NICE,
+        scrubbedEnv: withoutBoxToken(process.env),
+      });
+    } catch (error) {
+      release();
+      throw error instanceof AcpOpenError ? new HttpError(422, error.message) : error;
+    }
+  },
+  "POST /acp/send": async (body: AcpSendRequest): Promise<AcpSendResult> => {
+    try {
+      return acp.send(body);
+    } catch (error) {
+      throw error instanceof AcpOpenError ? new HttpError(404, error.message) : error;
+    }
+  },
+  "POST /acp/reply": async (body: AcpReplyRequest): Promise<{ ok: true }> => {
+    try {
+      acp.reply(body);
+      return { ok: true };
+    } catch (error) {
+      throw error instanceof AcpOpenError ? new HttpError(404, error.message) : error;
+    }
+  },
+  "POST /acp/events": async (body: AcpEventsRequest): Promise<AcpEventsResult> => {
+    const result = await acp.events(body);
+    if (result === undefined) throw new HttpError(404, `No ACP session ${body.session_id}`);
+    return result;
+  },
+  "POST /acp/close": async (body: AcpCloseRequest): Promise<AcpSessionStatus> => {
+    const result = await acp.close(body);
+    if (result === undefined) throw new HttpError(404, `No ACP session ${body.session_id}`);
+    return result;
+  },
+  "POST /acp/sessions": async (): Promise<{ sessions: AcpSessionStatus[] }> => ({ sessions: acp.list() }),
   // Gated on desktop ownership exactly as /exec and /computer are: driving the browser on
   // someone else's desktop is driving their screen, whichever protocol it goes over.
   "GET /displays": async (): Promise<DisplayInfo[]> => displays.list(),
@@ -1243,6 +1298,8 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
       process.exit(0);
     }, SHUTDOWN_HARD_DEADLINE_MS);
     hardDeadline.unref();
+    // Engines kept alive are told to stop; their records stay for a load after the restart.
+    acp.shutdown();
     // A demonstration in progress is closed and queued rather than lost with the daemon.
     void withShutdownTimeout(teach.shutdown(), SHUTDOWN_TEACH_TIMEOUT_MS, "teach shutdown")
       .then(() =>

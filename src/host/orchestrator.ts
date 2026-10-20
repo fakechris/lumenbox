@@ -112,6 +112,7 @@ import { SkillCache } from "./skills.ts";
 import { parseSchedule, type Schedule, type Scheduled, Scheduler } from "./schedule.ts";
 import { heartbeatAgentOf, heartbeatItems, heartbeatSlug, readStanding, standingBoxDir } from "./standing.ts";
 import { UsageLog } from "./usage.ts";
+import { AcpDelegates, type SessionData } from "./acp-delegate.ts";
 import { tracerFromEnv, type Tracer } from "./trace.ts";
 import {
   createClient,
@@ -492,6 +493,8 @@ export class Orchestrator {
   private readonly steps: StepLedger | undefined;
   private readonly networkEvents: NetworkEventLog | undefined;
   readonly pendingWork: PendingWork | undefined;
+  /** Engines kept alive as sessions (docs/81). */
+  readonly acpDelegates: AcpDelegates;
   /** The MCP face (docs/33): per-job routes a delegated engine calls the host's MCP tools through. */
   readonly mcpFace: McpFace;
   /** The model relay (docs/11 round three): delegated engines' model traffic, keyless in the box. */
@@ -1047,6 +1050,14 @@ export class Orchestrator {
       onEvent: event => options.onTurnEvent?.(event),
     });
     this.delegateSessions = new DelegateSessions(options.pendingWork === null ? null : undefined);
+    this.acpDelegates = new AcpDelegates({
+      ...(this.pendingWork !== undefined ? { pendingWork: this.pendingWork } : {}),
+      policy: this.policy,
+      deliver: (agentId, text, conversation) => {
+        this.bus.deliverSystem(agentId, text, conversation);
+      },
+      log: line => console.error(`[acp] ${line}`),
+    });
     this.modelRelay = new ModelRelay({
       provider: () => this.provider,
       key: profile => {
@@ -1915,6 +1926,7 @@ export class Orchestrator {
       mcpFace: this.mcpFace,
       modelRelay: this.modelRelay,
       delegateSessions: this.delegateSessions,
+      acpDelegates: this.acpDelegates,
       onSummarised: (agentId, conversationId, entries) => {
         if (this.registry.contextMode(agentId, conversationId) !== "normal") return;
         // What the summary replaces goes to the extractor first, minus what a batch
@@ -2582,7 +2594,31 @@ export class Orchestrator {
     for (const fork of dropped) {
       console.error(`[pending-work] dropped fork ${fork.id} of ${fork.parent} (${fork.admitted ? "admitted" : "never admitted"}): ${fork.brief}`);
     }
+    await this.reattachSessions();
     return dropped.length;
+  }
+
+  /** Briefs recorded as sessions (docs/81): watched again, loaded, or settled as the box allows. */
+  async reattachSessions(): Promise<void> {
+    const open = this.pendingWork?.open().filter(item => item.kind === "delegate" && item.data?.mode === "session") ?? [];
+    const byAgent = new Map<string, typeof open>();
+    for (const item of open) byAgent.set(item.agentId, [...(byAgent.get(item.agentId) ?? []), item]);
+    for (const [agentId, items] of byAgent) {
+      const box = this.boxFor(agentId);
+      const agent = this.registry.tryGet(agentId);
+      if (box === undefined || agent === undefined) continue;
+      await this.acpDelegates.reattach(
+        box,
+        items.map(item => ({
+          agentId,
+          agentName: agent.profile.name,
+          conversation: item.parent,
+          jobId: item.child,
+          brief: item.brief,
+          data: item.data as unknown as SessionData & { engine: string },
+        }))
+      );
+    }
   }
 
   /** Waits for every agent woken as a side effect of the last prompt. */

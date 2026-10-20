@@ -23,6 +23,15 @@ import type {
   JobStatus,
   JobWaitRequest,
   JobWaitResult,
+  AcpOpenRequest,
+  AcpOpenResult,
+  AcpSendRequest,
+  AcpSendResult,
+  AcpReplyRequest,
+  AcpEventsRequest,
+  AcpEventsResult,
+  AcpCloseRequest,
+  AcpSessionStatus,
   ReadFileResult,
   RecordListResult,
   RecordingInfo,
@@ -376,6 +385,32 @@ export class BoxClient {
 
   killJob(jobId: string): Promise<JobStatus> {
     return this.post<JobStatus>("/jobs/kill", { job_id: jobId });
+  }
+
+  // ACP sessions (INV-1234, docs/81): an engine kept alive; opened, spoken to, polled, closed.
+  acpOpen(request: AcpOpenRequest): Promise<AcpOpenResult> {
+    // initialize and session/new each get a minute inside the box; the request outlasts both.
+    return this.post<AcpOpenResult>("/acp/open", request, 150_000);
+  }
+
+  acpSend(request: AcpSendRequest): Promise<AcpSendResult> {
+    return this.post<AcpSendResult>("/acp/send", request);
+  }
+
+  acpReply(request: AcpReplyRequest): Promise<{ ok: true }> {
+    return this.post<{ ok: true }>("/acp/reply", request);
+  }
+
+  acpEvents(request: AcpEventsRequest): Promise<AcpEventsResult> {
+    return this.post<AcpEventsResult>("/acp/events", request, (request.timeout_ms ?? 30_000) + 15_000);
+  }
+
+  acpClose(request: AcpCloseRequest): Promise<AcpSessionStatus> {
+    return this.post<AcpSessionStatus>("/acp/close", request);
+  }
+
+  acpSessions(): Promise<{ sessions: AcpSessionStatus[] }> {
+    return this.post<{ sessions: AcpSessionStatus[] }>("/acp/sessions", {});
   }
 
   /** What is on a desktop's clipboard. Empty when nothing owns the selection. */

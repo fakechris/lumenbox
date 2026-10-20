@@ -26,6 +26,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRegistry } from "../agents/registry.ts";
 import { AgentBus } from "../agents/bus.ts";
+import { AcpDelegates } from "./acp-delegate.ts";
 import { runTurn } from "./turn.ts";
 import { fakeModel } from "./testing/fake-model.ts";
 import type { BoxClient } from "../box/client.ts";
@@ -461,6 +462,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       ...(options.mcp !== undefined ? { mcp: options.mcp } : {}),
       ...(options.tasks !== undefined ? { tasks: options.tasks } : {}),
       ...(options.pendingWork !== undefined ? { pendingWork: options.pendingWork } : {}),
+      ...(acpDelegates !== undefined ? { acpDelegates } : {}),
       registry,
       bus,
       box,
@@ -496,6 +498,19 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
   }, event => {
     if (event.type === "turn_finished") goalLoop?.onTurnFinished(event.agentId);
   });
+  // Engines kept alive as sessions (docs/81): the bus delivers their notes, as the orchestrator's does.
+  const acpDelegates =
+    options.pendingWork !== undefined
+      ? new AcpDelegates({
+          pendingWork: options.pendingWork,
+          ...(options.policy !== undefined ? { policy: options.policy } : {}),
+          deliver: (agentId, text, conv) => {
+            bus.deliverSystem(agentId, text, conv);
+          },
+          eventsTimeoutMs: 300,
+          consentPollMs: 5,
+        })
+      : undefined;
   goalLoop = options.goalLoop?.({ bus, registry, tasks: options.tasks, files });
   goalGate = options.goalGate?.({ bus, registry, tasks: options.tasks, files });
 

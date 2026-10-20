@@ -132,6 +132,7 @@ test("mcode runs one-shot with full permissions, its profile written per run and
   // The profile lives in a directory made for the run and removed when it ends, however it ends.
   assert.match(run, /mktemp -d/);
   assert.match(run, /trap 'rm -rf "\$d"' EXIT/);
+  assert.match(run, /trap 'rm -rf "\$d"; exit 143' TERM INT HUP/, "a session ended by boxd's TERM must not leave the profile behind");
   assert.match(run, /MINIMAX_DATA_DIR="\$d"/);
   assert.match(run, /goal:\\n  verification: subagent/, "a custom provider defaults to no verification; ours insists on a sub-agent");
   // The token reaches the profile from the environment at run time and is never inlined.
