@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: testing-and-release
-     updated: 2026-09-01
+     updated: 2026-10-20
 -->
 # Testing and release stability: ours, against OpenClaw and Hermes
 
@@ -137,3 +137,22 @@ installers with three packages in node_modules and every new user's first launch
    channel's tests must satisfy.
 3. **Tiering and a live tier** — only once there is something a live run protects
    that the smoke suite does not.
+
+## The network is denied twice (INV-1238, 2026-10-20)
+
+`npm test` keeps a test off the network in two layers, and says which are in force on its
+first line:
+
+- **In the process**, `scripts/test-network-guard.mjs` refuses `fetch`, `http`/`https`,
+  `net.connect` / `createConnection` / `Socket.connect` and `tls.connect` to anything but
+  loopback and Unix sockets, naming the target in the error (`BlockedByTestGuard`). The patched
+  builtins are synced to their ESM bindings, so `import { connect } from "node:net"` is caught
+  too.
+- **At the operating system**, `scripts/test-floor.mjs` runs the whole suite under macOS
+  `sandbox-exec` (`deny network-outbound`, loopback and Unix sockets allowed) or a Linux network
+  namespace (`unshare -rn`, only `lo` up). A `curl` or `git fetch` a test spawns fails there;
+  `src/host/test-guards.test.ts` spawns one to prove it. Where neither is usable the runner prints
+  `network: NOT denied by the OS — <why>` and goes on with the in-process layer alone; the
+  self-test then reports the gap instead of asserting the deny. `AGENTBOX_TEST_NO_SANDBOX=1`
+  switches the OS layer off on purpose. CI (Linux) has it on.
+

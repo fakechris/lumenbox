@@ -37,6 +37,36 @@ test("a test cannot reach the network, and says so where the call was made", asy
   });
 });
 
+test("below HTTP too: a raw socket or a TLS connection to anywhere but loopback is refused at the call (INV-1238)", async () => {
+  const net = await import("node:net");
+  const tls = await import("node:tls");
+  assert.throws(() => net.connect(443, "api.anthropic.com"), /BlockedByTestGuard[\s\S]*net:\/\/api\.anthropic\.com/);
+  assert.throws(() => net.createConnection({ host: "open.feishu.cn", port: 443 }), /net:\/\/open\.feishu\.cn/);
+  assert.throws(() => tls.connect({ host: "api.minimaxi.com", port: 443 }), /tls:\/\/api\.minimaxi\.com/);
+  assert.throws(() => new net.Socket().connect(80, "example.com"), /net:\/\/example\.com/);
+  // Loopback and Unix sockets stay open: the refusal comes from the stack, not the guard.
+  await new Promise<void>(resolve => {
+    const socket = net.connect(9, "127.0.0.1");
+    socket.on("error", error => {
+      assert.doesNotMatch(String(error), /BlockedByTestGuard/);
+      resolve();
+    });
+  });
+});
+
+test("what a test spawns cannot reach out either, where the OS can be asked (INV-1238)", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const osNet = process.env.AGENTBOX_TEST_OS_NET;
+  assert.ok(osNet === "denied" || osNet === "unavailable", `the runner says which layer is in force (got ${osNet})`);
+  const probe = spawnSync("curl", ["-sS", "-m", "5", "-o", "/dev/null", "https://example.com"], { encoding: "utf8" });
+  if (osNet === "denied") {
+    assert.notEqual(probe.status, 0, `a spawned curl must fail under the OS deny (status ${probe.status}, ${probe.stderr.trim()})`);
+  } else {
+    // Said, not hidden: on this machine the OS layer is missing and only Node's calls are guarded.
+    console.error("[test-guards] OS network layer unavailable here; spawned processes are not denied (the runner said so)");
+  }
+});
+
 test("a test cannot reach the live installation by accident", () => {
   // The failure this prevents was real and silent: the orchestrator opens its usage
   // ledger off this path, so the resume tests appended to a person's actual spend
