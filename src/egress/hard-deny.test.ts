@@ -30,3 +30,13 @@ test("anything else is left to the allow list", () => {
     assert.equal(hardDenied(host, 443, channels), undefined, host);
   }
 });
+
+test("the relay's flags: host ports from --host-ports, else the web port; lists split on commas", async () => {
+  const { relayOptionsFromFlags } = await import("./relay-cli.ts");
+  const flags = (entries: Record<string, string>) => new Map<string, unknown>(Object.entries(entries));
+  assert.deepEqual(relayOptionsFromFlags(flags({}), { AGENTBOX_PORT: "7780" }), { channelPorts: [7780] });
+  assert.deepEqual(relayOptionsFromFlags(flags({}), {}), { channelPorts: [7777] });
+  assert.deepEqual(relayOptionsFromFlags(flags({ "--host-ports": "7777, 9000,x", "--allow": "a.com, *.b.com", "--port": "8791", "--host": "0.0.0.0", "--events": "/tmp/e.jsonl" }), {}), {
+    port: 8791, host: "0.0.0.0", allow: ["a.com", "*.b.com"], channelPorts: [7777, 9000], eventsPath: "/tmp/e.jsonl",
+  });
+});

@@ -39,6 +39,7 @@ import { DockerBoxProvisioner } from "./box/provisioner.ts";
 import { applyConfigEnv, ensureConfigFile, loadConfig } from "./config.ts";
 import { describeControlPlane, startControlPlane } from "./control/main.ts";
 import { startEgressRelay } from "./egress/relay.ts";
+import { relayOptionsFromFlags } from "./egress/relay-cli.ts";
 import { NetworkEventLog, networkEventsPath, summariseEvents } from "./egress/events.ts";
 import { describeAbsences } from "./host/absences.ts";
 import { backupNow, backupRoot } from "./host/backup.ts";
@@ -1303,36 +1304,22 @@ async function cmdEgress(argv: string[]): Promise<number> {
     return 0;
   }
   const { flags } = parseArgs(argv);
-  const portFlag = flags.get("--port");
-  const hostFlag = flags.get("--host");
-  const allowFlag = flags.get("--allow");
-  // Host ports a box may reach through the relay (INV-1224): the web port by default, where the
-  // MCP face and the model relay live; the relay adds its own. Everything else on the host is
-  // refused before the allow list, as is every cloud metadata address.
-  const hostPortsFlag = flags.get("--host-ports");
-  const channelPorts =
-    typeof hostPortsFlag === "string"
-      ? hostPortsFlag.split(",").map(entry => Number(entry.trim())).filter(port => Number.isInteger(port) && port > 0)
-      : [Number(process.env.AGENTBOX_PORT ?? 7777)];
+  const options = relayOptionsFromFlags(flags, process.env);
 
   try {
     // Each box by its own token, with what its bundles let it reach (INV-423). The
     // own box's token is the relay token, so it is named here too and its bundle hosts
     // apply; an attached box is known by the token file its record names.
     const boxes = relayBoxes();
-    const eventsFlag = flags.get("--events");
-    const events = new NetworkEventLog(typeof eventsFlag === "string" ? eventsFlag : networkEventsPath());
+    const events = new NetworkEventLog(options.eventsPath ?? networkEventsPath());
     const server = startEgressRelay({
       // The box token by default, so a box started by this CLI can already authenticate.
       token: loadBoxToken(),
-      port: typeof portFlag === "string" ? Number(portFlag) : undefined,
-      host: typeof hostFlag === "string" ? hostFlag : undefined,
-      allow:
-        typeof allowFlag === "string"
-          ? allowFlag.split(",").map(entry => entry.trim()).filter(Boolean)
-          : undefined,
+      ...(options.port !== undefined ? { port: options.port } : {}),
+      ...(options.host !== undefined ? { host: options.host } : {}),
+      ...(options.allow !== undefined ? { allow: options.allow } : {}),
       boxes,
-      channelPorts,
+      channelPorts: options.channelPorts,
       // Every decision to disk, for `agentbox egress events` and the web (INV-432).
       onEvent: event => events.append(event),
       log: line => out(dim(line)),
