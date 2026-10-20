@@ -2646,6 +2646,7 @@ test("a bot-to-bot chain with no person stops at the budget, and a person's word
     if (/^Sent|has been told|queued|delivered/i.test(lastText) && round > 0 && /tool_result/.test(lastText)) return { say: "sent" };
     const other = agent === "Ping" ? "Pong" : "Ping";
     sends.push(`${agent}→${other}#${round}`);
+    // biome-ignore lint/suspicious/noThenProperty: `then` is the scripted step's follow-up reply (scenario.ts), never awaited
     return { call: "SendToAgent", input: { target_id: other, message: `recount ${agent} ${round}: still differs` }, then: { say: "waiting on them" } };
   };
   const episode = await runEpisode({ team: [{ name: "Ping" }, { name: "Pong" }], says: ["check the numbers with Pong"], script, maxRounds: 40 });
