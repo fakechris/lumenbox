@@ -42,6 +42,8 @@ const FETCH_MAX_BYTES = 64 * 1024 * 1024;
 export interface Peer {
   /** The node's tailnet name, without the trailing dot. */
   name: string;
+  /** The tailnet address the letter came from: where fetches and replies connect, so a name is never resolved. */
+  ip?: string;
   user?: string;
   tags?: string[];
 }
@@ -69,9 +71,9 @@ export interface TailmsgDeps {
   /** Local hour, injectable for the quiet-hours test. */
   hour?: () => number;
   /** Fetches a file from a peer; the default is plain HTTP on the tailnet. */
-  download?: (url: string, to: string, maxBytes: number) => Promise<number>;
+  download?: (url: string, to: string, maxBytes: number, connectTo: string | undefined) => Promise<number>;
   /** Delivers a reply to a peer's `/msg`; the default is plain HTTP on the tailnet. */
-  post?: (host: string, port: number, body: string) => Promise<{ status: number; body: string }>;
+  post?: (host: string, port: number, body: string, connectTo: string | undefined) => Promise<{ status: number; body: string }>;
   /** Whether a source address is on the tailnet; the test, which only has loopback, replaces it. */
   tailnetAddress?: (ip: string) => boolean;
 }
@@ -105,7 +107,7 @@ export class TailmsgDoor implements ChannelAdapter {
   private readonly counters: WakeCounters;
   private flushTimer: NodeJS.Timeout | undefined;
   /** Per peer: the last letter it sent, and the agent of theirs that wrote — what a reply addresses. */
-  private readonly lastFrom = new Map<string, { id: string; fromAgent?: string; port: number }>();
+  private readonly lastFrom = new Map<string, { id: string; fromAgent?: string; port: number; ip?: string }>();
 
   constructor(
     door: string,
@@ -172,7 +174,7 @@ export class TailmsgDoor implements ChannelAdapter {
       ...(this.config.defaultAgent !== undefined ? { from_agent: this.config.defaultAgent } : {}),
     };
     const post = this.deps.post ?? defaultPost;
-    const answer = await post(peerHost, last?.port ?? TAILMSG_DEFAULT_PORT, JSON.stringify(envelope));
+    const answer = await post(peerHost, last?.port ?? TAILMSG_DEFAULT_PORT, JSON.stringify(envelope), last?.ip);
     if (answer.status !== 202 && answer.status !== 200) throw new Error(`tailmsg: ${peerHost} answered ${answer.status} to the reply: ${answer.body.slice(0, 200)}`);
     return id;
   }
@@ -235,11 +237,12 @@ export class TailmsgDoor implements ChannelAdapter {
       return { status: 400, body: { error: parsed.error } };
     }
     const envelope = parsed.envelope;
-    const peer = await this.deps.whois(ip).catch(() => undefined);
-    if (peer === undefined) {
+    const named = await this.deps.whois(ip).catch(() => undefined);
+    if (named === undefined) {
       this.deps.log(`channel ${this.name}: ${ip} is not a node tailscale knows; refused`);
       return { status: 403, body: { error: "whois did not name you" } };
     }
+    const peer: Peer = { ...named, ip: ip.replace(/^::ffff:/, "") };
     if ((this.config.deny ?? []).some(pattern => matches(pattern, peer))) {
       this.deps.log(`channel ${this.name}: ${peer.name} is denied`);
       return { status: 403, body: { error: "denied" } };
@@ -278,7 +281,7 @@ export class TailmsgDoor implements ChannelAdapter {
       received: { at: new Date(now).toISOString(), peer, wake, ...(agent !== undefined ? { agent } : {}), agent_status: agentStatus },
     };
     writeFileSync(path, JSON.stringify(record));
-    this.lastFrom.set(canonicalHost(peer.name), { id: envelope.id, ...(envelope.from_agent !== undefined ? { fromAgent: envelope.from_agent } : {}), port: this.port });
+    this.lastFrom.set(canonicalHost(peer.name), { id: envelope.id, ...(envelope.from_agent !== undefined ? { fromAgent: envelope.from_agent } : {}), port: this.port, ...(peer.ip !== undefined ? { ip: peer.ip } : {}) });
     this.deps.log(`channel ${this.name}: letter ${envelope.id} from ${peer.name}${envelope.from_agent !== undefined ? `/${envelope.from_agent}` : ""} to ${agent ?? "(default)"} [${agentStatus}]: wake ${wake.requested} → ${wake.effective}${wake.reason !== undefined ? ` (${wake.reason})` : ""}`);
     // Not named `then`: an object with a then method is a thenable, and awaiting it never settles.
     const after = async () => {
@@ -303,7 +306,7 @@ export class TailmsgDoor implements ChannelAdapter {
       const final = join(dir, name);
       const part = `${final}.part`;
       try {
-        const size = await download(entry.url, part, Math.min(entry.size, FETCH_MAX_BYTES));
+        const size = await download(entry.url, part, Math.min(entry.size, FETCH_MAX_BYTES), peer.ip);
         const digest = createHash("sha256").update(readFileSync(part)).digest("hex");
         if (size !== entry.size || digest !== entry.sha256) {
           unlinkSync(part);
@@ -398,12 +401,13 @@ function readBody(req: IncomingMessage, max: number): Promise<Buffer> {
   });
 }
 
-function defaultDownload(url: string, to: string, maxBytes: number): Promise<number> {
+/** Connects to the verified address when there is one, with the url's host in the Host header; a MagicDNS name is never resolved here (measured 2026-10-20: it resolved to the IPv6 address the peer does not listen on). */
+function defaultDownload(url: string, to: string, maxBytes: number, connectTo: string | undefined): Promise<number> {
   return new Promise((resolve, reject) => {
     const target = new URL(url);
     const out = createWriteStream(to);
     let size = 0;
-    const req = httpRequest({ host: target.hostname, port: target.port || TAILMSG_DEFAULT_PORT, path: target.pathname + target.search, method: "GET", timeout: 60_000 }, res => {
+    const req = httpRequest({ host: connectTo ?? target.hostname, port: target.port || TAILMSG_DEFAULT_PORT, path: target.pathname + target.search, method: "GET", timeout: 60_000, headers: { host: target.host } }, res => {
       if (res.statusCode !== 200) {
         res.resume();
         out.close();
@@ -427,9 +431,9 @@ function defaultDownload(url: string, to: string, maxBytes: number): Promise<num
   });
 }
 
-function defaultPost(host: string, port: number, body: string): Promise<{ status: number; body: string }> {
+function defaultPost(host: string, port: number, body: string, connectTo: string | undefined): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
-    const req = httpRequest({ host, port, path: "/msg", method: "POST", headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) }, timeout: 20_000 }, res => {
+    const req = httpRequest({ host: connectTo ?? host, port, path: "/msg", method: "POST", headers: { host: `${host}:${port}`, "content-type": "application/json", "content-length": Buffer.byteLength(body) }, timeout: 20_000 }, res => {
       const chunks: Buffer[] = [];
       res.on("data", (chunk: Buffer) => chunks.push(chunk));
       res.on("end", () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }));

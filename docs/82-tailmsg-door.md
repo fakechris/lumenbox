@@ -75,7 +75,23 @@ live. The settings page has no form for the `tailmsg` field yet: the record API 
 State lives under `~/.agentbox/tailmsg/<door id>/`: `inbox/<id>.json` (the envelope, whois, the
 wake decision, when it was handed on), `inbox/<id>/files/`, `wake-counters.json`.
 
-## 4. Not in this stage
+## 4. Measured, 2026-10-20
+
+Yobiru's own `tailmsg.py` on chrismac-mini (`serve` + `send … --wake now --as grok --file note.txt`)
+against this door on the maintainer's Mac, over the real tailnet:
+
+| Step | Result |
+| --- | --- |
+| `send` without `--legacy-request` | Yobiru read our `/info` (no capabilities) and sent a plain v1 letter; 202 |
+| whois of the peer | `Node.Name` with trailing dot, `UserProfile.LoginName`; ~30 ms |
+| file fetch by the url's MagicDNS name | empty reply after 5 s: the name resolved to the peer's IPv6 address, which Yobiru does not listen on |
+| file fetch by the verified IPv4 | 200, 20 bytes, sha256 matched; kept |
+| reply to the peer's `/msg` | 202; in Yobiru's inbox as `re:<id>`, addressed to `grok` (unknown there, stored, nobody woken) |
+
+Hence the rule in the code: fetches and replies connect to the tailnet address whois verified,
+with the url's host in the Host header; a name is never resolved for them.
+
+## 5. Not in this stage
 
 Sending a first letter (only replies); the request lifecycle of tailmsg 0.5; placing fetched
 files in the box; a settings-page form; TLS or any authentication beyond the tailnet itself,

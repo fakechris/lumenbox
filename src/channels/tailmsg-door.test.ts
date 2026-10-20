@@ -53,7 +53,7 @@ test("the door: health, refusals in order, admission, dedupe, wake, the agent's 
   const dir = mkdtempSync(join(tmpdir(), "tailmsg-door-"));
   const logs: string[] = [];
   const delivered: InboundMessage[] = [];
-  const sent: { host: string; port: number; body: Record<string, unknown> }[] = [];
+  const sent: { host: string; port: number; body: Record<string, unknown>; connectTo: string | undefined }[] = [];
   // The peer's file server: /f/good holds a file whose hash the letter will carry.
   const good = Buffer.from("the report, in full");
   const peerFiles = createServer((req, res) => {
@@ -78,8 +78,8 @@ test("the door: health, refusals in order, admission, dedupe, wake, the agent's 
       log: line => logs.push(line),
       hour: () => hour,
       tailnetAddress: () => true,
-      post: async (host, port, body) => {
-        sent.push({ host, port, body: JSON.parse(body) as Record<string, unknown> });
+      post: async (host, port, body, connectTo) => {
+        sent.push({ host, port, body: JSON.parse(body) as Record<string, unknown>, connectTo });
         return { status: 202, body: "{}" };
       },
     }
@@ -128,6 +128,7 @@ test("the door: health, refusals in order, admission, dedupe, wake, the agent's 
     // The agent answered: a reply went to the peer's /msg, addressed to the agent that wrote, threaded.
     assert.equal(sent.length, 1);
     assert.equal(sent[0]!.host, PEER);
+    assert.equal(sent[0]!.connectTo, "127.0.0.1", "the reply connects to the address whois verified, not to a name");
     assert.equal(sent[0]!.body.reply_to, first.id);
     assert.equal(sent[0]!.body.agent, "grok");
     assert.equal(sent[0]!.body.from, SELF);
@@ -187,7 +188,10 @@ test("the door: health, refusals in order, admission, dedupe, wake, the agent's 
         { name: "missing.txt", url: `http://bot-box:${peerPort}/f/none`, sha256: sha, size: good.length },
       ],
     });
-    door["deps"].download = (url, to, max) => downloadFrom(url, to, max, peerPort);
+    door["deps"].download = (url, to, max, connectTo) => {
+      assert.equal(connectTo, "127.0.0.1", "the fetch connects to the address whois verified");
+      return downloadFrom(url, to, max, peerPort);
+    };
     // The third `now` this hour for (bot-box, codex) is over the rate of 2: batch.
     const rated = await post(port, withFiles);
     assert.equal(rated.status, 202);
