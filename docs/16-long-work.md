@@ -2,7 +2,7 @@
      title: Finishing long work: the protocol, the cost, and the stop
      family: decision
      status: current
-     updated: 2026-08-26
+     updated: 2026-10-20
 -->
 # Finishing long work: the protocol, the cost, and the stop
 
@@ -421,3 +421,27 @@ the record.
 The same fix that worked for the chevron — [stop reasoning about the artefact and print
 it](17-two-agents.md) — applies to a schema. Before the next version of this design claims
 a field exists, it should quote a line of the actual file.
+
+## The read-load signal (INV-1222, 2026-10-20)
+
+When to hand work to a Fork or a Delegate was the model's call on no numbers. Now the host
+tells it once per turn, as a note appended to a round's tool results, when either holds:
+
+- the tool results this turn exceed **120,000 characters**, or
+- the last request was over **60 %** of the model's compaction trigger and this round's calls
+  were reading (`read_file`, `list_dir`, `ReadHistory`, `WebFetch`, `browser_read`, … —
+  `read-load.ts`).
+
+A fork's own turns and goal continuations get no note: a fork exists to be heavy and
+disposable, and the goal loop paces its runs itself. The note names the numbers and says what
+to do with the rest — background `Fork` for what stands alone, `Delegate` for deep work in one
+repository — and decides nothing.
+
+The thresholds come from this installation's ledger, read on 2026-10-20 (358 turns, `usage.jsonl`,
+no text read): rounds per turn p50 4, p90 18, p99 59; the request's growth within a turn (what
+the turn read) p50 4.3k tokens, p90 28.6k, p99 77k; peak request p50 52k, p90 91k, with a 200k
+trigger. 120k characters is the p90 growth at four characters per token; 60 % of the trigger is
+where a turn still has room to split before compaction takes it. What to watch after a week:
+peak request size, compactions per turn, and `Fork` calls with `background: true`, before and
+after (INV-1222's verification).
+
