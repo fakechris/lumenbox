@@ -45,6 +45,10 @@ jobs:
 
       - name: lint
         run: npm run lint
+      - name: architecture ratchet (arch-baseline.json only shrinks)
+        run: npm run arch
+      - name: let the test runner open a network namespace (ubuntu 24.04 restricts unprivileged userns)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
 
       - name: test
         run: npm run test:ci
