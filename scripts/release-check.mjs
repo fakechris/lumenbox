@@ -203,6 +203,35 @@ check("every packaged dmg exists beside its zip (same staged app, same tree)", (
   if (problems.length > 0) throw new Error(problems.join("; "));
 });
 
+check("the image at this version carries every delegated engine (the 0.3.7 engine-less box)", () => {
+  // Read from the image itself, not the build log: /etc/lumenbox/contract.json is what the
+  // Dockerfile writes from its pins, so an empty field is an engine the box does not have.
+  const repo = process.env.AGENTBOX_IMAGE_REPO ?? "fakechris/lumenbox";
+  const image = `${repo}:${version}`;
+  let raw;
+  try {
+    raw = execFileSync("docker", ["run", "--rm", "--entrypoint", "cat", image, "/etc/lumenbox/contract.json"], {
+      encoding: "utf8", timeout: 120_000, stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    if (process.env.RELEASE_CHECK_REQUIRE_ENGINES === "1") {
+      throw new Error(`could not read the engine contract from ${image}: ${error.message}`);
+    }
+    note(`${image} is not available locally; engine contract not checked (set RELEASE_CHECK_REQUIRE_ENGINES=1 to insist)`);
+    return;
+  }
+  const contract = JSON.parse(raw);
+  const engines = contract.engines ?? {};
+  const missing = ["opencode", "claude", "pi", "mcode"].filter(engine => !engines[engine]);
+  if (missing.length > 0) {
+    throw new Error(
+      `${image} carries no ${missing.join(", ")}: rebuild with the *_VERSION pins exported ` +
+        "(see build-image.mjs; LUMENBOX_RELEASE_IMAGE=1 refuses an unpinned release build)."
+    );
+  }
+  note(`${image} carries ${Object.entries(engines).map(([name, v]) => `${name} ${v}`).join(", ")}`);
+});
+
 check("the image tag this app pulls exists on Docker Hub before the app ships", () => {
   if (process.env.RELEASE_CHECK_SKIP_IMAGE === "1") {
     note("RELEASE_CHECK_SKIP_IMAGE=1 — image gate skipped (CI has no business depending on the Hub per push)");

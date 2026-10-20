@@ -13,6 +13,10 @@
  *   `stopReason` ("stop", "error", "aborted") and `errorMessage`.
  * - opencode `run --format json`: `{"type":"error"}` events, and `step_finish` parts whose
  *   `reason` is "stop" on the step that ended the run.
+ * - mcode `exec --output-format stream-json`: the last `{"type":"exec.completed"}` line, whose
+ *   `result.status` is succeeded / failed / timeout / cancelled / limit_exceeded (read from
+ *   minimax-code 9a93560, headless/contract.ts; INV-1233). A failure before the run starts
+ *   writes no JSON at all, only stderr and an exit code — no report, so unknown.
  */
 
 import type { BoxClient } from "../box/client.ts";
@@ -21,7 +25,7 @@ import { quoteForShell } from "./presets.ts";
 
 export { MACHINE_OUTPUT } from "./presets.ts";
 
-export type EngineName = "claude" | "pi" | "opencode";
+export type EngineName = "claude" | "pi" | "opencode" | "mcode";
 
 export interface EngineUsage {
   input: number;
@@ -164,14 +168,39 @@ function opencodeReport(all: Record<string, unknown>[]): EngineReport | undefine
 }
 
 /** The engine's completion report in its log, if it wrote one. */
+function mcodeReport(all: Record<string, unknown>[]): EngineReport | undefined {
+  const completed = all.filter(event => event.type === "exec.completed").at(-1);
+  const result = completed?.result as Record<string, unknown> | undefined;
+  if (result === undefined) return undefined;
+  const status = str(result.status);
+  const error = result.error as Record<string, unknown> | undefined;
+  const usage = result.usage as Record<string, unknown> | undefined;
+  const input = num(usage?.inputTokens);
+  const output = num(usage?.outputTokens);
+  // `limit_exceeded` is the --max-steps budget reached and `cancelled` a signal: stopped short.
+  const kind: EngineReport["status"] =
+    status === "succeeded" ? "completed" : status === "limit_exceeded" || status === "cancelled" ? "aborted" : "failed";
+  const text = typeof result.output === "string" ? result.output : result.output !== undefined ? JSON.stringify(result.output) : undefined;
+  const detail = str(error?.message) ?? (status === undefined ? "the run ended without a status" : `stopped: ${status}`);
+  return {
+    engine: "mcode",
+    status: kind,
+    ...(kind !== "completed" ? { detail } : {}),
+    ...(kind === "completed" && str(text) !== undefined ? { finalText: text! } : {}),
+    ...(input !== undefined && output !== undefined
+      ? { usage: { input, output, cacheRead: num(usage?.cacheReadTokens) ?? 0, cacheWrite: num(usage?.cacheWriteTokens) ?? 0 } }
+      : {}),
+    ...(str(result.sessionId) !== undefined ? { sessionId: str(result.sessionId)! } : {}),
+  };
+}
 export function parseEngineReport(engine: EngineName, log: string): EngineReport | undefined {
   const all = events(log);
-  return engine === "claude" ? claudeReport(all) : engine === "pi" ? piReport(all) : opencodeReport(all);
+  return engine === "claude" ? claudeReport(all) : engine === "pi" ? piReport(all) : engine === "mcode" ? mcodeReport(all) : opencodeReport(all);
 }
 
 /** The engine a preset name is, when it is one whose report the host reads. */
 export function engineNamed(preset: string | undefined): EngineName | undefined {
-  return preset === "claude" || preset === "pi" || preset === "opencode" ? preset : undefined;
+  return preset === "claude" || preset === "pi" || preset === "opencode" || preset === "mcode" ? preset : undefined;
 }
 
 /**

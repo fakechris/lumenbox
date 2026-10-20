@@ -59,7 +59,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # 3. Node.js 22 for the daemon.
 #    Installs official prebuilt binary with mirror fallback — avoids Nodesource GPG / apt flakiness.
-ARG NODE_VERSION=22.18.0
+ARG NODE_VERSION=22.20.0
 RUN dpkgArch="$(dpkg --print-architecture)" \
     && case "${dpkgArch}" in \
         arm64) nodeArch="arm64" ;; \
@@ -273,13 +273,25 @@ RUN if [ -n "$PI_VERSION" ]; then \
       && mkdir -p /home/box/.local \
       && chown -R box:box /home/box/.pi /home/box/.local; \
     fi
+# MiniMax Code (INV-1233): its install needs scripts for better-sqlite3's prebuilt binding, and
+# Node 22.19+ (the NODE_VERSION above). Skills are read from ~/.agents/skills, one of the user
+# roots it scans. Its profile with the relay credential is never in the image: each delegation
+# writes one into a temporary MINIMAX_DATA_DIR and removes it (src/host/presets.ts).
+ARG MCODE_VERSION=""
+RUN if [ -n "$MCODE_VERSION" ]; then \
+      npm install -g "@minimax-ai/code@${MCODE_VERSION}" \
+      && mkdir -p /home/box/.agents \
+      && ln -sfn /home/box/work/skills /home/box/.agents/skills \
+      && mkdir -p /home/box/.local \
+      && chown -R box:box /home/box/.agents /home/box/.local; \
+    fi
 
 # The image contract: what this build carries, readable by boxd (in /health) and by the host
 # at box up, so "which engines does this box have" is a fact the box states rather than a
 # probe. Versions are the build args above; empty means not carried.
 RUN mkdir -p /etc/lumenbox \
-    && printf '{"contract":1,"engines":{"opencode":"%s","claude":"%s","pi":"%s"},"builtAt":"%s"}\n' \
-       "$OPENCODE_VERSION" "$CLAUDE_CODE_VERSION" "$PI_VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    && printf '{"contract":1,"engines":{"opencode":"%s","claude":"%s","pi":"%s","mcode":"%s"},"builtAt":"%s"}\n' \
+       "$OPENCODE_VERSION" "$CLAUDE_CODE_VERSION" "$PI_VERSION" "$MCODE_VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
        > /etc/lumenbox/contract.json
 
 # The entrypoint runs as root and drops privileges per process: the desktop and the
