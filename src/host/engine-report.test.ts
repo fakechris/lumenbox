@@ -286,3 +286,36 @@ test("a delegated job stopped with Jobs kill is recorded aborted, though the kil
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("mcode's exec.completed line is the report: succeeded, failed, the step budget and a signal (INV-1233)", () => {
+  // Shapes from minimax-code 9a93560 headless/contract.ts and events.ts; a real-output fixture
+  // replaces these once the engine has been run in a box.
+  const line = (result: Record<string, unknown>) =>
+    `${JSON.stringify({ schemaVersion: 1, type: "exec.started", sequence: 1, runId: "r", sessionId: "s1", turnId: "t" })}\n` +
+    `${JSON.stringify({ schemaVersion: 1, type: "exec.completed", sequence: 9, runId: "r", sessionId: "s1", turnId: "t", result: { schemaVersion: 1, type: "exec.result", runId: "r", sessionId: "s1", turnId: "t", durationMs: 10, ...result } })}\n`;
+  const ok = parseEngineReport("mcode", line({ status: "succeeded", output: "done: 3 files", usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 50 } }));
+  assert.deepEqual(ok, { engine: "mcode", status: "completed", finalText: "done: 3 files", usage: { input: 100, output: 20, cacheRead: 50, cacheWrite: 0 }, sessionId: "s1" });
+  const failed = parseEngineReport("mcode", line({ status: "failed", error: { category: "runtime", code: "PROVIDER_ERROR", message: "400 bad request" } }));
+  assert.equal(failed?.status, "failed");
+  assert.equal(failed?.detail, "400 bad request");
+  assert.equal(parseEngineReport("mcode", line({ status: "limit_exceeded" }))?.status, "aborted");
+  assert.equal(parseEngineReport("mcode", line({ status: "cancelled" }))?.status, "aborted");
+  assert.equal(parseEngineReport("mcode", line({ status: "timeout" }))?.status, "failed");
+  // A failure before the run starts writes no JSON: no report.
+  assert.equal(parseEngineReport("mcode", "mcode exec failed: config error\n"), undefined);
+});
+
+test("mcode 0.6.12's real output: a succeeded run and a relay it could not reach (INV-1233)", () => {
+  // Measured in the box image with mcode 0.6.12 against a stub Anthropic-messages server on an
+  // internal docker network (docs/25 §mcode): exit 0 with exec.completed status succeeded, and
+  // exit 4 with status failed when the relay refused the connection.
+  const ok = parseEngineReport("mcode", fixture("mcode-ok"))!;
+  assert.equal(ok.status, "completed");
+  assert.equal(ok.finalText, "Done. I read the brief and there was nothing to change.");
+  assert.deepEqual(ok.usage, { input: 42, output: 12, cacheRead: 0, cacheWrite: 0 });
+  assert.match(ok.sessionId ?? "", /^mvs_/);
+  const refused = parseEngineReport("mcode", fixture("mcode-refused"))!;
+  assert.equal(refused.status, "failed");
+  assert.match(refused.detail ?? "", /upstream error: Connection error/);
+  assert.equal(refused.usage, undefined, "usageSource unavailable is not zero");
+});

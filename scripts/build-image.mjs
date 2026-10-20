@@ -71,14 +71,27 @@ if (outgoing) {
 // environment turns the Dockerfile's dormant opencode layer on, at exactly that
 // version. Unset builds stay engine-free, which is what they were.
 const buildArgs = [];
+const unpinned = [];
 for (const [variable, engine] of [
   ["OPENCODE_VERSION", "opencode"],
   ["CLAUDE_CODE_VERSION", "claude"],
   ["PI_VERSION", "pi"],
+  ["MCODE_VERSION", "mcode"],
 ]) {
   if (process.env[variable]) {
     buildArgs.push("--build-arg", `${variable}=${process.env[variable]}`);
     console.log(`${engine} pinned at ${process.env[variable]}`);
+  } else {
+    unpinned.push(`${engine} (${variable})`);
+  }
+}
+// Said loudly, because the 0.3.7 release shipped an engine-less box this way and nothing
+// between here and the smoke test noticed. A release build names every engine.
+if (unpinned.length > 0) {
+  console.log(`\nNOT in this image: ${unpinned.join(", ")} — a release image pins all of them.`);
+  if (process.env.LUMENBOX_RELEASE_IMAGE === "1") {
+    console.error("LUMENBOX_RELEASE_IMAGE=1 and an engine is unpinned; refusing to build a release image without it.");
+    process.exit(1);
   }
 }
 const release = `${REPO}:${VERSION}`;

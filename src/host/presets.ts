@@ -43,10 +43,11 @@
  * The flag that makes each engine write its machine-readable stream, from which the host reads
  * the engine's own completion report (INV-908, engine-report.ts).
  */
-export const MACHINE_OUTPUT: Readonly<Record<"claude" | "pi" | "opencode", string>> = {
+export const MACHINE_OUTPUT: Readonly<Record<"claude" | "pi" | "opencode" | "mcode", string>> = {
   claude: "--output-format stream-json --verbose",
   pi: "--mode json",
   opencode: "--format json",
+  mcode: "--output-format stream-json",
 };
 
 /**
@@ -310,6 +311,91 @@ PRESETS_MUTABLE.push({
     env: {},
     args: "",
     note: "pi has no MCP client; lend it tools as CLI scripts in the box instead",
+  }),
+});
+
+/** How many model steps one mcode delegation may take before the engine stops it (exit 7, reported as `limit_exceeded`). */
+export const MCODE_MAX_STEPS = 200;
+
+/**
+ * The profile an mcode run is given: written by the run itself, from its environment, into a
+ * directory that exists only for that run.
+ *
+ * mcode reads its provider from `config.yaml` in its data directory and expands no variables
+ * there, so the relay token would have to sit in that file in plain text. The way out is to
+ * give each run a data directory of its own (`MINIMAX_DATA_DIR` to a `mktemp -d`), write the
+ * file there from `$LUMENBOX_RELAY_TOKEN` at the last moment, and remove the directory when
+ * the run ends however it ends (`trap … EXIT`): nothing with the token outlives the job, and
+ * the route it names is revoked at job end anyway. The file also carries the engine's goal
+ * verification, which for a custom provider defaults to `none` — the worker's own word that it
+ * finished — and must be `subagent` here (INV-1232, verification-policy.ts). Read from
+ * minimax-code 9a93560 / 0.6.12; the permission policy is on the command line below.
+ */
+function mcodeProfileShell(model: string | undefined): string {
+  const id = model !== undefined ? quoteForShell(model) : '"${LUMENBOX_RELAY_MODEL:?mcode needs a model name}"';
+  return (
+    `d=$(mktemp -d /tmp/mcode.XXXXXX) && trap 'rm -rf "$d"' EXIT && umask 077 && m=${id} && ` +
+    `printf 'custom_provider:\\n  lumenbox:\\n    api: %s\\n    options:\\n      apiKey: %s\\n      baseURL: %s\\n    models:\\n      %s: {}\\ndefaultModel: custom_provider:lumenbox/%s\\ngoal:\\n  verification: subagent\\n' ` +
+    `"\${LUMENBOX_RELAY_API:-anthropic-messages}" "\${LUMENBOX_RELAY_TOKEN:?mcode needs the relay token}" "\${LUMENBOX_RELAY_URL:?mcode needs the relay url}" "$m" "$m" > "$d/config.yaml" && ` +
+    `export MINIMAX_DATA_DIR="$d"`
+  );
+}
+
+PRESETS_MUTABLE.push({
+  name: "mcode",
+  summary: "MiniMax Code: MiniMax's own coding agent, tuned for the M3 family; explore / worker / verifier sub-agents, strict about finishing.",
+  probe: "command -v mcode",
+  // Not --ignore-scripts: the engine needs better-sqlite3's native binding, which its install
+  // fetches as a prebuilt. Needs Node 22.19+ in the box (0.6.x refuses older, exit 1).
+  install: {
+    package: "@minimax-ai/code",
+    version: "0.6.12",
+    after: "mkdir -p ~/.agents && ln -sfn /home/box/work/skills ~/.agents/skills",
+  },
+  // `exec` is the one-shot surface: no prompts, no login for a custom provider, and an
+  // interaction it would have needed fails the run instead of hanging it. `--permission full`
+  // is not optional: the default, `smart`, sends every tool input the local rules cannot decide
+  // to MiniMax's cloud gateway (permission/src/cloud-gateway.ts), key or no key. The box is the
+  // sandbox; the prompt has no one to ask. `--max-steps` is the budget; the engine reports
+  // `limit_exceeded` when it is reached. The model is the relay's entry, named as
+  // `custom_provider:lumenbox/<id>`, and travels as a flag as well as in the profile.
+  run: (quoted, model, extraArgs) =>
+    `${mcodeProfileShell(model)} && mcode exec --config "$d/config.yaml" ${MACHINE_OUTPUT.mcode} --permission full --max-steps ${MCODE_MAX_STEPS}` +
+    ` --model "custom_provider:lumenbox/$m"${extraArgs ? ` ${extraArgs}` : ""} ${quoted}`,
+  skillsMount: "~/.agents/skills",
+  wires: ["anthropic", "openai"],
+  // mcode reads no BASE_URL or API_KEY variables at all (bash-subprocess-env.ts scrubs them from
+  // what it runs). The relay travels under our own names and becomes the profile at run time;
+  // telemetry is off by both names it honours. Nothing here is a file in the box.
+  relayEnv: (baseUrl, token, model) => ({
+    LUMENBOX_RELAY_URL: baseUrl,
+    LUMENBOX_RELAY_TOKEN: token,
+    ...(model !== undefined ? { LUMENBOX_RELAY_MODEL: model } : {}),
+    MCODE_DISABLE_TELEMETRY: "1",
+    DO_NOT_TRACK: "1",
+  }),
+  // The wire is decided on the host; the run writes it into the profile. The file written here
+  // is a note only (the real profile is per run, see mcodeProfileShell) and names no secret.
+  relayConfig: (url, tokenVar, wire) => ({
+    file: "/home/box/.agents/mcode-relay.json",
+    content: `${JSON.stringify(
+      { note: "mcode's profile is written per run from the environment into a temporary MINIMAX_DATA_DIR; this file only records the route", url, token: `$${tokenVar}`, api: wire === "openai" ? "openai-completions" : "anthropic-messages" },
+      null,
+      2
+    )}\n`,
+    env: { LUMENBOX_RELAY_API: wire === "openai" ? "openai-completions" : "anthropic-messages" },
+  }),
+  // mcode has an MCP client, but its servers are configured in the same profile file; lending
+  // tools through it is the ACP step (INV-1234), not this one-shot preset.
+  mcpFace: (url, tokenVar) => ({
+    content: `${JSON.stringify(
+      { note: "this one-shot mcode preset does not load MCP servers; the host tools below were offered but are not reachable from it", url, token: `$${tokenVar}` },
+      null,
+      2
+    )}\n`,
+    env: {},
+    args: "",
+    note: "mcode is run one-shot without MCP servers here; lend it tools as CLI scripts in the box instead",
   }),
 });
 

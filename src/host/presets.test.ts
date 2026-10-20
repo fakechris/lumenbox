@@ -119,3 +119,31 @@ test("every engine whose report the host reads is run in the mode that writes it
     assert.ok(preset.run("'go'", "m").includes(` ${flag}`), `${engine} runs with ${flag}`);
   }
 });
+
+test("mcode runs one-shot with full permissions, its profile written per run and never a file with the token in it (INV-1233)", () => {
+  const mcode = presetNamed("mcode")!;
+  const run = mcode.run("'fix the tests'", "MiniMax-M3", undefined);
+  // The default, smart, sends tool inputs to MiniMax's cloud gateway; full keeps the box the sandbox.
+  assert.match(run, /mcode exec .*--permission full/);
+  assert.doesNotMatch(run, /--permission (smart|off)/);
+  assert.match(run, /--max-steps \d+/);
+  assert.match(run, /--model "custom_provider:lumenbox\/\$m"/);
+  assert.match(run, /'fix the tests'$/);
+  // The profile lives in a directory made for the run and removed when it ends, however it ends.
+  assert.match(run, /mktemp -d/);
+  assert.match(run, /trap 'rm -rf "\$d"' EXIT/);
+  assert.match(run, /MINIMAX_DATA_DIR="\$d"/);
+  assert.match(run, /goal:\\n  verification: subagent/, "a custom provider defaults to no verification; ours insists on a sub-agent");
+  // The token reaches the profile from the environment at run time and is never inlined.
+  const env = mcode.relayEnv("http://host:7777/relay/abc", "tok-secret", "MiniMax-M3");
+  assert.equal(env.LUMENBOX_RELAY_TOKEN, "tok-secret");
+  assert.equal(env.MCODE_DISABLE_TELEMETRY, "1");
+  assert.doesNotMatch(run, /tok-secret/);
+  const config = mcode.relayConfig!("http://host:7777/relay/abc", "LUMENBOX_RELAY_TOKEN", "anthropic", "MiniMax-M3");
+  assert.doesNotMatch(config.content, /tok-secret/);
+  assert.equal(config.env.LUMENBOX_RELAY_API, "anthropic-messages");
+  assert.equal(mcode.relayConfig!("u", "T", "openai", "m").env.LUMENBOX_RELAY_API, "openai-completions");
+  assert.deepEqual(mcode.wires, ["anthropic", "openai"]);
+  // No model named: the run insists on one from the relay rather than letting mcode pick.
+  assert.match(mcode.run("'x'"), /LUMENBOX_RELAY_MODEL:\?/);
+});
