@@ -132,6 +132,7 @@ import {
   upsertChannelRecord,
 } from "../channels/identity.ts";
 import { TelegramChannel } from "../channels/telegram.ts";
+import { parseTailmsgRecordConfig, tailmsgDoorFromRecord } from "../channels/tailmsg.ts";
 import { HostRunner, hostRunnerConfig } from "../host/host-runner.ts";
 import { ALL_TOOLS } from "../host/orchestrator.ts";
 import {
@@ -206,8 +207,8 @@ import { MemoryAdmin } from "../host/memory-admin.ts";
 import { ConnectCodeStore } from "../box/connect-codes.ts";
 import { FollowUpBudget, type FollowUpItem } from "../host/follow-up-budget.ts";
 import { SessionEpochs } from "./session-epochs.ts";
-import { Directories, directorySource, departmentQuotaKey } from "../host/directory.ts";
-import { directoryProviders } from "../channels/directory.ts";
+import { Directories } from "../host/directory.ts";
+import { directoryHelpers } from "../channels/directory-sources.ts";
 import { mayReadScopedEvent } from "./event-visibility.ts";
 import { PersonalBoxes, type PersonalBoxDriver } from "../host/personal-boxes.ts";
 import { PersonalDocker } from "../box/personal.ts";
@@ -358,31 +359,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     const has = (key: string) => process.env[key] !== undefined || typeof saved[key] === "string";
     const base = channelEnvBase(record.id);
     if (record.type === "telegram") return has("TELEGRAM_BOT_TOKEN");
+    if (record.type === "tailmsg") return true;
     if (record.type === "dingtalk") return has(`${base}_CLIENT_ID`) && has(`${base}_CLIENT_SECRET`);
     return has(`${base}_APP_ID`) && has(`${base}_APP_SECRET`);
   };
   const directories = new Directories();
-  const directoryCredentials = (id: string) => {
-    const record = channelRecords.find(item => item.id === id);
-    if (!record || record.type === "telegram") return;
-    const env = loadConfig().env ?? {};
-    const base = channelEnvBase(id);
-    const value = (key: string) => process.env[key] ?? env[key];
-    const clientId = value(base + (record.type === "feishu" ? "_APP_ID" : "_CLIENT_ID"));
-    const clientSecret = value(base + (record.type === "feishu" ? "_APP_SECRET" : "_CLIENT_SECRET"));
-    if (!clientId || !clientSecret) return;
-    return { source: directorySource(id, record.incarnation, clientId, record.type === "feishu" ? process.env.FEISHU_DOMAIN ?? "feishu" : "dingtalk"), clientId, clientSecret, provider: directoryProviders[record.type]! };
-  };
-  const directorySources = () => channelRecords.flatMap(record => {
-    const credentials = directoryCredentials(record.id);
-    return credentials ? [credentials.source] : [];
-  });
-  const directoryDepartments = () => directorySources().flatMap(source => {
-    if (directories.status(source) !== "ready") return [];
-    return directories.of(source.channelId)!.snapshot!.departments.map(department => ({
-      key: departmentQuotaKey(source, department.vendorId), name: department.name, channelId: source.channelId,
-    }));
-  });
+  const directory = directoryHelpers({ channelRecords, directories, channelEnvBase, env: key => process.env[key] ?? (loadConfig().env ?? {})[key], feishuDomain: () => process.env.FEISHU_DOMAIN ?? "feishu" });
+  const { credentials: directoryCredentials, sources: directorySources, departments: directoryDepartments } = directory;
   /** Read once on first request; it never changes while the server is up. */
   let vendorScript: Buffer | undefined;
   let a2uiScript: Buffer | undefined;
@@ -1897,6 +1880,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // loudly instead.
     // One document reader per Feishu door with an app (INV-871), filled in the loop below.
     const docReaders = new Map<string, DocReader>();
+    const tailmsgDoorDeps = { home: agentboxHome(), log, agentKnown: (name: string) => { try { registry.resolve(name); return true; } catch { return false; } } };
     orchestrator.docReaderFor = conversation => docReaderForChat(conversations.chatKeyFor(conversation), docReaders, "feishu");
     for (const record of channelRecords) {
       if (record.id !== record.type && record.type === "telegram") {
@@ -1909,7 +1893,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         );
         continue;
       }
-      if (record.type === "telegram") {
+      if (record.type === "tailmsg") {
+        channels.register(tailmsgDoorFromRecord(record, tailmsgDoorDeps), true, "starting");
+      } else if (record.type === "telegram") {
         const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
         channels.register(
           new TelegramChannel(telegramToken ?? "", line => log(line)),
@@ -4919,7 +4905,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const body = await readJson(req);
           const id = String(body.id ?? "").trim();
           const type = String(body.type ?? "feishu");
-          if (type !== "feishu" && type !== "dingtalk" && type !== "telegram") {
+          if (type !== "feishu" && type !== "dingtalk" && type !== "telegram" && type !== "tailmsg") {
             send(res, 400, { error: `unknown channel type ${type}` });
             return;
           }
@@ -4941,6 +4927,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 400, { error: `groupMessages must be "all" or "addressed".` });
             return;
           }
+          const tailmsg = type === "tailmsg" ? parseTailmsgRecordConfig(body.tailmsg) : undefined;
+          if (typeof tailmsg === "string") {
+            send(res, 400, { error: tailmsg });
+            return;
+          }
           const wasKnown = channelRecords.some(record => record.id === id);
           let updated: ReturnType<typeof upsertChannelRecord> | undefined;
           try {
@@ -4952,6 +4943,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                 ...(typeof body.name === "string" ? { name: body.name } : {}),
                 ...(defaultAgent !== undefined ? { defaultAgent } : {}),
                 ...(groupMessages !== undefined ? { groupMessages } : {}),
+                ...(tailmsg !== undefined ? { tailmsg } : {}),
               },
               registry.box.id
             );
@@ -5033,6 +5025,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                     })();
               started = channels.registerAndStart(liveDoor, "starting");
             }
+          } else if (type === "tailmsg") {
+            started = channels.registerAndStart(tailmsgDoorFromRecord(updated.find(record => record.id === id)!, tailmsgDoorDeps), "starting");
           }
           log(
             `channel records: ${id} ${wasKnown ? "updated" : "added"}` +
