@@ -119,7 +119,7 @@ function withinWork(path: string): boolean {
   return normalised === WORK_DIR || normalised.startsWith(`${WORK_DIR}/`);
 }
 
-import { agentboxHome, isPersonalBoxQuota, loadConfig, saveConfig, type AgentboxConfig } from "../config.ts";
+import { agentboxHome, isPersonalBoxQuota, loadConfig, lockedConfigEnv, reapplyConfigEnv, saveConfig, type AgentboxConfig } from "../config.ts";
 
 type AgentboxConfigHostExec = NonNullable<AgentboxConfig["hostExec"]>;
 import { ChannelManager } from "../channels/manager.ts";
@@ -5623,13 +5623,28 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // The choice used to live only in the launch command, and a restart that forgot
         // the flag silently became a different company's model with a credential that
         // could not work. The file is the fix; this pair of routes is the interface to
-        // it. A change takes effect at the next start — the orchestrator is built around
-        // one provider, and swapping it under running turns would be a livelier bug than
-        // a restart.
+        // it. The provider, model, vision and summary-model fields take effect on save
+        // (INV-1268): the orchestrator swaps its default runtime and a turn already running
+        // finishes on the pair it started with. The host door, the startup item and the box
+        // image still wait for a restart, and the reply says which it was.
         if (route === "GET /api/config") {
           const config = loadConfig();
+          const live = orchestrator.provider;
           send(res, 200, {
-            current: describeProvider(provider),
+            current: describeProvider(live),
+            // What is in force right now, and which of the file's variables the shell overrides
+            // (INV-1268): a saved model that the page cannot make effective says so.
+            effective: {
+              label: live.label,
+              model: live.model,
+              vision: live.vision,
+              summaryModel: process.env.AGENTBOX_SUMMARY_MODEL ?? null,
+              locked: lockedConfigEnv(config),
+            },
+            settings: {
+              vision: config.env?.AGENTBOX_VISION === "1" ? "on" : config.env?.AGENTBOX_VISION === "0" ? "off" : "auto",
+              summaryModel: config.env?.AGENTBOX_SUMMARY_MODEL ?? null,
+            },
             config: {
               provider: config.provider ?? null,
               model: config.model ?? null,
@@ -5717,6 +5732,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             const value = typeof body.boxImage === "string" ? body.boxImage.trim() : "";
             boxImageChange = value !== "" ? value : null;
           }
+          // Vision and the summary model are variables the provider resolver reads; the page
+          // offers them as settings, stored in the file's env block under their own names only.
+          const envChange: Record<string, string | null> = {};
+          if (body.vision === "on") envChange.AGENTBOX_VISION = "1";
+          else if (body.vision === "off") envChange.AGENTBOX_VISION = "0";
+          else if (body.vision === "auto") envChange.AGENTBOX_VISION = null;
+          if (body.summaryModel !== undefined) envChange.AGENTBOX_SUMMARY_MODEL = field(body.summaryModel) ?? null;
+          if (key !== undefined && key !== null) envChange[resolveProvider(chosenName).keyEnv] = key;
+
+          const before = loadConfig();
           const path = saveConfig({
             provider: providerValue === null ? null : field(providerValue)?.toLowerCase(),
             model: body.model === null ? null : field(body.model),
@@ -5724,12 +5749,49 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             ...(boxImageChange !== undefined ? { boxImage: boxImageChange } : {}),
             ...(hostExecChange !== undefined ? { hostExec: hostExecChange } : {}),
             ...(startupItemChange !== undefined ? { startupItem: startupItemChange } : {}),
-            ...(key !== undefined && key !== null
-              ? { env: { [resolveProvider(chosenName).keyEnv]: key } }
-              : {}),
+            ...(Object.keys(envChange).length > 0 ? { env: envChange } : {}),
           });
           log(`config saved to ${path}`);
-          send(res, 200, { saved: true, note: "Takes effect when the server restarts." });
+
+          // Apply the model side now (INV-1268). The file is already written; what can still
+          // fail is resolving it, and then the old runtime stays and the page hears why.
+          const after = loadConfig();
+          const { locked } = reapplyConfigEnv(after);
+          let profile: ProviderProfile;
+          try {
+            profile = resolveProvider(undefined, after.provider);
+          } catch (error) {
+            send(res, 400, { saved: true, applied: false, error: error instanceof Error ? error.message : String(error) });
+            return;
+          }
+          const credentialled =
+            process.env[profile.keyEnv] !== undefined ||
+            (profile.keyEnv === "ANTHROPIC_API_KEY" && process.env.ANTHROPIC_AUTH_TOKEN !== undefined);
+          if (!credentialled) {
+            send(res, 400, { saved: true, applied: false, error: `Saved, but not applied: no ${profile.keyEnv} for ${profile.label}. The previous model stays in use.` });
+            return;
+          }
+          const live = orchestrator.provider;
+          const sameRuntime =
+            live.label === profile.label && live.model === profile.model && live.baseUrl === profile.baseUrl &&
+            live.keyEnv === profile.keyEnv && live.vision === profile.vision && live.maxTokens === profile.maxTokens;
+          if (!sameRuntime) orchestrator.setDefaultProvider(profile);
+          const restartNeeded =
+            (hostExecChange !== undefined && JSON.stringify(hostExecChange ?? null) !== JSON.stringify(before.hostExec ?? null)) ||
+            (startupItemChange !== undefined && (startupItemChange ?? false) !== (before.startupItem ?? false)) ||
+            (boxImageChange !== undefined && (boxImageChange ?? null) !== (before.boxImage ?? null));
+          send(res, 200, {
+            saved: true,
+            applied: !sameRuntime,
+            current: describeProvider(orchestrator.provider),
+            locked,
+            restartNeeded,
+            note: restartNeeded
+              ? "Model settings are in force now; the host door, startup item or box image change takes effect when the server restarts."
+              : locked.length > 0
+                ? `Saved. ${locked.join(", ")} is set in the server's environment and overrides the file until the server starts without it.`
+                : "Saved and in force. Turns already running finish on the previous model.",
+          });
           return;
         }
 
@@ -5929,7 +5991,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const midnight = new Date();
           midnight.setHours(0, 0, 0, 0);
           send(res, 200, {
-            provider: describeProvider(provider),
+            provider: describeProvider(orchestrator.provider),
             build,
             usageToday: caller.userId === undefined ? orchestrator.usage.totalsSince(midnight.getTime()) : orchestrator.usage.sum(orchestrator.usage.since(0, Number.MAX_SAFE_INTEGER).filter(record => Date.parse(record.at) >= midnight.getTime() && mayReadAgent(record.agentId))),
             // Broken out by person, with a readable name where the id is a principal.

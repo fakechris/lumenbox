@@ -275,8 +275,8 @@ const SILICONFLOW_GLOBAL: ProviderProfile = {
  */
 export const PRESET_MODELS: Record<string, readonly string[]> = {
   anthropic: ["claude-opus-5", "claude-sonnet-5", "claude-opus-4-6", "claude-haiku-4-5"],
-  minimax: ["MiniMax-M3", "MiniMax-M2"],
-  "minimax-global": ["MiniMax-M3", "MiniMax-M2"],
+  minimax: ["MiniMax-M3.1-Flash-Preview", "MiniMax-M3", "MiniMax-M2"],
+  "minimax-global": ["MiniMax-M3.1-Flash-Preview", "MiniMax-M3", "MiniMax-M2"],
   deepseek: ["deepseek-chat", "deepseek-reasoner"],
   kimi: ["kimi-k2-turbo-preview", "kimi-k2-0905-preview"],
   "kimi-global": ["kimi-k2-turbo-preview", "kimi-k2-0905-preview"],

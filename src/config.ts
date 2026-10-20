@@ -616,15 +616,67 @@ function readEnvMap(
  * only affect this program's own lookups.
  */
 export function applyConfigEnv(config: AgentboxConfig): void {
-  for (const [key, value] of Object.entries(config.env ?? {})) {
-    if (process.env[key] === undefined) process.env[key] = value;
+  for (const [key, value] of configEnvEntries(config)) {
+    if (process.env[key] === undefined) {
+      process.env[key] = value;
+      appliedFromConfig.add(key);
+    }
   }
-  if (config.model !== undefined && process.env.AGENTBOX_MODEL === undefined) {
-    process.env.AGENTBOX_MODEL = config.model;
+}
+
+/** The variables a config file speaks for: its `env` block, plus the two top-level fields that are really variables. */
+function configEnvEntries(config: AgentboxConfig): [string, string][] {
+  const entries: [string, string][] = Object.entries(config.env ?? {});
+  if (config.model !== undefined) entries.push(["AGENTBOX_MODEL", config.model]);
+  if (config.baseUrl !== undefined) entries.push(["AGENTBOX_BASE_URL", config.baseUrl]);
+  return entries;
+}
+
+/**
+ * Which process.env keys the config file put there, as opposed to the shell. Kept so a later
+ * re-apply can tell a value it may replace from one the operator exported on purpose: after
+ * startup the two look identical in process.env (INV-1268).
+ */
+const appliedFromConfig = new Set<string>();
+
+/**
+ * Apply a config file again, after a save, to a process that is already running (INV-1268).
+ *
+ * A key the shell set stays as it is and is reported as `locked`; a key this process took from
+ * the config before — or that nothing set — follows the file: set to the file's value, or
+ * removed when the file no longer names it. Nothing else in process.env is touched.
+ */
+export function reapplyConfigEnv(config: AgentboxConfig): { locked: string[] } {
+  const next = new Map(configEnvEntries(config));
+  const locked: string[] = [];
+  for (const key of [...appliedFromConfig]) {
+    if (!next.has(key)) {
+      delete process.env[key];
+      appliedFromConfig.delete(key);
+    }
   }
-  if (config.baseUrl !== undefined && process.env.AGENTBOX_BASE_URL === undefined) {
-    process.env.AGENTBOX_BASE_URL = config.baseUrl;
+  for (const [key, value] of next) {
+    const shellOwned = process.env[key] !== undefined && !appliedFromConfig.has(key);
+    if (shellOwned) {
+      if (process.env[key] !== value) locked.push(key);
+      continue;
+    }
+    process.env[key] = value;
+    appliedFromConfig.add(key);
   }
+  return { locked };
+}
+
+/** The keys a config file names that the shell has set to something else: what a settings page must call locked. */
+export function lockedConfigEnv(config: AgentboxConfig): string[] {
+  return configEnvEntries(config)
+    .filter(([key, value]) => process.env[key] !== undefined && !appliedFromConfig.has(key) && process.env[key] !== value)
+    .map(([key]) => key);
+}
+
+/** Test seam: forget which keys came from config, so one test's apply does not leak into the next. */
+export function resetConfigEnvForTests(): void {
+  appliedFromConfig.clear();
 }
 
 /**

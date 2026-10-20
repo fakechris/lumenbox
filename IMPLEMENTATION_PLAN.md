@@ -1,40 +1,40 @@
-# Implementation plan — ShowUI (INV-1269, docs/79)
+# Implementation plan — hot-swap the default model (INV-1268)
 
-Branch `feat/inv-1269-showui`, worktree `agentbox-showui`. Each stage ships green on its own
-(`npm run check`). The previous plan (2026-09-02 delta) is complete; see docs/11 for its record.
+Branch `feat/inv-1268-provider`, worktree `agentbox-quick`. The previous plan (ShowUI, INV-1269)
+is complete; its record is in docs/79 and the INV. Each stage ships green on its own
+(`npm run check`, `npm test`).
 
-## Stage 1: Host — tool, catalog, validation, ledger
-**Goal**: `ShowUI` exists; the host validates input against the lumenbox A2UI catalog with the
-real `MessageProcessor`; a `SurfaceLedger` keeps the latest message list per surface; the
-`showUI` context hook is wired like `askUser`.
-**Success Criteria**: `src/host/show-ui.test.ts` — catalog-outside component rejected with the
-reason; unknown property rejected; dangling child rejected; first call yields
-createSurface+updateComponents, second call only updateComponents, close yields deleteSurface;
-ledger latest-line-wins and `closed` drops the surface. ShowUI listed in PERSON_FACING_TOOLS,
-DESK_TOOLS, ALL_TOOLS, TEMPLATE_SETUP_TOOLS, side-effects, activity phrase. `npm run check` green.
-**Status**: Complete (2026-10-19)
+## Stage 1: Orchestrator — a swappable default runtime
+**Goal**: `orchestrator.setDefaultProvider(profile)` replaces provider, client and the
+Rememberer's summary pair together; a running turn keeps the pair it started with.
+**Success Criteria**: unit test — swap mid-turn, the turn's later rounds and its usage rows still
+name the old model, the next turn names the new one; askCheaply/askBounded/relay/Rememberer read
+the new one; a `switch` row lands in usage.jsonl.
+**Status**: Complete
 
-## Stage 2: Web — vendor bundle, surface item, replay, action
-**Goal**: `vendor/a2ui.js` built by `scripts/build-vendor.mjs` and served at `/vendor/a2ui.js`;
-the page shows a `surface` item via `<a2ui-surface>`, updates it in place on a second event,
-replays it from the transcript, and posts actions as `[Action "name" on card id: {...}]`.
-**Success Criteria**: `app-html.test.ts` covers the surface item markup and update path;
-`transcript.test.ts` covers ShowUI tool_use → `surface` on the display tool; vendor route test;
-`npm run check` green; manual: a card renders in the running web (main checkout, ask first).
-**Status**: Complete (2026-10-19) — verified in a real browser on a static harness: the bundle loads, ten components, a TextField + ChoicePicker + Button card renders, and the press yields `[Action "pick" on card plan: {"plan":["b"],"name":"Chris"}]`; the running web is still to be checked at Stage 4.
+## Stage 2: Config — re-apply after a save, shell wins
+**Goal**: `reapplyConfigEnv(config)` sets the variables the file speaks for, removes the ones it
+dropped, never touches a shell-exported one, and reports those as `locked`.
+**Success Criteria**: config.test.ts — config-applied key follows the file; shell key stays and is
+listed; dropped key is removed.
+**Status**: Complete
 
-## Stage 3: Channels — Feishu card, text fallback, action callback
-**Goal**: Feishu adapter translates the catalog subset to an interactive card; button press comes
-back as the action message; DingTalk/Telegram get the text rendering; the manager routes via a
-`/act` continuation; restart redraws from the ledger are not required (post-once, like questions).
-**Success Criteria**: `feishu.test.ts` fixture for a Text+Button+ChoicePicker surface; callback
-test yields the action text; `manager.test.ts` `/act` parsing; `strings`/i18n entries; green.
-**Status**: Complete (2026-10-19) — the press is `@Agent [Action …]`, so the manager routes it as a typed message with no new state; DingTalk and Telegram get the words path (no DingTalk card template yet).
+## Stage 3: Server — save applies, no restart for model fields
+**Goal**: `POST /api/config` saves, re-applies env, resolves the provider, swaps it; on a resolve
+failure it keeps the old runtime and answers 400. Accepts `vision` (auto/on/off) and
+`summaryModel`. `GET /api/config` and `/api/state` report the live provider plus `locked`.
+`restartNeeded` only when hostExec/startupItem/boxImage changed.
+**Success Criteria**: server test — save a new model, `/api/state` shows it without restart, pid
+unchanged; invalid provider → 400 and state unchanged.
+**Status**: Complete (src/web/config-switch.test.ts)
 
-## Stage 4: Scenario, prompt, docs, live check
-**Goal**: scenario harness stub `ShowUI:delivered`, a scenario test fake-engine → ShowUI → action
-→ next turn sees it; conduct text says when to use ShowUI instead of Markdown; docs/79 and
-INDEX final; NOTICE entry; `release:check`; one real-box run (web click + Feishu click) in a
-handoff note.
-**Success Criteria**: all of the above; INV-1269 acceptance items 1–5 ticked with evidence.
-**Status**: Code complete (2026-10-19): scenario, conduct line, skill doc, README licence note, handoff. Live web run done 2026-10-19 (card drawn, press returned, one provider-encoding fix found and shipped); Feishu press done the same day (`[Action "pick" on card pick: {"which":"left"}]` in the Feishu conversation) — INV-1269 acceptance item 5 complete.
+## Stage 4: Settings page
+**Goal**: model input (suggestions incl. MiniMax-M3.1-Flash-Preview), vision three-way, summary
+model, "now running" line with locked notes; Save applies, Save & restart only when needed.
+**Success Criteria**: app-html static checks for the new ids; the save path reads `restartNeeded`.
+**Status**: Complete
+
+## Stage 5: Release check and the live switch
+**Goal**: `npm run release:check`; switch the model in the desktop app on this Mac; evidence in the
+PR — server pid before/after, channel log without a reconnect, usage.jsonl model before/after.
+**Status**: Not Started
