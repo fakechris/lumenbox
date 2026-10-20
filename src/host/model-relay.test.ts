@@ -163,5 +163,9 @@ test("usage is read off either wire, streamed or not", () => {
   const stream = countUsage('data: {"choices":[]}\n\ndata: {"usage":{"prompt_tokens":5,"completion_tokens":2}}\n\ndata: [DONE]\n');
   assert.equal(stream.inputTokens, 5);
   assert.equal(stream.outputTokens, 2);
-  assert.deepEqual(countUsage("not json"), { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
+  // A body that named no cache field has unverified cache zeros; one with no usage at all is missing (INV-1260).
+  assert.equal(stream.metering, "cache_unknown");
+  assert.deepEqual(countUsage("not json"), { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, metering: "missing" });
+  const anthropic = countUsage(JSON.stringify({ usage: { input_tokens: 7, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }));
+  assert.deepEqual(anthropic, { inputTokens: 7, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 });
 });

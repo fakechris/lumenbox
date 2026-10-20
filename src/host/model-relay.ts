@@ -21,7 +21,7 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ProviderProfile } from "./provider.ts";
-import type { UsageLog } from "./usage.ts";
+import type { UsageLog, UsageMetering } from "./usage.ts";
 
 export const RELAY_PATH = /^\/relay\/([0-9a-f]{32})(\/.*)?$/;
 /** How long a route lives without traffic, and the absolute ceiling with it. */
@@ -63,6 +63,8 @@ interface Counted {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  /** Set when the body never named a cache field: its zeros are "not said", not "none" (INV-1260). */
+  metering?: UsageMetering;
 }
 
 function sameSecret(a: string, b: string): boolean {
@@ -78,20 +80,24 @@ function sameSecret(a: string, b: string): boolean {
  */
 export function countUsage(body: string): Counted {
   const counted: Counted = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+  let sawUsage = false;
+  let sawCache = false;
   const absorb = (usage: unknown) => {
     if (typeof usage !== "object" || usage === null) return;
     const u = usage as Record<string, unknown>;
+    sawUsage = true;
     const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
     // Anthropic names.
     if ("input_tokens" in u) counted.inputTokens = Math.max(counted.inputTokens, n(u.input_tokens));
     if ("output_tokens" in u) counted.outputTokens = Math.max(counted.outputTokens, n(u.output_tokens));
-    if ("cache_read_input_tokens" in u) counted.cacheReadTokens = Math.max(counted.cacheReadTokens, n(u.cache_read_input_tokens));
-    if ("cache_creation_input_tokens" in u) counted.cacheWriteTokens = Math.max(counted.cacheWriteTokens, n(u.cache_creation_input_tokens));
+    if ("cache_read_input_tokens" in u) { sawCache = true; counted.cacheReadTokens = Math.max(counted.cacheReadTokens, n(u.cache_read_input_tokens)); }
+    if ("cache_creation_input_tokens" in u) { sawCache = true; counted.cacheWriteTokens = Math.max(counted.cacheWriteTokens, n(u.cache_creation_input_tokens)); }
     // OpenAI names.
     if ("prompt_tokens" in u) counted.inputTokens = Math.max(counted.inputTokens, n(u.prompt_tokens));
     if ("completion_tokens" in u) counted.outputTokens = Math.max(counted.outputTokens, n(u.completion_tokens));
     const details = u.prompt_tokens_details as Record<string, unknown> | undefined;
     if (details !== undefined && "cached_tokens" in details) {
+      sawCache = true;
       counted.cacheReadTokens = Math.max(counted.cacheReadTokens, n(details.cached_tokens));
     }
   };
@@ -111,6 +117,10 @@ export function countUsage(body: string): Counted {
     const message = event.message as Record<string, unknown> | undefined;
     if (message !== undefined) absorb(message.usage);
   }
+  // No usage block at all is "missing"; a block that never named a cache field leaves the
+  // cache zeros unverified. Either way the row is counted but not priced.
+  if (!sawUsage) counted.metering = "missing";
+  else if (!sawCache) counted.metering = "cache_unknown";
   return counted;
 }
 

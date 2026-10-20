@@ -47,7 +47,7 @@ import {
   FirstTokenStallError,
   FIRST_TOKEN_DEADLINE_MS,
 } from "./transient.ts";
-import { cacheReadShare, type UsageKind, type UsageLog } from "./usage.ts";
+import { cacheMetering, cacheReadShare, type UsageKind, type UsageLog } from "./usage.ts";
 import { chooseRelevant, memoryProjectionManifest, SHARED_CHAR_BUDGET, type MemoryRecall } from "./memory.ts";
 import { refusedLine, type NetworkEventLog } from "../egress/events.ts";
 import { needsReview, type ReviewInput, type ReviewMode, type Verdict } from "./auto-review.ts";
@@ -2672,7 +2672,9 @@ ${outcome.text}`;
       cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
       cacheWriteTokens: response.usage.cache_creation_input_tokens ?? 0,
     };
-    const metering = (response.usage as { metering?: import("./usage.ts").UsageMetering }).metering;
+    // A cache field the provider left out is not a zero (INV-1260): the row is marked and
+    // spend.ts leaves it unpriced rather than billing a number nobody reported.
+    const metering = cacheMetering(response.usage);
     emit({ type: "usage", agentId: agent.id, round, ...usage,
       ...(metering !== undefined ? { metering } : {}) });
     turnUsage.inputTokens += usage.inputTokens;

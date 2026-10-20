@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { appendFileSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { UsageLog, type UsageRecord } from "./usage.ts";
+import { cacheMetering, UsageLog, type UsageRecord } from "./usage.ts";
 
 const entry = (agentName = "Ada", round = 0): Omit<UsageRecord, "seq" | "at"> => ({
   agentId: `id-${agentName}`,
@@ -384,4 +384,27 @@ test("a cold cache with nothing changed, or a warm one, writes no reason row (IN
   log.notePromptCache({ ...other, usage: low, changed: ["stable"] });
   log.notePromptCache({ ...other, usage: low, changed: ["stable"] });
   assert.equal(log.since(0).length, 0);
+});
+
+test("a cache field the provider left out is unknown, a reported zero is zero (INV-1260)", () => {
+  const path = logPath();
+  const log = new UsageLog(path);
+  const who = { kind: "summarize" as const, agentId: "a", agentName: "a", provider: "p", model: "m" };
+  log.recordAside({ ...who, usage: { input_tokens: 1, output_tokens: 1 } });
+  log.recordAside({ ...who, usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: null, cache_creation_input_tokens: null } });
+  log.recordAside({ ...who, usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } });
+  log.recordAside({ ...who, usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, metering: "complete" } });
+  const rows = new UsageLog(path).since(0, 10);
+  assert.deepEqual(rows.map(row => row.metering), ["cache_unknown", "cache_unknown", undefined, "complete"]);
+  assert.deepEqual(rows.map(row => row.cacheWriteTokens), [0, 0, 0, 0]);
+  // The wire's own verdict is kept as given, never second-guessed from the counts.
+  assert.equal(cacheMetering({ metering: "missing" }), "missing");
+});
+
+test("a pre-2026-10-20 row with a numeric zero and no mark reads exactly as before (INV-1260)", () => {
+  const path = logPath();
+  writeFileSync(path, JSON.stringify({ seq: 1, at: "2026-09-15T00:00:00.000Z", ...entry() , cacheWriteTokens: 0 }) + "\n");
+  const [row] = new UsageLog(path).since(0, 10);
+  assert.equal(row?.cacheWriteTokens, 0);
+  assert.equal(row?.metering, undefined);
 });

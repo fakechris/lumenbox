@@ -30,8 +30,10 @@ const first = lines("usage.jsonl")
   .filter(r => r.kind === "turn" && r.round === 0 && r.at >= since)
   .sort((a, b) => a.at.localeCompare(b.at));
 
-let hits = 0, reads = 0, fresh = 0, only128 = 0;
+let hits = 0, reads = 0, fresh = 0, only128 = 0, unknown = 0;
 for (const row of first) {
+  // A row the provider never gave cache fields for says nothing about hits either way (INV-1260).
+  if (row.metering !== undefined && row.metering !== "complete") { unknown += 1; continue; }
   const begin = begins.get(row.turnId);
   const input = (row.inputTokens ?? 0) + (row.cacheReadTokens ?? 0) + (row.cacheWriteTokens ?? 0);
   const read = row.cacheReadTokens ?? 0;
@@ -47,4 +49,5 @@ for (const row of first) {
 }
 const total = reads + fresh;
 console.log(`\n${first.length} first rounds since ${since || "the start of the log"}: ${hits} read more than 128 tokens, ${only128} read exactly 128; ` +
-  `${reads} of ${total} first-round input tokens from cache (${total > 0 ? Math.round((reads / total) * 100) : 0}%).`);
+  `${reads} of ${total} first-round input tokens from cache (${total > 0 ? Math.round((reads / total) * 100) : 0}%)` +
+  `${unknown > 0 ? `; ${unknown} rows had no cache fields from the provider and are left out` : ""}.`);
