@@ -123,6 +123,15 @@ Every file in `docs/` opens with a header block naming what it is:
 - **A conduct fix is not finished until the episode is a scenario.** `src/host/scenario.ts` runs
   a whole multi-agent episode on the real stack with a scripted model and scores it; add one to
   `scenario.test.ts` for every run that went wrong (docs/43).
+- **What is too big only shrinks.** `arch-baseline.json` (checked by `npm run arch`, part of
+  `npm run check` and CI) lists every production file over 1000 lines at its current length and
+  every file reading `process.env` outside `src/config.ts` / `src/cli.ts` / the daemons' `main.ts`.
+  A listed file may get shorter or stop reading the environment, never the reverse; a new file
+  fits the limit or is split; the baseline never gains an entry (`--write-baseline` only lowers).
+- **Tests are not scored by count.** When a review asks for a change, change the existing
+  regression test that covers it rather than adding one per review round; and never write a
+  change detector (a test that asserts the current output byte-for-byte without saying what
+  would be wrong). Zero new tests for a fix is correct when the existing test now proves it.
 - **A concept has one home.** A second definition of the same idea in a second file is the bug,
   even when it works. `src/host/architecture-guard.test.ts` fails the build for the ones we have
   already paid for.
