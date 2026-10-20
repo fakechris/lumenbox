@@ -10,7 +10,7 @@ with the profile written from the environment and removed on exit, `goal.verific
 `build-image.mjs` lists unpinned engines and refuses a release build with one;
 `release-check.mjs` reads the image contract.
 **Success Criteria**: presets/engine-report tests; `npm run check` green.
-**Status**: In Progress
+**Status**: Complete
 
 ## Stage 2: Run it for real
 **Goal**: build the box image with all four pins; run `mcode exec` through the preset's exact
@@ -20,9 +20,9 @@ the outside), with egress logged.
 calls through the relay (no `/mavis/api/v1/permission/check`); the temporary data dir is gone
 after the run and no file in the box contains the token; real output becomes the fixture in
 `src/host/fixtures/engine-report/mcode-*.jsonl`.
-**Status**: Not Started
+**Status**: Complete (stub run, docs/25 §mcode; a real-model run is still open)
 
 ## Stage 3: Docs and pins
 **Goal**: docs/25 gains the mcode row (measured facts), the release-engine-pins memory names
 MCODE_VERSION; PR.
-**Status**: Not Started
+**Status**: Complete

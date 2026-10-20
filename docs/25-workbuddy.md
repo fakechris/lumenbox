@@ -2,7 +2,7 @@
      title: Workbuddy: skills, presets, delegated engines — the hands-on program
      family: decision
      status: current
-     updated: 2026-10-01
+     updated: 2026-10-20
 -->
 # Workbuddy: skills, presets, delegated engines — the hands-on program
 
@@ -128,6 +128,40 @@ machine-readable mode, and the host reads the engine's last report from the log
 or `aborted` when it said so, and `unknown` when it said nothing. The exit code is kept as
 evidence and decides only a failure the report does not contradict. A resume Claude refuses
 drops the thread capsule; the next run starts fresh and says why.
+
+## Measured: MiniMax Code as the fourth preset (INV-1233, 2026-10-20)
+
+mcode 0.6.12 (`@minimax-ai/code`, read at minimax-code 9a93560) in the box image, run with the
+preset's exact command against a stub Anthropic-messages server on an `--internal` docker
+network — no route to anything else, so a call to MiniMax's cloud would have failed loudly.
+The fixtures `src/host/fixtures/engine-report/mcode-ok.jsonl` and `mcode-refused.jsonl` are its
+output as written.
+
+| run | exit | last line | what the stub saw |
+|---|---|---|---|
+| stub answers | 0 | `exec.completed`, `result.status: "succeeded"`, `output` the answer, `usage.{inputTokens,outputTokens}` | `POST /v1/messages/count_tokens` ×2 (answered 404, tolerated), `POST /v1/messages` with `stream: true`; auth as `x-api-key`; nothing else |
+| relay refuses the connection | 4 | `turn.failed` then `exec.completed` `status: "failed"`, `error.message` "BYOK provider … upstream error: Connection error.", `usageSource: "unavailable"` | — |
+
+What the preset does and why, each read in the engine's source and then watched here:
+
+- **`--permission full`, on the command line.** `exec`'s default is `smart`, which sends every
+  tool input the local rules cannot decide to `agent.minimax.{cn,io}/mavis/api/v1/permission/check`
+  — with a customer's own key as much as with MiniMax's, because the CLI marks itself a managed
+  runtime. `full` keeps the deterministic denies and asks nobody. `ask` is refused headless.
+- **The profile is per run and gone afterwards.** mcode reads its provider from `config.yaml`
+  in its data directory and expands no variables, so the credential has to be in that file.
+  The run makes a `mktemp -d`, points `MINIMAX_DATA_DIR` at it, writes the file from
+  `$LUMENBOX_RELAY_TOKEN` and removes the directory on `EXIT`. After both runs: no `/tmp/mcode.*`
+  left, and `grep -rl <token> /home/box /tmp` found nothing.
+- **`goal.verification: subagent`** in the profile. A custom provider defaults to `none`, where
+  the worker's own claim closes the goal.
+- **Telemetry off twice** (`MCODE_DISABLE_TELEMETRY=1`, `DO_NOT_TRACK=1`); it is opt-in anyway.
+  The update check is wired only into the interactive TUI.
+- **Node 22.19+**: 0.6.x refuses older with exit 1, so the image's Node moved 22.18 → 22.20.
+  The install needs scripts (better-sqlite3's prebuilt), unlike pi's.
+- **Not measured:** a run with tool calls against a real model, `--max-steps` reached
+  (`limit_exceeded`, exit 7, read as aborted), and a MiniMax endpoint's answer to
+  `count_tokens` through the real relay (the stub's 404 was tolerated).
 
 Not measured: a long run with tool calls on each engine against a real model. The parsers
 read only the final events, and an opencode run cut off after a tool-calls step has no

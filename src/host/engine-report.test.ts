@@ -304,3 +304,18 @@ test("mcode's exec.completed line is the report: succeeded, failed, the step bud
   // A failure before the run starts writes no JSON: no report.
   assert.equal(parseEngineReport("mcode", "mcode exec failed: config error\n"), undefined);
 });
+
+test("mcode 0.6.12's real output: a succeeded run and a relay it could not reach (INV-1233)", () => {
+  // Measured in the box image with mcode 0.6.12 against a stub Anthropic-messages server on an
+  // internal docker network (docs/25 §mcode): exit 0 with exec.completed status succeeded, and
+  // exit 4 with status failed when the relay refused the connection.
+  const ok = parseEngineReport("mcode", fixture("mcode-ok"))!;
+  assert.equal(ok.status, "completed");
+  assert.equal(ok.finalText, "Done. I read the brief and there was nothing to change.");
+  assert.deepEqual(ok.usage, { input: 42, output: 12, cacheRead: 0, cacheWrite: 0 });
+  assert.match(ok.sessionId ?? "", /^mvs_/);
+  const refused = parseEngineReport("mcode", fixture("mcode-refused"))!;
+  assert.equal(refused.status, "failed");
+  assert.match(refused.detail ?? "", /upstream error: Connection error/);
+  assert.equal(refused.usage, undefined, "usageSource unavailable is not zero");
+});
