@@ -59,7 +59,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [20-completion-standard](20-completion-standard.md) | The standard of completion, written before the work | current | 2026-09-14 |
 | [23-context-compaction](23-context-compaction.md) | Why the agent kept compacting, and what long-horizon systems do instead | current | 2026-09-27 |
 | [24-context-memory](24-context-memory.md) | Context, memory and compaction: ours, against Hermes and OpenClaw | current | 2026-09-26 |
-| [25-workbuddy](25-workbuddy.md) | Workbuddy: skills, presets, delegated engines — the hands-on program | current | 2026-10-20 |
+| [25-workbuddy](25-workbuddy.md) | Workbuddy: skills, presets, delegated engines — the hands-on program | current | 2026-10-21 |
 | [26-inbound-reliability](26-inbound-reliability.md) | Inbound reliability: what a message goes through, and what mature harnesses do | current | 2026-09-01 |
 | [29-bot-templates](29-bot-templates.md) | Bot templates: the bot packs itself, the new bot installs itself | current | 2026-09-14 |
 | [30-multi-box](30-multi-box.md) | Many boxes, one host: the multi-box mode | current | 2026-09-14 |
@@ -99,7 +99,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [78-context-handoff](78-context-handoff.md) | 建议换代：空闲时备好交接，人发 /new 时装入 | current | 2026-10-15 |
 | [79-genui](79-genui.md) | ShowUI：agent 用 A2UI 组装卡片，网页渲染，飞书/钉钉降级 | current | 2026-10-19 |
 | [80-mcp-apps-host](80-mcp-apps-host.md) | MCP Apps 宿主：网页把 MCP 工具自带的 ui:// 界面装进第二 origin 的沙箱（spike 结论） | current | 2026-10-19 |
-| [81-delegate-session-acp](81-delegate-session-acp.md) | Delegate as a session: what mcode's ACP actually does, and what enters the host | current | 2026-10-20 |
+| [81-delegate-session-acp](81-delegate-session-acp.md) | Delegate as a session: what mcode's ACP actually does, and what enters the host | current | 2026-10-21 |
 | [82-tailmsg-door](82-tailmsg-door.md) | The tailmsg door: another machine's agent writes to ours over the tailnet | current | 2026-10-20 |
 
 ## handoff

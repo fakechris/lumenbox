@@ -2,7 +2,7 @@
      title: Workbuddy: skills, presets, delegated engines — the hands-on program
      family: decision
      status: current
-     updated: 2026-10-20
+     updated: 2026-10-21
 -->
 # Workbuddy: skills, presets, delegated engines — the hands-on program
 
@@ -190,6 +190,12 @@ the engine sees, and the fixtures above are what it says back.
 Not measured: a long run with tool calls on each engine against a real model. The parsers
 read only the final events, and an opencode run cut off after a tool-calls step has no
 completion report, so it is `unknown`.
+
+## Timeouts on the delegation path
+
+Every wait a delegation can run out of, for the one-shot and the session form alike, is one
+table in docs/81 §4 (INV-1310): what each is, what happens when it runs out, and what the record
+says. The one-shot job itself has no clock; `Jobs wait` does, and a kill is `aborted`.
 
 ## Rules of the program
 

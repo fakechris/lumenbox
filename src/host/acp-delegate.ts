@@ -21,14 +21,14 @@
  * the bill (model-relay.ts). `usage_update` from the engine is context occupancy, not tokens.
  */
 import { createHash } from "node:crypto";
-import type { AcpEvent } from "../protocol/index.ts";
 import type { BoxClient } from "../box/client.ts";
+import type { AcpEvent } from "../protocol/index.ts";
+import { judgeWithReport } from "./delegate-report.ts";
 import { awaitDelegatedConsent } from "./delegated-consent.ts";
 import { delegateEndedNote, readReportFile } from "./engine-report.ts";
-import { judgeWithReport } from "./delegate-report.ts";
-import { describeWorktree, worktreeState } from "./worktree-state.ts";
 import type { PendingWork } from "./pending-work.ts";
 import type { PolicyGate } from "./policy.ts";
+import { describeWorktree, worktreeState } from "./worktree-state.ts";
 
 export type AcpBox = Pick<BoxClient, "acpOpen" | "acpSend" | "acpReply" | "acpEvents" | "acpClose" | "acpSessions"> & Partial<Pick<BoxClient, "exec" | "readFile">>;
 
@@ -44,7 +44,18 @@ export interface AcpDelegateDeps {
   /** Consent waiting, overridable for tests. */
   consentPollMs?: number;
   consentWaitMs?: number;
+  /** How long the engine has to confirm a cancel before the host ends the session itself (INV-1310). */
+  cancelGraceMs?: number;
 }
+
+/**
+ * The engine's time to answer `session/cancel` (INV-1310). A cancel is a notification: nothing
+ * comes back for it but the prompt's own response, `stopReason: cancelled`. An engine that never
+ * sends that would leave the brief in flight for ever with nobody collecting it, which is the
+ * nanoMuse hub's failure (the caller gives up, the target keeps working). So the host waits this
+ * long, then settles the brief as aborted by its own hand and closes the session.
+ */
+export const CANCEL_GRACE_MS = 15_000;
 
 /** What the record of a brief carries for a session, beside `engine` (pending-work `data`). */
 export interface SessionData {
@@ -198,13 +209,41 @@ export class AcpDelegates {
     return mode === "duplicate" ? "duplicate" : "delivered";
   }
 
-  /** `session/cancel`: a notification; the brief settles when the engine answers its prompt. */
+  /**
+   * `session/cancel`: a notification; the brief settles when the engine answers its prompt with
+   * `cancelled`, or, when the engine does not within the grace, as aborted by the host's own hand.
+   */
   async cancel(jobId: string): Promise<boolean> {
     const watch = this.watches.get(jobId);
     if (watch === undefined) throw new Error(`${jobId} is not an open delegate session on this host`);
     if (watch.inFlight === undefined) return false;
     await watch.box.acpSend({ session_id: jobId, method: "session/cancel", params: { sessionId: watch.engineSessionId }, notify: true });
+    void this.awaitCancel(watch, "the agent cancelled the brief");
     return true;
+  }
+
+  /**
+   * Waits the grace for the engine to confirm a cancel already sent. Not awaited by the caller:
+   * the confirmation is an event the keeper's loop handles, and holding that loop would hold
+   * the very answer this waits for. When the brief is still in flight at the deadline, the
+   * host settles it as aborted, naming the layer that gave up, and closes the session.
+   */
+  private async awaitCancel(watch: Watch, why: string): Promise<void> {
+    const inFlight = watch.inFlight;
+    if (inFlight === undefined) return;
+    const grace = this.deps.cancelGraceMs ?? CANCEL_GRACE_MS;
+    const now = this.deps.now ?? Date.now;
+    const deadline = now() + grace;
+    while (now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, Math.min(100, grace)));
+      // Settled by the engine's own answer, or the session is gone: nothing left to do here.
+      if (watch.inFlight !== inFlight || watch.stopped) return;
+    }
+    this.deps.log?.(`acp ${watch.jobId}: the engine did not confirm the cancel within ${Math.round(grace / 1000)}s; closing the session`);
+    watch.stopped = true;
+    this.watches.delete(watch.jobId);
+    this.settle(watch, "aborted", `${why}; the engine did not confirm the cancel within ${Math.round(grace / 1000)}s, so the host closed the session`);
+    await watch.box.acpClose({ session_id: watch.jobId }).catch(() => undefined);
   }
 
   /** Ends the engine; a brief still in flight is settled as aborted by the host's own hand. */
@@ -385,6 +424,7 @@ export class AcpDelegates {
       // the host ends it instead, and the brief settles as aborted when the engine confirms.
       this.deps.log?.(`acp ${watch.jobId}: consent timed out; cancelling the turn`);
       await watch.box.acpSend({ session_id: watch.jobId, method: "session/cancel", params: { sessionId: watch.engineSessionId }, notify: true }).catch(() => undefined);
+      void this.awaitCancel(watch, "nobody answered the engine's permission question within the consent wait");
     }
   }
 
