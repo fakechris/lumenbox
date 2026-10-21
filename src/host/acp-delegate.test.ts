@@ -299,6 +299,9 @@ test("consent times out and the engine ignores the cancel that follows: aborted 
     assert.match(row?.why ?? "", /nobody answered the engine's permission question within the consent wait; the engine did not confirm the cancel within 0s/);
     assert.equal(f.policy.pending().length, 0, "the question was withdrawn");
     assert.equal(f.delegates.get(started.jobId), undefined);
+    // The close that follows the note still runs; let it finish before the directory goes.
+    for (let i = 0; i < 100 && f.acp.list().some(s => s.session_id === started.jobId); i++) await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(f.acp.list().some(s => s.session_id === started.jobId), false, "the session is gone from the box");
   } finally {
     f.cleanup();
   }
