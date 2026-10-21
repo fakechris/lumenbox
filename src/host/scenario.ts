@@ -36,6 +36,7 @@ import { MemoryMirror } from "./memory-mirror.ts";
 import { memoryRef } from "./memory.ts";
 import type { ProviderProfile } from "./provider.ts";
 import type { PolicyGate } from "./policy.ts";
+import type { Vault } from "./vault.ts";
 import type { McpManager } from "./mcp.ts";
 import type { PendingWork } from "./pending-work.ts";
 import type { TaskStore } from "./tasks.ts";
@@ -336,6 +337,8 @@ export interface EpisodeOptions {
   box?: Partial<BoxClient>;
   /** A desktop index, so browser tools are offered and reach the scripted box rather than refusing for want of a display. */
   display?: number;
+  /** A credential vault, so `browser_fill_secret` and host secrets resolve (INV-1309). */
+  vault?: Vault;
   /** Skills the agents are offered, as the prompt would list them (INV-481). */
   skills?: readonly Skill[];
   /** Persisted history before the episode, including legacy compaction records. */
@@ -469,6 +472,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       resolution: undefined,
       ...(options.selectMemory !== undefined ? { selectMemory: options.selectMemory } : {}),
       ...(options.display !== undefined ? { displayIndex: options.display } : {}),
+      ...(options.vault !== undefined ? { vault: options.vault } : {}),
       ...(options.skills !== undefined ? { skills: options.skills } : {}),
       conversation,
       syncStanding: (agentId: string) => mirror.sync(agentId),

@@ -16,7 +16,7 @@
       "src/host/compaction.ts": 1567,
       "src/host/memory.ts": 1183,
       "src/host/orchestrator.ts": 2805,
-      "src/host/policy.ts": 1217,
+      "src/host/policy.ts": 1167,
       "src/host/prompt.ts": 1451,
       "src/host/schedule.ts": 1122,
       "src/host/starter-skills.ts": 1339,

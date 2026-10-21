@@ -197,7 +197,9 @@ test("the door: health, refusals in order, admission, dedupe, wake, the agent's 
     assert.equal(rated.status, 202);
     assert.equal(rated.body.wake, "batch");
     // 202 is "in the inbox"; the fetch follows the answer, and the flush hands it on.
-    for (let i = 0; i < 100 && !readdirSync(join(dir, "inbox", withFiles.id, "files")).includes("report.txt"); i++) await new Promise(resolve => setTimeout(resolve, 20));
+    // The record gains `files` only once every fetch has settled, matched or dropped.
+    const fetched = () => { try { return (JSON.parse(readFileSync(join(dir, "inbox", `${withFiles.id}.json`), "utf8")) as { received: { files?: string[] } }).received.files !== undefined; } catch { return false; } };
+    for (let i = 0; i < 250 && !fetched(); i++) await new Promise(resolve => setTimeout(resolve, 20));
     await door.flushBatch();
     assert.equal(delivered.length, 5, logs.join("\n"));
     assert.match(delivered[4]!.text, /wake batch \(rate: 2 now-wakes per hour/);

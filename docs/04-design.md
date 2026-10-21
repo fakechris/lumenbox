@@ -359,6 +359,20 @@ action.
 two commands sharing a 400-character prefix pass under one grant. An action too large to display is
 refused, not truncated: consent to something nobody read is not consent.
 
+**A turn that read a secret is asked before it reaches a host nobody listed (INV-1309).** The
+tools that resolve a vault value (`RunOnHost` with `secrets`, `browser_fill_secret`) mark the turn
+tainted in the gate. From then on, a call that leaves the box for a host outside the box's egress
+allow list asks a person, whatever the mode, the lists or an operator's allow rule say: `WebFetch`
+and `browser_open` by their url; `bash` and `RunOnHost` by the hosts in the command (urls,
+`ssh`/`scp`/`rsync` targets, `curl`/`wget` arguments); a network command whose host the gate
+cannot read, `WebSearch`, `browser_upload`, `Delegate` and any MCP or `reach` tool as an unknown
+destination, which is outside. Loopback is the box's own; package managers are not counted; a
+`connector_request` is the person's own service called as them. An empty allow list names nobody.
+The card says what kind of thing was read and where the call would go, never the secret; the
+approval is once-only, and a "session" or "always" answer is recorded as once. Not yet a taint
+source: a private chat's text or a memory, because nothing marks either today (docs/10 S-1).
+Code: `src/host/egress-taint.ts`.
+
 ## 16. Resuming an interrupted turn
 
 An agent four hundred rounds into a task, killed by a restart or an OOM, used to leave its prompt
