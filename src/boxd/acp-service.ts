@@ -15,11 +15,10 @@
  * the two things `session/load` needs after a restart. Never the environment: the relay
  * credential arrives per open and is not written anywhere by this file.
  */
-import { spawn, type ChildProcessByStdio } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync, type WriteStream } from "node:fs";
+import { type ChildProcessByStdio, spawn } from "node:child_process";
+import { createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, type WriteStream, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Readable, Writable } from "node:stream";
-import { JOBS_DIR, JOB_ID } from "./job-service.ts";
 import type {
   AcpCloseRequest,
   AcpEvent,
@@ -32,6 +31,7 @@ import type {
   AcpSendResult,
   AcpSessionStatus,
 } from "../protocol/index.ts";
+import { JOB_ID, JOBS_DIR } from "./job-service.ts";
 
 /** How long the engine gets to answer `initialize` and `session/new` / `session/load`. */
 const OPEN_TIMEOUT_MS = 60_000;
@@ -410,7 +410,15 @@ export class AcpService {
     this.push(session, { kind: "exit", exit_code: code, ...(note !== undefined ? { line: note } : {}) });
     session.log?.end();
     session.log = undefined;
-    this.writeRecord(session);
+    // A session already closed (its record removed, perhaps its directory gone) gets no new
+    // record from its process's last breath; a record that cannot be written is logged, not thrown,
+    // because this runs from the child's close event where nothing can catch it.
+    if (!this.sessions.has(session.status.session_id)) return;
+    try {
+      this.writeRecord(session);
+    } catch (error) {
+      console.error(`[acp] ${session.status.session_id}: could not record the exit: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   private kill(session: Session): void {

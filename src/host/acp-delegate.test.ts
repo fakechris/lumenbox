@@ -75,12 +75,23 @@ function fixture(options: { commandsNeedingConsent?: string[]; consentWaitMs?: n
     }
     throw new Error(`no note within ${limitMs}ms; have: ${notes.map(n => n.text.slice(0, 80)).join(" | ")}`);
   };
+  /** The log is a write stream: a line sent a moment ago may not be on disk yet, so it is polled for. */
+  const logHas = async (jobId: string, pattern: RegExp, limitMs = 3_000) => {
+    const end = Date.now() + limitMs;
+    let log = "";
+    while (Date.now() < end) {
+      try { log = readFileSync(join(dir, `${jobId}.log`), "utf8"); } catch { log = ""; }
+      if (pattern.test(log)) return log;
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    return log;
+  };
   const committed = () =>
     readFileSync(join(dir, "pending-work.jsonl"), "utf8")
       .split("\n")
       .filter(Boolean)
       .map(line => JSON.parse(line) as { event: string; how?: string; why?: string; data?: Record<string, unknown>; child?: string });
-  return { dir, pendingWork, policy, acp, delegates, notes, start, settledNote, committed, cleanup: () => { acp.shutdown(); rmSync(dir, { recursive: true, force: true }); } };
+  return { dir, pendingWork, policy, acp, delegates, notes, start, settledNote, logHas, committed, cleanup: () => { acp.shutdown(); rmSync(dir, { recursive: true, force: true }); } };
 }
 
 test("a brief settles on the engine's end_turn: done, the answer in the note, the record marked a session", async () => {
@@ -154,7 +165,7 @@ test("the engine's permission question goes to the gate: granted is allow-once, 
     f.policy.deny(f.policy.pending()[0]!.id, "test", "no");
     await f.settledNote();
     assert.equal(f.policy.pending().length, 0, "the re-check's request was withdrawn");
-    const log = readFileSync(join(f.dir, `${started.jobId}.log`), "utf8");
+    const log = await f.logHas(started.jobId, /"outcome"/);
     const answers = log.split("\n").filter(line => line.startsWith(">> ") && line.includes('"outcome"'));
     assert.equal(answers.length, 2);
     assert.ok(answers.every(line => !line.includes("allow-always")), "a standing grant is never given to an engine");
@@ -176,7 +187,7 @@ test("a permission question nobody answers ends the turn: deny, then session/can
     assert.match(note.text, /stopped before it finished|unknown.*delivered no report/);
     assert.ok(["aborted", "unknown"].includes(f.committed().find(r => r.event === "committed")?.how ?? ""));
     assert.equal(f.policy.pending().length, 0);
-    const log = readFileSync(join(f.dir, `${started.jobId}.log`), "utf8");
+    const log = await f.logHas(started.jobId, />> .*"session\/cancel"/);
     assert.match(log, />> .*"session\/cancel"/, "the host ended the turn rather than leave it waiting");
     assert.match(log, />> .*"optionId":"deny"/);
     await f.delegates.close(started.jobId);
