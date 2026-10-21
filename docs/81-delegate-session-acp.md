@@ -3,7 +3,7 @@
      family: decision
      status: current
      domain: delegate-session
-     updated: 2026-10-20
+     updated: 2026-10-21
 -->
 
 # Delegate as a session: what mcode's ACP actually does, and what enters the host
@@ -133,3 +133,44 @@ live box on this machine still runs the pre-mcode image; the next image release 
   session removed at close.
 - `presets.ts` `run` for mcode gains the session form; the one-shot form stays for the three
   other presets and for mcode when the host asks for one-shot.
+
+## 4. Who gives up when: every timeout on the delegation path (INV-1310)
+
+nanoMuse's hub (research 2026-10-20) has five timeouts that disagree (120 s, 600 s, 10 min, 15 min,
+15 min) and a caller that sends no stop when it gives up, so a target keeps working for minutes
+after nobody is listening. This table is ours, so the same question has one answer here. The
+rule it enforces: **whichever layer gives up first sends the engine a cancel, and the brief
+settles as aborted with that layer named in the record**; no layer gives up silently.
+
+| Layer | Value | When it runs out | Outcome on the record |
+|---|---|---|---|
+| **Session mode (ACP), host keeper** `host/acp-delegate.ts` | | | |
+| The brief itself (`session/prompt` → its response) | none | never by time: the person cancels or the engine's own turn budget ends it | `done` on `end_turn`; `aborted` on `cancelled` or `max_turn_requests`; `failed` on an error or any other stop |
+| Consent wait for `session/request_permission` (`delegated-consent.ts`) | 10 min (`PERMISSION_WAIT_MS`), polled each 1 s | the question is withdrawn (denied as "nobody answered in time"), the engine is answered `deny`, `session/cancel` is sent, and the cancel grace below starts | `aborted`: "nobody answered the engine's permission question within the consent wait" |
+| Cancel grace, after any `session/cancel` (`CANCEL_GRACE_MS`) | 15 s | the engine has not answered the prompt with `cancelled`: the host settles the brief itself and closes the session (SIGTERM, then SIGKILL after 3 s) | `aborted`: "…; the engine did not confirm the cancel within 15s, so the host closed the session" |
+| Steer answer (`mcode/session/steer`) | 15 s | the steer tool call fails with "did not answer the steer in time"; the brief is untouched | none: a steer is delivered or it is not |
+| Events poll (`acpEvents`) | 25 s per poll (box caps at 120 s); 2 s retry when the box is unreachable | nothing: a long poll ending empty is normal, and an unreachable box is retried for as long as the host runs | none |
+| Engine exit mid-brief | n/a | the `exit` event or `running: false` | `failed`: "the engine exited (code) before answering" |
+| **Session mode, boxd** `boxd/acp-service.ts` | | | |
+| `initialize`, `session/new`, `session/load` | 60 s (`OPEN_TIMEOUT_MS`) | the open fails, the process is killed, no record is left; the Delegate call returns the error and no brief is recorded | none: nothing was in flight |
+| Close grace (`session/close`) | 3 s (`CLOSE_GRACE_MS`) | SIGKILL after SIGTERM | as above |
+| **After a restart** | | | |
+| Host restart, engine still running in the box | n/a | the session is watched again from the record | the brief in flight settles on the engine's answer, as before |
+| Box restart (engine gone) | n/a | `session/load` with the stored id in the stored cwd; a refusal is definite | `failed`: the brief in flight is unknown to the new process and is not replayed |
+| **One-shot mode (background job)** `host/tools.ts`, `boxd/job-service.ts` | | | |
+| The job itself | none | never by time: it runs until it exits; `Jobs kill` stops it | its exit and its report decide (INV-908, INV-1261); a kill is `aborted` ("stopped, by us") |
+| `Jobs wait` | 60 s default, 600 s cap per wait | the wait returns "still running"; the job is untouched | none |
+| Engine probe at launch | 15 s | the delegation is refused before it starts | none |
+| boxd restart under a running job | n/a | the job is `interrupted`; exit unknown | `unknown` at settling: a result nobody saw is not a result |
+| Host restart with a job open | n/a | an extension's job is handed back to it; one nothing picks up is dropped and the agent told | dropped: "lost in a restart: … an attempt, not a result" |
+
+Two things the table makes plain. The brief has no clock of its own, on purpose: a deep piece of
+repository work has no sensible duration, and a timer that killed it at a round number would be
+the nanoMuse defect in a different coat. What has a clock is every wait on something else (a
+person, an engine's answer to a cancel, a steer), and each of those says what it does when it runs
+out. And the one path that used to give up silently is now the cancel grace: before INV-1310 a
+cancel was a notification and nothing more, so an engine that ignored it kept the brief in flight
+for ever; `host/acp-delegate.test.ts` now runs that engine (`IGNORE_CANCEL` in the fake) on both
+the agent's cancel and the consent timeout, and the brief settles as aborted inside the grace with
+the session closed.
+

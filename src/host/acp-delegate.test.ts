@@ -8,14 +8,14 @@
  * same code path the box runs.
  */
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { AcpService } from "../boxd/acp-service.ts";
-import { AcpDelegates, type AcpBox } from "./acp-delegate.ts";
+import { type AcpBox, AcpDelegates } from "./acp-delegate.ts";
 import { PendingWork } from "./pending-work.ts";
 import { PolicyGate } from "./policy.ts";
 
@@ -46,7 +46,7 @@ function boxOver(acp: AcpService, env: Record<string, string> = {}): AcpBox {
   };
 }
 
-function fixture(options: { commandsNeedingConsent?: string[]; consentWaitMs?: number } = {}) {
+function fixture(options: { commandsNeedingConsent?: string[]; consentWaitMs?: number; cancelGraceMs?: number } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "acp-delegate-"));
   const pendingWork = new PendingWork(join(dir, "pending-work.jsonl"));
   const policy = new PolicyGate({
@@ -62,6 +62,7 @@ function fixture(options: { commandsNeedingConsent?: string[]; consentWaitMs?: n
     eventsTimeoutMs: 300,
     consentPollMs: 5,
     ...(options.consentWaitMs !== undefined ? { consentWaitMs: options.consentWaitMs } : {}),
+    ...(options.cancelGraceMs !== undefined ? { cancelGraceMs: options.cancelGraceMs } : {}),
   });
   const start = (prompt: string, env: Record<string, string> = {}) =>
     delegates.start({ box: boxOver(acp, env), agentId: "a1", agentName: "Ada", conversation: "main", engine: "fake", command, cwd: dir, env, prompt }, `job-${Math.random().toString(16).slice(2, 10).padEnd(8, "0")}`);
@@ -74,12 +75,23 @@ function fixture(options: { commandsNeedingConsent?: string[]; consentWaitMs?: n
     }
     throw new Error(`no note within ${limitMs}ms; have: ${notes.map(n => n.text.slice(0, 80)).join(" | ")}`);
   };
+  /** The log is a write stream: a line sent a moment ago may not be on disk yet, so it is polled for. */
+  const logHas = async (jobId: string, pattern: RegExp, limitMs = 3_000) => {
+    const end = Date.now() + limitMs;
+    let log = "";
+    while (Date.now() < end) {
+      try { log = readFileSync(join(dir, `${jobId}.log`), "utf8"); } catch { log = ""; }
+      if (pattern.test(log)) return log;
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    return log;
+  };
   const committed = () =>
     readFileSync(join(dir, "pending-work.jsonl"), "utf8")
       .split("\n")
       .filter(Boolean)
       .map(line => JSON.parse(line) as { event: string; how?: string; why?: string; data?: Record<string, unknown>; child?: string });
-  return { dir, pendingWork, policy, acp, delegates, notes, start, settledNote, committed, cleanup: () => { acp.shutdown(); rmSync(dir, { recursive: true, force: true }); } };
+  return { dir, pendingWork, policy, acp, delegates, notes, start, settledNote, logHas, committed, cleanup: () => { acp.shutdown(); rmSync(dir, { recursive: true, force: true }); } };
 }
 
 test("a brief settles on the engine's end_turn: done, the answer in the note, the record marked a session", async () => {
@@ -153,7 +165,7 @@ test("the engine's permission question goes to the gate: granted is allow-once, 
     f.policy.deny(f.policy.pending()[0]!.id, "test", "no");
     await f.settledNote();
     assert.equal(f.policy.pending().length, 0, "the re-check's request was withdrawn");
-    const log = readFileSync(join(f.dir, `${started.jobId}.log`), "utf8");
+    const log = await f.logHas(started.jobId, /"outcome"/);
     const answers = log.split("\n").filter(line => line.startsWith(">> ") && line.includes('"outcome"'));
     assert.equal(answers.length, 2);
     assert.ok(answers.every(line => !line.includes("allow-always")), "a standing grant is never given to an engine");
@@ -175,7 +187,7 @@ test("a permission question nobody answers ends the turn: deny, then session/can
     assert.match(note.text, /stopped before it finished|unknown.*delivered no report/);
     assert.ok(["aborted", "unknown"].includes(f.committed().find(r => r.event === "committed")?.how ?? ""));
     assert.equal(f.policy.pending().length, 0);
-    const log = readFileSync(join(f.dir, `${started.jobId}.log`), "utf8");
+    const log = await f.logHas(started.jobId, />> .*"session\/cancel"/);
     assert.match(log, />> .*"session\/cancel"/, "the host ended the turn rather than leave it waiting");
     assert.match(log, />> .*"optionId":"deny"/);
     await f.delegates.close(started.jobId);
@@ -262,6 +274,63 @@ test("after a host restart a running session is watched again; after a box resta
     while (notes4.length === 0 && Date.now() < spoke4) await new Promise(resolve => setTimeout(resolve, 20));
     assert.match(notes4[0] ?? "", /failed.*no longer has this session/i);
     reborn.shutdown();
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("an engine that ignores the cancel: the host settles the brief as aborted after the grace and closes the session (INV-1310)", async () => {
+  const f = fixture({ cancelGraceMs: 300 });
+  try {
+    const started = await f.start("SLOW IGNORE_CANCEL keep going");
+    await new Promise(resolve => setTimeout(resolve, 150));
+    assert.equal(await f.delegates.cancel(started.jobId), true);
+    const note = await f.settledNote();
+    assert.match(note.text, /stopped before it finished|aborted/i);
+    const row = f.committed().find(r => r.event === "committed");
+    assert.equal(row?.how, "aborted");
+    assert.match(row?.why ?? "", /the agent cancelled the brief; the engine did not confirm the cancel within 0s, so the host closed the session/);
+    assert.equal(f.delegates.get(started.jobId), undefined, "the session is gone from the host");
+    // The note goes out before the close finishes (SIGTERM, then up to 3 s for the engine to go).
+    for (let i = 0; i < 100 && f.acp.list().some(s => s.session_id === started.jobId); i++) await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(f.acp.list().some(s => s.session_id === started.jobId), false, "and from the box");
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("consent times out and the engine ignores the cancel that follows: aborted by the host, the record naming both layers (INV-1310)", async () => {
+  const f = fixture({ commandsNeedingConsent: ["curl"], consentWaitMs: 100, cancelGraceMs: 300 });
+  try {
+    const started = await f.start("ASK IGNORE_CANCEL and wait");
+    const note = await f.settledNote();
+    assert.match(note.text, /stopped before it finished|aborted/i);
+    const row = f.committed().find(r => r.event === "committed");
+    assert.equal(row?.how, "aborted");
+    assert.match(row?.why ?? "", /nobody answered the engine's permission question within the consent wait; the engine did not confirm the cancel within 0s/);
+    assert.equal(f.policy.pending().length, 0, "the question was withdrawn");
+    assert.equal(f.delegates.get(started.jobId), undefined);
+    // The close that follows the note still runs; let it finish before the directory goes.
+    for (let i = 0; i < 100 && f.acp.list().some(s => s.session_id === started.jobId); i++) await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(f.acp.list().some(s => s.session_id === started.jobId), false, "the session is gone from the box");
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("an engine that confirms the cancel settles on its own word, and the grace changes nothing (INV-1310)", async () => {
+  const f = fixture({ cancelGraceMs: 5_000 });
+  try {
+    const started = await f.start("SLOW keep going");
+    await new Promise(resolve => setTimeout(resolve, 150));
+    assert.equal(await f.delegates.cancel(started.jobId), true);
+    const note = await f.settledNote();
+    const row = f.committed().find(r => r.event === "committed");
+    assert.equal(row?.how, "aborted");
+    assert.match(row?.why ?? "", /the engine confirmed the cancel/);
+    assert.ok(note !== undefined);
+    assert.notEqual(f.delegates.get(started.jobId), undefined, "the session stays open for the next brief");
+    await f.delegates.close(started.jobId);
   } finally {
     f.cleanup();
   }

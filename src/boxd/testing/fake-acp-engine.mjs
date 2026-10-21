@@ -10,6 +10,8 @@
  *              → a tool_call_update completed and end_turn; denied → end_turn with a note
  *   CRASH    — the process exits 3 mid-turn without answering
  *   FAIL     — the prompt is answered with a JSON-RPC internalError
+ *   IGNORE_CANCEL — `session/cancel` is swallowed: the turn goes on as if nothing was said,
+ *              and an ASK turn that was refused stays open instead of ending
  *
  * State for `session/load`: a file FAKE_ACP_STATE (json: {sessionId, cwd}) if the env names
  * one, so a second process can load what the first created — or refuse a different cwd.
@@ -93,7 +95,7 @@ rl.on("line", line => {
         save();
       }
       if (text.includes("FAIL")) return refuse(-32603, "MiniMax Code Runtime failed: fake provider error");
-      const turn = { id, sessionId, turnId: `turn_${id}`, cancelled: false, steers: [] };
+      const turn = { id, sessionId, turnId: `turn_${id}`, cancelled: false, steers: [], ignoresCancel: text.includes("IGNORE_CANCEL") };
       activeTurn = turn;
       const finish = stopReason => {
         if (activeTurn !== turn) return;
@@ -121,6 +123,8 @@ rl.on("line", line => {
           } else {
             update(sessionId, { sessionUpdate: "tool_call_update", toolCallId: "call_1", status: "failed" });
             say(["not", "allowed."]);
+            // An engine that holds its turn open after a refusal and hears no cancel: the host's problem to end.
+            if (turn.ignoresCancel) return;
           }
           finish("end_turn");
         });
@@ -156,7 +160,7 @@ rl.on("line", line => {
       return;
     }
     case "session/cancel": {
-      if (activeTurn && activeTurn.sessionId === params.sessionId) {
+      if (activeTurn && activeTurn.sessionId === params.sessionId && !activeTurn.ignoresCancel) {
         const turn = activeTurn;
         turn.cancelled = true;
         activeTurn = undefined;
