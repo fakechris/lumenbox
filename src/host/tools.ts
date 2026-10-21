@@ -2681,9 +2681,8 @@ export async function dispatchTool(
   input: Record<string, unknown>,
   context: ToolContext
 ): Promise<ToolOutcome> {
-  // Before the switch, so no tool can be added later that quietly bypasses it. A refusal comes back
-  // as a tool error, which is the shape the model already knows how to read: it sees why, and can
-  // stop or ask, rather than retrying into a wall.
+  // Before the switch, so no tool added later can bypass it. A refusal comes back as a tool error:
+  // the model sees why, and can stop or ask, rather than retrying into a wall.
   const decision = context.policy?.check({
     kind: "tool",
     agentId: context.agent.id,
@@ -2694,6 +2693,7 @@ export async function dispatchTool(
     // from whichever door they drove it (INV-156).
     ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}),
     ...(context.callerName !== undefined ? { principalName: context.callerName } : {}),
+    ...(context.turnId !== undefined ? { turnId: context.turnId } : {}),
   });
   if (decision !== undefined && !decision.allow) {
     return { text: decision.reason, isError: true, ...(decision.approval !== undefined ? { approval: { id: decision.approval.id } } : {}) };
@@ -3556,10 +3556,8 @@ export async function dispatchTool(
       const command = String(input.command ?? "").trim();
       if (command === "") return { text: "`command` is required.", isError: true };
 
-      // Named secrets, resolved through the vault against this agent's grants. Every
-      // resolution is audited inside the vault; a refused one is left out of the
-      // environment and named back, so the model learns it lacks the grant rather
-      // than the command failing opaquely.
+      // Named secrets, resolved through the vault against this agent's grants, audited there;
+      // a refused one is left out and named back, so the model learns it lacks the grant.
       const secretEnv: Record<string, string> = {};
       const refusedSecrets: string[] = [];
       const asked = Array.isArray(input.secrets) ? (input.secrets as unknown[]) : [];
@@ -3580,6 +3578,7 @@ export async function dispatchTool(
         if (value === undefined) refusedSecrets.push(secretId);
         else secretEnv[secretId] = value;
       }
+      if (Object.keys(secretEnv).length > 0) context.policy?.taint.mark(context.turnId ?? "", "vault");
 
       try {
         const result = await context.hostRunner.run(command, secretEnv);
@@ -4276,6 +4275,7 @@ export async function dispatchTool(
         };
       }
       const domains = context.vault.domainsOf(secretId);
+      context.policy?.taint.mark(context.turnId ?? "", "vault");
       try {
         const result = await box.browser({
           op: "fill_secret",

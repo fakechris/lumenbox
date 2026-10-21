@@ -39,6 +39,10 @@ import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
 import type { RuleStore } from "./rules.ts";
 import { sideEffectOf, tierAsks, tierGateMode, type SideEffectTier, type TierGateMode } from "./side-effects.ts";
+import { describeTaint, type Taint, taintOf, TurnTaint } from "./egress-taint.ts";
+import { approvalReason, describeRequest, fingerprintOf, tooLargeToApprove } from "./policy-describe.ts";
+
+export { describeRequest, fingerprintOf, MAX_APPROVABLE_DESCRIPTION, tooLargeToApprove } from "./policy-describe.ts";
 
 /**
  * What was asked of the gate and who decided it: a record (INV-812).
@@ -97,6 +101,8 @@ export type PolicyRequest =
        * (and the fingerprint binds) carries it, so consent is to *that* button on *that* page.
        */
       irreversible?: string;
+      /** The turn this call belongs to, for the taint rule (INV-1309): set by dispatch, never by the model. */
+      turnId?: string;
       /** Trusted box observation plus host execution identity, never model input (INV-955). */
       inputScope?: SensitiveInput & {
         turnId: string; conversation: string; principal: string; target: string;
@@ -141,6 +147,8 @@ export interface PendingApproval {
    * call that is not waiting to be retried.
    */
   harnessResumes?: boolean;
+  /** Only "once" may be granted (INV-1309): a tainted turn's outbound call is never a standing grant. */
+  onceOnly?: true;
 }
 
 // ── limits ────────────────────────────────────────────────────────────────────────────
@@ -349,6 +357,8 @@ export interface PolicyGateOptions {
    * applying at exactly the moment its accounting broke.
    */
   spendUnavailable?: () => string | undefined;
+  /** The hosts an agent's box may reach (its bundles' egressHosts), for the taint rule (INV-1309). Absent: none. */
+  egressAllow?: (agentId: string) => readonly string[];
   now?: () => Date;
   log?: (line: string) => void;
 }
@@ -373,6 +383,9 @@ export class PolicyGate {
   private readonly rules: RuleStore | undefined;
   /** What a reusable grant belongs to: the box (INV-539). */
   private readonly subjectOf: (agentId: string) => string;
+  private readonly egressAllow: (agentId: string) => readonly string[];
+  /** The turns that read private material (INV-1309); the tools that read it mark here. */
+  readonly taint = new TurnTaint();
 
   /**
    * Called the moment a new approval is created, with what a notifier needs.
@@ -423,6 +436,7 @@ export class PolicyGate {
     // What a reusable grant belongs to (INV-539). The box, once the orchestrator can say
     // which; the agent's own id when nobody wired it, which is what a unit test is.
     this.subjectOf = options.boxOf ?? ((agentId: string) => agentId);
+    this.egressAllow = options.egressAllow ?? (() => []);
     this.replay();
   }
 
@@ -446,6 +460,7 @@ export class PolicyGate {
       ...(request.kind === "tool" && this.lastRule !== undefined ? { rule: this.lastRule } : {}),
       ...(request.kind === "tool" && this.lastTier !== undefined ? { tier: this.lastTier } : {}),
       ...(request.kind === "tool" && decision.allow && this.lastWouldAsk ? { wouldAsk: request.tool } : {}),
+      ...(request.kind === "tool" && this.lastTaint !== undefined ? { taint: this.lastTaint } : {}),
     });
     if (request.kind === "tool" && decision.allow && this.lastWouldAsk) {
       this.noteShadowAsk({ at: this.now().toISOString(), tool: request.tool, agentId: request.agentId, request: describeRequest(request) });
@@ -599,9 +614,15 @@ export class PolicyGate {
   /** The last tool check's tier, and whether the tier gate would have asked where it did not. */
   private lastTier: SideEffectTier | undefined;
   private lastWouldAsk = false;
+  /** The last tool check's taint, for the audit row: the kind of thing read and the target, never content. */
+  private lastTaint: Taint | undefined;
 
   private decideTool(request: Extract<PolicyRequest, { kind: "tool" }>): Outcome {
     this.lastRule = undefined;
+    // The taint rule (INV-1309): a turn that read private material does not carry it to a host
+    // outside the allow list unasked. Like a host command or an irreversible finding, nothing
+    // the operator's lists say lifts it; unlike them, the answer can only ever be "once".
+    this.lastTaint = taintOf(request, this.taint, this.egressAllow(request.agentId));
     // What the call does to the world (INV-691). The box's finding outranks the declaration:
     // a click is `self` until the box says this click pays.
     const effect = sideEffectOf(request.tool, request.input);
@@ -632,7 +653,7 @@ export class PolicyGate {
     // AGENTBOX_APPROVAL_TOOLS would, and an operator's allow rule lifts it the same way.
     const tierWouldAsk = gate !== "off" && tierAsks(tier);
     const configuredAsk = this.needsApproval(request) || (gate === "enforce" && tierWouldAsk);
-    const mustAsk = request.tool === "RunOnHost" || request.irreversible !== undefined;
+    const mustAsk = request.tool === "RunOnHost" || request.irreversible !== undefined || this.lastTaint !== undefined;
     const asks = rule?.effect === "ask" || mustAsk || (configuredAsk && rule?.effect !== "allow");
     if (!asks) {
       // Shadow: allowed as before, and the row says a person would have been asked.
@@ -658,8 +679,9 @@ export class PolicyGate {
       request.delegated?.ask === true
         ? `[delegated engine${request.delegated.jobId !== undefined ? ` ${request.delegated.jobId}` : ""}] ${describeRequest(request)}`
         : describeRequest(request);
-    // The rule that asked is on the card, so the person knows why they are being asked.
-    const description = rule?.effect === "ask" ? `[rule ${rule.id}] ${described}` : described;
+    // The rule that asked is on the card, so the person knows why they are being asked; so is the taint.
+    const ruled = rule?.effect === "ask" ? `[rule ${rule.id}] ${described}` : described;
+    const description = this.lastTaint !== undefined ? `${describeTaint(this.lastTaint)} ${ruled}` : ruled;
     // Refused outright, not truncated: see `tooLargeToApprove`.
     const tooLarge = tooLargeToApprove(description);
     if (tooLarge !== undefined) return { decision: { allow: false, reason: tooLarge } };
@@ -736,6 +758,7 @@ export class PolicyGate {
       description,
       ...(effect.action !== undefined ? { action: effect.action } : {}),
       requestedAt: this.now().toISOString(),
+      ...(this.lastTaint !== undefined ? { onceOnly: true as const } : {}),
     };
     this.awaiting.set(fingerprint, approval);
     this.log(`waiting for a person to approve: ${description}`);
@@ -890,6 +913,11 @@ export class PolicyGate {
     if (found === undefined) return false;
     this.awaiting.delete(found.fingerprint);
     const at = this.now().toISOString();
+    if (found.onceOnly === true && scope !== "once") {
+      // A tainted turn's outbound call is answered for this call and no other (INV-1309).
+      this.log(`${by} asked for a ${scope} grant on a once-only approval; granted once: ${found.description}`);
+      scope = "once";
+    }
 
     if (scope === "always") {
       this.always.set(found.fingerprint, {
@@ -1136,81 +1164,3 @@ const COMPACT_AT = envNumber("AGENTBOX_POLICY_COMPACT_AT", 20_000);
 const KEEP_ON_COMPACT = envNumber("AGENTBOX_POLICY_KEEP", 5_000);
 
 // ── describing and binding ────────────────────────────────────────────────────────────
-
-/**
- * The one rendering of an action, used for the person, the log, and the fingerprint.
- *
- * One function on purpose. If the text shown to a person and the text that was hashed could differ,
- * the binding would be decorative — someone could be shown one command and consent to another.
- */
-export function describeRequest(request: PolicyRequest): string {
-  switch (request.kind) {
-    case "model-call":
-      return `${request.agentName}: model call (round ${request.round})`;
-    case "wake":
-      return `${request.agentName}: wake ${request.targetName}`;
-    case "tool": {
-      // An engine asking for consent is shown in full: a person cannot consent to "N bytes,
-      // not recorded". A delegated call merely being checked stays summarised, as before.
-      if (request.delegated !== undefined && request.delegated.ask !== true) {
-        const bytes = Buffer.byteLength(JSON.stringify(request.input));
-        return `${request.agentName}: ${request.tool} via delegated job ${request.delegated.jobId ?? "(starting)"} (${bytes} bytes of input, not recorded)`;
-      }
-      const command = typeof request.input.command === "string" ? request.input.command : undefined;
-      // The irreversible finding leads, so the card says what the click *does* before what
-      // the call *is*: "pay ¥1,299" is the thing a person is consenting to.
-      const detail =
-        request.irreversible !== undefined
-          ? `${request.irreversible} — ${JSON.stringify(request.input)}`
-          : (command ?? JSON.stringify(request.input));
-      // Said on the card when it is certain, so a person approving `git status && ls` is told the
-      // one thing that decides it. Silence otherwise: "not known to be read-only" is not a warning.
-      const readOnly =
-        command !== undefined && (request.tool === "RunOnHost" || request.tool === "bash") && classifyShell(command).readOnly
-          ? " [read-only]"
-          : "";
-      const reuse = request.inputScope === undefined ? "" : " [same exact value and data category to this origin, in this conversation and turn, for up to 15 minutes]";
-      return `${request.agentName}: ${request.tool} — ${detail}${readOnly}${reuse}`;
-    }
-  }
-}
-
-/**
- * The most an action may be and still be approvable.
- *
- * Generous — far beyond any real command or path — because the number is not the point. The point is
- * that consent is given to *what the person read*, so an action too large to show has to be refused
- * rather than shortened.
- */
-export const MAX_APPROVABLE_DESCRIPTION = 2_000;
-
-/**
- * Why an action cannot be put in front of a person at all, if it cannot.
- *
- * This closes a hole in the first version of this file. `describeRequest` truncated at 400
- * characters, and the fingerprint was taken over the truncated text — so two commands sharing their
- * first 400 characters and differing after would pass under one grant. Truncating what a person is
- * shown while binding a grant to it makes the binding decorative.
- */
-export function tooLargeToApprove(description: string): string | undefined {
-  if (description.length <= MAX_APPROVABLE_DESCRIPTION) return undefined;
-  return (
-    `This action is ${description.length} characters long, and cannot be shown to a person in full ` +
-    `(the limit is ${MAX_APPROVABLE_DESCRIPTION}). It is refused rather than shortened, because ` +
-    `approving a summary of an action is not approving the action. Break it into smaller steps, or ` +
-    `put the payload in a file and act on the file.`
-  );
-}
-
-/** Binds a grant to one agent and one exact description. */
-export function fingerprintOf(agentId: string, description: string): string {
-  return createHash("sha256").update(`${agentId} ${description}`).digest("hex").slice(0, 32);
-}
-
-function approvalReason(description: string): string {
-  return (
-    `This needs a person's approval before it can run: ${description}\n` +
-    `It has been put in front of them. Do not try to work around it, and do not repeat the ` +
-    `request — ask the person directly if it is urgent, or continue with something else.`
-  );
-}

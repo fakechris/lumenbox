@@ -349,11 +349,11 @@ export class Orchestrator {
       }
     },
     spendUnavailable: () => this.usage.unavailable(),
+    // The box's egress allow list for the taint rule (INV-1309), read lazily: bundles come later.
+    egressAllow: agentId => { try { return this.bundles.forBox(this.registry.boxOf(agentId))?.egressHosts ?? []; } catch { return []; } },
     spentSince: sinceMs => {
       const totals = this.usage.totalsSince(sinceMs);
-      // Every billed class, not just input and output. The control-plane meter counts cache reads
-      // and writes; a local budget that ignored them let a cache-heavy run report near-zero spend
-      // while genuinely costing money.
+      // Every billed class, cache reads and writes included: a budget ignoring them let a cache-heavy run report near-zero spend.
       return (
         totals.inputTokens +
         totals.outputTokens +
