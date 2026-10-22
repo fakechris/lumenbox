@@ -263,3 +263,30 @@ test("current-boot revocation replay reconciles a persisted tombstone for cleanu
     assert.equal((await rebooted.reclaimControlled(30, 2, rebooted.reconcileToken)).released, false);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("an unsuccessful reinspection never clears the partial-stop safety fence", async () => {
+  for (const failure of ["throw", "workload", "stop-refused"] as const) {
+    const dir = mkdtempSync(join(tmpdir(), "desktop-reclaim-fence-"));
+    let partial = false;
+    const manager = new DisplayManager(() => {}, dir, {
+      now: Date.now, idleMs: 100, adopted: () => false,
+      create: async index => ({ index, display: `:${index}`, executor: { invalidateElements() {} }, detection: {} }) as never,
+      capture: async () => {
+        if (partial && failure === "throw") throw new Error("inspection unavailable");
+        return { processes: [], ...(partial && failure === "workload" ? { reason: "unknown workload" } : {}) };
+      },
+      stop: async () => {
+        if (partial) return { stopped: false, retryable: true, reason: "process set changed" };
+        partial = true;
+        return { stopped: false, failed: true, reason: "partial stop" };
+      },
+    });
+    try {
+      await manager.ensure(30); revokeForReclaim(manager);
+      assert.equal((await manager.reclaimControlled(30, 2, manager.reconcileToken)).released, false);
+      assert.equal((await manager.reclaimControlled(30, 2, manager.reconcileToken)).released, false);
+      await assert.rejects(manager.ensure(30), /inspection required/, failure);
+      assert.equal(manager.resources().desktops[0]!.state, "failed");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+});

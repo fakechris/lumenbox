@@ -15,7 +15,7 @@ export interface ResourceState {
 }
 
 export async function stopResource(index: number, state: ResourceState, runtime: DesktopResourceRuntime,
-  authorize: () => boolean, stopped: () => void): Promise<void> {
+  authorize: () => boolean, stopped: () => void, preserveFailure = false): Promise<void> {
   state.retryReason = undefined;
   state.state = "stopping";
   state.stopping = (async () => {
@@ -26,7 +26,7 @@ export async function stopResource(index: number, state: ResourceState, runtime:
         state.state = "dormant";
         state.snapshot = undefined;
       } else {
-        state.state = result.failed ? "failed" : "ready";
+        state.state = result.failed || preserveFailure ? "failed" : "ready";
         if (result.reason && authorize()) {
           if (result.retryable && !result.failed) state.retryReason = result.reason;
           else state.retained = result.reason;
@@ -51,6 +51,7 @@ export async function reclaimControlled(index: number, states: Map<number, Resou
     states.set(index, state);
   }
   const current = state;
+  const preserveFailure = current.state === "failed";
   const generation = ++current.generation;
   // Reserve the transition before inspection. New demand changes the generation
   // and waits for the stop; it cannot create a browser between proof and commit.
@@ -62,17 +63,17 @@ export async function reclaimControlled(index: number, states: Map<number, Resou
   try {
     const snapshot = await runtime.capture(index, current.launchId ?? randomUUID(), true);
     if (!authorize() || snapshot.reason) {
-      current.state = "ready";
+      current.state = preserveFailure ? "failed" : "ready";
       return { released: false, reason: snapshot.reason ?? "desktop demand changed" };
     }
     current.snapshot = snapshot;
     // stopResource publishes its own promise synchronously before awaiting OS work.
-    const pending = stopResource(index, current, runtime, authorize, stopped);
+    const pending = stopResource(index, current, runtime, authorize, stopped, preserveFailure);
     await pending;
     const released = (current as ResourceState).state === "dormant";
     return { released, ...(!released ? { reason: current.retryReason ?? current.retained } : {}) };
   } catch {
-    current.state = "ready";
+    current.state = preserveFailure ? "failed" : "ready";
     return { released: false, reason: "process inspection unavailable" };
   } finally { finish(); }
 }
