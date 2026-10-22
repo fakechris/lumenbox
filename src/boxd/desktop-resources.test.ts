@@ -215,3 +215,51 @@ test("legacy adopted infrastructure is inspected afresh but an unknown workload 
     assert.equal(stops, 1);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("a revoked desktop can recover from partial stop only through a fresh complete proof", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "desktop-reclaim-partial-"));
+  let inspections = 0, attempts = 0;
+  const manager = new DisplayManager(() => {}, dir, {
+    now: Date.now, idleMs: 100, adopted: () => false,
+    create: async index => ({ index, display: `:${index}`, executor: { invalidateElements() {} }, detection: {} }) as never,
+    capture: async () => { inspections++; return { processes: [] }; },
+    stop: async (_index, _snapshot, authorize) => {
+      assert.ok(authorize()); attempts++;
+      return attempts === 1 ? { stopped: false, failed: true, reason: "partial stop" } : { stopped: true };
+    },
+  });
+  try {
+    await manager.ensure(30); revokeForReclaim(manager);
+    assert.equal((await manager.reclaimControlled(30, 2, manager.reconcileToken)).released, false);
+    await assert.rejects(manager.ensure(30), /inspection required/);
+    const before = inspections;
+    assert.equal((await manager.reclaimControlled(30, 2, manager.reconcileToken)).released, true);
+    assert.equal(inspections, before + 1);
+    assert.equal(attempts, 2);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("current-boot revocation replay reconciles a persisted tombstone for cleanup after restart", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "desktop-reclaim-restart-"));
+  let stops = 0;
+  const runtime = {
+    now: Date.now, idleMs: 100, adopted: () => true,
+    capture: async () => ({ processes: [] }),
+    stop: async (_index: number, _snapshot: unknown, authorize: () => boolean) => {
+      assert.ok(authorize()); stops++; return { stopped: true };
+    },
+  };
+  try {
+    const previous = new DisplayManager(() => {}, dir, runtime);
+    revokeForReclaim(previous);
+    const rebooted = new DisplayManager(() => {}, dir, runtime);
+    assert.equal((await rebooted.reclaimControlled(30, 2, rebooted.reconcileToken)).released, false);
+    assert.throws(() => rebooted.revokeControl(30, "end-1", 1, previous.reconcileToken), /reconcile token/);
+    assert.deepEqual(rebooted.revokeControl(30, "end-1", 1, rebooted.reconcileToken), { epoch: 2, applied: false });
+    assert.equal((await rebooted.reclaimControlled(30, 2, rebooted.reconcileToken)).released, true);
+    assert.equal(stops, 1);
+    rebooted.armControl(30, 3, "successor", rebooted.reconcileToken);
+    rebooted.revokeControl(30, "end-1", 1, rebooted.reconcileToken);
+    assert.equal((await rebooted.reclaimControlled(30, 2, rebooted.reconcileToken)).released, false);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

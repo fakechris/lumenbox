@@ -655,6 +655,16 @@ export class DisplayManager {
             "token is a delayed message, not controller's current state"
         );
       }
+      // A current-boot replay of an already committed revocation reconciles
+      // its tombstone without rearming or lowering the persisted high-water mark.
+      if (existing.revoked && existing.epoch === fromEpoch + 1) {
+        const candidate = new Map(this.control);
+        candidate.set(index, { ...existing, reconciled: true });
+        const revocations = DisplayManager.boundedRevocations(this.appliedRevocations, revokeId);
+        this.saveControl(candidate, revocations, partialAfter);
+        this.commitControl(candidate, revocations, partialAfter);
+        return { epoch: existing.epoch, applied: false };
+      }
       if (fromEpoch < existing.epoch) {
         // Stale revocation against a generation newer than controller claims: superseded. If
         // it carried a scope confirmation, that still has to land — save the unchanged

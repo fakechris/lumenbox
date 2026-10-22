@@ -50,7 +50,6 @@ export async function reclaimControlled(index: number, states: Map<number, Resou
     state = { state: "ready", generation: 0, touched: runtime.now(), references: 0, pinned: false };
     states.set(index, state);
   }
-  if (state.state === "failed") return { released: false, reason: "process state requires inspection" };
   const current = state;
   const generation = ++current.generation;
   // Reserve the transition before inspection. New demand changes the generation
