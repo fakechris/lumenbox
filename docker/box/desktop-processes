@@ -30,6 +30,7 @@ committed = False
 x = None
 grabbed = False
 launch_id = None
+controlled = False
 
 
 def emit(value):
@@ -130,6 +131,22 @@ try:
     launch_id = request.get('launch_id') if request['mode'] == 'capture' else request['snapshot'].get('launch_id')
     if not isinstance(launch_id, str) or not launch_id:
         raise RuntimeError('launcher provenance unavailable')
+    controlled = (request if request['mode'] == 'capture' else request['snapshot']).get('controlled') is True
+    # An absent X socket alone is insufficient: VNC/proxy residue may remain.
+    # Prove the per-display process inventory is empty before releasing its slot.
+    if controlled and not inventory() and not pathlib.Path(f'/tmp/.X11-unix/X{INDEX}').exists():
+        if request['mode'] == 'capture':
+            emit({'processes': [], 'launch_id': launch_id, 'controlled': True, 'absent': True})
+        elif request['snapshot'].get('absent') is True:
+            emit({'ready': True})
+            if not select.select([sys.stdin], [], [], 5)[0]:
+                raise RuntimeError('daemon authorization timed out')
+            approval = json.loads(sys.stdin.readline() or '{}')
+            emit({'stopped': approval.get('commit') is True and not inventory()
+                  and not pathlib.Path(f'/tmp/.X11-unix/X{INDEX}').exists()})
+        else:
+            emit({'stopped': False, 'retryable': True, 'reason': 'desktop process state changed'})
+        raise SystemExit(0)
     x = xdisplay.Display(DISPLAY)
     version = x.res_query_version()
     if (version.server_major, version.server_minor) < (1, 2):
@@ -139,13 +156,13 @@ try:
         reason = None
         if not current or not any(p['name'] == 'Xvfb' for p in current):
             reason = 'desktop process identity unavailable'
-        elif any((p['name'] not in ALLOWED or not p.get('owned')) for p in current) or not x_empty(current):
+        elif any((p['name'] not in ALLOWED or (not controlled and not p.get('owned'))) for p in current) or not x_empty(current):
             reason = 'desktop has an untracked workload'
-        emit({'processes': current, 'launch_id': launch_id, **({'reason': reason} if reason else {})})
+        emit({'processes': current, 'launch_id': launch_id, 'controlled': controlled, **({'reason': reason} if reason else {})})
     else:
         expected = request['snapshot']['processes']
         # A missing/restarted component is also uncertain, not a smaller safe set.
-        if any((p['name'] not in ALLOWED or not p.get('owned')) for p in current) or not x_empty(current):
+        if any((p['name'] not in ALLOWED or (not controlled and not p.get('owned'))) for p in current) or not x_empty(current):
             emit({'stopped': False, 'reason': 'desktop has an untracked workload'})
         elif current != expected:
             emit({'stopped': False, 'retryable': True, 'reason': 'desktop infrastructure changed; awaiting fresh inspection'})
@@ -175,7 +192,7 @@ try:
             x.sync()
             grabbed = True
             final = inventory()
-            if any((p['name'] not in ALLOWED or not p.get('owned')) for p in final) or not x_empty(final):
+            if any((p['name'] not in ALLOWED or (not controlled and not p.get('owned'))) for p in final) or not x_empty(final):
                 emit({'stopped': False, 'reason': 'desktop has an untracked workload'})
             elif final != expected:
                 emit({'stopped': False, 'retryable': True, 'reason': 'desktop infrastructure changed; awaiting fresh inspection'})

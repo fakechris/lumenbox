@@ -760,6 +760,11 @@ const routes: Record<string, Handler> = {
     displays.assertOwner(body.index, body.owner);
     return { ready: await displays.ready(body.index, body.owner) };
   },
+  "POST /displays/reclaim": async (body: { index: number; epoch: number; reconcile_token: string }) => {
+    if (!isDisplayIndex(body.index) || !Number.isSafeInteger(body.epoch)) throw new HttpError(400, "Invalid desktop reclaim request");
+    if (teach.isTeaching(body.index)) return { released: false, reason: "teaching recording active" };
+    return displays.reclaimControlled(body.index, body.epoch, body.reconcile_token);
+  },
   "POST /displays/pin": async (body: EnsureDisplayRequest & { pinned: boolean }) => {
     if (typeof body.pinned !== "boolean") throw new HttpError(400, "pinned must be a boolean");
     displays.assertControl(body.index, body);
@@ -1302,13 +1307,8 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     acp.shutdown();
     // A demonstration in progress is closed and queued rather than lost with the daemon.
     void withShutdownTimeout(teach.shutdown(), SHUTDOWN_TEACH_TIMEOUT_MS, "teach shutdown")
-      .then(() =>
-        withShutdownTimeout(
-          new Promise<void>(resolve => server.close(() => resolve())),
-          SHUTDOWN_CLOSE_TIMEOUT_MS,
-          "server close"
-        )
-      )
+      .then(() => withShutdownTimeout(
+        new Promise<void>(resolve => server.close(() => resolve())), SHUTDOWN_CLOSE_TIMEOUT_MS, "server close"))
       .finally(() => process.exit(0));
   });
 }

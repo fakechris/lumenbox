@@ -158,3 +158,60 @@ test("a pre-commit inspection failure retains the desktop and a later complete p
     assert.equal(f.manager.resources().reclaims, 1);
   } finally { f.dispose(); }
 });
+
+function revokeForReclaim(manager: DisplayManager, epoch = 1) {
+  manager.armControl(30, epoch, "controller", manager.reconcileToken);
+  manager.revokeControl(30, `end-${epoch}`, epoch, manager.reconcileToken);
+}
+
+test("controller can reclaim a used desktop only after revocation and all viewers close", async () => {
+  const f = fixture();
+  try {
+    await f.manager.ensure(30);
+    f.manager.markWorkload(30);
+    assert.equal((await f.manager.reclaimControlled(30, 2, f.manager.reconcileToken)).released, false);
+    revokeForReclaim(f.manager);
+    const viewer = f.manager.hold(30);
+    assert.equal((await f.manager.reclaimControlled(30, 2, f.manager.reconcileToken)).released, false);
+    viewer();
+    assert.equal((await f.manager.reclaimControlled(30, 2, "previous-boot")).released, false);
+    assert.equal((await f.manager.reclaimControlled(30, 2, f.manager.reconcileToken)).released, true);
+    assert.equal(f.manager.has(30), false);
+    assert.equal(f.stops(), 1);
+    f.manager.armControl(30, 3, "next", f.manager.reconcileToken);
+    await f.manager.ensure(30);
+    assert.equal(f.manager.has(30), true);
+  } finally { f.dispose(); }
+});
+
+test("late reclamation never stops the next controller generation", async () => {
+  const f = fixture();
+  try {
+    await f.manager.ensure(30); revokeForReclaim(f.manager);
+    f.intercept(async () => { f.manager.armControl(30, 3, "next", f.manager.reconcileToken); });
+    assert.equal((await f.manager.reclaimControlled(30, 2, f.manager.reconcileToken)).released, false);
+    assert.equal(f.stops(), 0);
+    assert.equal(f.manager.has(30), true);
+  } finally { f.dispose(); }
+});
+
+test("legacy adopted infrastructure is inspected afresh but an unknown workload blocks release", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "desktop-reclaim-"));
+  let workload = true, stops = 0;
+  const manager = new DisplayManager(() => {}, dir, {
+    now: Date.now, idleMs: 0, adopted: () => true,
+    capture: async (_index, _launch, controlled) => {
+      assert.equal(controlled, true);
+      return { processes: [], ...(workload ? { reason: "desktop has an untracked workload" } : {}) };
+    },
+    stop: async (_index, _snapshot, authorize) => { assert.ok(authorize()); stops++; return { stopped: true }; },
+  });
+  try {
+    revokeForReclaim(manager);
+    assert.equal((await manager.reclaimControlled(30, 2, manager.reconcileToken)).released, false);
+    assert.equal(stops, 0);
+    workload = false;
+    assert.equal((await manager.reclaimControlled(30, 2, manager.reconcileToken)).released, true);
+    assert.equal(stops, 1);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

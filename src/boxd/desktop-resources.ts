@@ -7,6 +7,7 @@ export interface DesktopProcessSnapshot {
   processes: { pid: number; start: string; name: string; owned?: boolean }[];
   reason?: string;
   launch_id?: string;
+  controlled?: boolean;
   retryable?: boolean;
 }
 export interface DesktopResourceRuntime {
@@ -14,11 +15,11 @@ export interface DesktopResourceRuntime {
   idleMs: number;
   adopted: (index: number) => boolean;
   create?: (index: number) => Promise<Desktop>;
-  capture: (index: number, launchId?: string) => Promise<DesktopProcessSnapshot>;
+  capture: (index: number, launchId?: string, controlled?: boolean) => Promise<DesktopProcessSnapshot>;
   stop: (index: number, snapshot: DesktopProcessSnapshot, authorize: () => boolean) => Promise<{ stopped: boolean; reason?: string; failed?: boolean; retryable?: boolean }>;
 }
 
-function processCommand<T>(index: number, snapshot?: DesktopProcessSnapshot, authorize?: () => boolean, launchId?: string): Promise<T> {
+function processCommand<T>(index: number, snapshot?: DesktopProcessSnapshot, authorize?: () => boolean, launchId?: string, controlled = false): Promise<T> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.env.BOXD_DESKTOP_PROCESSES ?? "/usr/local/bin/desktop-processes", [String(index)], { stdio: ["pipe", "pipe", "pipe"] });
     let output = "", result: T | undefined, failure: Error | undefined;
@@ -44,7 +45,7 @@ function processCommand<T>(index: number, snapshot?: DesktopProcessSnapshot, aut
       else resolve(result);
     });
     child.stdin.on("error", () => {});
-    child.stdin.write(JSON.stringify(snapshot ? { mode: "stop", snapshot } : { mode: "capture", launch_id: launchId }) + "\n");
+    child.stdin.write(JSON.stringify(snapshot ? { mode: "stop", snapshot } : { mode: "capture", launch_id: launchId, controlled }) + "\n");
   });
 }
 
@@ -55,7 +56,7 @@ export function desktopResourceRuntime(): DesktopResourceRuntime {
     // Zero explicitly disables reclamation. Invalid configuration retains desktops.
     idleMs: Number.isFinite(configured) && configured >= 1000 ? configured : 0,
     adopted: index => existsSync(`/tmp/.X11-unix/X${index}`),
-    capture: (index, launchId) => processCommand<DesktopProcessSnapshot>(index, undefined, undefined, launchId),
+    capture: (index, launchId, controlled) => processCommand<DesktopProcessSnapshot>(index, undefined, undefined, launchId, controlled),
     stop: (index, snapshot, authorize) => processCommand(index, snapshot, authorize),
   };
 }
