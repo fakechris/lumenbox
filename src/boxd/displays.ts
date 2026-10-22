@@ -13,7 +13,8 @@
  * Desktops are created on demand: a box with one agent does not pay for idle ones.
  */
 
-import { desktopResourceRuntime, type DesktopResourceRuntime, type DesktopProcessSnapshot } from "./desktop-resources.ts";
+import { reclaimControlled, stopResource, type ResourceState } from "./desktop-reclamation.ts";
+import { desktopResourceRuntime, type DesktopResourceRuntime } from "./desktop-resources.ts";
 import { envNumber } from "../config.ts";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -273,18 +274,6 @@ function ownerConflict(index: number, token: string | undefined): string | undef
   return `Desktop ${index} belongs to another agent — it was claimed before this daemon restarted.`;
 }
 
-interface ResourceState {
-  state: "starting" | "ready" | "stopping" | "dormant" | "failed";
-  generation: number;
-  touched: number;
-  references: number;
-  pinned: boolean;
-  retained?: string;
-  retryReason?: string;
-  snapshot?: DesktopProcessSnapshot;
-  launchId?: string;
-  stopping?: Promise<void>;
-}
 
 export class DisplayManager {
   private readonly resourceStates = new Map<number, ResourceState>();
@@ -665,6 +654,16 @@ export class DisplayManager {
           `desktop ${index} is awaiting reconciliation; a revocation without this boot's reconcile ` +
             "token is a delayed message, not controller's current state"
         );
+      }
+      // A current-boot replay of an already committed revocation reconciles
+      // its tombstone without rearming or lowering the persisted high-water mark.
+      if (existing.revoked && existing.epoch === fromEpoch + 1) {
+        const candidate = new Map(this.control);
+        candidate.set(index, { ...existing, reconciled: true });
+        const revocations = DisplayManager.boundedRevocations(this.appliedRevocations, revokeId);
+        this.saveControl(candidate, revocations, partialAfter);
+        this.commitControl(candidate, revocations, partialAfter);
+        return { epoch: existing.epoch, applied: false };
       }
       if (fromEpoch < existing.epoch) {
         // Stale revocation against a generation newer than controller claims: superseded. If
@@ -1123,6 +1122,23 @@ export class DisplayManager {
     return state.retained;
   }
 
+  private forgetDesktop(index: number): void {
+    this.desktops.get(index)?.executor?.invalidateElements();
+    this.desktops.delete(index);
+    this.reclaims++;
+  }
+
+  async reclaimControlled(index: number, epoch: number, boot: string) {
+    const authorized = () => {
+      const guard = this.control.get(index);
+      return isDisplayIndex(index) && index !== DEFAULT_DISPLAY_INDEX && boot === this.reconcileToken
+        && !this.guardDegraded && !this.partial && guard?.reconciled === true && guard.revoked && guard.epoch === epoch;
+    };
+    return reclaimControlled(index, this.resourceStates, this.resourcesRuntime, authorized,
+      () => this.supervising || this.reaping || this.starting.has(index) || Boolean(this.userInControl(index)),
+      () => this.forgetDesktop(index));
+  }
+
   async reapIdle(): Promise<void> {
     if (this.reaping || this.supervising || this.resourcesRuntime.idleMs === 0) return;
     this.reaping = true;
@@ -1133,28 +1149,7 @@ export class DisplayManager {
         const generation = state.generation;
         const authorize = () => this.resourceStates.get(index) === state && state.generation === generation
           && !this.retainedReason(index, state) && this.resourcesRuntime.now() - state.touched >= this.resourcesRuntime.idleMs;
-        state.retryReason = undefined;
-        state.state = "stopping";
-        state.stopping = (async () => {
-          try {
-            const result = await this.resourcesRuntime.stop(index, state.snapshot!, authorize);
-            if (result.stopped) {
-              this.desktops.get(index)?.executor?.invalidateElements();
-              this.desktops.delete(index);
-              state.state = "dormant";
-              state.snapshot = undefined;
-              this.reclaims++;
-            } else {
-              state.state = result.failed ? "failed" : "ready";
-              if (result.reason && authorize()) {
-                if (result.retryable && !result.failed) state.retryReason = result.reason;
-                else state.retained = result.reason;
-              }
-            }
-          } catch { state.state = "failed"; state.retained = "reclamation failed; process inspection required"; }
-        })();
-        await state.stopping;
-        state.stopping = undefined;
+        await stopResource(index, state, this.resourcesRuntime, authorize, () => this.forgetDesktop(index));
       }
     } finally { this.reaping = false; }
   }

@@ -158,3 +158,135 @@ test("a pre-commit inspection failure retains the desktop and a later complete p
     assert.equal(f.manager.resources().reclaims, 1);
   } finally { f.dispose(); }
 });
+
+function revokeForReclaim(manager: DisplayManager, epoch = 1) {
+  manager.armControl(30, epoch, "controller", manager.reconcileToken);
+  manager.revokeControl(30, `end-${epoch}`, epoch, manager.reconcileToken);
+}
+
+test("controller can reclaim a used desktop only after revocation and all viewers close", async () => {
+  const f = fixture();
+  try {
+    await f.manager.ensure(30);
+    f.manager.markWorkload(30);
+    assert.equal((await f.manager.reclaimControlled(30, 2, f.manager.reconcileToken)).released, false);
+    revokeForReclaim(f.manager);
+    const viewer = f.manager.hold(30);
+    assert.equal((await f.manager.reclaimControlled(30, 2, f.manager.reconcileToken)).released, false);
+    viewer();
+    assert.equal((await f.manager.reclaimControlled(30, 2, "previous-boot")).released, false);
+    assert.equal((await f.manager.reclaimControlled(30, 2, f.manager.reconcileToken)).released, true);
+    assert.equal(f.manager.has(30), false);
+    assert.equal(f.stops(), 1);
+    f.manager.armControl(30, 3, "next", f.manager.reconcileToken);
+    await f.manager.ensure(30);
+    assert.equal(f.manager.has(30), true);
+  } finally { f.dispose(); }
+});
+
+test("late reclamation never stops the next controller generation", async () => {
+  const f = fixture();
+  try {
+    await f.manager.ensure(30); revokeForReclaim(f.manager);
+    f.intercept(async () => { f.manager.armControl(30, 3, "next", f.manager.reconcileToken); });
+    assert.equal((await f.manager.reclaimControlled(30, 2, f.manager.reconcileToken)).released, false);
+    assert.equal(f.stops(), 0);
+    assert.equal(f.manager.has(30), true);
+  } finally { f.dispose(); }
+});
+
+test("legacy adopted infrastructure is inspected afresh but an unknown workload blocks release", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "desktop-reclaim-"));
+  let workload = true, stops = 0;
+  const manager = new DisplayManager(() => {}, dir, {
+    now: Date.now, idleMs: 0, adopted: () => true,
+    capture: async (_index, _launch, controlled) => {
+      assert.equal(controlled, true);
+      return { processes: [], ...(workload ? { reason: "desktop has an untracked workload" } : {}) };
+    },
+    stop: async (_index, _snapshot, authorize) => { assert.ok(authorize()); stops++; return { stopped: true }; },
+  });
+  try {
+    revokeForReclaim(manager);
+    assert.equal((await manager.reclaimControlled(30, 2, manager.reconcileToken)).released, false);
+    assert.equal(stops, 0);
+    workload = false;
+    assert.equal((await manager.reclaimControlled(30, 2, manager.reconcileToken)).released, true);
+    assert.equal(stops, 1);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a revoked desktop can recover from partial stop only through a fresh complete proof", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "desktop-reclaim-partial-"));
+  let inspections = 0, attempts = 0;
+  const manager = new DisplayManager(() => {}, dir, {
+    now: Date.now, idleMs: 100, adopted: () => false,
+    create: async index => ({ index, display: `:${index}`, executor: { invalidateElements() {} }, detection: {} }) as never,
+    capture: async () => { inspections++; return { processes: [] }; },
+    stop: async (_index, _snapshot, authorize) => {
+      assert.ok(authorize()); attempts++;
+      return attempts === 1 ? { stopped: false, failed: true, reason: "partial stop" } : { stopped: true };
+    },
+  });
+  try {
+    await manager.ensure(30); revokeForReclaim(manager);
+    assert.equal((await manager.reclaimControlled(30, 2, manager.reconcileToken)).released, false);
+    await assert.rejects(manager.ensure(30), /inspection required/);
+    const before = inspections;
+    assert.equal((await manager.reclaimControlled(30, 2, manager.reconcileToken)).released, true);
+    assert.equal(inspections, before + 1);
+    assert.equal(attempts, 2);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("current-boot revocation replay reconciles a persisted tombstone for cleanup after restart", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "desktop-reclaim-restart-"));
+  let stops = 0;
+  const runtime = {
+    now: Date.now, idleMs: 100, adopted: () => true,
+    capture: async () => ({ processes: [] }),
+    stop: async (_index: number, _snapshot: unknown, authorize: () => boolean) => {
+      assert.ok(authorize()); stops++; return { stopped: true };
+    },
+  };
+  try {
+    const previous = new DisplayManager(() => {}, dir, runtime);
+    revokeForReclaim(previous);
+    const rebooted = new DisplayManager(() => {}, dir, runtime);
+    assert.equal((await rebooted.reclaimControlled(30, 2, rebooted.reconcileToken)).released, false);
+    assert.throws(() => rebooted.revokeControl(30, "end-1", 1, previous.reconcileToken), /reconcile token/);
+    assert.deepEqual(rebooted.revokeControl(30, "end-1", 1, rebooted.reconcileToken), { epoch: 2, applied: false });
+    assert.equal((await rebooted.reclaimControlled(30, 2, rebooted.reconcileToken)).released, true);
+    assert.equal(stops, 1);
+    rebooted.armControl(30, 3, "successor", rebooted.reconcileToken);
+    rebooted.revokeControl(30, "end-1", 1, rebooted.reconcileToken);
+    assert.equal((await rebooted.reclaimControlled(30, 2, rebooted.reconcileToken)).released, false);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("an unsuccessful reinspection never clears the partial-stop safety fence", async () => {
+  for (const failure of ["throw", "workload", "stop-refused"] as const) {
+    const dir = mkdtempSync(join(tmpdir(), "desktop-reclaim-fence-"));
+    let partial = false;
+    const manager = new DisplayManager(() => {}, dir, {
+      now: Date.now, idleMs: 100, adopted: () => false,
+      create: async index => ({ index, display: `:${index}`, executor: { invalidateElements() {} }, detection: {} }) as never,
+      capture: async () => {
+        if (partial && failure === "throw") throw new Error("inspection unavailable");
+        return { processes: [], ...(partial && failure === "workload" ? { reason: "unknown workload" } : {}) };
+      },
+      stop: async () => {
+        if (partial) return { stopped: false, retryable: true, reason: "process set changed" };
+        partial = true;
+        return { stopped: false, failed: true, reason: "partial stop" };
+      },
+    });
+    try {
+      await manager.ensure(30); revokeForReclaim(manager);
+      assert.equal((await manager.reclaimControlled(30, 2, manager.reconcileToken)).released, false);
+      assert.equal((await manager.reclaimControlled(30, 2, manager.reconcileToken)).released, false);
+      await assert.rejects(manager.ensure(30), /inspection required/, failure);
+      assert.equal(manager.resources().desktops[0]!.state, "failed");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+});
