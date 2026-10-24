@@ -49,6 +49,8 @@ jobs:
         run: npm run arch
       - name: let the test runner open a network namespace (ubuntu 24.04 restricts unprivileged userns)
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: the host sandbox's Linux mechanism (INV-1344), so its tests run rather than skip
+        run: sudo apt-get install -y --no-install-recommends bubblewrap socat
 
       - name: test
         run: npm run test:ci

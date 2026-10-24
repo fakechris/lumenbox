@@ -93,6 +93,13 @@ export interface AgentboxConfig {
     cwd?: string;
     timeoutMs?: number;
     maxOutputBytes?: number;
+    /**
+     * The OS sandbox around each host command (INV-1344): writes only under `cwd`, the temp
+     * directory and `allowWrite`; network only through the egress relay. "on" unless an
+     * operator writes "off" here — the same kind of decision as `enabled`.
+     */
+    sandbox?: "on" | "off";
+    allowWrite?: string[];
   };
   /**
    * MCP servers whose tools the agents may use, by name.
@@ -122,6 +129,10 @@ export interface AgentboxConfig {
        * exchange that used it may still be remembered from (INV-894). Absent means it may.
        */
       pollutesMemory?: boolean;
+      /** The OS sandbox around the server process (INV-1344): on unless the operator writes "off". */
+      sandbox?: "on" | "off";
+      /** Directories the server may write besides its own work directory and the temp directory. */
+      allowWrite?: string[];
     }
   >;
   /**
@@ -480,11 +491,14 @@ function readMcpServers(
             )
           )
         : undefined;
+    const allowWrite = readStringList(entry.allowWrite, `mcpServers.${name}.allowWrite`, warn);
     servers[name] = {
       command: entry.command,
       ...(args !== undefined && args.length > 0 ? { args } : {}),
       ...(env !== undefined && Object.keys(env).length > 0 ? { env } : {}),
       ...(entry.pollutesMemory === false ? { pollutesMemory: false } : {}),
+      ...(entry.sandbox === "off" ? { sandbox: "off" as const } : {}),
+      ...(allowWrite !== undefined ? { allowWrite } : {}),
     };
   }
   return Object.keys(servers).length > 0 ? servers : undefined;
@@ -558,7 +572,21 @@ function readHostExec(
   if (typeof raw.maxOutputBytes === "number" && Number.isFinite(raw.maxOutputBytes)) {
     result.maxOutputBytes = raw.maxOutputBytes;
   }
+  if (raw.sandbox === "off" || raw.sandbox === "on") result.sandbox = raw.sandbox;
+  const allowWrite = readStringList(raw.allowWrite, "hostExec.allowWrite", warn);
+  if (allowWrite !== undefined) result.allowWrite = allowWrite;
   return Object.keys(result).length > 0 ? result : undefined;
+}
+
+/**
+ * The egress relay host processes should speak to (INV-1344), from the same two variables the
+ * box is handed (box/docker.ts). Absent means host processes get no network at all.
+ */
+export function egressRelayFromEnv(env: NodeJS.ProcessEnv = process.env): { relay: string; token: string } | undefined {
+  const relay = env.AGENTBOX_EGRESS_RELAY;
+  const token = env.AGENTBOX_EGRESS_TOKEN;
+  if (relay === undefined || relay === "" || token === undefined || token === "") return undefined;
+  return { relay, token };
 }
 
 function readStringList(
@@ -732,7 +760,9 @@ export function saveConfig(
   }
   if (changes.hostExec !== undefined) {
     if (changes.hostExec === null) delete raw.hostExec;
-    else raw.hostExec = changes.hostExec;
+    // Merged, not replaced: the Settings form sends `enabled` and `cwd`, and must not erase the
+    // sandbox and timeout keys an operator wrote by hand (INV-1344).
+    else raw.hostExec = { ...(raw.hostExec !== null && typeof raw.hostExec === "object" ? (raw.hostExec as Record<string, unknown>) : {}), ...changes.hostExec };
   }
   if (changes.personalBoxQuota !== undefined) {
     if (changes.personalBoxQuota === null) delete raw.personalBoxQuota;

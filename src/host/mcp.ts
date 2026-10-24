@@ -24,6 +24,10 @@
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { type HostProcessDeps, proxyEnvironment } from "./host-runner.ts";
 import type { CapabilityLedger } from "./mcp-capabilities.ts";
 import { pinnedPackage } from "./mcp-connectors.ts";
 
@@ -44,6 +48,10 @@ export interface McpServerConfig {
   args?: string[];
   /** Extra environment for the child. Inherits the orchestrator's, minus nothing. */
   env?: Record<string, string>;
+  /** The OS sandbox around the process (INV-1344): on unless the operator wrote "off". */
+  sandbox?: "on" | "off";
+  /** Directories the server may write besides its work directory and the temp directory. */
+  allowWrite?: string[];
   /**
    * Remote: a Streamable HTTP endpoint (the official hosted servers — Linear, Notion —
    * publish these). The JSON-RPC is the same wire the stdio child speaks; only the pipe
@@ -141,8 +149,32 @@ class McpServer {
     readonly config: McpServerConfig,
     private readonly log: (line: string) => void,
     /** Told the tool list each time it is learned, so the manager can keep the ledger (INV-813). */
-    private readonly onListed: (tools: readonly McpTool[]) => void = () => {}
+    private readonly onListed: (tools: readonly McpTool[]) => void = () => {},
+    /**
+     * The sandbox and egress proxy for the child (INV-1344). Absent means the caller chose to
+     * run servers bare — a test, or `mcp: null`'s sibling; given, a server runs sandboxed or not
+     * at all, unless its own config says `sandbox: "off"`.
+     */
+    private readonly host?: HostProcessDeps
   ) {}
+
+  /**
+   * The command under the host sandbox (INV-1344): writes only in a work directory of its own
+   * under the temp directory plus `allowWrite`; network only through the host egress proxy.
+   * Throws when a sandbox was wired in but cannot be applied: a server does not start bare.
+   */
+  private async confine(): Promise<{ command: string; args: string[]; env: Record<string, string> }> {
+    const bare = { command: this.config.command!, args: this.config.args ?? [], env: {} };
+    if (this.host === undefined || this.config.sandbox === "off") return bare;
+    const sandbox = this.host.sandbox;
+    if (sandbox === undefined) throw new Error(`${this.config.name} would run bare: no host sandbox is available and its config does not say sandbox: "off"`);
+    const egress = await this.host.egress;
+    const cwd = join(tmpdir(), `agentbox-mcp-${this.config.name}`);
+    mkdirSync(cwd, { recursive: true });
+    const wrapped = sandbox.wrap(bare.command, bare.args, { cwd, allowWrite: this.config.allowWrite ?? [], loopbackPorts: egress === undefined ? [] : [egress.port] });
+    this.log(`mcp ${this.config.name}: under ${wrapped.mechanism}; ${wrapped.rules.join("; ")}`);
+    return { command: wrapped.command, args: wrapped.args, env: { ...(egress === undefined ? {} : proxyEnvironment(egress.port)), ...wrapped.env } };
+  }
 
   status(): McpServerStatus {
     return {
@@ -173,9 +205,10 @@ class McpServer {
 
   private async start(): Promise<void> {
     if (this.config.url !== undefined) throw new Error(`${this.config.name} is a remote server; use RemoteMcpServer`);
-    const child = spawn(this.config.command!, this.config.args ?? [], {
+    const confined = await this.confine();
+    const child = spawn(confined.command, confined.args, {
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, ...this.config.env },
+      env: { ...process.env, ...confined.env, ...this.config.env },
     });
     this.child = child;
     child.stdout.setEncoding("utf8");
@@ -582,13 +615,15 @@ export class VirtualServer implements ToolServer {
 export class McpManager {
   private servers: ToolServer[];
   private readonly ledger: CapabilityLedger | undefined;
+  private readonly host: HostProcessDeps | undefined;
 
   constructor(
     configs: readonly McpServerConfig[],
     private readonly log: (line: string) => void = () => {},
-    options: { ledger?: CapabilityLedger } = {}
+    options: { ledger?: CapabilityLedger; host?: HostProcessDeps } = {}
   ) {
     this.ledger = options.ledger;
+    this.host = options.host;
     this.servers = configs.map(config => this.create(config));
   }
 
@@ -599,7 +634,7 @@ export class McpManager {
     const onListed = (tools: readonly McpTool[]) => {
       this.ledger?.record(config.name, tools, pinnedPackage(config.args));
     };
-    return config.url !== undefined ? new RemoteMcpServer(config, this.log, onListed) : new McpServer(config, this.log, onListed);
+    return config.url !== undefined ? new RemoteMcpServer(config, this.log, onListed) : new McpServer(config, this.log, onListed, this.host);
   }
 
   /**
