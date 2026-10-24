@@ -413,6 +413,26 @@ that a person needs to look.
 Ordering at startup: accepted-but-unstarted work first, then interrupted turns — a turn already
 running is further along than a message only accepted, and they run in the order they are queued.
 
+**Swept, not assumed (INV-1332).** `src/host/crash-sweep.sweep.ts` runs one turn of three calls
+(`bash`, `read_file`, `write_file`, then a reply) in a child process that kills itself at each
+boundary below, then opens the same directory in the test process and checks the rules. It is part
+of `npm test`, run after the parallel suite on its own (`*.sweep.ts`): seventeen hosts started
+beside a hundred test files is load enough to push either over the per-test clock. The step
+ledger's own writes are not separate cuts: `pending` is written just before the effect, so a kill
+after it is the effect's "before"; `settled` just after the results, so a kill after it is the next
+model call.
+
+| The host dies… | What the restart finds | What the resumed turn does |
+| --- | --- | --- |
+| during a model call | an open turn, every earlier call settled | asks the model again; nothing re-runs |
+| after `pending`, before the effect | an open step with no result | `bash` (unsafe): `outcome_unknown`, the model looks before redoing; `read_file`: re-run; `write_file` (declared idempotent, INV-525): re-run, same content |
+| after the effect, before its result is on disk | the same open step; the effect happened | the same answers: `bash` is unknown and the model finds the effect in place, so it does not repeat it; the idempotent write re-runs to the same state |
+| after the results entry, before `settled` | the result on disk, the step still open | the result stands as written; nothing re-runs, nothing is called unknown |
+| before the turn's `end` record | the reply on disk, the turn open | the model is asked once more and ends the turn; no effect runs |
+
+What holds at every cut: each side effect runs at most once, the files end up as the uninterrupted
+turn would have left them, the reply is delivered, and neither a turn nor a step is left open.
+
 ## 17. Two agents, one file (F10.3)
 
 Every agent shares one `/home/box/work` as one uid. Two of them editing the same file is a lost

@@ -26,7 +26,7 @@ import { join, relative, sep } from "node:path";
 export const DEFAULT_LIMIT = 1000;
 export const BASELINE_FILE = "arch-baseline.json";
 const PRODUCTION = /\.ts$/;
-const EXCLUDED = [/\.test\.ts$/, /(^|\/)testing\//, /(^|\/)fixtures\//, /\.d\.ts$/];
+const EXCLUDED = [/\.test\.ts$/, /\.sweep\.ts$/, /(^|\/)testing\//, /(^|\/)fixtures\//, /\.d\.ts$/];
 const ENV_READ = /\bprocess\.env\b/;
 
 /** Every production source file under `root/src`, with what the two rules measure. */

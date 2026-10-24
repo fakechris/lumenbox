@@ -35,11 +35,13 @@ import { underOsNetworkDeny } from "./test-sandbox.mjs";
  * remember to raise is a number that goes stale, so staleness is now itself reported: passing far
  * above the floor prints how to raise it, every run, until somebody does.
  */
-const FLOOR = Number(process.env.AGENTBOX_TEST_FLOOR ?? 2525);
+const FLOOR = Number(process.env.AGENTBOX_TEST_FLOOR ?? 2545);
 /** How far above the floor the suite may sit before the floor is called stale. */
 const STALE_MARGIN = 40;
 
-const runner = underOsNetworkDeny(process.execPath, [
+/** The runner for one set of test files: the guard first, the OS sandbox around, TAP out. */
+function runnerFor(globs) {
+  return underOsNetworkDeny(process.execPath, [
     "--experimental-transform-types",
     // In place before the first test module: a test may not reach the network.
     "--import",
@@ -47,41 +49,66 @@ const runner = underOsNetworkDeny(process.execPath, [
     "--test",
     "--test-reporter=tap",
     "--test-timeout=30000",
-    "src/**/*.test.ts",
-    // The documents are checked like the code is: two of them claiming one number, or one
-    // domain, is the same class of defect as two functions claiming one name.
-    "scripts/*.test.mjs",
-]);
-console.error(
-  runner.osNet === "denied"
-    ? `[test-floor] network: denied by the OS (${runner.why}); loopback open; the in-process guard is the second layer`
-    : `[test-floor] network: NOT denied by the OS — ${runner.why}; only the in-process guard (fetch/http/https/net/tls) is in force. ` +
-        "A spawned curl or git could reach out from a test on this machine; CI denies it."
-);
-const child = spawn(
-  runner.command,
-  runner.args,
-  // An allowlisted environment, not this shell's: see scripts/test-env.mjs. The run
-  // must not be able to read a credential that happens to be exported here, and must
-  // not be able to reach the live installation in ~/.agentbox.
-  { stdio: ["ignore", "pipe", "inherit"], env: { ...hermeticEnv(), AGENTBOX_TEST_OS_NET: runner.osNet } }
-);
+    ...globs,
+  ]);
+}
 
-let output = "";
-child.stdout.setEncoding("utf8");
-child.stdout.on("data", chunk => {
-  output += chunk;
-  process.stdout.write(chunk);
+/** Runs one set of files under the hermetic environment and returns its exit code and TAP. */
+function runFiles(runner) {
+  return new Promise(resolve => {
+    const child = spawn(
+      runner.command,
+      runner.args,
+      // An allowlisted environment, not this shell's: see scripts/test-env.mjs. The run
+      // must not be able to read a credential that happens to be exported here, and must
+      // not be able to reach the live installation in ~/.agentbox.
+      { stdio: ["ignore", "pipe", "inherit"], env: { ...hermeticEnv(), AGENTBOX_TEST_OS_NET: runner.osNet } }
+    );
+    let output = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", chunk => {
+      output += chunk;
+      process.stdout.write(chunk);
+    });
+    child.on("close", code => resolve({ code, output }));
+  });
+}
+
+const summary = tap => ({
+  pass: Number(/^# pass (\d+)$/m.exec(tap)?.[1] ?? 0),
+  fail: Number(/^# fail (\d+)$/m.exec(tap)?.[1] ?? 0),
+  total: Number(/^# tests (\d+)$/m.exec(tap)?.[1] ?? 0),
 });
 
-const code = await new Promise(resolve => child.on("close", resolve));
+const main = runnerFor([
+  "src/**/*.test.ts",
+  // The documents are checked like the code is: two of them claiming one number, or one
+  // domain, is the same class of defect as two functions claiming one name.
+  "scripts/*.test.mjs",
+]);
+console.error(
+  main.osNet === "denied"
+    ? `[test-floor] network: denied by the OS (${main.why}); loopback open; the in-process guard is the second layer`
+    : `[test-floor] network: NOT denied by the OS — ${main.why}; only the in-process guard (fetch/http/https/net/tls) is in force. ` +
+        "A spawned curl or git could reach out from a test on this machine; CI denies it."
+);
+const first = await runFiles(main);
 
-// From the TAP summary rather than by counting `ok` lines: subtests each emit one, so counting lines
-// would inflate the number and make the floor meaningless.
-const pass = Number(/^# pass (\d+)$/m.exec(output)?.[1] ?? 0);
-const fail = Number(/^# fail (\d+)$/m.exec(output)?.[1] ?? 0);
-const total = Number(/^# tests (\d+)$/m.exec(output)?.[1] ?? 0);
+// The sweeps (`*.sweep.ts`, INV-1332) run after the parallel suite, alone: each starts a dozen
+// hosts as child processes and kills them, which beside a hundred concurrent test files is
+// enough load to push unrelated files over the per-test clock, and to be pushed over it itself.
+// Alone they take seconds. Their tests count toward the floor like any other.
+console.error("[test-floor] sweeps: the crash sweep runs after the suite, alone");
+const second = await runFiles(runnerFor(["src/**/*.sweep.ts"]));
 
+const code = first.code !== 0 ? first.code : second.code;
+const counts = [summary(first.output), summary(second.output)];
+const pass = counts[0].pass + counts[1].pass;
+const fail = counts[0].fail + counts[1].fail;
+const total = counts[0].total + counts[1].total;
+
+// Counted from the TAP summaries rather than by counting `ok` lines: subtests each emit one, so
+// counting lines would inflate the number and make the floor meaningless.
 if (code !== 0 || fail > 0) {
   console.error(`\n[test-floor] ${fail} test(s) failed.`);
   process.exit(1);
