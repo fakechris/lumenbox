@@ -87,6 +87,7 @@ export class NetworkEventLog {
           port: Number(parsed.port ?? 0),
           allowed: parsed.allowed === true,
           ...(parsed.reason !== undefined ? { reason: parsed.reason } : {}),
+          ...(typeof parsed.detail === "string" ? { detail: parsed.detail } : {}),
           // A line written before INV-784 names no call; read as what it is.
           attribution: parsed.attribution === "call" ? "call" : "unattributed",
           ...(typeof parsed.agentId === "string" ? { agentId: parsed.agentId } : {}),
@@ -140,16 +141,45 @@ export function summariseEvents(events: readonly NetworkEvent[]): { box: string;
 }
 
 /**
- * The one line a tool call is told about its refusals (INV-784): "2 outbound connections
- * refused: a.test, b.test". Undefined when there were none, so nothing is appended. Hosts
- * once each, in the order first refused, capped so a sweep cannot flood the result.
+ * What the relay refused while one tool call ran, as a block on the call's result (INV-784,
+ * INV-1345). The model learns that `pip install` failed because vendor.test is not allowed,
+ * rather than reading a timeout — and learns the rule each host hit, so the next step is
+ * obvious: a host nobody listed stays refused; a listed one is reached without asking.
+ * One line per host:port and reason, oldest first, at most `maxLines` before "+N more";
+ * never the call token. The shape follows sandbox-runtime's `<sandbox_violations>`
+ * (research 2026-10-24).
  */
-export function refusedLine(events: readonly NetworkEvent[], maxHosts = 8): string | undefined {
+export function egressDeniedBlock(events: readonly NetworkEvent[], maxLines = 10): string | undefined {
   const refused = events.filter(event => !event.allowed);
   if (refused.length === 0) return undefined;
-  const hosts: string[] = [];
-  for (const event of refused) if (!hosts.includes(event.host)) hosts.push(event.host);
-  const shown = hosts.slice(0, maxHosts);
-  const more = hosts.length - shown.length;
-  return `${refused.length} outbound connection${refused.length === 1 ? "" : "s"} refused: ${shown.join(", ")}${more > 0 ? ` and ${more} more` : ""}`;
+  const lines: string[] = [];
+  for (const event of [...refused].sort((a, b) => a.at.localeCompare(b.at))) {
+    const line = `${event.host}:${event.port} — ${reasonOf(event)}`;
+    if (!lines.includes(line)) lines.push(line);
+  }
+  const shown = lines.slice(0, maxLines);
+  const more = lines.length - shown.length;
+  return [
+    "<egress_denied>",
+    ...shown,
+    ...(more > 0 ? [`+${more} more`] : []),
+    "</egress_denied>",
+    "Outbound connections the egress relay refused during this call. A host outside this box's allow " +
+      "list (the bundle's egressHosts, or `agentbox egress --allow`) stays refused until a person lists it; " +
+      "a hard-denied target can never be listed.",
+  ].join("\n");
+}
+
+function reasonOf(event: NetworkEvent): string {
+  switch (event.reason) {
+    case "hard-denied":
+      return `hard-denied${event.detail !== undefined ? `: ${event.detail}` : ""}`;
+    case "unauthorized":
+      return "unauthorized (the stream's token named no box)";
+    case "not allowed":
+    case undefined:
+      return "not allowed (outside this box's allow list)";
+    default:
+      return event.reason;
+  }
 }

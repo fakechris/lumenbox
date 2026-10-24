@@ -52,7 +52,8 @@ test("the summary says per box what was allowed, what was refused, and which hos
 });
 
 // ── by call (INV-784) ─────────────────────────────────────────────────────────────
-import { refusedLine } from "./events.ts";
+import { egressDeniedBlock } from "./events.ts";
+import type { NetworkEvent } from "./relay.ts";
 
 test("events are queried by agent, turn and tool call, and a line written before attribution reads as unattributed", () => {
   const dir = mkdtempSync(join(tmpdir(), "agentbox-netevents-"));
@@ -75,13 +76,24 @@ test("events are queried by agent, turn and tool call, and a line written before
   }
 });
 
-test("the refusal line is one line, hosts once each, nothing when nothing was refused", () => {
-  const event = (host: string, allowed: boolean) => ({ at: at(1), box: "b", host, port: 443, allowed, attribution: "unattributed" as const });
-  assert.equal(refusedLine([event("a.test", true)]), undefined);
-  assert.equal(refusedLine([event("a.test", false)]), "1 outbound connection refused: a.test");
-  assert.equal(refusedLine([event("a.test", false), event("b.test", false), event("a.test", false), event("c.test", true)]), "3 outbound connections refused: a.test, b.test");
-  const many = ["h1", "h2", "h3"].map(host => event(host, false));
-  assert.equal(refusedLine(many, 2), "3 outbound connections refused: h1, h2 and 1 more");
+test("the refusal block names each host:port once with its rule, oldest first, caps the lines, and is nothing when nothing was refused (INV-1345)", () => {
+  const event = (host: string, allowed: boolean, extra: Partial<NetworkEvent> = {}, second = 1) => ({ at: at(second), box: "b", host, port: 443, allowed, attribution: "unattributed" as const, ...extra });
+  assert.equal(egressDeniedBlock([event("a.test", true)]), undefined);
+  const block = egressDeniedBlock([
+    event("b.test", false, { reason: "not allowed" }, 2),
+    event("a.test", false, { reason: "hard-denied", detail: "cloud metadata address" }, 1),
+    event("b.test", false, { reason: "not allowed" }, 3),
+    event("c.test", true, {}, 4),
+  ])!;
+  const lines = block.split("\n");
+  assert.equal(lines[0], "<egress_denied>");
+  assert.equal(lines[1], "a.test:443 — hard-denied: cloud metadata address");
+  assert.equal(lines[2], "b.test:443 — not allowed (outside this box's allow list)");
+  assert.equal(lines[3], "</egress_denied>");
+  assert.match(lines[4]!, /agentbox egress --allow/, "the next step is named");
+  assert.doesNotMatch(block, /token/i);
+  const many = ["h1", "h2", "h3"].map(host => event(host, false, { reason: "not allowed" }));
+  assert.deepEqual(egressDeniedBlock(many, 2)!.split("\n").slice(1, 4), ["h1:443 — not allowed (outside this box's allow list)", "h2:443 — not allowed (outside this box's allow list)", "+1 more"]);
 });
 
 test("the event file rotates once past its cap, keeping one previous generation (INV-1224)", async () => {

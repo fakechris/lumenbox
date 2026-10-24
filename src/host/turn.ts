@@ -50,7 +50,7 @@ import {
 } from "./transient.ts";
 import { cacheMetering, cacheReadShare, type UsageKind, type UsageLog } from "./usage.ts";
 import { chooseRelevant, memoryProjectionManifest, SHARED_CHAR_BUDGET, type MemoryRecall } from "./memory.ts";
-import { refusedLine, type NetworkEventLog } from "../egress/events.ts";
+import { egressDeniedBlock, type NetworkEventLog } from "../egress/events.ts";
 import { needsReview, type ReviewInput, type ReviewMode, type Verdict } from "./auto-review.ts";
 import type { HookRunner } from "./hooks.ts";
 import { AGENT_WAKE_CUE, laneOf } from "../agents/bus.ts";
@@ -3447,17 +3447,17 @@ ${outcome.text}`;
         screenshot: outcome.images?.[0]?.data,
       });
 
-      // What the relay refused while this call ran, as one line on the result (INV-784): the
-      // model learns that `pip install` failed because vendor.test is not allowed, rather
-      // than reading a timeout. Read from the relay's own ledger, keyed by this call.
+      // What the relay refused while this call ran, as a block on the result (INV-784,
+      // INV-1345): host, port and the rule each hit. Read from the relay's own ledger, keyed by
+      // this call, so two calls running at once each see only their own refusals.
       if (deps.networkEvents !== undefined) {
         let refused: string | undefined;
         try {
-          refused = refusedLine(deps.networkEvents.query({ toolUse: toolUse.id, refused: true, limit: 1000 }).events);
+          refused = egressDeniedBlock(deps.networkEvents.query({ toolUse: toolUse.id, refused: true, limit: 1000 }).events);
         } catch {
           // The ledger must never decide a tool result.
         }
-        if (refused !== undefined) outcome = { ...outcome, text: `${outcome.text}\n${refused}` };
+        if (refused !== undefined) outcome = { ...outcome, text: `${outcome.text}\n\n${refused}` };
       }
 
       // A model without vision must not be handed image blocks it cannot decode — the
