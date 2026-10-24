@@ -41,16 +41,16 @@
   "dependencies": {
     "@a2ui/lit": "^0.14.0",
     "@a2ui/web_core": "^0.14.0",
-    "@anthropic-ai/sdk": "^0.133.0",
-    "@larksuiteoapi/node-sdk": "^1.74.0",
-    "markdown-it": "^15.0.2",
-    "zod": "^3.25.76"
+    "@anthropic-ai/sdk": "^0.137.0",
+    "@larksuiteoapi/node-sdk": "^1.76.0",
+    "markdown-it": "^15.0.3",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",
     "@types/node": "^26.6.5",
-    "electron": "^44.7.0",
-    "electron-builder": "^26.15.3",
+    "electron": "^44.9.3",
+    "electron-builder": "^26.18.0",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2"
   },
