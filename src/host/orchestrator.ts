@@ -101,7 +101,7 @@ import { TeachRunner, parseTrace, teachingClarificationCue } from "./teach.ts";
 import { TeachDrafts, parseTeachingResponse, publishTeachingSkill } from "./teach-drafts.ts";
 import { RuleStore } from "./rules.ts";
 import { MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
-import type { HostRunner } from "./host-runner.ts";
+import type { HostProcessDeps, HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
 import type { OAuthGate } from "./oauth.ts";
 import { readsExternalContent, Rememberer, summariseExchange, turnReadOutside } from "./remember.ts";
@@ -199,11 +199,10 @@ export interface OrchestratorOptions {
   bundles?: BundleStore;
   /** Operator rules; tests pass one over a temp dir. */
   rules?: RuleStore;
-  /**
-   * MCP servers whose tools the agents may call. Absent reads the config file; `null`
-   * keeps none, which is what a test that must not spawn a child process wants.
-   */
+  /** MCP servers the agents may call. Absent reads the config file; `null` keeps none (a test that must not spawn). */
   mcp?: McpManager | null;
+  /** The sandbox and egress proxy for stdio MCP servers (INV-1344); absent runs them bare. */
+  hostProcess?: HostProcessDeps;
   /**
    * How an agent puts a question to the person who gave it the work. Absent means
    * there is nobody to ask — a CLI run, a test — and the tool says so plainly rather
@@ -908,9 +907,8 @@ export class Orchestrator {
         ? new McpManager(
             options.mcp === null ? [] : mcpServersFrom(loadConfig()),
             line => console.error(`[mcp] ${line}`),
-            // What each server offered, by version, over time (INV-813): a changed tool list is
-            // on the record with the package version that changed it.
-            options.mcp === null ? undefined : { ledger: new CapabilityLedger(join(agentboxHome(), "mcp-capabilities.jsonl")) }
+            // What each server offered, by version, over time (INV-813), and how each is confined (INV-1344).
+            options.mcp === null ? undefined : { ledger: new CapabilityLedger(join(agentboxHome(), "mcp-capabilities.jsonl")), ...(options.hostProcess !== undefined ? { host: options.hostProcess } : {}) }
           )
         : options.mcp;
     this.claims =
@@ -2795,7 +2793,7 @@ export const STARTER_TEAM: readonly {
 ];
 
 /** The MCP server list as config.json spells it, in the manager's shape. */
-function mcpServersFrom(config: { mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string>; host?: boolean; hostOnlyTools?: string[]; pollutesMemory?: boolean }>; connectorVersions?: Record<string, string> }) {
+function mcpServersFrom(config: { mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string>; host?: boolean; hostOnlyTools?: string[]; pollutesMemory?: boolean; sandbox?: "on" | "off"; allowWrite?: string[] }>; connectorVersions?: Record<string, string> }) {
   // The connector doors (mcp-connectors.ts) sit under the operator's entries: a config.json
   // line with the same name overrides a door's default, an env credential turns a door on,
   // and either may exist without the other. `connectorVersions` pins a door's package

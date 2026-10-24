@@ -700,9 +700,13 @@ pauses for a person to approve the exact text, by construction rather than by a
 configurable list an operator might leave empty. Commands run under a directory the
 operator chose (no default: a default would be this code choosing what an agent may
 reach), through the login shell, as a single shell argument so a filename with a
-space is data. Not a security boundary — an approved command runs with the
-orchestrator's privileges, which is the point of approving it — but an accident
-boundary and an audit trail.
+space is data. An approved command runs with the orchestrator's privileges where the OS
+sandbox allows (INV-1344, docs/06 §9): writes only under that directory, the temp
+directory and what the operator listed; network only through the egress relay; `~/.ssh`
+and its kin never writable. The approval is a person reading `npm test`; the sandbox is
+what bounds everything under it that the person did not read. `hostExec.sandbox: "off"`
+is the written opt-out; where the sandbox cannot be applied the command is refused, not
+run bare.
 
 ## 28. Chat channels
 

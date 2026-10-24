@@ -218,6 +218,42 @@ State it plainly, because a deployment decision depends on it.
   previous generation. The relay is a tunnel, so an HTTPS request's method and status are not
   seen there — only what crossed.
 
+### The host-side sandbox (INV-1344)
+
+Two things run outside the box with the orchestrator's own privileges: a `RunOnHost`
+command and a stdio MCP server. Both now run under the operating system's sandbox,
+built in `src/host/host-sandbox.ts` after anthropics/sandbox-runtime (research 2026-10-24):
+
+- **Mechanism.** macOS: a Seatbelt profile handed to `sandbox-exec -p`. Linux: bubblewrap
+  (`bwrap --ro-bind / /`, the writable paths bound back in, `--unshare-net --unshare-pid`),
+  with `socat` bridging the allowed loopback port from a Unix socket into the namespace.
+  Where neither can be applied the process is **refused with the reason**, never run bare.
+- **Rules.** Reads allowed. Writes only under the working directory (`hostExec.cwd`; an MCP
+  server gets its own directory under the temp directory), the temp directory and
+  `hostExec.allowWrite` / `mcpServers.<name>.allowWrite`. Never writable, even under a
+  writable parent: `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config/gh`, `~/.kube`, `~/.netrc`,
+  the shell rc files, `~/.gitconfig`, `~/.agentbox*`, and `.git/hooks` and `.git/config`
+  under the working directory.
+- **Network.** Only the host egress proxy on loopback (`src/host/host-egress.ts`), which
+  speaks to the relay named by `AGENTBOX_EGRESS_RELAY` / `AGENTBOX_EGRESS_TOKEN` — the same two
+  variables the box is handed — and so applies the relay's allow list, hard denials and
+  resolved-address check to host commands too. A `RunOnHost` command's connections carry its
+  call token, so its refusals come back on the result (INV-1345). No relay configured means
+  **no network** for host processes; the rules say so.
+- **What the model sees.** A failed command whose output looks like a refusal (EPERM, read-only
+  file system, network unreachable…) gets a `<sandbox_violations>` block listing the rules in
+  force, so `claude` failing to write `~/.claude` reads as "add it to `hostExec.allowWrite`"
+  rather than a mystery.
+- **Opt-out, in writing.** `hostExec.sandbox: "off"` or `mcpServers.<name>.sandbox: "off"` in
+  `config.json` — the same class of decision as `hostExec.enabled`, and not one the Settings
+  form offers. The form's `enabled`/`cwd` save merges into `hostExec` and no longer erases
+  hand-written keys.
+- **Known gaps.** A hard link made outside the rules; on Linux the deny list covers only paths
+  that exist when the process starts; the Seatbelt profile matches real paths, so every path is
+  resolved before it is written into the profile (a `/var/folders` rule would silently miss
+  `/private/var/folders`). The sandbox is an accident boundary around an approved command, not
+  a replacement for the approval.
+
 ### What the box reaches *without* the relay (measured 2026-10-20)
 
 The relay decides only for traffic sent through it (the box's browser, and whatever an agent

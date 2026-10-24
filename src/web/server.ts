@@ -119,7 +119,7 @@ function withinWork(path: string): boolean {
   return normalised === WORK_DIR || normalised.startsWith(`${WORK_DIR}/`);
 }
 
-import { agentboxHome, isPersonalBoxQuota, loadConfig, lockedConfigEnv, reapplyConfigEnv, saveConfig, type AgentboxConfig } from "../config.ts";
+import { agentboxHome, egressRelayFromEnv, isPersonalBoxQuota, loadConfig, lockedConfigEnv, reapplyConfigEnv, saveConfig, type AgentboxConfig } from "../config.ts";
 
 type AgentboxConfigHostExec = NonNullable<AgentboxConfig["hostExec"]>;
 import { ChannelManager } from "../channels/manager.ts";
@@ -133,7 +133,9 @@ import {
 } from "../channels/identity.ts";
 import { TelegramChannel } from "../channels/telegram.ts";
 import { parseTailmsgRecordConfig, tailmsgDoorFromRecord } from "../channels/tailmsg.ts";
+import { startHostEgress } from "../host/host-egress.ts";
 import { HostRunner, hostRunnerConfig } from "../host/host-runner.ts";
+import { HostSandbox } from "../host/host-sandbox.ts";
 import { ALL_TOOLS } from "../host/orchestrator.ts";
 import {
   CATALOG_CONNECTORS,
@@ -495,10 +497,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     });
   };
 
-  // The door out of the box, built from config: off unless an operator turned it on.
-  // Read once at construction — a change to it takes effect at the next restart, the
-  // same as the provider, because it decides what tools an agent is even offered.
-  const hostRunner = new HostRunner(hostRunnerConfig(loadConfig().hostExec ?? {}));
+  // Host processes (RunOnHost, stdio MCP servers) run under the OS sandbox with the egress relay as their only network (INV-1344).
+  const relayEnv = egressRelayFromEnv();
+  const hostProcess = {
+    sandbox: new HostSandbox(),
+    egress: relayEnv === undefined ? Promise.resolve(undefined) : startHostEgress({ ...relayEnv, log }).catch((error: unknown) => { log(`host egress: not started (${error instanceof Error ? error.message : String(error)}); host processes have no network`); return undefined; }),
+  };
+  // The door out of the box, from config: off unless an operator turned it on; read once, like the provider.
+  const hostRunner = new HostRunner(hostRunnerConfig(loadConfig().hostExec ?? {}), hostProcess);
   if (hostRunner.enabled) log("host execution is on; every host command still asks for approval");
 
 
@@ -578,6 +584,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     useBox: options.useBox,
     boxProvisioner: provisioner,
     hostRunner,
+    hostProcess,
     vault,
     oauth,
     // An agent that cannot proceed without knowing something asks the person who gave
@@ -943,18 +950,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   };
   const lastInboundFor = (channel: string): string | undefined => {
     const arrivals = ingress.list().filter(record => record.channel === channel);
-    // The watermark never passes an arrival that has not been decided.
-    //
-    // "Last thing that arrived" was the obvious floor and the wrong one: an arrival is
-    // recorded the instant the wire hands it over, so a crash between that record and
-    // the durable queue moved the floor past a message nobody ever answered, and the
-    // sweep would never look at it again. Mature harnesses persist a watermark strictly
-    // below the smallest still-pending item for exactly this reason (OpenClaw's Telegram
-    // update-offset store, src/telegram/bot.ts — the same rule, expressed in update ids).
-    // Here the ledger already distinguishes the two: an arrival with a fate reached a
-    // decision, one without it did not.
-    // The window amendment is in catchUpFloor: an undecided arrival from days ago must not
-    // pin the floor there forever (it did, from 2026-08-28 to 2026-09-02).
+    // The watermark never passes an arrival that has not been decided. "Last thing that
+    // arrived" was the wrong floor: a crash between the arrival record and the durable queue
+    // moved it past a message nobody answered. Mature harnesses keep the watermark strictly
+    // below the smallest pending item (OpenClaw's Telegram update-offset store); here an
+    // arrival with a fate was decided, one without was not. catchUpFloor adds the window:
+    // an undecided arrival from days ago must not pin the floor forever (2026-08-28..09-02).
     return catchUpFloor(arrivals, Date.now(), REPLAY_MAX_AGE_MS);
   };
   /**
@@ -5650,8 +5651,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             hostExec: {
               enabled: hostRunner.enabled,
               cwd: config.hostExec?.cwd ?? null,
-              // Present only after a restart with it on; the live runner is what an
-              // agent would actually reach, so its reason is the honest one.
+              // From the live runner, which is what an agent would actually reach.
               unavailableReason: hostRunner.unavailableReason() ?? null,
             },
             // Whether a credential is present is worth showing; the credential is not.

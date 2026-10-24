@@ -3568,12 +3568,9 @@ export async function dispatchTool(
           agentId: context.agent.id,
           agentName: context.agent.profile.name,
           ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}),
-          // The box's bundles grant it (INV-420/INV-539). An agent's own scope is not
-          // consulted any more: two agents in one box differing in what they could reach
-          // is docs/22 §0 being false in the running system, and the honest migration is
-          // fail-closed — `agentbox bundle migrate` turns scopes into the box's bundles,
-          // and until it has run the secret is refused rather than quietly granted to one
-          // agent and not its neighbour.
+          // The box's bundles grant it (INV-420/INV-539), never an agent's own scope: two agents in
+          // one box differing in reach is docs/22 §0 being false. Fail-closed until `agentbox
+          // bundle migrate` has turned scopes into the box's bundles.
           scopeGrants: context.bundles?.grantsSecret(boxOfAgent(context), secretId) === true,
         });
         if (value === undefined) refusedSecrets.push(secretId);
@@ -3582,10 +3579,11 @@ export async function dispatchTool(
       if (Object.keys(secretEnv).length > 0) context.policy?.taint.mark(context.turnId ?? "", "vault");
 
       try {
-        const result = await context.hostRunner.run(command, secretEnv);
+        const result = await context.hostRunner.run(command, secretEnv, callFor(context).call);
         const parts = [
           result.stdout.trim() !== "" ? result.stdout : "(no stdout)",
           result.stderr.trim() !== "" ? `stderr:\n${result.stderr}` : "",
+          result.sandbox?.note ?? "",
           result.timedOut ? "The command hit the host time limit and was killed." : "",
           result.truncatedBytes > 0
             ? `(${result.truncatedBytes} bytes of output dropped for length.)`

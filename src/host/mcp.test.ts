@@ -314,3 +314,39 @@ test("an MCP server's results keep an exchange out of memory unless the operator
     manager.stop();
   }
 });
+
+// ── the host sandbox (INV-1344) ───────────────────────────────────────────────────
+
+import { HostSandbox } from "./host-sandbox.ts";
+
+test("with host deps but no usable sandbox a server does not start bare: its status says why; `sandbox: \"off\"` is the written opt-out", async () => {
+  const { path, cleanup } = withStub();
+  const host = { sandbox: undefined, egress: Promise.resolve(undefined) };
+  const manager = new McpManager([{ name: "bare", command: process.execPath, args: [path] }, { name: "opted", command: process.execPath, args: [path], sandbox: "off" as const }], () => {}, { host });
+  try {
+    await manager.ready();
+    const status = manager.statuses();
+    assert.match(status.find(entry => entry.name === "bare")?.detail ?? "", /would run bare/);
+    assert.equal(status.find(entry => entry.name === "bare")?.toolCount, 0);
+    assert.equal(status.find(entry => entry.name === "opted")?.toolCount, 2, "the opted-out server runs as before");
+  } finally {
+    manager.stop();
+    cleanup();
+  }
+});
+
+const liveSandbox = new HostSandbox();
+
+test("a stdio server starts and answers under the live sandbox", { skip: liveSandbox.unavailableReason() }, async () => {
+  const { path, cleanup } = withStub();
+  const manager = new McpManager([{ name: "stub", command: process.execPath, args: [path] }], () => {}, { host: { sandbox: liveSandbox, egress: Promise.resolve(undefined) } });
+  try {
+    await manager.ready();
+    assert.equal(manager.statuses()[0]?.toolCount, 2, manager.statuses()[0]?.detail ?? "");
+    const result = await manager.call("stub__echo", { text: "hi" });
+    assert.match(JSON.stringify(result), /echo: hi/);
+  } finally {
+    manager.stop();
+    cleanup();
+  }
+});
