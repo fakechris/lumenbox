@@ -209,10 +209,19 @@ export class TeachRunner {
             skill: parsed.skill, question: parsed.question });
           await box.teachDone(entry.id, false);
           ran += 1;
-        } catch (error) {
-          this.deps.log(`teach ${entry.id}: the turn failed (${error instanceof Error ? error.message : String(error)}); released for a later try`);
-          await box.teachRelease(entry.id).catch(() => {});
-          break;
+        } catch {
+          // A failed generation is not a successful skill and must not become an
+          // unbounded timer retry. Persist a reviewable question before settling
+          // the queue; the existing clarification UI owns an explicit retry.
+          this.deps.drafts.create({ boxId, agentId: agent.id, sessionId: entry.id, eventsPath,
+            ...(entry.videoPath === undefined ? {} : { videoPath: entry.videoPath }),
+            display: entry.display, ...(entry.epoch === undefined ? {} : { epoch: entry.epoch }),
+            ...(entry.binding?.taskId === undefined ? {} : { taskId: entry.binding.taskId }),
+            skill: null,
+            question: "教学生成未完成，未创建或发布技能。原始示范已保留；请补充目标并重新生成，或拒绝此草稿。" });
+          this.deps.log(`teach ${entry.id}: generation failed; saved for human review, automatic retry stopped`);
+          await box.teachDone(entry.id, false);
+          ran += 1;
         }
       }
     } finally {

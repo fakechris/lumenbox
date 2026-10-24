@@ -84,7 +84,7 @@ test("the cue carries the discipline: inputs vs constants, stable targets, no cr
   assert.match(cue, /A human must review and publish/);
 });
 
-test("the runner claims, prompts the desktop's agent with the trace, marks done; a failed turn is released; no owner leaves it queued", async t => {
+test("the runner claims, prompts the desktop's agent with the trace, marks done; a failed turn awaits human review; no owner leaves it queued", async t => {
   const root = mkdtempSync(join(tmpdir(), "teach-runner-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const log: string[] = [];
@@ -129,12 +129,19 @@ test("the runner claims, prompts the desktop's agent with the trace, marks done;
   assert.match(prompted[0]?.text ?? "", /1 click\(s\), 1 typing burst\(s\)/);
   assert.match(prompted[1]?.text ?? "", /0 click\(s\)/, "an empty trace still teaches from the video");
 
-  // A turn that fails releases the claim and stops draining.
+  // A failed generation becomes a durable review item and cannot loop after restart.
   entries = [{ id: "teach-c", sessionDir: "/t/c", display: 3, binding: { agentId: "ada" }, startedAt: "2026-09-11T12:00:00.000Z" }];
   fail = true;
   calls.length = 0;
-  assert.equal(await runner.drain("box-1", box as never), 0);
-  assert.deepEqual(calls, ["claim:teach-c", "release:teach-c"]);
+  assert.equal(await runner.drain("box-1", box as never), 1);
+  assert.deepEqual(calls, ["claim:teach-c", "done:teach-c"]);
+  const saved = new TeachDrafts(root).forSession("box-1", "teach-c")!;
+  assert.equal(saved.skill, null);
+  assert.match(saved.question ?? "", /未创建或发布/);
+  entries = [{ id: "teach-c", sessionDir: "/t/c", display: 3, binding: { agentId: "ada" }, startedAt: "2026-09-11T12:00:00.000Z" }];
+  const restarted = new TeachRunner({ agentById: () => ({ id: "ada", name: "Ada" }), drafts: new TeachDrafts(root),
+    generate: async () => { assert.fail("must not regenerate after restart"); }, log: () => {} });
+  await restarted.drain("box-1", box as never);
 
   // Nobody owns that desktop: released and left for later, said in the log.
   entries = [{ id: "teach-d", sessionDir: "/t/d", display: 9, startedAt: "2026-09-11T13:00:00.000Z" }];
