@@ -993,7 +993,7 @@ export class Orchestrator {
       get provider() { return self.remembererRuntime.profile; },
       log: line => console.error(`[memory] ${line}`),
       usage: this.usage,
-      externalTool: tool => this.readsExternalContent(tool),
+      externalTool: tool => this.readsExternalContent(tool), heldValues: () => this.options.vault?.heldValues() ?? new Map(),
     });
 
     this.extensions =

@@ -21,6 +21,7 @@ import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
 import type { PolicyGate } from "./policy.ts";
 import type { HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
+import { guardMemoryCandidate } from "./memory-guard.ts";
 import { appendLearning, hostOf, learningsDir, readLearnings, renderLearnings } from "./learnings.ts";
 import type { ScopeStore } from "./scopes.ts";
 import type { BundleStore } from "./bundles.ts";
@@ -5473,11 +5474,10 @@ export async function dispatchTool(
 
     case "RememberFact": {
       const fact = String(input.fact ?? "").trim();
-      const rejected = validateRecord(fact);
+      const rejected = validateRecord(fact) ?? guardMemoryCandidate(fact, { held: context.vault?.heldValues() ?? new Map() });
       if (rejected !== undefined) return { text: rejected.reason, isError: true };
 
-      // A deliberate act, so it is stored as a `fact` — trusted, and barely decaying. Something the
-      // agent chose to keep should not age out the way an automatic extraction does.
+      // A deliberate act, stored as a `fact`: trusted, barely decaying, unlike an automatic extraction.
       const shared = String(input.scope ?? "self") === "team";
       const key = dedupeKey(fact);
       // Checked against both tiers whichever was asked for: an agent should not keep its own copy of

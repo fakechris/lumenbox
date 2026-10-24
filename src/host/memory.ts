@@ -79,6 +79,8 @@ export interface MemoryRecord {
    * inactive, including a record appended after the withdrawal by a late background job.
    */
   revokedSources?: string[];
+  /** Held by the write-time judge (INV-1333), not remembered: the question and its confidence. Out of recall, kept by compaction, for a person. */
+  held?: { question: string; confidence: number };
 }
 
 /**
@@ -221,13 +223,12 @@ export function dedupe(records: readonly MemoryRecord[]): MemoryRecord[] {
   const revoked = revokedMemorySources(records);
   const byKey = new Map<string, MemoryRecord>();
   for (const record of records) {
-    if (record.revokedSources !== undefined) continue;
+    if (record.revokedSources !== undefined || record.held !== undefined) continue;
     if (recordHasRevokedSource(record, revoked)) continue;
     const key = dedupeKey(record.text);
     if (key === "") continue;
     if (record.kind === "retraction") {
-      // Withdraws whatever it names, and is not itself remembered. Order matters and is the file's:
-      // something recorded again *after* a retraction is a fresh statement, not a withdrawn one.
+      // Withdraws whatever it names, and is not itself remembered; something recorded again *after* it is fresh.
       byKey.delete(key);
       continue;
     }
@@ -1003,9 +1004,8 @@ export function compactMemoryLines(lines: readonly string[]): string[] | undefin
   const records = parsed.flatMap(entry => (entry.record === undefined ? [] : [entry.record]));
   const live = new Set(dedupe(records));
   const kept = parsed
-    // Source withdrawals remain as tombstones even after every current derivative is
-    // gone: a late extractor carrying the same source must not resurrect it.
-    .filter(entry => entry.record !== undefined && (live.has(entry.record) || entry.record.revokedSources !== undefined))
+    // Source withdrawals stay as tombstones (a late extractor must not resurrect one); held lines wait for a person.
+    .filter(entry => entry.record !== undefined && (live.has(entry.record) || entry.record.revokedSources !== undefined || entry.record.held !== undefined))
     .map(entry => entry.line);
   return kept.length < lines.length ? kept : undefined;
 }
