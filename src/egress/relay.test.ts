@@ -150,3 +150,63 @@ test("a cloud metadata address or a host port off the channel list is refused be
     upstream.close();
   }
 });
+
+test("an allow-listed name is judged by what it resolves to: a metadata or host address refuses the stream, a public one is dialled as that address (INV-1343)", async () => {
+  const upstream = createServer(socket => socket.end("hi there"));
+  await new Promise<void>(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  const upstreamPort = (upstream.address() as { port: number }).port;
+  const events: NetworkEvent[] = [];
+  const answers: Record<string, { address: string; family: number }[]> = {
+    "metadata.example": [{ address: "169.254.169.254", family: 4 }],
+    "home.example": [{ address: "127.0.0.1", family: 4 }],
+    "mixed.example": [{ address: "93.184.216.34", family: 4 }, { address: "::1", family: 6 }],
+    "upstream.example": [{ address: "127.0.0.1", family: 4 }],
+    "fe80.example": [{ address: "fe80::1", family: 6 }],
+  };
+  const asked: string[] = [];
+  const relay = startEgressRelay({
+    token: "relay-token-1234567890",
+    allow: ["*"],
+    port: 0,
+    channelPorts: [upstreamPort],
+    onEvent: event => events.push(event),
+    lookup: async host => {
+      asked.push(host);
+      const found = answers[host];
+      if (found === undefined) throw new Error(`ENOTFOUND ${host}`);
+      return found;
+    },
+  });
+  await new Promise<void>(resolve => relay.once("listening", resolve));
+  const relayPort = (relay.address() as { port: number }).port;
+  const stream = (host: string, port: number) =>
+    new Promise<string>(resolve => {
+      let answer = "";
+      const socket = connect(relayPort, "127.0.0.1", () => socket.write(encodeRequest({ token: "relay-token-1234567890", host, port })));
+      socket.on("data", chunk => { answer += chunk.toString(); if (answer.includes("hi there")) socket.end(); });
+      socket.on("close", () => resolve(answer));
+      socket.on("error", () => resolve(answer));
+    });
+  try {
+    await stream("metadata.example", 80);
+    await stream("home.example", 9);
+    await stream("mixed.example", 443);
+    await stream("fe80.example", 443);
+    await stream("gone.example", 443);
+    const ok = await stream("upstream.example", upstreamPort);
+    assert.match(ok, /hi there/, "the checked address is the one dialled: a name for 127.0.0.1 on a channel port reaches the upstream");
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.deepEqual(
+      events.filter(e => e.closed === undefined).map(e => [e.host, e.allowed, e.reason]),
+      [["metadata.example", false, "hard-denied"], ["home.example", false, "hard-denied"], ["mixed.example", false, "hard-denied"], ["fe80.example", false, "hard-denied"], ["gone.example", false, "unresolved"], ["upstream.example", true, undefined]]
+    );
+    assert.equal(events[0]!.detail, "metadata.example resolves to 169.254.169.254: cloud metadata address");
+    assert.match(events[1]!.detail ?? "", /resolves to 127\.0\.0\.1: host port 9 is not an explicit channel/);
+    assert.match(events[2]!.detail ?? "", /resolves to ::1/, "one bad answer among good ones refuses the whole stream");
+    assert.match(events[3]!.detail ?? "", /fe80::1: cloud metadata address/);
+    assert.deepEqual(asked, ["metadata.example", "home.example", "mixed.example", "fe80.example", "gone.example", "upstream.example"], "a literal address is never looked up; a name is looked up once");
+  } finally {
+    relay.close();
+    upstream.close();
+  }
+});

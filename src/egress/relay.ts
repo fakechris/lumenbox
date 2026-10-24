@@ -13,8 +13,9 @@
  * whatever restrictions it was given. It never parses the traffic.
  */
 
-import { createServer, connect as netConnect, type Server } from "node:net";
-import { hardDenied } from "./hard-deny.ts";
+import { lookup as dnsLookup } from "node:dns/promises";
+import { createServer, connect as netConnect, isIP, type Server } from "node:net";
+import { hardDenied, hardDeniedAddress } from "./hard-deny.ts";
 import { decodeCall } from "./call.ts";
 import {
   EgressProtocolError,
@@ -51,7 +52,21 @@ export interface RelayOptions {
    * every cloud metadata address, is refused before any allow list is read.
    */
   channelPorts?: readonly number[];
+  /**
+   * How a name becomes addresses (INV-1343). The relay dials the address it checked, never the
+   * name, so a second DNS answer cannot undo the check. Tests hand in a fake; the default is
+   * the system resolver with every answer.
+   */
+  lookup?: (host: string) => Promise<readonly { address: string; family: number }[]>;
   log?: (line: string) => void;
+}
+
+const systemLookup: NonNullable<RelayOptions["lookup"]> = host => dnsLookup(host, { all: true });
+
+/** The addresses a host stands for: itself when it is already one, else what the resolver says. */
+async function resolve(host: string, lookup: NonNullable<RelayOptions["lookup"]>) {
+  const family = isIP(host);
+  return family !== 0 ? [{ address: host, family }] : lookup(host);
 }
 
 export interface RelayBox {
@@ -70,7 +85,7 @@ export interface NetworkEvent {
   port: number;
   allowed: boolean;
   /** Why it was refused, when it was. `hard-denied` is a target no list could allow (hard-deny.ts). */
-  reason?: "unauthorized" | "not allowed" | "hard-denied";
+  reason?: "unauthorized" | "not allowed" | "hard-denied" | "unresolved";
   /** For a hard denial: which rule. */
   detail?: string;
   /**
@@ -147,7 +162,7 @@ export function startEgressRelay(options: RelayOptions): Server {
     box.setTimeout(PREAMBLE_TIMEOUT_MS, () => box.destroy());
 
     let head = Buffer.alloc(0);
-    const onData = (chunk: Buffer) => {
+    const onData = async (chunk: Buffer) => {
       head = Buffer.concat([head, chunk]);
       let decoded: ReturnType<typeof decodeRequest>;
       try {
@@ -162,6 +177,9 @@ export function startEgressRelay(options: RelayOptions): Server {
       if (!decoded) return;
 
       box.off("data", onData);
+      // Paused until the upstream is piped: bytes the box sends while the name resolves and the
+      // dial completes wait in the buffer instead of being emitted to nobody.
+      box.pause();
       box.setTimeout(0);
       const { request, rest } = decoded;
 
@@ -209,12 +227,47 @@ export function startEgressRelay(options: RelayOptions): Server {
         box.end(encodeResponse(false, "not allowed"));
         return;
       }
+      // What the name stands for, checked before the dial (INV-1343). The box's proxy is still
+      // holding the stream open for the answer, so the wait costs it nothing it was not paying.
+      let addresses: readonly { address: string; family: number }[];
+      try {
+        addresses = await resolve(request.host, options.lookup ?? systemLookup);
+      } catch (error) {
+        log(`relay: ${who.box}: ${request.host} does not resolve (${describe(error)})`);
+        event(false, "unresolved");
+        box.end(encodeResponse(false, "unresolved"));
+        return;
+      }
+      const first = addresses[0];
+      if (first === undefined) {
+        event(false, "unresolved");
+        box.end(encodeResponse(false, "unresolved"));
+        return;
+      }
+      for (const { address } of addresses) {
+        const deniedAddress = hardDeniedAddress(address, request.port, { channelPorts: channelPorts(options) });
+        if (deniedAddress === undefined) continue;
+        const detail = `${request.host} resolves to ${address}: ${deniedAddress}`;
+        log(`relay: ${who.box}: ${request.host}:${request.port} refused outright: ${detail}`);
+        options.onEvent?.({
+          at: new Date().toISOString(),
+          box: who.box,
+          host: request.host,
+          port: request.port,
+          allowed: false,
+          reason: "hard-denied",
+          detail,
+          ...attributionOf(request.call),
+        });
+        box.end(encodeResponse(false, `hard-denied: ${detail}`));
+        return;
+      }
       event(true);
 
       const opened = Date.now();
       let bytesUp = 0;
       let bytesDown = 0;
-      const upstream = netConnect(request.port, request.host);
+      const upstream = netConnect({ port: request.port, host: first.address, family: first.family });
       upstream.on("data", (chunk: Buffer) => { bytesDown += chunk.length; });
       box.on("data", (chunk: Buffer) => { bytesUp += chunk.length; });
       let closedOnce = false;
