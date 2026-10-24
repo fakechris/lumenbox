@@ -17,10 +17,10 @@
  */
 
 import { createHash } from "node:crypto";
-import { appendLine } from "./jsonl.ts";
 import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
+import { appendLine } from "./jsonl.ts";
+import { dedupeKey, type MemoryRecord, recordHasRevokedSource, revokedMemorySources, sourceCovers, validateRecord } from "./memory.ts";
 import { describeMaintenanceSource } from "./memory-maintenance.ts";
-import { dedupeKey, recordHasRevokedSource, revokedMemorySources, sourceCovers, validateRecord, type MemoryRecord } from "./memory.ts";
 
 export interface MemoryView {
   /** The dedupe key: what a retraction or a re-record is matched on. */
@@ -35,10 +35,12 @@ export interface MemoryView {
   box?: string;
   audience?: "everyone";
   from?: string[];
-  status: "live" | "retracted";
+  status: "live" | "retracted" | "held";
   /** For a retracted line: when, and by what. */
   retractedAt?: string;
   retractedBy?: string;
+  /** For a held line (INV-1333): the question that held it and the judge's confidence. */
+  heldBy?: string;
 }
 
 export interface MemorySummary {
@@ -48,6 +50,8 @@ export interface MemorySummary {
   live: number;
   byKind: Record<string, number>;
   retracted: number;
+  /** Lines the write-time judge held for a person (INV-1333). */
+  held: number;
   lastAt?: string;
 }
 
@@ -71,6 +75,11 @@ export function memoryView(records: readonly MemoryRecord[]): MemoryView[] {
     if (record.revokedSources !== undefined) continue;
     const key = dedupeKey(record.text);
     if (key === "") continue;
+    if (record.held !== undefined) {
+      // Waiting for a person, never live: shown with what held it, counted apart.
+      views.push({ key, version: versionOf(record), at: record.at, kind: record.kind, text: record.text, ...(record.source !== undefined ? { source: record.source } : {}), ...(record.from !== undefined ? { from: [...record.from] } : {}), status: "held", heldBy: `${record.held.question} ${record.held.confidence}` });
+      continue;
+    }
     if (record.kind === "retraction") {
       const target = liveByKey.get(key);
       if (target !== undefined) {
@@ -143,6 +152,7 @@ export function summarise(agent: Pick<AgentRecord, "id" | "profile">, boxId: str
     live: views.filter(view => view.status === "live").length,
     byKind,
     retracted: views.filter(view => view.status === "retracted").length,
+    held: views.filter(view => view.status === "held").length,
     ...(lastAt !== undefined ? { lastAt } : {}),
   };
 }

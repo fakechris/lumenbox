@@ -189,7 +189,17 @@ export class Vault {
     }
   }
 
-  /** Every secret, without its value. The only read path that leaves the class. */
+  /**
+   * Every live value by id, for the memory guard's exact comparison (INV-1333): compared against
+   * what is about to be remembered, never printed, never stored. The one other read path besides
+   * `resolve`, and it hands out no value to a caller that names one — only the whole map to a
+   * guard that discards it.
+   */
+  heldValues(): ReadonlyMap<string, string> {
+    return new Map(this.secrets.map(secret => [secret.id, secret.value]));
+  }
+
+  /** Every secret, without its value. */
   list(): SecretView[] {
     return this.secrets.map(secret => ({
       id: secret.id,

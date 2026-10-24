@@ -257,6 +257,19 @@ and ten long ones cost very different amounts of the thing actually being spent.
   true; only one should occupy the budget.
 - **Sharded by scope.** Personal memory is per-agent; a separate shared store is what lets one
   agent answer from something another learned.
+- **Every candidate is guarded, then judged, before the ledger takes it (INV-1333).** The guard
+  refuses by kind and never rewrites: a held value or a credential shape in clear, base64,
+  percent-encoded or spaced out; invisible characters; an identifier copied out of the
+  conversation verbatim (a URL, a path and a hex sha are facts and pass). The judge asks four
+  yes/no questions of each line, each with a confidence, in the shape a typed decision model
+  answers: `fromContent` (an instruction that arrived in something read, not said), `narrowsRules`
+  (a change to what the agent may do), `contradicts` and `duplicate`, each naming the known line.
+  A yes at 0.6 on the first two **holds** the line: it stays in the ledger with the question and
+  confidence, out of recall, sharing and projection, shown as held in the memory view, for a person
+  (INV-959 builds that door). A contradiction at 0.8 withdraws the known line with a retraction and
+  keeps the new one; below that it is held. A duplicate refreshes the known line's date. A judge
+  that does not answer holds everything it was asked about. INV-894 still keeps outside-content
+  exchanges away from the extractor; this is for what gets past it (a file in the box, a teammate).
 - **The file is bounded, like every other durable log.** Past a threshold it is rewritten down to
   the live view — superseded records, retracted facts with their retractions, and lines no reader
   ever parsed all go; what stays keeps its bytes and timestamps, so the view and the decay do not

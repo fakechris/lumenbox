@@ -21,31 +21,32 @@
  * future turn and crowds out what matters. The sentinel is explicit and the parser honours it.
  */
 
-import { envNumber } from "../config.ts";
 import type Anthropic from "@anthropic-ai/sdk";
 import type { AgentRegistry } from "../agents/registry.ts";
-import type { ProviderProfile } from "./provider.ts";
-import type { UsageLog } from "./usage.ts";
+import { envNumber } from "../config.ts";
+import type { HistoryEntry } from "./compaction.ts";
 import {
   buildEpisodePrompt,
   buildExtractionPrompt,
+  type MemoryRecord,memoryRef, 
   parseEpisode,
   parseExtraction,
-  selectRelevant,
-  type MemoryRecord,
+  selectRelevant
 } from "./memory.ts";
+import { guardMemoryCandidate } from "./memory-guard.ts";
+import { dispose, type MemoryJudge, modelJudge } from "./memory-judge.ts";
 import {
   buildMaintenancePrompt,
+  type MaintenancePlan,
   parseMaintenanceProposals,
   recordsOfPlan,
   snapshotForMaintenance,
   verifyMaintenanceProposals,
-  type MaintenancePlan,
 } from "./memory-maintenance.ts";
-import { buildPitfallPrompt, parsePitfall, type PitfallSource } from "./pitfalls.ts";
+import { buildPitfallPrompt, type PitfallSource, parsePitfall } from "./pitfalls.ts";
+import type { ProviderProfile } from "./provider.ts";
 import { credentialIn } from "./secret-scan.ts";
-import type { HistoryEntry } from "./compaction.ts";
-import { memoryRef } from "./memory.ts";
+import type { UsageLog } from "./usage.ts";
 
 /**
  * How many exchanges accumulate before extraction runs.
@@ -191,6 +192,10 @@ export interface RememberDeps {
    * orchestrator adds the MCP servers that pollute memory.
    */
   externalTool?: (tool: string) => boolean;
+  /** Values the installation holds, for the guard's exact and encoded comparison (INV-1333). */
+  heldValues?: () => ReadonlyMap<string, string>;
+  /** Answers the four questions about each candidate (INV-1333); defaults to one call on the cheap profile. */
+  judge?: MemoryJudge;
 }
 
 /**
@@ -513,9 +518,21 @@ export class Rememberer {
       }
       records = kept;
     }
+    // The guard, then the judge (INV-1333): a candidate is refused for what it carries, held for
+    // what it is. Refused ones are gone; held ones wait in the ledger for a person.
+    const held = this.deps.heldValues?.();
+    records = records.filter(record => {
+      const refused = guardMemoryCandidate(record.text, { ...(held !== undefined ? { held } : {}), spoken: combined });
+      if (refused !== undefined) this.log(`refused an extracted memory: ${refused.reason}`);
+      return refused === undefined;
+    });
     if (records.length > 0) {
-      this.deps.registry.appendMemoryRecords(agentId, records);
-      this.log(`kept ${records.length} memor${records.length === 1 ? "y" : "ies"} from ${exchanges.length} exchanges`);
+      const judged = await this.judge(agentId, combined, records, known, principal);
+      if (!guard()) return;
+      for (const line of judged.log) this.log(`memory judge: ${line}`);
+      const writes = [...judged.retractions, ...judged.keep, ...judged.refreshed, ...judged.held];
+      if (writes.length > 0) this.deps.registry.appendMemoryRecords(agentId, writes);
+      this.log(`kept ${judged.keep.length} memor${judged.keep.length === 1 ? "y" : "ies"} from ${exchanges.length} exchanges${judged.held.length > 0 ? `, held ${judged.held.length} for a person` : ""}`);
     }
 
     // Whether or not anything was extracted, the exchanges count toward an episode: a stretch of
@@ -624,6 +641,21 @@ export class Rememberer {
   }
 
   /** One plain, tool-free call on the cheap profile. */
+  /**
+   * The four questions, then what becomes of each candidate. A judge that cannot answer holds
+   * everything it was asked about: a candidate nobody judged is not a candidate anybody cleared.
+   */
+  private async judge(agentId: string, conversation: string, candidates: MemoryRecord[], known: readonly MemoryRecord[], principal?: string): Promise<ReturnType<typeof dispose>> {
+    const judge = this.deps.judge ?? modelJudge(prompt => this.ask(agentId, prompt, principal, 2048));
+    try {
+      const verdicts = await judge({ conversation, candidates: candidates.map(record => record.text), known: known.map(record => record.text) });
+      return dispose(candidates, verdicts, known);
+    } catch (error) {
+      this.log(`the memory judge did not answer (${error instanceof Error ? error.message : String(error)}); holding ${candidates.length} candidate(s)`);
+      return dispose(candidates, [], known);
+    }
+  }
+
   private async ask(agentId: string, prompt: string, principal?: string, maxTokens = 1024): Promise<string> {
     const response = await this.deps.client.messages.create({
       model: this.deps.provider.model,

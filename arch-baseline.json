@@ -5,7 +5,7 @@
       "src/agents/registry.ts": 1510,
       "src/box/docker.ts": 1109,
       "src/boxd/browser-service.ts": 2134,
-      "src/boxd/displays.ts": 1308,
+      "src/boxd/displays.ts": 1303,
       "src/boxd/main.ts": 1315,
       "src/channels/dingtalk.ts": 1540,
       "src/channels/feishu.ts": 2422,

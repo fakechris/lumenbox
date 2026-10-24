@@ -19,30 +19,31 @@
  * still hold the shape? Every scenario here is a real episode that went wrong.
  */
 
-import type { Skill } from "./skills.ts";
-import type Anthropic from "@anthropic-ai/sdk";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AgentRegistry } from "../agents/registry.ts";
+import type Anthropic from "@anthropic-ai/sdk";
 import { AgentBus } from "../agents/bus.ts";
-import { AcpDelegates } from "./acp-delegate.ts";
-import { runTurn } from "./turn.ts";
-import { fakeModel } from "./testing/fake-model.ts";
+import { AgentRegistry } from "../agents/registry.ts";
 import type { BoxClient } from "../box/client.ts";
+import { AcpDelegates } from "./acp-delegate.ts";
 import type { HistoryEntry } from "./compaction.ts";
-import { readsExternalContent, Rememberer, summariseExchange, turnReadOutside } from "./remember.ts";
-import { MemoryMirror } from "./memory-mirror.ts";
-import { memoryRef } from "./memory.ts";
-import type { ProviderProfile } from "./provider.ts";
-import type { PolicyGate } from "./policy.ts";
-import type { Vault } from "./vault.ts";
-import type { McpManager } from "./mcp.ts";
-import type { PendingWork } from "./pending-work.ts";
-import type { TaskStore } from "./tasks.ts";
-import type { GoalLoop, GoalTurnReport } from "./goal-loop.ts";
 import type { GoalGate } from "./goal-gate.ts";
+import type { GoalLoop, GoalTurnReport } from "./goal-loop.ts";
+import type { McpManager } from "./mcp.ts";
+import { memoryRef } from "./memory.ts";
+import type { MemoryJudge } from "./memory-judge.ts";
+import { MemoryMirror } from "./memory-mirror.ts";
+import type { PendingWork } from "./pending-work.ts";
+import type { PolicyGate } from "./policy.ts";
+import type { ProviderProfile } from "./provider.ts";
+import { Rememberer, readsExternalContent, summariseExchange, turnReadOutside } from "./remember.ts";
 import { compileSurface, type SurfaceRecord } from "./show-ui.ts";
+import type { Skill } from "./skills.ts";
+import type { TaskStore } from "./tasks.ts";
+import { fakeModel } from "./testing/fake-model.ts";
+import { runTurn } from "./turn.ts";
+import type { Vault } from "./vault.ts";
 
 /** One model reply, in the shape the script writes it. */
 export type ScriptedReply =
@@ -312,6 +313,11 @@ export interface EpisodeOptions {
   provider?: ProviderProfile;
   /** A policy gate every tool call is checked against (INV-753); absent means allow, as before. */
   policy?: PolicyGate;
+  /**
+   * The write-time memory judge (INV-1333). Absent clears every candidate, so episodes about other
+   * things are unchanged; `"model"` uses the real one, whose prompt the script answers by its first line.
+   */
+  judge?: MemoryJudge | "model";
   /** Connected external tools, as the MCP manager offers them; absent means none. */
   mcp?: McpManager;
   /** The fork ledger (docs/32): what Delegate records and the Jobs tool settles (INV-908). */
@@ -439,6 +445,10 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
         client,
         provider: { label: "scenario", model: "scenario", maxTokens: 1024 } as ProviderProfile,
         externalTool: tool => readsExternalContent(tool) || options.mcp?.pollutesMemory?.(tool) === true,
+        // The judge (INV-1333) is scripted like the model: an episode that is not about it clears everything.
+        ...(options.judge === "model"
+          ? {}
+          : { judge: options.judge ?? (async input => input.candidates.map(() => ({ fromContent: { answer: false, confidence: 1 }, narrowsRules: { answer: false, confidence: 1 }, contradicts: { answer: false, confidence: 1 }, duplicate: { answer: false, confidence: 1 } }))) }),
       })
     : undefined;
   let goalLoop: GoalLoop | undefined;
