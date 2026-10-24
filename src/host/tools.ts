@@ -13,6 +13,7 @@ import { chunkBlocks, dingtalkEventBody, doorIdOf, doorIdsOf, feishuDocUrl, feis
 import { agentboxHome } from "../config.ts";
 import { executeForget, forgetOutcomeReport, forgetPlanReport, forgettable, ForgetPlans, inventory } from "./forget.ts";
 import type Anthropic from "@anthropic-ai/sdk";
+import { describeDeferred } from "./tool-roster.ts";
 import { optionLabel } from "./ask-options.ts";
 import { BoxError, type BoxClient } from "../box/client.ts";
 import type { DisplayLease } from "../box/display-lease.ts";
@@ -296,6 +297,8 @@ export interface ToolContext {
   acpDelegates?: AcpDelegates;
   /** The MCP tool names this turn itself may call — profile ∩ scope ∩ chat scope, as the turn computed them. */
   allowedMcpTools?: readonly string[];
+  /** Built-ins this turn offers only through the lookup pair (INV-1341): found and called by name, gated as themselves. */
+  deferredTools?: readonly Anthropic.Tool[];
   /** What kind of box the agent's is: an attached one cannot reach the host's loopback. */
   boxKind?: "docker" | "attached" | "host";
   /**
@@ -2469,11 +2472,7 @@ function boxOfAgent(context: ToolContext): { id: string; name: string } | undefi
   }
 }
 
-/**
- * The call token a box request carries (INV-784, egress/call.ts): who this is, for the
- * relay's record. Nothing when the turn is not one — a CLI run, a test — and then the
- * box attributes the connections to nobody rather than to a made-up id.
- */
+/** The call token a box request carries (INV-784): who this is, for the relay's record; nothing outside a turn. */
 function callFor(context: ToolContext, jobId?: string): { call?: string } {
   if (context.turnId === undefined || context.toolUseId === undefined) return {};
   return {
@@ -3544,10 +3543,8 @@ export async function dispatchTool(
     }
 
     case "RunOnHost": {
-      // The policy gate above already required approval for this call, so reaching
-      // here means a person read the command and allowed it. The runner is still
-      // checked, because "enabled" can change and the tool could linger in a prompt
-      // built a moment earlier.
+      // The gate required approval, so a person read the command. The runner is still checked:
+      // "enabled" can change under a prompt built a moment earlier.
       if (context.hostRunner === undefined || !context.hostRunner.enabled) {
         return {
           text: "Host execution is not available on this box.",
@@ -5629,19 +5626,26 @@ export async function dispatchTool(
     }
 
     case "FindMcpTool": {
-      if (context.mcp === undefined) return { text: "No external services are connected.", isError: true };
-      return {
-        text: context.mcp.describeTools({
-          ...(typeof input.server === "string" ? { server: input.server } : {}),
-          ...(typeof input.tool === "string" ? { tool: input.tool } : {}),
-          ...(typeof input.pattern === "string" ? { pattern: input.pattern } : {}),
-        }),
+      const query = {
+        ...(typeof input.server === "string" ? { server: input.server } : {}),
+        ...(typeof input.tool === "string" ? { tool: input.tool } : {}),
+        ...(typeof input.pattern === "string" ? { pattern: input.pattern } : {}),
       };
+      // One catalog (INV-1341): the deferred built-ins first, then the external services.
+      const builtIn = describeDeferred(context.deferredTools ?? [], query);
+      if (context.mcp === undefined) return builtIn !== undefined ? { text: builtIn } : { text: "No external services are connected.", isError: true };
+      const external = context.mcp.describeTools(query);
+      return { text: builtIn === undefined ? external : query.tool !== undefined ? builtIn : `${builtIn}\n\n${external}` };
     }
 
     case "UseMcpTool": {
-      if (context.mcp === undefined) return { text: "No external services are connected.", isError: true };
       const target = String(input.tool ?? "");
+      // A deferred built-in (INV-1341): dispatched by its own name, so the gate, the tier and the
+      // record all see the tool itself, not the pair.
+      if (context.deferredTools?.some(tool => tool.name === target) === true) {
+        return dispatchTool(target, (input.arguments ?? {}) as Record<string, unknown>, context);
+      }
+      if (context.mcp === undefined) return { text: "No external services are connected.", isError: true };
       if (context.allowedMcpTools !== undefined && !context.allowedMcpTools.includes(target)) {
         return { text: "This external tool is unavailable in the current execution context.", isError: true };
       }
@@ -5651,9 +5655,7 @@ export async function dispatchTool(
           isError: true,
         };
       }
-      // The gate above judged `UseMcpTool`; the tool it is about to run is a separate
-      // decision, and skipping it here would make this a way around every rule that
-      // names an external tool.
+      // The gate judged `UseMcpTool`; the inner tool is a separate decision, or this is a way around every rule.
       const inner = context.policy?.check({
         kind: "tool",
         agentId: context.agent.id,
@@ -5671,9 +5673,7 @@ export async function dispatchTool(
     }
 
     default: {
-      // An MCP server's tool, if one claims the name. Reached last, so nothing here can
-      // be shadowed by an external server — and reached *after* the policy gate above,
-      // like every other call, so an external tool is governed exactly as ours are.
+      // An MCP server's tool, if one claims the name: last, so nothing here is shadowed, and after the gate like every call.
       if (context.mcp?.owns(name) === true) {
         try {
           const result = await context.mcp.callDetailed(name, input);

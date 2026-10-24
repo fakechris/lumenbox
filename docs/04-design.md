@@ -789,3 +789,42 @@ over the cap — while the same box, and every other person on it, is unaffected
 nobody drove (a wake, a scheduled run) has no principal and is subject only to the box
 budget. Configured the same way the box budget is: an environment variable, or the
 config file's env map.
+
+## 33. The tool roster: resident and deferred
+
+Forty-nine built-in tool definitions rode in every request, about 73 KB, and the step
+ledger for 2026-09-24..10-24 (1,835 calls) showed eighteen of them doing all the work:
+`bash` alone was 51%, and thirty definitions were called once or never. Anthropic's
+"Building agents" (2026-10-22, INV-1339) puts the point where tool choice degrades at
+thirty to fifty definitions. So the roster is split, not renamed (INV-1341,
+`src/host/tool-roster.ts`):
+
+- **Resident** — in every turn's list: the daily tools (`bash`, the four file tools,
+  `computer`, `Tasks`, `ShowUI`, `SendToAgent`, `SetTodos`, `Checkpoint`, `WebFetch`,
+  `WebSearch`, `RememberFact`, `ReadHistory`), what faces the person (`AskUser`,
+  `NothingToSay`), `Delegate`, `Goal` (the prompt tells the agent to call it), the browser's core four (`browser_open`, `browser_snapshot`,
+  `browser_read`, `browser_act`), the connector doors (`connector_request`, `FeishuWrite`,
+  `DingTalkWrite`) and `RunOnHost`.
+- **Deferred** — everything else `buildTools` offers: still built, still narrowed by the
+  same profile, scope and routine rules, still dispatched by its own name with its own
+  side-effect tier and gate — but found through `FindMcpTool` and called through
+  `UseMcpTool`, the pair that already did this for external tools. The catalog is one
+  catalog: a `## built-in (n)` section above the services. `FindMcpTool`'s description
+  names the deferred tools, so the model knows they exist without a round trip.
+
+| with every flag on | definitions sent | bytes |
+|---|---|---|
+| before | 49 | 73,145 |
+| after | 26 resident + the pair = 28 | 49,412 |
+
+The split applies only when the offered list is over the thirty-tool budget: an agent whose
+profile, scope or routine already narrowed it to a handful keeps that handful whole, with no
+pair. Nothing is renamed, so no stored allowlist, skill `allowed-tools:` line, scope, activity
+phrase, idempotency key or tier table changes meaning; a deferred name in a routine's tool
+scope keeps the pair offered. A fork gets the resident list and no pair, as it got no MCP
+tools before. What was *not* done, and why: the nine `browser_*` tools were not merged into
+one `browser` tool, because their tiers differ (observe / self / reach) and a merged tool
+would need a per-action tier decision that the gate, the activity phrases and the records
+do not have today; deferring the five unused ones gets the same list length without that
+risk. `SetPlan` / `ClaimWork` were likewise deferred rather than folded into `Tasks`.
+

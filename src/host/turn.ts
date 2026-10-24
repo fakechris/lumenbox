@@ -140,6 +140,7 @@ import { readInstallationInstructions } from "./place.ts";
 import { changeNotice, readStanding, takeChanges } from "./standing.ts";
 import type { McpManager } from "./mcp.ts";
 import { TOOL_BUDGET_WARNING } from "./mcp.ts";
+import { lookupPair, splitRoster } from "./tool-roster.ts";
 import { narrowTools, toolAllowed } from "./scopes.ts";
 import { conversationIdFor, MAIN_CONVERSATION } from "../agents/registry.ts";
 import { summaryRuntimeFor } from "./provider.ts";
@@ -2024,52 +2025,18 @@ ${outcome.text}`;
   const allowedMcp = (deps.templateSetup !== undefined ? [] : (deps.mcp?.toolsFor(boxServers) ?? [])).filter(
     tool => toolAllowed(effectiveTools, tool.name)
   );
-  // Past a certain number they stop being a list and start being a document that every
-  // turn pays for. Then they go behind a lookup pair instead: one round trip when an
-  // external tool is actually wanted, nothing when it is not.
-  const mcpTools: Anthropic.Tool[] =
-    allowedMcp.length > TOOL_BUDGET_WARNING
-      ? [
-          {
-            name: "FindMcpTool",
-            description:
-              `${allowedMcp.length} tools from connected external services are available, too ` +
-              "many to list in full here. Search them with this, then call one with " +
-              "`UseMcpTool`. No arguments lists every service and its tools with a one-line " +
-              "description each; `pattern` filters by substring; `server` narrows to one " +
-              "service; `tool` returns that one tool's full description and input schema, " +
-              "which is what you need before calling it.",
-            input_schema: {
-              type: "object",
-              properties: {
-                pattern: { type: "string", description: "Substring to look for." },
-                server: { type: "string", description: "Only this service's tools." },
-                tool: { type: "string", description: "One tool's full detail, by exact name." },
-              },
-            },
-          },
-          {
-            name: "UseMcpTool",
-            description:
-              "Call one of the external tools found with `FindMcpTool`. Look the tool up " +
-              "first — its input schema is not shown here, and guessing the arguments wastes " +
-              "the call.",
-            input_schema: {
-              type: "object",
-              properties: {
-                tool: { type: "string", description: "The exact tool name, as `service__tool`." },
-                arguments: { type: "object", description: "Its arguments, per its schema." },
-              },
-              required: ["tool"],
-            },
-          },
-        ]
-      : allowedMcp.map(tool => ({
-          name: tool.name,
-          description: tool.description,
-          input_schema: tool.inputSchema as Anthropic.Tool["input_schema"],
-        }));
-
+  // Past a certain number they stop being a list and start being a document every turn pays
+  // for; then they go behind the lookup pair (tool-roster.ts), which is also where the less-used
+  // built-ins live (INV-1341). Offered whenever either kind is behind it.
+  const mcpOverBudget = allowedMcp.length > TOOL_BUDGET_WARNING;
+  const directMcp: Anthropic.Tool[] = mcpOverBudget
+    ? []
+    : allowedMcp.map(tool => ({
+        name: tool.name,
+        description: tool.description,
+        input_schema: tool.inputSchema as Anthropic.Tool["input_schema"],
+      }));
+  const gatewayTools = (deferred: readonly Anthropic.Tool[]) => lookupPair(mcpOverBudget ? allowedMcp.length : 0, deferred);
 
   // Narrowed only when every message opening this turn came from a routine that declared its
   // tools. A person's message carries no scope, so a turn a person drives is never narrowed, and
@@ -2081,7 +2048,7 @@ ${outcome.text}`;
     console.error(`[tools] ${agent.profile.name}: routine declared its tools; offering only ${[...routineScope].join(", ") || "none"}`);
   }
 
-  const tools = buildTools(
+  const offered = buildTools(
     box !== undefined,
     provider.vision,
     effectiveTools,
@@ -2098,8 +2065,7 @@ ${outcome.text}`;
     // Connected services (INV-422): offered only where a live grant covers this agent —
     // the box's bundles or the secret's own grants — and never to a fork.
     isForkConversation(conversation) ? [] : connectorsFor(deps, agent, registry)
-    // MCP tools are outward channels too — a fork gets none (docs/32 §2).
-  ).concat(isForkConversation(conversation) ? [] : mcpTools)
+  )
     // Only an agent the person actually talks to may reach them (docs/42 §2). A worker created
     // by another agent and woken only by teammates has a chat nobody is reading, and its
     // question would sit there unseen; what it needs decided goes back to the sender instead.
@@ -2109,10 +2075,22 @@ ${outcome.text}`;
     // Deliberate silence is for turns nobody is waiting on (INV-775): withheld, not refused,
     // wherever a person opened the turn and is reading for the answer.
     .filter(tool => silenceOffered || tool.name !== SILENCE_TOOL)
-    // A routine's own skill said what it needs (INV-691). Applied last, as an intersection, so it
-    // can only take away: a name the agent was never offered stays unoffered.
-    .filter(tool => routineScope === undefined || routineScope.has(tool.name) ||
-      (MCP_GATEWAY_TOOLS.has(tool.name) && [...routineScope].some(name => name.includes("__"))));
+    // A routine's own skill said what it needs (INV-691). Applied as an intersection, so it can
+    // only take away: a name the agent was never offered stays unoffered.
+    .filter(tool => routineScope === undefined || routineScope.has(tool.name));
+  // The split (INV-1341): the resident built-ins ride in the list; the deferred ones wait in the
+  // catalog behind the lookup pair, which a fork never gets (MCP tools are outward channels too,
+  // docs/32 §2). A routine that named a deferred tool or an external one keeps the pair.
+  const roster = splitRoster(offered);
+  const deferred = isForkConversation(conversation) ? [] : roster.deferred;
+  const tools: Anthropic.Tool[] = isForkConversation(conversation)
+    ? roster.resident
+    : [...roster.resident, ...directMcp, ...gatewayTools(deferred)].filter(
+        tool =>
+          routineScope === undefined ||
+          !MCP_GATEWAY_TOOLS.has(tool.name) ||
+          [...routineScope].some(name => name.includes("__") || deferred.some(d => d.name === name))
+      );
 
   // The prompt in three digests (INV-782): the stable prefix, the volatile tail, and the tool
   // definitions as sent. The tool set was never in `promptHash`, and it is the segment that moves
@@ -3401,6 +3379,7 @@ ${outcome.text}`;
             ...(deps.acpDelegates !== undefined ? { acpDelegates: deps.acpDelegates } : {}),
             ...(deps.boxKind !== undefined ? { boxKind: deps.boxKind } : {}),
             allowedMcpTools: allowedMcp.map(tool => tool.name),
+            deferredTools: deferred,
             ...(deps.templateSetup !== undefined ? { templateSetup: deps.templateSetup } : {}),
             ...(deps.templates !== undefined ? { templates: deps.templates } : {}),
             turnId,
