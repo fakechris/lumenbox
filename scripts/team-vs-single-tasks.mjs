@@ -162,7 +162,8 @@ export const TASKS = [
     say: "{workdir}/inbox 里乱得很，整理一下。",
     answerToQuestions: "按文件类型分到子目录就行，别删东西。",
     setup: {
-      "inbox/a.png": "png", "inbox/b.PNG": "png", "inbox/notes.md": "# n", "inbox/todo.txt": "x", "inbox/report.pdf": "pdf", "inbox/draft2.md": "# d",
+      // Text-only names: a fake image would be read as an image and refused by the model's API.
+      "inbox/a.csv": "x,y\n1,2", "inbox/b.CSV": "x,y\n3,4", "inbox/notes.md": "# n", "inbox/todo.txt": "x", "inbox/app.log": "2026-10-01 INFO ok", "inbox/draft2.md": "# d",
     },
     checks: {
       "nothing deleted": async ({ sh, workdir }) => (await sh(`find ${workdir}/inbox -type f | wc -l`)).stdout.trim() === "6",

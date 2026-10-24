@@ -110,7 +110,7 @@ async function main() {
         try {
           episode = await runEpisode(task, config === "team" ? STARTER_TEAM : [single], provider, `${task.id}-${run}-${config}`);
         } catch (error) {
-          episode = { failure: error instanceof Error ? error.message : String(error), metrics: {}, checks: {} };
+          episode = { failure: error instanceof Error ? error.message : String(error), metrics: {}, checks: {}, ...(error?.trail !== undefined ? { tools: error.trail } : {}) };
         } finally {
           rmSync(home, { recursive: true, force: true });
         }
@@ -119,7 +119,7 @@ async function main() {
         episode.config = config;
         episode.seconds = Math.round((Date.now() - started) / 1000);
         episodes.push(episode);
-        console.log(episode.failure ? `failed: ${episode.failure.slice(0, 80)}` : `${episode.seconds}s, ${episode.metrics.calls} calls, ${episode.metrics.tokens} tokens, checks ${Object.values(episode.checks).filter(Boolean).length}/${Object.keys(episode.checks).length}`);
+        console.log(episode.failure ? `failed: ${episode.failure.slice(0, 240)}` : `${episode.seconds}s, ${episode.metrics.calls} calls, ${episode.metrics.tokens} tokens, checks ${Object.values(episode.checks).filter(Boolean).length}/${Object.keys(episode.checks).length}`);
       }
     }
   }
@@ -212,8 +212,11 @@ async function runEpisode(task, team, provider, slug) {
   try {
     await orchestrator.prompt(front.id, task.say.replaceAll("{workdir}", workdir), { userId: "eval" });
     await orchestrator.bus.idle();
-  } finally {
-    // The counts, then the deliverable, then the directory goes.
+  } catch (error) {
+    // The directory goes even when the episode did not; the trail rides on the error for the record.
+    await sh(`rm -rf ${JSON.stringify(workdir)}`).catch(() => {});
+    if (error instanceof Error) error.trail = Object.fromEntries([...new Set(trail.map(step => step.tool))].map(tool => [tool, trail.filter(step => step.tool === tool).length]));
+    throw error;
   }
   const seconds = Math.round((Date.now() - started) / 1000);
   const checks = {};
@@ -264,10 +267,11 @@ async function judgePair(judge, task, team, single) {
   const [first, second] = flip ? [single, team] : [team, single];
   const show = episode => `final message:\n${episode.text || "(nothing said)"}\n\ndelivered file:\n${episode.deliverable || "(none)"}\n\nautomatic checks: ${JSON.stringify(episode.checks)}`;
   const prompt = `TASK:\n${task.say.replaceAll("{workdir}", "<workdir>")}\n\nRUBRIC:\n${task.rubric}\n\n=== Response 1 ===\n${show(first)}\n\n=== Response 2 ===\n${show(second)}`;
-  const response = await judge.client.messages.create({ model: judge.profile.model, max_tokens: 600, system: JUDGE_SYSTEM, messages: [{ role: "user", content: prompt }] });
+  const response = await judge.client.messages.create({ model: judge.profile.model, max_tokens: 1500, system: JUDGE_SYSTEM, messages: [{ role: "user", content: prompt }] });
   const text = response.content.filter(block => block.type === "text").map(block => block.text).join("");
-  const start = text.lastIndexOf("{");
-  const parsed = JSON.parse(text.slice(start, text.lastIndexOf("}") + 1));
+  // The last JSON object in the reply, whatever came before it (a thinking preamble, a code fence).
+  const parsed = lastJsonObject(text);
+  if (parsed === undefined) throw new Error(`no JSON verdict in the judge's reply (${text.slice(-120).replace(/\s+/g, " ")})`);
   const forTeam = flip ? 2 : 1;
   const forSingle = flip ? 1 : 2;
   return {
@@ -279,6 +283,14 @@ async function judgePair(judge, task, team, single) {
     better: parsed.better === 0 ? "tie" : parsed.better === forTeam ? "team" : "single",
     why: String(parsed.why ?? "").slice(0, 200),
   };
+}
+
+function lastJsonObject(text) {
+  const end = text.lastIndexOf("}");
+  for (let start = text.lastIndexOf("{", end); start >= 0; start = text.lastIndexOf("{", start - 1)) {
+    try { return JSON.parse(text.slice(start, end + 1)); } catch { /* an inner brace; widen */ }
+  }
+  return undefined;
 }
 
 function mean(values) {
