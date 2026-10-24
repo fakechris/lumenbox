@@ -1,6 +1,13 @@
-# 83. Team versus one agent: the first measured comparison (INV-1340)
+<!-- doc: 83-team-vs-single-eval
+     title: Team versus one agent: the first measured comparison
+     family: decision
+     status: current
+     updated: 2026-10-24
+-->
 
-**Date:** 2026-10-24. **Question:** is the default four-agent team (Ada coordinator, Rex
+# Team versus one agent: the first measured comparison
+
+**INV-1340, 2026-10-24.** **Question:** is the default four-agent team (Ada coordinator, Rex
 researcher, Ops operator, Vera reviewer) better than one agent holding the union of their
 tools, on the daily tasks this installation actually sees? Anthropic's "Building agents"
 (2026-10-22, INV-1339) reported that a single agent plus skills usually wins on quality,

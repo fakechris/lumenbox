@@ -101,6 +101,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [80-mcp-apps-host](80-mcp-apps-host.md) | MCP Apps 宿主：网页把 MCP 工具自带的 ui:// 界面装进第二 origin 的沙箱（spike 结论） | current | 2026-10-19 |
 | [81-delegate-session-acp](81-delegate-session-acp.md) | Delegate as a session: what mcode's ACP actually does, and what enters the host | current | 2026-10-21 |
 | [82-tailmsg-door](82-tailmsg-door.md) | The tailmsg door: another machine's agent writes to ours over the tailnet | current | 2026-10-20 |
+| [83-team-vs-single-eval](83-team-vs-single-eval.md) | Team versus one agent: the first measured comparison | current | 2026-10-24 |
 
 ## handoff
 
@@ -126,3 +127,4 @@ this file and the headers disagree. Edit the header, not this table.
 | [handoff-2026-09-24-task-recover](handoff-2026-09-24-task-recover.md) | Handoff — 上下文恢复第四项：同任务只读 /recover | current | 2026-09-24 |
 | [handoff-2026-10-19-showui](handoff-2026-10-19-showui.md) | Handoff — ShowUI：agent 用 A2UI 组装卡片（INV-1269，docs/79） | current | 2026-10-19 |
 | [handoff-2026-10-19-showui-stage-two](handoff-2026-10-19-showui-stage-two.md) | Handoff — ShowUI 第二阶段：网页端成为交互面（INV-1280） | current | 2026-10-19 |
+
