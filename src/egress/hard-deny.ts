@@ -17,6 +17,8 @@
  * (not through the proxy) is not decided here; docs/06 §9 says what each platform lets through.
  */
 
+import { classifyAddress, plainAddress } from "./address.ts";
+
 const METADATA_NAMES = new Set(["metadata.google.internal", "metadata", "instance-data", "fd00:ec2::254", "[fd00:ec2::254]"]);
 const HOST_NAMES = new Set(["localhost", "host.docker.internal", "host.lima.internal", "gateway.docker.internal", "docker.for.mac.localhost", "0.0.0.0", "::1", "[::1]", "::", "[::]"]);
 
@@ -40,6 +42,22 @@ export function hardDenied(host: string, port: number, options: HardDenyOptions)
   const name = host.trim().toLowerCase().replace(/\.$/, "");
   if (linkLocalV4(name) || METADATA_NAMES.has(name)) return "cloud metadata address";
   if (loopbackV4(name) || HOST_NAMES.has(name)) {
+    if (options.channelPorts.includes(port)) return undefined;
+    return `host port ${port} is not an explicit channel (channels: ${options.channelPorts.join(", ") || "none"})`;
+  }
+  return undefined;
+}
+
+/**
+ * The same two refusals for an address a name *resolved to* (INV-1343). `hardDenied` reads the
+ * host the box named; an allow-listed name whose DNS answer is 169.254.169.254 or 127.0.0.1
+ * got past it, so the relay asks this about every answer before it dials one.
+ */
+export function hardDeniedAddress(address: string, port: number, options: HardDenyOptions): string | undefined {
+  const plain = plainAddress(address);
+  const kind = classifyAddress(plain);
+  if (kind === "link-local" || METADATA_NAMES.has(plain)) return "cloud metadata address";
+  if (kind === "loopback" || kind === "unspecified") {
     if (options.channelPorts.includes(port)) return undefined;
     return `host port ${port} is not an explicit channel (channels: ${options.channelPorts.join(", ") || "none"})`;
   }

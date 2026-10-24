@@ -208,7 +208,11 @@ State it plainly, because a deployment decision depends on it.
   `src/egress/hard-deny.ts`): every cloud metadata address (169.254.0.0/16, `fd00:ec2::254`,
   `metadata.google.internal`), and the host itself — loopback, `host.docker.internal` and its
   kin — except the ports that are channels on purpose: the web port (MCP face and model relay)
-  and the relay's own (`agentbox egress relay --host-ports 7777,…`). Every stream is one line
+  and the relay's own (`agentbox egress relay --host-ports 7777,…`). The same two rules are
+  applied again to every address a name *resolves to* (INV-1343, `hardDeniedAddress`), and the
+  relay dials the address it checked rather than the name, so an allow-listed domain whose DNS
+  answer is 169.254.169.254 or 127.0.0.1 is refused with the answer in the event's `detail`; a
+  name that does not resolve is refused `unresolved`. Every stream is one line
   in `network-events.jsonl` at the decision (host, port, box, who asked, allowed or why not)
   and one more when it closes (bytes each way, duration); the file rotates at 20 MB keeping one
   previous generation. The relay is a tunnel, so an HTTPS request's method and status are not

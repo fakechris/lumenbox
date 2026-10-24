@@ -26,6 +26,7 @@ import { request as httpsRequest } from "node:https";
 import { lookup as dnsLookup } from "node:dns";
 import type { LookupAddress } from "node:dns";
 import { isIP, type LookupFunction } from "node:net";
+import { forbiddenAddress } from "../egress/address.ts";
 import { type ReadOutcomeInput, textShape } from "./read-outcome.ts";
 
 /** How long one request may take before it is abandoned. */
@@ -89,50 +90,7 @@ export class WebError extends Error {
   }
 }
 
-/**
- * Whether an IP is one an agent must not be able to reach, and why.
- *
- * Deny-listed rather than allow-listed because the public internet is not enumerable.
- * The list is the addresses that mean "somewhere inside", in both families.
- */
-export function forbiddenAddress(ip: string): string | undefined {
-  const plain = ip.startsWith("::ffff:") ? ip.slice(7) : ip;
-  if (plain.includes(".")) {
-    const parts = plain.split(".").map(Number);
-    if (parts.length !== 4 || parts.some(part => !Number.isInteger(part) || part < 0 || part > 255)) {
-      return "is not an address this understands";
-    }
-    const [a, b] = parts as [number, number, number, number];
-    if (a === 127) return "is this machine";
-    if (a === 10) return "is a private network";
-    if (a === 172 && b >= 16 && b <= 31) return "is a private network";
-    if (a === 192 && b === 168) return "is a private network";
-    // Where cloud instances keep their credentials. The single most valuable address
-    // an injected instruction can name, and the reason this check exists at all.
-    if (a === 169 && b === 254) return "is link-local, where cloud instances keep their credentials";
-    if (a === 0) return "is unspecified";
-    if (a === 100 && b >= 64 && b <= 127) return "is carrier-internal";
-    // 198.18/15 is reserved for benchmarking on paper, and in practice is the fake-IP
-    // range transparent proxies (Clash, Surge, WARP) hand back for *public* names. On
-    // such a machine every real site resolves into it, so blocking it costs the whole
-    // web — and buys nothing, because unlike the ranges above it fronts no private
-    // network and no metadata service. Found by fetching example.com on a laptop where
-    // it did exactly that.
-    if (a >= 224) return "is multicast or reserved";
-    return undefined;
-  }
-
-  const lower = plain.toLowerCase();
-  if (lower === "::1") return "is this machine";
-  if (lower === "::") return "is unspecified";
-  const head = Number.parseInt(lower.split(":")[0] || "0", 16);
-  // fc00::/7 — unique local, the IPv6 private range.
-  if ((head & 0xfe00) === 0xfc00) return "is a private network";
-  // fe80::/10 — link-local.
-  if ((head & 0xffc0) === 0xfe80) return "is link-local";
-  if ((head & 0xff00) === 0xff00) return "is multicast";
-  return undefined;
-}
+export { forbiddenAddress };
 
 /**
  * A DNS lookup that refuses to hand back an inside address.
