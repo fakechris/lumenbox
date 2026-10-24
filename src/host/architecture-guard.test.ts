@@ -21,7 +21,7 @@ function sources(): { path: string; text: string }[] {
       if (statSync(full).isDirectory()) {
         if (name === "catalog-data" || name === "node_modules") continue;
         walk(full);
-      } else if (name.endsWith(".ts") && !name.endsWith(".test.ts")) {
+      } else if (name.endsWith(".ts") && !name.endsWith(".test.ts") && !name.endsWith(".sweep.ts")) {
         out.push({ path: relative(ROOT, full), text: readFileSync(full, "utf8") });
       }
     }
