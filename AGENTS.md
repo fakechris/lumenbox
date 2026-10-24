@@ -128,6 +128,11 @@ Every file in `docs/` opens with a header block naming what it is:
   every file reading `process.env` outside `src/config.ts` / `src/cli.ts` / the daemons' `main.ts`.
   A listed file may get shorter or stop reading the environment, never the reverse; a new file
   fits the limit or is split; the baseline never gains an entry (`--write-baseline` only lowers).
+- **A flaky fix is believed at 16 runs, 4 at a time.** A test that failed only sometimes was
+  green for its author and red under the loaded suite; a fix for one is merged only with the
+  output of `npm run flaky -- <file>` (16/16) in the PR. The script runs the file the way
+  `npm test` does (guard, sandbox, environment), concurrently, and prints the first failure whole.
+  Not in CI by default: it is the evidence a flaky fix carries, not a gate on every change.
 - **Tests are not scored by count.** When a review asks for a change, change the existing
   regression test that covers it rather than adding one per review round; and never write a
   change detector (a test that asserts the current output byte-for-byte without saying what
