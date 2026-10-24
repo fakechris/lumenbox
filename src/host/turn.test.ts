@@ -3790,7 +3790,9 @@ test("a tool call whose connections the relay refused gets one line saying so on
     const result = (capture.params[1]!.messages.at(-1)!.content as Anthropic.ContentBlockParam[])[0] as Anthropic.ToolResultBlockParam;
     const text = ((result.content as Anthropic.ContentBlockParam[])[0] as { text: string }).text;
     const lines = text.split("\n");
-    assert.equal(lines.at(-1), "3 outbound connections refused: vendor.test, mirror.test", "one line, appended last");
+    assert.equal(lines.indexOf("<egress_denied>"), lines.length - 5, "the block is appended last");
+    assert.deepEqual(lines.slice(-4, -2), ["vendor.test:443 — not allowed (outside this box's allow list)", "mirror.test:443 — not allowed (outside this box's allow list)"], "each host once, with its rule");
+    assert.equal(lines.at(-2), "</egress_denied>");
     assert.match(text, /hello from the box/, "the result itself is untouched");
   } finally {
     cleanup();

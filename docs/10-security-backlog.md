@@ -172,9 +172,9 @@ token, and a relay that predates it, both still work; they just say `unattribute
 
 **What it buys.** `agentbox egress events --agent/--turn/--tool-use`, the same keys on
 `GET /api/network-events`, the fields in the audit export (INV-433) — and the model itself is
-told: a tool call whose connections the relay refused gets one line on its result,
-`N outbound connections refused: host1, host2`, so a `pip install` that hung because
-`vendor.test` is not allowed reads as what it was. The one deliberate widening: shell commands
+told: a tool call whose connections the relay refused gets an `<egress_denied>` block on its
+result (INV-1345), one line per host:port with the rule it hit — `vendor.test:443 — not
+allowed (outside this box's allow list)` — so a `pip install` that hung reads as what it was. The one deliberate widening: shell commands
 run for a call now go through the relay, which before this only the browser did (box-chrome's
 `--proxy-server`). That is the point of R4 — egress is a scope's policy, and a policy the shell
 could step around was not one.
