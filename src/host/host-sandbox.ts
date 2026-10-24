@@ -167,7 +167,9 @@ export class HostSandbox {
   }
 
   private bwrap(cwd: string, writable: readonly string[], denied: readonly string[], ports: readonly number[], command: string, args: readonly string[]): string[] {
-    const out = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"];
+    // No tmpfs over /tmp: the temp directory is writable because it is bound back in like every
+    // other allowed path, so a write anywhere else under /tmp is refused rather than swallowed.
+    const out = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"];
     for (const path of writable) out.push("--bind", path, path);
     // A denied path under a writable one is bound back read-only on top; order makes it win.
     for (const path of denied) out.push("--ro-bind", path, path);
