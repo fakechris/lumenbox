@@ -114,7 +114,8 @@ function stubBox() {
     },
     downloadFile: async (path: string) => {
       calls.push({ kind: "download", detail: path });
-      return { path, base64: "ZmFrZS1wbmctYnl0ZXM=" };
+      // Real PNG signature bytes (INV-1353: the bytes decide whether a file is an image).
+      return { path, base64: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]).toString("base64") };
     },
   } as unknown as BoxClient;
   return { box, calls };
@@ -1780,7 +1781,7 @@ test("read_file on an image hands the model the image itself", async () => {
       .find(block => block.type === "image") as { source?: { media_type?: string; data?: string } } | undefined;
     assert.ok(imageBlock !== undefined, "an image block rides in the tool result");
     assert.equal(imageBlock.source?.media_type, "image/png");
-    assert.equal(imageBlock.source?.data, "ZmFrZS1wbmctYnl0ZXM=");
+    assert.equal(imageBlock.source?.data, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]).toString("base64"), "the bytes the box handed over, untouched");
   } finally {
     cleanup();
   }
@@ -3943,3 +3944,62 @@ test("a fork's effects are dropped: nothing is put in front of the person (INV-8
   assert.equal(pending.length, 0);
 });
 
+
+// ── an image the provider refuses (INV-1353) ───────────────────────────────────
+
+test("a request the provider refuses for an image it cannot read is retried without the image, with a note where it was, and the turn finishes", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada", description: "test" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box } = stubBox();
+    const capture: Capture = { params: [] };
+    const replies = [
+      message([toolUseBlock("computer", { actions: [{ action: "screenshot" }] }, "toolu_shot")], "tool_use"),
+      message([textBlock("done")]),
+    ];
+    const MINIMAX = '400 {"type":"error","error":{"type":"invalid_request_error","message":"invalid param: invalid image content: decode image config: image: unknown format (2013)"}}';
+    const client = stubClientRejectingLargeRequests(replies, capture, params => (imagesIn(params) > 0 ? MINIMAX : undefined));
+    const events: { type: string; detail?: string }[] = [];
+    await runTurn(
+      ada,
+      [{ id: "m-test", fromId: "user", fromName: "user", text: "look at the screen", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: { display: { width: 1280, height: 800 }, api: { width: 1280, height: 800 } }, displayIndex: 1, onEvent: event => events.push(event as { type: string }) }
+    );
+    const texts = (registry.readTranscript(ada.id) as TranscriptEntry[]).filter(entry => !("kind" in entry));
+    assert.ok(JSON.stringify(texts).includes("done"), "the turn reached its conclusion rather than dying on the 400");
+    const recovery = events.filter(event => event.type === "compacted" && (event.detail ?? "").includes("refused-image"));
+    assert.equal(recovery.length, 1, `one recovery, reported: ${JSON.stringify(events.filter(e => e.type === "compacted").map(e => e.detail))}`);
+    assert.match(recovery[0]!.detail ?? "", /image_refused: replaced 1 image/);
+    const accepted = capture.params.filter(params => imagesIn(params) === 0);
+    const last = accepted.at(-1)!;
+    assert.match(JSON.stringify(last.messages), /an image was attached here, but the model refused it: invalid param: invalid image content/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("read_file attaches an image only when the bytes are one: a text file called .png is refused as not-an-image, never sent", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada", description: "test" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box, calls } = stubBox();
+    (box as unknown as { downloadFile: (path: string) => Promise<unknown> }).downloadFile = async (path: string) => {
+      calls.push({ kind: "download", detail: path });
+      return { path, base64: Buffer.from("fake-png-bytes").toString("base64") };
+    };
+    const capture: Capture = { params: [] };
+    const { client } = stubClient([
+      message([toolUseBlock("read_file", { path: "/home/box/work/inbox/a.png" }, "toolu_read")], "tool_use"),
+      message([textBlock("done")]),
+    ], capture);
+    await runTurn(ada, [{ id: "m-test", fromId: "user", fromName: "user", text: "look", priority: false, receivedAt: "" }], new AbortController().signal, { client, registry, bus, box, resolution: undefined });
+    assert.ok(calls.some(call => call.kind === "download"), "the file was fetched");
+    assert.equal(capture.params.reduce((n, params) => n + imagesIn(params), 0), 0, "no image block was ever sent");
+    assert.match(JSON.stringify(capture.params.at(-1)!.messages), /named like an image but its bytes are not one/);
+  } finally {
+    cleanup();
+  }
+});

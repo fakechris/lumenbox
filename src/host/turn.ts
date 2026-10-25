@@ -140,6 +140,7 @@ import { readInstallationInstructions } from "./place.ts";
 import { changeNotice, readStanding, takeChanges } from "./standing.ts";
 import type { McpManager } from "./mcp.ts";
 import { TOOL_BUDGET_WARNING } from "./mcp.ts";
+import { imageRefusalOf, replaceRefusedImages } from "./image-refusal.ts";
 import { lookupPair, splitRoster } from "./tool-roster.ts";
 import { narrowTools, toolAllowed } from "./scopes.ts";
 import { conversationIdFor, MAIN_CONVERSATION } from "../agents/registry.ts";
@@ -185,7 +186,7 @@ const MAX_MALFORMED_RETRIES = 1;
 const FILED_ANSWER_FLOOR = 80;
 
 /** What kind of "too big" a provider is complaining about, or undefined if it is not that. */
-export type Overflow = "context-window" | "too-many-images";
+export type Overflow = "context-window" | "too-many-images" | "refused-image";
 
 /**
  * Reads a provider error for the two distinct ways a request can be too large.
@@ -200,6 +201,8 @@ export type Overflow = "context-window" | "too-many-images";
  * retry. Hence the specific phrases rather than a search for "token" or "large".
  */
 export function classifyOverflow(error: unknown): Overflow | undefined {
+  // An image the provider cannot read (INV-1353) is recovered the same way: take it out, retry.
+  if (imageRefusalOf(error) !== undefined) return "refused-image";
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
   const imagePhrases = [
     "too many images",
@@ -302,8 +305,13 @@ export function isTruncatedByContext(
  */
 function shedForRetry(
   messages: Anthropic.MessageParam[],
-  overflow: Overflow
+  overflow: Overflow,
+  reason = ""
 ): { dropped: number; detail: string } {
+  if (overflow === "refused-image") {
+    const replaced = replaceRefusedImages(messages, reason);
+    return { dropped: replaced, detail: `image_refused: replaced ${replaced} image(s) with a note (${reason})` };
+  }
   // An image-count rejection is not about tokens, so keeping even one may be too many.
   const keep = overflow === "too-many-images" ? 0 : KEEP_IMAGES;
   const pruned = pruneOldImages(messages, keep);
@@ -2588,7 +2596,7 @@ ${outcome.text}`;
       const overflow = classifyOverflow(error);
       if (overflow !== undefined && shed < MAX_SHED_ATTEMPTS) {
         shed += 1;
-        const relief = shedForRetry(messages, overflow);
+        const relief = shedForRetry(messages, overflow, imageRefusalOf(error) ?? "");
         console.error(
           `[compaction] ${agent.profile.name}: request rejected (${overflow}); ` +
             `${relief.detail}; retrying round ${round}`
