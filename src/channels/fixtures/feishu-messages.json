@@ -1,45 +1,109 @@
 {
   "$comment": "CAPTURED from Feishu and sanitised by scripts/capture-feishu-fixtures.mjs — content replaced, structure kept. Re-capture rather than hand-editing.",
-  "capturedAt": "2026-09-01",
+  "capturedAt": "2026-10-25",
   "messages": [
     {
-      "kind": "image:user:threaded",
+      "kind": "file:app:top-level",
+      "source": "feishu-api:/im/v1/messages (the operator's own tenant, bot-visible chats); API shape — the live event carries mentions[].id.open_id where this carries mentions[].id as a string",
+      "sanitised": "ids aliased to *_fixtureN, timestamps fixed, free text replaced; discriminators and structure kept",
+      "expect": "normalize",
       "message": {
         "body": {
-          "content": "{\"image_key\":\"img_fixture1\"}"
+          "content": "{\"file_key\":\"file_fixture1\",\"file_name\":\"示例文本 sample text for shape only\"}"
         },
+        "chat_default_name": "示例 sample",
         "chat_id": "oc_fixture2",
+        "chat_type": "group",
         "create_time": "1788000000000",
         "deleted": false,
         "message_id": "om_fixture3",
         "message_position": "示例 sample",
-        "msg_type": "image",
+        "msg_type": "file",
         "sender": {
-          "id": "ou_fixture4",
+          "id": "cli_fixture4",
+          "id_type": "app_id",
+          "sender_type": "app",
+          "tenant_key": "示例 sample"
+        },
+        "update_time": "1788000000000",
+        "updated": false
+      }
+    },
+    {
+      "kind": "file:app:top-level+deleted",
+      "source": "feishu-api:/im/v1/messages (the operator's own tenant, bot-visible chats); API shape — the live event carries mentions[].id.open_id where this carries mentions[].id as a string",
+      "sanitised": "ids aliased to *_fixtureN, timestamps fixed, free text replaced; discriminators and structure kept",
+      "expect": "ignore",
+      "message": {
+        "body": {
+          "content": "示例文本 sample text for shape only"
+        },
+        "chat_default_name": "示例 sample",
+        "chat_id": "oc_fixture2",
+        "chat_type": "group",
+        "create_time": "1788000000000",
+        "deleted": true,
+        "message_id": "om_fixture5",
+        "message_position": "示例 sample",
+        "msg_type": "file",
+        "sender": {
+          "id": "cli_fixture4",
+          "id_type": "app_id",
+          "sender_type": "app",
+          "tenant_key": "示例 sample"
+        },
+        "update_time": "1788000000000",
+        "updated": false
+      }
+    },
+    {
+      "kind": "file:user:threaded+edited",
+      "source": "feishu-api:/im/v1/messages (the operator's own tenant, bot-visible chats); API shape — the live event carries mentions[].id.open_id where this carries mentions[].id as a string",
+      "sanitised": "ids aliased to *_fixtureN, timestamps fixed, free text replaced; discriminators and structure kept",
+      "expect": "normalize",
+      "message": {
+        "body": {
+          "content": "{\"file_key\":\"file_fixture6\",\"file_name\":\"示例文本 sample text for shape only\"}"
+        },
+        "chat_default_name": "示例 sample",
+        "chat_id": "oc_fixture2",
+        "chat_type": "group",
+        "create_time": "1788000000000",
+        "deleted": false,
+        "message_id": "om_fixture7",
+        "message_position": "示例 sample",
+        "msg_type": "file",
+        "sender": {
+          "id": "ou_fixture8",
           "id_type": "open_id",
           "sender_type": "user",
           "tenant_key": "示例 sample"
         },
-        "thread_id": "omt_fixture5",
+        "thread_id": "omt_fixture9",
         "thread_message_position": "示例 sample",
         "update_time": "1788000000000",
         "updated": true
       }
     },
     {
-      "kind": "interactive:app:top-level",
+      "kind": "image:app:top-level",
+      "source": "feishu-api:/im/v1/messages (the operator's own tenant, bot-visible chats); API shape — the live event carries mentions[].id.open_id where this carries mentions[].id as a string",
+      "sanitised": "ids aliased to *_fixtureN, timestamps fixed, free text replaced; discriminators and structure kept",
+      "expect": "normalize",
       "message": {
         "body": {
-          "content": "{\"title\":\"示例 sample\",\"elements\":[[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\"}],[{\"tag\":\"button\",\"text\":\"示例文本 sample text for shape only\",\"type\":\"default\"},{\"tag\":\"button\",\"text\":\"示例文本 sample text for shape only\",\"type\":\"default\"},{\"tag\":\"button\",\"text\":\"示例文本 sample text for shape only\",\"type\":\"default\"}],[{\"tag\":\"note\",\"elements\":[{\"tag\":\"text\",\"text\":\"示例 sample\"}]}]]}"
+          "content": "{\"image_key\":\"img_fixture10\"}"
         },
+        "chat_default_name": "示例 sample",
         "chat_id": "oc_fixture2",
+        "chat_type": "group",
         "create_time": "1788000000000",
         "deleted": false,
-        "message_id": "om_fixture6",
+        "message_id": "om_fixture11",
         "message_position": "示例 sample",
-        "msg_type": "interactive",
+        "msg_type": "image",
         "sender": {
-          "id": "cli_fixture7",
+          "id": "cli_fixture4",
           "id_type": "app_id",
           "sender_type": "app",
           "tenant_key": "示例 sample"
@@ -49,46 +113,330 @@
       }
     },
     {
-      "kind": "post:app:top-level",
+      "kind": "image:user:threaded+edited",
+      "source": "feishu-api:/im/v1/messages (the operator's own tenant, bot-visible chats); API shape — the live event carries mentions[].id.open_id where this carries mentions[].id as a string",
+      "sanitised": "ids aliased to *_fixtureN, timestamps fixed, free text replaced; discriminators and structure kept",
+      "expect": "normalize",
       "message": {
         "body": {
-          "content": "{\"title\":\"\",\"content\":[[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}]],\"content_v2\":[[{\"tag\":\"md\",\"text\":\"示例文本 sample text for shape only\"}]]}"
+          "content": "{\"image_key\":\"img_fixture12\"}"
         },
+        "chat_default_name": "示例 sample",
         "chat_id": "oc_fixture2",
+        "chat_type": "group",
         "create_time": "1788000000000",
         "deleted": false,
-        "message_id": "om_fixture8",
+        "message_id": "om_fixture13",
         "message_position": "示例 sample",
-        "msg_type": "post",
+        "msg_type": "image",
         "sender": {
-          "id": "cli_fixture7",
-          "id_type": "app_id",
-          "sender_type": "app",
-          "tenant_key": "示例 sample"
-        },
-        "update_time": "1788000000000",
-        "updated": false
-      }
-    },
-    {
-      "kind": "post:user:threaded",
-      "message": {
-        "body": {
-          "content": "{\"title\":\"\",\"content\":[[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]},{\"tag\":\"a\",\"href\":\"示例文本 sample text for shape only\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]},{\"tag\":\"a\",\"href\":\"示例文本 sample text for shape only\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"code_block\",\"language\":\"示例 sample\",\"text\":\"示例 sample\"}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"a\",\"href\":\"示例文本 sample text for shape only\",\"text\":\"示例文本 sample text for shape only\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"code_block\",\"language\":\"示例 sample\",\"text\":\"示例 sample\"}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}]],\"content_v2\":[[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]},{\"tag\":\"a\",\"href\":\"示例文本 sample text for shape only\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]},{\"tag\":\"a\",\"href\":\"示例文本 sample text for shape only\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"code_block\",\"language\":\"示例 sample\",\"text\":\"示例 sample\"}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"a\",\"href\":\"示例文本 sample text for shape only\",\"text\":\"示例文本 sample text for shape only\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"code_block\",\"language\":\"示例 sample\",\"text\":\"示例 sample\"}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}]]}"
-        },
-        "chat_id": "oc_fixture2",
-        "create_time": "1788000000000",
-        "deleted": false,
-        "message_id": "om_fixture9",
-        "message_position": "示例 sample",
-        "msg_type": "post",
-        "sender": {
-          "id": "ou_fixture4",
+          "id": "ou_fixture8",
           "id_type": "open_id",
           "sender_type": "user",
           "tenant_key": "示例 sample"
         },
-        "thread_id": "omt_fixture10",
+        "thread_id": "omt_fixture14",
+        "thread_message_position": "示例 sample",
+        "update_time": "1788000000000",
+        "updated": true
+      }
+    },
+    {
+      "kind": "image:user:top-level",
+      "source": "feishu-api:/im/v1/messages (the operator's own tenant, bot-visible chats); API shape — the live event carries mentions[].id.open_id where this carries mentions[].id as a string",
+      "sanitised": "ids aliased to *_fixtureN, timestamps fixed, free text replaced; discriminators and structure kept",
+      "expect": "normalize",
+      "message": {
+        "body": {
+          "content": "{\"image_key\":\"img_fixture15\"}"
+        },
+        "chat_default_name": "示例 sample",
+        "chat_id": "oc_fixture2",
+        "chat_type": "group",
+        "create_time": "1788000000000",
+        "deleted": false,
+        "message_id": "om_fixture16",
+        "message_position": "示例 sample",
+        "msg_type": "image",
+        "sender": {
+          "id": "ou_fixture8",
+          "id_type": "open_id",
+          "sender_type": "user",
+          "tenant_key": "示例 sample"
+        },
+        "update_time": "1788000000000",
+        "updated": false
+      }
+    },
+    {
+      "kind": "interactive:app:top-level",
+      "source": "feishu-api:/im/v1/messages (the operator's own tenant, bot-visible chats); API shape — the live event carries mentions[].id.open_id where this carries mentions[].id as a string",
+      "sanitised": "ids aliased to *_fixtureN, timestamps fixed, free text replaced; discriminators and structure kept",
+      "expect": "ignore",
+      "message": {
+        "body": {
+          "content": "{\"title\":\"示例 sample\",\"elements\":[[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\"}],[{\"tag\":\"button\",\"text\":\"示例文本 sample text for shape only\",\"type\":\"default\"},{\"tag\":\"button\",\"text\":\"示例文本 sample text for shape only\",\"type\":\"default\"},{\"tag\":\"button\",\"text\":\"示例文本 sample text for shape only\",\"type\":\"default\"}],[{\"tag\":\"note\",\"elements\":[{\"tag\":\"text\",\"text\":\"示例 sample\"}]}]]}"
+        },
+        "chat_default_name": "示例 sample",
+        "chat_id": "oc_fixture2",
+        "chat_type": "group",
+        "create_time": "1788000000000",
+        "deleted": false,
+        "message_id": "om_fixture17",
+        "message_position": "示例 sample",
+        "msg_type": "interactive",
+        "sender": {
+          "id": "cli_fixture4",
+          "id_type": "app_id",
+          "sender_type": "app",
+          "tenant_key": "示例 sample"
+        },
+        "update_time": "1788000000000",
+        "updated": false
+      }
+    },
+    {
+      "kind": "interactive:app:top-level+deleted",
+      "source": "feishu-api:/im/v1/messages (the operator's own tenant, bot-visible chats); API shape — the live event carries mentions[].id.open_id where this carries mentions[].id as a string",
+      "sanitised": "ids aliased to *_fixtureN, timestamps fixed, free text replaced; discriminators and structure kept",
+      "expect": "ignore",
+      "message": {
+        "body": {
+          "content": "示例文本 sample text for shape only"
+        },
+        "chat_default_name": "示例 sample",
+        "chat_id": "oc_fixture2",
+        "chat_type": "group",
+        "create_time": "1788000000000",
+        "deleted": true,
+        "message_id": "om_fixture18",
+        "message_position": "示例 sample",
+        "msg_type": "interactive",
+        "sender": {
+          "id": "cli_fixture4",
+          "id_type": "app_id",
+          "sender_type": "app",
+          "tenant_key": "示例 sample"
+        },
+        "update_time": "1788000000000",
+        "updated": false
+      }
+    },
+    {
+      "kind": "interactive:app:top-level+edited",
+      "source": "feishu-api:/im/v1/messages (the operator's own tenant, bot-visible chats); API shape — the live event carries mentions[].id.open_id where this carries mentions[].id as a string",
+      "sanitised": "ids aliased to *_fixtureN, timestamps fixed, free text replaced; discriminators and structure kept",
+      "expect": "ignore",
+      "message": {
+        "body": {
+          "content": "{\"title\":\"示例文本 sample text for shape only\",\"elements\":[[{\"tag\":\"text\",\"text\":\"示例 sample\"},{\"tag\":\"text\",\"text\":\"示例 sample\"}],[{\"tag\":\"note\",\"elements\":[{\"tag\":\"text\",\"text\":\"示例 sample\"}]}]]}"
+        },
+        "chat_default_name": "示例 sample",
+        "chat_id": "oc_fixture2",
+        "chat_type": "group",
+        "create_time": "1788000000000",
+        "deleted": false,
+        "message_id": "om_fixture19",
+        "message_position": "示例 sample",
+        "msg_type": "interactive",
+        "sender": {
+          "id": "cli_fixture4",
+          "id_type": "app_id",
+          "sender_type": "app",
+          "tenant_key": "示例 sample"
+        },
+        "update_time": "1788000000000",
+        "updated": true
+      }
+    },
+    {
+      "kind": "post:app:top-level",
+      "source": "feishu-api:/im/v1/messages (the operator's own tenant, bot-visible chats); API shape — the live event carries mentions[].id.open_id where this carries mentions[].id as a string",
+      "sanitised": "ids aliased to *_fixtureN, timestamps fixed, free text replaced; discriminators and structure kept",
+      "expect": "normalize",
+      "message": {
+        "body": {
+          "content": "{\"title\":\"\",\"content\":[[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}]],\"content_v2\":[[{\"tag\":\"md\",\"text\":\"示例文本 sample text for shape only\"}]]}"
+        },
+        "chat_default_name": "示例 sample",
+        "chat_id": "oc_fixture2",
+        "chat_type": "group",
+        "create_time": "1788000000000",
+        "deleted": false,
+        "message_id": "om_fixture20",
+        "message_position": "示例 sample",
+        "msg_type": "post",
+        "sender": {
+          "id": "cli_fixture4",
+          "id_type": "app_id",
+          "sender_type": "app",
+          "tenant_key": "示例 sample"
+        },
+        "update_time": "1788000000000",
+        "updated": false
+      }
+    },
+    {
+      "kind": "post:app:top-level+deleted",
+      "source": "feishu-api:/im/v1/messages (the operator's own tenant, bot-visible chats); API shape — the live event carries mentions[].id.open_id where this carries mentions[].id as a string",
+      "sanitised": "ids aliased to *_fixtureN, timestamps fixed, free text replaced; discriminators and structure kept",
+      "expect": "ignore",
+      "message": {
+        "body": {
+          "content": "示例文本 sample text for shape only"
+        },
+        "chat_default_name": "示例 sample",
+        "chat_id": "oc_fixture2",
+        "chat_type": "group",
+        "create_time": "1788000000000",
+        "deleted": true,
+        "message_id": "om_fixture21",
+        "message_position": "示例 sample",
+        "msg_type": "post",
+        "sender": {
+          "id": "cli_fixture4",
+          "id_type": "app_id",
+          "sender_type": "app",
+          "tenant_key": "示例 sample"
+        },
+        "update_time": "1788000000000",
+        "updated": false
+      }
+    },
+    {
+      "kind": "post:user:threaded+edited",
+      "source": "feishu-api:/im/v1/messages (the operator's own tenant, bot-visible chats); API shape — the live event carries mentions[].id.open_id where this carries mentions[].id as a string",
+      "sanitised": "ids aliased to *_fixtureN, timestamps fixed, free text replaced; discriminators and structure kept",
+      "expect": "normalize",
+      "message": {
+        "body": {
+          "content": "{\"title\":\"\",\"content\":[[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]},{\"tag\":\"a\",\"href\":\"示例文本 sample text for shape only\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]},{\"tag\":\"a\",\"href\":\"示例文本 sample text for shape only\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"code_block\",\"language\":\"示例 sample\",\"text\":\"示例 sample\"}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"a\",\"href\":\"示例文本 sample text for shape only\",\"text\":\"示例文本 sample text for shape only\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"code_block\",\"language\":\"示例 sample\",\"text\":\"示例 sample\"}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}]],\"content_v2\":[[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]},{\"tag\":\"a\",\"href\":\"示例文本 sample text for shape only\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]},{\"tag\":\"a\",\"href\":\"示例文本 sample text for shape only\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"code_block\",\"language\":\"示例 sample\",\"text\":\"示例 sample\"}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]},{\"tag\":\"a\",\"href\":\"示例文本 sample text for shape only\",\"text\":\"示例文本 sample text for shape only\",\"style\":[\"示例 sample\"]},{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"code_block\",\"language\":\"示例 sample\",\"text\":\"示例 sample\"}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[],[],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[\"示例 sample\"]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}]]}"
+        },
+        "chat_default_name": "示例 sample",
+        "chat_id": "oc_fixture2",
+        "chat_type": "group",
+        "create_time": "1788000000000",
+        "deleted": false,
+        "message_id": "om_fixture22",
+        "message_position": "示例 sample",
+        "msg_type": "post",
+        "sender": {
+          "id": "ou_fixture8",
+          "id_type": "open_id",
+          "sender_type": "user",
+          "tenant_key": "示例 sample"
+        },
+        "thread_id": "omt_fixture23",
+        "thread_message_position": "示例 sample",
+        "update_time": "1788000000000",
+        "updated": true
+      }
+    },
+    {
+      "kind": "post:user:top-level",
+      "source": "feishu-api:/im/v1/messages (the operator's own tenant, bot-visible chats); API shape — the live event carries mentions[].id.open_id where this carries mentions[].id as a string",
+      "sanitised": "ids aliased to *_fixtureN, timestamps fixed, free text replaced; discriminators and structure kept",
+      "expect": "normalize",
+      "message": {
+        "body": {
+          "content": "{\"title\":\"\",\"content\":[[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[{\"tag\":\"img\",\"image_key\":\"img_fixture24\",\"width\":494,\"height\":159}]],\"content_v2\":[[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[{\"tag\":\"text\",\"text\":\"示例 sample\",\"style\":[]}],[],[{\"tag\":\"text\",\"text\":\"示例文本 sample text for shape only\",\"style\":[]}],[],[{\"tag\":\"img\",\"image_key\":\"img_fixture24\",\"width\":494,\"height\":159}]]}"
+        },
+        "chat_default_name": "示例 sample",
+        "chat_id": "oc_fixture2",
+        "chat_type": "group",
+        "create_time": "1788000000000",
+        "deleted": false,
+        "message_id": "om_fixture25",
+        "message_position": "示例 sample",
+        "msg_type": "post",
+        "sender": {
+          "id": "ou_fixture8",
+          "id_type": "open_id",
+          "sender_type": "user",
+          "tenant_key": "示例 sample"
+        },
+        "update_time": "1788000000000",
+        "updated": false
+      }
+    },
+    {
+      "kind": "post:user:top-level+deleted",
+      "source": "feishu-api:/im/v1/messages (the operator's own tenant, bot-visible chats); API shape — the live event carries mentions[].id.open_id where this carries mentions[].id as a string",
+      "sanitised": "ids aliased to *_fixtureN, timestamps fixed, free text replaced; discriminators and structure kept",
+      "expect": "ignore",
+      "message": {
+        "body": {
+          "content": "示例文本 sample text for shape only"
+        },
+        "chat_default_name": "示例 sample",
+        "chat_id": "oc_fixture2",
+        "chat_type": "group",
+        "create_time": "1788000000000",
+        "deleted": true,
+        "message_id": "om_fixture26",
+        "message_position": "示例 sample",
+        "msg_type": "post",
+        "sender": {
+          "id": "ou_fixture8",
+          "id_type": "open_id",
+          "sender_type": "user",
+          "tenant_key": "示例 sample"
+        },
+        "update_time": "1788000000000",
+        "updated": false
+      }
+    },
+    {
+      "kind": "system::top-level",
+      "source": "feishu-api:/im/v1/messages (the operator's own tenant, bot-visible chats); API shape — the live event carries mentions[].id.open_id where this carries mentions[].id as a string",
+      "sanitised": "ids aliased to *_fixtureN, timestamps fixed, free text replaced; discriminators and structure kept",
+      "expect": "ignore",
+      "message": {
+        "body": {
+          "content": "{\"template\":\"示例文本 sample text for shape only\",\"from_user\":[\"1788000000000\"],\"to_chatters\":[],\"divider_text\":{}}"
+        },
+        "chat_default_name": "示例 sample",
+        "chat_id": "oc_fixture2",
+        "chat_type": "group",
+        "create_time": "1788000000000",
+        "deleted": false,
+        "message_id": "om_fixture27",
+        "message_position": "示例 sample",
+        "msg_type": "system",
+        "sender": {
+          "id": "",
+          "id_type": "",
+          "sender_type": "",
+          "tenant_key": ""
+        },
+        "update_time": "1788000000000",
+        "updated": false
+      }
+    },
+    {
+      "kind": "text:app:threaded+edited",
+      "source": "feishu-api:/im/v1/messages (the operator's own tenant, bot-visible chats); API shape — the live event carries mentions[].id.open_id where this carries mentions[].id as a string",
+      "sanitised": "ids aliased to *_fixtureN, timestamps fixed, free text replaced; discriminators and structure kept",
+      "expect": "normalize",
+      "message": {
+        "body": {
+          "content": "{\"text\":\"示例 sample\"}"
+        },
+        "chat_default_name": "示例 sample",
+        "chat_id": "oc_fixture2",
+        "chat_type": "group",
+        "create_time": "1788000000000",
+        "deleted": false,
+        "message_id": "om_fixture28",
+        "message_position": "示例 sample",
+        "msg_type": "text",
+        "sender": {
+          "id": "cli_fixture4",
+          "id_type": "app_id",
+          "sender_type": "app",
+          "tenant_key": "示例 sample"
+        },
+        "thread_id": "omt_fixture29",
         "thread_message_position": "示例 sample",
         "update_time": "1788000000000",
         "updated": true
@@ -96,18 +444,23 @@
     },
     {
       "kind": "text:app:top-level",
+      "source": "feishu-api:/im/v1/messages (the operator's own tenant, bot-visible chats); API shape — the live event carries mentions[].id.open_id where this carries mentions[].id as a string",
+      "sanitised": "ids aliased to *_fixtureN, timestamps fixed, free text replaced; discriminators and structure kept",
+      "expect": "normalize",
       "message": {
         "body": {
           "content": "{\"text\":\"示例文本 sample text for shape only\"}"
         },
+        "chat_default_name": "示例 sample",
         "chat_id": "oc_fixture2",
+        "chat_type": "group",
         "create_time": "1788000000000",
         "deleted": false,
-        "message_id": "om_fixture11",
+        "message_id": "om_fixture30",
         "message_position": "示例 sample",
         "msg_type": "text",
         "sender": {
-          "id": "cli_fixture7",
+          "id": "cli_fixture4",
           "id_type": "app_id",
           "sender_type": "app",
           "tenant_key": "示例 sample"
@@ -117,24 +470,169 @@
       }
     },
     {
-      "kind": "text:user:threaded",
+      "kind": "text:user:threaded+edited",
+      "source": "feishu-api:/im/v1/messages (the operator's own tenant, bot-visible chats); API shape — the live event carries mentions[].id.open_id where this carries mentions[].id as a string",
+      "sanitised": "ids aliased to *_fixtureN, timestamps fixed, free text replaced; discriminators and structure kept",
+      "expect": "normalize",
       "message": {
         "body": {
           "content": "{\"text\":\"示例文本 sample text for shape only\"}"
         },
+        "chat_default_name": "示例 sample",
         "chat_id": "oc_fixture2",
+        "chat_type": "group",
         "create_time": "1788000000000",
         "deleted": false,
-        "message_id": "om_fixture12",
+        "message_id": "om_fixture31",
         "message_position": "示例 sample",
         "msg_type": "text",
         "sender": {
-          "id": "ou_fixture4",
+          "id": "ou_fixture8",
           "id_type": "open_id",
           "sender_type": "user",
           "tenant_key": "示例 sample"
         },
-        "thread_id": "omt_fixture13",
+        "thread_id": "omt_fixture32",
+        "thread_message_position": "示例 sample",
+        "update_time": "1788000000000",
+        "updated": true
+      }
+    },
+    {
+      "kind": "text:user:threaded+edited+mention",
+      "source": "feishu-api:/im/v1/messages (the operator's own tenant, bot-visible chats); API shape — the live event carries mentions[].id.open_id where this carries mentions[].id as a string",
+      "sanitised": "ids aliased to *_fixtureN, timestamps fixed, free text replaced; discriminators and structure kept",
+      "expect": "normalize",
+      "message": {
+        "body": {
+          "content": "{\"text\":\"示例文本 sample text for shape only\"}"
+        },
+        "chat_default_name": "示例 sample",
+        "chat_id": "oc_fixture2",
+        "chat_type": "group",
+        "create_time": "1788000000000",
+        "deleted": false,
+        "mentions": [
+          {
+            "id": "ou_fixture33",
+            "id_type": "open_id",
+            "key": "@_user_1",
+            "name": "示例 sample",
+            "tenant_key": "示例 sample"
+          }
+        ],
+        "message_id": "om_fixture34",
+        "message_position": "示例 sample",
+        "msg_type": "text",
+        "sender": {
+          "id": "ou_fixture8",
+          "id_type": "open_id",
+          "sender_type": "user",
+          "tenant_key": "示例 sample"
+        },
+        "thread_id": "omt_fixture35",
+        "thread_message_position": "示例 sample",
+        "update_time": "1788000000000",
+        "updated": true
+      }
+    },
+    {
+      "kind": "text:user:threaded+reply+edited",
+      "source": "feishu-api:/im/v1/messages (the operator's own tenant, bot-visible chats); API shape — the live event carries mentions[].id.open_id where this carries mentions[].id as a string",
+      "sanitised": "ids aliased to *_fixtureN, timestamps fixed, free text replaced; discriminators and structure kept",
+      "expect": "normalize",
+      "message": {
+        "body": {
+          "content": "{\"text\":\"示例 sample\"}"
+        },
+        "chat_default_name": "示例 sample",
+        "chat_id": "oc_fixture2",
+        "chat_type": "group",
+        "create_time": "1788000000000",
+        "deleted": false,
+        "message_id": "om_fixture36",
+        "message_position": "示例 sample",
+        "msg_type": "text",
+        "parent_id": "om_fixture37",
+        "root_id": "om_fixture37",
+        "sender": {
+          "id": "ou_fixture8",
+          "id_type": "open_id",
+          "sender_type": "user",
+          "tenant_key": "示例 sample"
+        },
+        "thread_id": "omt_fixture38",
+        "thread_message_position": "示例 sample",
+        "update_time": "1788000000000",
+        "updated": true
+      }
+    },
+    {
+      "kind": "text:user:threaded+reply+edited+deleted",
+      "source": "feishu-api:/im/v1/messages (the operator's own tenant, bot-visible chats); API shape — the live event carries mentions[].id.open_id where this carries mentions[].id as a string",
+      "sanitised": "ids aliased to *_fixtureN, timestamps fixed, free text replaced; discriminators and structure kept",
+      "expect": "ignore",
+      "message": {
+        "body": {
+          "content": "示例文本 sample text for shape only"
+        },
+        "chat_default_name": "示例 sample",
+        "chat_id": "oc_fixture2",
+        "chat_type": "group",
+        "create_time": "1788000000000",
+        "deleted": true,
+        "message_id": "om_fixture39",
+        "message_position": "示例 sample",
+        "msg_type": "text",
+        "parent_id": "om_fixture25",
+        "root_id": "om_fixture25",
+        "sender": {
+          "id": "ou_fixture8",
+          "id_type": "open_id",
+          "sender_type": "user",
+          "tenant_key": "示例 sample"
+        },
+        "thread_id": "omt_fixture40",
+        "thread_message_position": "示例 sample",
+        "update_time": "1788000000000",
+        "updated": true
+      }
+    },
+    {
+      "kind": "text:user:threaded+reply+edited+mention",
+      "source": "feishu-api:/im/v1/messages (the operator's own tenant, bot-visible chats); API shape — the live event carries mentions[].id.open_id where this carries mentions[].id as a string",
+      "sanitised": "ids aliased to *_fixtureN, timestamps fixed, free text replaced; discriminators and structure kept",
+      "expect": "normalize",
+      "message": {
+        "body": {
+          "content": "{\"text\":\"示例文本 sample text for shape only\"}"
+        },
+        "chat_default_name": "示例 sample",
+        "chat_id": "oc_fixture2",
+        "chat_type": "group",
+        "create_time": "1788000000000",
+        "deleted": false,
+        "mentions": [
+          {
+            "id": "ou_fixture33",
+            "id_type": "open_id",
+            "key": "@_user_1",
+            "name": "示例 sample",
+            "tenant_key": "示例 sample"
+          }
+        ],
+        "message_id": "om_fixture41",
+        "message_position": "示例 sample",
+        "msg_type": "text",
+        "parent_id": "om_fixture42",
+        "root_id": "om_fixture42",
+        "sender": {
+          "id": "ou_fixture8",
+          "id_type": "open_id",
+          "sender_type": "user",
+          "tenant_key": "示例 sample"
+        },
+        "thread_id": "omt_fixture43",
         "thread_message_position": "示例 sample",
         "update_time": "1788000000000",
         "updated": true
@@ -142,24 +640,148 @@
     },
     {
       "kind": "text:user:top-level",
+      "source": "feishu-api:/im/v1/messages (the operator's own tenant, bot-visible chats); API shape — the live event carries mentions[].id.open_id where this carries mentions[].id as a string",
+      "sanitised": "ids aliased to *_fixtureN, timestamps fixed, free text replaced; discriminators and structure kept",
+      "expect": "normalize",
       "message": {
         "body": {
           "content": "{\"text\":\"示例文本 sample text for shape only\"}"
         },
+        "chat_default_name": "示例 sample",
         "chat_id": "oc_fixture2",
+        "chat_type": "group",
         "create_time": "1788000000000",
         "deleted": false,
-        "message_id": "om_fixture14",
+        "message_id": "om_fixture44",
         "message_position": "示例 sample",
         "msg_type": "text",
         "sender": {
-          "id": "ou_fixture4",
+          "id": "ou_fixture8",
           "id_type": "open_id",
           "sender_type": "user",
           "tenant_key": "示例 sample"
         },
         "update_time": "1788000000000",
         "updated": false
+      }
+    },
+    {
+      "kind": "text:user:top-level+edited",
+      "source": "feishu-api:/im/v1/messages (the operator's own tenant, bot-visible chats); API shape — the live event carries mentions[].id.open_id where this carries mentions[].id as a string",
+      "sanitised": "ids aliased to *_fixtureN, timestamps fixed, free text replaced; discriminators and structure kept",
+      "expect": "normalize",
+      "message": {
+        "body": {
+          "content": "{\"text\":\"示例文本 sample text for shape only\"}"
+        },
+        "chat_default_name": "示例 sample",
+        "chat_id": "oc_fixture2",
+        "chat_type": "group",
+        "create_time": "1788000000000",
+        "deleted": false,
+        "message_id": "om_fixture45",
+        "message_position": "示例 sample",
+        "msg_type": "text",
+        "sender": {
+          "id": "ou_fixture8",
+          "id_type": "open_id",
+          "sender_type": "user",
+          "tenant_key": "示例 sample"
+        },
+        "update_time": "1788000000000",
+        "updated": true
+      }
+    },
+    {
+      "kind": "text:user:top-level+edited+deleted",
+      "source": "feishu-api:/im/v1/messages (the operator's own tenant, bot-visible chats); API shape — the live event carries mentions[].id.open_id where this carries mentions[].id as a string",
+      "sanitised": "ids aliased to *_fixtureN, timestamps fixed, free text replaced; discriminators and structure kept",
+      "expect": "ignore",
+      "message": {
+        "body": {
+          "content": "示例文本 sample text for shape only"
+        },
+        "chat_default_name": "示例 sample",
+        "chat_id": "oc_fixture2",
+        "chat_type": "group",
+        "create_time": "1788000000000",
+        "deleted": true,
+        "message_id": "om_fixture46",
+        "message_position": "示例 sample",
+        "msg_type": "text",
+        "sender": {
+          "id": "ou_fixture8",
+          "id_type": "open_id",
+          "sender_type": "user",
+          "tenant_key": "示例 sample"
+        },
+        "update_time": "1788000000000",
+        "updated": true
+      }
+    },
+    {
+      "kind": "text:user:top-level+edited+mention",
+      "source": "feishu-api:/im/v1/messages (the operator's own tenant, bot-visible chats); API shape — the live event carries mentions[].id.open_id where this carries mentions[].id as a string",
+      "sanitised": "ids aliased to *_fixtureN, timestamps fixed, free text replaced; discriminators and structure kept",
+      "expect": "normalize",
+      "message": {
+        "body": {
+          "content": "{\"text\":\"示例文本 sample text for shape only\"}"
+        },
+        "chat_default_name": "示例 sample",
+        "chat_id": "oc_fixture2",
+        "chat_type": "group",
+        "create_time": "1788000000000",
+        "deleted": false,
+        "mentions": [
+          {
+            "id": "ou_fixture33",
+            "id_type": "open_id",
+            "key": "@_user_1",
+            "name": "示例 sample",
+            "tenant_key": "示例 sample"
+          }
+        ],
+        "message_id": "om_fixture47",
+        "message_position": "示例 sample",
+        "msg_type": "text",
+        "sender": {
+          "id": "ou_fixture8",
+          "id_type": "open_id",
+          "sender_type": "user",
+          "tenant_key": "示例 sample"
+        },
+        "update_time": "1788000000000",
+        "updated": true
+      }
+    },
+    {
+      "kind": "text:user:top-level+reply+edited+deleted",
+      "source": "feishu-api:/im/v1/messages (the operator's own tenant, bot-visible chats); API shape — the live event carries mentions[].id.open_id where this carries mentions[].id as a string",
+      "sanitised": "ids aliased to *_fixtureN, timestamps fixed, free text replaced; discriminators and structure kept",
+      "expect": "ignore",
+      "message": {
+        "body": {
+          "content": "示例文本 sample text for shape only"
+        },
+        "chat_default_name": "示例 sample",
+        "chat_id": "oc_fixture2",
+        "chat_type": "group",
+        "create_time": "1788000000000",
+        "deleted": true,
+        "message_id": "om_fixture48",
+        "message_position": "示例 sample",
+        "msg_type": "text",
+        "parent_id": "om_fixture25",
+        "root_id": "om_fixture25",
+        "sender": {
+          "id": "ou_fixture8",
+          "id_type": "open_id",
+          "sender_type": "user",
+          "tenant_key": "示例 sample"
+        },
+        "update_time": "1788000000000",
+        "updated": true
       }
     }
   ]

@@ -1205,18 +1205,12 @@ export class FeishuChannel implements ChannelAdapter {
       },
     });
 
-    // The connect that retries, because the SDK's does not: after a restart the
-    // vendor can refuse the new connection for ~a minute while the dead process's
-    // registration lingers, and the SDK logs `connect failed` once and never tries
-    // again — a bot that is deaf forever, reading exactly like a quiet afternoon
-    // (roadmap R35; it cost a dropped message and four minutes to diagnose). The
-    // SDK exposes no state and no close hook, so its own logger is the witness:
-    // `client ready` ends the retrying, `connect failed` schedules the next
-    // attempt, and every attempt is said out loud — liveness.ts is right that a
-    // *silent* reconnect rebuilds blindness one layer up, so this one narrates.
-    // A retry while an earlier client somehow lives is safe on this vendor: Feishu
-    // refuses a second consumer per app, which is the very behaviour being ridden
-    // out. Backoff resets on success; `stop()` ends the loop with the process.
+    // The connect that retries, because the SDK's does not: after a restart the vendor can refuse the
+    // new connection for ~a minute while the dead process's registration lingers, and the SDK logs
+    // `connect failed` once and never tries again — a bot that is deaf forever, reading exactly like a
+    // quiet afternoon (roadmap R35; it cost a dropped message and four minutes to diagnose). The SDK
+    // exposes no state and no close hook, so its own logger is the witness: `client ready` ends the
+    // retrying, `connect failed` schedules the next attempt, and every attempt is said out loud.
     let attempts = 0;
     let retryTimer: NodeJS.Timeout | undefined;
     let readyTimer: NodeJS.Timeout | undefined;
@@ -1449,7 +1443,11 @@ export class FeishuChannel implements ChannelAdapter {
               : {}),
           });
         }
-        if (chatId === "" || data.message === undefined) return {};
+        // Dropped and said (INV-128): a message with no chat has nowhere to be answered.
+        if (chatId === "" || data.message === undefined) {
+          this.discard(data.message?.message_id, "no chat id on the event");
+          return {};
+        }
         if (data.message.chat_type !== undefined) {
           this.chatTypes.set(chatId, data.message.chat_type);
         }
@@ -1480,10 +1478,14 @@ export class FeishuChannel implements ChannelAdapter {
           try {
             parsed = JSON.parse(data.message.content ?? "{}") as typeof parsed;
           } catch {
+            this.discard(messageId, `${messageType} content did not parse`);
             return {};
           }
           const fileKey = parsed.file_key ?? parsed.image_key;
-          if (fileKey === undefined) return {};
+          if (fileKey === undefined) {
+            this.discard(messageId, `${messageType} without a file key`);
+            return {};
+          }
           const name = parsed.file_name ?? `image-${messageId.slice(-8)}.png`;
           const identity = `${this.name}:${openId}`;
           this.chats.set(identity, chatId);
@@ -1959,19 +1961,13 @@ export class FeishuChannel implements ChannelAdapter {
       params: { receive_id_type: "chat_id" },
       data: { receive_id: chatId, msg_type: "text", content: JSON.stringify({ text }) },
     });
-    // The other half of what `post` does, and the half this door kept skipping. Everything
-    // pushed at a person rather than said inside a conversation leaves here — the upgrade
-    // notice, the approval nudge — and until now none of it was recorded as ours. Two
-    // things broke, and the quiet one is the worse: in a group, `isAddressed` asks whether
-    // the root was sent by us, so a bare 回复 to one of these notices was not addressed to
-    // anybody and was **dropped without a word**. Only someone who also typed `@bot` got
-    // through. (Observed 2026-09-15 on the upgrade notice.)
-    //
-    // In a group, recorded under the thread the notice itself opens rather than under the
-    // room: an authorless push has no conversation behind it, and `${chatId}:${sentId}` is
-    // the key `conversationKeyFor` already mints for a reply under this message, so answers
-    // stay anchored in the topic instead of landing at the bottom of the room. In a direct
-    // chat the room *is* the conversation and the thread key would be one nothing arrives in.
+    // The other half of what `post` does, and the half this door kept skipping. Everything pushed at a
+    // person rather than said inside a conversation leaves here — the upgrade notice, the approval
+    // nudge — and until now none of it was recorded as ours. Two things broke, and the quiet one is
+    // the worse: in a group, `isAddressed` asks whether the root was sent by us, so a bare 回复 to one
+    // of these notices was not addressed to anybody and was **dropped without a word**. Only someone
+    // who also typed `@bot` got through. (Observed 2026-09-15 on the upgrade notice.) In a group,
+    // recorded under the thread the notice itself opens rather than under the room.
     const sentId = response?.data?.message_id;
     if (sentId === undefined || sentId === "") throw new Error("feishu delivery unconfirmed: no message id; check before retrying");
     const conversation =
