@@ -244,6 +244,8 @@ async function runEpisode(task, team, provider, slug) {
       inputTokens: usage.reduce((n, u) => n + u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens, 0),
       outputTokens: usage.reduce((n, u) => n + u.outputTokens, 0),
       toolCalls: trail.length,
+      // The longest single turn in the episode, in model calls: what the per-turn budget (INV-1354) bounds.
+      longestTurn: usage.reduce((n, u) => Math.max(n, (u.round ?? 0) + 1), 0),
       teammateMessages: trail.filter(step => step.tool === "SendToAgent").length,
       agentsThatWorked: new Set(trail.map(step => step.agent)).size,
       questions,
