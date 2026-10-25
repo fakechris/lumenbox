@@ -111,9 +111,13 @@ installers with three packages in node_modules and every new user's first launch
   reads it, for both `dist/` and the image.
 - The test floor is 986 and complains when it goes stale.
 - CI is green again, and now runs the release check.
-- `src/channels/fixtures/feishu-messages.json` + `feishu-corpus.test.ts` — seven
-  real shapes, sanitised, with the contract every parser must satisfy against
-  them. Mutation-checked: flattening `post` content turns it red.
+- `src/channels/fixtures/feishu-messages.json` + `feishu-corpus.test.ts` — 27 real
+  shapes (INV-128, 2026-10-25; seven before), captured from the operator's tenant and
+  sanitised, each with provenance and the outcome the receiver owes it; driven through the
+  real receiver (`receiverFor`) with no credentials or network. `feishu-negatives.json`
+  holds six synthetic refusals, labelled synthetic. Mutation-checked: flattening `post`
+  content turns it red. Known gap: the corpus is the API-history shape (`mentions[].id` a
+  string where the live event nests `open_id`); the test maps that one field.
 - `scripts/test-network-guard.mjs` — loopback only, everything else throws where
   it was called. The suite passes under it, which is the evidence that nothing
   was quietly reaching a vendor.
@@ -128,11 +132,12 @@ installers with three packages in node_modules and every new user's first launch
 
 ## Open, ranked
 
-1. **A captured-payload corpus.** Twenty real Feishu/DingTalk event bodies,
-   sanitised, checked in, with every parser run against all of them. This is the
-   gap that keeps costing us: `meet_number`, `video_chat`, `thread_id` vs
-   `root_id`, the `post` shape — each found in production, each pinned only where
-   somebody happened to write a test afterwards.
+1. **A captured-payload corpus — Feishu done, DingTalk open.** 27 real Feishu shapes are
+   in (INV-128). DingTalk has no history API a script can read; its stream events have to
+   be recorded as they arrive, and none have been. Until an operator records a day of
+   DingTalk traffic the DingTalk parsers stay pinned by hand-written literals and the
+   adapter contract only. Still missing on the Feishu side: a `video_chat` message, a
+   `share_chat`/`merge_forward`, and a live-event capture to replace the API shape.
 2. **A contract assertion per adapter**, in OpenClaw's shape — one function every
    channel's tests must satisfy.
 3. **Tiering and a live tier** — only once there is something a live run protects

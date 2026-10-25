@@ -69,6 +69,8 @@ const alias = (value, prefix) => {
  */
 const STRUCTURAL_KEYS = new Set([
   "msg_type",
+  "message_type",
+  "key",
   "sender_type",
   "id_type",
   "tag",
@@ -115,24 +117,59 @@ const scrub = (value, key) => {
   return value;
 };
 
-const chats = await get("/im/v1/chats?page_size=10");
+// Every chat the bot is in, and up to a few hundred messages of each: the corpus wants one
+// message per *shape*, and the rarer shapes (a deleted message, an edited one, a reply that
+// carries root_id, a mention, a video-chat invite) only turn up deep in a busy room.
+const chats = [];
+for (let pageToken; ; ) {
+  const page = await get(`/im/v1/chats?page_size=50${pageToken ? `&page_token=${pageToken}` : ""}`);
+  chats.push(...(page.data?.items ?? []));
+  if (!page.data?.has_more || !page.data?.page_token) break;
+  pageToken = page.data.page_token;
+}
 const byKind = new Map();
-for (const chat of (chats.data?.items ?? []).slice(0, 8)) {
-  const history = await get(
-    `/im/v1/messages?container_id_type=chat&container_id=${chat.chat_id}` +
-      `&sort_type=ByCreateTimeDesc&page_size=40`
-  );
-  for (const message of history.data?.items ?? []) {
-    const threaded = message.thread_id !== undefined ? "threaded" : "top-level";
-    const key = `${message.msg_type}:${message.sender?.sender_type ?? "?"}:${threaded}`;
-    if (!byKind.has(key)) byKind.set(key, message);
+/**
+ * The shape key (INV-128): message type, who sent it, threaded or not, and the flags that
+ * change how a parser must treat it — a reply (root_id), an edit, a deletion, a mention,
+ * a direct chat. Two messages with the same key are the same shape; one is kept.
+ */
+const kindOf = message => {
+  const body = typeof message.body?.content === "string" ? message.body.content : "";
+  const flags = [
+    message.thread_id !== undefined ? "threaded" : "top-level",
+    message.root_id !== undefined && message.root_id !== message.message_id ? "reply" : "",
+    message.updated === true ? "edited" : "",
+    message.deleted === true ? "deleted" : "",
+    message.mentions?.length > 0 || /"key":"@_user_/.test(body) ? "mention" : "",
+    message.chat_type === "p2p" ? "p2p" : "",
+  ].filter(Boolean);
+  return `${message.msg_type}:${message.sender?.sender_type ?? "?"}:${flags.join("+")}`;
+};
+for (const chat of chats) {
+  let pageToken;
+  for (let pages = 0; pages < 5; pages += 1) {
+    const history = await get(
+      `/im/v1/messages?container_id_type=chat&container_id=${chat.chat_id}` +
+        `&sort_type=ByCreateTimeDesc&page_size=50${pageToken ? `&page_token=${pageToken}` : ""}`
+    );
+    for (const message of history.data?.items ?? []) {
+      const key = kindOf(message);
+      if (!byKind.has(key)) byKind.set(key, message);
+    }
+    if (!history.data?.has_more || !history.data?.page_token) break;
+    pageToken = history.data.page_token;
   }
 }
-
 const corpus = [...byKind.entries()]
   .sort(([a], [b]) => a.localeCompare(b))
   .map(([kind, message]) => ({
     kind,
+    // Provenance (INV-128): where it came from, how it was changed, what a reader should do with it.
+    source: "feishu-api:/im/v1/messages (the operator's own tenant, bot-visible chats); API shape — the live event carries mentions[].id.open_id where this carries mentions[].id as a string",
+    sanitised: "ids aliased to *_fixtureN, timestamps fixed, free text replaced; discriminators and structure kept",
+    // What the receiver must do with it: our own cards and system notices are not work, a
+    // deleted message has no body left to read; everything else becomes an inbound message.
+    expect: message.deleted === true || message.msg_type === "system" || message.msg_type === "interactive" ? "ignore" : "normalize",
     // The body's content is a JSON *string* on this wire; kept that way, because the
     // double encoding is part of the shape and every parser has to survive it.
     message: scrub(message),

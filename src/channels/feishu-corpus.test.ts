@@ -1,5 +1,5 @@
 /**
- * Every parser, against every shape the wire has actually sent.
+ * Every parser, against every shape the wire has actually sent (INV-128).
  *
  * The corpus beside this file was captured from Feishu and sanitised (see
  * scripts/capture-feishu-fixtures.mjs): content replaced, structure kept. It exists
@@ -9,53 +9,142 @@
  * where the topic carries `thread_id`, rich text arriving as a nested array-of-arrays
  * under `post` while the bot appeared to ignore messages at random.
  *
- * This is the contract test OpenClaw applies per channel (`test/helpers/inbound-contract.ts`),
- * pointed at recorded input rather than invented input: one assertion set, run over the
- * whole corpus, so a shape that changes fails once, loudly, in a file whose diff shows
- * what changed.
+ * Three files, three claims. `feishu-messages.json` is **captured** — 27 shapes of real
+ * messages from the operator's own tenant, each with its provenance and the outcome the
+ * receiver owes it (`normalize` or `ignore`). `feishu-negatives.json` is **synthetic** and
+ * says so — shapes the receiver must refuse. This file drives the real receiver
+ * (`receiverFor`, the same seam the socket and the catch-up sweep use) over both and checks
+ * the manifest, the sanitisation and the outcomes, with no credentials and no network.
+ *
+ * One honest gap: the captured shapes are the *API history* shape. The live event carries
+ * `mentions[].id.open_id` where the history carries `mentions[].id` as a string; the test maps
+ * that one field and the manifest records it. Recorded live events would close the gap.
  */
-
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { conversationKeyFor, FeishuChannel } from "./feishu.ts";
+import type { InboundMessage } from "./manager.ts";
 
 interface CapturedMessage {
   kind: string;
+  source: string;
+  sanitised: string;
+  expect: "normalize" | "ignore";
   message: {
     message_id?: string;
     chat_id?: string;
     msg_type?: string;
     thread_id?: string;
     root_id?: string;
+    parent_id?: string;
     chat_type?: string;
+    create_time?: string;
     deleted?: boolean;
+    updated?: boolean;
+    mentions?: { key?: string; id?: string }[];
     sender?: { id?: string; sender_type?: string };
     body?: { content?: string };
   };
 }
+interface NegativeEvent {
+  kind: string;
+  expect: "reject";
+  reason: string;
+  data: unknown;
+  deliverTwice?: boolean;
+}
+const here = (name: string) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
+const corpus = JSON.parse(readFileSync(here("feishu-messages.json"), "utf8")) as { capturedAt: string; messages: CapturedMessage[] };
+const negatives = JSON.parse(readFileSync(here("feishu-negatives.json"), "utf8")) as { events: NegativeEvent[] };
 
-const corpus = JSON.parse(
-  readFileSync(fileURLToPath(new URL("./fixtures/feishu-messages.json", import.meta.url)), "utf8")
-) as { capturedAt: string; messages: CapturedMessage[] };
+/** A receiver over a fresh adapter: what it admitted, what it dropped and why. */
+function receiver(botOpenId = "ou_bot") {
+  const dropped: string[] = [];
+  const inbound: InboundMessage[] = [];
+  const adapter = new FeishuChannel("app", "secret", line => dropped.push(line));
+  const internals = adapter as unknown as {
+    ownOpenIdCache?: string;
+    sendToChat: unknown;
+    downloadResource: unknown;
+    receiverFor: (handler: (message: InboundMessage) => Promise<string | undefined>) => (data: unknown) => unknown;
+  };
+  internals.ownOpenIdCache = botOpenId;
+  internals.sendToChat = async () => undefined;
+  internals.downloadResource = async () => ({ base64: "QUJD", fileName: "fixture.bin" });
+  const receive = internals.receiverFor(async message => {
+    inbound.push(message);
+    return undefined;
+  });
+  return { receive, inbound, dropped, settle: () => new Promise(resolve => setTimeout(resolve, 20)) };
+}
 
-test("the corpus is real, plural, and carries the shapes worth pinning", () => {
-  assert.ok(corpus.messages.length >= 5, "a corpus of one is a literal with extra steps");
-  const kinds = new Set(corpus.messages.map(entry => entry.message.msg_type));
-  // The three that have each cost an incident: plain text, rich text, and an image.
-  for (const kind of ["text", "post", "image"]) {
-    assert.ok(kinds.has(kind), `no ${kind} message captured; re-run the capture script`);
+/** A captured history message as the event the socket would have delivered. */
+function eventOf(message: CapturedMessage["message"]) {
+  return {
+    ...(message.sender?.id !== undefined ? { sender: { sender_id: { open_id: message.sender.id } } } : {}),
+    message: {
+      message_id: message.message_id,
+      chat_id: message.chat_id,
+      message_type: message.msg_type,
+      content: message.body?.content,
+      // The one translation (see the header): history carries the id as a string.
+      ...(message.mentions !== undefined ? { mentions: message.mentions.map(mention => ({ key: mention.key, id: { open_id: mention.id } })) } : {}),
+      thread_id: message.thread_id,
+      root_id: message.root_id,
+      parent_id: message.parent_id,
+      chat_type: message.chat_type,
+      create_time: message.create_time,
+    },
+  };
+}
+
+test("the corpus is real, plural, provenanced, and carries the shapes worth pinning (A1, A2)", () => {
+  assert.ok(corpus.messages.length >= 20, `${corpus.messages.length} captured shapes; the floor is 20`);
+  for (const entry of corpus.messages) {
+    assert.match(entry.source, /^feishu-api:/, `${entry.kind}: no provenance`);
+    assert.ok(entry.sanitised.length > 0, `${entry.kind}: how it was sanitised is not recorded`);
+    assert.ok(entry.expect === "normalize" || entry.expect === "ignore", `${entry.kind}: no expected outcome`);
   }
-  // And both sides of the thread question, which is what conversation keying turns on.
-  assert.ok(
-    corpus.messages.some(entry => entry.message.thread_id !== undefined),
-    "no threaded message captured"
-  );
-  assert.ok(
-    corpus.messages.some(entry => entry.message.thread_id === undefined),
-    "no top-level message captured"
-  );
+  const kinds = new Set(corpus.messages.map(entry => entry.message.msg_type));
+  for (const kind of ["text", "post", "image", "file", "interactive", "system"]) assert.ok(kinds.has(kind), `no ${kind} message captured; re-run the capture script`);
+  const flags = corpus.messages.map(entry => entry.kind).join(" ");
+  for (const flag of ["threaded", "top-level", "reply", "edited", "deleted", "mention"]) assert.match(flags, new RegExp(flag), `no ${flag} shape captured`);
+  assert.ok(negatives.events.every(event => event.expect === "reject"), "negatives are refusals, and say so");
+});
+
+test("sanitisation held: no raw ids, long numbers, addresses, hosts or free text survive in either fixture (A3)", () => {
+  for (const name of ["feishu-messages.json", "feishu-negatives.json"]) {
+    const text = readFileSync(here(name), "utf8");
+    assert.equal(text.match(/\b(ou|oc|om|omt|cli|img|file)_(?!fixture)[A-Za-z0-9]{6,}/g), null, `${name}: a raw id`);
+    assert.equal((text.match(/(?<![A-Za-z_])\d{10,}(?!\d)/g) ?? []).filter(digits => digits !== "1788000000000").length, 0, `${name}: a real timestamp or number`);
+    assert.equal(text.match(/[\w.+-]+@[\w-]+\.[\w.]+/g), null, `${name}: an email address`);
+    assert.equal(text.match(/https?:\/\//g), null, `${name}: a URL`);
+    const cjk = (text.match(/[一-鿿]{2,}/g) ?? []).filter(run => run !== "示例文本" && run !== "示例");
+    assert.deepEqual(cjk, [], `${name}: free text survived`);
+  }
+});
+
+test("every captured shape through the real receiver does what its manifest says: admitted as work, or dropped and said (A2, A4)", async () => {
+  for (const entry of corpus.messages) {
+    const mentioned = entry.message.mentions?.[0]?.id;
+    const { receive, inbound, dropped, settle } = receiver(mentioned ?? "ou_bot");
+    receive(eventOf(entry.message));
+    await settle();
+    if (entry.expect === "normalize") {
+      assert.equal(inbound.length, 1, `${entry.kind}: expected to be admitted, got dropped: ${dropped.join(" | ")}`);
+      const message = inbound[0]!;
+      assert.match(message.chatKey ?? "", /^feishu:oc_fixture/, `${entry.kind}: unusable chat key ${message.chatKey}`);
+      if (entry.message.msg_type === "text" || entry.message.msg_type === "post") assert.ok(message.text.trim() !== "", `${entry.kind}: admitted with no text`);
+      if (entry.kind.includes("mention")) assert.equal(message.addressed, true, `${entry.kind}: a mention of the bot is addressed`);
+      // A file or image carries no addressing decision yet (undefined); text and post in a group do.
+      if ((entry.message.msg_type === "text" || entry.message.msg_type === "post") && entry.message.chat_type === "group" && !entry.kind.includes("mention") && !entry.kind.includes("reply")) assert.equal(message.addressed, false, `${entry.kind}: an unaddressed group message is not addressed`);
+    } else {
+      assert.equal(inbound.length, 0, `${entry.kind}: expected to be ignored, was admitted as ${JSON.stringify(inbound[0]?.text)}`);
+      assert.ok(dropped.some(line => /dropped/.test(line)), `${entry.kind}: ignored silently; the drop must be said`);
+    }
+  }
 });
 
 test("every captured message keys to a conversation, and a topic keys to its root", () => {
@@ -73,71 +162,31 @@ test("every captured message keys to a conversation, and a topic keys to its roo
     assert.match(key, /^feishu:oc_/, `${kind} produced an unusable conversation key: ${key}`);
     // Never keyed on `thread_id`: it is minted when the first reply arrives, so the
     // opening message never carries it and preferring it split every topic in two.
-    if (message.thread_id !== undefined) {
-      assert.ok(!key.includes(message.thread_id), `${kind} keyed on thread_id`);
-    }
+    if (message.thread_id !== undefined) assert.ok(!key.includes(message.thread_id), `${kind} keyed on thread_id`);
   }
 });
 
-test("every captured body renders to something a person could read", () => {
-  // The adapter's own renderer, reached the way the existing tests reach it. A payload
-  // that renders empty is the failure mode that looked like the bot ignoring messages.
-  const adapter = new FeishuChannel("a", "b", () => {});
-  const renderPost = (
-    adapter as unknown as {
-      renderPostBody: (title: unknown, content: unknown) => { text: string; imageKeys: string[] };
+test("every synthetic negative is refused by the receiver and the refusal is said", async () => {
+  for (const event of negatives.events) {
+    const { receive, inbound, dropped, settle } = receiver();
+    receive(event.data);
+    if (event.deliverTwice === true) {
+      await settle();
+      inbound.length = 0;
+      dropped.length = 0;
+      receive(event.data);
     }
-  ).renderPostBody.bind(adapter);
-
-  for (const { kind, message } of corpus.messages) {
-    const parsed = JSON.parse(message.body?.content ?? "{}") as {
-      text?: string;
-      title?: string;
-      content?: unknown;
-      image_key?: string;
-      elements?: unknown;
-    };
-    if (message.msg_type === "text") {
-      assert.ok(
-        typeof parsed.text === "string" && parsed.text.trim() !== "",
-        `${kind}: a text message with no text`
-      );
-      continue;
-    }
-    if (message.msg_type === "post") {
-      // The nesting is the point: content is an array of *lines*, each an array of runs.
-      assert.ok(Array.isArray(parsed.content), `${kind}: post content is not an array`);
-      assert.ok(
-        Array.isArray((parsed.content as unknown[])[0]),
-        `${kind}: post content is not an array of lines`
-      );
-      const { text } = renderPost(parsed.title, parsed.content);
-      assert.ok(text.trim() !== "", `${kind}: rich text rendered to nothing`);
-      continue;
-    }
-    if (message.msg_type === "image") {
-      assert.match(String(parsed.image_key), /^img_/, `${kind}: no image key`);
-      continue;
-    }
-    if (message.msg_type === "interactive") {
-      // Ours, on the way back in. Not work to answer, but it must not crash a reader.
-      assert.ok(parsed.elements !== undefined || parsed.title !== undefined);
-      continue;
-    }
-    assert.fail(`${kind}: an uncovered message type reached the corpus — teach the parsers first`);
+    await settle();
+    assert.equal(inbound.length, 0, `${event.kind}: admitted as work (${event.reason})`);
+    assert.ok(dropped.length > 0, `${event.kind}: refused silently (${event.reason})`);
   }
 });
 
 test("a field we do not read yet is recorded rather than forgotten", () => {
   // `content_v2` rides along on every rich-text message and nothing here reads it. That
-  // is a decision, not an oversight, and this is where it is written down: if it ever
-  // becomes the only place some content lives, this assertion is the reminder that it
-  // was there all along.
-  const post = corpus.messages.find(entry => entry.message.msg_type === "post");
+  // is a decision, not an oversight, and this is where it is written down.
+  const post = corpus.messages.find(entry => entry.message.msg_type === "post" && entry.expect === "normalize");
   assert.ok(post !== undefined);
   const parsed = JSON.parse(post.message.body?.content ?? "{}") as Record<string, unknown>;
-  assert.ok(
-    "content_v2" in parsed || "content" in parsed,
-    "the post body lost both of its content fields"
-  );
+  assert.ok("content_v2" in parsed || "content" in parsed, "rich text carries content (or content_v2)");
 });

@@ -1,0 +1,109 @@
+{
+  "$comment": "SYNTHETIC negatives for INV-128 — written by hand, not captured; each is a shape the Feishu receiver must refuse, never admit as work. Kept apart from the captured corpus so synthetic never passes for real.",
+  "events": [
+    {
+      "kind": "unknown-type:sticker",
+      "expect": "reject",
+      "reason": "a message type no parser knows is dropped and said, not admitted as text",
+      "data": {
+        "sender": {
+          "sender_id": {
+            "open_id": "ou_fixture_neg1"
+          }
+        },
+        "message": {
+          "message_id": "om_fixture_neg1",
+          "chat_id": "oc_fixture_neg",
+          "message_type": "sticker",
+          "content": "{\"file_key\":\"img_fixture_neg\"}",
+          "chat_type": "group"
+        }
+      }
+    },
+    {
+      "kind": "no-sender",
+      "expect": "reject",
+      "reason": "no sender identity means nobody downstream can decide who may drive",
+      "data": {
+        "message": {
+          "message_id": "om_fixture_neg2",
+          "chat_id": "oc_fixture_neg",
+          "message_type": "text",
+          "content": "{\"text\":\"示例 sample\"}",
+          "chat_type": "group"
+        }
+      }
+    },
+    {
+      "kind": "no-chat",
+      "expect": "reject",
+      "reason": "a message with no chat has nowhere to be answered",
+      "data": {
+        "sender": {
+          "sender_id": {
+            "open_id": "ou_fixture_neg1"
+          }
+        },
+        "message": {
+          "message_id": "om_fixture_neg3",
+          "message_type": "text",
+          "content": "{\"text\":\"示例 sample\"}",
+          "chat_type": "group"
+        }
+      }
+    },
+    {
+      "kind": "content-not-json",
+      "expect": "reject",
+      "reason": "a text body that is not the JSON string the wire promises is dropped, not guessed at",
+      "data": {
+        "sender": {
+          "sender_id": {
+            "open_id": "ou_fixture_neg1"
+          }
+        },
+        "message": {
+          "message_id": "om_fixture_neg4",
+          "chat_id": "oc_fixture_neg",
+          "message_type": "text",
+          "content": "示例 sample",
+          "chat_type": "group"
+        }
+      }
+    },
+    {
+      "kind": "dingtalk-shaped",
+      "expect": "reject",
+      "reason": "another channel's event is not this adapter's; it must not be mistaken for a Feishu message",
+      "data": {
+        "msgtype": "text",
+        "text": {
+          "content": "示例 sample"
+        },
+        "conversationId": "cid_fixture_neg",
+        "senderStaffId": "staff_fixture_neg",
+        "msgId": "msg_fixture_neg"
+      }
+    },
+    {
+      "kind": "duplicate-same-id",
+      "expect": "reject",
+      "reason": "the second delivery of one message id is a redelivery, not a second turn",
+      "data": {
+        "sender": {
+          "sender_id": {
+            "open_id": "ou_fixture_neg1"
+          }
+        },
+        "message": {
+          "message_id": "om_fixture_dup",
+          "chat_id": "oc_fixture_neg",
+          "message_type": "text",
+          "content": "{\"text\":\"示例 sample\"}",
+          "chat_type": "group"
+        }
+      },
+      "deliverTwice": true
+    }
+  ]
+}
