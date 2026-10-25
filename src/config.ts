@@ -39,6 +39,11 @@ export interface AgentboxConfig {
   /** Model override, applied exactly as `--model` is — only when nothing else set one. */
   model?: string;
   /**
+   * The turn's own budget (INV-1354): model calls per turn before the work goes back to the
+   * person, and how many times the identical tool call may run before it is replayed instead.
+   */
+  turnBudget?: { calls?: number; repeats?: number };
+  /**
    * The local hour (0–23) at which an unattended upgrade may run.
    *
    * Absent means any hour, which is right for a laptop: an upgrade that waits for 4am on a
@@ -253,6 +258,20 @@ export function configPath(): string {
   return process.env.AGENTBOX_CONFIG ?? join(agentboxHome(), "config.json");
 }
 
+/** `turnBudget: { calls, repeats }` — each optional, each a whole number within sane bounds. */
+function readTurnBudget(value: unknown, warn: (message: string) => void): AgentboxConfig["turnBudget"] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    warn("config: turnBudget must be an object, ignoring it");
+    return undefined;
+  }
+  const raw = value as Record<string, unknown>;
+  const out: NonNullable<AgentboxConfig["turnBudget"]> = {};
+  if (raw.calls !== undefined) out.calls = readInteger(raw.calls, 60, { min: 5, max: 400 }, "turnBudget.calls", warn);
+  if (raw.repeats !== undefined) out.repeats = readInteger(raw.repeats, 3, { min: 1, max: 50 }, "turnBudget.repeats", warn);
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function readInteger(
   value: unknown,
   fallback: number,
@@ -320,6 +339,7 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
       "activityLimit",
       onWarn
     ),
+    ...(readTurnBudget(raw.turnBudget, onWarn) !== undefined ? { turnBudget: readTurnBudget(raw.turnBudget, onWarn) } : {}),
     ...(readHour(raw.upgradeHour, onWarn) !== undefined
       ? { upgradeHour: readHour(raw.upgradeHour, onWarn) }
       : {}),

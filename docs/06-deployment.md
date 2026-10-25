@@ -105,7 +105,9 @@ box (the orchestrator inside the container) needs nothing: the face uses loopbac
 | `BOXD_AGENT_NICE` | 19 | How far behind the desktop the agent runs |
 | `BOXD_SUPERVISE_MS`, `BOXD_MAX_RESTARTS`, `BOXD_RESTART_WINDOW_MS`, `BOXD_BACKOFF_*`, `BOXD_GIVE_UP_EPISODES` | see design | Supervision tuning |
 
-**`config.json`** for what is decided once: currently `activityLimit`.
+**`config.json`** for what is decided once: currently `activityLimit`, and `turnBudget`
+(`{ "calls": 60, "repeats": 3 }`, INV-1354: model calls one turn may make before handing the
+work back, and how often the identical tool call runs before it is replayed).
 
 ## 5. Operating it
 

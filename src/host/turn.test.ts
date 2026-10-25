@@ -1955,7 +1955,7 @@ test("a turn that is still working continues instead of being abandoned", async 
         ada,
         [{ id: "m-test", fromId: "user", fromName: "user", text: "work", priority: false, receivedAt: "" }],
         new AbortController().signal,
-        { client, registry, bus, box, resolution: undefined, displayIndex: 1 }
+        { client, registry, bus, box, resolution: undefined, turnBudget: { calls: 100_000, repeats: 100_000 }, displayIndex: 1 }
       ),
       /continuations/
     );
@@ -2272,7 +2272,7 @@ test("a continuation reassembles its request instead of growing the old one", as
       ada,
       [{ id: "m-test", fromId: "user", fromName: "user", text: "keep going", priority: false, receivedAt: "" }],
       new AbortController().signal,
-      { client, registry, bus, box, resolution: undefined }
+      { client, registry, bus, box, resolution: undefined, turnBudget: { calls: 100_000, repeats: 100_000 } }
     ).catch(() => {
       // It ends at the continuation budget; the assertion below is about the requests it made.
     });
@@ -2858,7 +2858,7 @@ test("a continuation keeps the memory selection made for the request", async () 
         registry,
         bus,
         box,
-        resolution: undefined,
+        resolution: undefined, turnBudget: { calls: 100_000, repeats: 100_000 },
         selectMemory: async prompt => {
           asked += 1;
           const line = prompt.split("\n").find(candidate => candidate.includes("FACT-1 "));
@@ -4039,6 +4039,73 @@ test("a 15K analysis filed before a bookkeeping call is the channel's reply, not
     assert.ok(reply.endsWith("等你的回复。"), "and the closing line follows it rather than replacing it");
     assert.ok(!reply.includes("收到，我先核对"), "the interim line is not repeated in the reply");
     assert.ok(reply.length >= 15_000);
+  } finally {
+    cleanup();
+  }
+});
+
+// ── the turn's own budget (INV-1354) ─────────────────────────────────────────────
+
+test("an identical read repeated past the repeats budget is replayed, not re-run, and the result says so", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box, calls } = stubBox();
+    (box as unknown as { readFile: (path: string) => Promise<unknown> }).readFile = async (path: string) => {
+      calls.push({ kind: "read", detail: path });
+      return { content: "hello from notes" };
+    };
+    const capture: Capture = { params: [] };
+    const read = (id: string) => message([toolUseBlock("read_file", { path: "/home/box/work/notes.txt" }, id)], "tool_use");
+    // Three identical reads, not four: four consecutive identical rounds is the loop detector's
+    // threshold (progress.ts), which is the backstop behind this and would end the turn first.
+    const { client } = stubClient([read("t1"), read("t2"), read("t3"), message([textBlock("done")])], capture);
+    await runTurn(
+      ada,
+      [{ id: "m-rep", fromId: "user", fromName: "user", text: "read it", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: undefined, turnBudget: { calls: 60, repeats: 2 } }
+    );
+    const downloads = calls.filter(call => /notes\.txt/.test(String(call.detail)));
+    assert.equal(downloads.length, 2, `the box was asked twice, not four times: ${JSON.stringify(calls.map(c => c.kind))}`);
+    const text = JSON.stringify(capture.params.at(-1)!.messages);
+    assert.match(text, /identical read_file call has now been made 3 times; it was not run again/);
+    const replayAt = text.indexOf("[This identical");
+    assert.ok(replayAt > 0 && text.lastIndexOf("hello from notes", replayAt) > 0, "the replay carries the previous result's text");
+    assert.match(JSON.stringify(registry.readTranscript(ada.id)), /done/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("at the call budget the turn hands the work back as a reply and an event; at 80% the model is warned once", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const { box } = stubBox();
+    const capture: Capture = { params: [] };
+    // A model that never stops: a different file every round, so the loop detector stays quiet.
+    const replies = Array.from({ length: 30 }, (_, i) => message([toolUseBlock("read_file", { path: `/home/box/work/f${i}.txt` }, `t${i}`)], "tool_use"));
+    const { client } = stubClient(replies, capture);
+    const events: { type: string; calls?: number; limit?: number }[] = [];
+    await runTurn(
+      ada,
+      [{ id: "m-budget", fromId: "user", fromName: "user", text: "look through everything", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box, resolution: undefined, turnBudget: { calls: 10, repeats: 3 }, onEvent: event => events.push(event as { type: string }) }
+    );
+    assert.equal(capture.params.length, 10, "exactly the budget's calls were made");
+    const hit = events.find(event => event.type === "turn_budget_hit");
+    assert.ok(hit !== undefined, "the budget event was emitted");
+    assert.deepEqual({ calls: hit.calls, limit: hit.limit }, { calls: 10, limit: 10 });
+    const warned = capture.params.filter(params => /Turn budget: 8 of 10 model calls used/.test(JSON.stringify(params.messages)));
+    assert.ok(warned.length >= 1, "the 80% line reached the model");
+    assert.equal(JSON.stringify(capture.params.at(-1)!.messages).split("Turn budget:").length - 1, 1, "warned once, not every round");
+    const reply = replyForMessage(registry.readTranscript(ada.id), "m-budget");
+    assert.match(reply, /used its budget of 10 model calls, so I am stopping and handing it back/);
+    assert.match(reply, /read_file ×10/);
   } finally {
     cleanup();
   }
