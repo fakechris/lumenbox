@@ -721,7 +721,18 @@ is exactly the person not looking at the page.
 
 ## 29. The turn engine, hardened
 
-Four properties added after a comparative review of durable-harness practice:
+Four properties added after a comparative review of durable-harness practice, and a fifth
+from the INV-1340 eval:
+
+- **An image the provider refuses is not the turn's death** (INV-1353). MiniMax answered a
+  WebP screenshot with "invalid image content … unknown format" and the turn died on it, four
+  times in four. Now that 400 is classified beside the size rejections: every image block in
+  the conversation is replaced by `[an image was attached here, but the model refused it: …]`,
+  the round is retried once under the same bounded counter, and the recovery is an event
+  (`image_refused`). `read_file` attaches an image only when the bytes carry a PNG/JPEG/GIF/WebP
+  signature, so a text file called `a.png` is refused as not-an-image rather than sent. Open:
+  screenshots are WebP, which MiniMax cannot decode at all, so on that provider the `computer`
+  tool is blind until the box can hand back PNG; the turn survives, the screenshot does not.
 
 - **Truncation honesty.** A `max_tokens` stop with output far below the cap this code
   sent is a response the context squeezed, not an answer. It is discarded — a tool

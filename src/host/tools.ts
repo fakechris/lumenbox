@@ -14,6 +14,7 @@ import { agentboxHome } from "../config.ts";
 import { executeForget, forgetOutcomeReport, forgetPlanReport, forgettable, ForgetPlans, inventory } from "./forget.ts";
 import type Anthropic from "@anthropic-ai/sdk";
 import { describeDeferred } from "./tool-roster.ts";
+import { sniffImage } from "./image-refusal.ts";
 import { optionLabel } from "./ask-options.ts";
 import { BoxError, type BoxClient } from "../box/client.ts";
 import type { DisplayLease } from "../box/display-lease.ts";
@@ -3648,15 +3649,10 @@ export async function dispatchTool(
             isError: true,
           };
         }
-        const ext = imageExt[1]!.toLowerCase();
-        const mediaType =
-          ext === "png"
-            ? ("image/png" as const)
-            : ext === "webp"
-              ? ("image/webp" as const)
-              : ext === "gif"
-                ? ("image/gif" as const)
-                : ("image/jpeg" as const);
+        // The bytes decide, not the name (INV-1353): a text file called a.png went up as an image and
+        // the provider refused the whole request.
+        const mediaType = sniffImage(file.base64);
+        if (mediaType === undefined) return { text: `${path} is named like an image but its bytes are not one (no PNG/JPEG/GIF/WebP signature). Read it as text with bash if that is what it is.`, isError: true };
         return { text: `${path} (image, attached)`, images: [{ mediaType, data: file.base64 }] };
       }
       // The shape answers the question people actually ask of a `.env`, and keeps its

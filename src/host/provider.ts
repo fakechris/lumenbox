@@ -105,7 +105,9 @@ const ANTHROPIC: ProviderProfile = {
  * returned 200. Anything not listed here is assumed blind, because that is the
  * assumption whose failure is visible.
  */
-const MINIMAX_VISION_MODELS = new Set(["MiniMax-M3"]);
+// M3.1-Flash measured 2026-10-25 (INV-1353): a PNG was read and named ("Red"). WebP it refuses
+// outright with "image: unknown format", which is handled in turn.ts, not here.
+const MINIMAX_VISION_MODELS = new Set(["MiniMax-M3", "MiniMax-M3.1-Flash"]);
 
 const MINIMAX: ProviderProfile = {
   label: "MiniMax",
