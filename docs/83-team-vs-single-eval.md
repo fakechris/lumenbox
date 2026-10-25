@@ -164,3 +164,28 @@ AGENTBOX_CONTAINER=lumenbox-eval-box node --experimental-transform-types scripts
 
 `--dry-run` prints the plan without a model call; `--only <task> --config team|single` narrows;
 `--keep-text` stores the agents' final messages in the JSON (never the turns).
+
+## 7. Appendix: the runaway tasks after INV-1353 and INV-1354 (2026-10-25)
+
+Same harness, same model, the two tasks that ran away in §2, one run each, with the image
+refusal recovered (INV-1353) and the per-turn budget in place (INV-1354, defaults 60 calls /
+3 repeats). `longest turn` is the most model calls any single turn in the episode made — what
+the budget bounds; `calls` is the episode total across the main turn and its `Delegate` forks,
+each of which has its own budget.
+
+| episode | seconds | calls | longest turn | tokens | checks | before (§2.2) |
+|---|---|---|---|---|---|---|
+| fixscript T | 28 | 8 | — | 176k | 2/2 | 2016 s / 362 calls / 49.4M |
+| fixscript S | 1010 | 81 | — | 5.9M | 2/2 | 1894 s / 100 calls / 35.2M |
+| testit T | 122 | 31 | — | 769k | 3/3 | 1632 s / 99 calls / 13.0M |
+| testit S | 544 | 107 | — | 4.4M | 3/3 | 1815 s / 255 calls / 29.3M |
+| testit S (second run, metric added) | 540 | 88 | **54** | 4.2M | 3/3 | |
+
+No turn reached the ceiling (no `turn_budget_hit` in any log; the measured longest turn was
+54 of 60). The episode totals above 60 are three or four turns — the single agent delegated to
+forks three times in the last run — each under its own budget. Two readings: the budget did
+not fire, so it cost nothing here; and an agent that cannot loop past 60 calls in one turn can
+still spend 88 across turns it spawns, which is INV-1277's territory. Tokens fell 5–10× against
+§2.2 for the same tasks, but with one run each that is a direction, not a measurement; the
+earlier runaways were themselves outliers. The 1010-second fixscript S episode is the number
+to watch in a full re-run.
