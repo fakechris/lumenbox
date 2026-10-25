@@ -3201,7 +3201,10 @@ ${outcome.text}`;
     if (filedAnswer) {
       registry.appendTranscript(agent.id, goal !== undefined
         ? { role: "assistant", kind: "blocks", blocks: [{ type: "text", text: roundText }], at: new Date().toISOString(), turnId, silent: { reason: "goal continuation: kept on the record, not delivered" } }
-        : { role: "assistant", text: roundText, at: new Date().toISOString() } satisfies TranscriptEntry, conversation);
+        // Stamped with the turn (INV-1264): the channel reply is selected by turn id, and an
+        // unstamped answer was the one entry it skipped — a 15K analysis filed here was never
+        // delivered, and the person saw only the closing line.
+        : { role: "assistant", text: roundText, at: new Date().toISOString(), turnId } satisfies TranscriptEntry, conversation);
     }
 
     // The opening line reaches the person while the tools run (docs/31 layer 1a). Grok Bot
