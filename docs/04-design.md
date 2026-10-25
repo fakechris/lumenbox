@@ -724,6 +724,15 @@ is exactly the person not looking at the page.
 Four properties added after a comparative review of durable-harness practice, and a fifth
 from the INV-1340 eval:
 
+- **A turn has its own budget** (INV-1354, `src/host/turn-budget.ts`). INV-1277 bounds hops
+  between agents; nothing bounded an agent by itself, and the INV-1340 eval saw one episode
+  make 362 model calls. Two operator settings in `config.json`, `turnBudget.calls` (default
+  60) and `turnBudget.repeats` (default 3): at 80% of the calls the next tool result carries one
+  line saying so; at the ceiling the turn ends with a report to the person — what ran, what is
+  unfinished — as an outcome (`turn_budget_hit` event), not a failure. The identical tool call
+  past `repeats` is not run again; the previous result comes back marked as a replay. The
+  consecutive-round loop detector (progress.ts) stays; this catches the varied busywork it
+  cannot, and stops a repeated call before its fourth run rather than after.
 - **An image the provider refuses is not the turn's death** (INV-1353). MiniMax answered a
   WebP screenshot with "invalid image content … unknown format" and the turn died on it, four
   times in four. Now that 400 is classified beside the size rejections: every image block in

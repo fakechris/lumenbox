@@ -141,6 +141,7 @@ import { changeNotice, readStanding, takeChanges } from "./standing.ts";
 import type { McpManager } from "./mcp.ts";
 import { TOOL_BUDGET_WARNING } from "./mcp.ts";
 import { imageRefusalOf, replaceRefusedImages } from "./image-refusal.ts";
+import { budgetReport, budgetWarning, replayNote, TurnBudget, type TurnBudgetConfig } from "./turn-budget.ts";
 import { lookupPair, splitRoster } from "./tool-roster.ts";
 import { narrowTools, toolAllowed } from "./scopes.ts";
 import { conversationIdFor, MAIN_CONVERSATION } from "../agents/registry.ts";
@@ -590,6 +591,8 @@ export interface TurnDeps {
    * means the box's traffic is not going through a relay this host can see.
    */
   networkEvents?: Pick<NetworkEventLog, "query">;
+  /** The turn's own budget (INV-1354): model calls and identical-call repeats. Absent means the defaults. */
+  turnBudget?: TurnBudgetConfig;
   /** The fork ledger (docs/32): forks are recorded before they start and committed here. */
   pendingWork?: PendingWork;
   /** Acts on the effects a tool result asks for (INV-861). Absent means results are text only. */
@@ -699,6 +702,8 @@ type TurnEventBody =
    * work, which is the one thing a board must never do.
    */
   | { type: "stuck"; agentId: string; reason: string }
+  /** The turn ended on its own call budget (INV-1354): handed back to the person, not failed. */
+  | { type: "turn_budget_hit"; agentId: string; calls: number; limit: number }
   /**
    * A round failed in a way a retry can fix, and is being retried.
    *
@@ -893,11 +898,10 @@ export function storableResult(
     // page it kept (fetched.ts). Both pointers are worth carrying.
     const pointer = whole.slice(text.length).match(/\[[^\]]*full (?:output|page) kept:[^\]]*\]/);
     if (pointer !== null) text += `\n${pointer[0]}`;
-    // Nobody kept it, so the cut does. Everything without a spill of its own used to end
-    // here — the whole of a long browser read, a long document, an MCP server's answer —
-    // and the record kept the first two thousand characters of it with nothing saying
-    // there had been more. A failure to file is said in place of the pointer rather than
-    // thrown: the turn happened either way, and a turn is not lost over a full disk.
+    // Nobody kept it, so the cut does. Everything without a spill of its own used to end here — the whole of a
+    // long browser read, a long document, an MCP server's answer — and the record kept the first two thousand
+    // characters of it with nothing saying there had been more. A failure to file is said in place of the
+    // pointer rather than thrown: the turn happened either way, and a turn is not lost over a full disk.
     else if (keep !== undefined) {
       // One instant for the file's frontmatter and for the pointer describing it.
       const keptAt = keep.at ?? new Date();
@@ -1010,14 +1014,12 @@ async function summarise(
   };
 
   let text = await ask();
-  // The four headings were a request; this is the check (docs/24 v3 P0 #3), tuned by
-  // Grok round 3 for the production model: MiniMax writes `## Threads` or Chinese
-  // heading dialects, and a strict English-bold check would retry — and pay a full
-  // second history pass — on *every* compaction. The check is tolerant (any casing,
-  // ## or bold or bare-colon), and the retry fires only when the draft is genuinely
-  // shapeless: fewer than two of the four sections recognisable. A still-flawed
-  // second answer is accepted with a loud log — the mechanical anchors and pinned
-  // entries carry the exact facts either way, and a flawed narrative beats a
+  // The four headings were a request; this is the check (docs/24 v3 P0 #3), tuned by Grok round 3 for the
+  // production model: MiniMax writes `## Threads` or Chinese heading dialects, and a strict English-bold check
+  // would retry — and pay a full second history pass — on *every* compaction. The check is tolerant (any
+  // casing, ## or bold or bare-colon), and the retry fires only when the draft is genuinely shapeless: fewer
+  // than two of the four sections recognisable. A still-flawed second answer is accepted with a loud log — the
+  // mechanical anchors and pinned entries carry the exact facts either way, and a flawed narrative beats a
   // dropped-history marker.
   if (text !== "" && missingSummaryHeadings(text).length > 2) {
     const missing = missingSummaryHeadings(text).join(", ");
@@ -1223,10 +1225,9 @@ export async function compactHistory(options: {
     }
     if (produced === undefined) throw new Error("the summariser returned no text");
     entry = produced;
-    // Pinned survivors are chosen against the *adopted* coverage, not the fresh cut
-    // (verification review, finding 1): an adopted pending may cover fewer entries
-    // than the cut just computed, and the assembled tail is active.slice(covers) —
-    // choosing pins against the fresh cut's tail let a pair between the two land in
+    // Pinned survivors are chosen against the *adopted* coverage, not the fresh cut (verification review,
+    // finding 1): an adopted pending may cover fewer entries than the cut just computed, and the assembled tail
+    // is active.slice(covers) — choosing pins against the fresh cut's tail let a pair between the two land in
     // the request twice, with duplicate tool_use ids the API rejects.
     entry = withSurvivors(entry, active.slice(0, entry.covers), active.slice(entry.covers));
     // And the adopted result must actually fit: summary + pins + real tail under the
@@ -1265,11 +1266,10 @@ export async function compactHistory(options: {
       `became ${tokensAfter}` +
       (ready === undefined ? "" : " (prepared in the background)");
     log(detail);
-    // What the summary is about to stand in for goes to the memory extractor first: a
-    // decision or a constraint in those entries survives as a record even if the summary
-    // loses it (TurnkeyAI's pre-compaction flush; ours reuses the ordinary extractor).
-    // In its own guard (INV-148 A3): a flush that throws must not turn a summary that
-    // exists into a dropped-history marker — the flush is insurance, not a gate.
+    // What the summary is about to stand in for goes to the memory extractor first: a decision or a constraint
+    // in those entries survives as a record even if the summary loses it (TurnkeyAI's pre-compaction flush;
+    // ours reuses the ordinary extractor). In its own guard (INV-148 A3): a flush that throws must not turn a
+    // summary that exists into a dropped-history marker — the flush is insurance, not a gate.
     try {
       onSummarised?.(active.slice(0, entry.covers));
     } catch (flushError) {
@@ -1353,11 +1353,10 @@ export function historyToMessages(
   while (window.length > 0 && "kind" in window[0]! && window[0]!.kind === "results") {
     window.shift();
   }
-  // Declared here, used at the bottom: consecutive same-role messages are merged into
-  // one content array (Grok round 3: the summary, a pinned ask, pinned results and a
-  // tail user message can land adjacent, and the Anthropic wire rejects consecutive
-  // user roles — one message holding text and tool_result blocks together is legal on
-  // both wires, so merging is the shape-safe answer for every junction at once).
+  // Declared here, used at the bottom: consecutive same-role messages are merged into one content array (Grok
+  // round 3: the summary, a pinned ask, pinned results and a tail user message can land adjacent, and the
+  // Anthropic wire rejects consecutive user roles — one message holding text and tool_result blocks together is
+  // legal on both wires, so merging is the shape-safe answer for every junction at once).
   const mergeAdjacent = (list: Anthropic.MessageParam[]): Anthropic.MessageParam[] => {
     const merged: Anthropic.MessageParam[] = [];
     for (const message of list) {
@@ -1377,11 +1376,11 @@ export function historyToMessages(
     }
     return merged;
   };
-  // A trailing call with no results is *kept*, not dropped. It used to be popped, because a request
-  // ending in an unpaired `tool_use` is rejected — but pairing is now repaired below, and popping it
-  // deleted the one piece of evidence a resumed turn most needs: the action that was in flight when
-  // the process died. The agent was told to check what it might have been part-way through, and the
-  // record of what that was had been removed from its own history.
+  // A trailing call with no results is *kept*, not dropped. It used to be popped, because a request ending in
+  // an unpaired `tool_use` is rejected — but pairing is now repaired below, and popping it deleted the one
+  // piece of evidence a resumed turn most needs: the action that was in flight when the process died. The agent
+  // was told to check what it might have been part-way through, and the record of what that was had been
+  // removed from its own history.
 
   const messages: Anthropic.MessageParam[] = [];
   for (const entry of window) {
@@ -1508,11 +1507,10 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   const callsThisTurn: string[] = [];
   /** Who this turn addressed with SendToAgent, by the name or id it used, lowercased. */
   const messagedThisTurn = new Set<string>();
-  // The turn is the attempt; the work is what the attempts are attempts at. A resumption
-  // inherits rather than mints, which is the whole point of the field: without it a turn that
-  // resumed twice appears in every report as three unrelated short turns.
-  // A goal continuation inherits the pursuit's id the same way a resumption inherits its
-  // work's (INV-770): every turn of one objective is one piece of work in the ledgers.
+  // The turn is the attempt; the work is what the attempts are attempts at. A resumption inherits rather than
+  // mints, which is the whole point of the field: without it a turn that resumed twice appears in every report
+  // as three unrelated short turns. A goal continuation inherits the pursuit's id the same way a resumption
+  // inherits its work's (INV-770): every turn of one objective is one piece of work in the ledgers.
   const goal = inbound.find(message => message.goal !== undefined)?.goal;
   const workId = deps.resumeOf?.workId ?? goal?.workId ?? randomUUID();
   // Built once, here, because this is the only place that knows all four of the things an aside
@@ -1666,25 +1664,21 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     console.error(`[context] ${agent.profile.name}: ${fault}`);
   }
 
-  // Two breakpoints, one per stability tier. The first covers the tool
-  // definitions and the invariant prompt; the second extends the cache over
-  // memory and the roster while those are unchanged, and is the only part that
-  // has to be re-processed when the agent writes a memory. Breakpoints are
-  // dropped entirely where the endpoint does not implement caching, rather than
-  // sent and ignored.
+  // Two breakpoints, one per stability tier. The first covers the tool definitions and the invariant prompt;
+  // the second extends the cache over memory and the roster while those are unchanged, and is the only part
+  // that has to be re-processed when the agent writes a memory. Breakpoints are dropped entirely where the
+  // endpoint does not implement caching, rather than sent and ignored.
   const cache = provider.promptCaching
     ? ({ cache_control: { type: "ephemeral" } } as const)
     : {};
   const forkLine = isForkConversation(conversation) ? `\n\n${FORK_PROMPT_LINE}` : "";
-  // Where the volatile tier rides (INV-767). With breakpoints, the stable block is cached on
-  // its own and the volatile one may sit beside it. An automatic prefix cache has no
-  // breakpoints — MiniMax's matches at message boundaries and treats tools + system + the
-  // first message as one unit — so one changed byte of system (the memory selected for
-  // *this* request, a todo ticked) misses the whole prefix: measured 2026-09-26, 33 of 41
-  // first rounds read exactly 128 tokens, and two turns with a byte-identical system prompt
-  // and no tools still read 128. There the volatile tier goes to the end of the newest
-  // message, which is where MiniMax's own guidance puts dynamic content; the system prompt
-  // and the tools are then the same bytes turn after turn.
+  // Where the volatile tier rides (INV-767). With breakpoints, the stable block is cached on its own and the
+  // volatile one may sit beside it. An automatic prefix cache has no breakpoints — MiniMax's matches at message
+  // boundaries and treats tools + system + the first message as one unit — so one changed byte of system (the
+  // memory selected for *this* request, a todo ticked) misses the whole prefix: measured 2026-09-26, 33 of 41
+  // first rounds read exactly 128 tokens, and two turns with a byte-identical system prompt and no tools still
+  // read 128. There the volatile tier goes to the end of the newest message, which is where MiniMax's own
+  // guidance puts dynamic content; the system prompt and the tools are then the same bytes turn after turn.
   const volatileInTail = !provider.promptCaching && process.env.AGENTBOX_VOLATILE_TAIL !== "0";
   const hostContext = (volatile: string): string =>
     "<host_context>\nAssembled by the host for this turn: the tasks, plan, memory and roster " +
@@ -1709,12 +1703,11 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
 
   let history = registry.readTranscript(agent.id, conversation) as TranscriptEntry[];
 
-  // A resumed turn re-executes the safe half of an interrupted tool batch instead of
-  // guessing at it. The trailing assistant entry's tool_use blocks are the durable
-  // record of what was asked — nothing here mutates arguments, so the block *is* the
-  // call — and a read-only call answered fresh beats a result declared unknown.
-  // Everything not declared safe keeps the honest "never recorded" treatment at
-  // assembly, and the model is still told to look before redoing those.
+  // A resumed turn re-executes the safe half of an interrupted tool batch instead of guessing at it. The
+  // trailing assistant entry's tool_use blocks are the durable record of what was asked — nothing here mutates
+  // arguments, so the block *is* the call — and a read-only call answered fresh beats a result declared
+  // unknown. Everything not declared safe keeps the honest "never recorded" treatment at assembly, and the
+  // model is still told to look before redoing those.
   if (!isolated && deps.resumeOf !== undefined && !continuing && history.length > 0) {
     const last = history[history.length - 1]!;
     if ("kind" in last && last.kind === "blocks") {
@@ -1880,11 +1873,10 @@ ${outcome.text}`;
         history = [...history, entry];
       }
     }
-    // A step that was waiting on a person and whose refusal is already on the record: the
-    // call's result slot is taken, so the answer arrives as a line from the host. This is
-    // the shape a restart during the model request after an approval leaves (INV-798):
-    // the step stays open until the person answers, the turn parks on it, and what they
-    // said has to reach the model somewhere.
+    // A step that was waiting on a person and whose refusal is already on the record: the call's result slot is
+    // taken, so the answer arrives as a line from the host. This is the shape a restart during the model
+    // request after an approval leaves (INV-798): the step stays open until the person answers, the turn parks
+    // on it, and what they said has to reach the model somewhere.
     const told = [...open.values()]
       .filter(step => step.approvalId !== undefined && !answeredHere.has(step.toolUseId) && !stillWaiting.has(step.toolUseId))
       .map(step => approvalOutcomeResult(step.name, approvalHow(step.approvalId!)));
@@ -2061,11 +2053,10 @@ ${outcome.text}`;
     provider.vision,
     effectiveTools,
     deps.hostRunner?.enabled === true,
-    // The desktop is offered only in the main conversation: an agent has one screen,
-    // the operator is watching the team room's, and a side chat driving it would fight
-    // for pixels with the room. Side conversations keep shell, files and the rest and
-    // do their work headless — which is what lets them run at the same time as the room.
-    // And only when the box gave it one: a host box (INV-438) has no desktop at all.
+    // The desktop is offered only in the main conversation: an agent has one screen, the operator is watching
+    // the team room's, and a side chat driving it would fight for pixels with the room. Side conversations keep
+    // shell, files and the rest and do their work headless — which is what lets them run at the same time as
+    // the room. And only when the box gave it one: a host box (INV-438) has no desktop at all.
     conversation === MAIN_CONVERSATION && deps.displayIndex !== undefined,
     deps.docReader !== undefined,
     deps.templates !== undefined,
@@ -2074,11 +2065,11 @@ ${outcome.text}`;
     // the box's bundles or the secret's own grants — and never to a fork.
     isForkConversation(conversation) ? [] : connectorsFor(deps, agent, registry)
   )
-    // Only an agent the person actually talks to may reach them (docs/42 §2). A worker created
-    // by another agent and woken only by teammates has a chat nobody is reading, and its
-    // question would sit there unseen; what it needs decided goes back to the sender instead.
-    // The test is the whole conversation, not this turn: the front agent woken by a worker's
-    // report is still the person's counterpart, and it is the one that has to be able to ask.
+    // Only an agent the person actually talks to may reach them (docs/42 §2). A worker created by another agent
+    // and woken only by teammates has a chat nobody is reading, and its question would sit there unseen; what
+    // it needs decided goes back to the sender instead. The test is the whole conversation, not this turn: the
+    // front agent woken by a worker's report is still the person's counterpart, and it is the one that has to
+    // be able to ask.
     .filter(tool => !(!personIsHere && PERSON_FACING_TOOLS.has(tool.name)))
     // Deliberate silence is for turns nobody is waiting on (INV-775): withheld, not refused,
     // wherever a person opened the turn and is reading for the answer.
@@ -2100,11 +2091,11 @@ ${outcome.text}`;
           [...routineScope].some(name => name.includes("__") || deferred.some(d => d.name === name))
       );
 
-  // The prompt in three digests (INV-782): the stable prefix, the volatile tail, and the tool
-  // definitions as sent. The tool set was never in `promptHash`, and it is the segment that moves
-  // with skills, MCP servers and the lane — the common cache killer nobody could see. Compared
-  // with the previous turn in this conversation, so the ledger and the span say *which* part
-  // moved, not only that something did. Record and compare only: nothing here changes the prompt.
+  // The prompt in three digests (INV-782): the stable prefix, the volatile tail, and the tool definitions as
+  // sent. The tool set was never in `promptHash`, and it is the segment that moves with skills, MCP servers and
+  // the lane — the common cache killer nobody could see. Compared with the previous turn in this conversation,
+  // so the ledger and the span say *which* part moved, not only that something did. Record and compare only:
+  // nothing here changes the prompt.
   const promptFingerprint: PromptFingerprint = {
     stable: promptHashOf(promptParts.stable),
     volatile: promptHashOf(promptParts.volatile),
@@ -2124,6 +2115,8 @@ ${outcome.text}`;
   // One entry per completed round, for the loop and progress judgements. Held out here rather than
   // inside runRounds so a continuation can reset it: a fresh budget deserves a fresh judgement.
   const rounds: RoundRecord[] = [];
+  const budget = new TurnBudget(deps.turnBudget);
+  let budgetWarningDue = false;
   // Whether the person has already been handed the model's opening line this turn (docs/31
   // layer 1a). Turn-scoped, not round-scoped: a continuation restarts the round count and
   // must not greet them twice.
@@ -2249,15 +2242,14 @@ ${outcome.text}`;
       messages.length = 0;
       messages.push(...historyToMessages(history));
 
-      // Rebuild the volatile system block from disk too. The durable blocks — plan, todos — are the
-      // whole point of surviving compaction, and an agent updates them *mid-turn*: it marks a todo
-      // done in round five, and a continuation compacts that tool result away while the system block,
-      // built once at turn start, still says the todo is pending. The stable half is unchanged, so
-      // only system[1] is rewritten. Memory keeps the selection made at turn start: the selector
-      // chose against *this* request and the choice is still right for its continuation, while
-      // re-running a plain score-based recall here quietly threw that choice away (audit 2026-09-01
-      // #6). A fact remembered mid-turn reaches the next turn, not this one — the same freeze Grok
-      // Bot applies per compaction epoch, and the reason the memory block stays byte-stable.
+      // Rebuild the volatile system block from disk too. The durable blocks — plan, todos — are the whole point
+      // of surviving compaction, and an agent updates them *mid-turn*: it marks a todo done in round five, and
+      // a continuation compacts that tool result away while the system block, built once at turn start, still
+      // says the todo is pending. The stable half is unchanged, so only system[1] is rewritten. Memory keeps
+      // the selection made at turn start: the selector chose against *this* request and the choice is still
+      // right for its continuation, while re-running a plain score-based recall here quietly threw that choice
+      // away (audit 2026-09-01 #6). A fact remembered mid-turn reaches the next turn, not this one — the same
+      // freeze Grok Bot applies per compaction epoch, and the reason the memory block stays byte-stable.
       const rebuilt = buildParts(memoryRecall).volatile + forkLine;
       if (volatileInTail) {
         // The continuation prompt is the newest message now; the rebuilt tier rides with it.
@@ -2330,19 +2322,28 @@ ${outcome.text}`;
       emit({ type: "aborted", agentId: agent.id });
       throw new TurnAborted();
     }
+    // The turn's own budget (INV-1354): at the ceiling the work goes back to the person as an
+    // outcome, said in the conversation and as an event — not thrown, not a 401st call.
+    const spend = budget.call();
+    if (spend === "warn") budgetWarningDue = true;
+    if (spend === "hit") {
+      const report = withCheckpoints(budgetReport(budget, callsThisTurn, chinese), registry.readDurableState(agent.id, conversation));
+      registry.appendTranscript(agent.id, { role: "assistant", text: report, at: new Date().toISOString(), turnId } satisfies TranscriptEntry, conversation);
+      emit({ type: "text", agentId: agent.id, agentName: agent.profile.name, delta: report });
+      emit({ type: "turn_budget_hit", agentId: agent.id, calls: budget.callsUsed, limit: budget.limits.calls });
+      console.error(`[turn] ${agent.profile.name}: turn budget hit (${budget.callsUsed} model calls); handed back`);
+      return;
+    }
 
-    // Steering: what the user said while this turn was running, consumed at the round
-    // boundary instead of waiting for the whole turn to end. "Actually, also change
-    // the title" lands in the next request, mid-task, with all the work so far intact
-    // — the alternative was minutes of latency or an interrupt that threw the work
-    // away. Only the user's own messages steer: a teammate's message is new work that
-    // deserves its own turn and its own causal record, and that behaviour is pinned
-    // by the race catalog. Appended at the tail, which keeps the provider's prefix
-    // cache warm — the same reason compaction is the only mid-turn rewrite.
-    // The last round is for delivery, not for one more tool (INV-410, browser-use-pi's
-    // reserved final turn): the model is told, and tools are withheld for this request,
-    // so what it has becomes a reply — partial, and said so — instead of a 401st call
-    // nobody reads.
+    // Steering: what the user said while this turn was running, consumed at the round boundary instead of
+    // waiting for the whole turn to end. "Actually, also change the title" lands in the next request, mid-task,
+    // with all the work so far intact — the alternative was minutes of latency or an interrupt that threw the
+    // work away. Only the user's own messages steer: a teammate's message is new work that deserves its own
+    // turn and its own causal record, and that behaviour is pinned by the race catalog. Appended at the tail,
+    // which keeps the provider's prefix cache warm — the same reason compaction is the only mid-turn rewrite.
+    // The last round is for delivery, not for one more tool (INV-410, browser-use-pi's reserved final turn):
+    // the model is told, and tools are withheld for this request, so what it has becomes a reply — partial, and
+    // said so — instead of a 401st call nobody reads.
     if (round === MAX_ROUNDS - 1 || (goal?.finishOnly === true && round === 0)) {
       const lastCall =
         "[last round] You have one response left in this turn and no tools. Reply now with what " +
@@ -2769,14 +2770,12 @@ ${outcome.text}`;
       ...(cacheShare !== undefined ? { cacheShare } : {}),
     });
 
-    // A response the context squeezed rather than finished. Discarded, never
-    // appended: a tool call cut mid-JSON is not evidence of anything, and an answer
-    // cut mid-sentence would be continued as though it were finished. Its cost is
-    // already on the books — the usage record above is written before this
-    // classification *on purpose*: spend must not vanish with a response we chose to
-    // throw away. Shed and retry under the same bounded counter as a rejected
-    // request; when nothing further can shed, the truncated response is kept, because
-    // degraded is better than dead and the truncation is at least visible.
+    // A response the context squeezed rather than finished. Discarded, never appended: a tool call cut mid-JSON
+    // is not evidence of anything, and an answer cut mid-sentence would be continued as though it were
+    // finished. Its cost is already on the books — the usage record above is written before this classification
+    // *on purpose*: spend must not vanish with a response we chose to throw away. Shed and retry under the same
+    // bounded counter as a rejected request; when nothing further can shed, the truncated response is kept,
+    // because degraded is better than dead and the truncation is at least visible.
     if (isTruncatedByContext(response, provider.maxTokens) && shed < MAX_SHED_ATTEMPTS) {
       shed += 1;
       const relief = shedForRetry(messages, "context-window");
@@ -2823,12 +2822,11 @@ ${outcome.text}`;
       return;
     }
 
-    // The output gate (INV-761): a response with no structured call whose text is a call
-    // written out, or a loop that ran to the cap, is not an answer. Discarded before it
-    // reaches the transcript — which is what the channels deliver from — and before any
-    // guard reads it; asked for once more; a second one fails the turn rather than
-    // delivering it and letting the channel call the task done. Never "continue": that pays
-    // again for more of the loop.
+    // The output gate (INV-761): a response with no structured call whose text is a call written out, or a loop
+    // that ran to the cap, is not an answer. Discarded before it reaches the transcript — which is what the
+    // channels deliver from — and before any guard reads it; asked for once more; a second one fails the turn
+    // rather than delivering it and letting the channel call the task done. Never "continue": that pays again
+    // for more of the loop.
     if (!response.content.some(block => block.type === "tool_use")) {
       const malformed = malformedOutput(
         response.content
@@ -2921,11 +2919,11 @@ ${outcome.text}`;
       guardPending = undefined;
     }
 
-    // Deliberate silence (INV-775): the model looked and decided there is nothing to do. The
-    // turn ends here — nothing is delivered, no nudge asks it to say more, and the reason is on
-    // the record beside the call. Anything else requested in the same round is not run: a turn
-    // that has decided to say nothing has no result to act on. Only when it was offered; a
-    // call on a turn someone is waiting on falls through to the tool's own refusal.
+    // Deliberate silence (INV-775): the model looked and decided there is nothing to do. The turn ends here —
+    // nothing is delivered, no nudge asks it to say more, and the reason is on the record beside the call.
+    // Anything else requested in the same round is not run: a turn that has decided to say nothing has no
+    // result to act on. Only when it was offered; a call on a turn someone is waiting on falls through to the
+    // tool's own refusal.
     const silence = silenceOffered ? toolUses.find(use => use.name === SILENCE_TOOL) : undefined;
     if (silence !== undefined) {
       const reason = String((silence.input as { reason?: unknown } | null)?.reason ?? "").trim() || "(no reason given)";
@@ -2963,11 +2961,11 @@ ${outcome.text}`;
         .map(block => block.text)
         .join("");
 
-      // The guards (docs/31 layer 1e): a person-opened turn may not end on a verdict reached
-      // with no tool, an offer to check instead of a check, or a promise with no call. Bounded
-      // — twice per turn at most — logged, and the send-back kept out of the durable record:
-      // the model's text is filed as blocks so the record has it, but it is not a reply
-      // (`replySince` would have delivered the wrong verdict beside the corrected one).
+      // The guards (docs/31 layer 1e): a person-opened turn may not end on a verdict reached with no tool, an
+      // offer to check instead of a check, or a promise with no call. Bounded — twice per turn at most —
+      // logged, and the send-back kept out of the durable record: the model's text is filed as blocks so the
+      // record has it, but it is not a reply (`replySince` would have delivered the wrong verdict beside the
+      // corrected one).
       const reason =
         // Every guard answers with a demand for a tool call, so none may fire where no tool
         // was offered (INV-761): asking a toolless context to act is how a model ends up
@@ -3033,11 +3031,10 @@ ${outcome.text}`;
         }
       }
 
-      // The delivery gate (INV-692): whatever sits in this chat's outbox is posted when the turn
-      // ends, so it is checked while it can still be fixed — a .docx that is markdown, a zip cut
-      // off, JSON that does not parse, a template left unfilled. Silent when every file is fine;
-      // twice per turn at most. Delivery holds back what cannot be opened regardless, so this is
-      // the chance to fix it, not the only line of defence.
+      // The delivery gate (INV-692): whatever sits in this chat's outbox is posted when the turn ends, so it is
+      // checked while it can still be fixed — a .docx that is markdown, a zip cut off, JSON that does not
+      // parse, a template left unfilled. Silent when every file is fine; twice per turn at most. Delivery holds
+      // back what cannot be opened regardless, so this is the chance to fix it, not the only line of defence.
       if (finalText.trim() && deliverableNudges < MAX_DELIVERABLE_NUDGES && box !== undefined && !isolated &&
         conversation !== MAIN_CONVERSATION) {
         const report = deliverableReport(await outboxFindings(box, chatFilesRoot(conversation)), chinese);
@@ -3057,11 +3054,11 @@ ${outcome.text}`;
         }
       }
 
-      // The newer-message gate (INV-1189): the person wrote again while this answer was being
-      // generated. Their message keeps its own turn — folding it in here is how an unrelated
-      // request once got swallowed into an old task (INV-611/630) — but this reply is about to
-      // go out first, so the model sees it once, with no tools, and may revise or annotate what
-      // it is about to say. Once per turn; nothing is taken from the queue.
+      // The newer-message gate (INV-1189): the person wrote again while this answer was being generated. Their
+      // message keeps its own turn — folding it in here is how an unrelated request once got swallowed into an
+      // old task (INV-611/630) — but this reply is about to go out first, so the model sees it once, with no
+      // tools, and may revise or annotate what it is about to say. Once per turn; nothing is taken from the
+      // queue.
       if (finalText.trim() && personOpened && goal === undefined && !newerChecked) {
         newerChecked = true;
         const newer = deps.bus.newerFromPerson?.(agent.id, conversation, roundStartedAt) ?? [];
@@ -3182,15 +3179,13 @@ ${outcome.text}`;
     toolCallsInTurn += toolUses.length;
     toolNamesInTurn.push(...toolUses.map(use => use.name));
 
-    // Text followed only by bookkeeping calls is not narration — it is the answer,
-    // filed. Measured on t51: the agent wrote its whole analysis, then tidied up
-    // (`Tasks.update`, `RememberFact`), and the tidying demoted the answer to a folded
-    // step nobody was shown; the person's screen said "已记下。等你下一步。" Whether text
-    // is "the answer" was being decided by whether a tool call happened to follow it —
-    // a fact about sequencing, not content. So: when every call in the round files a
-    // conclusion rather than gathers evidence, the text lands in the transcript now,
-    // where the reply is read from. The floor keeps a genuine one-line "记一下" from
-    // being promoted into an answer.
+    // Text followed only by bookkeeping calls is not narration — it is the answer, filed. Measured on t51: the
+    // agent wrote its whole analysis, then tidied up (`Tasks.update`, `RememberFact`), and the tidying demoted
+    // the answer to a folded step nobody was shown; the person's screen said "已记下。等你下一步。" Whether text is "the
+    // answer" was being decided by whether a tool call happened to follow it — a fact about sequencing, not
+    // content. So: when every call in the round files a conclusion rather than gathers evidence, the text lands
+    // in the transcript now, where the reply is read from. The floor keeps a genuine one-line "记一下" from being
+    // promoted into an answer.
     const roundText = response.content
       .filter((block): block is Anthropic.TextBlock => block.type === "text")
       .map(block => block.text)
@@ -3207,11 +3202,10 @@ ${outcome.text}`;
         : { role: "assistant", text: roundText, at: new Date().toISOString(), turnId } satisfies TranscriptEntry, conversation);
     }
 
-    // The opening line reaches the person while the tools run (docs/31 layer 1a). Grok Bot
-    // needs a SendToUser tool for this because its plain text is never shown; ours is, so
-    // the same effect is one event: the text the model said beside its first calls goes to
-    // the chat now, once, and stays out of the final reply. Measured on Bob's thread: the
-    // line "你说得对，我先查一下" had been filed as blocks and shown to nobody.
+    // The opening line reaches the person while the tools run (docs/31 layer 1a). Grok Bot needs a SendToUser
+    // tool for this because its plain text is never shown; ours is, so the same effect is one event: the text
+    // the model said beside its first calls goes to the chat now, once, and stays out of the final reply.
+    // Measured on Bob's thread: the line "你说得对，我先查一下" had been filed as blocks and shown to nobody.
     if (personOpened && !interimDelivered && toolUses.length > 0 && !filedAnswer && roundText.trim() !== "") {
       interimDelivered = true;
       emit({ type: "interim", agentId: agent.id, agentName: agent.profile.name, text: roundText.trim() });
@@ -3227,15 +3221,13 @@ ${outcome.text}`;
     // and a defect that succeeds slowly (a click that took fifteen seconds) invisible to
     // any reading of the transcript.
     const requestedAt = new Date().toISOString();
-    // Persist the calls as blocks *before* any of them runs, and the results after (the
-    // order the API requires: the calling assistant turn, then its results). On disk first
-    // because the block is the durable record of what was asked (INV-774): a restart that
-    // finds it with no results, and the step ledger saying which calls were dispatched,
-    // can answer each one honestly instead of losing the action that was in flight.
-    // Thinking blocks are not kept — they are only valid within the turn that produced
-    // them. Text promoted as a filed answer above is left out here: it already stands as
-    // a plain entry just before this one, and keeping both would replay the same
-    // paragraph twice into every later request.
+    // Persist the calls as blocks *before* any of them runs, and the results after (the order the API requires:
+    // the calling assistant turn, then its results). On disk first because the block is the durable record of
+    // what was asked (INV-774): a restart that finds it with no results, and the step ledger saying which calls
+    // were dispatched, can answer each one honestly instead of losing the action that was in flight. Thinking
+    // blocks are not kept — they are only valid within the turn that produced them. Text promoted as a filed
+    // answer above is left out here: it already stands as a plain entry just before this one, and keeping both
+    // would replay the same paragraph twice into every later request.
     registry.appendTranscript(agent.id, {
       role: "assistant",
       kind: "blocks",
@@ -3347,7 +3339,12 @@ ${outcome.text}`;
         // disk leaves this call open in the ledger, which is what lets a restart continue
         // this turn instead of guessing at it.
         deps.steps?.pending(turnId, toolUse.id, toolUse.name);
-        outcome = await dispatchTool(
+        // An identical call past the budget's repeats is answered from the last run (INV-1354).
+        const replay = budget.replayFor(toolUse.name, toolUse.input ?? {});
+        if (replay !== undefined) {
+          const previous = (Array.isArray(replay) ? replay : []).find((part): part is Anthropic.TextBlockParam => (part as { type?: string }).type === "text");
+          outcome = { text: `${previous?.text ?? ""}\n\n${replayNote(toolUse.name, budget.repeatsOf(toolUse.name, toolUse.input ?? {}) + 1, chinese)}` };
+        } else outcome = await dispatchTool(
           toolUse.name,
           (toolUse.input ?? {}) as Record<string, unknown>,
           {
@@ -3479,7 +3476,7 @@ ${outcome.text}`;
       // what the record keeps are two different things, and the block that goes to the
       // model must not carry the substitute anywhere it could be mistaken for the answer.
       return {
-        block: toolResultBlock(toolUse.id, outcome),
+        block: (() => { const block = toolResultBlock(toolUse.id, outcome); budget.ran(toolUse.name, toolUse.input ?? {}, block.content); return block; })(),
         ...(outcome.recordAs !== undefined ? { recordAs: outcome.recordAs } : {}),
         ...(outcome.commit !== undefined ? { commit: outcome.commit } : {}),
       };
@@ -3518,6 +3515,15 @@ ${outcome.text}`;
     for (const entry of done) {
       if (entry === undefined) continue;
       results.push(entry.block);
+    }
+    // The 80% warning rides on the last result of the round, once (INV-1354).
+    if (budgetWarningDue && results.length > 0) {
+      budgetWarningDue = false;
+      const last = results[results.length - 1]!;
+      if (Array.isArray(last.content)) last.content.push({ type: "text", text: budgetWarning(budget, chinese) });
+    }
+    for (const entry of done) {
+      if (entry === undefined) continue;
       if (entry.recordAs !== undefined) withheld.set(entry.block.tool_use_id, entry.recordAs);
     }
 

@@ -51,6 +51,7 @@ import { HookRunner } from "./hooks.ts";
 import { appendLine } from "./jsonl.ts";
 import { redactDeep } from "./secret-redaction.ts";
 import { NetworkEventLog } from "../egress/events.ts";
+import { DEFAULT_TURN_BUDGET } from "./turn-budget.ts";
 import { agentboxHome } from "../config.ts";
 import { join } from "node:path";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -1924,6 +1925,7 @@ export class Orchestrator {
       turns: this.turns,
       ...(this.steps !== undefined ? { steps: this.steps } : {}),
       ...(this.networkEvents !== undefined ? { networkEvents: this.networkEvents } : {}),
+      turnBudget: { ...DEFAULT_TURN_BUDGET, ...(loadConfig().turnBudget ?? {}) },
       ...(this.pendingWork !== undefined ? { pendingWork: this.pendingWork } : {}),
       ...(this.effects !== undefined ? { effects: this.effects } : {}),
       ...(this.orchestrations !== undefined ? { orchestrations: this.orchestrations } : {}),
