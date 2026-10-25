@@ -2663,3 +2663,46 @@ test("a card the agent composed goes to the chat that drove it: a card where the
   await manager.idle();
   assert.equal(adapter.sent.length, before);
 });
+
+// ── a long reply and the streaming card (INV-1264) ──────────────────────────────
+
+test("the streaming card holds only the tail of a long reply, and a failed card update is logged, never fatal; the full text still goes to the chat", async () => {
+  const adapter = cardAdapter();
+  const logged: string[] = [];
+  let updates = 0;
+  const original = adapter.updateTaskCard!.bind(adapter);
+  adapter.updateTaskCard = async (handle, card) => {
+    updates += 1;
+    // The third update is refused, as a wire does when a card is too large or the message is gone.
+    if (updates === 3) throw new Error("400 card too large (fake)");
+    return original(handle, card);
+  };
+  const long = "分析段落。".repeat(3_000); // 15K characters
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: async (_a, _t, _i, _c, _p, _thread, _task, _interim, onText) => {
+      // The card is posted after the ack delay; the reply starts streaming once it exists.
+      await sleep(60);
+      // Streamed in four growing pieces, each ending in a newline so the rate limit lets it through.
+      for (const cut of [1000, 5000, 10_000, long.length]) {
+        onText?.(`${long.slice(0, cut)}\n`);
+        await sleep(5);
+      }
+      return long;
+    },
+    ackAfterMs: 10,
+    log: line => logged.push(line),
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+  await adapter.inject({ identity: "feishu:ou_1", chatKey: "feishu:oc_room", senderLabel: "chris", text: "@Rex 对比两篇论文" });
+  await manager.idle();
+
+  const streamed = adapter.cards.map(entry => entry.card.text).filter((text): text is string => typeof text === "string");
+  assert.ok(streamed.length >= 2, "the card was rewritten as the reply grew");
+  assert.ok(streamed.every(text => text.length <= 4_000 + 1), `every card body is within the tail cap (max ${Math.max(...streamed.map(t => t.length))})`);
+  assert.ok(streamed.some(text => text.startsWith("…")), "a capped body says it is a tail");
+  assert.ok(logged.some(line => /streaming card update failed/.test(line)), "the refused update is a log line");
+  assert.deepEqual(adapter.chatSent.map(sent => sent.text), [long], "the chat gets the whole reply, not the card's tail");
+  assert.equal(adapter.cards.at(-1)!.card.status, "done");
+});

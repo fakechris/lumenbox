@@ -4003,3 +4003,43 @@ test("read_file attaches an image only when the bytes are one: a text file calle
     cleanup();
   }
 });
+
+// ── the long filed answer reaches the channel (INV-1264) ────────────────────────
+
+test("a 15K analysis filed before a bookkeeping call is the channel's reply, not only the closing line after it (INV-1264)", async () => {
+  // Nova's shape on 2026-10-18, replayed: round 0 an opening line beside tool calls (the interim),
+  // round 1 the whole analysis beside one Tasks call (a filed answer), round 2 one closing sentence.
+  // The person saw nothing but the closing sentence, because the filed answer carried no turn id
+  // and the channel selects the reply by turn id.
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const capture: Capture = { params: [] };
+    const analysis = "两篇多智能体论文的对照分析。".repeat(1100); // ≈15K characters, ≈45KB UTF-8
+    assert.ok(analysis.length >= 15_000);
+    const { client } = stubClient(
+      [
+        message([textBlock("收到，我先核对一下两篇论文的事实。"), toolUseBlock("Tasks", { action: "list" }, "toolu_0")], "tool_use"),
+        message([textBlock(analysis), toolUseBlock("Tasks", { action: "update", id: "t1", status: "review" }, "toolu_1")], "tool_use"),
+        message([textBlock("等你的回复。")]),
+      ],
+      capture
+    );
+    const interim: string[] = [];
+    await runTurn(
+      ada,
+      [{ id: "m-long", fromId: "user", fromName: "user", text: "帮我对比这两篇论文", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box: undefined, resolution: undefined, onEvent: event => { if (event.type === "interim") interim.push(event.text); } }
+    );
+    assert.deepEqual(interim, ["收到，我先核对一下两篇论文的事实。"], "the opening line went out as the interim, once");
+    const reply = replyForMessage(registry.readTranscript(ada.id), "m-long");
+    assert.ok(reply.includes(analysis), `the analysis is in the channel reply (reply is ${reply.length} chars)`);
+    assert.ok(reply.endsWith("等你的回复。"), "and the closing line follows it rather than replacing it");
+    assert.ok(!reply.includes("收到，我先核对"), "the interim line is not repeated in the reply");
+    assert.ok(reply.length >= 15_000);
+  } finally {
+    cleanup();
+  }
+});

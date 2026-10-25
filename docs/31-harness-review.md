@@ -244,3 +244,27 @@ Read plainly: on the message that produced the incident, the same model now sear
 times on round 0 and greets the person while doing it, with the reminder and the epistemic
 paragraph alone — the guards did not need to fire. Whether they fire on real traffic, and how
 often the model complies, is what the `[conduct]` lines are for over the coming week.
+
+## 7. The 15K analysis nobody saw, 2026-10-18 → 2026-10-25 (INV-1264)
+
+Nova wrote a ~15K-character analysis in round 2 beside one `Tasks` call, then said "等你的回复。"
+in round 3. Feishu showed the person only the closing line. Reproduced hermetically on main
+(`turn.test.ts`, "a 15K analysis filed before a bookkeeping call…"): the channel reply was six
+characters. Root cause, read from the code rather than guessed from the three candidates:
+
+- The filed-answer rule (§3, t51) wrote the analysis to the transcript as a plain assistant
+  entry **without a `turnId`**. The web reads the reply with `replySince`, which takes every plain
+  assistant entry after the message, so the web never noticed. A channel message carries its
+  id, and the reply for it is selected by **causal turn id** (`reply.ts`, `replyForMessage`) —
+  the one filter the filed entry failed. Everything after it in the turn (the closing line) had
+  the id and was delivered alone.
+- Not the streaming card: `manager.ts` already keeps only the last 4,000 characters in the card
+  (`STREAM_TAIL_CHARS`, Memoh's number) and logs a refused update instead of failing; the chat
+  text goes separately through `sendToChat`, 8,000 characters per message. A test now pins both.
+- Not the interim rule either: the interim is the opening line, once; the filed answer bypasses
+  it by design.
+
+Fix: the filed entry carries the turn id. One line; the reproduction test fails without it and
+passes with it. What remains open from the contract: a screenshot from a real Feishu group of a
+15K reply arriving in two 8,000-character posts, which needs the operator's test group; the
+code path is the ordinary `sendToChat` chunking that every long reply already takes.
