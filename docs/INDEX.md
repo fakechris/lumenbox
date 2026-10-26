@@ -27,7 +27,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [11-roadmap](11-roadmap.md) | Roadmap and backlog | current | 2026-09-28 |
 | [21-dingtalk-wire](21-dingtalk-wire.md) | The DingTalk wire | current | 2026-08-28 |
 | [22-domain-model](22-domain-model.md) | The domain model: people, doors, workers, rooms | current | 2026-10-01 |
-| [27-testing-and-release](27-testing-and-release.md) | Testing and release stability: ours, against OpenClaw and Hermes | current | 2026-10-20 |
+| [27-testing-and-release](27-testing-and-release.md) | Testing and release stability: ours, against OpenClaw and Hermes | current | 2026-10-26 |
 | [57-agent-consumer-contract](57-agent-consumer-contract.md) | Agent 消费者合同：谁去拉，谁保证，不同架构怎么统一 | current | 2026-09-15 |
 
 ## guide
@@ -44,6 +44,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [55-external-desktops](55-external-desktops.md) | External browsers and desktop control | current | 2026-09-15 |
 | [56-teaching-upgrade](56-teaching-upgrade.md) | Teaching draft upgrade | current | 2026-09-15 |
 | [70-cua-linux-validation](70-cua-linux-validation.md) | Linux CUA 回归矩阵与状态验收 | current | 2026-09-22 |
+| [84-preset-matrix](84-preset-matrix.md) | The Delegate support matrix: presets × providers × scenarios | current | 2026-10-26 |
 
 ## decision
 
@@ -127,4 +128,3 @@ this file and the headers disagree. Edit the header, not this table.
 | [handoff-2026-09-24-task-recover](handoff-2026-09-24-task-recover.md) | Handoff — 上下文恢复第四项：同任务只读 /recover | current | 2026-09-24 |
 | [handoff-2026-10-19-showui](handoff-2026-10-19-showui.md) | Handoff — ShowUI：agent 用 A2UI 组装卡片（INV-1269，docs/79） | current | 2026-10-19 |
 | [handoff-2026-10-19-showui-stage-two](handoff-2026-10-19-showui-stage-two.md) | Handoff — ShowUI 第二阶段：网页端成为交互面（INV-1280） | current | 2026-10-19 |
-
