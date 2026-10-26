@@ -32,7 +32,8 @@ test("a headless run grants its own tools and carries the relay's model", () => 
   // and does nothing — the quiet kind of wrong this file exists for.
   const opencode = presetNamed("opencode")!;
   assert.match(opencode.run("'x'"), /--auto/, "permissions granted, or the engine is inert");
-  assert.match(opencode.run("'x'", "minimax-cn/MiniMax-M3"), /-m minimax-cn\/MiniMax-M3 'x'/);
+  assert.match(opencode.run("'x'", "minimax-cn/MiniMax-M3"), /-m minimax-cn\/MiniMax-M3 'x'/, "a qualified id names a catalogue provider and passes through");
+  assert.match(opencode.run("'x'", "MiniMax-M3.1-Flash"), /-m lumenbox\/MiniMax-M3.1-Flash 'x'/, "a bare id is the relay's model, under the relay's provider entry");
   assert.doesNotMatch(opencode.run("'x'"), /-m /, "no model named means no flag, not an empty one");
   const claude = presetNamed("claude")!;
   assert.match(claude.run("'x'", "some-model"), /--model some-model/);
@@ -50,8 +51,10 @@ test("without a relay a delegated engine gets nothing, and with one it gets only
     process.env.AGENTBOX_RELAY_URL = "http://relay.local:8788";
     process.env.AGENTBOX_RELAY_TOKEN = "box-scoped-token";
     const env = delegateEnv(preset);
-    assert.equal(env.ANTHROPIC_BASE_URL, "http://relay.local:8788");
-    assert.equal(env.ANTHROPIC_API_KEY, "box-scoped-token");
+    assert.equal(env.LUMENBOX_RELAY_URL, "http://relay.local:8788");
+    assert.equal(env.LUMENBOX_RELAY_TOKEN, "box-scoped-token");
+    assert.equal(env.MINIMAX_API_KEY, undefined, "no vendor variable: a catalogue provider lit by the relay token sends it to the vendor (INV-1359)");
+    assert.equal(env.ANTHROPIC_API_KEY, undefined);
     assert.ok(
       !Object.values(env).includes(process.env.MINIMAX_API_KEY ?? " "),
       "the installation's own key never travels"
@@ -62,6 +65,23 @@ test("without a relay a delegated engine gets nothing, and with one it gets only
     if (token === undefined) delete process.env.AGENTBOX_RELAY_TOKEN;
     else process.env.AGENTBOX_RELAY_TOKEN = token;
   }
+});
+
+test("opencode is driven through its global config: the relay as a provider, the token a reference, the SDK by wire", () => {
+  // Measured by the INV-1359 matrix (2026-10-26): with the token in MINIMAX_API_KEY opencode
+  // routed to minimax-cn directly and died with "Unexpected server error"; the relay saw no call.
+  const opencode = presetNamed("opencode")!;
+  const config = opencode.relayConfig!("http://host:7777/relay/abc/", "LUMENBOX_RELAY_TOKEN", "anthropic", "MiniMax-M3.1-Flash");
+  assert.equal(config.file, "/home/box/.config/opencode/opencode.json");
+  const parsed = JSON.parse(config.content) as { provider: { lumenbox: { npm: string; options: { baseURL: string; apiKey: string }; models: Record<string, unknown> } } };
+  assert.equal(parsed.provider.lumenbox.npm, "@ai-sdk/anthropic");
+  assert.equal(parsed.provider.lumenbox.options.baseURL, "{env:LUMENBOX_RELAY_URL}/v1", "the route is a reference too, so concurrent jobs never cross; the SDK appends /messages and the relay forwards /v1/messages");
+  assert.ok(!config.content.includes("relay/abc"), "no per-job route in a file every job shares");
+  assert.equal(parsed.provider.lumenbox.options.apiKey, "{env:LUMENBOX_RELAY_TOKEN}", "the token is a reference, never inline");
+  assert.deepEqual(Object.keys(parsed.provider.lumenbox.models), ["MiniMax-M3.1-Flash"]);
+  assert.ok(!config.content.includes("box-scoped"), "no secret in the file");
+  const openai = JSON.parse(opencode.relayConfig!("u", "T", "openai", "m").content) as { provider: { lumenbox: { npm: string } } };
+  assert.equal(openai.provider.lumenbox.npm, "@ai-sdk/openai-compatible");
 });
 
 test("pi is driven through a models.json entry that names the relay, and Claude Code's runtime is its environment", () => {
