@@ -110,6 +110,17 @@ check("the box image pins its base by digest, and something unfreezes it", () =>
   }
 });
 
+check("the box image hands npm's cache to the box user after the engines are installed", () => {
+  // The engine installs run as root with HOME=/home/box, so npm's cache lands root-owned in the
+  // box user's home; a runtime `Delegate install: true` then fails with EACCES (0.3.7, INV-1359).
+  const dockerfile = readFileSync(join(root, "docker/box/Dockerfile"), "utf8");
+  const lastInstall = dockerfile.lastIndexOf("npm install -g");
+  const handover = dockerfile.lastIndexOf("chown -R box:box /home/box/.npm");
+  if (lastInstall < 0 || handover < lastInstall) {
+    throw new Error("docker/box/Dockerfile must chown /home/box/.npm to box:box after the last npm install -g");
+  }
+});
+
 // ── the two gates 0.3.0 shipped without (INV-854 → INV-858) ─────────────────────────
 //
 // Everything above proves bundles built from this checkout load. Neither proved what

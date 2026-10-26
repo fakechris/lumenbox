@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: testing-and-release
-     updated: 2026-10-20
+     updated: 2026-10-26
 -->
 # Testing and release stability: ours, against OpenClaw and Hermes
 
@@ -141,7 +141,11 @@ installers with three packages in node_modules and every new user's first launch
 2. **A contract assertion per adapter**, in OpenClaw's shape — one function every
    channel's tests must satisfy.
 3. **Tiering and a live tier** — only once there is something a live run protects
-   that the smoke suite does not.
+   that the smoke suite does not. One live run now exists: `scripts/preset-matrix.mjs`
+   (docs/84, INV-1359) runs every Delegate preset × configured provider × five scenarios
+   against a dedicated box and writes a dated table; run it before a release that touches
+   the presets, the relay, or the image's engines. Its first run found the image's
+   root-owned npm cache (fixed, guarded by `release-check`).
 
 ## The network is denied twice (INV-1238, 2026-10-20)
 

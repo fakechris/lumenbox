@@ -285,6 +285,12 @@ RUN if [ -n "$MCODE_VERSION" ]; then \
       && mkdir -p /home/box/.local \
       && chown -R box:box /home/box/.agents /home/box/.local; \
     fi
+# Every `npm install -g` above ran as root with HOME=/home/box, so npm's cache under
+# /home/box/.npm is root-owned — and a `Delegate install: true` as the box user later dies
+# with EACCES on that cache (measured on 0.3.7 by scripts/preset-matrix.mjs, INV-1359).
+# The cache belongs to the user who installs engines at runtime; release-check asserts this
+# line stays after the last engine block.
+RUN mkdir -p /home/box/.npm && chown -R box:box /home/box/.npm
 
 # The image contract: what this build carries, readable by boxd (in /health) and by the host
 # at box up, so "which engines does this box have" is a fact the box states rather than a
