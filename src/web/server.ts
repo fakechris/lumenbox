@@ -136,6 +136,7 @@ import { parseTailmsgRecordConfig, tailmsgDoorFromRecord } from "../channels/tai
 import { startHostEgress } from "../host/host-egress.ts";
 import { HostRunner, hostRunnerConfig } from "../host/host-runner.ts";
 import { HostSandbox } from "../host/host-sandbox.ts";
+import { outboundRedactor } from "../host/redact-outbound.ts";
 import { ALL_TOOLS } from "../host/orchestrator.ts";
 import {
   CATALOG_CONNECTORS,
@@ -1568,9 +1569,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         deliveries.close(owed);
         throw new Error(stuck);
       }
-      const reply = origin?.messageId !== undefined
+      const reply = outboundRedactor(vault.heldValues())(origin?.messageId !== undefined // held values scrubbed on the way out (INV-1360)
         ? orchestrator.replyForMessage(agent.id, origin.messageId, conversation)
-        : orchestrator.replySince(agent.id, before, conversation);
+        : orchestrator.replySince(agent.id, before, conversation));
       // Closed here rather than after the channel's send: the channel is about to deliver
       // it in this same tick, and a send that fails leaves the message in the outbox
       // rather than needing this queue as a second retry mechanism.
@@ -5651,8 +5652,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             hostExec: {
               enabled: hostRunner.enabled,
               cwd: config.hostExec?.cwd ?? null,
-              // From the live runner, which is what an agent would actually reach.
-              unavailableReason: hostRunner.unavailableReason() ?? null,
+              unavailableReason: hostRunner.unavailableReason() ?? null, // from the live runner, what an agent would reach
             },
             // Whether a credential is present is worth showing; the credential is not.
             presets: providerNames().map(name => {
