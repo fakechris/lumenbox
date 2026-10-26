@@ -13,11 +13,14 @@ import {
   principalForToken,
   type McpServerTool,
 } from "./mcp-server.ts";
+import { IdempotencyStore } from "./idempotency.ts";
 
 /** A real server, because the claims are about HTTP: status codes, headers, bodies. */
 async function withServer(
   tools: readonly McpServerTool[],
-  tokens: ReturnType<typeof mintMcpToken>[]
+  tokens: ReturnType<typeof mintMcpToken>[],
+  idempotency?: IdempotencyStore,
+  headers: Record<string, string> = {}
 ): Promise<{
   // The parsed JSON body is what the assertions interrogate; naming a shape here would
   // assert the thing under test.
@@ -34,6 +37,7 @@ async function withServer(
       tools,
       principalFor: presented => principalForToken(presented, tokens),
       log: line => logged.push(line),
+      ...(idempotency !== undefined ? { idempotency } : {}),
     }).then(handled => {
       if (!handled) {
         res.writeHead(404);
@@ -50,6 +54,7 @@ async function withServer(
         method: "POST",
         headers: {
           "content-type": "application/json",
+          ...headers,
           ...(token !== undefined ? { authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify(body),
@@ -164,6 +169,76 @@ test("a tool's own failure is a readable result, not a broken transport", async 
     assert.match(body.result.content[0].text, /not on this installation/,
       "the caller's agent should read this and decide, like any other failed tool");
   } finally {
+    await stop();
+  }
+});
+
+// ── the written contract (INV-1358) ──────────────────────────────────────────────
+
+test("initialize states every side-door capability, the false ones included", async () => {
+  const token = mintMcpToken("p1", "test");
+  const { call, stop } = await withServer([echoTool([])], [token]);
+  try {
+    const { body } = await call({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }, token.token);
+    const caps = body.result.capabilities.experimental.lumenbox;
+    assert.equal(caps.idempotency_key, true);
+    assert.equal(caps.terminal_states, true);
+    assert.equal(caps.cancel, false, "a capability we lack is reported false");
+    assert.equal(caps.streaming, false);
+  } finally {
+    await stop();
+  }
+});
+
+test("fields the tool's schema does not name are accepted and listed as ignored_fields on the result", async () => {
+  const token = mintMcpToken("p1", "test");
+  const seen: string[] = [];
+  const { call, stop } = await withServer([echoTool(seen)], [token]);
+  try {
+    const { body } = await call({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "assign_task", arguments: { brief: "do it", tools: ["x"], priority: 3 } } }, token.token);
+    assert.match(body.result.content[0].text, /^t42\n\nignored_fields: priority, tools$/);
+    assert.deepEqual(seen, ["p1:do it"], "the call still ran, once");
+  } finally {
+    await stop();
+  }
+});
+
+test("an Idempotency-Key makes a retry return the first answer, waits while the first is running, and refuses a different body", async () => {
+  const token = mintMcpToken("p1", "test");
+  let runs = 0;
+  let release: (() => void) | undefined;
+  const slow: McpServerTool = {
+    name: "assign_task",
+    description: "d",
+    inputSchema: { type: "object", properties: { brief: { type: "string" } } },
+    readOnly: false,
+    run: async input => {
+      runs += 1;
+      await new Promise<void>(resolve => { release = resolve; });
+      return `t${runs}:${String(input.brief)}`;
+    },
+  };
+  const store = new IdempotencyStore({ ttlMs: 60_000 });
+  const { call, stop } = await withServer([slow], [token], store, { "idempotency-key": "key-0001" });
+  try {
+    const body = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "assign_task", arguments: { brief: "once" } } };
+    const first = call(body, token.token);
+    await new Promise(resolve => setTimeout(resolve, 30));
+    const second = call(body, token.token); // same key, same body, first still running: waits
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(runs, 1, "the second call did not start a second run");
+    release?.();
+    const [a, b] = await Promise.all([first, second]);
+    assert.equal(a.body.result.content[0].text, "t1:once");
+    assert.deepEqual(b.body.result, a.body.result, "the retry got the first answer");
+    const third = await call(body, token.token);
+    assert.deepEqual(third.body.result, a.body.result, "and so does a later one");
+    assert.equal(runs, 1);
+    const changed = await call({ ...body, params: { name: "assign_task", arguments: { brief: "something else" } } }, token.token);
+    assert.equal(changed.body.error.code, -32009, "same key, different body is a conflict");
+    assert.match(changed.body.error.message, /Idempotency-Key reused/);
+  } finally {
+    release?.();
     await stop();
   }
 });

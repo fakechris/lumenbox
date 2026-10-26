@@ -242,3 +242,35 @@ Enumerate and answer, with the concrete input:
    answer says so. S.
 3. Live: delegate to `opencode` in the Docker box with one named tool and watch the audit line
    and the lease renew. Then docs/25, docs/06 (the Linux bind note) and docs/10.
+
+## 8. The person's side door: the written contract (INV-1358, 2026-10-26)
+
+The side door (`/mcp`: `assign_task`, `task_status`, `list_agents`, `run_on_box`,
+`box_screenshot`) had behaviour but no contract. HarnessRouter's UHP (INV-1357) writes the
+four things an outside caller needs and checks them; this is ours, in `src/web/mcp-contract.ts`
+and `mcp-tools.ts`:
+
+- **Terminal states.** `task_status` opens with `status: in_progress | completed | failed |
+  incomplete | cancelled`, with the reason in brackets. The board's six statuses map: `open` /
+  `doing` → in_progress; `done` → completed; `blocked` → failed (blocked); `dropped` → cancelled
+  (dropped); `review` → incomplete, with `turn_budget` (INV-1354), `rounds` (the loop detector)
+  or `held_for_review` (INV-817's acceptance / due / waiting-on hold). `incomplete` is the turn
+  having stopped itself and handed the work back: not a failure to retry blindly, not a result.
+  A task assigned through the door now closes when its turn ends (`turnFinished`), is marked
+  `blocked` with the error when the turn throws, and gets its `incomplete (…)` note from the
+  turn's own `turn_budget_hit` / `stuck` event before it closes.
+- **`ignored_fields`.** Arguments the tool's schema does not name are accepted, not acted on,
+  and listed on the result: `ignored_fields: priority, tools`. Nothing is silently dropped.
+- **Idempotency.** `Idempotency-Key` as an HTTP header, `_meta.idempotencyKey`, or an
+  `idempotency_key` argument, on mutating tools. The same key with the same body returns the
+  first answer — waiting for it while the first call is still running; the same key with a
+  different body is refused (`-32009`, "Idempotency-Key reused with a different request"). Keys
+  live 24 hours and are persisted to `~/.agentbox/mcp-idempotency.jsonl`, so a retry after a
+  restart still finds its answer. Read-only tools ignore the key.
+- **Capabilities, true or false.** `initialize` returns
+  `capabilities.experimental.lumenbox = {tasks, task_status, terminal_states, ignored_fields,
+  idempotency_key: true; cancel, streaming, files, sessions: false}`. A capability we lack is
+  said to be absent, never left for the caller to infer.
+
+Not done, on purpose: no OpenAI Responses compatibility, no change to the Delegate route (§1),
+no cancel — `cancel: false` is the honest line until there is one.

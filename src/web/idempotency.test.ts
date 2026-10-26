@@ -18,3 +18,28 @@ test("a repeated key replays the first answer, a changed body under it conflicts
   now += IDEMPOTENCY_TTL_MS + 1;
   assert.equal(store.claim("req-000001", { text: "bye" }).kind, "fresh", "expired, so the name is free again");
 });
+
+// ── a day-long key survives a restart (INV-1358) ────────────────────────────────
+
+test("a settled reply persisted to the jsonl is replayed by a fresh store, within its TTL and not past it", async () => {
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "idem-"));
+  const path = join(dir, "keys.jsonl");
+  try {
+    let now = 1_000_000;
+    const first = new IdempotencyStore({ now: () => now, ttlMs: 24 * 60 * 60_000, persistTo: path });
+    assert.equal(first.claim("key-persist-1", { a: 1 }).kind, "fresh");
+    first.settle("key-persist-1", { status: 200, body: { ok: true } });
+    const second = new IdempotencyStore({ now: () => now + 60_000, ttlMs: 24 * 60 * 60_000, persistTo: path });
+    const replay = second.claim("key-persist-1", { a: 1 });
+    assert.equal(replay.kind, "replay");
+    if (replay.kind === "replay") assert.deepEqual((await replay.reply).body, { ok: true });
+    assert.equal(second.claim("key-persist-1", { a: 2 }).kind, "conflict");
+    const late = new IdempotencyStore({ now: () => now + 25 * 60 * 60_000, ttlMs: 24 * 60 * 60_000, persistTo: path });
+    assert.equal(late.claim("key-persist-1", { a: 1 }).kind, "fresh", "a day later the key is forgotten");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

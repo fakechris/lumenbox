@@ -26,6 +26,8 @@
 
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IdempotencyStore } from "./idempotency.ts";
+import { idempotencyKeyOf, ignoredFields, SIDE_DOOR_CAPABILITIES } from "./mcp-contract.ts";
 
 /** Prefix so a token is recognisable in a log or a config file as ours. */
 const TOKEN_PREFIX = "lmbx_";
@@ -119,6 +121,8 @@ export async function handleMcpRequest(
     path?: string;
     /** Who answers `initialize` as. */
     serverName?: string;
+    /** Request-level idempotency for mutating tools (INV-1358): same key → the first answer, waiting while it runs. */
+    idempotency?: IdempotencyStore;
   }
 ): Promise<boolean> {
   if (req.url?.split("?")[0] !== (deps.path ?? "/mcp")) return false;
@@ -163,7 +167,8 @@ export async function handleMcpRequest(
     case "initialize":
       reply({
         protocolVersion: "2025-06-18",
-        capabilities: { tools: { listChanged: false } },
+        // Every side-door capability, true or false, never omitted (INV-1358, mcp-contract.ts).
+        capabilities: { tools: { listChanged: false }, experimental: { lumenbox: SIDE_DOOR_CAPABILITIES } },
         serverInfo: { name: deps.serverName ?? "lumenbox", version: "1" },
       });
       return true;
@@ -196,15 +201,35 @@ export async function handleMcpRequest(
         return true;
       }
       const args = (request.params?.arguments ?? {}) as Record<string, unknown>;
+      // Fields the schema does not name are accepted, not acted on, and said (INV-1358).
+      const ignored = ignoredFields(args, tool.inputSchema);
+      const trailer = ignored.length > 0 ? `\n\nignored_fields: ${ignored.join(", ")}` : "";
+      // A retry wearing the first call's key gets the first answer; while the first call is still
+      // running it waits for it; the same key on a different body is a conflict, not a replay.
+      const key = tool.readOnly ? undefined : idempotencyKeyOf(req.headers as Record<string, unknown>, request.params);
+      const claim = deps.idempotency?.claim(key, { tool: name, args }) ?? { kind: "none" as const };
+      if (claim.kind === "conflict") {
+        fail(-32009, "Idempotency-Key reused with a different request. Use a new key for a new request.");
+        return true;
+      }
+      if (claim.kind === "replay") {
+        const first = await claim.reply;
+        reply(first.body);
+        return true;
+      }
       try {
         const text = await tool.run(args, principalId);
-        reply({ content: [{ type: "text", text }] });
+        const result = { content: [{ type: "text", text: `${text}${trailer}` }] };
+        if (claim.kind === "fresh") deps.idempotency?.settle(key, { status: 200, body: result });
+        reply(result);
       } catch (error) {
         // An MCP error result, not a transport error: the caller's agent should read
         // this and decide, the same as any other failed tool.
         const detail = error instanceof Error ? error.message : String(error);
         deps.log(`mcp server: ${name} failed for ${principalId}: ${detail}`);
-        reply({ content: [{ type: "text", text: detail }], isError: true });
+        const result = { content: [{ type: "text", text: `${detail}${trailer}` }], isError: true };
+        if (claim.kind === "fresh") deps.idempotency?.settle(key, { status: 200, body: result });
+        reply(result);
       }
       return true;
     }
