@@ -63,7 +63,8 @@ test("the policy gate is asked from the few places that act, and nowhere else", 
   // the same stop/budget gate even though no ordinary tool-enabled turn is started.
   // delegated-consent.ts is the one place a delegated engine's permission question (the MCP
   // face's `permission` tool, an ACP session's `session/request_permission`) asks the gate.
-  const allowed = new Set(["cli.ts", "host/delegated-consent.ts", "host/mcp-face.ts", "host/tools.ts", "host/turn.ts", "host/orchestrator.ts", "web/server.ts"]);
+  // web/mcp-tools.ts holds the side door's run_on_box check, moved out of server.ts unchanged (INV-1358).
+  const allowed = new Set(["cli.ts", "host/delegated-consent.ts", "host/mcp-face.ts", "host/tools.ts", "host/turn.ts", "host/orchestrator.ts", "web/server.ts", "web/mcp-tools.ts"]);
   const offenders = sources()
     .filter(file => /\.check\(\{\s*kind:/.test(file.text) && !allowed.has(file.path))
     .map(file => file.path);
