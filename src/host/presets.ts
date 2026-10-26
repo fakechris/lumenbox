@@ -43,6 +43,9 @@
  * The flag that makes each engine write its machine-readable stream, from which the host reads
  * the engine's own completion report (INV-908, engine-report.ts).
  */
+/** The provider entry opencode's relay config declares; a bare model id is named under it. */
+export const OPENCODE_RELAY_PROVIDER = "lumenbox";
+
 export const MACHINE_OUTPUT: Readonly<Record<"claude" | "pi" | "opencode" | "mcode", string>> = {
   claude: "--output-format stream-json --verbose",
   pi: "--mode json",
@@ -181,22 +184,47 @@ PRESETS_MUTABLE.push(...([
     // without it — the engine "works" and does nothing. The box is the sandbox; the
     // permission prompt has no one to ask. The model travels as a flag because this
     // engine has no model environment variable (measured on 1.18.25).
+    // The model is `provider/model` to opencode. A bare id is the relay's model and is named
+    // under the relay's own provider entry (relayConfig below); a qualified id — an operator's
+    // AGENTBOX_RELAY_MODEL naming a catalogue provider — passes through as written.
     run: (quoted, model, extraArgs) =>
-      `opencode run --auto ${MACHINE_OUTPUT.opencode}${model ? ` -m ${model}` : ""}${extraArgs ? ` ${extraArgs}` : ""} ${quoted}`,
+      `opencode run --auto ${MACHINE_OUTPUT.opencode}${model ? ` -m ${model.includes("/") ? model : `${OPENCODE_RELAY_PROVIDER}/${model}`}` : ""}${extraArgs ? ` ${extraArgs}` : ""} ${quoted}`,
     skillsMount: "~/.config/opencode/skill",
     wires: ["anthropic", "openai"],
-    // Measured on 1.18.25: opencode ignores ANTHROPIC_BASE_URL/OPENAI_BASE_URL — its
-    // endpoints come from a provider catalog, overridable only in its config file. The
-    // BASE_URL pair stays for engine versions that do honor it; what actually routes
-    // traffic today is MINIMAX_API_KEY, which lights up the catalog's minimax-cn
-    // provider — the degenerate-relay case, where the relay variables name the vendor
-    // itself. A true relay with its own URL needs the config-file face (docs/25).
+    // Measured on 1.18.25: opencode ignores ANTHROPIC_BASE_URL/OPENAI_BASE_URL — its endpoints
+    // come from a provider catalogue, overridable only in its config file. Until INV-1359's
+    // matrix (2026-10-26) the relay token travelled as MINIMAX_API_KEY, which lit the
+    // catalogue's minimax-cn provider and sent the token to the vendor itself: every opencode
+    // delegation on a relayed MiniMax installation died before its first model call. Now the
+    // environment carries only the route, and the config file (relayConfig) names it as a
+    // provider — no vendor variable is set, so no catalogue provider lights up by accident.
     relayEnv: (baseUrl, token) => ({
-      OPENAI_BASE_URL: baseUrl,
-      OPENAI_API_KEY: token,
-      ANTHROPIC_BASE_URL: baseUrl,
-      ANTHROPIC_API_KEY: token,
-      MINIMAX_API_KEY: token,
+      LUMENBOX_RELAY_URL: baseUrl,
+      LUMENBOX_RELAY_TOKEN: token,
+    }),
+    // opencode's global config, merged under the per-job OPENCODE_CONFIG face file (the image
+    // ships none, so nothing of the operator's is overwritten). The route and token are `{env:}`
+    // references — opencode substitutes them anywhere in the text — so the file's content is the
+    // same for every job of one model and two jobs writing it at once cannot cross their routes.
+    // The SDK package follows the wire: both are bundled with opencode.
+    relayConfig: (_url, tokenVar, wire, model) => ({
+      file: "/home/box/.config/opencode/opencode.json",
+      content: `${JSON.stringify(
+        {
+          $schema: "https://opencode.ai/config.json",
+          provider: {
+            [OPENCODE_RELAY_PROVIDER]: {
+              npm: wire === "openai" ? "@ai-sdk/openai-compatible" : "@ai-sdk/anthropic",
+              name: "lumenbox relay",
+              options: { baseURL: "{env:LUMENBOX_RELAY_URL}/v1", apiKey: `{env:${tokenVar}}` },
+              models: model !== undefined ? { [model]: { name: model } } : {},
+            },
+          },
+        },
+        null,
+        2
+      )}\n`,
+      env: {},
     }),
     // opencode reads a config file named by OPENCODE_CONFIG and expands `{env:VAR}` in it; it
     // still merges its global config, so an operator's own MCP entries in the box would load

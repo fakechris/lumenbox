@@ -42,7 +42,28 @@ node --experimental-transform-types scripts/preset-matrix.mjs --from research/ma
 `--dry-run` calls no model and touches no box. The script refuses the live box unless
 `--live-box` is passed. It is never part of `npm test`.
 
-## The table, 2026-10-26, build b456ce8
+## The table after the fixes, 2026-10-26, build c360b5f + INV-1363
+
+Box: `lumenbox-dev:0.3.7`, built from the current Dockerfile (node v22.20.0; image contract:
+opencode 1.18.25, claude 2.1.250, pi 0.85.1, mcode 0.6.12, built 2026-10-26). The opencode preset
+carries the INV-1363 fix (relay as a config-file provider).
+
+### Provider: minimax (MiniMax (China), MiniMax-M3.1-Flash)
+
+| preset | first | followup | switch | artifact | recycle | notes |
+|---|---|---|---|---|---|---|
+| opencode | pass (17s) | n/a | n/a | pass (13s) | n/a | followup/recycle: no session form · switch: no per-brief model |
+| claude | pass (10s) | pass (29s) | n/a | pass (10s) | pass (33s) | switch: no per-brief model |
+| pi | pass (25s) | n/a | n/a | pass (12s) | n/a | followup/recycle: no session form · switch: no per-brief model |
+| mcode | pass (27s) | pass (41s) | n/a | pass (23s) | pass (65s) | switch: no per-brief model |
+
+Every applicable cell passes. mcode's session form (ACP) resumes across the recycle like claude's.
+In the run between the two tables (0.3.7 image, opencode fixed) one opencode `artifact` cell
+and, earlier, one claude `recycle` cell were judged `unknown` because the engine exited 0 without
+calling `delegate_submit` — the model skipping the report step, seen twice in five runs across
+two engines; the verdict machinery is right to refuse the claim.
+
+## The first table, 2026-10-26, build b456ce8 (before the fixes)
 
 Box: `fakechris/lumenbox:0.3.7` (node v22.18.0; image contract: opencode 1.18.25, claude 2.1.250,
 pi 0.85.1, built 2026-10-07). Only one provider is configured on this machine.
@@ -65,9 +86,12 @@ output; the table above is the record).
    1.18.25 ignores `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL`, routes by its provider catalogue, and
    the model arrives as a bare `-m MiniMax-M3.1-Flash` where opencode wants `provider/model`.
    The engine dies before its first model call. A probe in the box with a bogus key reaches
-   MiniMax directly and gets its 401, which confirms the traffic never touches the relay. Fixing
-   it means the config-file face the comment names (docs/25) with a `provider/model` id. Not
-   done here; a candidate.
+   MiniMax directly and gets its 401, which confirms the traffic never touches the relay.
+   **Fixed as INV-1363**: the environment carries only `LUMENBOX_RELAY_URL`/`_TOKEN` (no vendor
+   variable, so no catalogue provider lights up), the preset writes opencode's global config
+   declaring a `lumenbox` provider whose `baseURL`/`apiKey` are `{env:}` references (same bytes
+   for every job, so concurrent jobs cannot cross routes), and a bare model id runs as
+   `lumenbox/<id>`. After the fix opencode's own log shows only `providerID=lumenbox`.
 2. **Claude on MiniMax-M3.1-Flash sometimes skips `delegate_submit`.** One cell in two runs:
    the engine wrote the file, printed "Done", exited 0, and never called the report tool; the
    Delegate verdict machinery (INV-1261) correctly refused the claim. This is the model, not the
@@ -80,8 +104,8 @@ output; the table above is the record).
      npm's cache. Fixed in this change: the Dockerfile hands the cache to `box:box` after the
      last engine block, and `release-check` asserts the line stays there.
    - With the cache writable, mcode 0.6.12's `verify-native-install` refuses Node 22.18.0. The
-     Dockerfile already pins 22.20.0 (#194), so a rebuilt image passes; the table says what the
-     published image does.
+     Dockerfile already pins 22.20.0 (#194); on an image built from it mcode passes all four
+     applicable cells (table above). The published 0.3.7 image cannot run mcode at all.
 4. **The follow-up brief must be unambiguous for a small model.** The first wording ("append
    the single line AGAIN") was read by MiniMax-M3.1-Flash as "append the line again", producing
    `PONG\nPONG` and a false "did not resume" verdict. The job logs showed the same Claude session
