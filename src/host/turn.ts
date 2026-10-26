@@ -142,6 +142,7 @@ import type { McpManager } from "./mcp.ts";
 import { TOOL_BUDGET_WARNING } from "./mcp.ts";
 import { imageRefusalOf, replaceRefusedImages } from "./image-refusal.ts";
 import { budgetReport, budgetWarning, replayNote, TurnBudget, type TurnBudgetConfig } from "./turn-budget.ts";
+import { outboundRedactor, redactEvent } from "./redact-outbound.ts";
 import { lookupPair, splitRoster } from "./tool-roster.ts";
 import { narrowTools, toolAllowed } from "./scopes.ts";
 import { conversationIdFor, MAIN_CONVERSATION } from "../agents/registry.ts";
@@ -1489,7 +1490,10 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   // Every event names its conversation, so a page viewing one thread can ignore the
   // stream of another instead of splicing an outside chat's reply into the team room.
   const baseEmit = deps.onEvent ?? (() => {});
-  const emit: typeof baseEmit = event => baseEmit({ ...event, conversation });
+  // Held values never leave on the stream (INV-1360): the words a person reads are scrubbed here,
+  // at the one door every text and interim event goes through; the record keeps `recordAs`.
+  const redactOut = outboundRedactor(deps.vault?.heldValues());
+  const emit: typeof baseEmit = event => baseEmit(redactEvent({ ...event, conversation }, redactOut));
   const provider = deps.provider ?? FULL_CLAUDE;
 
   // Recorded before anything else, so a process that dies at any point after this leaves a begin
@@ -3121,7 +3125,7 @@ ${outcome.text}`;
             session_id: turnId,
             agent_name: agent.profile.name,
             stop_hook_active: stopHookActive,
-            last_message: finalText.slice(0, 20_000),
+            last_message: redactOut(finalText).slice(0, 20_000),
           });
           if (hook.blocked && !stopHookActive) {
             stopHookActive = true;

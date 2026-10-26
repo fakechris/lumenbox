@@ -4110,3 +4110,41 @@ test("at the call budget the turn hands the work back as a reply and an event; a
     cleanup();
   }
 });
+
+// ── held values never leave on the stream (INV-1360) ───────────────────────────
+
+test("a vault value a host command printed is scrubbed from the text and interim events, while the model still sees the output it was given", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const secret = "hunter2-very-secret-value-9";
+    const capture: Capture = { params: [] };
+    const { client } = stubClient(
+      [
+        message([textBlock("我先看一下环境。"), toolUseBlock("RunOnHost", { command: "printenv SHOP_PASSWORD", secrets: ["SHOP_PASSWORD"] }, "toolu_host")], "tool_use"),
+        message([textBlock(`The value is ${secret} and in base64 ${Buffer.from(secret).toString("base64")}.`)]),
+      ],
+      capture
+    );
+    const hostRunner = { enabled: true, unavailableReason: () => undefined, run: async () => ({ stdout: `SHOP_PASSWORD=${secret}\n`, stderr: "", code: 0, timedOut: false, truncatedBytes: 0 }) };
+    const vault = { resolve: () => secret, heldValues: () => new Map([["SHOP_PASSWORD", secret]]) };
+    const events: { type: string; delta?: string; text?: string }[] = [];
+    await runTurn(
+      ada,
+      [{ id: "m-secret", fromId: "user", fromName: "user", text: "check the shop password is set", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client, registry, bus, box: undefined, resolution: undefined, hostRunner: hostRunner as never, vault: vault as never, onEvent: event => events.push(event as { type: string }) }
+    );
+    const streamed = events.filter(event => event.type === "text").map(event => event.delta ?? "").join("");
+    assert.ok(streamed.includes("[vault:SHOP_PASSWORD]"), `the stream names the secret: ${streamed}`);
+    assert.ok(!streamed.includes("hunter2"), "no character of the value reached the stream");
+    assert.ok(!streamed.includes(Buffer.from(secret).toString("base64")), "nor its base64 form");
+    const interim = events.filter(event => event.type === "interim").map(event => event.text ?? "");
+    assert.ok(interim.every(text => !text.includes("hunter2")));
+    const toolResultToModel = JSON.stringify(capture.params.at(-1)!.messages);
+    assert.ok(toolResultToModel.includes(secret), "the model saw the real output, as it did before");
+  } finally {
+    cleanup();
+  }
+});

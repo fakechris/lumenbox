@@ -59,7 +59,7 @@ function variants(text: string): string[] {
 }
 
 /** The encodings a held value might appear in, so `includes` catches the dressed-up copy too. */
-function encodings(value: string): string[] {
+export function encodings(value: string): string[] {
   return [
     value,
     value.replace(/\s+/g, ""),
