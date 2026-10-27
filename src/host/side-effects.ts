@@ -61,6 +61,7 @@ const DECLARED: Record<string, SideEffect> = {
   browser_pages: { tier: "observe" },
   browser_snapshot: { tier: "observe" },
   browser_verify_write: { tier: "observe" },
+  RunOperation: { tier: "reach", action: "replay a taught browser operation" },
   browser_read: { tier: "observe" },
   browser_scroll: { tier: "observe" },
   browser_wait_for: { tier: "observe" },

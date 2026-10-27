@@ -5379,6 +5379,27 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           }
           return;
         }
+        // An operation draft's dry run (INV-1378): its cases on the teaching agent's own desktop; nothing commits.
+        if (route === "POST /api/teaching-drafts/dryrun") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          try {
+            const draft = orchestrator.teachDrafts.get(String(body.id ?? ""));
+            if (!mayReadBox(draft.boxId)) {
+              send(res, 403, { error: "This teaching box is not available to this caller" });
+              return;
+            }
+            const box = orchestrator.boxFor(draft.agentId);
+            if (box === undefined) throw new Error("The teaching agent's box is not connected; retry when it is");
+            const display = orchestrator.registry.displayIndexFor(draft.agentId);
+            const owner = orchestrator.registry.boxOwnerTokenFor(draft.agentId);
+            const done = await orchestrator.teachDrafts.dryRun(draft.id, request => box.browser({ ...request, display, ...(owner !== undefined ? { owner } : {}) }));
+            send(res, 200, { draft: done });
+          } catch (error) {
+            send(res, 409, { error: error instanceof Error ? error.message : String(error) });
+          }
+          return;
+        }
         // A published skill's versions, and a rollback that publishes one of them again (INV-1376).
         if (route === "GET /api/teaching-drafts/versions" || route === "POST /api/teaching-drafts/rollback") {
           if (refusedRole("admin")) return;

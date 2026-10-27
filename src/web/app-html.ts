@@ -1176,7 +1176,7 @@ export const APP_HTML = String.raw`<!doctype html>
       <button id="teachreviewclarify" class="btn accent">Generate revised draft</button>
     </div>
     <div class="actions">
-      <button id="teachreviewpublish" class="btn accent">Publish reviewed skill</button>
+      <button id="teachreviewdryrun" class="btn ghost" style="display:none">Dry-run the operation's cases</button><button id="teachreviewpublish" class="btn accent">Publish reviewed skill</button>
       <button id="teachreviewreject" class="btn ghost">Reject draft</button>
     </div>
   </div>
@@ -1765,8 +1765,7 @@ $("setquotasave").onclick = function () {
 
 function openSettings(tab) {
   showSettingsTab(typeof tab === "string" ? tab : "model");
-  // Applied on open as well as on load: the dialog is built once and reopened, and
-  // whoever is at the browser may have signed in since the page did.
+  // Applied on open as well as on load: the dialog is built once and reopened, and whoever is at the browser may have signed in since the page did.
   applyRole();
   fetch("/api/config")
     .then(function (r) { return r.json(); })
@@ -2959,8 +2958,7 @@ function renderSpend(data) {
       : "");
 
   var sections = [];
-  // Place first: which box and which door burn the money is the question a person
-  // running several teams asks before which model does (INV-431).
+  // Place first: which box and which door burn the money is the question a person running several teams asks before which model does (INV-431).
   ["byBox", "byDoor", "byKind", "byAgent", "byModel"].forEach(function (key) {
     var rows = report[key] || [];
     if (rows.length < 2) return;
@@ -6169,7 +6167,7 @@ var selectedTeachingDraft = null;
 function showTeachingDraft(draft) {
   selectedTeachingDraft = draft;
   $("teachreviewdetail").style.display = "block";
-  showSkillVersions(draft).catch(function () {});
+  showSkillVersions(draft).catch(function () {}); var op = draft.files && draft.files["operation.json"]; $("teachreviewdryrun").style.display = op && draft.status === "draft" ? "" : "none"; if (op) $("teachreviewtext").textContent = (draft.skill || "") + "\n\n--- operation.json ---\n" + op + "\n--- cases.json ---\n" + (draft.files["cases.json"] || "") + (draft.dryRun ? "\n--- last dry run: " + draft.dryRun.passed + "/" + draft.dryRun.total + " passed ---\n" + draft.dryRun.failures.join("\n") : "\n--- not dry-run yet: publishing needs one ---");
   $("teachreviewsource").textContent = draft.status + " · agent " + draft.agentId + " · box " + draft.boxId + " · session " + draft.sessionId + " · trace " + draft.eventsPath + (draft.videoPath ? " · video " + draft.videoPath : "") + (draft.redactedCredentials && draft.redactedCredentials.length ? " · credentials removed from the trace before the model read it: " + draft.redactedCredentials.join(", ") : "") + (draft.source ? (draft.source.kind === "eval" ? " · revision of " + draft.source.skillDir + " from evaluation " + draft.source.from + " (failing tasks: " + draft.source.basis.join(", ") + ")" : " · imported from " + draft.source.from + (draft.files ? " with " + Object.keys(draft.files).length + " helper file(s)" : "")) : "") + (draft.unknownTools && draft.unknownTools.length ? " · tools with no equivalent here, dropped: " + draft.unknownTools.join(", ") : "");
   $("teachreviewtext").textContent = draft.skill || draft.question;
   // Advice on the wording, from the same check the skills page uses; publishing is never blocked by it.
@@ -6237,6 +6235,7 @@ async function decideTeachingDraft(action) {
 async function showSkillVersions(draft) { var list = $("teachreviewversionlist"); $("teachreviewversions").style.display = draft.status === "published" ? "" : "none"; list.replaceChildren(); if (draft.status !== "published") return; var r = await fetch("/api/teaching-drafts/versions?id=" + encodeURIComponent(draft.id)); var p = await r.json(); var vs = p.versions || []; if (!r.ok || !vs.length) { list.textContent = p.error || "No recorded versions."; return; }
   vs.forEach(function (v, i) { var row = document.createElement("div"); row.textContent = "v" + v.version + " · " + v.at + " · " + v.author + " · " + v.message + " "; if (i < vs.length - 1) { var b = document.createElement("button"); b.className = "btn ghost sm"; b.textContent = "Roll back to v" + v.version; b.onclick = async function () { var x = await fetch("/api/teaching-drafts/rollback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: draft.id, version: v.version }) }); var y = await x.json(); $("teachreviewstatus").textContent = x.ok ? "Published v" + v.version + " again as a new version; nothing was run." : (y.error || "Rollback failed"); showSkillVersions(draft); if (x.ok) refreshSkills(); }; row.appendChild(b); } list.appendChild(row); });
 }
+$("teachreviewdryrun").onclick = async function () { var d = selectedTeachingDraft; if (!d) return; $("teachreviewstatus").textContent = "Running the cases on the agent's desktop; nothing commits…"; var r = await fetch("/api/teaching-drafts/dryrun", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: d.id }) }); var p = await r.json(); $("teachreviewstatus").textContent = r.ok ? "Dry run: " + p.draft.dryRun.passed + "/" + p.draft.dryRun.total + " cases passed." : (p.error || "Dry run failed"); if (r.ok) showTeachingDraft(p.draft); };
 $("teachreviewclarify").onclick = function () { decideTeachingDraft("clarify"); };
 $("teachreviewpublish").onclick = function () { decideTeachingDraft("approve"); };
 $("teachreviewreject").onclick = function () { decideTeachingDraft("reject"); };
