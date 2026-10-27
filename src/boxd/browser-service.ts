@@ -466,6 +466,8 @@ export interface SecretField {
   formMethod?: string;
   /** Each submitter's `formmethod` override, lower-case: a button can turn a POST form into a GET. */
   submitMethods?: readonly string[];
+  /** False when the field belongs to no form; absent from older readers. */
+  hasForm?: boolean;
   /**
    * Every URL the owning form could submit to, resolved: the form's `action` and each submitter's
    * `formaction`. Empty when the field has no form.
@@ -521,6 +523,43 @@ export function secretFieldRefusal(field: SecretField, domains: readonly string[
     }
   }
   return undefined;
+}
+
+/**
+ * The page-side reader for `SecretField`, run on the field in an isolated world. The submitters
+ * come from `form.elements`, not a query under the form: a button outside the form that joins it
+ * with `form="id"` submits it too, and its `formaction` is a target like any other (INV-1380).
+ * `hasForm` separates "no form" from "a form with no targets" so the caller can say so.
+ */
+export const SECRET_FIELD_DESCRIPTION =
+  "function(){ const tag = (this.tagName || '').toLowerCase();" +
+  " const type = tag === 'input' ? String(this.type || '').toLowerCase() : '';" +
+  " const form = this.form || null; if (!form) return { tag, type, hasForm: false, submitTargets: [] };" +
+  " const targets = [form.action];" +
+  " const methods = [];" +
+  " for (const el of Array.from(form.elements || [])) {" +
+  "   const t = (el.tagName || '').toLowerCase(); const ty = String(el.type || '').toLowerCase();" +
+  "   const submitter = (t === 'button' && ty !== 'button' && ty !== 'reset') || (t === 'input' && (ty === 'submit' || ty === 'image'));" +
+  "   if (!submitter) continue;" +
+  "   if (el.hasAttribute('formaction')) targets.push(el.formAction);" +
+  "   if (el.hasAttribute('formmethod')) methods.push(String(el.formMethod || 'get').toLowerCase()); }" +
+  " return { tag, type, hasForm: true, formMethod: String(form.method || 'get').toLowerCase(), submitMethods: methods, submitTargets: targets }; }";
+
+/**
+ * What the agent is told after a fill that went through, or undefined when there is nothing to
+ * say. Lengths only: a field that kept fewer characters than the secret has (a `maxlength`, an
+ * input mask) would submit a wrong credential, so the agent hears it before it presses submit.
+ * A field with no form submits by script, where nobody here can see the destination.
+ */
+export function secretFillNote(field: SecretField, expected: number, kept: number): string | undefined {
+  const notes: string[] = [];
+  if (kept !== expected) {
+    notes.push(`The field kept ${kept} of the secret's ${expected} characters (a length limit or an input mask); do not submit it as is — say what happened.`);
+  }
+  if (field.hasForm === false) {
+    notes.push("This field is in no form, so where the page sends it on submit cannot be checked; the box's egress rules still apply.");
+  }
+  return notes.length === 0 ? undefined : notes.join(" ");
 }
 
 /** How many tabs one desktop's agent may hold open. Beyond this, close one first. */
@@ -1175,7 +1214,7 @@ class BrowserPage {
    * it, and the field is marked so the outline redacts it. Nothing here goes through
    * `Input.insertText`, so no keystroke reaches a recording.
    */
-  async fillSecret(ref: string, value: string, domains: readonly string[]): Promise<void> {
+  async fillSecret(ref: string, value: string, domains: readonly string[]): Promise<string | undefined> {
     if (ref.includes("@")) {
       throw new CdpError("fill_secret works on the main document only; a field inside a frame cannot be filled this way.");
     }
@@ -1197,16 +1236,7 @@ class BrowserPage {
     const described = (await this.session.send("Runtime.callFunctionOn", {
       objectId: target,
       returnByValue: true,
-      functionDeclaration:
-        "function(){ const tag = (this.tagName || '').toLowerCase();" +
-        " const type = tag === 'input' ? String(this.type || '').toLowerCase() : '';" +
-        " const form = this.form || null; if (!form) return { tag, type, submitTargets: [] };" +
-        " const targets = [form.action];" +
-        " const methods = [];" +
-        " for (const el of form.querySelectorAll('button, input[type=submit], input[type=image]')) {" +
-        "   if (el.hasAttribute('formaction')) targets.push(el.formAction);" +
-        "   if (el.hasAttribute('formmethod')) methods.push(String(el.formMethod || 'get').toLowerCase()); }" +
-        " return { tag, type, formMethod: String(form.method || 'get').toLowerCase(), submitMethods: methods, submitTargets: targets }; }",
+      functionDeclaration: SECRET_FIELD_DESCRIPTION,
     })) as { result?: { value?: SecretField } };
     const field = described.result?.value;
     if (field === undefined) throw new CdpError("Could not read that field before filling it; take a fresh snapshot.");
@@ -1221,11 +1251,14 @@ class BrowserPage {
         " const d = Object.getOwnPropertyDescriptor(proto, 'value'); if (!d || !d.set) return 'not a field';" +
         " this.focus(); d.set.call(this, v);" +
         " this.dispatchEvent(new Event('input', {bubbles:true})); this.dispatchEvent(new Event('change', {bubbles:true}));" +
-        " this.setAttribute('data-lumen-secret', '1'); return 'ok'; }",
+        " this.setAttribute('data-lumen-secret', '1'); return 'ok:' + String(this.value).length; }",
     })) as { result?: { value?: string } };
-    if (outcome.result?.value !== "ok") {
+    const filled = /^ok:(\d+)$/.exec(outcome.result?.value ?? "");
+    if (filled === null) {
       throw new CdpError(`That element is ${outcome.result?.value ?? "not fillable"}: fill_secret needs an input or a textarea.`);
     }
+    // Only lengths travel back, never the value (INV-1380).
+    return secretFillNote(field, value.length, Number(filled[1]));
   }
 
   /**
@@ -2030,8 +2063,9 @@ export class BrowserService {
     if (value === "") throw new CdpError("The secret resolved to nothing; nothing was typed.");
     const page = await this.pageFor(display);
     await page.assertFresh(snapshot);
-    await page.fillSecret(ref, value, domains);
-    return this.settled(display, await page.report());
+    const note = await page.fillSecret(ref, value, domains);
+    const result = await this.settled(display, await page.report());
+    return note === undefined ? result : { ...result, note: result.note === undefined ? note : `${note} ${result.note}` };
   }
 
   async scroll(display: number, direction: string, amount: number): Promise<BrowserResult> {
