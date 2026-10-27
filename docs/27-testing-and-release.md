@@ -118,6 +118,11 @@ installers with three packages in node_modules and every new user's first launch
   holds six synthetic refusals, labelled synthetic. Mutation-checked: flattening `post`
   content turns it red. Known gap: the corpus is the API-history shape (`mentions[].id` a
   string where the live event nests `open_id`); the test maps that one field.
+- `scripts/public-content.mjs` (INV-1381) — every markdown file under docs/ plus README and
+  AGENTS fails the suite on a local home directory, a tailnet or LAN address, a `*.ts.net`
+  name, a non-placeholder email, or an internal host name listed (as a SHA-256 hash) in
+  `scripts/public-content.json`. Ticket ids stay allowed. The first run cleaned twelve docs;
+  git history still holds the old text.
 - `scripts/test-network-guard.mjs` — loopback only, everything else throws where
   it was called. The suite passes under it, which is the evidence that nothing
   was quietly reaching a vendor.

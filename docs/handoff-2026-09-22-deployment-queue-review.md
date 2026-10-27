@@ -25,8 +25,8 @@
 | 真实模型 | scorecard 明确 INCOMPLETE：model scenarios SKIPPED；不能当文风/业务质量验收 |
 | 新镜像 | agentbox/box:57bc5c0cb08f；image sha256:c0ef4ab107e656a7122c8ee85cee52e35274d2296819e1193af37dc283b40921 |
 | 升级前 | Atlas / Bot Boss / Nova 均无运行回合；box runningJobs=0；strayFiles=0 |
-| 宿主备份 | /Users/chris/.agentbox-backups/2026-09-22-pre-deploy-23f51fd |
-| 卷备份 | /Users/chris/.agentbox-backups/2026-09-22T10-08-20-volumes/ 下 work/config 两份 tar.gz |
+| 宿主备份 | ~/.agentbox-backups/2026-09-22-pre-deploy-23f51fd |
+| 卷备份 | ~/.agentbox-backups/2026-09-22T10-08-20-volumes/ 下 work/config 两份 tar.gz |
 | 操作 | 暂停 launchd 宿主；box up --recreate 自动备份、重建、验证；恢复原 launchd 服务 |
 | 部署后宿主 | /api/state HTTP 200，build.commit=23f51fd，box.connected=true |
 | 部署后渠道 | feishu-personal、feishu-enterprise 均 configured=true、running=true、socket ready |

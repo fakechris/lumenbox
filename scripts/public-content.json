@@ -1,0 +1,8 @@
+{
+  "//": "SHA-256 of internal host/account names that must not appear in public docs (scripts/public-content.mjs). Hashes, so this file does not list them.",
+  "internalNameHashes": [
+    "0869aff6c3903b4593b80181dde17e4ea67794f2bfca64b2a2884ebb43d9fadd",
+    "16779331dd047f08908b43682582a3f27fb3a03c0f0b18b35c8e46530aec39ef",
+    "bf7a579311c63a3a2e829b89d4b171e6cf79f846795bbe4dfd9485aa97a90cf5"
+  ]
+}

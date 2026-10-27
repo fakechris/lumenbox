@@ -263,7 +263,7 @@ points at the proxy). A command in the box that connects directly is decided by 
 network alone, and that differs by platform. Probed from inside the running box with
 `curl -m 3` (exit 28 = timed out, 1 = connected to a non-HTTP service):
 
-| target | OrbStack (this Mac) | box@cursor (cloud VM, Linux Docker) |
+| target | OrbStack (this Mac) | a cloud VM on the operator's tailnet (Linux Docker) |
 |---|---|---|
 | `http://169.254.169.254/latest/meta-data/` | timed out — no metadata service on a Mac | **not measured today**: the VM was unreachable (tailscale offline). Expected reachable: Docker's default bridge routes link-local through the host; a request there returns the instance's credentials |
 | `host.docker.internal:7777` (web, a channel) | 401 — reachable, as intended | expected reachable |

@@ -61,3 +61,32 @@ test("research material is not tracked (c11f918: it lives in /research/, ignored
   const files = tracked.split("\n").filter(line => line !== "");
   assert.deepEqual(files, [], `research material is tracked; move it to /research/ and git rm --cached it:\n${files.join("\n")}`);
 });
+
+import { publicContentProblems, scanPublic } from "./public-content.mjs";
+import { createHash } from "node:crypto";
+
+test("public docs carry no home directory, private address, tailnet name, personal email or internal name (INV-1381)", () => {
+  const problems = scanPublic(root);
+  assert.deepEqual(problems, [], problems.join("\n"));
+});
+
+test("the public-content rules catch what they are for and leave the product's own words alone", () => {
+  const hash = createHash("sha256").update("secret-vm").digest("hex");
+  const config = { internalNameHashes: [hash] };
+  const one = text => publicContentProblems(text, config);
+  assert.match(one("see /Users/alice/repo/x").join(), /local home directory \(\/Users\/alice\/\)/);
+  assert.match(one("cd /home/alice/work").join(), /\/home\/alice\//);
+  assert.deepEqual(one("the box writes /home/box/work and hostd runs as /home/hostd/x"), [], "the product's own homes");
+  assert.match(one("attached at 100.114.30.43").join(), /private network address/);
+  assert.match(one("at 192.168.1.20 on the LAN").join(), /192\.168\.1\.20/);
+  assert.deepEqual(one("deny 10.0.0.0/8 and 192.168.0.0/16"), [], "a CIDR is a rule, not a machine");
+  assert.deepEqual(one("docker's bridge 172.17.0.1"), [], "the docker bridge is everyone's");
+  assert.match(one("my.tailnet-x1.ts.net").join(), /tailnet name/);
+  assert.deepEqual(one("host.example.ts.net is the placeholder"), []);
+  assert.match(one("mail someone@gmail.com").join(), /email address \(…@gmail\.com\)/);
+  assert.deepEqual(one("alice@example.com, admin@involute.local, bot@corp.com"), []);
+  const named = one("ssh into Secret-VM. tonight");
+  assert.equal(named.length, 1);
+  assert.ok(!named[0].includes("secret-vm"), "the message never echoes the hashed name");
+  assert.deepEqual(one("INV-1381 and docs/84 are fine to cite"), []);
+});
