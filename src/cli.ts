@@ -1650,7 +1650,7 @@ async function main(): Promise<number> {
 
     case "template":
       return cmdTemplate(rest);
-    case "skills": return rest[0] === "import" ? (await import("./host/skill-import.ts")).cmdSkillsImport(rest.slice(1)) : (err("Unknown skills command. One of: import."), 1); // INV-1367
+    case "skills": return rest[0] === "import" ? (await import("./host/skill-import.ts")).cmdSkillsImport(rest.slice(1)) : rest[0] === "improve" ? (await import("./host/learning-material.ts")).cmdSkillsImprove(rest.slice(1)) : (err("Unknown skills command. One of: import, improve."), 1); // INV-1367, INV-1377
     case "bundle":
       return cmdBundle(rest);
 

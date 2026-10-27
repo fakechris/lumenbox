@@ -20,6 +20,8 @@
  *   npm run scenario -- --teach          teach evals (INV-1369): synthetic demonstrations → the
  *                                        teaching turn → deterministic checks on the draft
  *   npm run scenario -- --teach --fake   the same with each fixture's reference answer: no model
+ *   … --material <dir>                   also write learning material (INV-1377): tasks/<id>.json +
+ *                                        index.jsonl, for `agentbox skills improve`
  *
  * A scratch AGENTBOX_HOME and a scratch box are used, so nothing here touches the live
  * installation's agents, ledgers or spend.
@@ -129,6 +131,18 @@ async function main() {
   }
 
   report(chosen, results, runs);
+  await writeLearningMaterial(results.map(result => {
+    const scenario = chosen.find(s => s.name === result.scenario);
+    const failing = Object.entries(result.checks ?? {}).filter(([, ok]) => !ok).map(([label]) => label);
+    return {
+      id: `${result.scenario}-${result.run}`,
+      source: "scenario",
+      input: scenario?.say ?? result.scenario,
+      ...(result.score !== undefined ? { output: result.score.said.map(part => part.text).join("\n"), tools: result.score.trail.map(step => String(step.tool ?? step.name ?? step)) } : {}),
+      passed: result.score !== undefined && failing.length === 0,
+      feedback: result.failure ?? (failing.length > 0 ? `failed: ${failing.join(", ")}` : "every check passed"),
+    };
+  }));
   const out = flag("--json");
   if (out !== undefined) {
     // Provider and model travel with the numbers: the release scorecard compares two runs
@@ -231,10 +245,26 @@ async function skillEvals(provider, runs, only) {
           rmSync(home, { recursive: true, force: true });
         }
       }
-      rows.push({ skill: starter.slug, case: one.name, kind: one.kind, instead: one.instead, verdicts, opened: [...opened] });
+      rows.push({ skill: starter.slug, case: one.name, kind: one.kind, instead: one.instead, says: one.says, verdicts, opened: [...opened] });
     }
   }
 
+  await writeLearningMaterial(rows.map(row => {
+    const scored = row.verdicts.filter(v => v === "pass" || v === "fail");
+    const passes = row.verdicts.filter(v => v === "pass").length;
+    const openedIt = row.opened.includes(row.skill);
+    return {
+      id: `${row.skill}--${row.case}`.replace(/[^A-Za-z0-9._-]+/g, "-").slice(0, 120),
+      source: "skill-eval",
+      input: row.says,
+      output: `skills opened: ${row.opened.join(", ") || "none"}`,
+      passed: scored.length > 0 && passes === scored.length,
+      feedback: row.kind === "trigger"
+        ? `This request should have opened ${row.skill}; it passed ${passes}/${row.verdicts.length} run(s)${openedIt ? "" : " and was never opened"}.`
+        : `This request should not have opened ${row.skill}${row.instead ? ` (${row.instead} fits instead)` : ""}; it passed ${passes}/${row.verdicts.length} run(s).`,
+      skill: { slug: row.skill },
+    };
+  }));
   console.log(`\n  skill evals — ${runs} run(s) per case, at most ${cap} model calls each\n`);
   for (const row of rows) {
     const bar = row.verdicts.map(v => (v === "pass" ? "·" : v === "na" ? "-" : v === "infra" ? "!" : "x")).join("");
@@ -356,5 +386,22 @@ async function teachEvals(provider, runs, only) {
   console.log(renderTeachScorecard(rows));
   const out = flag("--json");
   if (out !== undefined) writeFileSync(out, JSON.stringify({ at: new Date().toISOString(), model: fake ? "reference" : provider.model, rows }, null, 2));
+  await writeLearningMaterial(rows.map(row => ({
+    id: `teach-${row.fixture}-${row.run}`,
+    source: "teach-eval",
+    input: `the demonstration "${row.fixture}"`,
+    passed: row.passed,
+    // The names of the checks that failed and their findings; never the fixture's expectations.
+    feedback: row.failure ?? (row.checks.filter(c => !c.ok).map(c => `${c.name}${c.detail ? `: ${c.detail}` : ""}`).join("; ") || "all checks passed"),
+  })));
   if (fake && rows.some(row => !row.passed)) process.exitCode = 1;
+}
+
+/** Learning material (INV-1377) from whichever mode ran; written only when --material names a directory. */
+async function writeLearningMaterial(tasks) {
+  const dir = flag("--material");
+  if (dir === undefined) return;
+  const { writeMaterial } = await import("../src/host/learning-material.ts");
+  writeMaterial(dir, tasks);
+  console.log(`\n  learning material: ${tasks.length} task(s) in ${dir}`);
 }

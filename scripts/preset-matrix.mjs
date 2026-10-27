@@ -116,6 +116,11 @@ async function runMatrix(presets, providers, sha) {
   }
   const md = render(cells, providers, sha);
   console.log(`\n${md}`);
+  if (flag("--material") !== undefined) {
+    // Learning material (INV-1377): one task per cell, the reason as feedback.
+    const { writeMaterial } = await import("../src/host/learning-material.ts");
+    writeMaterial(flag("--material"), cells.map(cell => ({ id: `${cell.preset}-${cell.provider}-${cell.scenario}`, source: "preset-matrix", input: `${cell.scenario} on ${cell.preset} with ${cell.provider} (${cell.model})`, passed: cell.result === "pass", feedback: cell.reason ?? cell.result })));
+  }
   for (const [name, text] of [["--json", JSON.stringify({ at: new Date().toISOString(), build: sha, box: boxFacts, cells }, null, 2)], ["--md", md]]) {
     const out = flag(name);
     if (out === undefined) continue;
