@@ -742,6 +742,18 @@ whole thing as a body and the skill still works under a name derived from its di
 *no description* is the one case reported rather than ignored — the description is the only thing read
 when choosing, so without one the skill exists and is never chosen.
 
+**A skill can say what an agent may change in it** (INV-1375, `src/host/skill-contract.ts`, after
+hermit's adapter contract). A `skill.yaml` beside SKILL.md lists the `learnable` files (globs, with
+optional `max_bytes`, `max_files` and required `frontmatter` keys), the `fixed` files, the
+`fixed_frontmatter` keys whose value never changes (`allowed-tools` is the usual one) and
+`max_diff_lines` per write (default 200). `write_file` and `edit_file` refuse a write to that skill
+that breaks it — a fixed file, a file outside learnable, over a limit, a dropped or changed key, too
+large a change at once, or a credential shape — so the file stays at its current version. skill.yaml
+itself is never written by an agent, and one that does not parse refuses every write to its skill.
+A multi-file draft (`checkSkillDraft`) has each offending file reverted to the current version
+instead. A skill without skill.yaml is unaffected; writes through `bash` are not checked here
+(skill provenance records them).
+
 A `schedule:` line in the frontmatter makes a skill an **automation** — no second object and no
 second store; the only difference between a recipe and an automation is a line of frontmatter. Five
 cron fields, `@every <n><unit>`, or `@hourly`/`@daily`/`@weekly`/`@monthly`. Deliberately a subset:
