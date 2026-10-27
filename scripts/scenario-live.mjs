@@ -17,6 +17,9 @@
  *                                        when it should be, and left alone when it should not
  *   npm run scenario -- --skills --only research-brief --runs 1
  *   npm run scenario -- --skills --kind trigger     only the "should open it" cases
+ *   npm run scenario -- --teach          teach evals (INV-1369): synthetic demonstrations → the
+ *                                        teaching turn → deterministic checks on the draft
+ *   npm run scenario -- --teach --fake   the same with each fixture's reference answer: no model
  *
  * A scratch AGENTBOX_HOME and a scratch box are used, so nothing here touches the live
  * installation's agents, ledgers or spend.
@@ -87,6 +90,10 @@ async function main() {
   const only = flag("--only");
   if (process.argv.includes("--skills")) {
     await skillEvals(provider, runs, only);
+    return;
+  }
+  if (process.argv.includes("--teach")) {
+    await teachEvals(provider, runs, only);
     return;
   }
   const chosen = only ? SCENARIOS.filter(s => s.name === only) : SCENARIOS;
@@ -326,3 +333,28 @@ function report(scenarios, results, runs) {
 }
 
 await main();
+
+/** Teach evals (INV-1369): the real teaching cue, the real model (or --fake), scored by teach-evals.ts. */
+async function teachEvals(provider, runs, only) {
+  const { runTeachEvals, renderTeachScorecard } = await import("../src/host/teach-evals.ts");
+  const { TEACH_MAX_TOKENS } = await import("../src/host/teach.ts");
+  const fake = process.argv.includes("--fake");
+  let generate;
+  if (fake) {
+    generate = async (_cue, fixture) => fixture.reference;
+  } else {
+    const { createClient } = await import("../src/host/provider.ts");
+    const client = createClient(provider);
+    // The same call the orchestrator makes for a teaching draft: one user message, no tools.
+    generate = async cue => {
+      const response = await client.messages.create({ model: provider.model, max_tokens: Math.min(TEACH_MAX_TOKENS, provider.maxTokens), messages: [{ role: "user", content: cue }] });
+      return response.content.filter(block => block.type === "text").map(block => block.text).join("\n");
+    };
+  }
+  const rows = await runTeachEvals(generate, { runs: fake ? 1 : runs, ...(only !== undefined ? { only } : {}) });
+  console.log(`\nteach evals — ${fake ? "reference answers (--fake)" : `${provider.label} ${provider.model}`}, ${fake ? 1 : runs} run(s) each\n`);
+  console.log(renderTeachScorecard(rows));
+  const out = flag("--json");
+  if (out !== undefined) writeFileSync(out, JSON.stringify({ at: new Date().toISOString(), model: fake ? "reference" : provider.model, rows }, null, 2));
+  if (fake && rows.some(row => !row.passed)) process.exitCode = 1;
+}

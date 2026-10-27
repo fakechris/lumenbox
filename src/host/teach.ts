@@ -41,6 +41,14 @@ export function parseTrace(text: string): TraceEvent[] {
   return out;
 }
 
+/**
+ * The teaching call's output budget. A thinking model spends most of it before writing: measured
+ * 2026-10-27 on MiniMax-M3.1-Flash, 7–11k output tokens per draft, and at the old 4096 it stopped
+ * on max_tokens with no text at all — every live teaching draft failed (INV-1369). Under the
+ * ~21k non-streaming ceiling.
+ */
+export const TEACH_MAX_TOKENS = 16_000;
+
 /** How much of each outline the cue carries; the agent reads the file for the rest. */
 export const OUTLINE_CHARS = 1_500;
 /** How many events the cue carries inline before it points at the file. */
