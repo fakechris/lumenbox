@@ -743,7 +743,7 @@ whole thing as a body and the skill still works under a name derived from its di
 when choosing, so without one the skill exists and is never chosen.
 
 **A skill can say what an agent may change in it** (INV-1375, `src/host/skill-contract.ts`, after
-hermit's adapter contract). A `skill.yaml` beside SKILL.md lists the `learnable` files (globs, with
+a learnable/fixed contract over the skill's files). A `skill.yaml` beside SKILL.md lists the `learnable` files (globs, with
 optional `max_bytes`, `max_files` and required `frontmatter` keys), the `fixed` files, the
 `fixed_frontmatter` keys whose value never changes (`allowed-tools` is the usual one) and
 `max_diff_lines` per write (default 200). `write_file` and `edit_file` refuse a write to that skill
@@ -756,7 +756,7 @@ instead. A skill without skill.yaml is unaffected; writes through `bash` are not
 
 **Skills from elsewhere come in as drafts** (INV-1367, `src/host/skill-import.ts`):
 `agentbox skills import <dir> [--agent <name>]` reads a folder with a SKILL.md, or a folder of
-them (OpenClaw and Hermes `skills/`, Rakazo `.agents/skills`, a Skill Recorder export), and makes
+them — the SKILL.md layout other agent hosts and recording tools already write — and makes
 each a teaching draft — the same review a demonstration gets; nothing is installed. Frontmatter is
 reduced to name, description, `scope: global` and `allowed-tools` mapped onto our tools (inline,
 bracketed or YAML-list form; Claude Code patterns like `Bash(gh *)` reduced to the tool, unknown

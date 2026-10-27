@@ -5,9 +5,8 @@
  * (`recordAs`, docs/15): the transcript keeps "ran with SHOP_PASSWORD in its environment" and
  * not the output. But the same words still travel two other ways — the `text` and `interim`
  * events the web page, the channel's streaming card and the activity feed read, and the reply a
- * channel delivers — and nothing scrubbed those. HarnessRouter's `env_secret` redaction covers
- * the response, the stream, the trace and the record alike (research 2026-10-25); this closes
- * the two we were missing.
+ * channel delivers — and nothing scrubbed those. A secret withheld from the record has to be
+ * withheld from the stream and the trace too; this closes the two we were missing.
  *
  * The rule is the memory guard's (INV-1333): a held value is matched in clear and in the
  * encodings a model is likely to repeat it in — base64, base64url, percent-encoded, spaces

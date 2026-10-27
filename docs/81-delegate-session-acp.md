@@ -136,7 +136,7 @@ live box on this machine still runs the pre-mcode image; the next image release 
 
 ## 4. Who gives up when: every timeout on the delegation path (INV-1310)
 
-nanoMuse's hub (research 2026-10-20) has five timeouts that disagree (120 s, 600 s, 10 min, 15 min,
+One hub we read has five timeouts that disagree (120 s, 600 s, 10 min, 15 min,
 15 min) and a caller that sends no stop when it gives up, so a target keeps working for minutes
 after nobody is listening. This table is ours, so the same question has one answer here. The
 rule it enforces: **whichever layer gives up first sends the engine a cancel, and the brief
@@ -166,7 +166,7 @@ settles as aborted with that layer named in the record**; no layer gives up sile
 
 Two things the table makes plain. The brief has no clock of its own, on purpose: a deep piece of
 repository work has no sensible duration, and a timer that killed it at a round number would be
-the nanoMuse defect in a different coat. What has a clock is every wait on something else (a
+that hub's defect in a different coat. What has a clock is every wait on something else (a
 person, an engine's answer to a cancel, a steer), and each of those says what it does when it runs
 out. And the one path that used to give up silently is now the cancel grace: before INV-1310 a
 cancel was a notification and nothing more, so an engine that ignored it kept the brief in flight

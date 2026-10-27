@@ -18,8 +18,7 @@
  * read-only, the writable paths bound back in, and a fresh network namespace in which the
  * loopback ports are bridged from Unix sockets by socat. Where neither mechanism works the
  * sandbox says so and the caller refuses to run: a silent fall-back to bare would be the one
- * thing worse than not having it. The design follows anthropics/sandbox-runtime (research
- * 2026-10-24), minus its TLS termination, which the relay does not do.
+ * thing worse than not having it. No TLS termination: the relay does not do it.
  *
  * Known gaps, stated: a hard link made outside the rules is not covered; on Linux the deny
  * list only covers paths that exist when the command starts; Seatbelt matches the real path,

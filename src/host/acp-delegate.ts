@@ -52,7 +52,7 @@ export interface AcpDelegateDeps {
  * The engine's time to answer `session/cancel` (INV-1310). A cancel is a notification: nothing
  * comes back for it but the prompt's own response, `stopReason: cancelled`. An engine that never
  * sends that would leave the brief in flight for ever with nobody collecting it, which is the
- * nanoMuse hub's failure (the caller gives up, the target keeps working). So the host waits this
+ * the failure we have seen in another hub (the caller gives up, the target keeps working). So the host waits this
  * long, then settles the brief as aborted by its own hand and closes the session.
  */
 export const CANCEL_GRACE_MS = 15_000;

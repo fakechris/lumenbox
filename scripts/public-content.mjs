@@ -1,5 +1,5 @@
 /**
- * What may not appear in public text (INV-1381, after pomerado's public-content scan): this repo
+ * What may not appear in public text (INV-1381): this repo
  * is public, and a handoff written at the end of a long session is where a home directory, a
  * tailnet address or an operator's own host alias slips in. Ticket ids (INV-123) are allowed on
  * purpose: citing the ledger in public is how this project works.

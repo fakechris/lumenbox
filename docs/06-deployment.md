@@ -224,7 +224,7 @@ State it plainly, because a deployment decision depends on it.
 
 Two things run outside the box with the orchestrator's own privileges: a `RunOnHost`
 command and a stdio MCP server. Both now run under the operating system's sandbox,
-built in `src/host/host-sandbox.ts` after anthropics/sandbox-runtime (research 2026-10-24):
+built in `src/host/host-sandbox.ts`:
 
 - **Mechanism.** macOS: a Seatbelt profile handed to `sandbox-exec -p`. Linux: bubblewrap
   (`bwrap --ro-bind / /`, the writable paths bound back in, `--unshare-net --unshare-pid`),
