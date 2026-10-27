@@ -1169,6 +1169,7 @@ export const APP_HTML = String.raw`<!doctype html>
     <div id="teachreviewhints" class="fieldnote" style="display:none;white-space:pre-wrap;margin:6px 0"></div>
     <pre id="teachreviewtext" style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;padding:14px;border:1px solid var(--border)"></pre>
     <details id="teachreviewhistory" style="display:none"><summary>Earlier questions and answers</summary><pre id="teachreviewhistorytext" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>
+    <details id="teachreviewversions" style="display:none"><summary>Published versions</summary><div id="teachreviewversionlist" class="fieldnote"></div></details>
     <div id="teachreviewclarification" style="display:none;margin:14px 0">
       <label for="teachreviewanswer">Answer the teaching question</label>
       <textarea id="teachreviewanswer" rows="4" maxlength="4096" placeholder="Explain the goal, variable inputs and expected output. Do not include credentials." style="display:block;width:100%;box-sizing:border-box;margin:8px 0"></textarea>
@@ -1657,8 +1658,7 @@ var md = window.markdownit ? window.markdownit(${JSON.stringify(MARKDOWN_OPTIONS
 
 function renderMarkdown(text) {
   var value = String(text == null ? "" : text);
-  // If the library did not load, show escaped text rather than nothing. A feed
-  // showing raw Markdown is poor; a blank one is useless.
+  // If the library did not load, show escaped text rather than nothing. A feed showing raw Markdown is poor; a blank one is useless.
   if (!md) return linkifyWorkPaths("<p>" + esc(value).replace(/\n/g, "<br>") + "</p>");
   // After rendering, not before: markdown-it escapes and structures first, so this is operating on
   // known-safe HTML and cannot be used to inject anything. html:false remains the boundary.
@@ -2765,8 +2765,7 @@ function settingsProviderChanged() {
     return '<option value="' + esc(m) + '">';
   }).join("");
   $("setmodel").placeholder = "preset default: " + preset.model;
-  // Whether a credential is present is worth showing; the credential itself never
-  // leaves the server.
+  // Whether a credential is present is worth showing; the credential itself never leaves the server.
   $("setkeynote").textContent = preset.keyPresent
     ? "A key for " + preset.keyEnv + " is already provided. Leave blank to keep using it."
     : "No " + preset.keyEnv + " found — paste a key here, or export the variable before starting.";
@@ -2838,8 +2837,7 @@ function waitForRestart() {
   }, 1500);
 }
 
-// One real request against the endpoint, so "invalid api key" is learned here and not
-// at the restart after saving.
+// One real request against the endpoint, so "invalid api key" is learned here and not at the restart after saving.
 $("settest").onclick = function () {
   var body = { provider: $("setprovider").value };
   var model = $("setmodel").value.trim();
@@ -3758,8 +3756,7 @@ function searchable(who, when) {
     }
     if (cutoff > 0) {
       var at = node.getAttribute("data-at");
-      // A row with no timestamp is kept: dropping it would silently hide the live turn,
-      // which is the most likely thing being looked for.
+      // A row with no timestamp is kept: dropping it would silently hide the live turn, which is the most likely thing being looked for.
       if (at && Date.parse(at) < cutoff) continue;
     }
     out.push(node);
@@ -3901,8 +3898,7 @@ function closeCtx() { $("ctxmenu").className = ""; ctxTarget = null; }
 
 $("chat").addEventListener("contextmenu", function (event) {
   var msg = event.target.closest(".msg");
-  // A selection means they want the browser's own menu, which can copy exactly what is
-  // selected. Ours would be in the way.
+  // A selection means they want the browser's own menu, which can copy exactly what is selected. Ours would be in the way.
   if (!msg || String(window.getSelection() || "").length > 0) return;
   event.preventDefault();
   ctxTarget = msg;
@@ -3922,8 +3918,7 @@ $("chat").addEventListener("contextmenu", function (event) {
   }).join("");
   var menu = $("ctxmenu");
   menu.className = "on";
-  // Kept on screen: a menu opened near the bottom right of the window would otherwise
-  // hang off it and the last item would be unreachable.
+  // Kept on screen: a menu opened near the bottom right of the window would otherwise hang off it and the last item would be unreachable.
   var width = menu.offsetWidth, height = menu.offsetHeight;
   menu.style.left = Math.min(event.clientX, window.innerWidth - width - 8) + "px";
   menu.style.top = Math.min(event.clientY, window.innerHeight - height - 8) + "px";
@@ -6174,6 +6169,7 @@ var selectedTeachingDraft = null;
 function showTeachingDraft(draft) {
   selectedTeachingDraft = draft;
   $("teachreviewdetail").style.display = "block";
+  showSkillVersions(draft).catch(function () {});
   $("teachreviewsource").textContent = draft.status + " · agent " + draft.agentId + " · box " + draft.boxId + " · session " + draft.sessionId + " · trace " + draft.eventsPath + (draft.videoPath ? " · video " + draft.videoPath : "") + (draft.redactedCredentials && draft.redactedCredentials.length ? " · credentials removed from the trace before the model read it: " + draft.redactedCredentials.join(", ") : "") + (draft.source ? " · imported from " + draft.source.from + (draft.files ? " with " + Object.keys(draft.files).length + " helper file(s)" : "") : "") + (draft.unknownTools && draft.unknownTools.length ? " · tools with no equivalent here, dropped: " + draft.unknownTools.join(", ") : "");
   $("teachreviewtext").textContent = draft.skill || draft.question;
   // Advice on the wording, from the same check the skills page uses; publishing is never blocked by it.
@@ -6236,6 +6232,10 @@ async function decideTeachingDraft(action) {
     showTeachingDraft(teachingDrafts.find(function (item) { return item.id === draft.id; }) || draft);
     if (action === "clarify") $("teachreviewanswer").value = answer;
   }
+}
+// A published skill's versions (INV-1376); rolling back publishes that version again as a new one.
+async function showSkillVersions(draft) { var list = $("teachreviewversionlist"); $("teachreviewversions").style.display = draft.status === "published" ? "" : "none"; list.replaceChildren(); if (draft.status !== "published") return; var r = await fetch("/api/teaching-drafts/versions?id=" + encodeURIComponent(draft.id)); var p = await r.json(); var vs = p.versions || []; if (!r.ok || !vs.length) { list.textContent = p.error || "No recorded versions."; return; }
+  vs.forEach(function (v, i) { var row = document.createElement("div"); row.textContent = "v" + v.version + " · " + v.at + " · " + v.author + " · " + v.message + " "; if (i < vs.length - 1) { var b = document.createElement("button"); b.className = "btn ghost sm"; b.textContent = "Roll back to v" + v.version; b.onclick = async function () { var x = await fetch("/api/teaching-drafts/rollback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: draft.id, version: v.version }) }); var y = await x.json(); $("teachreviewstatus").textContent = x.ok ? "Published v" + v.version + " again as a new version; nothing was run." : (y.error || "Rollback failed"); showSkillVersions(draft); if (x.ok) refreshSkills(); }; row.appendChild(b); } list.appendChild(row); });
 }
 $("teachreviewclarify").onclick = function () { decideTeachingDraft("clarify"); };
 $("teachreviewpublish").onclick = function () { decideTeachingDraft("approve"); };

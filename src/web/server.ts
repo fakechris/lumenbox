@@ -5379,6 +5379,33 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           }
           return;
         }
+        // A published skill's versions, and a rollback that publishes one of them again (INV-1376).
+        if (route === "GET /api/teaching-drafts/versions" || route === "POST /api/teaching-drafts/rollback") {
+          if (refusedRole("admin")) return;
+          const body = route.startsWith("POST") ? await readJson(req) : { id: url.searchParams.get("id") ?? "" };
+          if (typeof body.id !== "string" || body.id === "") {
+            send(res, 400, { error: "Name the published draft" });
+            return;
+          }
+          try {
+            if (!mayReadBox(orchestrator.teachDrafts.get(body.id).boxId)) {
+              send(res, 403, { error: "This teaching box is not available to this caller" });
+              return;
+            }
+            if (route.startsWith("POST")) {
+              const version = Number(body.version);
+              if (!Number.isSafeInteger(version) || version < 1) {
+                send(res, 400, { error: "Name the version to return to" });
+                return;
+              }
+              await orchestrator.approveTeachingDraft(body.id, "", caller.userId ?? "local-operator", version);
+            }
+            send(res, 200, { versions: orchestrator.teachDrafts.versions(body.id) });
+          } catch (error) {
+            send(res, 409, { error: error instanceof Error ? error.message : String(error) });
+          }
+          return;
+        }
         if (route === "GET /api/skills") {
           const loaded = await orchestrator.skills.refresh();
           send(res, 200, {
