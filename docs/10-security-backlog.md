@@ -43,7 +43,12 @@ agent reads that the vault does not hold is untouched. Because a tool result rea
 request, an exact copy a `RunOnHost` command printed is replaced before the model reads it, not
 only in the record. One fact this entry previously left out: `browser_fill_secret` sends the
 value into the box's browser by design (INV-402); the page then holds it, and what the box does
-with that page is the box's boundary, not the vault's.
+with that page is the box's boundary, not the vault's. Before it types, the fill refuses a
+field whose form could submit anywhere the secret does not name — the form's `action` and every
+submitter's `formaction`, read from `form.elements` so a button outside the form joined by
+`form="id"` counts too (INV-1380) — and after it types, the agent hears, by length only, when
+the field kept fewer characters than the secret has, and when the field is in no form, so the
+destination is script-chosen and unknowable from here.
 
 **And the MCP face keeps it so (docs/33, 2026-09-03):** a delegated engine in the box reaches the
 host's MCP tools through a per-job route on the web server — a key in the path, a bearer in the

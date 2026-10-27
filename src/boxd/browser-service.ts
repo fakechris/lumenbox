@@ -437,91 +437,8 @@ export function verifyBrowserExpectation(expect: ActExpectation | undefined, aft
   return { status: unmet === undefined ? "satisfied" : "unsatisfied", source: "dom", detail: unmet === undefined ? "requested DOM postcondition holds at readback" : "requested DOM postcondition does not hold" };
 }
 
-/**
- * Whether a page's host is one a secret may be typed into: exact, or `*.example.com`
- * for the domain and its subdomains. An empty list allows nothing — a credential with no
- * home is fillable nowhere.
- */
-export function hostAllowed(host: string, domains: readonly string[]): boolean {
-  const target = host.trim().toLowerCase();
-  if (target === "") return false;
-  return domains.some(entry => {
-    const pattern = entry.trim().toLowerCase();
-    if (pattern === "") return false;
-    if (pattern.startsWith("*.")) {
-      const bare = pattern.slice(2);
-      return target === bare || target.endsWith(`.${bare}`);
-    }
-    return target === pattern;
-  });
-}
-
-/** What a field says about itself, read in the isolated world before a secret goes into it. */
-export interface SecretField {
-  /** Lower-case tag name. */
-  tag: string;
-  /** The input's `type`, lower-case; empty for anything that is not an input. */
-  type: string;
-  /** The owning form's `method` (`get`, `post`, `dialog`), or undefined when the field has no form. */
-  formMethod?: string;
-  /** Each submitter's `formmethod` override, lower-case: a button can turn a POST form into a GET. */
-  submitMethods?: readonly string[];
-  /**
-   * Every URL the owning form could submit to, resolved: the form's `action` and each submitter's
-   * `formaction`. Empty when the field has no form.
-   */
-  submitTargets: readonly string[];
-}
-
-/** A host on this machine: nothing between here and there to read cleartext, nobody to hand data to. */
-function loopback(hostname: string): boolean {
-  const bare = hostname.replace(/^\[|\]$/g, "").toLowerCase();
-  return bare === "localhost" || bare === "::1" || /^127\./.test(bare) || bare.endsWith(".localhost");
-}
-
-/** Input types a credential is typed into. `search` is not one: its value becomes a URL. */
-const SECRET_INPUT_TYPES = new Set(["password", "text", "email", "tel", "number"]);
-
-/**
- * Why a secret may not go into this field, or undefined when it may.
- *
- * The page's host is checked separately (`hostAllowed`); this is the rest of the binding. A host
- * match alone lets a secret be typed into a comment box on the right site and posted for anyone
- * to read, or into a login form whose `action` sends it somewhere else. So: a single-line input
- * of a credential type, in no form or a form that posts, and every place that form can submit
- * to is a host the secret names. Script-driven submission (`fetch` from the page) is outside
- * what a field can tell us; docs/49 lists it as a bypass surface.
- */
-export function secretFieldRefusal(field: SecretField, domains: readonly string[]): string | undefined {
-  if (field.tag !== "input") {
-    return `That element is a ${field.tag || "non-field"}; a secret is filled only into a single-line input, never a text area or editable region whose content gets posted.`;
-  }
-  if (!SECRET_INPUT_TYPES.has(field.type)) {
-    return `That input is type="${field.type}"; a secret is filled only into a password, text, email, tel or number input.`;
-  }
-  for (const method of [field.formMethod, ...(field.submitMethods ?? [])]) {
-    if (method !== undefined && method !== "post") {
-      return `That field's form can submit with method="${method}", which would put the secret in a URL; it is not filled.`;
-    }
-  }
-  for (const target of field.submitTargets) {
-    let url: URL | undefined;
-    try {
-      url = new URL(target);
-    } catch {
-      url = undefined;
-    }
-    const host = url?.host ?? "";
-    if (!hostAllowed(host, domains)) {
-      return `That field's form submits to ${host || "an unreadable address"}, and the secret may only go to ${domains.join(", ")}.`;
-    }
-    // Cleartext is readable by everything between here and there. A page on this machine is exempt.
-    if (url !== undefined && url.protocol !== "https:" && !(url.protocol === "http:" && loopback(url.hostname))) {
-      return `That field's form submits over ${url.protocol.replace(":", "")}, not https, so the secret would travel readable; it is not filled.`;
-    }
-  }
-  return undefined;
-}
+import { hostAllowed, loopback, SECRET_FIELD_DESCRIPTION, secretFieldRefusal, secretFillNote, type SecretField } from "./secret-field.ts";
+export { hostAllowed, SECRET_FIELD_DESCRIPTION, secretFieldRefusal, secretFillNote, type SecretField } from "./secret-field.ts";
 
 /** How many tabs one desktop's agent may hold open. Beyond this, close one first. */
 export const PAGE_BUDGET = 6;
@@ -1175,7 +1092,7 @@ class BrowserPage {
    * it, and the field is marked so the outline redacts it. Nothing here goes through
    * `Input.insertText`, so no keystroke reaches a recording.
    */
-  async fillSecret(ref: string, value: string, domains: readonly string[]): Promise<void> {
+  async fillSecret(ref: string, value: string, domains: readonly string[]): Promise<string | undefined> {
     if (ref.includes("@")) {
       throw new CdpError("fill_secret works on the main document only; a field inside a frame cannot be filled this way.");
     }
@@ -1197,16 +1114,7 @@ class BrowserPage {
     const described = (await this.session.send("Runtime.callFunctionOn", {
       objectId: target,
       returnByValue: true,
-      functionDeclaration:
-        "function(){ const tag = (this.tagName || '').toLowerCase();" +
-        " const type = tag === 'input' ? String(this.type || '').toLowerCase() : '';" +
-        " const form = this.form || null; if (!form) return { tag, type, submitTargets: [] };" +
-        " const targets = [form.action];" +
-        " const methods = [];" +
-        " for (const el of form.querySelectorAll('button, input[type=submit], input[type=image]')) {" +
-        "   if (el.hasAttribute('formaction')) targets.push(el.formAction);" +
-        "   if (el.hasAttribute('formmethod')) methods.push(String(el.formMethod || 'get').toLowerCase()); }" +
-        " return { tag, type, formMethod: String(form.method || 'get').toLowerCase(), submitMethods: methods, submitTargets: targets }; }",
+      functionDeclaration: SECRET_FIELD_DESCRIPTION,
     })) as { result?: { value?: SecretField } };
     const field = described.result?.value;
     if (field === undefined) throw new CdpError("Could not read that field before filling it; take a fresh snapshot.");
@@ -1221,11 +1129,14 @@ class BrowserPage {
         " const d = Object.getOwnPropertyDescriptor(proto, 'value'); if (!d || !d.set) return 'not a field';" +
         " this.focus(); d.set.call(this, v);" +
         " this.dispatchEvent(new Event('input', {bubbles:true})); this.dispatchEvent(new Event('change', {bubbles:true}));" +
-        " this.setAttribute('data-lumen-secret', '1'); return 'ok'; }",
+        " this.setAttribute('data-lumen-secret', '1'); return 'ok:' + String(this.value).length; }",
     })) as { result?: { value?: string } };
-    if (outcome.result?.value !== "ok") {
+    const filled = /^ok:(\d+)$/.exec(outcome.result?.value ?? "");
+    if (filled === null) {
       throw new CdpError(`That element is ${outcome.result?.value ?? "not fillable"}: fill_secret needs an input or a textarea.`);
     }
+    // Only lengths travel back, never the value (INV-1380).
+    return secretFillNote(field, value.length, Number(filled[1]));
   }
 
   /**
@@ -2030,8 +1941,9 @@ export class BrowserService {
     if (value === "") throw new CdpError("The secret resolved to nothing; nothing was typed.");
     const page = await this.pageFor(display);
     await page.assertFresh(snapshot);
-    await page.fillSecret(ref, value, domains);
-    return this.settled(display, await page.report());
+    const note = await page.fillSecret(ref, value, domains);
+    const result = await this.settled(display, await page.report());
+    return note === undefined ? result : { ...result, note: result.note === undefined ? note : `${note} ${result.note}` };
   }
 
   async scroll(display: number, direction: string, amount: number): Promise<BrowserResult> {

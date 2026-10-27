@@ -400,3 +400,45 @@ test("the person's details going into a third-party page are asked about, naming
   assert.equal(sensitiveInputReason(field({ type: "email", signIn: true }), "me@example.com", "github.com"), undefined, "signing in is what naming the site asked for");
   assert.match(sensitiveInputReason(field({ autocomplete: "cc-number", signIn: true }), "4111111111111111", shop) ?? "", /payment card/, "a card is still a card on a form with a password");
 });
+
+import { SECRET_FIELD_DESCRIPTION, secretFillNote } from "./browser-service.ts";
+
+/** A minimal element for the page-side reader: tag, type, attributes, and the form it belongs to. */
+function element(tagName: string, type: string, attributes: Record<string, string> = {}, extra: Record<string, unknown> = {}) {
+  return {
+    tagName: tagName.toUpperCase(),
+    type,
+    hasAttribute: (name: string) => name in attributes,
+    formAction: attributes.formaction,
+    formMethod: attributes.formmethod,
+    ...extra,
+  };
+}
+
+test("the page-side reader counts a submitter outside the form that joins it by form=id (INV-1380)", () => {
+  const read = new Function(`return (${SECRET_FIELD_DESCRIPTION})`)() as (this: unknown) => { hasForm: boolean; submitTargets: string[]; submitMethods: string[] };
+  // form.elements lists every associated control, including a button placed outside the <form>
+  // element with form="login"; a querySelectorAll under the form would never see it.
+  const outside = element("button", "submit", { formaction: "https://evil.example/collect" }, { formAction: "https://evil.example/collect" });
+  const plainButton = element("button", "button", { formaction: "https://ignored.example/" }, { formAction: "https://ignored.example/" });
+  const form = { action: "https://github.com/session", method: "post", elements: [element("input", "password"), plainButton, outside] };
+  const field = read.call(element("input", "password", {}, { form }));
+  assert.equal(field.hasForm, true);
+  assert.deepEqual(field.submitTargets, ["https://github.com/session", "https://evil.example/collect"], "type=button does not submit; the outside submitter does");
+  assert.match(secretFieldRefusal(field as never, ["*.github.com"]) ?? "", /evil\.example/);
+
+  const lone = read.call(element("input", "password", {}, { form: null }));
+  assert.equal(lone.hasForm, false);
+  assert.deepEqual(lone.submitTargets, []);
+});
+
+test("after a fill the agent hears a truncated field and an unknowable destination, never the value", () => {
+  const login = { tag: "input", type: "password", hasForm: true, formMethod: "post", submitTargets: ["https://github.com/session"] };
+  assert.equal(secretFillNote(login, 12, 12), undefined, "a whole value in a posting form needs no note");
+  assert.match(secretFillNote(login, 12, 8) ?? "", /kept 8 of the secret's 12 characters/);
+  assert.match(secretFillNote({ ...login, hasForm: false, submitTargets: [] }, 12, 12) ?? "", /in no form/);
+  const both = secretFillNote({ ...login, hasForm: false, submitTargets: [] }, 12, 8) ?? "";
+  assert.match(both, /kept 8/);
+  assert.match(both, /in no form/);
+  assert.equal(secretFillNote({ ...login, hasForm: undefined }, 5, 5), undefined, "an older reader without hasForm says nothing extra");
+});
