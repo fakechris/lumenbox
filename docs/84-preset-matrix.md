@@ -9,7 +9,7 @@
 `scripts/preset-matrix.mjs` runs every Delegate preset against every provider this machine has
 a key for, through five scenarios, and writes a dated table. It exists so "does Delegate to pi
 still work on this provider" is answered before a release, not by a user after it (INV-1359,
-after HarnessRouter's harness × model × scenario table, research 2026-10-25).
+a harness × model × scenario table).
 
 ## What a cell measures
 

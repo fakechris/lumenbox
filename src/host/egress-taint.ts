@@ -5,9 +5,9 @@
  * The egress relay says which hosts a box may reach (bundles' `egressHosts`) and hard-denies
  * the dangerous ones (INV-1224); the policy gate says which actions a person must approve. The
  * two never met: "this turn just resolved a vault secret" changed nothing about whether the
- * next `curl` to a host nobody listed would be asked about. nanoMuse's Sentinel has the rule in
- * one line (docs research 2026-10-20): once private data was read in this chat, any call that
- * can egress outside the allow list asks, whatever the mode. This is that rule, in the shape of
+ * next `curl` to a host nobody listed would be asked about. The rule fits in one line: once
+ * private data was read in this chat, any call that can egress outside the allow list asks,
+ * whatever the mode. This is that rule, in the shape of
  * our gate: the taint is a fact about the turn, recorded by the tool that read the secret; the
  * gate asks when a tainted turn's call would leave the box for a host outside the allow list;
  * the approval is once-only, because "always" for an exfiltration path is not a thing a card

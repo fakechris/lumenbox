@@ -52,8 +52,7 @@ const clock = (at: string) => at.slice(11, 19);
  * The trace's text with every credential-shaped value replaced by `[credential:<kind>]`
  * (INV-1368). boxd already keeps keystrokes as counts and redacts password fields in outlines;
  * this is the second pass for what those cannot see — a token in a URL, in a shell command, in
- * a page's visible text — before any of it reaches the teaching model. Skill Recorder runs
- * secretlint on everything it sends for the same reason.
+ * a page's visible text — before any of it reaches the teaching model.
  */
 export function redactCredentials(text: string): string {
   let out = text;

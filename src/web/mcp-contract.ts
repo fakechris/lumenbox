@@ -3,7 +3,7 @@
  * retry runs twice, and which capabilities exist.
  *
  * The person's MCP door (`/mcp`, assign_task / task_status / …) had behaviour but no contract.
- * HarnessRouter's UHP (research 2026-10-25) writes the same four things down and checks them:
+ * The contract has four parts:
  * terminal states `completed | failed | incomplete | cancelled`, `ignored_fields`, an
  * `Idempotency-Key` that returns the first result and waits while it is still running, and a
  * capability list where a missing capability is reported `false` rather than left out. This

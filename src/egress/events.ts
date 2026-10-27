@@ -146,7 +146,7 @@ export function summariseEvents(events: readonly NetworkEvent[]): { box: string;
  * rather than reading a timeout — and learns the rule each host hit, so the next step is
  * obvious: a host nobody listed stays refused; a listed one is reached without asking.
  * One line per host:port and reason, oldest first, at most `maxLines` before "+N more";
- * never the call token. The shape follows sandbox-runtime's `<sandbox_violations>`
+ * never the call token. The shape follows the `<sandbox_violations>` block
  * (research 2026-10-24).
  */
 export function egressDeniedBlock(events: readonly NetworkEvent[], maxLines = 10): string | undefined {

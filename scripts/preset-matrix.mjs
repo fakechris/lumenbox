@@ -2,8 +2,7 @@
 /**
  * The Delegate support matrix (INV-1359): every preset, against every provider this machine has a
  * key for, through five scenarios — so "does Delegate to pi still work on this provider" is answered
- * before a release rather than by a user after it. After HarnessRouter's harness × model × scenario
- * table (research 2026-10-25).
+ * before a release rather than by a user after it.
  *
  * Scenarios, one cell each:
  *   first      a brief that writes one file; the engine's own report says done, the file exists

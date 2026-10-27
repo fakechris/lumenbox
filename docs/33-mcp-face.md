@@ -246,7 +246,7 @@ Enumerate and answer, with the concrete input:
 ## 8. The person's side door: the written contract (INV-1358, 2026-10-26)
 
 The side door (`/mcp`: `assign_task`, `task_status`, `list_agents`, `run_on_box`,
-`box_screenshot`) had behaviour but no contract. HarnessRouter's UHP (INV-1357) writes the
+`box_screenshot`) had behaviour but no contract. A written agent-task protocol has the
 four things an outside caller needs and checks them; this is ours, in `src/web/mcp-contract.ts`
 and `mcp-tools.ts`:
 

@@ -1,7 +1,6 @@
 /**
- * Importing SKILL.md folders from elsewhere (INV-1367): OpenClaw and Hermes `skills/` folders,
- * Rakazo's `.agents/skills`, Microsoft Skill Recorder's generic export — all one shape, a
- * directory with a SKILL.md (name / description / allowed-tools frontmatter) and files beside it.
+ * Importing SKILL.md folders from elsewhere (INV-1367): other agent hosts' `skills/` folders and
+ * recording tools' exports are all one shape, a directory with a SKILL.md (name / description / allowed-tools frontmatter) and files beside it.
  *
  * An import is never installed directly. Each skill becomes a teaching draft (teach-drafts.ts), the
  * same gate a demonstration goes through: a person reads it and publishes it, or does not. What
@@ -88,7 +87,7 @@ export function findSkillFolders(root: string): SkillFolder[] {
 
 /**
  * `allowed-tools` as other hosts write it: inline (`Bash, Read`), bracketed, or a YAML list on the
- * lines below (Skill Recorder), with Claude Code permission patterns like `Bash(gh *)` reduced to
+ * lines below, with Claude Code permission patterns like `Bash(gh *)` reduced to
  * the tool they scope — the scope itself has no equivalent here and the policy gate decides instead.
  */
 export function allowedToolsRaw(text: string): string | undefined {

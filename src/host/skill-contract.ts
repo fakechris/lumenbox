@@ -1,5 +1,5 @@
 /**
- * A skill's structural contract (INV-1375, after hermit's adapter.yaml, INV-1371 §3.1).
+ * A skill's structural contract (INV-1375).
  *
  * A skill is a directory the agent can write (skills.ts), which is the point — and the problem
  * when a person has written part of it that the agent must not rewrite: a constraint section, the
@@ -16,7 +16,7 @@
  *   fixed_frontmatter: [allowed-tools]      # SKILL.md keys whose value never changes
  *   max_diff_lines: 200         # one write may not change more lines than this
  *
- * Every model-produced change passes the same five checks hermit has three of — fixed parts
+ * Every model-produced change passes five checks — fixed parts
  * unchanged, files inside learnable, size and format limits — plus the two it admits are missing:
  * a diff cap and a credential scan. A single write that fails is refused (the file stays at its
  * current version); a multi-file draft has each failing file reverted to the current version, and
