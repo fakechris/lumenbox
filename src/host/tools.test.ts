@@ -1096,3 +1096,36 @@ test("bash offers desktop startup only to desktop-capable conversations", () => 
     assert.ok("command" in properties);
   }
 });
+
+test("browser_act with commit: a pressed mark is refused until browser_verify_write says not_done (INV-1379)", async () => {
+  let clicks = 0;
+  const context = boxContext({
+    browser: async () => {
+      clicks += 1;
+      return { url: "https://shop.test/checkout", title: "Checkout", snapshot: "- button \"Pay\"", outcome: "ok" as const, progress: { executed_count: 1, dispatch: "sent" as const }, verification: { status: "satisfied" as const, source: "dom" as const, detail: "receipt shown" } };
+    },
+  });
+  (context as { conversation?: string }).conversation = "write-path-1";
+  const pay = { action: "click", ref: "e1", snapshot: "s1", commit: "pay", writePath: ["pay"] };
+  const first = await dispatchTool("browser_act", pay, context);
+  assert.match(first.text, /Write path complete: pay ✓/);
+  const again = await dispatchTool("browser_act", { ...pay, writePath: undefined }, context);
+  assert.equal(again.isError, true);
+  assert.match(again.text, /^Outcome: refused — "pay" was already pressed/);
+  assert.equal(clicks, 1, "the second press never reached the box");
+  const verified = await dispatchTool("browser_verify_write", { mark: "pay", verdict: "not_done", evidence: "card form still empty" }, context);
+  assert.match(verified.text, /Recorded "pay" as not_done/);
+  await dispatchTool("browser_act", { ...pay, writePath: undefined }, context);
+  assert.equal(clicks, 2);
+});
+
+test("a commit click whose result is unknown counts as pressed: the repeat is refused (INV-1379)", async () => {
+  const context = boxContext({ browser: async () => ({ url: "https://shop.test/", title: "Shop", snapshot: "-" }) });
+  (context as { conversation?: string }).conversation = "write-path-2";
+  const send = { action: "click", ref: "e2", snapshot: "s2", commit: "send", writePath: ["send"] };
+  const first = await dispatchTool("browser_act", send, context);
+  assert.match(first.text, /^Outcome: unknown/);
+  assert.match(first.text, /Write path: send \?/);
+  const again = await dispatchTool("browser_act", { ...send, writePath: undefined }, context);
+  assert.match(again.text, /^Outcome: refused — "send" was already pressed \(its result was not confirmed\)/);
+});

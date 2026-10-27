@@ -2672,6 +2672,7 @@ export const ALL_TOOLS: readonly string[] = [
   "NothingToSay",
   "WaitForControl",
   "browser_fill_secret",
+  "browser_verify_write",
   "browser_pages",
   "NoteSiteLearning",
   "computer",
