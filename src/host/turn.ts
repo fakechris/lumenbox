@@ -142,6 +142,7 @@ import type { McpManager } from "./mcp.ts";
 import { TOOL_BUDGET_WARNING } from "./mcp.ts";
 import { imageRefusalOf, replaceRefusedImages } from "./image-refusal.ts";
 import { budgetReport, budgetWarning, replayNote, TurnBudget, type TurnBudgetConfig } from "./turn-budget.ts";
+import { writePathKey, writePaths } from "./write-path.ts";
 import { outboundRedactor, redactEvent } from "./redact-outbound.ts";
 import { lookupPair, splitRoster } from "./tool-roster.ts";
 import { narrowTools, toolAllowed } from "./scopes.ts";
@@ -862,8 +863,7 @@ export function storableResult(
   keep?: KeepContext
 ): Anthropic.ToolResultBlockParam {
   if (recordAs !== undefined) {
-    // Not truncated and not scanned for a spill pointer: this text was written to be
-    // stored, and it is already short.
+    // Not truncated and not scanned for a spill pointer: this text was written to be stored, and it is already short.
     return {
       type: "tool_result",
       tool_use_id: block.tool_use_id,
@@ -895,8 +895,7 @@ export function storableResult(
   // what lets a later ReadHistory walk from a 2,000-character remnant to the whole
   // file. Trimming is not the same as losing, but only if the trail is kept.
   if (whole.length > text.length) {
-    // Two writers use the phrase: the box for spilled shell output, the host for a fetched
-    // page it kept (fetched.ts). Both pointers are worth carrying.
+    // Two writers use the phrase: the box for spilled shell output, the host for a fetched page it kept (fetched.ts). Both pointers are worth carrying.
     const pointer = whole.slice(text.length).match(/\[[^\]]*full (?:output|page) kept:[^\]]*\]/);
     if (pointer !== null) text += `\n${pointer[0]}`;
     // Nobody kept it, so the cut does. Everything without a spill of its own used to end here — the whole of a
@@ -2267,6 +2266,7 @@ ${outcome.text}`;
 
       rounds.length = 0; // a fresh budget means a fresh judgement about looping
     }
+    const openWrite = writePaths.incomplete(writePathKey(agent.id, conversation)); if (openWrite !== undefined) emit({ type: "interim", agentId: agent.id, agentName: agent.profile.name, text: openWrite }); // INV-1379
     finish("done");
   } catch (error) {
     // An end either way. A turn that failed or was aborted is over, and leaving it open would have

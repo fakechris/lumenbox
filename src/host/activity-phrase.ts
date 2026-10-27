@@ -51,6 +51,7 @@ const TEMPLATES: Record<string, Template> = {
   browser_open: { en: "opening {detail}", zh: "打开网站 {detail}" },
   browser_pages: { en: "switching browser tabs", zh: "切换浏览器标签页" },
   browser_snapshot: { en: "looking at the page", zh: "查看网页" },
+  browser_verify_write: { en: "checking whether a submission went through", zh: "核对提交是否生效" },
   browser_read: { en: "reading the page", zh: "阅读网页" },
   browser_act: { en: "acting on the page ({detail})", zh: "操作网页({detail})" },
   browser_scroll: { en: "scrolling the page", zh: "滚动网页" },

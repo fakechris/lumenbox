@@ -85,6 +85,7 @@ import {
 import { afterTimeout, idempotencyOfHttp } from "../protocol/idempotency.ts";
 import { skillSlugOf } from "./skill-provenance.ts";
 import { skillWriteRefusal } from "./skill-contract.ts";
+import { afterCommit, withWritePath, writePathKey, writePaths } from "./write-path.ts";
 import { capRefusal, standingFileOf, writeStandingFromAgent } from "./standing.ts";
 import { SKILL_FILENAME } from "./skills.ts";
 import {
@@ -2113,6 +2114,7 @@ export function buildTools(
         },
       }
     );
+    withWritePath(tools); // INV-1379: commit/writePath on browser_act, and browser_verify_write
   }
 
   tools.push({
@@ -4300,6 +4302,8 @@ export async function dispatchTool(
       }
     }
 
+    case "browser_verify_write":
+      return { text: writePaths.verify(writePathKey(context.agent.id, context.conversation), String(input.mark ?? ""), (["done", "not_done", "unknown"] as const).find(v => v === input.verdict) ?? "unknown", String(input.evidence ?? "").slice(0, 300)) };
     case "browser_open":
     case "browser_snapshot":
     case "browser_read":
@@ -4309,12 +4313,9 @@ export async function dispatchTool(
     case "browser_pages":
     case "browser_upload": {
       const box = requireBox(context);
-      // Refused rather than left to a default. With no display named, boxd falls back to
-      // the first one — which belongs to whichever agent was given it — so an agent whose
-      // own desktop failed to start would silently drive somebody else's screen. Observed:
-      // a desktop that would not come up produced "Desktop 1 belongs to another agent",
-      // which reads as a permissions problem and is actually this. Checked before the
-      // lease, which needs the display to know whose screen is being claimed.
+      // Refused rather than defaulted: with no display named boxd falls back to the first one, so an
+      // agent whose desktop failed to start would silently drive somebody else's screen (observed as
+      // "Desktop 1 belongs to another agent"). Checked before the lease, which needs the display.
       if (context.displayIndex === undefined) {
         return {
           text:
@@ -4325,10 +4326,8 @@ export async function dispatchTool(
         };
       }
 
-      // The same desktop guard the pixel tools use, keyed by the same display. Driving
-      // the browser on another agent's screen is driving their screen, whichever
-      // protocol it travels over — and an agent on its own screen is never refused
-      // for a colleague's.
+      // The pixel tools' desktop guard, same display key: another agent's browser is their screen,
+      // whichever protocol drives it; an agent on its own screen is never refused for a colleague's.
       if (context.display && !context.display.acquire(context.displayIndex, context.agent.id)) {
         const holderId = context.display.heldBy(context.displayIndex)!;
         const holder = context.registry.tryGet(holderId);
@@ -4368,6 +4367,8 @@ export async function dispatchTool(
         }
       }
       if (name === "browser_act") {
+        const writeRefusal = typeof input.commit === "string" ? writePaths.before(writePathKey(context.agent.id, context.conversation), input.commit, input.writePath) : undefined; // INV-1379
+        if (writeRefusal !== undefined) return { text: outcomeLine("refused", writeRefusal), isError: true };
         request.action = String(input.action ?? "");
         if (typeof input.ref === "string") request.ref = input.ref;
         if (typeof input.snapshot === "string" && input.snapshot !== "") request.snapshot = input.snapshot;
@@ -4454,7 +4455,7 @@ export async function dispatchTool(
         return { text: parts.join("\n\n"), ...(outcome === "unknown" ? { isError: true } : {}) };
       };
       try {
-        return render(await box.browser(request));
+        return afterCommit(writePathKey(context.agent.id, context.conversation), input, render(await box.browser(request)));
       } catch (error) {
         // A browser error is nearly always actionable — no browser running, a stale ref,
         // an element with no position — so it goes back as text rather than as a throw.
@@ -4492,7 +4493,7 @@ export async function dispatchTool(
             return { text: outcomeLine("refused", decision.reason), isError: true, ...(decision.approval !== undefined ? { approval: { id: decision.approval.id } } : {}) };
           }
           try {
-            return render(await box.browser({ ...request, confirmed: true, ...(sensitive !== undefined ? { inputApproval: { ...sensitive, expiresAt: decision.inputExpiresAt ?? Date.now() + SENSITIVE_INPUT_TTL_MS } } : {}) }));
+            return afterCommit(writePathKey(context.agent.id, context.conversation), input, render(await box.browser({ ...request, confirmed: true, ...(sensitive !== undefined ? { inputApproval: { ...sensitive, expiresAt: decision.inputExpiresAt ?? Date.now() + SENSITIVE_INPUT_TTL_MS } } : {}) })));
           } catch (again) {
             const why = again instanceof Error ? again.message : String(again);
             return { text: outcomeLine(boxErrorOutcome(again) ?? "failed", why), isError: true };
@@ -4511,14 +4512,14 @@ export async function dispatchTool(
             ...(context.displayIndex !== undefined ? { display: context.displayIndex } : {}),
             ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
           });
-          return {
+          return afterCommit(writePathKey(context.agent.id, context.conversation), input, {
             text: `${verdict}\n\nThe page as it stands: ${now.title || "(untitled)"} — ${now.url}\n\n${now.snapshot}`,
             isError: true,
-          };
+          });
         } catch {
           // The snapshot failing too means the browser is the problem, and the original
           // message already says so.
-          return { text: verdict, isError: true };
+          return afterCommit(writePathKey(context.agent.id, context.conversation), input, { text: verdict, isError: true });
         }
       }
     }

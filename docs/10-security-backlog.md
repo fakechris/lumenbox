@@ -50,6 +50,17 @@ submitter's `formaction`, read from `form.elements` so a button outside the form
 the field kept fewer characters than the secret has, and when the field is in no form, so the
 destination is script-chosen and unknowable from here.
 
+**And a write is not done twice (INV-1379, `src/host/write-path.ts`).** The box refuses a click it
+reads as paying, publishing or deleting until a person approves it; what it could not stop was
+the agent pressing Submit again after a timeout. A multi-step browser write now declares its path
+— `writePath: ["add-to-cart", "pay"]` on the first `browser_act` that passes `commit` — and each
+commit step names its mark. A mark whose click went out is recorded (confirmed when its `expect`
+was met, unconfirmed otherwise) and cannot be pressed again until `browser_verify_write` records
+`not_done` from the page; `unknown` keeps it refused and says to ask the person. A path left
+unfinished at the end of the turn is said as `incomplete (write_path)`. The approval card shows
+the declared path with the click. In memory, six hours: a restart forgets an open path, and the
+box's own irreversible gate still stands.
+
 **And the MCP face keeps it so (docs/33, 2026-09-03):** a delegated engine in the box reaches the
 host's MCP tools through a per-job route on the web server — a key in the path, a bearer in the
 job's environment, exact tool names snapshotted at mint, a lease the host renews from the box's
