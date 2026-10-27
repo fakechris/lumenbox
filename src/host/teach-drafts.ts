@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { BoxClient } from "../box/client.ts";
-import { loadSkills, parseSkillFile, skillFrom, SKILLS_DIR } from "./skills.ts";
+import { loadSkills, parseSkillFile, skillFrom, SKILLS_DIR, slugify } from "./skills.ts";
 import { namesControlSurface } from "./control-surfaces.ts";
 import { isDisplayIndex } from "../protocol/index.ts";
 
@@ -29,6 +29,12 @@ export interface TeachProposal {
   clarifications?: TeachClarification[];
   /** Credential kinds removed from the trace before the teaching model read it (INV-1368); never values. */
   redactedCredentials?: string[];
+  /** Where an imported draft came from (INV-1367); a demonstration has none. */
+  source?: { kind: "import"; from: string };
+  /** Helper files published beside SKILL.md, relative path → text (imports only). */
+  files?: Record<string, string>;
+  /** allowed-tools names the import could not map onto ours; dropped, shown to the reviewer. */
+  unknownTools?: string[];
 }
 
 /** Accept an entire Markdown wrapper, never extract JSON from surrounding prose. */
@@ -59,7 +65,7 @@ export interface TeachDraft extends TeachProposal {
 type Publish = (boxId: string, path: string, content: string) => Promise<void>;
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 const idFor = (boxId: string, sessionId: string) => hash(JSON.stringify([boxId, sessionId]));
-const digestOf = (p: TeachProposal) => hash(JSON.stringify([p.boxId, p.agentId, p.sessionId, p.eventsPath, p.videoPath ?? null, p.skill, p.question, ...(p.display === undefined && p.epoch === undefined && p.taskId === undefined ? [] : [{ display: p.display, epoch: p.epoch, taskId: p.taskId }]), ...(p.clarifications === undefined ? [] : [p.clarifications]), ...(p.redactedCredentials === undefined ? [] : [{ redactedCredentials: p.redactedCredentials }])]));
+const digestOf = (p: TeachProposal) => hash(JSON.stringify([p.boxId, p.agentId, p.sessionId, p.eventsPath, p.videoPath ?? null, p.skill, p.question, ...(p.display === undefined && p.epoch === undefined && p.taskId === undefined ? [] : [{ display: p.display, epoch: p.epoch, taskId: p.taskId }]), ...(p.clarifications === undefined ? [] : [p.clarifications]), ...(p.redactedCredentials === undefined ? [] : [{ redactedCredentials: p.redactedCredentials }]), ...(p.source === undefined ? [] : [{ source: p.source, files: p.files ?? null, unknownTools: p.unknownTools ?? null }])]));
 
 function validateProposal(p: TeachProposal): void {
   for (const value of [p.boxId, p.agentId, p.sessionId, p.eventsPath]) {
@@ -69,6 +75,14 @@ function validateProposal(p: TeachProposal): void {
   if (p.epoch !== undefined && (!Number.isSafeInteger(p.epoch) || p.epoch < 0)) throw new Error("Invalid teaching epoch");
   if (p.taskId !== undefined && (typeof p.taskId !== "string" || !p.taskId.trim() || p.taskId.length > 256)) throw new Error("Invalid teaching task");
   if (p.videoPath !== undefined && typeof p.videoPath !== "string") throw new Error("Invalid teaching video");
+  if (p.source !== undefined && (p.source.kind !== "import" || typeof p.source.from !== "string" || !p.source.from.trim() || p.source.from.length > 4096)) throw new Error("Invalid import source");
+  if (p.files !== undefined) {
+    const entries = typeof p.files === "object" && p.files !== null ? Object.entries(p.files) : [];
+    if (p.source === undefined || entries.length === 0 || entries.length > 50 ||
+        entries.some(([path, content]) => typeof content !== "string" || content.length > 512 * 1024 || !/^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/.test(path) ||
+          path.split("/").some(part => part === ".." || part === ".") || path === "SKILL.md")) throw new Error("Invalid imported files");
+  }
+  if (p.unknownTools !== undefined && (!Array.isArray(p.unknownTools) || p.unknownTools.length > 64 || p.unknownTools.some(name => typeof name !== "string" || name.length > 128))) throw new Error("Invalid unknown tools");
   if (p.redactedCredentials !== undefined && (!Array.isArray(p.redactedCredentials) || p.redactedCredentials.length > 32 ||
       p.redactedCredentials.some(kind => typeof kind !== "string" || !/^[a-z0-9-]{1,40}$/.test(kind)))) throw new Error("Invalid teaching redaction note");
   if (p.clarifications !== undefined) {
@@ -92,12 +106,21 @@ function validateProposal(p: TeachProposal): void {
     const result = skillFrom("teaching", parsed);
     if ("problem" in result || !parsed.meta.name || parsed.meta.scope !== "global") throw new Error("Teaching skill needs name, description, scope: global and a body");
     // Publishing a teaching result must not also install an unattended routine.
-    if (Object.keys(parsed.meta).some(key => !["name", "description", "scope"].includes(key))) throw new Error("Teaching drafts cannot install a schedule, listener or other execution metadata");
+    // An import may carry allowed-tools, already mapped onto ours; nothing that runs unattended.
+    const allowedKeys = p.source?.kind === "import" ? ["name", "description", "scope", "allowed-tools"] : ["name", "description", "scope"];
+    if (Object.keys(parsed.meta).some(key => !allowedKeys.includes(key))) throw new Error("Teaching drafts cannot install a schedule, listener or other execution metadata");
   }
 }
 
 /** The real box publication path, shared by the host and filesystem integration tests. */
 export async function publishTeachingSkill(box: Pick<BoxClient, "writeFile" | "uploadFile" | "readFile" | "listDir">, path: string, content: string): Promise<void> {
+  if (!path.endsWith("/SKILL.md")) {
+    // A helper file beside an imported skill (INV-1367): written and read back; nothing loads it alone.
+    await box.writeFile(path, content);
+    const back = await box.readFile(path);
+    if (back.truncated || back.content !== content) throw new Error(`Published helper file verification failed: ${path}`);
+    return;
+  }
   // /fs/upload is atomic but requires its parent directory to exist. The harmless
   // provenance file creates that directory without exposing a partial SKILL.md.
   await box.writeFile(`${dirname(path)}/publication.json`, JSON.stringify({ source: "teaching", sha256: hash(content) }));
@@ -187,8 +210,11 @@ export class TeachDrafts {
       this.save(draft); // Durable approval precedes the remote effect, including retries.
     }
     const pending = (async () => {
-      // A unique destination avoids replacing an unrelated, already published recipe.
-      await publish(draft.boxId, `${SKILLS_DIR}/taught-${draft.id}/SKILL.md`, draft.skill!);
+      // A unique destination avoids replacing an unrelated, already published recipe. Helper files
+      // first and SKILL.md last, so the skill is never loadable with half its files.
+      const dir = `${SKILLS_DIR}/${draft.source?.kind === "import" ? `imported-${slugify(parseSkillFile(draft.skill!).meta.name ?? "skill")}-${draft.id.slice(0, 8)}` : `taught-${draft.id}`}`;
+      for (const [path, content] of Object.entries(draft.files ?? {})) await publish(draft.boxId, `${dir}/${path}`, content);
+      await publish(draft.boxId, `${dir}/SKILL.md`, draft.skill!);
       draft.status = "published";
       this.save(draft);
       return draft;
