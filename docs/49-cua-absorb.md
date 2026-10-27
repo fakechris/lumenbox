@@ -115,6 +115,23 @@
 - 2026-10-27（INV-1368）：教学 prompt 带排好序的工具目录（connector/MCP → WebFetch/read_file → bash → browser_act → computer）、录制动作→工具的映射、"description 是触发器"；trace 进模型前过 `CREDENTIAL_PATTERNS`（`redactCredentials`），命中处变成 `[credential:<kind>]`，草稿记 `redactedCredentials`（只有种类），审阅页显示。
 - 验收：对 C2 的 fixture 示范生成的 skill 能被 agent 在新会话里 dry run 通过；skill 文本 grep 不到坐标与密钥；教学回合有 transcript 证据。
 
+#### C3 附：teach 评测（INV-1369，2026-10-27）
+
+`npm run scenario -- --teach [--runs N] [--fake]`（`src/host/teach-evals.ts`）：6 个合成示范（boxd 的 trace 形状：点击、键入次数、outline、shell、导航），每个配确定性检查——能解析、写/不写 skill、frontmatter、无屏幕坐标、无凭据、示范里的具体值变成 `{input}`、description 是触发器、步骤顺序、后果性步骤先确认、不复述评分词（tripwire）；跑之前先做 absence probe（cue 里不得含该 fixture 的期望与参考答案）。`--fake` 用每个 fixture 的参考答案，不调模型，是评分器与 cue 的回归信号。
+
+第一次真模型运行（MiniMax-M3.1-Flash，每个 fixture 3 次）先暴露了一个现场 bug（INV-1391）：教学调用的输出预算 4096 被思考耗尽，返回无文本，且 thinking 块被当作非文本拒收——4/6 fixture 全部解析失败，即现场所有示范都产不出草稿。预算改为共用的 `TEACH_MAX_TOKENS = 16_000`（实测每份草稿输出 7–11k tokens）、校验只要求 end_turn 且有 text 块之后重跑：
+
+| fixture | 通过 | 失败的检查 |
+|---|---|---|
+| issue-search | 1/3 | 坐标；示范值 "flaky test" 原样保留 |
+| expense-submit | 1/3 | 示范值 "42.50" 原样保留 |
+| disk-report | 3/3 | — |
+| csv-export | 1/3 | 坐标；示范值 "2026-43" 原样保留 |
+| token-in-url | 3/3 | — |
+| only-sign-in | 3/3 | — |
+
+读法：凭据扣除与"只登录就不写"稳定；最常见的失分是把示范里的具体值留在 skill 里（检查是严格的，"例如 flaky test" 也算），其次是写进屏幕坐标。这是改 teach prompt 时要看的两列；本项不改 prompt。
+
 ## 里程碑 D（挂在 INV-141 下）：浏览器定位与多页
 
 对应第 6 条。这是 INV-141「浏览器与 computer-use」的自然延伸，不新建里程碑。

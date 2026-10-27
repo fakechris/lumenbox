@@ -98,7 +98,7 @@ import { buildAuditPrompt, manifestDiff, MANIFEST_COMMAND, parseManifest, settle
 import { ALL_MCP_TOOLS, ScopeStore } from "./scopes.ts";
 import { delegateEndedNote, settleDelegate } from "./engine-report.ts";
 import { BundleStore } from "./bundles.ts";
-import { TeachRunner, parseTrace, teachingClarificationCue } from "./teach.ts";
+import { TEACH_MAX_TOKENS, TeachRunner, parseTrace, teachingClarificationCue } from "./teach.ts";
 import { TeachDrafts, parseTeachingResponse, publishTeachingSkill } from "./teach-drafts.ts";
 import { RuleStore } from "./rules.ts";
 import { MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
@@ -1399,11 +1399,11 @@ export class Orchestrator {
       ...(caller?.userId === undefined ? {} : { principalId: caller.userId }) });
     if (!decision.allow) throw new Error(decision.reason);
     const { client, provider } = this.runtimeForAgent(agent);
-    const response = await client.messages.create({ model: provider.model, max_tokens: Math.min(4096, provider.maxTokens),
+    const response = await client.messages.create({ model: provider.model, max_tokens: Math.min(TEACH_MAX_TOKENS, provider.maxTokens),
       messages: [{ role: "user", content: text }] });
     this.usage.recordAside({ kind: "review", agentId, agentName: agent.profile.name, provider: provider.label,
       model: provider.model, usage: response.usage, ...(caller?.userId === undefined ? {} : { principal: caller.userId }) });
-    if (response.stop_reason !== "end_turn" || response.content.some(block => block.type !== "text")) throw new Error("Teaching generation did not return a complete text proposal");
+    if (response.stop_reason !== "end_turn" || !response.content.some(block => block.type === "text")) throw new Error(`Teaching generation did not return a complete text proposal (stop: ${response.stop_reason})`);
     return response.content.filter((block): block is Anthropic.TextBlock => block.type === "text").map(block => block.text).join("\n");
   }
 
