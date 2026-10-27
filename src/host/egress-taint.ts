@@ -29,11 +29,17 @@ import { MCP_SEPARATOR } from "./mcp.ts";
 import { sideEffectOf } from "./side-effects.ts";
 import { permitted } from "../egress/relay.ts";
 
-/** What a turn read that makes its outbound calls a question. */
-export type TaintSource = "vault";
+/**
+ * What a turn read that makes its outbound calls a question. `vault`: a secret, so leaving the
+ * allow list asks (INV-1309). `outside`: content from outside the box (a page, a search, a
+ * connector's or an MCP server's result), so the first call to a service this turn has not used
+ * yet asks (INV-1366) — even a read sends its arguments, which the outside text may have chosen.
+ */
+export type TaintSource = "vault" | "outside";
 
 const SOURCE_TEXT: Record<TaintSource, string> = {
   vault: "a vault secret",
+  outside: "content from outside the box",
 };
 
 /** What the gate learned about a call: why the turn is tainted and where the call would go. */
@@ -41,6 +47,8 @@ export interface Taint {
   sources: TaintSource[];
   /** Where the call would reach, in the words the card and the record use. */
   target: string;
+  /** Which rule asked: leaving the allow list (default) or a service's first use this turn. */
+  rule?: "egress" | "first-use";
 }
 
 /** Where a call would reach: hosts the host could read off the input, or a target it could not. */
@@ -52,6 +60,22 @@ export type Outbound = { hosts: string[] } | { unknown: string };
  */
 export class TurnTaint {
   private readonly turns = new Map<string, Set<TaintSource>>();
+  /** The services (MCP servers, connectors) each turn has already called, for the first-use rule. */
+  private readonly used = new Map<string, Set<string>>();
+
+  /** Records that this turn called the service; a later call to it is not a first use. */
+  markUsed(turnId: string, service: string): void {
+    if (turnId === "") return;
+    const set = this.used.get(turnId) ?? new Set<string>();
+    set.add(service);
+    this.used.delete(turnId);
+    this.used.set(turnId, set);
+    if (this.used.size > 512) this.used.delete(this.used.keys().next().value!);
+  }
+
+  hasUsed(turnId: string | undefined, service: string): boolean {
+    return turnId !== undefined && (this.used.get(turnId)?.has(service) ?? false);
+  }
 
   mark(turnId: string, source: TaintSource): void {
     if (turnId === "") return;
@@ -161,17 +185,59 @@ export function taintOf(
 ): Taint | undefined {
   const sources = taint.sourcesOf(call.turnId);
   if (sources.length === 0) return undefined;
-  const outbound = outboundOf(call.tool, call.input);
-  if (outbound === undefined) return undefined;
-  if ("hosts" in outbound) {
-    if (allHostsAllowed(outbound.hosts, allow)) return undefined;
-    return { sources, target: outbound.hosts.join(", ") };
+  // The egress rule is the vault's: a turn that only read a web page must still be able to browse.
+  if (sources.includes("vault")) {
+    const outbound = outboundOf(call.tool, call.input);
+    if (outbound !== undefined) {
+      if (!("hosts" in outbound)) return { sources, target: outbound.unknown };
+      if (!allHostsAllowed(outbound.hosts, allow)) return { sources, target: outbound.hosts.join(", ") };
+    }
   }
-  return { sources, target: outbound.unknown };
+  if (sources.includes("outside")) {
+    const service = serviceOf(call.tool, call.input);
+    if (service !== undefined && !taint.hasUsed(call.turnId, service.key)) {
+      return { sources: ["outside"], target: service.label, rule: "first-use" };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The outside service a call talks to, keyed for the first-use rule: an MCP server by name, a
+ * connector by its id. Built-in tools that stay in the box, or reach the web through the relay's
+ * own rules, are not services here.
+ */
+export function serviceOf(tool: string, input: Record<string, unknown>): { key: string; label: string } | undefined {
+  if (tool.includes(MCP_SEPARATOR)) {
+    const server = tool.slice(0, tool.indexOf(MCP_SEPARATOR));
+    return { key: `mcp:${server}`, label: `the ${server} MCP server` };
+  }
+  if (tool === "connector_request") {
+    const connector = String(input.connector ?? "").trim().toLowerCase();
+    return connector === "" ? undefined : { key: `connector:${connector}`, label: `the ${connector} connector` };
+  }
+  return undefined;
 }
 
 /** The card's and the record's words for a taint: the kind of thing read, never its content. */
 export function describeTaint(taint: Taint): string {
   const read = taint.sources.map(source => SOURCE_TEXT[source]).join(" and ");
+  if (taint.rule === "first-use") return `[tainted: this turn read ${read}; this is its first call to ${taint.target}]`;
   return `[tainted: this turn read ${read}; ${taint.target} is outside the box's egress allow list]`;
+}
+
+/**
+ * After a call is allowed (INV-1366): it is a use of its service, and a call that reads outside
+ * content taints the turn from here on. Marked after the call's own check, so the read itself is
+ * not asked about; the next first use of another service is.
+ */
+export function noteAllowedCall(
+  taint: TurnTaint,
+  call: { tool: string; input: Record<string, unknown>; turnId?: string },
+  externalTool: ((tool: string) => boolean) | undefined
+): void {
+  if (call.turnId === undefined) return;
+  const service = serviceOf(call.tool, call.input);
+  if (service !== undefined) taint.markUsed(call.turnId, service.key);
+  if (externalTool?.(call.tool) === true) taint.mark(call.turnId, "outside");
 }

@@ -39,7 +39,7 @@ import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
 import type { RuleStore } from "./rules.ts";
 import { sideEffectOf, tierAsks, tierGateMode, type SideEffectTier, type TierGateMode } from "./side-effects.ts";
-import { describeTaint, type Taint, taintOf, TurnTaint } from "./egress-taint.ts";
+import { describeTaint, noteAllowedCall, type Taint, taintOf, TurnTaint } from "./egress-taint.ts";
 import { approvalReason, describeRequest, fingerprintOf, tooLargeToApprove } from "./policy-describe.ts";
 
 export { describeRequest, fingerprintOf, MAX_APPROVABLE_DESCRIPTION, tooLargeToApprove } from "./policy-describe.ts";
@@ -384,8 +384,9 @@ export class PolicyGate {
   /** What a reusable grant belongs to: the box (INV-539). */
   private readonly subjectOf: (agentId: string) => string;
   private readonly egressAllow: (agentId: string) => readonly string[];
-  /** The turns that read private material (INV-1309); the tools that read it mark here. */
+  /** Turns that read a secret (INV-1309) or outside content (INV-1366, per `externalTool`, set by the orchestrator). */
   readonly taint = new TurnTaint();
+  externalTool: ((tool: string) => boolean) | undefined;
 
   /**
    * Called the moment a new approval is created, with what a notifier needs.
@@ -485,6 +486,7 @@ export class PolicyGate {
         return { allow: false, reason };
       }
     }
+    if (request.kind === "tool" && decision.allow) noteAllowedCall(this.taint, request, this.externalTool);
     // Only a durably recorded human grant can seed reuse. An allowed ordinary call cannot.
     if (decision.allow && inputGrant !== undefined && consequence?.kind === "approval-used") {
       const scope = this.turnInputs.get(inputGrant.key);
@@ -614,14 +616,12 @@ export class PolicyGate {
   /** The last tool check's tier, and whether the tier gate would have asked where it did not. */
   private lastTier: SideEffectTier | undefined;
   private lastWouldAsk = false;
-  /** The last tool check's taint, for the audit row: the kind of thing read and the target, never content. */
-  private lastTaint: Taint | undefined;
+  private lastTaint: Taint | undefined; // For the audit row: the kind of thing read and the target, never content.
 
   private decideTool(request: Extract<PolicyRequest, { kind: "tool" }>): Outcome {
     this.lastRule = undefined;
-    // The taint rule (INV-1309): a turn that read private material does not carry it to a host
-    // outside the allow list unasked. Like a host command or an irreversible finding, nothing
-    // the operator's lists say lifts it; unlike them, the answer can only ever be "once".
+    // The taint rules (INV-1309 egress after a vault read, INV-1366 first use after an outside
+    // read): nothing the operator's lists say lifts them, and the answer is only ever "once".
     this.lastTaint = taintOf(request, this.taint, this.egressAllow(request.agentId));
     // What the call does to the world (INV-691). The box's finding outranks the declaration:
     // a click is `self` until the box says this click pays.
