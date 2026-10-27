@@ -765,6 +765,15 @@ no symlinks or dotfolders) ride along and are published before SKILL.md, under
 `imported-<slug>-<id>/`. A skill naming the host's own records, or a SKILL.md holding a credential
 shape, is refused; a helper holding one is left out and reported.
 
+**A host-published skill has a history** (INV-1376, `src/host/skill-history.ts`): a git
+repository at `~/.agentbox/skill-history` records every teaching or imported draft (author: the
+agent) and every publish (author: the person), each publish tagged `skill/<dir>/vN`. A `CARD.md`
+generated at publication goes into the box beside SKILL.md: version, who published it and when,
+where it came from, and that nobody ran it — no evaluation is recorded per skill yet. The review
+panel lists a published skill's versions; rolling back publishes an older one again as a new
+version, so history is only appended. A credential shape refuses the commit. Skills an agent
+writes directly in the box are not in this history; provenance records who wrote them.
+
 A `schedule:` line in the frontmatter makes a skill an **automation** — no second object and no
 second store; the only difference between a recipe and an automation is a line of frontmatter. Five
 cron fields, `@every <n><unit>`, or `@hourly`/`@daily`/`@weekly`/`@monthly`. Deliberately a subset:

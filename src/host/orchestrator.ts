@@ -99,7 +99,7 @@ import { ALL_MCP_TOOLS, ScopeStore } from "./scopes.ts";
 import { delegateEndedNote, settleDelegate } from "./engine-report.ts";
 import { BundleStore } from "./bundles.ts";
 import { TEACH_MAX_TOKENS, TeachRunner, parseTrace, teachingClarificationCue } from "./teach.ts";
-import { TeachDrafts, parseTeachingResponse, publishTeachingSkill } from "./teach-drafts.ts";
+import { SkillHistory, TeachDrafts, parseTeachingResponse, publishTeachingSkill } from "./teach-drafts.ts";
 import { RuleStore } from "./rules.ts";
 import { MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
 import type { HostProcessDeps, HostRunner } from "./host-runner.ts";
@@ -401,7 +401,7 @@ export class Orchestrator {
   readonly scopes: ScopeStore | undefined;
   /** Bundles attached to boxes (INV-420). */
   readonly bundles: BundleStore;
-  readonly teachDrafts = new TeachDrafts(join(agentboxHome(), "skills-drafts"));
+  readonly teachDrafts = new TeachDrafts(join(agentboxHome(), "skills-drafts"), new SkillHistory(join(agentboxHome(), "skill-history")));
   /** What routines committed to and whether anything holds it (INV-528). */
   readonly commitments = new CommitmentLedger(join(agentboxHome(), "commitments.jsonl"));
   /** Every routine run's result, delivered or not (INV-776). */
@@ -460,8 +460,7 @@ export class Orchestrator {
    */
   reloadMcp(): { started: string[]; stopped: string[]; kept: string[] } | undefined {
     if (!this.mcpFromConfig) return undefined;
-    // Every route dies with the list it was minted against (docs/33 §0a): a hot-swapped server
-    // must not hand a running engine tools nobody named.
+    // Every route dies with the list it was minted against (docs/33 §0a): a hot-swapped server must not hand a running engine tools nobody named.
     const revoked = this.mcpFace.revokeAll("MCP servers reloaded");
     if (revoked > 0) console.error(`[mcp-face] ${revoked} route(s) revoked by the reload`);
     return this.mcp.reload(mcpServersFrom(loadConfig(line => console.error(`[config] ${line}`))));
@@ -1421,12 +1420,13 @@ export class Orchestrator {
     });
   }
 
-  async approveTeachingDraft(id: string, digest: string, actor: string): Promise<import("./teach-drafts.ts").TeachDraft> {
-    return this.teachDrafts.approve(id, digest, actor, async (boxId, path, content) => {
+  async approveTeachingDraft(id: string, digest: string, actor: string, rollbackTo?: number): Promise<import("./teach-drafts.ts").TeachDraft> { // rollbackTo: publish that version again as a new one (INV-1376)
+    const publish = async (boxId: string, path: string, content: string) => {
       const box = this.boxClients.get(boxId);
       if (!box) throw new Error("The teaching box is disconnected; retry when it reconnects");
       await publishTeachingSkill(box, path, content);
-    });
+    };
+    return rollbackTo === undefined ? this.teachDrafts.approve(id, digest, actor, publish) : this.teachDrafts.rollback(id, rollbackTo, actor, publish);
   }
 
   /** Every connected box: demonstrations that ended by lapse or shutdown have no hand-back to trigger them. */

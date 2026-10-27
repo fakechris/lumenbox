@@ -5,6 +5,8 @@ import { dirname, join } from "node:path";
 import type { BoxClient } from "../box/client.ts";
 import { loadSkills, parseSkillFile, skillFrom, SKILLS_DIR, slugify } from "./skills.ts";
 import { namesControlSurface } from "./control-surfaces.ts";
+import { SkillHistory, type SkillVersion } from "./skill-history.ts";
+export { SkillHistory } from "./skill-history.ts";
 import { isDisplayIndex } from "../protocol/index.ts";
 
 export interface TeachClarification {
@@ -133,9 +135,25 @@ export async function publishTeachingSkill(box: Pick<BoxClient, "writeFile" | "u
 }
 
 /** Single hostd writer, like TaskStore. Drafts live outside every box's formal skill roots. */
+/** Where a draft publishes in the box: imported-<slug>-<id> for an import, taught-<id> for a demonstration. */
+export function publishDirOf(draft: Pick<TeachDraft, "id" | "source" | "skill">): string {
+  return draft.source?.kind === "import" ? `imported-${slugify(parseSkillFile(draft.skill ?? "").meta.name ?? "skill")}-${draft.id.slice(0, 8)}` : `taught-${draft.id}`;
+}
+
 export class TeachDrafts {
   private readonly publishing = new Map<string, Promise<TeachDraft>>();
-  constructor(private readonly root: string) {}
+  /** `history` (INV-1376) records drafts and publishes; absent, nothing is recorded. */
+  constructor(private readonly root: string, private readonly history?: SkillHistory) {}
+
+  /** History is a record of the gate, not the gate: a failure to write it is logged, never fatal. */
+  private recordHistory(what: string, write: (history: SkillHistory) => void): void {
+    if (this.history === undefined) return;
+    try {
+      write(this.history);
+    } catch (error) {
+      console.error(`[skill-history] could not record ${what}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
 
   forSession(boxId: string, sessionId: string): TeachDraft | undefined {
     const id = idFor(boxId, sessionId);
@@ -148,6 +166,9 @@ export class TeachDrafts {
     if (existing) return existing; // A queue retry cannot replace the text a person reviewed.
     const draft: TeachDraft = { ...proposal, id: idFor(proposal.boxId, proposal.sessionId), digest: digestOf(proposal), createdAt: new Date().toISOString(), status: "draft" };
     this.save(draft);
+    if (draft.skill !== null) {
+      this.recordHistory(`draft ${draft.id}`, history => history.recordDraft({ id: draft.id, agentName: draft.agentId, source: draft.source?.from ?? draft.eventsPath, files: { ...(draft.files ?? {}), "SKILL.md": draft.skill! } }));
+    }
     return draft;
   }
 
@@ -212,15 +233,49 @@ export class TeachDrafts {
     const pending = (async () => {
       // A unique destination avoids replacing an unrelated, already published recipe. Helper files
       // first and SKILL.md last, so the skill is never loadable with half its files.
-      const dir = `${SKILLS_DIR}/${draft.source?.kind === "import" ? `imported-${slugify(parseSkillFile(draft.skill!).meta.name ?? "skill")}-${draft.id.slice(0, 8)}` : `taught-${draft.id}`}`;
+      const slug = publishDirOf(draft);
+      const dir = `${SKILLS_DIR}/${slug}`;
+      const at = new Date().toISOString();
+      const record = { dir: slug, name: parseSkillFile(draft.skill!).meta.name ?? slug, files: { ...(draft.files ?? {}), "SKILL.md": draft.skill! }, actor: draft.approvedBy ?? actor, source: draft.source?.from ?? draft.eventsPath, draftId: draft.id };
       for (const [path, content] of Object.entries(draft.files ?? {})) await publish(draft.boxId, `${dir}/${path}`, content);
+      // The card travels with the skill, generated here (INV-1376); the version is the one about to be tagged.
+      if (this.history !== undefined) await publish(draft.boxId, `${dir}/CARD.md`, SkillHistory.card(record, this.history.nextVersion(slug), at));
       await publish(draft.boxId, `${dir}/SKILL.md`, draft.skill!);
       draft.status = "published";
       this.save(draft);
+      this.recordHistory(`publish of ${slug}`, history => history.recordPublish(record, at));
       return draft;
     })();
     this.publishing.set(id, pending);
     try { return await pending; } finally { this.publishing.delete(id); }
+  }
+
+  /** The published versions of a draft's skill, oldest first; empty without history or before a publish. */
+  versions(id: string): SkillVersion[] {
+    const draft = this.get(id);
+    return this.history === undefined || draft.status !== "published" ? [] : this.history.versions(publishDirOf(draft));
+  }
+
+  /**
+   * Publishes an earlier version of a published skill again, as a new version (INV-1376). History
+   * is appended, never rewritten; the box gets the old files and a fresh CARD.md saying so.
+   */
+  async rollback(id: string, version: number, actor: string, publish: Publish): Promise<TeachDraft> {
+    const draft = this.get(id);
+    if (this.history === undefined) throw new Error("This installation keeps no skill history");
+    if (draft.status !== "published") throw new Error("Only a published skill has versions to return to");
+    if (!actor.trim()) throw new Error("A rolling-back operator is required");
+    const slug = publishDirOf(draft);
+    const files = this.history.filesAt(slug, version);
+    if (files["SKILL.md"] === undefined) throw new Error(`Version ${version} has no SKILL.md`);
+    const at = new Date().toISOString();
+    const record = { dir: slug, name: parseSkillFile(files["SKILL.md"]).meta.name ?? slug, files, actor, source: draft.source?.from ?? draft.eventsPath, draftId: draft.id, note: `rollback to v${version}` };
+    const dir = `${SKILLS_DIR}/${slug}`;
+    for (const [path, content] of Object.entries(files)) if (path !== "SKILL.md") await publish(draft.boxId, `${dir}/${path}`, content);
+    await publish(draft.boxId, `${dir}/CARD.md`, SkillHistory.card(record, this.history.nextVersion(slug), at));
+    await publish(draft.boxId, `${dir}/SKILL.md`, files["SKILL.md"]);
+    this.history.recordPublish(record, at);
+    return draft;
   }
 
   private reviewed(id: string, digest: string): TeachDraft {
