@@ -19,11 +19,12 @@
  * measures the engine on the provider, not a model's choice of preset. The engine itself runs for
  * real, in the dedicated box, through the host's model relay with the provider's key.
  *
- *   AGENTBOX_CONTAINER=lumenbox-eval-box node --experimental-transform-types scripts/preset-matrix.mjs --dry-run
- *   AGENTBOX_CONTAINER=lumenbox-eval-box node --experimental-transform-types scripts/preset-matrix.mjs \
+ *   node --experimental-transform-types scripts/preset-matrix.mjs --dry-run
+ *   node --experimental-transform-types scripts/preset-matrix.mjs [--box create|keep|use <name>] [--image build] \
  *       --json out/matrix.json --md out/matrix.md [--only pi] [--providers minimax,kimi] [--install]
  *
- * Never part of `npm test`. Refuses the live box unless --live-box is passed.
+ * Never part of `npm test`. Creates and removes its own lumenbox-eval-* box unless told otherwise;
+ * the live box only with --live-box.
  */
 import { execSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -74,14 +75,23 @@ async function main() {
     console.log(`\nproviders: ${providers.map(p => `${p.name} (${p.profile.label} ${p.profile.model})`).join(", ")}\n`);
     return;
   }
-  if (process.env.AGENTBOX_CONTAINER === undefined && !has("--live-box")) {
-    throw new Error("Refusing to run against the live box. Set AGENTBOX_CONTAINER to a dedicated box, or pass --live-box to mean it.");
-  }
-  if (process.env.AGENTBOX_TOKEN === undefined) {
+  // The box (INV-1370): by default this run creates lumenbox-eval-<run> and removes it at the
+  // end, Ctrl-C included; AGENTBOX_CONTAINER or --box use <name> attaches and removes nothing;
+  // --live-box means the default box, on purpose. See scripts/lib/eval-box.mjs.
+  const { openEvalBox } = await import("./lib/eval-box.mjs");
+  const box = has("--live-box") ? { close: async () => {} } : await openEvalBox({ runId: `matrix-${sha}-${Date.now().toString(36)}` });
+  if (has("--live-box") && process.env.AGENTBOX_TOKEN === undefined) {
     const { loadBoxToken } = await import("../src/box/docker.ts");
     process.env.AGENTBOX_TOKEN = loadBoxToken(process.env.AGENTBOX_CONTAINER);
   }
+  try {
+    await runMatrix(presets, providers, sha);
+  } finally {
+    await box.close();
+  }
+}
 
+async function runMatrix(presets, providers, sha) {
   const cells = [];
   for (const provider of providers) {
     for (const preset of presets) {

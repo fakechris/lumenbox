@@ -157,10 +157,18 @@ a worse one when she does. Three things, in order:
 ## 6. Reproducing
 
 ```
-AGENTBOX_CONTAINER=lumenbox-eval-box agentbox box up
-AGENTBOX_CONTAINER=lumenbox-eval-box node --experimental-transform-types scripts/team-vs-single-eval.mjs \
+node --experimental-transform-types scripts/team-vs-single-eval.mjs [--box create|keep|use <name>] [--image build] \
   --runs 2 --judges minimax,minimax:MiniMax-M3 --json out/eval.json --md out/eval.md
 ```
+
+**The box** (INV-1370, `scripts/lib/eval-box.mjs`): by default the script creates its own
+`lumenbox-eval-<run>` box and removes it when the run ends — success, failure or Ctrl-C — after
+printing what it removes (container, its three volumes, network, token file, and any image
+`--image build` made). It removes only names under `lumenbox-eval-` that this run created.
+`--box keep` leaves the created box running; `--box use <name>` (or `AGENTBOX_CONTAINER`)
+attaches to an existing box and removes nothing; `--image build` first builds the current
+Dockerfile as `lumenbox-eval:<version>` with every engine pinned; `--live-box` means the default
+box, on purpose.
 
 `--dry-run` prints the plan without a model call; `--only <task> --config team|single` narrows;
 `--keep-text` stores the agents' final messages in the JSON (never the turns).

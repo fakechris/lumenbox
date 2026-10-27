@@ -16,8 +16,8 @@
  *       --runs 2 --judges minimax --json out/eval.json --md out/eval.md
  *   … --only recount --config single      one task, one configuration
  *
- * Scratch AGENTBOX_HOME per run; the box is the one AGENTBOX_CONTAINER names (create it first with
- * `AGENTBOX_CONTAINER=lumenbox-eval-box agentbox box up`), and every task works under its own
+ * Scratch AGENTBOX_HOME per run; the box is created for the run and removed at the end
+ * (scripts/lib/eval-box.mjs: --box create|keep|use <name>, --image build), and every task works under its own
  * directory in /home/box/work/eval-inv1340, removed afterwards. The output holds statistics,
  * scores and the judges' one-line reasons — never a transcript (`--keep-text` adds the agents'
  * final answers for a reader, still not the turns).
@@ -72,9 +72,21 @@ async function main() {
   // Credentials from the operator's real installation, applied to the environment before the
   // scratch home replaces it; the provider resolved from the real config and passed down.
   const { loadConfig, applyConfigEnv } = await import("../src/config.ts");
-  const { resolveProvider, createClient } = await import("../src/host/provider.ts");
   const realConfig = loadConfig();
   applyConfigEnv(realConfig);
+  // The box (INV-1370): created for this run and removed at the end unless AGENTBOX_CONTAINER /
+  // --box use names one, --box keep keeps it, or --live-box means the default box on purpose.
+  const { openEvalBox } = await import("./lib/eval-box.mjs");
+  const box = has("--live-box") ? { close: async () => {} } : await openEvalBox({ runId: `tvs-${Date.now().toString(36)}` });
+  try {
+    await evaluate(runs, chosen, configs, judgeNames, realConfig);
+  } finally {
+    await box.close();
+  }
+}
+
+async function evaluate(runs, chosen, configs, judgeNames, realConfig) {
+  const { resolveProvider, createClient } = await import("../src/host/provider.ts");
   // The box token lives in the real home; the scratch homes below have none. Resolved once here
   // and carried in the environment, which is where the box client looks first.
   if (process.env.AGENTBOX_CONTAINER !== undefined && process.env.AGENTBOX_TOKEN === undefined) {
@@ -91,10 +103,6 @@ async function main() {
     return { name, profile, client: createClient(profile) };
   });
   console.log(`\n  agents: ${provider.label} ${provider.model}; judges: ${judges.map(judge => `${judge.profile.label} ${judge.profile.model}`).join(", ") || "none"}; box: ${process.env.AGENTBOX_CONTAINER ?? "(default — the live box!)"}\n`);
-  if (process.env.AGENTBOX_CONTAINER === undefined && !has("--live-box")) {
-    throw new Error("Refusing to run against the live box. Set AGENTBOX_CONTAINER to a dedicated box, or pass --live-box to mean it.");
-  }
-
   const { STARTER_TEAM } = await import("../src/host/orchestrator.ts");
   const single = singleAgentFrom(STARTER_TEAM);
   const episodes = [];
