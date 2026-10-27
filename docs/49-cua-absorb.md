@@ -112,6 +112,7 @@
 - 交还后触发一个教学回合：flock 认领队列、先验两帧不是空桌面、优先读结构化 trace，录像只用于补全；区分输入与常量；歧义先问。
 - 产出 skill 文件（docs/26 的 skill 形状）：参数化、稳定目标优先（URL、ref 的 role+name）而非坐标、有 connector 就不用 UI 回放、后果性步骤标"先确认"、绝不嵌凭据、不编码 harness 机制。
 - 只提供 dry run，绝不自动跑；凭据为主的示范不生成 skill。
+- 2026-10-27（INV-1368，借自 microsoft/skill-recorder）：教学 prompt 带排好序的工具目录（connector/MCP → WebFetch/read_file → bash → browser_act → computer）、录制动作→工具的映射、"description 是触发器"；trace 进模型前过 `CREDENTIAL_PATTERNS`（`redactCredentials`），命中处变成 `[credential:<kind>]`，草稿记 `redactedCredentials`（只有种类），审阅页显示。
 - 验收：对 C2 的 fixture 示范生成的 skill 能被 agent 在新会话里 dry run 通过；skill 文本 grep 不到坐标与密钥；教学回合有 transcript 证据。
 
 ## 里程碑 D（挂在 INV-141 下）：浏览器定位与多页

@@ -144,3 +144,30 @@ test("the runner claims, prompts the desktop's agent with the trace, marks done;
   assert.deepEqual(calls, []);
   assert.ok(log.some(line => /no captured agent/.test(line)));
 });
+
+import { credentialKindsIn, redactCredentials, type TraceEvent } from "./teach.ts";
+
+test("the trace reaches the teaching model with credential-shaped values replaced by their kind (INV-1368)", () => {
+  const token = `ghp_${"a".repeat(36)}`;
+  const key = `sk-${"b".repeat(24)}`;
+  const events: TraceEvent[] = [
+    { at: "2026-10-27T01:00:00Z", type: "exec", cmd: `curl -H "Authorization: token ${token}" https://api.github.com/user` },
+    { at: "2026-10-27T01:00:01Z", type: "snapshot", url: `https://dash.example.com/?key=${key}`, title: "Dashboard", outline: `heading "Your key"\ntext "${key}"`, after: "click" },
+    { at: "2026-10-27T01:00:02Z", type: "click", button: 1, x: 10, y: 20, title: "Dashboard" },
+  ];
+  const rendered = renderTrace(events).join("\n");
+  assert.ok(!rendered.includes(token) && !rendered.includes(key), "no character run of either value survives");
+  assert.match(rendered, /\[credential:github-pat\]/);
+  assert.match(rendered, /\[credential:openai-anthropic\]/);
+  assert.deepEqual(credentialKindsIn(events).sort(), ["github-pat", "openai-anthropic", "url-token"], "the ?key= in the URL is its own kind");
+  assert.deepEqual(credentialKindsIn([events[2]!]), [], "a clean trace notes nothing");
+  assert.equal(redactCredentials("plain text"), "plain text");
+});
+
+test("the teaching rules hand the model a ranked tool catalogue and the description-is-the-trigger rule", () => {
+  const cue = teachCue({ entry: { id: "s1", sessionDir: "/x", display: 1, startedAt: "2026-10-27T01:00:00Z" } as never, events: [], self: "Ada", eventsPath: "/x/events.jsonl" });
+  assert.match(cue, /\(a\) a connector or MCP tool.*\(b\) WebFetch or read_file.*\(c\) bash.*\(d\) browser_act.*\(e\) computer/s);
+  assert.match(cue, /a typing burst → an \{input\}/);
+  assert.match(cue, /The description is the trigger/);
+  assert.match(cue, /\[credential:\.\.\.\] was removed/);
+});

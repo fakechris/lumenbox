@@ -27,6 +27,8 @@ export interface TeachProposal {
   skill: string | null;
   question: string | null;
   clarifications?: TeachClarification[];
+  /** Credential kinds removed from the trace before the teaching model read it (INV-1368); never values. */
+  redactedCredentials?: string[];
 }
 
 /** Accept an entire Markdown wrapper, never extract JSON from surrounding prose. */
@@ -57,7 +59,7 @@ export interface TeachDraft extends TeachProposal {
 type Publish = (boxId: string, path: string, content: string) => Promise<void>;
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 const idFor = (boxId: string, sessionId: string) => hash(JSON.stringify([boxId, sessionId]));
-const digestOf = (p: TeachProposal) => hash(JSON.stringify([p.boxId, p.agentId, p.sessionId, p.eventsPath, p.videoPath ?? null, p.skill, p.question, ...(p.display === undefined && p.epoch === undefined && p.taskId === undefined ? [] : [{ display: p.display, epoch: p.epoch, taskId: p.taskId }]), ...(p.clarifications === undefined ? [] : [p.clarifications])]));
+const digestOf = (p: TeachProposal) => hash(JSON.stringify([p.boxId, p.agentId, p.sessionId, p.eventsPath, p.videoPath ?? null, p.skill, p.question, ...(p.display === undefined && p.epoch === undefined && p.taskId === undefined ? [] : [{ display: p.display, epoch: p.epoch, taskId: p.taskId }]), ...(p.clarifications === undefined ? [] : [p.clarifications]), ...(p.redactedCredentials === undefined ? [] : [{ redactedCredentials: p.redactedCredentials }])]));
 
 function validateProposal(p: TeachProposal): void {
   for (const value of [p.boxId, p.agentId, p.sessionId, p.eventsPath]) {
@@ -67,6 +69,8 @@ function validateProposal(p: TeachProposal): void {
   if (p.epoch !== undefined && (!Number.isSafeInteger(p.epoch) || p.epoch < 0)) throw new Error("Invalid teaching epoch");
   if (p.taskId !== undefined && (typeof p.taskId !== "string" || !p.taskId.trim() || p.taskId.length > 256)) throw new Error("Invalid teaching task");
   if (p.videoPath !== undefined && typeof p.videoPath !== "string") throw new Error("Invalid teaching video");
+  if (p.redactedCredentials !== undefined && (!Array.isArray(p.redactedCredentials) || p.redactedCredentials.length > 32 ||
+      p.redactedCredentials.some(kind => typeof kind !== "string" || !/^[a-z0-9-]{1,40}$/.test(kind)))) throw new Error("Invalid teaching redaction note");
   if (p.clarifications !== undefined) {
     if (!Array.isArray(p.clarifications) || p.clarifications.length > 10) throw new Error("Invalid teaching clarification history");
     for (const entry of p.clarifications) {

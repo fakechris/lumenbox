@@ -137,3 +137,15 @@ test("teaching responses accept a single JSON fence without accepting prose or w
     assert.deepEqual(drafts.list(), []);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test("a draft carries which credential kinds were removed from its trace, and only kinds (INV-1368)", () => {
+  const root = mkdtempSync(join(tmpdir(), "teach-redacted-"));
+  try {
+    const drafts = new TeachDrafts(root);
+    const draft = drafts.create({ boxId: "b", agentId: "a", sessionId: "s-red", eventsPath: "/e", skill: "---\nname: x\ndescription: y\nscope: global\n---\nbody", question: null, redactedCredentials: ["github-pat"] });
+    assert.deepEqual(drafts.get(draft.id).redactedCredentials, ["github-pat"], "it survives the round trip and the digest check");
+    assert.throws(() => drafts.create({ boxId: "b", agentId: "a", sessionId: "s-bad", eventsPath: "/e", skill: null, question: "q", redactedCredentials: ["ghp_" + "a".repeat(36)] }), /redaction note/, "a value is never a kind");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
