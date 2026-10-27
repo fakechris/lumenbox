@@ -6174,7 +6174,7 @@ var selectedTeachingDraft = null;
 function showTeachingDraft(draft) {
   selectedTeachingDraft = draft;
   $("teachreviewdetail").style.display = "block";
-  $("teachreviewsource").textContent = draft.status + " · agent " + draft.agentId + " · box " + draft.boxId + " · session " + draft.sessionId + " · trace " + draft.eventsPath + (draft.videoPath ? " · video " + draft.videoPath : "");
+  $("teachreviewsource").textContent = draft.status + " · agent " + draft.agentId + " · box " + draft.boxId + " · session " + draft.sessionId + " · trace " + draft.eventsPath + (draft.videoPath ? " · video " + draft.videoPath : "") + (draft.redactedCredentials && draft.redactedCredentials.length ? " · credentials removed from the trace before the model read it: " + draft.redactedCredentials.join(", ") : "");
   $("teachreviewtext").textContent = draft.skill || draft.question;
   // Advice on the wording, from the same check the skills page uses; publishing is never blocked by it.
   $("teachreviewhints").style.display = (draft.hints || []).length ? "block" : "none";
