@@ -392,9 +392,9 @@ WebSocket send (`src/boxd/cdp.ts:164-178`).
 
 The secret test cannot prove “secrets never in the container.” In the transplanted proxy,
 the real secret is substituted into URL/headers/body on the outbound request
-(`/Users/chris/sdcard/source/openclaw/src/secrets/egress-proxy/proxy-server.ts:323-432`),
+(`~/sdcard/source/openclaw/src/secrets/egress-proxy/proxy-server.ts:323-432`),
 but the upstream response is piped back unchanged
-(`/Users/chris/sdcard/source/openclaw/src/secrets/egress-proxy/proxy-server.ts:387-399`).
+(`~/sdcard/source/openclaw/src/secrets/egress-proxy/proxy-server.ts:387-399`).
 A permitted test origin can echo the credential it received; it then exists in browser
 memory/DOM/cache while an environment/profile grep still passes.
 
@@ -437,31 +437,31 @@ copying qm's fail-closed CONNECT authorization, resolved-IP checks and firewall 
 
 ACTUALLY HAPPENS:
 
-OpenClaw authorizes at CONNECT (`/Users/chris/sdcard/source/openclaw/src/secrets/egress-proxy/proxy-server.ts:498-544`).
+OpenClaw authorizes at CONNECT (`~/sdcard/source/openclaw/src/secrets/egress-proxy/proxy-server.ts:498-544`).
 Its per-target TLS server closes over the `RegisteredRun` object and uses that same object
-for every HTTP request on the server (`/Users/chris/sdcard/source/openclaw/src/secrets/egress-proxy/proxy-server.ts:435-454`).
+for every HTTP request on the server (`~/sdcard/source/openclaw/src/secrets/egress-proxy/proxy-server.ts:435-454`).
 `revokeRun` deletes the token map but destroys neither active sockets nor cached TLS
-servers; only full proxy shutdown destroys sockets (`/Users/chris/sdcard/source/openclaw/src/secrets/egress-proxy/proxy-server.ts:610-625`).
+servers; only full proxy shutdown destroys sockets (`~/sdcard/source/openclaw/src/secrets/egress-proxy/proxy-server.ts:610-625`).
 Therefore the verified gap is larger than one streaming request: later requests on an
 already-authorized persistent connection retain the captured binding.
 
 The browser trust transplant is also missing. OpenClaw exports proxy and CA variables for
-Node, OpenSSL/curl and Requests (`/Users/chris/sdcard/source/openclaw/src/secrets/egress-proxy/proxy-server.ts:573-608`);
+Node, OpenSSL/curl and Requests (`~/sdcard/source/openclaw/src/secrets/egress-proxy/proxy-server.ts:573-608`);
 it exports no Chromium trust configuration. Agentbox passes only a proxy command-line
 argument to Chrome (`docker/box/box-chrome:59-71`). V2 supplies no Chrome CA installation,
 pinning or policy contract, so its sentinel-swapping TLS MITM is not a transplantable
 browser path as described.
 
 QM's topology facts are narrower than v2's boundary. It creates one network and publishes
-the daemon to host loopback (`/Users/chris/sdcard/source/qm/src/sandbox/local-sandbox.ts:228-267`),
+the daemon to host loopback (`~/sdcard/source/qm/src/sandbox/local-sandbox.ts:228-267`),
 but its local daemon client sends no authentication header
-(`/Users/chris/sdcard/source/qm/src/sandbox/local-sandbox.ts:161-175`) and its own profile
-declares egress enforcement `none` (`/Users/chris/sdcard/source/qm/src/sandbox/local-sandbox.ts:318-327`).
+(`~/sdcard/source/qm/src/sandbox/local-sandbox.ts:161-175`) and its own profile
+declares egress enforcement `none` (`~/sdcard/source/qm/src/sandbox/local-sandbox.ts:318-327`).
 Its Envoy check does fail closed and resolve destinations
-(`/Users/chris/sdcard/source/qm/deploy/egress-proxy/envoy.yaml:83-113`,
-`/Users/chris/sdcard/source/qm/src/egress-authz-main.ts:96-169`), but the extra iptables
+(`~/sdcard/source/qm/deploy/egress-proxy/envoy.yaml:83-113`,
+`~/sdcard/source/qm/src/egress-authz-main.ts:96-169`), but the extra iptables
 “belt” is explicitly best-effort and continues when NET_ADMIN is missing
-(`/Users/chris/sdcard/source/qm/deploy/egress-proxy/start.sh:4-10`). None of those mechanisms
+(`~/sdcard/source/qm/deploy/egress-proxy/start.sh:4-10`). None of those mechanisms
 coordinates a persistent X11 browser, local schemes, CDP or capture audiences.
 
 VERDICT:
@@ -493,19 +493,19 @@ ACTUALLY HAPPENS:
 
 Centaur's barrier addresses a warm proxy whose five-second poll allowed the first LLM
 call to beat config application by about 350 ms
-(`/Users/chris/sdcard/source/centaur/services/api-rs/crates/centaur-sandbox-agent-k8s/src/iron_proxy.rs:61-77`).
+(`~/sdcard/source/centaur/services/api-rs/crates/centaur-sandbox-agent-k8s/src/iron_proxy.rs:61-77`).
 It does poll the live pod's management endpoint for principal/config match
-(`/Users/chris/sdcard/source/centaur/services/api-rs/crates/centaur-sandbox-agent-k8s/src/iron_proxy.rs:843-903`,
-`/Users/chris/sdcard/source/centaur/services/api-rs/crates/centaur-sandbox-agent-k8s/src/iron_proxy.rs:1042-1134`).
+(`~/sdcard/source/centaur/services/api-rs/crates/centaur-sandbox-agent-k8s/src/iron_proxy.rs:843-903`,
+`~/sdcard/source/centaur/services/api-rs/crates/centaur-sandbox-agent-k8s/src/iron_proxy.rs:1042-1134`).
 But `wait_for_proxy_principal_applied` returns no success value, falls back to a blind
 delay when management is unavailable, and explicitly proceeds on timeout
-(`/Users/chris/sdcard/source/centaur/services/api-rs/crates/centaur-sandbox-agent-k8s/src/iron_proxy.rs:727-785`).
+(`~/sdcard/source/centaur/services/api-rs/crates/centaur-sandbox-agent-k8s/src/iron_proxy.rs:727-785`).
 It is not an acknowledged-or-refuse barrier.
 
 Cindy snapshots owner state around an account RPC and rechecks before changing durable
-recovery state (`/Users/chris/sdcard/source/cindy/apps/desktop/src/main/maker-host/auth-adapters.ts:1313-1390`).
+recovery state (`~/sdcard/source/cindy/apps/desktop/src/main/maker-host/auth-adapters.ts:1313-1390`).
 Its owner-scope key combines mode, owner and generation
-(`/Users/chris/sdcard/source/cindy/apps/desktop/src/main/appSessionState.ts:112-127`). That
+(`~/sdcard/source/cindy/apps/desktop/src/main/appSessionState.ts:112-127`). That
 correctly drops a stale commit; it does not cancel the asynchronous RPC, much less undo
 an external input effect. Agentbox's current CDP sender itself warns that a timed-out
 command may already have run (`src/boxd/cdp.ts:164-178`).

@@ -6,7 +6,7 @@
 -->
 # CUA 修复实施与验收记录
 
-工作树：`/Users/chris/workspace/lumenbox-cua-fixes`，初始分支 `fix/cua-observation-contract`（领取 INV 后改用服务器签发的 `feat/inv-636-cua`），基线 `23f51fd`。研究与依赖取舍当时见 docs/62（2026-09-28 移出仓库，结论见 [roadmap「What outside research decided」](11-roadmap.md)）；研究记录保留当时事实，本文件记录后续实现。
+工作树：`<workspace>/lumenbox-cua-fixes`，初始分支 `fix/cua-observation-contract`（领取 INV 后改用服务器签发的 `feat/inv-636-cua`），基线 `23f51fd`。研究与依赖取舍当时见 docs/62（2026-09-28 移出仓库，结论见 [roadmap「What outside research decided」](11-roadmap.md)）；研究记录保留当时事实，本文件记录后续实现。
 
 ## INV-636：观测与目标一致性
 

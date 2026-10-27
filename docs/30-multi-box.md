@@ -54,8 +54,8 @@ owner-only and audited. The URL an admin gives is as the primary's container rea
 (`host.docker.internal:13370` for a tunnel on the control host). Tests in
 `src/control/multi-box.test.ts`.
 
-**Transport, later the same night.** `ssh box@cursor` turned out to be Tailscale SSH on
-Chris's own tailnet (the VM is `cursor`, 100.114.30.43, `tailfb0218.ts.net`), not a vendor
+**Transport, later the same night.** `ssh <user>@<vm>` turned out to be Tailscale SSH on
+the operator's own tailnet (the VM is a tailnet machine at <tailnet ip>, `<tailnet>.ts.net`), not a vendor
 relay. So `attach-grok.sh --via auto` binds boxd to the VM's tailnet address and the
 installation dials it directly — WireGuard underneath, the box token on top, no forward to
 keep alive; `--via ssh` keeps the loopback bind plus an SSH local forward for a machine

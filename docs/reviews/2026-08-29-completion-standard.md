@@ -62,15 +62,15 @@ the request is truncated and therefore cannot support an exhaustive standard.
 
 Evidence with file:line:
 
-- `/Users/chris/source/research/grokbot/agentbox/docs/20-completion-standard.md:59-71`
-- `/Users/chris/source/research/grokbot/agentbox/src/channels/manager.ts:500-504`
-- `/Users/chris/source/research/grokbot/agentbox/src/channels/manager.ts:946-990`
-- `/Users/chris/source/research/grokbot/agentbox/src/channels/manager.ts:1278-1296`
-- `/Users/chris/source/research/grokbot/agentbox/src/web/server.ts:797-829`
-- `/Users/chris/source/research/grokbot/agentbox/src/host/tasks.ts:133-163`
-- `/Users/chris/source/research/grokbot/agentbox/src/host/tasks.ts:221-233`
-- `/Users/chris/source/research/grokbot/agentbox/src/host/audit.ts:61-98`
-- `/Users/chris/source/research/grokbot/agentbox/src/host/orchestrator.ts:319-344`
+- `<repo>/docs/20-completion-standard.md:59-71`
+- `<repo>/src/channels/manager.ts:500-504`
+- `<repo>/src/channels/manager.ts:946-990`
+- `<repo>/src/channels/manager.ts:1278-1296`
+- `<repo>/src/web/server.ts:797-829`
+- `<repo>/src/host/tasks.ts:133-163`
+- `<repo>/src/host/tasks.ts:221-233`
+- `<repo>/src/host/audit.ts:61-98`
+- `<repo>/src/host/orchestrator.ts:319-344`
 
 ## 2. `done` IS NOT THE REQUESTER'S WORD
 
@@ -114,14 +114,14 @@ while both the requester and the real acceptance question remain untouched.
 
 Evidence with file:line:
 
-- `/Users/chris/source/research/grokbot/agentbox/docs/20-completion-standard.md:38-53`
-- `/Users/chris/source/research/grokbot/agentbox/src/channels/manager.ts:249-252`
-- `/Users/chris/source/research/grokbot/agentbox/src/channels/manager.ts:968-978`
-- `/Users/chris/source/research/grokbot/agentbox/src/channels/manager.ts:1029-1036`
-- `/Users/chris/source/research/grokbot/agentbox/src/channels/manager.ts:1278-1297`
-- `/Users/chris/source/research/grokbot/agentbox/src/web/server.ts:838-848`
-- `/Users/chris/source/research/grokbot/agentbox/src/web/server.ts:2128-2159`
-- `/Users/chris/source/research/grokbot/agentbox/src/host/tasks.ts:221-233`
+- `<repo>/docs/20-completion-standard.md:38-53`
+- `<repo>/src/channels/manager.ts:249-252`
+- `<repo>/src/channels/manager.ts:968-978`
+- `<repo>/src/channels/manager.ts:1029-1036`
+- `<repo>/src/channels/manager.ts:1278-1297`
+- `<repo>/src/web/server.ts:838-848`
+- `<repo>/src/web/server.ts:2128-2159`
+- `<repo>/src/host/tasks.ts:221-233`
 
 ## 3. PRE-AUTHORING MOVES THE OPINION; IT DOES NOT DEFINE `cover`
 
@@ -175,10 +175,10 @@ the claim that it escapes self-certification does not.
 
 Evidence with file:line:
 
-- `/Users/chris/source/research/grokbot/agentbox/docs/20-completion-standard.md:29-49`
-- `/Users/chris/source/research/grokbot/agentbox/docs/20-completion-standard.md:75-98`
-- `/Users/chris/source/research/grokbot/agentbox/docs/16-long-work.md:222-253`
-- `/Users/chris/source/research/grokbot/agentbox/docs/reviews/2026-08-26-obligation-ledger.md:201-221`
+- `<repo>/docs/20-completion-standard.md:29-49`
+- `<repo>/docs/20-completion-standard.md:75-98`
+- `<repo>/docs/16-long-work.md:222-253`
+- `<repo>/docs/reviews/2026-08-26-obligation-ledger.md:201-221`
 
 ## 4. THE VISIBLE-STANDARD INVERSION RECREATES THE TARGETING EFFECT
 
@@ -224,9 +224,9 @@ completion claim.
 
 Evidence with file:line:
 
-- `/Users/chris/source/research/grokbot/agentbox/docs/20-completion-standard.md:11-27`
-- `/Users/chris/source/research/grokbot/agentbox/docs/20-completion-standard.md:100-115`
-- `/Users/chris/source/research/grokbot/agentbox/docs/20-completion-standard.md:126-142`
+- `<repo>/docs/20-completion-standard.md:11-27`
+- `<repo>/docs/20-completion-standard.md:100-115`
+- `<repo>/docs/20-completion-standard.md:126-142`
 
 ## 5. “MAY BE ADDED TO, NEVER WEAKENED” HAS NEITHER A STATE MODEL NOR AN ENFORCER
 
@@ -285,16 +285,16 @@ monotonic list is the same state collapse that the earlier reviews rejected.
 
 Evidence with file:line:
 
-- `/Users/chris/source/research/grokbot/agentbox/docs/20-completion-standard.md:89-109`
-- `/Users/chris/source/research/grokbot/agentbox/docs/20-completion-standard.md:149-164`
-- `/Users/chris/source/research/grokbot/agentbox/src/host/tasks.ts:46-86`
-- `/Users/chris/source/research/grokbot/agentbox/src/host/tasks.ts:133-163`
-- `/Users/chris/source/research/grokbot/agentbox/src/host/tasks.ts:200-277`
-- `/Users/chris/source/research/grokbot/agentbox/src/host/tasks.ts:280-291`
-- `/Users/chris/source/research/grokbot/agentbox/src/host/tasks.ts:321-342`
-- `/Users/chris/source/research/grokbot/agentbox/src/host/tools.ts:888-943`
-- `/Users/chris/source/research/grokbot/agentbox/src/host/tools.ts:2360-2448`
-- `/Users/chris/source/research/grokbot/agentbox/src/web/server.ts:2128-2159`
+- `<repo>/docs/20-completion-standard.md:89-109`
+- `<repo>/docs/20-completion-standard.md:149-164`
+- `<repo>/src/host/tasks.ts:46-86`
+- `<repo>/src/host/tasks.ts:133-163`
+- `<repo>/src/host/tasks.ts:200-277`
+- `<repo>/src/host/tasks.ts:280-291`
+- `<repo>/src/host/tasks.ts:321-342`
+- `<repo>/src/host/tools.ts:888-943`
+- `<repo>/src/host/tools.ts:2360-2448`
+- `<repo>/src/web/server.ts:2128-2159`
 
 ## 6. ONE CALL FROM THE REQUEST ALONE CAN CHECK SHAPE, NOT SEMANTIC COMPLETENESS
 
@@ -342,11 +342,11 @@ completion verdict.
 
 Evidence with file:line:
 
-- `/Users/chris/source/research/grokbot/agentbox/docs/20-completion-standard.md:11-27`
-- `/Users/chris/source/research/grokbot/agentbox/docs/20-completion-standard.md:75-98`
-- `/Users/chris/source/research/grokbot/agentbox/docs/20-completion-standard.md:126-142`
-- `/Users/chris/source/research/grokbot/agentbox/src/channels/manager.ts:1260-1266`
-- `/Users/chris/source/research/grokbot/agentbox/src/channels/manager.ts:1410-1420`
+- `<repo>/docs/20-completion-standard.md:11-27`
+- `<repo>/docs/20-completion-standard.md:75-98`
+- `<repo>/docs/20-completion-standard.md:126-142`
+- `<repo>/src/channels/manager.ts:1260-1266`
+- `<repo>/src/channels/manager.ts:1410-1420`
 
 ## 7. A ONE-LINE REQUEST MUST BE ALLOWED TO HAVE NO STANDARD
 
@@ -388,9 +388,9 @@ normal input, so section 6's first question resolves against buildability.
 
 Evidence with file:line:
 
-- `/Users/chris/source/research/grokbot/agentbox/docs/20-completion-standard.md:138-152`
-- `/Users/chris/source/research/grokbot/agentbox/src/channels/board-view.ts:66-92`
-- `/Users/chris/source/research/grokbot/agentbox/src/web/app-html.ts:2801-2826`
+- `<repo>/docs/20-completion-standard.md:138-152`
+- `<repo>/src/channels/board-view.ts:66-92`
+- `<repo>/src/web/app-html.ts:2801-2826`
 
 ## 8. WITH NO REVIEWER, THE STANDARD IS SKIPPED AND SELF-CERTIFICATION RETURNS
 
@@ -430,13 +430,13 @@ solving completion for the system whose ordinary deployment lacks the prerequisi
 
 Evidence with file:line:
 
-- `/Users/chris/source/research/grokbot/agentbox/docs/20-completion-standard.md:132-136`
-- `/Users/chris/source/research/grokbot/agentbox/docs/20-completion-standard.md:153-155`
-- `/Users/chris/source/research/grokbot/agentbox/src/web/server.ts:810-828`
-- `/Users/chris/source/research/grokbot/agentbox/src/web/server.ts:2101-2119`
-- `/Users/chris/source/research/grokbot/agentbox/src/host/tools.ts:2386-2406`
-- `/Users/chris/source/research/grokbot/agentbox/src/host/tasks.ts:191-233`
-- `/Users/chris/source/research/grokbot/agentbox/src/host/orchestrator.ts:319-327`
+- `<repo>/docs/20-completion-standard.md:132-136`
+- `<repo>/docs/20-completion-standard.md:153-155`
+- `<repo>/src/web/server.ts:810-828`
+- `<repo>/src/web/server.ts:2101-2119`
+- `<repo>/src/host/tools.ts:2386-2406`
+- `<repo>/src/host/tasks.ts:191-233`
+- `<repo>/src/host/orchestrator.ts:319-327`
 
 ## 9. STEERING MAKES MONOTONIC REQUIREMENTS WRONG
 
@@ -480,11 +480,11 @@ steering makes either the work or the invariant impossible.
 
 Evidence with file:line:
 
-- `/Users/chris/source/research/grokbot/agentbox/docs/20-completion-standard.md:95-98`
-- `/Users/chris/source/research/grokbot/agentbox/docs/20-completion-standard.md:156-164`
-- `/Users/chris/source/research/grokbot/agentbox/src/channels/manager.ts:949-965`
-- `/Users/chris/source/research/grokbot/agentbox/src/host/tasks.ts:46-80`
-- `/Users/chris/source/research/grokbot/agentbox/src/host/tasks.ts:200-277`
+- `<repo>/docs/20-completion-standard.md:95-98`
+- `<repo>/docs/20-completion-standard.md:156-164`
+- `<repo>/src/channels/manager.ts:949-965`
+- `<repo>/src/host/tasks.ts:46-80`
+- `<repo>/src/host/tasks.ts:200-277`
 
 ## 10. “BEFORE THE WORK” HAS NO SERIALIZATION OR FAILURE PROTOCOL
 
@@ -535,17 +535,17 @@ transaction is not implementation detail; it is the timing claim.
 
 Evidence with file:line:
 
-- `/Users/chris/source/research/grokbot/agentbox/docs/20-completion-standard.md:43-49`
-- `/Users/chris/source/research/grokbot/agentbox/docs/20-completion-standard.md:73-80`
-- `/Users/chris/source/research/grokbot/agentbox/docs/20-completion-standard.md:119-136`
-- `/Users/chris/source/research/grokbot/agentbox/src/channels/manager.ts:390-405`
-- `/Users/chris/source/research/grokbot/agentbox/src/channels/manager.ts:1278-1297`
-- `/Users/chris/source/research/grokbot/agentbox/src/channels/manager.ts:1409-1420`
-- `/Users/chris/source/research/grokbot/agentbox/src/host/tasks.ts:95-105`
-- `/Users/chris/source/research/grokbot/agentbox/src/host/tasks.ts:133-163`
-- `/Users/chris/source/research/grokbot/agentbox/src/host/tasks.ts:272-291`
-- `/Users/chris/source/research/grokbot/agentbox/src/web/server.ts:2101-2119`
-- `/Users/chris/source/research/grokbot/agentbox/src/host/tools.ts:2386-2406`
+- `<repo>/docs/20-completion-standard.md:43-49`
+- `<repo>/docs/20-completion-standard.md:73-80`
+- `<repo>/docs/20-completion-standard.md:119-136`
+- `<repo>/src/channels/manager.ts:390-405`
+- `<repo>/src/channels/manager.ts:1278-1297`
+- `<repo>/src/channels/manager.ts:1409-1420`
+- `<repo>/src/host/tasks.ts:95-105`
+- `<repo>/src/host/tasks.ts:133-163`
+- `<repo>/src/host/tasks.ts:272-291`
+- `<repo>/src/web/server.ts:2101-2119`
+- `<repo>/src/host/tools.ts:2386-2406`
 
 ## 11. STORING THE STANDARD DOES NOT SHOW IT TO EITHER CONSUMER
 
@@ -588,12 +588,12 @@ correct.
 
 Evidence with file:line:
 
-- `/Users/chris/source/research/grokbot/agentbox/docs/20-completion-standard.md:97-109`
-- `/Users/chris/source/research/grokbot/agentbox/src/host/prompt.ts:537-551`
-- `/Users/chris/source/research/grokbot/agentbox/src/host/tasks.ts:350-355`
-- `/Users/chris/source/research/grokbot/agentbox/src/host/tools.ts:2377-2384`
-- `/Users/chris/source/research/grokbot/agentbox/src/channels/board-view.ts:66-92`
-- `/Users/chris/source/research/grokbot/agentbox/src/web/app-html.ts:2801-2826`
+- `<repo>/docs/20-completion-standard.md:97-109`
+- `<repo>/src/host/prompt.ts:537-551`
+- `<repo>/src/host/tasks.ts:350-355`
+- `<repo>/src/host/tools.ts:2377-2384`
+- `<repo>/src/channels/board-view.ts:66-92`
+- `<repo>/src/web/app-html.ts:2801-2826`
 
 ## OVERALL VERDICT: REJECT
 

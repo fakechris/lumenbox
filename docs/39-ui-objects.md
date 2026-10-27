@@ -59,7 +59,7 @@ same structure:
 - `Templates` opens the shelf (§2) with "stamp into this box" as its primary action.
 - `Doors` lists the channels that reach this box, with the group rule (docs/11 item 7) and
   the default agent, moved out of Settings.
-- `Box` is the box's own card: kind (docker / attached at 100.114.30.43), the image contract
+- `Box` is the box's own card: kind (docker / attached at a tailnet address), the image contract
   (engines carried, docs/11 item 11f), displays in use, engines installed on demand, disk,
   and the three actions a box has — restart, recreate from image, detach.
 - The Tasks tab shows the box's board. Work is per box because agents are.

@@ -233,8 +233,8 @@ JSON）。副本是只读快照，skill 不写回。
 ```json
 "ovp": {
   "enabled": true,
-  "vaultRoot": "/Users/chris/…/staging-vault",
-  "bin": "/Users/chris/workspace/obsidian_vault_pipeline/target/release/ovp2",
+  "vaultRoot": "~/…/staging-vault",
+  "bin": "<workspace>/obsidian_vault_pipeline/target/release/ovp2",
   "channels": ["feishu-personal"],
   "dayBoundary": "22:00", "timezone": "Asia/Shanghai",
   "maxSourcesPerRun": 10,

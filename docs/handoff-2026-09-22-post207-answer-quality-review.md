@@ -41,13 +41,13 @@ hostd 为 `0adba14b76aa79406ea21f9a154632f7c3849b1a483d1e17f925e0021fc71126`。
 
 备份：
 
-- host：`/Users/chris/.agentbox-backups/2026-09-22-pre-deploy-cc71f82`，39 个文件。
-- box：`/Users/chris/.agentbox-backups/2026-09-22T10-50-22-volumes/`，含 work/config 卷备份。
+- host：`~/.agentbox-backups/2026-09-22-pre-deploy-cc71f82`，39 个文件。
+- box：`~/.agentbox-backups/2026-09-22T10-50-22-volumes/`，含 work/config 卷备份。
 - 原镜像保留；容器重建不保留临时进程或打开的浏览器页面。
 
 本机日志：`/tmp/lumenbox-pr207-{install,release,image,recreate}.log`。
 部署凭据也已写入 [PR #207 部署评论](https://github.com/fakechris/lumenbox/pull/207#issuecomment-5775280873)，并更新 INV-611/630/616 的 verification 字段；没有修改工作状态或验收合同。
-完整分数卡：`/Users/chris/.agentbox/scorecards/2026-09-22T10-48-35-958Z-cc71f82.json`。
+完整分数卡：`~/.agentbox/scorecards/2026-09-22T10-48-35-958Z-cc71f82.json`。
 这些本机路径用于此次执行溯源，不代替长期 CI 留存。未运行会操作现有桌面的整套 live smoke，也没有向生产聊天发送验收消息。
 
 主 checkout 原有未提交修改全部保留；仅为快进更新临时 stash 了 INDEX，随后成功恢复。没有把他人的 CUA/Jev 研究、模板或 AGENTS 修改混入 PR #207。

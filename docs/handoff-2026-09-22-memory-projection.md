@@ -9,7 +9,7 @@
 ## 本次交付范围
 
 用户批准在新 worktree 逐项实施上下文恢复，并明确允许本轮本地实施。
-工作目录为 `/Users/chris/workspace/lumenbox-context-recovery`，分支 `fix/context-recovery`，
+工作目录为 `<workspace>/lumenbox-context-recovery`，分支 `fix/context-recovery`，
 起点 `cc71f8223138a010b70c2e211cf739fa3a7ac57c`。没有修改运行中的 box 或主工作区的未提交研究。
 
 第一项修复个人/共享记忆的自动准入：

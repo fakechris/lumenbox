@@ -102,7 +102,7 @@ Involute 仓库的门是 `pnpm lint` / `pnpm typecheck` / `pnpm test`（`package
 ## 4. 给新 session 的开场白（可直接粘）
 
 > 我在 `~/workspace/Involute` 做 agent 身份与工作项对话的服务端部分。设计与工单见
-> `/Users/chris/source/research/grokbot/agentbox-tier0/docs/54-agent-identity-and-threads.md`
+> `<repo-worktree>/docs/54-agent-identity-and-threads.md`
 > 与 `.../docs/handoff-2026-09-15-involute-agent-threads.md`（后者有 file:line 与验收）。
 > 先读这两份，再读本仓库 AGENTS.md，然后按 B1 → B2 → B3 → B4 的顺序做，一条一个 PR，
 > 每条都要有 A1–A7 里对应的验收测试。B3 的状态机照 A2A 的命名，不要自己发明。
