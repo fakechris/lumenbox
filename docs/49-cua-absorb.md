@@ -115,6 +115,17 @@
 - 2026-10-27（INV-1368）：教学 prompt 带排好序的工具目录（connector/MCP → WebFetch/read_file → bash → browser_act → computer）、录制动作→工具的映射、"description 是触发器"；trace 进模型前过 `CREDENTIAL_PATTERNS`（`redactCredentials`），命中处变成 `[credential:<kind>]`，草稿记 `redactedCredentials`（只有种类），审阅页显示。
 - 验收：对 C2 的 fixture 示范生成的 skill 能被 agent 在新会话里 dry run 通过；skill 文本 grep 不到坐标与密钥；教学回合有 transcript 证据。
 
+#### C3 附：operation —— 教一次、无模型重放（INV-1378，2026-10-27）
+
+对"同一个网站上反复做的同一件事"，教学回合除 SKILL.md 外还可返回 `operation`（`src/host/operation.ts`）：声明式的浏览器步骤表——`open`（URL 带 `{input}`）、`act`（按 role+name 找元素，绝不用坐标或 ref；提交/支付/删除的步骤带 `commit`）、`read`（正则取一个组到某个输出字段）、`wait`——加输入/输出的类型。不是代码：host 只解释它认识的步骤，经盒子自己的浏览器 API 执行。教学回合同时写 ≥3 个 `cases`（目的、输入、可选的输出正则）。
+
+- 草稿：`operation.json` 与 `cases.json` 随草稿；解析时即校验，坏的 operation 不会成为草稿。
+- dry run：审阅面板"Dry-run the operation's cases"在教学 agent 自己的桌面上跑用例，结果记在草稿（不入 digest）；写操作只跑到第一个 commit 之前，绝不提交。
+- 发布门：用例通过率 ≥70% 才能发布（`CASE_PASS_RATE`）。
+- 运行：`RunOperation {skill, input}` 读该 skill 目录的 operation.json，在 agent 的桌面上执行，返回类型化输出；失败带类型与步骤（`invalid_input` / `step_failed` / `not_found` / `output_missing` / `output_type` / `needs_approval`），并提示改为在线完成、说明可能需要重教。带 commit 的 operation 每次运行前为整条 commit 路径问人一次。
+
+实测（专用盒子，MiniMax-M3.1-Flash 教学）：本地 fixture 报表页的合成示范 → 模型产出 operation + 3 个用例 → 真桌面 dry run 3/3 → 发布 → agent 用 RunOperation 查一个没示范过的周（2026-W44）得到 `{"signups": "1,311"}`，operation 本身零模型调用。首两次尝试模型只写了 SKILL.md：输出契约第 1 条只列了 skill/question，与 operation 指令矛盾，已改。
+
 #### C3 附：teach 评测（INV-1369，2026-10-27）
 
 `npm run scenario -- --teach [--runs N] [--fake]`（`src/host/teach-evals.ts`）：6 个合成示范（boxd 的 trace 形状：点击、键入次数、outline、shell、导航），每个配确定性检查——能解析、写/不写 skill、frontmatter、无屏幕坐标、无凭据、示范里的具体值变成 `{input}`、description 是触发器、步骤顺序、后果性步骤先确认、不复述评分词（tripwire）；跑之前先做 absence probe（cue 里不得含该 fixture 的期望与参考答案）。`--fake` 用每个 fixture 的参考答案，不调模型，是评分器与 cue 的回归信号。

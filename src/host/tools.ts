@@ -86,6 +86,7 @@ import { afterTimeout, idempotencyOfHttp } from "../protocol/idempotency.ts";
 import { skillSlugOf } from "./skill-provenance.ts";
 import { skillWriteRefusal } from "./skill-contract.ts";
 import { afterCommit, withWritePath, writePathKey, writePaths } from "./write-path.ts";
+import { runOperationTool, withOperationTool } from "./operation-tool.ts";
 import { capRefusal, standingFileOf, writeStandingFromAgent } from "./standing.ts";
 import { SKILL_FILENAME } from "./skills.ts";
 import {
@@ -2114,7 +2115,7 @@ export function buildTools(
         },
       }
     );
-    withWritePath(tools); // INV-1379: commit/writePath on browser_act, and browser_verify_write
+    withWritePath(tools); withOperationTool(tools); // INV-1379 write paths; INV-1378 RunOperation
   }
 
   tools.push({
@@ -2693,8 +2694,7 @@ export async function dispatchTool(
     agentName: context.agent.profile.name,
     tool: name,
     input,
-    // Whose turn this is, so a rule a person wrote about their own routine work applies
-    // from whichever door they drove it (INV-156).
+    // Whose turn this is, so a rule a person wrote about their own routine work applies from whichever door they drove it (INV-156).
     ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}),
     ...(context.callerName !== undefined ? { principalName: context.callerName } : {}),
     ...(context.turnId !== undefined ? { turnId: context.turnId } : {}),
@@ -2715,7 +2715,7 @@ export async function dispatchTool(
   }
 
   if (name === "computer" || ["browser_open", "browser_snapshot", "browser_read", "browser_act",
-    "browser_scroll", "browser_wait_for", "browser_pages", "browser_upload", "browser_fill_secret",
+    "browser_scroll", "browser_wait_for", "browser_pages", "browser_upload", "browser_fill_secret", "RunOperation",
     "HandOverDesktop"].includes(name)) {
     try { await context.ensureDesktop?.(); }
     catch (error) { return { text: error instanceof Error ? error.message : String(error), isError: true }; }
@@ -2866,8 +2866,7 @@ export async function dispatchTool(
     }
 
     case "bash": {
-      // Attributed before it runs: a write attempt into a skill is the fact that matters, whether
-      // or not the command then succeeded.
+      // Attributed before it runs: a write attempt into a skill is the fact that matters, whether or not the command then succeeded.
       context.skillProvenance?.noteCommand({
         command: String(input.command ?? ""),
         agentId: context.agent.id,
@@ -4302,6 +4301,7 @@ export async function dispatchTool(
       }
     }
 
+    case "RunOperation": return runOperationTool(context, input); // INV-1378
     case "browser_verify_write":
       return { text: writePaths.verify(writePathKey(context.agent.id, context.conversation), String(input.mark ?? ""), (["done", "not_done", "unknown"] as const).find(v => v === input.verdict) ?? "unknown", String(input.evidence ?? "").slice(0, 300)) };
     case "browser_open":

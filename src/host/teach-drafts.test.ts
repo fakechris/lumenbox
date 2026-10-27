@@ -149,3 +149,38 @@ test("a draft carries which credential kinds were removed from its trace, and on
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+import { operationOf } from "./teach-drafts.ts";
+
+test("an operation draft is published only after a dry run passes 70% of its cases (INV-1378)", async () => {
+  const root = mkdtempSync(join(tmpdir(), "teach-operation-"));
+  try {
+    const operation = { name: "Signups", input: { week: { type: "string" } }, output: { signups: { type: "number" } }, steps: [{ open: "https://a.example.com/{week}" }, { read: { as: "signups", pattern: "Signups (\\d+)" } }] };
+    const cases = [{ purpose: "w43", input: { week: "w43" }, expect: { signups: "^\\d+$" } }, { purpose: "w44", input: { week: "w44" } }];
+    const skill = "---\nname: Weekly signups\ndescription: Use when asked for a week's signups\nscope: global\n---\n\nRunOperation with this skill's directory and {week}.";
+    const parsed = parseTeachingResponse(JSON.stringify({ skill, question: null, operation, cases }));
+    assert.deepEqual(Object.keys(parsed.files ?? {}), ["operation.json", "cases.json"]);
+    assert.throws(() => parseTeachingResponse(JSON.stringify({ skill, question: null, operation: { ...operation, steps: [{ eval: "x" }] }, cases })), /operation is invalid/);
+    assert.throws(() => parseTeachingResponse(JSON.stringify({ skill, question: null, operation, cases: [] })), /needs cases/);
+
+    const drafts = new TeachDrafts(root);
+    const draft = drafts.create({ boxId: "b", agentId: "a", sessionId: "op1", eventsPath: "/t/e.jsonl", ...parsed });
+    assert.equal(operationOf(draft)?.cases.length, 2);
+    const publish = async () => {};
+    await assert.rejects(() => drafts.approve(draft.id, draft.digest, "chris", publish), /only after a dry run/);
+    const pages: Record<string, string> = { "https://a.example.com/w43": "Signups 120" };
+    let at = "";
+    const browser = async (request: { op: string; url?: string }) => {
+      if (request.op === "open") at = request.url ?? "";
+      return { url: at, text: pages[at] ?? "", outcome: "ok" };
+    };
+    const half = await drafts.dryRun(draft.id, browser as never);
+    assert.deepEqual([half.dryRun?.passed, half.dryRun?.total], [1, 2]);
+    await assert.rejects(() => drafts.approve(draft.id, draft.digest, "chris", publish), /last: 1\/2/);
+    pages["https://a.example.com/w44"] = "Signups 98";
+    await drafts.dryRun(draft.id, browser as never);
+    assert.equal((await drafts.approve(draft.id, draft.digest, "chris", publish)).status, "published", "the dry run is not part of the digest the reviewer saw");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

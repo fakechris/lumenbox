@@ -1129,3 +1129,24 @@ test("a commit click whose result is unknown counts as pressed: the repeat is re
   const again = await dispatchTool("browser_act", { ...send, writePath: undefined }, context);
   assert.match(again.text, /^Outcome: refused — "send" was already pressed \(its result was not confirmed\)/);
 });
+
+test("RunOperation replays a published operation on the agent's desktop and returns typed output (INV-1378)", async () => {
+  const operation = { name: "Signups", input: { week: { type: "string" } }, output: { signups: { type: "number" } }, steps: [{ open: "https://a.example.com/{week}" }, { read: { as: "signups", pattern: "Signups ([\\d,]+)" } }] };
+  const seen: { op: string; display?: number }[] = [];
+  const context = boxContext({
+    readFile: async (path: string) => {
+      assert.equal(path, "/home/box/work/skills/taught-x/operation.json");
+      return { content: JSON.stringify(operation) };
+    },
+    browser: async (request: { op: string; display?: number }) => {
+      seen.push(request);
+      return { url: "https://a.example.com/w43", text: "Signups 1,204", outcome: "ok" };
+    },
+  });
+  const ok = await dispatchTool("RunOperation", { skill: "taught-x", input: { week: "w43" } }, context);
+  assert.match(ok.text, /^Outcome: ok\. "Signups" returned:\n\{\n {2}"signups": 1204\n\}/);
+  assert.ok(seen.every(request => request.display === 3), "on the agent's own desktop");
+  const bad = await dispatchTool("RunOperation", { skill: "taught-x", input: {} }, context);
+  assert.match(bad.text, /^Outcome: failed — "Signups" invalid_input: input week is missing\. .*re-teaching/);
+  assert.equal((await dispatchTool("RunOperation", { skill: "../etc", input: {} }, context)).isError, true);
+});

@@ -6,6 +6,7 @@ import type { BoxClient } from "../box/client.ts";
 import { loadSkills, parseSkillFile, skillFrom, SKILLS_DIR, slugify } from "./skills.ts";
 import { namesControlSurface } from "./control-surfaces.ts";
 import { SkillHistory, type SkillVersion } from "./skill-history.ts";
+import { CASE_PASS_RATE, casesPass, type Operation, type OperationCase, operationProblem, runCases } from "./operation.ts";
 export { SkillHistory } from "./skill-history.ts";
 import { isDisplayIndex } from "../protocol/index.ts";
 
@@ -44,7 +45,7 @@ export interface TeachProposal {
 }
 
 /** Accept an entire Markdown wrapper, never extract JSON from surrounding prose. */
-export function parseTeachingResponse(response: string): Pick<TeachProposal, "skill" | "question"> {
+export function parseTeachingResponse(response: string): Pick<TeachProposal, "skill" | "question" | "files"> {
   const unwrap = (text: string, languages: string) => {
     const match = new RegExp("^```(?:" + languages + ")?\\r?\\n([\\s\\S]*?)\\r?\\n```$").exec(text.trim());
     return match ? match[1]! : text;
@@ -56,7 +57,24 @@ export function parseTeachingResponse(response: string): Pick<TeachProposal, "sk
   const proposal = value as Record<string, unknown>;
   if ((proposal.skill !== null && typeof proposal.skill !== "string") ||
       (proposal.question !== null && typeof proposal.question !== "string")) throw new Error("Teaching response needs skill and question fields");
-  return { skill: typeof proposal.skill === "string" ? unwrap(proposal.skill, "markdown|md") : null, question: proposal.question };
+  const skill = typeof proposal.skill === "string" ? unwrap(proposal.skill, "markdown|md") : null;
+  // An operation (INV-1378) rides as two files beside the skill; a broken one is refused here,
+  // before a draft exists, rather than published and found broken at the first run.
+  if (skill !== null && proposal.operation !== undefined && proposal.operation !== null) {
+    const problem = operationProblem(proposal.operation);
+    if (problem !== undefined) throw new Error(`Teaching response's operation is invalid: ${problem}`);
+    const cases = Array.isArray(proposal.cases) ? proposal.cases.filter(one => one && typeof one === "object" && typeof (one as { purpose?: unknown }).purpose === "string").slice(0, 20) : [];
+    if (cases.length === 0) throw new Error("An operation needs cases: at least one, each with a purpose and an input");
+    return { skill, question: null, files: { "operation.json": `${JSON.stringify(proposal.operation, null, 2)}\n`, "cases.json": `${JSON.stringify(cases, null, 2)}\n` } };
+  }
+  return { skill, question: proposal.question as string | null };
+}
+
+/** A draft that carries an operation (INV-1378): its parsed operation and cases, or undefined. */
+export function operationOf(draft: Pick<TeachProposal, "files">): { operation: Operation; cases: OperationCase[] } | undefined {
+  const op = draft.files?.["operation.json"];
+  if (op === undefined) return undefined;
+  return { operation: JSON.parse(op) as Operation, cases: JSON.parse(draft.files?.["cases.json"] ?? "[]") as OperationCase[] };
 }
 
 export interface TeachDraft extends TeachProposal {
@@ -66,6 +84,8 @@ export interface TeachDraft extends TeachProposal {
   status: "draft" | "publishing" | "published" | "rejected";
   approvedBy?: string;
   approvedAt?: string;
+  /** The last dry run of an operation draft's cases (INV-1378); not part of the digest. */
+  dryRun?: { passed: number; total: number; failures: string[]; at: string };
 }
 
 type Publish = (boxId: string, path: string, content: string) => Promise<void>;
@@ -85,9 +105,16 @@ function validateProposal(p: TeachProposal): void {
   if (p.source?.kind === "eval" && (!/^[A-Za-z0-9._-]{1,120}$/.test(p.source.skillDir) || !Array.isArray(p.source.basis) || p.source.basis.length > 64 || p.source.basis.some(id => typeof id !== "string" || id.length > 120))) throw new Error("Invalid evaluation source");
   if (p.files !== undefined) {
     const entries = typeof p.files === "object" && p.files !== null ? Object.entries(p.files) : [];
-    if (p.source === undefined || entries.length === 0 || entries.length > 50 ||
+    const operationOnly = entries.every(([path]) => path === "operation.json" || path === "cases.json") && entries.some(([path]) => path === "operation.json");
+    if ((p.source === undefined && !operationOnly) || entries.length === 0 || entries.length > 50 ||
         entries.some(([path, content]) => typeof content !== "string" || content.length > 512 * 1024 || !/^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/.test(path) ||
           path.split("/").some(part => part === ".." || part === ".") || path === "SKILL.md")) throw new Error("Invalid imported files");
+  }
+  if (p.files?.["operation.json"] !== undefined) {
+    let parsed: unknown;
+    try { parsed = JSON.parse(p.files["operation.json"]); } catch { throw new Error("Invalid operation: not JSON"); }
+    const problem = operationProblem(parsed);
+    if (problem !== undefined) throw new Error(`Invalid operation: ${problem}`);
   }
   if (p.unknownTools !== undefined && (!Array.isArray(p.unknownTools) || p.unknownTools.length > 64 || p.unknownTools.some(name => typeof name !== "string" || name.length > 128))) throw new Error("Invalid unknown tools");
   if (p.redactedCredentials !== undefined && (!Array.isArray(p.redactedCredentials) || p.redactedCredentials.length > 32 ||
@@ -200,7 +227,7 @@ export class TeachDrafts {
   }
 
   async clarify(id: string, digest: string, answer: string, actor: string,
-    generate: (draft: TeachDraft, answer: string) => Promise<Pick<TeachProposal, "skill" | "question">>): Promise<TeachDraft> {
+    generate: (draft: TeachDraft, answer: string) => Promise<Pick<TeachProposal, "skill" | "question" | "files">>): Promise<TeachDraft> {
     const original = this.reviewedQuestion(id, digest);
     if (typeof answer !== "string" || !answer.trim() || answer.length > 4096 ||
         typeof actor !== "string" || !actor.trim() || actor.length > 256) throw new Error("Provide a bounded clarification and its operator");
@@ -208,7 +235,7 @@ export class TeachDrafts {
     const response = await generate(original, answer.trim());
     // Reject, another answer, or publication while the model was running wins.
     const current = this.reviewedQuestion(id, digest);
-    const revised: TeachDraft = { ...current, skill: response.skill, question: response.question,
+    const revised: TeachDraft = { ...current, skill: response.skill, question: response.question, ...(response.files !== undefined ? { files: response.files } : {}),
       clarifications: [...(current.clarifications ?? []), { question: current.question!, answer: answer.trim(), actor,
         at: new Date().toISOString(), digest: current.digest }] };
     validateProposal(revised);
@@ -227,6 +254,9 @@ export class TeachDrafts {
     const draft = this.reviewed(id, digest);
     if (!actor.trim()) throw new Error("An approving operator is required");
     if (draft.status === "rejected" || draft.skill === null) throw new Error("This draft cannot be published");
+    if (operationOf(draft) !== undefined && draft.status === "draft" && (draft.dryRun === undefined || !casesPass(draft.dryRun))) {
+      throw new Error(`An operation is published only after a dry run passes at least ${Math.round(CASE_PASS_RATE * 100)}% of its cases${draft.dryRun ? ` (last: ${draft.dryRun.passed}/${draft.dryRun.total})` : ""}`);
+    }
     if (draft.status === "published") return draft;
     const active = this.publishing.get(id);
     if (active) return active;
@@ -254,6 +284,19 @@ export class TeachDrafts {
     })();
     this.publishing.set(id, pending);
     try { return await pending; } finally { this.publishing.delete(id); }
+  }
+
+  /** Runs an operation draft's cases (INV-1378) and records the result on the draft; it never commits. */
+  async dryRun(id: string, browser: Parameters<typeof runCases>[2]): Promise<TeachDraft> {
+    const draft = this.get(id);
+    const found = operationOf(draft);
+    if (found === undefined) throw new Error("This draft has no operation to dry-run");
+    if (draft.status !== "draft") throw new Error("Only an unpublished draft is dry-run");
+    const result = await runCases(found.operation, found.cases, browser);
+    const current = this.get(id);
+    current.dryRun = { ...result, at: new Date().toISOString() };
+    this.save(current);
+    return current;
   }
 
   /** The published versions of a draft's skill, oldest first; empty without history or before a publish. */

@@ -727,8 +727,7 @@ export class Orchestrator {
       const agent = this.registry.tryGet(owner);
       return agent === undefined ? undefined : { agentId: agent.id, agentName: agent.profile.name };
     },
-    // So the scheduler can tell "agent: Ada" from "agent: <somebody else>" — the gate
-    // it applies to a name that came out of a writable file.
+    // So the scheduler can tell "agent: Ada" from "agent: <somebody else>" — the gate it applies to a name that came out of a writable file.
     resolveAgent: name => {
       try {
         return this.registry.resolve(name).id;
@@ -2673,6 +2672,7 @@ export const ALL_TOOLS: readonly string[] = [
   "WaitForControl",
   "browser_fill_secret",
   "browser_verify_write",
+  "RunOperation",
   "browser_pages",
   "NoteSiteLearning",
   "computer",
