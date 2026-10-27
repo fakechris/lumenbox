@@ -188,7 +188,7 @@ const WHEN_WORDING = /\b(use when|use it when|when (?:someone|the person|you|ask
 const PRIOR_CONTEXT = /\bas (?:above|discussed|mentioned)\b|\bearlier in (?:this|the) (?:conversation|chat)\b|\bthe conversation above\b|上文|刚才|前面(?:说|提到)的|如上所述/i;
 
 /** Our own tool names, from the one place every tool is declared. */
-const KNOWN_TOOL_NAMES: ReadonlySet<string> = new Set([...declaredTools(), "connector_request", "FindMcpTool", "UseMcpTool"]);
+export const KNOWN_TOOL_NAMES: ReadonlySet<string> = new Set([...declaredTools(), "connector_request", "FindMcpTool", "UseMcpTool"]);
 
 /**
  * `allowed-tools:` read into our names, and what could not be read.

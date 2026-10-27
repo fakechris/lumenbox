@@ -754,6 +754,17 @@ A multi-file draft (`checkSkillDraft`) has each offending file reverted to the c
 instead. A skill without skill.yaml is unaffected; writes through `bash` are not checked here
 (skill provenance records them).
 
+**Skills from elsewhere come in as drafts** (INV-1367, `src/host/skill-import.ts`):
+`agentbox skills import <dir> [--agent <name>]` reads a folder with a SKILL.md, or a folder of
+them (OpenClaw and Hermes `skills/`, Rakazo `.agents/skills`, a Skill Recorder export), and makes
+each a teaching draft — the same review a demonstration gets; nothing is installed. Frontmatter is
+reduced to name, description, `scope: global` and `allowed-tools` mapped onto our tools (inline,
+bracketed or YAML-list form; Claude Code patterns like `Bash(gh *)` reduced to the tool, unknown
+names dropped and shown to the reviewer); the body is kept as written; helper files (≤50, text,
+no symlinks or dotfolders) ride along and are published before SKILL.md, under
+`imported-<slug>-<id>/`. A skill naming the host's own records, or a SKILL.md holding a credential
+shape, is refused; a helper holding one is left out and reported.
+
 A `schedule:` line in the frontmatter makes a skill an **automation** — no second object and no
 second store; the only difference between a recipe and an automation is a line of frontmatter. Five
 cron fields, `@every <n><unit>`, or `@hourly`/`@daily`/`@weekly`/`@monthly`. Deliberately a subset:

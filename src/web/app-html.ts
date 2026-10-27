@@ -6174,7 +6174,7 @@ var selectedTeachingDraft = null;
 function showTeachingDraft(draft) {
   selectedTeachingDraft = draft;
   $("teachreviewdetail").style.display = "block";
-  $("teachreviewsource").textContent = draft.status + " · agent " + draft.agentId + " · box " + draft.boxId + " · session " + draft.sessionId + " · trace " + draft.eventsPath + (draft.videoPath ? " · video " + draft.videoPath : "") + (draft.redactedCredentials && draft.redactedCredentials.length ? " · credentials removed from the trace before the model read it: " + draft.redactedCredentials.join(", ") : "");
+  $("teachreviewsource").textContent = draft.status + " · agent " + draft.agentId + " · box " + draft.boxId + " · session " + draft.sessionId + " · trace " + draft.eventsPath + (draft.videoPath ? " · video " + draft.videoPath : "") + (draft.redactedCredentials && draft.redactedCredentials.length ? " · credentials removed from the trace before the model read it: " + draft.redactedCredentials.join(", ") : "") + (draft.source ? " · imported from " + draft.source.from + (draft.files ? " with " + Object.keys(draft.files).length + " helper file(s)" : "") : "") + (draft.unknownTools && draft.unknownTools.length ? " · tools with no equivalent here, dropped: " + draft.unknownTools.join(", ") : "");
   $("teachreviewtext").textContent = draft.skill || draft.question;
   // Advice on the wording, from the same check the skills page uses; publishing is never blocked by it.
   $("teachreviewhints").style.display = (draft.hints || []).length ? "block" : "none";
