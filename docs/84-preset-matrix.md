@@ -33,14 +33,22 @@ with that reason. A missing engine is a FAIL naming the pinned package; `--insta
 Delegate's own install job and waits for it, reporting the job's exit and log tail when it fails.
 
 ```
-AGENTBOX_CONTAINER=lumenbox-eval-box node --experimental-transform-types scripts/preset-matrix.mjs --dry-run
-AGENTBOX_CONTAINER=lumenbox-eval-box node --experimental-transform-types scripts/preset-matrix.mjs \
+node --experimental-transform-types scripts/preset-matrix.mjs --dry-run
+node --experimental-transform-types scripts/preset-matrix.mjs [--box create|keep|use <name>] [--image build] \
     --install --json research/matrix/<date>.json --md research/matrix/<date>.md [--only pi] [--providers minimax,kimi]
 node --experimental-transform-types scripts/preset-matrix.mjs --from research/matrix/<date>.json   # re-render
 ```
 
-`--dry-run` calls no model and touches no box. The script refuses the live box unless
-`--live-box` is passed. It is never part of `npm test`.
+`--dry-run` calls no model and touches no box. It is never part of `npm test`.
+
+**The box** (INV-1370, `scripts/lib/eval-box.mjs`): by default the script creates its own
+`lumenbox-eval-<run>` box and removes it when the run ends — success, failure or Ctrl-C — after
+printing what it removes (container, its three volumes, network, token file, and any image
+`--image build` made). It removes only names under `lumenbox-eval-` that this run created.
+`--box keep` leaves the created box running; `--box use <name>` (or `AGENTBOX_CONTAINER`)
+attaches to an existing box and removes nothing; `--image build` first builds the current
+Dockerfile as `lumenbox-eval:<version>` with every engine pinned; `--live-box` means the default
+box, on purpose.
 
 ## The table after the fixes, 2026-10-26, build c360b5f + INV-1363
 
