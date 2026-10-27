@@ -84,6 +84,7 @@ import {
 } from "../protocol/index.ts";
 import { afterTimeout, idempotencyOfHttp } from "../protocol/idempotency.ts";
 import { skillSlugOf } from "./skill-provenance.ts";
+import { skillWriteRefusal } from "./skill-contract.ts";
 import { capRefusal, standingFileOf, writeStandingFromAgent } from "./standing.ts";
 import { SKILL_FILENAME } from "./skills.ts";
 import {
@@ -3880,6 +3881,8 @@ export async function dispatchTool(
           isError: true,
         };
       }
+      const editContract = await skillWriteRefusal(box, path, updated); // INV-1375: the skill's skill.yaml, if any
+      if (editContract !== undefined) return { text: `Not edited: ${editContract}`, isError: true };
       // A standing file (INV-777) is capped, and its host copy is written in the same call.
       const standingEdited = standingFileOf(path, context.agent.id);
       const editCap = standingEdited === undefined ? undefined : capRefusal(standingEdited, updated);
@@ -3965,6 +3968,8 @@ export async function dispatchTool(
         };
       }
       const written = templateStamp(context, path, content);
+      const writeContract = await skillWriteRefusal(box, path, written); // INV-1375: the skill's skill.yaml, if any
+      if (writeContract !== undefined) return { text: `Not written: ${writeContract}`, isError: true };
       // A standing file (INV-777) is capped, and its host copy — the one that counts — is written
       // in the same call, so the agent's edit is in its next prompt and never reported back to it.
       const standingWritten = standingFileOf(path, context.agent.id);
