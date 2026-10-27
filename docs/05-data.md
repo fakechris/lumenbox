@@ -774,6 +774,17 @@ panel lists a published skill's versions; rolling back publishes an older one ag
 version, so history is only appended. A credential shape refuses the commit. Skills an agent
 writes directly in the box are not in this history; provenance records who wrote them.
 
+**An evaluation can propose a revision** (INV-1377, `src/host/learning-material.ts`). `npm run
+scenario -- --skills|--teach [--material <dir>]` and `scripts/preset-matrix.mjs --material <dir>`
+write learning material: `tasks/<id>.json` (what was asked, what came back, tools, passed, the
+feedback that says why, the skill under test) and `index.jsonl`, schema-checked and with
+credential shapes redacted; never a fixture's expected answer or hidden rubric. `agentbox skills
+improve <skill> --material <dir> [--from <SKILL.md>]` gives a teaching-style turn only that
+material and the skill as it stands; its answer becomes a draft revising that skill (source
+`eval`, the failing task ids as its basis) in the same review, published over the skill's own
+directory by a person or not at all. For a starter skill the repo's copy stays canonical: a
+published revision changes the box's copy, and the same text belongs in `starter-skills` too.
+
 A `schedule:` line in the frontmatter makes a skill an **automation** — no second object and no
 second store; the only difference between a recipe and an automation is a line of frontmatter. Five
 cron fields, `@every <n><unit>`, or `@hourly`/`@daily`/`@weekly`/`@monthly`. Deliberately a subset:

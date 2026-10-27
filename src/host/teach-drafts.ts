@@ -31,8 +31,12 @@ export interface TeachProposal {
   clarifications?: TeachClarification[];
   /** Credential kinds removed from the trace before the teaching model read it (INV-1368); never values. */
   redactedCredentials?: string[];
-  /** Where an imported draft came from (INV-1367); a demonstration has none. */
-  source?: { kind: "import"; from: string };
+  /**
+   * Where a draft came from when not a demonstration: an import (INV-1367), or an evaluation's
+   * learning material (INV-1377) proposing a revision of the existing skill `skillDir`, resting on
+   * the failing tasks in `basis`.
+   */
+  source?: { kind: "import"; from: string } | { kind: "eval"; from: string; skillDir: string; basis: string[] };
   /** Helper files published beside SKILL.md, relative path → text (imports only). */
   files?: Record<string, string>;
   /** allowed-tools names the import could not map onto ours; dropped, shown to the reviewer. */
@@ -77,7 +81,8 @@ function validateProposal(p: TeachProposal): void {
   if (p.epoch !== undefined && (!Number.isSafeInteger(p.epoch) || p.epoch < 0)) throw new Error("Invalid teaching epoch");
   if (p.taskId !== undefined && (typeof p.taskId !== "string" || !p.taskId.trim() || p.taskId.length > 256)) throw new Error("Invalid teaching task");
   if (p.videoPath !== undefined && typeof p.videoPath !== "string") throw new Error("Invalid teaching video");
-  if (p.source !== undefined && (p.source.kind !== "import" || typeof p.source.from !== "string" || !p.source.from.trim() || p.source.from.length > 4096)) throw new Error("Invalid import source");
+  if (p.source !== undefined && ((p.source.kind !== "import" && p.source.kind !== "eval") || typeof p.source.from !== "string" || !p.source.from.trim() || p.source.from.length > 4096)) throw new Error("Invalid import source");
+  if (p.source?.kind === "eval" && (!/^[A-Za-z0-9._-]{1,120}$/.test(p.source.skillDir) || !Array.isArray(p.source.basis) || p.source.basis.length > 64 || p.source.basis.some(id => typeof id !== "string" || id.length > 120))) throw new Error("Invalid evaluation source");
   if (p.files !== undefined) {
     const entries = typeof p.files === "object" && p.files !== null ? Object.entries(p.files) : [];
     if (p.source === undefined || entries.length === 0 || entries.length > 50 ||
@@ -109,7 +114,7 @@ function validateProposal(p: TeachProposal): void {
     if ("problem" in result || !parsed.meta.name || parsed.meta.scope !== "global") throw new Error("Teaching skill needs name, description, scope: global and a body");
     // Publishing a teaching result must not also install an unattended routine.
     // An import may carry allowed-tools, already mapped onto ours; nothing that runs unattended.
-    const allowedKeys = p.source?.kind === "import" ? ["name", "description", "scope", "allowed-tools"] : ["name", "description", "scope"];
+    const allowedKeys = p.source !== undefined ? ["name", "description", "scope", "allowed-tools"] : ["name", "description", "scope"];
     if (Object.keys(parsed.meta).some(key => !allowedKeys.includes(key))) throw new Error("Teaching drafts cannot install a schedule, listener or other execution metadata");
   }
 }
@@ -137,6 +142,7 @@ export async function publishTeachingSkill(box: Pick<BoxClient, "writeFile" | "u
 /** Single hostd writer, like TaskStore. Drafts live outside every box's formal skill roots. */
 /** Where a draft publishes in the box: imported-<slug>-<id> for an import, taught-<id> for a demonstration. */
 export function publishDirOf(draft: Pick<TeachDraft, "id" | "source" | "skill">): string {
+  if (draft.source?.kind === "eval") return draft.source.skillDir; // a revision publishes over the skill it revises
   return draft.source?.kind === "import" ? `imported-${slugify(parseSkillFile(draft.skill ?? "").meta.name ?? "skill")}-${draft.id.slice(0, 8)}` : `taught-${draft.id}`;
 }
 
