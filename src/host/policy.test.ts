@@ -955,3 +955,33 @@ test("the taint rule (INV-1309): a turn that read a vault secret is asked before
     cleanup();
   }
 });
+
+test("the first-use rule (INV-1366): after an outside read, the turn's first call to a new MCP server asks; used ones do not", () => {
+  const { path, cleanup } = fixture();
+  try {
+    const gate = new PolicyGate({
+      path,
+      limits: { budgetWindowHours: 24, wakesPerWindow: 30, wakeWindowMinutes: 10, approvalRequiredTools: [], approvalRequiredCommands: [], tierGate: "off" },
+      egressAllow: () => [],
+    });
+    gate.externalTool = tool => tool === "WebFetch" || tool.startsWith("browser_");
+    const call = (tool: string, input: Record<string, unknown> = {}, turnId = "t1"): PolicyRequest => ({ kind: "tool", agentId: "agent-1", agentName: "Ada", tool, input, turnId });
+
+    assert.equal(gate.check(call("linear__list_issues")).allow, true, "untainted: a first call is just a call");
+    assert.equal(gate.check(call("WebFetch", { url: "https://news.example/a" })).allow, true, "the read itself is not asked about");
+    assert.equal(gate.check(call("WebFetch", { url: "https://other.example/b" })).allow, true, "and browsing on is not either");
+    assert.equal(gate.check(call("linear__create_issue", { title: "x" })).allow, true, "a server used before the read is not a first use");
+
+    const asked = gate.check(call("notion__search", { query: "x" }));
+    assert.equal(asked.allow, false, "a server first used after an outside read asks, even for a read");
+    assert.match(gate.pending()[0]!.description, /^\[tainted: this turn read content from outside the box; this is its first call to the notion MCP server\]/);
+    assert.equal(gate.check(call("notion__search", { query: "x" }, "t2")).allow, true, "another turn read nothing");
+
+    // Approved once, the server counts as used for the rest of the turn.
+    assert.equal(gate.grant(gate.pending()[0]!.id, "user", "once"), true);
+    assert.equal(gate.check(call("notion__search", { query: "x" })).allow, true);
+    assert.equal(gate.check(call("notion__get_page", { id: "p" })).allow, true, "the same server, another tool: not a first use");
+  } finally {
+    cleanup();
+  }
+});

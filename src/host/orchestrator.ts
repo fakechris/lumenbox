@@ -797,9 +797,7 @@ export class Orchestrator {
           ? { principal: this.callerFor(task.assigneeId)!.userId! }
           : {}),
       })
-      .catch(() => {
-        // Already logged inside; a failure to take notes is not the person's problem.
-      });
+      .catch(() => {}); // Already logged inside; a failure to take notes is not the person's problem.
   }
 
   /** Whether a tool's result is outside content that keeps its exchange out of memory (INV-894). */
@@ -994,6 +992,7 @@ export class Orchestrator {
       usage: this.usage,
       externalTool: tool => this.readsExternalContent(tool), heldValues: () => this.options.vault?.heldValues() ?? new Map(),
     });
+    this.policy.externalTool = tool => this.readsExternalContent(tool);
 
     this.extensions =
       options.extensions === null

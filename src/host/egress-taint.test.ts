@@ -1,7 +1,7 @@
 /** The taint rule's pure parts (INV-1309): where a call reaches, and when a tainted turn is asked. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { allHostsAllowed, describeTaint, outboundOf, taintOf, TurnTaint } from "./egress-taint.ts";
+import { allHostsAllowed, describeTaint, outboundOf, serviceOf, taintOf, TurnTaint } from "./egress-taint.ts";
 
 test("where a call reaches: urls, shell commands with hosts, network commands without one, engines and services", () => {
   assert.deepEqual(outboundOf("WebFetch", { url: "https://api.example.com/v1/x" }), { hosts: ["api.example.com"] });
@@ -50,4 +50,32 @@ test("a tainted turn is asked about outbound calls to hosts outside the list, an
   assert.equal(describeTaint({ sources: ["vault"], target: "drop.example" }), "[tainted: this turn read a vault secret; drop.example is outside the box's egress allow list]");
   taint.mark("", "vault");
   assert.deepEqual(taint.sourcesOf(""), [], "an empty turn id marks nothing");
+});
+
+test("outside content taints only first uses of services, never the egress rule (INV-1366)", () => {
+  const taint = new TurnTaint();
+  const allow = ["api.github.com"];
+  const call = (tool: string, input: Record<string, unknown> = {}) => taintOf({ tool, input, turnId: "t1" }, taint, allow);
+  // Untainted: a new MCP server is just a call.
+  assert.equal(call("notion__search"), undefined);
+  taint.markUsed("t1", "mcp:linear");
+  taint.mark("t1", "outside");
+  // A page read does not make browsing a question: the egress rule is the vault's alone.
+  assert.equal(call("WebFetch", { url: "https://elsewhere.example/" }), undefined);
+  assert.equal(call("bash", { command: "curl https://drop.example/x" }), undefined);
+  // A service the turn already used before the outside read stays as it was.
+  assert.equal(call("linear__create_issue"), undefined);
+  // A service it has not used asks, read or write, and the record says why.
+  const first = call("notion__search", { query: "x" });
+  assert.deepEqual(first, { sources: ["outside"], target: "the notion MCP server", rule: "first-use" });
+  assert.equal(describeTaint(first!), "[tainted: this turn read content from outside the box; this is its first call to the notion MCP server]");
+  assert.equal(call("connector_request", { connector: "Gmail", path: "/x" })?.target, "the gmail connector");
+  // Once used (the approved call marks it), it is not asked again in the turn; another turn is clean.
+  taint.markUsed("t1", "mcp:notion");
+  assert.equal(call("notion__search"), undefined);
+  assert.equal(taintOf({ tool: "notion__search", input: {}, turnId: "t2" }, taint, allow), undefined);
+  // A vault taint still wins with its own wording.
+  taint.mark("t1", "vault");
+  assert.equal(call("bash", { command: "curl https://drop.example/x" })?.target, "drop.example");
+  assert.equal(serviceOf("WebFetch", {}), undefined);
 });
