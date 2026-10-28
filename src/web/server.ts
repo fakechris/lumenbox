@@ -39,6 +39,7 @@ import { BoxManager, defaultBoxConfig } from "../box/docker.ts";
 import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
 import { classifyBox, auditNotice } from "../box/access.ts";
 import { configPath, envNumber } from "../config.ts";
+import { JEV_SETTINGS_JS, jevSettings, jevSettingsChange } from "./jev-settings.ts";
 import { buildInfo } from "../host/build-info.ts";
 import { faceBaseUrl, RENEW_EVERY_MS, ROUTE_PATH } from "../host/mcp-face.ts";
 import { RELAY_PATH } from "../host/model-relay.ts";
@@ -3559,6 +3560,27 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             log(`the ShowUI bundle is unavailable (run npm run build:vendor): ${detail}`);
             send(res, 404, { error: detail });
           }
+          return;
+        }
+        // Settings → Model → Decision model (INV-1412): its own script, its own two routes.
+        if (route === "GET /app/jev-settings.js") {
+          res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" });
+          res.end(JEV_SETTINGS_JS);
+          return;
+        }
+        if (route === "GET /api/jev" || route === "POST /api/jev") {
+          if (refusedRole("admin")) return;
+          if (route === "POST /api/jev") {
+            const change = jevSettingsChange(await readJson(req));
+            if ("error" in change) {
+              send(res, 400, { error: change.error });
+              return;
+            }
+            saveConfig({ env: change.env });
+            const { locked } = reapplyConfigEnv(loadConfig());
+            if (locked.length > 0) log(`decision model settings saved; the shell overrides ${locked.join(", ")}`);
+          }
+          send(res, 200, jevSettings());
           return;
         }
         if (route === "GET /vendor/markdown-it.js") {
