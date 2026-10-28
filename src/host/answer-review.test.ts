@@ -33,3 +33,31 @@ test("an unavailable reviewer fails open as UNKNOWN and records hashes rather th
   assert.doesNotMatch(JSON.stringify(records), /secret request|secret answer/);
   assert.match(JSON.stringify(records), /"unavailable":true/);
 });
+
+test("with the decision model on, the review is one choice, falls back to the model when it fails, and samples every reply", async () => {
+  const { answerReviewPercent } = await import("./answer-review.ts");
+  const jevAnswer = { model: "m", ms: 1, answers: { category: { type: "choice" as const, choice: "NON_ANSWER", confidence: 0.91, probabilities: { NON_ANSWER: 0.91, PASS: 0.09 } } } };
+  let modelCalls = 0;
+  let asked: import("./jev.ts").JevRequest | undefined;
+  const on = (ok: boolean): import("./jev.ts").SwitchDeps => ({
+    mode: () => "on",
+    client: () => async request => { asked = request; if (!ok) throw new Error("down"); return jevAnswer; },
+    record: () => {},
+    log: () => {},
+  });
+  const reviewer = (ok: boolean) => new AnswerReviewer({ ask: async () => { modelCalls += 1; return '{"category":"PASS","confidence":0.8,"reason":"fine"}'; }, jev: on(ok) });
+  const input = { agentName: "Ada", messageId: "m1", conversation: "main", request: "what is the deploy date?", answer: "I'll look into it." };
+
+  const verdict = await reviewer(true).review(input);
+  assert.equal(verdict.category, "NON_ANSWER");
+  assert.equal(verdict.confidence, 0.91);
+  assert.equal(modelCalls, 0);
+  assert.deepEqual(Object.keys((asked!.questions.category as { criteria: Record<string, string> }).criteria), ["PASS", "NON_ANSWER", "PROCESS_OVER_RESULT", "CONTEXT_BLEED", "UNKNOWN"]);
+  assert.ok(recoverySuggestion(verdict) !== undefined, "the suggestion threshold is unchanged");
+
+  assert.equal((await reviewer(false).review(input)).category, "PASS", "a failed decision model leaves the model's review");
+  assert.equal(modelCalls, 1);
+
+  assert.equal(answerReviewPercent(on(true)), 100);
+  assert.equal(answerReviewPercent({ ...on(true), mode: () => "off" }), 5);
+});
