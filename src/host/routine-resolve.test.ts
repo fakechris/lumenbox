@@ -244,3 +244,23 @@ test("the model judge may soften a push but never re-opens a silence, and falls 
   assert.equal(parseResolveVerdict('{"verdict":"maybe"}'), undefined);
   assert.deepEqual(parseResolveVerdict('Sure: {"verdict":"SILENT","reason":"same"}'), { verdict: "silent", reason: "same" });
 });
+
+test("the decision model may turn a push into an attachment or a silence when sure, and never re-opens a silence", async () => {
+  const { resolveRoutineResult } = await import("./routine-resolve.ts");
+  const jev = (choice: string, confidence: number, fail = false): import("./jev.ts").SwitchDeps => ({
+    mode: () => "on",
+    client: () => async () => {
+      if (fail) throw new Error("down");
+      return { model: "m", ms: 1, answers: { verdict: { type: "choice" as const, choice, confidence, probabilities: { [choice]: confidence } } } };
+    },
+    record: () => {},
+    log: () => {},
+  });
+  const changed = { slug: "prices", text: "BTC 64,100 (was 64,000)", deliver: "feishu:chat", recentChat: [], previous: { sha256: "x", text: "BTC 64,000", at: "t0" } };
+
+  assert.equal((await resolveRoutineResult(changed, { jev: jev("attach_next", 0.85) })).verdict, "attach_next");
+  assert.equal((await resolveRoutineResult(changed, { jev: jev("silent", 0.55) })).verdict, "push_now", "an unsure answer leaves the push");
+  assert.equal((await resolveRoutineResult(changed, { jev: jev("silent", 0.9, true) })).verdict, "push_now", "a failure leaves the push");
+  assert.equal((await resolveRoutineResult({ ...changed, text: "" }, { jev: jev("push_now", 1) })).verdict, "silent", "the rules' silence is not re-opened");
+  assert.equal((await resolveRoutineResult({ ...changed, deliverWhen: "always" }, { jev: jev("silent", 1) })).verdict, "push_now", "deliver_when: always is the routine's own word");
+});
