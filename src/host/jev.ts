@@ -245,6 +245,11 @@ export const defaultSwitchDeps: SwitchDeps = {
   log: line => console.error(`[jev] ${line}`),
 };
 
+/** The same dependencies with `on` read as `shadow`: for points where the decision model may only be compared, never decide. */
+export function shadowOnly(deps: SwitchDeps = defaultSwitchDeps): SwitchDeps {
+  return { ...deps, mode: point => (deps.mode(point) === "on" ? "shadow" : deps.mode(point)) };
+}
+
 /** The switch's effective mode: `off` whenever there is no credential to act on it with. */
 export function modeFor(point: JevPoint, deps: SwitchDeps = defaultSwitchDeps): { mode: JevMode; ask?: JevAsk } {
   const mode = deps.mode(point);
