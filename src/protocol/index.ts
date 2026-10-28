@@ -109,24 +109,18 @@ export interface ComputerRequest extends DisplayGuardProjection {
   actions: readonly ComputerAction[];
   expect?: DesktopExpectation;
   /**
-   * Proof that the caller owns this desktop.
-   *
-   * A display is bound to a token when it is created, and input carrying anyone else's
-   * token is refused. Without it, any caller that could name a display could drive it —
+   * Proof that the caller owns this desktop. A display is bound to a token when it is created, and input carrying
+   * anyone else's token is refused. Without it, any caller that could name a display could drive it —
    * which meant one agent could type into another's screen.
    */
   owner?: string;
-  /**
-   * Which desktop to act on. Each agent gets its own, so their input and their
-   * screenshots cannot cross. Defaults to 1.
-   */
+  /** Which desktop to act on. Each agent gets its own, so their input and their screenshots cannot cross. Defaults to 1. */
   display?: number;
-  /**
-   * Bind a spare keycode per unmapped character before typing instead of letting
-   * `xdotool type` remap one per character and lose it. See the SAND-1271 note in
-   * the X11 executor.
-   */
+  /** Bind a spare keycode per unmapped character before typing instead of letting `xdotool type` remap one per character and lose it. See the SAND-1271 note in the X11 executor. */
   bind_unmapped_characters?: boolean;
+  /** Also return the final frame as a JPEG (INV-1417), red-outlined around `mark` when given (INV-1420). */
+  jpeg?: boolean;
+  mark?: { x: number; y: number; width: number; height: number };
 }
 
 /** One operable control of the active window, as the accessibility tree describes it. */
@@ -220,7 +214,8 @@ export type Effect = "confirmed" | "observed_change" | "partial" | "suspected_no
 
 export interface ActionVerification {
   status: "satisfied" | "unsatisfied" | "unknown";
-  source: "native" | "dom" | "none";
+  /** `vision`: the host read the final frame against `expect.looks` (INV-1417). */
+  source: "native" | "dom" | "vision" | "none";
   detail: string;
 }
 
@@ -229,6 +224,8 @@ export interface DesktopExpectation {
   window_title?: string;
   /** Exactly one operable element with this role/name must exist in the active window. */
   element?: { role: string; name: string; states?: string[] };
+  /** What the screen should show afterwards, in words; checked on the host, never sent to the box (INV-1417). */
+  looks?: string;
 }
 
 /** One projection for browser, computer and older peers. Dispatch is not verification. */
@@ -327,6 +324,8 @@ export interface ComputerResult {
   success: boolean;
   /** base64 WebP at API resolution. Empty only if capture failed. */
   screenshot: string;
+  /** The same frame as JPEG, when the request asked for one and the box could make it. */
+  screenshot_jpeg?: string;
   cursor_position?: { x: number; y: number };
   /** Present when the batch included list_windows. */
   windows?: readonly WindowInfo[];

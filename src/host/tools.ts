@@ -1,5 +1,6 @@
 import { isComputerWrite } from "../cua/execution.ts";
 import { SENSITIVE_INPUT_TTL_MS, inputValueHash, parseSensitiveInput } from "../protocol/sensitive-input.ts";
+import { computerWithVision, visionExpectSchema } from "./computer-vision.ts";
 /**
  * Tool definitions and dispatch.
  *
@@ -866,7 +867,7 @@ export function buildTools(
             expect: {
               type: "object", description: "Optional state to verify after the batch. Image change alone is not success.",
               properties: {
-                window_title: { type: "string" },
+                window_title: { type: "string" }, ...visionExpectSchema(),
                 element: { type: "object", properties: { role: { type: "string" }, name: { type: "string" }, states: { type: "array", items: { type: "string" } } }, required: ["role", "name"] },
               },
             },
@@ -2793,16 +2794,15 @@ export async function dispatchTool(
 
       let result: Awaited<ReturnType<BoxClient["computer"]>>;
       try {
-        result = await box.computer(actions, {
+        result = await computerWithVision(box, actions, {
           display: context.displayIndex,
           owner: context.boxOwner,
           expect: input.expect as import("../protocol/index.ts").DesktopExpectation | undefined,
         });
       } catch (error) {
-        // The box said no, or said nothing. Those are different answers and the model
-        // must not be handed one where the other is true: an owner refusal is refused
-        // (retrying gets the same refusal); a box that timed out or dropped the
-        // connection is unknown (the keystrokes may have landed before it went quiet).
+        // The box said no, or said nothing. Those are different answers and the model must not be handed one where the
+        // other is true: an owner refusal is refused (retrying gets the same refusal); a box that timed out or dropped
+        // the connection is unknown (the keystrokes may have landed before it went quiet).
         const outcome = boxErrorOutcome(error);
         if (outcome === undefined) throw error;
         const message = error instanceof Error ? error.message : String(error);

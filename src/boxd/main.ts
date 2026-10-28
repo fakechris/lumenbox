@@ -1,4 +1,5 @@
 import { X11_DESKTOP_CAPABILITIES } from "../cua/x11-executor.ts";
+import { webpToJpeg } from "../cua/jpeg.ts";
 import { withCdpAuthority } from "./cdp.ts";
 /**
  * boxd — the in-box daemon.
@@ -285,10 +286,9 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
       authorize,
     });
     return {
-      // Ran, but nothing to show for it, is not "ok": the capture is the only evidence
-      // the host has that the screen is in the state the actions were meant to leave it.
-      // An outline that was asked for and could not be read is the same: the model has
-      // to know it is working from the screenshot alone (INV-412).
+      // Ran, but nothing to show for it, is not "ok": the capture is the only evidence the host has that the screen is in
+      // the state the actions were meant to leave it. An outline that was asked for and could not be read is the same:
+      // the model has to know it is working from the screenshot alone (INV-412).
       outcome: computerOutcome({ ...result, elements_note: result.elementsNote }),
       verification: result.verification,
       ...(result.effect !== undefined
@@ -299,6 +299,7 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
       elements_observation_id: result.elementsObservationId,
       progress: result.progress,
       screenshot: result.screenshot,
+      ...(body.jpeg === true && result.screenshot !== "" ? { screenshot_jpeg: await webpToJpeg(result.screenshot, body.mark !== undefined ? { mark: body.mark } : {}).catch(() => undefined) } : {}),
       windows: result.windows,
       ...(result.elements !== undefined ? { elements: result.elements } : {}),
       ...(result.elementsNote !== undefined ? { elements_note: result.elementsNote } : {}),
@@ -312,10 +313,9 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
     const original = error instanceof ComputerExecutionError ? error.original : error;
     const progress = error instanceof ComputerExecutionError ? error.progress : { executed_count: 0, dispatch: "not_started" as const };
     const refused = original instanceof DisplayGuardError || original instanceof DisplayOwnershipError || original instanceof UserInControlError || original instanceof DesktopTargetError;
-    // A failed action is exactly when the model most needs to see the screen:
-    // it has to work out what state the desktop is actually in before retrying.
-    // Returning only an error string leaves it guessing, so settle and capture
-    // before reporting. A capture that also fails must not mask the real error.
+    // A failed action is exactly when the model most needs to see the screen: it has to work out what state the
+    // desktop is actually in before retrying. Returning only an error string leaves it guessing, so settle and
+    // capture before reporting. A capture that also fails must not mask the real error.
     let screenshot = "";
     try {
       const recovery = await x11.execute([

@@ -1,7 +1,7 @@
 import type { ComputerProgress } from "../protocol/index.ts";
 
 export function isComputerWrite(action: { action?: unknown } | null | undefined): boolean {
-  return !["screenshot", "screenshot_window", "cursor_position", "list_windows", "list_elements", "wait"].includes(String(action?.action));
+  return !["screenshot", "screenshot_window", "cursor_position", "list_windows", "list_elements", "wait", "wait_until"].includes(String(action?.action));
 }
 
 export class DesktopTargetError extends Error {
