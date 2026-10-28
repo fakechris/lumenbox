@@ -8,6 +8,8 @@
  *   - `expect.looks` (INV-1417): the final frame, as JPEG, checked against a sentence the model wrote.
  *   - `wait_until` (INV-1418): a read-only action, alone in its call, that polls the screen until it
  *     shows what `looks` describes or `seconds` run out.
+ *   - `click_target` (INV-1419): the first action of its call, a control named in words; the host
+ *     finds it on a fresh frame with a box question and sends an ordinary click at its centre.
  *
  * The rule from docs/85 holds throughout: an answer read off the screen may make the outcome more
  * careful — a check that fails, a wait that ends unknown, a person asked — and never less.
@@ -15,7 +17,7 @@
 
 import type { BoxClient } from "../box/client.ts";
 import type { ActionVerification, ComputerAction, ComputerResult, DesktopExpectation } from "../protocol/index.ts";
-import { defaultSwitchDeps, type JevAsk, modeFor, noulOf, type SwitchDeps } from "./jev.ts";
+import { boxOf, defaultSwitchDeps, type JevAsk, modeFor, noulOf, type SwitchDeps } from "./jev.ts";
 
 type Box = Pick<BoxClient, "computer">;
 type Options = Parameters<BoxClient["computer"]>[1];
@@ -84,8 +86,46 @@ export function visionActionSchema<T extends { properties: Record<string, unknow
     fields.looks = { type: "string", description: "For wait_until: what the screen will show when the wait is over, in one plain sentence." };
     fields.seconds = { type: "integer", description: `For wait_until: how long to wait at most. Defaults to ${WAIT_DEFAULT_SECONDS}, at most ${WAIT_MAX_SECONDS}.` };
   }
+  if (modeFor("computer_click", jev).mode === "on") {
+    extra.push("click_target");
+    fields.target = { type: "string", description: "For click_target: the control to click, in words (\"the Send button\", \"the search box at the top\"). Must be the first action of the call; the host finds it on the current screen and clicks its centre, or refuses when unsure." };
+  }
   if (extra.length === 0) return schema;
   return { ...schema, properties: { ...schema.properties, ...fields, action: { ...actionField, enum: [...actionField.enum, ...extra] } } };
+}
+
+/** At or above this a located target is clicked; below it the call is refused rather than guessed. */
+export const CLICK_AT = 0.5;
+
+/** A JPEG's pixel size, from its start-of-frame marker; undefined when there is none. */
+export function jpegSize(base64: string): { width: number; height: number } | undefined {
+  const bytes = Buffer.from(base64, "base64");
+  let i = 2;
+  while (i + 9 < bytes.length) {
+    if (bytes[i] !== 0xff) return undefined;
+    const marker = bytes[i + 1]!;
+    const length = bytes.readUInt16BE(i + 2);
+    // SOF0..SOF15 carry the size, except the DHT/JPG/DAC markers that share the range.
+    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+      return { height: bytes.readUInt16BE(i + 5), width: bytes.readUInt16BE(i + 7) };
+    }
+    i += 2 + length;
+  }
+  return undefined;
+}
+
+/** Where `target` is on the frame, as an API-space point, or why it was not clicked. */
+export async function locate(ask: JevAsk, jpegBase64: string, target: string): Promise<{ x: number; y: number; confidence: number } | { why: string }> {
+  const size = jpegSize(jpegBase64);
+  if (size === undefined) return { why: "the frame's size could not be read" };
+  const result = await ask({
+    state: { screen: IMAGE_REF },
+    images: [{ ref: IMAGE_REF, format: "jpg", base64: jpegBase64 }],
+    questions: { where: { type: "box", instructions: `${target} in \`screen\`` } },
+  });
+  const { box, confidence } = boxOf(result, "where");
+  if (confidence < CLICK_AT) return { why: `could not find "${target.slice(0, 120)}" confidently (${confidence.toFixed(2)}); take a screenshot and click by coordinates` };
+  return { x: Math.round(((box.left + box.right) / 2) * size.width), y: Math.round(((box.top + box.bottom) / 2) * size.height), confidence };
 }
 
 function refused(error: string): ComputerResult {
@@ -128,6 +168,23 @@ export async function computerWithVision(box: Box, actions: readonly ComputerAct
     const { mode, ask } = modeFor("computer_wait", jev);
     if (mode !== "on" || ask === undefined) return refused("wait_until is not switched on here; use wait with a number of milliseconds and look at the screenshot");
     return waitUntil(box, wait, options, ask, jev, clock);
+  }
+  const targeted = actions.findIndex(action => (action as { action?: unknown }).action === "click_target");
+  if (targeted >= 0) {
+    if (targeted > 0) return refused("click_target goes first in its call, so it is found on the screen as it is now: send the actions before it separately");
+    const { mode, ask } = modeFor("computer_click", jev);
+    if (mode !== "on" || ask === undefined) return refused("click_target is not switched on here; take a screenshot and click by coordinates");
+    const first = actions[0] as { target?: unknown; button?: unknown; count?: unknown };
+    const target = typeof first.target === "string" ? first.target.trim() : "";
+    if (target === "") return refused("click_target needs target: the control to click, in words");
+    const frame = await box.computer([{ action: "screenshot" } as ComputerAction], { ...options, expect: undefined, jpeg: true });
+    if (frame.screenshot_jpeg === undefined) return refused("the box sent no JPEG frame, so click_target cannot read the screen; update the box image, or click by coordinates");
+    const found = await locate(ask, frame.screenshot_jpeg, target).catch(error => ({ why: `the decision model failed (${error instanceof Error ? error.message : String(error)})` }));
+    if ("why" in found) return { ...refused(`click_target: ${found.why}`), screenshot: frame.screenshot };
+    const clickAction = { action: "click", coordinate: [found.x, found.y], ...(first.button !== undefined ? { button: first.button } : {}), ...(typeof first.count === "number" ? { count: first.count } : {}) } as ComputerAction;
+    const result = await computerWithVision(box, [clickAction, ...actions.slice(1)], options, jev, clock);
+    const note = `click_target "${target.slice(0, 80)}" clicked at (${found.x}, ${found.y}), confidence ${found.confidence.toFixed(2)}`;
+    return { ...result, effect_detail: result.effect_detail === undefined ? note : `${note}; ${result.effect_detail}` };
   }
   const { looks, ...rest } = options.expect ?? ({} as DesktopExpectation);
   // The box never sees `looks`: an older one would read an expectation it cannot check as a failure.
