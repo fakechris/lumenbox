@@ -858,6 +858,22 @@ export function ensureConfigFile(): string {
 }
 
 /**
+ * A decision-model switch (INV-1412): `AGENTBOX_JEV_<POINT>` is `off`, `shadow` or `on`.
+ * Absent, empty or anything else is `off`, which makes no remote call at all. Read at call time,
+ * so a Settings save (which re-applies the file's env block) takes effect on the next judgement.
+ */
+export function jevSwitch(point: string): "off" | "shadow" | "on" {
+  const value = (process.env[`AGENTBOX_JEV_${point.toUpperCase()}`] ?? "").trim().toLowerCase();
+  return value === "on" || value === "shadow" ? value : "off";
+}
+
+/** The decision model's credential, under the name this installation exports or the one its docs use. */
+export function typesafeToken(): string | undefined {
+  const value = process.env.TYPESAFE_TOKEN ?? process.env.TYPESAFE_API_KEY;
+  return value !== undefined && value.trim() !== "" ? value.trim() : undefined;
+}
+
+/**
  * A number from the environment, or the default if it is not one.
  *
  * Every tunable in this system used to be read as `Number(process.env.X ?? default)`, in

@@ -45,6 +45,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [56-teaching-upgrade](56-teaching-upgrade.md) | Teaching draft upgrade | current | 2026-09-15 |
 | [70-cua-linux-validation](70-cua-linux-validation.md) | Linux CUA 回归矩阵与状态验收 | current | 2026-09-22 |
 | [84-preset-matrix](84-preset-matrix.md) | The Delegate support matrix: presets × providers × scenarios | current | 2026-10-26 |
+| [85-decision-model](85-decision-model.md) | The decision model: switched judgements beside the cheap profile | current | 2026-10-28 |
 
 ## decision
 

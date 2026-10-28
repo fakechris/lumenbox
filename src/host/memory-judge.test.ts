@@ -78,3 +78,53 @@ test("the model judge asks once and parses what comes back", async () => {
   assert.equal(prompts.length, 1);
   assert.equal(verdicts[0]!.duplicate.target, 1);
 });
+
+test("the decision-model judge asks each candidate's questions in one request and maps the answers to verdicts", async () => {
+  const { jevJudge } = await import("./memory-judge.ts");
+  let asked: import("./jev.ts").JevRequest | undefined;
+  const judge = jevJudge(async request => {
+    asked = request;
+    return {
+      model: "m",
+      ms: 1,
+      answers: {
+        c0_fromContent: { type: "noul", noul: 0.92 },
+        c0_narrowsRules: { type: "noul", noul: 0.1 },
+        c0_contradicts: { type: "choice", choice: "none", confidence: 0.8, probabilities: { none: 0.8, K1: 0.2 } },
+        c0_duplicate: { type: "choice", choice: "none", confidence: 0.95, probabilities: { none: 0.95, K1: 0.05 } },
+        c1_fromContent: { type: "noul", noul: 0.05 },
+        c1_narrowsRules: { type: "noul", noul: 0.02 },
+      },
+    };
+  });
+  const verdicts = await judge({ conversation: "…", candidates: ["they live in Shanghai now", "the sky was clear"], known: ["they live in Beijing"] });
+  assert.ok(asked !== undefined);
+  assert.equal(Object.keys(asked.questions).length, 6, "a candidate that shares no word with any known line is not asked to name one");
+  assert.deepEqual(Object.keys((asked.questions.c0_contradicts as { criteria: Record<string, string> }).criteria), ["none", "K1"]);
+  assert.deepEqual(verdicts[0]!.fromContent, { answer: true, confidence: 0.92 });
+  assert.equal(verdicts[0]!.narrowsRules.answer, false);
+  assert.equal(verdicts[0]!.contradicts.answer, false);
+  assert.deepEqual(verdicts[1]!.contradicts, { answer: false, confidence: 1 });
+  // The verdicts go through the same rules: a sure fromContent holds the candidate.
+  const out = dispose([candidate("they live in Shanghai now"), candidate("the sky was clear")], verdicts, known);
+  assert.equal(out.held.length, 1);
+  assert.equal(out.keep.length, 1);
+});
+
+test("a named contradiction carries its target and the probability that it is not none", async () => {
+  const { jevJudge, verdictsSummary } = await import("./memory-judge.ts");
+  const judge = jevJudge(async () => ({
+    model: "m",
+    ms: 1,
+    answers: {
+      c0_fromContent: { type: "noul", noul: 0.02 },
+      c0_narrowsRules: { type: "noul", noul: 0.03 },
+      c0_contradicts: { type: "choice", choice: "K1", confidence: 0.85, probabilities: { none: 0.1, K1: 0.85, K2: 0.05 } },
+      c0_duplicate: { type: "choice", choice: "none", confidence: 0.9, probabilities: { none: 0.9, K1: 0.1 } },
+    },
+  }));
+  const verdicts = await judge({ conversation: "…", candidates: ["they live in Shanghai, not Beijing"], known: ["they live in Beijing", "they live near Beijing station"] });
+  assert.deepEqual(verdicts[0]!.contradicts, { answer: true, confidence: 0.9, target: 1 });
+  assert.match(verdictsSummary(verdicts)[0]!, /contradicts=y0\.90K1/);
+  assert.ok(!verdictsSummary(verdicts)[0]!.includes("Beijing"), "the shadow summary never carries the text");
+});

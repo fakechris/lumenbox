@@ -34,7 +34,8 @@ import {
   selectRelevant
 } from "./memory.ts";
 import { guardMemoryCandidate } from "./memory-guard.ts";
-import { dispose, type MemoryJudge, modelJudge } from "./memory-judge.ts";
+import { dispose, jevJudge, type MemoryJudge, modelJudge, verdictsSummary } from "./memory-judge.ts";
+import { type SwitchDeps, switched } from "./jev.ts";
 import {
   buildMaintenancePrompt,
   type MaintenancePlan,
@@ -196,6 +197,8 @@ export interface RememberDeps {
   heldValues?: () => ReadonlyMap<string, string>;
   /** Answers the four questions about each candidate (INV-1333); defaults to one call on the cheap profile. */
   judge?: MemoryJudge;
+  /** The decision-model switch's dependencies (INV-1412); tests replace them, production reads the environment. */
+  jev?: SwitchDeps;
 }
 
 /**
@@ -646,9 +649,10 @@ export class Rememberer {
    * everything it was asked about: a candidate nobody judged is not a candidate anybody cleared.
    */
   private async judge(agentId: string, conversation: string, candidates: MemoryRecord[], known: readonly MemoryRecord[], principal?: string): Promise<ReturnType<typeof dispose>> {
-    const judge = this.deps.judge ?? modelJudge(prompt => this.ask(agentId, prompt, principal, 2048));
+    const own = this.deps.judge ?? modelJudge(prompt => this.ask(agentId, prompt, principal, 2048));
+    const input = { conversation, candidates: candidates.map(record => record.text), known: known.map(record => record.text) };
     try {
-      const verdicts = await judge({ conversation, candidates: candidates.map(record => record.text), known: known.map(record => record.text) });
+      const verdicts = await switched("memory_judge", { own: () => own(input), jev: ask => jevJudge(ask)(input), summary: verdictsSummary }, this.deps.jev);
       return dispose(candidates, verdicts, known);
     } catch (error) {
       this.log(`the memory judge did not answer (${error instanceof Error ? error.message : String(error)}); holding ${candidates.length} candidate(s)`);

@@ -1629,6 +1629,7 @@ export const APP_HTML = String.raw`<!doctype html>
 </div>
 
 <script src="/vendor/markdown-it.js"></script>
+<script src="/app/jev-settings.js"></script>
 <script>
 "use strict";
 // Markdown rendering is markdown-it's job, served from node_modules by this server.
