@@ -287,12 +287,12 @@ export class TeachDrafts {
   }
 
   /** Runs an operation draft's cases (INV-1378) and records the result on the draft; it never commits. */
-  async dryRun(id: string, browser: Parameters<typeof runCases>[2]): Promise<TeachDraft> {
+  async dryRun(id: string, browser: Parameters<typeof runCases>[2], desktop?: Parameters<typeof runCases>[3]): Promise<TeachDraft> {
     const draft = this.get(id);
     const found = operationOf(draft);
     if (found === undefined) throw new Error("This draft has no operation to dry-run");
     if (draft.status !== "draft") throw new Error("Only an unpublished draft is dry-run");
-    const result = await runCases(found.operation, found.cases, browser);
+    const result = await runCases(found.operation, found.cases, browser, desktop);
     const current = this.get(id);
     current.dryRun = { ...result, at: new Date().toISOString() };
     this.save(current);
