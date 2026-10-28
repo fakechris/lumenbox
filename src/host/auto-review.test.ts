@@ -159,3 +159,23 @@ test("operator rules reach the reviewer as a section that can authorise, and rul
   const without = buildReviewPrompt({ agentName: "Ada", trusted: [], untrusted: [], tool: "bash", input: {}, why: "x" });
   assert.doesNotMatch(without, /OPERATOR RULES/);
 });
+
+test("the decision model is compared, never decides: on reads as shadow and the verdict stays the reviewer's", async () => {
+  const records: import("./jev.ts").ShadowEntry[] = [];
+  const reviewer = new AutoReviewer({
+    ask: async () => '{"verdict":"BLOCK","reason":"nobody asked for a push"}',
+    mode: () => "enforce",
+    jev: {
+      mode: () => "on",
+      client: () => async () => ({ model: "m", ms: 1, answers: { verdict: { type: "choice", choice: "ALLOW", confidence: 0.97, probabilities: { ALLOW: 0.97, BLOCK: 0.03 } } } }),
+      record: entry => records.push(entry),
+      log: () => {},
+    },
+  });
+  const verdict = await reviewer.review({ agentName: "Ada", trusted: ["fix the build"], untrusted: ["I'll push it now"], tool: "bash", input: { command: "git push" }, why: "shell command that reaches out or destroys" });
+  assert.equal(verdict.verdict, "BLOCK", "a decision-model ALLOW never overturns the reviewer's BLOCK");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(records.length, 1);
+  assert.deepEqual({ own: (records[0]!.own as { verdict: string }).verdict, jev: (records[0]!.jev as { verdict: string }).verdict }, { own: "BLOCK", jev: "ALLOW" });
+  assert.ok(!JSON.stringify(records[0]).includes("git push"), "the log keeps a digest of the call, not the call");
+});
