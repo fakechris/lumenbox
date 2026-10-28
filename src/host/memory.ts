@@ -940,8 +940,7 @@ export async function chooseRelevant(options: {
   }
 
   try {
-    // The selector, or the decision model when its switch says so (INV-1414); undefined means fall back.
-    const own = async () => {
+    const own = async () => { // the selector; the decision model replaces it when its switch says so (INV-1414)
       const answer = await options.ask(buildSelectionPrompt(candidates, options.query));
       const read = answer === undefined ? undefined : parseSelection(answer, candidates);
       if (answer !== undefined && read === undefined) options.log?.("the memory selector's answer could not be read; using relevant facts only");
