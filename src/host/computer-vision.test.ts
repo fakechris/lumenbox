@@ -21,7 +21,7 @@ function fakeBox(result: Partial<ComputerResult> = {}) {
 
 function deps(mode: JevMode, p: number | Error, records: ShadowEntry[] = []): SwitchDeps {
   return {
-    mode: () => mode,
+    mode: point => (point === "computer_verify" ? mode : "off"),
     client: () => async request => {
       if (p instanceof Error) throw p;
       assert.equal(request.images?.[0]?.base64, "JPEG", "the question is about the JPEG copy of the same frame");
@@ -119,7 +119,7 @@ test("click_target finds the control on a fresh frame and sends an ordinary clic
   const sof = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x00, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x03, 0x20, 0x05, 0x00, 0x03]);
   assert.deepEqual(jpegSize(sof.toString("base64")), { width: 1280, height: 800 });
   const boxAnswer = (confidence: number): SwitchDeps => ({
-    mode: () => "on",
+    mode: point => (point === "computer_click" ? "on" : "off"),
     client: () => async request => {
       assert.equal(Object.values(request.questions)[0]!.type, "box");
       return { model: "m", ms: 1, answers: { where: { type: "box", box: { top: 0.89, bottom: 0.95, left: 0.55, right: 0.6 }, confidence } } };
@@ -151,4 +151,49 @@ test("click_target finds the control on a fresh frame and sends an ordinary clic
 
   assert.match((await computerWithVision(box, [{ action: "key", key: "a" } as ComputerAction, ask[0]!], {}, boxAnswer(0.9))).error!, /goes first/);
   assert.match((await computerWithVision(box, ask, {}, { ...boxAnswer(0.9), mode: () => "off" })).error!, /not switched on/);
+});
+
+test("the guard sends a click on what looks like send/pay/delete to the gate, and only ever adds an approval", async () => {
+  const { approvalOf, GUARD_AT } = await import("./computer-vision.ts");
+  const reading = (choice: string, confidence: number, mode: JevMode = "on", fail = false): SwitchDeps => ({
+    mode: point => (point === "computer_guard" ? mode : "off"),
+    client: () => async request => {
+      if (fail) throw new Error("down");
+      assert.equal(Object.values(request.questions)[0]!.type, "choice");
+      return { model: "m", ms: 1, answers: { kind: { type: "choice", choice, confidence, probabilities: { [choice]: confidence } } } };
+    },
+    record: () => {},
+    log: () => {},
+  });
+  const box = fakeBox();
+  const findings: string[] = [];
+  const refuse = (finding: string) => { findings.push(finding); return { allow: false as const, reason: "waiting for a person", approvalId: "ap-1" }; };
+
+  const stopped = await computerWithVision(box, click, { guard: refuse }, reading("send", 0.9));
+  assert.equal(stopped.outcome, "refused");
+  assert.deepEqual(approvalOf(stopped), { approval: { id: "ap-1" } }, "the turn waits on the approval like a browser click's");
+  assert.equal(box.calls.length, 1, "only the marked frame was taken; the click was not sent");
+  assert.deepEqual(box.calls[0]!.options.mark, { x: 60, y: 180, width: 80, height: 40 });
+  assert.equal(findings[0], "click at (100, 200) on a control that looks like it will send (desktop, read from the screen)", "no confidence in the words, so a grant matches the retry");
+
+  box.calls.length = 0;
+  await computerWithVision(box, click, { guard: () => ({ allow: true }) }, reading("send", 0.9));
+  assert.equal(box.calls.length, 2, "approved: the frame, then the click");
+  box.calls.length = 0;
+  await computerWithVision(box, click, { guard: refuse }, reading("other", 0.95));
+  assert.equal(box.calls.length, 2, "an ordinary control is clicked as before");
+  box.calls.length = 0;
+  await computerWithVision(box, click, { guard: refuse }, reading("delete", GUARD_AT - 0.1));
+  assert.equal(box.calls.length, 2, "an unsure reading adds no gate");
+  box.calls.length = 0;
+  await computerWithVision(box, click, { guard: refuse }, reading("send", 0.9, "on", true));
+  assert.equal(box.calls.length, 2, "a failed reading is today's behaviour");
+  box.calls.length = 0;
+  await computerWithVision(box, click, { guard: refuse }, reading("send", 0.9, "shadow"));
+  assert.equal(box.calls.length, 2, "shadow only records");
+  box.calls.length = 0;
+  await computerWithVision(box, [{ action: "key", key: "Return" } as ComputerAction, ...click], { guard: refuse }, reading("send", 0.9));
+  assert.equal(box.calls.length, 1, "a batch whose first write is not a click is not read");
+  assert.equal(approvalOf(await computerWithVision(fakeBox(), click, {}, reading("pay", 0.9))).approval, undefined);
+  assert.match((await computerWithVision(fakeBox(), click, {}, reading("pay", 0.9))).error!, /no approval channel/);
 });
