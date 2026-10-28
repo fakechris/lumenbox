@@ -1,0 +1,100 @@
+/**
+ * The decision model reading the desktop (INV-1417…1420): what the host may ask of a screenshot
+ * between the model's computer call and the box.
+ *
+ * The `computer` tool goes through `computerWithVision` instead of calling the box directly. With
+ * every switch off it is exactly that call. With one on it adds, in this order:
+ *
+ *   - `expect.looks` (INV-1417): the final frame, as JPEG, checked against a sentence the model wrote.
+ *
+ * The rule from docs/85 holds throughout: an answer read off the screen may make the outcome more
+ * careful — a check that fails, a wait that ends unknown, a person asked — and never less.
+ */
+
+import type { BoxClient } from "../box/client.ts";
+import type { ActionVerification, ComputerAction, ComputerResult, DesktopExpectation } from "../protocol/index.ts";
+import { defaultSwitchDeps, type JevAsk, modeFor, noulOf, type SwitchDeps } from "./jev.ts";
+
+type Box = Pick<BoxClient, "computer">;
+type Options = Parameters<BoxClient["computer"]>[1];
+
+/** At or below this, the screen is taken not to show what `looks` describes. */
+export const LOOKS_UNSATISFIED_AT = 0.2;
+/** At or above this, the screen is taken to show it — as evidence only, never as the verdict. */
+export const LOOKS_SATISFIED_AT = 0.8;
+
+const IMAGE_REF = "3f6c1a2e-screen";
+
+/** One yes/no question about a JPEG frame. */
+export async function askScreen(ask: JevAsk, jpegBase64: string, question: string): Promise<number> {
+  const result = await ask({
+    state: { screen: IMAGE_REF },
+    images: [{ ref: IMAGE_REF, format: "jpg", base64: jpegBase64 }],
+    questions: { yes: { type: "noul", instructions: question } },
+  });
+  return noulOf(result, "yes");
+}
+
+/**
+ * The verification a `looks` answer leaves. A clear no overrides whatever else was verified; a
+ * clear yes is recorded as evidence and leaves the verification it found.
+ */
+export function looksVerification(existing: ActionVerification | undefined, looks: string, p: number): ActionVerification | undefined {
+  const quoted = `"${looks.slice(0, 160)}"`;
+  if (p <= LOOKS_UNSATISFIED_AT) {
+    return { status: "unsatisfied", source: "vision", detail: `the screen does not look like ${quoted} (${p.toFixed(2)}); look at the screenshot before anything else` };
+  }
+  const note = p >= LOOKS_SATISFIED_AT ? `the screen looks like ${quoted} (${p.toFixed(2)}), which is evidence, not proof` : `unclear whether the screen looks like ${quoted} (${p.toFixed(2)})`;
+  return existing === undefined ? { status: "unknown", source: "vision", detail: note } : { ...existing, detail: `${existing.detail}; ${note}` };
+}
+
+/** `expect.looks` in the tool's schema, only while its switch is not off: a field nothing would check is not offered. */
+export function visionExpectSchema(jev: SwitchDeps = defaultSwitchDeps): Record<string, unknown> {
+  if (modeFor("computer_verify", jev).mode === "off") return {};
+  return {
+    looks: {
+      type: "string",
+      description: "What the screen should show after the batch, in one plain sentence (\"a dialog titled Save As is open\"). Checked against the final screenshot; a clear mismatch fails the batch, a match is evidence, not proof.",
+    },
+  };
+}
+
+export async function computerWithVision(box: Box, actions: readonly ComputerAction[], options: Options = {}, jev: SwitchDeps = defaultSwitchDeps): Promise<ComputerResult> {
+  const { looks, ...rest } = options.expect ?? ({} as DesktopExpectation);
+  // The box never sees `looks`: an older one would read an expectation it cannot check as a failure.
+  const expect = Object.keys(rest).length > 0 ? rest : undefined;
+  const plain = { ...options, expect };
+  const { mode, ask } = looks === undefined || looks.trim() === "" ? { mode: "off" as const } : modeFor("computer_verify", jev);
+  if (mode === "off" || ask === undefined || looks === undefined) return box.computer(actions, plain);
+  // One dispatch, whatever the mode: the generic switch runs both of its paths in shadow, and a
+  // desktop batch run twice is two sets of clicks.
+  const result = await box.computer(actions, { ...plain, jpeg: true });
+  const frame = result.screenshot_jpeg;
+  const clean = withoutJpeg(result);
+  if (frame === undefined) {
+    if (mode === "shadow") return clean;
+    const note = "the box sent no JPEG frame, so expect.looks was not checked; update the box image";
+    return { ...clean, verification: clean.verification ?? { status: "unknown", source: "vision", detail: note } };
+  }
+  const question = `Does \`screen\` show this: ${looks}`;
+  if (mode === "shadow") {
+    const started = Date.now();
+    void askScreen(ask, frame, question)
+      .then(p => jev.record({ at: new Date().toISOString(), point: "computer_verify", own: clean.verification?.status ?? "none", jev: looksVerification(clean.verification, looks, p)?.status ?? "none", ms: Date.now() - started }))
+      .catch(error => jev.record({ at: new Date().toISOString(), point: "computer_verify", own: clean.verification?.status ?? "none", error: error instanceof Error ? error.message : String(error) }))
+      .catch(() => {});
+    return clean;
+  }
+  try {
+    return { ...clean, verification: looksVerification(clean.verification, looks, await askScreen(ask, frame, question)) };
+  } catch (error) {
+    jev.log(`computer_verify: the decision model failed (${error instanceof Error ? error.message : String(error)}); expect.looks not checked`);
+    return clean;
+  }
+}
+
+/** The JPEG copy is for the host's question only; the transcript keeps the WebP it always kept. */
+function withoutJpeg(result: ComputerResult): ComputerResult {
+  const { screenshot_jpeg: _dropped, ...rest } = result;
+  return rest;
+}

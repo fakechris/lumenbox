@@ -235,6 +235,9 @@ export class BoxClient {
       expect?: import("../protocol/index.ts").DesktopExpectation;
       /** Proof that this desktop is the caller's. Refused if it belongs to someone else. */
       owner?: string;
+      /** Also return the final frame as JPEG, outlined around `mark` (INV-1417, INV-1420). An older box ignores it. */
+      jpeg?: boolean;
+      mark?: { x: number; y: number; width: number; height: number };
     } = {}
   ): Promise<ComputerResult> {
     // Older daemons can execute a prefix before rejecting a new action, and cannot
@@ -265,6 +268,8 @@ export class BoxClient {
         display: options.display,
         owner: options.owner,
         bind_unmapped_characters: options.bindUnmappedCharacters ?? true,
+        ...(options.jpeg === true ? { jpeg: true } : {}),
+        ...(options.mark !== undefined ? { mark: options.mark } : {}),
       },
       COMPUTER_TIMEOUT_MS
     );
