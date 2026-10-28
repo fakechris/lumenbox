@@ -40,6 +40,7 @@ import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.t
 import { classifyBox, auditNotice } from "../box/access.ts";
 import { configPath, envNumber } from "../config.ts";
 import { JEV_SETTINGS_JS, jevSettings, jevSettingsChange } from "./jev-settings.ts";
+import { desktopRunner } from "../host/operation-desktop.ts";
 import { buildInfo } from "../host/build-info.ts";
 import { faceBaseUrl, RENEW_EVERY_MS, ROUTE_PATH } from "../host/mcp-face.ts";
 import { RELAY_PATH } from "../host/model-relay.ts";
@@ -5415,7 +5416,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             if (box === undefined) throw new Error("The teaching agent's box is not connected; retry when it is");
             const display = orchestrator.registry.displayIndexFor(draft.agentId);
             const owner = orchestrator.registry.boxOwnerTokenFor(draft.agentId);
-            const done = await orchestrator.teachDrafts.dryRun(draft.id, request => box.browser({ ...request, display, ...(owner !== undefined ? { owner } : {}) }));
+            const done = await orchestrator.teachDrafts.dryRun(draft.id, request => box.browser({ ...request, display, ...(owner !== undefined ? { owner } : {}) }), desktopRunner(box, { display, ...(owner !== undefined ? { owner } : {}) }));
             send(res, 200, { draft: done });
           } catch (error) {
             send(res, 409, { error: error instanceof Error ? error.message : String(error) });

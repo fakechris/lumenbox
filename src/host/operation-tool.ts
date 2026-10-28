@@ -5,6 +5,7 @@
  * the task live instead and say the operation needs re-teaching.
  */
 import { commitsOf, type Operation, operationProblem, runOperation } from "./operation.ts";
+import { desktopRunner } from "./operation-desktop.ts";
 import { SKILLS_DIR } from "./skills.ts";
 import type { ToolContext } from "./tools.ts";
 
@@ -13,7 +14,7 @@ export function withOperationTool(tools: { name: string; input_schema: unknown }
   tools.push({
     name: "RunOperation",
     description:
-      "Run a taught operation: a skill whose folder holds operation.json replays its browser steps on your desktop with no model, " +
+      "Run a taught operation: a skill whose folder holds operation.json replays its browser (and desktop) steps with no model, " +
       "and returns its output as JSON. Use it when such a skill fits the request — it is faster and more exact than doing the steps yourself. " +
       "If it fails, it says at which step and why; then do the task live and tell the person the operation may need re-teaching.",
     input_schema: {
@@ -56,7 +57,8 @@ export async function runOperationTool(context: ToolContext, input: Record<strin
     });
     if (!decision.allow) return { text: `Outcome: refused — ${decision.reason}`, isError: true, ...(decision.approval !== undefined ? { approval: { id: decision.approval.id } } : {}) };
   }
-  const result = await runOperation(op, values, request => box.browser({ ...request, display: context.displayIndex, ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}) }), commits.length > 0);
+  const where = { display: context.displayIndex, ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}) };
+  const result = await runOperation(op, values, request => box.browser({ ...request, ...where }), commits.length > 0, desktopRunner(box, where));
   if (result.ok) return { text: `Outcome: ok. "${op.name}" returned:\n${JSON.stringify(result.output, null, 2)}` };
   return {
     text: `Outcome: failed — "${op.name}" ${result.code}${result.step !== undefined ? ` at step ${result.step}` : ""}: ${result.detail}. The page may have changed since it was taught: do the task live, and tell the person this operation may need re-teaching.`,

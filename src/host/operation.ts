@@ -37,7 +37,29 @@ export type Step =
   | { open: string }
   | { act: { action: "click" | "type" | "key"; find: { role?: string; name?: string; nth?: number }; text?: string; key?: string; commit?: string; expect?: { appears?: string } } }
   | { read: { as: string; pattern: string } }
-  | { wait: { for: "text" | "url"; value: string; seconds?: number } };
+  | { wait: { for: "text" | "url"; value: string; seconds?: number } }
+  | { desktop: DesktopStep };
+
+/**
+ * A step on the desktop rather than in the browser (INV-1421), for an app with no accessibility
+ * tree: exactly one of click (a control named in words), type, key, wait (until the screen shows a
+ * sentence) or check (the screen shows it now). Never coordinates — a replay must find things again.
+ */
+export interface DesktopStep {
+  click?: string;
+  type?: string;
+  key?: string;
+  wait?: string;
+  check?: string;
+  seconds?: number;
+  commit?: string;
+}
+
+const DESKTOP_VERBS = ["click", "type", "key", "wait", "check"] as const;
+export type DesktopVerb = (typeof DESKTOP_VERBS)[number];
+
+/** Runs one desktop step; `committed` is a click a person approved with the run. */
+export type DesktopRunner = (step: { verb: DesktopVerb; value: string; seconds?: number; committed: boolean }) => Promise<{ ok: boolean; detail: string }>;
 
 export interface Operation {
   name: string;
@@ -80,7 +102,7 @@ export function operationProblem(value: unknown): string | undefined {
   for (const [index, step] of op.steps.entries()) {
     const at = `steps[${index}]`;
     const kinds = Object.keys(step ?? {});
-    if (kinds.length !== 1) return `${at}: one of open, act, read, wait`;
+    if (kinds.length !== 1) return `${at}: one of open, act, read, wait, desktop`;
     if ("open" in step) {
       if (typeof step.open !== "string" || !/^https?:\/\/|^file:\/\/\/home\/box\//.test(step.open)) return `${at}: open takes an http(s) URL or a file in the box's work directory`;
     } else if ("act" in step) {
@@ -100,8 +122,15 @@ export function operationProblem(value: unknown): string | undefined {
       reads.add(step.read.as);
     } else if ("wait" in step) {
       if (!["text", "url"].includes(step.wait?.for) || typeof step.wait.value !== "string") return `${at}: wait for text or url, with a value`;
+    } else if ("desktop" in step) {
+      const desk = step.desktop ?? {};
+      const verbs = DESKTOP_VERBS.filter(verb => desk[verb] !== undefined);
+      if (verbs.length !== 1 || typeof desk[verbs[0]!] !== "string" || desk[verbs[0]!]!.trim() === "") return `${at}: desktop takes exactly one of ${DESKTOP_VERBS.join(", ")}, as text`;
+      if (Object.keys(desk).some(key => !([...DESKTOP_VERBS, "seconds", "commit"] as string[]).includes(key))) return `${at}: desktop finds things by description — never by coordinates`;
+      if (desk.seconds !== undefined && (typeof desk.seconds !== "number" || desk.seconds < 1 || desk.seconds > 60)) return `${at}: desktop seconds is 1 to 60`;
+      if (desk.commit !== undefined && (verbs[0] !== "click" || typeof desk.commit !== "string" || !/^[A-Za-z0-9][A-Za-z0-9 _.-]{0,62}$/.test(desk.commit))) return `${at}: commit is a short step name, on a click`;
     } else {
-      return `${at}: one of open, act, read, wait`;
+      return `${at}: one of open, act, read, wait, desktop`;
     }
   }
   const unread = Object.keys(op.output).filter(key => !reads.has(key));
@@ -114,7 +143,7 @@ export function operationProblem(value: unknown): string | undefined {
 
 /** The commit marks an operation declares, in step order. */
 export function commitsOf(op: Operation): string[] {
-  return op.steps.flatMap(step => ("act" in step && step.act.commit !== undefined ? [step.act.commit] : []));
+  return op.steps.flatMap(step => ("act" in step && step.act.commit !== undefined ? [step.act.commit] : "desktop" in step && step.desktop.commit !== undefined ? [step.desktop.commit] : []));
 }
 
 function inputProblem(op: Operation, input: Record<string, unknown>): string | undefined {
@@ -134,7 +163,7 @@ function fill(template: string, input: Record<string, unknown>, encode = false):
 type Browser = (request: BrowserRequest) => Promise<{ outcome?: string; text?: string; url?: string; snapshot?: string }>;
 
 /** The steps in order; the values read, or the first typed failure. */
-async function runSteps(steps: readonly Step[], input: Record<string, unknown>, browser: Browser): Promise<RunResult> {
+async function runSteps(steps: readonly Step[], input: Record<string, unknown>, browser: Browser, desktop?: DesktopRunner): Promise<RunResult> {
   const output: Record<string, unknown> = {};
   for (const [index, step] of steps.entries()) {
     try {
@@ -161,6 +190,11 @@ async function runSteps(steps: readonly Step[], input: Record<string, unknown>, 
       } else if ("wait" in step) {
         const result = await browser({ op: "wait", waitFor: step.wait.for, value: fill(step.wait.value, input), seconds: step.wait.seconds ?? 15 });
         if (result.outcome === "failed" || result.outcome === "unknown") return { ok: false, code: "step_failed", step: index, detail: `waited for ${step.wait.for} "${step.wait.value}" and it did not come` };
+      } else if ("desktop" in step) {
+        if (desktop === undefined) return { ok: false, code: "step_failed", step: index, detail: "this operation has desktop steps and nothing here can run them" };
+        const verb = DESKTOP_VERBS.find(candidate => step.desktop[candidate] !== undefined)!;
+        const done = await desktop({ verb, value: fill(step.desktop[verb]!, input), ...(step.desktop.seconds !== undefined ? { seconds: step.desktop.seconds } : {}), committed: step.desktop.commit !== undefined });
+        if (!done.ok) return { ok: false, code: verb === "check" ? "not_found" : "step_failed", step: index, detail: `desktop ${verb} "${step.desktop[verb]}": ${done.detail}` };
       }
     } catch (error) {
       return { ok: false, code: "step_failed", step: index, detail: error instanceof Error ? error.message : String(error) };
@@ -173,13 +207,13 @@ async function runSteps(steps: readonly Step[], input: Record<string, unknown>, 
  * Runs an operation. `browser` is the box's browser for the agent's desktop; `approved` says a
  * person approved this run's commit steps (asked once by the caller, before the first step).
  */
-export async function runOperation(op: Operation, input: Record<string, unknown>, browser: Browser, approved = false): Promise<RunResult> {
+export async function runOperation(op: Operation, input: Record<string, unknown>, browser: Browser, approved = false, desktop?: DesktopRunner): Promise<RunResult> {
   const problem = operationProblem(op);
   if (problem !== undefined) return { ok: false, code: "step_failed", detail: `the operation is invalid: ${problem}` };
   const badInput = inputProblem(op, input);
   if (badInput !== undefined) return { ok: false, code: "invalid_input", detail: badInput };
   if (commitsOf(op).length > 0 && !approved) return { ok: false, code: "needs_approval", detail: `this operation commits (${commitsOf(op).join(" → ")}); a person approves the run first` };
-  const ran = await runSteps(op.steps, input, browser);
+  const ran = await runSteps(op.steps, input, browser, desktop);
   if (!ran.ok) return ran;
   const output = ran.output;
   for (const [key, field] of Object.entries(op.output)) {
@@ -200,15 +234,15 @@ export async function runOperation(op: Operation, input: Record<string, unknown>
  * run never commits — an operation that writes is run up to its first commit step, and a case
  * passes when every step before it went through.
  */
-export async function runCases(op: Operation, cases: readonly OperationCase[], browser: Browser): Promise<{ passed: number; total: number; failures: string[] }> {
+export async function runCases(op: Operation, cases: readonly OperationCase[], browser: Browser, desktop?: DesktopRunner): Promise<{ passed: number; total: number; failures: string[] }> {
   const failures: string[] = [];
   let passed = 0;
-  const firstCommit = op.steps.findIndex(step => "act" in step && step.act.commit !== undefined);
+  const firstCommit = op.steps.findIndex(step => ("act" in step && step.act.commit !== undefined) || ("desktop" in step && step.desktop.commit !== undefined));
   for (const one of cases) {
     const badInput = inputProblem(op, one.input);
     const result: RunResult = badInput !== undefined ? { ok: false, code: "invalid_input", detail: badInput }
-      : firstCommit >= 0 ? await runSteps(op.steps.slice(0, firstCommit), one.input, browser)
-      : await runOperation(op, one.input, browser);
+      : firstCommit >= 0 ? await runSteps(op.steps.slice(0, firstCommit), one.input, browser, desktop)
+      : await runOperation(op, one.input, browser, false, desktop);
     if (!result.ok) {
       failures.push(`${one.purpose}: ${result.code}${result.step !== undefined ? ` at step ${result.step}` : ""} — ${result.detail}`);
       continue;

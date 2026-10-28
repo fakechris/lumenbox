@@ -45,3 +45,25 @@ The decision model reads literally and has no defence against instructions writt
 shown. So it is never the only thing that permits an action: where a judgement guards something,
 its answer may only make the outcome more careful — hold a memory, call a result failed, ask a
 person — never wave something through that would otherwise have been stopped.
+
+## On the desktop
+
+The desktop points read the screen. The box returns the final frame also as JPEG when asked
+(the decision model takes no WebP), optionally with a red box drawn around a point.
+
+- `expect.looks` (`computer_verify`): one sentence about the screen after a batch. A clear no fails
+  the batch, even over a native yes; a clear yes is a line of evidence and never turns unknown into ok.
+- `wait_until` (`computer_wait`): alone in its call and read-only; a frame every 1.5 s until the
+  screen shows the sentence or the seconds run out (unknown).
+- `click_target` (`computer_click`): first in its call; the target's box on a fresh frame, an
+  ordinary click at its centre, refused below 0.5. Measured on our own screen it was no more
+  accurate than a vision-capable main model (7/10 against 8/10, `scripts/eval-click-target.mjs`),
+  so it is for models that cannot place a click themselves.
+- The guard (`computer_guard`): before a batch whose first write is a click, the boxed control is
+  read; send, pay, delete, publish or submit goes to the policy gate as irreversible, as a browser
+  click on one does. A failed or unsure reading adds nothing.
+- Taught operations may have `desktop` steps — click, type, key, wait, check, by description, never
+  coordinates. They run through the same path, a click not marked `commit` that the guard stops ends
+  the run, and with the needed switches off the dry run fails, so the operation cannot be published.
+
+Every desktop batch is dispatched once, whatever the mode: comparing two paths would mean clicking twice.
