@@ -108,6 +108,47 @@ test("wait_until polls read-only frames until the screen shows it, or says unkno
   assert.match(off.error!, /not switched on/);
 
   const schema = { properties: { action: { type: "string", enum: ["click"] } } };
-  assert.deepEqual((visionActionSchema(schema, polling([])).properties.action as { enum: string[] }).enum, ["click", "wait_until"]);
+  const waitOnly: SwitchDeps = { ...polling([]), mode: point => (point === "computer_wait" ? "on" : "off") };
+  assert.deepEqual((visionActionSchema(schema, waitOnly).properties.action as { enum: string[] }).enum, ["click", "wait_until"]);
   assert.equal(visionActionSchema(schema, { ...polling([]), mode: () => "off" }), schema);
+});
+
+test("click_target finds the control on a fresh frame and sends an ordinary click at its centre, or refuses when unsure", async () => {
+  const { jpegSize } = await import("./computer-vision.ts");
+  // A real 1280x800 JPEG header, so the size comes from the bytes rather than an assumption.
+  const sof = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x00, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x03, 0x20, 0x05, 0x00, 0x03]);
+  assert.deepEqual(jpegSize(sof.toString("base64")), { width: 1280, height: 800 });
+  const boxAnswer = (confidence: number): SwitchDeps => ({
+    mode: () => "on",
+    client: () => async request => {
+      assert.equal(Object.values(request.questions)[0]!.type, "box");
+      return { model: "m", ms: 1, answers: { where: { type: "box", box: { top: 0.89, bottom: 0.95, left: 0.55, right: 0.6 }, confidence } } };
+    },
+    record: () => {},
+    log: () => {},
+  });
+  const calls: { actions: readonly ComputerAction[]; options: Record<string, unknown> }[] = [];
+  const box = {
+    computer: async (actions: readonly ComputerAction[], options: Record<string, unknown> = {}) => {
+      calls.push({ actions, options });
+      return { success: true, screenshot: "WEBP", action_count: actions.length, duration_ms: 5, progress: { executed_count: 1, dispatch: "sent" }, effect: "observed_change", effect_detail: "click@(736,736) observed_change 9%", ...(options.jpeg === true ? { screenshot_jpeg: sof.toString("base64") } : {}) } as ComputerResult;
+    },
+  };
+  const ask = [{ action: "click_target", target: "the Send button" } as unknown as ComputerAction, { action: "key", key: "Return" } as ComputerAction];
+
+  const clicked = await computerWithVision(box, ask, { display: 1 }, boxAnswer(0.84));
+  assert.equal(calls.length, 2);
+  assert.equal((calls[0]!.actions[0] as { action: string }).action, "screenshot");
+  assert.deepEqual(calls[1]!.actions[0], { action: "click", coordinate: [736, 736] }, "the centre of the box, in the frame's pixels");
+  assert.equal((calls[1]!.actions[1] as { action: string }).action, "key", "the rest of the batch follows the click");
+  assert.match(clicked.effect_detail!, /click_target "the Send button" clicked at \(736, 736\), confidence 0\.84/);
+
+  calls.length = 0;
+  const unsure = await computerWithVision(box, ask, {}, boxAnswer(0.31));
+  assert.equal(unsure.outcome, "refused");
+  assert.match(unsure.error!, /could not find "the Send button" confidently \(0\.31\)/);
+  assert.equal(calls.length, 1, "nothing but the screenshot was sent");
+
+  assert.match((await computerWithVision(box, [{ action: "key", key: "a" } as ComputerAction, ask[0]!], {}, boxAnswer(0.9))).error!, /goes first/);
+  assert.match((await computerWithVision(box, ask, {}, { ...boxAnswer(0.9), mode: () => "off" })).error!, /not switched on/);
 });
