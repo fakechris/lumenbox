@@ -105,3 +105,20 @@ test("shadow answers with the default path and records both summaries, or the de
   assert.equal(records[1]!.error, "timeout");
   assert.equal(records[1]!.jev, undefined);
 });
+
+test("every call is one log line of numbers and ids, a failure too, and never the key or the wording", async () => {
+  const { loggedAsk } = await import("./jev.ts");
+  const lines: import("./jev.ts").CallEntry[] = [];
+  const ok = loggedAsk(async () => ({ model: "jev-1.14.0", ms: 3, inputTokens: 120, answers: { yes: { type: "noul", noul: 0.9712 }, pick: { type: "choice", choice: "en", confidence: 0.8, probabilities: { en: 0.8 } } } }), "answer_review", entry => lines.push(entry));
+  await ok({ ...request, images: [{ ref: "r", format: "jpg", base64: "SECRETPIXELS" }] });
+  assert.deepEqual({ point: lines[0]!.point, model: lines[0]!.model, inputTokens: lines[0]!.inputTokens, questions: lines[0]!.questions, images: lines[0]!.images, answers: lines[0]!.answers },
+    { point: "answer_review", model: "jev-1.14.0", inputTokens: 120, questions: { noul: 1, choice: 1 }, images: 1, answers: { yes: 0.971, pick: ["en", 0.8] } });
+  const text = JSON.stringify(lines[0]);
+  for (const leak of ["greeting", "hello", "SECRETPIXELS", TOKEN]) assert.ok(!text.includes(leak), `the log has no ${leak}`);
+
+  const failing = loggedAsk(async () => { throw new JevError("the decision model answered 500"); }, "memory_select", entry => lines.push(entry));
+  await assert.rejects(failing(request), /500/);
+  assert.equal(lines[1]!.error, "the decision model answered 500");
+  const unwritable = loggedAsk(async () => ({ model: "m", ms: 1, answers: {} }), undefined, () => { throw new Error("disk full"); });
+  assert.deepEqual((await unwritable(request)).answers, {}, "a log that cannot be written never fails the call");
+});

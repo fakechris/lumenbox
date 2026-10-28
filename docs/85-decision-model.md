@@ -24,6 +24,10 @@ in the config file's env block) or exported in the shell:
 | `shadow` | The point still decides on its own path; the decision model is asked the same question in the background, and both answers go to `~/.agentbox/jev-shadow.jsonl` as summaries — verdicts and hashes, never the text that was judged. |
 | `on` | The decision model decides; when it fails, the point's own path decides instead. |
 
+Every request, in any mode, is one line in `~/.agentbox/jev-calls.jsonl`: the point, the model
+version, the time, input tokens, how many questions of each type, and each answer as numbers — never
+the state, the wording or an image. `node scripts/jev-shadow-report.mjs` summarises both logs.
+
 Without a key (`TYPESAFE_TOKEN`, or `TYPESAFE_API_KEY`) every switch acts as `off`. Calls go
 straight to the vendor, not through `HTTP_PROXY`: measured, the proxy quadrupled the latency.
 

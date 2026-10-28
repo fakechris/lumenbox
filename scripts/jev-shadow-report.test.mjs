@@ -25,3 +25,14 @@ test("the report counts failures apart and lists disagreements", () => {
   assert.equal(row.agreement, 0.5);
   assert.equal(row.disagreements[0].at, "t2");
 });
+
+test("the call report gives count, failures, time quantiles and tokens per point", async () => {
+  const { callReport } = await import("./jev-shadow-report.mjs");
+  const lines = [
+    { point: "memory_select", ms: 200, inputTokens: 300 },
+    { point: "memory_select", ms: 400, inputTokens: 500 },
+    { point: "memory_select", ms: 900, error: "timeout" },
+  ].map(entry => JSON.stringify(entry));
+  const [row] = callReport(lines);
+  assert.deepEqual(row, { point: "memory_select", calls: 3, failed: 1, p50: 400, p95: 900, tokens: 800 });
+});
