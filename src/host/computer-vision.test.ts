@@ -75,3 +75,39 @@ test("shadow dispatches the batch once, changes nothing, and records both", asyn
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual({ point: records[0]!.point, own: records[0]!.own, jev: records[0]!.jev }, { point: "computer_verify", own: "none", jev: "unsatisfied" });
 });
+
+test("wait_until polls read-only frames until the screen shows it, or says unknown when time runs out", async () => {
+  const { WAIT_INTERVAL_MS, visionActionSchema } = await import("./computer-vision.ts");
+  let t = 0;
+  const clock = { now: () => t, sleep: async (ms: number) => { t += ms; } };
+  const answers = [0.1, 0.3, 0.92];
+  const polling = (ps: (number | Error)[]): SwitchDeps => ({
+    mode: () => "on",
+    client: () => async () => { const p = ps.shift() ?? 0.1; if (p instanceof Error) throw p; return { model: "m", ms: 1, answers: { yes: { type: "noul", noul: p } } }; },
+    record: () => {},
+    log: () => {},
+  });
+  const wait = [{ action: "wait_until", looks: "the page has finished loading", seconds: 10 } as unknown as ComputerAction];
+
+  const box = fakeBox();
+  const done = await computerWithVision(box, wait, {}, polling([...answers]), clock);
+  assert.equal(done.verification?.status, "satisfied");
+  assert.equal(box.calls.length, 3);
+  assert.ok(box.calls.every(call => call.actions.length === 1 && (call.actions[0] as { action: string }).action === "screenshot"), "only screenshots are sent to the box");
+  assert.equal(computerOutcome(done, false), "ok", "a read-only wait that saw the screen is ok");
+
+  t = 0;
+  const late = await computerWithVision(fakeBox(), wait, {}, polling([new Error("down"), 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2]), clock);
+  assert.equal(late.verification?.status, "unknown");
+  assert.match(late.verification!.detail, /within 10s/);
+  assert.ok(t <= 10_000 && t >= 10_000 - WAIT_INTERVAL_MS * 2, "it stops at the deadline");
+
+  const mixed = await computerWithVision(fakeBox(), [...wait, ...click], {}, polling([0.9]), clock);
+  assert.equal(mixed.outcome, "refused");
+  const off = await computerWithVision(fakeBox(), wait, {}, { ...polling([0.9]), mode: () => "off" }, clock);
+  assert.match(off.error!, /not switched on/);
+
+  const schema = { properties: { action: { type: "string", enum: ["click"] } } };
+  assert.deepEqual((visionActionSchema(schema, polling([])).properties.action as { enum: string[] }).enum, ["click", "wait_until"]);
+  assert.equal(visionActionSchema(schema, { ...polling([]), mode: () => "off" }), schema);
+});
