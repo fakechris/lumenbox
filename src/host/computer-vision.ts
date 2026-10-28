@@ -10,6 +10,9 @@
  *     shows what `looks` describes or `seconds` run out.
  *   - `click_target` (INV-1419): the first action of its call, a control named in words; the host
  *     finds it on a fresh frame with a box question and sends an ordinary click at its centre.
+ *   - the guard (INV-1420): before a batch whose first write is a click, the frame with a red box
+ *     around the point; a control the decision model takes for send, pay, delete, publish or submit
+ *     goes to the policy gate as irreversible, the way a browser click on one does.
  *
  * The rule from docs/85 holds throughout: an answer read off the screen may make the outcome more
  * careful — a check that fails, a wait that ends unknown, a person asked — and never less.
@@ -17,10 +20,16 @@
 
 import type { BoxClient } from "../box/client.ts";
 import type { ActionVerification, ComputerAction, ComputerResult, DesktopExpectation } from "../protocol/index.ts";
-import { boxOf, defaultSwitchDeps, type JevAsk, modeFor, noulOf, type SwitchDeps } from "./jev.ts";
+import { boxOf, choiceOf, defaultSwitchDeps, type JevAsk, modeFor, noulOf, type SwitchDeps } from "./jev.ts";
+import type { ToolContext } from "./tools.ts";
 
 type Box = Pick<BoxClient, "computer">;
-type Options = Parameters<BoxClient["computer"]>[1];
+type BoxOptions = NonNullable<Parameters<BoxClient["computer"]>[1]>;
+/** The box's options, plus the gate the guard asks; the gate never reaches the box. */
+type Options = BoxOptions & { guard?: Guard };
+
+/** What the policy gate says about a click the guard found irreversible. */
+export type Guard = (finding: string) => { allow: true } | { allow: false; reason: string; approvalId?: string };
 
 /** At or below this, the screen is taken not to show what `looks` describes. */
 export const LOOKS_UNSATISFIED_AT = 0.2;
@@ -128,12 +137,80 @@ export async function locate(ask: JevAsk, jpegBase64: string, target: string): P
   return { x: Math.round(((box.left + box.right) / 2) * size.width), y: Math.round(((box.top + box.bottom) / 2) * size.height), confidence };
 }
 
+/** At or above this, the guard's reading of a control sends the click to the policy gate. */
+export const GUARD_AT = 0.6;
+
+const GUARD_KINDS = {
+  send: "Sends a message, an email, a post or a reply to someone.",
+  pay: "Pays, buys, orders, subscribes or confirms a payment.",
+  delete: "Deletes, removes, discards or empties something.",
+  publish: "Publishes, shares, deploys, merges or makes something public.",
+  submit: "Submits a form or an application, or confirms an account change.",
+  other: "Anything else: navigation, opening, selecting, typing, closing, a toggle, a tab.",
+} as const;
+
+/** The gate for this call, from the tool's context: the same check a browser click the box found irreversible gets. */
+export function desktopGuard(context: Pick<ToolContext, "policy" | "agent" | "caller">, tool: string, input: Record<string, unknown>): Guard {
+  return finding => {
+    if (context.policy === undefined) return { allow: false, reason: `${finding}. A person has to approve this, and there is no approval channel here` };
+    const decision = context.policy.check({ kind: "tool", agentId: context.agent.id, agentName: context.agent.profile.name, tool, input, irreversible: finding, principalId: context.caller?.userId });
+    return decision.allow ? { allow: true } : { allow: false, reason: decision.reason, ...(decision.approval !== undefined ? { approvalId: decision.approval.id } : {}) };
+  };
+}
+
+/** The approval a guarded call is waiting on, for the tool result to carry; nothing otherwise. */
+export function approvalOf(result: object): { approval?: { id: string } } {
+  const id = (result as { approval_id?: unknown }).approval_id;
+  return typeof id === "string" ? { approval: { id } } : {};
+}
+
+/**
+ * The guard. Only a batch whose first write is a coordinate click is checked: a later click would
+ * be judged on a screen the earlier writes have not yet changed. Worded without the confidence, so
+ * a person's grant matches the same click asked again.
+ */
+async function guardClick(box: Box, actions: readonly ComputerAction[], options: BoxOptions, guard: Guard | undefined, mode: "shadow" | "on", ask: JevAsk, jev: SwitchDeps): Promise<ComputerResult | undefined> {
+  const first = actions.find(action => isWrite(action)) as { action?: string; coordinate?: [number, number] } | undefined;
+  if (first?.action !== "click" || !Array.isArray(first.coordinate)) return undefined;
+  const [x, y] = first.coordinate;
+  const frame = await box.computer([{ action: "screenshot" } as ComputerAction], { ...options, expect: undefined, jpeg: true, mark: { x: Math.max(0, x - 40), y: Math.max(0, y - 20), width: 80, height: 40 } });
+  if (frame.screenshot_jpeg === undefined) return undefined;
+  let kind: keyof typeof GUARD_KINDS;
+  let confidence: number;
+  try {
+    const result = await ask({
+      state: { screen: IMAGE_REF },
+      images: [{ ref: IMAGE_REF, format: "jpg", base64: frame.screenshot_jpeg }],
+      questions: { kind: { type: "choice", instructions: "What does the control inside the red box in `screen` do when it is clicked?", criteria: GUARD_KINDS } },
+    });
+    const answer = choiceOf(result, "kind");
+    kind = answer.choice as keyof typeof GUARD_KINDS;
+    confidence = answer.confidence;
+  } catch (error) {
+    // As today: no reading, no extra gate. The guard only ever adds an approval.
+    jev.log(`computer_guard: the decision model failed (${error instanceof Error ? error.message : String(error)}); the click goes ahead unguarded`);
+    return undefined;
+  }
+  const irreversible = kind !== "other" && confidence >= GUARD_AT;
+  if (mode === "shadow") {
+    jev.record({ at: new Date().toISOString(), point: "computer_guard", own: "unguarded", jev: irreversible ? kind : "other" });
+    return undefined;
+  }
+  if (!irreversible) return undefined;
+  const finding = `click at (${x}, ${y}) on a control that looks like it will ${kind === "other" ? "act" : kind} (desktop, read from the screen)`;
+  const gate = guard?.(finding) ?? { allow: false as const, reason: `${finding}. A person has to approve this, and there is no approval channel here` };
+  if (gate.allow) return undefined;
+  return { ...refused(gate.reason), screenshot: frame.screenshot, ...(gate.approvalId !== undefined ? { approval_id: gate.approvalId } : {}) } as ComputerResult;
+}
+
+const isWrite = (action: ComputerAction) => !["screenshot", "screenshot_window", "cursor_position", "list_windows", "list_elements", "wait", "wait_until"].includes(String((action as { action?: unknown }).action));
+
 function refused(error: string): ComputerResult {
   return { outcome: "refused", success: false, screenshot: "", error, action_count: 0, duration_ms: 0, progress: { executed_count: 0, dispatch: "not_started" } } as ComputerResult;
 }
 
 /** Polls the screen until it shows `looks`. Read-only: a satisfied wait is a fact about the screen, not about any write. */
-async function waitUntil(box: Box, action: { looks?: unknown; seconds?: unknown }, options: Options, ask: JevAsk, jev: SwitchDeps, clock: Clock): Promise<ComputerResult> {
+async function waitUntil(box: Box, action: { looks?: unknown; seconds?: unknown }, options: BoxOptions, ask: JevAsk, jev: SwitchDeps, clock: Clock): Promise<ComputerResult> {
   const looks = typeof action.looks === "string" ? action.looks.trim() : "";
   if (looks === "") return refused("wait_until needs looks: what the screen will show when the wait is over");
   const seconds = Math.min(WAIT_MAX_SECONDS, Math.max(1, typeof action.seconds === "number" && Number.isFinite(action.seconds) ? action.seconds : WAIT_DEFAULT_SECONDS));
@@ -162,12 +239,13 @@ async function waitUntil(box: Box, action: { looks?: unknown; seconds?: unknown 
 }
 
 export async function computerWithVision(box: Box, actions: readonly ComputerAction[], options: Options = {}, jev: SwitchDeps = defaultSwitchDeps, clock: Clock = realClock): Promise<ComputerResult> {
+  const { guard, ...boxOptions } = options;
   const wait = actions.find(action => (action as { action?: unknown }).action === "wait_until") as { looks?: unknown; seconds?: unknown } | undefined;
   if (wait !== undefined) {
     if (actions.length > 1) return refused("wait_until goes alone in its call: send the actions before it, then wait_until, then the ones after");
     const { mode, ask } = modeFor("computer_wait", jev);
     if (mode !== "on" || ask === undefined) return refused("wait_until is not switched on here; use wait with a number of milliseconds and look at the screenshot");
-    return waitUntil(box, wait, options, ask, jev, clock);
+    return waitUntil(box, wait, boxOptions, ask, jev, clock);
   }
   const targeted = actions.findIndex(action => (action as { action?: unknown }).action === "click_target");
   if (targeted >= 0) {
@@ -177,7 +255,7 @@ export async function computerWithVision(box: Box, actions: readonly ComputerAct
     const first = actions[0] as { target?: unknown; button?: unknown; count?: unknown };
     const target = typeof first.target === "string" ? first.target.trim() : "";
     if (target === "") return refused("click_target needs target: the control to click, in words");
-    const frame = await box.computer([{ action: "screenshot" } as ComputerAction], { ...options, expect: undefined, jpeg: true });
+    const frame = await box.computer([{ action: "screenshot" } as ComputerAction], { ...boxOptions, expect: undefined, jpeg: true });
     if (frame.screenshot_jpeg === undefined) return refused("the box sent no JPEG frame, so click_target cannot read the screen; update the box image, or click by coordinates");
     const found = await locate(ask, frame.screenshot_jpeg, target).catch(error => ({ why: `the decision model failed (${error instanceof Error ? error.message : String(error)})` }));
     if ("why" in found) return { ...refused(`click_target: ${found.why}`), screenshot: frame.screenshot };
@@ -186,10 +264,15 @@ export async function computerWithVision(box: Box, actions: readonly ComputerAct
     const note = `click_target "${target.slice(0, 80)}" clicked at (${found.x}, ${found.y}), confidence ${found.confidence.toFixed(2)}`;
     return { ...result, effect_detail: result.effect_detail === undefined ? note : `${note}; ${result.effect_detail}` };
   }
-  const { looks, ...rest } = options.expect ?? ({} as DesktopExpectation);
+  const guardMode = modeFor("computer_guard", jev);
+  if (guardMode.mode !== "off" && guardMode.ask !== undefined) {
+    const stopped = await guardClick(box, actions, boxOptions, guard, guardMode.mode, guardMode.ask, jev);
+    if (stopped !== undefined) return stopped;
+  }
+  const { looks, ...rest } = boxOptions.expect ?? ({} as DesktopExpectation);
   // The box never sees `looks`: an older one would read an expectation it cannot check as a failure.
   const expect = Object.keys(rest).length > 0 ? rest : undefined;
-  const plain = { ...options, expect };
+  const plain = { ...boxOptions, expect };
   const { mode, ask } = looks === undefined || looks.trim() === "" ? { mode: "off" as const } : modeFor("computer_verify", jev);
   if (mode === "off" || ask === undefined || looks === undefined) return box.computer(actions, plain);
   // One dispatch, whatever the mode: the generic switch runs both of its paths in shadow, and a

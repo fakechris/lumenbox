@@ -1,6 +1,6 @@
 import { isComputerWrite } from "../cua/execution.ts";
 import { SENSITIVE_INPUT_TTL_MS, inputValueHash, parseSensitiveInput } from "../protocol/sensitive-input.ts";
-import { computerWithVision, visionActionSchema, visionExpectSchema } from "./computer-vision.ts";
+import { approvalOf, computerWithVision, desktopGuard, visionActionSchema, visionExpectSchema } from "./computer-vision.ts";
 /**
  * Tool definitions and dispatch.
  *
@@ -2796,7 +2796,7 @@ export async function dispatchTool(
       try {
         result = await computerWithVision(box, actions, {
           display: context.displayIndex,
-          owner: context.boxOwner,
+          owner: context.boxOwner, guard: desktopGuard(context, name, input),
           expect: input.expect as import("../protocol/index.ts").DesktopExpectation | undefined,
         });
       } catch (error) {
@@ -2857,7 +2857,7 @@ export async function dispatchTool(
       }
 
       return {
-        text: notes.join(" "),
+        text: notes.join(" "), ...approvalOf(result),
         images: result.screenshot
           ? [{ mediaType: "image/webp", data: result.screenshot }]
           : undefined,
