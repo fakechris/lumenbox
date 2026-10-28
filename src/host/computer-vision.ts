@@ -6,6 +6,8 @@
  * every switch off it is exactly that call. With one on it adds, in this order:
  *
  *   - `expect.looks` (INV-1417): the final frame, as JPEG, checked against a sentence the model wrote.
+ *   - `wait_until` (INV-1418): a read-only action, alone in its call, that polls the screen until it
+ *     shows what `looks` describes or `seconds` run out.
  *
  * The rule from docs/85 holds throughout: an answer read off the screen may make the outcome more
  * careful — a check that fails, a wait that ends unknown, a person asked — and never less.
@@ -59,7 +61,74 @@ export function visionExpectSchema(jev: SwitchDeps = defaultSwitchDeps): Record<
   };
 }
 
-export async function computerWithVision(box: Box, actions: readonly ComputerAction[], options: Options = {}, jev: SwitchDeps = defaultSwitchDeps): Promise<ComputerResult> {
+/** At or above this, a polled frame shows what `wait_until` waits for. */
+export const WAIT_SATISFIED_AT = 0.8;
+export const WAIT_DEFAULT_SECONDS = 10;
+export const WAIT_MAX_SECONDS = 60;
+export const WAIT_INTERVAL_MS = 1_500;
+
+export interface Clock {
+  now(): number;
+  sleep(ms: number): Promise<void>;
+}
+
+const realClock: Clock = { now: () => Date.now(), sleep: ms => new Promise(resolve => setTimeout(resolve, ms)) };
+
+/** The host-only actions and their fields, added to the tool's action schema while their switches are on. */
+export function visionActionSchema<T extends { properties: Record<string, unknown> }>(schema: T, jev: SwitchDeps = defaultSwitchDeps): T {
+  const actionField = schema.properties.action as { enum: string[] };
+  const extra: string[] = [];
+  const fields: Record<string, unknown> = {};
+  if (modeFor("computer_wait", jev).mode === "on") {
+    extra.push("wait_until");
+    fields.looks = { type: "string", description: "For wait_until: what the screen will show when the wait is over, in one plain sentence." };
+    fields.seconds = { type: "integer", description: `For wait_until: how long to wait at most. Defaults to ${WAIT_DEFAULT_SECONDS}, at most ${WAIT_MAX_SECONDS}.` };
+  }
+  if (extra.length === 0) return schema;
+  return { ...schema, properties: { ...schema.properties, ...fields, action: { ...actionField, enum: [...actionField.enum, ...extra] } } };
+}
+
+function refused(error: string): ComputerResult {
+  return { outcome: "refused", success: false, screenshot: "", error, action_count: 0, duration_ms: 0, progress: { executed_count: 0, dispatch: "not_started" } } as ComputerResult;
+}
+
+/** Polls the screen until it shows `looks`. Read-only: a satisfied wait is a fact about the screen, not about any write. */
+async function waitUntil(box: Box, action: { looks?: unknown; seconds?: unknown }, options: Options, ask: JevAsk, jev: SwitchDeps, clock: Clock): Promise<ComputerResult> {
+  const looks = typeof action.looks === "string" ? action.looks.trim() : "";
+  if (looks === "") return refused("wait_until needs looks: what the screen will show when the wait is over");
+  const seconds = Math.min(WAIT_MAX_SECONDS, Math.max(1, typeof action.seconds === "number" && Number.isFinite(action.seconds) ? action.seconds : WAIT_DEFAULT_SECONDS));
+  const deadline = clock.now() + seconds * 1000;
+  const quoted = `"${looks.slice(0, 160)}"`;
+  for (let polls = 1; ; polls += 1) {
+    const frame = await box.computer([{ action: "screenshot" } as ComputerAction], { ...options, expect: undefined, jpeg: true });
+    if (frame.screenshot_jpeg === undefined) {
+      return { ...withoutJpeg(frame), verification: { status: "unknown", source: "vision", detail: "the box sent no JPEG frame, so wait_until cannot read the screen; update the box image, or use wait" } };
+    }
+    let p: number | undefined;
+    try {
+      p = await askScreen(ask, frame.screenshot_jpeg, `Does \`screen\` show this: ${looks}`);
+    } catch (error) {
+      jev.log(`computer_wait: the decision model failed (${error instanceof Error ? error.message : String(error)}); polling on`);
+    }
+    if (p !== undefined && p >= WAIT_SATISFIED_AT) {
+      return { ...withoutJpeg(frame), verification: { status: "satisfied", source: "vision", detail: `the screen shows ${quoted} (${p.toFixed(2)}) after ${polls} look(s)` } };
+    }
+    if (clock.now() + WAIT_INTERVAL_MS > deadline) {
+      const last = p === undefined ? "the last look could not be judged" : `last look ${p.toFixed(2)}`;
+      return { ...withoutJpeg(frame), verification: { status: "unknown", source: "vision", detail: `did not see ${quoted} within ${seconds}s (${last}); the screenshot is the last look` } };
+    }
+    await clock.sleep(WAIT_INTERVAL_MS);
+  }
+}
+
+export async function computerWithVision(box: Box, actions: readonly ComputerAction[], options: Options = {}, jev: SwitchDeps = defaultSwitchDeps, clock: Clock = realClock): Promise<ComputerResult> {
+  const wait = actions.find(action => (action as { action?: unknown }).action === "wait_until") as { looks?: unknown; seconds?: unknown } | undefined;
+  if (wait !== undefined) {
+    if (actions.length > 1) return refused("wait_until goes alone in its call: send the actions before it, then wait_until, then the ones after");
+    const { mode, ask } = modeFor("computer_wait", jev);
+    if (mode !== "on" || ask === undefined) return refused("wait_until is not switched on here; use wait with a number of milliseconds and look at the screenshot");
+    return waitUntil(box, wait, options, ask, jev, clock);
+  }
   const { looks, ...rest } = options.expect ?? ({} as DesktopExpectation);
   // The box never sees `looks`: an older one would read an expectation it cannot check as a failure.
   const expect = Object.keys(rest).length > 0 ? rest : undefined;

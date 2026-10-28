@@ -1,6 +1,6 @@
 import { isComputerWrite } from "../cua/execution.ts";
 import { SENSITIVE_INPUT_TTL_MS, inputValueHash, parseSensitiveInput } from "../protocol/sensitive-input.ts";
-import { computerWithVision, visionExpectSchema } from "./computer-vision.ts";
+import { computerWithVision, visionActionSchema, visionExpectSchema } from "./computer-vision.ts";
 /**
  * Tool definitions and dispatch.
  *
@@ -874,7 +874,7 @@ export function buildTools(
             actions: {
               type: "array",
               description: "The actions to perform, in order.",
-              items: actionSchema,
+              items: visionActionSchema(actionSchema),
               minItems: 1,
             },
           },
