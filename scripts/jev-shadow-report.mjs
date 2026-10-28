@@ -2,12 +2,15 @@
 /**
  * How often the decision model agreed with each point's own path, from the shadow log (INV-1415).
  *
- *   node scripts/jev-shadow-report.mjs [path]     default ~/.agentbox/jev-shadow.jsonl
+ *   node scripts/jev-shadow-report.mjs [home]     default ~/.agentbox
  *
  * Per point: how many comparisons, how many the decision model failed, the agreement rate, and up
  * to ten disagreements as the log recorded them (verdicts and digests; the log never holds text).
  * This is the evidence a switch is moved from shadow to on with — or, for the authorisation review,
  * the evidence that it never should be.
+ *
+ * Then every call from jev-calls.jsonl (INV-1424), whatever the mode: per point, how many, how many
+ * failed, the median and 95th-percentile time, and the input tokens spent.
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -74,14 +77,51 @@ export function report(lines) {
   }));
 }
 
+const quantile = (sorted, q) => (sorted.length === 0 ? null : sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]);
+
+export function callReport(lines) {
+  const byPoint = new Map();
+  for (const line of lines) {
+    if (line.trim() === "") continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const key = entry.point ?? "(none)";
+    const row = byPoint.get(key) ?? { calls: 0, failed: 0, ms: [], tokens: 0 };
+    row.calls += 1;
+    if (entry.error !== undefined) row.failed += 1;
+    if (typeof entry.ms === "number") row.ms.push(entry.ms);
+    if (typeof entry.inputTokens === "number") row.tokens += entry.inputTokens;
+    byPoint.set(key, row);
+  }
+  return [...byPoint.entries()].map(([point, row]) => {
+    const sorted = [...row.ms].sort((a, b) => a - b);
+    return { point, calls: row.calls, failed: row.failed, p50: quantile(sorted, 0.5), p95: quantile(sorted, 0.95), tokens: row.tokens };
+  });
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const path = process.argv[2] ?? join(process.env.AGENTBOX_HOME ?? join(homedir(), ".agentbox"), "jev-shadow.jsonl");
-  if (!existsSync(path)) {
-    console.log(`No shadow log at ${path}. Set a point to shadow in Settings → Model → Decision model first.`);
+  const home = process.argv[2] ?? process.env.AGENTBOX_HOME ?? join(homedir(), ".agentbox");
+  const shadow = join(home, "jev-shadow.jsonl");
+  const calls = join(home, "jev-calls.jsonl");
+  if (!existsSync(shadow) && !existsSync(calls)) {
+    console.log(`No decision-model logs under ${home}. Turn a point on or to shadow in Settings → Model → Decision model first.`);
     process.exit(0);
   }
-  for (const row of report(readFileSync(path, "utf8").split("\n"))) {
-    console.log(`${row.point}: ${row.compared} compared, ${row.failed} failed, agreement ${row.agreement ?? "—"}`);
-    for (const d of row.disagreements) console.log(`  ${d.at}  own ${JSON.stringify(d.own)}  model ${JSON.stringify(d.jev)}`);
+  if (existsSync(calls)) {
+    console.log("Calls:");
+    for (const row of callReport(readFileSync(calls, "utf8").split("\n"))) {
+      console.log(`  ${row.point}: ${row.calls} calls, ${row.failed} failed, p50 ${row.p50 ?? "—"} ms, p95 ${row.p95 ?? "—"} ms, ${row.tokens} input tokens`);
+    }
+  }
+  if (existsSync(shadow)) {
+    console.log("Shadow comparisons:");
+    for (const row of report(readFileSync(shadow, "utf8").split("\n"))) {
+      console.log(`  ${row.point}: ${row.compared} compared, ${row.failed} failed, agreement ${row.agreement ?? "—"}`);
+      for (const d of row.disagreements) console.log(`    ${d.at}  own ${JSON.stringify(d.own)}  model ${JSON.stringify(d.jev)}`);
+    }
   }
 }

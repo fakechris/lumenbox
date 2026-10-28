@@ -190,10 +190,65 @@ export function typesafeClient(options: {
   };
 }
 
-/** The client for this installation, or undefined when no credential is set. */
-export function jevClient(): JevAsk | undefined {
+/** One line per decision-model request (INV-1424): numbers and ids, never the state, the wording or an image. */
+export interface CallEntry {
+  at: string;
+  point?: JevPoint;
+  model?: string;
+  ms: number;
+  inputTokens?: number;
+  /** How many questions of each type. */
+  questions: Record<string, number>;
+  images: number;
+  /** Per question id: a noul's probability, a choice and its confidence, a box and its confidence, a score. */
+  answers?: Record<string, unknown>;
+  error?: string;
+}
+
+function answerSummary(answer: Answer): unknown {
+  switch (answer.type) {
+    case "noul":
+      return Number(answer.noul.toFixed(3));
+    case "choice":
+      return [answer.choice, Number(answer.confidence.toFixed(3))];
+    case "score":
+      return [Number(answer.score.toFixed(3)), Number(answer.confidence.toFixed(3))];
+    case "box":
+      return [answer.box.left, answer.box.top, answer.box.right, answer.box.bottom, Number(answer.confidence.toFixed(3))].map(n => Number(n.toFixed(3)));
+  }
+}
+
+/** The same client, writing one call entry per request; a log that cannot be written never fails the request. */
+export function loggedAsk(ask: JevAsk, point: JevPoint | undefined, write: (entry: CallEntry) => void): JevAsk {
+  return async request => {
+    const started = Date.now();
+    const questions: Record<string, number> = {};
+    for (const question of Object.values(request.questions)) questions[question.type] = (questions[question.type] ?? 0) + 1;
+    const base = { at: new Date().toISOString(), ...(point !== undefined ? { point } : {}), questions, images: request.images?.length ?? 0 };
+    const safely = (entry: CallEntry) => {
+      try {
+        write(entry);
+      } catch {
+        // The call's answer matters more than its log line.
+      }
+    };
+    try {
+      const result = await ask(request);
+      safely({ ...base, model: result.model, ms: Date.now() - started, ...(result.inputTokens !== undefined ? { inputTokens: result.inputTokens } : {}), answers: Object.fromEntries(Object.entries(result.answers).map(([id, answer]) => [id, answerSummary(answer)])) });
+      return result;
+    } catch (error) {
+      safely({ ...base, ms: Date.now() - started, error: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
+  };
+}
+
+const writeCall = (entry: CallEntry) => appendLine(join(agentboxHome(), "jev-calls.jsonl"), JSON.stringify(entry));
+
+/** The client for this installation, logging every call under `point`, or undefined when no credential is set. */
+export function jevClient(point?: JevPoint, write: (entry: CallEntry) => void = writeCall): JevAsk | undefined {
   const token = typesafeToken();
-  return token === undefined ? undefined : typesafeClient({ token });
+  return token === undefined ? undefined : loggedAsk(typesafeClient({ token }), point, write);
 }
 
 /** The answer under `id`, narrowed to its type. The client already checked every answer exists. */
@@ -233,14 +288,15 @@ export interface ShadowEntry {
 
 export interface SwitchDeps {
   mode: (point: JevPoint) => JevMode;
-  client: () => JevAsk | undefined;
+  /** The client for a point; the default one logs every call to jev-calls.jsonl (INV-1424). */
+  client: (point: JevPoint) => JevAsk | undefined;
   record: (entry: ShadowEntry) => void;
   log: (line: string) => void;
 }
 
 export const defaultSwitchDeps: SwitchDeps = {
   mode: point => jevSwitch(point),
-  client: jevClient,
+  client: point => jevClient(point),
   record: entry => appendLine(join(agentboxHome(), "jev-shadow.jsonl"), JSON.stringify(entry)),
   log: line => console.error(`[jev] ${line}`),
 };
@@ -254,7 +310,7 @@ export function shadowOnly(deps: SwitchDeps = defaultSwitchDeps): SwitchDeps {
 export function modeFor(point: JevPoint, deps: SwitchDeps = defaultSwitchDeps): { mode: JevMode; ask?: JevAsk } {
   const mode = deps.mode(point);
   if (mode === "off") return { mode };
-  const ask = deps.client();
+  const ask = deps.client(point);
   return ask === undefined ? { mode: "off" } : { mode, ask };
 }
 
