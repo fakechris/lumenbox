@@ -608,3 +608,32 @@ test("a memory that carries a credential is refused, by kind and without quoting
   assert.deepEqual(parsed.map(record => record.text), ["Chris wants the digest on Mondays."]);
   assert.deepEqual(importMarkdown(`- password: ${"p".repeat(16)}\n- the region is eu-west-1`).map(record => record.text), ["the region is eu-west-1"]);
 });
+
+test("with the decision model on, each candidate is one yes/no question; all-no shows none; a failure falls back to the selector", async () => {
+  const records = [factAt("2026-06-01T00:00:00Z", "the deployment region is eu-west-1"), factAt("2026-08-01T00:00:00Z", "they prefer tea")];
+  const jev = (probability: (text: string) => number, fail = false): import("./jev.ts").SwitchDeps => ({
+    mode: () => "on",
+    client: () => async request => {
+      if (fail) throw new Error("down");
+      const memories = (request.state as { memories: string[] }).memories;
+      return { model: "m", ms: 1, answers: Object.fromEntries(memories.map((text, i) => [`m${i}`, { type: "noul" as const, noul: probability(text) }])) };
+    },
+    record: () => {},
+    log: () => {},
+  });
+  let selectorCalls = 0;
+  const ask = async () => { selectorCalls += 1; return '{"selected": [2]}'; };
+
+  const chosen = await chooseRelevant({ records, query: "which region do we deploy to", ask, jev: jev(text => (text.includes("eu-west-1") ? 0.93 : 0.04)) });
+  assert.deepEqual(chosen.records.map(record => record.text), ["the deployment region is eu-west-1"]);
+  assert.equal(chosen.method, "model");
+  assert.equal(selectorCalls, 0, "the turn does not wait for the selector");
+
+  const none = await chooseRelevant({ records, query: "what is the weather", ask, jev: jev(() => 0.1) });
+  assert.equal(none.records.length, 0, "every candidate below the line is a decision to show none");
+  assert.equal(none.method, "model");
+
+  const fellBack = await chooseRelevant({ records, query: "which region do we deploy to", ask, jev: jev(() => 1, true) });
+  assert.equal(selectorCalls, 1);
+  assert.equal(fellBack.method, "model", "the selector answered in its place");
+});
