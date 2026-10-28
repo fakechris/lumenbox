@@ -35,6 +35,8 @@
 import { createHash } from "node:crypto";
 import { envNumber } from "../config.ts";
 import { credentialIn, credentialRefusal } from "./secret-scan.ts";
+import { type SwitchDeps, switched } from "./jev.ts";
+import { jevSelect } from "./memory-select-jev.ts";
 
 /** A single thing remembered. One JSON object per line, appended, never edited in place. */
 export interface MemoryRecord {
@@ -864,9 +866,8 @@ export function buildSelectionPrompt(
 /**
  * The chosen records, or undefined when the answer could not be used.
  *
- * Undefined rather than an empty list, because "the selector said none" and "the selector failed"
- * must not be the same answer: the first is a decision to respect, the second is a reason to fall
- * back to conservative lexical fact retrieval.
+ * Undefined rather than an empty list, because "the selector said none" and "the selector failed" must not be the same
+ * answer: the first is a decision to respect, the second is a reason to fall back to conservative lexical fact retrieval.
  */
 export function parseSelection(
   text: string,
@@ -914,26 +915,24 @@ export async function chooseRelevant(options: {
   now?: number;
   ask: (prompt: string) => Promise<string | undefined>;
   log?: (line: string) => void;
+  jev?: SwitchDeps;
 }): Promise<MemoryRecall> {
   const budget = options.budget ?? MEMORY_CHAR_BUDGET;
   const now = options.now ?? Date.now();
   const fallback = () => recallRelevant(options.records, options.query, budget, now);
   if (options.query.trim() === "") return fallback();
 
-  // Top-by-score, unioned with what the query lexically touches: score alone meant a
-  // record past rank 60 could never be shown to the selector however precisely the
-  // conversation asked for it — the one job "reach past the decay" exists to do.
+  // Top-by-score, unioned with what the query lexically touches: score alone meant a record past rank 60
+  // could never be shown to the selector however precisely the conversation asked for it — the one job "reach past the decay" exists to do.
   const deduped = dedupe(options.records);
   if (deduped.length === 0) return fallback();
   const byScore = deduped
     .map(record => ({ record, score: scoreOf(record, now) }))
     .sort((a, b) => b.score - a.score || b.record.at.localeCompare(a.record.at))
-    .slice(0, MAX_SELECTION_CANDIDATES)
-    .map(entry => entry.record);
+    .slice(0, MAX_SELECTION_CANDIDATES).map(entry => entry.record);
   const lexical = selectRelevant(options.query, deduped, 20);
   const candidates: MemoryRecord[] = [];
-  // The selector is shown one phrasing of each fact, not six: a candidate list padded with
-  // rephrasings crowds out the sixtieth distinct fact, which may be the one asked about.
+  // The selector is shown one phrasing of each fact, not six: a list padded with rephrasings crowds out the sixtieth distinct fact, which may be the one asked about.
   for (const record of [...byScore, ...lexical]) {
     if (candidates.includes(record)) continue;
     if (candidates.some(seen => nearDuplicate(seen.text, record.text))) continue;
@@ -941,13 +940,14 @@ export async function chooseRelevant(options: {
   }
 
   try {
-    const answer = await options.ask(buildSelectionPrompt(candidates, options.query));
-    if (answer === undefined) return fallback();
-    const chosen = parseSelection(answer, candidates);
-    if (chosen === undefined) {
-      options.log?.("the memory selector's answer could not be read; using relevant facts only");
-      return fallback();
-    }
+    const own = async () => { // the selector; the decision model replaces it when its switch says so (INV-1414)
+      const answer = await options.ask(buildSelectionPrompt(candidates, options.query));
+      const read = answer === undefined ? undefined : parseSelection(answer, candidates);
+      if (answer !== undefined && read === undefined) options.log?.("the memory selector's answer could not be read; using relevant facts only");
+      return read;
+    };
+    const chosen = await switched("memory_select", { own, jev: ask => jevSelect(ask, candidates, options.query, MAX_SELECTED), summary: value => value?.map(record => candidates.indexOf(record)) ?? "none" }, options.jev);
+    if (chosen === undefined) return fallback();
     // Rejected text must not leak back through either spare body space or the index.
     return { ...recall(chosen, budget, now, undefined, { strictBudget: true }), excluded: deduped.length - chosen.length, method: "model" };
   } catch {
