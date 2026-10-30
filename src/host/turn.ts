@@ -1372,7 +1372,7 @@ export function historyToMessages(
       merged[merged.length - 1] = {
         role: previous.role,
         content: [...blocksOf(previous), ...blocksOf(message)],
-      };
+      } as Anthropic.MessageParam; // SDK 1.x's union adds a text-only `system` role our transcripts never hold
     }
     return merged;
   };

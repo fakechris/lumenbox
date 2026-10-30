@@ -1797,9 +1797,9 @@ async function main(): Promise<number> {
           const response = await judgeClient.messages.create({
             model: judgeProfile.model,
             max_tokens: 4,
-            // Zero, because a grader that disagrees with itself between runs turns a
-            // regression suite into noise.
-            temperature: 0,
+            // Zero, because a grader that disagrees with itself between runs turns a regression suite into noise. SDK 1.x
+            // dropped the field from its types (API 2026-10-21); the version we pin still takes it (ANTHROPIC_API_VERSION).
+            ...({ temperature: 0 } as object),
             messages: [
               {
                 role: "user",

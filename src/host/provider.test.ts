@@ -240,3 +240,29 @@ test("providerConfigured: a saved provider or any credential counts; neither doe
   );
   assert.equal(providerConfigured(undefined, [{ keyEnv: "NO_SUCH_KEY" }], {}), false);
 });
+
+test("every client speaks the pinned Messages API version, not the SDK's default (INV-1439)", async () => {
+  const { createClient, ANTHROPIC_API_VERSION } = await import("./provider.ts");
+  const { createServer } = await import("node:http");
+  const seen: string[] = [];
+  const server = createServer((req, res) => {
+    seen.push(String(req.headers["anthropic-version"]));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ id: "m", type: "message", role: "assistant", model: "x", content: [{ type: "text", text: "ok" }], stop_reason: "end_turn", stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } }));
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as { port: number }).port;
+  const base = resolveProvider("minimax");
+  const saved = process.env[base.keyEnv];
+  try {
+    process.env[base.keyEnv] = "test-key";
+    const profile = { ...base, baseUrl: `http://127.0.0.1:${port}` };
+    await createClient(profile).messages.create({ model: "x", max_tokens: 4, messages: [{ role: "user", content: "hi" }] });
+    assert.deepEqual(seen, [ANTHROPIC_API_VERSION]);
+    assert.equal(ANTHROPIC_API_VERSION, "2023-06-01");
+  } finally {
+    if (saved === undefined) delete process.env[base.keyEnv];
+    else process.env[base.keyEnv] = saved;
+    server.close();
+  }
+});

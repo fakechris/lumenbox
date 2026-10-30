@@ -556,6 +556,7 @@ function wireClientFor(
   // unseen: no `retrying` event, no ledger line, no Retry-After floor, and multiplied by the host's own
   // attempts. A caller that wants SDK retries says so, with the reason.
   const maxRetries = options?.maxRetries ?? 0;
+  const defaultHeaders = { "anthropic-version": ANTHROPIC_API_VERSION };
   if (profile.auth === "bearer") {
     return new Anthropic({
       baseURL: profile.baseUrl,
@@ -563,6 +564,7 @@ function wireClientFor(
       apiKey: null,
       ...options,
       maxRetries,
+      defaultHeaders,
     });
   }
 
@@ -571,8 +573,17 @@ function wireClientFor(
     ...(key ? { apiKey: key } : {}),
     ...options,
     maxRetries,
+    defaultHeaders,
   });
 }
+
+/**
+ * The Messages API version every client speaks (INV-1439). SDK 1.x sends 2026-10-21 by default;
+ * the compatible endpoints we ship presets for (MiniMax, DeepSeek, Kimi, GLM…) implement the
+ * 2023-06-01 shape, and on it `temperature` and the old message roles behave as they did. Moving
+ * this is a decision of its own, tried against every preset, not a side effect of an SDK bump.
+ */
+export const ANTHROPIC_API_VERSION = "2023-06-01";
 
 export function createClient(profile: ProviderProfile): Anthropic {
   return clientFor(profile, process.env[profile.keyEnv]);

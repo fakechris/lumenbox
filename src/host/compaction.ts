@@ -1125,7 +1125,7 @@ export function pruneOldImages(
         })
         .reverse();
       return changed
-        ? { ...message, content: blocks as Anthropic.ContentBlockParam[] }
+        ? ({ ...message, content: blocks as Anthropic.ContentBlockParam[] } as Anthropic.MessageParam)
         : message;
     })
     .reverse();
