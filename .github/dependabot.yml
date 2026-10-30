@@ -7,6 +7,10 @@
 # deliberate while quietly getting older.
 #
 # Grouped rather than one PR per image: a base bump is reviewed and rebuilt as a unit.
+#
+# Minor and patch updates share a group; a major version gets a PR of its own. One group for
+# everything let three majors (SDK, zod, electron) fail the type check and take four harmless
+# bumps down with them (#424), so a major is now always read alone.
 version: 2
 updates:
   - package-ecosystem: pip
@@ -16,6 +20,7 @@ updates:
     groups:
       document-libraries:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: docker
     directory: "/docker/box"
@@ -29,7 +34,14 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    ignore:
+      # ShowUI hands our component schemas to @a2ui, whose latest (0.14) is built on zod 3 and
+      # zod-to-json-schema 3: zod 4 objects there fail at run time, not only in the type check.
+      # Lift this when @a2ui supports zod 4 (INV-1438).
+      - dependency-name: "zod"
+        update-types: ["version-update:semver-major"]
     groups:
       # The SDKs move often and are read together when one of them breaks.
       dependencies:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
