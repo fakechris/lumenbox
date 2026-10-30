@@ -49,6 +49,10 @@ export function parseTrace(text: string): TraceEvent[] {
  */
 export const TEACH_MAX_TOKENS = 16_000;
 
+/** The question a draft carries when generation failed (INV-1436): no skill was made, and how to get one. */
+export const TEACH_FAILED_QUESTION =
+  "Teaching did not finish, so no skill was created or published. The demonstration is kept: say what its goal was to generate it again, or reject this draft.";
+
 /** How much of each outline the cue carries; the agent reads the file for the rest. */
 export const OUTLINE_CHARS = 1_500;
 /** How many events the cue carries inline before it points at the file. */
@@ -250,9 +254,17 @@ export class TeachRunner {
           await box.teachDone(entry.id, false);
           ran += 1;
         } catch (error) {
-          this.deps.log(`teach ${entry.id}: the turn failed (${error instanceof Error ? error.message : String(error)}); released for a later try`);
-          await box.teachRelease(entry.id).catch(() => {});
-          break;
+          // Not released for another try (INV-1436): a failure that repeats would call the model on
+          // every drain for ever, and production saw exactly that. The demonstration is kept as a
+          // draft with no skill and a question, and a person regenerates it by answering (clarify).
+          this.deps.drafts.create({ boxId, agentId: agent.id, sessionId: entry.id, eventsPath,
+            ...(entry.videoPath === undefined ? {} : { videoPath: entry.videoPath }),
+            display: entry.display, ...(entry.epoch === undefined ? {} : { epoch: entry.epoch }),
+            ...(entry.binding?.taskId === undefined ? {} : { taskId: entry.binding.taskId }),
+            skill: null, question: TEACH_FAILED_QUESTION });
+          this.deps.log(`teach ${entry.id}: generation failed (${error instanceof Error ? error.message : String(error)}); kept for a person to review, not retried`);
+          await box.teachDone(entry.id, false);
+          ran += 1;
         }
       }
     } finally {

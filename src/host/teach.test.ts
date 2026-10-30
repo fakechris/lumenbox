@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { TeachDrafts } from "./teach-drafts.ts";
 import { TeachQueue } from "../boxd/teach-service.ts";
 import assert from "node:assert/strict";
-import { TeachRunner, parseTrace, renderTrace, summariseTrace, teachCue } from "./teach.ts";
+import { TEACH_FAILED_QUESTION, TeachRunner, parseTrace, renderTrace, summariseTrace, teachCue } from "./teach.ts";
 
 const trace = [
   '{"at":"2026-09-11T10:00:00.000Z","type":"snapshot","url":"https://shop.test/","title":"Shop","outline":"- textbox \\"Search\\" [ref=e1]","after":"start"}',
@@ -84,7 +84,7 @@ test("the cue carries the discipline: inputs vs constants, stable targets, no cr
   assert.match(cue, /A human must review and publish/);
 });
 
-test("the runner claims, prompts the desktop's agent with the trace, marks done; a failed turn is released; no owner leaves it queued", async t => {
+test("the runner claims, prompts the desktop's agent with the trace, marks done; a failed turn is kept for review, not retried; no owner leaves it queued", async t => {
   const root = mkdtempSync(join(tmpdir(), "teach-runner-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const log: string[] = [];
@@ -129,12 +129,26 @@ test("the runner claims, prompts the desktop's agent with the trace, marks done;
   assert.match(prompted[0]?.text ?? "", /1 click\(s\), 1 typing burst\(s\)/);
   assert.match(prompted[1]?.text ?? "", /0 click\(s\)/, "an empty trace still teaches from the video");
 
-  // A turn that fails releases the claim and stops draining.
+  // A turn that fails is kept as a draft with no skill and a question, and the entry is done:
+  // released, it would be generated again on every drain, which is the loop INV-1436 ends.
   entries = [{ id: "teach-c", sessionDir: "/t/c", display: 3, binding: { agentId: "ada" }, startedAt: "2026-09-11T12:00:00.000Z" }];
   fail = true;
   calls.length = 0;
-  assert.equal(await runner.drain("box-1", box as never), 0);
-  assert.deepEqual(calls, ["claim:teach-c", "release:teach-c"]);
+  assert.equal(await runner.drain("box-1", box as never), 1);
+  assert.deepEqual(calls, ["claim:teach-c", "done:teach-c"]);
+  const kept = new TeachDrafts(root).forSession("box-1", "teach-c");
+  assert.equal(kept?.skill, null);
+  assert.equal(kept?.question, TEACH_FAILED_QUESTION);
+  assert.ok(log.some(line => /teach-c: generation failed .*not retried/.test(line)));
+  let regenerated = 0;
+  const afterRestart = new TeachRunner({
+    agentById: () => ({ id: "ada", name: "Ada" }),
+    drafts: new TeachDrafts(root),
+    generate: async () => { regenerated += 1; return "{}"; },
+    log: () => {},
+  });
+  await afterRestart.drain("box-1", box as never);
+  assert.equal(regenerated, 0, "a restart does not generate the failed demonstration again");
 
   // Nobody owns that desktop: released and left for later, said in the log.
   entries = [{ id: "teach-d", sessionDir: "/t/d", display: 9, startedAt: "2026-09-11T13:00:00.000Z" }];
