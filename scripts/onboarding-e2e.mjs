@@ -465,7 +465,9 @@ async function phaseFull(run) {
       const reply = await app.waitFor("a reply from the agent", async () => {
         const setup = await app.api("/api/setup");
         if (!setup.agentTurn) return undefined;
-        return app.inPage("(function(){ var all = document.querySelectorAll('#chat .msg.assistant'); var last = all[all.length - 1]; return last && last.innerText.trim().length > 0 ? last.innerText.trim() : undefined; })()");
+        // An agent's bubble carries data-role="agent" and no role class (bubble() in
+        // app-html.ts gives agents the empty role); its text is in .body, under the name row.
+        return app.inPage("(function(){ var all = document.querySelectorAll('#chat .msg[data-role=\"agent\"] .body'); var last = all[all.length - 1]; return last && last.innerText.trim().length > 0 ? last.innerText.trim() : undefined; })()");
       }, options.replyTimeoutMin * 60_000, 3000);
       await app.shot("06-first-reply");
       return `reply: ${reply.replace(/\s+/g, " ").slice(0, 160)}`;
