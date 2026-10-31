@@ -2,7 +2,7 @@
      title: Onboarding acceptance: a new user's first run on the published release
      family: guide
      status: current
-     updated: 2026-10-30
+     updated: 2026-10-31
 -->
 # Onboarding acceptance: a new user's first run on the published release
 
@@ -22,7 +22,7 @@ This page is the runbook for the agent that runs it.
 | preflight | macOS; ports free; no run dir or container of that name; the key variable set; ≥ 8 GB free. Records whether `fakechris/lumenbox:<version>` is already on the machine — if it is, the run is not a first pull and the report says so |
 | download | the DMG from the GitHub release matches the release's `SHA256SUMS` |
 | install | the app copied out of the DMG passes `codesign --verify --deep --strict` and its packaged `package.json` says the version asked for |
-| gatekeeper (note) | `spctl --assess` verdict, recorded, never failing: the app is signed but not notarized, so what a person sees on first open depends on how they downloaded it |
+| gatekeeper opens a downloaded copy | the dmg and the installed app both pass `xcrun stapler validate` and `spctl --assess`: notarized, with the ticket stapled so they open offline too. Releases through 0.3.8 were not notarized and fail here; `--allow-unnotarized` turns the step into a note for checking them. A failure here does not stop the rest of the walk |
 | nodocker: app starts | the app, launched with a Docker socket that does not exist, serves its page and opens its window |
 | nodocker: Settings says what to do | `/api/state` diagnoses `no-engine` and Settings → Boxes tells the person to start Docker Desktop or OrbStack |
 | full: first launch shows the set-up card | a fresh home has no key and no box, and the set-up card is on screen |
@@ -68,6 +68,7 @@ node scripts/onboarding-e2e.mjs --version 0.3.8 --key-env MINIMAX_API_KEY --prov
 Docker Desktop or OrbStack must be running for the full phase (the nodocker phase hides it
 from the app on its own). Run only `--phases nodocker` on a machine without Docker.
 `--dmg FILE` skips the download and checks a local DMG against the published sums instead.
+`--allow-unnotarized` is for releases from before notarization (0.3.8 and earlier).
 Expect 10–40 minutes, most of it the first pull.
 
 Exit 0 is PASS, 1 is a failed step, 2 is a script error. The report is

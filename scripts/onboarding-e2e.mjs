@@ -20,7 +20,7 @@
  *
  *   node scripts/onboarding-e2e.mjs --version 0.3.8 [--phases nodocker,full] [--provider minimax]
  *        [--key-env MINIMAX_API_KEY] [--port 7796] [--cdp-port 9341] [--run-dir DIR] [--dmg FILE]
- *        [--box-timeout-min 40] [--reply-timeout-min 6]
+ *        [--box-timeout-min 40] [--reply-timeout-min 6] [--allow-unnotarized]
  *   node scripts/onboarding-e2e.mjs --cleanup DIR [--yes] [--remove-image]
  *
  * Runbook: docs/86-onboarding-acceptance.md.
@@ -32,6 +32,7 @@ import { existsSync, mkdirSync, readFileSync, statfsSync, writeFileSync } from "
 import { createConnection } from "node:net";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { assess } from "./notarization.mjs";
 
 export const REPO = "fakechris/lumenbox";
 export const IMAGE_REPO = "fakechris/lumenbox";
@@ -39,7 +40,7 @@ export const IMAGE_REPO = "fakechris/lumenbox";
 // ── pure parts (tested) ───────────────────────────────────────────────────────────────
 
 export function parseArgs(argv) {
-  const out = { phases: ["nodocker", "full"], provider: "minimax", port: 7796, cdpPort: 9341, boxTimeoutMin: 40, replyTimeoutMin: 6, yes: false, removeImage: false };
+  const out = { phases: ["nodocker", "full"], provider: "minimax", port: 7796, cdpPort: 9341, boxTimeoutMin: 40, replyTimeoutMin: 6, yes: false, removeImage: false, allowUnnotarized: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     const next = () => {
@@ -62,6 +63,7 @@ export function parseArgs(argv) {
       case "--cleanup": out.cleanup = next(); break;
       case "--yes": out.yes = true; break;
       case "--remove-image": out.removeImage = true; break;
+      case "--allow-unnotarized": out.allowUnnotarized = true; break;
       default: throw new Error(`unknown argument ${arg}`);
     }
   }
@@ -370,13 +372,18 @@ async function fetchArtifacts(run) {
     if (stamped.version !== options.version) throw new Error(`the app says ${stamped.version}, not ${options.version}`);
     return `signed; version ${stamped.version}, build ${stamped.buildCommit ?? "unknown"}`;
   });
-  let gatekeeper;
-  try {
-    gatekeeper = sh("spctl", ["--assess", "--type", "execute", "-vv", join(run.dir, "LumenBox.app")]);
-  } catch (error) {
-    gatekeeper = String(error.stderr ?? error.message).trim();
+  // A browser download is quarantined, and Gatekeeper opens it only if Apple notarized it
+  // (INV-1450); stapled, so it opens offline too. Releases through 0.3.8 were not.
+  const verdicts = [["dmg", dmg], ["app", join(run.dir, "LumenBox.app")]].map(([kind, path]) => [kind, assess({ kind, path })]);
+  const refused = verdicts.filter(([, v]) => !v.ok).map(([kind, v]) => `${kind}: ${v.problems.join("; ")}`);
+  if (options.allowUnnotarized) {
+    run.note("gatekeeper", refused.length === 0 ? "dmg and app notarized and stapled" : `${refused.join(" · ")} — allowed by --allow-unnotarized; a browser download of this release is blocked on first open`);
+  } else {
+    await run.step("gatekeeper opens a downloaded copy", async () => {
+      if (refused.length > 0) throw new Error(`${refused.join(" · ")}. A browser download is blocked on first open (pass --allow-unnotarized to check a release from before notarization)`);
+      return "dmg and app notarized and stapled";
+    });
   }
-  run.note("gatekeeper", `${gatekeeper.split("\n").join(" ")} — a browser download is quarantined; a person sees whatever this verdict implies on first open`);
 }
 
 async function phaseNoDocker(run) {
@@ -515,7 +522,8 @@ async function main() {
   }
   try {
     await fetchArtifacts(run);
-    if (!run.steps.some(step => step.status === "fail")) {
+    // Gatekeeper refusing the download does not stop the walk: what happens after it is still worth knowing.
+    if (!run.steps.some(step => step.status === "fail" && (step.name === "download" || step.name === "install"))) {
       if (options.phases.includes("nodocker")) await phaseNoDocker(run);
       if (options.phases.includes("full")) await phaseFull(run);
     }

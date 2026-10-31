@@ -90,6 +90,18 @@ installers with three packages in node_modules and every new user's first launch
    saw. Overriding `AGENTBOX_DIST_DIR` points the check at a candidate directory. The
    dist scripts stamp the short commit into the packaged `package.json` (`buildCommit`),
    which is the version line's only source on a machine with no `.git` (INV-876).
+   **Notarized, with `APPLE_KEYCHAIN_PROFILE=lumenbox` set** (INV-1450): electron-builder
+   notarizes and staples each `.app`, and `scripts/dist.mjs` submits each signed dmg to the
+   notary service and staples it. Without credentials the build still succeeds and prints
+   `NOT NOTARIZED` before and after — every release through 0.3.8 went out that way, and a
+   browser download was blocked on first open. Then run `release:check` again: it refuses an
+   app or dmg that `stapler validate` and `spctl --assess` do not pass
+   (`RELEASE_CHECK_SKIP_NOTARIZE=1` for a build that will not be published). Make
+   `SHA256SUMS` only after this; stapling changes the dmg.
+   One-time setup on the publishing Mac: an App Store Connect API key (Developer role, team
+   A69VRB2X6U), its `.p8` kept outside the repository, stored once with
+   `xcrun notarytool store-credentials lumenbox --key <AuthKey_ID.p8> --key-id <ID> --issuer <issuer>`.
+   The secret then lives in the keychain; nothing in the repository or the build log names it.
 4. **After publishing, a new user's first run on another Mac** (INV-1447):
    `scripts/onboarding-e2e.mjs` downloads the published DMG, checks it against SHA256SUMS,
    and walks no-Docker guidance → key in Settings → Start the box (a real first pull) →
