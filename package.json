@@ -119,7 +119,8 @@
       "maintainer": "LumenBox"
     },
     "dmg": {
-      "title": "LumenBox ${version}"
+      "title": "LumenBox ${version}",
+      "sign": true
     },
     "nsis": {
       "oneClick": false,

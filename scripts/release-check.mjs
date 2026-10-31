@@ -20,6 +20,9 @@
  *     crashed on every new user's first import — a green check above would not have seen it)
  *   - the image tag this app pulls at its version exists on Docker Hub, because a fresh
  *     install's first "Start the box" pulls exactly that tag (skippable per environment)
+ *   - every macOS app and dmg of this version is notarized and stapled, because Gatekeeper
+ *     blocks a downloaded app that is not, and the build skips notarizing without a word
+ *     when it has no Apple credentials (every release through 0.3.8; skippable per environment)
  *
  * Not here: anything needing a real box or an X server. `npm run smoke` covers those
  * against a running container and takes minutes — it belongs to a release, and this
@@ -30,6 +33,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { assess, macArtifacts } from "./notarization.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const failures = [];
@@ -241,6 +245,32 @@ check("the image at this version carries every delegated engine (the 0.3.7 engin
     );
   }
   note(`${image} carries ${Object.entries(engines).map(([name, v]) => `${name} ${v}`).join(", ")}`);
+});
+
+check("every macOS app and dmg of this version is notarized and stapled", () => {
+  const artifacts = macArtifacts(distDir, version);
+  if (artifacts.length === 0) {
+    note(`no macOS artifacts for ${version} in ${distDir}; notarization gate skipped`);
+    return;
+  }
+  if (process.env.RELEASE_CHECK_SKIP_NOTARIZE === "1") {
+    note("RELEASE_CHECK_SKIP_NOTARIZE=1 — notarization gate skipped (a local build, not a release)");
+    return;
+  }
+  if (process.platform !== "darwin") throw new Error("macOS artifacts can only be assessed on macOS; set RELEASE_CHECK_SKIP_NOTARIZE=1 if this is not the publishing machine");
+  const problems = [];
+  for (const artifact of artifacts) {
+    const verdict = assess(artifact);
+    const name = artifact.path.slice(distDir.length + 1);
+    if (verdict.ok) note(`${name}: notarized and stapled`);
+    else problems.push(`${name}: ${verdict.problems.join("; ")}`);
+  }
+  if (problems.length > 0) {
+    throw new Error(
+      `${problems.join(". ")}. A browser download of this app is blocked on first open. Build with ` +
+        "APPLE_KEYCHAIN_PROFILE set (docs/27), or RELEASE_CHECK_SKIP_NOTARIZE=1 for a build that will not be published."
+    );
+  }
 });
 
 check("the image tag this app pulls exists on Docker Hub before the app ships", () => {
