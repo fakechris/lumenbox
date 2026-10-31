@@ -90,6 +90,11 @@ installers with three packages in node_modules and every new user's first launch
    saw. Overriding `AGENTBOX_DIST_DIR` points the check at a candidate directory. The
    dist scripts stamp the short commit into the packaged `package.json` (`buildCommit`),
    which is the version line's only source on a machine with no `.git` (INV-876).
+4. **After publishing, a new user's first run on another Mac** (INV-1447):
+   `scripts/onboarding-e2e.mjs` downloads the published DMG, checks it against SHA256SUMS,
+   and walks no-Docker guidance → key in Settings → Start the box (a real first pull) →
+   green dot → first reply, isolated from whatever already runs there. Runbook:
+   [86](86-onboarding-acceptance.md).
 
 | | Ours (after today) | OpenClaw | Hermes |
 | --- | --- | --- | --- |
