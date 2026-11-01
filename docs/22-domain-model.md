@@ -150,6 +150,30 @@ Rules the store keeps (`src/host/tasks.ts`, `src/host/mandate.ts`):
 - **Older tasks** have no mandate on file; they are read as the requester's explicit word and
   checked the same way, and the first check writes the mandate.
 
+## 2b. A task's stage: whom it waits for, by one table (INV-1464)
+
+The board has statuses; the attention page had seven kinds of item, each produced by its own
+rule. Neither answered the question a person arrives with — *does this need me now?* — with a
+definition they could check. `src/host/task-stage.ts` is that definition, read from the top,
+first match wins, every live task on exactly one row; `/api/attention` returns `stages` for
+every live task and the page counts the `person/*` rows above the agents list ("需要你 · N"),
+which takes no space when it is zero.
+
+| Stage | Holds when | A person must |
+| --- | --- | --- |
+| `ended` | status done or dropped | nothing |
+| `person/delivery` | a message for the task's chat is undeliverable after its retries (outbox) | check the door |
+| `person/answer` | a question is pending in its conversation, the board asks with options, or its mandate is stale | answer |
+| `person/review` | status review | accept or send back |
+| `person/blocked` | status blocked with no options to choose from | unblock |
+| `working/queued` | status open: nobody has started it | nothing yet |
+| `working` | status doing and something of it runs now: the assignee's turn, or a command it let go of | nothing |
+| `idle` | status doing and nothing runs: it waits for a message, a job's end, a wake | nothing |
+
+Derived every time from the task record and three reads of the world (`undelivered`,
+`questionPending`, `active`); never stored. `src/host/task-stage.test.ts` checks every row with
+a fixture and that every status × world combination lands on exactly one labelled row.
+
 ## 3. What uniformity retires, and where the holes still are
 
 - **Per-agent `visibility`** ("who may drive this agent") — retired, and as of

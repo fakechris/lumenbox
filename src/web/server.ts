@@ -1721,8 +1721,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         const updated = orchestrator.tasks?.update(taskId, { status: "done", note: "验收通过" }, by);
         return updated?.task.status === "done" ? "done" : "not_review";
       },
-      // A turn ended but a command it started runs on (INV-1461): the task stays doing until that job's wake finishes it.
-      stillWorking: (taskId, note) => { orchestrator.tasks?.update(taskId, { status: "doing", note }, "channel"); },
+      stillWorking: (taskId, note) => { orchestrator.tasks?.update(taskId, { status: "doing", note }, "channel"); }, // A turn ended but a command runs on (INV-1461): doing until that job's wake finishes it.
       closed: (taskId, outcome, note) => {
         // A turn ending is not the work being done: the success path asks the board what that means. A
         // failure is recorded as-is. Only review and done have card words; other board states are not guessed at.
@@ -6147,8 +6146,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // so it sees the installation's: everything with a clock on it.
         // The page's words, in the language this person reads (INV-544). One bundle with
         // the chat strings, so the same installation stops speaking Chinese in Feishu and
-        // English on the page. `?lang=` is the override a person can use before there is
-        // anywhere to store a preference.
+        // English on the page; `?lang=` is the override before there is anywhere to store a preference.
         if (route === "GET /api/i18n") {
           const locale = resolveLocale({
             ...(url.searchParams.get("lang") !== null ? { preference: url.searchParams.get("lang")! } : {}),
@@ -6170,6 +6168,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             unanswered: involuteUnanswered,
             paused: orchestrator.bus.pausedChains(),
             undeliverable: outbox.problems(),
+            chatKeyOf: conversation => conversations.chatKeyFor(conversation), // The stage table's reads (INV-1464).
+            active: task => task.assigneeId !== undefined && task.conversation !== undefined && (orchestrator.bus.isActive(task.assigneeId, task.conversation) || orchestrator.jobWatch.openJobs(task.assigneeId, task.conversation).length > 0),
             ...(me === undefined ? { all: true } : {}),
           });
           send(res, 200, { ...answer, who: me?.name ?? "this installation" });

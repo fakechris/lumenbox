@@ -115,3 +115,20 @@ test("a message the host could not get into a chat after its retries is everyone
   assert.deepEqual({ kind: answer.mine[0]!.kind, ref: answer.mine[0]!.ref }, { kind: "undeliverable", ref: "feishu:oc_9" });
   assert.match(answer.mine[0]!.detail, /3 attempts; last: ECONNRESET/);
 });
+
+test("every live task has a stage by the table, a blocked task with options is a question for its requester, and the world is read for delivery and activity (INV-1464)", () => {
+  const asks = task({ id: "t3", status: "blocked", assigneeId: "bot", conversation: "feishu-oc_1", history: [{ at: "t", by: "bot", status: "blocked", note: "us or eu?", options: ["us", "eu"] }] });
+  const working = task({ id: "t4", status: "doing", assigneeId: "bot", conversation: "feishu-oc_2" });
+  const stuck = task({ id: "t5", status: "doing", assigneeId: "bot", conversation: "feishu-oc_3" });
+  const answer = attentionFor({
+    principalId: "p-chris", identities: [], tasks: [asks, working, stuck], questions: [], nameOf, now: new Date(T0),
+    undeliverable: [{ id: "r1", chatKey: "feishu:oc_3", purpose: "notice", attempts: 3 }],
+    chatKeyOf: conversation => ({ "feishu-oc_3": "feishu:oc_3" })[conversation],
+    active: t => t.id === "t4",
+  });
+  assert.deepEqual(answer.stages, { t3: "person/answer", t4: "working", t5: "person/delivery" });
+  const question = answer.mine.find(item => item.ref === "t3");
+  assert.deepEqual({ kind: question?.kind, stage: question?.stage, with: question?.with }, { kind: "question", stage: "person/answer", with: "Ada" });
+  assert.match(question?.detail ?? "", /us or eu\? — us \/ eu/);
+  assert.equal(answer.theirs.find(item => item.ref === "t4")?.stage, "working");
+});
