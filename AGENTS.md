@@ -147,6 +147,9 @@ Every file in `docs/` opens with a header block naming what it is:
 - **A concept has one home.** A second definition of the same idea in a second file is the bug,
   even when it works. `src/host/architecture-guard.test.ts` fails the build for the ones we have
   already paid for.
+- **Search `docs/solutions/` before touching `src/cua`, `src/boxd` or `docker/box`.** One page per
+  pitfall (frontmatter: module, tags, problem_type, found; then Symptom / Cause / Fix / Verify),
+  outside the numbered documents. A pitfall you hit that is not there goes there, with how to verify.
 - **The Dockerfile is the source of truth for the box.** Fix box problems by changing it and
   rebuilding, never by editing a running container.
 - **Verify on the artifact, not in your head.** Print the byte, read the field, take the
