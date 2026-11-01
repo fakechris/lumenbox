@@ -9,6 +9,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { bindingsOf, CommitmentLedger, describeGaps, parseCommitments, priorCommitmentsPrompt, reconcileCommitments } from "./commitments.ts";
 import { finishRoutineRun, PendingAttachments, RoutineResultLedger, routineResolveMode, type DeliveryOutcome } from "./routine-resolve.ts";
+import { BoxGenerations } from "./box-generation.ts";
 import { writeEvalCase } from "./eval-cases.ts";
 import { routineResult } from "./run-result.ts";
 import { learningsDir } from "./learnings.ts";
@@ -309,7 +310,8 @@ export class Orchestrator {
   readonly skillProvenance: SkillProvenance;
   readonly hooks: HookRunner | undefined;
   /** The commands turns let go of past their foreground window (INV-1461); their end wakes the agent on the background lane. */
-  readonly jobWatch = new JobWatch({ box: () => this.boxClient(), log: line => console.error(`[jobs] ${line}`), wake: (agentId, conversation, text) => this.prompt(agentId, text, undefined, { conversation, steerable: false, lane: "background", synthetic: true }).then(() => undefined) });
+  readonly generations = new BoxGenerations(line => console.error(`[box] ${line}`)); // which incarnation of each box a slow callback belongs to (INV-1476); bumped on every (re)connect
+  readonly jobWatch = new JobWatch({ box: () => this.boxClient(), log: line => console.error(`[jobs] ${line}`), wake: (agentId, conversation, text) => this.prompt(agentId, text, undefined, { conversation, steerable: false, lane: "background", synthetic: true }).then(() => undefined), generation: agentId => this.generations.current(this.registry.boxOf(agentId).id) });
   /**
    * Agents whose current turn is installing a template, by the template's id (docs/29 §5.3).
    * Set around the setup prompt and cleared after it, never by the agent.
@@ -672,6 +674,7 @@ export class Orchestrator {
       const conversation = conversationIdFor(deliver);
       const record = this.registry.resolve(agent);
       const agentId = record.id;
+      const stamp = this.generations.stamp(this.registry.boxOf(agentId).id);
       // Taken before the turn: "what it said" is everything past this point — the channel path's mark, and why a reply survives a restart.
       const before = this.registry.readTranscript(agentId, conversation).length;
       await this.prompt(agent, prompt, undefined, {
@@ -684,6 +687,8 @@ export class Orchestrator {
       await this.settle();
       const said = this.replySince(agentId, before, conversation).trim();
       const result = resultOf(agentId);
+      // The box was reconnected under the run (INV-1476): its result is the old incarnation's and is not delivered.
+      if (this.generations.stale(stamp, `routine ${slug ?? identity ?? "ad-hoc"} delivery`)) return { result };
       // Execute is over. What it said is written down and a resolve step decides whether the chat hears it (INV-776).
       await finishRoutineRun(
         {
@@ -1169,15 +1174,11 @@ export class Orchestrator {
         this.boxClients.set(own, client);
         this.resolution = health.resolution;
         this.resolutions.set(own, health.resolution);
-        // Read here rather than at construction: connecting again may be connecting to a
-        // *different* box, and the class belongs to the box, not to the process. The
-        // roster's box record name is the fallback for attached provisioners, whose
-        // boxName is a URL — see classifyBox for why a URL never keys the lookup.
+        // Read here, not at construction: connecting again may be a *different* box, and the class belongs to the box. The roster's
+        // box record name is the fallback for attached provisioners, whose boxName is a URL — see classifyBox for why a URL never keys the lookup.
         this.boxAccess = classifyBox(provisioner.boxName, loadConfig(), this.registry.box.name);
         this.boxAccesses.set(own, this.boxAccess);
-        // Connecting again means the box may be a different box: one that was updated,
-        // recreated, or simply restarted. Nothing it had is guaranteed to still be
-        // there, and a remembered desktop is the one that never appears.
+        // Connecting again may be a different box — updated, recreated, restarted; nothing it had is guaranteed, and a remembered desktop is the one that never appears.
         this.forgetDesktopsOf(own);
         const size = health.resolution
           ? `${health.resolution.display.width}x${health.resolution.display.height}`
@@ -1328,13 +1329,14 @@ export class Orchestrator {
       kind: entry.kind,
       connected: this.boxClients.has(entry.id),
       displayFloor: entry.displayFloor,
-      agents: this.registry.agentsIn(entry.id).length,
+      agents: this.registry.agentsIn(entry.id).length, ...this.generations.statusOf(entry.id),
       ...(this.boxClients.has(entry.id) && this.desktopResources.has(entry.id) ? { resources: this.desktopResources.get(entry.id) } : {}),
       ...(entry.endpoint !== undefined ? { endpoint: entry.endpoint.baseUrl } : {}),
     }));
   }
 
   private forgetDesktopsOf(boxId: string): void {
+    this.generations.bump(boxId, "connected");
     this.desktopResources.delete(boxId);
     for (const key of this.startingDisplays.keys()) {
       if (key.startsWith(`${boxId}:`)) this.startingDisplays.delete(key);
@@ -1362,10 +1364,8 @@ export class Orchestrator {
           if (health.desktop_resources) this.desktopResources.set(entry.id, health.desktop_resources);
           else this.desktopResources.delete(entry.id);
         } catch (error) {
-          // An error with a body is an answer: the box spoke, and what it said is
-          // somebody else's problem. A timeout, an abort or an unreachable address is
-          // *not* an answer, and counting it as one would defeat the whole watch — the
-          // wedged box is exactly the one whose calls never come back.
+          // An error with a body is an answer: the box spoke. A timeout, an abort or an unreachable address is *not* an answer,
+          // and counting it as one would defeat the whole watch — the wedged box is exactly the one whose calls never come back.
           const kind = error instanceof BoxError ? error.kind : "unreachable";
           if (kind !== "timeout" && kind !== "unreachable" && kind !== "crashed") this.wedge.answered(entry.id);
           return;

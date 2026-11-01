@@ -20,6 +20,8 @@ const POLL_MS = 60_000;
 export interface WatchedJob {
   agentId: string;
   conversation: string;
+  /** The box's generation when the watch began (INV-1476): a wake for an earlier one is dropped. */
+  generation?: number;
   jobId: string;
   command: string;
   startedAt: number;
@@ -35,6 +37,8 @@ export interface JobWatchDeps {
   box: () => JobWatchBox | undefined;
   /** Tells the agent, in its conversation, as a host message. */
   wake: (agentId: string, conversation: string, text: string) => Promise<void>;
+  /** The current generation of the agent's box (INV-1476); absent means generations are not tracked. */
+  generation?: (agentId: string) => number;
   log: (line: string) => void;
   now?: () => number;
   capMs?: number;
@@ -66,7 +70,7 @@ export class JobWatch {
   /** Starts watching; a job already watched is left alone. */
   watch(job: Omit<WatchedJob, "startedAt">): void {
     if (this.open.has(job.jobId)) return;
-    const watched: WatchedJob = { ...job, startedAt: (this.deps.now ?? Date.now)() };
+    const watched: WatchedJob = { ...job, startedAt: (this.deps.now ?? Date.now)(), ...(this.deps.generation !== undefined ? { generation: this.deps.generation(job.agentId) } : {}) };
     this.open.set(job.jobId, watched);
     void this.follow(watched).catch(error => this.deps.log(`job watch ${job.jobId}: ${error instanceof Error ? error.message : String(error)}`)).finally(() => this.open.delete(job.jobId));
   }
@@ -74,6 +78,13 @@ export class JobWatch {
   /** The jobs still running that this agent let go of in this conversation. */
   openJobs(agentId: string, conversation: string): WatchedJob[] {
     return [...this.open.values()].filter(job => job.agentId === agentId && job.conversation === conversation);
+  }
+
+  /** The box was reconnected since the watch began: the job's end belongs to an incarnation that is gone, and the agent is not woken for it. */
+  private staleNow(job: WatchedJob): boolean {
+    if (job.generation === undefined || this.deps.generation === undefined || this.deps.generation(job.agentId) === job.generation) return false;
+    this.deps.log(`stale-generation: job watch ${job.jobId} began at box generation ${job.generation}, now ${this.deps.generation(job.agentId)}; the wake is dropped`);
+    return true;
   }
 
   private async follow(job: WatchedJob): Promise<void> {
@@ -87,11 +98,13 @@ export class JobWatch {
         await box.killJob(job.jobId).catch(() => undefined);
         const ended = await box.waitForJob({ job_id: job.jobId, timeout_ms: 3_000 }).catch(() => undefined);
         this.deps.log(`job watch ${job.jobId}: killed at the ${Math.round(cap / 60_000)}-minute cap`);
+        if (this.staleNow(job)) return;
         await this.deps.wake(job.agentId, job.conversation, jobEndedNote(job, ended ?? { log_path: "(unknown)", tail: "" }, true));
         return;
       }
       const waited = await box.waitForJob({ job_id: job.jobId, timeout_ms: Math.min(this.deps.pollMs ?? POLL_MS, cap - elapsed) });
       if (waited.running) continue;
+      if (this.staleNow(job)) return;
       this.deps.log(`job watch ${job.jobId}: ended (${waited.interrupted === true ? "interrupted" : `exit ${waited.exit_code}`}); waking ${job.agentId}`);
       await this.deps.wake(job.agentId, job.conversation, jobEndedNote(job, waited, false));
       return;
