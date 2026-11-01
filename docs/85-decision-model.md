@@ -33,7 +33,7 @@ straight to the vendor, not through `HTTP_PROXY`: measured, the proxy quadrupled
 
 | Point | Modes | Its own path |
 |---|---|---|
-| `memory_judge` | off, shadow, on | the four questions on the cheap profile (`memory-judge.ts`) |
+| `memory_judge` | off, shadow, on | the four questions on the cheap profile (`memory-judge.ts`); with the decision model, four type scores per line as well (INV-1472) |
 | `answer_review` | off, shadow, on | the reply review (`answer-review.ts`) |
 | `memory_select` | off, shadow, on | the per-turn memory selector (`memory.ts`) |
 | `memory_sufficiency` | off, shadow, on | — (a check after the selection, INV-1471: enough? anything misleading? drops the misleading, widens the selection once) |
@@ -43,6 +43,15 @@ straight to the vendor, not through `HTTP_PROXY`: measured, the proxy quadrupled
 | `computer_wait` | off, on | — (new action) |
 | `computer_click` | off, on | — (new action) |
 | `computer_guard` | off, shadow, on | — (new check before a desktop click) |
+
+**What a memory is like (INV-1472).** `kind` says where a line came from; four scores say what it
+is for — episodic, semantic, procedural, preference, each 0..1, asked of every candidate by the
+decision model at `memory_judge` and stored on the line (`types`). At `memory_select` the same
+four are asked of the message, and the order of the memories that passed the line leans toward the
+ones whose profile matches (`leanedByType`: cosine affinity, `AGENTBOX_MEMORY_TYPE_WEIGHT`, default
+0.2; at 0 nothing changes). A lean, not an admission: a memory the model scored below the line stays
+out whatever its type, and a line without scores — written before, or by the cheap-profile judge —
+is neutral. No new switch: it follows `memory_judge` and `memory_select`.
 
 **Enough, and nothing in the way (INV-1471).** The selector stops at its budget whether or not
 what it picked answers the message. `memory_sufficiency` asks one more request after
