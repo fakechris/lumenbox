@@ -63,6 +63,8 @@ export interface GoalLoopDeps {
   busy: (agentId: string, conversation: string) => string[];
   /** The wake gate (policy): a stopped agent or one over its wake rate is refused. */
   wakeGate: (agentId: string) => { allowed: boolean; reason?: string };
+  /** Whether the task's mandate still holds (INV-1457); false leaves the continuation to a person. Absent means always. */
+  revalidate?: (task: Task) => boolean;
   /** Plan and todos as the prompt sees them, for the stall hash. */
   durableState: (agentId: string, conversation: string) => DurableState | undefined;
   /** The workspace as path→hash, when there is a box to ask. */
@@ -227,6 +229,10 @@ export class GoalLoop {
     // a turn may have begun.
     if ((this.personSeq.get(this.convKey(key.agentId, key.conversation)) ?? 0) !== personSeq) return;
     if (this.deps.bus.isActive(key.agentId, key.conversation) || this.deps.bus.queuedCount(key.agentId, key.conversation) > 0 || this.deps.busy(key.agentId, key.conversation).length > 0) return;
+    if (this.deps.revalidate?.(task) === false) {
+      this.deps.log(`goal ${task.id}: continuation held, the mandate no longer holds; waiting for the person`);
+      return;
+    }
     const gate = this.deps.wakeGate(key.agentId);
     if (!gate.allowed) {
       this.deps.log(`goal ${task.id}: continuation held by the wake gate${gate.reason !== undefined ? ` (${gate.reason})` : ""}`);

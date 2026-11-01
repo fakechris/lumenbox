@@ -91,6 +91,7 @@ import { mergeServers } from "./mcp-connectors.ts";
 import { CapabilityLedger } from "./mcp-capabilities.ts";
 import { PolicyGate } from "./policy.ts";
 import { TaskStore, type Task } from "./tasks.ts";
+import type { MandateWorld } from "./mandate.ts";
 import { BoxError } from "../box/client.ts";
 import { Receipts } from "./receipts.ts";
 import { WedgeWatch } from "./wedge.ts";
@@ -128,6 +129,7 @@ import {
 
 export interface OrchestratorOptions {
   registry?: AgentRegistry;
+  mandateWorld?: () => MandateWorld; // What a task's mandate is checked against before a goal continuation (INV-1457).
   client?: Anthropic;
   /** Which endpoint to talk to. Defaults to whatever the environment selects. */
   provider?: ProviderProfile;
@@ -1109,12 +1111,10 @@ export class Orchestrator {
       manifest: () => this.workspaceManifest(),
       notify: async (task, text) => {
         const chatKey = task.pursuit?.chatKey;
-        if (chatKey === undefined) {
-          console.error(`[goal] ${task.id}: no chat to tell; the board has the note`);
-          return;
-        }
+        if (chatKey === undefined) { console.error(`[goal] ${task.id}: no chat to tell; the board has the note`); return; }
         await this.options.deliverToChat?.(chatKey, text, task.assigneeId);
       },
+      revalidate: task => this.options.mandateWorld === undefined || this.tasks!.revalidate(task.id, task.requester, this.options.mandateWorld()).status === "ok",
       log: line => console.error(`[goal] ${line}`),
     });
     if (this.tasks !== undefined) this.tasks.onChange(task => this.goalLoop?.onTaskChanged(task));

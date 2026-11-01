@@ -21,9 +21,10 @@
 
 import type { Task } from "./tasks.ts";
 import type { WatchedQuestion } from "./question-expiry.ts";
+import { describeStale } from "./mandate.ts";
 
 export interface AttentionItem {
-  kind: "question" | "close-proposal" | "review" | "nudged" | "waiting" | "unanswered" | "paused";
+  kind: "question" | "close-proposal" | "review" | "nudged" | "waiting" | "unanswered" | "paused" | "reauthorize";
   /** What to open: a task id, or the conversation a question was asked in. */
   ref: string;
   title: string;
@@ -119,6 +120,17 @@ export function attentionFor(input: AttentionInput): Attention {
 
   for (const task of input.tasks) {
     if (!isLive(task)) continue;
+    // A wake the mandate refused (INV-1457): the work waits for the person whose word it was.
+    const stale = task.mandate?.stale;
+    if (stale !== undefined && task.mandate?.withdrawn === undefined && isMe(task.mandate?.by ?? task.requester)) {
+      mine.push({
+        kind: "reauthorize",
+        ref: task.id,
+        title: `${task.id}: needs re-authorising`,
+        detail: `${describeStale(stale.reasons)}; reply on it to continue, or stop it`,
+        ...(task.assigneeId !== undefined ? { with: input.nameOf(task.assigneeId) } : {}),
+      });
+    }
     const proposal = task.closeProposal;
     if (proposal !== undefined && isMe(task.requester)) {
       mine.push({

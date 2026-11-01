@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: identity-and-authority
-     updated: 2026-10-01
+     updated: 2026-11-01
 -->
 # The domain model: people, doors, workers, rooms
 
@@ -120,6 +120,35 @@ and what it routes is the box's list, always.
 door reaches every agent in the box. That is not a limitation but the definition
 of "same box". A door whose people need isolated authority needs its own box, and
 build items 1–4 cannot produce one; see §7.
+
+## 2a. A task's mandate: who may have it done, and under what (INV-1457)
+
+The policy answers "may this tool call run"; it never answered "may this work go on".
+A task recorded who asked for it, and every later wake — a `/continue`, a `/recover`, a
+goal continuation — took that record as authority. Now a task carries a **mandate**:
+
+| Field | Holds |
+| --- | --- |
+| `by` | The principal whose authority this is: the requester. |
+| `strength` | `explicit`, a person's own request; `inferred`, work started on a rule — a proposal, a routine, a listener — which also needs its `source` still enabled. |
+| `rulesHash` | The operator's rule set (`~/.agentbox/rules`) as loaded at the grant. |
+| `stale` | Set when a wake found the mandate no longer holds, with every reason: the person can no longer drive, the rules changed, the source is off. |
+| `withdrawn` | Set by a person's stop. Final. |
+
+Rules the store keeps (`src/host/tasks.ts`, `src/host/mandate.ts`):
+
+- **Granted once, with the request.** The mandate is not edited; a wider scope is a new task.
+- **Checked before every wake.** `/continue tN` and `/recover tN` from a chat, and a goal
+  continuation, call `revalidate` first. A failed check cancels nothing that runs: it marks
+  the task stale, writes a `mandate-stale` row to `policy.jsonl`, and the task appears under
+  *what needs me* for the person whose word it was. Nobody else's reply moves it.
+- **The person's own word settles what their word can.** A changed rule set or a switched-off
+  source is accepted by the requester's next `/continue`, and the turn is told so. A driver
+  role they no longer hold is not theirs to restore.
+- **A stop withdraws it.** `停` on a running task drops the task and withdraws its mandate; no
+  later message on the thread wakes it, `/recover` refuses it. New work there is a new task.
+- **Older tasks** have no mandate on file; they are read as the requester's explicit word and
+  checked the same way, and the first check writes the mandate.
 
 ## 3. What uniformity retires, and where the holes still are
 

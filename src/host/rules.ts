@@ -227,6 +227,11 @@ export class RuleStore {
     return this.rules.map(rule => ({ ...rule }));
   }
 
+  /** The hash of the rule set as loaded, the one the audit row names. */
+  currentHash(): string {
+    return this.hash;
+  }
+
   /** Files that are not rules, so an operator finds out without grepping a log. */
   ignored(): { id: string; problem: string }[] {
     return [...this.problems];

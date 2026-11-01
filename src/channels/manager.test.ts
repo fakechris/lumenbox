@@ -2706,3 +2706,58 @@ test("the streaming card holds only the tail of a long reply, and a failed card 
   assert.deepEqual(adapter.chatSent.map(sent => sent.text), [long], "the chat gets the whole reply, not the card's tail");
   assert.equal(adapter.cards.at(-1)!.card.status, "done");
 });
+
+test("a wake checks the task's mandate: stale waits for its person, withdrawn is over, and 停 withdraws it (INV-1457)", async () => {
+  const adapter = cardAdapter();
+  const withdrawn: string[] = [];
+  let opened = 0;
+  let verdict: { status: "ok" | "stale" | "withdrawn" | "unknown"; reasons?: string[]; reauthorised?: string[] } = { status: "ok" };
+  const asked: string[] = [];
+  let release: () => void = () => {};
+  const manager = new ChannelManager({
+    mayDrive: () => true,
+    ask: (() => {
+      let first = true;
+      return async (_agent: string | undefined, text: string) => {
+        asked.push(text);
+        if (first) { first = false; await new Promise<void>(resolve => { release = resolve; }); }
+        return "done";
+      };
+    })(),
+    stop: () => "stopped" as const,
+    board: {
+      open: () => `t${++opened}`,
+      started: () => {},
+      closed: () => "done" as const,
+      revalidate: () => verdict,
+      withdraw: taskId => { withdrawn.push(taskId); },
+    },
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+  const room = { identity: "feishu:ou_1", chatKey: "feishu:oc_room", senderLabel: "chris" };
+  try {
+    await adapter.inject({ ...room, messageId: "m1", text: "汇总报表" });
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    verdict = { status: "stale", reasons: ["rules-changed"] };
+    assert.match(String(await adapter.inject({ ...room, messageId: "m2", text: "/continue t1 改成百分比" })), /需要重新授权.*规则已变更/);
+    assert.equal(asked.length, 1, "a stale mandate starts no turn");
+
+    verdict = { status: "ok", reauthorised: ["rules-changed"] };
+    assert.equal(await adapter.inject({ ...room, messageId: "m3", text: "/continue t1 改成百分比" }), undefined);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.match(asked[1] ?? "", /re-authorised this task with this message after: rules-changed/);
+
+    verdict = { status: "withdrawn" };
+    assert.match(String(await adapter.inject({ ...room, messageId: "m4", text: "/continue t1 再来" })), /已被叫停/);
+
+    assert.match(String(await adapter.inject({ ...room, messageId: "m5", text: "停" })), /叫停/);
+    assert.deepEqual(withdrawn, ["t1"], "the person's stop withdrew the running task's mandate");
+  } finally {
+    release();
+    await manager.idle();
+    manager.stop();
+  }
+});

@@ -24,6 +24,9 @@
  * config file's env map — never as constructor literals.
  */
 
+import { mandateNote, reauthorisationNeeded } from "./mandate-text.ts";
+import { parseAcceptance, parseStopRequest } from "./verbs.ts";
+export { parseAcceptance, parseStopRequest } from "./verbs.ts";
 import { roomDecision } from "./identity.ts";
 import type { Ingress } from "./ingress.ts";
 import type { Messages } from "./messages.ts";
@@ -314,30 +317,6 @@ export interface ChannelStatus {
   detail: string;
 }
 
-/**
- * A whole message that means "stop what you are doing".
- *
- * The same discipline as approval replies: the message must be *only* the verb. "停下来
- * 改用另一个文件夹" is an instruction that mentions stopping, and reading it as a stop
- * would throw away the half that says what to do instead.
- */
-export function parseStopRequest(text: string): boolean {
-  const t = text.trim().toLowerCase().replace(/[.!。!~]+$/, "");
-  return ["停", "停下", "停下来", "先停", "取消", "算了", "别做了", "stop", "cancel", "/stop"].includes(t);
-}
-
-/**
- * A whole message that means "I accept this work".
- *
- * The walkthrough drew the person saying "好了"; real people say 可以, 收到, 没问题, OK.
- * Whole-message only, like every verb here — "可以再快点吗" is a question that contains
- * an acceptance word, and accepting on it would close work the person was pushing back on.
- */
-export function parseAcceptance(text: string): boolean {
-  const t = text.trim().toLowerCase().replace(/[.!。!~,,]+$/, "");
-  return ["可以", "好了", "好的", "好", "收到", "没问题", "通过", "验收通过", "就这样", "ok", "okay", "lgtm", "辛苦了"].includes(t);
-}
-
 /** How a one-word reply on a chat answers a pending approval. */
 export type ApprovalReply = "once" | "always" | "session" | "deny";
 
@@ -611,6 +590,9 @@ export interface ChannelManagerDeps {
     schedules?: (chatKey: string) => Promise<string>;
     /** Where a person can watch this task work, when this installation is reachable. */
     urlFor?: (taskId: string) => string | undefined;
+    /** Whether a task's mandate still holds for this person's wake (INV-1457); `reauthorised` is what this message settled. */
+    revalidate?: (taskId: string, identity: string) => { status: "ok" | "stale" | "withdrawn" | "unknown"; reasons?: string[]; reauthorised?: string[] };
+    withdraw?: (taskId: string, identity: string) => void; // A person's stop withdraws the task's mandate for good.
     started: (taskId: string) => void;
     /**
      * Reports the turn's outcome and returns what the board made of it.
@@ -1597,6 +1579,8 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       if (taskId === undefined) return "用法：/recover t任务号（例如 /recover t25）。本次没有修改任务。";
       if (message.files?.length) return "请单独发送 /recover t任务号；附件未作为恢复来源消费。";
       if (this.deps.recover === undefined) return "此入口尚未接入任务恢复；本次没有修改任务。";
+      const mandate = this.deps.board?.revalidate?.(taskId, message.identity);
+      if (mandate?.status === "withdrawn" || mandate?.status === "stale") return reauthorisationNeeded(taskId, mandate);
       const key = message.threadKey ?? message.chatKey ?? message.identity;
       const busy = this.runningWork.get(key) ?? [];
       const question = [...this.awaitingAnswer.values()].some(item => item.conversationKey === key && item.expiresAt > Date.now());
@@ -1797,15 +1781,20 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
           entries.find(entry => entry.agentName === target.agentName) !== target) {
         return "没有找到你在当前会话中正在执行的这个任务；排队中和已结束的任务不能追加。请单独发送新请求。";
       }
+      // The task's mandate is checked before its work goes on (INV-1457).
+      const mandate = this.deps.board?.revalidate?.(reference.id, message.identity);
+      if (mandate?.status === "withdrawn" || mandate?.status === "stale") return reauthorisationNeeded(reference.id, mandate);
       // Even an explicit addition gets a tracked turn. Fire-and-forget steering can
       // race the old turn's exit and acknowledge words no later reply ever delivers.
-      addition = { agentName: target.agentName, text: `[Additional instruction for task ${reference.id}; handle after the current turn]\n\n${reference.text}` };
+      addition = { agentName: target.agentName, text: `[Additional instruction for task ${reference.id}; handle after the current turn]${mandateNote(mandate?.reauthorised)}\n\n${reference.text}` };
     } else if (/^\/(?:answer|continue)(?:\s|$)/u.test(text)) {
       return "请使用 /answer 问题编号 答案，或 /continue 任务编号 追加内容。";
     }
     if (running !== undefined) {
       if (answering === undefined && parseStopRequest(text)) {
         const outcome = this.deps.stop?.(running.agentName, message.identity) ?? "not-running";
+        // A person's stop ends the work, not just the turn (INV-1457).
+        if (outcome === "stopped" && running.taskId !== undefined) this.deps.board?.withdraw?.(running.taskId, message.identity);
         // Three answers, not two: refused is not "nothing is running", and telling
         // somebody their stop worked when it did not is worse than refusing them.
         return outcome === "stopped" ? STOPPING : outcome === "refused" ? notYours(running.agentName) : NOTHING_RUNNING;
