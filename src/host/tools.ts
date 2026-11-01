@@ -610,7 +610,7 @@ const actionSchema = {
     coordinate: coordinateSchema,
     value: { type: "string", description: "For set_value: replace an editable native control with this text. Values travel to the isolated native helper." },
     ref: { type: "string", description: "For element actions: copy the complete opaque ref from the latest list_elements. Never shorten or reuse it after a write." },
-    observation_id: { type: "string", description: "For element actions: the elements observation id returned with the outline, when available." },
+    observation_id: { type: "string", description: "For element actions, required: the elements observation id returned with the outline the ref came from. A ref is refused without it." },
     path: {
       type: "array" as const,
       description: "For drag: the points to move through, starting point first.",
@@ -870,7 +870,7 @@ export function buildTools(
           "active window's controls from the accessibility tree — role, name, state and " +
           "position — and gives each a ref plus supported operations. Prefer `invoke_element` or " +
           "`set_value` when supported: these use native AT-SPI actions. `click_element` explicitly uses " +
-          "coordinates; unsupported semantics never fall back to clicks. Refresh refs after every write. Not every app has a tree (a terminal, " +
+          "coordinates; unsupported semantics never fall back to clicks. Send the outline's observation_id with every ref, and take a new list_elements after every write: a ref is re-identified in the live tree before input and refused (STALE_REF, AMBIGUOUS_TARGET) rather than resolved to whatever is there now. Not every app has a tree (a terminal, " +
           "an Electron app): then the result says so and the screenshot is what you have.",
         input_schema: {
           type: "object",

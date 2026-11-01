@@ -84,7 +84,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [46-chat-as-a-chat](46-chat-as-a-chat.md) | The chat is a chat | current | 2026-09-09 |
 | [47-jumpbox-audit](47-jumpbox-audit.md) | Jump-box behaviour audit | current | 2026-09-11 |
 | [48-identity-consistency](48-identity-consistency.md) | One person across channels | current | 2026-09-10 |
-| [49-cua-absorb](49-cua-absorb.md) | 吸收四个 CUA 项目：操作有证据、不可逆有门、接管即教学、经验可共享 | current | 2026-09-14 |
+| [49-cua-absorb](49-cua-absorb.md) | 吸收四个 CUA 项目：操作有证据、不可逆有门、接管即教学、经验可共享 | current | 2026-11-01 |
 | [50-enterprise-primitives](50-enterprise-primitives.md) | 企业级 agent 的高层规划：原语、数据、控制、记忆、审计、运行时 | current | 2026-09-14 |
 | [51-follow-through](51-follow-through.md) | 跟进（follow-through）：问题、承诺与挂着的工作如何不再无声 | current | 2026-09-15 |
 | [52-multiuser-and-product](52-multiuser-and-product.md) | 多用户与产品面：一次对账与打磨 | current | 2026-09-14 |

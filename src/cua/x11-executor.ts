@@ -12,7 +12,7 @@ type X11ExecutionResult = DesktopExecutionResult;
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { ComputerExecutionError, DesktopTargetError, isComputerWrite } from "./execution.ts";
+import { ComputerExecutionError, DesktopTargetError, isComputerWrite, targetVerdict } from "./execution.ts";
 import { envNumber } from "../config.ts";
 import { execFile } from "node:child_process";
 import { readFileSync, unlinkSync } from "node:fs";
@@ -490,13 +490,16 @@ export class X11Executor implements DesktopDriver {
     return "error" in read ? read : this.adoptElements(read);
   }
 
-  /** Re-read immediately before dispatch; no cached geometry can silently move the target. */
+  // Re-read immediately before dispatch; no cached geometry can silently move the target. A ref belongs to one
+  // observation and must come with its id (INV-1478); `targetVerdict` re-identifies the control in the current tree.
   protected async validateElement(ref: string, observationId?: string): Promise<Point> {
+    if (observationId === undefined || observationId.trim() === "") {
+      throw new DesktopTargetError("element actions need the observation_id the outline came with");
+    }
     const target = this.elementTargets.get(ref);
     const window = this.elementWindow;
     const generation = this.observationGeneration;
-    if (!target || !window || !this.elementsObservationId ||
-        (observationId !== undefined && observationId !== this.elementsObservationId)) {
+    if (!target || !window || !this.elementsObservationId || observationId !== this.elementsObservationId) {
       throw new DesktopTargetError("element is not bound to the current observation");
     }
     if (!window.identity || !target.identity) throw new DesktopTargetError("reader cannot prove native target identity; upgrade the box helper");
@@ -505,13 +508,8 @@ export class X11Executor implements DesktopDriver {
     if (generation !== this.observationGeneration || "error" in read || read.window.identity !== window.identity) {
       throw new DesktopTargetError("the observed window is no longer current or readable");
     }
-    const matches = read.elements.filter(element => element.identity === target.identity);
-    const current = matches[0];
-    if (matches.length !== 1 || !current || current.role !== target.role || current.name !== target.name ||
-        current.x !== target.x || current.y !== target.y || current.width !== target.width || current.height !== target.height ||
-        current.states.includes("disabled")) {
-      throw new DesktopTargetError("the target moved, changed, disappeared or is disabled");
-    }
+    const verdict = targetVerdict(target, read.elements);
+    if (verdict !== undefined) throw verdict;
     return this.elementCentre(ref);
   }
 

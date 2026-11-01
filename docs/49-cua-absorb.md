@@ -2,7 +2,7 @@
      title: 吸收四个 CUA 项目：操作有证据、不可逆有门、接管即教学、经验可共享
      family: decision
      status: current
-     updated: 2026-09-14
+     updated: 2026-11-01
 -->
 # 49. 吸收四个 CUA 项目：操作有证据、不可逆有门、接管即教学、经验可共享
 
@@ -48,6 +48,8 @@
 ### A1b. 桌面控件树：`list_elements` / `click_element`（INV-412，2026-09-11）
 
 镜像装 `at-spi2-core python3-gi gir1.2-atspi-2.0`；`start-display` 每桌面起 `at-spi-bus-launcher`（地址写在 X root 的 `AT_SPI_BUS`，GTK/Qt/Chromium 由此找到总线，不需要 session bus）；`box-chrome` 加 `--force-renderer-accessibility`。`docker/box/box-ax`（python，4s 截止）读活动窗口的可操作控件（角色、名称、状态、屏幕矩形，上限 150），输出 JSON；boxd 的 `list_elements` 把矩形换算到 API 坐标并记住每个 ref 的中心，`click_element(ref)` 在盒内解析成坐标走 `click` 同一条路，所以 A1 的效果证据与 B1 的审查同样生效。没有树（xterm、Electron）时 `elements_note` 说明原因、整批 outcome=unknown，host 把它渲染成 "No control outline: …Work from the screenshot."；有树时渲染成与 browser_snapshot 同形的大纲 `- role "name" [ref=a3] [states] at (x,y)`。smoke：thunar 读到 24 个控件并点中菜单（effect confirmed），xterm 返回 unknown 并附原因；42/42。**增量实测（2026-09-11，arm64）**：镜像 1.88 GB → 1.89 GB（+~10 MB）；`box up --recreate` 到 daemon 就绪 71 s，与此前一轮同量级（未见可测差异）；a11y 总线每桌面一个 `at-spi-bus-launcher` 进程。踩过的坑：boxd 执行器的环境只有 DISPLAY，按名找 box-ax 需要显式 PATH；xfwm4 自己也在总线上且带 ACTIVE 窗口，所以读树必须锚定 X 的活动窗口标题，否则终端会读成"空成功"。
+
+**ref 的身份与拒绝（INV-1478，2026-11-01）。** 上文"记住每个 ref 的中心"已不是全部：`validateElement` 在每次 `click_element` / `invoke_element` / `set_value` 下发前重读一遍树，按 box-ax 给出的原生身份（D-Bus 连接名 + 对象路径，不是遍历序号）在当前树里重识别，且角色、名称、矩形都要和观察时一样、未被禁用，才用缓存的中心点击。`observation_id` 必填：裸 ref、或带着别次观察 id 的 ref，一律 `STALE_OBSERVATION`，不会拿当前屏幕上的东西凑。零匹配（控件没了、换了身份、移动、改名、被禁用）是 `STALE_REF`——被删掉那行的 ref 不能落到补上来的那行；多于一个匹配是 `AMBIGUOUS_TARGET`（附数量）。两者都不点击，boxd 以 outcome=refused 带 `refusal_code` 返回，错误文本里写明下一步（重新 list_elements 再选）。box-ax 的 `--perform` 路径本来就按同一身份校验，所以 invoke/set_value 的第二道门在盒内。
 
 ### A2. `browser_act` 目标范围 diff 与 `expect`
 
