@@ -57,7 +57,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [09-tenancy](09-tenancy.md) | Tenancy: teams, users, and who may drive which agent | superseded by [22-domain-model](22-domain-model.md) — §3 retires per-agent visibility; §0 sets uniformity | 2026-08-19 |
 | [10-security-backlog](10-security-backlog.md) | Security backlog | current | 2026-09-26 |
 | [14-from-outside-reading](14-from-outside-reading.md) | Ideas taken from outside reading | current | 2026-08-26 |
-| [15-secrets-in-the-record](15-secrets-in-the-record.md) | R7: secrets an agent reads land in the record in clear | current | 2026-08-25 |
+| [15-secrets-in-the-record](15-secrets-in-the-record.md) | R7: secrets an agent reads land in the record in clear | current | 2026-11-01 |
 | [16-long-work](16-long-work.md) | Finishing long work: the protocol, the cost, and the stop | current | 2026-10-20 |
 | [18-identity-box](18-identity-box.md) | Boxes that say what they are (v4) | superseded by [22-domain-model](22-domain-model.md) — §4 replaces boxName/config.boxes[name] with ids and incarnations | 2026-08-29 |
 | [20-completion-standard](20-completion-standard.md) | The standard of completion, written before the work | current | 2026-09-14 |

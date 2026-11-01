@@ -164,7 +164,7 @@ export const SETTINGS_DIALOG_HTML = `
         <input id="setsecid" placeholder="GITHUB_TOKEN" spellcheck="false" style="flex:1;min-width:110px">
         <input id="setsecval" type="password" placeholder="value" spellcheck="false" autocomplete="off" style="flex:1;min-width:110px">
         <input id="setsecgrant" placeholder="* or agent:id or principal:id" spellcheck="false" style="flex:1.3;min-width:130px;font-family:var(--font-sans);font-size:12px">
-        <input id="setsecsites" placeholder="sites: github.com, *.example.com" spellcheck="false" title="Where a browser may type this secret. Empty means it can be used in a host command but never filled into a web page." style="flex:1.3;min-width:150px;font-family:var(--font-sans);font-size:12px">
+        <input id="setsecsites" placeholder="sites: github.com, *.example.com — or git, github.com" spellcheck="false" title="Where a browser may type this secret. Empty means it can be used in a host command but never filled into a web page. Write git among the sites for a git token: a host command then hands it to git through a one-run credential helper for those hosts (github.com when none) instead of its environment." style="flex:1.3;min-width:150px;font-family:var(--font-sans);font-size:12px">
         <button class="btn sm" id="setsecadd">Add</button>
       </div>
       <div class="fieldnote">A credential, given to who may use it. It is delivered only through

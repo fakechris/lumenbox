@@ -1655,7 +1655,7 @@ function renderSecrets() {
         var who = (s.grants || []).map(function (g) { return g.holder + (g.expiresAt ? " (until " + g.expiresAt.slice(0,10) + ")" : ""); }).join(", ") || "nobody yet";
         // Where a browser may type it (INV-967): named, or said to be nowhere, so the person
         // who reads a refusal here sees the same fact the refusal was about.
-        var sites = (s.domains || []).length ? "sites: " + s.domains.join(", ") : "not fillable in a browser (no sites)";
+        var sites = (s.kind === "git" ? "git credential for " + ((s.domains || []).join(", ") || "github.com") + " (handed to git, not to the command)" : (s.domains || []).length ? "sites: " + s.domains.join(", ") : "not fillable in a browser (no sites)");
         return '<div style="display:flex;gap:8px;align-items:center;font-size:13px">' +
           '<span class="mono" style="min-width:110px;font-weight:600">' + esc(s.id) + "</span>" +
           '<span class="dim" style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis">' + esc(who) + " · " + esc(sites) + "</span>" +
@@ -1674,7 +1674,7 @@ $("setsecadd").onclick = function () {
   var exists = secrets.some(function (s) { return s.id === id; });
   if (!id || (!value && !exists)) { $("setsecstatus").textContent = "A secret needs a name and a value."; return; }
   $("setsecstatus").textContent = "Saving…";
-  var body = { id: id, grants: grant ? [{ holder: grant }] : [], domains: sites };
+  var body = { id: id, grants: grant ? [{ holder: grant }] : [], domains: sites.filter(function (d) { return d !== "git"; }), kind: sites.indexOf("git") >= 0 ? "git" : null }; // "git" among the sites marks a git credential (INV-1408)
   if (value) body.value = value;
   fetch("/api/vault", {
     method: "POST",

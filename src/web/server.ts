@@ -4473,7 +4473,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             id,
             ...(typeof body.description === "string" ? { description: body.description } : {}),
             ...(typeof body.value === "string" && body.value !== "" ? { value: body.value } : {}),
-            grants,
+            grants, ...(body.kind === "git" ? { kind: "git" as const } : body.kind === null ? { kind: null } : {}), // git: delivered to git by helper, not to the environment (INV-1408)
             // Where it may be typed into a page (INV-402). Sent as a list or a comma string.
             ...(Array.isArray(body.domains)
               ? { domains: (body.domains as unknown[]).filter((d): d is string => typeof d === "string").map(d => d.trim()).filter(Boolean) }
