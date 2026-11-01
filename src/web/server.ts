@@ -141,6 +141,7 @@ import { startHostEgress } from "../host/host-egress.ts";
 import { HostRunner, hostRunnerConfig } from "../host/host-runner.ts";
 import { HostSandbox } from "../host/host-sandbox.ts";
 import { outboundRedactor } from "../host/redact-outbound.ts";
+import { blockedQuestion, describePurpose, outboundVerdict } from "../host/outbound.ts";
 import { ALL_TOOLS } from "../host/orchestrator.ts";
 import {
   CATALOG_CONNECTORS,
@@ -727,7 +728,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // The receipt, not the swallowing door (INV-802): a vendor failure here must read as
       // undelivered, or the next identical result is silenced against a send nobody got.
       if (chats === undefined) return { delivered: false, why: "no channels are configured" };
-      return chats.tryPushToChat(chatKey, text);
+      return chats.tryPushToChat(chatKey, text, { kind: "notice", about: `report from ${fromAgentId ?? "a routine"}` });
     },
     onTurnEvent: event => {
       // An edit_file call goes to the page with its diff attached, computed here once, so
@@ -1012,11 +1013,22 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     ask: (agentId, request) => orchestrator.askBounded(agentId, request),
     triggerTokens: () => policyForModel(orchestrator.provider.model).triggerTokens,
     followUps,
-    push: async (chatKey, text) => (chats === undefined ? { delivered: false } : chats.tryPushToChat(chatKey, text)),
+    push: async (chatKey, text) => (chats === undefined ? { delivered: false } : chats.tryPushToChat(chatKey, text, { kind: "notice", about: "context steward" })),
     log,
   });
 
+  const acked = new Set<string>();
   const channels = new ChannelManager({
+    // The speaking right of a host push (INV-1459): the world each purpose claims, read now; a refusal is audited.
+    outbound: (purpose, chatKey) => {
+      const verdict = outboundVerdict(purpose, {
+        taskStatus: id => orchestrator.tasks?.get(id)?.status,
+        pendingQuestion: ref => questions.list().find(item => item.id === ref)?.question ?? blockedQuestion(orchestrator.tasks?.get(ref)),
+        answerOwed: id => deliveries.pending().some(item => item.id === id),
+      }, acked);
+      if (!verdict.allow) orchestrator.policy.notifyReplyRefused(describePurpose(purpose), chatKey, verdict.reason);
+      return verdict;
+    },
     contextIdle: input => {
       let agent: ReturnType<typeof registry.resolve> | undefined;
       try { agent = input.agentName === undefined ? registry.list()[0] : registry.resolve(input.agentName); }
@@ -1864,14 +1876,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         } catch {
           // Not an agent: the name is whatever moved it.
         }
-        void channels.pushQuestionToChat(chatKey, {
-          agentName,
-          question: `${task.id}「${task.title}」卡住了：${last.note}`,
-          options: last.options,
-        });
+        const question = `${task.id}「${task.title}」卡住了：${last.note}`;
+        void channels.pushQuestionToChat(chatKey, { agentName, question, options: last.options }, { kind: "attention", ref: task.id, question });
         return;
       }
-      void channels.pushToChat(chatKey, line);
+      void channels.pushToChat(chatKey, line, { kind: "notice", about: `board: ${task.id} ${task.status}` });
     });
   }
 
@@ -2040,7 +2049,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       log(`delivering an answer owed since ${owed.at} to ${owed.chatKey}`);
       const late = `晚到了一步——这个在我重启时做完的:\n\n${reply}`;
       try {
-        await channels.pushToChat(owed.chatKey, late);
+        await channels.pushToChat(owed.chatKey, late, { kind: "answer", deliveryId: owed.id });
         // Closed by the id the request carried. It matters: the sweep below would
         // otherwise reopen a task whose answer had just been handed over and ask the
         // person to request it again.
@@ -2087,7 +2096,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           log(`rescued ${stuck.task.id} but cannot reach ${stuck.conversation}: no chat recorded`);
           continue;
         }
-        void channels.pushToChat(chatKey, message).catch((error: unknown) => {
+        void channels.pushToChat(chatKey, message, { kind: "notice", about: `rescued ${stuck.task.id}` }).catch((error: unknown) => {
           // Not swallowed. This is the notice that exists so an interrupted request is
           // not lost, and losing *it* silently is the same failure one level up.
           log(
@@ -2110,7 +2119,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     for (const [chatKey, hour] of Object.entries(configured)) {
       if (now.getHours() !== hour || digestsSent.get(chatKey) === today) continue;
       digestsSent.set(chatKey, today);
-      void channels.pushToChat(chatKey, digestFor(chatKey));
+      void channels.pushToChat(chatKey, digestFor(chatKey), { kind: "notice", about: "daily digest" });
     }
   }, 10 * 60_000);
   digestTimer.unref?.();
@@ -2175,7 +2184,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // Said whatever the day's budget is — this is the host reporting what it just did
       // on somebody's behalf, and a silent default is the thing docs/51 forbids. It still
       // counts against the room's budget, so the nudges know the room was spoken to.
-      if (askedIn !== undefined) void chats?.pushToChat(askedIn, expiry.toChat).then(() => followUps.record(askedIn)).catch((error: unknown) => log(`question: could not tell ${askedIn} (${error instanceof Error ? error.message : String(error)})`));
+      if (askedIn !== undefined) void chats?.pushToChat(askedIn, expiry.toChat, { kind: "notice", about: `question ${question.id} expired` }).then(() => followUps.record(askedIn)).catch((error: unknown) => log(`question: could not tell ${askedIn} (${error instanceof Error ? error.message : String(error)})`));
       else if (question.conversation !== "main") log(`question: expired in ${question.conversation} but no chat is recorded for it; the ledger has it`);
       broadcast({ type: "question_expired", agentId: question.agentId, agentName: question.agentName, question: question.question, verdict: expiry.verdict });
       // What the host did on a person's behalf, recorded where it can be asked about
@@ -2237,7 +2246,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       }
       const target = chats;
       followUps.reserve(chatKey);
-      void target.tryPushToChat(chatKey, message.text).finally(() => followUps.release(chatKey)).then(result => {
+      void target.tryPushToChat(chatKey, message.text, { kind: "notice", about: "follow-up sweep" }).finally(() => followUps.release(chatKey)).then(result => {
         if (!result.delivered) {
           log(`tasks: ${chatKey} was not told (${result.why ?? "no reason given"}); nothing counted`);
           return;
@@ -6847,7 +6856,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             log(`console message to ${conversation} stays on the web: no chat recorded for it`);
           }
           if (chatKey !== undefined) {
-            void channels.pushToChat(chatKey, `〔控制台〕${text}`);
+            void channels.pushToChat(chatKey, `〔控制台〕${text}`, { kind: "notice", about: "console" });
           }
 
           // Echo the prompt so every connected page shows it, then answer
@@ -6872,7 +6881,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               // from the transcript, the same way the channel path recovers an answer.
               if (chatKey !== undefined) {
                 const said = orchestrator.replySince(agentId, before, conversation);
-                if (said !== "") void channels.pushToChat(chatKey, said);
+                if (said !== "") void channels.pushToChat(chatKey, said, { kind: "notice", about: "console reply" });
               }
             })
             // Teammates woken by this turn are still working; let them finish so
