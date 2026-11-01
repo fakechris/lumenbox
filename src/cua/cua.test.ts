@@ -340,11 +340,15 @@ test("a click that repainted its neighbourhood is observed_change, and one that 
   const taken = await executor.execute([{ action: "click", coordinate: [400, 300] }]);
   assert.equal(taken.effect, "observed_change");
   assert.match(taken.effectDetail ?? "", /observed_change 100\.0%/);
+  assert.equal(taken.progress?.delivery, "delivered_verified", "the screen answered the click (INV-1480)");
 
   const blind = new ScriptedExecutor();
   blind.frames = [null];
   const unseen = await blind.execute([{ action: "click", coordinate: [400, 300] }]);
   assert.equal(unseen.effect, "unverifiable");
+  assert.equal(unseen.progress?.delivery, "delivered_unverified", "the click went out; nothing showed whether it took");
+  const looked = await new ScriptedExecutor().execute([{ action: "screenshot" }]);
+  assert.equal(looked.progress?.delivery, "not_delivered", "a read sends no input");
   // The action still ran: a failed capture must never fail the click.
   assert.deepEqual(blind.ran, ["click"]);
 });
@@ -557,7 +561,7 @@ test("an interrupted batch carries its completed prefix instead of the requested
     { action: "click", coordinate: [1, 1] }, { action: "type", text: "abc" }, { action: "key", key: "Return" },
   ]), (error: unknown) => {
     assert.ok(error instanceof ComputerExecutionError);
-    assert.deepEqual(error.progress, { executed_count: 1, failed_at: 1, dispatch: "partial" });
+    assert.deepEqual(error.progress, { executed_count: 1, failed_at: 1, dispatch: "partial", delivery: "delivery_uncertain" });
     return /fixture delivery lost/.test(error.message);
   });
   assert.deepEqual(executor.ran, ["click"]);

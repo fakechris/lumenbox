@@ -251,7 +251,7 @@ Every \`computer\` and \`browser_*\` result opens with a verdict: **ok**, **fail
 before it ran — the same call gets the same answer, so change what you are doing or ask.
 Unknown is never success: the box went quiet, the capture failed, or the page could not be
 read, and the action may or may not have landed. Look before you act again, and never
-repeat a write — a send, a submit, a delete — on the strength of unknown. A wait reports
+repeat a write — a send, a submit, a delete — on the strength of unknown. A \`computer\` result also says **Delivery**: only not_delivered may be sent again as it was; anything else means the input went out, so look first. A wait reports
 satisfied, unsatisfied, or unknown; only unsatisfied means the thing did not appear.
 A \`computer\` result also measures each write — click, key, type, drag — by comparing
 the pixels around the point before and after: **observed_change**, **partial**,

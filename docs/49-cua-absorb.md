@@ -76,6 +76,7 @@
 - 在 `browser-service` 里对 act 目标做确定性检测：按钮/表单文本命中支付、下单、发布、删除、清空、授权、同意等词表（中英），或"通用确认按钮相邻金额"的启发式；命中即返回 `refused` 并向 host 抛 `approval_needed` 事件，走现有 policy gate 与线内审批卡片（INV-107）。
 - `computer` 工具进入 `auto-review` 的 reviewed class：坐标点击前 host 先用当前截图 + 意图做 shadow 审查，enforce 模式下高风险拦下。
 - 命中敏感目标时禁止任何自动重试（防重复下单）。
+- **送达五态（INV-1480，2026-11-01）。** 自动重试不再按动作类别（read / idempotent / unsafe）判，按本批证据判：`progress.delivery`（`src/cua/delivery.ts`）= `not_delivered`（refused 或首个写之前就失败）/ `delivery_uncertain`（部分写出后失败）/ `delivered_unverified`（写出，没看到任何证据）/ `delivered_verified`（写出，且邻域像素变了或后置条件有结论——送达不等于应用已持久化）/ `unknown`（下发后盒子没回音）。`afterTimeout(declaration, input, attempt, delivery)` 有 delivery 时只在 `not_delivered` 放行一次重试，其余一律不重试并说明理由（toggle 类"类别幂等、实例不幂等"由此判对）；没有 delivery 字段的旧结果沿用类别规则。工具结果文本多一行 `Delivery: …`，prompt 里加了一句：只有 not_delivered 可以原样再发。本条没有引入任何自动重试：桌面动作今天没有自动重试路径，这里给出的是裁决与给模型的话。
 - 诚实列出绕过面：`form.submit()`、页内 fetch、shell 里的 curl 不在这道门里，由 B3 和 shell 守卫兜底。
 - 验收：fixture 页面上的"立即支付"按钮被 refused 且出现审批卡；同页普通按钮不触发；`auto-review.test` 覆盖 computer 分支；eval-auto-review 的 shadow 统计加入 computer。
 
