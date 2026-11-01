@@ -455,13 +455,16 @@ test("list_elements scales the tree to API space and remembers where each contro
   // The click measures its effect at the control's centre, like any click.
   executor.frames = [flat(10), flat(90), flat(90)];
   const ref = listed.elements![2]!.ref;
-  const clicked = await executor.execute([{ action: "click_element", ref }]);
+  const clicked = await executor.execute([{ action: "click_element", ref, observation_id: listed.elementsObservationId }]);
   assert.deepEqual(executor.clicks, [{ action: "click_element", ref }]);
   assert.equal(clicked.effect, "observed_change");
   assert.match(clicked.effectDetail ?? "", /click_element@\(300,48\)/, "measured at the entry's centre, in API space");
 
-  // A ref from nowhere is a failure that names the fix, not a click somewhere.
-  await assert.rejects(executor.execute([{ action: "click_element", ref: "a9" }]), /STALE_OBSERVATION/);
+  // A ref from nowhere is a failure that names the fix, not a click somewhere; so is a ref without its observation.
+  const again = await executor.execute([{ action: "list_elements" }]);
+  await assert.rejects(executor.execute([{ action: "click_element", ref: "a9", observation_id: again.elementsObservationId }]), /STALE_OBSERVATION/);
+  await assert.rejects(executor.execute([{ action: "click_element", ref: again.elements![2]!.ref }]), /STALE_OBSERVATION: element actions need the observation_id/);
+  assert.equal(executor.clicks.length, 1);
 });
 
 test("an app with no tree is said in words, and the batch is unknown, not an empty success", async () => {
@@ -481,37 +484,47 @@ test("failed/new observations cannot reuse an earlier element token", async () =
   const oldRef = first.elements![0]!.ref;
   const second = await executor.execute([{ action: "list_elements" }]);
   assert.notEqual(second.elements![0]!.ref, oldRef);
-  await assert.rejects(executor.execute([{ action: "click_element", ref: oldRef }]), /STALE_OBSERVATION/);
+  await assert.rejects(executor.execute([{ action: "click_element", ref: oldRef, observation_id: first.elementsObservationId }]), /STALE_OBSERVATION/);
+  await assert.rejects(executor.execute([{ action: "click_element", ref: second.elements![0]!.ref, observation_id: first.elementsObservationId }]), /STALE_OBSERVATION/, "a ref with another outline's id is not resolved either");
   const fresh = await executor.execute([{ action: "list_elements" }]);
   executor.tree = undefined;
   await executor.execute([{ action: "list_elements" }]);
-  await assert.rejects(executor.execute([{ action: "click_element", ref: fresh.elements![0]!.ref }]), /STALE_OBSERVATION/);
+  await assert.rejects(executor.execute([{ action: "click_element", ref: fresh.elements![0]!.ref, observation_id: fresh.elementsObservationId }]), /STALE_OBSERVATION/);
   assert.equal(executor.clicks.length, 0);
 });
 
-test("a moved, disabled or replaced native target refuses before input", async () => {
-  for (const mutate of [
-    (tree: AxOutput) => { tree.window.identity = "replacement-window"; },
-    (tree: AxOutput) => { tree.elements[0]!.x += 100; },
-    (tree: AxOutput) => { tree.elements[0]!.identity = "replacement-control"; },
-    (tree: AxOutput) => { tree.elements[0]!.states = ["disabled"]; },
-  ]) {
+test("a moved, disabled, removed or duplicated native target refuses before input, each with its own code (INV-1478)", async () => {
+  for (const [mutate, code] of [
+    [(tree: AxOutput) => { tree.window.identity = "replacement-window"; }, /STALE_OBSERVATION: the observed window/],
+    [(tree: AxOutput) => { tree.elements[0]!.x += 100; }, /STALE_REF: menu "File" moved or changed/],
+    [(tree: AxOutput) => { tree.elements[0]!.identity = "replacement-control"; }, /STALE_REF: menu "File" is no longer in the window/],
+    // The row the model saw was deleted and the next row took its place and its rectangle: the ref must not land there.
+    [(tree: AxOutput) => { tree.elements.splice(0, 1); tree.elements[0]!.x = 10; tree.elements[0]!.y = 40; tree.elements[0]!.width = 40; tree.elements[0]!.height = 20; }, /STALE_REF: .*no longer in the window/],
+    [(tree: AxOutput) => { tree.elements[0]!.states = ["disabled"]; }, /STALE_REF: menu "File" is disabled now/],
+    [(tree: AxOutput) => { tree.elements.push({ ...tree.elements[0]! }); }, /AMBIGUOUS_TARGET: 2 controls in the window answer to menu "File"/],
+  ] as const) {
     const executor = new TreeExecutor({ measureEffect: false });
     const listed = await executor.execute([{ action: "list_elements" }]);
     const tree = JSON.parse(AX_SAMPLE);
     mutate(tree);
     executor.tree = JSON.stringify(tree);
-    await assert.rejects(executor.execute([{ action: "click_element", ref: listed.elements![0]!.ref }]), /STALE_OBSERVATION/);
+    await assert.rejects(executor.execute([{ action: "click_element", ref: listed.elements![0]!.ref, observation_id: listed.elementsObservationId }]), code);
     assert.equal(executor.clicks.length, 0);
   }
+  // Unchanged, the same ref clicks.
+  const executor = new TreeExecutor({ measureEffect: false });
+  const listed = await executor.execute([{ action: "list_elements" }]);
+  await executor.execute([{ action: "click_element", ref: listed.elements![0]!.ref, observation_id: listed.elementsObservationId }]);
+  assert.equal(executor.clicks.length, 1);
 });
 
 test("a write consumes element references, including a delayed second click", async () => {
   const executor = new TreeExecutor({ measureEffect: false });
   const listed = await executor.execute([{ action: "list_elements" }]);
   const ref = listed.elements![0]!.ref;
-  await executor.execute([{ action: "click_element", ref }]);
-  await assert.rejects(executor.execute([{ action: "click_element", ref }]), /STALE_OBSERVATION/);
+  const observation_id = listed.elementsObservationId;
+  await executor.execute([{ action: "click_element", ref, observation_id }]);
+  await assert.rejects(executor.execute([{ action: "click_element", ref, observation_id }]), /STALE_OBSERVATION/);
   assert.equal(executor.clicks.length, 1);
 });
 
@@ -559,7 +572,7 @@ test("native postconditions distinguish matching, missing, ambiguous and unreada
   const read = await executor.execute([{ action: "list_elements" }]);
   const element = read.elements![0]!;
   const expect = { element: { role: element.role, name: element.name, states: [...element.states] } };
-  const matched = await executor.execute([{ action: "click_element", ref: element.ref }], { expect });
+  const matched = await executor.execute([{ action: "click_element", ref: element.ref, observation_id: read.elementsObservationId }], { expect });
   assert.equal(matched.verification?.status, "satisfied");
   const missing = await executor.execute([{ action: "screenshot" }], { expect: { element: { role: "button", name: "does not exist" } } });
   assert.equal(missing.verification?.status, "unsatisfied");
@@ -583,7 +596,7 @@ test("native semantics require an advertised capability, never click as a fallba
   }
   const executor = new Semantic({ measureEffect: false });
   let listed = await executor.execute([{ action: "list_elements" }]);
-  await assert.rejects(executor.execute([{ action: "invoke_element", ref: listed.elements![0]!.ref }]), /UNSUPPORTED_ACTION/);
+  await assert.rejects(executor.execute([{ action: "invoke_element", ref: listed.elements![0]!.ref, observation_id: listed.elementsObservationId }]), /UNSUPPORTED_ACTION/);
   assert.equal(executor.calls, 0);
   assert.equal(executor.clicks.length, 0);
   const raw = JSON.parse(AX_SAMPLE) as AxOutput;
@@ -591,9 +604,10 @@ test("native semantics require an advertised capability, never click as a fallba
   executor.tree = JSON.stringify(raw);
   listed = await executor.execute([{ action: "list_elements" }]);
   const ref = listed.elements![0]!.ref;
-  const result = await executor.execute([{ action: "set_value", ref, value: "new value" }]);
+  const observation_id = listed.elementsObservationId;
+  const result = await executor.execute([{ action: "set_value", ref, observation_id, value: "new value" }]);
   assert.equal(result.verification?.status, "satisfied");
   assert.equal(executor.calls, 1);
   assert.equal(executor.clicks.length, 0);
-  await assert.rejects(executor.execute([{ action: "set_value", ref, value: "again" }]), /STALE_OBSERVATION/);
+  await assert.rejects(executor.execute([{ action: "set_value", ref, observation_id, value: "again" }]), /STALE_OBSERVATION/);
 });
