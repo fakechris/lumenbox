@@ -180,3 +180,28 @@ digests, question expiries, rescue notices and console relays are `notice`; a la
 recovered from the ledger is `answer`; a blocked task's card is `attention`. Nothing in the
 host sends a `result` yet — the gate is there for the agent-initiated delivery that INV-1462
 brings — so today its teeth show on `attention` and `answer`.
+
+### The receipt under each push (INV-1460, same day)
+
+The gate above decides whether a message may go; `src/host/outbox.ts` records whether it did.
+Every host push gets a receipt in `~/.agentbox/outbox.jsonl` under an id derived from the chat,
+the purpose and the words (a notice adds the day), written before the door is called:
+
+- **The same message is never sent twice.** A second push with the same id is answered
+  `{delivered: true, duplicate: true}` and sends nothing — which is what makes a retry safe,
+  and why the Feishu door's own "never blindly retry" stays true: it does not, the outbox does.
+- **A blink is retried; a verdict is not.** A failed send is counted on the receipt and tried
+  again after 5 s, then 10 s, up to three attempts (`src/channels/outbox-sender.ts`). A door's
+  answer that the conversation cannot take the message — not found, removed, no permission — is
+  `dropped` with its reason, and that id is never queued again. After three failures the receipt
+  stays `pending` and appears under *what needs me* as **undeliverable**, with the last error.
+- **In order per chat.** Each chat has one chain; a message waits for the one before it,
+  retries included, so an acknowledgement never arrives after the result it precedes.
+- **A restart finishes the queue.** Pending receipts keep their text, and the server sends them
+  again through the door they were for before anything else — the ones past their attempts are
+  left for a person.
+
+The deliveries ledger (`deliveries.jsonl`) is unchanged and sits one level up: it knows an
+*answer* is owed for a request and rebuilds it from the transcript; the outbox knows whether
+the *message* carrying it went. The `answer` purpose reads the first; the receipt records the
+second.

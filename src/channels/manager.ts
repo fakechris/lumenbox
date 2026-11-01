@@ -26,6 +26,7 @@
 
 import { mandateNote, reauthorisationNeeded } from "./mandate-text.ts";
 import { describePurpose, type OutboundPurpose } from "../host/outbound.ts";
+import type { OutboxSender } from "./outbox-sender.ts";
 import { parseAcceptance, parseStopRequest } from "./verbs.ts";
 export { parseAcceptance, parseStopRequest } from "./verbs.ts";
 import { roomDecision } from "./identity.ts";
@@ -398,6 +399,7 @@ export interface ChannelManagerDeps {
   incarnationOf?: (chatKey: string) => number;
   /** The speaking right of a host-initiated push (INV-1459): refused with a reason when its purpose's claim does not hold. */
   outbound?: (purpose: OutboundPurpose, chatKey: string) => { allow: true } | { allow: false; reason: string };
+  outbox?: OutboxSender; // Sends under a receipt, retried and ordered per chat (INV-1460).
   /**
    * The door's own default (docs/22 §2): who answers a message that names nobody,
    * per adapter. Absent, or undefined for an adapter, falls through to the
@@ -1296,23 +1298,19 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       this.deps.log(`channel: ${why}`);
       return Promise.resolve({ delivered: false, why });
     }
-    return adapter
-      .sendToChat(chatKey, text)
-      .then(() =>
-        // The same file duty the reply door has. A scheduled report that says "the
-        // long version is at «path»" into a chat that cannot open box paths was the
-        // measured failure (2026-09-01): this door pushed words and never files.
-        this.deliverFiles(adapter, chatKey, chatKey, text, undefined, line =>
-          adapter.sendToChat === undefined ? Promise.resolve() : adapter.sendToChat(chatKey, line)
-        )
-      )
-      .then(() => ({ delivered: true }))
-      .catch((error: unknown) => {
-        const why = `could not send to ${chatKey} — ${error instanceof Error ? error.message : String(error)}`;
-        this.deps.log(`channel ${adapter.name}: ${why}`);
-        return { delivered: false, why };
-      });
+    // The same file duty the reply door has: a report that names its long version by box path
+    // into a chat that cannot open it was the measured failure (2026-09-01).
+    const files = () => this.deliverFiles(adapter, chatKey, chatKey, text, undefined, line => adapter.sendToChat === undefined ? Promise.resolve() : adapter.sendToChat(chatKey, line));
+    if (this.deps.outbox !== undefined) return this.deps.outbox.send({ adapter: { sendToChat: (key, line) => adapter.sendToChat!(key, line) }, chatKey, text, purpose }, files);
+    return adapter.sendToChat(chatKey, text).then(files).then(() => ({ delivered: true })).catch((error: unknown) => {
+      const why = `could not send to ${chatKey} — ${error instanceof Error ? error.message : String(error)}`;
+      this.deps.log(`channel ${adapter.name}: ${why}`);
+      return { delivered: false, why };
+    });
   }
+
+  /** The door a chat key addresses, for the outbox to resume through after a restart. */
+  adapterFor(chatKey: string): ChannelAdapter | undefined { return this.adapters.find(a => chatKey.startsWith(`${a.name}:`)); }
 
   /**
    * The files a delivered text owes its chat: whatever sits in the chat's outbox,
