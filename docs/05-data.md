@@ -736,6 +736,21 @@ it alone — a skill with a helper script needs the script where `bash` can run 
 the one it picks. A dozen recipes in every request would cost more than the conversation, which is the
 same reasoning that governs memory and compaction here.
 
+**The index has a ceiling, and each description a window (INV-760).** `SKILL_INDEX_CHARS`
+(13,500) is the most the index may take; past it a skill is named, not described — and a skill
+that is only named is rarely opened (INV-715). The 41 skills a fresh box starts with took 12,816
+of it on 2026-11-01, so the next two would have filled it. Rather than raise the ceiling (a
+paragraph per skill, every turn, for every agent), `indexDescription` folds each description
+to the sentences the index is read for: the opening one, the first that says *when* or names
+triggers, the first that says what it is *not* for (including "use other-skill"), then the rest
+in order while they fit `INDEX_DESCRIPTION_CHARS` (240), cut at a word with a mark. The 41 take
+10,651; the SKILL.md keeps its full description for the agent that opens it. A test renders the
+shipped skills plus five more and fails if any is left to a bare name. Measured against the
+skill evals (`npm run scenario -- --skills --runs 3`, 24 starters × trigger + no-trigger, 3
+runs each, MiniMax-M3.1-Flash, 2026-11-01): trigger 72/72 → 72/72, no-trigger 72/72 → 72/72;
+mean system+tools 15,543 → 15,562 tokens, because the 24 starters are mostly under the window
+already — the fold's 2,165 characters are saved on the hub packages, which the evals do not load.
+
 Frontmatter is parsed with about ten lines rather than a YAML dependency. The failure mode of a real
 parser is worse here: it rejects a file a person hand-edited slightly wrong, where this treats the
 whole thing as a body and the skill still works under a name derived from its directory. A skill with

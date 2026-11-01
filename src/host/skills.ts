@@ -53,6 +53,12 @@ export const SKILL_FILENAME = "SKILL.md";
  * The index was 12,000 until the skills a fresh box starts with alone took 11,577 of it; five
  * packages more (2026-10-02) would have pushed four of them out to a bare name. 13,500 holds
  * what ships with room left for skills an agent writes; a test fails when it no longer does.
+ *
+ * By 2026-11-01 the 41 shipped skills took 12,816 of the 13,500 — two more and the next would be
+ * a bare name again. Raising the limit buys a paragraph per skill at every turn; what the index
+ * is read for is one decision, so each description is folded to the sentences that decide
+ * (`indexDescription`, INDEX_DESCRIPTION_CHARS) and the 41 take 10,651. Measured on the skill
+ * evals (INV-760, docs/05 §3.1a): see the numbers there before touching either limit.
  */
 export const MAX_DESCRIPTION_CHARS = 400;
 export const SKILL_INDEX_CHARS = 13_500;
@@ -498,7 +504,7 @@ export function renderSkills(skills: readonly Skill[]): string {
       skill.helpers.length === 0
         ? ""
         : ` — with ${skill.helpers.join(", ")} in the same directory`;
-    const line = `- **${skill.name}** — ${skill.description}${when}\n  \`${skill.path}\`${helpers}`;
+    const line = `- **${skill.name}** — ${indexDescription(skill.description)}${when}\n  \`${skill.path}\`${helpers}`;
     // Past the budget the rest are named, not described: the agent still knows they exist and where,
     // which is what the index is for, and the prompt stops growing with the directory.
     if (used + line.length > SKILL_INDEX_CHARS) {
@@ -780,4 +786,44 @@ export class SkillCache {
     await this.inFlight;
     return this.loaded;
   }
+}
+
+/** The most of one description the index carries (INV-760): enough for "when", not the paragraph. */
+export const INDEX_DESCRIPTION_CHARS = 240;
+
+const WHEN_SENTENCE = /\bwhen\b|\bwhenever\b|\buse (this|it|for)\b|\btriggers?\b|当|用于|适用|什么时候|触发/i;
+// "Not for X", "use other-skill", "that is other-skill": the sentence that points elsewhere.
+const NOT_SENTENCE = /\bnot (for|when|if|to be used)\b|\bdo not\b|\bdon't\b|\bnever\b|\bunless\b|\binstead\b|\b(use|that is|see) [a-z0-9]+(-[a-z0-9]+)+\b|不要|不适用|不用于|不是用来/i;
+
+/**
+ * What of a description reaches the index. A description is read for one decision — does this
+ * skill apply to what was just asked — so the index keeps the sentences that answer it first:
+ * the opening one, the first that says *when* (or names triggers), and the first that says what
+ * it is *not* for; then the rest in order while they fit. Cut at a word past the limit, with a
+ * mark, so a long description still reads as a sentence and not as a stump.
+ */
+export function indexDescription(description: string, max = INDEX_DESCRIPTION_CHARS): string {
+  const whole = description.trim().replace(/\s+/g, " ");
+  if (whole.length <= max) return whole;
+  const sentences = whole.split(/(?<=[.!?。！？])\s+/).filter(sentence => sentence !== "");
+  const kept = new Set<string>();
+  const take = (sentence: string | undefined) => {
+    if (sentence !== undefined) kept.add(sentence);
+  };
+  take(sentences[0]);
+  if (!WHEN_SENTENCE.test(sentences[0] ?? "")) take(sentences.find(sentence => WHEN_SENTENCE.test(sentence)));
+  take(sentences.find(sentence => NOT_SENTENCE.test(sentence)));
+  let length = [...kept].reduce((sum, sentence) => sum + sentence.length + 1, -1);
+  for (const sentence of sentences) {
+    // A stump left by the 400-character cut says nothing worth a line.
+    if (kept.has(sentence) || sentence.endsWith("…") || length + 1 + sentence.length > max) continue;
+    kept.add(sentence);
+    length += 1 + sentence.length;
+  }
+  const joined = sentences.filter(sentence => kept.has(sentence)).join(" ");
+  if (joined.length <= max) return joined;
+  const cut = joined.slice(0, max - 1);
+  const atWord = cut.lastIndexOf(" ");
+  // A word boundary only when there is one in the last third: Chinese has none, and an early one would waste the budget.
+  return `${atWord > max * 0.66 ? cut.slice(0, atWord) : cut}…`;
 }
