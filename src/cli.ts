@@ -47,6 +47,7 @@ import { Orchestrator, STARTER_TEAM } from "./host/orchestrator.ts";
 import {
   createClient,
   describeProvider,
+  keylessStart,
   type ProviderProfile,
   providerNames,
   resolveProvider,
@@ -1066,18 +1067,9 @@ async function cmdChat(argv: string[]): Promise<number> {
     return 1;
   }
 
-  if (
-    provider.keyEnv === "ANTHROPIC_API_KEY" &&
-    !process.env.ANTHROPIC_API_KEY &&
-    !process.env.ANTHROPIC_AUTH_TOKEN
-  ) {
-    // The SDK also reads an `ant auth login` profile, so this is a hint, not a gate.
-    out(
-      dim(
-        "No ANTHROPIC_API_KEY set — relying on an `ant auth login` profile. " +
-          "Run `ant auth status` if requests fail."
-      )
-    );
+  // The SDK also reads an `ant auth login` profile, so this is a hint, not a gate.
+  if (provider.keyEnv === "ANTHROPIC_API_KEY" && !process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
+    out(dim("No ANTHROPIC_API_KEY set — relying on an `ant auth login` profile. Run `ant auth status` if requests fail."));
   }
 
   const noBox = flags.has("--no-box");
@@ -1371,6 +1363,7 @@ async function cmdWeb(argv: string[]): Promise<number> {
     err(error instanceof Error ? error.message : String(error));
     return 1;
   }
+  provider = keylessStart(provider, line => out(dim(line)));
 
   // Make sure there is somebody to talk to before opening a page with an empty
   // sidebar and no explanation.

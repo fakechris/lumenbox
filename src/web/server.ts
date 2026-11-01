@@ -49,6 +49,7 @@ import { mcpServerTools } from "./mcp-tools.ts";
 import { BackupSchedule, backupRoot } from "../host/backup.ts";
 import { Orchestrator } from "../host/orchestrator.ts";
 import { describeProvider, type ProviderProfile } from "../host/provider.ts";
+import { configuredProviders, SEARCH_PROVIDERS } from "../host/web.ts";
 import type { TurnEvent } from "../host/turn.ts";
 import { APP_HTML, LOGIN_HTML } from "./app-html.ts";
 import {
@@ -5344,7 +5345,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             loadConfig().provider,
             providerNames().map(name => resolveProvider(name))
           );
-          send(res, 200, { key, box: boxes.some(box => box.connected), agentTurn, door, review });
+          // Optional, so it is a fact and not a gate: without a search key the WebSearch
+          // tool is withheld entirely and web questions degrade to the box's browser —
+          // a state the card names rather than leaves to be discovered mid-task.
+          const search = configuredProviders().length > 0;
+          send(res, 200, { key, box: boxes.some(box => box.connected), agentTurn, door, review, search });
           return;
         }
 
@@ -5588,6 +5593,18 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                     process.env.ANTHROPIC_AUTH_TOKEN !== undefined),
               };
             }),
+            // The search providers in the same shape as the model presets: which key each
+            // reads, and whether this installation has one. A capability that degrades
+            // silently reads as covered (absences.ts), and the page is where a person
+            // learns it — the CLI prints the same fact to stdout nobody in the desktop
+            // app reads.
+            search: {
+              providers: SEARCH_PROVIDERS.map(provider => ({
+                name: provider.name,
+                keyEnv: provider.keyEnv,
+                keyPresent: (process.env[provider.keyEnv] ?? "") !== "",
+              })),
+            },
           });
           return;
         }
@@ -5653,6 +5670,31 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           else if (body.vision === "auto") envChange.AGENTBOX_VISION = null;
           if (body.summaryModel !== undefined) envChange.AGENTBOX_SUMMARY_MODEL = field(body.summaryModel) ?? null;
           if (key !== undefined && key !== null) envChange[resolveProvider(chosenName).keyEnv] = key;
+          // The search key, under the chosen provider's variable — the same one-variable
+          // rule as the model key, so the page still cannot write arbitrary variables.
+          // An empty choice ("none") clears whichever of the three is set, because a key
+          // nobody wanted is worse than none; a named choice with a blank key changes
+          // nothing, matching the model key's "leave blank to keep" above.
+          if (body.searchProvider !== undefined || body.searchKey !== undefined) {
+            const chosen = typeof body.searchProvider === "string" ? body.searchProvider : "";
+            const searchKey = field(body.searchKey);
+            if (chosen === "") {
+              if (searchKey !== undefined) {
+                send(res, 400, { error: "Pick a search provider for the key, or clear it with none." });
+                return;
+              }
+              for (const provider of SEARCH_PROVIDERS) envChange[provider.keyEnv] = null;
+            } else {
+              const provider = SEARCH_PROVIDERS.find(candidate => candidate.name === chosen);
+              if (provider === undefined) {
+                send(res, 400, {
+                  error: `Unknown search provider "${chosen}". Known: ${SEARCH_PROVIDERS.map(p => p.name).join(", ")}, or none.`,
+                });
+                return;
+              }
+              if (searchKey !== undefined) envChange[provider.keyEnv] = searchKey;
+            }
+          }
 
           const before = loadConfig();
           const path = saveConfig({
