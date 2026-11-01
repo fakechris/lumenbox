@@ -200,7 +200,7 @@ export function failureModes(results: readonly ScenarioResult[]): string[] {
   return [...modes.entries()].sort((x, y) => y[1] - x[1]).map(([mode, n]) => `${mode} ×${n}`);
 }
 
-export function renderReport(profile: AgentProfileForImprove, results: readonly ScenarioResult[], proposals: readonly Proposal[], at: string): string {
+export function renderReport(profile: AgentProfileForImprove, results: readonly ScenarioResult[], proposals: readonly Proposal[], at: string, unreadable?: string): string {
   const passed = results.filter(r => !failed(r)).length;
   const lines = [
     `# Check-up: ${profile.name} — ${at.slice(0, 16).replace("T", " ")}`,
@@ -221,7 +221,7 @@ export function renderReport(profile: AgentProfileForImprove, results: readonly 
     ].join("\n")),
     "## Proposal",
     "",
-    proposals.length === 0 ? "Nothing to change: no scenario failed, or the model proposed no edit." : "Not applied. Each diff is against the standing file as it was when this ran; apply what you agree with.",
+    proposals.length === 0 ? (unreadable !== undefined ? `The model answered, but not as a proposal this could read. What it said:\n\n> ${unreadable.replace(/\n/g, "\n> ")}` : "Nothing to change: no scenario failed, or the model proposed no edit.") : "Not applied. Each diff is against the standing file as it was when this ran; apply what you agree with.",
     "",
     ...proposals.flatMap(p => [`### ${p.file}`, "", p.why, "", "```diff", unifiedDiff(p.file, profile.standing[p.file] ?? "", p.text).trimEnd(), "```", ""]),
   ];
@@ -244,12 +244,15 @@ export async function improveAgent(agentName: string, deps: ImproveDeps, options
     log(`  ${index + 1}. ${scenario.kind}: ${verdict.category}, judge ${judged.score}/5`);
   }
   const failures = results.filter(failed);
-  const proposals = failures.length === 0 ? [] : parseProposals(await deps.ask(proposalPrompt(profile, failures))).filter(p => p.text.trim() !== (profile.standing[p.file] ?? "").trim());
+  const proposed = failures.length === 0 ? undefined : await deps.ask(proposalPrompt(profile, failures));
+  const proposals = parseProposals(proposed).filter(p => p.text.trim() !== (profile.standing[p.file] ?? "").trim());
+  // A proposal the model wrote but this could not read is said, not swallowed: the person sees what came back.
+  const unreadable = proposed !== undefined && proposals.length === 0 && parseProposals(proposed).length === 0 ? proposed.trim().slice(0, 600) : undefined;
   const at = now.toISOString();
   const dir = join(deps.reportDir, profile.name.replace(/[^A-Za-z0-9_-]+/g, "-"));
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const reportPath = join(dir, `${at.replace(/[:.]/g, "-")}.md`);
-  writeFileSync(reportPath, renderReport(profile, results, proposals, at), { mode: 0o600 });
+  writeFileSync(reportPath, renderReport(profile, results, proposals, at, unreadable), { mode: 0o600 });
   const cases: string[] = [];
   if (deps.evalsDir !== undefined) {
     for (const [index, result] of failures.entries()) {
@@ -287,7 +290,8 @@ export async function cmdImprove(argv: string[], out: (line: string) => void = l
       return { agentId: agent.id, name: agent.profile.name, description: agent.profile.description ?? "", standing: readStanding(registry.dirFor(agent.id), agent.profile.name), skills, recentRequests: recent };
     },
     ask: async prompt => {
-      const response = await cheap.client.messages.create({ model: cheap.profile.model, max_tokens: 2000, messages: [{ role: "user", content: prompt }] });
+      // Enough for three whole standing files in one JSON answer; a cut-off answer is an unreadable proposal.
+      const response = await cheap.client.messages.create({ model: cheap.profile.model, max_tokens: Math.min(6000, cheap.profile.maxTokens), messages: [{ role: "user", content: prompt }] });
       return response.content.map(part => (part.type === "text" ? part.text : "")).join("");
     },
     runIsolated: async (agentId, request, index) => {
