@@ -28,7 +28,9 @@ export type PausedReason =
   | "deadline"
   | "budget"
   | "needs_person"
-  | "error";
+  | "error"
+  /** Two continuations in a row judged to be trying a hypothesis the ledger already holds (INV-1475). */
+  | "repeating";
 
 /** A checklist item: what "done" is made of, and — where the person confirmed it — how it is checked. */
 export interface ChecklistItem {
@@ -69,6 +71,8 @@ export interface Pursuit {
     errorStreak?: number;
     /** What the last continuation left behind: hash of plan + todos + workspace manifest. */
     lastStateHash?: string;
+    /** Continuations in a row judged to repeat a hypothesis already on the ledger (INV-1475). */
+    repeatStreak?: number;
     rejections: number;
     activeMs: number;
     cost: number;
@@ -90,6 +94,8 @@ export interface Pursuit {
   };
   /** The channel message that created it — the idempotency key for a resent `/goal`. */
   sourceMessageId?: string;
+  /** What each continuation tried and how it came out (INV-1475); at most EXPERIMENT_LEDGER_MAX, oldest dropped. */
+  experiments?: Experiment[];
   /** The chat it was set in, so the loop can tell the person when the goal stops or finishes. */
   chatKey?: string;
   createdAt: string;
@@ -271,6 +277,7 @@ export function describePursuit(task: Pick<Task, "id" | "title" | "pursuit">): s
     });
   }
   if (pursuit.lastVerdict !== undefined) lines.push(`上次验证：${pursuit.lastVerdict.passed ? "通过" : "未通过"}${pursuit.lastVerdict.nextAction !== undefined ? `，下一步：${pursuit.lastVerdict.nextAction}` : ""}`);
+  if ((pursuit.experiments ?? []).length > 0) lines.push("实验账本：", ...ledgerLines(pursuit));
   return lines.join("\n");
 }
 
@@ -518,6 +525,11 @@ export function continuationNotice(task: Pick<Task, "id" | "pursuit">, seq: numb
   if (pursuit.lastVerdict !== undefined) {
     lines.push(`Last verification: ${pursuit.lastVerdict.passed ? "passed" : "not passed"}.${pursuit.lastVerdict.nextAction !== undefined ? ` Next: ${pursuit.lastVerdict.nextAction}` : ""}`, "");
   }
+  if ((pursuit.experiments ?? []).length > 0) {
+    lines.push("Experiments so far (what each continuation tried, and how it came out):");
+    for (const line of ledgerLines(pursuit)) lines.push(escapeXml(line));
+    lines.push("Do not repeat a hypothesis the ledger shows failed. If you have no new hypothesis to try, report that you are blocked and what would unblock you, rather than continuing.", "");
+  }
   const budget = pursuit.limits.budget;
   if (budget !== undefined && pursuit.spent.cost >= budget * BUDGET_WARN_AT) {
     lines.push(`Budget: ${Math.round(pursuit.spent.cost)} of ${budget} input-token equivalents spent (${Math.round((pursuit.spent.cost / budget) * 100)}%). When it is reached the goal pauses and reports what is done; make what remains count, and claim completion as soon as it is true.`, "");
@@ -557,6 +569,7 @@ export function stopNotice(task: Pick<Task, "id" | "pursuit">, reason: PausedRea
     budget: "预算到了上限",
     needs_person: "需要你来决定",
     error: "连续几次续跑都失败了",
+    repeating: "连续两轮都在重复账本里已经试过的假设，没有新路径",
   };
   return `目标 ${task.id} 已暂停：${why[reason]}${detail !== undefined ? `（${detail}）` : ""}。进度和清单留在板上；/goal 查看，/goal resume 继续，/goal clear 放弃。`;
 }
@@ -664,3 +677,55 @@ export function verdictNotice(task: Pick<Task, "id" | "pursuit">, verdict: GoalV
   return `目标 ${task.id} 的完成申请没有通过验证；它会继续推进${verdict?.nextAction !== undefined ? `，下一步：${verdict.nextAction}` : ""}。`;
 }
 
+
+// ── the experiment ledger (INV-1475) ─────────────────────────────────────────────────────────
+
+/**
+ * What one continuation tried. `kind` is the judgement that matters to the loop: `new` is a
+ * hypothesis not on the ledger, `repeat` is one the ledger already holds, `wrapup` is a
+ * continuation that tried nothing — it reported, tidied or verified.
+ */
+export interface Experiment {
+  n: number;
+  kind: "new" | "repeat" | "wrapup";
+  hypothesis: string;
+  action: string;
+  outcome: string;
+  at: string;
+}
+
+export const EXPERIMENT_LEDGER_MAX = 20;
+
+/** The ledger with one more entry, the oldest dropped past the cap. */
+export function appendExperiment(ledger: readonly Experiment[], entry: Experiment): Experiment[] {
+  return [...ledger, entry].slice(-EXPERIMENT_LEDGER_MAX);
+}
+
+export function ledgerLines(pursuit: Pick<Pursuit, "experiments">): string[] {
+  return (pursuit.experiments ?? []).map(e => `${e.n}. [${e.kind}] ${e.hypothesis} → ${e.action} → ${e.outcome}`);
+}
+
+/** The cheap profile's one question per continuation: what did this round try, and was it new? */
+export function experimentPrompt(objective: string, ledger: readonly Experiment[], finalText: string, n: number): string {
+  const prior = ledger.length === 0 ? "(nothing yet)" : ledger.map(e => `${e.n}. ${e.hypothesis} → ${e.outcome}`).join("\n");
+  return [
+    `An assistant is pursuing a goal over several rounds. Below is the goal, the ledger of what earlier rounds tried, and what round ${n} reported. Say what round ${n} tried as one experiment.`,
+    'Answer with JSON only: {"kind": "new|repeat|wrapup", "hypothesis": "<the idea it tested, one line>", "action": "<what it did, one line>", "outcome": "<what came of it, one line>"}.',
+    "kind is repeat when the hypothesis is one the ledger already holds (same idea, however worded); wrapup when the round tried nothing new — it reported, tidied, or verified; new otherwise.",
+    "", "## Goal", objective.slice(0, 1_000), "", "## Ledger", prior, "", `## Round ${n} reported`, finalText.replace(/\s+/g, " ").slice(0, 3_000),
+  ].join("\n");
+}
+
+export function parseExperiment(text: string | undefined, n: number, at: string): Experiment | undefined {
+  const match = /\{[\s\S]*\}/.exec(text ?? "");
+  if (match === null) return undefined;
+  try {
+    const raw = JSON.parse(match[0]) as { kind?: unknown; hypothesis?: unknown; action?: unknown; outcome?: unknown };
+    const kind = raw.kind === "repeat" || raw.kind === "wrapup" ? raw.kind : "new";
+    const line = (value: unknown) => (typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, 200) : "");
+    if (line(raw.hypothesis) === "" && line(raw.action) === "") return undefined;
+    return { n, kind, hypothesis: line(raw.hypothesis) || "(unstated)", action: line(raw.action) || "(unstated)", outcome: line(raw.outcome) || "(unstated)", at };
+  } catch {
+    return undefined;
+  }
+}

@@ -2,7 +2,7 @@
      title: Goal 模式：一个持久目标、一个有界的续跑循环、一道不归执行者管的完成闸门
      family: decision
      status: current
-     updated: 2026-09-27
+     updated: 2026-11-01
 -->
 # 74. Goal 模式：一个持久目标、一个有界的续跑循环、一道不归执行者管的完成闸门
 
@@ -261,3 +261,17 @@ usage 按权重折算加到 `pursuit.spent.cost`，单位是"折算输入 token"
 
 构建顺序不变。① 的合同补 R1、R7、R8；② 补 R4、R5、R6、R10/R11；③ 补 R2、R3、R12。
 
+
+## 8. 实验账本（INV-1475，2026-11-01）
+
+四道闸里的"停滞"只看 plan + todos + 工作区的 hash 没变，判不出"换了说法再试同一招"。现在每次续跑结束，host
+用便宜档问一个问题——这一轮试了什么假设、做了什么、结果如何、是新假设 / 重复旧假设 / 收尾——答案记进
+`pursuit.experiments`（最多 20 条，最旧的丢）。下一轮的续跑提示附上账本摘要，并要求：不得重复账本里失败过
+的假设；没有新假设就报告 blocked 而不是继续。接了 judge 时，停滞判定改为**连续两轮被判重复**（`repeating`），
+hash 不变本身不再暂停——一轮试了新东西但失败，hash 也不变；没接 judge 时沿用 hash 规则。`/goal` 显示账本。
+
+```
+Task.pursuit.experiments?: [{ n, kind: "new" | "repeat" | "wrapup", hypothesis, action, outcome, at }]
+Task.pursuit.spent.repeatStreak?: number
+pausedReason 增 "repeating"
+```

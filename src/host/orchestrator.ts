@@ -1094,8 +1094,7 @@ export class Orchestrator {
       (agent, inbound, signal, conversation, acknowledge) => this.executeTurn(agent, inbound, signal, conversation, acknowledge),
       event => {
         options.onBusEvent?.(event);
-        // A turn ending is what lets a goal consider its next continuation (INV-770).
-        if (event.type === "turn_finished") this.goalLoop?.onTurnFinished(event.agentId);
+        if (event.type === "turn_finished") this.goalLoop?.onTurnFinished(event.agentId); // a turn ending is what lets a goal consider its next continuation (INV-770)
       },
       inbox,
       true
@@ -1122,6 +1121,7 @@ export class Orchestrator {
         await this.options.deliverToChat?.(chatKey, text, task.assigneeId);
       },
       revalidate: task => this.options.mandateWorld === undefined || this.tasks!.revalidate(task.id, task.requester, this.options.mandateWorld()).status === "ok",
+      judgeExperiment: (prompt, agentId) => this.askCheaply(this.registry.get(agentId), prompt), // the ledger's one question per continuation (INV-1475)
       log: line => console.error(`[goal] ${line}`),
     });
     if (this.tasks !== undefined) this.tasks.onChange(task => this.goalLoop?.onTaskChanged(task));
