@@ -36,7 +36,7 @@ import { createHash } from "node:crypto";
 import { envNumber } from "../config.ts";
 import { credentialIn, credentialRefusal } from "./secret-scan.ts";
 import { type SwitchDeps, switched } from "./jev.ts";
-import { jevSelect } from "./memory-select-jev.ts";
+import { jevSelect, sufficiencySwitched } from "./memory-select-jev.ts";
 
 /** A single thing remembered. One JSON object per line, appended, never edited in place. */
 export interface MemoryRecord {
@@ -895,10 +895,7 @@ export function parseSelection(
   return parsed.selected.length > 0 && chosen.length === 0 ? undefined : chosen;
 }
 
-/**
- * Conservative fallback for prompt builders without a selector. Automatic notes/episodes are
- * not promoted merely because the provider failed. Retractions are resolved before filtering.
- */
+/** Conservative fallback for prompt builders without a selector: automatic notes/episodes are not promoted because the provider failed; retractions are resolved first. */
 export function recallRelevant(
   records: readonly MemoryRecord[], query: string, budget = MEMORY_CHAR_BUDGET, now = Date.now()
 ): MemoryRecall {
@@ -946,8 +943,9 @@ export async function chooseRelevant(options: {
       if (answer !== undefined && read === undefined) options.log?.("the memory selector's answer could not be read; using relevant facts only");
       return read;
     };
-    const chosen = await switched("memory_select", { own, jev: ask => jevSelect(ask, candidates, options.query, MAX_SELECTED), summary: value => value?.map(record => candidates.indexOf(record)) ?? "none" }, options.jev);
-    if (chosen === undefined) return fallback();
+    const selected = await switched("memory_select", { own, jev: ask => jevSelect(ask, candidates, options.query, MAX_SELECTED), summary: value => value?.map(record => candidates.indexOf(record)) ?? "none" }, options.jev);
+    if (selected === undefined) return fallback();
+    const chosen = await sufficiencySwitched(selected, candidates, options.query, MAX_SELECTED, options.jev); // enough, and nothing in the way? (INV-1471)
     // Rejected text must not leak back through either spare body space or the index.
     return { ...recall(chosen, budget, now, undefined, { strictBudget: true }), excluded: deduped.length - chosen.length, method: "model" };
   } catch {
