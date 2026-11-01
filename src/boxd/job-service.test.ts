@@ -140,3 +140,23 @@ test("a caller-minted id is honoured and idempotent; an exit file is written; a 
     cleanup();
   }
 });
+
+test("a running process is adopted as a job (INV-1461): the head of its output leads the log, its exit is recorded like any job's", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-jobs-adopt-"));
+  try {
+    const { spawn } = await import("node:child_process");
+    const jobs = new JobService(dir);
+    const child = spawn("/bin/bash", ["-c", "echo later; exit 3"], { stdio: ["ignore", "pipe", "pipe"] });
+    let settled = 0;
+    const started = jobs.adopt({ child, command: "echo earlier; echo later; exit 3", head: Buffer.from("earlier\n"), onSettled: () => { settled += 1; } });
+    assert.match(started.job_id, /^job-[0-9a-f]{8}$/);
+    const ended = await jobs.wait({ job_id: started.job_id, timeout_ms: 5_000 });
+    assert.equal(ended?.running, false);
+    assert.equal(ended?.exit_code, 3);
+    assert.equal(readFileSync(started.log_path, "utf8"), "earlier\nlater\n");
+    assert.equal(settled, 1);
+    assert.equal(jobs.list().some(job => job.job_id === started.job_id), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

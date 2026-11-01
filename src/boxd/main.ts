@@ -659,10 +659,7 @@ const routes: Record<string, Handler> = {
     // Every shell command, with who asked for it. Nothing recorded this before, so the
     // box could not answer "who ran that" for the one endpoint where the answer matters
     // most. Truncated because a log is not a transcript; the spool files hold output.
-    log(
-      `exec [${body.actor ?? "unlabelled"}]${body.background === true ? " (background)" : ""}: ` +
-        `${body.command.replace(/\s+/g, " ").slice(0, 200)}`
-    );
+    log(`exec [${body.actor ?? "unlabelled"}]${body.background === true ? " (background)" : ""}: ${body.command.replace(/\s+/g, " ").slice(0, 200)}`);
     // Vouched for to the egress proxy for as long as the command runs (INV-784), so the
     // relay's record says which call opened each connection. A job is vouched for until
     // it ends, which is when its connections end.
@@ -685,10 +682,13 @@ const routes: Record<string, Handler> = {
       }
     }
     try {
-      return await runShell(body, environmentForCall(body.call));
-    } finally {
+      // A command past its foreground window is adopted as a job (INV-1461); the call stays vouched for until that job ends.
+      let adopted = false;
+      const result = await runShell(body, environmentForCall(body.call), input => { adopted = true; return jobs.adopt({ ...input, onSettled: release }); });
+      if (adopted) return result;
       release();
-    }
+      return result;
+    } catch (error) { release(); throw error; }
   },
   // Background work, once started, is asked about rather than waited on.
   "POST /jobs": async (): Promise<{ jobs: JobStatus[] }> => ({ jobs: jobs.list() }),

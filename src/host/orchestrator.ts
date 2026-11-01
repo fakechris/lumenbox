@@ -85,6 +85,7 @@ import { classifyBox, type BoxClass } from "../box/access.ts";
 import type { ResolutionConfig, DesktopResources } from "../protocol/index.ts";
 import { runTurn, TurnAborted, type TurnDeps, type TurnEvent } from "./turn.ts";
 import { readHandoff, type ToolContext } from "./tools.ts";
+import { JobWatch } from "./job-watch.ts";
 import { loadConfig } from "../config.ts";
 import { McpManager } from "./mcp.ts";
 import { mergeServers } from "./mcp-connectors.ts";
@@ -305,6 +306,8 @@ export class Orchestrator {
   }
   readonly skillProvenance: SkillProvenance;
   readonly hooks: HookRunner | undefined;
+  /** The commands turns let go of past their foreground window (INV-1461); their end wakes the agent on the background lane. */
+  readonly jobWatch = new JobWatch({ box: () => this.boxClient(), log: line => console.error(`[jobs] ${line}`), wake: (agentId, conversation, text) => this.prompt(agentId, text, undefined, { conversation, steerable: false, lane: "background", synthetic: true }).then(() => undefined) });
   /**
    * Agents whose current turn is installing a template, by the template's id (docs/29 §5.3).
    * Set around the setup prompt and cleared after it, never by the agent.
@@ -1884,8 +1887,7 @@ export class Orchestrator {
       usage: this.usage,
       policy: this.policy,
       caller: this.callerFor(agent.id),
-      // The name as the roster shows it, so a rule can be written "principal: Chris"
-      // rather than with a uuid nobody can read (INV-156).
+      // The name as the roster shows it, so a rule can say "principal: Chris" rather than a uuid (INV-156).
       ...(this.options.principalName !== undefined && this.callerFor(agent.id)?.userId !== undefined
         ? { callerName: this.options.principalName(this.callerFor(agent.id)!.userId!) }
         : {}),
@@ -1939,14 +1941,12 @@ export class Orchestrator {
         void this.rememberer.flush(agentId, conversationId, entries as HistoryEntry[]).catch(() => {});
       },
       boxKind: this.boxEntryOf(agent.id).kind,
-      // The same cheap profile the summariser and the note-taker use. Choosing which memories to
-      // show is the least interesting work in the system and should be billed accordingly.
+      // The same cheap profile the summariser and the note-taker use: choosing memories is the least interesting work here.
       selectMemory: prompt => this.askCheaply(agent, prompt),
-      skillProvenance: this.skillProvenance,
+      skillProvenance: this.skillProvenance, jobWatch: this.jobWatch,
       syncStanding: agentId => this.memoryMirror.sync(agentId),
       ...(this.templateSetups.has(agent.id) ? { templateSetup: this.templateSetups.get(agent.id)! } : {}),
-      templates: this.templates,
-      hooks: this.hooks,
+      templates: this.templates, hooks: this.hooks,
       // Same cheap profile. Shadow by default: the verdicts land in auto-review.jsonl and the web
       // log, and a week of them is what decides whether the classifier earns a veto.
       autoReview: new AutoReviewer({

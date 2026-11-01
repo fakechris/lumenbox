@@ -378,25 +378,21 @@ export interface ExecRequest extends DisplayGuardProjection {
    */
   background?: boolean;
   /**
-   * Who asked for this, for the record — an agent id, or what the host was doing.
-   *
-   * A label, never a bypass. It changes nothing about what runs, what is allowed, or
-   * who may call: the token is the access control and stays the access control. It
-   * exists because host housekeeping and an agent's own shell arrive on this one
-   * endpoint looking identical, so `mkdir` for a starter skill and `rm -rf` typed by a
-   * model were the same line in the box's log — and, until this landed, that line did
-   * not exist at all. A record that cannot say who acted answers the only question
-   * anybody asks it with a shrug.
-   *
-   * Untrusted by construction. Anything holding the token can write anything here, so
-   * it is evidence about *our* callers and not proof about a stranger's.
+   * Who asked for this, for the record — an agent id, or what the host was doing. A label, never a
+   * bypass: the token is the access control. It exists because host housekeeping and an agent's own
+   * shell arrive on this one endpoint looking identical, so `mkdir` for a starter skill and `rm -rf`
+   * typed by a model were the same line in the box's log. Untrusted by construction: evidence about
+   * *our* callers, not proof about a stranger's.
    */
   actor?: string;
   /**
-   * A job id the caller minted (docs/32 slice two): `job-` plus 8–32 hex characters. Lets
-   * the host record the job before it exists and makes a repeated start idempotent — the
-   * same id twice returns the job already running rather than spawning it again.
+   * Answer after this long with the command still running (INV-1461): it is adopted as a job, its
+   * output so far comes back with the job's id, and `/jobs/*` says what became of it. The command is
+   * not killed; `timeout_ms` no longer applies to it. A turn that would otherwise hold for a build
+   * stays free for the person's next message.
    */
+  foreground_ms?: number;
+  /** A job id the caller minted (docs/32 slice two): `job-` plus 8–32 hex characters, so the host records the job before it exists and a repeated start returns the running job instead of a second one. */
   job_id?: string;
   /**
    * The call this command runs for (INV-784, egress/call.ts): an opaque token the host
@@ -469,6 +465,8 @@ export interface ExecResult {
    * its command died for some other reason.
    */
   timeout_ms?: number;
+  /** Set when `foreground_ms` passed first (INV-1461): the command runs on as this job; `exit_code` is -1 and `stdout`/`stderr` are what it had said by then. */
+  still_running?: JobStartedResult;
 }
 
 export interface ReadFileRequest {

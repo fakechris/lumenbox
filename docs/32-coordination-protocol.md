@@ -260,3 +260,24 @@ batches had finished. `Orchestrate` takes the whole job as one **plan** — `bri
   (prepared on submit, admitted when it starts, committed when the result is delivered); the result
   arrives in the conversation as a single message — the summary, or each item's answer.
 
+
+## 10. Addendum 2026-11-01 (INV-1461): a command a turn lets go of
+
+A shell command held its turn for as long as it ran — up to the ten-minute cap — and for that
+long the agent could not hear the person's next message in the same conversation. Now a
+foreground command has a window (`AGENTBOX_FOREGROUND_MS`, 10 s): past it the box does not kill
+it but **adopts it as a job** (`JobService.adopt`): what it had said so far is written at the
+head of the job's log, the rest follows there, and the tool result says *still running as
+job-…, you will get a message when it ends; do not wait or poll*. The turn goes on, or ends.
+
+The host watches that job from outside any turn (`src/host/job-watch.ts`): one long wait on
+the box at a time, and when the job ends — or is killed at the 30-minute cap for a command a
+turn left behind — one host message goes into the agent's conversation on the **background
+lane**, which the bus runs after anything a person has queued: a person's message is never
+behind a build's result. The task the turn was on stays `doing` with the job named in its
+note instead of closing when the turn ends (`board.stillWorking`); the wake turn finishes it.
+
+`background: true` is unchanged: a job the agent chose to start is its own to ask after, never
+watched or killed here. Delegated engines (ACP sessions) are not in this path. The watch is in
+memory: a host restart forgets it, the job stays on the box's `/jobs` list, and `Jobs` still
+answers for it.

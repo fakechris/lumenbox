@@ -555,7 +555,7 @@ export interface TurnDeps {
    */
   autoReview?: { mode(): ReviewMode; review(input: ReviewInput): Promise<Verdict> };
   /** Records which agent wrote into a skill. Absent means no record is kept. */
-  skillProvenance?: ToolContext["skillProvenance"];
+  skillProvenance?: ToolContext["skillProvenance"]; jobWatch?: ToolContext["jobWatch"]; // The watch on commands a turn lets go of (INV-1461).
   /**
    * Pushes the agent's standing files to its box before the turn reads them (INV-777), so the
    * copy it may edit is the copy the prompt carries. Absent means no mirror — tests, or no box.
@@ -3381,7 +3381,7 @@ ${outcome.text}`;
             askSecret: deps.askSecret,
             handOver: deps.handOver,
             docReader: deps.docReader,
-            skillProvenance: deps.skillProvenance,
+            skillProvenance: deps.skillProvenance, jobWatch: deps.jobWatch,
             workId,
             ...(deps.pendingWork !== undefined ? { pendingWork: deps.pendingWork } : {}),
             ...(deps.orchestrations !== undefined ? { orchestrations: deps.orchestrations } : {}),
