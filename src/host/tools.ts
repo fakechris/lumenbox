@@ -64,6 +64,7 @@ import type { GoalGate } from "./goal-gate.ts";
 import { checklistAdditions, describePursuit } from "./goal-mode.ts";
 import { AROUND_ENTRY_CHARS, describeHistory, ENTRY_CHARS, readEpochHistory, readHistory } from "./history.ts";
 import type { HostRunner } from "./host-runner.ts";
+import { resolveHostSecrets } from "./host-secrets.ts";
 import { sniffImage } from "./image-refusal.ts";
 import { appendLearning, hostOf, learningsDir, readLearnings, renderLearnings } from "./learnings.ts";
 import type { McpManager, ToolEffect } from "./mcp.ts";
@@ -3504,30 +3505,23 @@ export async function dispatchTool(
       }
       const command = String(input.command ?? "").trim();
       if (command === "") return { text: "`command` is required.", isError: true };
+      let erased: string[] = [];
 
-      // Named secrets, resolved through the vault against this agent's grants, audited there;
-      // a refused one is left out and named back, so the model learns it lacks the grant.
-      const secretEnv: Record<string, string> = {};
-      const refusedSecrets: string[] = [];
-      const asked = Array.isArray(input.secrets) ? (input.secrets as unknown[]) : [];
-      for (const raw of asked) {
-        const secretId = String(raw);
-        const value = context.vault?.resolve(secretId, {
-          agentId: context.agent.id,
-          agentName: context.agent.profile.name,
-          ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}),
-          // The box's bundles grant it (INV-420/INV-539), never an agent's own scope: two agents in
-          // one box differing in reach is docs/22 §0 being false. Fail-closed until `agentbox
-          // bundle migrate` has turned scopes into the box's bundles.
-          scopeGrants: context.bundles?.grantsSecret(boxOfAgent(context), secretId) === true,
-        });
-        if (value === undefined) refusedSecrets.push(secretId);
-        else secretEnv[secretId] = value;
-      }
-      if (Object.keys(secretEnv).length > 0) context.policy?.taint.mark(context.turnId ?? "", "vault");
+      // Named secrets, resolved through the vault against this agent's grants, audited there; a refused one is
+      // left out and named back. A git one reaches git through a one-run helper, not the environment (INV-1408).
+      // The box's bundles grant a secret (INV-420/INV-539), never an agent's own scope: two agents in one box
+      // differing in reach is docs/22 §0 being false. Fail-closed until `agentbox bundle migrate` has run.
+      const secrets = resolveHostSecrets(context.vault, Array.isArray(input.secrets) ? (input.secrets as unknown[]) : [], command, {
+        agentId: context.agent.id, agentName: context.agent.profile.name,
+        ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}),
+        scopeGrants: secretId => context.bundles?.grantsSecret(boxOfAgent(context), secretId) === true,
+      });
+      const { refused: refusedSecrets } = secrets;
+      const granted = [...secrets.inEnvironment, ...secrets.toGit];
+      if (granted.length > 0) context.policy?.taint.mark(context.turnId ?? "", "vault");
 
       try {
-        const result = await context.hostRunner.run(command, secretEnv, callFor(context).call);
+        const result = await context.hostRunner.run(command, secrets.env, callFor(context).call).finally(() => { erased = secrets.finish().erased; });
         const parts = [
           result.stdout.trim() !== "" ? result.stdout : "(no stdout)",
           result.stderr.trim() !== "" ? `stderr:\n${result.stderr}` : "",
@@ -3539,13 +3533,14 @@ export async function dispatchTool(
           refusedSecrets.length > 0
             ? `Not run with these secrets — you have not been granted them: ${refusedSecrets.join(", ")}.`
             : "",
-          Object.keys(secretEnv).length > 0
+          secrets.inEnvironment.length > 0
             ? `The secrets were in the command's environment only. Never quote a value back, even ` +
               `partly; confirm a secret by its effect (a 200, a login, a non-empty check), not by printing it.`
             : "",
+          secrets.toGit.length > 0 ? `${secrets.toGit.join(", ")} went to git through a credential helper for this run, not into the environment.` : "",
+          erased.length > 0 ? `git reported the credential refused by ${erased.join(", ")}: the token is wrong or lacks access there.` : "",
           `exit code: ${result.code === null ? "unknown" : result.code}`,
         ].filter(part => part !== "");
-        const granted = Object.keys(secretEnv);
         return {
           text: parts.join("\n\n"),
           isError: result.code !== 0 && !result.timedOut,
@@ -3556,7 +3551,7 @@ export async function dispatchTool(
             ? {
                 recordAs: [
                   `$ ${command}`,
-                  `ran on the host with ${granted.join(", ")} in its environment.`,
+                  `ran on the host with ${granted.join(", ")} available to it (git ones through a helper, the rest in its environment).`,
                   `Output withheld from this record: a command given a credential may ` +
                     `print it, and this is the one place that is known rather than guessed. ` +
                     `The agent saw it; the transcript does not keep it.`,

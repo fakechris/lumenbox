@@ -71,6 +71,13 @@ export interface Secret {
    * fillable anywhere, which is the safe reading of "nobody said where".
    */
   domains?: string[];
+  /**
+   * `git`: a credential for git over https (INV-1408). RunOnHost hands it to git through a
+   * one-run credential helper for the hosts in `domains` (github.com when none are named)
+   * instead of the command's environment, so a build script or a test under the same command
+   * never reads it; only a command that is `gh` itself gets it as GH_TOKEN.
+   */
+  kind?: "git";
 }
 
 /** A secret as a reader may see it: everything but the value. */
@@ -79,6 +86,7 @@ export interface SecretView {
   description: string;
   grants: Grant[];
   domains?: string[];
+  kind?: "git";
   oauth?: { provider: string; kind: OAuthMeta["kind"]; expiresAt?: string; scopes?: string[] };
 }
 
@@ -180,6 +188,7 @@ export class Vault {
                 }))
             : [],
           ...(Array.isArray(raw.domains) ? { domains: raw.domains.filter((d: unknown): d is string => typeof d === "string" && d !== "") } : {}),
+          ...(raw.kind === "git" ? { kind: "git" as const } : {}),
           ...(oauthOfRaw(raw.oauth) !== undefined ? { oauth: oauthOfRaw(raw.oauth)! } : {}),
         });
       }
@@ -206,6 +215,7 @@ export class Vault {
       description: secret.description,
       grants: secret.grants.map(grant => ({ ...grant })),
       ...(secret.domains !== undefined ? { domains: [...secret.domains] } : {}),
+      ...(secret.kind !== undefined ? { kind: secret.kind } : {}),
       ...(secret.oauth !== undefined
         ? {
             oauth: {
@@ -242,12 +252,17 @@ export class Vault {
     return [...(this.secrets.find(secret => secret.id === id)?.domains ?? [])];
   }
 
+  /** What kind of credential a secret is, when its entry says: `git` is delivered to git, not to a command's environment. */
+  kindOf(id: string): Secret["kind"] {
+    return this.secrets.find(secret => secret.id === id)?.kind;
+  }
+
   /**
    * Creates or updates a secret. A missing `value` keeps the existing one — so an
    * operator editing a description or grants does not have to re-paste the secret,
    * and the UI never has to hold a value it was never shown.
    */
-  setSecret(input: { id: string; description?: string; value?: string; grants?: Grant[]; domains?: string[]; oauth?: OAuthMeta }): void {
+  setSecret(input: { id: string; description?: string; value?: string; grants?: Grant[]; domains?: string[]; kind?: "git" | null; oauth?: OAuthMeta }): void {
     const id = input.id.trim();
     if (id === "") return;
     const existing = this.secrets.find(secret => secret.id === id);
@@ -264,6 +279,8 @@ export class Vault {
         ? { domains: [...(input.domains ?? existing?.domains)!] }
         : {}),
       ...((input.oauth ?? existing?.oauth) !== undefined ? { oauth: { ...(input.oauth ?? existing?.oauth)! } } : {}),
+      // null clears the kind; undefined keeps what was there.
+      ...((input.kind === undefined ? existing?.kind : input.kind ?? undefined) !== undefined ? { kind: "git" as const } : {}),
     };
     if (existing !== undefined) this.retire(existing, secret);
     this.secrets = [...this.secrets.filter(s => s.id !== id), secret];

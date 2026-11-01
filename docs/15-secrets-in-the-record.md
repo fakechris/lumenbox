@@ -2,7 +2,7 @@
      title: R7: secrets an agent reads land in the record in clear
      family: decision
      status: current
-     updated: 2026-08-25
+     updated: 2026-11-01
 -->
 # R7: secrets an agent reads land in the record in clear
 
@@ -80,6 +80,20 @@ Where third-party or secret-bearing text reaches a durable record:
 | MCP tool results | anything a third-party server returns | in the transcript, same as any tool |
 | channel messages | a person pastes a key into the chat | in the transcript |
 | `RunOnHost` | the vault resolves a real secret | **never enters the box**; audited by name |
+
+**A git token goes to git, not to the command (INV-1408).** A secret placed in a host command's
+environment is read by every process under it — the build script, a postinstall, the tests —
+and any of them may print it; the record above is the last line, not the first. A vault secret
+marked `git` (write `git` among its sites in Settings, or `kind: "git"` on the API) is never put
+in the environment: `RunOnHost` writes a one-run credential helper and the token in a 0600 file
+under a private temporary directory, points git at it through `GIT_CONFIG_*` variables (no
+gitconfig is touched), and removes the directory when the command ends. The helper answers
+`https` to the hosts the secret names — github.com when it names none — and nothing to any other
+host or protocol; the person's own helpers (the keychain) are reset for the agent's command, so
+an agent's git reaches only what it was granted. An `erase` from git is reported on the result as
+the token being refused by that host. The one exception is a command that is `gh` itself, which
+gets the token as `GH_TOKEN`: it is the process the token was for. Without the kind, the old path
+stands (`src/host/host-secrets.ts`, `src/host/git-credential.ts`).
 
 Two amplifiers make each of these worse than a line in a file:
 
