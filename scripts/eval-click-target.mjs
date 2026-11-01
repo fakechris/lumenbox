@@ -1,14 +1,19 @@
 #!/usr/bin/env node
 /**
- * Where would a click land? The decision model's box against the main model's own coordinates (INV-1419).
+ * Where would a click land? Three ways to find a control named in words (INV-1419, INV-1479):
+ * the decision model's box on the screenshot, the main model's own coordinates, and the decision
+ * model's choice from the window's control outline.
  *
  *   node --experimental-transform-types scripts/eval-click-target.mjs [--model]
  *
- * Needs TYPESAFE_TOKEN; `--model` also asks the configured provider (the same one `agentbox web`
- * would use, from ~/.agentbox/config.json) for coordinates on the same screenshot. Not part of
+ * Needs TYPESAFE_TOKEN (read from ~/.agentbox/config.json like `agentbox web` does); `--model`
+ * also asks the configured provider for coordinates on the same screenshot. Not part of
  * `npm test`: it spends money and reaches the network. The screenshot is our own team room
- * (assets/screens/team-room.png, 1280x800); each target's rectangle was measured on it by hand.
- * A hit is a centre inside the rectangle. The absent target must be refused, not clicked.
+ * (assets/screens/team-room.png, 1280x800); each target's rectangle was measured on it by hand,
+ * and OUTLINE below is the control tree a box would list for it, written by hand from the same
+ * screen (the web app is Electron, which exposes no tree in a box, so the outline is authored,
+ * not captured — what is measured is the choice, not box-ax). A hit is a centre inside the
+ * rectangle, or the right control chosen. The absent target must be refused, not clicked.
  */
 
 import { execFileSync } from "node:child_process";
@@ -16,7 +21,7 @@ import { readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyConfigEnv, loadConfig } from "../src/config.ts";
-import { CLICK_AT, locate } from "../src/host/computer-vision.ts";
+import { choose, CLICK_AT, locate } from "../src/host/computer-vision.ts";
 import { jevClient } from "../src/host/jev.ts";
 
 const SHOT = new URL("../assets/screens/team-room.png", import.meta.url).pathname;
@@ -35,6 +40,30 @@ const CASES = [
 
 const inside = (x, y, r) => r !== null && x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3];
 
+/** The team room's controls as a box would list them, top to bottom; `expect` names the CASES target each one answers. */
+const OUTLINE = [
+  { role: "page tab", name: "Team room", x: 120, y: 8, width: 150, height: 24, states: ["selected"] },
+  { role: "push button", name: "New tab", x: 284, y: 8, width: 22, height: 24, states: [], expect: "the new browser tab (+) button" },
+  { role: "entry", name: "Address", x: 320, y: 8, width: 600, height: 24, states: ["editable"] },
+  { role: "push button", name: "Settings", x: 1200, y: 95, width: 26, height: 23, states: [], expect: "the settings gear icon in the top bar" },
+  { role: "push button", name: "Help", x: 1236, y: 95, width: 26, height: 23, states: [] },
+  { role: "combo box", name: "Team room", x: 470, y: 143, width: 110, height: 19, states: [] },
+  { role: "link", name: "Configure", x: 590, y: 143, width: 58, height: 19, states: [], expect: "the 'Configure' link next to the team room menu" },
+  { role: "page tab", name: "Chat", x: 850, y: 142, width: 40, height: 20, states: ["selected"] },
+  { role: "page tab", name: "Files", x: 898, y: 142, width: 37, height: 20, states: [], expect: "the Files tab in the right panel" },
+  { role: "page tab", name: "Tasks", x: 945, y: 142, width: 42, height: 20, states: [] },
+  { role: "toggle button", name: "Record", x: 1118, y: 140, width: 54, height: 25, states: [], expect: "the 'record' toggle" },
+  { role: "push button", name: "Take over", x: 1180, y: 137, width: 77, height: 30, states: [], expect: "the 'Take over' button" },
+  { role: "list item", name: "Ada — front desk", x: 12, y: 218, width: 203, height: 52, states: ["selected"], expect: "the agent Ada in the sidebar" },
+  { role: "list item", name: "Mia — research", x: 12, y: 276, width: 203, height: 52, states: [] },
+  { role: "list item", name: "Enzo — code", x: 12, y: 334, width: 203, height: 52, states: [] },
+  { role: "push button", name: "Add agent", x: 12, y: 400, width: 203, height: 32, states: [] },
+  { role: "push button", name: "Attach", x: 247, y: 660, width: 60, height: 28, states: [] },
+  { role: "entry", name: "Message", x: 247, y: 697, width: 453, height: 55, states: ["editable", "focused"], expect: "the message input box" },
+  { role: "push button", name: "Send", x: 712, y: 718, width: 63, height: 34, states: [], expect: "the Send button" },
+  { role: "push button", name: "Stop", x: 712, y: 680, width: 63, height: 30, states: ["disabled"] },
+].map((control, index) => ({ ...control, ref: `obs:a${index + 1}` }));
+
 async function modelPoint(client, profile, png, target) {
   const response = await client.messages.create({
     model: profile.model,
@@ -49,6 +78,7 @@ async function modelPoint(client, profile, png, target) {
   return match ? JSON.parse(match[0]) : { none: true };
 }
 
+applyConfigEnv(loadConfig());
 const ask = jevClient();
 if (ask === undefined) {
   console.log("No TYPESAFE_TOKEN; nothing to evaluate.");
@@ -62,7 +92,6 @@ const png = readFileSync(SHOT).toString("base64");
 
 let model;
 if (process.argv.includes("--model")) {
-  applyConfigEnv(loadConfig());
   const { resolveProvider, createClient } = await import("../src/host/provider.ts");
   const profile = resolveProvider(undefined, loadConfig().provider);
   model = { profile, client: createClient(profile) };
@@ -70,11 +99,18 @@ if (process.argv.includes("--model")) {
 
 let jevHits = 0;
 let modelHits = 0;
+let outlineHits = 0;
 for (const c of CASES) {
   const started = Date.now();
   const found = await locate(ask, jpeg, c.target);
   const jevOk = "why" in found ? c.rect === null : inside(found.x, found.y, c.rect);
   jevHits += jevOk ? 1 : 0;
+  const chosenAt = Date.now();
+  const chosen = await choose(ask, OUTLINE, c.target).catch(error => ({ why: String(error) }));
+  const wanted = OUTLINE.find(control => control.expect === c.target);
+  const outlineOk = "why" in chosen ? wanted === undefined : wanted !== undefined && chosen.element.ref === wanted.ref;
+  outlineHits += outlineOk ? 1 : 0;
+  const outlineText = "why" in chosen ? "refused" : `${chosen.element.role} "${chosen.element.name}" ${chosen.confidence.toFixed(2)} r${chosen.round}`;
   let modelText = "";
   if (model !== undefined) {
     const point = await modelPoint(model.client, model.profile, png, c.target).catch(error => ({ error: String(error) }));
@@ -83,6 +119,6 @@ for (const c of CASES) {
     modelText = ` | model ${modelOk ? "hit " : "MISS"} ${JSON.stringify(point)}`;
   }
   const where = "why" in found ? `refused` : `(${found.x}, ${found.y}) ${found.confidence.toFixed(2)}`;
-  console.log(`${jevOk ? "hit " : "MISS"} ${String(Date.now() - started).padStart(4)}ms  ${c.target}: jev ${where}${modelText}`);
+  console.log(`${jevOk ? "hit " : "MISS"} ${String(chosenAt - started).padStart(4)}ms  ${c.target}: jev box ${where} | outline ${outlineOk ? "hit " : "MISS"} ${String(Date.now() - chosenAt).padStart(4)}ms ${outlineText}${modelText}`);
 }
-console.log(`\ndecision model: ${jevHits}/${CASES.length} (clicks at or above ${CLICK_AT})${model !== undefined ? `; ${model.profile.label} ${model.profile.model}: ${modelHits}/${CASES.length}` : ""}`);
+console.log(`\ndecision model, box on the screenshot: ${jevHits}/${CASES.length} (clicks at or above ${CLICK_AT}); choice from the outline: ${outlineHits}/${CASES.length}${model !== undefined ? `; ${model.profile.label} ${model.profile.model}: ${modelHits}/${CASES.length}` : ""}`);
