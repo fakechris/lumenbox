@@ -8,9 +8,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import * as awaitImported from "./docs-lint.mjs";
 import { lintDocs, parseHeader, renderIndex, titleOf } from "./docs-lint.mjs";
 
 const root = join(fileURLToPath(new URL(".", import.meta.url)), "..");
@@ -89,4 +91,18 @@ test("the public-content rules catch what they are for and leave the product's o
   assert.equal(named.length, 1);
   assert.ok(!named[0].includes("secret-vm"), "the message never echoes the hashed name");
   assert.deepEqual(one("INV-1381 and docs/84 are fine to cite"), []);
+});
+
+test("a solution page needs its frontmatter and its four paragraphs; a page that cannot say how to verify is refused", () => {
+  const { lintSolutions, parseSolutionFrontmatter } = awaitImported;
+  assert.deepEqual(lintSolutions(join(docs, "solutions")), [], "every shipped page is whole");
+  assert.ok(readdirSync(join(docs, "solutions")).filter(f => f.endsWith(".md")).length >= 8, "the first batch is in");
+  const dir = mkdtempSync(join(tmpdir(), "solutions-"));
+  try {
+    writeFileSync(join(dir, "a.md"), "---\nmodule: x\ntags: [y]\nproblem_type: guesswork\nfound: 2026-11-01\n---\n# A\n\n**Symptom.** s\n\n**Cause.** c\n\n**Fix.** f\n");
+    const problems = lintSolutions(dir);
+    assert.ok(problems.some(p => /problem_type guesswork is not one of/.test(p)));
+    assert.ok(problems.some(p => /no \*\*Verify\.\*\* paragraph/.test(p)));
+    assert.deepEqual(parseSolutionFrontmatter("no front"), undefined);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

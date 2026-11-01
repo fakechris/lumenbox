@@ -13,7 +13,7 @@
  * disagree. Nothing here reads prose; it reads the header block, which is the point.
  */
 
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 export const FAMILIES = new Set(["spec", "decision", "guide", "handoff"]);
@@ -105,7 +105,43 @@ export function lintDocs(dir) {
       problems.push(`two current specs claim ${domain}: ${owners.join(", ")}. One of them is superseded; say which.`);
     }
   }
+  problems.push(...lintSolutions(join(dir, "solutions")));
   return { docs, problems };
+}
+
+/**
+ * The pitfall pages (INV-1483): `docs/solutions/<slug>.md`, outside the numbered documents and
+ * their link rules, but each with a complete frontmatter — module, tags, problem_type, found —
+ * and the four sections a pitfall is worth keeping for. A page that cannot say how to verify
+ * the fix is a story, not a solution.
+ */
+export const SOLUTION_PROBLEM_TYPES = new Set(["runtime-error", "best-practice", "measurement"]);
+export const SOLUTION_SECTIONS = ["Symptom", "Cause", "Fix", "Verify"];
+
+export function parseSolutionFrontmatter(text) {
+  const match = /^---\n([\s\S]*?)\n---\n/.exec(text);
+  if (match === null) return undefined;
+  const fields = {};
+  for (const line of match[1].split("\n")) {
+    const kv = /^([a-z_]+):\s*(.*)$/.exec(line);
+    if (kv) fields[kv[1]] = kv[2].trim();
+  }
+  return fields;
+}
+
+export function lintSolutions(dir) {
+  const problems = [];
+  if (!existsSync(dir)) return problems;
+  for (const file of readdirSync(dir).filter(f => f.endsWith(".md")).sort()) {
+    const text = readFileSync(join(dir, file), "utf8");
+    const front = parseSolutionFrontmatter(text);
+    if (front === undefined) { problems.push(`solutions/${file}: no frontmatter (module, tags, problem_type, found).`); continue; }
+    for (const key of ["module", "tags", "problem_type", "found"]) if ((front[key] ?? "") === "") problems.push(`solutions/${file}: frontmatter lacks ${key}.`);
+    if (front.problem_type !== undefined && !SOLUTION_PROBLEM_TYPES.has(front.problem_type)) problems.push(`solutions/${file}: problem_type ${front.problem_type} is not one of ${[...SOLUTION_PROBLEM_TYPES].join(", ")}.`);
+    if (!/^# .+/m.test(text)) problems.push(`solutions/${file}: no title heading.`);
+    for (const section of SOLUTION_SECTIONS) if (!new RegExp(`^\\*\\*${section}\\.\\*\\*`, "m").test(text)) problems.push(`solutions/${file}: no **${section}.** paragraph.`);
+  }
+  return problems;
 }
 
 /** The index, generated: what exists, what it is, and what replaced it. */
