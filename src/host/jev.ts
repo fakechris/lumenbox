@@ -30,6 +30,7 @@ export type JevPoint =
   | "memory_judge"
   | "answer_review"
   | "memory_select"
+  | "memory_sufficiency"
   | "auto_review"
   | "routine_resolve"
   | "computer_verify"

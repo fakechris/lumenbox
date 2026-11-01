@@ -36,12 +36,25 @@ straight to the vendor, not through `HTTP_PROXY`: measured, the proxy quadrupled
 | `memory_judge` | off, shadow, on | the four questions on the cheap profile (`memory-judge.ts`) |
 | `answer_review` | off, shadow, on | the reply review (`answer-review.ts`) |
 | `memory_select` | off, shadow, on | the per-turn memory selector (`memory.ts`) |
+| `memory_sufficiency` | off, shadow, on | — (a check after the selection, INV-1471: enough? anything misleading? drops the misleading, widens the selection once) |
 | `auto_review` | off, shadow | the authorisation review (`auto-review.ts`) — compared, never decides |
 | `routine_resolve` | off, shadow, on | the routine verdict (`routine-resolve.ts`) |
 | `computer_verify` | off, shadow, on | the desktop postcondition check |
 | `computer_wait` | off, on | — (new action) |
 | `computer_click` | off, on | — (new action) |
 | `computer_guard` | off, shadow, on | — (new check before a desktop click) |
+
+**Enough, and nothing in the way (INV-1471).** The selector stops at its budget whether or not
+what it picked answers the message. `memory_sufficiency` asks one more request after
+`memory_select`: a noul on whether the chosen memories are enough to reply well, and one per
+memory on whether it is unrelated and could lead the reply astray (the review's CONTEXT_BLEED,
+seen before the reply). `on`: the misleading are left out of this turn's prompt — never deleted —
+and when the rest is not enough and candidates remain, one selection with twice the budget, checked
+once more for misleading entries; never a third. `shadow`: what was selected goes in unchanged and
+the refinement is logged beside it, so `jev-shadow-report` shows how often the two differ. The
+switch follows the rule every switch follows: absent is `off` (the contract asked for `shadow` by
+default; a point that makes a remote call nobody switched on would be the one exception, so it is
+not one). Read it with the answer review's CONTEXT_BLEED rate over the same days.
 
 ## The rule
 
