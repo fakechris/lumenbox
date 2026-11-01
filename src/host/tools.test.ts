@@ -1010,6 +1010,14 @@ test("elementsOutline is one line per control in the browser outline's shape, an
   assert.equal(outline, 'Controls of "Documents - Thunar" (thunar):\n- menu "File" [ref=a1] at (15,25)\n- push button [ref=a2] [disabled] at (65,48)\n… (more controls than shown; act on what is here or scroll)');
   assert.match(elementsOutline({ elements_note: "the active app has none" }), /^No control outline: the active app has none\. Work from the screenshot\./);
   assert.match(elementsOutline({ elements: [], elements_window: { title: "x", app: "", truncated: false } }), /no operable controls are showing/);
+  // A read that ran out of budget names what it left, each as a ref to drill into (INV-1481).
+  const partial = elementsOutline({
+    elements_window: { title: "Inbox", app: "chrome", truncated: true, cut: [{ ref: "obs:c0-1", role: "table", name: "Messages", children_count: 240 }, { ref: "obs:c0-2", role: "panel", name: "", children_count: 3 }] },
+    elements: [{ ref: "obs:a1", role: "push button", name: "Compose", x: 5, y: 20, width: 20, height: 10, states: [] }],
+  });
+  assert.match(partial, /\n… table "Messages" \[ref=obs:c0-1\] holds 240 more not read — list_elements with ref=obs:c0-1 reads it/);
+  assert.match(partial, /\n… panel \[ref=obs:c0-2\] holds 3 more not read/);
+  assert.doesNotMatch(partial, /act on what is here or scroll/, "the generic line gives way to the named containers");
 });
 
 test("WebFetch keeps the whole page on the host and ends its result with a pointer the transcript cut carries", async () => {

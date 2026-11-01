@@ -51,6 +51,8 @@
 
 **ref 的身份与拒绝（INV-1478，2026-11-01）。** 上文"记住每个 ref 的中心"已不是全部：`validateElement` 在每次 `click_element` / `invoke_element` / `set_value` 下发前重读一遍树，按 box-ax 给出的原生身份（D-Bus 连接名 + 对象路径，不是遍历序号）在当前树里重识别，且角色、名称、矩形都要和观察时一样、未被禁用，才用缓存的中心点击。`observation_id` 必填：裸 ref、或带着别次观察 id 的 ref，一律 `STALE_OBSERVATION`，不会拿当前屏幕上的东西凑。零匹配（控件没了、换了身份、移动、改名、被禁用）是 `STALE_REF`——被删掉那行的 ref 不能落到补上来的那行；多于一个匹配是 `AMBIGUOUS_TARGET`（附数量）。两者都不点击，boxd 以 outcome=refused 带 `refusal_code` 返回，错误文本里写明下一步（重新 list_elements 再选）。box-ax 的 `--perform` 路径本来就按同一身份校验，所以 invoke/set_value 的第二道门在盒内。
 
+**部分观察与钻取（INV-1481，2026-11-01）。** 以前 box-ax 过了 4 秒截止就整批 `error`、host 只剩截图，150 控件上限则只给一个 `truncated: true`。现在预算用完是部分成功：box-ax 打印已读到的控件 + `complete: false` + `cut`（没进去的容器：role、name、children_count 和从窗口出发的子索引 `path`），截止时也打印已读部分（SIGALRM 里 `finish`）。boxd 把每个未读容器记成本次观察里的一个 ref（`<obs>:c<drill>-<n>`），大纲里渲染成 "… table "Messages" [ref=…] holds 240 more not read — list_elements with ref=… reads it"；`list_elements` 带这个 `ref` 时 boxd 以 `--root <path> --ref-prefix d<n>` 只读那个子树，窗口身份必须与观察时相同，结果并入同一次观察（旧 ref 仍有效，被钻的容器从 cut 里去掉，新的 cut 加进来），不是新观察。Chromium 的匿名包装层（无名的 panel/section/group/generic/viewport…）不计入 5000 节点预算，否则网页的可达内容会被脚手架吃掉。box-ax 的 walk 现在可以不碰总线导入：`docker/box/test_box_ax.py` 用假树测截断标记、root 钻取、包装层免费，由 `src/cua/box-ax.test.ts` 在 npm test 里跑。未做：Chrome 密集页面的盒内 smoke（本会话无活 box）。
+
 ### A2. `browser_act` 目标范围 diff 与 `expect`
 
 - act 前记录目标元素的 value/checked/text/focus/aria 状态和目标子树的哈希，act 后两个 tick 稳定再比，返回 `effect` 与 `changed: [...]`。

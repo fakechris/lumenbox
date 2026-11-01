@@ -424,9 +424,15 @@ test("box-ax output is read: a tree, an error, or nothing readable — never an 
 
 class TreeExecutor extends ScriptedExecutor {
   tree: string | undefined = AX_SAMPLE;
+  /** What box-ax answers a --root read with, keyed by the path asked for. */
+  subtrees = new Map<string, string>();
+  readonly reads: string[][] = [];
   readonly clicks: { action: string; ref?: string }[] = [];
-  protected override async readElements() {
-    const parsed = this.tree === undefined ? undefined : parseAxOutput(this.tree);
+  protected override async readElements(args: readonly string[] = []) {
+    this.reads.push([...args]);
+    const root = args.indexOf("--root");
+    const text = root >= 0 ? this.subtrees.get(args[root + 1]!) : this.tree;
+    const parsed = text === undefined ? undefined : parseAxOutput(text);
     if (parsed === undefined) return { error: "the accessibility reader is not available (no box-ax)" };
     if ("error" in parsed) return parsed;
     return parsed;
@@ -610,4 +616,42 @@ test("native semantics require an advertised capability, never click as a fallba
   assert.equal(executor.calls, 1);
   assert.equal(executor.clicks.length, 0);
   await assert.rejects(executor.execute([{ action: "set_value", ref, observation_id, value: "again" }]), /STALE_OBSERVATION/);
+});
+
+test("a read that ran out of budget is an outline with what it left unread, and a drill reads one container into the same observation (INV-1481)", async () => {
+  const executor = new TreeExecutor({ measureEffect: false });
+  const partial = JSON.parse(AX_SAMPLE) as Record<string, unknown>;
+  partial.complete = false;
+  partial.cut = [{ role: "table", name: "Rows", children_count: 40, path: "2/1" }, { role: "panel", name: "", children_count: 2, path: "3" }];
+  executor.tree = JSON.stringify(partial);
+  const listed = await executor.execute([{ action: "list_elements" }]);
+  assert.equal(listed.elements?.length, 3, "what was read is an outline, not an error");
+  assert.equal(listed.elementsWindow?.complete, false);
+  assert.deepEqual(listed.elementsWindow?.cut?.map(c => `${c.ref.split(":").at(-1)} ${c.role} ${c.name} ${c.children_count}`), ["c0-1 table Rows 40", "c0-2 panel  2"]);
+  const observation = listed.elementsObservationId!;
+  const rows = listed.elementsWindow!.cut![0]!.ref;
+  assert.ok(rows.startsWith(`${observation}:`), "a container ref belongs to the observation");
+
+  // The drill: box-ax is asked for that path with its own ref prefix; the result joins the observation.
+  executor.subtrees.set("2/1", JSON.stringify({
+    window: { title: "Documents - Thunar", app: "thunar", identity: "fixture-window:1", id: "0x1" },
+    elements: [{ ref: "d11", identity: "native:11", role: "table cell", name: "row 1", x: 300, y: 200, width: 400, height: 20, states: [] }],
+    complete: true, cut: [],
+  }));
+  const drilled = await executor.execute([{ action: "list_elements", ref: rows }]);
+  assert.deepEqual(executor.reads.find(args => args.includes("--root")), ["--root", "2/1", "--ref-prefix", "d1"]);
+  assert.equal(drilled.elementsObservationId, observation, "the same observation");
+  assert.deepEqual(drilled.elements?.map(e => e.ref.split(":").at(-1)), ["a1", "a2", "a3", "d11"], "earlier refs stay; the rows join them");
+  assert.deepEqual(drilled.elementsWindow?.cut?.map(c => c.role), ["panel"], "the drilled container is no longer unread; the other still is");
+  assert.equal(drilled.elementsWindow?.complete, false);
+  await executor.execute([{ action: "click_element", ref: listed.elements![0]!.ref, observation_id: observation }]);
+  assert.equal(executor.clicks.length, 1, "a ref from before the drill still clicks");
+
+  // A drill into a ref that is not an unread container, or after the window changed, is refused.
+  await assert.rejects(executor.execute([{ action: "list_elements", ref: `${observation}:c9-9` }]), /STALE_OBSERVATION: .*not a container the current outline left unread/);
+  const again = await executor.execute([{ action: "list_elements" }]);
+  const other = JSON.parse(executor.subtrees.get("2/1")!);
+  other.window.identity = "another-window";
+  executor.subtrees.set("2/1", JSON.stringify(other));
+  await assert.rejects(executor.execute([{ action: "list_elements", ref: again.elementsWindow!.cut![0]!.ref }]), /STALE_OBSERVATION: the window changed/);
 });

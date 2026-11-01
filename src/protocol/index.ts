@@ -67,7 +67,7 @@ export type ComputerAction =
    * The operable controls of the active window, from the accessibility tree (INV-412):
    * role, name, state and where each is on screen. Nothing when the app exposes no tree.
    */
-  | { action: "list_elements" }
+  | { action: "list_elements"; ref?: string }
   /** Clicks a control by the ref `list_elements` gave it; resolved to coordinates in the box. */
   | { action: "click_element"; ref: string; observation_id?: string; button?: MouseButton; count?: number; modifiers?: string }
   | { action: "invoke_element"; ref: string; observation_id?: string }
@@ -124,6 +124,7 @@ export interface ComputerRequest extends DisplayGuardProjection {
 }
 
 /** One operable control of the active window, as the accessibility tree describes it. */
+export interface ElementsWindow { title: string; app: string; truncated: boolean; complete?: boolean; cut?: readonly { ref: string; role: string; name: string; children_count: number }[] } // the outline's window; `cut` = containers not read, each a ref list_elements drills into (INV-1481)
 export interface ElementInfo {
   /** Opaque snapshot-bound token. Copy verbatim; invalid after any write or new observation. */
   ref: string;
@@ -331,10 +332,9 @@ export interface ComputerResult {
   windows?: readonly WindowInfo[];
   /** Present when the batch included list_elements and the active window exposed a tree. */
   elements?: readonly ElementInfo[];
-  /** Why there are no elements, when list_elements was asked and the tree was not there. */
+  /** Why there are no elements, when list_elements was asked and the tree was not there; and the window they came from. */
   elements_note?: string;
-  /** The window the elements came from. */
-  elements_window?: { title: string; app: string; truncated: boolean };
+  elements_window?: ElementsWindow;
   action_count: number;
   duration_ms: number;
   error?: string;

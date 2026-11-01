@@ -1,4 +1,4 @@
-import type { DesktopCapabilities, ComputerAction, ComputerProgress, DesktopExpectation, ActionVerification, DesktopObservation, ElementInfo, WindowInfo, Effect } from "../protocol/index.ts";
+import type { DesktopCapabilities, ComputerAction, ComputerProgress, DesktopExpectation, ActionVerification, DesktopObservation, ElementInfo, ElementsWindow, WindowInfo, Effect } from "../protocol/index.ts";
 
 export interface DesktopDriver {
   readonly capabilities: DesktopCapabilities;
@@ -38,7 +38,7 @@ export interface DesktopExecutionResult {
   elements?: readonly ElementInfo[];
   /** Why there are none, when list_elements was asked and there was no tree. */
   elementsNote?: string;
-  elementsWindow?: { title: string; app: string; truncated: boolean };
+  elementsWindow?: ElementsWindow;
   actionCount: number;
   durationMs: number;
   error?: string;

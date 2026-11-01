@@ -12,6 +12,15 @@ success, because "no controls" and "cannot see" must never read the same.
 Exit codes: 0 with {"window","elements"}; 1 with {"error"} when there is no tree.
 Never blocks past the deadline: AT-SPI calls into a hung app can stall, and boxd's
 own timeout is the last line, not the first.
+
+Running out of budget is a partial success, not a failure (INV-1481): past the control
+limit or the deadline the controls read so far are printed with "complete": false and
+the containers whose children were not reached ("truncated": role, name, children_count,
+and a "path" of child indices from the window). `--root <path>` reads one such subtree
+alone, under the same limit and deadline, and `--ref-prefix <p>` names its refs so they
+can join the observation they drill into. Chromium's anonymous wrappers (unnamed panels,
+sections, groups) do not count against the node budget, or a web page's reachable
+content would be judged by its scaffolding.
 """
 
 import json
@@ -23,6 +32,23 @@ PERFORM = "--perform" in sys.argv
 ATTEMPTED = False
 LIMIT = 150
 DEADLINE_S = 4
+NODE_BUDGET = 5000
+WRAPPER_ROLES = {"panel", "filler", "section", "group", "generic", "unknown", "viewport", "scroll pane", "document web", "frame", "canvas", "paragraph"}
+
+
+def argument(flag, default=None):
+    if flag in sys.argv:
+        index = sys.argv.index(flag)
+        if index + 1 < len(sys.argv):
+            return sys.argv[index + 1]
+    return default
+
+
+ROOT_PATH = argument("--root")
+REF_PREFIX = argument("--ref-prefix", "a")
+
+# What the walk has read when the deadline cuts it short: printed as a partial observation.
+PARTIAL = {"ready": False, "window": None, "elements": [], "truncated": []}
 
 OPERABLE = {
     "push button", "toggle button", "check box", "radio button", "menu", "menu item",
@@ -41,18 +67,23 @@ def fail(reason):
 
 
 def on_alarm(_signum, _frame):
+    if PARTIAL["ready"] and not PERFORM:
+        # The window is known and some controls are read: say what was seen and where it stopped.
+        finish(PARTIAL["window"], PARTIAL["elements"], PARTIAL["truncated"], complete=False)
     fail("the accessibility tree did not answer within %ds" % DEADLINE_S)
 
 
-signal.signal(signal.SIGALRM, on_alarm)
-signal.alarm(DEADLINE_S)
-
-try:
-    import gi
-    gi.require_version("Atspi", "2.0")
-    from gi.repository import Atspi
-except Exception as error:  # noqa: BLE001 — any import failure is one answer
-    fail("AT-SPI bindings are not available: %s" % error)
+if __name__ == "__main__":
+    signal.signal(signal.SIGALRM, on_alarm)
+    signal.alarm(DEADLINE_S)
+    try:
+        import gi
+        gi.require_version("Atspi", "2.0")
+        from gi.repository import Atspi
+    except Exception as error:  # noqa: BLE001 — any import failure is one answer
+        fail("AT-SPI bindings are not available: %s" % error)
+else:  # imported by a test: the walk takes duck-typed nodes and never touches the bus
+    Atspi = None
 
 
 def state_names(accessible):
@@ -148,33 +179,75 @@ def operations_of(node, role, states):
     return operations
 
 
-def walk(window, nodes=None):
-    out = []
-    truncated = False
-    stack = [window]
+def is_wrapper(role, name):
+    """An unnamed container that only holds other things: Chromium's layout scaffolding, GTK's boxes."""
+    return name == "" and role in WRAPPER_ROLES
+
+
+def child_count(node):
+    try:
+        return node.get_child_count()
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def descend(window, path):
+    """The node at a child-index path from the window, or None when the path no longer leads anywhere."""
+    node = window
+    for step in path.split("/") if path else []:
+        try:
+            node = node.get_child_at_index(int(step))
+        except Exception:  # noqa: BLE001
+            return None
+        if node is None:
+            return None
+    return node
+
+
+def walk(root, nodes=None, root_path="", ref_prefix="a", elements=None, truncated=None):
+    """
+    The operable controls under `root`, top to bottom, until the control limit or the node
+    budget. Containers left unread when the walk stops are listed in `truncated` with the
+    path a later --root can take to them. `elements` and `truncated` may be passed in so a
+    deadline can print what was read so far.
+    """
+    out = [] if elements is None else elements
+    cut = [] if truncated is None else truncated
+    # Each stack entry: (node, path of child indices from the window).
+    stack = [(root, root_path)]
     seen = 0
-    while stack and not truncated:
-        node = stack.pop()
-        seen += 1
-        if seen > 5000:
-            truncated = True
-            break
+    while stack:
+        node, path = stack.pop()
         try:
             role = node.get_role_name()
         except Exception:  # noqa: BLE001
             continue
         states = state_names(node)
+        try:
+            name = node.get_name() or ""
+        except Exception:  # noqa: BLE001
+            name = ""
+        if not is_wrapper(role, name):
+            seen += 1
+        if seen > NODE_BUDGET or len(out) >= LIMIT:
+            # Over budget: this node and everything still on the stack are what was not read.
+            for pending, pending_path in [(node, path)] + stack[::-1]:
+                count = child_count(pending)
+                if count > 0:
+                    try:
+                        pending_role, pending_name = pending.get_role_name(), (pending.get_name() or "")
+                    except Exception:  # noqa: BLE001
+                        pending_role, pending_name = "", ""
+                    cut.append({"role": pending_role, "name": pending_name[:120], "children_count": count, "path": pending_path})
+            break
         if "showing" in states and role in OPERABLE:
             rect = rect_of(node)
             if rect is not None:
-                try:
-                    name = node.get_name() or ""
-                except Exception:  # noqa: BLE001
-                    name = ""
                 identity = native_identity(node)
                 if nodes is not None:
                     nodes[identity] = node
                 out.append({
+                    "ref": "%s%d" % (ref_prefix, len(out) + 1),
                     "identity": identity,
                     "operations": operations_of(node, role, states),
                     "role": role,
@@ -183,19 +256,19 @@ def walk(window, nodes=None):
                     "states": sorted(s for s in states if s in ("checked", "selected", "expanded", "focused", "pressed", "editable"))
                                 + ([] if "enabled" in states or "sensitive" in states else ["disabled"]),
                 })
-                if len(out) >= LIMIT:
-                    truncated = True
-                    break
-        try:
-            count = node.get_child_count()
-        except Exception:  # noqa: BLE001
-            continue
+        count = child_count(node)
         # Children pushed in reverse so the outline reads top-to-bottom, as the widget tree does.
         for k in range(min(count, 400) - 1, -1, -1):
             child = node.get_child_at_index(k)
             if child is not None:
-                stack.append(child)
-    return out, truncated
+                stack.append((child, "%s/%d" % (path, k) if path else str(k)))
+    return out, cut
+
+
+def finish(window_info, elements, truncated, complete):
+    print(json.dumps({"window": window_info, "elements": elements, "truncated": len(truncated) > 0 or not complete,
+                      "complete": complete and len(truncated) == 0, "cut": truncated}))
+    sys.exit(0)
 
 
 def perform(window_identity, xwindow, elements, nodes):
@@ -259,24 +332,30 @@ def main():
         fail("ambiguous accessibility window: same process has multiple windows with this title")
     app, window = candidates[0]
     nodes = {} if PERFORM else None
-    elements, truncated = walk(window, nodes)
+    try:
+        identity = "%s:%s:%s:%s" % (target["id"], target["pid"], target["started"], native_identity(window))
+        title = window.get_name() or ""
+        application = app.get_name() or "" if app is not None else ""
+    except Exception as error:
+        fail("could not validate the observed window: %s" % error)
+    window_info = {"title": title, "app": application, "id": target["id"], "identity": identity}
+    root = window
+    if ROOT_PATH is not None and not PERFORM:
+        root = descend(window, ROOT_PATH)
+        if root is None:
+            fail("the container at %s is no longer in the window; take a new list_elements" % ROOT_PATH)
+    PARTIAL.update({"window": window_info, "ready": not PERFORM})
+    elements, truncated = walk(root, nodes, ROOT_PATH or "", REF_PREFIX, PARTIAL["elements"], PARTIAL["truncated"])
     try:
         if x_active_window() != target:
             fail("the active window changed during observation")
-        identity = "%s:%s:%s:%s" % (target["id"], target["pid"], target["started"], native_identity(window))
     except Exception as error:
         fail("could not validate the observed window: %s" % error)
     if PERFORM:
         perform(identity, target, elements, nodes)
         return
-    for index, element in enumerate(elements):
-        element["ref"] = "a%d" % (index + 1)
-    try:
-        title = window.get_name() or ""
-        application = app.get_name() or "" if app is not None else ""
-    except Exception:  # noqa: BLE001
-        title, application = "", ""
-    print(json.dumps({"window": {"title": title, "app": application, "id": target["id"], "identity": identity}, "elements": elements, "truncated": truncated}))
+    finish(window_info, elements, truncated, complete=True)
 
 
-main()
+if __name__ == "__main__":
+    main()
