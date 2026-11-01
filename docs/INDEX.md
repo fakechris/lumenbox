@@ -48,6 +48,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [85-decision-model](85-decision-model.md) | The decision model: switched judgements beside the cheap profile | current | 2026-11-01 |
 | [86-onboarding-acceptance](86-onboarding-acceptance.md) | Onboarding acceptance: a new user's first run on the published release | current | 2026-10-31 |
 | [87-prompt-parts](87-prompt-parts.md) | Built-in prompt parts: a team's override, and what happens when the default moves | current | 2026-11-01 |
+| [88-improve](88-improve.md) | A check-up for one agent: scenarios in isolation, a judged report, a proposal nobody applies | current | 2026-11-01 |
 
 ## decision
 
