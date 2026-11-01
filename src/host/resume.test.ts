@@ -43,6 +43,9 @@ test("a turn that began and never ended is the one that was interrupted", () => 
     );
     assert.equal(outstanding[0]?.about, "deploy the thing");
     assert.equal(outstanding[0]?.attempt, 1);
+    // How an agent's turns since a moment ended, for a routine's result (INV-1404): t2 has no end yet.
+    assert.deepEqual(new TurnLedger(path).endedSince("ada", 0), [{ how: "done" }]);
+    assert.deepEqual(new TurnLedger(path).endedSince("bob", 0), []);
   } finally {
     cleanup();
   }

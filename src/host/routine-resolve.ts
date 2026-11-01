@@ -25,6 +25,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { sha256 } from "./fetched.ts";
 import { choiceOf, type JevAsk, type SwitchDeps, switched } from "./jev.ts";
 import { appendLine } from "./jsonl.ts";
+import type { RunResult } from "./run-result.ts";
 
 export type RoutineVerdict = "silent" | "attach_next" | "push_now";
 
@@ -78,6 +79,8 @@ export interface RoutineResultRecord {
   delivered?: boolean;
   /** Why the send failed, when `delivered` is false. */
   deliveryError?: string;
+  /** How the run itself came out (INV-1404): done, partial (the turn stopped itself) or failed. */
+  result?: RunResult;
 }
 
 export type RoutineResolveMode = "rules" | "model";
@@ -311,6 +314,8 @@ export class PendingAttachments {
 }
 
 export interface RoutineRun {
+  /** How the turns of this run ended, as a word (INV-1404). */
+  result?: RunResult;
   slug: string;
   agentId: string;
   agentName?: string;
@@ -384,6 +389,7 @@ export async function finishRoutineRun(run: RoutineRun, deps: RoutineDeliveryDep
     text,
     sha256: sha256(text),
     ...(run.silent !== undefined ? { silent: run.silent } : {}),
+    ...(run.result !== undefined ? { result: run.result } : {}),
   };
   deps.ledger.record({ ...base, verdict: "pending", reason: "written before resolve" });
   const resolution = await resolveRoutineResult(

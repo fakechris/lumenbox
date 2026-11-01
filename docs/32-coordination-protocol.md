@@ -2,7 +2,7 @@
      title: Coordination as protocol, slice one: a fork ledger that survives restarts, and fenced children
      family: decision
      status: current
-     updated: 2026-09-29
+     updated: 2026-11-01
 -->
 # 32 — Coordination as protocol, slice one: a fork ledger that survives restarts, and fenced children
 
@@ -259,6 +259,16 @@ batches had finished. `Orchestrate` takes the whole job as one **plan** — `bri
 - **One record, one message.** The pending-work ledger holds one `orchestrate` record per plan
   (prepared on submit, admitted when it starts, committed when the result is delivered); the result
   arrives in the conversation as a single message — the summary, or each item's answer.
+- **Done, partial or failed, with the counts (INV-1404).** A plan with items left undone used to be
+  committed `done` unless every item failed. Now `planResult` (`src/host/run-result.ts`) says
+  `done` (all items), `partial` (some) or `failed` (none), the header reads "finished partial
+  (3 done, 2 not done)", and the commit carries the word and the counts. A routine run gets the same
+  word from how its turns ended on the turn ledger — a turn that stopped itself (the call budget,
+  the loop detector) now ends `incomplete` rather than `done`, which makes the run `partial`; a
+  failed or aborted turn makes it `failed` — written on the run's result record (the automations
+  page shows it beside the verdict) and on the schedule ledger's `finished` line, which the
+  autonomy metrics count by result alongside plans by outcome. The side door reads
+  `incomplete (partial)` as `incomplete`.
 
 
 ## 10. Addendum 2026-11-01 (INV-1461): a command a turn lets go of

@@ -1563,17 +1563,17 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
 
   let ended = false;
   let endedHow: string | undefined;
+  let stoppedBy: "turn_budget" | "rounds" | undefined; // set when the turn stopped itself, so it ends "incomplete", not "done" (INV-1404)
   let lastFinalText: string | undefined;
   /** The whole turn's spend, for a goal's budget (INV-772). */
   const turnUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
-  // The first specific failure class this turn saw, kept across retries (INV-1235): the class the
-  // turn is filed under is the thing that first went wrong, not the last wrapper around it.
+  // The first specific failure class this turn saw, kept across retries (INV-1235): filed under what first went wrong, not the last wrapper.
   let failureSeen: FailureCategory | undefined;
   const noteFailureClass = (error: unknown): FailureCategory => {
     failureSeen = keepFirstSpecific(failureSeen, classifyFailureOf(error));
     return failureSeen;
   };
-  const finish = (how: string, category?: FailureCategory) => {
+  const finish = (how: string, category?: string) => {
     if (ended) return;
     ended = true;
     endedHow = how;
@@ -2267,7 +2267,7 @@ ${outcome.text}`;
       rounds.length = 0; // a fresh budget means a fresh judgement about looping
     }
     const openWrite = writePaths.incomplete(writePathKey(agent.id, conversation)); if (openWrite !== undefined) emit({ type: "interim", agentId: agent.id, agentName: agent.profile.name, text: openWrite }); // INV-1379
-    finish("done");
+    finish(stoppedBy === undefined ? "done" : "incomplete", stoppedBy);
   } catch (error) {
     // An end either way. A turn that failed or was aborted is over, and leaving it open would have
     // the next startup try to resume something that already reported itself.
@@ -2335,6 +2335,7 @@ ${outcome.text}`;
       registry.appendTranscript(agent.id, { role: "assistant", text: report, at: new Date().toISOString(), turnId } satisfies TranscriptEntry, conversation);
       emit({ type: "text", agentId: agent.id, agentName: agent.profile.name, delta: report });
       emit({ type: "turn_budget_hit", agentId: agent.id, calls: budget.callsUsed, limit: budget.limits.calls });
+      stoppedBy = "turn_budget";
       console.error(`[turn] ${agent.profile.name}: turn budget hit (${budget.callsUsed} model calls); handed back`);
       return;
     }
@@ -3610,11 +3611,10 @@ ${outcome.text}`;
         agentName: agent.profile.name,
         delta: report,
       });
-      // Said twice, to two audiences: as prose to whoever is reading the conversation,
-      // and as an event to whoever is tracking whether this work needs a person now.
+      // Said twice, to two audiences: as prose to whoever reads the conversation, as an event to whoever tracks whether this needs a person.
       emit({ type: "stuck", agentId: agent.id, reason: report });
-      // Ended, not thrown: the agent stopped for a reason it has been told, which is an outcome
-      // rather than a failure of the machinery.
+      stoppedBy = "rounds";
+      // Ended, not thrown: the agent stopped for a reason it has been told — an outcome, not a failure of the machinery.
       return;
     }
   }

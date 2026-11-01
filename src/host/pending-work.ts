@@ -32,7 +32,7 @@ const COMPACT_AT = 500;
  * How a piece of work settled. A delegation's is the engine's own report (INV-908): `done` only
  * when the engine said it completed, `unknown` when it said nothing, whatever the exit code.
  */
-export type CommitHow = "done" | "failed" | "late" | "aborted" | "unknown";
+export type CommitHow = "done" | "partial" | "failed" | "late" | "aborted" | "unknown";
 
 /** What a settled delegation leaves on the record beyond its outcome (INV-908). */
 export interface CommitNote {

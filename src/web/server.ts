@@ -4062,7 +4062,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           send(res, 200, {
             schedules: (await orchestrator.scheduler.status()).filter(entry => mayReadBox(entry.boxId ?? registry.box.id)).map(entry => {
               const last = lastResults.get(entry.slug);
-              return last === undefined ? entry : { ...entry, lastResult: { at: last.at, verdict: last.verdict, reason: last.reason, text: last.text.slice(0, 600) } };
+              return last === undefined ? entry : { ...entry, lastResult: { at: last.at, verdict: last.verdict, reason: last.reason, text: last.text.slice(0, 600), ...(last.result !== undefined ? { result: last.result } : {}) } };
             }),
             armed: process.env.AGENTBOX_SCHEDULER !== "0",
             // The places (INV-430): the view groups routines by the box they live in.

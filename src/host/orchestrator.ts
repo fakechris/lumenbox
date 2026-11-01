@@ -9,6 +9,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { bindingsOf, CommitmentLedger, describeGaps, parseCommitments, priorCommitmentsPrompt, reconcileCommitments } from "./commitments.ts";
 import { finishRoutineRun, PendingAttachments, RoutineResultLedger, routineResolveMode, type DeliveryOutcome } from "./routine-resolve.ts";
+import { routineResult } from "./run-result.ts";
 import { learningsDir } from "./learnings.ts";
 import { replyForMessage, silenceForMessage } from "./reply.ts";
 import { contextTaskBlockers, isContextCommand } from "./context-recovery.ts";
@@ -655,24 +656,22 @@ export class Orchestrator {
         })));
     },
     observed: (slug, would) => this.policy.notifyObserved(slug, would), // The observe-mode audit row (INV-1458).
-    // Through the ordinary prompt path, so a scheduled turn is checked by the policy gate exactly like any other: a box over its
-    // budget stops firing rather than quietly draining it. Its own turn always: a scheduled kickoff absorbed as steering into
-    // whatever runs would bury the run's report inside an unrelated reply. A delivering run happens *in* the chat's conversation,
-    // so what it says lands in the room's own history rather than in the main conversation, which no chat has ever read.
-    // Last time's commitments open the next run of the same routine (INV-528).
+    // Through the ordinary prompt path, so the policy gate checks a scheduled turn like any other (a box over budget stops firing). Its own turn
+    // always: a kickoff absorbed as steering would bury its report in an unrelated reply. A delivering run happens *in* the chat's conversation. Last time's commitments open the next run (INV-528).
     priorCommitments: slug => priorCommitmentsPrompt(this.commitments.lastFor(slug), this.tasks?.list() ?? []),
     run: async (agent, prompt, deliver, slug, toolScope, deliverWhen, identity) => {
       const scope = toolScope !== undefined ? { toolScope } : {};
+      const startedMs = Date.now();
+      // How the run came out is read off the turn ledger afterwards (INV-1404): done, partial (the turn stopped itself) or failed.
+      const resultOf = (agentId: string) => routineResult(this.turns?.endedSince(agentId, startedMs) ?? []);
       if (deliver === undefined) {
         await this.prompt(agent, prompt, undefined, { steerable: false, lane: "background", synthetic: true, ...scope });
-        return;
+        return { result: resultOf(this.registry.resolve(agent).id) };
       }
       const conversation = conversationIdFor(deliver);
       const record = this.registry.resolve(agent);
       const agentId = record.id;
-      // Taken before the turn, because "what it said" is everything past this point —
-      // the same mark the channel path uses, and the reason a reply can be recovered at
-      // all after a restart.
+      // Taken before the turn: "what it said" is everything past this point — the channel path's mark, and why a reply survives a restart.
       const before = this.registry.readTranscript(agentId, conversation).length;
       await this.prompt(agent, prompt, undefined, {
         steerable: false,
@@ -683,12 +682,12 @@ export class Orchestrator {
       });
       await this.settle();
       const said = this.replySince(agentId, before, conversation).trim();
-      // Execute is over. What it said is written down and a resolve step decides whether
-      // the chat hears it (INV-776): nothing to say, or the same result as last time, stays
-      // on the ledger; a routine that asked for every run gets every run.
+      const result = resultOf(agentId);
+      // Execute is over. What it said is written down and a resolve step decides whether the chat hears it (INV-776).
       await finishRoutineRun(
         {
           slug: slug ?? identity ?? "ad-hoc",
+          result,
           agentId,
           agentName: record.profile.name,
           deliver,
@@ -711,6 +710,7 @@ export class Orchestrator {
           log: line => console.error(`[routine] ${line}`),
         }
       );
+      return { result };
     },
     // A waiting webhook: the same turn, but the caller is told what came of it.
     runAndSay: async (agent, prompt, toolScope) => {
