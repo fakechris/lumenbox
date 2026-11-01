@@ -8,21 +8,27 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   MAX_DESCRIPTION_CHARS,
   SKILL_INDEX_CHARS,
+  INDEX_DESCRIPTION_CHARS,
   composeSkillFile,
+  indexDescription,
   loadSkills,
   parseSkillFile,
   renderSkills,
   SkillCache,
   skillFrom,
+  SKILL_FILENAME,
   SKILLS_DIR,
   slugify,
   visibleTo,
   type Skill,
   type SkillSource,
 } from "./skills.ts";
+import { starterSkillsWithEvals } from "./starter-skills.ts";
 
 function skill(name: string, scope: Skill["scope"] = "global", owner?: string): Skill {
   return {
@@ -530,4 +536,47 @@ test("a routine's mode is read from its frontmatter, and a wrong word is refused
   assert.ok("skill" in none && none.skill.mode === undefined, "absent is auto, for every routine from before modes");
   const wrong = skillFrom("watch", parseSkillFile(`${base}mode: watch\n---\nbody`));
   assert.ok("problem" in wrong && /mode must be "off", "observe" or "auto"/.test(wrong.problem));
+});
+
+test("the index carries the sentences that decide, not the paragraph (INV-760)", () => {
+  const short = "Use when someone asks for a brief. Not for tables.";
+  assert.equal(indexDescription(short), short, "under the limit, as written");
+  const long =
+    "Market research specialist focused on comprehensive market analysis and opportunity identification. " +
+    "Excels at quantitative market sizing (TAM/SAM/SOM), qualitative consumer research, and strategic positioning analysis. " +
+    "It also writes long reports with charts, tables and appendices for every segment it finds, which take a while. " +
+    "Use when someone asks how big a market is or who buys what. " +
+    "Not for a single company's financials — that is data-brief.";
+  const folded = indexDescription(long);
+  assert.ok(folded.length <= INDEX_DESCRIPTION_CHARS, `${folded.length} chars`);
+  assert.match(folded, /^Market research specialist/, "the opening sentence stays first");
+  assert.match(folded, /Use when someone asks how big a market is/, "the when-sentence is kept even though it comes late");
+  assert.match(folded, /Not for a single company's financials/, "the not-for sentence is kept");
+  assert.doesNotMatch(folded, /charts, tables and appendices/, "the filler is what goes");
+  const pointer = indexDescription(`Use when someone hands you a table (${"x".repeat(120)}). Check data quality first, then answer with figures tied to columns, and end with actions. For a topic with no table, use research-brief.`);
+  assert.match(pointer, /use research-brief/, "a sentence that points at another skill is a not-for sentence");
+  const stump = indexDescription(`Open and edit spreadsheets. ${"Use when the user asks to build a model. ".repeat(6)}Covers formulas and pivots and more and mo…`);
+  assert.doesNotMatch(stump, /mo…$/, "the fragment a 400-character cut left behind is not carried");
+  const chinese = indexDescription(`公众号长文写作。当用户需要撰写公众号文章时使用。${"触发词包括写文章、写稿子、帮我写、续写、扩写、公众号文章、长文、出稿。".repeat(8)}`);
+  assert.ok(chinese.length <= INDEX_DESCRIPTION_CHARS && chinese.endsWith("…"), "cut with a mark where there is no word boundary");
+  assert.match(chinese, /^公众号长文写作。当用户需要撰写公众号文章时使用。/);
+});
+
+test("every skill a fresh box starts with, and five more, is described in the index (INV-760)", () => {
+  const hubDir = join(import.meta.dirname, "catalog-data", "skills");
+  const shipped = [
+    ...starterSkillsWithEvals().map(starter => ({ slug: starter.slug, content: starter.content })),
+    ...readdirSync(hubDir).filter(slug => existsSync(join(hubDir, slug, SKILL_FILENAME))).map(slug => ({ slug, content: readFileSync(join(hubDir, slug, SKILL_FILENAME), "utf8") })),
+  ];
+  const five = Array.from({ length: 5 }, (_, index) => ({ slug: `written-later-${index}`, content: `---\ndescription: ${"Use when the team asks for the thing it asks for every week. ".repeat(6)}\n---\nbody` }));
+  const skills = [...shipped, ...five].map(({ slug, content }) => {
+    const made = skillFrom(slug, parseSkillFile(content));
+    assert.ok("skill" in made, `${slug}: ${"problem" in made ? made.problem : ""}`);
+    return made.skill;
+  });
+  const seen = new Set(skills.map(skill => skill.slug));
+  assert.ok(seen.size >= 46, `${seen.size} skills`);
+  const rendered = renderSkills(skills);
+  assert.doesNotMatch(rendered, /more not described here/, "nothing is left to a bare name");
+  for (const skill of skills) assert.ok(rendered.includes(`**${skill.name}** — `), `${skill.slug} is described`);
 });
