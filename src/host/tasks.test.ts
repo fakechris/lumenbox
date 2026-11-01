@@ -399,3 +399,51 @@ test("a recovery attempt has one monotonic lifecycle on the original task", () =
     cleanup();
   }
 });
+
+test("a task's mandate: granted with the request, stale when the world moved, re-authorised by its person, withdrawn by a stop (INV-1457)", () => {
+  const { store, reopen, cleanup } = tempStore();
+  try {
+    const task = store.create({ title: "Sum the reports", requester: "p-chris", mandate: { rulesHash: "r1" } })!;
+    assert.deepEqual({ by: task.mandate?.by, strength: task.mandate?.strength, rulesHash: task.mandate?.rulesHash }, { by: "p-chris", strength: "explicit", rulesHash: "r1" });
+    assert.equal(store.create({ title: "Tidy", requester: "p-chris", proposedBy: "ada" })!.mandate?.strength, "inferred");
+
+    const driver = { mayDrive: (id: string) => id === "p-chris", rulesHash: "r1" };
+    assert.deepEqual(store.revalidate("t1", "p-chris", driver), { status: "ok" });
+
+    // The rules changed: a wake by somebody else waits for the person; the person's own word settles it.
+    const rulesMoved = { ...driver, rulesHash: "r2" };
+    assert.deepEqual(store.revalidate("t1", "p-mia", rulesMoved), { status: "stale", reasons: ["rules-changed"] });
+    assert.deepEqual(store.get("t1")!.mandate?.stale?.reasons, ["rules-changed"]);
+    assert.deepEqual(store.revalidate("t1", "p-chris", rulesMoved), { status: "ok", reauthorised: ["rules-changed"] });
+    assert.equal(store.get("t1")!.mandate?.stale, undefined);
+    assert.equal(store.get("t1")!.mandate?.rulesHash, "r2", "re-authorised under the rules as they are now");
+
+    // The requester lost the driver role: not even their own word brings the work back.
+    const demoted = { mayDrive: () => false, rulesHash: "r2" };
+    assert.deepEqual(store.revalidate("t1", "p-chris", demoted), { status: "stale", reasons: ["requester-cannot-drive"] });
+    assert.equal(reopen().get("t1")!.mandate?.stale?.reasons[0], "requester-cannot-drive", "stale survives a restart");
+
+    // A stop withdraws it for good: dropped, and no later check reopens it.
+    store.withdraw("t1", "p-mia", "stopped from the chat");
+    assert.equal(store.get("t1")!.status, "dropped");
+    assert.equal(store.get("t1")!.mandate?.withdrawn?.by, "p-mia");
+    assert.deepEqual(store.revalidate("t1", "p-chris", driver), { status: "withdrawn" });
+    assert.deepEqual(store.revalidate("nope", "p-chris", driver), { status: "unknown" });
+  } finally {
+    cleanup();
+  }
+});
+
+test("a task from before mandates is read as the requester's explicit word and checked the same way", () => {
+  const { store, cleanup } = tempStore();
+  try {
+    const created = store.create({ title: "old", requester: "p-chris" })!;
+    // Simulate a pre-mandate record: strip the field as an older file would lack it.
+    (store as unknown as { tasks: Map<string, unknown> }).tasks.set(created.id, { ...created, mandate: undefined });
+    assert.deepEqual(store.revalidate(created.id, "p-chris", { mayDrive: () => true }), { status: "ok" });
+    assert.equal(store.get(created.id)!.mandate?.strength, "explicit");
+    assert.deepEqual(store.revalidate(created.id, "p-mia", { mayDrive: () => false }), { status: "stale", reasons: ["requester-cannot-drive"] });
+  } finally {
+    cleanup();
+  }
+});

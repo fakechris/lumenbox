@@ -282,6 +282,7 @@ type PolicyEvent =
     }
   | { at: string; kind: "rules-loaded"; hash: string; ids: string[]; problems: { id: string; problem: string }[] }
   | { at: string; kind: "stop"; agentId: string; by: string }
+  | { at: string; kind: "mandate-stale"; taskId: string; by: string; reasons: string[] } // A wake the task's mandate refused (INV-1457).
   | { at: string; kind: "resume"; agentId: string; by: string }
   | { at: string; kind: "approval-requested"; id: string; fingerprint: string; agentId: string; description: string; action?: string; harnessResumes?: boolean }
   | { at: string; kind: "approval-granted"; id: string; by: string }
@@ -598,18 +599,17 @@ export class PolicyGate {
     // Nothing else in the system stops that, and it spends money at the speed of the API.
     return {
       allow: false,
-      reason:
-        `You have woken teammates ${recent.length} times in ${this.limits.wakeWindowMinutes} ` +
-        `minutes, which is the limit. Two agents taking turns to wake each other is a loop that ` +
-        `spends money without progressing. Finish what you are doing and reply to the person ` +
-        `instead of delegating again.`,
+      reason: `You have woken teammates ${recent.length} times in ${this.limits.wakeWindowMinutes} minutes, which is the limit. ` +
+        `Two agents taking turns to wake each other is a loop that spends money without progressing. Finish what you are doing and reply to the person instead of delegating again.`,
     };
   }
 
+  /** A wake refused because the task's mandate no longer holds (INV-1457). */
+  notifyMandateStale(taskId: string, by: string, reasons: readonly string[]): void { this.append({ at: this.now().toISOString(), kind: "mandate-stale", taskId, by, reasons: [...reasons] }); }
+  rulesHash(): string | undefined { return this.rules?.currentHash(); } // The rule set as loaded now, for a mandate to be granted and checked under.
+
   /** Records that the rule set changed. Called by the store's onChange. */
-  notifyRulesLoaded(change: { hash: string; ids: string[]; problems: { id: string; problem: string }[] }): void {
-    this.append({ at: this.now().toISOString(), kind: "rules-loaded", ...change });
-  }
+  notifyRulesLoaded(change: { hash: string; ids: string[]; problems: { id: string; problem: string }[] }): void { this.append({ at: this.now().toISOString(), kind: "rules-loaded", ...change }); }
 
   /** The rule that decided the last check, for the audit row. */
   private lastRule: string | undefined;
@@ -844,8 +844,7 @@ export class PolicyGate {
   stop(agentId: string, by = "user"): void {
     if (this.stopped.has(agentId)) return;
     this.stopped.add(agentId);
-    this.append({ at: this.now().toISOString(), kind: "stop", agentId, by });
-    this.log(`${by} stopped ${agentId}`);
+    this.append({ at: this.now().toISOString(), kind: "stop", agentId, by }); this.log(`${by} stopped ${agentId}`);
   }
 
   /**

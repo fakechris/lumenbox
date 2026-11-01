@@ -38,6 +38,9 @@ import { appendLine, type LedgerKind } from "./jsonl.ts";
 import { Receipts } from "./receipts.ts";
 import { agentboxHome, envNumber } from "../config.ts";
 import { conversationOfTask, GOAL_GATE_ACTOR, type Pursuit, taskStatusFor } from "./goal-mode.ts";
+import { applyRevalidation, applyWithdrawal, grantMandate, type Mandate, type MandateWorld, type RevalidationResult } from "./mandate.ts";
+import { clampDescription, dueOf, type TaskContract } from "./task-fields.ts";
+export { clampContract, clampDescription, DESCRIPTION_LIMIT, dueOf, type TaskContract } from "./task-fields.ts";
 
 /**
  * What each task is, now, plus a grace period on closed ones so a person asking about
@@ -111,24 +114,6 @@ export interface TaskChange {
   evidence?: string[];
 }
 
-export interface TaskContract {
-  outcome?: string;
-  scope?: string;
-  constraints?: string;
-  acceptance?: string;
-  verification?: string;
-}
-
-export function clampContract(input: Partial<Record<keyof TaskContract, unknown>> | undefined): TaskContract | undefined {
-  if (input === undefined) return undefined;
-  const out: TaskContract = {};
-  for (const key of ["outcome", "scope", "constraints", "acceptance", "verification"] as const) {
-    const value = input[key];
-    if (typeof value === "string" && value.trim() !== "") out[key] = value.trim().slice(0, 1_000);
-  }
-  return Object.keys(out).length === 0 ? undefined : out;
-}
-
 export interface Task {
   id: string;
   title: string;
@@ -149,6 +134,8 @@ export interface Task {
    * from them stayed in lane.)
    */
   contract?: TaskContract;
+  /** Who may have this done, on what footing and under which rules (INV-1457); see mandate.ts. */
+  mandate?: Mandate;
   /**
    * Set while an agent's proposal waits for a person: the agent may describe work, a person
    * commits it before anyone starts. Cleared by `commit`. An agent cannot take or start a
@@ -240,21 +227,6 @@ function describeAge(ms: number): string {
 }
 
 /**
- * How much of the request a task keeps, and what it says when it kept less.
- *
- * The cut is real — a snapshot is one line and an unbounded description makes the board
- * file unbounded — but it used to be silent, and that is what makes it dangerous rather
- * than merely lossy. A 4,200-character request whose last sentence is "do not deduplicate
- * the invoice rows" persisted without that sentence, and every later reader — a person
- * scanning the board, an auditor told to re-derive the constraints from the original
- * request — saw a complete-looking request that was not complete. Found by review.
- *
- * So the truncation announces itself in the text, in the reader's own line of sight. It
- * cannot make the words come back; it can stop them from being missed.
- */
-export const DESCRIPTION_LIMIT = 4_000;
-
-/**
  * Actors that are the harness rather than a person, moving work on the assignee's behalf.
  *
  * They pass the who-may-accept rule because refusing them would break the ordinary case
@@ -270,21 +242,6 @@ const HARNESS_ACTORS: ReadonlySet<string> = new Set([
   "web",
   "audit-guard",
 ]);
-
-/** A due date as stored: an ISO instant, from a date or an instant; nothing for anything else. */
-export function dueOf(raw: string | undefined): string | undefined {
-  if (raw === undefined || raw.trim() === "") return undefined;
-  const text = raw.trim();
-  const t = Date.parse(/^\d{4}-\d{2}-\d{2}$/.test(text) ? `${text}T23:59:59Z` : text);
-  return Number.isNaN(t) ? undefined : new Date(t).toISOString();
-}
-
-export function clampDescription(text: string): string {
-  const trimmed = text.trim();
-  if (trimmed.length <= DESCRIPTION_LIMIT) return trimmed;
-  const note = `\n\n[截断:原文 ${trimmed.length} 字,此处只保留前 ${DESCRIPTION_LIMIT} 字。完整内容在原始消息里。]`;
-  return `${trimmed.slice(0, DESCRIPTION_LIMIT - note.length)}${note}`;
-}
 
 /** Kept on each task so a snapshot stays one line, not a graph. */
 const HISTORY_LIMIT = 30;
@@ -381,6 +338,7 @@ export class TaskStore {
     due?: string;
     goal?: { area: string; commitment?: string };
     pursuit?: Pursuit;
+    mandate?: { source?: string; rulesHash?: string }; // What the mandate rests on (INV-1457).
     now?: Date;
   }): Task | undefined {
     const title = input.title.replace(/\s+/g, " ").trim().slice(0, 200);
@@ -401,6 +359,7 @@ export class TaskStore {
       ...(input.conversation !== undefined ? { conversation: input.conversation } : {}),
       ...(input.contract !== undefined ? { contract: input.contract } : {}),
       ...(input.proposedBy !== undefined ? { proposedBy: input.proposedBy } : {}),
+      mandate: grantMandate({ by: input.requester, ...(input.proposedBy !== undefined ? { proposedBy: input.proposedBy } : {}), ...input.mandate, now: input.now ?? new Date() }),
       ...(dueOf(input.due) !== undefined ? { due: dueOf(input.due)! } : {}),
       ...(input.goal !== undefined && input.goal.area.trim() !== ""
         ? { goal: { area: input.goal.area.trim().slice(0, 80), ...(input.goal.commitment?.trim() ? { commitment: input.goal.commitment.trim().slice(0, 500) } : {}) } }
@@ -413,6 +372,25 @@ export class TaskStore {
     this.tasks.set(task.id, task);
     this.append({ kind: "task", task });
     return this.get(task.id);
+  }
+
+  /** Whether the task's mandate still holds for a wake by `principalId` (INV-1457); see mandate.ts. */
+  revalidate(id: string, principalId: string, world: MandateWorld, now: Date = new Date()): RevalidationResult {
+    const task = this.tasks.get(id);
+    if (task === undefined) return { status: "unknown" };
+    const { result, task: updated } = applyRevalidation(task, principalId, world, now);
+    if (updated !== undefined) { this.tasks.set(id, updated); this.append({ kind: "task", task: updated }); }
+    return result;
+  }
+
+  /** A person's stop withdraws the mandate for good (INV-1457): dropped by the host on their behalf, never woken again. */
+  withdraw(id: string, by: string, reason: string, now: Date = new Date()): Task | undefined {
+    const withdrawn = applyWithdrawal(this.tasks.get(id), by, reason, now);
+    if (withdrawn === undefined) return this.get(id);
+    this.tasks.set(id, withdrawn);
+    if (isLive(withdrawn.status)) this.update(id, { status: "dropped", note: `stopped by ${by}: ${reason}` }, "host", undefined, now);
+    else this.append({ kind: "task", task: withdrawn });
+    return this.get(id);
   }
 
   /** Prepare one idempotent recovery attempt on the existing task. */

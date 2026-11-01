@@ -181,6 +181,7 @@ import {
 import { PRESET_MODELS, providerConfigured, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { BootstrapAdmins } from "../host/bootstrap.ts";
 import { Principals, principalsPath, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
+import type { MandateWorld } from "../host/mandate.ts";
 import { blockedAnnouncement, boardView } from "../channels/board-view.ts";
 import {
   DESKTOP_NOT_PUBLIC,
@@ -583,6 +584,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const pendingHandovers = new Map<string, { agentId: string; agentName: string; instruction: string; reason: string; conversation?: string; at: string; desktopPath?: string }>();
 
   const orchestrator = new Orchestrator({
+    mandateWorld: () => mandateWorld(),
     pendingQuestions: (agentId, conversation) => questions.list().filter(item => item.agentId === agentId && item.conversation === conversation && item.expiresAt > Date.now()).length,
     registry,
     provider,
@@ -755,6 +757,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // identity that used to be a bare channel grant becomes a driver principal, so a
   // person's existing access survives the upgrade rather than being silently revoked.
   const principals = new Principals(undefined, { incarnationOf, warn: line => log(`principals: ${line}`) });
+  /** What a task's mandate is checked against now (INV-1457): the principal's role today and the rule set as loaded. */
+  const mandateWorld = (): MandateWorld => ({
+    mayDrive: id => roleAtLeast(principals.list().find(person => person.id === id)?.role ?? principals.roleOf(id), "driver"),
+    ...(orchestrator.policy.rulesHash() !== undefined ? { rulesHash: orchestrator.policy.rulesHash()! } : {}),
+  });
   const bootstrap = new BootstrapAdmins(principalsPath(), join(agentboxHome(), "bootstrap-code"));
   try {
     if (bootstrap.ensure()) log("First-admin bootstrap is available at /bootstrap; retrieve the code from the local bootstrap-code file (24h, one use).");
@@ -1649,9 +1656,20 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           ...(assigneeId !== undefined ? { assigneeId } : {}),
           ...(reviewerId !== undefined ? { reviewerId } : {}),
           conversation: conversationIdFor(input.threadKey ?? input.chatKey),
+          ...(orchestrator.policy.rulesHash() !== undefined ? { mandate: { rulesHash: orchestrator.policy.rulesHash()! } } : {}),
         });
         return task?.id;
       },
+      // The mandate check before a wake (INV-1457): stale is audited and shown to its person.
+      revalidate: (taskId, identity) => {
+        const tasks = orchestrator.tasks;
+        if (tasks === undefined) return { status: "unknown" };
+        const by = principals.resolve(identity).id;
+        const result = tasks.revalidate(taskId, by, mandateWorld());
+        if (result.status === "stale") orchestrator.policy.notifyMandateStale(taskId, by, result.reasons ?? []);
+        return result;
+      },
+      withdraw: (taskId, identity) => { orchestrator.tasks?.withdraw(taskId, principals.resolve(identity).id, "stopped from the chat"); },
       // "看板": the room's plate right now, grouped by what a person does about each
       // state. All lookups — see board-view.ts.
       show: chatKey => boardView(tasksOfChat(chatKey), displayName, taskUrl),

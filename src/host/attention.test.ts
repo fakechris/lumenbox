@@ -97,3 +97,14 @@ test("a paused teammate chain is everyone's to see, with either agent as the way
   assert.match(row.title, /Ada ↔ Bob: paused after 4 turns with no person/);
   assert.match(row.detail, /message either of them/);
 });
+
+test("a task whose mandate went stale waits on the person whose word it was (INV-1457)", () => {
+  const stale = task({ id: "t7", assigneeId: "bot", mandate: { by: "p-chris", strength: "explicit", grantedAt: "2026-09-01T00:00:00.000Z", stale: { at: "2026-09-15T08:00:00.000Z", reasons: ["rules-changed"] } } });
+  const mine = attentionFor({ principalId: "p-chris", identities: [], tasks: [stale], questions: [], nameOf, now: new Date(T0) }).mine;
+  assert.equal(mine.length, 1);
+  assert.deepEqual({ kind: mine[0]!.kind, ref: mine[0]!.ref, with: mine[0]!.with }, { kind: "reauthorize", ref: "t7", with: "Ada" });
+  assert.match(mine[0]!.detail, /rules changed/);
+  assert.equal(attentionFor({ principalId: "p-mia", identities: [], tasks: [stale], questions: [], nameOf, now: new Date(T0) }).mine.length, 0, "not Mia's to re-authorise");
+  const withdrawn = task({ ...stale, mandate: { ...stale.mandate!, withdrawn: { at: "t", by: "p-chris", reason: "stop" } } });
+  assert.equal(attentionFor({ principalId: "p-chris", identities: [], tasks: [withdrawn], questions: [], nameOf, now: new Date(T0) }).mine.length, 0, "a withdrawn mandate asks nobody");
+});
