@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: storage
-     updated: 2026-10-01
+     updated: 2026-11-01
 -->
 # Data
 
@@ -834,6 +834,18 @@ never retried after a lost answer: a second create is a second document. Set `AG
 (the tenant's `*.feishu.cn`) for direct document links. The starter team's tool lists now name
 `connector_request` and these two: until now an allowlist withheld them from the default team even
 when connected, because the guard that checks the lists built its tools without a connection.
+
+**Writing once (INV-1395).** A create that the model repeats after a lost answer used to be a
+second row or a second event, because each call minted a fresh random key. Now a write's key is
+made of what it writes (`writeKey` in `office-write.ts`: door, target, the trimmed fields or
+title and span, keys sorted), so the vendor drops the repeat where it offers a key (Bitable
+`client_token`, Feishu calendar `idempotency_key`); and every create looks first — a row with the
+same first-field value, an event with the same title starting at the same second, an open task of
+the same title, a DingTalk event of the same title in the same span — and answers `duplicate_of
+<id>` with the existing object's link instead of creating. After a create, the object is read
+back: the create's answer is the vendor accepting the request, the read is the object being
+there. A read-back that fails is `unknown` with "search for it before writing again", not a
+failure and not a success. The tools' bodies live in `office-write-tools.ts`.
 
 **Writing a skill, and two hints (INV-755).** The `skill-authoring` starter is how a skill should
 be written here: a description that starts "Use when…" in the words people say and names the

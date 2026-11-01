@@ -9,7 +9,7 @@
       "src/boxd/main.ts": 1315,
       "src/channels/dingtalk.ts": 1540,
       "src/channels/feishu.ts": 2418,
-      "src/channels/manager.ts": 2506,
+      "src/channels/manager.ts": 2505,
       "src/cli.ts": 2187,
       "src/control/store.ts": 1341,
       "src/cua/x11-executor.ts": 1372,
@@ -17,15 +17,15 @@
       "src/host/memory.ts": 1183,
       "src/host/orchestrator.ts": 2805,
       "src/host/policy.ts": 1165,
-      "src/host/prompt.ts": 1451,
+      "src/host/prompt.ts": 1443,
       "src/host/starter-skills.ts": 1339,
       "src/host/tasks.ts": 1056,
       "src/host/template.ts": 1178,
-      "src/host/tools.ts": 5694,
+      "src/host/tools.ts": 5482,
       "src/host/turn.ts": 3781,
-      "src/protocol/index.ts": 1066,
+      "src/protocol/index.ts": 1064,
       "src/web/app-html.ts": 7682,
-      "src/web/server.ts": 7216
+      "src/web/server.ts": 7215
     }
   },
   "env": {
