@@ -521,3 +521,13 @@ test("deliver_when: always or changed is read; anything else is refused with the
   const wrong = skillFrom("prices", parseSkillFile("---\ndescription: hourly price\nschedule: @every 1h\ndeliver: feishu:oc_1\ndeliver_when: sometimes\n---\ncheck"));
   assert.ok("problem" in wrong && /deliver_when must be "always" or "changed"/.test(wrong.problem));
 });
+
+test("a routine's mode is read from its frontmatter, and a wrong word is refused rather than run (INV-1458)", () => {
+  const base = "---\ndescription: watch the inbox\nschedule: @daily\n";
+  const observe = skillFrom("watch", parseSkillFile(`${base}mode: observe\n---\nbody`));
+  assert.ok("skill" in observe && observe.skill.mode === "observe");
+  const none = skillFrom("watch", parseSkillFile(`${base}---\nbody`));
+  assert.ok("skill" in none && none.skill.mode === undefined, "absent is auto, for every routine from before modes");
+  const wrong = skillFrom("watch", parseSkillFile(`${base}mode: watch\n---\nbody`));
+  assert.ok("problem" in wrong && /mode must be "off", "observe" or "auto"/.test(wrong.problem));
+});

@@ -284,6 +284,7 @@ type PolicyEvent =
   | { at: string; kind: "stop"; agentId: string; by: string }
   | { at: string; kind: "mandate-stale"; taskId: string; by: string; reasons: string[] } // A wake the task's mandate refused (INV-1457).
   | { at: string; kind: "reply-refused"; purpose: string; chatKey: string; reason: string } // A host push whose purpose's claim did not hold (INV-1459).
+  | { at: string; kind: "observed"; slug: string; would: string } // A routine in observe mode was triggered and did not run (INV-1458).
   | { at: string; kind: "resume"; agentId: string; by: string }
   | { at: string; kind: "approval-requested"; id: string; fingerprint: string; agentId: string; description: string; action?: string; harnessResumes?: boolean }
   | { at: string; kind: "approval-granted"; id: string; by: string }
@@ -609,6 +610,7 @@ export class PolicyGate {
   notifyMandateStale(taskId: string, by: string, reasons: readonly string[]): void { this.append({ at: this.now().toISOString(), kind: "mandate-stale", taskId, by, reasons: [...reasons] }); }
   rulesHash(): string | undefined { return this.rules?.currentHash(); } // The rule set as loaded now, for a mandate to be granted and checked under.
   notifyReplyRefused(purpose: string, chatKey: string, reason: string): void { this.append({ at: this.now().toISOString(), kind: "reply-refused", purpose, chatKey, reason }); }
+  notifyObserved(slug: string, would: string): void { this.append({ at: this.now().toISOString(), kind: "observed", slug, would }); }
 
   /** Records that the rule set changed. Called by the store's onChange. */
   notifyRulesLoaded(change: { hash: string; ids: string[]; problems: { id: string; problem: string }[] }): void { this.append({ at: this.now().toISOString(), kind: "rules-loaded", ...change }); }
@@ -891,9 +893,7 @@ export class PolicyGate {
   }
 
   /** Everything waiting on a person, newest last. */
-  pending(): PendingApproval[] {
-    return [...this.awaiting.values()].sort((a, b) => a.requestedAt.localeCompare(b.requestedAt));
-  }
+  pending(): PendingApproval[] { return [...this.awaiting.values()].sort((a, b) => a.requestedAt.localeCompare(b.requestedAt)); }
 
   /**
    * Grants one approval by id, at one of three scopes.

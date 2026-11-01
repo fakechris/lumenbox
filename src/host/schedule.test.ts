@@ -802,3 +802,34 @@ test("a routine's declared tools travel with every run of it, timed or by hand (
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(scopes, [["read_file", "WebSearch"], undefined, ["read_file", "WebSearch"]]);
 });
+
+test("observe mode records what would have run and runs nothing; off is never evaluated; auto runs (INV-1458)", async () => {
+  const runs: string[] = [];
+  const observed: { slug: string; would: string }[] = [];
+  let clock = at("2026-11-01T09:00:00Z");
+  const routine = (slug: string, mode?: "off" | "observe" | "auto") => ({ slug, name: slug, path: `/${slug}`, schedule: scheduleOf("@every 30m"), deliver: "feishu:oc_1", ...(mode !== undefined ? { mode } : {}) });
+  const scheduler = new Scheduler({
+    due: async () => [routine("watch", "observe"), routine("dark", "off"), routine("live", "auto"), routine("old")],
+    listeners: async () => [{ slug: "ears", name: "ears", path: "/ears", match: "deploy failed", mode: "observe" as const }, { slug: "deaf", name: "deaf", path: "/deaf", match: "deploy failed", mode: "off" as const }],
+    run: async agent => { runs.push(agent); },
+    observed: (slug, would) => observed.push({ slug, would }),
+    defaultAgent: () => "agent-ada",
+    now: () => clock,
+    log: () => {},
+    path: null,
+  });
+  clock = at("2026-11-01T09:31:00Z");
+  await scheduler.tick();
+  assert.equal(runs.length, 2, "auto and the routine with no mode ran");
+  assert.deepEqual(observed.map(o => o.slug), ["watch"]);
+  assert.match(observed[0]!.would, /run as agent-ada .*report to feishu:oc_1/);
+  const fired = await scheduler.heard({ text: "the deploy failed again", chatKey: "feishu:oc_1", senderLabel: "chris", messageId: "m1" });
+  assert.deepEqual(fired, ["ears"], "the observing listener counts as fired, the off one does not");
+  assert.equal(runs.length, 2, "no listener run started");
+  assert.deepEqual(observed.map(o => o.slug), ["watch", "ears"]);
+  const status = await scheduler.status();
+  const by = Object.fromEntries(status.map(row => [row.slug, { mode: row.mode, defaulted: row.modeDefaulted }]));
+  assert.deepEqual(by.watch, { mode: "observe", defaulted: false });
+  assert.deepEqual(by.old, { mode: "auto", defaulted: true });
+  assert.deepEqual(by.dark, { mode: "off", defaulted: false });
+});

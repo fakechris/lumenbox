@@ -32,6 +32,7 @@
  * is why it is acceptable.
  */
 
+import { describeSchedule, isDue, nextFire, type Schedule } from "./schedule-time.ts";
 import { envNumber } from "../config.ts";
 import { webhookPrompt } from "./webhooks.ts";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
@@ -39,362 +40,7 @@ import { appendLine } from "./jsonl.ts";
 import type { DeliverWhen } from "./routine-resolve.ts";
 import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
-
-/** A parsed schedule: the fields a cron expression constrains. `undefined` means "any". */
-export interface Schedule {
-  /** The text it was parsed from, for messages and for the prompt. */
-  source: string;
-  minutes?: readonly number[];
-  hours?: readonly number[];
-  daysOfMonth?: readonly number[];
-  months?: readonly number[];
-  daysOfWeek?: readonly number[];
-  /** Set instead of the fields above for `@every <n><unit>`. */
-  everyMs?: number;
-  /**
-   * Set instead of the fields above for `@at <instant>` (INV-430): a one-time task. It fires
-   * once, at or after that instant, and never again — the recorded run is what says it is done.
-   */
-  at?: number;
-}
-
-/** How late a one-time task may still fire: a host that was down at the instant catches up within this. */
-export const ONCE_GRACE_MS = 24 * 3_600_000;
-
-const ALIASES: Record<string, string> = {
-  "@hourly": "0 * * * *",
-  "@daily": "0 0 * * *",
-  "@midnight": "0 0 * * *",
-  "@weekly": "0 0 * * 0",
-  "@monthly": "0 0 1 * *",
-};
-
-const RANGES: [number, number][] = [
-  [0, 59], // minute
-  [0, 23], // hour
-  [1, 31], // day of month
-  [1, 12], // month
-  [0, 6], // day of week
-];
-
-/**
- * Parses a schedule, or says why it could not.
- *
- * Deliberately a small subset: `*`, numbers, comma lists, ranges and `*​/n` steps, plus `@every` and a
- * few aliases. Not a full cron implementation, because the parts left out — names like `MON`, `L`,
- * `#`, seconds fields — vary between implementations, and a schedule that means something slightly
- * different from what its author expected is worse than one that was refused.
- */
-export function parseSchedule(text: string): { schedule: Schedule } | { problem: string } {
-  const raw = text.trim().toLowerCase();
-  if (raw === "") return { problem: "an empty schedule" };
-
-  const every = /^@every\s+(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)$/.exec(raw);
-  if (every !== null) {
-    const amount = Number(every[1]);
-    const unit = every[2] ?? "m";
-    const ms = unit.startsWith("d") ? 86_400_000 : unit.startsWith("h") ? 3_600_000 : 60_000;
-    if (amount <= 0) return { problem: `"${text}": an interval has to be more than zero` };
-    const everyMs = amount * ms;
-    // A minute is the floor because the checker ticks at that resolution, and an automation that
-    // claims to run every ten seconds and runs every sixty is lying to whoever wrote it.
-    if (everyMs < 60_000) return { problem: `"${text}": the shortest interval is one minute` };
-    return { schedule: { source: text.trim(), everyMs } };
-  }
-
-  const once = /^@at\s+(.+)$/i.exec(text.trim());
-  if (once !== null) {
-    const at = Date.parse(once[1]!.trim());
-    if (Number.isNaN(at)) return { problem: `"${text}": @at needs an instant such as 2026-09-12T09:00 or 2026-09-12T09:00+08:00` };
-    return { schedule: { source: text.trim(), at } };
-  }
-
-  const expanded = ALIASES[raw] ?? raw;
-  if (expanded.startsWith("@")) {
-    return {
-      problem:
-        `"${text}" is not a schedule this understands. Use five cron fields ` +
-        `(\`0 9 * * 1-5\`), \`@every 30m\`, \`@at 2026-09-12T09:00\`, or one of ${Object.keys(ALIASES).join(", ")}.`,
-    };
-  }
-
-  const fields = expanded.split(/\s+/);
-  if (fields.length !== 5) {
-    return {
-      problem:
-        `"${text}" has ${fields.length} field(s); a cron schedule has five ` +
-        `(minute hour day-of-month month day-of-week).`,
-    };
-  }
-
-  const parsed: (readonly number[] | undefined)[] = [];
-  for (let at = 0; at < 5; at++) {
-    const field = parseField(fields[at]!, RANGES[at]![0], RANGES[at]![1]);
-    // "any" and "unreadable" are different answers and must not share a representation. Collapsing
-    // them here made every `*` in fields three to five a parse error — which is to say, almost every
-    // real schedule. The third time in this codebase that conflating "nothing" with "failed" has
-    // produced a bug, so it is a tagged union rather than a convention.
-    if (field.ok === false) {
-      return { problem: `"${text}": cannot read field ${at + 1} ("${fields[at]}")` };
-    }
-    parsed.push(field.any ? undefined : field.values);
-  }
-
-  return {
-    schedule: {
-      source: text.trim(),
-      ...(parsed[0] !== undefined ? { minutes: parsed[0] } : {}),
-      ...(parsed[1] !== undefined ? { hours: parsed[1] } : {}),
-      ...(parsed[2] !== undefined ? { daysOfMonth: parsed[2] } : {}),
-      ...(parsed[3] !== undefined ? { months: parsed[3] } : {}),
-      ...(parsed[4] !== undefined ? { daysOfWeek: parsed[4] } : {}),
-    },
-  };
-}
-
-/**
- * One cron field, as either "any value", a set of values, or unreadable.
- *
- * Three outcomes, named, because two of them mean opposite things and both were `undefined` in the
- * first version — so `*` in the day-of-month field was read as a parse failure and almost no real
- * schedule loaded.
- */
-type Field = { ok: true; any: true } | { ok: true; any: false; values: number[] } | { ok: false };
-
-function parseField(field: string, low: number, high: number): Field {
-  if (field === "*") return { ok: true, any: true };
-  const values = new Set<number>();
-  for (const part of field.split(",")) {
-    const step = /^(.+)\/(\d+)$/.exec(part);
-    const body = step?.[1] ?? part;
-    const stride = step === null ? 1 : Number(step[2]);
-    if (stride <= 0) return { ok: false };
-
-    let from: number;
-    let to: number;
-    if (body === "*") {
-      from = low;
-      to = high;
-    } else {
-      const range = /^(\d+)-(\d+)$/.exec(body);
-      if (range !== null) {
-        from = Number(range[1]);
-        to = Number(range[2]);
-      } else if (/^\d+$/.test(body)) {
-        from = Number(body);
-        to = from;
-      } else {
-        return { ok: false };
-      }
-    }
-    if (from < low || to > high || from > to) return { ok: false };
-    for (let value = from; value <= to; value += stride) values.add(value);
-  }
-  if (values.size === 0) return { ok: false };
-  return { ok: true, any: false, values: [...values].sort((a, b) => a - b) };
-}
-
-/**
- * Whether a schedule wants to run at this minute, given when it last did.
- *
- * Minute resolution, and the last-run time is what stops one tick firing twice. For `@every`, the
- * question is simply whether the interval has elapsed; for cron it is whether the fields match *and*
- * we have not already fired inside this same minute.
- *
- * **Never catches up.** A schedule whose window passed while nothing was running does not fire late —
- * see the module comment for why that is the safer default rather than an oversight.
- */
-/**
- * The wall-clock fields of an instant, in a named zone.
- *
- * `Intl` rather than arithmetic, because the arithmetic is daylight saving and nobody
- * gets that right by hand: "06:30 ET" is 10:30 or 11:30 UTC depending on the date, and a
- * scheduler that silently drifts by an hour twice a year is the kind of wrong that looks
- * right for months.
- *
- * An unknown zone throws at parse time, not here — see `parseTimezone`.
- */
-export function wallClock(now: Date, timezone: string | undefined): {
-  minute: number;
-  hour: number;
-  day: number;
-  month: number;
-  weekday: number;
-} {
-  if (timezone === undefined) {
-    return {
-      minute: now.getMinutes(),
-      hour: now.getHours(),
-      day: now.getDate(),
-      month: now.getMonth() + 1,
-      weekday: now.getDay(),
-    };
-  }
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: timezone,
-    hour12: false,
-    year: "numeric",
-    month: "numeric",
-    day: "numeric",
-    hour: "numeric",
-    minute: "numeric",
-    weekday: "short",
-  }).formatToParts(now);
-  const field = (type: string): string =>
-    parts.find(part => part.type === type)?.value ?? "0";
-  const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  return {
-    // "24" is midnight in some locales' hourCycle; normalised so hour 0 means hour 0.
-    minute: Number(field("minute")),
-    hour: Number(field("hour")) % 24,
-    day: Number(field("day")),
-    month: Number(field("month")),
-    weekday: Math.max(0, WEEKDAYS.indexOf(field("weekday"))),
-  };
-}
-
-/** Whether a zone name is one this runtime knows. Checked at parse time so a typo is loud. */
-export function knownTimezone(name: string): boolean {
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: name });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export function isDue(
-  schedule: Schedule,
-  now: Date,
-  lastRun: Date | undefined,
-  timezone?: string
-): boolean {
-  if (schedule.everyMs !== undefined) {
-    if (lastRun === undefined) return true;
-    return now.getTime() - lastRun.getTime() >= schedule.everyMs;
-  }
-  if (schedule.at !== undefined) {
-    // Once: never after it has run, not before its instant, and not so late that firing
-    // would be a surprise — a task set for a morning the host slept through fires when the
-    // host wakes that day, not a month later when somebody restarts it.
-    if (lastRun !== undefined) return false;
-    return now.getTime() >= schedule.at && now.getTime() - schedule.at < ONCE_GRACE_MS;
-  }
-
-  const at = wallClock(now, timezone);
-  const matches =
-    within(schedule.minutes, at.minute) &&
-    within(schedule.hours, at.hour) &&
-    within(schedule.daysOfMonth, at.day) &&
-    within(schedule.months, at.month) &&
-    within(schedule.daysOfWeek, at.weekday);
-  if (!matches) return false;
-
-  // Already fired this minute. Without this a checker ticking every thirty seconds fires twice for
-  // one scheduled minute, which for a daily report means two reports. Compared as instants rather
-  // than as wall-clock fields, so it holds across a daylight-saving jump too.
-  if (lastRun !== undefined && sameMinute(lastRun, now)) return false;
-  return true;
-}
-
-function within(allowed: readonly number[] | undefined, value: number): boolean {
-  return allowed === undefined || allowed.includes(value);
-}
-
-function sameMinute(a: Date, b: Date): boolean {
-  return Math.floor(a.getTime() / 60_000) === Math.floor(b.getTime() / 60_000);
-}
-
-/**
- * Plain language, for the prompt and the UI. A cron expression is not something to make a person
- * read — but a description that understates how often something runs is worse than the cron, since
- * this text is what a person reviews before leaving an automation running unattended.
- *
- * The three it used to get wrong: it read only the first minute, so `0,30 * * * *` was "every hour"
- * when it runs twice an hour; it treated an unrestricted minute field as minute zero, so
- * `* 9 * * *` — sixty runs — read as "at 09:00"; and it ignored the month entirely, so a schedule
- * that fires one month a year claimed to fire every month.
- */
-/**
- * When a schedule fires next, after an instant: for the automations view, so "next" is
- * read from the same rules the tick uses. Undefined means never again (a one-time task
- * that ran, or a cron that matches nothing in the coming year).
- */
-export function nextFire(schedule: Schedule, after: Date, lastRun: Date | undefined, timezone?: string): Date | undefined {
-  if (schedule.everyMs !== undefined) {
-    return lastRun === undefined ? after : new Date(Math.max(after.getTime(), lastRun.getTime() + schedule.everyMs));
-  }
-  if (schedule.at !== undefined) {
-    if (lastRun !== undefined || after.getTime() - schedule.at >= ONCE_GRACE_MS) return undefined;
-    return new Date(Math.max(schedule.at, after.getTime()));
-  }
-  // Minute by minute from the next whole minute, jumping a day or an hour at a time when
-  // the day or the hour cannot match — a year is the horizon, as a yearly cron needs.
-  const horizon = after.getTime() + 366 * 86_400_000;
-  let t = Math.floor(after.getTime() / 60_000) * 60_000 + 60_000;
-  while (t <= horizon) {
-    const now = new Date(t);
-    const at = wallClock(now, timezone);
-    if (!within(schedule.months, at.month) || !within(schedule.daysOfMonth, at.day) || !within(schedule.daysOfWeek, at.weekday)) {
-      t += (24 - at.hour) * 3_600_000 - at.minute * 60_000;
-      continue;
-    }
-    if (!within(schedule.hours, at.hour)) {
-      t += 3_600_000 - at.minute * 60_000;
-      continue;
-    }
-    if (within(schedule.minutes, at.minute)) return now;
-    t += 60_000;
-  }
-  return undefined;
-}
-
-export function describeSchedule(schedule: Schedule): string {
-  if (schedule.at !== undefined) return `once, at ${new Date(schedule.at).toISOString().slice(0, 16).replace("T", " ")} UTC`;
-  if (schedule.everyMs !== undefined) {
-    const minutes = Math.round(schedule.everyMs / 60_000);
-    if (minutes % 1440 === 0) return `every ${minutes / 1440} day(s)`;
-    if (minutes % 60 === 0) return `every ${minutes / 60} hour(s)`;
-    return `every ${minutes} minute(s)`;
-  }
-
-  const pad = (value: number) => String(value).padStart(2, "0");
-  const parts: string[] = [];
-
-  if (schedule.minutes === undefined) {
-    // Every minute of whichever hours are allowed. Said first and said plainly, because this is the
-    // one that surprises people.
-    parts.push(
-      schedule.hours === undefined
-        ? "every minute"
-        : `every minute of ${schedule.hours.map(hour => `${pad(hour)}:00`).join(", ")}`
-    );
-  } else if (schedule.hours === undefined) {
-    parts.push(
-      schedule.minutes.length === 1
-        ? `every hour at :${pad(schedule.minutes[0]!)}`
-        : `every hour at ${schedule.minutes.map(minute => `:${pad(minute)}`).join(", ")}`
-    );
-  } else {
-    const times = schedule.hours.flatMap(hour =>
-      schedule.minutes!.map(minute => `${pad(hour)}:${pad(minute)}`)
-    );
-    parts.push(`at ${times.join(", ")}`);
-  }
-
-  if (schedule.daysOfWeek !== undefined) {
-    const names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    parts.push(`on ${schedule.daysOfWeek.map(day => names[day]).join(", ")}`);
-  }
-  if (schedule.daysOfMonth !== undefined) {
-    parts.push(`on day ${schedule.daysOfMonth.join(", ")} of the month`);
-  }
-  if (schedule.months !== undefined) {
-    const names = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    parts.push(`in ${schedule.months.map(month => names[month]).join(", ")}`);
-  }
-  return parts.join(" ");
-}
+export { ONCE_GRACE_MS, describeSchedule, isDue, knownTimezone, nextFire, parseSchedule, wallClock, type Schedule } from "./schedule-time.ts";
 
 /**
  * What a scheduled turn is told.
@@ -433,6 +79,7 @@ export interface Scheduled {
   path: string;
   schedule: Schedule;
   runAs?: string;
+  mode?: RoutineMode;
   /** IANA zone the times are read in. Absent means the host's own clock. */
   timezone?: string;
   /**
@@ -461,6 +108,7 @@ export interface Scheduled {
 /** A routine that fires when its own URL is called (webhooks.ts). */
 export interface Hooked {
   slug: string;
+  mode?: RoutineMode;
   name: string;
   path: string;
   runAs?: string;
@@ -481,6 +129,7 @@ export interface Listening {
   match: string;
   chat?: string;
   runAs?: string;
+  mode?: RoutineMode;
   paused?: boolean;
   boxId?: string;
   /** The tools the skill says it needs (INV-691); an unattended run is narrowed to them. */
@@ -532,10 +181,15 @@ export function scheduleLogPath(): string {
 }
 
 /** One thing that happened to one schedule. Append-only, like everything else durable here. */
+/** How a routine is allowed to act (INV-1458): off = never evaluated; observe = the trigger is recorded as "would run", nothing runs; auto = runs. */
+export type RoutineMode = "off" | "observe" | "auto";
+
 interface RunRecord {
   slug: string;
   at: string;
-  event: "started" | "finished" | "skipped";
+  event: "started" | "finished" | "skipped" | "observed";
+  /** On `observed`: what would have run, in one line (INV-1458). */
+  would?: string;
   /** Which agent ran it. On `started` and `finished`. */
   agent?: string;
   /**
@@ -589,6 +243,8 @@ export interface SchedulerDeps {
    * are its own — not one `ad-hoc` history every listener shares.
    */
   run: (agent: string, prompt: string, deliver?: string, slug?: string, toolScope?: readonly string[], deliverWhen?: DeliverWhen, identity?: string) => Promise<void>;
+  /** A routine in observe mode was triggered and did not run (INV-1458); the audit row. */
+  observed?: (slug: string, would: string) => void;
   /**
    * What a routine committed to last time and where it stands (INV-528), prepended to
    * its prompt so a retro opens with its own previous "next week" rather than a blank.
@@ -694,7 +350,7 @@ export class Scheduler {
   private record(
     slug: string,
     event: RunRecord["event"],
-    extra: Pick<RunRecord, "agent" | "tokens" | "ms"> = {}
+    extra: Pick<RunRecord, "agent" | "tokens" | "ms" | "would"> = {}
   ): void {
     if (this.path === undefined) return;
     try {
@@ -708,6 +364,32 @@ export class Scheduler {
       // after a restart, which is the behaviour this whole file used to have.
       this.log(`${slug}: could not write the run history (${error instanceof Error ? error.message : String(error)})`);
     }
+  }
+
+  /**
+   * Observe mode (INV-1458): the trigger fired and this is what would have run. Recorded on the
+   * run history and the policy ledger, nothing started, no chat told. The schedule still advances,
+   * so a person reading the record sees each window the routine would have taken.
+   */
+  private observe(skill: { slug: string; name: string }, agent: string, would: string): void {
+    this.lastRun.set(skill.slug, this.now());
+    this.record(skill.slug, "observed", { agent, would });
+    this.deps.observed?.(skill.slug, would);
+    this.log(`${skill.name}: observed, not run — ${would}`);
+  }
+
+  /** The observe records of one routine, newest first, for the automations page. */
+  observedOf(slug: string, limit = 5): { at: string; would: string }[] {
+    if (this.path === undefined || !existsSync(this.path)) return [];
+    const out: { at: string; would: string }[] = [];
+    for (const line of readFileSync(this.path, "utf8").split("\n")) {
+      if (line.trim() === "") continue;
+      try {
+        const record = JSON.parse(line) as RunRecord;
+        if (record.slug === slug && record.event === "observed") out.push({ at: record.at, would: record.would ?? "" });
+      } catch { /* torn line */ }
+    }
+    return out.slice(-limit).reverse();
   }
 
   /** Message ids already answered by a listener, so a redelivered message fires nothing twice. */
@@ -745,7 +427,7 @@ export class Scheduler {
     for (const skill of listening) {
       if (skill.paused === true) continue;
       if (skill.chat !== undefined && skill.chat !== message.chatKey && !message.chatKey.startsWith(`${skill.chat}/`)) continue;
-      if (!listenerMatches(skill.match, message.text)) continue;
+      if (skill.mode === "off" || !listenerMatches(skill.match, message.text)) continue;
       if (this.running.has(skill.slug)) {
         this.log(`${skill.name}: skipped a matching message, the previous run has not finished`);
         this.record(skill.slug, "skipped");
@@ -754,6 +436,7 @@ export class Scheduler {
       const agent = this.runnerFor(skill);
       if (agent === undefined) continue;
       const deliver = message.threadKey ?? message.chatKey;
+      if (skill.mode === "observe") { this.observe(skill, agent, `run as ${agent} for a message in ${deliver} matching ${skill.match}`); fired.push(skill.slug); continue; }
       this.running.add(skill.slug);
       const startedAt = this.now();
       this.record(skill.slug, "started", { agent });
@@ -808,7 +491,7 @@ export class Scheduler {
     for (const skill of scheduled) {
       // Paused is not due. Not logged per tick: a routine somebody switched off would fill the
       // log with the fact every thirty seconds.
-      if (skill.paused === true) continue;
+      if (skill.paused === true || skill.mode === "off") continue;
       if (!isDue(skill.schedule, this.now(), this.lastRun.get(skill.slug), skill.timezone)) continue;
 
       if (this.running.has(skill.slug)) {
@@ -826,6 +509,7 @@ export class Scheduler {
         this.log(`${skill.name}: no agent to run it`);
         continue;
       }
+      if (skill.mode === "observe") { this.observe(skill, agent, `run as ${agent} (${describeSchedule(skill.schedule)})${skill.deliver !== undefined ? `, report to ${skill.deliver}` : ""}`); continue; }
 
       // Marked before starting, so a slow first tick cannot be overtaken by the next one.
       this.lastRun.set(skill.slug, this.now());
@@ -891,6 +575,10 @@ export class Scheduler {
       kind: "schedule" | "once" | "webhook";
       /** The box the routine lives in; absent means the installation's own. */
       boxId: string | undefined;
+      /** How it may act (INV-1458); `modeDefaulted` when the file says nothing and auto is assumed. */
+      mode: RoutineMode;
+      modeDefaulted: boolean;
+      observed: { at: string; would: string }[];
     }[]
   > {
     const skills = await this.deps.due().catch(() => []);
@@ -911,6 +599,7 @@ export class Scheduler {
       paused: skill.paused === true,
       kind: skill.schedule.at !== undefined ? ("once" as const) : ("schedule" as const),
       boxId: skill.boxId,
+      mode: skill.mode ?? "auto", modeDefaulted: skill.mode === undefined, observed: this.observedOf(skill.slug),
     }));
     // Webhook routines belong in the same list: to a person, "what runs by itself" is one
     // question, and a routine that is missing from the automations page is a routine nobody
@@ -935,6 +624,7 @@ export class Scheduler {
         paused: skill.paused === true,
         kind: "webhook" as const,
         boxId: skill.boxId,
+        mode: skill.mode ?? "auto", modeDefaulted: skill.mode === undefined, observed: this.observedOf(skill.slug),
       })),
     ];
   }
@@ -1009,11 +699,13 @@ export class Scheduler {
     const skill = hooked.find(candidate => candidate.slug === slug);
     if (skill === undefined) return { ok: false, reason: `No webhook routine "${slug}".` };
     if (skill.paused === true) return { ok: false, reason: `${skill.name} is paused; turn it on first.` };
+    if (skill.mode === "off") return { ok: false, reason: `${skill.name} is switched off (mode: off).` };
     // Refused rather than queued: a shortcut pressed twice on a train should not stack two runs
     // of the same routine, and the second press is nearly always the same content.
     if (this.running.has(slug)) return { ok: false, reason: `${skill.name} is already running.` };
     const agent = this.runnerFor(skill);
     if (agent === undefined) return { ok: false, reason: `No agent to run ${skill.name}.` };
+    if (skill.mode === "observe") { this.observe(skill, agent, `run as ${agent} for a webhook call${from !== undefined ? ` from ${from}` : ""}`); return { ok: true, said: `${skill.name} is in observe mode: recorded what it would have done, nothing ran.` }; }
 
     this.running.add(slug);
     const startedAt = this.now();

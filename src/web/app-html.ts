@@ -5266,6 +5266,18 @@ function automationRow(s, rows) {
   var toggle = s.paused
     ? '<button class="btn ghost sm" data-resume="' + esc(s.slug) + '">Turn on</button>'
     : '<button class="btn ghost sm" data-pause="' + esc(s.slug) + '">Pause</button>';
+  // How it may act (INV-1458): observe records what it would have run; a file that says nothing
+  // is auto by default and marked so, because that is the one case a person has not chosen.
+  var mode = s.mode || "auto";
+  var modeTag = mode === "auto" && !s.modeDefaulted ? "" :
+    '<span style="color:' + (mode === "observe" ? "var(--accent-2)" : mode === "off" ? "var(--warn)" : "var(--muted)") + ';font-size:10.5px;border:1px solid var(--border);border-radius:5px;padding:0 5px">' +
+      (s.modeDefaulted ? "auto (no mode set)" : mode) + "</span>";
+  var modeSwitch = mode === "auto"
+    ? '<button class="btn ghost sm" data-mode="observe" data-mode-slug="' + esc(s.slug) + '" title="Record what it would run; nothing runs">Observe</button>'
+    : '<button class="btn ghost sm" data-mode="auto" data-mode-slug="' + esc(s.slug) + '" title="Let it run">Let it run</button>';
+  var observed = (s.observed || []).length
+    ? '<div class="dim" style="font-size:11px;margin-top:3px">would have run ' + s.observed.length + ' time' + (s.observed.length === 1 ? "" : "s") + ' \u00b7 last ' + esc(new Date(s.observed[0].at).toLocaleString()) + ': ' + esc(s.observed[0].would) + "</div>"
+    : "";
   // A webhook routine's URL and secret are the whole of its interface: without them on screen
   // there is nothing to paste into a phone, and the routine is armed but unreachable.
   // Keyed on the hook data alone. It used to also require s.kind === "webhook", which is the
@@ -5294,15 +5306,15 @@ function automationRow(s, rows) {
     : "";
   return '<div style="padding:10px 16px;border-bottom:1px solid var(--border)' + (s.paused ? ";opacity:.75" : "") + '">' +
     '<div style="display:flex;gap:9px;align-items:baseline">' +
-      '<span style="flex:1;font-size:13px;font-weight:500">' + esc(s.name) + " " + origin + " " + pausedTag + "</span>" +
-      toggle +
+      '<span style="flex:1;font-size:13px;font-weight:500">' + esc(s.name) + " " + origin + " " + pausedTag + " " + modeTag + "</span>" +
+      modeSwitch + toggle +
       '<button class="btn ghost sm" data-run="' + esc(s.slug) + '"' + (s.running || s.paused ? " disabled" : "") + ">Run now</button>" +
     "</div>" +
     '<div class="dim" style="font-size:11px;margin-top:3px">' + when +
       (s.agent ? " · as " + esc(s.agent) : "") + " · " + where + "</div>" +
     '<div class="dim" style="font-size:11px">' + last + ' · <span class="mono">' + esc(s.schedule) + "</span></div>" +
     (s.because ? '<div class="dim" style="font-size:11px;font-style:italic">' + esc(s.because) + "</div>" : "") +
-    lastResult +
+    lastResult + observed +
     hookBlock +
   "</div>";
 }
@@ -5406,6 +5418,16 @@ document.getElementById("autolist").addEventListener("click", function (e) {
       .then(function (r) { return r.json(); })
       .then(function (data) { if (data.error) alert(data.error); return refreshAutomations(); })
       .catch(function () { return refreshAutomations(); });
+    return;
+  }
+  var modeSlug = get("data-mode-slug");
+  if (modeSlug) {
+    e.preventDefault();
+    e.target.disabled = true;
+    fetch("/api/schedules/mode", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: modeSlug, mode: get("data-mode") }) })
+      .then(function (r) { return r.json(); })
+      .then(function (data) { if (data.error) alert(data.error); setTimeout(refreshAutomations, 400); })
+      .catch(function () { setTimeout(refreshAutomations, 400); });
     return;
   }
   var toggleSlug = get("data-resume") || get("data-pause");

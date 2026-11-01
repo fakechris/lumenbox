@@ -2,7 +2,7 @@
      title: Bot templates: the bot packs itself, the new bot installs itself
      family: decision
      status: current
-     updated: 2026-09-14
+     updated: 2026-11-01
 -->
 # Bot templates: the bot packs itself, the new bot installs itself
 
@@ -26,6 +26,13 @@ Stages 1 and 2 shipped the same day, on `feat/bot-templates`:
   keys → `{placeholders}` + "Ask the importing user for:"), `packTemplate` (from the live
   files; a bot's `body` replaces only the markdown below the frontmatter; an `about` record
   refuses), `renderRecipe`, `templateSetupCue`, `reconcile`, `stampTemplateWrite`.
+- **`mode: off | observe | auto`** (INV-1458) — how a routine may act. `observe` records
+  "would have run as …" on the run history and `policy.jsonl` (`observed`) at every trigger —
+  schedule, listener match, webhook call — and runs nothing, tells no chat; the automations
+  page shows the last few and a one-click switch to `auto`. `off` is never evaluated. Absent
+  is `auto`, for every routine written before modes, and the page marks it "auto (no mode
+  set)". Agents are told to write `mode: observe` on every routine they create; "Run now" is a
+  person's explicit act and runs in any mode. `POST /api/schedules/mode` is the line.
 - **`paused: true`** — one frontmatter key (`skills.ts`); the tick and the listener skip it,
   `runNow` refuses it, `status()` reports it; `POST /api/schedules/resume|pause` is the line,
   and resume refuses while a `{placeholder}` is left.
