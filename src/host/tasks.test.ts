@@ -447,3 +447,19 @@ test("a task from before mandates is read as the requester's explicit word and c
     cleanup();
   }
 });
+
+test("a thread follow-up is noted on its task and handed back once (INV-1462)", () => {
+  const { store, cleanup } = tempStore();
+  try {
+    const created = store.create({ title: "Sum", requester: "p-chris" })!;
+    assert.equal(store.handBack(created.id, "ada", "nothing here"), "none");
+    store.followUpDelivered(created.id, "m1");
+    assert.equal(store.get(created.id)!.followUp?.messageId, "m1");
+    assert.equal(store.handBack(created.id, "ada", "it asks for a different report"), "handed");
+    assert.equal(store.get(created.id)!.followUp?.handedBack?.reason, "it asks for a different report");
+    assert.equal(store.get(created.id)!.history.at(-1)?.note, "handed back: it asks for a different report");
+    assert.equal(store.handBack(created.id, "ada", "again"), "already");
+    store.followUpDelivered(created.id, "m2");
+    assert.equal(store.get(created.id)!.followUp?.handedBack, undefined, "a new follow-up can be handed back again");
+  } finally { cleanup(); }
+});

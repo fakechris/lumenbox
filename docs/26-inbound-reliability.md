@@ -205,3 +205,25 @@ The deliveries ledger (`deliveries.jsonl`) is unchanged and sits one level up: i
 *answer* is owed for a request and rebuilds it from the transcript; the outbox knows whether
 the *message* carrying it went. The `answer` purpose reads the first; the receipt records the
 second.
+
+### A thread's follow-ups belong to the task asked for there (INV-1462)
+
+Every channel message opened its own task; `/continue tN` was how a person said which work a
+line belonged to, and without it "再把标题改短点" became a new request. A topic thread is the
+subscription the ticket model makes explicit: the task that was asked for there owns what a
+person says there next (`src/host/follow-up.ts`).
+
+- A person's message in a thread goes to the owning task's agent as a **follow-up turn on that
+  task** — its own tracked turn, never folded into a running one (the Nova rule holds) — with a
+  note saying the message is theirs to decide. Doing it, and saying so in the reply, is the
+  acknowledgement; no separate ack tool.
+- The agent hands it back with **`HandBack(task_id, reason)`** when it asks for something beyond
+  the task or belongs to other work; the host then routes the same message as new work (a new
+  task, the person's own words). A follow-up is handed back once; a second call is refused.
+- The owner is the newest task in that conversation whose mandate was not withdrawn: a task a
+  person **stopped owns nothing**, and its thread's next message is new work. The mandate is
+  revalidated first (INV-1457); a stale one asks the person before anything runs.
+- Rooms without threads keep the old behaviour: a room is not a subscription. `/continue` and
+  `/answer` still bind explicitly.
+- Not built: releasing "unread" follow-ups when a task ends — in this turn model every message
+  gets its turn at once, so nothing is ever left unread on a task.

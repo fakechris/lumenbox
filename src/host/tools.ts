@@ -1,8 +1,8 @@
+import { isComputerWrite } from "../cua/execution.ts";
+import { inputValueHash, parseSensitiveInput, SENSITIVE_INPUT_TTL_MS } from "../protocol/sensitive-input.ts";
+import { approvalOf, computerWithVision, desktopGuard, visionActionSchema, visionExpectSchema } from "./computer-vision.ts";
 import { formatExec } from "./exec-format.ts";
 import type { JobWatch } from "./job-watch.ts";
-import { isComputerWrite } from "../cua/execution.ts";
-import { SENSITIVE_INPUT_TTL_MS, inputValueHash, parseSensitiveInput } from "../protocol/sensitive-input.ts";
-import { approvalOf, computerWithVision, desktopGuard, visionActionSchema, visionExpectSchema } from "./computer-vision.ts";
 /**
  * Tool definitions and dispatch.
  *
@@ -11,95 +11,94 @@ import { approvalOf, computerWithVision, desktopGuard, visionActionSchema, visio
  * measurably under-triggers.
  */
 
-import { randomUUID } from "node:crypto";
-import { chunkBlocks, dingtalkEventBody, doorIdOf, doorIdsOf, feishuDocUrl, feishuEventBody, feishuTaskBody, instantOf, markdownToFeishuBlocks } from "./office-write.ts";
-import { agentboxHome } from "../config.ts";
-import { executeForget, forgetOutcomeReport, forgetPlanReport, forgettable, ForgetPlans, inventory } from "./forget.ts";
+import { randomBytes, randomUUID } from "node:crypto";
+import { join } from "node:path";
 import type Anthropic from "@anthropic-ai/sdk";
-import { describeDeferred } from "./tool-roster.ts";
-import { sniffImage } from "./image-refusal.ts";
-import { optionLabel } from "./ask-options.ts";
-import { BoxError, type BoxClient } from "../box/client.ts";
-import type { DisplayLease } from "../box/display-lease.ts";
 import type { AgentBus } from "../agents/bus.ts";
 import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
-import type { PolicyGate } from "./policy.ts";
-import type { HostRunner } from "./host-runner.ts";
-import type { Vault } from "./vault.ts";
-import { guardMemoryCandidate } from "./memory-guard.ts";
-import { appendLearning, hostOf, learningsDir, readLearnings, renderLearnings } from "./learnings.ts";
-import type { ScopeStore } from "./scopes.ts";
-import type { BundleStore } from "./bundles.ts";
-import { oauthProvider, scrubToken, tokenHeaders, type OAuthGate, type OAuthProvider } from "./oauth.ts";
-import type { McpManager, ToolEffect } from "./mcp.ts";
-import { delegateEnv, delegateModel, PRESETS, presetNamed, quoteForShell, installCommand, withEnginesPath } from "./presets.ts";
-import type { AcpDelegates } from "./acp-delegate.ts";
-import { actOnDelegateSession } from "./delegate-session-actions.ts";
-import { deliveryInstructions } from "./delegate-report.ts";
-import { namesControlSurface } from "./control-surfaces.ts";
-import { catalogMenu, intersectTools, profilesFor } from "./catalog.ts";
-import { AROUND_ENTRY_CHARS, describeHistory, ENTRY_CHARS, readEpochHistory, readHistory } from "./history.ts";
-import { canSearch, fetchPage, type FetchedPage, guardUrl, isSearchEngine, MAX_TEXT, pageReadOutcome, searchWeb, WebError } from "./web.ts";
-import { readOutcome, textShape, withReadOutcome } from "./read-outcome.ts";
-import { fetchXPost, XResolversUnavailable, xStatusRef } from "./x-post.ts";
-import { join } from "node:path";
-import { keepFetchedPage, keptPointer, KEPT_MARKER, pruneOccasionally } from "./fetched.ts";
-import { findKeptResult } from "./results.ts";
-import { describeEnvShape, envShape, looksLikeEnvFile } from "./env-shape.ts";
-import { guardShellCommand } from "./ui-automation-guard.ts";
-import { dedupe, dedupeKey, describeFrom, memoryRef, validateRecord } from "./memory.ts";
-import { type Claims, heldElsewhere } from "./claims.ts";
-import { forkTag, type CommitHow, type PendingWork } from "./pending-work.ts";
-import { engineNamed, parseEngineReport, readLogEnd, settleDelegate } from "./engine-report.ts";
-import { type Orchestrations, parsePlan } from "./orchestrate.ts";
-import { MCP_FACE_DIR, MCP_FACE_TOKEN_VARIABLE, type McpFace } from "./mcp-face.ts";
-import type { ModelRelay } from "./model-relay.ts";
-import type { DelegateSessions } from "./delegate-sessions.ts";
-import { randomBytes } from "node:crypto";
-import { encodeCall } from "../egress/call.ts";
 import { MAIN_CONVERSATION, normaliseTags } from "../agents/registry.ts";
-import { describeTask, isLive, isTaskStatus, TASK_STATUSES, type TaskStore, clampContract } from "./tasks.ts";
-import { checklistAdditions, describePursuit } from "./goal-mode.ts";
-import type { GoalGate } from "./goal-gate.ts";
-import { ABSENT, versionOf, type FileVersions } from "./files.ts";
+import { type BoxClient, BoxError } from "../box/client.ts";
+import type { DisplayLease } from "../box/display-lease.ts";
+import { agentboxHome } from "../config.ts";
+import { encodeCall } from "../egress/call.ts";
+import { afterTimeout, idempotencyOfHttp } from "../protocol/idempotency.ts";
+import {
+  actionOutcome,
+  type BrowserRequest,
+  type ComputerAction,
+  computerOutcome,
+  type DisplayInfo,
+  type ElementInfo,
+  effectLine,
+  type Outcome,
+  outcomeLine,
+  verificationLine,
+} from "../protocol/index.ts";
+import type { AcpDelegates } from "./acp-delegate.ts";
+import { optionLabel } from "./ask-options.ts";
+import type { BundleStore } from "./bundles.ts";
+import { catalogMenu, intersectTools, profilesFor } from "./catalog.ts";
+import { type Claims, heldElsewhere } from "./claims.ts";
+import { namesControlSurface } from "./control-surfaces.ts";
+import { deliveryInstructions } from "./delegate-report.ts";
+import { actOnDelegateSession } from "./delegate-session-actions.ts";
+import type { DelegateSessions } from "./delegate-sessions.ts";
 import {
   describeTodos,
   isTodoStatus,
   TODO_STATUSES,
-  validatePlan,
-  validateTodos,
   type TodoItem,
   type TodoStatus,
   validateCheckpoint,
+  validatePlan,
+  validateTodos,
   withCheckpoint,
 } from "./durable.ts";
-import {
-  computerOutcome,
-  effectLine,
-  actionOutcome,
-  verificationLine,
-  outcomeLine,
-  type BrowserRequest,
-  type ComputerAction,
-  type DisplayInfo,
-  type ElementInfo,
-  type Outcome,
-} from "../protocol/index.ts";
-import { afterTimeout, idempotencyOfHttp } from "../protocol/idempotency.ts";
-import { skillSlugOf } from "./skill-provenance.ts";
-import { skillWriteRefusal } from "./skill-contract.ts";
-import { afterCommit, withWritePath, writePathKey, writePaths } from "./write-path.ts";
+import { engineNamed, parseEngineReport, readLogEnd, settleDelegate } from "./engine-report.ts";
+import { describeEnvShape, envShape, looksLikeEnvFile } from "./env-shape.ts";
+import { KEPT_MARKER, keepFetchedPage, keptPointer, pruneOccasionally } from "./fetched.ts";
+import { ABSENT, type FileVersions, versionOf } from "./files.ts";
+import { executeForget, ForgetPlans, forgetOutcomeReport, forgetPlanReport, forgettable, inventory } from "./forget.ts";
+import type { GoalGate } from "./goal-gate.ts";
+import { checklistAdditions, describePursuit } from "./goal-mode.ts";
+import { AROUND_ENTRY_CHARS, describeHistory, ENTRY_CHARS, readEpochHistory, readHistory } from "./history.ts";
+import type { HostRunner } from "./host-runner.ts";
+import { sniffImage } from "./image-refusal.ts";
+import { appendLearning, hostOf, learningsDir, readLearnings, renderLearnings } from "./learnings.ts";
+import type { McpManager, ToolEffect } from "./mcp.ts";
+import { MCP_FACE_DIR, MCP_FACE_TOKEN_VARIABLE, type McpFace } from "./mcp-face.ts";
+import { dedupe, dedupeKey, describeFrom, memoryRef, validateRecord } from "./memory.ts";
+import { guardMemoryCandidate } from "./memory-guard.ts";
+import type { ModelRelay } from "./model-relay.ts";
+import { type OAuthGate, type OAuthProvider, oauthProvider, scrubToken, tokenHeaders } from "./oauth.ts";
+import { chunkBlocks, dingtalkEventBody, doorIdOf, doorIdsOf, feishuDocUrl, feishuEventBody, feishuTaskBody, instantOf, markdownToFeishuBlocks } from "./office-write.ts";
 import { runOperationTool, withOperationTool } from "./operation-tool.ts";
-import { capRefusal, standingFileOf, writeStandingFromAgent } from "./standing.ts";
+import { type Orchestrations, parsePlan } from "./orchestrate.ts";
+import { type CommitHow, forkTag, type PendingWork } from "./pending-work.ts";
+import type { PolicyGate } from "./policy.ts";
+import { delegateEnv, delegateModel, installCommand, PRESETS, presetNamed, quoteForShell, withEnginesPath } from "./presets.ts";
+import { readOutcome, textShape, withReadOutcome } from "./read-outcome.ts";
+import { findKeptResult } from "./results.ts";
+import type { ScopeStore } from "./scopes.ts";
+import { skillWriteRefusal } from "./skill-contract.ts";
+import { skillSlugOf } from "./skill-provenance.ts";
 import { SKILL_FILENAME } from "./skills.ts";
+import { capRefusal, standingFileOf, writeStandingFromAgent } from "./standing.ts";
+import { clampContract, describeTask, isLive, isTaskStatus, TASK_STATUSES, type TaskStore } from "./tasks.ts";
 import {
   type BotTemplate,
-  TEMPLATE_SOURCE_PREFIX,
   describeTemplate,
+  manifestOf,
   packTemplate,
   stampTemplateWrite,
-  manifestOf,
+  TEMPLATE_SOURCE_PREFIX,
 } from "./template.ts";
+import { describeDeferred } from "./tool-roster.ts";
+import { guardShellCommand } from "./ui-automation-guard.ts";
+import type { Vault } from "./vault.ts";
+import { canSearch, type FetchedPage, fetchPage, guardUrl, isSearchEngine, MAX_TEXT, pageReadOutcome, searchWeb, WebError } from "./web.ts";
+import { afterCommit, withWritePath, writePathKey, writePaths } from "./write-path.ts";
+import { fetchXPost, XResolversUnavailable, xStatusRef } from "./x-post.ts";
 
 /** How long a shell command holds a turn before it runs on as a job (INV-1461); AGENTBOX_FOREGROUND_MS, default 10 s. */
 function foregroundWindowMs(): number {
@@ -457,6 +456,7 @@ export const FORK_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
   "CreateAgent",
   "UpdateAgent",
   "Tasks",
+  "HandBack",
   "ClaimWork",
   "RememberFact",
   "PackTemplate",
@@ -554,6 +554,7 @@ export const MAX_FORKS = 12;
  */
 export const BOOKKEEPING_TOOLS: ReadonlySet<string> = new Set([
   "Tasks",
+  "HandBack",
   "RememberFact",
   "SetTodos",
   "SetPlan",
@@ -1749,6 +1750,14 @@ export function buildTools(
         },
         required: ["action"],
       },
+    },
+    {
+      name: "HandBack",
+      description:
+        "A person's message in your task's thread was handed to you to decide (it says so at the top). When it asks " +
+        "for something beyond that task, or belongs to other work, hand it back with one sentence of why; it is then " +
+        "routed as new work. Do nothing else about it. A follow-up can be handed back once.",
+      input_schema: { type: "object", properties: { task_id: { type: "string" }, reason: { type: "string" } }, required: ["task_id", "reason"] },
     },
     {
       name: "Tasks",
@@ -5235,6 +5244,11 @@ export async function dispatchTool(
         return { text: result.text, ...(result.accepted ? {} : { isError: true }) };
       }
       return { text: `Unknown Goal action "${action}"; use status, checklist_add or claim_complete.`, isError: true };
+    }
+    case "HandBack": {
+      const result = context.tasks?.handBack(String(input.task_id ?? ""), context.agent.id, String(input.reason ?? "")) ?? "none";
+      if (result === "handed") return { text: "Handed back. It will be routed as new work; say nothing more about it in this turn." };
+      return { text: result === "already" ? "This follow-up was already handed back once; it is being routed." : "Nothing is handed to this task to decide right now.", isError: true };
     }
     case "Tasks": {
       const board = context.tasks;

@@ -2783,3 +2783,40 @@ test("a host push names its purpose, and the gate's refusal reaches the caller w
     assert.equal(adapter.chatSent.at(-1)?.text, "done!");
   } finally { manager.stop(); }
 });
+
+test("a person's message in a task's thread runs as a follow-up on that task, not a new one; handed back, it becomes new work (INV-1462)", async () => {
+  const adapter = cardAdapter();
+  const asked: string[] = [];
+  const opened: string[] = [];
+  let handed: string | undefined;
+  const manager = new ChannelManager({
+    mayDrive: () => true, log: () => {},
+    ask: async (_agent, text) => { asked.push(text); return "ok"; },
+    board: {
+      open: input => { opened.push(input.title); return `t${opened.length}`; },
+      started: () => {}, closed: () => "done" as const,
+      ownerOf: threadKey => (threadKey === "feishu:oc_room:thread1" ? { taskId: "t1", title: "Sum the reports" } : undefined),
+      handedBack: () => handed,
+    },
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+  const thread = { identity: "feishu:ou_1", chatKey: "feishu:oc_room", threadKey: "feishu:oc_room:thread1", senderLabel: "chris" };
+  try {
+    assert.equal(await adapter.inject({ ...thread, messageId: "m2", text: "也加上三月的" }), undefined);
+    await manager.idle();
+    assert.equal(opened.length, 0, "a follow-up opens no task");
+    assert.match(asked[0] ?? "", /Follow-up in the thread of task t1 \(Sum the reports\)[\s\S]*也加上三月的/);
+
+    handed = "it asks for a new report";
+    await adapter.inject({ ...thread, messageId: "m3", text: "另外帮我订个会议室" });
+    await manager.idle();
+    assert.deepEqual(opened, ["另外帮我订个会议室"], "handed back, the message is routed as new work");
+    assert.equal(asked.length, 3);
+    assert.equal(asked[2], "另外帮我订个会议室", "the new turn carries the person's words, not the follow-up wrapper");
+
+    await adapter.inject({ ...thread, threadKey: undefined, messageId: "m4", text: "新需求" });
+    await manager.idle();
+    assert.equal(opened.length, 2, "a room without a thread is not a subscription: a new task as before");
+  } finally { manager.stop(); }
+});

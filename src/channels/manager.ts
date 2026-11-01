@@ -25,6 +25,7 @@
  */
 
 import { mandateNote, reauthorisationNeeded } from "./mandate-text.ts";
+import { followUpPrompt } from "../host/follow-up.ts";
 import { describePurpose, type OutboundPurpose } from "../host/outbound.ts";
 import type { OutboxSender } from "./outbox-sender.ts";
 import { parseAcceptance, parseStopRequest } from "./verbs.ts";
@@ -600,6 +601,10 @@ export interface ChannelManagerDeps {
     /** Whether a task's mandate still holds for this person's wake (INV-1457); `reauthorised` is what this message settled. */
     revalidate?: (taskId: string, identity: string) => { status: "ok" | "stale" | "withdrawn" | "unknown"; reasons?: string[]; reauthorised?: string[] };
     withdraw?: (taskId: string, identity: string) => void; // A person's stop withdraws the task's mandate for good.
+    /** The task that owns a thread's follow-ups (INV-1462), when one does; the message is delivered to it. */
+    ownerOf?: (threadKey: string, messageId: string) => { taskId: string; title: string } | undefined;
+    /** Whether that task's agent handed the follow-up back, with why; the message is then routed as new work. */
+    handedBack?: (taskId: string) => string | undefined;
     started: (taskId: string) => void;
     /**
      * Reports the turn's outcome and returns what the board made of it.
@@ -889,9 +894,8 @@ export class ChannelManager {
   }
 
   private startAdapter(adapter: ChannelAdapter): void {
-    // A button in a room is pressable by whoever the room trusts to drive — the
-    // same set the text verbs trust — checked at press time, not at render time,
-    // because a card outlives the moment it was posted.
+    // A button in a room is pressable by whoever the room trusts to drive — the same set the text verbs trust — checked at press time, not at render time, because a card
+    // outlives the moment it was posted.
     adapter.onApprovalAction?.(async press => {
       if (!this.deps.mayDrive(press.identity)) return undefined;
       const result = this.deps.answerApproval?.(press.approvalId, press.reply);
@@ -1040,9 +1044,8 @@ export class ChannelManager {
       adapterName: asker.adapter.name, conversationKey, question: input.question,
       expiresAt: input.expiresAt ?? Date.now() + QUESTION_STALE_MS,
     });
-    // What happens if they say nothing, on the card rather than in a design document
-    // (INV-533): a default nobody was told about is not a default they agreed to, and
-    // "answer by when" is the part that makes a question answerable at all.
+    // What happens if they say nothing, on the card rather than in a design document (INV-533): a default nobody was told about is not a default they agreed to, and "answer by
+    // when" is the part that makes a question answerable at all.
     const terms = questionTerms(input.fallback, input.expiresAt);
     // Buttons where the wire has them: the person answers a choice with one tap, and the
     // press goes through the same door as a typed reply. Words keep working either way.
@@ -1211,13 +1214,8 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       );
       return;
     }
-    // This door is the one place the installation speaks *as* an agent without the agent
-    // running: an upgrade question, an approval nudge. Nothing recorded it, so the words
-    // existed on the person's screen and nowhere else, and the reply — "can you backup
-    // these files" — arrived into a conversation whose whole history was that one line
-    // (2026-09-15). Kept as context rather than as a turn, and marked as ours, because a
-    // transcript entry would put an assistant message at the head of a fresh conversation
-    // and the wire refuses a request that does not open with the person.
+    // This door is the one place the installation speaks *as* an agent without the agent running: an upgrade question, an approval nudge. Nothing recorded it, so the words
+    // existed on the person's screen and nowhere else, and the reply — "can you backup these files" — arrived into a conversation whose whole history was that one line (2026-09-15). Kept as context rather than as a turn, and marked as ours, because a transcript entry would put an assistant message at the head of a fresh conversation and the wire refuses a request that does not open with the person.
     if (conversation === undefined) return;
     const agentName = this.deps.defaultAgentFor?.(adapterName);
     this.deps.heard?.({
@@ -1335,8 +1333,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       const files = await this.deps.collectOutbox(outboxKey);
       const delivered: string[] = [];
       for (const file of files) {
-        // A file that cannot be opened as its name says is held, not sent (INV-692): it stays
-        // in the outbox, and the failure below says which and why. The agent was told the same
+        // A file that cannot be opened as its name says is held, not sent (INV-692): it stays in the outbox, and the failure below says which and why. The agent was told the same
         // before its turn ended; this is the backstop for a turn that finished anyway.
         const unopenable = heldBack(file);
         if (unopenable !== undefined) {
@@ -1367,13 +1364,8 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         await this.deps.outboxDelivered?.(outboxKey, delivered);
       }
 
-      // A file the text *names* but never handed over. An agent wrote its research
-      // to a path under the work directory and said "the full version is at «path»",
-      // which is a real file in the box and an unopenable string to the person
-      // reading it in a chat — they had to ask for it again. The outbox convention is
-      // in the prompt and was not followed, and whether it was is a path comparison
-      // rather than a judgement, so the harness checks rather than asks harder.
-      // Never retry an ambiguous failed send via the named-path fallback in this turn.
+      // A file the text *names* but never handed over. An agent wrote its research to a path under the work directory and said "the full version is at «path»", which is a real
+      // file in the box and an unopenable string to the person reading it in a chat — they had to ask for it again. The outbox convention is in the prompt and was not followed, and whether it was is a path comparison rather than a judgement, so the harness checks rather than asks harder. Never retry an ambiguous failed send via the named-path fallback in this turn.
       const named = undelivered(boxPathsNamed(text), files.map(file => file.name));
       for (const path of named.slice(0, 3)) {
         const file = await this.deps.readBoxFile?.(path).catch(() => undefined);
@@ -1796,20 +1788,32 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     } else if (/^\/(?:answer|continue)(?:\s|$)/u.test(text)) {
       return "请使用 /answer 问题编号 答案，或 /continue 任务编号 追加内容。";
     }
+    // A person's message in a task's own thread is that task's agent's to decide first (INV-1462): a follow-up turn
+    // on the task, never a new one — unless the agent hands it back, when it is routed as the new work it is.
+    const owner = message.threadKey !== undefined && answering === undefined && addition === undefined && !parseStopRequest(text) && !parseAcceptance(text)
+      ? this.deps.board?.ownerOf?.(message.threadKey, message.messageId ?? message.id ?? "") : undefined;
+    if (owner !== undefined) {
+      const mandate = this.deps.board?.revalidate?.(owner.taskId, message.identity);
+      if (mandate?.status === "stale") return reauthorisationNeeded(owner.taskId, mandate);
+      const followUp = this.runTask(adapter, message, agentName ?? this.deps.defaultAgentFor?.(adapter.name), followUpPrompt({ id: owner.taskId, title: owner.title }, text), undefined, { existingTaskId: owner.taskId, cardTitle: `跟进：${owner.title}` })
+        .then(() => { const why = this.deps.board?.handedBack?.(owner.taskId); if (why !== undefined) { this.deps.log(`channel ${adapter.name}: ${owner.taskId} handed the follow-up back (${why}); routing it as new work`); return this.runTask(adapter, message, agentName ?? this.deps.defaultAgentFor?.(adapter.name), text, undefined, { cardTitle: firstLine(text) }); } return undefined; })
+        .catch(error => { this.deps.log(`channel ${adapter.name}: follow-up failed (${error instanceof Error ? error.message : String(error)})`); })
+        .finally(() => { this.inflight.delete(followUp); this.inflightContexts.delete(followUp); });
+      this.inflight.add(followUp); this.inflightContexts.set(followUp, conversationKey);
+      return undefined;
+    }
     if (running !== undefined) {
       if (answering === undefined && parseStopRequest(text)) {
         const outcome = this.deps.stop?.(running.agentName, message.identity) ?? "not-running";
         // A person's stop ends the work, not just the turn (INV-1457).
         if (outcome === "stopped" && running.taskId !== undefined) this.deps.board?.withdraw?.(running.taskId, message.identity);
-        // Three answers, not two: refused is not "nothing is running", and telling
-        // somebody their stop worked when it did not is worse than refusing them.
+            // Three answers, not two: refused is not "nothing is running".
         return outcome === "stopped" ? STOPPING : outcome === "refused" ? notYours(running.agentName) : NOTHING_RUNNING;
       }
     } else if (answering === undefined && parseStopRequest(text)) {
       return NOTHING_RUNNING;
     } else if (answering === undefined && parseAcceptance(text)) {
-      // "可以" with a task waiting on this person closes it as their word. With nothing
-      // waiting, the same word is ordinary chat and falls through to the agent.
+      // "可以" with a task waiting on this person closes it; with nothing waiting it is chat.
       const waiting = this.lastTask.get(conversationKey);
       if (waiting !== undefined && this.deps.board?.accept !== undefined) {
         const verdict = this.deps.board.accept(waiting, message.identity);
@@ -1823,14 +1827,12 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     // Explicit references retain their agent; otherwise the door owns the default.
     const addressed = answering?.agentName ?? addition?.agentName ?? agentName ?? this.deps.defaultAgentFor?.(adapter.name);
 
-    // 「桌面」 is a link to the live screen, answered on the wire — the phone-sized
-    // version of the web page's Take over.
+    // 「桌面」 is a link to the live screen, the phone-sized Take over.
     if (parseDesktopRequest(text) && this.deps.desktopUrl !== undefined) {
       return this.deps.desktopUrl(addressed, adapter.name);
     }
 
-    // 「入会 <会议号>」 becomes the door's join instructions — the trigger that
-    // sidesteps the vendor's invite machinery (see parseMeetingJoinRequest).
+    // 「入会 <会议号>」 becomes the door's join instructions (see parseMeetingJoinRequest).
     const joinNo = parseMeetingJoinRequest(text);
     const finalText =
       joinNo !== undefined
@@ -1849,15 +1851,13 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
             await this.runTask(adapter, message, addressed, textForTurn, files, { questionId: answering?.id, onSucceeded: () => { succeeded = true; } });
           })();
 
-    // The work runs behind this return; the decisions above stay synchronous because
-    // a refusal or an approval answer *is* the whole response.
+    // The work runs behind this return; the decisions above stay synchronous.
     const task = work.catch(error => {
       this.deps.log(`channel ${adapter.name}: request failed (${error instanceof Error ? error.message : String(error)})`);
     }).finally(() => {
       this.inflight.delete(task);
       this.inflightContexts.delete(task);
-      // A candidate, not an authorisation: the host decides whether anything is worth doing,
-      // and nothing it does switches the conversation (INV-1190).
+      // A candidate, not an authorisation (INV-1190).
       if (succeeded && message.privateChat === true) {
         try {
           this.deps.contextIdle?.({ agentName: addressed, identity: message.identity, conversationKey, chatKey: message.chatKey ?? message.identity });
