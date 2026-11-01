@@ -1,6 +1,7 @@
 import { isComputerWrite } from "../cua/execution.ts";
 import { inputValueHash, parseSensitiveInput, SENSITIVE_INPUT_TTL_MS } from "../protocol/sensitive-input.ts";
 import { approvalOf, computerWithVision, desktopGuard, visionActionSchema, visionExpectSchema } from "./computer-vision.ts";
+import { deliveryLine } from "../cua/delivery.ts";
 import { formatExec } from "./exec-format.ts";
 import type { JobWatch } from "./job-watch.ts";
 /**
@@ -2426,10 +2427,7 @@ export function boxErrorOutcome(error: unknown): Outcome | undefined {
 }
 
 /** The box an agent lives in, for bundle lookups; undefined when the registry cannot say. */
-/**
- * The active window's controls as an outline, in the shape the browser outline uses
- * (INV-412): one line per control, the ref first so it can be copied into click_element.
- */
+/** The active window's controls as an outline, in the browser outline's shape (INV-412): one line per control, the ref first so it can be copied into click_element. */
 /** Prose and link counts alone. The caller sets `chars`, because only it knows how much of the text the model was actually handed. */
 function proseAndLinks(text: string): { prose: number; links: number } {
   const { prose, links } = textShape(text);
@@ -2758,6 +2756,7 @@ export async function dispatchTool(
 
       const outcome = computerOutcome(result, actions.some(isComputerWrite));
       const notes: string[] = [outcomeLine(outcome, result.error)];
+      if (result.progress?.delivery !== undefined) notes.push(deliveryLine(result.progress.delivery));
       if (result.progress) notes.push(`Completed ${result.progress.executed_count} action(s); dispatch=${result.progress.dispatch}.` +
         (result.progress.failed_at === undefined ? "" : ` Stopped at action ${result.progress.failed_at + 1}; do not replay the completed prefix.`));
       if (result.elements_observation_id) notes.push(`Elements observation: ${result.elements_observation_id}.`);

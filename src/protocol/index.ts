@@ -27,11 +27,7 @@ export type ScrollDirection = "up" | "down" | "left" | "right";
 
 export type Coordinate = readonly [x: number, y: number];
 
-/**
- * One computer-use action in API coordinate space.
- *
- * `modifiers` is a "+"-joined chord ("ctrl+shift"); `meta` maps to X11 `super`.
- */
+/** One computer-use action in API coordinate space; `modifiers` is a "+"-joined chord ("ctrl+shift"), `meta` maps to X11 `super`. */
 export type ComputerAction =
   | { action: "mouse_move"; coordinate: Coordinate }
   | {
@@ -161,11 +157,14 @@ export interface DesktopObservation {
   resolution: ResolutionConfig;
 }
 
+/** Whether this batch's input reached the desktop (INV-1480, src/cua/delivery.ts); only not_delivered may be sent again. */
+export type Delivery = "not_delivered" | "delivery_uncertain" | "delivered_unverified" | "delivered_verified" | "unknown";
 export interface ComputerProgress {
-  /** Number of actions whose executor returned; does not imply their effects were verified. */
+  /** Number of actions whose executor returned (not their effects verified); `delivery` is this batch's own verdict. */
   executed_count: number;
   failed_at?: number;
   dispatch: "not_started" | "sent" | "partial";
+  delivery?: Delivery;
 }
 
 export interface WindowInfo {

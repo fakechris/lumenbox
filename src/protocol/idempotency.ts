@@ -24,6 +24,8 @@
  * about what the caller may do when the answer is lost, and a refusal to guess.
  */
 
+import type { Delivery } from "./index.ts";
+
 export type Idempotency =
   | { kind: "read" }
   | { kind: "idempotent"; key?: string }
@@ -101,8 +103,15 @@ export interface RetryPlan {
 export function afterTimeout(
   declaration: Idempotency,
   input: Record<string, unknown> = {},
-  attempt = 1
+  attempt = 1,
+  delivery?: Delivery
 ): RetryPlan {
+  // A desktop batch says for itself whether its input went out (INV-1480): that verdict
+  // outranks the category, because a toggle is idempotent as a class and not as an instance.
+  if (delivery !== undefined) {
+    if (delivery === "not_delivered") return attempt <= 1 ? { retry: true } : { retry: false, note: "nothing was sent twice in a row; look at the screen before a third try" };
+    return { retry: false, note: `the input ${delivery === "unknown" ? "may have" : delivery === "delivery_uncertain" ? "partly" : "already"} reached the desktop (${delivery}) — look at the screen before sending it again` };
+  }
   if (declaration.kind === "read") {
     return attempt <= 1 ? { retry: true } : { retry: false, note: "the read did not answer twice; treat it as unread rather than empty" };
   }

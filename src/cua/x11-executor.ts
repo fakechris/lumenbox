@@ -13,6 +13,7 @@ type X11ExecutionResult = DesktopExecutionResult;
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { type AxOutput, parseAxOutput } from "./ax-output.ts";
+import { deliveryOf } from "./delivery.ts";
 import { ComputerExecutionError, DesktopTargetError, isComputerWrite, targetVerdict } from "./execution.ts";
 import { envNumber } from "../config.ts";
 import { execFile } from "node:child_process";
@@ -770,7 +771,7 @@ export class X11Executor implements DesktopDriver {
       verification,
       observation,
       elementsObservationId: elements === undefined ? undefined : this.elementsObservationId,
-      progress: { executed_count: executedCount, dispatch: attemptedWrite ? "sent" : "not_started" },
+      progress: { executed_count: executedCount, dispatch: attemptedWrite ? "sent" : "not_started", delivery: deliveryOf({ dispatch: attemptedWrite ? "sent" : "not_started", effect, verification }) },
       screenshot: lastScreenshot ?? "",
       ...(effect !== undefined
         ? {
@@ -790,10 +791,8 @@ export class X11Executor implements DesktopDriver {
     };
     } catch (error) {
       this.invalidateElements();
-      throw new ComputerExecutionError(error, {
-        executed_count: executedCount, failed_at: failedAt,
-        dispatch: attemptedWrite ? (failedAt === undefined ? "sent" : "partial") : "not_started",
-      });
+      const dispatch = attemptedWrite ? (failedAt === undefined ? "sent" : "partial") : "not_started";
+      throw new ComputerExecutionError(error, { executed_count: executedCount, failed_at: failedAt, dispatch, delivery: deliveryOf({ dispatch }) });
     }
   }
 
