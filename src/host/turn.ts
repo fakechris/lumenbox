@@ -137,6 +137,7 @@ import type { ScopeStore } from "./scopes.ts";
 import { checkpointSummary, type DurableState } from "./durable.ts";
 import { narrowSkills, type BundleStore } from "./bundles.ts";
 import { readInstallationInstructions } from "./place.ts";
+import { agentVersionOf } from "./agent-version.ts";
 import { changeNotice, readStanding, takeChanges } from "./standing.ts";
 import type { McpManager } from "./mcp.ts";
 import { TOOL_BUDGET_WARNING } from "./mcp.ts";
@@ -2094,11 +2095,9 @@ ${outcome.text}`;
           [...routineScope].some(name => name.includes("__") || deferred.some(d => d.name === name))
       );
 
-  // The prompt in three digests (INV-782): the stable prefix, the volatile tail, and the tool definitions as
-  // sent. The tool set was never in `promptHash`, and it is the segment that moves with skills, MCP servers and
-  // the lane — the common cache killer nobody could see. Compared with the previous turn in this conversation,
-  // so the ledger and the span say *which* part moved, not only that something did. Record and compare only:
-  // nothing here changes the prompt.
+  // The prompt in three digests (INV-782): stable prefix, volatile tail, tool definitions as sent — the tool set was never in
+  // `promptHash`, and it moves with skills, MCP servers and the lane. Compared with the previous turn in this conversation
+  // so the ledger says *which* part moved. Record and compare only: nothing here changes the prompt.
   const promptFingerprint: PromptFingerprint = {
     stable: promptHashOf(promptParts.stable),
     volatile: promptHashOf(promptParts.volatile),
@@ -2195,6 +2194,7 @@ ${outcome.text}`;
       personal: memoryProjectionManifest(memoryRecall),
       shared: memoryProjectionManifest(sharedMemoryRecall),
     },
+    agentVersion: agentVersionOf(standing, offeredSkills),
   });
   // If this fails, leave the begin open: recovery, not a second inbox replay, owns it.
   deps.onReady?.();

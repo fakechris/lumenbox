@@ -133,6 +133,8 @@ export class AnswerReviewer {
     ask: (prompt: string) => Promise<string | undefined>;
     mode?: () => AnswerReviewMode;
     record?: (record: AnswerReviewRecord) => void;
+    /** A reply judged not PASS, with its text, for the eval cases (INV-1474); the caller redacts and files it. */
+    keepCase?: (c: { at: string; agent: string; messageId: string; conversation?: string; request: string; answer: string } & AnswerVerdict) => void;
     now?: () => Date;
     jev?: SwitchDeps;
   }) {}
@@ -165,6 +167,9 @@ export class AnswerReviewer {
       ...settled,
       ...(unavailable ? { unavailable: true as const } : {}),
     });
+    if (!unavailable && settled.category !== "PASS" && settled.category !== "UNKNOWN") {
+      this.deps.keepCase?.({ at: (this.deps.now?.() ?? new Date()).toISOString(), agent: input.agentName, messageId: input.messageId, ...(input.conversation !== undefined ? { conversation: input.conversation } : {}), request: input.request, answer: input.answer, ...settled });
+    }
     return settled;
   }
 }
