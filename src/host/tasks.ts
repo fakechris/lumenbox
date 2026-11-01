@@ -1,51 +1,39 @@
 /**
  * The task board: work as an object, not a message.
  *
- * Until now the unit of work was a conversation turn — fine for "do this now", useless
- * for "who is doing what, what is blocked, what is waiting for review". A Task is the
- * smallest object that answers those: a title, an assignee, a status with a history of
- * who moved it and when, and an optional reviewer whose acceptance is what "done"
- * means. This is the work control plane's minimal form; Runs are linked by recording
- * the turn id on every change an agent makes, and the transcript is the evidence.
+ * A turn is fine for "do this now", useless for "who is doing what, what is blocked, what waits for review". A Task is
+ * the smallest object that answers those: title, assignee, status with a history of who moved it, an optional reviewer
+ * whose acceptance is "done". Runs are linked by the turn id on every change; the transcript is the evidence.
  *
- * **Advisory, like claims — with two exceptions**, both about who may say a task is
- * done. Statuses are not enforced against a model that decides everything else, and the
- * history makes movement visible rather than impossible. The exceptions:
+ * **Advisory, like claims — with two exceptions**, both about who may say a task is done; the history makes
+ * movement visible rather than impossible. The exceptions:
  *
- *   1. **A named reviewer means the assignee cannot accept its own work.** The attempt
- *      lands in review with a note saying so. That is the entire point of naming one,
- *      and a gate the worker can wave itself through is decoration.
- *   2. **Somebody the task is not about cannot end it.** Chat acceptance is keyed by
- *      conversation, so an authorised colleague in a shared room could type 可以 and
- *      close work that was never theirs — the store allowed it because it only ever
- *      refused the assignee. Their attempt is refused and the task does not move.
+ *   1. **A named reviewer means the assignee cannot accept its own work.** The attempt lands in review with a
+ *      note saying so; a gate the worker can wave itself through is decoration.
+ *   2. **Somebody the task is not about cannot end it.** Chat acceptance is keyed by conversation, so a colleague
+ *      in a shared room could type 可以 and close work that was never theirs; their attempt is refused.
  *
- * What is deliberately *not* enforced, and is a deferred product decision rather than an
- * oversight (docs/16): a task with no reviewer still closes when its turn finishes. The
- * alternative — every one-shot chat request waiting for a person to say 可以 — answers
- * "what needs somebody" wrong in the other direction.
+ * Deliberately *not* enforced (docs/16): a task with no reviewer still closes when its turn finishes; every one-shot
+ * chat request waiting for a person to say 可以 would answer "what needs somebody" wrong the other way.
  *
- * Storage is a jsonl of task snapshots, one line per change, latest line per id wins —
- * the same replay-and-compact shape as every other durable log here. History rides
- * inside the task, bounded, so a snapshot is self-contained. Ids are small numbers
- * ("t12") because people say them in chat; a counter marker survives compaction so an
- * id is never reused after its task is gone.
+ * Storage is a jsonl of task snapshots, latest line per id wins (replay-and-compact like every durable log here);
+ * history rides inside the task, bounded. Ids are small numbers ("t12") because people say them in chat; a counter
+ * marker survives compaction so an id is never reused.
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { appendLine, type LedgerKind } from "./jsonl.ts";
-import { Receipts } from "./receipts.ts";
 import { agentboxHome, envNumber } from "../config.ts";
+import { deliveredFollowUp, type FollowUp, type HandBackResult, handBack as handBackFollowUp } from "./follow-up.ts";
 import { conversationOfTask, GOAL_GATE_ACTOR, type Pursuit, taskStatusFor } from "./goal-mode.ts";
+import { appendLine, type LedgerKind } from "./jsonl.ts";
 import { applyRevalidation, applyWithdrawal, grantMandate, type Mandate, type MandateWorld, type RevalidationResult } from "./mandate.ts";
+import { Receipts } from "./receipts.ts";
 import { clampDescription, dueOf, type TaskContract } from "./task-fields.ts";
+
 export { clampContract, clampDescription, DESCRIPTION_LIMIT, dueOf, type TaskContract } from "./task-fields.ts";
 
-/**
- * What each task is, now, plus a grace period on closed ones so a person asking about
- * something they just finished still gets an answer. Older closed tasks are not owed.
- */
+/** What each task is now, plus a grace period on closed ones so a person asking about something just finished still gets an answer. */
 export const LEDGER_KIND: LedgerKind = "state";
 
 export function tasksPath(): string {
@@ -59,12 +47,7 @@ export function isTaskStatus(value: string): value is TaskStatus {
   return (TASK_STATUSES as readonly string[]).includes(value);
 }
 
-/** A status under which a task still needs somebody. */
-/**
- * Why a task is not closed by its turn ending, or undefined for the one-shot ask that is
- * (INV-817). A due date, something it waits on, or acceptance criteria each mean a check was
- * promised; the turn ending is not that check.
- */
+/** Why a task is not closed by its turn ending, or undefined for the one-shot ask that is (INV-817): a due date, a wait or acceptance criteria mean a check was promised. */
 export function heldForReview(task: Pick<Task, "due" | "waitingOn" | "contract">): string | undefined {
   if (task.contract?.acceptance !== undefined) return "it has acceptance criteria";
   if (task.due !== undefined) return `it is due ${task.due}`;
@@ -136,6 +119,7 @@ export interface Task {
   contract?: TaskContract;
   /** Who may have this done, on what footing and under which rules (INV-1457); see mandate.ts. */
   mandate?: Mandate;
+  followUp?: FollowUp; // The person's last thread message handed to this task's agent (INV-1462); see follow-up.ts.
   /**
    * Set while an agent's proposal waits for a person: the agent may describe work, a person
    * commits it before anyone starts. Cleared by `commit`. An agent cannot take or start a
@@ -391,6 +375,22 @@ export class TaskStore {
     if (isLive(withdrawn.status)) this.update(id, { status: "dropped", note: `stopped by ${by}: ${reason}` }, "host", undefined, now);
     else this.append({ kind: "task", task: withdrawn });
     return this.get(id);
+  }
+
+  /** A person's thread message is this task's agent's to decide (INV-1462). */
+  followUpDelivered(id: string, messageId: string, now: Date = new Date()): void {
+    const task = this.tasks.get(id);
+    if (task === undefined) return;
+    this.tasks.set(id, { ...task, followUp: deliveredFollowUp(messageId, now) }); this.append({ kind: "task", task: this.tasks.get(id)! });
+  }
+
+  /** The task's agent hands its follow-up back as beyond the task, once; it is then routed as new work. */
+  handBack(id: string, by: string, reason: string, now: Date = new Date()): HandBackResult {
+    const task = this.tasks.get(id);
+    if (task === undefined) return "none";
+    const { result, followUp } = handBackFollowUp(task.followUp, by, reason, now);
+    if (followUp !== undefined) this.update(id, { note: `handed back: ${followUp.handedBack!.reason}` }, by, undefined, now), this.tasks.set(id, { ...this.tasks.get(id)!, followUp }), this.append({ kind: "task", task: this.tasks.get(id)! });
+    return result;
   }
 
   /** Prepare one idempotent recovery attempt on the existing task. */

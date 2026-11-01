@@ -1943,8 +1943,7 @@ export class Orchestrator {
       boxKind: this.boxEntryOf(agent.id).kind,
       // The same cheap profile the summariser and the note-taker use: choosing memories is the least interesting work here.
       selectMemory: prompt => this.askCheaply(agent, prompt),
-      skillProvenance: this.skillProvenance, jobWatch: this.jobWatch,
-      syncStanding: agentId => this.memoryMirror.sync(agentId),
+      skillProvenance: this.skillProvenance, jobWatch: this.jobWatch, syncStanding: agentId => this.memoryMirror.sync(agentId),
       ...(this.templateSetups.has(agent.id) ? { templateSetup: this.templateSetups.get(agent.id)! } : {}),
       templates: this.templates, hooks: this.hooks,
       // Same cheap profile. Shadow by default: the verdicts land in auto-review.jsonl and the web
@@ -2714,6 +2713,7 @@ export const ALL_TOOLS: readonly string[] = [
   "Recall",
   "OtherThreads",
   "Tasks",
+  "HandBack",
   "Goal",
   "RunOnHost",
   // Offered only when a connection exists (INV-422, INV-754) — and until they were listed here, the

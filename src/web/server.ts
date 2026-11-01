@@ -143,6 +143,7 @@ import { HostSandbox } from "../host/host-sandbox.ts";
 import { outboundRedactor } from "../host/redact-outbound.ts";
 import { blockedQuestion, describePurpose, outboundVerdict } from "../host/outbound.ts";
 import { decidePart, type PartKey, partViews, strayOverrides } from "../host/prompt-parts.ts";
+import { ownerOf } from "../host/follow-up.ts";
 import { Outbox } from "../host/outbox.ts";
 import { OutboxSender } from "../channels/outbox-sender.ts";
 import { ALL_TOOLS } from "../host/orchestrator.ts";
@@ -333,9 +334,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       },
     };
   };
-  // The doors, loaded before the people: identity links and knocks record the
-  // incarnation of the channel they were observed under (docs/22 §4), so the
-  // lookup has to exist before the principals file is read.
+  // The doors, loaded before the people: identity links and knocks record the incarnation of the channel they were observed under (docs/22 §4), so the lookup has to exist
+  // before the principals file is read.
   const channelRecordsPath = join(agentboxHome(), CHANNEL_RECORDS_FILENAME);
   const preferences = new PreferenceStore(join(agentboxHome(), "preferences.json"));
   const channelRecords = ensureChannelRecords(channelRecordsPath, registry.box.id);
@@ -443,10 +443,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     }
   };
 
-  // Inside a try because construction itself can refuse — the attached provisioner
-  // throws when no token is configured (v4 claims review, finding 7), and a server
-  // that cannot reach a box is a server without a box, not no server at all. The
-  // stub keeps the interface honest: every connect answers with the reason.
+  // Inside a try because construction itself can refuse — the attached provisioner throws when no token is configured (v4 claims review, finding 7), and a server that cannot
+  // reach a box is a server without a box, not no server at all. The stub keeps the interface honest: every connect answers with the reason.
   const provisioner = (() => {
     try {
       return options.boxProvisioner ?? resolveBoxProvisioner();
@@ -482,8 +480,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    */
   let chats: ChannelManager | undefined;
 
-  // Optional in the type and not in the code: two routes read it unconditionally, so a
-  // caller that omitted it got a 500 from the page's own state endpoint. Resolved once
+  // Optional in the type and not in the code: two routes read it unconditionally, so a caller that omitted it got a 500 from the page's own state endpoint. Resolved once
   // here rather than defended at each use, which is how one of them ends up missing it.
   const provider = options.provider ?? resolveProvider(loadConfig().provider);
 
@@ -856,7 +853,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   };
 
   // Every thread in the chat, not just one. A room's work is spread across a
-  // conversation per topic, and both the digest and the board are about the room.
   const tasksOfChat = (chatKey: string) => {
     const conversation = conversationIdFor(chatKey);
     return (orchestrator.tasks?.list() ?? []).filter(
@@ -866,10 +862,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     );
   };
 
-  // The chat's day, from the objects that already record it: the board for what
-  // happened, usage for what it cost, the policy gate for what waits on a person.
-  // Deliberately not a model call — a digest that could hallucinate its numbers
-  // would poison the one place those numbers are read daily.
+  // The chat's day from the objects that record it (board, usage, policy gate); not a model call, which could hallucinate numbers.
   const digestFor = (chatKey: string): string => {
     const all = tasksOfChat(chatKey);
     const since = Date.now() - 24 * 3_600_000;
@@ -1688,6 +1681,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         return result;
       },
       withdraw: (taskId, identity) => { orchestrator.tasks?.withdraw(taskId, principals.resolve(identity).id, "stopped from the chat"); },
+      // A thread's follow-ups belong to the task asked for there (INV-1462); the message is noted on it so a hand-back is once.
+      ownerOf: (threadKey, messageId) => {
+        const task = ownerOf(orchestrator.tasks?.list() ?? [], conversationIdFor(threadKey));
+        if (task === undefined) return undefined;
+        orchestrator.tasks?.followUpDelivered(task.id, messageId);
+        return { taskId: task.id, title: task.title };
+      },
+      handedBack: taskId => orchestrator.tasks?.get(taskId)?.followUp?.handedBack?.reason,
       // "看板": the room's plate right now, grouped by what a person does about each
       // state. All lookups — see board-view.ts.
       show: chatKey => boardView(tasksOfChat(chatKey), displayName, taskUrl),
@@ -6664,7 +6665,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         // A paused routine is one frontmatter line; turning it on or off is that line.
-        // A routine's mode (INV-1458) is one frontmatter line too: off / observe / auto, switched here and audited.
         if (route === "POST /api/schedules/resume" || route === "POST /api/schedules/pause" || route === "POST /api/schedules/mode") {
           if (refused()) return;
           const body = await readJson(req);
