@@ -16,6 +16,8 @@
  * - A newline inside a text run is a soft break; a paragraph is a new block.
  */
 
+import { createHash } from "node:crypto";
+
 // ── Feishu documents ─────────────────────────────────────────────────────────────────────────
 
 type TextElement = { text_run: { content: string } };
@@ -177,4 +179,61 @@ export function doorIdsOf(identities: readonly string[] | undefined, door: "feis
 /** The requester's own id on a door: the most recently linked one (see doorIdsOf). */
 export function doorIdOf(identities: readonly string[] | undefined, door: "feishu" | "dingtalk"): string | undefined {
   return doorIdsOf(identities, door)[0];
+}
+
+// ── writing once (INV-1395) ──────────────────────────────────────────────────────────────────
+
+/**
+ * A write's key: the same request gives the same key, so a create repeated after a lost answer
+ * is the vendor's duplicate to drop, not a second record. Strings are trimmed and their inner
+ * whitespace folded; object keys are sorted; numbers and booleans are taken as they are.
+ */
+export function writeKey(door: "feishu" | "dingtalk", kind: string, ...parts: unknown[]): string {
+  return createHash("sha256").update(JSON.stringify([door, kind, ...parts.map(canonical)])).digest("hex");
+}
+
+/** The key in UUID shape, for a vendor that documents the parameter as one. */
+export function writeKeyUuid(door: "feishu" | "dingtalk", kind: string, ...parts: unknown[]): string {
+  const hex = writeKey(door, kind, ...parts);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
+function canonical(value: unknown): unknown {
+  if (typeof value === "string") return foldSpace(value);
+  if (Array.isArray(value)) return value.map(canonical);
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, inner]) => [key, canonical(inner)]));
+  }
+  return value;
+}
+
+const foldSpace = (text: string): string => text.trim().replace(/\s+/g, " ");
+
+/** Whether two titles name the same thing to a person: case and spacing do not count. */
+export const sameTitle = (a: unknown, b: unknown): boolean =>
+  typeof a === "string" && typeof b === "string" && foldSpace(a).toLowerCase() === foldSpace(b).toLowerCase();
+
+/**
+ * The field a Bitable row is told apart by: the first one the model gave, which is the primary
+ * field in every base the model copies from the UI; a text cell's value for the search.
+ */
+export function bitableKeyField(fields: Record<string, unknown>): { name: string; value: string } | undefined {
+  const [name, value] = Object.entries(fields)[0] ?? [];
+  if (name === undefined || value === undefined || value === null || typeof value === "object") return undefined;
+  return { name, value: String(value) };
+}
+
+/** The window a calendar duplicate is looked for in: the event's own span, as the vendor's unit. */
+export const eventWindow = (startMs: number, endMs: number) => ({ fromS: Math.floor(startMs / 1000), toS: Math.ceil(endMs / 1000) });
+
+/**
+ * What the read-back after a create means. The create's answer says the vendor accepted the
+ * request; only reading the object back says it is there. Not being able to read it is not a
+ * failure — the object may well exist — so it is said as unknown, with what to do before writing
+ * again.
+ */
+export function readBackLine(read: { ok: true } | { ok: false; text: string }, what: string): { outcome: "ok" | "unknown"; text: string } {
+  return read.ok
+    ? { outcome: "ok", text: `${what} is there (read back).` }
+    : { outcome: "unknown", text: `${what} was accepted but could not be read back (${read.text}) — it may exist; search for it before writing again` };
 }
