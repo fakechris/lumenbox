@@ -612,6 +612,7 @@ export class Orchestrator {
           ...(skill.authoredBy !== undefined ? { authoredBy: skill.authoredBy } : {}),
           ...(skill.because !== undefined ? { because: skill.because } : {}),
           ...(skill.paused === true ? { paused: true } : {}),
+          ...(skill.mode !== undefined ? { mode: skill.mode } : {}),
           ...(skill.allowedTools !== undefined ? { allowedTools: skill.allowedTools } : {}),
         })))];
     },
@@ -630,6 +631,7 @@ export class Orchestrator {
           ...(skill.authoredBy !== undefined ? { authoredBy: skill.authoredBy } : {}),
           ...(skill.because !== undefined ? { because: skill.because } : {}),
           ...(skill.paused === true ? { paused: true } : {}),
+          ...(skill.mode !== undefined ? { mode: skill.mode } : {}),
           ...(skill.allowedTools !== undefined ? { allowedTools: skill.allowedTools } : {}),
         })));
     },
@@ -642,20 +644,18 @@ export class Orchestrator {
           slug: skill.slug,
           name: skill.name,
           path: skill.path,
-          match: skill.listener!.match,
-          ...(skill.listener!.chat !== undefined ? { chat: skill.listener!.chat } : {}),
+          match: skill.listener!.match, ...(skill.listener!.chat !== undefined ? { chat: skill.listener!.chat } : {}),
           ...(skill.runAs !== undefined ? { runAs: skill.runAs } : {}),
           ...(skill.paused === true ? { paused: true } : {}),
+          ...(skill.mode !== undefined ? { mode: skill.mode } : {}),
           ...(skill.allowedTools !== undefined ? { allowedTools: skill.allowedTools } : {}),
         })));
     },
-    // Through the ordinary prompt path, so a scheduled turn is checked by the policy gate exactly
-    // like any other: a box over its budget stops firing rather than quietly draining it.
-    // Its own turn always: a scheduled kickoff absorbed as steering into whatever
-    // happens to be running would bury the run's report inside an unrelated reply.
-    // A delivering run happens *in* the chat's conversation, so what it says is read from
-    // the same place a person's turn is read from and lands in the room's own history —
-    // rather than in the main conversation, which no chat has ever read.
+    observed: (slug, would) => this.policy.notifyObserved(slug, would), // The observe-mode audit row (INV-1458).
+    // Through the ordinary prompt path, so a scheduled turn is checked by the policy gate exactly like any other: a box over its
+    // budget stops firing rather than quietly draining it. Its own turn always: a scheduled kickoff absorbed as steering into
+    // whatever runs would bury the run's report inside an unrelated reply. A delivering run happens *in* the chat's conversation,
+    // so what it says lands in the room's own history rather than in the main conversation, which no chat has ever read.
     // Last time's commitments open the next run of the same routine (INV-528).
     priorCommitments: slug => priorCommitmentsPrompt(this.commitments.lastFor(slug), this.tasks?.list() ?? []),
     run: async (agent, prompt, deliver, slug, toolScope, deliverWhen, identity) => {

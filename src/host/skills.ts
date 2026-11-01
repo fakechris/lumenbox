@@ -146,6 +146,8 @@ export interface Skill {
    * store — the same reason a schedule is a line and not an object.
    */
   paused?: boolean;
+  /** How the routine may act (INV-1458); absent means auto. */
+  mode?: "off" | "observe" | "auto";
   /**
    * The tools this skill says it needs (`allowed-tools:`), in this installation's names (INV-691).
    *
@@ -223,6 +225,7 @@ const KNOWN_KEYS = new Set([
   "timezone",
   "deliver",
   "deliver_when",
+  "mode",
   "authored_by",
   "because",
   "trigger",
@@ -425,6 +428,13 @@ export function skillFrom(
   if (parsed.meta.deliver_when !== undefined && parsed.meta.deliver_when.trim() !== "" && deliverWhen === undefined) {
     return { problem: `${slug}: deliver_when must be "always" or "changed", not "${parsed.meta.deliver_when.trim()}".` };
   }
+  // How a routine may act (INV-1458). Absent is auto, for every routine written before modes
+  // existed; a wrong word is refused, because "observe" misspelt must not mean "run".
+  const modeText = parsed.meta.mode?.trim();
+  const mode = modeText === "off" || modeText === "observe" || modeText === "auto" ? modeText : undefined;
+  if (modeText !== undefined && modeText !== "" && mode === undefined) {
+    return { problem: `${slug}: mode must be "off", "observe" or "auto", not "${modeText}".` };
+  }
 
   return {
     skill: {
@@ -445,6 +455,7 @@ export function skillFrom(
       ...(parsed.meta.authored_by ? { authoredBy: parsed.meta.authored_by.trim() } : {}),
       ...(parsed.meta.because ? { because: parsed.meta.because.trim() } : {}),
       ...(parsed.meta.paused?.trim() === "true" ? { paused: true } : {}),
+      ...(mode !== undefined ? { mode } : {}),
       ...(allowed !== undefined ? { allowedTools: allowed.tools } : {}),
     },
     ...(note === undefined ? {} : { note }),
@@ -545,6 +556,9 @@ export function renderSkills(skills: readonly Skill[]): string {
     "deliver_when: always to deliver every run — without it a run whose result is the same as",
     "last time's, or that had nothing to say, is kept on the results ledger and not delivered;",
     "authored_by is you when it was your idea. No inline # comments in frontmatter.",
+    "`mode: observe` makes a routine record what it would have run instead of running it, so a",
+    "new routine can be watched for a few days on the automations page before `mode: auto` lets",
+    "it act; `mode: off` switches it off. Write mode: observe on every routine you create.",
     "`paused: true` keeps a routine off until a person turns it on from the automations list;",
     "a routine you were handed by a template starts that way, and you do not remove the line",
     "yourself — ask, and let them switch it on.",

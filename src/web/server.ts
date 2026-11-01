@@ -6665,14 +6665,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         // A paused routine is one frontmatter line; turning it on or off is that line.
-        if (route === "POST /api/schedules/resume" || route === "POST /api/schedules/pause") {
+        // A routine's mode (INV-1458) is one frontmatter line too: off / observe / auto, switched here and audited.
+        if (route === "POST /api/schedules/resume" || route === "POST /api/schedules/pause" || route === "POST /api/schedules/mode") {
           if (refused()) return;
           const body = await readJson(req);
           const slug = String(body.slug ?? "").trim();
+          const mode = route.endsWith("/mode") ? String(body.mode ?? "") : undefined;
           const box = orchestrator.boxClient();
-          if (box === undefined || !/^[A-Za-z0-9._-]+$/.test(slug)) {
-            send(res, 400, { error: box === undefined ? "No box is connected." : "That is not a skill slug." });
-            return;
+          if (box === undefined || !/^[A-Za-z0-9._-]+$/.test(slug) || (mode !== undefined && !["off", "observe", "auto"].includes(mode))) {
+            send(res, 400, { error: box === undefined ? "No box is connected." : mode !== undefined ? "mode must be off, observe or auto." : "That is not a skill slug." }); return;
           }
           const path = `${SKILLS_DIR}/${slug}/${SKILL_FILENAME}`;
           try {
@@ -6685,12 +6686,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                 return;
               }
             }
-            const updated = resumed
-              ? rewriteFrontmatter(existing.content, { drop: ["paused"] })
-              : rewriteFrontmatter(existing.content, { set: { paused: "true" } });
+            const updated = mode !== undefined ? rewriteFrontmatter(existing.content, { set: { mode } })
+              : resumed ? rewriteFrontmatter(existing.content, { drop: ["paused"] }) : rewriteFrontmatter(existing.content, { set: { paused: "true" } });
             await box.writeFile(path, updated);
-            log(`${resumed ? "resumed" : "paused"} ${slug}${caller.userId === undefined ? "" : ` for ${caller.userId}`}`);
-            send(res, 200, { ok: true, paused: !resumed });
+            log(`${mode !== undefined ? `mode ${mode} for` : resumed ? "resumed" : "paused"} ${slug}${caller.userId === undefined ? "" : ` for ${caller.userId}`}`);
+            send(res, 200, { ok: true, paused: mode === undefined ? !resumed : undefined, ...(mode !== undefined ? { mode } : {}) });
           } catch (error) {
             send(res, 404, { error: `Could not read ${path}: ${error instanceof Error ? error.message : String(error)}` });
           }
