@@ -1473,7 +1473,8 @@ test("a scheduled push delivers the files its text names, like a reply does", as
 
   await manager.pushToChat(
     "telegram:oc_room",
-    "周报写好了。长版: /home/box/work/research/weekly-retro-2026-08-31.md"
+    "周报写好了。长版: /home/box/work/research/weekly-retro-2026-08-31.md",
+    { kind: "notice", about: "test" }
   );
   assert.equal(adapter.chatSent.at(-1)?.text.includes("周报写好了"), true);
   assert.deepEqual(
@@ -1484,7 +1485,7 @@ test("a scheduled push delivers the files its text names, like a reply does", as
 
   // A push that names nothing sends nothing extra.
   adapter.sentFiles.length = 0;
-  await manager.pushToChat("telegram:oc_room", "晨报: 一切正常。");
+  await manager.pushToChat("telegram:oc_room", "晨报: 一切正常。", { kind: "notice", about: "test" });
   assert.deepEqual(adapter.sentFiles, []);
 });
 
@@ -2487,7 +2488,7 @@ test("the reply streams into the task card on its own clock, and a blocked quest
   const second = new ChannelManager({ mayDrive: () => true, ask: async () => "ok", log: () => {} });
   second.register(asking, true, "test");
   await started(second);
-  await second.pushQuestionToChat("telegram:oc_9", { agentName: "Ada", question: "t3 stuck: which region?", options: ["us", "eu"] });
+  await second.pushQuestionToChat("telegram:oc_9", { agentName: "Ada", question: "t3 stuck: which region?", options: ["us", "eu"] }, { kind: "attention", ref: "t3", question: "t3 stuck: which region?" });
   assert.equal(JSON.stringify(questions), JSON.stringify([{ chatKey: "telegram:oc_9", options: ["us", "eu"] }]));
 });
 
@@ -2760,4 +2761,25 @@ test("a wake checks the task's mandate: stale waits for its person, withdrawn is
     await manager.idle();
     manager.stop();
   }
+});
+
+test("a host push names its purpose, and the gate's refusal reaches the caller with its reason instead of the chat (INV-1459)", async () => {
+  const adapter = cardAdapter();
+  const refusals: string[] = [];
+  const manager = new ChannelManager({
+    mayDrive: () => true, ask: async () => "unused",
+    outbound: purpose => purpose.kind === "result" && purpose.taskId === "t1" ? { allow: false, reason: "result refused: task t1 is doing, not finished" } : { allow: true },
+    log: line => { if (/refused/.test(line)) refusals.push(line); },
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+  try {
+    const refused = await manager.tryPushToChat("telegram:room", "done!", { kind: "result", taskId: "t1" });
+    assert.deepEqual(refused, { delivered: false, why: "result refused: task t1 is doing, not finished" });
+    assert.equal(adapter.chatSent.length, 0, "nothing reached the chat");
+    assert.match(refusals[0] ?? "", /result for t1 to telegram:room refused/);
+    const allowed = await manager.tryPushToChat("telegram:room", "done!", { kind: "result", taskId: "t2" });
+    assert.equal(allowed.delivered, true);
+    assert.equal(adapter.chatSent.at(-1)?.text, "done!");
+  } finally { manager.stop(); }
 });

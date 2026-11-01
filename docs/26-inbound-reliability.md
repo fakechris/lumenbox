@@ -2,7 +2,7 @@
      title: Inbound reliability: what a message goes through, and what mature harnesses do
      family: decision
      status: current
-     updated: 2026-09-01
+     updated: 2026-11-01
 -->
 # Inbound reliability: what a message goes through, and what mature harnesses do
 
@@ -148,3 +148,35 @@ at: steering takes those at round boundaries, and while a turn is finishing R8 l
 the next turn on purpose. One window stays open, and the scenario pins it:
 a correction that lands after the answer exists, while it is being sent, cannot be seen by it.
 
+
+## 2026-11-01: the outbound side — a host push names its purpose (INV-1459)
+
+Everything above is about a message that arrives. The message that leaves had one rule — a
+person's own turn answers them — and no rule for the rest: a routine's report, a late answer,
+a board card, a digest, a rescue notice, a console relay. Those are the host or an agent
+deciding to speak, and the only checks were after the fact (answer review, default shadow) and
+by volume (the follow-up budget). Neither asks what the message is *for*, so a result for
+unfinished work, an answer nobody is owed, and a question that is not the one on file all
+went out.
+
+Now every host-initiated push (`pushToChat`, `tryPushToChat`, `pushQuestionToChat`) carries a
+purpose, and `src/host/outbound.ts` reads the world for it before the adapter is touched:
+
+| Purpose | Allowed when |
+| --- | --- |
+| `result` | the task it reports is in review, done or dropped |
+| `attention` | the question it carries is the one pending under that ref — a watched question or a blocked task's card — word for word |
+| `answer` | a reply is still owed under that delivery id (`deliveries.jsonl`), which the send then closes |
+| `ack` | the message has not been acknowledged before |
+| `notice` | always; the host reporting what it did or saw. Counted, not gated |
+
+A refusal is returned to the caller with its reason — `{delivered: false, why}` — and written
+to `policy.jsonl` as `reply-refused`, so a prompt that keeps trying to announce an unfinished
+draft leaves a trail a person can read. The person-opened turn's own reply is not under this
+gate: that is the conversation itself. Answer review stays as the sample after the fact.
+
+What is labelled today: routine and goal reports, the context steward, the follow-up sweep,
+digests, question expiries, rescue notices and console relays are `notice`; a late answer
+recovered from the ledger is `answer`; a blocked task's card is `attention`. Nothing in the
+host sends a `result` yet — the gate is there for the agent-initiated delivery that INV-1462
+brings — so today its teeth show on `attention` and `answer`.

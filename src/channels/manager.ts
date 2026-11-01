@@ -25,6 +25,7 @@
  */
 
 import { mandateNote, reauthorisationNeeded } from "./mandate-text.ts";
+import { describePurpose, type OutboundPurpose } from "../host/outbound.ts";
 import { parseAcceptance, parseStopRequest } from "./verbs.ts";
 export { parseAcceptance, parseStopRequest } from "./verbs.ts";
 import { roomDecision } from "./identity.ts";
@@ -395,6 +396,8 @@ export interface ChannelManagerDeps {
    * `pushToChat` fails closed on any address whose channel has moved past 1.
    */
   incarnationOf?: (chatKey: string) => number;
+  /** The speaking right of a host-initiated push (INV-1459): refused with a reason when its purpose's claim does not hold. */
+  outbound?: (purpose: OutboundPurpose, chatKey: string) => { allow: true } | { allow: false; reason: string };
   /**
    * The door's own default (docs/22 §2): who answers a message that names nobody,
    * per adapter. Absent, or undefined for an adapter, falls through to the
@@ -1241,25 +1244,31 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
    * A pressed button speaks as a message in that chat, which is how the answer reaches
    * whoever picks the task back up.
    */
-  pushQuestionToChat(chatKey: string, card: QuestionCardState): Promise<void> {
+  pushQuestionToChat(chatKey: string, card: QuestionCardState, purpose: OutboundPurpose): Promise<void> {
     if ((this.deps.incarnationOf?.(chatKey) ?? 1) !== 1) {
       this.deps.log(`channel: dead letter for ${chatKey} — its channel was replaced. Dropped.`);
       return Promise.resolve();
     }
+    const refused = this.refusal(purpose, chatKey);
+    if (refused !== undefined) return Promise.resolve();
     const adapter = this.adapters.find(a => chatKey.startsWith(`${a.name}:`));
     if (adapter?.postQuestionCard !== undefined) {
       return adapter.postQuestionCard("", card, chatKey);
     }
-    const text = questionText(
-      card.agentName,
-      card.question,
-      `\n\n${card.options.map(option => `· ${option}`).join("\n")}`
-    );
-    return this.pushToChat(chatKey, text);
+    const text = questionText(card.agentName, card.question, `\n\n${card.options.map(option => `· ${option}`).join("\n")}`);
+    return this.pushToChat(chatKey, text, { kind: "notice", about: "question text form" });
   }
 
-  pushToChat(chatKey: string, text: string): Promise<void> {
-    return this.tryPushToChat(chatKey, text).then(() => undefined);
+  pushToChat(chatKey: string, text: string, purpose: OutboundPurpose): Promise<void> {
+    return this.tryPushToChat(chatKey, text, purpose).then(() => undefined);
+  }
+
+  /** The gate's refusal of a push, logged; undefined when it may go. */
+  private refusal(purpose: OutboundPurpose, chatKey: string): string | undefined {
+    const verdict = this.deps.outbound?.(purpose, chatKey) ?? { allow: true as const };
+    if (verdict.allow) return undefined;
+    this.deps.log(`channel: ${describePurpose(purpose)} to ${chatKey} refused — ${verdict.reason}`);
+    return verdict.reason;
   }
 
   /**
@@ -1271,12 +1280,14 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
    * deliveries needs the difference: two ageing nudges that went nowhere used to archive
    * the work as unanswered. Undelivered is not silence.
    */
-  tryPushToChat(chatKey: string, text: string): Promise<{ delivered: boolean; why?: string }> {
+  tryPushToChat(chatKey: string, text: string, purpose: OutboundPurpose): Promise<{ delivered: boolean; why?: string }> {
     if ((this.deps.incarnationOf?.(chatKey) ?? 1) !== 1) {
       const why = `dead letter for ${chatKey} — its channel was replaced, and an unstamped address cannot prove it means the current tenant. Dropped.`;
       this.deps.log(`channel: ${why}`);
       return Promise.resolve({ delivered: false, why });
     }
+    const refused = this.refusal(purpose, chatKey);
+    if (refused !== undefined) return Promise.resolve({ delivered: false, why: refused });
     const adapter = this.adapters.find(a => chatKey.startsWith(`${a.name}:`));
     if (adapter?.sendToChat === undefined) {
       // Not an error to ignore: a digest, a rescue notice or a late answer was addressed

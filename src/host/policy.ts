@@ -283,6 +283,7 @@ type PolicyEvent =
   | { at: string; kind: "rules-loaded"; hash: string; ids: string[]; problems: { id: string; problem: string }[] }
   | { at: string; kind: "stop"; agentId: string; by: string }
   | { at: string; kind: "mandate-stale"; taskId: string; by: string; reasons: string[] } // A wake the task's mandate refused (INV-1457).
+  | { at: string; kind: "reply-refused"; purpose: string; chatKey: string; reason: string } // A host push whose purpose's claim did not hold (INV-1459).
   | { at: string; kind: "resume"; agentId: string; by: string }
   | { at: string; kind: "approval-requested"; id: string; fingerprint: string; agentId: string; description: string; action?: string; harnessResumes?: boolean }
   | { at: string; kind: "approval-granted"; id: string; by: string }
@@ -607,6 +608,7 @@ export class PolicyGate {
   /** A wake refused because the task's mandate no longer holds (INV-1457). */
   notifyMandateStale(taskId: string, by: string, reasons: readonly string[]): void { this.append({ at: this.now().toISOString(), kind: "mandate-stale", taskId, by, reasons: [...reasons] }); }
   rulesHash(): string | undefined { return this.rules?.currentHash(); } // The rule set as loaded now, for a mandate to be granted and checked under.
+  notifyReplyRefused(purpose: string, chatKey: string, reason: string): void { this.append({ at: this.now().toISOString(), kind: "reply-refused", purpose, chatKey, reason }); }
 
   /** Records that the rule set changed. Called by the store's onChange. */
   notifyRulesLoaded(change: { hash: string; ids: string[]; problems: { id: string; problem: string }[] }): void { this.append({ at: this.now().toISOString(), kind: "rules-loaded", ...change }); }
@@ -856,13 +858,10 @@ export class PolicyGate {
    */
   resume(agentId: string, by = "system"): void {
     if (!this.stopped.has(agentId)) return;
-    this.stopped.delete(agentId);
-    this.append({ at: this.now().toISOString(), kind: "resume", agentId, by });
+    this.stopped.delete(agentId); this.append({ at: this.now().toISOString(), kind: "resume", agentId, by });
   }
 
-  isStopped(agentId: string): boolean {
-    return this.stopped.has(agentId);
-  }
+  isStopped(agentId: string): boolean { return this.stopped.has(agentId); }
 
   /**
    * What the tier gate would have asked a person about, had it been enforcing (INV-691).
