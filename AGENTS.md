@@ -117,6 +117,13 @@ Every file in `docs/` opens with a header block naming what it is:
 
 ## House rules that outrank convenience
 
+- **One session, one fresh worktree.** Every task — implementation, release build, docs edit —
+  starts with `git worktree add <new-dir> <base>` of its own, and never works in a checkout
+  another session may be using. Measured 2026-11-01: a 0.3.9 release build found the shared
+  checkout switched to another task's branch with uncommitted WIP mid-build, and `npm run arch`
+  ran against somebody else's half-written file — a green check there would have certified work
+  that was never merged. A worktree is cheap; a build of the wrong tree is not. Remove the
+  worktree when the task's PR is merged.
 - **`npm test` is the gate.** It is hermetic: no credentials, no network, no live `~/.agentbox`.
   Never merge on a red suite. `npm run release:check` builds *and launches* the artifact — a
   green build is not evidence that the thing runs.
