@@ -105,7 +105,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [80-mcp-apps-host](80-mcp-apps-host.md) | MCP Apps 宿主：网页把 MCP 工具自带的 ui:// 界面装进第二 origin 的沙箱（spike 结论） | current | 2026-10-19 |
 | [81-delegate-session-acp](81-delegate-session-acp.md) | Delegate as a session: what mcode's ACP actually does, and what enters the host | current | 2026-10-21 |
 | [82-tailmsg-door](82-tailmsg-door.md) | The tailmsg door: another machine's agent writes to ours over the tailnet | current | 2026-10-20 |
-| [83-team-vs-single-eval](83-team-vs-single-eval.md) | Team versus one agent: the first measured comparison | current | 2026-10-24 |
+| [83-team-vs-single-eval](83-team-vs-single-eval.md) | Team versus one agent: the first measured comparison | current | 2026-11-01 |
 
 ## handoff
 

@@ -9,6 +9,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { bindingsOf, CommitmentLedger, describeGaps, parseCommitments, priorCommitmentsPrompt, reconcileCommitments } from "./commitments.ts";
 import { finishRoutineRun, PendingAttachments, RoutineResultLedger, routineResolveMode, type DeliveryOutcome } from "./routine-resolve.ts";
+import { writeEvalCase } from "./eval-cases.ts";
 import { routineResult } from "./run-result.ts";
 import { learningsDir } from "./learnings.ts";
 import { replyForMessage, silenceForMessage } from "./reply.ts";
@@ -720,12 +721,10 @@ export class Orchestrator {
       await this.settle();
       return this.replySince(agentId, before).trim();
     },
-    // A skill runs on the box its file is in, as that box's first agent; the installation's
-    // first agent only when the box has none (or the skill did not say).
+    // A skill runs on the box its file is in, as that box's first agent; the installation's first agent only when the box has none.
     defaultAgent: boxId =>
       (boxId !== undefined ? this.registry.agentsIn(boxId)[0]?.id : undefined) ?? this.registry.list()[0]?.id,
-    // A heartbeat is the agent's own routine — its HEARTBEAT.md, in its own directory — so it
-    // runs as that agent the way a skill runs as the agent the host saw write it.
+    // A heartbeat is the agent's own routine — its HEARTBEAT.md — so it runs as that agent, as a skill runs as its writer.
     writerOf: slug => {
       const owner = heartbeatAgentOf(slug);
       if (owner === undefined) return this.skillProvenance.writerOf(slug);
@@ -2346,6 +2345,7 @@ export class Orchestrator {
       ask: prompt => this.askCheaply(agent!, prompt, "review"),
       mode: () => answerReviewMode(),
       record: entry => appendLine(join(agentboxHome(), "answer-review.jsonl"), JSON.stringify(redactDeep(entry))),
+      keepCase: c => writeEvalCase(join(agentboxHome(), "evals"), redactDeep({ ...c, version: this.turns?.lastAgentVersion(agent!.id, input.conversation) })),
     }).review({ ...input, agentName: agent.profile.name });
   }
 

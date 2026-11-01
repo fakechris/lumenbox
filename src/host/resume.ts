@@ -25,6 +25,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import type { AgentVersion } from "./agent-version.ts";
 import { appendLine, archiveSettled, type LedgerKind } from "./jsonl.ts";
 import { redactDeep } from "./secret-redaction.ts";
 import { dirname, join } from "node:path";
@@ -111,6 +112,8 @@ interface BeginRecord {
     personal: import("./memory.ts").MemoryProjectionManifest;
     shared: import("./memory.ts").MemoryProjectionManifest;
   };
+  /** Which version of the agent this turn ran under — standing files, offered skills, prompt parts — as hashes (INV-1474). */
+  agentVersion?: AgentVersion;
 }
 
 /** The three parts of an assembled prompt that can each break the provider's cache on their own. */
@@ -253,6 +256,7 @@ export class TurnLedger {
     contextEpoch?: number;
     contextMode?: "normal" | "clean" | "recover";
     memoryProjection?: BeginRecord["memoryProjection"];
+    agentVersion?: AgentVersion;
     now?: Date;
   }): string {
     const record: BeginRecord = {
@@ -276,9 +280,20 @@ export class TurnLedger {
       ...(options.contextEpoch !== undefined ? { contextEpoch: options.contextEpoch } : {}),
       ...(options.contextMode !== undefined ? { contextMode: options.contextMode } : {}),
       ...(options.memoryProjection !== undefined ? { memoryProjection: options.memoryProjection } : {}),
+      ...(options.agentVersion !== undefined ? { agentVersion: options.agentVersion } : {}),
     };
     this.append(record, true);
     return record.id;
+  }
+
+  /** The agent's version on its most recent turn in this conversation (INV-1474): what an eval case is stamped with. */
+  lastAgentVersion(agentId: string, conversation?: string): AgentVersion | undefined {
+    let found: AgentVersion | undefined;
+    for (const record of this.read()) {
+      if (record.event !== "begin" || record.agentId !== agentId || (record.conversation ?? undefined) !== conversation) continue;
+      if (record.agentVersion !== undefined) found = record.agentVersion;
+    }
+    return found;
   }
 
   /**

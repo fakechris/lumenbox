@@ -2,7 +2,7 @@
      title: Team versus one agent: the first measured comparison
      family: decision
      status: current
-     updated: 2026-10-24
+     updated: 2026-11-01
 -->
 
 # Team versus one agent: the first measured comparison
@@ -197,3 +197,20 @@ still spend 88 across turns it spawns, which is INV-1277's territory. Tokens fel
 §2.2 for the same tasks, but with one run each that is a direction, not a measurement; the
 earlier runaways were themselves outliers. The 1010-second fixscript S episode is the number
 to watch in a full re-run.
+
+## 8. Addendum 2026-11-01 (INV-1474): the agent's version on the trace, and bad replies as cases
+
+To say whether a change to an agent's prompt helped, the trace has to say what the prompt was.
+Every turn's `begin` record on `turns.jsonl` now carries `agentVersion` (`src/host/agent-version.ts`):
+a hash per standing file (AGENTS, SOUL, USER, HEARTBEAT), per skill the prompt offered (the
+description the index carried, by slug), and per built-in prompt part (the override's base when one
+is on file, docs/87). Hashes only, never the text; one line in SOUL.md is a new version.
+
+A reply the answer review (docs/85) judges NON_ANSWER, PROCESS_OVER_RESULT or CONTEXT_BLEED is kept as
+a case under `~/.agentbox/evals/<agent>/<date>-<messageId>.md` (`src/host/eval-cases.ts`): the
+request, the answer, the label and reason, and the version the turn ran under; one file per
+message, redacted before it is written. The *Expected* section is empty for the person to fill.
+`node --experimental-transform-types scripts/replay-evals.mjs <agent>` sends each case's request to
+the agent again under its current prompt, judges the answer with the same review, and prints one
+line per case — recorded label → label now, and which parts of the agent changed since — with the
+pass rate at the end; no cases is a quiet exit. It spends money and is not part of `npm test`.
