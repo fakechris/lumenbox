@@ -485,6 +485,31 @@ export class MissingCredentialError extends Error {
 }
 
 /**
+ * A profile the web command can always start on, when the saved one has no credential yet.
+ *
+ * `clientFor` refuses a keyless non-Anthropic profile, which at startup exits the server
+ * — and under the desktop shell that is a crash dialog over a config file only a text
+ * editor can fix. First-party Anthropic is the one profile whose client constructs
+ * without a key (the SDK defers authentication to request time), so a page without a
+ * working model can still open, show the setup card's "paste a key" step, and swap the
+ * live runtime over on the save that has one (INV-1268). The warning names the variable
+ * the operator is missing, because the degraded state is otherwise silent.
+ */
+export function keylessStart(
+  profile: ProviderProfile,
+  warn: (line: string) => void
+): ProviderProfile {
+  const credentialPresent =
+    process.env[profile.keyEnv] !== undefined ||
+    (profile.keyEnv === "ANTHROPIC_API_KEY" && process.env.ANTHROPIC_AUTH_TOKEN !== undefined);
+  if (credentialPresent) return profile;
+  warn(
+    `no ${profile.keyEnv} for ${profile.label} — starting without a model; paste a key in Settings → Model`
+  );
+  return resolveProvider("anthropic");
+}
+
+/**
  * Builds a client for the profile, with an explicit key when the caller has one.
  *
  * The credential is passed in the header the endpoint expects, and the other one

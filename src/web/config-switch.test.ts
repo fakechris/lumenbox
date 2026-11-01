@@ -120,3 +120,76 @@ test("a saved model is in force without a restart; a file that cannot be applied
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("a search key is saved under its provider's variable, applied live, and clearable", async () => {
+  const home = mkdtempSync(join(tmpdir(), "agentbox-search-"));
+  const saved = {
+    home: process.env.AGENTBOX_HOME,
+    key: process.env.ANTHROPIC_API_KEY,
+    keenable: process.env.KEENABLE_API_KEY,
+    brave: process.env.BRAVE_SEARCH_API_KEY,
+    tavily: process.env.TAVILY_API_KEY,
+  };
+  process.env.AGENTBOX_HOME = home;
+  delete process.env.KEENABLE_API_KEY;
+  delete process.env.BRAVE_SEARCH_API_KEY;
+  delete process.env.TAVILY_API_KEY;
+  process.env.ANTHROPIC_API_KEY = "test-key-not-real";
+  resetConfigEnvForTests();
+  let stop: (() => void) | undefined;
+  try {
+    stop = await startWebServer({
+      port: PORT + 1,
+      host: "127.0.0.1",
+      token: "t0k",
+      useBox: false,
+      provider: resolveProvider("anthropic"),
+      onLog: () => {},
+    });
+    const headers = { "content-type": "application/json", authorization: "Bearer t0k" };
+    const post = async (body: unknown) => {
+      const response = await fetch(`http://127.0.0.1:${PORT + 1}/api/config`, { method: "POST", headers, body: JSON.stringify(body) });
+      return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+    };
+    const config = async () => (await (await fetch(`http://127.0.0.1:${PORT + 1}/api/config`, { headers })).json()) as {
+      search: { providers: { name: string; keyEnv: string; keyPresent: boolean }[] };
+    };
+    const setup = async () => (await (await fetch(`http://127.0.0.1:${PORT + 1}/api/setup`, { headers })).json()) as { search: boolean };
+
+    // Nothing configured: the page can say which key each provider reads, and the setup
+    // card can say the capability is absent — the fact the CLI prints to stdout nobody
+    // in the desktop app reads.
+    assert.equal((await config()).search.providers.length, 3);
+    assert.equal((await setup()).search, false);
+
+    // A key for one provider lands under that provider's variable and is live at once.
+    const first = await post({ searchProvider: "keenable", searchKey: "sk-search-test" });
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+    assert.equal(process.env.KEENABLE_API_KEY, "sk-search-test");
+    const file = JSON.parse(readFileSync(join(home, "config.json"), "utf8")) as { env?: Record<string, string> };
+    assert.equal(file.env?.KEENABLE_API_KEY, "sk-search-test");
+    const shown = (await config()).search.providers;
+    assert.equal(shown.find(p => p.name === "keenable")?.keyPresent, true);
+    assert.equal((await setup()).search, true);
+
+    // "none" clears whichever of the three is set — a key nobody wanted is worse than none.
+    const second = await post({ searchProvider: "" });
+    assert.equal(second.status, 200, JSON.stringify(second.body));
+    assert.equal(process.env.KEENABLE_API_KEY, undefined);
+    assert.equal((await setup()).search, false);
+
+    // A key with no provider, or a provider that does not exist, is refused rather than guessed.
+    assert.equal((await post({ searchKey: "orphan" })).status, 400);
+    assert.equal((await post({ searchProvider: "bogus", searchKey: "x" })).status, 400);
+  } finally {
+    stop?.();
+    for (const [key, value] of [
+      ["AGENTBOX_HOME", saved.home], ["ANTHROPIC_API_KEY", saved.key],
+      ["KEENABLE_API_KEY", saved.keenable], ["BRAVE_SEARCH_API_KEY", saved.brave], ["TAVILY_API_KEY", saved.tavily],
+    ] as const) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    resetConfigEnvForTests();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
