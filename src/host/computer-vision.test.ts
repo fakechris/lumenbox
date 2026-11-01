@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { type ComputerAction, type ComputerResult, computerOutcome } from "../protocol/index.ts";
+import { type ComputerAction, type ComputerResult, computerOutcome, type ElementInfo } from "../protocol/index.ts";
 import { computerWithVision, LOOKS_UNSATISFIED_AT, visionExpectSchema } from "./computer-vision.ts";
 import type { JevMode, ShadowEntry, SwitchDeps } from "./jev.ts";
 
@@ -138,8 +138,8 @@ test("click_target finds the control on a fresh frame and sends an ordinary clic
 
   const clicked = await computerWithVision(box, ask, { display: 1 }, boxAnswer(0.84));
   assert.equal(calls.length, 2);
-  assert.equal((calls[0]!.actions[0] as { action: string }).action, "screenshot");
-  assert.deepEqual(calls[1]!.actions[0], { action: "click", coordinate: [736, 736] }, "the centre of the box, in the frame's pixels");
+  assert.deepEqual(calls[0]!.actions.map(action => action.action), ["list_elements", "screenshot"], "one observation: the outline when there is one, and the frame");
+  assert.deepEqual(calls[1]!.actions[0], { action: "click", coordinate: [736, 736] }, "no tree: the centre of the box, in the frame's pixels");
   assert.equal((calls[1]!.actions[1] as { action: string }).action, "key", "the rest of the batch follows the click");
   assert.match(clicked.effect_detail!, /click_target "the Send button" clicked at \(736, 736\), confidence 0\.84/);
 
@@ -196,4 +196,67 @@ test("the guard sends a click on what looks like send/pay/delete to the gate, an
   assert.equal(box.calls.length, 1, "a batch whose first write is not a click is not read");
   assert.equal(approvalOf(await computerWithVision(fakeBox(), click, {}, reading("pay", 0.9))).approval, undefined);
   assert.match((await computerWithVision(fakeBox(), click, {}, reading("pay", 0.9))).error!, /no approval channel/);
+});
+
+test("click_target with an outline chooses from the clickable controls, looks twice when unsure, and never asks for text (INV-1479)", async () => {
+  const { choose, clickable, criterionOf, richCriterionOf } = await import("./computer-vision.ts");
+  const elements: ElementInfo[] = [
+    { ref: "obs:a1", role: "push button", name: "Back", x: 10, y: 10, width: 40, height: 20, states: ["disabled"] },
+    { ref: "obs:a2", role: "entry", name: "Message", x: 247, y: 697, width: 453, height: 55, states: ["editable", "focused"] },
+    { ref: "obs:a3", role: "push button", name: "Send", x: 712, y: 718, width: 63, height: 34, states: [] },
+    { ref: "obs:a4", role: "push button", name: "Send", x: 900, y: 718, width: 63, height: 34, states: ["pressed"] },
+  ];
+  assert.deepEqual(clickable(elements).map(element => element.ref), ["obs:a2", "obs:a3", "obs:a4"], "a disabled control is not a candidate");
+  assert.equal(criterionOf(elements[1]!), 'entry "Message" [focused]');
+  assert.equal(criterionOf(elements[3]!), 'push button "Send" [pressed]');
+  assert.equal(richCriterionOf(elements[2]!, clickable(elements)), 'push button "Send" at (712, 718) 63x34, beside entry "Message" [focused] and push button "Send" [pressed]');
+
+  const asked: { criteria: Record<string, string>; types: string[] }[] = [];
+  const answering = (rounds: { choice: string; confidence: number; present: number }[]) => async (request: { questions: Record<string, { type: string; criteria?: Record<string, string> }> }) => {
+    const which = request.questions.which!;
+    asked.push({ criteria: which.criteria!, types: Object.values(request.questions).map(question => question.type) });
+    const round = rounds.shift()!;
+    const keys = Object.keys(which.criteria!).filter(key => key !== "none");
+    const probabilities = Object.fromEntries([...keys.map((key, index) => [key, key === round.choice ? 0.6 : 0.3 - index * 0.05]), ["none", 0.1]]);
+    return { model: "m", ms: 1, answers: { which: { type: "choice", choice: round.choice, confidence: round.confidence, probabilities }, present: { type: "noul", noul: round.present } } };
+  };
+  // Round one is sure.
+  const sure = await choose(answering([{ choice: "1", confidence: 0.9, present: 0.95 }]) as never, elements, "the Send button");
+  assert.ok(!("why" in sure) && sure.element.ref === "obs:a3" && sure.round === 1, JSON.stringify(sure));
+  assert.deepEqual(asked[0]!.types, ["choice", "noul"], "a choice and a presence question, no box and no text");
+  assert.deepEqual(Object.keys(asked[0]!.criteria), ["0", "1", "2", "none"]);
+  assert.equal(asked[0]!.criteria["0"], 'entry "Message" [focused]');
+  // Round one says none; the second look at the closest few, with rectangles, finds it.
+  asked.length = 0;
+  const second = await choose(answering([{ choice: "none", confidence: 0.8, present: 0.5 }, { choice: "0", confidence: 0.85, present: 0.9 }]) as never, elements, "the Send button");
+  assert.ok(!("why" in second) && second.round === 2, JSON.stringify(second));
+  assert.equal(asked.length, 2);
+  assert.ok(Object.keys(asked[1]!.criteria).length <= 6, "the second look is over at most five controls and none");
+  assert.match(asked[1]!.criteria["0"]!, /at \(\d+, \d+\) \d+x\d+/, "the second look carries rectangles");
+  // Still none: the caller is told why.
+  const none = await choose(answering([{ choice: "none", confidence: 0.9, present: 0.1 }, { choice: "none", confidence: 0.9, present: 0.1 }]) as never, elements, "the Send button");
+  assert.ok("why" in none && /no listed control/.test(none.why));
+  // A presence doubt caps the confidence even when the choice is sure.
+  const doubted = await choose(answering([{ choice: "1", confidence: 0.95, present: 0.2 }, { choice: "1", confidence: 0.95, present: 0.2 }]) as never, elements, "the Send button");
+  assert.ok("why" in doubted);
+
+  // Through computerWithVision: the chosen ref is clicked with its observation id, the rest of the batch follows untouched, and the frame is the fallback.
+  const calls: { actions: readonly ComputerAction[] }[] = [];
+  const box = {
+    computer: async (actions: readonly ComputerAction[], options: Record<string, unknown> = {}) => {
+      calls.push({ actions });
+      const observed = actions.some(action => action.action === "list_elements");
+      return { success: true, screenshot: "WEBP", action_count: actions.length, duration_ms: 5, progress: { executed_count: 1, dispatch: "sent" }, ...(observed ? { elements, elements_observation_id: "obs" } : {}), ...(options.jpeg === true ? { screenshot_jpeg: "/9j/" } : {}) } as ComputerResult;
+    },
+  };
+  const deps = (rounds: { choice: string; confidence: number; present: number }[]): SwitchDeps => ({ mode: point => (point === "computer_click" ? "on" : "off"), client: () => answering(rounds) as never, record: () => {}, log: () => {} });
+  const batch = [{ action: "click_target", target: "the Send button" } as unknown as ComputerAction, { action: "type", text: "hello from the agent" } as ComputerAction];
+  const clicked = await computerWithVision(box, batch, {}, deps([{ choice: "1", confidence: 0.9, present: 0.95 }]));
+  assert.deepEqual(calls[1]!.actions, [{ action: "click_element", ref: "obs:a3", observation_id: "obs" }, { action: "type", text: "hello from the agent" }], "the text typed is the agent's, verbatim; nothing the model said is typed");
+  assert.match(clicked.effect_detail!, /chose push button "Send" from the outline, confidence 0\.90/);
+  calls.length = 0;
+  const neither = await computerWithVision(box, batch, {}, deps([{ choice: "none", confidence: 0.9, present: 0.1 }, { choice: "none", confidence: 0.9, present: 0.1 }]));
+  assert.equal(neither.outcome, "refused");
+  assert.match(neither.error!, /no listed control is "the Send button" confidently \(0\.10\); on the screen, the frame's size could not be read/, "the outline's answer and the frame's, both said");
+  assert.equal(calls.length, 1, "nothing was clicked or typed");
 });

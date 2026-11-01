@@ -19,7 +19,7 @@
  */
 
 import type { BoxClient } from "../box/client.ts";
-import type { ActionVerification, ComputerAction, ComputerResult, DesktopExpectation } from "../protocol/index.ts";
+import type { ActionVerification, ComputerAction, ComputerResult, DesktopExpectation, ElementInfo } from "../protocol/index.ts";
 import { boxOf, choiceOf, defaultSwitchDeps, type JevAsk, modeFor, noulOf, type SwitchDeps } from "./jev.ts";
 import type { ToolContext } from "./tools.ts";
 
@@ -135,6 +135,62 @@ export async function locate(ask: JevAsk, jpegBase64: string, target: string): P
   const { box, confidence } = boxOf(result, "where");
   if (confidence < CLICK_AT) return { why: `could not find "${target.slice(0, 120)}" confidently (${confidence.toFixed(2)}); take a screenshot and click by coordinates` };
   return { x: Math.round(((box.left + box.right) / 2) * size.width), y: Math.round(((box.top + box.bottom) / 2) * size.height), confidence };
+}
+
+/** The most controls one choice question carries, and how many are asked about again when the first round found none. */
+export const CHOICE_LIMIT = 254;
+export const SECOND_LOOK = 5;
+
+/** The controls a click can land on: anything listed that is not disabled, up to the question's limit. */
+export function clickable(elements: readonly ElementInfo[]): ElementInfo[] {
+  return elements.filter(element => !element.states.includes("disabled")).slice(0, CHOICE_LIMIT);
+}
+
+/** One control as a line the decision model chooses between: role, name, the states that tell twins apart. */
+export function criterionOf(element: ElementInfo): string {
+  const states = element.states.filter(state => state !== "editable");
+  return `${element.role} "${element.name}"${states.length > 0 ? ` [${states.join(", ")}]` : ""}`;
+}
+
+/** The same line with where it is and what sits beside it, for the second look at the few that came close. */
+export function richCriterionOf(element: ElementInfo, all: readonly ElementInfo[]): string {
+  const index = all.indexOf(element);
+  const beside = [all[index - 1], all[index + 1]].filter((other): other is ElementInfo => other !== undefined).map(criterionOf);
+  return `${criterionOf(element)} at (${element.x}, ${element.y}) ${element.width}x${element.height}${beside.length > 0 ? `, beside ${beside.join(" and ")}` : ""}`;
+}
+
+/**
+ * Which listed control `target` names (INV-1479): a choice over the clickable controls, with
+ * `none`, rather than a box on pixels — on a list the decision model is choosing, not locating.
+ * A first round below the click threshold, or `none`, gets a second look at the few that came
+ * closest, each with its rectangle and neighbours; still nothing is `why`, and the caller falls
+ * back to the frame. The model is never asked for text: what to type comes from the agent's call.
+ */
+export async function choose(ask: JevAsk, elements: readonly ElementInfo[], target: string): Promise<{ element: ElementInfo; confidence: number; round: 1 | 2 } | { why: string }> {
+  const options = clickable(elements);
+  if (options.length === 0) return { why: "no clickable control is listed" };
+  const round = async (subset: readonly ElementInfo[], criterion: (element: ElementInfo) => string, n: 1 | 2) => {
+    const criteria = Object.fromEntries(subset.map((element, index) => [String(index), criterion(element)]));
+    const result = await ask({
+      state: { target, controls: `${subset.length} controls of the active window, listed as the accessibility tree gives them, top to bottom` },
+      questions: {
+        which: { type: "choice", instructions: `Which control is \`target\`? Choose none when no listed control is it`, criteria: { ...criteria, none: "none of the listed controls is the target" } },
+        present: { type: "noul", instructions: "`target` is one of the listed controls" },
+      },
+    });
+    const picked = choiceOf(result, "which");
+    const present = noulOf(result, "present");
+    const element = picked.choice === "none" ? undefined : subset[Number(picked.choice)];
+    const ranked = Object.entries(picked.probabilities).filter(([key]) => key !== "none").sort(([, a], [, b]) => b - a).map(([key]) => subset[Number(key)]).filter((item): item is ElementInfo => item !== undefined);
+    return { element, confidence: Math.min(picked.confidence, present), ranked, n };
+  };
+  const first = await round(options, criterionOf, 1);
+  if (first.element !== undefined && first.confidence >= CLICK_AT) return { element: first.element, confidence: first.confidence, round: 1 };
+  const closest = first.ranked.slice(0, SECOND_LOOK);
+  if (closest.length === 0) return { why: `no listed control is "${target.slice(0, 120)}"` };
+  const second = await round(closest, element => richCriterionOf(element, options), 2);
+  if (second.element !== undefined && second.confidence >= CLICK_AT) return { element: second.element, confidence: second.confidence, round: 2 };
+  return { why: `no listed control is "${target.slice(0, 120)}" confidently (${second.confidence.toFixed(2)})` };
 }
 
 /** At or above this, the guard's reading of a control sends the click to the policy gate. */
@@ -255,13 +311,25 @@ export async function computerWithVision(box: Box, actions: readonly ComputerAct
     const first = actions[0] as { target?: unknown; button?: unknown; count?: unknown };
     const target = typeof first.target === "string" ? first.target.trim() : "";
     if (target === "") return refused("click_target needs target: the control to click, in words");
-    const frame = await box.computer([{ action: "screenshot" } as ComputerAction], { ...boxOptions, expect: undefined, jpeg: true });
+    // One observation gives both the control outline (when the app has a tree) and the frame to fall back to.
+    const frame = await box.computer([{ action: "list_elements" }, { action: "screenshot" }] as ComputerAction[], { ...boxOptions, expect: undefined, jpeg: true });
+    const extra = { ...(first.button !== undefined ? { button: first.button } : {}), ...(typeof first.count === "number" ? { count: first.count } : {}) };
+    const failed = (error: unknown) => ({ why: `the decision model failed (${error instanceof Error ? error.message : String(error)})` });
+    const outline = frame.elements !== undefined && frame.elements.length > 0 ? frame.elements : undefined;
+    const chosen = outline === undefined ? undefined : await choose(ask, outline, target).catch(failed);
+    if (chosen !== undefined && !("why" in chosen)) {
+      // The ref goes through the box's own identity check before any input (INV-1478).
+      const clickAction = { action: "click_element", ref: chosen.element.ref, observation_id: frame.elements_observation_id, ...extra } as ComputerAction;
+      const result = await computerWithVision(box, [clickAction, ...actions.slice(1)], options, jev, clock);
+      const note = `click_target "${target.slice(0, 80)}" chose ${criterionOf(chosen.element)} from the outline, confidence ${chosen.confidence.toFixed(2)}${chosen.round === 2 ? " on a second look" : ""}`;
+      return { ...result, effect_detail: result.effect_detail === undefined ? note : `${note}; ${result.effect_detail}` };
+    }
     if (frame.screenshot_jpeg === undefined) return refused("the box sent no JPEG frame, so click_target cannot read the screen; update the box image, or click by coordinates");
-    const found = await locate(ask, frame.screenshot_jpeg, target).catch(error => ({ why: `the decision model failed (${error instanceof Error ? error.message : String(error)})` }));
-    if ("why" in found) return { ...refused(`click_target: ${found.why}`), screenshot: frame.screenshot };
-    const clickAction = { action: "click", coordinate: [found.x, found.y], ...(first.button !== undefined ? { button: first.button } : {}), ...(typeof first.count === "number" ? { count: first.count } : {}) } as ComputerAction;
+    const found = await locate(ask, frame.screenshot_jpeg, target).catch(failed);
+    if ("why" in found) return { ...refused(`click_target: ${chosen === undefined ? "" : `${chosen.why}; on the screen, `}${found.why}`), screenshot: frame.screenshot };
+    const clickAction = { action: "click", coordinate: [found.x, found.y], ...extra } as ComputerAction;
     const result = await computerWithVision(box, [clickAction, ...actions.slice(1)], options, jev, clock);
-    const note = `click_target "${target.slice(0, 80)}" clicked at (${found.x}, ${found.y}), confidence ${found.confidence.toFixed(2)}`;
+    const note = `click_target "${target.slice(0, 80)}" clicked at (${found.x}, ${found.y}), confidence ${found.confidence.toFixed(2)}${outline === undefined ? "" : " (the outline named nothing)"}`;
     return { ...result, effect_detail: result.effect_detail === undefined ? note : `${note}; ${result.effect_detail}` };
   }
   const guardMode = modeFor("computer_guard", jev);

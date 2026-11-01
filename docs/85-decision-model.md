@@ -2,7 +2,7 @@
      title: The decision model: switched judgements beside the cheap profile
      family: guide
      status: current
-     updated: 2026-10-28
+     updated: 2026-11-01
 -->
 # The decision model: switched judgements beside the cheap profile
 
@@ -59,10 +59,21 @@ The desktop points read the screen. The box returns the final frame also as JPEG
   the batch, even over a native yes; a clear yes is a line of evidence and never turns unknown into ok.
 - `wait_until` (`computer_wait`): alone in its call and read-only; a frame every 1.5 s until the
   screen shows the sentence or the seconds run out (unknown).
-- `click_target` (`computer_click`): first in its call; the target's box on a fresh frame, an
-  ordinary click at its centre, refused below 0.5. Measured on our own screen it was no more
-  accurate than a vision-capable main model (7/10 against 8/10, `scripts/eval-click-target.mjs`),
-  so it is for models that cannot place a click themselves.
+- `click_target` (`computer_click`): first in its call. One observation takes the window's control
+  outline and a frame. With an outline, the decision model *chooses* the control from the clickable
+  ones (a `choice` over up to 254 lines of `role "name" [states]` plus `none`, and a `present`
+  noul; a first round under 0.5 or `none` gets a second look at the five closest, each with its
+  rectangle and neighbours), and the chosen ref is clicked through `click_element`, so the box's
+  identity check (docs/49 A1b) stands between the choice and the input. Without an outline — a
+  terminal, an Electron app — or when the outline names nothing, the target's box on the frame and
+  an ordinary click at its centre, refused below 0.5, as before. The model is never asked for text:
+  what is typed is the agent's, verbatim (INV-1479).
+  Measured on our own screen (`scripts/eval-click-target.mjs`, 10 targets, one absent, 2026-11-01,
+  MiniMax-M3.1-Flash as the main model): box on the screenshot 8/10, choice from the outline 10/10
+  (the absent one refused), main model 7/10. The choice's confidences sit low — 0.51 to 0.72, the
+  Files tab at 0.51 — and a first round takes 2–11 s against 0.3–2 s for a box, so the threshold is
+  the thing to watch, not the hit rate; the outline in that eval is authored from the screen, not
+  captured (the web app exposes no tree), so it measures the choosing, not box-ax.
 - The guard (`computer_guard`): before a batch whose first write is a click, the boxed control is
   read; send, pay, delete, publish or submit goes to the policy gate as irreversible, as a browser
   click on one does. A failed or unsure reading adds nothing.
