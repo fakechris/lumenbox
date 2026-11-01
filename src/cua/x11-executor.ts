@@ -12,6 +12,7 @@ type X11ExecutionResult = DesktopExecutionResult;
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import { type AxOutput, parseAxOutput } from "./ax-output.ts";
 import { ComputerExecutionError, DesktopTargetError, isComputerWrite, targetVerdict } from "./execution.ts";
 import { envNumber } from "../config.ts";
 import { execFile } from "node:child_process";
@@ -25,6 +26,7 @@ import type {
   ScrollDirection,
   WindowInfo,
   ElementInfo,
+  ElementsWindow,
   Effect,
   DesktopObservation,
   ActionVerification,
@@ -337,48 +339,7 @@ export function patchWebpHeader(buffer: Buffer): Buffer {
   return buffer;
 }
 
-/** What box-ax prints: the tree it read, or why it could not. */
-export interface AxOutput {
-  window: { title: string; app: string; truncated: boolean; identity?: string; id?: string };
-  elements: { ref: string; identity?: string; role: string; name: string; x: number; y: number; width: number; height: number; states: string[]; operations?: string[] }[];
-}
-
-export function parseAxOutput(text: string): AxOutput | { error: string } | undefined {
-  const line = text.trim().split("\n").pop() ?? "";
-  if (line === "") return undefined;
-  let parsed: Record<string, unknown>;
-  try {
-    parsed = JSON.parse(line) as Record<string, unknown>;
-  } catch {
-    return undefined;
-  }
-  if (typeof parsed.error === "string") return { error: parsed.error };
-  if (!Array.isArray(parsed.elements)) return undefined;
-  const window = (parsed.window ?? {}) as Record<string, unknown>;
-  return {
-    window: {
-      title: typeof window.title === "string" ? window.title : "",
-      app: typeof window.app === "string" ? window.app : "",
-      truncated: parsed.truncated === true,
-      identity: typeof window.identity === "string" ? window.identity : undefined,
-      id: typeof window.id === "string" ? window.id : undefined,
-    },
-    elements: (parsed.elements as Record<string, unknown>[])
-      .filter(e => typeof e.ref === "string" && typeof e.role === "string")
-      .map(e => ({
-        ref: e.ref as string,
-        identity: typeof e.identity === "string" ? e.identity : undefined,
-        operations: Array.isArray(e.operations) ? e.operations.filter((op): op is string => op === "invoke" || op === "set_value") : [],
-        role: e.role as string,
-        name: typeof e.name === "string" ? e.name : "",
-        x: Number(e.x ?? 0),
-        y: Number(e.y ?? 0),
-        width: Number(e.width ?? 0),
-        height: Number(e.height ?? 0),
-        states: Array.isArray(e.states) ? e.states.filter((s): s is string => typeof s === "string") : [],
-      })),
-  };
-}
+export { type AxOutput, parseAxOutput } from "./ax-output.ts";
 
 export interface X11Config {
   display: string;
@@ -396,6 +357,9 @@ export interface X11Config {
   effectSettleMs?: number;
 }
 
+/** What a list_elements answers: the controls known in this observation, and the window with what was left unread. */
+export type Outline = { elements: ElementInfo[]; window: ElementsWindow };
+
 export const X11_DESKTOP_CAPABILITIES = { backend: "x11-atspi", platform: "linux", semantic_actions: ["invoke", "set_value"], background_semantic: false, observation_refs: true } as const;
 
 export class X11Executor implements DesktopDriver {
@@ -409,6 +373,11 @@ export class X11Executor implements DesktopDriver {
   private elementWindow: AxOutput["window"] | undefined;
   private elementsObservationId: string | undefined;
   private observationGeneration = 0;
+  /** The containers the last read left unentered, by ref: a list_elements with that ref reads one alone (INV-1481). */
+  private containerPaths = new Map<string, AxOutput["cut"][number]>();
+  private drills = 0;
+  /** The top-level read of this observation, as box-ax gave it: what a later whole read is compared against. */
+  private topLevelRead: AxOutput["elements"] = [];
 
   /** Authority/lifecycle changes and writes invalidate references synchronously. */
   invalidateElements(): void {
@@ -417,6 +386,9 @@ export class X11Executor implements DesktopDriver {
     this.elementTargets.clear();
     this.elementWindow = undefined;
     this.elementsObservationId = undefined;
+    this.containerPaths.clear();
+    this.drills = 0;
+    this.topLevelRead = [];
   }
 
   constructor(config: X11Config) {
@@ -461,13 +433,13 @@ export class X11Executor implements DesktopDriver {
    * (INV-412). An app with no tree — a terminal, an Electron app — is an `error`, said in
    * words, never an empty list: the model must fall back to the screenshot knowingly.
    */
-  protected async readElements(): Promise<AxOutput | { error: string }> {
+  protected async readElements(args: readonly string[] = []): Promise<AxOutput | { error: string }> {
     let stdout: string;
     authorizeOperation();
     try {
       // The executor's environment is DISPLAY alone; a lookup by name needs a PATH, and
       // the daemon's own is the one the image set.
-      stdout = await nativeHelper("box-ax", [], {}, {
+      stdout = await nativeHelper("box-ax", [...args], {}, {
         env: this.env, authorize: authorizeOperation, allowReadRefusal: true,
       });
     } catch (error) {
@@ -482,12 +454,25 @@ export class X11Executor implements DesktopDriver {
     return parsed;
   }
 
-  protected async listElements(): Promise<{ elements: ElementInfo[]; window: AxOutput["window"] } | { error: string }> {
+  protected async listElements(root?: string): Promise<Outline | { error: string }> {
     const generation = this.observationGeneration;
-    const read = await this.readElements();
+    const drill = root === undefined ? undefined : this.drillArgs(root);
+    const read = await this.readElements(drill?.args ?? []);
     authorizeOperation();
     if (generation !== this.observationGeneration) throw new DesktopTargetError("control changed during observation");
-    return "error" in read ? read : this.adoptElements(read);
+    if ("error" in read) return read;
+    if (drill !== undefined && read.window.identity !== this.elementWindow?.identity) throw new DesktopTargetError("the window changed since the outline was taken");
+    return this.adoptElements(read, drill?.root);
+  }
+
+  /** The box-ax arguments that read one unentered container of the current observation alone. */
+  private drillArgs(root: string): { root: string; args: string[] } {
+    const container = this.containerPaths.get(root.trim());
+    if (container === undefined || this.elementsObservationId === undefined) {
+      throw new DesktopTargetError(`${root} is not a container the current outline left unread`);
+    }
+    this.drills += 1;
+    return { root: root.trim(), args: ["--root", container.path, "--ref-prefix", `d${this.drills}`] };
   }
 
   // Re-read immediately before dispatch; no cached geometry can silently move the target. A ref belongs to one
@@ -513,31 +498,35 @@ export class X11Executor implements DesktopDriver {
     return this.elementCentre(ref);
   }
 
-  /** Scales the tree's screen rectangles to API space and remembers the centres for click_element. */
-  protected adoptElements(read: AxOutput): { elements: ElementInfo[]; window: { title: string; app: string; truncated: boolean } } {
-    this.invalidateElements();
-    this.elementsObservationId = randomUUID();
-    this.elementWindow = read.window;
-    const elements: ElementInfo[] = [];
+  /**
+   * Scales the tree's screen rectangles to API space and remembers the centres for
+   * click_element. A drill (`into` names the container read) joins the observation it was
+   * taken from: the earlier refs stay valid, the container's own entry is replaced by what
+   * was found under it, and the outline returned is the whole of what is known.
+   */
+  protected adoptElements(read: AxOutput, into?: string): Outline {
+    if (into === undefined) {
+      this.invalidateElements();
+      this.elementsObservationId = randomUUID();
+      this.elementWindow = read.window;
+      this.topLevelRead = read.elements;
+    } else {
+      this.containerPaths.delete(into);
+    }
+    const observation = this.elementsObservationId!;
     for (const raw of read.elements) {
-      const ref = `${this.elementsObservationId}:${raw.ref}`;
+      const ref = `${observation}:${raw.ref}`;
       this.elementCentres.set(ref, { x: Math.round(raw.x + raw.width / 2), y: Math.round(raw.y + raw.height / 2) });
       this.elementTargets.set(ref, raw);
+    }
+    for (const [index, container] of read.cut.entries()) this.containerPaths.set(`${observation}:c${this.drills}-${index + 1}`, container);
+    const elements: ElementInfo[] = [...this.elementTargets].map(([ref, raw]) => {
       const origin = this.apiPoint({ x: raw.x, y: raw.y });
       const far = this.apiPoint({ x: raw.x + raw.width, y: raw.y + raw.height });
-      elements.push({
-        ref,
-        role: raw.role,
-        name: raw.name,
-        x: Math.round(origin.x),
-        y: Math.round(origin.y),
-        width: Math.max(1, Math.round(far.x - origin.x)),
-        height: Math.max(1, Math.round(far.y - origin.y)),
-        states: raw.states,
-        operations: raw.operations,
-      });
-    }
-    return { elements, window: read.window };
+      return { ref, role: raw.role, name: raw.name, x: Math.round(origin.x), y: Math.round(origin.y), width: Math.max(1, Math.round(far.x - origin.x)), height: Math.max(1, Math.round(far.y - origin.y)), states: raw.states, operations: raw.operations };
+    });
+    const cut = [...this.containerPaths].map(([ref, container]) => ({ ref, role: container.role, name: container.name, children_count: container.children_count }));
+    return { elements, window: { ...this.elementWindow!, truncated: cut.length > 0, complete: cut.length === 0 && read.complete, cut } };
   }
 
   protected async executeSemantic(action: Extract<ComputerAction, { action: "invoke_element" | "set_value" }>): Promise<ActionVerification> {
@@ -608,7 +597,7 @@ export class X11Executor implements DesktopDriver {
     let windows: readonly WindowInfo[] | undefined;
     let elements: readonly ElementInfo[] | undefined;
     let elementsNote: string | undefined;
-    let elementsWindow: { title: string; app: string; truncated: boolean } | undefined;
+    let elementsWindow: ElementsWindow | undefined;
     let screenshotTaken = false;
     let settleNeeded = false;
     let executedCount = 0;
@@ -655,12 +644,13 @@ export class X11Executor implements DesktopDriver {
         windows = await this.listWindows();
       } else if (action.action === "list_elements") {
         screenshotTaken = false;
-        this.invalidateElements();
+        // A drill keeps the observation it reads into; a fresh read starts one.
+        if (action.ref === undefined) this.invalidateElements();
         if (settleNeeded) {
           await sleep(this.config.screenshotDelayMs);
           settleNeeded = false;
         }
-        const read = await this.listElements();
+        const read = await this.listElements(action.ref);
         if ("error" in read) {
           elements = undefined;
           elementsNote = read.error;
@@ -757,7 +747,7 @@ export class X11Executor implements DesktopDriver {
       authorizeOperation();
       const unchanged = generation === this.observationGeneration && !("error" in current) &&
         current.window.identity !== undefined && current.window.identity === this.elementWindow?.identity &&
-        JSON.stringify(current.elements) === JSON.stringify([...this.elementTargets.values()]);
+        JSON.stringify(current.elements) === JSON.stringify(this.topLevelRead);
       if (!unchanged) {
         this.invalidateElements();
         elements = undefined;

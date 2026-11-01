@@ -609,7 +609,7 @@ const actionSchema = {
     },
     coordinate: coordinateSchema,
     value: { type: "string", description: "For set_value: replace an editable native control with this text. Values travel to the isolated native helper." },
-    ref: { type: "string", description: "For element actions: copy the complete opaque ref from the latest list_elements. Never shorten or reuse it after a write." },
+    ref: { type: "string", description: "For element actions: copy the complete opaque ref from the latest list_elements. Never shorten or reuse it after a write. For list_elements: the ref of a container the last outline left unread, to read that part alone into the same observation." },
     observation_id: { type: "string", description: "For element actions, required: the elements observation id returned with the outline the ref came from. A ref is refused without it." },
     path: {
       type: "array" as const,
@@ -2430,16 +2430,13 @@ export function boxErrorOutcome(error: unknown): Outcome | undefined {
  * The active window's controls as an outline, in the shape the browser outline uses
  * (INV-412): one line per control, the ref first so it can be copied into click_element.
  */
-/**
- * Prose and link counts alone. The caller sets `chars`, because only it knows how much
- * of the text the model was actually handed.
- */
+/** Prose and link counts alone. The caller sets `chars`, because only it knows how much of the text the model was actually handed. */
 function proseAndLinks(text: string): { prose: number; links: number } {
   const { prose, links } = textShape(text);
   return { prose, links };
 }
 
-export function elementsOutline(result: { elements?: readonly ElementInfo[]; elements_note?: string; elements_window?: { title: string; app: string; truncated: boolean } }): string {
+export function elementsOutline(result: { elements?: readonly ElementInfo[]; elements_note?: string; elements_window?: { title: string; app: string; truncated: boolean; cut?: readonly { ref: string; role: string; name: string; children_count: number }[] } }): string {
   if (result.elements === undefined) {
     return `No control outline: ${result.elements_note ?? "the active window exposes no accessibility tree"}. Work from the screenshot.`;
   }
@@ -2450,7 +2447,9 @@ export function elementsOutline(result: { elements?: readonly ElementInfo[]; ele
     const operations = element.operations?.length ? ` operations=${element.operations.join(",")}` : "";
     return `- ${element.role}${name} [ref=${element.ref}]${states}${operations} at (${element.x + Math.round(element.width / 2)},${element.y + Math.round(element.height / 2)})`;
   });
-  const cap = result.elements_window?.truncated === true ? "\n… (more controls than shown; act on what is here or scroll)" : "";
+  // What the read left unentered (INV-1481): each container is a ref a list_elements can drill into, in the same observation.
+  const unread = (result.elements_window?.cut ?? []).map(c => `\n… ${c.role}${c.name !== "" ? ` "${c.name}"` : ""} [ref=${c.ref}] holds ${c.children_count} more not read — list_elements with ref=${c.ref} reads it`).join("");
+  const cap = unread !== "" ? unread : result.elements_window?.truncated === true ? "\n… (more controls than shown; act on what is here or scroll)" : "";
   return lines.length > 0
     ? `Controls${where}:\n${lines.join("\n")}${cap}`
     : `The active window${where} exposes a tree but no operable controls are showing.`;
