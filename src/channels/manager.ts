@@ -507,6 +507,8 @@ export interface ChannelManagerDeps {
    * then says less rather than guessing.
    */
   ahead?: (agentName: string | undefined, chatKey: string) => number;
+  /** The commands this agent let go of in this conversation that still run (INV-1461), as one line each; empty when none. */
+  openJobs?: (agentName: string | undefined, conversationKey: string) => string[];
   /**
    * How long a turn may run before the chat is told it is under way. A quick answer
    * should arrive as itself, not behind a "working on it" — the threshold is what
@@ -607,6 +609,8 @@ export interface ChannelManagerDeps {
      * review and the card, deciding for itself, still said Done.
      */
     closed: (taskId: string, outcome: "done" | "failed", note?: string) => TaskCardState["status"] | undefined;
+    /** The turn ended but a command it started runs on (INV-1461): the task stays doing, with the note, until that job's wake finishes it. */
+    stillWorking?: (taskId: string, note: string) => void;
     /**
      * The requester accepting reviewed work. "done" when it closed; "not_review" when the
      * task was not waiting on them — and then the word was ordinary chat, not a verdict.
@@ -1298,8 +1302,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       this.deps.log(`channel: ${why}`);
       return Promise.resolve({ delivered: false, why });
     }
-    // The same file duty the reply door has: a report that names its long version by box path
-    // into a chat that cannot open it was the measured failure (2026-09-01).
+    // The same file duty the reply door has (a report naming its long version by box path, 2026-09-01).
     const files = () => this.deliverFiles(adapter, chatKey, chatKey, text, undefined, line => adapter.sendToChat === undefined ? Promise.resolve() : adapter.sendToChat(chatKey, line));
     if (this.deps.outbox !== undefined) return this.deps.outbox.send({ adapter: { sendToChat: (key, line) => adapter.sendToChat!(key, line) }, chatKey, text, purpose }, files);
     return adapter.sendToChat(chatKey, text).then(files).then(() => ({ delivered: true })).catch((error: unknown) => {
@@ -1313,12 +1316,9 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
   adapterFor(chatKey: string): ChannelAdapter | undefined { return this.adapters.find(a => chatKey.startsWith(`${a.name}:`)); }
 
   /**
-   * The files a delivered text owes its chat: whatever sits in the chat's outbox,
-   * then anything the text names under the work directory but never handed over.
-   * One implementation for both delivery doors — the inbound-reply path and the
-   * scheduled/console push — because when only the first door carried files, a
-   * scheduled weekly report named its long version by box path into a chat that
-   * could not open it, and the person had to ask again.
+   * The files a delivered text owes its chat: the chat's outbox, then anything the text names under the work
+   * directory but never handed over. One implementation for both delivery doors, after a scheduled report named
+   * its long version by box path into a chat that could not open it.
    */
   private async deliverFiles(
     adapter: ChannelAdapter,
@@ -1763,9 +1763,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     const { agentName, text } = parseAddress(message.text);
     if (text === "") return SAY_WHAT_YOU_NEED;
 
-    // New requests always have their own task. Intent words and a pending question are
-    // not ownership. Explicit references bind context, but still get a tracked turn;
-    // no channel request uses fire-and-forget steering (INV-611/630).
+    // New requests always have their own task; explicit references bind context but still get a tracked turn (INV-611/630).
     const conversationKey = message.threadKey ?? message.chatKey ?? message.identity;
     const entries = this.runningWork.get(conversationKey) ?? [];
     const running = entries.find(entry => agentName === undefined || entry.agentName === agentName);
@@ -1793,8 +1791,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       // The task's mandate is checked before its work goes on (INV-1457).
       const mandate = this.deps.board?.revalidate?.(reference.id, message.identity);
       if (mandate?.status === "withdrawn" || mandate?.status === "stale") return reauthorisationNeeded(reference.id, mandate);
-      // Even an explicit addition gets a tracked turn. Fire-and-forget steering can
-      // race the old turn's exit and acknowledge words no later reply ever delivers.
+      // Even an explicit addition gets a tracked turn: fire-and-forget steering can race the old turn's exit.
       addition = { agentName: target.agentName, text: `[Additional instruction for task ${reference.id}; handle after the current turn]${mandateNote(mandate?.reauthorised)}\n\n${reference.text}` };
     } else if (/^\/(?:answer|continue)(?:\s|$)/u.test(text)) {
       return "请使用 /answer 问题编号 答案，或 /continue 任务编号 追加内容。";
@@ -1870,6 +1867,13 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     this.inflight.add(task);
     this.inflightContexts.set(task, conversationKey);
     return undefined;
+  }
+
+  /** Closes a finished turn's task — unless a command it started still runs (INV-1461): then it stays doing until that job's wake finishes it. */
+  private settle(taskId: string, agentName: string | undefined, conversationKey: string): TaskCardState["status"] | undefined {
+    const jobs = this.deps.openJobs?.(agentName, conversationKey) ?? [];
+    if (jobs.length === 0) return this.deps.board?.closed(taskId, "done");
+    this.deps.board?.stillWorking?.(taskId, `turn ended with a command still running: ${jobs.join("; ").slice(0, 300)}`); return "working";
   }
 
   /** A line to the room that asked, or to the sender where the wire has no rooms. */
@@ -2367,16 +2371,14 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       );
       clearTimeout(ackTimer);
       if (typeof asked !== "string") {
-        // Deliberate silence (INV-775): the room hears nothing from this agent — not the reply,
-        // not the empty-output note, not a trailer. Whatever it put in the outbox still goes,
-        // because a file in the outbox is an act, not a sentence. The task settles as done:
-        // the turn completed, it just had nothing to say (INV-801).
+        // Deliberate silence (INV-775): the room hears nothing — not the reply, not a trailer. Files in the outbox
+        // still go (an act, not a sentence). The task settles as done: it completed with nothing to say (INV-801).
         this.deps.log(`channel ${adapter.name}: ${agentName ?? "agent"} stayed silent — ${asked.silent.reason.slice(0, 120)}`);
         await interimDelivery;
         await this.deliverFiles(adapter, targetChatKey, message.threadKey ?? chatKey, "", anchor, line => deliver(line));
-        const settled = taskId !== undefined ? this.deps.board?.closed(taskId, "done") : undefined;
+        const settled = taskId !== undefined ? this.settle(taskId, agentName, runningKey) : undefined;
         if (taskId !== undefined && options?.recoveryOperationId !== undefined) this.deps.recover?.finished(taskId, options.recoveryOperationId, "completed");
-        finishCard(settled === "review" ? "review" : "done");
+        finishCard(settled === "review" || settled === "working" ? settled : "done");
         mark("done");
         options?.onSucceeded?.();
         return;
@@ -2417,17 +2419,14 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         deliver(line)
       );
       // A generated answer is not yet a delivered answer. Settle only after text/files.
-      const settled = taskId !== undefined ? this.deps.board?.closed(taskId, "done") : undefined;
+      const settled = taskId !== undefined ? this.settle(taskId, agentName, runningKey) : undefined;
       if (taskId !== undefined && options?.recoveryOperationId !== undefined) this.deps.recover?.finished(taskId, options.recoveryOperationId, "completed");
-      finishCard(settled === "review" ? "review" : "done");
+      finishCard(settled === "review" || settled === "working" ? settled : "done");
       mark("done");
       // Only now — reply and files delivered, task settled — is the conversation idle (INV-1190).
       options?.onSucceeded?.();
-      // The desk as the task left it: evidence at a glance — but only when the turn
-      // actually used the desktop (a poster of an untouched desk is noise), only for
-      // work long enough to have been acknowledged — a quick answer does not need a
-      // poster — and never a failure: the reply already landed, and its record is
-      // the transcript.
+      // The desk as the task left it: evidence at a glance — only when the turn used the desktop, only for work
+      // long enough to have been acknowledged, and never a failure: the reply already landed.
       if (
         acknowledged &&
         touchedDesktop &&

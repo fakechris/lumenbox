@@ -1721,15 +1721,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         const updated = orchestrator.tasks?.update(taskId, { status: "done", note: "验收通过" }, by);
         return updated?.task.status === "done" ? "done" : "not_review";
       },
+      // A turn ended but a command it started runs on (INV-1461): the task stays doing until that job's wake finishes it.
+      stillWorking: (taskId, note) => { orchestrator.tasks?.update(taskId, { status: "doing", note }, "channel"); },
       closed: (taskId, outcome, note) => {
-        // A turn ending is not the work being done, so the success path asks the board what
-        // that means rather than asserting it. A failure is different: nothing about a turn
-        // that threw is a judgement the agent made, so it is recorded as-is.
+        // A turn ending is not the work being done: the success path asks the board what that means. A
+        // failure is recorded as-is. Only review and done have card words; other board states are not guessed at.
         if (outcome === "done") {
           const settled = orchestrator.tasks?.turnFinished(taskId);
-          // Only the two the card has words for. Anything else the agent chose — blocked,
-          // dropped — is a board state, and inventing a card colour for it here would be
-          // guessing at a vocabulary the adapters do not have.
           return settled?.task.status === "review" ? "review" : "done";
         }
         orchestrator.tasks?.update(
@@ -1838,16 +1836,18 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // What a queued acknowledgement says: the running turn counts as one ahead, plus
     // whatever is already waiting in this chat's lane. An unknown agent name answers
     // zero — the ask that follows throws the message worth relaying.
+    // The commands this agent let go of in this conversation that still run (INV-1461).
+    openJobs: (agentName, conversationKey) => {
+      let agent: { id: string } | undefined;
+      try { agent = agentName !== undefined ? registry.resolve(agentName) : registry.list()[0]; } catch { return []; }
+      return agent === undefined ? [] : orchestrator.jobWatch.openJobs(agent.id, conversationIdFor(conversationKey)).map(job => `${job.jobId}: ${job.command.slice(0, 80)}`);
+    },
     ahead: (agentName, chatKey) => {
       try {
-        const agent =
-          agentName !== undefined ? registry.resolve(agentName) : registry.list()[0];
+        const agent = agentName !== undefined ? registry.resolve(agentName) : registry.list()[0];
         if (agent === undefined) return 0;
         const conversation = conversationIdFor(chatKey);
-        return (
-          (orchestrator.bus.isActive(agent.id, conversation) ? 1 : 0) +
-          orchestrator.bus.queuedCount(agent.id, conversation)
-        );
+        return (orchestrator.bus.isActive(agent.id, conversation) ? 1 : 0) + orchestrator.bus.queuedCount(agent.id, conversation);
       } catch {
         return 0;
       }

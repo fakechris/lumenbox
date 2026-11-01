@@ -1,3 +1,5 @@
+import { formatExec } from "./exec-format.ts";
+import type { JobWatch } from "./job-watch.ts";
 import { isComputerWrite } from "../cua/execution.ts";
 import { SENSITIVE_INPUT_TTL_MS, inputValueHash, parseSensitiveInput } from "../protocol/sensitive-input.ts";
 import { approvalOf, computerWithVision, desktopGuard, visionActionSchema, visionExpectSchema } from "./computer-vision.ts";
@@ -99,8 +101,16 @@ import {
   manifestOf,
 } from "./template.ts";
 
+/** How long a shell command holds a turn before it runs on as a job (INV-1461); AGENTBOX_FOREGROUND_MS, default 10 s. */
+function foregroundWindowMs(): number {
+  const raw = Number(process.env.AGENTBOX_FOREGROUND_MS ?? 10_000);
+  return Number.isFinite(raw) && raw >= 1_000 ? Math.min(raw, 600_000) : 10_000;
+}
+
 export interface ToolContext {
   agent: AgentRecord;
+  /** Watches the commands a turn let go of past their foreground window (INV-1461); absent means none is watched. */
+  jobWatch?: JobWatch;
   /**
    * How WebFetch reads a page. Replaced only by tests, which cannot reach the web and
    * must not; the default is the guarded fetch in web.ts.
@@ -2376,38 +2386,6 @@ function truncate(text: string, max: number): string {
   );
 }
 
-/** Formats an exec result the way a person reading a terminal would want it. */
-function formatExec(
-  result: {
-    stdout: string;
-    stderr: string;
-    exit_code: number;
-    timed_out: boolean;
-    timeout_ms?: number;
-  },
-  requestedTimeoutMs?: number
-): string {
-  const parts: string[] = [];
-  if (result.timed_out) {
-    const applied = result.timeout_ms;
-    // Which timeout killed it, and whether it was the one asked for. A command killed at ten
-    // minutes after a request for an hour looks like a crash unless the cap is named.
-    const capped =
-      applied !== undefined && requestedTimeoutMs !== undefined && requestedTimeoutMs > applied
-        ? ` — the box caps a single command at ${applied}ms, so the ${requestedTimeoutMs}ms you ` +
-          `asked for was not applied. For longer work, start it detached and poll it.`
-        : applied !== undefined
-          ? ` after ${applied}ms`
-          : "";
-    parts.push(`[command timed out and was killed${capped}]`);
-  }
-  parts.push(`exit code: ${result.exit_code}`);
-  // Caps chosen so one `npm install` or one `cat` of a log cannot eat the context.
-  if (result.stdout.trim()) parts.push(`stdout:\n${truncate(result.stdout, 20_000)}`);
-  if (result.stderr.trim()) parts.push(`stderr:\n${truncate(result.stderr, 10_000)}`);
-  if (!result.stdout.trim() && !result.stderr.trim()) parts.push("(no output)");
-  return parts.join("\n\n");
-}
 
 /**
  * What a setup turn's write into a skill file becomes: stamped with the template it came from,
@@ -2898,9 +2876,11 @@ export async function dispatchTool(
             `whether or not you wait.`,
         };
       }
+      const foregroundMs = foregroundWindowMs();
       const result = await box.exec(command, {
         cwd: input.cwd ? String(input.cwd) : undefined,
         timeoutMs: input.timeout_ms ? Number(input.timeout_ms) : undefined,
+        ...(context.jobWatch !== undefined ? { foregroundMs } : {}),
         // Per-agent AND per-conversation session, so each agent keeps its own working
         // directory and environment without inheriting a teammate's — and two of its
         // own conversations running at once do not cross cwd or env either.
@@ -2912,9 +2892,9 @@ export async function dispatchTool(
         actor: `agent:${context.agent.id}`,
         ...callFor(context),
       });
-      return {
-        text: formatExec(result, input.timeout_ms ? Number(input.timeout_ms) : undefined),
-      };
+      // A command that outlived its window runs on as a job; the watch wakes this agent when it ends (INV-1461).
+      if (result.still_running !== undefined) context.jobWatch?.watch({ agentId: context.agent.id, conversation: context.conversation ?? MAIN_CONVERSATION, jobId: result.still_running.job_id, command });
+      return { text: formatExec(result, input.timeout_ms ? Number(input.timeout_ms) : undefined, foregroundMs) };
     }
 
     case "Orchestrate": {

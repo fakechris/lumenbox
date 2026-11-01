@@ -20,7 +20,8 @@
  * waiting for exit would wait forever.
  */
 
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
+import type { WriteStream } from "node:fs";
 import {
   closeSync,
   createWriteStream,
@@ -208,18 +209,38 @@ export class JobService {
       }
     );
 
+    return this.track(child, jobId, input.command, logPath, log, input.onSettled);
+  }
+
+  /**
+   * A command that was started in the foreground and is still running when its caller stops
+   * waiting (INV-1461): it becomes a job from here on. What it has said so far is written at the
+   * head of the log, so the file reads as the whole output; its exit, when it comes, is recorded
+   * like any job's. The process is not touched — the caller's timer, not this, was what would
+   * have killed it.
+   */
+  adopt(input: { child: ChildProcess; command: string; head: Buffer; onSettled?: () => void }): JobStartedResult {
+    mkdirSync(this.dir, { recursive: true });
+    const jobId = `job-${randomUUID().slice(0, 8)}`;
+    const logPath = join(this.dir, `${jobId}.log`);
+    const log = createWriteStream(logPath, { flags: "a" });
+    if (input.head.length > 0) log.write(input.head);
+    return this.track(input.child, jobId, input.command, logPath, log, input.onSettled, input.head.length);
+  }
+
+  private track(child: ChildProcess, jobId: string, command: string, logPath: string, log: WriteStream, onSettled: (() => void) | undefined, head = 0): JobStartedResult {
     // Both streams into one file, interleaved as they arrive: a build's errors belong
     // beside the step that produced them, and two files would lose that ordering.
-    child.stdout.pipe(log, { end: false });
-    child.stderr.pipe(log, { end: false });
+    child.stdout?.pipe(log, { end: false });
+    child.stderr?.pipe(log, { end: false });
 
     const status: JobStatus = {
       job_id: jobId,
-      command: input.command,
+      command,
       running: true,
       started_at: new Date().toISOString(),
       log_path: logPath,
-      log_bytes: 0,
+      log_bytes: head,
     };
 
     // Resolved when the log is *on disk*, not when the process exited.
@@ -236,7 +257,7 @@ export class JobService {
         status.ended_at = new Date().toISOString();
         this.writeExit(status);
         try {
-          input.onSettled?.();
+          onSettled?.();
         } catch {
           // The job's record does not depend on whoever asked to hear about its end.
         }

@@ -8,11 +8,11 @@
  */
 
 import { envNumber } from "../config.ts";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { closeSync, mkdirSync, openSync, readdirSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { join } from "node:path";
-import { DURABLE_RESULT_CHARS, type ExecRequest, type ExecResult } from "../protocol/index.ts";
+import { DURABLE_RESULT_CHARS, type ExecRequest, type ExecResult, type JobStartedResult } from "../protocol/index.ts";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 /**
@@ -348,7 +348,10 @@ function shellQuote(value: string): string {
  * only (the call token and proxy of INV-784): it wins over the request's own `env` and
  * over whatever a session saved last time.
  */
-export function runShell(request: ExecRequest, pinned: Record<string, string> = {}): Promise<ExecResult> {
+/** How a still-running foreground command becomes a job at `foreground_ms` (INV-1461): the job service's `adopt`. */
+export type Adopt = (input: { child: ChildProcess; command: string; head: Buffer }) => JobStartedResult;
+
+export function runShell(request: ExecRequest, pinned: Record<string, string> = {}, adopt?: Adopt): Promise<ExecResult> {
   const command = request.command?.trim();
   if (!command) {
     return Promise.reject(new Error("command must be a non-empty string"));
@@ -415,6 +418,32 @@ export function runShell(request: ExecRequest, pinned: Record<string, string> = 
     const DRAIN_GRACE_MS = 2_000;
     let escaped = false;
 
+    // The foreground window (INV-1461): past it the command is not killed but handed to the job
+    // service, and the caller gets what it said so far plus the job's id. Everything after this
+    // instant goes to the job's log, not here.
+    const window = request.foreground_ms !== undefined && adopt !== undefined && request.foreground_ms < timeoutMs ? request.foreground_ms : undefined;
+    const handoff = window === undefined || adopt === undefined ? undefined : setTimeout(() => {
+      if (settled) return;
+      child.stdout.removeAllListeners("data");
+      child.stderr.removeAllListeners("data");
+      const head = Buffer.concat([Buffer.from(stdout.toString("stdout")), Buffer.from(stderr.toString("stderr"))]);
+      let job: JobStartedResult;
+      try {
+        job = adopt({ child, command, head });
+      } catch (error) {
+        stderr.push(Buffer.from(`\n[could not hand the command to the job service: ${error instanceof Error ? error.message : String(error)}; still waiting for it]`));
+        child.stdout.on("data", chunk => stdout.push(chunk as Buffer));
+        child.stderr.on("data", chunk => stderr.push(chunk as Buffer));
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      stdout.close();
+      stderr.close();
+      resolve({ stdout: stdout.toString("stdout"), stderr: stderr.toString("stderr"), exit_code: -1, timed_out: false, timeout_ms: timeoutMs, still_running: job });
+    }, window);
+    handoff?.unref?.();
+
     const timer = setTimeout(() => {
       timedOut = true;
       try {
@@ -437,6 +466,7 @@ export function runShell(request: ExecRequest, pinned: Record<string, string> = 
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (handoff !== undefined) clearTimeout(handoff);
       // Closed before the strings are built, so the notice describes a complete file.
       stdout.close();
       stderr.close();

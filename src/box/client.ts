@@ -334,6 +334,8 @@ export class BoxClient {
       actor?: string;
       /** The call token (INV-784, egress/call.ts) the box attributes the command's connections to. */
       call?: string;
+      /** Answer after this long with the command still running as a job (INV-1461). */
+      foregroundMs?: number;
     } = {}
   ): Promise<ExecResult> {
     const commandTimeout = options.timeoutMs ?? 120_000;
@@ -343,6 +345,7 @@ export class BoxClient {
         command,
         cwd: options.cwd,
         timeout_ms: commandTimeout,
+        ...(options.foregroundMs !== undefined ? { foreground_ms: options.foregroundMs } : {}),
         session: options.session,
         display: options.display,
         owner: options.owner,

@@ -279,3 +279,29 @@ test("a pinned per-call variable reaches the command and wins over the session, 
   const third = await runShell({ command: "echo \"[$AGENTBOX_CALL]\"", session });
   assert.equal(third.stdout.trim(), "[]", "a call token does not outlive its call");
 });
+
+test("a command past its foreground window runs on as a job, with what it said so far and no kill (INV-1461)", async () => {
+  const adopted: { command: string; head: string }[] = [];
+  const result = await runShell(
+    { command: "echo first; sleep 1; echo second", foreground_ms: 200, timeout_ms: 5_000 },
+    {},
+    input => {
+      adopted.push({ command: input.command, head: input.head.toString("utf8") });
+      // The adopter keeps the child; here it just waits for it to prove nothing killed it.
+      input.child.stdout?.resume();
+      input.child.stderr?.resume();
+      return { job_id: "job-0123abcd", pid: input.child.pid ?? -1, log_path: "/tmp/job-0123abcd.log" };
+    }
+  );
+  assert.equal(result.still_running?.job_id, "job-0123abcd");
+  assert.equal(result.exit_code, -1);
+  assert.equal(result.timed_out, false);
+  assert.match(result.stdout, /first/);
+  assert.doesNotMatch(result.stdout, /second/);
+  assert.equal(adopted.length, 1);
+  assert.match(adopted[0]!.head, /first/);
+  // Without an adopter the window means nothing: the command is simply waited for.
+  const plain = await runShell({ command: "echo whole", foreground_ms: 50, timeout_ms: 5_000 });
+  assert.equal(plain.still_running, undefined);
+  assert.match(plain.stdout, /whole/);
+});
