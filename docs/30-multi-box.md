@@ -2,7 +2,7 @@
      title: Many boxes, one host: the multi-box mode
      family: decision
      status: current
-     updated: 2026-09-14
+     updated: 2026-11-01
 -->
 # Many boxes, one host: the multi-box mode
 
@@ -214,3 +214,18 @@ they were running on that machine is not known to have stopped — stop the runn
 be sure. Codes and credentials are stored hashed in `~/.agentbox/connect.json` and never
 logged. Not built: a vendor multi-tenant control plane; this is one installation's
 registry of its own machines (`src/box/connect-codes.ts`, `web/box-register.test.ts`).
+
+## Generations (INV-1476, 2026-11-01)
+
+A box is reconnected when it was updated, recreated, restarted, or newly attached — a personal
+box included — and the orchestrator already forgets its desktops at that moment. What it could
+not forget was work in flight against the old incarnation: a job watch about to wake an agent
+with "your command ended", a routine run about to deliver its result. Each box now has a
+generation (`src/host/box-generation.ts`), bumped on every (re)connect; a job watch stamps it
+when it begins and a routine run when it starts, and asks before acting. A stamp from an earlier
+generation is dropped with one log line, `stale-generation: … dropped`, and nothing else
+happens. `GET /api/boxes` carries each box's `generation` and its `lastStaleDrop`. Desktop and
+browser calls need no stamp: a turn holds the client of the box it started with, and after a
+reconnect that client's calls fail rather than land on the new box. An agent does not change
+box (its `boxId` is immutable), so "the agent moved" is not a generation; a restart of the
+host is one for every box, since every callback died with the process.
