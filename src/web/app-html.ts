@@ -916,6 +916,7 @@ export const APP_HTML = String.raw`<!doctype html>
   <div class="eyebrow-row"><span class="eyebrow">Agents</span>
     <a href="#" id="groupby" class="dim" style="font-size:11px;margin-right:8px" title="Group the list by team, or list it A to Z">teams</a>
     <button id="new" class="btn ghost sm" title="New agent">+</button></div>
+  <div id="needsme" style="display:none;border-bottom:1px solid var(--border);padding:8px 12px"></div>
   <div class="scroll" id="agents"></div>
   <div style="padding:6px 12px 4px"><button id="shelfopen" class="btn sm" style="width:100%;justify-content:space-between;display:flex" title="Templates: saved agents you can stamp into this box"><span>Templates</span><span class="dim">stamp ▸</span></button></div>
   <div id="sidefoot">
@@ -1061,9 +1062,7 @@ export const APP_HTML = String.raw`<!doctype html>
       <select id="taskassign" style="height:28px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font-size:12px"></select>
       <button class="btn sm" id="taskadd">Add</button>
     </div>
-    <!-- What needs me, before what the board has (INV-543). Two lists and their clocks:
-         the page a person opens to answer "is anything waiting on me?" without reading
-         everybody's board. -->
+    <!-- What needs me, before what the board has (INV-543): two lists and their clocks. -->
     <div id="attention" style="display:none;border-bottom:1px solid var(--border);padding:10px 16px"></div>
     <div class="scroll" id="tasklist"></div>
   </div>
@@ -5707,30 +5706,30 @@ function renderAttention() {
     .then(function (data) {
       var mine = data.mine || [];
       var theirs = data.theirs || [];
+      var row = function (item, owed) {
+        var act =
+          item.kind === "close-proposal" ? '<button class="btn sm ghost" data-att-keep="' + esc(item.ref) + '">' + esc(t("ui.attention.keepOpen")) + "</button>" :
+          item.kind === "nudged" ? '<button class="btn sm ghost" data-att-drop="' + esc(item.ref) + '">' + esc(t("ui.attention.close")) + '</button><button class="btn sm ghost" data-att-snooze="' + esc(item.ref) + '">' + esc(t("ui.attention.notNow")) + "</button>" :
+          item.kind === "question" && !/^t\d+$/.test(item.ref) ? '<button class="btn sm ghost" data-att-open="' + esc(item.ref) + '">' + esc(t("ui.attention.answer")) + "</button>" :
+          item.kind === "paused" ? '<button class="btn sm ghost" data-att-open="' + esc(item.ref) + '">' + esc(t("ui.attention.open")) + "</button>" :
+          '<button class="btn sm ghost" data-att-task="' + esc(item.ref) + '">' + esc(t("ui.attention.open")) + "</button>";
+        return '<div style="display:flex;gap:8px;align-items:baseline;padding:3px 0;font-size:12.5px"><span class="dim mono" style="font-size:11px;min-width:58px">' + esc(item.deadline ? whenOf(item.deadline) : "") + "</span>" +
+          '<span style="flex:1">' + esc(item.title) + ' <span class="dim">' + esc(item.detail) + (item.stage ? " · " + esc(item.stage) : "") + "</span></span>" + (owed ? act : "") + "</div>";
+      };
+      // The first screen (INV-1464): the person/* rows, counted, above the agents; healthy takes no space.
+      var needs = mine.filter(function (i) { return i.stage ? i.stage.indexOf("person/") === 0 : i.kind === "question" || i.kind === "paused" || i.kind === "undeliverable"; });
+      $("needsme").style.display = needs.length ? "" : "none";
+      $("needsme").innerHTML = needs.length ? '<div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--warn);margin-bottom:4px">' + esc(t("ui.attention.needsMe")) + " · " + needs.length + "</div>" + needs.map(function (i) { return row(i, true); }).join("") : "";
       if (!mine.length && !theirs.length) {
         $("attention").style.display = "";
         $("attention").innerHTML = '<div class="dim" style="font-size:12.5px">' + esc(t("ui.attention.empty")) + "</div>";
         return;
       }
-      var row = function (item, owed) {
-        var act =
-          item.kind === "close-proposal" ? '<button class="btn sm ghost" data-att-keep="' + esc(item.ref) + '">' + esc(t("ui.attention.keepOpen")) + "</button>" :
-          item.kind === "nudged" ? '<button class="btn sm ghost" data-att-drop="' + esc(item.ref) + '">' + esc(t("ui.attention.close")) + '</button><button class="btn sm ghost" data-att-snooze="' + esc(item.ref) + '">' + esc(t("ui.attention.notNow")) + "</button>" :
-          item.kind === "question" ? '<button class="btn sm ghost" data-att-open="' + esc(item.ref) + '">' + esc(t("ui.attention.answer")) + "</button>" :
-          item.kind === "paused" ? '<button class="btn sm ghost" data-att-open="' + esc(item.ref) + '">' + esc(t("ui.attention.open")) + "</button>" :
-          '<button class="btn sm ghost" data-att-task="' + esc(item.ref) + '">' + esc(t("ui.attention.open")) + "</button>";
-        return '<div style="display:flex;gap:8px;align-items:baseline;padding:3px 0;font-size:12.5px">' +
-          '<span class="dim mono" style="font-size:11px;min-width:58px">' + esc(item.deadline ? whenOf(item.deadline) : "") + "</span>" +
-          '<span style="flex:1">' + esc(item.title) + ' <span class="dim">' + esc(item.detail) + "</span></span>" +
-          (owed ? act : "") +
-          "</div>";
-      };
       $("attention").style.display = "";
-      $("attention").innerHTML =
-        (mine.length ? '<div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:4px">' + esc(t("ui.attention.mine")) + "</div>" + mine.map(function (i) { return row(i, true); }).join("") : "") +
+      $("attention").innerHTML = (mine.length ? '<div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:4px">' + esc(t("ui.attention.mine")) + "</div>" + mine.map(function (i) { return row(i, true); }).join("") : "") +
         (theirs.length ? '<div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:8px 0 4px">' + esc(t("ui.attention.theirs")) + "</div>" + theirs.map(function (i) { return row(i, false); }).join("") : "");
     })
-    .catch(function () { $("attention").style.display = "none"; });
+    .catch(function () { $("attention").style.display = "none"; $("needsme").style.display = "none"; });
 }
 
 // The actions, each one an existing route: keeping a task open, closing it, asking to be

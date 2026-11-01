@@ -22,6 +22,7 @@
 import type { Task } from "./tasks.ts";
 import type { WatchedQuestion } from "./question-expiry.ts";
 import { describeStale } from "./mandate.ts";
+import { STAGE_LABEL, type TaskStage, taskStage } from "./task-stage.ts";
 
 export interface AttentionItem {
   kind: "question" | "close-proposal" | "review" | "nudged" | "waiting" | "unanswered" | "paused" | "reauthorize" | "undeliverable";
@@ -34,9 +35,13 @@ export interface AttentionItem {
   deadline?: string;
   /** Which agent or person this is with. */
   with?: string;
+  /** The task's stage by the table in task-stage.ts (INV-1464), on items that are about a task. */
+  stage?: TaskStage;
 }
 
 export interface Attention {
+  /** Every live task's stage by the table (INV-1464), whoever it is with. */
+  stages: Record<string, TaskStage>;
   /** Waiting on me: nothing moves until I answer. */
   mine: AttentionItem[];
   /** Waiting on somebody else, for me. */
@@ -67,6 +72,10 @@ export interface AttentionInput {
    */
   /** Messages the host could not get into a chat after its retries (INV-1460): everyone's, since no person is in them yet. */
   undeliverable?: readonly { id: string; chatKey: string; purpose: string; attempts: number; lastError?: string }[];
+  /** The chat a task's conversation delivers to, so an undeliverable message is matched to its task (INV-1464). */
+  chatKeyOf?: (conversation: string) => string | undefined;
+  /** Whether something of this task runs right now: the assignee's turn in its conversation, or a command it let go of. */
+  active?: (task: Task) => boolean;
   all?: boolean;
   now?: Date;
 }
@@ -129,6 +138,19 @@ export function attentionFor(input: AttentionInput): Attention {
     });
   }
 
+  // The stage of every live task, by the one table (INV-1464): what each item below says is
+  // worded from it, and the first screen counts the person/* rows.
+  const stages: Record<string, TaskStage> = {};
+  const undeliverableChats = new Set((input.undeliverable ?? []).map(receipt => receipt.chatKey));
+  for (const task of input.tasks) {
+    if (!isLive(task)) continue;
+    const chatKey = task.conversation !== undefined ? input.chatKeyOf?.(task.conversation) : undefined;
+    stages[task.id] = taskStage(task, {
+      undelivered: chatKey !== undefined && undeliverableChats.has(chatKey),
+      questionPending: input.questions.some(question => question.conversation === task.conversation && (task.assigneeId === undefined || question.agentId === task.assigneeId)),
+      active: input.active?.(task) ?? false,
+    });
+  }
   for (const task of input.tasks) {
     if (!isLive(task)) continue;
     // A wake the mandate refused (INV-1457): the work waits for the person whose word it was.
@@ -136,7 +158,7 @@ export function attentionFor(input: AttentionInput): Attention {
     if (stale !== undefined && task.mandate?.withdrawn === undefined && isMe(task.mandate?.by ?? task.requester)) {
       mine.push({
         kind: "reauthorize",
-        ref: task.id,
+        ref: task.id, stage: stages[task.id],
         title: `${task.id}: needs re-authorising`,
         detail: `${describeStale(stale.reasons)}; reply on it to continue, or stop it`,
         ...(task.assigneeId !== undefined ? { with: input.nameOf(task.assigneeId) } : {}),
@@ -146,7 +168,7 @@ export function attentionFor(input: AttentionInput): Attention {
     if (proposal !== undefined && isMe(task.requester)) {
       mine.push({
         kind: "close-proposal",
-        ref: task.id,
+        ref: task.id, stage: stages[task.id],
         title: task.title,
         detail: `${input.nameOf(proposal.by)} proposes closing it: ${proposal.reason}. Say nothing and it closes.`,
         deadline: proposal.decideBy,
@@ -157,7 +179,7 @@ export function attentionFor(input: AttentionInput): Attention {
     if (task.status === "review" && isMe(task.reviewerId)) {
       mine.push({
         kind: "review",
-        ref: task.id,
+        ref: task.id, stage: stages[task.id],
         title: task.title,
         detail: `${input.nameOf(task.assigneeId ?? "somebody")} says it is done and is waiting for your word.`,
         ...(task.due !== undefined ? { deadline: task.due } : {}),
@@ -168,7 +190,7 @@ export function attentionFor(input: AttentionInput): Attention {
     if (task.aging !== undefined && isMe(task.requester)) {
       mine.push({
         kind: "nudged",
-        ref: task.id,
+        ref: task.id, stage: stages[task.id],
         title: task.title,
         detail:
           task.aging.reason === "overdue"
@@ -179,10 +201,15 @@ export function attentionFor(input: AttentionInput): Attention {
       });
       continue;
     }
+    if (stages[task.id] === "person/answer" && task.mandate?.stale === undefined && isMe(task.requester)) {
+      const last = task.history.at(-1);
+      mine.push({ kind: "question", ref: task.id, stage: stages[task.id], title: task.title, detail: `${last?.note ?? "a question is pending"}${last?.options !== undefined && last.options.length > 0 ? ` — ${last.options.join(" / ")}` : ""}`, ...(task.assigneeId !== undefined ? { with: input.nameOf(task.assigneeId) } : {}) });
+      continue;
+    }
     if (isMe(task.requester)) {
       theirs.push({
         kind: "waiting",
-        ref: task.id,
+        ref: task.id, stage: stages[task.id],
         title: task.title,
         detail:
           task.waitingOn !== undefined
@@ -191,7 +218,7 @@ export function attentionFor(input: AttentionInput): Attention {
               ? "blocked"
               : task.assigneeId === undefined
                 ? "nobody has taken it"
-                : `${input.nameOf(task.assigneeId)} has it`,
+                : `${input.nameOf(task.assigneeId)} has it (${STAGE_LABEL[stages[task.id]!]})`,
         ...(task.due !== undefined ? { deadline: task.due } : {}),
         ...(task.assigneeId !== undefined ? { with: input.nameOf(task.assigneeId) } : {}),
       });
@@ -207,5 +234,5 @@ export function attentionFor(input: AttentionInput): Attention {
     return Date.parse(a.deadline) - Date.parse(b.deadline);
   };
   void now;
-  return { mine: mine.sort(byDeadline), theirs: theirs.sort(byDeadline) };
+  return { stages, mine: mine.sort(byDeadline), theirs: theirs.sort(byDeadline) };
 }
