@@ -2133,8 +2133,8 @@ export class FeishuChannel implements ChannelAdapter {
       if (!sentId) throw new Error("feishu delivery unconfirmed: no message id; check before retrying");
       return sentId;
     }
-    // A timeout may follow a successful vendor send. Never blindly retry or change
-    // reply to create without a durable receipt/idempotency key.
+    // A timeout may follow a successful vendor send, so this never retries by itself: the
+    // outbox retries under the message's receipt id (INV-1460), which is what makes it safe.
     const response = await this.apiClient.im.message.create({
       params: { receive_id_type: "chat_id" },
       data: { receive_id: chatId, msg_type: msgType, content },

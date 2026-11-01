@@ -108,3 +108,10 @@ test("a task whose mandate went stale waits on the person whose word it was (INV
   const withdrawn = task({ ...stale, mandate: { ...stale.mandate!, withdrawn: { at: "t", by: "p-chris", reason: "stop" } } });
   assert.equal(attentionFor({ principalId: "p-chris", identities: [], tasks: [withdrawn], questions: [], nameOf, now: new Date(T0) }).mine.length, 0, "a withdrawn mandate asks nobody");
 });
+
+test("a message the host could not get into a chat after its retries is everyone's to see (INV-1460)", () => {
+  const answer = attentionFor({ principalId: "p-mia", identities: [], tasks: [], questions: [], nameOf, now: new Date(T0), undeliverable: [{ id: "r1", chatKey: "feishu:oc_9", purpose: "attention under t3", attempts: 3, lastError: "ECONNRESET" }] });
+  assert.equal(answer.mine.length, 1);
+  assert.deepEqual({ kind: answer.mine[0]!.kind, ref: answer.mine[0]!.ref }, { kind: "undeliverable", ref: "feishu:oc_9" });
+  assert.match(answer.mine[0]!.detail, /3 attempts; last: ECONNRESET/);
+});

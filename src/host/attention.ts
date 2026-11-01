@@ -24,7 +24,7 @@ import type { WatchedQuestion } from "./question-expiry.ts";
 import { describeStale } from "./mandate.ts";
 
 export interface AttentionItem {
-  kind: "question" | "close-proposal" | "review" | "nudged" | "waiting" | "unanswered" | "paused" | "reauthorize";
+  kind: "question" | "close-proposal" | "review" | "nudged" | "waiting" | "unanswered" | "paused" | "reauthorize" | "undeliverable";
   /** What to open: a task id, or the conversation a question was asked in. */
   ref: string;
   title: string;
@@ -65,6 +65,8 @@ export interface AttentionInput {
    * everything with a clock on it rather than nothing — an empty page for the one caller
    * who can act on all of it would be a strange kind of privacy.
    */
+  /** Messages the host could not get into a chat after its retries (INV-1460): everyone's, since no person is in them yet. */
+  undeliverable?: readonly { id: string; chatKey: string; purpose: string; attempts: number; lastError?: string }[];
   all?: boolean;
   now?: Date;
 }
@@ -104,6 +106,15 @@ export function attentionFor(input: AttentionInput): Attention {
       title: `${chain.fromName} ↔ ${chain.toName}: paused after ${chain.hops} turns with no person`,
       detail: `${chain.fromName} wanted to message ${chain.toName} again; message either of them to decide`,
       with: chain.fromName,
+    });
+  }
+
+  for (const receipt of input.undeliverable ?? []) {
+    mine.push({
+      kind: "undeliverable",
+      ref: receipt.chatKey,
+      title: `${receipt.chatKey}: ${receipt.purpose} not delivered`,
+      detail: `${receipt.attempts} attempts${receipt.lastError !== undefined ? `; last: ${receipt.lastError}` : ""}; check the door, or the message stays pending`,
     });
   }
 

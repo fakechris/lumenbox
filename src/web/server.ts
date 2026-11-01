@@ -142,6 +142,8 @@ import { HostRunner, hostRunnerConfig } from "../host/host-runner.ts";
 import { HostSandbox } from "../host/host-sandbox.ts";
 import { outboundRedactor } from "../host/redact-outbound.ts";
 import { blockedQuestion, describePurpose, outboundVerdict } from "../host/outbound.ts";
+import { Outbox } from "../host/outbox.ts";
+import { OutboxSender } from "../channels/outbox-sender.ts";
 import { ALL_TOOLS } from "../host/orchestrator.ts";
 import {
   CATALOG_CONNECTORS,
@@ -1018,7 +1020,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   });
 
   const acked = new Set<string>();
+  const outbox = new Outbox(join(agentboxHome(), "outbox.jsonl"));
+  const outboxSender = new OutboxSender(outbox, log);
   const channels = new ChannelManager({
+    outbox: outboxSender,
     // The speaking right of a host push (INV-1459): the world each purpose claims, read now; a refusal is audited.
     outbound: (purpose, chatKey) => {
       const verdict = outboundVerdict(purpose, {
@@ -2012,6 +2017,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     }
   chats = channels;
   channels.start();
+  // What was still on its way when the process last stopped goes again (INV-1460).
+  void outboxSender.resume(chatKey => { const door = channels.adapterFor(chatKey); return door?.sendToChat === undefined ? undefined : { sendToChat: (key, text) => door.sendToChat!(key, text) }; })
+    .then(resumed => { if (resumed > 0) log(`outbox: ${resumed} pending message(s) sent again after the restart`); });
 
   // Answers that were owed when this process last stopped.
   //
@@ -6161,6 +6169,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             nameOf: id => registry.tryGet(id)?.profile.name ?? principals.list().find(person => person.id === id)?.name ?? id,
             unanswered: involuteUnanswered,
             paused: orchestrator.bus.pausedChains(),
+            undeliverable: outbox.problems(),
             ...(me === undefined ? { all: true } : {}),
           });
           send(res, 200, { ...answer, who: me?.name ?? "this installation" });
