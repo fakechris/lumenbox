@@ -252,3 +252,39 @@ test("cost accrues from every continuation's report, and a spent budget ends wit
   } finally { h.cleanup(); }
 });
 
+
+test("each continuation leaves one experiment on the ledger; two rounds repeating an old hypothesis pause the goal, and the next notice carries the ledger (INV-1475)", async () => {
+  const answers: string[] = [];
+  const prompts: string[] = [];
+  const h = harness({ judgeExperiment: async prompt => { prompts.push(prompt); return answers.shift(); } });
+  try {
+    const run = async (finalText: string, answer: string | undefined) => {
+      if (answer !== undefined) answers.push(answer);
+      h.loop.onTurnFinished("nova"); h.fire();
+      const wake = h.wakes.at(-1)!;
+      h.loop.turnStarting("nova", CONV, [{ id: `g${h.wakes.length}`, fromId: "user", fromName: "user", text: wake.text, priority: false, receivedAt: "", synthetic: true, goal: wake.goal }]);
+      await h.loop.turnEnded({ marker: wake.goal!, how: "done", worked: true, finalText });
+    };
+    await run("Tried the vendor API; it 403s.", '{"kind":"new","hypothesis":"the vendor API can list orders","action":"called /orders","outcome":"403, no scope"}');
+    assert.deepEqual(h.pursuit().experiments?.map(e => `${e.n} ${e.kind} ${e.hypothesis}`), ["1 new the vendor API can list orders"]);
+    assert.match(prompts[0]!, /## Ledger\n\(nothing yet\)/);
+    assert.match(h.wakes.at(-1)!.text, /Continue working/);
+    // The judge could not read round two: no entry, no streak.
+    await run("Looked around.", "not json at all");
+    assert.equal(h.pursuit().experiments?.length, 1);
+    assert.equal(h.pursuit().spent.repeatStreak, 0);
+    // The notice for the next round carries the ledger and the rule.
+    await run("Tried /orders again with the same key.", '{"kind":"repeat","hypothesis":"the vendor API can list orders","action":"called /orders again","outcome":"403"}');
+    assert.match(h.wakes.at(-1)!.text, /Experiments so far[\s\S]*1\. \[new\] the vendor API can list orders → called \/orders → 403, no scope[\s\S]*Do not repeat a hypothesis the ledger shows failed/);
+    assert.match(prompts.at(-1)!, /## Ledger\n1\. the vendor API can list orders → 403, no scope/);
+    assert.equal(h.pursuit().spent.repeatStreak, 1);
+    assert.equal(h.pursuit().status, "active", "one repeat is a warning, not a stop");
+    await run("Retried /orders once more.", '{"kind":"repeat","hypothesis":"the vendor API can list orders","action":"retried","outcome":"403"}');
+    assert.equal(h.pursuit().spent.repeatStreak, 2);
+    assert.equal(h.pursuit().status, "paused");
+    assert.equal(h.pursuit().pausedReason, "repeating");
+    assert.match(h.told.at(-1) ?? "", /连续两轮都在重复账本里已经试过的假设/);
+    assert.equal(h.pursuit().experiments?.length, 3);
+    assert.equal(h.pursuit().spent.stallStreak, 3, "the hash streak is still counted, but with a judge it no longer pauses");
+  } finally { h.cleanup(); }
+});

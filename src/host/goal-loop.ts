@@ -20,7 +20,7 @@
  */
 import type { InboundMessage } from "../agents/bus.ts";
 import type { Task, TaskStore } from "./tasks.ts";
-import { continuationNotice, finishOnlyNotice, GOAL_BOOKKEEPING_TOOLS, type GoalMarker, type PausedReason, type Pursuit, stopNotice } from "./goal-mode.ts";
+import { appendExperiment, continuationNotice, type Experiment, experimentPrompt, finishOnlyNotice, GOAL_BOOKKEEPING_TOOLS, parseExperiment, type GoalMarker, type PausedReason, type Pursuit, stopNotice } from "./goal-mode.ts";
 import { stateHashOf } from "./progress.ts";
 import type { DurableState } from "./durable.ts";
 import { createHash } from "node:crypto";
@@ -29,6 +29,8 @@ import { createHash } from "node:crypto";
 export const ANTI_SPIN_LIMIT = 3;
 /** Continuations in a row that changed nothing (plan, todos, workspace) before the goal pauses. */
 export const STALL_LIMIT = 2;
+/** Continuations in a row judged to repeat an old hypothesis before the goal pauses (INV-1475). */
+export const REPEAT_LIMIT = 2;
 /** Failed continuation turns in a row before the goal pauses. */
 export const MAX_CONTINUATION_RETRIES = 2;
 /** How long the conversation must stay quiet before a continuation starts. */
@@ -71,6 +73,8 @@ export interface GoalLoopDeps {
   manifest?: () => Promise<Map<string, string> | undefined>;
   /** Tell the person, in their chat. */
   notify: (task: Task, text: string) => Promise<void>;
+  /** The cheap profile, for the one experiment question a continuation gets (INV-1475). Absent: no ledger, the hash stall stands. */
+  judgeExperiment?: (prompt: string, agentId: string) => Promise<string | undefined>;
   log: (line: string) => void;
   now?: () => Date;
   /** Injectable for tests; defaults to the real timers. */
@@ -295,17 +299,23 @@ export class GoalLoop {
     const idleStreak = report.worked ? 0 : pursuit.spent.idleStreak + 1;
     const stateHash = await this.stateHash(task);
     const stallStreak = stateHash !== undefined && stateHash === pursuit.spent.lastStateHash ? (pursuit.spent.stallStreak ?? 0) + 1 : 0;
-    const stop: PausedReason | undefined = idleStreak >= ANTI_SPIN_LIMIT ? "anti_spin" : stallStreak >= STALL_LIMIT ? "stalled" : undefined;
+    // The ledger (INV-1475): what this round tried, judged against what earlier rounds tried. With a judge wired in, a
+    // stall is two rounds in a row repeating an old hypothesis — not an unchanged hash, which a round that tried something
+    // new and failed also leaves. Without one, the hash rule stands.
+    const experiment = await this.judgeExperiment(task, pursuit, report);
+    const repeatStreak = experiment?.kind === "repeat" ? (pursuit.spent.repeatStreak ?? 0) + 1 : 0;
+    const stop: PausedReason | undefined = idleStreak >= ANTI_SPIN_LIMIT ? "anti_spin" : this.deps.judgeExperiment !== undefined ? (repeatStreak >= REPEAT_LIMIT ? "repeating" : undefined) : stallStreak >= STALL_LIMIT ? "stalled" : undefined;
     this.deps.tasks.setPursuit(
       task.id,
       current => ({
         ...current,
         ...(stop !== undefined ? { status: "paused" as const, pausedReason: stop } : {}),
-        spent: { ...current.spent, idleStreak, stallStreak, errorStreak: 0, activeMs: current.spent.activeMs + elapsed, cost: current.spent.cost + (report.cost ?? 0), ...(stateHash !== undefined ? { lastStateHash: stateHash } : {}) },
+        ...(experiment !== undefined ? { experiments: appendExperiment(current.experiments ?? [], experiment) } : {}),
+        spent: { ...current.spent, idleStreak, stallStreak, repeatStreak, errorStreak: 0, activeMs: current.spent.activeMs + elapsed, cost: current.spent.cost + (report.cost ?? 0), ...(stateHash !== undefined ? { lastStateHash: stateHash } : {}) },
       }),
       stop !== undefined
         ? `paused: ${stop} after continuation ${pursuit.spent.continuations}`
-        : `continuation ${pursuit.spent.continuations} ended (${report.worked ? "worked" : "no working tool call"}${stateHash !== undefined ? `, state ${stateHash.slice(0, 8)}` : ""})`
+        : `continuation ${pursuit.spent.continuations} ended (${report.worked ? "worked" : "no working tool call"}${stateHash !== undefined ? `, state ${stateHash.slice(0, 8)}` : ""}${experiment !== undefined ? `, experiment ${experiment.kind}` : ""})`
     );
     if (stop !== undefined) {
       this.deps.log(`goal ${task.id}: paused (${stop}) after ${pursuit.spent.continuations} continuations`);
@@ -313,6 +323,20 @@ export class GoalLoop {
       return;
     }
     // The next continuation is considered by the turn_finished fact that follows this report.
+  }
+
+  /** One cheap question about the round that ended; undefined when no judge is wired, the round said nothing, or the answer could not be read. */
+  private async judgeExperiment(task: Task, pursuit: Pursuit, report: { finalText?: string }): Promise<Experiment | undefined> {
+    const key = this.keyOf(task);
+    if (this.deps.judgeExperiment === undefined || key === undefined || report.finalText === undefined || report.finalText.trim() === "") return undefined;
+    const n = pursuit.spent.continuations;
+    const at = (this.deps.now ?? (() => new Date()))().toISOString();
+    try {
+      return parseExperiment(await this.deps.judgeExperiment(experimentPrompt(pursuit.objective, pursuit.experiments ?? [], report.finalText, n), key.agentId), n, at);
+    } catch (error) {
+      this.deps.log(`goal ${task.id}: the experiment judge failed (${error instanceof Error ? error.message : String(error)}); the ledger gets no entry for continuation ${n}`);
+      return undefined;
+    }
   }
 
   /** Plan + todos + workspace, one digest. Absent when neither is readable. */
