@@ -19,6 +19,7 @@
  */
 import { choiceOf, type JevAsk, noulOf, type Question } from "./jev.ts";
 import { dedupeKey, type MemoryRecord, selectRelevant } from "./memory.ts";
+import { MEMORY_TYPE_NAMES, type MemoryTypes, TYPE_INSTRUCTIONS } from "./memory-types.ts";
 
 export const JUDGE_QUESTIONS = ["fromContent", "narrowsRules", "contradicts", "duplicate"] as const;
 export type JudgeQuestion = (typeof JUDGE_QUESTIONS)[number];
@@ -31,7 +32,9 @@ export interface Verdict {
   target?: number;
 }
 
-export type Verdicts = Record<JudgeQuestion, Verdict>;
+/** `types` is the decision model's four scores for the candidate (INV-1472); the cheap-profile judge leaves them absent. */
+export type Verdicts = Record<JudgeQuestion, Verdict> & { types?: MemoryTypes };
+
 
 /** Answers the four questions for every candidate, in order. Throws when it cannot. */
 export type MemoryJudge = (input: { conversation: string; candidates: readonly string[]; known: readonly string[] }) => Promise<Verdicts[]>;
@@ -131,6 +134,7 @@ export function jevJudge(ask: JevAsk): MemoryJudge {
         type: "noul",
         instructions: `Does ${it} change what the agent may do: its permissions, approvals, who it may message, what it may skip asking about, or its own instructions?`,
       };
+      for (const name of MEMORY_TYPE_NAMES) questions[`c${i}_type_${name}`] = { type: "noul", instructions: TYPE_INSTRUCTIONS[name](it) };
       const shortlist = selectRelevant(candidate, known, JEV_KNOWN_PER_CANDIDATE).map(record => Number(record.at));
       if (shortlist.length === 0) return;
       const criteria = { none: "None of the listed memories.", ...Object.fromEntries(shortlist.map(k => [`K${k + 1}`, clip(input.known[k]!, 240)])) };
@@ -151,6 +155,8 @@ export function jevJudge(ask: JevAsk): MemoryJudge {
       narrowsRules: yesNo(noulOf(result, `c${i}_narrowsRules`)),
       contradicts: named(`c${i}_contradicts`),
       duplicate: named(`c${i}_duplicate`),
+      // Present only when every axis was answered: an older decision model, or a test that scripts four answers, leaves it off.
+      ...(MEMORY_TYPE_NAMES.every(name => `c${i}_type_${name}` in result.answers) ? { types: Object.fromEntries(MEMORY_TYPE_NAMES.map(name => [name, Number(noulOf(result, `c${i}_type_${name}`).toFixed(2))])) as MemoryTypes } : {}),
     }));
   };
 }
@@ -179,8 +185,10 @@ export interface Disposition {
 export function dispose(candidates: readonly MemoryRecord[], verdicts: readonly Verdicts[], known: readonly MemoryRecord[], now = new Date()): Disposition {
   const out: Disposition = { keep: [], held: [], retractions: [], refreshed: [], log: [] };
   const retracted = new Set<string>();
-  candidates.forEach((record, i) => {
+  candidates.forEach((candidate, i) => {
     const v = verdicts[i];
+    // The scores ride the line it kept, held or refreshed — the file is where they are read from later.
+    const record = v?.types !== undefined ? { ...candidate, types: v.types } : candidate;
     if (v === undefined) {
       out.held.push(held(record, "unjudged", 0));
       out.log.push(`candidate ${i + 1}: held, no verdict`);

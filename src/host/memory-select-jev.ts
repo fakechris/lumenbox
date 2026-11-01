@@ -11,12 +11,15 @@
 import type { JevAsk, Question, SwitchDeps } from "./jev.ts";
 import { noulOf, switched } from "./jev.ts";
 import type { MemoryRecord } from "./memory.ts";
+import { leanedByType, MEMORY_TYPE_NAMES, type MemoryTypes, TYPE_INSTRUCTIONS } from "./memory-types.ts";
 
 /** At or above this probability a memory is worth showing. A constant, so a change is reviewed. */
 export const SELECT_AT = 0.5;
 
 export async function jevSelect(ask: JevAsk, candidates: readonly MemoryRecord[], query: string, max: number): Promise<MemoryRecord[]> {
   const questions: Record<string, Question> = {};
+  // What kind of memory the message calls for, in the same request (INV-1472): the four axes of the lines, asked of the message.
+  for (const name of MEMORY_TYPE_NAMES) questions[`q_${name}`] = { type: "noul", instructions: TYPE_INSTRUCTIONS[name]("the reply to `message`") };
   candidates.forEach((_, i) => {
     questions[`m${i}`] = {
       type: "noul",
@@ -29,10 +32,13 @@ export async function jevSelect(ask: JevAsk, candidates: readonly MemoryRecord[]
     state: { message: query.replace(/\s+/g, " ").slice(0, 1_000), memories: candidates.map(record => `[${record.kind}] ${record.text.replace(/\s+/g, " ")}`) },
     questions,
   });
+  // A model that answered the memories but not the message's four axes (an older one, a scripted one) leans nothing.
+  const request = MEMORY_TYPE_NAMES.every(name => `q_${name}` in result.answers) ? (Object.fromEntries(MEMORY_TYPE_NAMES.map(name => [name, noulOf(result, `q_${name}`)])) as MemoryTypes) : undefined;
+  // The line is the per-memory answer; the lean only orders what passed it, so a type match never admits a memory the model rejected.
   return candidates
     .map((record, i) => ({ record, p: noulOf(result, `m${i}`) }))
     .filter(entry => entry.p >= SELECT_AT)
-    .sort((a, b) => b.p - a.p)
+    .sort((a, b) => leanedByType(b.p, b.record, request) - leanedByType(a.p, a.record, request))
     .slice(0, max)
     .map(entry => entry.record);
 }

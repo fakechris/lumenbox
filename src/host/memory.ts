@@ -37,14 +37,15 @@ import { envNumber } from "../config.ts";
 import { credentialIn, credentialRefusal } from "./secret-scan.ts";
 import { type SwitchDeps, switched } from "./jev.ts";
 import { jevSelect, sufficiencySwitched } from "./memory-select-jev.ts";
+import type { MemoryTypes } from "./memory-types.ts";
 
 /** A single thing remembered. One JSON object per line, appended, never edited in place. */
 export interface MemoryRecord {
   at: string;
   kind: MemoryKind;
   text: string;
-  /** How it got here: the tool that wrote it, or the turn it was extracted from. For a person. */
-  source?: string;
+  types?: MemoryTypes; // the four type scores, 0..1 each, when the judge scored the line (INV-1472, memory-types.ts)
+  source?: string; // how it got here: the tool that wrote it, or the turn it was extracted from; for a person
   /**
    * The agent that learned it, on a shared record.
    *
@@ -157,6 +158,7 @@ export function scoreOf(record: MemoryRecord, now = Date.now()): number {
   const halfLife = HALF_LIFE_DAYS[record.kind];
   return WEIGHT[record.kind] * 2 ** (-ageDays / halfLife);
 }
+
 
 /**
  * The key two memories are the same by.

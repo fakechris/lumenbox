@@ -99,7 +99,7 @@ test("the decision-model judge asks each candidate's questions in one request an
   });
   const verdicts = await judge({ conversation: "…", candidates: ["they live in Shanghai now", "the sky was clear"], known: ["they live in Beijing"] });
   assert.ok(asked !== undefined);
-  assert.equal(Object.keys(asked.questions).length, 6, "a candidate that shares no word with any known line is not asked to name one");
+  assert.equal(Object.keys(asked.questions).length, 6 + 2 * 4, "a candidate that shares no word with any known line is not asked to name one; each gets its four type questions (INV-1472)");
   assert.deepEqual(Object.keys((asked.questions.c0_contradicts as { criteria: Record<string, string> }).criteria), ["none", "K1"]);
   assert.deepEqual(verdicts[0]!.fromContent, { answer: true, confidence: 0.92 });
   assert.equal(verdicts[0]!.narrowsRules.answer, false);

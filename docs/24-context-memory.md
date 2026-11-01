@@ -2,7 +2,7 @@
      title: Context, memory and compaction: ours, against Hermes and OpenClaw
      family: decision
      status: current
-     updated: 2026-09-26
+     updated: 2026-11-01
 -->
 # Context, memory and compaction: ours, against Hermes and OpenClaw
 
@@ -71,7 +71,9 @@ cap re-compacts from disk and rebuilds the volatile prompt before continuing
 (`turn.ts:1192-1213`) — a second compaction site, mid-task.
 
 **Memory.** Five record kinds (fact/note/episode/retraction/pitfall) in
-append-only JSONL, scored at recall by kind-specific half-life decay and weight,
+append-only JSONL — since INV-1472 a line may also carry four type scores (episodic/semantic/
+procedural/preference) that lean the selection toward what the request calls for, docs/85 —
+scored at recall by kind-specific half-life decay and weight,
 deduped, rendered into the prompt under a 4k-char budget (shared shards 1.5k).
 When the budget has to drop something, `chooseRelevant` may ask a model which
 lines to keep — at turn start only; continuations re-score with `recall()`.
