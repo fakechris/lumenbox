@@ -74,6 +74,11 @@ export const SETTINGS_DIALOG_HTML = `
       inside the box. Provider, model, vision and summary model take effect on save; turns already
       running finish on the previous model. The host door, startup item and box image wait for a
       restart.</div>
+    <div class="field" data-tier="installation" data-settab="model" id="setpartswrap" style="display:none">
+      <label>Built-in rules</label>
+      <div class="fieldnote">The prompt parts every agent reads: how a turn works, the front agent's short turns, unattended turns. Edit one here and it is yours; when a release changes the default you are shown both and asked. Prompt text only — no gate in code moves.</div>
+      <div id="setparts"></div>
+    </div>
     <div class="field" data-tier="installation" data-settab="memory">
       <label>Memory</label>
       <div class="fieldnote" style="margin:0">What each agent has kept, by box. Open an agent to read the lines, withdraw one, or

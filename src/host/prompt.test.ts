@@ -11,6 +11,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   ablated,
   turnReminderFor,
@@ -708,5 +711,22 @@ test("a background lane gets the unattended conduct; a person's turn does not, a
   } finally {
     if (previous === undefined) delete process.env.AGENTBOX_ABLATE;
     else process.env.AGENTBOX_ABLATE = previous;
+  }
+});
+
+test("a team's override of a built-in part is what the prompt says, and only that part (INV-1465)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-prompt-override-"));
+  const previous = process.env.AGENTBOX_PROMPT_OVERRIDES;
+  process.env.AGENTBOX_PROMPT_OVERRIDES = dir;
+  try {
+    writeFileSync(join(dir, "conduct.md"), "---\nbase: whatever\n---\n# How a turn works (ours)\n\nAnswer in Chinese first.\n");
+    const conduct = STABLE_SECTIONS.find(section => section.name === "conduct")!;
+    const front = STABLE_SECTIONS.find(section => section.name === "front")!;
+    const context = { agent: { id: "a1", profile: { name: "Ada", persona: "" } } } as unknown as Parameters<typeof conduct.render>[0];
+    assert.match(conduct.render(context), /^# How a turn works \(ours\)\n\nAnswer in Chinese first\.$/);
+    assert.match(front.render({ ...context, conversation: "main" }), /^# Your turns stay short/);
+  } finally {
+    if (previous === undefined) delete process.env.AGENTBOX_PROMPT_OVERRIDES; else process.env.AGENTBOX_PROMPT_OVERRIDES = previous;
+    rmSync(dir, { recursive: true, force: true });
   }
 });

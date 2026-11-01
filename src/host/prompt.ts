@@ -7,29 +7,30 @@
  * time, the inbound message) goes in the message turns, not here.
  */
 
-import { conversationOfTask, renderPursuit } from "./goal-mode.ts";
-import type { AgentRecord, HeardLine } from "../agents/registry.ts";
-import { isForkConversation } from "./tools.ts";
-import { MAIN_CONVERSATION } from "../agents/registry.ts";
 import type { InboundMessage, Lane } from "../agents/bus.ts";
 import { AGENT_WAKE_CUE } from "../agents/bus.ts";
-import { renderDurableBlocks, type DurableState } from "./durable.ts";
-import { describeTask, type Task } from "./tasks.ts";
+import type { AgentRecord, HeardLine } from "../agents/registry.ts";
+import { MAIN_CONVERSATION } from "../agents/registry.ts";
 import type { BoxClass } from "../box/access.ts";
+import type { ResolutionConfig } from "../protocol/index.ts";
+import { type DurableState, renderDurableBlocks } from "./durable.ts";
+import { conversationOfTask, renderPursuit } from "./goal-mode.ts";
+import { renderHistoryBlock } from "./history.ts";
 import {
+  type MemoryRecall,
+  type MemoryRecord,
   memoryMirrorDir,
   recallRelevant,
   renderMemory,
   renderSharedMemory,
   SHARED_CHAR_BUDGET,
-  type MemoryRecall,
-  type MemoryRecord,
 } from "./memory.ts";
-import { renderSkills, visibleTo, type Skill } from "./skills.ts";
-import { renderPlace, type PlaceInstructions } from "./place.ts";
+import { type PlaceInstructions, renderPlace } from "./place.ts";
+import { definePart, partText } from "./prompt-parts.ts";
+import { renderSkills, type Skill, visibleTo } from "./skills.ts";
 import { renderStanding, type StandingSnapshot } from "./standing.ts";
-import { renderHistoryBlock } from "./history.ts";
-import type { ResolutionConfig } from "../protocol/index.ts";
+import { describeTask, type Task } from "./tasks.ts";
+import { isForkConversation } from "./tools.ts";
 
 /** Teammates listed inline before falling back to "read the agent directory". */
 export const AGENT_DIRECTORY_LIMIT = 40;
@@ -776,15 +777,8 @@ const TOOLLESS_RECAP = `# Before you answer
 
 
 /**
- * How to conduct a conversation: the part of the prompt that is about the person, not the
- * tools. Stable — it never changes between turns — so it sits with the base prompt where a
- * cached prefix keeps it free.
- *
- * Every rule here is the prompt form of an incident. "Reply first" and "ack ≠ delivery"
- * are what a weekly-report follow-up needed on 2026-09-01, when the agent opened with a
- * wall of clarifying questions and a person read silence; "never fabricate data" and
- * "record what was said" are the alwyzon correction; "ask as a question, not a menu" is
- * how a decision widget stops reading like a form (docs/11, the 2026-09-01 delta).
+ * The conduct rules, every one the prompt form of an incident (docs/11, the 2026-09-01 delta). A team may override this
+ * part (INV-1465); the default is registered below.
  */
 const CONDUCT_PROMPT = `# How a turn works
 
@@ -836,13 +830,9 @@ When the shape of the information is the point — a comparison, a few options e
 line of explanation, a short form, a progress list — show it as a card with \`ShowUI\`
 rather than describing it in prose or ASCII; a plain question stays \`AskUser\`. Say in a
 line what the card is for; a press on it comes back to you as a message.`;
+definePart({ key: "conduct", title: "How a turn works", about: "Reply first, work out loud, close the loop; tone, never fabricate, asking, showing. Every rule is the prompt form of an incident.", text: CONDUCT_PROMPT });
 
-/**
- * The front (docs/42 §3). Read from Grok Bot's dispatcher persona and kept to what a harness
- * can back: the agent a person talks to keeps its turns short and hands heavy work to a
- * background fork of itself, which reports back here. The machinery is never named to the
- * person. A fork does not get this section — it is the worker.
- */
+/** The front (docs/42 §3): short turns, heavy work to a background fork; never named to the person. A fork does not get it. */
 export const FRONT_PROMPT = `# Your turns stay short
 
 You are the one the person talks to, and a new message must get an answer within seconds
@@ -864,11 +854,12 @@ whether the person has to be asked.
 This machinery is yours, not theirs. Never tell the person you are forking, delegating,
 dispatching or spinning anything up. "On it", "Running that now", "Still finishing the
 CSV" — you are one person doing several things at once.`;
+definePart({ key: "front", title: "Your turns stay short", about: "The agent a person talks to answers within seconds and hands heavy work to a background fork of itself.", text: FRONT_PROMPT });
 
 export const STABLE_SECTIONS: readonly PromptSection[] = [
   { name: "base", render: () => BASE_PROMPT },
-  { name: "conduct", render: () => (ablated("conduct") ? "" : CONDUCT_PROMPT) },
-  { name: "front", render: context => (isForkConversation(context.conversation) ? "" : FRONT_PROMPT) },
+  { name: "conduct", render: () => (ablated("conduct") ? "" : partText("conduct")) },
+  { name: "front", render: context => (isForkConversation(context.conversation) ? "" : partText("front")) },
   { name: "box", render: context => boxSection(context) },
   // The place speaks before the worker: installation, then box, then the persona below.
   { name: "place", render: context => renderPlace(context.place) },
@@ -1043,6 +1034,7 @@ will read your questions or stop you mid-way. That makes the rules tighter, not 
   result what you would send, create or change, and why; a person decides.
 - **If you must delete, delete recoverably.** Move aside or rename rather than remove; say where
   it went.`;
+definePart({ key: "unattended", title: "Nobody is watching this turn", about: "How a scheduled, listener or wake turn behaves with no person waiting.", text: UNATTENDED_CONDUCT });
 
 export const VOLATILE_SECTIONS: readonly PromptSection[] = [
   { name: "plan", render: context => renderDurableBlocks(context.durable ?? {}) },
@@ -1127,7 +1119,7 @@ export const VOLATILE_SECTIONS: readonly PromptSection[] = [
     // Only when nobody is watching. In the volatile tier so the stable prefix is the same
     // bytes for a person's turn and a timer's: the cache is a prefix match.
     render: context =>
-      context.lane === "background" && !ablated("unattended") ? UNATTENDED_CONDUCT : "",
+      context.lane === "background" && !ablated("unattended") ? partText("unattended") : "",
   },
   // The standing files (INV-777): the last thing that changes from turn to turn, so an edit to
   // USER.md invalidates only this and the recap; nothing above it moves by a byte.
