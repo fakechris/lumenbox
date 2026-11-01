@@ -66,3 +66,29 @@ test("failed turns are partitioned by failure class", () => {
   assert.deepEqual(metrics.turns.failedBy, { rate_limit: 1, unknown: 1 });
   assert.match(renderMetrics(metrics), /failed by class: rate_limit 1, unknown 1/);
 });
+
+test("routines are counted by their own result, and plans by how they committed (INV-1404)", () => {
+  const T0 = Date.parse("2026-11-01T00:00:00Z");
+  const at = (minutes: number) => new Date(T0 + minutes * 60_000).toISOString();
+  const metrics = computeMetrics({
+    turns: [], usage: [], tasks: [], log: [], fromMs: T0, toMs: T0 + 60 * 60_000,
+    schedules: [
+      JSON.stringify({ slug: "digest", event: "finished", at: at(5), ms: 1000, result: "done" }),
+      JSON.stringify({ slug: "digest", event: "finished", at: at(15), ms: 1000, result: "partial" }),
+      JSON.stringify({ slug: "retro", event: "finished", at: at(25), ms: 1000 }),
+    ],
+    work: [
+      JSON.stringify({ event: "prepared", id: "p1", kind: "orchestrate", at: at(1) }),
+      JSON.stringify({ event: "committed", id: "p1", how: "partial", at: at(30) }),
+      JSON.stringify({ event: "prepared", id: "f1", kind: "fork", at: at(1) }),
+      JSON.stringify({ event: "committed", id: "f1", how: "done", at: at(31) }),
+      JSON.stringify({ event: "prepared", id: "p2", kind: "orchestrate", at: at(2) }),
+      JSON.stringify({ event: "committed", id: "p2", how: "done", at: at(40) }),
+    ],
+  });
+  assert.equal(metrics.routines.runs, 3);
+  assert.deepEqual(metrics.routines.byResult, { done: 1, partial: 1 }, "an older line without a result is run but not judged");
+  assert.deepEqual(metrics.plans, { done: 1, partial: 1, failed: 0 }, "a fork's commit is not a plan's");
+  assert.match(renderMetrics(metrics), /Routines: 3 run\(s\) \(done 1, partial 1\)/);
+  assert.match(renderMetrics(metrics), /Plans: 1 done, 1 partial, 0 failed/);
+});

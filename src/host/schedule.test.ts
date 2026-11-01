@@ -8,7 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -832,4 +832,25 @@ test("observe mode records what would have run and runs nothing; off is never ev
   assert.deepEqual(by.watch, { mode: "observe", defaulted: false });
   assert.deepEqual(by.old, { mode: "auto", defaulted: true });
   assert.deepEqual(by.dark, { mode: "off", defaulted: false });
+});
+
+test("the ledger's finished line carries the run's result when the runner says it (INV-1404)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "sched-result-"));
+  try {
+    const path = join(dir, "schedules.jsonl");
+    const scheduler = new Scheduler({
+      due: async () => [{ slug: "digest", name: "Digest", path: "/p", schedule: scheduleOf("@every 30m") }],
+      run: async () => ({ result: "partial" as const }),
+      defaultAgent: () => "agent-ada",
+      now: () => at("2026-08-20T09:00:00"),
+      log: () => {},
+      path,
+    });
+    await scheduler.tick();
+    await new Promise(resolve => setImmediate(resolve));
+    const finished = readFileSync(path, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line) as { event: string; result?: string }).find(record => record.event === "finished");
+    assert.equal(finished?.result, "partial", "the turn stopped itself: partial, not done");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

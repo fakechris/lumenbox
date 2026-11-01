@@ -11,13 +11,14 @@
  *
  * `incomplete` is INV-1354's and the loop detector's outcome: the turn stopped itself and handed
  * the work back. It is not a failure and not a completion, and a caller that cannot tell the
- * three apart retries the wrong one.
+ * three apart retries the wrong one. A run that did part of what it set out to do — a plan with
+ * items left undone, a routine whose turn stopped itself — is `incomplete (partial)` (INV-1404).
  */
 
 import type { Task } from "../host/tasks.ts";
 
 export type TaskState = "in_progress" | "completed" | "failed" | "incomplete" | "cancelled";
-export type IncompleteReason = "turn_budget" | "rounds" | "continuations" | "held_for_review";
+export type IncompleteReason = "turn_budget" | "rounds" | "continuations" | "partial" | "held_for_review";
 
 export interface TaskOutcome {
   status: TaskState;
@@ -25,7 +26,7 @@ export interface TaskOutcome {
 }
 
 /** The note a turn's own stop leaves on the task, so the outcome can say why (written by mcp-tools.ts). */
-export const INCOMPLETE_NOTE = /^incomplete \((turn_budget|rounds|continuations)\)/;
+export const INCOMPLETE_NOTE = /^incomplete \((turn_budget|rounds|continuations|partial)\)/;
 
 /** Our board's status and history, read as the contract's terminal state. */
 export function outcomeOf(task: Pick<Task, "status" | "history">): TaskOutcome {

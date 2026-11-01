@@ -15,6 +15,7 @@ test("the board's six statuses read as the contract's five states, with the turn
   assert.deepEqual(outcomeOf(task("review", ["turn ended; not closed because it has acceptance criteria"])), { status: "incomplete", reason: "held_for_review" });
   assert.deepEqual(outcomeOf(task("review", ["something", "incomplete (turn_budget): 60 model calls, handed back"])), { status: "incomplete", reason: "turn_budget" });
   assert.deepEqual(outcomeOf(task("review", ["incomplete (rounds): Stopping: the last 4 rounds…"])), { status: "incomplete", reason: "rounds" });
+  assert.deepEqual(outcomeOf(task("review", ["incomplete (partial): 3 of 5 done"])), { status: "incomplete", reason: "partial" }, "part done is incomplete, not completed (INV-1404)");
   assert.equal(describeOutcome({ status: "incomplete", reason: "turn_budget" }), "status: incomplete (turn_budget)");
   assert.equal(describeOutcome({ status: "completed" }), "status: completed");
 });

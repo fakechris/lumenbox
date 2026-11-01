@@ -38,6 +38,7 @@ import { webhookPrompt } from "./webhooks.ts";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { appendLine } from "./jsonl.ts";
 import type { DeliverWhen } from "./routine-resolve.ts";
+import type { RunResult } from "./run-result.ts";
 import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
 export { ONCE_GRACE_MS, describeSchedule, isDue, knownTimezone, nextFire, parseSchedule, wallClock, type Schedule } from "./schedule-time.ts";
@@ -200,6 +201,8 @@ interface RunRecord {
   tokens?: number;
   /** How long the run took, on `finished`. */
   ms?: number;
+  /** How the run came out, on `finished` (INV-1404): done, partial or failed; absent when the runner did not say. */
+  result?: RunResult;
 }
 
 /**
@@ -242,7 +245,7 @@ export interface SchedulerDeps {
    * a listener passes no slug, because a listener run is not reconciled, but its results
    * are its own — not one `ad-hoc` history every listener shares.
    */
-  run: (agent: string, prompt: string, deliver?: string, slug?: string, toolScope?: readonly string[], deliverWhen?: DeliverWhen, identity?: string) => Promise<void>;
+  run: (agent: string, prompt: string, deliver?: string, slug?: string, toolScope?: readonly string[], deliverWhen?: DeliverWhen, identity?: string) => Promise<void | { result: RunResult }>;
   /** A routine in observe mode was triggered and did not run (INV-1458); the audit row. */
   observed?: (slug: string, would: string) => void;
   /**
@@ -350,7 +353,7 @@ export class Scheduler {
   private record(
     slug: string,
     event: RunRecord["event"],
-    extra: Pick<RunRecord, "agent" | "tokens" | "ms" | "would"> = {}
+    extra: Pick<RunRecord, "agent" | "tokens" | "ms" | "would" | "result"> = {}
   ): void {
     if (this.path === undefined) return;
     try {
@@ -439,6 +442,7 @@ export class Scheduler {
       if (skill.mode === "observe") { this.observe(skill, agent, `run as ${agent} for a message in ${deliver} matching ${skill.match}`); fired.push(skill.slug); continue; }
       this.running.add(skill.slug);
       const startedAt = this.now();
+      let result: RunResult | undefined;
       this.record(skill.slug, "started", { agent });
       this.log(`${skill.name}: fired by a message in ${deliver}`);
       fired.push(skill.slug);
@@ -460,6 +464,7 @@ export class Scheduler {
           // another room, is not silenced by a result that room never heard.
           skill.slug
         )
+        .then(outcome => { result = outcome?.result; })
         .catch(error => {
           this.log(`${skill.name}: run failed — ${error instanceof Error ? error.message : String(error)}`);
         })
@@ -467,6 +472,7 @@ export class Scheduler {
           this.running.delete(skill.slug);
           this.record(skill.slug, "finished", {
             agent,
+            ...(result !== undefined ? { result } : {}),
             ms: this.now().getTime() - startedAt.getTime(),
             ...(this.deps.spentSinceAgent !== undefined
               ? { tokens: this.deps.spentSinceAgent(startedAt.getTime(), agent) }
@@ -515,6 +521,7 @@ export class Scheduler {
       this.lastRun.set(skill.slug, this.now());
       this.running.add(skill.slug);
       const startedAt = this.now();
+      let result: RunResult | undefined;
       this.record(skill.slug, "started", { agent });
       this.log(`${skill.name}: firing (${describeSchedule(skill.schedule)})`);
 
@@ -528,6 +535,7 @@ export class Scheduler {
           skill.allowedTools,
           skill.deliverWhen
         )
+        .then(outcome => { result = outcome?.result; })
         .catch(error => {
           // Reported and dropped. A scheduled run that failed will come round again, and retrying
           // now would be a second unasked-for turn on top of one that just went wrong.
@@ -539,6 +547,7 @@ export class Scheduler {
           this.running.delete(skill.slug);
           this.record(skill.slug, "finished", {
             agent,
+            ...(result !== undefined ? { result } : {}),
             ms: this.now().getTime() - startedAt.getTime(),
             ...(this.deps.spentSinceAgent !== undefined
               ? { tokens: this.deps.spentSinceAgent(startedAt.getTime(), agent) }
@@ -709,6 +718,7 @@ export class Scheduler {
 
     this.running.add(slug);
     const startedAt = this.now();
+    let result: RunResult | undefined;
     this.record(slug, "started", { agent });
     this.lastRun.set(slug, startedAt);
     this.log(`${skill.name}: fired by webhook`);
@@ -723,6 +733,7 @@ export class Scheduler {
       this.running.delete(slug);
       this.record(slug, "finished", {
         agent,
+        ...(result !== undefined ? { result } : {}),
         ms: this.now().getTime() - startedAt.getTime(),
         ...(this.deps.spentSinceAgent !== undefined
           ? { tokens: this.deps.spentSinceAgent(startedAt.getTime(), agent) }
@@ -746,6 +757,7 @@ export class Scheduler {
 
     void this.deps
       .run(agent, prompt, skill.deliver, skill.slug, skill.allowedTools, skill.deliverWhen)
+      .then(outcome => { result = outcome?.result; })
       .catch(error => {
         this.log(`${skill.name}: webhook run failed — ${error instanceof Error ? error.message : String(error)}`);
       })
@@ -764,6 +776,7 @@ export class Scheduler {
 
     this.running.add(slug);
     const startedAt = this.now();
+    let result: RunResult | undefined;
       this.record(slug, "started", { agent });
     this.log(`${skill.name}: firing now, by hand`);
     // By hand is still this routine running (INV-534): same slug, same opening with last
@@ -788,6 +801,7 @@ export class Scheduler {
         this.running.delete(slug);
         this.record(slug, "finished", {
             agent,
+            ...(result !== undefined ? { result } : {}),
             ms: this.now().getTime() - startedAt.getTime(),
             ...(this.deps.spentSinceAgent !== undefined
               ? { tokens: this.deps.spentSinceAgent(startedAt.getTime(), agent) }

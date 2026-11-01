@@ -19,6 +19,8 @@ export interface MetricsInput {
   usage: readonly string[];
   /** Lines of schedules.jsonl. */
   schedules: readonly string[];
+  /** Lines of pending-work.jsonl, for the plans; optional. */
+  work?: readonly string[];
   /** Lines of tasks.jsonl. */
   tasks: readonly string[];
   /** Log lines; only those containing `[conduct]` are read. */
@@ -34,7 +36,10 @@ export interface Metrics {
   /** Union of turn intervals over the window, and over the hours that had any turn at all. */
   dutyCycle: { busyHours: number; rawPercent: number; activeHours: number; withWorkPercent: number };
   tokens: { total: number; byKind: Record<string, number>; perTurn: number };
-  routines: { runs: number; tokens: number; medianSeconds: number };
+  /** `byResult`: done / partial / failed per the ledger's own word (INV-1404); older records say nothing and are not counted there. */
+  routines: { runs: number; tokens: number; medianSeconds: number; byResult: Record<string, number> };
+  /** Fan-out plans committed in the window, by how they came out (INV-1404); read from pending-work.jsonl when given. */
+  plans: { done: number; partial: number; failed: number };
   /** What needed a person: blocked tasks, and tasks parked in review. */
   interruptions: { blockedTasks: number; reviewWaits: number; perActiveHour: number };
   conduct: {
@@ -156,14 +161,26 @@ export function computeMetrics(input: MetricsInput): Metrics {
   let routineRuns = 0;
   let routineTokens = 0;
   const routineSeconds: number[] = [];
+  const byResult: Record<string, number> = {};
   for (const line of input.schedules) {
-    const record = parse<{ at?: string; event?: string; tokens?: number; ms?: number }>(line);
+    const record = parse<{ at?: string; event?: string; tokens?: number; ms?: number; result?: string }>(line);
     if (record?.event !== "finished" || !inWindow(record.at)) continue;
     routineRuns += 1;
     routineTokens += record.tokens ?? 0;
     if (record.ms !== undefined) routineSeconds.push(record.ms / 1000);
+    if (record.result !== undefined) byResult[record.result] = (byResult[record.result] ?? 0) + 1;
   }
   routineSeconds.sort((a, b) => a - b);
+
+  // Plans: a prepared record names the kind, the committed record the outcome; joined by id.
+  const planIds = new Set<string>();
+  const plans = { done: 0, partial: 0, failed: 0 };
+  for (const line of input.work ?? []) {
+    const record = parse<{ event?: string; id?: string; kind?: string; how?: string; at?: string }>(line);
+    if (record?.id === undefined) continue;
+    if (record.event === "prepared" && record.kind === "orchestrate") planIds.add(record.id);
+    if (record.event === "committed" && planIds.has(record.id) && inWindow(record.at) && (record.how === "done" || record.how === "partial" || record.how === "failed")) plans[record.how] += 1;
+  }
 
   // Interruptions: a task that went blocked, or into review, inside the window. Each is a
   // moment somebody had to be asked or had to look. Read from the board's history, which is
@@ -221,7 +238,8 @@ export function computeMetrics(input: MetricsInput): Metrics {
       withWorkPercent: activeHours === 0 ? 0 : Math.min(100, (100 * busyMs) / (activeHours * 3_600_000)),
     },
     tokens: { total: totalTokens, byKind, perTurn: turnsTotal === 0 ? 0 : totalTokens / turnsTotal },
-    routines: { runs: routineRuns, tokens: routineTokens, medianSeconds: percentile(routineSeconds, 0.5) },
+    routines: { runs: routineRuns, tokens: routineTokens, medianSeconds: percentile(routineSeconds, 0.5), byResult },
+    plans,
     interruptions: {
       blockedTasks,
       reviewWaits,
@@ -253,7 +271,8 @@ export function renderMetrics(metrics: Metrics): string {
     `Duty cycle: ${pct(metrics.dutyCycle.rawPercent)} of the wall clock (${hours(metrics.dutyCycle.busyHours)} busy); ` +
       `${pct(metrics.dutyCycle.withWorkPercent)} of the ${metrics.dutyCycle.activeHours} hour(s) that had work`,
     `Tokens: ${metrics.tokens.total.toLocaleString()} (${kinds || "none"}); ${Math.round(metrics.tokens.perTurn).toLocaleString()} per turn`,
-    `Routines: ${metrics.routines.runs} run(s), ${metrics.routines.tokens.toLocaleString()} tokens, median ${metrics.routines.medianSeconds.toFixed(0)} s`,
+    `Routines: ${metrics.routines.runs} run(s)${Object.keys(metrics.routines.byResult).length > 0 ? ` (${Object.entries(metrics.routines.byResult).map(([result, n]) => `${result} ${n}`).join(", ")})` : ""}, ${metrics.routines.tokens.toLocaleString()} tokens, median ${metrics.routines.medianSeconds.toFixed(0)} s`,
+    `Plans: ${metrics.plans.done} done, ${metrics.plans.partial} partial, ${metrics.plans.failed} failed`,
     `Interruptions: ${metrics.interruptions.blockedTasks} blocked, ${metrics.interruptions.reviewWaits} waiting for review; ` +
       `${metrics.interruptions.perActiveHour.toFixed(2)} per active hour`,
     `Conduct: opened with a reply ${c.openedWithReply}, tool-first ${c.openedToolFirst}, interim lines ${c.interimLines}; ` +

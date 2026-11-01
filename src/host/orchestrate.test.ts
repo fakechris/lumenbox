@@ -95,7 +95,7 @@ test("a small plan starts at once, stays within its concurrency, and reports onc
     assert.ok(child.peak() <= 2, `peak ${child.peak()} over the limit`);
     assert.ok(child.conversations.every(name => name.startsWith("fork/main-plan-")), "items run as forks");
     assert.equal(h.delivered.length, 1);
-    assert.match(h.delivered[0]!.text, /The plan "Survey the vendors" finished: 5 item\(s\)/);
+    assert.match(h.delivered[0]!.text, /The plan "Survey the vendors" finished done \(5 of 5\)/);
     assert.match(h.delivered[0]!.text, /--- item 3: vendor-3 \(done\) ---\nanswer for 3/);
     assert.equal(h.ledger().open().length, 0);
   } finally { h.cleanup(); }
@@ -178,7 +178,7 @@ test("30 items and a summary with a restart in the middle cost exactly 31 sub-ag
     assert.equal(child.briefs.length, 30 - 12 + 1, "only the unanswered items and the summary ran again");
     assert.equal(answeredBeforeCrash + child.briefs.length, 31);
     assert.equal(h.delivered.length, 1);
-    assert.match(h.delivered[0]!.text, /finished: 30 item\(s\)/);
+    assert.match(h.delivered[0]!.text, /finished done \(30 of 30\)/);
     for (const n of [1, 12, 13, 30]) assert.match(child.briefs[child.briefs.length - 1]!, new RegExp(`item ${n}: vendor-${n} \\(done\\)`));
   } finally { h.cleanup(); }
 });

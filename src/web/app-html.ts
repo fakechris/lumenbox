@@ -5254,7 +5254,7 @@ function automationRow(s, rows) {
   if (s.deliver && s.deliverWhen === "always") where += ' <span class="dim">(every run)</span>';
   // The last run's result, delivered or not (INV-776).
   var lastResult = s.lastResult
-    ? '<div class="dim" style="font-size:11px;margin-top:3px">last result ' + esc(new Date(s.lastResult.at).toLocaleString()) + " \u00b7 " +
+    ? '<div class="dim" style="font-size:11px;margin-top:3px">last result ' + esc(new Date(s.lastResult.at).toLocaleString()) + (s.lastResult.result && s.lastResult.result !== "done" ? ' <span class="' + (s.lastResult.result === "failed" ? "danger" : "warn") + '">' + esc(s.lastResult.result) + "</span>" : "") + " \u00b7 " +
         (s.lastResult.verdict === "silent" ? "not delivered" : s.lastResult.verdict === "attach_next" ? "attached to the next reply" : s.lastResult.verdict === "push_now" ? "delivered" : esc(s.lastResult.verdict)) +
         (s.lastResult.reason ? " \u2014 " + esc(s.lastResult.reason) : "") +
         (s.lastResult.text ? '<div class="mono" style="white-space:pre-wrap;margin-top:2px;max-height:6em;overflow:auto">' + esc(s.lastResult.text) + "</div>" : "") +

@@ -33,6 +33,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendLineDurably } from "./jsonl.ts";
 import type { OpenFork, PendingWork } from "./pending-work.ts";
+import { describeRunResult, planResult } from "./run-result.ts";
 import type { PendingApproval } from "./policy.ts";
 
 /** Above this many sub-agent calls the person confirms before anything runs. */
@@ -336,8 +337,9 @@ export class Orchestrations {
         this.keep(running, summary);
       }
     }
-    const failed = items.filter(result => result.status !== "done").length;
-    const header = `[The plan "${running.plan.brief}" finished: ${items.length} item(s)${failed > 0 ? `, ${failed} not done` : ""}.`;
+    // Done, partial or failed, with the counts (INV-1404): "done" no longer covers "done except two".
+    const counts = planResult(items);
+    const header = `[The plan "${running.plan.brief}" finished ${describeRunResult(counts)}.`;
     const body =
       summary !== undefined
         ? `${header} The summary:]\n\n${summary.text}`
@@ -348,7 +350,7 @@ export class Orchestrations {
             })
             .join("\n\n")}`;
     if (this.deps.deliver(running.agentId, body, running.parent)) {
-      this.deps.pendingWork.commit([{ id: running.id, how: failed === items.length && items.length > 0 ? "failed" : "done" }]);
+      this.deps.pendingWork.commit([{ id: running.id, how: counts.result, why: describeRunResult(counts) }]);
     } else {
       this.log(`plan ${running.hash}: finished, but the result could not be delivered; it stays open for the next start`);
     }
