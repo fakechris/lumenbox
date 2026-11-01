@@ -1352,11 +1352,8 @@ var md = window.markdownit ? window.markdownit(${JSON.stringify(MARKDOWN_OPTIONS
 
 // The token, out of the address bar.
 //
-// It is accepted once as a query parameter to bootstrap the cookie, and the cookie is what every
-// later request uses — so by the time this runs it has done its job. Leaving it there put a working
-// credential in browser history, in autocomplete, in the title bar of any screenshot, and in the
-// referrer of any outbound link. The one that actually happens: you copy the address bar to show a
-// colleague an agent's desktop, and hand over control of the box with it.
+// It is accepted once as a query parameter to bootstrap the cookie, and the cookie is what every later request uses — so by the time this runs it has done its job. Leaving
+// it there put a working credential in browser history, in autocomplete, in the title bar of any screenshot, and in the referrer of any outbound link. The one that actually happens: you copy the address bar to show a colleague an agent's desktop, and hand over control of the box with it.
 //
 // Only if the page loaded, which means the cookie was set — this runs after the server accepted the
 // request. Replacing it before that would lock someone out on the next refresh.
@@ -1404,9 +1401,8 @@ if (navigator.userAgent.indexOf("Electron") >= 0) {
 }
 
 // ── settings ───────────────────────────────────────────────────────────────
-// The dialog edits the config file the server reads at startup, so a saved change
-// needs a restart to act. Under the desktop shell "Save & restart" is seamless — the
-// shell relaunches the server; under a bare CLI the page says the process has ended.
+// The dialog edits the config file the server reads at startup, so a saved change needs a restart to act. Under the desktop shell "Save & restart" is seamless — the shell
+// relaunches the server; under a bare CLI the page says the process has ended.
 var settingsPresets = [];
 /** The search providers /api/config reported, and which one (if any) holds a key. */
 var searchPresets = [];
@@ -1481,6 +1477,29 @@ $("setquotasave").onclick = function () {
   }).catch(function (e) { $("setquotastatus").textContent = e.message; }).finally(function () { button.disabled = false; });
 };
 
+// The built-in prompt parts (INV-1465): status, the team's text where there is one, and the decision when a default moved.
+function loadPromptParts() {
+  fetch("/api/prompt-parts").then(function (r) { return r.json(); }).then(function (data) {
+    var parts = data.parts || [];
+    $("setpartswrap").style.display = parts.length ? "" : "none";
+    $("setparts").innerHTML = parts.map(function (p) {
+      var tag = p.status === "default-updated" ? '<span style="color:var(--warn);font-size:10.5px;border:1px solid var(--border);border-radius:5px;padding:0 5px">default updated</span>' : p.status === "overridden" ? '<span style="color:var(--accent-2);font-size:10.5px;border:1px solid var(--border);border-radius:5px;padding:0 5px">yours</span>' : "";
+      var decide = p.status === "default-updated" ? '<button class="btn ghost sm" data-part="' + esc(p.key) + '" data-part-decide="keep">Keep my text</button><button class="btn ghost sm" data-part="' + esc(p.key) + '" data-part-decide="default">Use the new default</button>' : p.status === "overridden" ? '<button class="btn ghost sm" data-part="' + esc(p.key) + '" data-part-decide="default">Back to default</button>' : "";
+      return '<div style="margin-top:8px"><div style="display:flex;gap:8px;align-items:baseline"><span style="flex:1;font-size:12.5px;font-weight:500">' + esc(p.title) + " " + tag + "</span>" + decide + '<button class="btn ghost sm" data-part="' + esc(p.key) + '" data-part-decide="edit">Save</button></div><div class="dim" style="font-size:11px">' + esc(p.about) + "</div>" +
+        (p.status === "default-updated" ? '<div class="dim" style="font-size:11px;margin-top:3px">New default:</div><pre class="mono" style="white-space:pre-wrap;font-size:11px;max-height:8em;overflow:auto;margin:2px 0">' + esc(p.text) + "</pre>" : "") +
+        '<textarea data-part-text="' + esc(p.key) + '" rows="5" spellcheck="false" style="width:100%;font-family:var(--font-mono);font-size:11px">' + esc(p.override ? p.override.text : p.text) + "</textarea></div>";
+    }).join("");
+  }).catch(function () { $("setpartswrap").style.display = "none"; });
+}
+$("setparts").addEventListener("click", function (event) {
+  var key = event.target.getAttribute && event.target.getAttribute("data-part");
+  if (!key) return;
+  var decision = event.target.getAttribute("data-part-decide");
+  var text = decision === "edit" ? document.querySelector('[data-part-text="' + key + '"]').value : undefined;
+  fetch("/api/prompt-parts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: key, decision: decision, text: text }) })
+    .then(function (r) { return r.json(); }).then(function (data) { if (data.error) alert(data.error); loadPromptParts(); });
+});
+
 function openSettings(tab) {
   showSettingsTab(typeof tab === "string" ? tab : "model");
   // Applied on open as well as on load: the dialog is built once and reopened, and whoever is at the browser may have signed in since the page did.
@@ -1526,7 +1545,7 @@ function openSettings(tab) {
       settingsProviderChanged();
       renderStandingGrants();
       renderBoxSection();
-      if (myRole === "admin") loadBoxQuotas();
+      if (myRole === "admin") { loadBoxQuotas(); loadPromptParts(); }
       renderChannels();
       renderSecrets(); renderConnectors();
       renderMemorySummary();
@@ -2375,8 +2394,7 @@ function renderBoxSection() {
   if (boxState.ok) {
     $("setboxstate").textContent = "Running — " + boxState.detail;
   } else if (dockerState && dockerState.state === "no-binary") {
-    // The machine has no docker command at all. Say what a box is, name the two things to
-    // install, and link them — the old error told the reader to run docker version, which
+    // The machine has no docker command at all. Say what a box is, name the two things to install, and link them — the old error told the reader to run docker version, which
     // assumed a reader who does not exist.
     $("setboxstate").innerHTML = esc(t("ui.box.dockerMissing")) +
       ' <a href="https://www.docker.com/products/docker-desktop/" target="_blank" rel="noreferrer">Docker Desktop</a> · ' +
@@ -2404,9 +2422,8 @@ function maybeOnboard() {
       if ((!configured && !anyKey) || !boxState.ok) {
         openSettings();
         $("setwelcome").style.display = "";
-        // First run has one sensible ending: save and restart, so what was typed is what
-        // runs. A second, weaker button beside it invites the save that does not take
-        // effect, and the next message dies on the key that was entered but never loaded.
+        // First run has one sensible ending: save and restart, so what was typed is what runs. A second, weaker button beside it invites the save that does not take effect, and
+        // the next message dies on the key that was entered but never loaded.
         $("setsave").style.display = "none";
       }
     })
@@ -2511,9 +2528,8 @@ function saveSettings(thenRestart) {
   body.boxImage = boxImage === "" ? null : boxImage;
   var key = $("setkey").value.trim();
   if (key !== "") body.key = key;
-  // The search row: a typed key saves under the chosen provider; picking "not configured"
-  // with nothing typed is the explicit clear. Anything else sends nothing, like the model
-  // key's leave-blank-to-keep.
+  // The search row: a typed key saves under the chosen provider; picking "not configured" with nothing typed is the explicit clear. Anything else sends nothing, like the
+  // model key's leave-blank-to-keep.
   var searchKey = $("setsearchkey").value.trim();
   var searchChoice = $("setsearchprov").value;
   if (searchKey !== "") {
@@ -2614,8 +2630,7 @@ $("setcancel").onclick = function () {
 };
 // ── the admin view ──────────────────────────────────────────────────────────────
 //
-// Reached from the header number, which had been sitting there since the honesty pass
-// showing today's tokens and opening nothing. Everything below reads; nothing here
+// Reached from the header number, which had been sitting there since the honesty pass showing today's tokens and opening nothing. Everything below reads; nothing here
 // changes anything, which is why one Close is the only control.
 
 var spendDay = null;
@@ -2727,9 +2742,8 @@ function renderSpend(data) {
       "<th style=\"text-align:right\">tokens out</th><th style=\"text-align:right\">tokens in</th>" +
       "<th style=\"text-align:right\">cache read</th></tr>" +
       tasks.map(function (row) {
-        // The id is a link rather than the row being clickable: a <tr> with a handler is
-        // invisible to the keyboard and to anything reading the page aloud, and it gives no
-        // sign that it can be clicked. Same defect the header number had.
+        // The id is a link rather than the row being clickable: a <tr> with a handler is invisible to the keyboard and to anything reading the page aloud, and it gives no sign
+        // that it can be clicked. Same defect the header number had.
         return '<tr class="pick"><td><a href="#" data-task="' + esc(row.id) + '">' + esc(row.id) +
           "</a> " + taskLabel(row.title) + "</td><td>" + esc(row.status) + "</td>" +
           // Zero turns and an unknown cost are the same fact; showing one as a figure and
@@ -2795,8 +2809,7 @@ function renderSpend(data) {
 }
 
 function openSpend(query) {
-  // Addressable, so a day or a task's cost can be linked to rather than described as a
-  // sequence of clicks. It also makes the view checkable by navigating to it, which is the
+  // Addressable, so a day or a task's cost can be linked to rather than described as a sequence of clicks. It also makes the view checkable by navigating to it, which is the
   // only way it *could* be checked here: synthetic clicks do not reach this browser.
   location.hash = "spend" + (query || "");
   $("spendwrap").style.display = "flex";
@@ -3190,18 +3203,15 @@ function beginStep(text, keepOpen) {
   var stick = nearBottom(chat);
   var step = document.createElement("details");
   step.className = "step";
-  // A step opened under text the person was reading stays open while the turn runs:
-  // the text they were reading gets a heading and calls under it, and folds with the
-  // rest when the turn ends and the transcript is re-rendered. Folding it the moment a
-  // tool call arrived made the sentence vanish mid-read.
+  // A step opened under text the person was reading stays open while the turn runs: the text they were reading gets a heading and calls under it, and folds with the rest
+  // when the turn ends and the transcript is re-rendered. Folding it the moment a tool call arrived made the sentence vanish mid-read.
   step.open = keepOpen === true || !folded;
   step.innerHTML =
     '<summary><span class="lbl"></span><span class="cnt"></span></summary>' +
     '<div class="kids"></div>';
   var head = firstLineOf(text);
   step.querySelector(".lbl").textContent = head || "working";
-  // Only the *rest* goes in the body. Putting the whole thing there repeated the first
-  // sentence directly under itself, which read as a rendering fault rather than as a
+  // Only the *rest* goes in the body. Putting the whole thing there repeated the first sentence directly under itself, which read as a rendering fault rather than as a
   // heading and its detail.
   var rest = restAfter(text, head);
   if (rest !== "") {
@@ -5234,17 +5244,15 @@ function automationRow(s, rows) {
     : s.lastRun
       ? "last ran " + esc(new Date(s.lastRun).toLocaleString())
       : '<span style="color:var(--warn)">never run</span>';
-  // Next, by the tick's own rules — the one line a person cannot compute from a cron string.
+  // Next, by the tick's own rules.
   if (s.nextRun && !s.running) last += " · next " + esc(new Date(s.nextRun).toLocaleString());
   else if (s.kind === "once" && s.lastRun) last += " · done";
-  // Where it reports is the line that matters most: a skill with no deliver runs and
-  // says nothing in any chat, which is right for a tidy-up and looks broken for a brief.
+  // Where it reports: a skill with no deliver says nothing in any chat.
   var where = s.deliver
     ? "reports to " + esc(s.deliver)
     : '<span class="dim">writes files only — no chat hears it</span>';
   if (s.deliver && s.deliverWhen === "always") where += ' <span class="dim">(every run)</span>';
-  // The last run's result, delivered or not (INV-776): a run the resolve step kept quiet is
-  // still on the record, and this is the line that says what it found and why it stayed quiet.
+  // The last run's result, delivered or not (INV-776).
   var lastResult = s.lastResult
     ? '<div class="dim" style="font-size:11px;margin-top:3px">last result ' + esc(new Date(s.lastResult.at).toLocaleString()) + " \u00b7 " +
         (s.lastResult.verdict === "silent" ? "not delivered" : s.lastResult.verdict === "attach_next" ? "attached to the next reply" : s.lastResult.verdict === "push_now" ? "delivered" : esc(s.lastResult.verdict)) +
@@ -5252,21 +5260,17 @@ function automationRow(s, rows) {
         (s.lastResult.text ? '<div class="mono" style="white-space:pre-wrap;margin-top:2px;max-height:6em;overflow:auto">' + esc(s.lastResult.text) + "</div>" : "") +
       "</div>"
     : "";
-  // Provenance, not permission: an agent may stand up a routine of its own, and what
-  // makes that safe is that the standing commitment says where it came from and what it
-  // costs — reviewed afterwards rather than approved beforehand.
+  // Provenance, not permission: reviewed afterwards rather than approved beforehand.
   var origin = s.authoredBy
     ? '<span style="color:var(--accent-2);font-size:10.5px;border:1px solid var(--border);border-radius:5px;padding:0 5px">by ' + esc(s.authoredBy) + "</span>"
     : "";
-  // Paused is a state a person chose (or a template arrived in): shown, and switchable here.
   var pausedTag = s.paused
     ? '<span style="color:var(--warn);font-size:10.5px;border:1px solid var(--border);border-radius:5px;padding:0 5px">paused</span>'
     : "";
   var toggle = s.paused
     ? '<button class="btn ghost sm" data-resume="' + esc(s.slug) + '">Turn on</button>'
     : '<button class="btn ghost sm" data-pause="' + esc(s.slug) + '">Pause</button>';
-  // How it may act (INV-1458): observe records what it would have run; a file that says nothing
-  // is auto by default and marked so, because that is the one case a person has not chosen.
+  // How it may act (INV-1458); a file that says nothing is auto, marked so.
   var mode = s.mode || "auto";
   var modeTag = mode === "auto" && !s.modeDefaulted ? "" :
     '<span style="color:' + (mode === "observe" ? "var(--accent-2)" : mode === "off" ? "var(--warn)" : "var(--muted)") + ';font-size:10.5px;border:1px solid var(--border);border-radius:5px;padding:0 5px">' +
@@ -5277,11 +5281,8 @@ function automationRow(s, rows) {
   var observed = (s.observed || []).length
     ? '<div class="dim" style="font-size:11px;margin-top:3px">would have run ' + s.observed.length + ' time' + (s.observed.length === 1 ? "" : "s") + ' \u00b7 last ' + esc(new Date(s.observed[0].at).toLocaleString()) + ': ' + esc(s.observed[0].would) + "</div>"
     : "";
-  // A webhook routine's URL and secret are the whole of its interface: without them on screen
-  // there is nothing to paste into a phone, and the routine is armed but unreachable.
-  // Keyed on the hook data alone. It used to also require s.kind === "webhook", which is the
-  // same fact said twice by two endpoints — and when the two disagreed the URL vanished from the
-  // page with nothing to explain it, which is exactly the failure a person cannot debug.
+  // A webhook routine's URL and secret are its whole interface; keyed on the hook data alone (two
+  // endpoints saying the same fact once disagreed and the URL vanished).
   var hook = (rows || hookRows)[s.slug];
   var hookBlock = hook
     ? '<div style="margin-top:6px;padding:8px 10px;border:1px solid var(--border);border-radius:8px">' +

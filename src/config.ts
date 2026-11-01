@@ -231,6 +231,12 @@ export const DEFAULT_CONFIG: AgentboxConfig = {
 /** Above this, a page would spend its first seconds rendering history. */
 const MAX_ACTIVITY_LIMIT = 20_000;
 
+/** Where a team's overrides of the built-in prompt parts live (INV-1465); AGENTBOX_PROMPT_OVERRIDES moves it, tests point it at a temp dir. */
+export function promptOverridesDir(): string {
+  const named = process.env.AGENTBOX_PROMPT_OVERRIDES;
+  return named !== undefined && named !== "" ? named : `${agentboxHome()}/prompt-overrides`;
+}
+
 export function agentboxHome(): string {
   const named = process.env.AGENTBOX_HOME;
   if (named !== undefined && named !== "") return named;

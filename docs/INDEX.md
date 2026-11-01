@@ -47,6 +47,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [84-preset-matrix](84-preset-matrix.md) | The Delegate support matrix: presets × providers × scenarios | current | 2026-10-26 |
 | [85-decision-model](85-decision-model.md) | The decision model: switched judgements beside the cheap profile | current | 2026-10-28 |
 | [86-onboarding-acceptance](86-onboarding-acceptance.md) | Onboarding acceptance: a new user's first run on the published release | current | 2026-10-31 |
+| [87-prompt-parts](87-prompt-parts.md) | Built-in prompt parts: a team's override, and what happens when the default moves | current | 2026-11-01 |
 
 ## decision
 

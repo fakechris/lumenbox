@@ -142,6 +142,7 @@ import { HostRunner, hostRunnerConfig } from "../host/host-runner.ts";
 import { HostSandbox } from "../host/host-sandbox.ts";
 import { outboundRedactor } from "../host/redact-outbound.ts";
 import { blockedQuestion, describePurpose, outboundVerdict } from "../host/outbound.ts";
+import { decidePart, type PartKey, partViews, strayOverrides } from "../host/prompt-parts.ts";
 import { Outbox } from "../host/outbox.ts";
 import { OutboxSender } from "../channels/outbox-sender.ts";
 import { ALL_TOOLS } from "../host/orchestrator.ts";
@@ -2074,10 +2075,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       }
     }
   };
-  const owedSweep = setInterval(() => {
-    // Cheap when the book is clear; pending() reads a small ledger.
-    if (deliveries.pending().length > 0) void settleOwed();
-  }, 20_000);
+  const owedSweep = setInterval(() => { if (deliveries.pending().length > 0) void settleOwed(); }, 20_000); // Cheap when the book is clear.
   owedSweep.unref?.();
   void (async () => {
     await settleOwed();
@@ -2104,20 +2102,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           continue;
         }
         void channels.pushToChat(chatKey, message, { kind: "notice", about: `rescued ${stuck.task.id}` }).catch((error: unknown) => {
-          // Not swallowed. This is the notice that exists so an interrupted request is
-          // not lost, and losing *it* silently is the same failure one level up.
-          log(
-            `rescued ${stuck.task.id} but could not tell ${chatKey}: ` +
-              `${error instanceof Error ? error.message : String(error)}`
-          );
+          // Not swallowed: this notice exists so an interrupted request is not lost, and losing it silently is the same failure.
+          log(`rescued ${stuck.task.id} but could not tell ${chatKey}: ${error instanceof Error ? error.message : String(error)}`);
         });
       }
     }
   })();
 
-  // The standing digests: checked a few times an hour, sent once per chat per day.
-  // The sent-marker is in memory, so the one failure mode is a duplicate digest after
-  // a restart in the same hour — the cheap side of that trade.
+  // The standing digests: checked a few times an hour, sent once per chat per day; the sent-marker is in memory,
+  // so the one failure mode is a duplicate digest after a restart in the same hour — the cheap side of that trade.
   const digestsSent = new Map<string, string>();
   const digestTimer = setInterval(() => {
     const configured = loadConfig().digests ?? {};
@@ -2183,14 +2176,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       const { question } = expiry;
       log(`question: ${question.agentName}'s "${question.question.slice(0, 60)}" expired unanswered → ${expiry.verdict}`);
 
-      // The line goes back to the room that asked, never to "whoever drove this agent
-      // last": a question put in one group and answered by default in another hands one
-      // room's decision to a different set of people (INV-530). A question from the web
-      // has no room; the page and the ledger carry it.
+      // Back to the room that asked, never "whoever drove this agent last" (INV-530); a web question has no room.
       const askedIn = question.conversation === "main" ? undefined : conversations.chatKeyFor(question.conversation);
-      // Said whatever the day's budget is — this is the host reporting what it just did
-      // on somebody's behalf, and a silent default is the thing docs/51 forbids. It still
-      // counts against the room's budget, so the nudges know the room was spoken to.
+      // Said whatever the budget is: the host reporting what it did on somebody's behalf (docs/51); still counted.
       if (askedIn !== undefined) void chats?.pushToChat(askedIn, expiry.toChat, { kind: "notice", about: `question ${question.id} expired` }).then(() => followUps.record(askedIn)).catch((error: unknown) => log(`question: could not tell ${askedIn} (${error instanceof Error ? error.message : String(error)})`));
       else if (question.conversation !== "main") log(`question: expired in ${question.conversation} but no chat is recorded for it; the ledger has it`);
       broadcast({ type: "question_expired", agentId: question.agentId, agentName: question.agentName, question: question.question, verdict: expiry.verdict });
@@ -6156,6 +6144,17 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
+        // The built-in prompt parts a team may override, and the decision when a default moved (INV-1465). Admin only: the words every agent reads.
+        if (route === "GET /api/prompt-parts") { if (refusedRole("admin")) return; send(res, 200, { parts: partViews(), stray: strayOverrides() }); return; }
+        if (route === "POST /api/prompt-parts") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          const key = String(body.key ?? "") as PartKey, kind = String(body.decision ?? "");
+          if (!partViews().some(part => part.key === key) || !["edit", "keep", "default"].includes(kind)) { send(res, 400, { error: "key must name a prompt part and decision must be edit, keep or default." }); return; }
+          const view = decidePart(key, kind === "edit" ? { kind: "edit", text: String(body.text ?? "") } : { kind: kind as "keep" | "default" });
+          log(`prompt part ${key}: ${kind}${caller.userId === undefined ? "" : ` by ${caller.userId}`} → ${view.status}`);
+          send(res, 200, { part: view }); return;
+        }
         if (route === "GET /api/attention") {
           const me = caller.userId === undefined ? undefined : principals.resolve(caller.userId);
           const board = orchestrator.tasks;
