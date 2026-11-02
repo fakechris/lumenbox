@@ -107,6 +107,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [81-delegate-session-acp](81-delegate-session-acp.md) | Delegate as a session: what mcode's ACP actually does, and what enters the host | current | 2026-10-21 |
 | [82-tailmsg-door](82-tailmsg-door.md) | The tailmsg door: another machine's agent writes to ours over the tailnet | current | 2026-10-20 |
 | [83-team-vs-single-eval](83-team-vs-single-eval.md) | Team versus one agent: the first measured comparison | current | 2026-11-01 |
+| [89-thesis](89-thesis.md) | LumenBox 是什么：分层、理念、决定、里程碑——一页说清楚的系统论 | current | 2026-11-01 |
 
 ## handoff
 
