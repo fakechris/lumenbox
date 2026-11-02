@@ -335,8 +335,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       },
     };
   };
-  // The doors, loaded before the people: identity links and knocks record the incarnation of the channel they were observed under (docs/22 §4), so the lookup has to exist
-  // before the principals file is read.
+  // The doors, loaded before the people: identity links and knocks record the incarnation of the channel they were observed under (docs/22 §4), so the lookup has to exist before the principals file is read.
   const channelRecordsPath = join(agentboxHome(), CHANNEL_RECORDS_FILENAME);
   const preferences = new PreferenceStore(join(agentboxHome(), "preferences.json"));
   const channelRecords = ensureChannelRecords(channelRecordsPath, registry.box.id);
@@ -3049,6 +3048,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const sideDoorTools = () => mcpServerTools({
     registry, orchestrator, principals, workDir: WORK_DIR, log, mayDrive: (agentId, principalId) => mayEnterBox(registry.boxOf(agentId), principalId) && mandateWorld().mayDrive(principalId),
     stageWorld: sideDoorStage, changeFeed, listen: listener => { channelTurnListeners.add(listener); return () => channelTurnListeners.delete(listener); },
+    notifyTask: (task, text) => { const chatKey = task.conversation === undefined ? undefined : conversations.chatKeyFor(task.conversation); if (chatKey !== undefined) void channels.pushToChat(chatKey, text, { kind: "notice", about: `supervisor flag on ${task.id}` }).catch((error: unknown) => log(`supervisor flag ${task.id}: notice not sent (${error instanceof Error ? error.message : String(error)})`)); }, // INV-1509
   });
   // Retries of a side-door call return the first answer for a day, persisted beside the ledgers.
   const sideDoorIdempotency = new IdempotencyStore({ ttlMs: 24 * 60 * 60_000, persistTo: join(agentboxHome(), "mcp-idempotency.jsonl") });

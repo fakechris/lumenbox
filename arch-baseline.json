@@ -19,7 +19,7 @@
       "src/host/policy.ts": 1165,
       "src/host/prompt.ts": 1443,
       "src/host/starter-skills.ts": 1339,
-      "src/host/tasks.ts": 1056,
+      "src/host/tasks.ts": 1052,
       "src/host/template.ts": 1178,
       "src/host/tools.ts": 5475,
       "src/host/turn.ts": 3781,

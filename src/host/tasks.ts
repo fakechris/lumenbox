@@ -27,6 +27,7 @@ import { agentboxHome, envNumber } from "../config.ts";
 import { deliveredFollowUp, type FollowUp, type HandBackResult, handBack as handBackFollowUp } from "./follow-up.ts";
 import { conversationOfTask, GOAL_GATE_ACTOR, type Pursuit, taskStatusFor } from "./goal-mode.ts";
 import { appendLine, type LedgerKind } from "./jsonl.ts";
+import { applyFlag, type FlagOutcome, type TaskFlag } from "./task-flag.ts";
 import { applyRevalidation, applyWithdrawal, grantMandate, type Mandate, type MandateWorld, type RevalidationResult } from "./mandate.ts";
 import { Receipts } from "./receipts.ts";
 import { clampDescription, dueOf, type TaskContract } from "./task-fields.ts";
@@ -109,13 +110,8 @@ export interface Task {
   assigneeId?: string;
   /** Named, "done" means this identity accepted it — the assignee cannot self-accept. */
   reviewerId?: string;
-  /**
-   * What finished looks like, in the requester's words, kept apart from the description.
-   * Five fields because that is what a reviewer needs and a title cannot carry: what comes
-   * out, what is in and out of bounds, what must not be done, how "done" is judged, and how
-   * it was checked. (Involute's work items carry the same five; two days of bots working
-   * from them stayed in lane.)
-   */
+  /** What finished looks like, in the requester's words: what comes out, the bounds, what must not be done, how
+   * "done" is judged and how it was checked — what a reviewer needs and a title cannot carry. */
   contract?: TaskContract;
   /** Who may have this done, on what footing and under which rules (INV-1457); see mandate.ts. */
   mandate?: Mandate;
@@ -142,13 +138,9 @@ export interface Task {
    * is the follow-up machinery, and one open goal per area is what stops a second intake.
    */
   goal?: { area: string; commitment?: string };
-  /**
-   * An objective the *agent* pursues until a gate it does not own says it is met (docs/74,
-   * INV-769). Distinct from `goal`, which is the person's own goal followed up by check-ins.
-   * The board derives `status` from it and refuses to move a pursuit task on anyone's word
-   * but the gate's or the requester's.
-   */
+  /** What the agent pursues until a gate it does not own says it is met (docs/74, INV-769); `status` follows it. Not `goal`, the person's own. */
   pursuit?: Pursuit;
+  flag?: TaskFlag; // A supervisor's raised attention (INV-1509): holds until the status moves; task-flag.ts.
   /** Leave it alone until this instant: the answer to a nudge that is "not now" (INV-532). */
   snoozeUntil?: string;
   /** How often the requester has been nudged about an overdue or idle task, and when last. */
@@ -940,10 +932,14 @@ export class TaskStore {
     return [...this.tasks.values()].find(task => task.pursuit?.sourceMessageId === messageId);
   }
 
-  /**
-   * Change a pursuit. The board status follows the pursuit's (docs/74 §7 R7) and the move is
-   * recorded under the gate's name, because this is the one path a pursuit moves through.
-   */
+  /** A supervisor raises attention on a task (INV-1509): a line, an item for a person, nothing about the work. */
+  flag(id: string, by: string, note: string, now: Date = new Date()): FlagOutcome {
+    const result = applyFlag(this.tasks.get(id), by, note, now, HISTORY_LIMIT);
+    if (result.task !== undefined) { this.tasks.set(id, result.task); this.append({ kind: "task", task: result.task }); for (const listener of this.listeners) listener(result.task); }
+    return result.outcome;
+  }
+
+  /** Change a pursuit: the board status follows it (docs/74 §7 R7), recorded under the gate's name — the one path a pursuit moves through. */
   setPursuit(
     id: string,
     change: (pursuit: Pursuit) => Pursuit,
