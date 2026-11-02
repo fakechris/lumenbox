@@ -1645,7 +1645,7 @@ async function main(): Promise<number> {
     case "improve": return (await import("./host/improve.ts")).cmdImprove(rest); // INV-1473: a check-up for one agent, proposal only
     case "watchdog": return (await import("./watchdog/main.ts")).cmdWatchdog(rest, { token: process.env.AGENTBOX_WATCHDOG_TOKEN, processEnv: process.env }); // INV-1509, docs/91
     case "supervise": return (await import("./supervisor/main.ts")).cmdSupervise(rest, { openaiToken: process.env.OPENAI_TOKEN ?? process.env.OPENAI_API_KEY, doorToken: process.env.AGENTBOX_SUPERVISOR_TOKEN }); // INV-1518, docs/90 §3.5
-    case "supervision": return (await import("./supervision/main.ts")).cmdSupervision(rest, { uiToken: process.env.AGENTBOX_UI_TOKEN, openaiToken: () => process.env.OPENAI_TOKEN ?? process.env.OPENAI_API_KEY }); // INV-1527: the app's watchdog + supervisor process
+    case "supervision": return (await import("./supervision/main.ts")).cmdSupervision(rest, { uiToken: process.env.AGENTBOX_UI_TOKEN, keyFor: name => process.env[name] ?? (name === "OPENAI_API_KEY" ? process.env.OPENAI_TOKEN : undefined) }); // INV-1527: the app's watchdog + supervisor process
     case "bundle": return cmdBundle(rest);
 
     case "host": {

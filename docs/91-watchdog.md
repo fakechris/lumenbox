@@ -23,8 +23,8 @@ first start the process issues its own door token for the installation's admin, 
 and reuses it from then on. If the door refuses it, the process issues a new one once. What a person
 should hear, such as the server not answering, a token refused, or a run that could not start,
 arrives as the app's own notification. The log is `~/Library/Logs/LumenBox/supervision.log`. The tray shows
-whether supervision is running. Its settings live in the `supervision` section of `config.json`,
-and the watchdog is on unless that section turns it off.
+whether supervision is running. Its settings are in Settings → Supervision, which writes the `supervision` section of
+`config.json`. The watchdog is on unless turned off there. A saved change restarts the process with the new settings.
 
 ## Running it by hand
 

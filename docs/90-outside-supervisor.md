@@ -76,6 +76,13 @@ box 的工具。goal_start 的 agent 和 budget 由运营者给，模型看不�
 改完后，同一目标只用两次模型调用：一次启动，一次一句话。门这边也随之改了：空的 agent 当作没填；不认识的
 名字拒绝，并列出团队。
 
+**在 app 里（INV-1527、INV-1528）。** 看门狗和监督者合在一个 `agentbox supervision` 子进程里，由桌面 app 管理，用户不装任何服务。设置在 Settings → Supervision：
+- 看门狗的开关与阈值；
+- 监督者的 provider 与模型，复用 Settings → Model 里已设的 key——OpenAI 的 gpt-6 走 Responses，其余走 app 的 provider 层；
+- 默认 agent、预算与上限。
+
+同一页可以发起、查看、停止运行；被监督的目标在任务列表里标 "supervised"。运行以文件排队（`~/.agentbox/supervisor/`），读回时再脱敏一次。
+
 ## 4. 监督者不能做的
 
 | 不能 | 因为 |

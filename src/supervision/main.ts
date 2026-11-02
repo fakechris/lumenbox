@@ -15,7 +15,7 @@ import { appendLine } from "../host/jsonl.ts";
 import { type Door, doorClient } from "../watchdog/client.ts";
 import { Watchdog, type ProgressJudge } from "../watchdog/main.ts";
 import { Supervisor, summaryOf } from "../supervisor/loop.ts";
-import { type ModelAsk, openaiResponses } from "../supervisor/openai.ts";
+import type { ModelAsk } from "../supervisor/openai.ts";
 import { writeFileSync } from "node:fs";
 import type { SupervisionConfig } from "./config.ts";
 import { runDir, stopRequested, takeNext, writeStatus } from "./queue.ts";
@@ -27,8 +27,8 @@ export interface SupervisionDeps {
   uiToken: () => string;
   fetch: typeof fetch;
   config: () => SupervisionConfig;
-  /** The model a run uses; undefined when no key is configured, which a run reports as failed. */
-  askFor: (model: string) => ModelAsk | undefined;
+  /** The model a run uses, or why there is none — which the run reports as failed. */
+  askFor: (choice: { provider: string; model: string }) => { ask: ModelAsk } | { error: string };
   judge?: ProgressJudge;
   emit: (line: string) => void;
   sleep?: (ms: number) => Promise<void>;
@@ -114,13 +114,14 @@ export class Supervision {
     if (request === undefined) return false;
     const config = this.deps.config().supervisor;
     const dir = runDir(this.deps.home, request.id);
-    const base = { id: request.id, objective: request.objective, requestedAt: request.requestedAt, model: config.model };
-    const ask = this.deps.askFor(config.model);
-    if (ask === undefined) {
-      writeStatus(this.deps.home, { ...base, state: "failed", error: "no key for the supervisor's model is configured", endedAt: new Date().toISOString() });
-      this.notify("A supervisor run could not start", "No key for the supervisor's model is configured.");
+    const base = { id: request.id, objective: request.objective, requestedAt: request.requestedAt, model: `${config.provider}/${config.model}` };
+    const chosen = this.deps.askFor({ provider: config.provider, model: config.model });
+    if ("error" in chosen) {
+      writeStatus(this.deps.home, { ...base, state: "failed", error: chosen.error, endedAt: new Date().toISOString() });
+      this.notify("A supervisor run could not start", chosen.error);
       return true;
     }
+    const ask = chosen.ask;
     const startedAt = new Date().toISOString();
     writeStatus(this.deps.home, { ...base, state: "running", startedAt });
     const supervisor = new Supervisor({
@@ -137,7 +138,7 @@ export class Supervision {
       const agent = request.agent ?? config.agent;
       const budget = request.budget ?? config.budget;
       const result = await supervisor.run(request.objective, { ...(agent !== undefined ? { agent } : {}), ...(budget !== undefined ? { budget } : {}) });
-      writeFileSync(join(dir, "summary.md"), `${summaryOf(request.objective, result)}Model: ${config.model}\n`);
+      writeFileSync(join(dir, "summary.md"), `${summaryOf(request.objective, result)}Model: ${config.provider}/${config.model}\n`);
       writeStatus(this.deps.home, { ...base, state: result.outcome === "stopped" ? "stopped" : "done", startedAt, endedAt: result.endedAt, outcome: result.outcome, ...(result.goalId !== undefined ? { goalId: result.goalId } : {}), modelCalls: result.modelCalls, tokens: { input: result.usage.input, output: result.usage.output } });
       if (result.outcome !== "completed" && result.outcome !== "stopped") this.notify("A supervisor run ended", `${result.goalId ?? "No goal"}: ${result.outcome.replace(/_/g, " ")}`);
     } catch (error) {
@@ -160,14 +161,19 @@ export class Supervision {
   }
 }
 
+/** Exit code the app reads as "start me again with new settings", as it does for the server. */
+export const SUPERVISION_RESTART_CODE = 75;
+
 /** The process the app starts. Keys and the UI token arrive from the CLI, which alone reads the environment. */
-export async function cmdSupervision(argv: string[], env: { uiToken?: string; openaiToken: () => string | undefined }, out: (line: string) => void = line => console.log(line)): Promise<number> {
+export async function cmdSupervision(argv: string[], env: { uiToken?: string; keyFor: (name: string) => string | undefined }, out: (line: string) => void = line => console.log(line)): Promise<number> {
   const value = (name: string) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : undefined);
   const { agentboxHome, applyConfigEnv, configPath, loadConfig } = await import("../config.ts");
   applyConfigEnv(loadConfig());
   const { uiToken } = await import("../box/docker.ts");
   const { readSupervisionConfig } = await import("./config.ts");
   const { decisionModelJudge } = await import("../watchdog/main.ts");
+  const { supervisorModel } = await import("../supervisor/models.ts");
+  const { statSync } = await import("node:fs");
   const config = () => readSupervisionConfig(configPath());
   const judge = config().watchdog.judge ? await decisionModelJudge(out) : undefined;
   const supervision = new Supervision({
@@ -176,7 +182,7 @@ export async function cmdSupervision(argv: string[], env: { uiToken?: string; op
     uiToken: () => env.uiToken ?? uiToken(),
     fetch,
     config,
-    askFor: model => { const key = env.openaiToken(); return key === undefined || key === "" ? undefined : openaiResponses({ token: key, model }); },
+    askFor: choice => supervisorModel(choice, env.keyFor),
     ...(judge !== undefined ? { judge } : {}),
     emit: out,
   });
@@ -184,6 +190,10 @@ export async function cmdSupervision(argv: string[], env: { uiToken?: string; op
   const stopNow = () => { stop.abort(); out("supervision: stopping"); setTimeout(() => process.exit(0), 1000).unref(); };
   process.once("SIGINT", stopNow);
   process.once("SIGTERM", stopNow);
+  // New settings take effect by starting again: the app restarts this process on exit code 75.
+  const stamp = () => { try { return statSync(configPath()).mtimeMs; } catch { return 0; } };
+  const seen = stamp();
+  setInterval(() => { if (stamp() !== seen) { out("supervision: settings changed; starting again"); process.exit(SUPERVISION_RESTART_CODE); } }, 5_000).unref();
   await supervision.run(stop.signal);
   return 0;
 }

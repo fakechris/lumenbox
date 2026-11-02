@@ -241,7 +241,8 @@ function startSupervision() {
     supervisionChild = null;
     updateTrayMenu();
     if (quitting) return;
-    if (supervisionDeliberate) {
+    if (supervisionDeliberate || code === RESTART_EXIT_CODE) {
+      // Asked for (new settings, from the shell or the process itself): not a crash.
       supervisionDeliberate = false;
       startSupervision();
       return;
