@@ -10,7 +10,7 @@ import type { StageWorld } from "../host/task-stage.ts";
 import { describeTask, isLive, type Task, type TaskStore } from "../host/tasks.ts";
 import type { TurnEvent } from "../host/turn.ts";
 import { describeOutcome, outcomeOf } from "./mcp-contract.ts";
-import { mcpGoalTools } from "./mcp-goal-tools.ts";
+import { agentNamed, mcpGoalTools } from "./mcp-goal-tools.ts";
 import { taskRecord } from "./mcp-record.ts";
 import { type ChangeFeed, describeWatch, WAIT_MAX_SECONDS } from "./mcp-watch.ts";
 import type { McpServerTool } from "./mcp-server.ts";
@@ -80,11 +80,7 @@ export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
       run: async (input, principalId) => {
         const brief = String(input.brief ?? "").trim();
         if (brief === "") throw new Error("A task needs a brief.");
-        const agentName = typeof input.agent === "string" ? input.agent : undefined;
-        const agent =
-          agentName !== undefined
-            ? registry.resolve(agentName)
-            : (registry.list()[0] ?? orchestrator.ensureDefaultAgent());
+        const agent = agentNamed(registry, input.agent, () => registry.list()[0] ?? orchestrator.ensureDefaultAgent());
         const task = orchestrator.tasks?.create({
           title: brief.split("\n", 1)[0] ?? brief,
           description: brief,

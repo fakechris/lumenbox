@@ -62,6 +62,20 @@
 `raise_attention`——在任务上写一条备注并进入"需要你"条，经我们的出站目的门以通知发出，同一原因有冷却；
 门不可达时执行一个本地命令。实现：`src/watchdog/`（client、rules、main），`agentbox watchdog`；`raise_attention` 写 `task.flag`（task-flag.ts，状态一动即失效、同一备注 6 小时内同一面旗），进入注意力 "flagged" 条目与任务所在聊天的 notice；`task_status` 无 id 时可 `scope: all`。
 
+**3.5 独立监督者（INV-1518，已建）。** `agentbox supervise --objective "…" --token-file … [--agent] [--budget] [--model gpt-6.1-sol]`：
+OpenAI Responses API 上的一个薄循环（`src/supervisor/`），只拿五个门工具——goal_start、task_status、goal_control、
+raise_attention、list_agents。不给 watch：等待是宿主的事，模型只在目标记录变化或长时间没动静时被叫醒。也不给碰
+box 的工具。goal_start 的 agent 和 budget 由运营者给，模型看不到这两个参数。每次运行写 `~/.agentbox/supervisor/<run>/`
+下的 transcript 与 summary，里面不含任何令牌或 key。
+
+这三条都是真实模型跑出来的，不是事先推出来的：
+- 模型给可选的 agent 填过空串和 "coordinator"；
+- 模型自己编过一个没人要的预算；
+- 模型自己拿 watch 来等，白花调用。
+
+改完后，同一目标只用两次模型调用：一次启动，一次一句话。门这边也随之改了：空的 agent 当作没填；不认识的
+名字拒绝，并列出团队。
+
 ## 4. 监督者不能做的
 
 | 不能 | 因为 |

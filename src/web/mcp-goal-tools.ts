@@ -29,6 +29,19 @@ export interface McpGoalDeps {
 }
 
 /** One conversation per goal, named from who asked and the call's key, in the alphabet a goal conversation allows. */
+/**
+ * The agent a door call names: blank is "not named" (a model fills optional fields with ""), and a
+ * name that is not on the team is refused with the team, so the caller does not have to guess (INV-1518).
+ */
+export function agentNamed<A extends { profile: { name: string } }>(registry: { resolve(name: string): A; list(): A[] }, name: unknown, fallback: () => A): A {
+  if (typeof name !== "string" || name.trim() === "") return fallback();
+  try {
+    return registry.resolve(name.trim());
+  } catch {
+    throw new Error(`No agent named ${name.trim()} on this team. The team: ${registry.list().map(agent => agent.profile.name).join(", ") || "nobody yet"}. Omit agent for the coordinator.`);
+  }
+}
+
 export function goalConversation(principalId: string, key: string): string {
   return `mcp-${createHash("sha256").update(`${principalId}\n${key}`).digest("hex").slice(0, 16)}`;
 }
@@ -61,7 +74,7 @@ export function mcpGoalTools(deps: McpGoalDeps): McpServerTool[] {
         const budget = typeof input.budget === "number" && Number.isFinite(input.budget) && input.budget > 0 ? Math.round(input.budget) : undefined;
         const text = `/goal ${objective}${budget !== undefined ? ` --budget ${budget}` : ""}`;
         if (parseGoalCommand(text).kind !== "create") throw new Error("That objective reads as a /goal subcommand, not a goal. Say what done looks like.");
-        const agent = typeof input.agent === "string" ? registry.resolve(input.agent) : (registry.list()[0] ?? orchestrator.ensureDefaultAgent());
+        const agent = agentNamed(registry, input.agent, () => registry.list()[0] ?? orchestrator.ensureDefaultAgent());
         const conversation = goalConversation(principalId, key);
         const operationId = JSON.stringify(["mcp", principalId, key, "goal"]);
         // The replay store answers a retry for a day; after that the board still knows the goal this key made.
