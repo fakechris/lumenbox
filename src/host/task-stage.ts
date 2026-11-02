@@ -32,6 +32,19 @@ export interface StageWorld {
   active: boolean;
 }
 
+/** The world for one task from what the host holds; the attention page and the side door read it the same way (INV-1506). */
+export function stageWorldOf<T extends Pick<Task, "conversation" | "assigneeId">>(
+  task: T,
+  reads: { undeliverableChats: ReadonlySet<string>; chatKeyOf?: (conversation: string) => string | undefined; questions: readonly { conversation?: string; agentId?: string }[]; active?: (task: T) => boolean },
+): StageWorld {
+  const chatKey = task.conversation !== undefined ? reads.chatKeyOf?.(task.conversation) : undefined;
+  return {
+    undelivered: chatKey !== undefined && reads.undeliverableChats.has(chatKey),
+    questionPending: reads.questions.some(question => question.conversation === task.conversation && (task.assigneeId === undefined || question.agentId === task.assigneeId)),
+    active: reads.active?.(task) ?? false,
+  };
+}
+
 /**
  * The table. Rows, in order:
  *

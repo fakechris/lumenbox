@@ -6,9 +6,11 @@
 
 import type { AgentRegistry } from "../agents/registry.ts";
 import type { Orchestrator } from "../host/orchestrator.ts";
-import { describeTask, isLive } from "../host/tasks.ts";
+import type { StageWorld } from "../host/task-stage.ts";
+import { describeTask, isLive, type Task } from "../host/tasks.ts";
 import type { TurnEvent } from "../host/turn.ts";
 import { describeOutcome, outcomeOf } from "./mcp-contract.ts";
+import { taskRecord } from "./mcp-record.ts";
 import type { McpServerTool } from "./mcp-server.ts";
 
 export interface McpToolsDeps {
@@ -19,10 +21,35 @@ export interface McpToolsDeps {
   log: (line: string) => void;
   /** Turn events, for as long as the listener is registered: how a task learns its turn stopped itself. */
   listen: (listener: (event: TurnEvent) => void) => () => void;
+  /** What the stage table reads beside a task (INV-1506); absent, a record carries no stage. */
+  stageWorld?: (task: Task) => StageWorld;
 }
 
 export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
   const { registry, orchestrator, principals, workDir, log } = deps;
+  const nameOf = (id: string) => registry.tryGet(id)?.profile.name ?? id;
+  const recordOf = (task: Task) => taskRecord(task, { nameOf, ...(deps.stageWorld !== undefined ? { stageWorld: deps.stageWorld } : {}) });
+  /** task_status, once: the text it always said, and the same tasks as the record has them (INV-1506). */
+  const statusOf = (input: Record<string, unknown>, principalId: string): { text: string; structured: Record<string, unknown> } => {
+    const board = orchestrator.tasks;
+    if (board === undefined) return { text: "This installation has no task board.", structured: { tasks: [] } };
+    const id = typeof input.task_id === "string" ? input.task_id : "";
+    if (id === "") {
+      const mine = board.list().filter(task => task.requester === principalId && isLive(task.status));
+      return {
+        text: mine.length === 0 ? "Nothing of yours is still open." : mine.map(task => `${describeOutcome(outcomeOf(task))}\n${describeTask(task, nameOf)}`).join("\n"),
+        structured: { tasks: mine.map(recordOf) },
+      };
+    }
+    const task = board.get(id);
+    if (task === undefined) return { text: `No task ${id}.`, structured: { tasks: [] } };
+    // Anyone with a token may read any task: the board is the team's shared record,
+    // and hiding a colleague's row from a colleague's agent would be theatre.
+    const history = task.history
+      .map(change => `  ${change.at} ${nameOf(change.by)} ${change.status ?? ""} ${change.note ?? ""}`.trimEnd())
+      .join("\n");
+    return { text: `${describeOutcome(outcomeOf(task))}\n${describeTask(task, nameOf)}\n${history}`, structured: { tasks: [recordOf(task)] } };
+  };
   return [
     {
       name: "assign_task",
@@ -82,34 +109,15 @@ export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
       name: "task_status",
       description:
         "How a task is going: its state (in_progress | completed | failed | incomplete | cancelled, " +
-        "with the reason), who has it, and every move anybody made on it. With no id, the tasks you asked for that are still open.",
+        "with the reason), who has it, and every move anybody made on it. With no id, the tasks you asked for that are still open. " +
+        "structuredContent carries the same tasks as data: outcome, stage, mandate, recent history, and a goal's checklist and spend.",
       inputSchema: {
         type: "object",
         properties: { task_id: { type: "string", description: "A task id like t42." } },
       },
       readOnly: true,
-      run: async (input, principalId) => {
-        const board = orchestrator.tasks;
-        if (board === undefined) return "This installation has no task board.";
-        const nameOf = (id: string) => registry.tryGet(id)?.profile.name ?? id;
-        const id = typeof input.task_id === "string" ? input.task_id : "";
-        if (id === "") {
-          const mine = board
-            .list()
-            .filter(task => task.requester === principalId && isLive(task.status));
-          return mine.length === 0
-            ? "Nothing of yours is still open."
-            : mine.map(task => `${describeOutcome(outcomeOf(task))}\n${describeTask(task, nameOf)}`).join("\n");
-        }
-        const task = board.get(id);
-        if (task === undefined) return `No task ${id}.`;
-        // Anyone with a token may read any task: the board is the team's shared record,
-        // and hiding a colleague's row from a colleague's agent would be theatre.
-        const history = task.history
-          .map(change => `  ${change.at} ${nameOf(change.by)} ${change.status ?? ""} ${change.note ?? ""}`.trimEnd())
-          .join("\n");
-        return `${describeOutcome(outcomeOf(task))}\n${describeTask(task, nameOf)}\n${history}`;
-      },
+      run: async (input, principalId) => statusOf(input, principalId).text,
+      runWithRecord: async (input, principalId) => statusOf(input, principalId),
     },
     {
       name: "list_agents",
