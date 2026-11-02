@@ -20,12 +20,20 @@ export interface Door {
   call(name: string, args: Record<string, unknown>, options?: { idempotencyKey?: string; timeoutMs?: number }): Promise<DoorReply>;
   /** The side door's stated capabilities (`initialize`), so a watchdog can tell a door too old for it (INV-1517). */
   capabilities?(): Promise<Record<string, boolean>>;
+  /** The door's tools as tools/list gives them (INV-1518). */
+  tools?(): Promise<{ name: string; description: string; inputSchema: Record<string, unknown> }[]>;
 }
 
 export function doorClient(url: string, token: string, fetchImpl: typeof fetch = fetch): Door {
   const endpoint = `${url.replace(/\/+$/, "")}/mcp`;
   let id = 0;
   return {
+    async tools() {
+      const response = await fetchImpl(endpoint, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method: "tools/list", params: {} }), signal: AbortSignal.timeout(15_000) }).catch(error => { throw new DoorUnreachable(`${endpoint}: ${error instanceof Error ? error.message : String(error)}`); });
+      if (response.status === 401 || response.status === 403) throw new DoorRefused(`${endpoint}: HTTP ${response.status}`);
+      if (response.status !== 200) throw new DoorUnreachable(`${endpoint}: HTTP ${response.status}`);
+      return ((await response.json()) as { result?: { tools?: { name: string; description: string; inputSchema: Record<string, unknown> }[] } }).result?.tools ?? [];
+    },
     async capabilities() {
       let response: Response;
       try {

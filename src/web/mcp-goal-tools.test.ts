@@ -83,3 +83,13 @@ test("losing the right to drive the agent stops the door too", async () => {
   const { start } = setup({ mayDrive: false });
   await assert.rejects(start.run({ objective: "Ship the digest" }, "p1", { idempotencyKey: "k1" }), /权限/);
 });
+
+test("a blank agent is not named, and an unknown one is refused with the team (INV-1518)", async () => {
+  const { agentNamed } = await import("./mcp-goal-tools.ts");
+  const ada = { id: "a1", profile: { name: "Ada" } }, ops = { id: "a2", profile: { name: "Ops" } };
+  const registry = { resolve: (name: string) => { const found = [ada, ops].find(agent => agent.profile.name === name); if (found === undefined) throw new Error("no"); return found; }, list: () => [ada, ops] };
+  assert.equal(agentNamed(registry, "", () => ada), ada);
+  assert.equal(agentNamed(registry, undefined, () => ada), ada);
+  assert.equal(agentNamed(registry, " Ops ", () => ada), ops);
+  assert.throws(() => agentNamed(registry, "coordinator", () => ada), /No agent named coordinator on this team\. The team: Ada, Ops\. Omit agent for the coordinator\./);
+});

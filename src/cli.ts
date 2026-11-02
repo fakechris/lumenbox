@@ -121,8 +121,7 @@ async function cmdBoxPush(): Promise<number> {
 }
 
 async function cmdBoxUp(argv: string[]): Promise<number> {
-  // --with-host puts the orchestrator in the container: the production shape, where the
-  // only thing outside the box is a browser. Without it the box is driven from here.
+  // --with-host puts the orchestrator in the container: the production shape, where the only thing outside the box is a browser. Without it the box is driven from here.
   const withHost = argv.includes("--with-host");
   const manager = new BoxManager(boxConfig({ withHost }));
   const recreate = argv.includes("--recreate");
@@ -1646,6 +1645,7 @@ async function main(): Promise<number> {
     case "skills": return rest[0] === "import" ? (await import("./host/skill-import.ts")).cmdSkillsImport(rest.slice(1)) : rest[0] === "improve" ? (await import("./host/learning-material.ts")).cmdSkillsImprove(rest.slice(1)) : (err("Unknown skills command. One of: import, improve."), 1); // INV-1367, INV-1377
     case "improve": return (await import("./host/improve.ts")).cmdImprove(rest); // INV-1473: a check-up for one agent, proposal only
     case "watchdog": return (await import("./watchdog/main.ts")).cmdWatchdog(rest, { token: process.env.AGENTBOX_WATCHDOG_TOKEN, processEnv: process.env }); // INV-1509, docs/91
+    case "supervise": return (await import("./supervisor/main.ts")).cmdSupervise(rest, { openaiToken: process.env.OPENAI_TOKEN ?? process.env.OPENAI_API_KEY, doorToken: process.env.AGENTBOX_SUPERVISOR_TOKEN }); // INV-1518, docs/90 §3.5
     case "bundle": return cmdBundle(rest);
 
     case "host": {
