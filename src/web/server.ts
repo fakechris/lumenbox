@@ -40,6 +40,8 @@ import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.t
 import { classifyBox, auditNotice } from "../box/access.ts";
 import { configPath, envNumber } from "../config.ts";
 import { JEV_SETTINGS_JS, jevSettings, jevSettingsChange } from "./jev-settings.ts";
+import { defaultSupervisionLog, supervisionRoute } from "./supervision-routes.ts";
+import { SUPERVISION_JS } from "./supervision-ui.ts";
 import { desktopRunner } from "../host/operation-desktop.ts";
 import { buildInfo } from "../host/build-info.ts";
 import { faceBaseUrl, RENEW_EVERY_MS, ROUTE_PATH } from "../host/mcp-face.ts";
@@ -482,8 +484,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // here rather than defended at each use, which is how one of them ends up missing it.
   const provider = options.provider ?? resolveProvider(loadConfig().provider);
 
-  // The moment an agent starts waiting on a person is worth pushing, not only
-  // polling: the desktop shell turns this into a system notification, which is the
+  // The moment an agent starts waiting on a person is worth pushing, not only polling: the desktop shell turns this into a system notification, which is the
   // only way to learn about it while the window is closed.
   const announceApproval = (approval: {
     id: string;
@@ -513,25 +514,20 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   if (hostRunner.enabled) log("host execution is on; every host command still asks for approval");
 
 
-  // The credential vault. Read fresh on each edit through the routes; the orchestrator
-  // holds this one instance, so a granted secret is usable on the next host command.
+  // The credential vault. Read fresh on each edit through the routes; the orchestrator holds this one instance, so a granted secret is usable on the next host command.
   const vault = new Vault();
   // Every record write and model request hides what this vault holds (INV-1186).
   setRedactionSource(() => vault.redactionEntries());
   // The OAuth gate over it (INV-422): tokens minted and refreshed here, never shown.
   const oauth = new OAuthGate(vault);
-  // Memory as a person sees and corrects it (INV-426): reads the registry's files, writes
-  // retractions and edits with a version check, audits to memory-audit.jsonl.
+  // Memory as a person sees and corrects it (INV-426): reads the registry's files, writes retractions and edits with a version check, audits to memory-audit.jsonl.
   const memoryAdmin = new MemoryAdmin(registry, join(agentboxHome(), "memory-audit.jsonl"));
-  // Connection codes and runner credentials (INV-434): how a machine elsewhere becomes a
-  // box here. Codes and credentials are stored hashed and never logged.
+  // Connection codes and runner credentials (INV-434): how a machine elsewhere becomes a box here. Codes and credentials are stored hashed and never logged.
   const connectCodes = new ConnectCodeStore(join(agentboxHome(), "connect.json"), registry.box.id);
-  // Questions that expire (INV-526): every AskUser is watched; unanswered past its window,
-  // the agent is woken to proceed on its default or to decide, and the chat is told.
+  // Questions that expire (INV-526): every AskUser is watched; unanswered past its window, the agent is woken to proceed on its default or to decide, and the chat is told.
   const questions = new QuestionWatch(join(agentboxHome(), "questions.jsonl"));
   const surfaces = new SurfaceLedger(surfaceLedgerPath(), message => log(message));
-  // What the host has already said to each room today, so four rails do not each start
-  // their own conversation (INV-535). Kept across a restart: a budget that resets when
+  // What the host has already said to each room today, so four rails do not each start their own conversation (INV-535). Kept across a restart: a budget that resets when
   // the process does is not a budget.
   const followUps = new FollowUpBudget(join(agentboxHome(), "follow-ups.jsonl"));
 
@@ -3568,6 +3564,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           }
           return;
         }
+        // Settings → Supervision (INV-1528): its own script and routes, like the decision model's below.
+        if (route === "GET /app/supervision.js") { res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(SUPERVISION_JS); return; }
+        const supervised = await supervisionRoute(route, { home: agentboxHome(), configPath: configPath(), agents: () => registry.list().map(agent => agent.profile.name), readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: role => refusedRole(role), logFile: defaultSupervisionLog() });
+        if (supervised !== undefined) { if (supervised.status !== 0) send(res, supervised.status, supervised.body); return; }
         // Settings → Model → Decision model (INV-1412): its own script, its own two routes.
         if (route === "GET /app/jev-settings.js") {
           res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" });

@@ -31,7 +31,7 @@ test("settings default to on, take what is set, and ignore what is not valid", (
     writeFileSync(path, JSON.stringify({ provider: "x", supervision: { watchdog: { enabled: false, stallMinutes: 15, pausedMinutes: -3 }, supervisor: { model: "gpt-6.1-terra", budget: 9000, agent: " Ops " } } }));
     const read = readSupervisionConfig(path);
     assert.deepEqual(read.watchdog, { enabled: false, stallMinutes: 15, pausedMinutes: 30, judge: true });
-    assert.deepEqual([read.supervisor.model, read.supervisor.budget, read.supervisor.agent, read.supervisor.maxModelCalls], ["gpt-6.1-terra", 9000, "Ops", 60]);
+    assert.deepEqual([read.supervisor.provider, read.supervisor.model, read.supervisor.budget, read.supervisor.agent, read.supervisor.maxModelCalls], ["openai", "gpt-6.1-terra", 9000, "Ops", 60]);
     writeFileSync(path, "{ broken");
     assert.deepEqual(readSupervisionConfig(path), DEFAULT_SUPERVISION);
   } finally {
@@ -124,7 +124,7 @@ test("a queued run goes start to end through the door, with its status, transcri
     const supervision = new Supervision({
       home: dir, url: door.url, uiToken: () => "ui", fetch,
       config: () => ({ ...DEFAULT_SUPERVISION, watchdog: { ...DEFAULT_SUPERVISION.watchdog, enabled: false } }),
-      askFor: () => (keyed ? ask : undefined),
+      askFor: () => (keyed ? { ask } : { error: "no key for OpenAI (OPENAI_API_KEY); set it in Settings → Model" }),
       emit: line => lines.push(line), sleep: async () => {}, watchSeconds: 1,
     });
     await supervision.connect(new AbortController().signal);
@@ -142,7 +142,7 @@ test("a queued run goes start to end through the door, with its status, transcri
     enqueue(dir, { id: "run-2", objective: "x" });
     await supervision.runOne();
     assert.equal(readStatus(dir, "run-2")?.state, "failed");
-    assert.ok(lines.includes(notifyLine("A supervisor run could not start", "No key for the supervisor's model is configured.")), "said to the person through the app");
+    assert.ok(lines.includes(notifyLine("A supervisor run could not start", "no key for OpenAI (OPENAI_API_KEY); set it in Settings → Model")), "said to the person through the app");
 
     keyed = true;
     completeGoals = false;

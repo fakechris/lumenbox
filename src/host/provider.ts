@@ -740,3 +740,8 @@ export function describeProvider(profile: ProviderProfile): string {
   const suffix = missing.length > 0 ? ` — ${missing.join(", ")}` : "";
   return `${profile.label} ${profile.model}${profile.baseUrl ? ` at ${profile.baseUrl}` : ""}${suffix}`;
 }
+
+/** Whether a provider's credential is set, without handing out its value (INV-1528, the Supervision settings). */
+export function credentialSet(keyEnv: string): boolean {
+  return (process.env[keyEnv] ?? "") !== "" || (keyEnv === "ANTHROPIC_API_KEY" && (process.env.ANTHROPIC_AUTH_TOKEN ?? "") !== "");
+}

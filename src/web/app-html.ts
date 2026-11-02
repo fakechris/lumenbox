@@ -1343,7 +1343,7 @@ ${SETTINGS_DIALOG_HTML}
 </div>
 
 <script src="/vendor/markdown-it.js"></script>
-<script src="/app/jev-settings.js"></script>
+<script src="/app/jev-settings.js"></script><script src="/app/supervision.js"></script>
 <script>
 "use strict";
 // Markdown rendering is markdown-it's job, served from node_modules by this server.
