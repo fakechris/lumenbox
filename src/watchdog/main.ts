@@ -151,8 +151,30 @@ export class Watchdog {
     return did;
   }
 
+  /**
+   * Whether the door has what the watchdog reads (INV-1517): the structured record and the change
+   * feed, which LumenBox's side door gained after 0.3.9. An older door is said once, then asked again.
+   */
+  async ready(): Promise<boolean> {
+    if (this.deps.door.capabilities === undefined) return true;
+    try {
+      const caps = await this.deps.door.capabilities();
+      const missing = ["structured", "watch"].filter(name => caps[name] !== true);
+      if (missing.length === 0) return true;
+      if (!this.tooOld) this.deps.log(`watchdog: the door is too old for the watchdog (it lacks ${missing.join(" and ")}); upgrade LumenBox. Asking again every ten minutes.`);
+      this.tooOld = true;
+      return false;
+    } catch (error) {
+      if (!(error instanceof DoorUnreachable)) throw error;
+      return true; // a door that does not answer is the tick's to report
+    }
+  }
+
+  private tooOld = false;
+
   /** Until the signal: a tick, then another; a door that is down is retried at the wait's pace. */
   async run(signal: AbortSignal): Promise<void> {
+    while (!signal.aborted && !(await this.ready())) await new Promise(resolve => setTimeout(resolve, 10 * 60_000));
     while (!signal.aborted) {
       const did = await this.tick().catch(error => { this.deps.log(`watchdog: ${error instanceof Error ? error.message : String(error)}`); return ["error"]; });
       if (did.includes("down") || did.includes("error") || did.includes("refused") || this.down) await new Promise(resolve => setTimeout(resolve, (this.deps.waitSeconds ?? 25) * 1000));
@@ -164,9 +186,12 @@ export class Watchdog {
 export async function cmdWatchdog(argv: string[], env: { token?: string; processEnv: Record<string, string | undefined> }, out: (line: string) => void = line => console.error(line)): Promise<number> {
   const value = (name: string) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : undefined);
   const url = value("--url") ?? "http://127.0.0.1:7777";
-  const token = value("--token") ?? env.token;
+  if (argv[0] === "install" || argv[0] === "uninstall" || argv[0] === "status") return manage(argv, value, url, env, out);
+  const tokenFile = value("--token-file");
+  const { readFileSync } = await import("node:fs");
+  const token = value("--token") ?? (tokenFile !== undefined ? readFileSync(tokenFile, "utf8").trim() : env.token);
   if (token === undefined || token === "") {
-    out("Usage: agentbox watchdog --token <side-door token> [--url http://127.0.0.1:7777] [--wait 25] [--on-down '<command>'] [--stall-minutes 60] [--paused-minutes 30] [--judge]\n(or AGENTBOX_WATCHDOG_TOKEN). Mint the token in Settings → MCP; it is a person's, and every flag is in their name.");
+    out("Usage: agentbox watchdog --token <side-door token> | --token-file <path> [--url http://127.0.0.1:7777] [--wait 25] [--on-down '<command>'] [--stall-minutes 60] [--paused-minutes 30] [--judge]\n       agentbox watchdog install [--principal <name>] [--no-judge] [--stall-minutes N] [--paused-minutes N] [--on-down '<command>'] | uninstall | status\n(or AGENTBOX_WATCHDOG_TOKEN). The token is a person's, and every flag is in their name.");
     return 1;
   }
   const number = (name: string, fallback: number) => { const raw = value(name); const parsed = raw === undefined ? NaN : Number(raw); return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback; };
@@ -186,8 +211,10 @@ export async function cmdWatchdog(argv: string[], env: { token?: string; process
   });
   out(`watchdog: watching ${url}${judge !== undefined ? " with the decision model as a second opinion" : ""}`);
   const stop = new AbortController();
-  process.once("SIGINT", () => stop.abort());
-  process.once("SIGTERM", () => stop.abort());
+  // A stop is prompt: a watch in flight can wait 30 s, and launchd's bootout waits for the exit.
+  const stopNow = () => { stop.abort(); out("watchdog: stopping"); setTimeout(() => process.exit(0), 1000).unref(); };
+  process.once("SIGINT", stopNow);
+  process.once("SIGTERM", stopNow);
   await watchdog.run(stop.signal);
   return 0;
 }
@@ -209,4 +236,36 @@ async function decisionModelJudge(out: (line: string) => void): Promise<Progress
     });
     return noulOf(result, "moving") < 0.3 ? "the decision model reads its latest moves as not advancing the checklist" : undefined;
   };
+}
+
+/** install / uninstall / status (INV-1517): the resident service, through install.ts. */
+async function manage(argv: string[], value: (name: string) => string | undefined, url: string, env: { processEnv: Record<string, string | undefined> }, out: (line: string) => void): Promise<number> {
+  const { spawnSync } = await import("node:child_process");
+  const { homedir } = await import("node:os");
+  const { join, resolve } = await import("node:path");
+  const { agentboxHome } = await import("../config.ts");
+  const { uiToken } = await import("../box/docker.ts");
+  const install = await import("./install.ts");
+  const keep = Object.fromEntries(["ELECTRON_RUN_AS_NODE", "AGENTBOX_HOME"].flatMap(name => (env.processEnv[name] !== undefined ? [[name, env.processEnv[name]!]] : [])));
+  const deps = {
+    home: agentboxHome(),
+    launchAgentsDir: join(homedir(), "Library", "LaunchAgents"),
+    uid: process.getuid?.() ?? 0,
+    platform: process.platform,
+    uiToken,
+    fetch,
+    run: (command: string, args: string[]) => { const ran = spawnSync(command, args, { encoding: "utf8" }); return { code: ran.status ?? 1, stdout: `${ran.stdout ?? ""}${ran.stderr ?? ""}` }; },
+    program: { execPath: process.execPath, execArgv: process.execArgv, script: resolve(process.argv[1] ?? ""), env: keep },
+  };
+  const number = (name: string) => { const raw = value(name); return raw === undefined ? undefined : Number(raw); };
+  try {
+    const lines = argv[0] === "install"
+      ? await install.installWatchdog({ url, judge: !argv.includes("--no-judge"), ...(value("--principal") !== undefined ? { principal: value("--principal")! } : {}), ...(number("--stall-minutes") !== undefined ? { stallMinutes: number("--stall-minutes")! } : {}), ...(number("--paused-minutes") !== undefined ? { pausedMinutes: number("--paused-minutes")! } : {}), ...(value("--on-down") !== undefined ? { onDown: value("--on-down")! } : {}), ...(value("--label") !== undefined ? { label: value("--label")! } : {}) }, deps)
+      : argv[0] === "uninstall" ? await install.uninstallWatchdog(deps) : install.watchdogStatus(deps);
+    for (const line of lines) out(line);
+    return 0;
+  } catch (error) {
+    out(`watchdog ${argv[0]}: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
 }

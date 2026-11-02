@@ -32,6 +32,28 @@ The token can come from `AGENTBOX_WATCHDOG_TOKEN` instead. Other flags:
 | `--on-down` | none | A shell command run once per outage when the door stops answering; `WATCHDOG_REASON` says why. |
 | `--judge` | off | Ask the decision model, once an hour per active goal, whether its latest moves advance the checklist. |
 
+## Running it as a service
+
+On a Mac, install it once and it starts at login and restarts if it exits:
+
+```
+agentbox watchdog install            # mints a token for the installation's admin, decision model on
+agentbox watchdog status             # running or not, the last flag, the recent log
+agentbox watchdog uninstall          # stops it, revokes its token, removes its files
+```
+
+`install` takes the same `--stall-minutes`, `--paused-minutes` and `--on-down` flags, plus
+`--principal <name>` when the installation has more than one admin and `--no-judge` to leave the
+decision model off. By default, a door that stops answering raises a macOS notification. The
+token is labelled "watchdog" in Settings → MCP. It is kept in `~/.agentbox/watchdog/token`,
+readable only by you, and never in the launchd job file. The job runs the same `agentbox` that
+ran `install`, so install it from the app you use.
+
+The watchdog needs a door with the structured record and the change feed. On an older LumenBox
+it says so once in its log, and asks again every ten minutes, so upgrading the app is enough. A
+token the door no longer accepts is also said once, and is not treated as an outage. Run
+`uninstall` and then `install` to replace it.
+
 ## What it judges
 
 Every rule reads the record only, and each says something a person can check by opening the task.
