@@ -67,3 +67,36 @@ test("runs: queued, listed, read back without secrets, stopped; a run needs an o
     h.cleanup();
   }
 });
+
+test("the wizard's routes: a model test says whether tools work, a key is saved for one provider only, and the place is kept outside config.json", async () => {
+  const h = setup();
+  try {
+    const saved: [string, string][] = [];
+    const deps = { ...h.deps, saveKey: (name: string, value: string) => { saved.push([name, value]); }, testAsk: (choice: { provider: string; model: string }) => choice.model === "toolless"
+      ? { ask: async () => ({ id: "r", calls: [], text: "pong", usage: { input: 1, output: 1, reasoning: 0 } }) }
+      : choice.model === "broken" ? { error: "no key for OpenAI (OPENAI_API_KEY); set it in Settings → Model" }
+      : { ask: async () => ({ id: "r", calls: [{ callId: "c", name: "ping", arguments: {} }], text: "", usage: { input: 1, output: 1, reasoning: 0 } }) } };
+    h.setBody({ provider: "openai", model: "gpt-6.1-sol" });
+    const ok = (await supervisionRoute("POST /api/supervision/test", deps))!.body as { ok: boolean; tools: boolean; ms: number };
+    assert.deepEqual([ok.ok, ok.tools, typeof ok.ms], [true, true, "number"]);
+    h.setBody({ provider: "openai", model: "toolless" });
+    assert.match(((await supervisionRoute("POST /api/supervision/test", deps))!.body as { error: string }).error, /did not call a tool/);
+    h.setBody({ provider: "openai", model: "broken" });
+    assert.deepEqual((await supervisionRoute("POST /api/supervision/test", deps))!.body, { ok: false, error: "no key for OpenAI (OPENAI_API_KEY); set it in Settings → Model" });
+    h.setBody({ provider: "openai", key: "sk-new-key-123" });
+    assert.deepEqual((await supervisionRoute("POST /api/supervision/key", deps))!.body, { saved: "OPENAI_API_KEY" });
+    assert.deepEqual(saved, [["OPENAI_API_KEY", "sk-new-key-123"]], "only that provider's key");
+    h.setBody({ provider: "openai", key: "two words" });
+    assert.equal((await supervisionRoute("POST /api/supervision/key", deps))!.status, 400);
+    h.setBody({ provider: "custom", key: "k" });
+    assert.equal((await supervisionRoute("POST /api/supervision/key", deps))!.status, 400);
+    assert.deepEqual((await supervisionRoute("GET /api/supervision/onboarding", deps))!.body, { step: 1, choices: {}, done: false });
+    h.setBody({ step: 3, choices: { provider: "openai", agent: "Ops" } });
+    await supervisionRoute("POST /api/supervision/onboarding", deps);
+    const kept = (await supervisionRoute("GET /api/supervision/onboarding", deps))!.body as { step: number; choices: { agent: string } };
+    assert.deepEqual([kept.step, kept.choices.agent], [3, "Ops"]);
+    assert.ok(!readFileSync(h.configPath, "utf8").includes("onboarding"), "stepping through does not touch config.json, so supervision does not restart");
+  } finally {
+    h.cleanup();
+  }
+});

@@ -42,6 +42,7 @@ import { configPath, envNumber } from "../config.ts";
 import { JEV_SETTINGS_JS, jevSettings, jevSettingsChange } from "./jev-settings.ts";
 import { defaultSupervisionLog, supervisionRoute } from "./supervision-routes.ts";
 import { SUPERVISION_JS } from "./supervision-ui.ts";
+import { SUPERVISION_WIZARD_JS } from "./supervision-wizard.ts";
 import { desktopRunner } from "../host/operation-desktop.ts";
 import { buildInfo } from "../host/build-info.ts";
 import { faceBaseUrl, RENEW_EVERY_MS, ROUTE_PATH } from "../host/mcp-face.ts";
@@ -567,8 +568,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     }
   };
 
-  // Channel task cards listen here while their ask is in flight: each listener is a
-  // narrow filter on (agent, conversation), added before the prompt and removed after
+  // Channel task cards listen here while their ask is in flight: each listener is a narrow filter on (agent, conversation), added before the prompt and removed after
   // it settles. A set rather than a rewiring of onTurnEvent per ask, because two chats
   // can be driving two agents at once.
   const channelTurnListeners = new Set<(event: TurnEvent) => void>();
@@ -3565,7 +3565,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
         // Settings → Supervision (INV-1528): its own script and routes, like the decision model's below.
-        if (route === "GET /app/supervision.js") { res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(SUPERVISION_JS); return; }
+        if (route === "GET /app/supervision.js") { res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(SUPERVISION_JS + SUPERVISION_WIZARD_JS); return; }
         const supervised = await supervisionRoute(route, { home: agentboxHome(), configPath: configPath(), agents: () => registry.list().map(agent => agent.profile.name), readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: role => refusedRole(role), logFile: defaultSupervisionLog() });
         if (supervised !== undefined) { if (supervised.status !== 0) send(res, supervised.status, supervised.body); return; }
         // Settings → Model → Decision model (INV-1412): its own script, its own two routes.

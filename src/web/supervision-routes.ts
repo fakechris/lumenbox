@@ -7,14 +7,15 @@
  * and drops a stop file. Nothing here returns a key, a token, or a key's value.
  */
 
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { credentialSet } from "../host/provider.ts";
+import { credentialFor, credentialSet, providerNames, resolveProvider } from "../host/provider.ts";
+import { applyConfigEnv, loadConfig, saveConfig } from "../config.ts";
 import { readSupervisionConfig, supervisionFromBody } from "../supervision/config.ts";
 import { newRunId } from "../supervision/main.ts";
 import { enqueue, listRuns, readStatus, requestStop, runDir } from "../supervision/queue.ts";
-import { supervisorProviders } from "../supervisor/models.ts";
+import { supervisorModel, supervisorProviders } from "../supervisor/models.ts";
 
 export interface SupervisionRouteDeps {
   home: string;
@@ -24,6 +25,23 @@ export interface SupervisionRouteDeps {
   /** Refuses (and answers) when the caller lacks the role; true means stop here. */
   refused: (role: "driver" | "admin") => boolean;
   logFile?: string;
+  /** Tests stand in for the model and the config file. */
+  testAsk?: typeof supervisorModel;
+  saveKey?: (keyEnv: string, key: string) => void;
+}
+
+/** One small tool call, to say whether a choice works before a run depends on it. */
+export async function testModel(choice: { provider: string; model: string }, choose: typeof supervisorModel = supervisorModel): Promise<{ ok: boolean; ms?: number; tools?: boolean; error?: string }> {
+  const chosen = choose(choice, credentialFor);
+  if ("error" in chosen) return { ok: false, error: chosen.error };
+  const started = Date.now();
+  try {
+    const turn = await chosen.ask({ instructions: "You are being tested. Call the ping tool once, with no arguments.", input: [{ role: "user", content: "ping" }], tools: [{ name: "ping", description: "Answers pong.", parameters: { type: "object", properties: {} } }] });
+    const tools = turn.calls.some(call => call.name === "ping");
+    return { ok: tools, ms: Date.now() - started, tools, ...(tools ? {} : { error: "the model answered but did not call a tool; a supervisor needs tool calls" }) };
+  } catch (error) {
+    return { ok: false, ms: Date.now() - started, error: redact(error instanceof Error ? error.message : String(error)).slice(0, 300) };
+  }
 }
 
 export type RouteAnswer = { status: number; body: unknown } | undefined;
@@ -63,6 +81,36 @@ export async function supervisionRoute(route: string, deps: SupervisionRouteDeps
     writeFileSync(`${deps.configPath}.partial`, `${JSON.stringify({ ...raw, supervision: next }, null, 2)}\n`, { mode: 0o600 });
     renameSync(`${deps.configPath}.partial`, deps.configPath);
     return { status: 200, body: { settings: next, note: "Saved; supervision starts again with these settings within a few seconds." } };
+  }
+  // The setup wizard (INV-1529): try a model, save a key for one provider, keep the wizard's place.
+  if (route === "POST /api/supervision/test") {
+    if (deps.refused("admin")) return { status: 0, body: null };
+    const body = await deps.readJson();
+    return { status: 200, body: await testModel({ provider: String(body.provider ?? ""), model: String(body.model ?? "") }, deps.testAsk) };
+  }
+  if (route === "POST /api/supervision/key") {
+    if (deps.refused("admin")) return { status: 0, body: null };
+    const body = await deps.readJson();
+    const provider = String(body.provider ?? "");
+    const key = typeof body.key === "string" ? body.key.trim() : "";
+    if (!providerNames().includes(provider) || provider === "custom") return { status: 400, body: { error: `no provider named ${provider}` } };
+    if (key === "" || /\s/.test(key)) return { status: 400, body: { error: "paste the key as one line" } };
+    const keyEnv = resolveProvider(provider).keyEnv;
+    // The key alone: the default provider the agents use is not changed by setting up the supervisor.
+    (deps.saveKey ?? ((name: string, value: string) => { saveConfig({ env: { [name]: value } }); applyConfigEnv(loadConfig()); }))(keyEnv, key);
+    return { status: 200, body: { saved: keyEnv } };
+  }
+  if (route === "GET /api/supervision/onboarding" || route === "POST /api/supervision/onboarding") {
+    if (deps.refused("driver")) return { status: 0, body: null };
+    const path = join(deps.home, "supervisor", "onboarding.json");
+    if (route === "POST /api/supervision/onboarding") {
+      const body = await deps.readJson();
+      const state = { step: Math.max(1, Math.min(6, Number(body.step) || 1)), choices: typeof body.choices === "object" && body.choices !== null ? body.choices : {}, done: body.done === true, at: new Date().toISOString() };
+      mkdirSync(join(deps.home, "supervisor"), { recursive: true });
+      writeFileSync(path, JSON.stringify(state));
+      return { status: 200, body: state };
+    }
+    return { status: 200, body: existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : { step: 1, choices: {}, done: false } };
   }
   if (route === "GET /api/supervision/runs") {
     if (deps.refused("driver")) return { status: 0, body: null };

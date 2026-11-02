@@ -2,7 +2,7 @@
      title: Getting started, every way in
      family: guide
      status: current
-     updated: 2026-09-28
+     updated: 2026-11-02
 -->
 # 37 — Getting started, every way in
 
@@ -129,6 +129,23 @@ Settings → Channels connects Feishu (飞书) or DingTalk (钉钉): paste the a
 that platform's developer console (docs/38 "Feishu app configuration" walks through the
 console side). After that, a message in the chat is a message to the agent, replies come back
 in the thread, files go both ways, and long jobs show a card that updates while they run.
+
+## 5a. A supervisor, if you want one
+
+Settings → Supervision. The watchdog there is already on. It tells you when work stops moving,
+or when a goal the system stopped has nobody looking at it. The supervisor is optional: another
+model that starts a goal for you and watches it to the end. The first time you open the tab, a
+five-step guide walks you through it:
+
+1. What it can and cannot do.
+2. Choose a model and test it. The guide saves a key for that provider only, if it has none.
+3. Choose the agent that does the work, and set the budget and limits. The guide shows the most
+   a run can cost.
+4. Write the first goal as what done looks like. Three examples are offered.
+5. Confirm and start, then watch the supervisor's first moves live.
+
+The guide keeps its place if you leave it. Starting a run creates a task on your board, and both
+the supervisor's model and the agent's model spend.
 
 ## 6. When something is wrong
 

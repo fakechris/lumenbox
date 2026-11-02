@@ -41,6 +41,8 @@ export const notifyLine = (title: string, body: string) => `@@notify ${JSON.stri
 export class Supervision {
   private inner: Door | undefined;
   private renewed = false;
+  /** A run is in progress: a settings restart waits for it rather than cutting it off. */
+  busy = false;
   /** A door whose client can be replaced when the token is renewed, under everyone holding it. */
   readonly door: Door = {
     call: (name, args, options) => this.client().call(name, args, options),
@@ -112,6 +114,15 @@ export class Supervision {
   async runOne(): Promise<boolean> {
     const request = takeNext(this.deps.home);
     if (request === undefined) return false;
+    this.busy = true;
+    try {
+      return await this.runRequest(request);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  private async runRequest(request: NonNullable<ReturnType<typeof takeNext>>): Promise<boolean> {
     const config = this.deps.config().supervisor;
     const dir = runDir(this.deps.home, request.id);
     const base = { id: request.id, objective: request.objective, requestedAt: request.requestedAt, model: `${config.provider}/${config.model}` };
@@ -193,7 +204,13 @@ export async function cmdSupervision(argv: string[], env: { uiToken?: string; ke
   // New settings take effect by starting again: the app restarts this process on exit code 75.
   const stamp = () => { try { return statSync(configPath()).mtimeMs; } catch { return 0; } };
   const seen = stamp();
-  setInterval(() => { if (stamp() !== seen) { out("supervision: settings changed; starting again"); process.exit(SUPERVISION_RESTART_CODE); } }, 5_000).unref();
+  let said = false;
+  setInterval(() => {
+    if (stamp() === seen) return;
+    if (supervision.busy) { if (!said) out("supervision: settings changed; starting again when the current run ends"); said = true; return; }
+    out("supervision: settings changed; starting again");
+    process.exit(SUPERVISION_RESTART_CODE);
+  }, 5_000).unref();
   await supervision.run(stop.signal);
   return 0;
 }
