@@ -18,6 +18,7 @@ import { join } from "node:path";
 
 export const FAMILIES = new Set(["spec", "decision", "guide", "handoff"]);
 export const STATUSES = new Set(["current", "superseded", "archived"]);
+const TRANSLATION = /^(.+)\.[a-z]{2}$/;
 
 /**
  * The header block: an HTML comment, so it does not render, and a flat key/value list,
@@ -81,8 +82,13 @@ export function lintDocs(dir) {
   // meant connector doors in two code comments and onboarding in two documents, and both
   // were right. Numbers are how everything cites everything here, so a number is a name.
   const byNumber = new Map();
+  // A translation (`89-thesis.zh.md`) shares its original's number and must have one.
+  for (const slug of docs.keys()) {
+    const original = TRANSLATION.exec(slug)?.[1];
+    if (original !== undefined && !docs.has(original)) problems.push(`${slug}: a translation of ${original}, which is not a document here.`);
+  }
   for (const [slug, header] of docs) {
-    if (header.status !== "current") continue;
+    if (header.status !== "current" || TRANSLATION.test(slug)) continue;
     const number = /^(\d+)-/.exec(slug)?.[1];
     if (number === undefined) continue;
     byNumber.set(number, [...(byNumber.get(number) ?? []), slug]);

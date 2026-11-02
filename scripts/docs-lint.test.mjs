@@ -49,6 +49,22 @@ test("the rules that matter catch what they are for", () => {
   assert.equal(titleOf("<!-- x -->\n# 53 — Connector doors\n"), "Connector doors");
 });
 
+test("a translation shares its original's number; one without an original is refused", () => {
+  const dir = mkdtempSync(join(tmpdir(), "docs-lint-"));
+  try {
+    const doc = (slug, title) => writeFileSync(join(dir, `${slug}.md`), `<!-- doc: ${slug}\n     title: ${title}\n     family: decision\n     status: current\n-->\n# ${title}\n`);
+    doc("89-thesis", "Thesis");
+    doc("89-thesis.zh", "论文");
+    assert.deepEqual(lintDocs(dir).problems, [], "the original and its translation are one number");
+    doc("90-alone.zh", "孤本");
+    assert.ok(lintDocs(dir).problems.some(p => /90-alone\.zh: a translation of 90-alone, which is not a document here/.test(p)));
+    doc("89-other", "Other");
+    assert.ok(lintDocs(dir).problems.some(p => /two current documents are numbered 89: (89-other, 89-thesis|89-thesis, 89-other)\./.test(p)), "two originals still clash");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("research material is not tracked (c11f918: it lives in /research/, ignored)", () => {
   // Research notes and competitive analysis are kept locally, never shipped. They kept landing
   // in docs/research/ and scripts/research/ instead, 46 files by 2026-09-28, so the rule is a
