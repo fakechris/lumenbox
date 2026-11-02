@@ -98,7 +98,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [65-context-recovery-design](65-context-recovery-design.md) | 上下文恢复方案（提案）：新会话、干净会话与任务重建 | current | 2026-09-22 |
 | [69-fidelity-and-evidence-root-causes](69-fidelity-and-evidence-root-causes.md) | 采集失真与证据蒸发：两类问题的根因、复发路径与卡口 | current | 2026-09-22 |
 | [71-evidence-provenance-practice](71-evidence-provenance-practice.md) | 证据与溯源的业界实践（2025–2026）：我们领先在哪、缺在哪 | current | 2026-09-22 |
-| [74-goal-mode](74-goal-mode.md) | Goal 模式：一个持久目标、一个有界的续跑循环、一道不归执行者管的完成闸门 | current | 2026-11-01 |
+| [74-goal-mode](74-goal-mode.md) | Goal 模式：一个持久目标、一个有界的续跑循环、一道不归执行者管的完成闸门 | current | 2026-11-02 |
 | [75-cost-per-accepted-task](75-cost-per-accepted-task.md) | Cost per accepted task requires an auditable denominator | current | 2026-09-29 |
 | [77-agent-state-drift](77-agent-state-drift.md) | 状态漂移：同样的代码和模型，agent 为什么会滚成仪式——根因、归因实验与方案 | current | 2026-10-09 |
 | [78-context-handoff](78-context-handoff.md) | 建议换代：空闲时备好交接，人发 /new 时装入 | current | 2026-10-15 |

@@ -3046,7 +3046,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // every call goes through the objects a person's request does (docs/90 §2; mcp-tools.ts, mcp-contract.ts; INV-1358).
   const taskActive = (task: { assigneeId?: string; conversation?: string }) => task.assigneeId !== undefined && task.conversation !== undefined && (orchestrator.bus.isActive(task.assigneeId, task.conversation) || orchestrator.jobWatch.openJobs(task.assigneeId, task.conversation).length > 0);
   const sideDoorTools = () => mcpServerTools({
-    registry, orchestrator, principals, workDir: WORK_DIR, log,
+    registry, orchestrator, principals, workDir: WORK_DIR, log, mayDrive: (agentId, principalId) => mayEnterBox(registry.boxOf(agentId), principalId) && mandateWorld().mayDrive(principalId),
     stageWorld: task => stageWorldOf(task, { undeliverableChats: new Set(outbox.problems().map(receipt => receipt.chatKey)), questions: questions.list(), chatKeyOf: conversation => conversations.chatKeyFor(conversation), active: taskActive }),
     listen: listener => { channelTurnListeners.add(listener); return () => channelTurnListeners.delete(listener); },
   });

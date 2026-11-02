@@ -54,6 +54,8 @@ export interface ChecklistItem {
 export interface Pursuit {
   status: PursuitStatus;
   pausedReason?: PausedReason;
+  /** Who paused it, when a principal did through the side door; only they may resume that pause there (INV-1507). */
+  pausedBy?: string;
   /** One id for every turn, verification and resumption of this objective (docs/16 §1). */
   workId: string;
   /** The person's words, exactly. Never edited; `/goal replace` is a new pursuit. */
@@ -415,7 +417,7 @@ export function goalCommand(deps: GoalCommandDeps, input: GoalCommandInput): Goa
     if (current === undefined) return { text: "当前会话没有目标可继续。" };
     if (current.pursuit!.status !== "paused") return { text: `目标 ${current.id} 正在推进（${current.pursuit!.status}），无需 resume。` };
     const pursuit = current.pursuit!;
-    deps.tasks.setPursuit(current.id, p => ({ ...p, status: "active", pausedReason: undefined }), `resumed by the person (/goal resume) after ${pursuit.pausedReason ?? "pause"}`, input.requester, now);
+    deps.tasks.setPursuit(current.id, p => ({ ...p, status: "active", pausedReason: undefined, pausedBy: undefined }), `resumed by the person (/goal resume) after ${pursuit.pausedReason ?? "pause"}`, input.requester, now);
     return { text: `目标 ${current.id} 继续推进。` };
   }
   if (command.kind === "clear") {

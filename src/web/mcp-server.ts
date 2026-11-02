@@ -78,7 +78,8 @@ export interface McpServerTool {
    * tools are ours; we know which ones change the world and say so.
    */
   readOnly: boolean;
-  run: (input: Record<string, unknown>, principalId: string) => Promise<string>;
+  /** `meta.idempotencyKey`: the call's key, for a tool whose own record needs it (INV-1507). */
+  run: (input: Record<string, unknown>, principalId: string, meta?: { idempotencyKey?: string }) => Promise<string>;
   /** Preferred when present: the same text with `structuredContent` beside it (INV-1506); the text is what `run` says. */
   runWithRecord?: (input: Record<string, unknown>, principalId: string) => Promise<{ text: string; structured: Record<string, unknown> }>;
 }
@@ -220,7 +221,7 @@ export async function handleMcpRequest(
         return true;
       }
       try {
-        const answer = tool.runWithRecord !== undefined ? await tool.runWithRecord(args, principalId) : await tool.run(args, principalId);
+        const answer = tool.runWithRecord !== undefined ? await tool.runWithRecord(args, principalId) : await tool.run(args, principalId, key !== undefined ? { idempotencyKey: key } : {});
         const text = typeof answer === "string" ? answer : answer.text;
         const result = { content: [{ type: "text", text: `${text}${trailer}` }], ...(typeof answer === "string" ? {} : { structuredContent: answer.structured }) };
         if (claim.kind === "fresh") deps.idempotency?.settle(key, { status: 200, body: result });
