@@ -283,7 +283,8 @@ test("a pinned per-call variable reaches the command and wins over the session, 
 test("a command past its foreground window runs on as a job, with what it said so far and no kill (INV-1461)", async () => {
   const adopted: { command: string; head: string }[] = [];
   const result = await runShell(
-    { command: "echo first; sleep 1; echo second", foreground_ms: 200, timeout_ms: 5_000 },
+    // A window wide enough for a shell to start under a loaded parallel run; 200 ms was not (it flaked under npm run check).
+    { command: "echo first; sleep 2; echo second", foreground_ms: 1_000, timeout_ms: 5_000 },
     {},
     input => {
       adopted.push({ command: input.command, head: input.head.toString("utf8") });

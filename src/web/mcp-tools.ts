@@ -12,6 +12,7 @@ import type { TurnEvent } from "../host/turn.ts";
 import { describeOutcome, outcomeOf } from "./mcp-contract.ts";
 import { mcpGoalTools } from "./mcp-goal-tools.ts";
 import { taskRecord } from "./mcp-record.ts";
+import { type ChangeFeed, describeWatch, WAIT_MAX_SECONDS } from "./mcp-watch.ts";
 import type { McpServerTool } from "./mcp-server.ts";
 
 export interface McpToolsDeps {
@@ -26,6 +27,8 @@ export interface McpToolsDeps {
   stageWorld?: (task: Task) => StageWorld;
   /** Whether a principal may drive an agent's box; given, the goal tools are on the door (INV-1507). */
   mayDrive?: (agentId: string, principalId: string) => boolean;
+  /** The board's changes as a feed; given, `watch` is on the door (INV-1508). */
+  changeFeed?: ChangeFeed;
 }
 
 export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
@@ -209,5 +212,35 @@ export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
       },
     },
     ...(deps.mayDrive !== undefined ? mcpGoalTools({ registry, orchestrator, mayDrive: deps.mayDrive, nameOf: id => principals.resolve(id).name, log }) : []),
+    ...(deps.changeFeed !== undefined ? [watchTool(deps.changeFeed)] : []),
   ];
+}
+
+/** `watch` (INV-1508): what moved since the cursor, or the next move, within the caller's wait. */
+function watchTool(feed: ChangeFeed): McpServerTool {
+  const runWatch = async (input: Record<string, unknown>, principalId: string, signal?: AbortSignal) => {
+    const since = typeof input.since === "string" ? input.since : undefined;
+    const seconds = typeof input.wait_seconds === "number" && Number.isFinite(input.wait_seconds) ? Math.max(0, Math.min(WAIT_MAX_SECONDS, input.wait_seconds)) : 25;
+    const all = input.scope === "all";
+    const result = await feed.wait(since, event => all || event.requester === principalId, seconds * 1000, signal);
+    return { text: describeWatch(result), structured: { ...result } as Record<string, unknown> };
+  };
+  return {
+    name: "watch",
+    description:
+      "What changed since your cursor: a task's status, its stage, its goal's status. Waits up to wait_seconds (max " +
+      `${WAIT_MAX_SECONDS}) for the next change when there is none. Call first without since to get a cursor. ` +
+      "reset: true means some changes are gone; read task_status again. scope: mine (default, tasks you asked for) or all.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        since: { type: "string", description: "The cursor the last watch returned." },
+        wait_seconds: { type: "number" },
+        scope: { type: "string", enum: ["mine", "all"] },
+      },
+    },
+    readOnly: true,
+    run: async (input, principalId, meta) => (await runWatch(input, principalId, meta?.signal)).text,
+    runWithRecord: async (input, principalId, meta) => runWatch(input, principalId, meta?.signal),
+  };
 }

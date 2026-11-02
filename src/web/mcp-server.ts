@@ -78,10 +78,10 @@ export interface McpServerTool {
    * tools are ours; we know which ones change the world and say so.
    */
   readOnly: boolean;
-  /** `meta.idempotencyKey`: the call's key, for a tool whose own record needs it (INV-1507). */
-  run: (input: Record<string, unknown>, principalId: string, meta?: { idempotencyKey?: string }) => Promise<string>;
+  /** `meta.idempotencyKey`: the call's key (INV-1507); `meta.signal`: aborted when the caller hangs up (INV-1508). */
+  run: (input: Record<string, unknown>, principalId: string, meta?: { idempotencyKey?: string; signal?: AbortSignal }) => Promise<string>;
   /** Preferred when present: the same text with `structuredContent` beside it (INV-1506); the text is what `run` says. */
-  runWithRecord?: (input: Record<string, unknown>, principalId: string) => Promise<{ text: string; structured: Record<string, unknown> }>;
+  runWithRecord?: (input: Record<string, unknown>, principalId: string, meta?: { signal?: AbortSignal }) => Promise<{ text: string; structured: Record<string, unknown> }>;
 }
 
 interface JsonRpcRequest {
@@ -221,7 +221,9 @@ export async function handleMcpRequest(
         return true;
       }
       try {
-        const answer = tool.runWithRecord !== undefined ? await tool.runWithRecord(args, principalId) : await tool.run(args, principalId, key !== undefined ? { idempotencyKey: key } : {});
+        const hangup = new AbortController(); // A long poll lets go of its listener when the caller does (INV-1508).
+        res.once("close", () => { if (!res.writableEnded) hangup.abort(); });
+        const answer = tool.runWithRecord !== undefined ? await tool.runWithRecord(args, principalId, { signal: hangup.signal }) : await tool.run(args, principalId, { ...(key !== undefined ? { idempotencyKey: key } : {}), signal: hangup.signal });
         const text = typeof answer === "string" ? answer : answer.text;
         const result = { content: [{ type: "text", text: `${text}${trailer}` }], ...(typeof answer === "string" ? {} : { structuredContent: answer.structured }) };
         if (claim.kind === "fresh") deps.idempotency?.settle(key, { status: 200, body: result });

@@ -91,8 +91,7 @@ function readToolList(value: unknown): readonly string[] | null | undefined | Er
   if (!Array.isArray(value) || value.some(item => typeof item !== "string")) {
     return new Error("tools must be an array of tool names");
   }
-  // An MCP tool (`server__tool`) or service (`server__*`) is named before it is connected, so it is
-  // not checked against what is connected now (INV-759).
+  // An MCP tool (`server__tool`) or service (`server__*`) is named before it is connected, so it is not checked against what is connected now (INV-759).
   const unknown = (value as string[]).filter(name => !ALL_TOOLS.includes(name) && !isMcpEntry(name));
   if (unknown.length > 0) {
     return new Error(`Unknown tools: ${unknown.join(", ")}. Known: ${ALL_TOOLS.join(", ")}.`);
@@ -175,7 +174,7 @@ import {
 import { ConversationDirectory, conversationsPath } from "../channels/conversations.ts";
 import { SentRootsLedger, sentRootsPath } from "../channels/sent-roots.ts";
 import { randomUUID } from "node:crypto";
-import { isLive, isTaskStatus } from "../host/tasks.ts";
+import { isLive, isTaskStatus, type Task } from "../host/tasks.ts";
 import { connectorSatisfied } from "../host/mcp-connectors.ts";
 import { adminRecipients, decideUpgrade, upgradeMessage } from "../host/upgrade.ts";
 import {
@@ -228,7 +227,8 @@ import { PersonalDocker } from "../box/personal.ts";
 import { personalAllocationRefusal, personalBoxesOf, personalQuotaFor } from "../host/box-quota.ts";
 import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
 import { attentionFor } from "../host/attention.ts";
-import { stageWorldOf } from "../host/task-stage.ts";
+import { stageWorldOf, taskStage } from "../host/task-stage.ts";
+import { ChangeFeed } from "./mcp-watch.ts";
 import { InvoluteConsumer } from "../host/involute-inbox.ts";
 import { mayAnswerFrom } from "../host/involute-askers.ts";
 import { describeQueues } from "../host/actor-queue.ts";
@@ -3042,13 +3042,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     return { allow: true, reason: "token" };
   };
 
-  // What an outside agent may do here, and nothing more: a computer and a team, never our memory, files or settings;
-  // every call goes through the objects a person's request does (docs/90 §2; mcp-tools.ts, mcp-contract.ts; INV-1358).
+  // The outside door (docs/90 §2): a computer and a team, never our memory, files or settings; every call goes through a person's objects (INV-1358).
   const taskActive = (task: { assigneeId?: string; conversation?: string }) => task.assigneeId !== undefined && task.conversation !== undefined && (orchestrator.bus.isActive(task.assigneeId, task.conversation) || orchestrator.jobWatch.openJobs(task.assigneeId, task.conversation).length > 0);
+  const sideDoorStage = (task: Task) => stageWorldOf(task, { undeliverableChats: new Set(outbox.problems().map(receipt => receipt.chatKey)), questions: questions.list(), chatKeyOf: conversation => conversations.chatKeyFor(conversation), active: taskActive });
+  const changeFeed = new ChangeFeed({ stageOf: task => taskStage(task, sideDoorStage(task)) }); orchestrator.tasks?.onChange(task => changeFeed.record(task)); // watch (INV-1508)
   const sideDoorTools = () => mcpServerTools({
     registry, orchestrator, principals, workDir: WORK_DIR, log, mayDrive: (agentId, principalId) => mayEnterBox(registry.boxOf(agentId), principalId) && mandateWorld().mayDrive(principalId),
-    stageWorld: task => stageWorldOf(task, { undeliverableChats: new Set(outbox.problems().map(receipt => receipt.chatKey)), questions: questions.list(), chatKeyOf: conversation => conversations.chatKeyFor(conversation), active: taskActive }),
-    listen: listener => { channelTurnListeners.add(listener); return () => channelTurnListeners.delete(listener); },
+    stageWorld: sideDoorStage, changeFeed, listen: listener => { channelTurnListeners.add(listener); return () => channelTurnListeners.delete(listener); },
   });
   // Retries of a side-door call return the first answer for a day, persisted beside the ledgers.
   const sideDoorIdempotency = new IdempotencyStore({ ttlMs: 24 * 60 * 60_000, persistTo: join(agentboxHome(), "mcp-idempotency.jsonl") });

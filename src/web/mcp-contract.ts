@@ -69,6 +69,7 @@ export const SIDE_DOOR_CAPABILITIES = {
   idempotency_key: true,
   structured: true, // task_status carries structuredContent (INV-1506).
   goals: true, // goal_start / goal_control (INV-1507).
+  watch: true, // a long-poll change feed; streaming stays false (INV-1508).
   cancel: false,
   streaming: false,
   files: false,
