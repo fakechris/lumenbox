@@ -37,7 +37,7 @@ import { appendLine, appendLineDurably, archiveSettled, type LedgerKind } from "
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
-import type { RuleStore } from "./rules.ts";
+import type { RuleReader } from "./rules.ts";
 import { sideEffectOf, tierAsks, tierGateMode, type SideEffectTier, type TierGateMode } from "./side-effects.ts";
 import { describeTaint, noteAllowedCall, type Taint, taintOf, TurnTaint } from "./egress-taint.ts";
 import { approvalReason, describeRequest, fingerprintOf, tooLargeToApprove } from "./policy-describe.ts";
@@ -327,7 +327,7 @@ interface Outcome {
 
 export interface PolicyGateOptions {
   /** Operator rules (INV-427): deny refuses, ask forces an approval, allow lifts the operator's own lists. */
-  rules?: RuleStore;
+  rules?: RuleReader;
   path?: string;
   limits?: PolicyLimits;
   /**
@@ -383,7 +383,7 @@ export class PolicyGate {
   private readonly spentSincePrincipal: (sinceMs: number, principalId: string) => number;
   private readonly spentSinceAgent: (sinceMs: number, agentId: string) => number;
   private readonly spendUnavailable: () => string | undefined;
-  private readonly rules: RuleStore | undefined;
+  private readonly rules: RuleReader | undefined;
   /** What a reusable grant belongs to: the box (INV-539). */
   private readonly subjectOf: (agentId: string) => string;
   private readonly egressAllow: (agentId: string) => readonly string[];
@@ -608,7 +608,7 @@ export class PolicyGate {
 
   /** A wake refused because the task's mandate no longer holds (INV-1457). */
   notifyMandateStale(taskId: string, by: string, reasons: readonly string[]): void { this.append({ at: this.now().toISOString(), kind: "mandate-stale", taskId, by, reasons: [...reasons] }); }
-  rulesHash(): string | undefined { return this.rules?.currentHash(); } // The rule set as loaded now, for a mandate to be granted and checked under.
+  rulesHash(): string | undefined { return this.rules?.currentHash() || undefined; } // The rule set as loaded now, for a mandate to be granted and checked under.
   notifyReplyRefused(purpose: string, chatKey: string, reason: string): void { this.append({ at: this.now().toISOString(), kind: "reply-refused", purpose, chatKey, reason }); }
   notifyObserved(slug: string, would: string): void { this.append({ at: this.now().toISOString(), kind: "observed", slug, would }); }
 

@@ -985,3 +985,28 @@ test("the first-use rule (INV-1366): after an outside read, the turn's first cal
     cleanup();
   }
 });
+
+// ── the gate's lazy rule store (INV-1511) ─────────────────────────────────────────
+import { lazyRuleStore } from "./rules.ts";
+
+test("through the lazy store the orchestrator hands the gate, a rule scoped to a person reaches that person, and the rule hash is there to read", () => {
+  const { cleanup, path } = fixture();
+  try {
+    const dir = join(path, "..", "rules");
+    const store = rulesIn(dir, { "no-deploy-bob": "---\neffect: deny\ntool: bash\ncommand: ./deploy\nprincipal: bob\n---\nBob does not deploy.\n" });
+    let built: RuleStore | undefined;
+    const gate = new PolicyGate({ path, limits: { budgetWindowHours: 24, wakesPerWindow: 30, wakeWindowMinutes: 10, approvalRequiredTools: [], approvalRequiredCommands: [] }, rules: lazyRuleStore(() => built) });
+    assert.equal(gate.rulesHash(), undefined, "before the store is built: no hash, and no throw");
+    built = store;
+    const asBob = gate.check({ ...toolRequest("./deploy prod"), principalId: "bob" } as PolicyRequest);
+    assert.equal(asBob.allow, false, "the caller reached the rule: Bob's deny holds");
+    assert.match(!asBob.allow ? asBob.reason : "", /no-deploy-bob/);
+    assert.equal(gate.check({ ...toolRequest("./deploy prod"), principalId: "carol" } as PolicyRequest).allow, true, "and only Bob's");
+    assert.equal(gate.rulesHash(), store.currentHash(), "the hash a mandate is granted and checked under");
+    const proto = Object.getOwnPropertyNames(RuleStore.prototype).filter(name => name !== "constructor");
+    const lazy = lazyRuleStore(() => store) as unknown as Record<string, unknown>;
+    assert.deepEqual(proto.filter(name => typeof lazy[name] !== "function"), [], "every method of the store is on the lazy face");
+  } finally {
+    cleanup();
+  }
+});
