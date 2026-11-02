@@ -105,7 +105,7 @@ import { delegateEndedNote, settleDelegate } from "./engine-report.ts";
 import { BundleStore } from "./bundles.ts";
 import { TEACH_MAX_TOKENS, TeachRunner, parseTrace, teachingClarificationCue } from "./teach.ts";
 import { SkillHistory, TeachDrafts, parseTeachingResponse, publishTeachingSkill } from "./teach-drafts.ts";
-import { RuleStore } from "./rules.ts";
+import { lazyRuleStore, RuleStore } from "./rules.ts";
 import { MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
 import type { HostProcessDeps, HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
@@ -375,13 +375,7 @@ export class Orchestrator {
     spentSinceAgent: (sinceMs, agentId) => this.usage.spentSinceAgent(sinceMs, agentId),
     log: line => console.error(`[policy] ${line}`),
     // Read lazily: the store is built after the gate, and rules reload with the config.
-    rules: {
-      decide: (tool: string, input: Record<string, unknown>) => this.rules?.decide(tool, input),
-      forReview: () => this.rules?.forReview() ?? [],
-      list: () => this.rules?.list() ?? [],
-      ignored: () => this.rules?.ignored() ?? [],
-      reload: () => this.rules?.reload(),
-    } as unknown as RuleStore,
+    rules: lazyRuleStore(() => this.rules),
   });
 
   /**

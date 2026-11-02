@@ -245,3 +245,23 @@ export class RuleStore {
     return renderRulesForReview(this.rules);
   }
 }
+
+/** The store's public face: what a holder that may be built before the store can ask (INV-1511). */
+export type RuleReader = { [K in keyof RuleStore]: RuleStore[K] };
+
+/**
+ * The store, asked lazily, every method and every argument passed through (INV-1511). The gate is
+ * built before the store; a hand-written stand-in cast to RuleStore once forwarded `decide`
+ * without its caller — so a rule scoped to a person never matched — and had no `currentHash`, so
+ * every mandate check threw. Typed as the store's own face, a missing method no longer compiles.
+ */
+export function lazyRuleStore(get: () => RuleStore | undefined): RuleReader {
+  return {
+    reload: () => get()?.reload(),
+    list: () => get()?.list() ?? [],
+    currentHash: () => get()?.currentHash() ?? "",
+    ignored: () => get()?.ignored() ?? [],
+    decide: (tool, input, caller) => get()?.decide(tool, input, caller),
+    forReview: () => get()?.forReview() ?? [],
+  };
+}
