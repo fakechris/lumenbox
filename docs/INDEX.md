@@ -109,6 +109,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [83-team-vs-single-eval](83-team-vs-single-eval.md) | Team versus one agent: the first measured comparison | current | 2026-11-01 |
 | [89-thesis](89-thesis.md) | The design of LumenBox: a team of agents, real machines, and one record | current | 2026-11-01 |
 | [89-thesis.zh](89-thesis.zh.md) | LumenBox 的设计：一支 agent 团队、一台台真机器、一套记录 | current | 2026-11-01 |
+| [90-outside-supervisor](90-outside-supervisor.md) | 外部监督者：一个委托人，不是一双手 | current | 2026-11-02 |
 
 ## handoff
 
