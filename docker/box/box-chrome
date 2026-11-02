@@ -103,6 +103,12 @@ if [ -n "${AGENTBOX_EGRESS_RELAY:-}" ]; then
   )
 fi
 
+# On the accessibility bus. --force-renderer-accessibility builds the tree inside the renderer,
+# but Chromium 156 (Debian trixie) no longer registers with AT-SPI from that flag alone: the
+# window is on screen and box-ax finds "no accessibility tree". ACCESSIBILITY_ENABLED=1 is
+# what makes it register, and without it list_elements is blind on every web page.
+export ACCESSIBILITY_ENABLED=1
+
 exec "$CHROME_BIN" \
   --class="$CHROME_CLASS" \
   --user-data-dir="$PROFILE" \

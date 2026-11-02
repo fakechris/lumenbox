@@ -447,6 +447,33 @@ await check("the clipboard is one clipboard", async () => {
   return "PRIMARY and CLIPBOARD agree";
 });
 
+await check("a page opened with box-chrome has a control tree, not a screenshot fallback (INV-1494)", async () => {
+  // Chromium 156 is on the accessibility bus only with ACCESSIBILITY_ENABLED=1 in box-chrome; without it
+  // list_elements on any web page says "no accessibility tree" and the agent is back to guessing pixels.
+  await box.exec("mkdir -p /tmp/smoke-a11y && printf '%s' '<!doctype html><title>smoke-a11y</title><input aria-label=\"Email\"><button>Sign in</button>' > /tmp/smoke-a11y/page.html");
+  await box.exec("DISPLAY=:1 setsid box-chrome --new-window file:///tmp/smoke-a11y/page.html >/dev/null 2>&1 &");
+  try {
+    let page;
+    for (let i = 0; i < 30 && page === undefined; i++) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      const windows = await box.computer([{ action: "list_windows" }], { display: 1, owner: owner() });
+      page = windows.windows?.find(w => /smoke-a11y/.test(w.title));
+    }
+    assert(page, "no smoke-a11y window within 15s");
+    let tree;
+    for (let i = 0; i < 10 && !(tree?.elements?.length > 0); i++) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      tree = await box.computer([{ action: "activate_window", window_id: page.id }, { action: "list_elements" }], { display: 1, owner: owner() });
+    }
+    assert(Array.isArray(tree?.elements) && tree.elements.length > 0, `no controls: ${tree?.elements_note ?? "empty"}`);
+    const button = tree.elements.find(e => /button/.test(e.role) && /sign in/i.test(e.name));
+    assert(button, `no Sign in button among ${tree.elements.slice(0, 10).map(e => `${e.role}:${e.name}`).join(", ")}`);
+    return `${tree.elements.length} controls, button ${button.ref}`;
+  } finally {
+    await box.exec("pkill -f -- 'smoke-a11y/page.html' || true; rm -rf /tmp/smoke-a11y");
+  }
+});
+
 await check("the control tree is read for a GTK app and refused in words for a terminal (INV-412)", async () => {
   // What this buys: a desktop app can be operated by its controls, not by guessing pixels.
   // And the half that matters as much: an app with no tree says so, so the model falls
@@ -461,7 +488,7 @@ await check("the control tree is read for a GTK app and refused in words for a t
   assert(Array.isArray(tree.elements) && tree.elements.length > 0, `no controls: ${tree.elements_note ?? "empty"}`);
   const menu = tree.elements.find(e => /menu/.test(e.role) && /file|edit|view/i.test(e.name));
   assert(menu, `no menu among ${tree.elements.slice(0, 8).map(e => `${e.role}:${e.name}`).join(", ")}`);
-  const clicked = await box.computer([{ action: "click_element", ref: menu.ref }], { display: 1, owner: owner() });
+  const clicked = await box.computer([{ action: "click_element", ref: menu.ref, observation_id: tree.elements_observation_id }], { display: 1, owner: owner() }); // the outline's id (INV-1478)
   assert(clicked.success, clicked.error ?? "click_element failed");
   assert(clicked.effect === "observed_change" || clicked.effect === "confirmed" || clicked.effect === "partial", `menu click effect was ${clicked.effect}`);
   await box.computer([{ action: "key", key: "Escape" }], { display: 1, owner: owner() });
