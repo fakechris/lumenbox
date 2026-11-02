@@ -42,6 +42,8 @@
 
 每个调用都有主人：令牌签给一个委托人，计费、预算、审计、审批都落在这个人身上。
 
+改动世界的工具在 tools/list 里都多一个 `idempotency_key` 参数（INV-1512）：通用 MCP 客户端不能按调用设 header，模型要能看见并填上它；带同一个值重试返回第一次的答复。header 与 `_meta` 仍然优先。
+
 ## 3. 合同要补的四样
 
 **3.1 结构化记录（INV-1506，已建）。** `task_status` 在文本之外返回 `structuredContent`：结局（state + reason）、

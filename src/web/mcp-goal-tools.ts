@@ -40,7 +40,7 @@ export function mcpGoalTools(deps: McpGoalDeps): McpServerTool[] {
       name: "goal_start",
       description:
         "Give the team a goal to pursue until it is verified done: it drafts a checklist, works in rounds, and stops " +
-        "itself on budget, idling, repetition or a failed check. Requires an Idempotency-Key. Returns the task id; follow " +
+        "itself on budget, idling, repetition or a failed check. Requires an idempotency_key argument (or the Idempotency-Key header). Returns the task id; follow " +
         "it with task_status, whose structuredContent carries the checklist and the spend.",
       inputSchema: {
         type: "object",
@@ -56,7 +56,7 @@ export function mcpGoalTools(deps: McpGoalDeps): McpServerTool[] {
         const board = orchestrator.tasks;
         if (board === undefined) throw new Error("This installation has no task board.");
         const key = meta?.idempotencyKey;
-        if (key === undefined || key === "") throw new Error("goal_start needs an Idempotency-Key, so a retry cannot make a second goal. Nothing was created.");
+        if (key === undefined || key === "") throw new Error("goal_start needs an idempotency_key argument (any unique string; the same one on a retry), so a retry cannot make a second goal. Nothing was created.");
         const objective = String(input.objective ?? "").replace(/\s+/g, " ").trim();
         const budget = typeof input.budget === "number" && Number.isFinite(input.budget) && input.budget > 0 ? Math.round(input.budget) : undefined;
         const text = `/goal ${objective}${budget !== undefined ? ` --budget ${budget}` : ""}`;
