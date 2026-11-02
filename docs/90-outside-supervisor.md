@@ -81,7 +81,7 @@ box 的工具。goal_start 的 agent 和 budget 由运营者给，模型看不�
 - 监督者的 provider 与模型，复用 Settings → Model 里已设的 key——OpenAI 的 gpt-6 走 Responses，其余走 app 的 provider 层；
 - 默认 agent、预算与上限。
 
-同一页可以发起、查看、停止运行；被监督的目标在任务列表里标 "supervised"。运行以文件排队（`~/.agentbox/supervisor/`），读回时再脱敏一次。
+同一页可以发起、查看、停止运行，也有五步启动向导（INV-1529，docs/37 §5a）；被监督的目标在任务列表里标 "supervised"。运行以文件排队（`~/.agentbox/supervisor/`），读回时再脱敏一次。
 
 ## 4. 监督者不能做的
 

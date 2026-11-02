@@ -745,3 +745,9 @@ export function describeProvider(profile: ProviderProfile): string {
 export function credentialSet(keyEnv: string): boolean {
   return (process.env[keyEnv] ?? "") !== "" || (keyEnv === "ANTHROPIC_API_KEY" && (process.env.ANTHROPIC_AUTH_TOKEN ?? "") !== "");
 }
+
+/** A provider's credential value, for the server-side model test and nothing that returns it (INV-1529). */
+export function credentialFor(keyEnv: string): string | undefined {
+  const value = process.env[keyEnv] ?? (keyEnv === "ANTHROPIC_API_KEY" ? process.env.ANTHROPIC_AUTH_TOKEN : undefined);
+  return value === undefined || value === "" ? undefined : value;
+}
