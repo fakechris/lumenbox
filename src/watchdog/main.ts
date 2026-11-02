@@ -10,7 +10,7 @@
  * have moved it in the meantime.
  */
 
-import { type Door, DoorUnreachable, doorClient } from "./client.ts";
+import { type Door, DoorRefused, DoorUnreachable, doorClient } from "./client.ts";
 import { DEFAULT_LIMITS, type Finding, findingsFor, type WatchdogLimits } from "./rules.ts";
 import type { TaskRecord } from "../web/mcp-record.ts";
 
@@ -42,6 +42,7 @@ export class Watchdog {
   private down = false;
   private readonly raised = new Map<string, number>();
   private readonly judged = new Map<string, number>();
+  private refused = false;
 
   constructor(private readonly deps: WatchdogDeps) {}
 
@@ -78,8 +79,16 @@ export class Watchdog {
       }
       if (this.down) { this.deps.log("watchdog: the door answers again"); this.down = false; }
       this.failures = 0;
+      this.refused = false;
     } catch (error) {
+      if (error instanceof DoorRefused) {
+        if (!this.refused) this.deps.log("watchdog: the door does not accept this token any more (revoked, or issued before tokens were kept across restarts). Run agentbox watchdog uninstall, then install.");
+        this.refused = true;
+        this.cursor = undefined;
+        return ["refused"];
+      }
       if (!(error instanceof DoorUnreachable)) throw error;
+      this.refused = false;
       this.failures++;
       this.cursor = undefined; // whatever it held is a reading of a process that may be gone
       if (this.failures >= (this.deps.downAfter ?? 2) && !this.down) {
@@ -146,7 +155,7 @@ export class Watchdog {
   async run(signal: AbortSignal): Promise<void> {
     while (!signal.aborted) {
       const did = await this.tick().catch(error => { this.deps.log(`watchdog: ${error instanceof Error ? error.message : String(error)}`); return ["error"]; });
-      if (did.includes("down") || did.includes("error") || this.down) await new Promise(resolve => setTimeout(resolve, (this.deps.waitSeconds ?? 25) * 1000));
+      if (did.includes("down") || did.includes("error") || did.includes("refused") || this.down) await new Promise(resolve => setTimeout(resolve, (this.deps.waitSeconds ?? 25) * 1000));
     }
   }
 }

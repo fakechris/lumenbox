@@ -7,6 +7,8 @@
  */
 
 export class DoorUnreachable extends Error {}
+/** The door answered and refused this token (401/403): not an outage, and retrying will not change it (INV-1520). */
+export class DoorRefused extends Error {}
 
 export interface DoorReply {
   text: string;
@@ -38,6 +40,7 @@ export function doorClient(url: string, token: string, fetchImpl: typeof fetch =
       } catch (error) {
         throw new DoorUnreachable(`${endpoint}: ${error instanceof Error ? error.message : String(error)}`);
       }
+      if (response.status === 401 || response.status === 403) throw new DoorRefused(`${endpoint}: HTTP ${response.status}`);
       if (response.status !== 200) throw new DoorUnreachable(`${endpoint}: HTTP ${response.status}`);
       const body = (await response.json()) as { result?: { content?: { text?: string }[]; structuredContent?: Record<string, unknown>; isError?: boolean }; error?: { message?: string } };
       if (body.error !== undefined) return { text: body.error.message ?? "error", isError: true };
