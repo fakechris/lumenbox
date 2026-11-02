@@ -88,7 +88,7 @@ ${envEntries}
 }
 
 /** Whose token: the one named, or the installation's single admin. */
-function principalFor(deps: InstallDeps, named?: string): string {
+export function principalFor(deps: Pick<InstallDeps, "home">, named?: string): string {
   const file = join(deps.home, "principals.json");
   const people = existsSync(file) ? ((JSON.parse(readFileSync(file, "utf8")) as { principals?: { id: string; name: string; role: string }[] }).principals ?? []) : [];
   if (named !== undefined) {

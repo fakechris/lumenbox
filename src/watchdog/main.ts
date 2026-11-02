@@ -22,6 +22,8 @@ export interface WatchdogDeps {
   limits?: WatchdogLimits;
   /** Run when the door has not answered `downAfter` times in a row; once per outage. */
   onDown?: (reason: string) => Promise<void>;
+  /** Tell a person, once per occurrence: a token refused, a door too old (INV-1527 routes this to the app). */
+  alert?: (title: string, body: string) => void;
   downAfter?: number;
   judge?: ProgressJudge;
   /** Seconds a watch waits for a change; the loop's pace when nothing moves. */
@@ -64,6 +66,11 @@ export class Watchdog {
   }
 
   /** One pass: catch up on the board, judge it, act. Returns what it did, for the tests and the log. */
+  /** Whether the last tick found the door refusing this token; the supervision process renews it once. */
+  get tokenRefused(): boolean {
+    return this.refused;
+  }
+
   async tick(): Promise<string[]> {
     const did: string[] = [];
     try {
@@ -82,7 +89,10 @@ export class Watchdog {
       this.refused = false;
     } catch (error) {
       if (error instanceof DoorRefused) {
-        if (!this.refused) this.deps.log("watchdog: the door does not accept this token any more (revoked, or issued before tokens were kept across restarts). Run agentbox watchdog uninstall, then install.");
+        if (!this.refused) {
+          this.deps.log("watchdog: the door does not accept this token any more (revoked, or issued before tokens were kept across restarts). Run agentbox watchdog uninstall, then install.");
+          this.deps.alert?.("LumenBox supervision", "The door no longer accepts the supervision token.");
+        }
         this.refused = true;
         this.cursor = undefined;
         return ["refused"];
@@ -161,7 +171,10 @@ export class Watchdog {
       const caps = await this.deps.door.capabilities();
       const missing = ["structured", "watch"].filter(name => caps[name] !== true);
       if (missing.length === 0) return true;
-      if (!this.tooOld) this.deps.log(`watchdog: the door is too old for the watchdog (it lacks ${missing.join(" and ")}); upgrade LumenBox. Asking again every ten minutes.`);
+      if (!this.tooOld) {
+        this.deps.log(`watchdog: the door is too old for the watchdog (it lacks ${missing.join(" and ")}); upgrade LumenBox. Asking again every ten minutes.`);
+        this.deps.alert?.("LumenBox supervision", "This LumenBox is too old for supervision; update it.");
+      }
       this.tooOld = true;
       return false;
     } catch (error) {
@@ -220,7 +233,7 @@ export async function cmdWatchdog(argv: string[], env: { token?: string; process
 }
 
 /** `--judge`: one yes/no to the decision model about the last moves of an active goal; a no is a note for a person. */
-async function decisionModelJudge(out: (line: string) => void): Promise<ProgressJudge | undefined> {
+export async function decisionModelJudge(out: (line: string) => void): Promise<ProgressJudge | undefined> {
   const { applyConfigEnv, loadConfig } = await import("../config.ts");
   applyConfigEnv(loadConfig());
   const { jevClient, noulOf } = await import("../host/jev.ts");

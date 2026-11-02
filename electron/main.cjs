@@ -167,7 +167,7 @@ function startServer() {
       updateTrayMenu();
       crashRestarts = 0;
       startServer();
-      whenServerReady(() => mainWindow?.reload());
+      whenServerReady(() => { mainWindow?.reload(); restartSupervision(); });
       return;
     }
 
@@ -186,6 +186,82 @@ function startServer() {
       `It exited ${crashRestarts} times in a row. Last output:\n\n${recentLog.join("\n")}`
     );
   });
+}
+
+// ── supervision ───────────────────────────────────────────────────────────────
+// The watchdog and the supervisor's run queue, as one child beside the server (INV-1527): outside
+// the server, so a server that hangs is seen, but started and stopped with the app so nobody
+// installs a service. What a person should hear arrives as `@@notify {json}` lines.
+
+const SUPERVISION_LOG = path.join(LOG_DIR, "supervision.log");
+let supervisionChild = null;
+let supervisionRestarts = 0;
+let supervisionDeliberate = false;
+
+function appendSupervisionLog(line) {
+  try {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+    if (fs.existsSync(SUPERVISION_LOG) && fs.statSync(SUPERVISION_LOG).size > 5 * 1024 * 1024) fs.renameSync(SUPERVISION_LOG, `${SUPERVISION_LOG}.1`);
+    fs.appendFileSync(SUPERVISION_LOG, `${new Date().toISOString()} ${line}\n`);
+  } catch {}
+}
+
+function startSupervision() {
+  if (quitting || supervisionChild) return;
+  const cli = path.join(REPO, "src", "cli.ts");
+  const startedAt = Date.now();
+  supervisionChild = spawn(process.execPath, ["--experimental-transform-types", cli, "supervision", "--url", `http://127.0.0.1:${PORT}`], {
+    cwd: REPO,
+    env: withToolPath({ ...process.env, ELECTRON_RUN_AS_NODE: "1", ...(uiAuth.token ? { AGENTBOX_UI_TOKEN: uiAuth.token } : {}) }),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let pending = "";
+  const onData = chunk => {
+    pending += String(chunk);
+    let end = pending.indexOf("\n");
+    while (end >= 0) {
+      const line = pending.slice(0, end);
+      pending = pending.slice(end + 1);
+      end = pending.indexOf("\n");
+      if (line.startsWith("@@notify ")) {
+        try {
+          const message = JSON.parse(line.slice("@@notify ".length));
+          notify(String(message.title ?? "LumenBox"), String(message.body ?? ""));
+        } catch {}
+        appendSupervisionLog(`notified: ${line.slice("@@notify ".length)}`);
+      } else if (line.trim() !== "") {
+        appendSupervisionLog(line);
+      }
+    }
+  };
+  supervisionChild.stdout.on("data", onData);
+  supervisionChild.stderr.on("data", onData);
+  updateTrayMenu();
+  supervisionChild.on("exit", (code, signal) => {
+    supervisionChild = null;
+    updateTrayMenu();
+    if (quitting) return;
+    if (supervisionDeliberate) {
+      supervisionDeliberate = false;
+      startSupervision();
+      return;
+    }
+    log(`supervision exited (code ${code}, signal ${signal})`);
+    if (Date.now() - startedAt > 10 * 60_000) supervisionRestarts = 0;
+    supervisionRestarts += 1;
+    if (supervisionRestarts <= 5) {
+      setTimeout(startSupervision, 2000 * supervisionRestarts);
+      return;
+    }
+    notify("LumenBox supervision stopped", "It exited five times in a row. See ~/Library/Logs/LumenBox/supervision.log.");
+  });
+}
+
+/** New settings: the supervision child reads them at start, so it starts again. */
+function restartSupervision() {
+  if (!supervisionChild) return startSupervision();
+  supervisionDeliberate = true;
+  supervisionChild.kill();
 }
 
 /**
@@ -385,6 +461,7 @@ function buildTrayMenu() {
       label: `Launch at login: ${loginSettings.openAtLogin ? "on" : "off"} (change in Settings)`,
       enabled: false,
     },
+    { label: `Supervision: ${supervisionChild ? "running" : "not running"}`, enabled: false },
     {
       label: "Restart server",
       click: () => {
@@ -458,7 +535,7 @@ if (!app.requestSingleInstanceLock()) {
         });
       }, 8_000);
     });
-    whenServerReady(() => watchEvents());
+    whenServerReady(() => { watchEvents(); startSupervision(); });
   });
 
   // The window closing is not the app ending: the tray keeps the agents reachable,
@@ -468,5 +545,6 @@ if (!app.requestSingleInstanceLock()) {
   app.on("before-quit", () => {
     quitting = true;
     serverChild?.kill();
+    supervisionChild?.kill();
   });
 }
