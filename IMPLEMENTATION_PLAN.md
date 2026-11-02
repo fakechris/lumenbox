@@ -32,3 +32,35 @@ directory is removed at close.
 **Success Criteria**: evidence in the PR (job log, approval shown and answered, stub/relay
 requests), `npm run release:check`.
 **Status**: Complete against the built boxd + real mcode acp with the stub model (stage3-run.txt); the live box is not recreated
+
+---
+
+# Implementation plan — the outside supervisor (docs/90, INV-1506..1510)
+
+A supervisor above the team is a principal on the MCP door, never a hand in the box. Stages
+wait for each candidate's commit; each ships green on its own.
+
+## Stage 1: structured task_status (INV-1506)
+**Goal**: `task_status` returns `structuredContent` (outcome, stage, mandate, history, pursuit summary) beside the unchanged text.
+**Success Criteria**: plain task, goal task and list each carry every field, equal to the board; text byte-identical; `structured: true` capability.
+**Status**: Not Started (candidate)
+
+## Stage 2: goals through the door (INV-1507)
+**Goal**: `goal_start` and `goal_control` over the same `goalCommand`; resume only what the principal itself paused.
+**Success Criteria**: key replay makes no second goal; no key refused; another's goal refused; system pause not resumable; drafting turn runs without closing the pursuit.
+**Status**: Not Started (candidate)
+
+## Stage 3: watch (INV-1508)
+**Goal**: a long-poll change feed from `TaskBoard.onChange`, bounded ring, cursor with reset.
+**Success Criteria**: change wakes a waiter; timeout returns empty; stale cursor resets; `mine` scoped; no listener leak.
+**Status**: Not Started (candidate)
+
+## Stage 4: the watchdog (INV-1509)
+**Goal**: `agentbox watchdog` as a separate process with its own token; deterministic rules; `raise_attention`; `--on-down`.
+**Success Criteria**: each rule fires and stays quiet when it should; cooldown; on-down runs when the door is gone; a stalled task shows the note in "needs you".
+**Status**: Not Started (candidate)
+
+## Stage 5: compatibility spike (INV-1510)
+**Goal**: an outside supervisor drives the team through the contract alone, in a throwaway container.
+**Success Criteria**: a report with a gap table, or a recorded reason the runtime was unavailable.
+**Status**: Not Started (candidate)
