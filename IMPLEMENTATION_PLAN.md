@@ -43,24 +43,24 @@ wait for each candidate's commit; each ships green on its own.
 ## Stage 1: structured task_status (INV-1506)
 **Goal**: `task_status` returns `structuredContent` (outcome, stage, mandate, history, pursuit summary) beside the unchanged text.
 **Success Criteria**: plain task, goal task and list each carry every field, equal to the board; text byte-identical; `structured: true` capability.
-**Status**: Not Started (candidate)
+**Status**: Complete (INV-1506, PR #478)
 
 ## Stage 2: goals through the door (INV-1507)
 **Goal**: `goal_start` and `goal_control` over the same `goalCommand`; resume only what the principal itself paused.
 **Success Criteria**: key replay makes no second goal; no key refused; another's goal refused; system pause not resumable; drafting turn runs without closing the pursuit.
-**Status**: Not Started (candidate)
+**Status**: Complete (INV-1507, PR #480; INV-1511 fixed on the way, PR #479)
 
 ## Stage 3: watch (INV-1508)
 **Goal**: a long-poll change feed from `TaskBoard.onChange`, bounded ring, cursor with reset.
 **Success Criteria**: change wakes a waiter; timeout returns empty; stale cursor resets; `mine` scoped; no listener leak.
-**Status**: Not Started (candidate)
+**Status**: Complete (INV-1508, PR #481)
 
 ## Stage 4: the watchdog (INV-1509)
 **Goal**: `agentbox watchdog` as a separate process with its own token; deterministic rules; `raise_attention`; `--on-down`.
 **Success Criteria**: each rule fires and stays quiet when it should; cooldown; on-down runs when the door is gone; a stalled task shows the note in "needs you".
-**Status**: Not Started (candidate)
+**Status**: Complete (INV-1509, PR #482)
 
 ## Stage 5: compatibility spike (INV-1510)
 **Goal**: an outside supervisor drives the team through the contract alone, in a throwaway container.
 **Success Criteria**: a report with a gap table, or a recorded reason the runtime was unavailable.
-**Status**: Not Started (candidate)
+**Status**: Complete — protocol layer passed; full run blocked on disk, model key, GitHub account (INV-1510 report; gap INV-1512)
