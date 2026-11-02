@@ -18,12 +18,25 @@ export interface DoorReply {
 
 export interface Door {
   call(name: string, args: Record<string, unknown>, options?: { idempotencyKey?: string; timeoutMs?: number }): Promise<DoorReply>;
+  /** The side door's stated capabilities (`initialize`), so a watchdog can tell a door too old for it (INV-1517). */
+  capabilities?(): Promise<Record<string, boolean>>;
 }
 
 export function doorClient(url: string, token: string, fetchImpl: typeof fetch = fetch): Door {
   const endpoint = `${url.replace(/\/+$/, "")}/mcp`;
   let id = 0;
   return {
+    async capabilities() {
+      let response: Response;
+      try {
+        response = await fetchImpl(endpoint, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method: "initialize", params: {} }), signal: AbortSignal.timeout(15_000) });
+      } catch (error) {
+        throw new DoorUnreachable(`${endpoint}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      if (response.status !== 200) throw new DoorUnreachable(`${endpoint}: HTTP ${response.status}`);
+      const body = (await response.json()) as { result?: { capabilities?: { experimental?: { lumenbox?: Record<string, boolean> } } } };
+      return body.result?.capabilities?.experimental?.lumenbox ?? {};
+    },
     async call(name, args, options = {}) {
       let response: Response;
       try {
