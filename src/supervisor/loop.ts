@@ -39,10 +39,12 @@ export interface SupervisorDeps {
   now?: () => Date;
   /** Seconds a watch waits; tests use 0. */
   watchSeconds?: number;
+  /** A person asked this run to stop (INV-1527): checked between watches and before each wake. */
+  shouldStop?: () => boolean;
 }
 
 export interface SupervisorResult {
-  outcome: "completed" | "cleared" | "cancelled" | "no_goal" | "limit_time" | "limit_calls" | "model_error";
+  outcome: "completed" | "cleared" | "cancelled" | "no_goal" | "limit_time" | "limit_calls" | "model_error" | "stopped";
   goalId?: string;
   modelCalls: number;
   usage: { input: number; output: number; reasoning: number };
@@ -192,6 +194,7 @@ export class Supervisor {
       if (end !== undefined) return result(end);
       if (this.now().getTime() - startedAt.getTime() >= this.limits.maxMinutes * 60_000) return result("limit_time");
       if (this.modelCalls >= this.limits.maxModelCalls) return result("limit_calls");
+      if (this.deps.shouldStop?.() === true) return result("stopped");
       const watched = await this.deps.door.call("watch", { since: cursor, wait_seconds: this.deps.watchSeconds ?? 30 }, { timeoutMs: 60_000 });
       const feed = watched.structured as { events?: { taskId: string; status: string; stage?: string; pursuit?: { status: string; pausedReason?: string } }[]; cursor?: string } | undefined;
       cursor = feed?.cursor ?? cursor;
@@ -200,6 +203,7 @@ export class Supervisor {
       if (mine.length === 0 && !quiet) continue;
       const current = await this.goalRecord();
       if (this.ended(current) !== undefined) return result(this.ended(current)!);
+      if (this.deps.shouldStop?.() === true) return result("stopped");
       lastWake = this.now().getTime();
       const what = mine.length > 0 ? `The goal's record changed: ${mine.map(event => `${event.status}${event.stage !== undefined ? ` ${event.stage}` : ""}${event.pursuit !== undefined ? ` goal ${event.pursuit.status}${event.pursuit.pausedReason !== undefined ? ` (${event.pursuit.pausedReason})` : ""}` : ""}`).join("; ")}.` : `No change for ${this.limits.idleWakeMinutes} minutes.`;
       try {

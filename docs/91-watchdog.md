@@ -13,7 +13,20 @@ The watchdog is the loop outside. It is the first client of the supervisor contr
 [docs/90](90-outside-supervisor.md), and it follows the rule that page sets: a supervisor is a
 principal on the door, not a hand in the box.
 
-## Running it
+## In the app
+
+Nothing to install. The desktop app runs the watchdog, together with the supervisor's run queue,
+as one child process beside the server: `agentbox supervision`. The app starts it once the server
+is ready, restarts it if it exits, restarts it when settings change, and stops it on quit. On
+first start the process issues its own door token for the installation's admin, labelled
+"LumenBox supervision" in Settings → MCP. It keeps the token in `~/.agentbox/supervision/token`
+and reuses it from then on. If the door refuses it, the process issues a new one once. What a person
+should hear, such as the server not answering, a token refused, or a run that could not start,
+arrives as the app's own notification. The log is `~/Library/Logs/LumenBox/supervision.log`. The tray shows
+whether supervision is running. Its settings live in the `supervision` section of `config.json`,
+and the watchdog is on unless that section turns it off.
+
+## Running it by hand
 
 Mint a side-door token in Settings → MCP. The token belongs to a person, and every flag the
 watchdog raises is in that person's name. Then run:
@@ -32,9 +45,11 @@ The token can come from `AGENTBOX_WATCHDOG_TOKEN` instead. Other flags:
 | `--on-down` | none | A shell command run once per outage when the door stops answering; `WATCHDOG_REASON` says why. |
 | `--judge` | off | Ask the decision model, once an hour per active goal, whether its latest moves advance the checklist. |
 
-## Running it as a service
+## Without the app
 
-On a Mac, install it once and it starts at login and restarts if it exits:
+On a headless machine, run it by hand, or install it as a launchd service. App users need neither.
+
+Install it once and it starts at login and restarts if it exits:
 
 ```
 agentbox watchdog install            # mints a token for the installation's admin, decision model on

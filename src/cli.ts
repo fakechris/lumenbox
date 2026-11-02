@@ -126,8 +126,7 @@ async function cmdBoxUp(argv: string[]): Promise<number> {
   const manager = new BoxManager(boxConfig({ withHost }));
   const recreate = argv.includes("--recreate");
 
-  // Recreating destroys everything not on a volume, so it asks before it does — but only
-  // when there is something to lose, because a confirmation that always appears is one
+  // Recreating destroys everything not on a volume, so it asks before it does — but only when there is something to lose, because a confirmation that always appears is one
   // that is always dismissed.
   if (recreate && (await manager.state()) !== "missing") {
     const findings = await inspectBeforeUpgrade(manager);
@@ -1646,6 +1645,7 @@ async function main(): Promise<number> {
     case "improve": return (await import("./host/improve.ts")).cmdImprove(rest); // INV-1473: a check-up for one agent, proposal only
     case "watchdog": return (await import("./watchdog/main.ts")).cmdWatchdog(rest, { token: process.env.AGENTBOX_WATCHDOG_TOKEN, processEnv: process.env }); // INV-1509, docs/91
     case "supervise": return (await import("./supervisor/main.ts")).cmdSupervise(rest, { openaiToken: process.env.OPENAI_TOKEN ?? process.env.OPENAI_API_KEY, doorToken: process.env.AGENTBOX_SUPERVISOR_TOKEN }); // INV-1518, docs/90 §3.5
+    case "supervision": return (await import("./supervision/main.ts")).cmdSupervision(rest, { uiToken: process.env.AGENTBOX_UI_TOKEN, openaiToken: () => process.env.OPENAI_TOKEN ?? process.env.OPENAI_API_KEY }); // INV-1527: the app's watchdog + supervisor process
     case "bundle": return cmdBundle(rest);
 
     case "host": {
