@@ -207,11 +207,9 @@ import { TOOL_BUDGET_WARNING } from "../host/mcp.ts";
 import { isMcpEntry } from "../host/scopes.ts";
 import {
   handleMcpRequest,
-  mintMcpToken,
-  principalForToken,
-  type McpAccessToken,
   type McpServerTool,
 } from "./mcp-server.ts";
+import { McpTokenStore } from "./mcp-tokens.ts";
 import { Vault, type Grant } from "../host/vault.ts";
 import { setRedactionSource } from "../host/secret-redaction.ts";
 import { OAuthGate } from "../host/oauth.ts";
@@ -807,15 +805,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // hands out a short-lived invite code the person redeems in the chat itself.
   // In memory on purpose: a knock lost to a restart costs the person one more
   // message, and a code that did not outlive the process is a *property* of a code.
-  /**
-   * Access tokens for the MCP side door, one per person per client.
-   *
-   * In memory, matching the invite codes above: a token that does not survive a
-   * restart is a token nobody has to remember to revoke, and re-issuing one is a
-   * click. Persisting them is the change to make when somebody's IDE is annoyed by
-   * it, not before.
-   */
-  const mcpTokens: McpAccessToken[] = [];
+  // Side-door tokens, one per person per client, kept across restarts as hashes (INV-1520, mcp-tokens.ts).
+  const mcpTokens = new McpTokenStore(join(agentboxHome(), "mcp-tokens.json"), line => log(line));
 
   const knocks = new Map<
     string,
@@ -3243,7 +3234,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (
         await handleMcpRequest(req, res, {
           tools: sideDoorTools(),
-          principalFor: presented => principalForToken(presented, mcpTokens),
+          principalFor: presented => mcpTokens.principalFor(presented),
           log: line => log(line),
           idempotency: sideDoorIdempotency,
         })
@@ -4663,8 +4654,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 400, { error: "A token belongs to a person; sign in or name one." });
             return;
           }
-          const minted = mintMcpToken(owner, String(body.label ?? ""));
-          mcpTokens.push(minted);
+          const minted = mcpTokens.mint(owner, String(body.label ?? ""));
           log(`mcp token issued to ${owner} (${minted.label})`);
           // The only time the secret is ever returned: it is not stored anywhere it
           // could be read back, so a lost one is re-issued rather than recovered.
@@ -4675,21 +4665,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "POST /api/mcp/tokens/revoke") {
           if (refusedRole("driver")) return;
           const body = await readJson(req);
-          const at = mcpTokens.findIndex(
-            entry =>
-              entry.createdAt === String(body.createdAt ?? "") &&
-              // A driver may only revoke their own; an admin may revoke anyone's.
-              (entry.principalId === caller.userId ||
-                roleAtLeast(
-                  caller.userId === undefined ? "admin" : principals.roleOf(caller.userId),
-                  "admin"
-                ))
-          );
-          if (at < 0) {
+          // A driver may only revoke their own; an admin may revoke anyone's.
+          const isAdmin = roleAtLeast(caller.userId === undefined ? "admin" : principals.roleOf(caller.userId), "admin");
+          if (!mcpTokens.revoke(String(body.createdAt ?? ""), entry => entry.principalId === caller.userId || isAdmin)) {
             send(res, 404, { error: "No token of yours matches." });
             return;
           }
-          mcpTokens.splice(at, 1);
           send(res, 200, { revoked: true });
           return;
         }
@@ -4738,12 +4719,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             budget: TOOL_BUDGET_WARNING,
             extensions: orchestrator.extensions?.current() ?? null,
             // Never the secrets — only that they exist, whose they are, and when.
-            tokens: mcpTokens.map(entry => ({
-              label: entry.label,
-              principalId: entry.principalId,
-              createdAt: entry.createdAt,
-              mine: entry.principalId === caller.userId,
-            })),
+            tokens: mcpTokens.list().map(entry => ({ ...entry, mine: entry.principalId === caller.userId })),
           });
           return;
         }

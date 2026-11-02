@@ -25,7 +25,7 @@
       "src/host/turn.ts": 3781,
       "src/protocol/index.ts": 1063,
       "src/web/app-html.ts": 7682,
-      "src/web/server.ts": 7205
+      "src/web/server.ts": 7181
     }
   },
   "env": {

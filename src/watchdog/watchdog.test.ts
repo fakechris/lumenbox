@@ -172,3 +172,25 @@ test("the decision model is not asked unless it was given", async () => {
     await door.stop();
   }
 });
+
+test("a refused token is said once and is not an outage: no on-down command, and a later acceptance clears it (INV-1520)", async () => {
+  const { DoorRefused } = await import("./client.ts");
+  let refuse = true;
+  const logs: string[] = [];
+  const downs: string[] = [];
+  const door: Door = {
+    call: async name => {
+      if (refuse) throw new DoorRefused("http://127.0.0.1:7777/mcp: HTTP 401");
+      return name === "watch" ? { text: "", isError: false, structured: { events: [], cursor: "0", reset: false } } : { text: "", isError: false, structured: { tasks: [] } };
+    },
+  };
+  const watchdog = new Watchdog({ door, waitSeconds: 0, log: line => logs.push(line), onDown: async reason => { downs.push(reason); } });
+  for (let i = 0; i < 3; i++) assert.deepEqual(await watchdog.tick(), ["refused"]);
+  assert.equal(logs.filter(line => /does not accept this token/.test(line)).length, 1, "said once");
+  assert.deepEqual(downs, [], "not an outage");
+  refuse = false;
+  assert.deepEqual(await watchdog.tick(), []);
+  refuse = true;
+  await watchdog.tick();
+  assert.equal(logs.filter(line => /does not accept this token/.test(line)).length, 2, "a new refusal after an acceptance is said again");
+});
