@@ -10,6 +10,7 @@ import type { StageWorld } from "../host/task-stage.ts";
 import { describeTask, isLive, type Task } from "../host/tasks.ts";
 import type { TurnEvent } from "../host/turn.ts";
 import { describeOutcome, outcomeOf } from "./mcp-contract.ts";
+import { mcpGoalTools } from "./mcp-goal-tools.ts";
 import { taskRecord } from "./mcp-record.ts";
 import type { McpServerTool } from "./mcp-server.ts";
 
@@ -23,6 +24,8 @@ export interface McpToolsDeps {
   listen: (listener: (event: TurnEvent) => void) => () => void;
   /** What the stage table reads beside a task (INV-1506); absent, a record carries no stage. */
   stageWorld?: (task: Task) => StageWorld;
+  /** Whether a principal may drive an agent's box; given, the goal tools are on the door (INV-1507). */
+  mayDrive?: (agentId: string, principalId: string) => boolean;
 }
 
 export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
@@ -205,5 +208,6 @@ export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
         return `Saved the current desktop of ${agent.profile.name} to ${path}.`;
       },
     },
+    ...(deps.mayDrive !== undefined ? mcpGoalTools({ registry, orchestrator, mayDrive: deps.mayDrive, nameOf: id => principals.resolve(id).name, log }) : []),
   ];
 }

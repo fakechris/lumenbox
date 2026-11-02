@@ -2,7 +2,7 @@
      title: Goal 模式：一个持久目标、一个有界的续跑循环、一道不归执行者管的完成闸门
      family: decision
      status: current
-     updated: 2026-11-01
+     updated: 2026-11-02
 -->
 # 74. Goal 模式：一个持久目标、一个有界的续跑循环、一道不归执行者管的完成闸门
 
@@ -275,3 +275,14 @@ Task.pursuit.experiments?: [{ n, kind: "new" | "repeat" | "wrapup", hypothesis, 
 Task.pursuit.spent.repeatStreak?: number
 pausedReason 增 "repeating"
 ```
+
+## 9. 从门进来的目标（INV-1507，2026-11-02）
+
+外部委托人（持 MCP 令牌的 agent，docs/90）经 `goal_start` 创建目标：同一个 `goalCommand`，同样的驱动权、
+上下文、阻塞与重复检查；调用的 Idempotency-Key 就是消息 id 的位置，没有 key 不建。每个目标一个独立会话
+`mcp-<sha256(委托人, key) 前 16 位>`；起草清单的第一轮经 `orchestrator.prompt` 在该会话里跑，不另开任务。
+同一个 key 在重放存储过期之后再来，返回板上已有的那个目标。
+
+`goal_control` 只认本委托人发起的目标：pause、clear 自己说了算；resume 只续**本委托人自己的暂停**
+（`pursuit.pausedBy`）。闸门叫停的（budget、repeating、anti_spin、needs_person、验证失败……）和人在聊天里的
+`/goal pause` 都不能从门续——越过一个停是人的决定。加预算、replace、确认清单命令不经门。

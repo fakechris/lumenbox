@@ -68,6 +68,7 @@ export const SIDE_DOOR_CAPABILITIES = {
   ignored_fields: true,
   idempotency_key: true,
   structured: true, // task_status carries structuredContent (INV-1506).
+  goals: true, // goal_start / goal_control (INV-1507).
   cancel: false,
   streaming: false,
   files: false,
