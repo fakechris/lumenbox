@@ -1,198 +1,266 @@
 <!-- doc: 89-thesis
-     title: LumenBox 的设计：一支 agent 团队、一台台真机器、一套记录
+     title: The design of LumenBox: a team of agents, real machines, and one record
      family: decision
      status: current
      updated: 2026-11-01
 -->
-# LumenBox 的设计：一支 agent 团队、一台台真机器、一套记录
+# The design of LumenBox: a team of agents, real machines, and one record
 
-> 这篇写给没有接触过 LumenBox 的人：它解决什么问题，为什么这样分层，哪些决定定了调，哪些路明确不走，
-> 现在走到了哪里。它只谈设计，不是功能手册；具体机制在各自的设计文档里。
+> English · [中文](89-thesis.zh.md)
+>
+> This is for someone who has never used LumenBox. It covers the problem LumenBox solves,
+> why it is layered the way it is, which decisions set its character, which paths it refuses,
+> and how far it has come. It is about design, not features; each mechanism has its own document.
 
-## 1. 问题：单会话 agent 到不了"一支团队"
+## 1. The problem: a single-session agent does not add up to a team
 
-过去一年，coding agent 证明了模型能用工具做复杂的事，而且越来越不需要人盯着每一步。但主流 agent 的
-基本单位仍然是**一个会话**：一个人、一个终端、一件事、做完为止。把它接上聊天软件、日历、邮件之后，
-它能收到消息，但本质没变——一个同步循环，长操作会卡住它；几件事的上下文混在一个窗口里；机器一合盖它就
-停了；每一次都要人来开口。
+Over the past year, coding agents have shown that a model can do complex work with tools and
+needs a person watching each step less and less. But the basic unit of a mainstream agent is
+still **one session**: one person, one terminal, one task, until it is done. Wire it to a chat
+app, a calendar and email, and it can receive messages, but nothing essential changes. It is a
+synchronous loop that a long operation blocks. The context of several tasks is mixed in one
+window. It stops when the laptop lid closes. And every time, a person has to speak first.
 
-我们要的不是"更聪明的一个会话"，而是**一个团队能长期依赖的一组同事**：它们有自己的机器，随时在线；
-人从自己习惯的地方（桌面、飞书/钉钉群、一个 Webhook）指派工作；它们做完会说、做不完会问、做错了留
-得下证据；而团队的边界——谁能到哪、什么必须先问人——由系统而不是由措辞保证。
+What we want is not a smarter session. We want **a group of colleagues a team can rely on over
+time**. They have their own machines and are always online. People assign work from wherever
+they already are: the desktop app, a Feishu or DingTalk group, a webhook. The agents say when
+they are done, ask when they cannot finish, and leave evidence when they get something wrong.
+And the team's boundaries, meaning who can reach what and what must be asked first, are held by
+the system rather than by wording.
 
-这就把问题从"怎么让模型更会做事"换成了四个更朴素的问题：
+That turns "how do we make the model better at doing things" into four plainer questions:
 
-1. 它在**哪台机器**上做事，这台机器谁能到？
-2. 一件事**该谁做**，做的时候能不能被打断、被纠正？
-3. 它**能不能**做这件事——谁授权的、授权到哪一步？
-4. 它说"做完了"的时候，**凭什么信**？
+1. On **which machine** does it work, and who can reach that machine?
+2. **Who** should do a piece of work, and can they be interrupted and corrected while doing it?
+3. **May** it do this? Who authorised it, and how far does that authorisation go?
+4. When it says "done", **why should anyone believe it**?
 
-LumenBox 的全部分层，就是给这四个问题各找一个唯一的回答处。
+Every layer in LumenBox exists to give one of these questions exactly one place where it is answered.
 
-## 2. 三个单位
+## 2. Three units
 
-- **box**：一台真的 Linux 机器（本地容器，或远端挂载的机器），里面每个 agent 有自己的桌面、浏览器、shell
-  和文件。不是沙盒，是工作站：agent 在里面有 sudo，能装东西，能开 Chrome，能跑一整晚的任务。
-- **turn**：一个 agent 收到一样东西（一条消息、一个定时、一个事件），思考，用工具，停下。一个 agent 在一个
-  会话里一次只有一轮；一轮可以把长命令放到后台，命令结束再把它叫醒。
-- **record**：每一轮**真正做了什么**，存成数据——不是 agent 对自己的总结。工具调用、桌面动作的效果证据、
-  出站消息的收据、策略门的裁决，都在记录里；agent 的汇报只是记录之外的一段话。
+- **box**: a real Linux machine, either a local container or a remote machine you attach.
+  Inside it, every agent has its own desktop, browser, shell and files. It is not a sandbox but
+  a workstation: the agent has sudo, can install things, open Chrome, and run a job all night.
+- **turn**: an agent receives one thing (a message, a schedule, an event), thinks, uses tools,
+  and stops. An agent has one turn at a time per conversation. A turn can put a long command in
+  the background and be woken when it ends.
+- **record**: what each turn **actually did**, kept as data rather than as the agent's summary of
+  itself. Tool calls, the evidence of desktop actions, receipts for outgoing messages and the
+  verdicts of policy gates are all on the record. The agent's report is a paragraph beside it.
 
-人指派工作、agent 之间协作、系统做裁决，都围绕这三样东西转。
+Assigning work, agents working together and the system's verdicts all revolve around these three.
 
-## 3. 四层，每层只回答一个问题
+## 3. Four layers, each answering one question
 
 ```
- 人 ──► 门 ──────────► 宿主编排器 ──────────► box ──────────────► 外部世界
-        谁在说话、        这一轮该谁做、          动作真的落地了吗、        凭据不出机器、
-        说给谁             能不能、做了什么        人在不在用这台机器        出站有没有被拒
+ person ─► doors ─────────► host orchestrator ─────► box ───────────────► outside world
+           who is speaking,   whose turn is this,     did the action land,   credentials stay put,
+           to whom            may it, what happened   is a person using it   was egress refused
 ```
 
-| 层 | 它拥有的 | 它明确不做的 |
+| Layer | What it owns | What it explicitly does not do |
 |---|---|---|
-| **门**（桌面 App、飞书、钉钉、Telegram、Webhook、MCP） | 身份、地址、消息编号、收件账本；出站消息的**目的**（结果 / 提问 / 回答 / 确认 / 通知）和收据 | 不做路由决策，**不带权限**，不改内容 |
-| **宿主编排器**（主人的机器上） | 回合循环、消息总线与优先级、团队名册（box 归属与团队的唯一定义）、提示词装配、记忆、技能索引、任务板、工作授权书、策略门、预算、目标循环 | 不执行工具本体，不碰像素，不保存 agent 的自我总结 |
-| **box**（每个 agent 一台桌面） | 桌面、浏览器、shell 与后台作业、文件、录像、控件树、桌面所有权（人接管时 agent 必须停手）、动作效果测量 | 不决定该不该做（那是上一层的门），不保存会话状态 |
-| **出站**（中继） | 凭据注入（agent 看不到值）、目标地址解析后再拦截、每次调用一个凭证、拒绝记录 | 不理解内容 |
+| **Doors** (desktop app, Feishu, DingTalk, Telegram, webhook, MCP) | Identity, address, message ids, the inbound ledger; the **purpose** of each outgoing message (result, question, answer, acknowledgement, notice) and its receipt | No routing decisions, **no authority**, no rewriting |
+| **Host orchestrator** (on the owner's machine) | The turn loop, the message bus and priorities, the team roster (the one definition of which box belongs to which team), prompt assembly, memory, the skill index, the task board, work mandates, policy gates, budgets, the goal loop | Does not run tools itself, does not touch pixels, does not keep the agent's self-summary |
+| **Box** (one desktop per agent) | Desktops, browser, shell and background jobs, files, recordings, the accessibility tree, desktop ownership (when a person takes over, the agent must stop), measuring the effect of actions | Does not decide whether to act (that is the gate one layer up), keeps no conversation state |
+| **Egress** (the relay) | Credential injection (the agent never sees the value), blocking after the destination is resolved, one credential per call, a record of refusals | Does not understand content |
 
-为什么是这四层，而不是常见的"一个路由大脑 + 一群执行者"：我们的瓶颈从来不是消息量，是**权限与证据**。
-把"谁能到哪"钉死在 box 一层（门不带权限、同一台机器里的 agent 权限一律平等），把"真的做了没"钉死在
-box 与记录，其余的东西才能随便换——换模型、把 box 从本地换成远端机器、把飞书换成钉钉，都不动另外三层。
-四层之间只有一个合同：JSON over HTTP，加一条看屏幕的 WebSocket。
+Why these four layers rather than the familiar "one routing brain plus many workers"? Our
+bottleneck was never message volume. It is **authority and evidence**. Pin "who can reach what"
+to the box (doors carry no authority, and agents in one machine are equal in reach). Pin "did it
+really happen" to the box and the record. Then everything else can change freely: switching
+models, moving a box from local to remote, swapping Feishu for DingTalk, none of these touch the
+other three layers. The four layers share one contract: JSON over HTTP, plus one WebSocket for
+watching screens.
 
-## 4. 工作从哪来：事件，不是提示词
+## 4. Where work comes from: events, not prompts
 
-一个长期在线的团队，输入主要不是人打的一句话，而是环境里不断发生的事：群消息、邮件、日历、CI 结果、
-一个到期的例程。LumenBox 把它们都当作**触发**，走同一条路：
+For a team that is always online, most input is not a sentence someone typed. It is what keeps
+happening around it: group messages, email, calendars, CI results, a routine that has come due.
+LumenBox treats all of them as **triggers** on one path.
 
-**先筛，再判。** 便宜的、确定的判断用代码：这个群要不要理、这个人在不在名单、这条是不是点名了谁。只有
-过了代码这一关的，才交给模型判断要不要行动。模型的判断可以用自然语言随时增减规则；代码的规则不能被
-措辞绕过。
+**Filter first, then judge.** Cheap, certain decisions are made in code: whether this group is
+listened to, whether this person is on the list, whether this message names someone. Only what
+passes code goes to a model to decide whether to act. The model's rules can be changed in plain
+language at any time; the code's rules cannot be talked around.
 
-**线程归正在做的人。** 一个话题线程、一个 PR、一封邮件链里的后续消息，不再回到"中央"重新分配，而是直接
-给正在做这件事的 agent：它要么接着做，要么用一句理由退回，退回之后这条消息才重新路由。没有线程的群聊
-不享受这个待遇——一个群不是一个订阅。
+**A thread belongs to whoever is working it.** Follow-ups in a topic thread, a pull request or an
+email chain do not go back to the centre to be reassigned. They go straight to the agent already
+doing that work, which either carries on or hands it back with a one-line reason; only then is
+the message routed again. A group chat without threads does not get this treatment: a group is
+not a subscription.
 
-**观察档。** 任何会主动做事的东西——监听、定时例程、Webhook——都有 `off / observe / auto` 三档。observe
-只记录"本来会做什么"，不做。一个团队可以先看一周它想做什么，再放手。
+**Observe mode.** Anything that acts on its own (a listener, a scheduled routine, a webhook) has
+three settings: `off`, `observe` and `auto`. Observe only records what it would have done. A team
+can watch for a week what it wants to do before letting it.
 
-**先做了再说。** 对于"安静复现并修复"这类策略，agent 可以在后台先动手，确认了结果才开口；确认不了就
-一直安静。这是预算允许范围内的投机，不是承诺。
+**Act first, speak after.** Under a policy such as "quietly reproduce and fix", an agent may start
+in the background and speak only once it has a confirmed result; if it cannot confirm, it stays
+quiet. This is speculation within budget, not a promise.
 
-## 5. 上下文：窗口是缓存
+## 5. Context: the window is a cache
 
-模型的上下文窗口有限，塞多了注意力被稀释，塞少了它要反复调工具去读。我们把窗口当缓存：
+A model's context window is finite. Fill it and attention is diluted; starve it and the model
+keeps calling tools to re-read. We treat the window as a cache.
 
-- **先给摘要和编号，按需展开。** 历史、长输出、技能正文都不直接进窗口——进的是一行描述和一个可读的
-  指针；技能索引只放"何时用"，正文由 agent 自己打开；过长的读取被截断并留下"从哪继续"的指针。
-- **记忆是选出来的，不是全带的。** 每轮按请求从记忆里选一小批，并多问一次"够不够、有没有误导的"；记忆
-  行上带有它是事件、事实、流程还是偏好的分数，让"怎么做"的问题偏向流程、"他喜欢什么"的问题偏向偏好。
-- **每轮记下它是在哪个版本的 agent 下发生的。** 人格文件、技能描述、内置规则各有哈希写进当轮记录，所以
-  "改了提示词之后到底好没好"是可以回放的问题，不是感觉。
+- **Summaries and pointers first, expanded on demand.** History, long output and skill bodies do
+  not go into the window directly. What goes in is one line of description and a readable
+  pointer. The skill index holds only "when to use"; the agent opens the body itself. A read that
+  is too long is cut and leaves a pointer saying where to continue.
+- **Memory is selected, not carried whole.** Each turn picks a small set of memories for the
+  request and asks once more whether that is enough and whether any of it misleads. Each memory
+  carries scores for being an event, a fact, a procedure or a preference, so "how do I" leans
+  toward procedures and "what does this person like" leans toward preferences.
+- **Each turn records which version of the agent it ran under.** The persona files, skill
+  descriptions and built-in rules each have a hash written into the turn's record. "Did it get
+  better after we changed the prompt" becomes a question you can replay, not a feeling.
 
-## 6. 交互：全双工，分渠道说话
+## 6. Interaction: full duplex, and each channel has its own manners
 
-**长操作不堵住对话。** 一条命令跑过几秒就自动转到后台，回合结束；命令结束时作为一条消息把 agent 叫醒。
-人的消息永远有一个并发槽，不会排在后台工作后面；正在跑的一轮可以被人的一句纠正打断并吸收。
+**Long operations do not block the conversation.** A command that runs more than a few seconds
+moves to the background and the turn ends; when it finishes, it wakes the agent as a message. A
+person's message always has a slot of its own and never queues behind background work. A turn
+in progress can be interrupted by a person's correction and take it in.
 
-**在哪说、怎么说，由渠道决定。** 群里只说结论、只问直接的问题、要决定的时候才打扰；文档和 PR 里给结构化、
-信息密集的输出。更重要的是**出站有门**：一条"结果"必须有交付物，一条"提问"必须有待答的问题，一条"回答"
-必须对应着一个人问过的问题——不满足的不发。每条出站消息有确定性编号和收据，重试不会发两遍；投递失败三次
-是一条需要人看的事项，不是一行日志。
+**Where and how to speak depends on the channel.** In a group: conclusions only, direct questions
+only, and interrupt only when a decision is needed. In documents and pull requests: structured,
+dense output. More importantly, **outgoing messages pass a gate**. A "result" must carry a
+deliverable, a "question" must have something open to answer, and an "answer" must match a
+question a person actually asked. What fails is not sent. Every outgoing message has a
+deterministic id and a receipt, so a retry never sends twice; three failed deliveries become
+something for a person to look at, not a line in a log.
 
-**人随时能接管。** 桌面可以接管，接管期间 agent 的一切输入被拒绝、它必须等；接管也是示范——人做一遍，
-agent 把它学成一个可以参数化的技能，只做 dry run，绝不自动跑。
+**A person can always take over.** You can take over a desktop, and while you hold it every input
+from the agent is refused and it has to wait. Taking over is also teaching: you do it once and the
+agent learns it as a skill with parameters, which it only dry-runs and never runs on its own.
 
-## 7. 机器：计算、状态与执行环境怎么分
+## 7. Machines: how compute, state and execution environment are split
 
-常见的做法是把 agent 的循环、会话状态和执行环境都放在云里，再想办法把人的本地环境同步上去。我们反过来：
+The usual approach puts the agent's loop, its session state and its execution environment in the
+cloud, then tries to sync a person's local environment up to it. We do the opposite.
 
-- **执行环境就是 box，它在主人手里。** 本地容器也好，挂在远端的一台机器也好，未提交的改动、内网依赖、
-  私有凭据都留在它原来的地方；编排器通过一个轻量守护进程使用它，守护进程不保存会话状态。
-- **状态是文件。** agent 是目录，会话是只追加的文件，记录是 JSONL。agent 用同一把 shell 读队友的档案，人用
-  编辑器也能读；备份就是复制目录。
-- **编排器留在主人的机器上。** 这是一个刻意的选择：主人的机器就是信任边界。把循环挪到云里，意味着要
-  重新回答"谁能到哪"。想从外面用自己的 box，答案是出站中继（box 主动连出去，端到端加密），不是把 box
-  搬进云。
-- **box 有代际。** 机器重建或重连之后，旧一代留下的慢回调（一个作业结束的唤醒、一个例程的投递）不会落到
-  新机器上，而是被丢弃并记一行。
+- **The execution environment is the box, and it stays with its owner.** Whether a local container
+  or a remote machine you attach, uncommitted changes, internal dependencies and private
+  credentials stay where they already are. The orchestrator uses it through a lightweight daemon
+  that keeps no session state.
+- **State is files.** An agent is a directory, a conversation is an append-only file, and the
+  record is JSONL. An agent reads a teammate's files with the same shell; a person can read them
+  in an editor; a backup is a copy of the directory.
+- **The orchestrator stays on the owner's machine.** This is deliberate: the owner's machine is the
+  trust boundary. Moving the loop to the cloud means answering "who can reach what" all over
+  again. To use your own box from outside, the answer is the outbound relay, where the box dials
+  out with end-to-end encryption, not moving the box into the cloud.
+- **Boxes have generations.** After a machine is rebuilt or reconnected, slow callbacks left by the
+  previous generation (a job's "finished" wake-up, a routine's delivery) do not land on the new
+  machine; they are dropped with one log line.
 
-## 8. 权限：两道门，没有第三层
+## 8. Authority: two gates, and no third
 
-这是整个系统最硬的一条原则：
+This is the hardest rule in the system.
 
-- **外门是安装的。** 你是不是我们的人，能不能管理这套系统。
-- **内门是 box 的。** 一台机器的持有者能到哪，里面的一切就能到哪。渠道不带权限，agent 不带权限；同一台
-  机器里的两个 agent 可以在人格、模型、分工上不同，**在"能到哪"上一律平等**——一个 agent 能碰到的秘密
-  它同事碰不到，是建模错误，秘密放错了机器。
-- "私有 / 共享"不是两种类型，只是持有者集合的大小：一个人、一个部门、所有人，同一个概念，同一道检查。
+- **The outer gate belongs to the installation.** Are you one of us, and may you manage this system.
+- **The inner gate belongs to the box.** Whatever the holders of a machine can reach, everything in
+  it can reach. Channels carry no authority and agents carry no authority. Two agents in one
+  machine may differ in persona, model and duties, but **are equal in what they can reach**. A
+  secret that one agent can touch and its colleague cannot is a modelling error: the secret is in
+  the wrong machine.
+- "Private" and "shared" are not two kinds of thing. They are the size of the holder set: one
+  person, one department, everyone. One concept, one check.
 
-在这两道门之上，还有三样东西不归 agent 的措辞管：**工作授权书**（这件事谁让做的、凭什么、能到哪一步、
-策略版本是什么；唤醒和续做前重新验证，策略变了就停下来问）；**策略门**（不可逆的动作——付款、发送、删除、
-发布——先问人；读过私密材料之后，出站到白名单之外先问人）；**预算**（次数、时长、成本，到线即停并汇报）。
+Above these two gates, three more things are not governed by the agent's wording. **Work
+mandates** say who asked for this, on what grounds, how far it may go and under which policy
+version; they are re-checked before waking and before resuming, and a policy change makes the
+agent stop and ask. **Policy gates** ask a person before irreversible actions such as paying,
+sending, deleting and publishing, and ask before sending anything outside the allow-list after
+private material was read. **Budgets** cap attempts, time and cost; at the line the work stops
+and reports.
 
-## 9. 证据：说"做完了"的时候凭什么信
+## 9. Evidence: why believe "done"
 
-- 桌面动作带**效果证据**：点击前后邻域像素的变化、控件树的回读、人写的后置条件；结果只有四种——成功、
-  失败、被拒、未知——**未知永远不算成功**，也永远不自动重试写操作。
-- 每个桌面动作还带**送达裁决**：没发出去 / 发了一部分 / 发了没验证 / 发了且看到变化 / 不知道。只有"没发出去"
-  可以原样再发一次；一个开关类按钮重复点击会把自己撤销，所以按类别判幂等是错的，按本次证据判才对。
-- 控件引用有**身份**：点击前重读界面重识别，控件消失了拒绝（而不是点到补位的那一行），有两个同样的也拒绝。
-- 汇报里引用的网页和文件必须是本轮真读过的，否则标出来。
-- 每条回复都有一个便宜的评审打标签（答了 / 没答 / 讲过程不讲结果 / 串了上下文）；坏样本自动沉淀成测试
-  用例，改提示词之后可以回放。
+- Desktop actions carry **effect evidence**: the change in nearby pixels before and after a click,
+  a read-back of the accessibility tree, a postcondition a person wrote. There are only four
+  outcomes: succeeded, failed, refused, unknown. **Unknown is never success**, and a write is
+  never retried automatically.
+- Every desktop action also carries a **delivery verdict**: not sent, partly sent, sent but not
+  verified, sent and a change seen, or don't know. Only "not sent" may be sent again as it was.
+  Clicking a toggle twice undoes it, so judging idempotency by the kind of action is wrong; it has
+  to be judged by this attempt's evidence.
+- References to controls have **identity**. Before a click the screen is re-read and the control
+  re-identified; if it has gone the click is refused rather than landing on whatever row moved
+  into its place, and if there are two identical ones it is refused too.
+- Pages and files cited in a report must have been read in this turn, or they are flagged.
+- Every reply gets a cheap review label: answered, not answered, narrated the process instead of
+  the result, or mixed up contexts. Bad examples become test cases automatically and can be
+  replayed after the prompt changes.
 
-## 10. 看门狗：长时间运行怎么不跑偏
+## 10. Watchdogs: how long runs stay on course
 
-长期在线的系统靠内部逻辑是撑不住的，要有外面的一圈控制：
+A system that is always on cannot rely on its own internal logic. It needs a control loop from
+outside.
 
-- **目标模式**有四道闸：连续几轮不干活、连续几轮没有变化、次数上限、时长/成本上限；到线即暂停并汇报，
-  不是静默停下。续跑有一本**实验账本**——每轮试了什么假设、结果如何；连续两轮在重复旧假设就暂停，没有
-  新假设就报告 blocked。"做完了"的判断不归执行者，由另一个会话验证清单。
-- **注意力阶段表**：每件工作此刻在等谁、等什么，由一张互斥全覆盖的表机械推出（等投递、等回答、等验收、
-  被卡住、排队中、工作中、等触发、已结束），放在首屏——人看一眼就知道哪些需要自己。
-- **体检**：一条命令读一个 agent 的定义，自动造出一组场景（含空输入、歧义、超范围、必须拒绝四类边界），
-  在隔离会话里真跑，打分，输出一份对其人格文件的改动提案——**不自动应用**。
+- **Goal mode** has four stops: several rounds with no work done, several rounds with nothing
+  changed, a cap on attempts, and a cap on time or cost. At the line it pauses and reports rather
+  than stopping silently. Continuing runs keep an **experiment ledger** recording the hypothesis
+  each round tried and how it went. Two rounds repeating an old hypothesis pause the run; having
+  no new hypothesis is reported as blocked. "Done" is not for the worker to say: another session
+  checks the checklist.
+- **The attention table** derives mechanically, from one mutually exclusive and exhaustive table,
+  who each piece of work is waiting on and for what: awaiting delivery, awaiting an answer,
+  awaiting acceptance, stuck, queued, working, waiting for a trigger, finished. It sits on the
+  first screen, so a person sees at a glance what needs them.
+- **The check-up** is one command. It reads an agent's definition, generates a set of scenarios
+  that always includes four edges (empty input, ambiguity, out of scope, must refuse), runs them
+  for real in isolated conversations, scores them, and writes a proposed change to the agent's
+  persona files. **It is never applied automatically.**
 
-## 11. 决策模型：便宜的判断放在开关后面
+## 11. The decision model: cheap judgments behind switches
 
-除了做事的主模型，系统里有一个便宜的"决策模型"，只回答是非题和选择题，用在十来个点上：哪些记忆值得带、
-回复算不算答了、例程结果要不要投递、点击前这个按钮像不像"付款"、从控件列表里选哪一个。每个点有自己的
-开关：`off / shadow / on`，shadow 只把它的判断记在主路径旁边做对比，不改行为。两条铁律：**未设即 off**
-（不会悄悄发远程调用）；**它绝不产生要输入的文本**——它读得太字面，会把页面里的话当指令。
+Besides the main model that does the work, the system has a cheap "decision model" that only
+answers yes/no and multiple-choice questions. It is used at about a dozen points: which memories
+are worth bringing, whether a reply actually answered, whether a routine's result should be
+delivered, whether the button about to be clicked looks like "pay", which element in a list to
+pick. Each point has its own switch: `off`, `shadow` or `on`. Shadow writes its judgment next to
+the main path for comparison without changing behaviour. Two firm rules: **unset means off**, so
+it never quietly makes a remote call; and **it never produces text to be typed**, because it reads
+too literally and would take words on a page as instructions.
 
-## 12. 定了调的决定，和被拒绝的路
+## 12. Decisions that set the character, and the paths refused
 
-| 决定 | 为什么 | 拒绝了什么 |
+| Decision | Why | What was refused |
 |---|---|---|
-| 一个 agent 一台桌面 | 焦点是合成输入跟随的东西，共享显示一定会撞 | 一个显示上的窗口路由 |
-| 文件系统就是数据库 | agent 和人用同一种方式读；备份是复制 | 数据库 |
-| box 是权限单位，机器里的 agent 一律平等 | 权限差异 = 秘密放错了机器 | 每-agent 权限集、渠道权限 |
-| 不提供共享卷、同步守护、"一个 agent 两台机器" | 每一个都是藏在一个 worker 里的第二个权威 | 第二权威 |
-| 路由是代码，不是一个长寿的"路由会话" | 带记忆的全局节点会长成第三层权限 | 全局路由大脑 |
-| 编排器留在主人机器上 | 那就是信任边界 | 把循环搬进云 |
-| 计划是数据，不是代码 | 模型写的脚本没有边界；真沙盒是又一个运行时 | 模型写脚本在沙盒里跑 |
-| "做完了"由另一个会话验证 | 自审是"停下冒充完成"的温床 | agent 自标完成 |
-| 内置规则可以被团队覆盖，门不能 | 团队要自己的措辞，但权限不是措辞 | 一切皆提示词 |
-| 默认安全姿态 | 多问一句是一句话，重复付款是一笔钱 | 乐观默认、自动重试 |
-| 第三方桌面工具可以跑，但不进产品通道 | 绕过 box 的守护进程，所有门和记录都看不见 | 旁路的执行通道 |
-| 不做托管服务、不做自治机群、不做不受信代码的沙盒 | 一个 box、一个团队、一个主人；容器是边界，agent 有 sudo | — |
+| One desktop per agent | Focus is what synthetic input follows; a shared display will collide | Routing windows on one display |
+| The file system is the database | Agents and people read it the same way; a backup is a copy | A database |
+| The box is the unit of authority; agents in a machine are equal | A difference in authority means a secret is in the wrong machine | Per-agent permission sets, per-channel authority |
+| No shared volumes, no sync daemon, no "one agent, two machines" | Each one is a second authority hidden inside a worker | A second authority |
+| Routing is code, not a long-lived "routing session" | A global node with memory grows into a third layer of authority | A global routing brain |
+| The orchestrator stays on the owner's machine | That is the trust boundary | Moving the loop to the cloud |
+| A plan is data, not code | A model-written script has no boundary; a real sandbox is one more runtime | Model-written scripts run in a sandbox |
+| "Done" is verified by another session | Self-review is where stopping passes for finishing | Agents marking their own work done |
+| Built-in rules can be overridden by the team; gates cannot | Teams want their own wording, but authority is not wording | Everything is a prompt |
+| Safe by default | One extra question costs a sentence; a duplicate payment costs money | Optimistic defaults, automatic retries |
+| Third-party desktop tools may run, but not as a product channel | They bypass the box daemon, so no gate and no record sees them | A side channel for execution |
+| Not a hosted service, not an autonomous fleet, not a sandbox for untrusted code | One box, one team, one owner; the container is the boundary and the agent has sudo | — |
 
-被拒绝的路和被采纳的一样重要：它们是下一次有人提同一个想法时的答案。
+The paths refused matter as much as the ones taken: they are the answer the next time someone
+proposes the same idea.
 
-## 13. 走到哪了
+## 13. Where it stands
 
-| 阶段 | 内容 | 状态 |
+| Stage | What it covers | Status |
 |---|---|---|
-| 可信发布 | 固定版本、签名、引擎固定、首启验收 | 完成；macOS 公证进行中 |
-| 一个人：从授权材料到可检查的产物 | 回合引擎、工具集、记录、效果证据、办公软件写入 | 完成 |
-| 教学与复用 | 接管即教学、模板导出/导入、技能契约 | 完成 |
-| 小团队安全使用 | 两道门、授权书、出站目的与收据、注意力阶段表、审计 | 机制已到；多用户身份一致性还开着 |
-| 自治与自我改进 | 观察档、目标账本、回复评审→测试用例、体检、决策模型各点 | 进行中：机制已到，对比数据还没跑够 |
-| 跨安装协作 | 对外的 MCP 面、能力卡片、出站中继 | 候选，等真实需求 |
+| Trustworthy releases | Pinned versions, signing, pinned engines, first-launch acceptance | Done; macOS notarization in progress |
+| One person: from authorised material to an inspectable product | Turn engine, tool set, record, effect evidence, writing to office suites | Done |
+| Teaching and reuse | Take-over as teaching, template export and import, skill contracts | Done |
+| Safe use by a small team | Two gates, mandates, outgoing purpose and receipts, the attention table, audit | Mechanisms in place; consistent multi-user identity still open |
+| Autonomy and self-improvement | Observe mode, the goal ledger, reply review to test cases, the check-up, decision-model points | In progress: mechanisms in place, comparison data not yet sufficient |
+| Collaboration across installations | An outward MCP surface, capability cards, the outbound relay | Candidates, waiting for real demand |
 
-## 14. 三句话
+## 14. Three sentences
 
-- **先写记录，再写能力。** 没有记录的能力在这里是负资产：它会被宣称，不会被证明。
-- **边界用代码画，措辞让团队改。** 门、预算、拒绝在代码里；语气、顺序、"怎么算做完"在团队可以覆盖的文本里。
-- **能停下来问人，就不要猜。** 一句多余的提问只花一句话；一次猜错的发送、付款、删除，收不回来。
+- **Write the record before the capability.** A capability without a record is a liability here:
+  it gets claimed, never proven.
+- **Draw boundaries in code; let the team change the wording.** Gates, budgets and refusals live in
+  code. Tone, order and "what counts as done" live in text the team can override.
+- **When you can stop and ask, don't guess.** An unnecessary question costs one sentence; a wrong
+  guess at sending, paying or deleting cannot be taken back.
