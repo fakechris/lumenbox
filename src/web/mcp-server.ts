@@ -186,7 +186,7 @@ export async function handleMcpRequest(
         tools: deps.tools.map(tool => ({
           name: tool.name,
           description: tool.description,
-          inputSchema: tool.inputSchema,
+          inputSchema: tool.readOnly ? tool.inputSchema : withIdempotencyKey(tool.inputSchema),
           annotations: {
             readOnlyHint: tool.readOnly,
             destructiveHint: !tool.readOnly,
@@ -244,4 +244,15 @@ export async function handleMcpRequest(
       fail(-32601, `Unsupported method: ${String(request.method)}`);
       return true;
   }
+}
+
+/**
+ * A changing tool's schema, with the argument that makes a retry safe (INV-1512). A generic MCP
+ * client sets no header per call, so the key has to be something the model can see and fill in;
+ * the header and `_meta` still win when a client does send them.
+ */
+export function withIdempotencyKey(schema: Record<string, unknown>): Record<string, unknown> {
+  const properties = (schema.properties ?? {}) as Record<string, unknown>;
+  if ("idempotency_key" in properties) return schema;
+  return { ...schema, properties: { ...properties, idempotency_key: { type: "string", description: "Any unique string for this request. Send the same one on a retry and you get the first answer instead of doing it twice." } } };
 }

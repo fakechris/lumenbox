@@ -242,3 +242,26 @@ test("an Idempotency-Key makes a retry return the first answer, waits while the 
     await stop();
   }
 });
+
+test("every changing tool advertises idempotency_key, a reading one does not, and the argument alone makes a retry safe (INV-1512)", async () => {
+  const token = mintMcpToken("p1", "test");
+  const seen: string[] = [];
+  const read: McpServerTool = { name: "task_status", description: "d", inputSchema: { type: "object", properties: { task_id: { type: "string" } } }, readOnly: true, run: async () => "ok" };
+  const store = new IdempotencyStore({ ttlMs: 60_000 });
+  const { call, stop } = await withServer([echoTool(seen), read], [token], store);
+  try {
+    const listed = await call({ jsonrpc: "2.0", id: 1, method: "tools/list" }, token.token);
+    const schemaOf = (name: string) => listed.body.result.tools.find((tool: { name: string }) => tool.name === name).inputSchema;
+    assert.equal(schemaOf("assign_task").properties.idempotency_key.type, "string");
+    assert.equal(schemaOf("assign_task").properties.brief.type, "string", "the tool's own fields are kept");
+    assert.equal(schemaOf("task_status").properties.idempotency_key, undefined, "a reading tool has nothing to make safe");
+    const body = { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "assign_task", arguments: { brief: "once", idempotency_key: "arg-key-1" } } };
+    const first = await call(body, token.token);
+    const retry = await call(body, token.token);
+    assert.deepEqual(retry.body.result, first.body.result);
+    assert.deepEqual(seen, ["p1:once"], "no header, only the argument: it ran once");
+    assert.doesNotMatch(first.body.result.content[0].text, /ignored_fields/, "the key is not an ignored field");
+  } finally {
+    await stop();
+  }
+});

@@ -33,7 +33,7 @@ const idOf = (text: string) => /^(t\d+)/.exec(text)?.[1] ?? "";
 
 test("goal_start makes one goal per key, in a conversation of its own, and drafts its checklist without opening a task", async () => {
   const { board, prompts, start } = setup();
-  await assert.rejects(start.run({ objective: "Ship the digest" }, "p1"), /needs an Idempotency-Key/, "no key, nothing made");
+  await assert.rejects(start.run({ objective: "Ship the digest" }, "p1"), /needs an idempotency_key argument/, "no key, nothing made");
   assert.equal(board.list().length, 0);
   const first = await start.run({ objective: "Ship the weekly digest", budget: 5000 }, "p1", { idempotencyKey: "k1" });
   const id = idOf(first);
