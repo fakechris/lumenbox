@@ -22,10 +22,11 @@
 import type { Task } from "./tasks.ts";
 import type { WatchedQuestion } from "./question-expiry.ts";
 import { describeStale } from "./mandate.ts";
+import { currentFlag } from "./task-flag.ts";
 import { STAGE_LABEL, stageWorldOf, type TaskStage, taskStage } from "./task-stage.ts";
 
 export interface AttentionItem {
-  kind: "question" | "close-proposal" | "review" | "nudged" | "waiting" | "unanswered" | "paused" | "reauthorize" | "undeliverable";
+  kind: "question" | "close-proposal" | "review" | "nudged" | "waiting" | "unanswered" | "paused" | "reauthorize" | "undeliverable" | "flagged";
   /** What to open: a task id, or the conversation a question was asked in. */
   ref: string;
   title: string;
@@ -156,6 +157,17 @@ export function attentionFor(input: AttentionInput): Attention {
         ref: task.id, stage: stages[task.id],
         title: `${task.id}: needs re-authorising`,
         detail: `${describeStale(stale.reasons)}; reply on it to continue, or stop it`,
+        ...(task.assigneeId !== undefined ? { with: input.nameOf(task.assigneeId) } : {}),
+      });
+    }
+    // A supervisor said a person should look (INV-1509): the requester's, and the one who raised it sees it too.
+    const flag = currentFlag(task);
+    if (flag !== undefined && (isMe(task.requester) || isMe(flag.by))) {
+      mine.push({
+        kind: "flagged",
+        ref: task.id, stage: stages[task.id],
+        title: `${task.id}: ${task.title}`,
+        detail: `${input.nameOf(flag.by)} flagged it: ${flag.note}`,
         ...(task.assigneeId !== undefined ? { with: input.nameOf(task.assigneeId) } : {}),
       });
     }

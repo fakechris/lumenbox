@@ -7,7 +7,7 @@
 import type { AgentRegistry } from "../agents/registry.ts";
 import type { Orchestrator } from "../host/orchestrator.ts";
 import type { StageWorld } from "../host/task-stage.ts";
-import { describeTask, isLive, type Task } from "../host/tasks.ts";
+import { describeTask, isLive, type Task, type TaskStore } from "../host/tasks.ts";
 import type { TurnEvent } from "../host/turn.ts";
 import { describeOutcome, outcomeOf } from "./mcp-contract.ts";
 import { mcpGoalTools } from "./mcp-goal-tools.ts";
@@ -18,7 +18,7 @@ import type { McpServerTool } from "./mcp-server.ts";
 export interface McpToolsDeps {
   registry: AgentRegistry;
   orchestrator: Orchestrator;
-  principals: { resolve(id: string): { name: string } };
+  principals: { resolve(id: string): { name: string }; list?(): readonly { id: string; name: string }[] };
   workDir: string;
   log: (line: string) => void;
   /** Turn events, for as long as the listener is registered: how a task learns its turn stopped itself. */
@@ -29,6 +29,8 @@ export interface McpToolsDeps {
   mayDrive?: (agentId: string, principalId: string) => boolean;
   /** The board's changes as a feed; given, `watch` is on the door (INV-1508). */
   changeFeed?: ChangeFeed;
+  /** Tell the task's chat, through the outbound gate as a notice (INV-1509); absent, a flag reaches the attention page only. */
+  notifyTask?: (task: Task, text: string) => void;
 }
 
 export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
@@ -41,7 +43,8 @@ export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
     if (board === undefined) return { text: "This installation has no task board.", structured: { tasks: [] } };
     const id = typeof input.task_id === "string" ? input.task_id : "";
     if (id === "") {
-      const mine = board.list().filter(task => task.requester === principalId && isLive(task.status));
+      // scope all (INV-1509): every live task, for a supervisor that watches the whole board; reading any task was always allowed.
+      const mine = board.list().filter(task => (input.scope === "all" || task.requester === principalId) && isLive(task.status));
       return {
         text: mine.length === 0 ? "Nothing of yours is still open." : mine.map(task => `${describeOutcome(outcomeOf(task))}\n${describeTask(task, nameOf)}`).join("\n"),
         structured: { tasks: mine.map(recordOf) },
@@ -119,7 +122,7 @@ export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
         "structuredContent carries the same tasks as data: outcome, stage, mandate, recent history, and a goal's checklist and spend.",
       inputSchema: {
         type: "object",
-        properties: { task_id: { type: "string", description: "A task id like t42." } },
+        properties: { task_id: { type: "string", description: "A task id like t42." }, scope: { type: "string", enum: ["mine", "all"], description: "With no id: your open tasks (mine, default) or every open task (all)." } },
       },
       readOnly: true,
       run: async (input, principalId) => statusOf(input, principalId).text,
@@ -213,6 +216,7 @@ export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
     },
     ...(deps.mayDrive !== undefined ? mcpGoalTools({ registry, orchestrator, mayDrive: deps.mayDrive, nameOf: id => principals.resolve(id).name, log }) : []),
     ...(deps.changeFeed !== undefined ? [watchTool(deps.changeFeed)] : []),
+    ...(orchestrator.tasks !== undefined ? [raiseAttentionTool(orchestrator.tasks, principals, deps.notifyTask)] : []),
   ];
 }
 
@@ -242,5 +246,34 @@ function watchTool(feed: ChangeFeed): McpServerTool {
     readOnly: true,
     run: async (input, principalId, meta) => (await runWatch(input, principalId, meta?.signal)).text,
     runWithRecord: async (input, principalId, meta) => runWatch(input, principalId, meta?.signal),
+  };
+}
+
+/** `raise_attention` (INV-1509, docs/91): a supervisor's one way to speak — a flag a person sees, never a move of the work. */
+function raiseAttentionTool(board: TaskStore, principals: McpToolsDeps["principals"], notify?: (task: Task, text: string) => void): McpServerTool {
+  return {
+    name: "raise_attention",
+    description:
+      "Ask a person to look at a task: a line on it, an item on its requester's \"needs you\" list, a notice in its chat. " +
+      "It changes nothing about the work. The same note on the same task within six hours is the same flag. Ended tasks refuse.",
+    inputSchema: {
+      type: "object",
+      properties: { task_id: { type: "string" }, note: { type: "string", description: "What a person should look at and why, one line." } },
+      required: ["task_id", "note"],
+    },
+    readOnly: false,
+    run: async (input, principalId) => {
+      const id = String(input.task_id ?? "");
+      const note = String(input.note ?? "").trim();
+      if (note === "") throw new Error("A flag needs a note: what should a person look at, and why.");
+      const outcome = board.flag(id, principalId, note, new Date());
+      if (outcome === "missing") throw new Error(`No task ${id}.`);
+      if (outcome === "ended") throw new Error(`Task ${id} has ended; there is nothing for a person to look at.`);
+      if (outcome === "already") return `Task ${id} already carries that flag; nobody is told twice.`;
+      const task = board.get(id)!;
+      const person = (who: string) => principals.list?.().find(entry => entry.id === who)?.name ?? principals.resolve(who).name;
+      notify?.(task, `${task.id}「${task.title}」needs a look — ${person(principalId)}: ${task.flag?.note ?? note}`);
+      return `Flagged ${id} for ${person(task.requester)}: it is on their "needs you" list${notify !== undefined ? ", and in its chat if it has one" : ""}.`;
+    },
   };
 }

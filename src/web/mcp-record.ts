@@ -9,6 +9,7 @@
  */
 
 import type { Pursuit } from "../host/goal-mode.ts";
+import { currentFlag, type TaskFlag } from "../host/task-flag.ts";
 import type { StageWorld } from "../host/task-stage.ts";
 import { taskStage } from "../host/task-stage.ts";
 import type { Task } from "../host/tasks.ts";
@@ -24,7 +25,7 @@ export interface PursuitRecord {
   pausedReason?: Pursuit["pausedReason"];
   objective: string;
   checklist: { id: string; text: string; verdict?: string }[];
-  spent: { continuations: number; activeMs: number; cost: number };
+  spent: { continuations: number; activeMs: number; cost: number; rejections: number };
   limits: Pursuit["limits"];
   experiments: { n: number; kind: string; hypothesis: string; outcome: string; at: string }[];
   lastVerdict?: { at: string; passed: boolean; nextAction?: string };
@@ -44,6 +45,8 @@ export interface TaskRecord {
   updatedAt: string;
   history: { at: string; by: string; status?: string; note?: string }[];
   pursuit?: PursuitRecord;
+  /** A supervisor's flag while it holds (INV-1509). */
+  flag?: TaskFlag;
 }
 
 export function pursuitRecord(pursuit: Pursuit): PursuitRecord {
@@ -52,7 +55,7 @@ export function pursuitRecord(pursuit: Pursuit): PursuitRecord {
     ...(pursuit.pausedReason !== undefined ? { pausedReason: pursuit.pausedReason } : {}),
     objective: pursuit.objective,
     checklist: pursuit.checklist.map(item => ({ id: item.id, text: item.text, ...(item.verdict !== undefined ? { verdict: item.verdict } : {}) })),
-    spent: { continuations: pursuit.spent.continuations, activeMs: pursuit.spent.activeMs, cost: Math.round(pursuit.spent.cost) },
+    spent: { continuations: pursuit.spent.continuations, activeMs: pursuit.spent.activeMs, cost: Math.round(pursuit.spent.cost), rejections: pursuit.spent.rejections },
     limits: pursuit.limits,
     experiments: (pursuit.experiments ?? []).slice(-RECORD_EXPERIMENTS).map(entry => ({ n: entry.n, kind: entry.kind, hypothesis: entry.hypothesis, outcome: entry.outcome, at: entry.at })),
     ...(pursuit.lastVerdict !== undefined
@@ -92,5 +95,6 @@ export function taskRecord(task: Task, deps: { nameOf: (id: string) => string; s
       ...(change.note !== undefined ? { note: change.note } : {}),
     })),
     ...(pursuit !== undefined ? { pursuit: pursuitRecord(pursuit) } : {}),
+    ...(currentFlag(task) !== undefined ? { flag: currentFlag(task)! } : {}),
   };
 }
