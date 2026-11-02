@@ -22,7 +22,7 @@
 import type { Task } from "./tasks.ts";
 import type { WatchedQuestion } from "./question-expiry.ts";
 import { describeStale } from "./mandate.ts";
-import { STAGE_LABEL, type TaskStage, taskStage } from "./task-stage.ts";
+import { STAGE_LABEL, stageWorldOf, type TaskStage, taskStage } from "./task-stage.ts";
 
 export interface AttentionItem {
   kind: "question" | "close-proposal" | "review" | "nudged" | "waiting" | "unanswered" | "paused" | "reauthorize" | "undeliverable";
@@ -144,12 +144,7 @@ export function attentionFor(input: AttentionInput): Attention {
   const undeliverableChats = new Set((input.undeliverable ?? []).map(receipt => receipt.chatKey));
   for (const task of input.tasks) {
     if (!isLive(task)) continue;
-    const chatKey = task.conversation !== undefined ? input.chatKeyOf?.(task.conversation) : undefined;
-    stages[task.id] = taskStage(task, {
-      undelivered: chatKey !== undefined && undeliverableChats.has(chatKey),
-      questionPending: input.questions.some(question => question.conversation === task.conversation && (task.assigneeId === undefined || question.agentId === task.assigneeId)),
-      active: input.active?.(task) ?? false,
-    });
+    stages[task.id] = taskStage(task, stageWorldOf(task, { undeliverableChats, questions: input.questions, ...(input.chatKeyOf !== undefined ? { chatKeyOf: input.chatKeyOf } : {}), ...(input.active !== undefined ? { active: input.active } : {}) }));
   }
   for (const task of input.tasks) {
     if (!isLive(task)) continue;

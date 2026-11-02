@@ -79,6 +79,8 @@ export interface McpServerTool {
    */
   readOnly: boolean;
   run: (input: Record<string, unknown>, principalId: string) => Promise<string>;
+  /** Preferred when present: the same text with `structuredContent` beside it (INV-1506); the text is what `run` says. */
+  runWithRecord?: (input: Record<string, unknown>, principalId: string) => Promise<{ text: string; structured: Record<string, unknown> }>;
 }
 
 interface JsonRpcRequest {
@@ -218,8 +220,9 @@ export async function handleMcpRequest(
         return true;
       }
       try {
-        const text = await tool.run(args, principalId);
-        const result = { content: [{ type: "text", text: `${text}${trailer}` }] };
+        const answer = tool.runWithRecord !== undefined ? await tool.runWithRecord(args, principalId) : await tool.run(args, principalId);
+        const text = typeof answer === "string" ? answer : answer.text;
+        const result = { content: [{ type: "text", text: `${text}${trailer}` }], ...(typeof answer === "string" ? {} : { structuredContent: answer.structured }) };
         if (claim.kind === "fresh") deps.idempotency?.settle(key, { status: 200, body: result });
         reply(result);
       } catch (error) {

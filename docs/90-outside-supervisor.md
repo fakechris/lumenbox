@@ -44,9 +44,9 @@
 
 ## 3. 合同要补的四样
 
-**3.1 结构化记录（INV-1506）。** `task_status` 在文本之外返回 `structuredContent`：结局（state + reason）、
+**3.1 结构化记录（INV-1506，已建）。** `task_status` 在文本之外返回 `structuredContent`：结局（state + reason）、
 注意力阶段（同一张阶段表）、授权书与其当前复核结论、最近的历史；任务是目标时附 pursuit 摘要（状态、
-暂停原因、清单逐项裁决、花费与上限、实验账本末尾、上次验证）。监督者读事实，不读措辞。文本不变。
+暂停原因、清单逐项裁决、花费与上限、实验账本末尾、上次验证）。监督者读事实，不读措辞。文本不变。实现：`mcp-record.ts`（`taskRecord`），工具的 `runWithRecord`；阶段读的世界与注意力页同一个 `stageWorldOf`；读取从不复核授权书（复核会写），只报告板上存的 valid / stale / withdrawn。
 
 **3.2 目标从门进来（INV-1507）。** `goal_start` 走与 `/goal` 同一个 `goalCommand`：同样的权限、上下文、
 阻塞检查，必须带幂等键。`goal_control` 只对自己发起的目标有效：可暂停、可清除；**只能续自己暂停的**——

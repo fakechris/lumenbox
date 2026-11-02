@@ -228,6 +228,7 @@ import { PersonalDocker } from "../box/personal.ts";
 import { personalAllocationRefusal, personalBoxesOf, personalQuotaFor } from "../host/box-quota.ts";
 import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
 import { attentionFor } from "../host/attention.ts";
+import { stageWorldOf } from "../host/task-stage.ts";
 import { InvoluteConsumer } from "../host/involute-inbox.ts";
 import { mayAnswerFrom } from "../host/involute-askers.ts";
 import { describeQueues } from "../host/actor-queue.ts";
@@ -3041,23 +3042,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     return { allow: true, reason: "token" };
   };
 
-  /**
-   * What an outside agent may do here, and nothing more.
-   *
-   * Narrow on purpose, and the narrowness is the product: a persistent computer with a
-   * desktop, and a team that can be given work and asked about later. Not our memory,
-   * not the filesystem wholesale, not the ability to reconfigure the installation —
-   * those belong to the people who live here, and an external agent borrowing a
-   * workforce has no business with them.
-   *
-   * Everything routes through the same objects a person's request does, which is what
-   * makes the attribution real rather than decorative: the task lands on the same
-   * board, the spend lands on the same principal, and a dangerous action raises the
-   * same approval card to the same phone.
-   */
-  // The side door's tools live with their contract (mcp-tools.ts, mcp-contract.ts; INV-1358).
+  // What an outside agent may do here, and nothing more: a computer and a team, never our memory, files or settings;
+  // every call goes through the objects a person's request does (docs/90 §2; mcp-tools.ts, mcp-contract.ts; INV-1358).
+  const taskActive = (task: { assigneeId?: string; conversation?: string }) => task.assigneeId !== undefined && task.conversation !== undefined && (orchestrator.bus.isActive(task.assigneeId, task.conversation) || orchestrator.jobWatch.openJobs(task.assigneeId, task.conversation).length > 0);
   const sideDoorTools = () => mcpServerTools({
     registry, orchestrator, principals, workDir: WORK_DIR, log,
+    stageWorld: task => stageWorldOf(task, { undeliverableChats: new Set(outbox.problems().map(receipt => receipt.chatKey)), questions: questions.list(), chatKeyOf: conversation => conversations.chatKeyFor(conversation), active: taskActive }),
     listen: listener => { channelTurnListeners.add(listener); return () => channelTurnListeners.delete(listener); },
   });
   // Retries of a side-door call return the first answer for a day, persisted beside the ledgers.
@@ -6169,7 +6159,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             paused: orchestrator.bus.pausedChains(),
             undeliverable: outbox.problems(),
             chatKeyOf: conversation => conversations.chatKeyFor(conversation), // The stage table's reads (INV-1464).
-            active: task => task.assigneeId !== undefined && task.conversation !== undefined && (orchestrator.bus.isActive(task.assigneeId, task.conversation) || orchestrator.jobWatch.openJobs(task.assigneeId, task.conversation).length > 0),
+            active: taskActive,
             ...(me === undefined ? { all: true } : {}),
           });
           send(res, 200, { ...answer, who: me?.name ?? "this installation" });

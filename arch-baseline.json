@@ -12,7 +12,7 @@
       "src/channels/manager.ts": 2505,
       "src/cli.ts": 2187,
       "src/control/store.ts": 1341,
-      "src/cua/x11-executor.ts": 1372,
+      "src/cua/x11-executor.ts": 1359,
       "src/host/compaction.ts": 1567,
       "src/host/memory.ts": 1183,
       "src/host/orchestrator.ts": 2805,
@@ -21,11 +21,11 @@
       "src/host/starter-skills.ts": 1339,
       "src/host/tasks.ts": 1056,
       "src/host/template.ts": 1178,
-      "src/host/tools.ts": 5482,
+      "src/host/tools.ts": 5475,
       "src/host/turn.ts": 3781,
-      "src/protocol/index.ts": 1064,
+      "src/protocol/index.ts": 1063,
       "src/web/app-html.ts": 7682,
-      "src/web/server.ts": 7215
+      "src/web/server.ts": 7205
     }
   },
   "env": {
