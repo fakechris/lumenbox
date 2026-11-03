@@ -51,7 +51,9 @@ tabs, and any file an agent wrote outside `work` and `.config`.
 orchestrator for turns in progress. A background job is killed with no record beyond its
 log file, and a turn interrupted mid-way leaves a ledger entry that will be retried against
 a box that is no longer the one it started on. Drain first, or refuse and say what is
-running.
+running. Two exceptions (INV-1551): a box that is stopped or does not answer has nothing to
+interrupt, so its update does not wait; and *Update now…* interrupts on purpose, after an
+admin is told what it stops.
 
 **R2 — Never leave yourself without the image you replaced.** `docker build -t …:latest`
 overwrites the tag in place, and the image it replaced survives only as an untagged layer
