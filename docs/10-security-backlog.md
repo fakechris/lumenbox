@@ -127,6 +127,11 @@ Closed, in this order of importance:
   environment's, a `--token` flag's, one generated at start. Not covered: image blocks, and a
   value split across two streamed deltas — the model cannot type a token it was never shown.
 
+- **The desktop always has a token.** A first start with no `~/.agentbox/ui-token` made none, and
+  a loopback web without a token answers anyone who reaches it — a box shell included, with a
+  forged Host. The desktop now makes one (`electron/ui-auth.cjs`). `agentbox web` from a
+  terminal still serves loopback without one when none is configured.
+
 Not closed: anything that reaches the box is readable there, because `box` has passwordless sudo.
 The box's own command log (snoopy) records argv verbatim and cannot redact it. The answer is the
 one above: this machine's credential never enters the box.
