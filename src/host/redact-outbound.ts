@@ -43,6 +43,19 @@ export function outboundRedactor(held: ReadonlyMap<string, string> | undefined):
   };
 }
 
+/**
+ * A tool result with held values replaced in its text, before the model or the record sees it
+ * (INV-1543). For this machine's own web token only: a box agent read it out of the box's
+ * browser profile, and every tool result that carried it went to the model provider and into
+ * the transcript, 1,385 times in one agent's. Unlike a vault value, nothing an agent does needs it.
+ */
+export function redactResult<T extends { content?: unknown }>(block: T, redact: Redactor): T {
+  const content = block.content;
+  if (typeof content === "string") return { ...block, content: redact(content) };
+  if (!Array.isArray(content)) return block;
+  return { ...block, content: content.map((item: { type?: string; text?: unknown }) => (item?.type === "text" && typeof item.text === "string" ? { ...item, text: redact(item.text) } : item)) };
+}
+
 /** The events that carry words to a person; everything else passes untouched. */
 export function redactEvent<T extends { type: string }>(event: T, redact: Redactor): T {
   const typed = event as { type: string; delta?: string; text?: string };

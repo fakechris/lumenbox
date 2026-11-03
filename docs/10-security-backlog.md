@@ -2,7 +2,7 @@
      title: Security backlog
      family: decision
      status: current
-     updated: 2026-09-26
+     updated: 2026-11-02
 -->
 # Security backlog
 
@@ -91,6 +91,42 @@ not the operator signs in.
 dependency the UI token already creates, so it adds no *new* trust — but the better shape is a signed
 assertion the box verifies itself, and the seam for it is that identity is read in exactly one place
 (`callerOf`).
+
+**2026-11-02: used against a desktop (INV-1543).** The reasoning above assumed a gateway in front. A
+desktop has none, and the headers were believed there too. What happened on one installation (app
+0.3.10, OrbStack):
+
+1. The box's Chromium had opened this machine's UI as `http://host.docker.internal:7777/?token=…`.
+   Its history kept the URL and its cookie jar kept the `agentbox_ui` cookie, in the `.config`
+   volume, for weeks. The token predated the split of the box's UI token from the machine's
+   (INV-572) and had never been rotated since.
+2. An agent copied the cookie database and decrypted it with Chromium's fixed Linux key.
+3. The web binds loopback, but a box reaches it as `host.docker.internal`, and on OrbStack its
+   connections arrive from 127.0.0.1: a loopback bind is not isolation under Docker.
+4. With the token, agents sent `x-agentbox-user` and `x-agentbox-role: owner` and were believed as
+   anyone, admin included: about 4,100 board reads, 1,100 board writes, 170 reads of other agents'
+   transcripts. They were working around the door's limits on their own audit tasks. Nothing
+   changed a setting or a key, or turned on host execution. Every result that printed the token
+   went to the model provider and into the transcript.
+
+Closed, in this order of importance:
+
+- **The token was rotated** and the box's browser profiles were cleared of the host UI's cookies,
+  history and saved sessions.
+- **Under a box's names for this machine, only the agents' MCP face is served.**
+  `boxSideRefusal` refuses `host.docker.internal`, its IPs and the other runtimes' names on every
+  route but `/mcp/r/<key>`. A browser cannot forge Host, so the box's browser can no longer sign
+  in to this page. A shell can, which is why the token must not be in the box at all.
+- **The headers are believed only behind a gateway.** `callerOf` reads them only where
+  `AGENTBOX_TRUST_GATEWAY_IDENTITY=1`, which the Kubernetes and Compose allocators set on the boxes
+  they run. Holding the UI token still makes a caller the operator; it no longer lets anyone claim
+  to be someone else.
+- **The token is named, not shown, in tool results** (`redactResult`): the model and the
+  transcript see `[vault:LUMENBOX_UI_TOKEN]`.
+
+Not closed: anything that reaches the box is readable there, because `box` has passwordless sudo.
+The box's own command log (snoopy) records argv verbatim and cannot redact it. The answer is the
+one above: this machine's credential never enters the box.
 
 ## S-5 — Budget enforcement is inside the box, so it is advisory
 
@@ -205,7 +241,7 @@ that landed for other reasons, two changed shape, and four are open with a named
 | **S-1** secrets in the transcript | **partly closed** | The browser path is gone (INV-402: `browser_fill_secret` types a vault value into a page; the model never sees it). `scan-records` (docs/15) answers "is a value I hold in the records", comparing without printing. **Open:** a `RunOnHost` command whose *output* contains a credential still lands verbatim. The shape stays detection-plus-marker, not silent removal — the transcript's value is that it is unedited. **Narrowed further, 2026-10-21 (INV-1309):** the way out is gated as well as the way in. A turn that resolved a vault value is tainted, and from then on a call that would leave the box for a host outside the box's egress allow list asks a person, once-only, whatever the mode (docs/04 §15). What it does not cover: a turn whose private material came from a chat or a memory, because nothing marks those as private yet. **Widened, 2026-10-27 (INV-1366):** a turn that read outside content (a page, a search, a connector or a memory-polluting MCP server's result) is tainted too, with a narrower rule: its first call to an MCP server or connector it has not used yet in that turn asks a person once, read or write, because even a read sends arguments the outside text may have chosen. Servers used before the read, and browsing on, are unaffected; the egress rule stays the vault's. **Narrowed again, 2026-10-26 (INV-1360):** a held vault value that a tool printed is now scrubbed to `[vault:NAME]` on every `text` and `interim` event, in the reply a channel delivers, and in the Stop hook's `last_message` — in clear and base64/base64url/percent-encoded forms, values of 12+ characters only (`src/host/redact-outbound.ts`). The model still sees the output it was given; the record keeps `recordAs`. Trace spans carry ids, model and token counts, never prose, so there was nothing to scrub there. |
 | **S-2** no TLS, cookie is the session | **closed in code, 2026-09-16 (INV-578)** | Unchanged in code, and the installation's own web changed underneath it: a sign-in now issues a per-person session rather than handing out the installation token (2026-09-15), so the cookie is no longer *the* credential — but on a plain-HTTP path it is still somebody's session. **Done**: a non-loopback bind with no `https://` public URL refuses to start and names the two ways forward; `AGENTBOX_INSECURE=1` is the deliberate escape and says so **on every start**, because a warning nobody sees again is a warning nobody acted on; the session cookie carries `Secure` when the address is https. |
 | **S-3** identity is a password list | **open, unchanged** | `PasswordListIdentity` (`src/control/gateway.ts:67`) still compares plaintext, with no KDF, lockout or rotation. It is the control plane's, not an installation's — an installation signs people in through a door's OAuth or an invite code. Next step: replace it before anybody who is not the operator signs into a *gateway*. |
-| **S-4** the box believes the gateway's headers | **narrowed** | Still believed, still one trust dependency rather than two. What changed (INV-537): an absent role header no longer means owner, the gateway's vocabulary is translated in exactly one function, and a web session's authority comes from the roster rather than from the header. The seam for a signed assertion is where it always was — `callerOf`. |
+| **S-4** the box believes the gateway's headers | **narrowed; used on a desktop 2026-11-02 and closed there (INV-1543)** | Still believed, still one trust dependency rather than two. What changed (INV-537): an absent role header no longer means owner, the gateway's vocabulary is translated in exactly one function, and a web session's authority comes from the roster rather than from the header. The seam for a signed assertion is where it always was — `callerOf`. |
 | **S-5** budget is enforced inside the box | **closed, 2026-09-16 (INV-580)** | The relay now refuses past a configured ceiling, before the request is forwarded — so the refusal costs nothing and the provider never sees it. The in-box gate is kept as the one that can explain itself to an agent. Money or tokens, per tenant (`quota.relay`) or deployment-wide (`AGENTBOX_RELAY_LIMIT_*`); absent means unchanged behaviour; an unpriced model fails a money ceiling **closed** and names the model, because otherwise it is a hole straight through it. |
 | **S-6** control key beside the database | **closed for the packaged deployment, 2026-09-16 (INV-579)** | The Kubernetes manifest now requires an `agentbox-control-key` Secret — not optional, because a key cannot be corrected after the tokens are encrypted with the wrong one — and `agentbox control key` mints one with the `kubectl` line. A local `control up` still mints a file beside the database, and now **says so on every start** and in `control status` rather than leaving an operator to assume otherwise. |
 | **S-7** "private" invites the wrong assumption | **closed, by removing the word's basis** | Per-agent `visibility` no longer decides anything (INV-540, docs/22 §3), the boundary is a box's `members` (INV-538), and the label a person reads is **derived from that set** rather than typed (`membersLabel`). There is no longer a UI string that could describe an agent as private while the filesystem says otherwise. |

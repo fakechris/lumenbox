@@ -61,7 +61,7 @@ import {
   authorize,
   callerOf,
   type AuthDecision,
-  isLoopback,
+  isLoopback, boxSideRefusal,
   mayDrive,
   parseCookies,
   refusalToDrive,
@@ -507,7 +507,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   };
   // The door out of the box, from config: off unless an operator turned it on; read once, like the provider.
   const hostRunner = new HostRunner(hostRunnerConfig(loadConfig().hostExec ?? {}), hostProcess);
-  const behindGateway = trustsGatewayIdentity(); // identity headers are believed only then (INV-1543)
   if (hostRunner.enabled) log("host execution is on; every host command still asks for approval");
 
 
@@ -3139,6 +3138,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       const url = new URL(req.url ?? "/", "http://localhost");
       const route = `${req.method} ${url.pathname}`;
       if (process.env.AGENTBOX_LOG_HTTP === "1") log(`web: ${route} from ${req.socket.remoteAddress}`);
+      const boxSide = boxSideRefusal(req.headers.host, url.pathname); if (boxSide !== undefined) { send(res, 403, { error: boxSide }); return; } // INV-1543
 
       const decision = admit({
         authorization: req.headers.authorization,
@@ -3324,7 +3324,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // code for. Both are only read on an authorised request, and the second is signed
       // by a key derived from the token that authorised it.
       principals.reload();
-      const gatewayCaller = callerOf(req.headers, decision.allow, behindGateway);
+      const gatewayCaller = callerOf(req.headers, decision.allow, trustsGatewayIdentity());
       const webIdentity = decision.allow
         ? readSession(parseCookies(req.headers.cookie).get(SESSION_COOKIE), sessionSecret)?.identity
         : undefined;
@@ -6893,7 +6893,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     const desktop = desktopRouteOf(
       pathname ?? "",
       query ? `?${query}` : "",
-      mayDrive(callerOf(req.headers, upgradeDecision.allow, behindGateway))
+      mayDrive(callerOf(req.headers, upgradeDecision.allow, trustsGatewayIdentity()))
     );
 
     if (!desktop) {
@@ -6901,7 +6901,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       return;
     }
 
-    const gateway = callerOf(req.headers, upgradeDecision.allow, behindGateway);
+    const gateway = callerOf(req.headers, upgradeDecision.allow, trustsGatewayIdentity());
     const identity = gateway.userId ?? readSession(parseCookies(req.headers.cookie).get(SESSION_COOKIE), sessionSecret)?.identity;
     principals.reload();
     const targetBox = registry.boxById(desktop.boxId ?? registry.box.id);

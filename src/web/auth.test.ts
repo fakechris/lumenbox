@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 COOKIE_NAME, authorize, isLoopback, parseCookies,
+  boxSideRefusal,
   callerOf,
   mayDrive,
   refusalToDrive,
@@ -194,4 +195,17 @@ test("a login's next is a path on this origin or nothing, as a browser would res
   }
   assert.equal(safeNext(null), undefined);
   assert.equal(safeNext(undefined), undefined);
+});
+
+test("under the names a box uses for this machine, only the agents' MCP face is served (INV-1543)", () => {
+  // The box's Chromium opened this page as host.docker.internal:7777 and kept the UI token in
+  // its cookie jar; on OrbStack the connection even arrived from 127.0.0.1.
+  assert.match(boxSideRefusal("host.docker.internal:7777", "/") ?? "", /how a box reaches this machine/);
+  assert.ok(boxSideRefusal("HOST.DOCKER.INTERNAL", "/api/tasks"), "case and a missing port do not matter");
+  assert.ok(boxSideRefusal("0.250.250.254:7777", "/api/config"), "OrbStack's address for it too");
+  assert.ok(boxSideRefusal("host.docker.internal:7777", "/mcp"), "the people's door is not the agents' face");
+  assert.equal(boxSideRefusal("host.docker.internal:7777", `/mcp/r/${"a".repeat(32)}`), undefined, "the face is how a box's delegates call LumenBox");
+  for (const host of ["127.0.0.1:7777", "localhost:7777", "lumen.example.com", "192.168.1.20:7777", undefined]) {
+    assert.equal(boxSideRefusal(host, "/api/tasks"), undefined, `${host} is served as before`);
+  }
 });

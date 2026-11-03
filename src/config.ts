@@ -618,6 +618,23 @@ export function trustsGatewayIdentity(env: NodeJS.ProcessEnv = process.env): boo
   return env.AGENTBOX_TRUST_GATEWAY_IDENTITY === "1";
 }
 
+/**
+ * This machine's own web credential, kept out of what agents are shown (INV-1543): the UI token
+ * from the environment (an in-box orchestrator's) and from the token file, which is only read,
+ * never created here. Name → value, for the redactor.
+ */
+export function hostTokens(env: NodeJS.ProcessEnv = process.env): Map<string, string> {
+  const held = new Map<string, string>();
+  const fromEnv = env.AGENTBOX_UI_TOKEN?.trim();
+  if (fromEnv) held.set("LUMENBOX_UI_TOKEN", fromEnv);
+  // Under test with no home set there is no installation, and so no token file to keep out.
+  const home = env.AGENTBOX_HOME ?? (env.AGENTBOX_TEST === "1" ? undefined : join(homedir(), ".agentbox"));
+  const file = home === undefined ? undefined : join(home, "ui-token");
+  const fromFile = file !== undefined && existsSync(file) ? readFileSync(file, "utf8").trim() : "";
+  if (fromFile && fromFile !== fromEnv) held.set(fromEnv ? "LUMENBOX_UI_TOKEN_FILE" : "LUMENBOX_UI_TOKEN", fromFile);
+  return held;
+}
+
 export function egressRelayFromEnv(env: NodeJS.ProcessEnv = process.env): { relay: string; token: string } | undefined {
   const relay = env.AGENTBOX_EGRESS_RELAY;
   const token = env.AGENTBOX_EGRESS_TOKEN;
