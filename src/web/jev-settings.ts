@@ -67,12 +67,12 @@ export const JEV_SETTINGS_JS = `(function () {
     keyNote.textContent = data.keyPresent ? "A key is set (TYPESAFE_TOKEN)." : "No key: every switch acts as off until TYPESAFE_TOKEN is set or pasted here.";
     rows.textContent = "";
     data.points.forEach(function (p) {
-      var row = el("div", { style: "display:flex;gap:8px;align-items:center" });
-      var select = el("select", { "data-point": p.point, style: "width:90px;flex:none" });
+      var row = el("div", { class: "ui-row" });
+      var select = el("select", { "data-point": p.point, class: "ui-w-sm" });
       p.modes.forEach(function (m) { var o = el("option", { value: m }, m); if (m === p.mode) o.selected = true; select.appendChild(o); });
       select.addEventListener("change", function () { var points = {}; points[p.point] = select.value; post({ points: points }, status); });
       row.appendChild(select);
-      row.appendChild(el("span", { class: "dim", style: "font-size:12px" }, p.label));
+      row.appendChild(el("span", { class: "dim ui-small" }, p.label));
       rows.appendChild(row);
     });
   }
@@ -85,13 +85,13 @@ export const JEV_SETTINGS_JS = `(function () {
     if (!anchor || document.getElementById("setjev")) return;
     field = el("div", { class: "field", id: "setjev", "data-tier": "installation", "data-settab": "model" });
     field.appendChild(el("label", {}, "Decision model"));
-    field.appendChild(el("div", { class: "fieldnote", style: "margin:0" }, "A fast yes/no and multiple-choice model for the host's own judgements. off makes no call; shadow keeps today's behaviour and logs both answers to ~/.agentbox/jev-shadow.jsonl; on uses it and falls back when it fails. It never alone allows an action."));
+    field.appendChild(el("div", { class: "fieldnote" }, "A fast yes/no and multiple-choice model for the host's own judgements. off makes no call; shadow keeps today's behaviour and logs both answers to ~/.agentbox/jev-shadow.jsonl; on uses it and falls back when it fails. It never alone allows an action."));
     keyNote = el("div", { class: "fieldnote" });
     field.appendChild(keyNote);
     var key = el("input", { type: "password", placeholder: "paste a TypeSafe key (optional)", autocomplete: "off", spellcheck: "false" });
     key.addEventListener("change", function () { if (key.value.trim() !== "") { post({ key: key.value.trim() }, status); key.value = ""; } });
     field.appendChild(key);
-    rows = el("div", { style: "display:flex;flex-direction:column;gap:4px;margin-top:6px" });
+    rows = el("div", { class: "ui-stack ui-gap" });
     field.appendChild(rows);
     status = el("div", { class: "fieldnote" });
     field.appendChild(status);

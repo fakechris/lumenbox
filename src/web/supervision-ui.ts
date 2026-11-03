@@ -27,7 +27,7 @@ export const SUPERVISION_JS = `(function () {
   }
   var ui = {}, data = null, runsTimer = null, watching = {};
 
-  function number(id, value) { var input = el("input", { id: id, type: "number", min: "1", style: "width:90px" }); input.value = value === undefined ? "" : String(value); return input; }
+  function number(id, value) { var input = el("input", { id: id, type: "number", min: "1", class: "ui-w-sm" }); input.value = value === undefined ? "" : String(value); return input; }
 
   function mount() {
     var tabs = document.getElementById("settabs");
@@ -47,21 +47,21 @@ export const SUPERVISION_JS = `(function () {
     ui.wdOn = el("input", { type: "checkbox", id: "supwatchdog" });
     ui.wdJudge = el("input", { type: "checkbox", id: "supjudge" });
     ui.stall = number("supstall"); ui.paused = number("suppaused");
-    var row1 = el("div", { style: "display:flex;gap:12px;align-items:center;flex-wrap:wrap" });
+    var row1 = el("div", { class: "ui-row" });
     row1.appendChild(ui.wdOn); row1.appendChild(el("span", {}, "on"));
     row1.appendChild(el("span", { class: "dim" }, "flag work in hand after")); row1.appendChild(ui.stall); row1.appendChild(el("span", { class: "dim" }, "min still,"));
     row1.appendChild(el("span", { class: "dim" }, "a stopped goal after")); row1.appendChild(ui.paused); row1.appendChild(el("span", { class: "dim" }, "min unattended"));
-    var row2 = el("div", { style: "display:flex;gap:8px;align-items:center;margin-top:6px" });
+    var row2 = el("div", { class: "ui-row ui-gap" });
     row2.appendChild(ui.wdJudge); row2.appendChild(el("span", { class: "dim" }, "ask the decision model, once an hour per active goal, whether it is moving"));
     ui.flag = el("div", { class: "fieldnote" });
     wd.appendChild(row1); wd.appendChild(row2); wd.appendChild(ui.flag);
     add(wd);
 
     var sv = field("Supervisor model");
-    ui.provider = el("select", { id: "supprovider", style: "max-width:260px" });
-    ui.model = el("input", { id: "supmodel", spellcheck: "false", style: "width:200px" });
+    ui.provider = el("select", { id: "supprovider" });
+    ui.model = el("input", { id: "supmodel", spellcheck: "false", class: "ui-w-md" });
     ui.keyNote = el("div", { class: "fieldnote" });
-    var row3 = el("div", { style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap" });
+    var row3 = el("div", { class: "ui-row" });
     row3.appendChild(ui.provider); row3.appendChild(ui.model);
     sv.appendChild(row3); sv.appendChild(ui.keyNote);
     ui.provider.addEventListener("change", function () { var p = providerNamed(ui.provider.value); if (p && !ui.model.value) ui.model.value = p.defaultModel; renderKey(); });
@@ -71,24 +71,24 @@ export const SUPERVISION_JS = `(function () {
     ui.agent = el("select", { id: "supagent" });
     ui.budget = number("supbudget"); ui.budget.placeholder = "none";
     ui.maxMinutes = number("supmaxmin"); ui.maxCalls = number("supmaxcalls");
-    var row4 = el("div", { style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap" });
+    var row4 = el("div", { class: "ui-row" });
     row4.appendChild(el("span", { class: "dim" }, "agent")); row4.appendChild(ui.agent);
     row4.appendChild(el("span", { class: "dim" }, "budget")); row4.appendChild(ui.budget);
     row4.appendChild(el("span", { class: "dim" }, "at most")); row4.appendChild(ui.maxMinutes); row4.appendChild(el("span", { class: "dim" }, "min and")); row4.appendChild(ui.maxCalls); row4.appendChild(el("span", { class: "dim" }, "model calls"));
     ui.save = el("button", { class: "btn" }, "Save supervision settings");
-    ui.saveNote = el("span", { class: "dim", style: "margin-left:8px" });
+    ui.saveNote = el("span", { class: "dim" });
     ui.save.addEventListener("click", save);
-    lim.appendChild(row4); var row5 = el("div", { style: "margin-top:8px" }); row5.appendChild(ui.save); row5.appendChild(ui.saveNote); lim.appendChild(row5);
+    lim.appendChild(row4); var row5 = el("div", { class: "ui-actions" }); row5.appendChild(ui.save); row5.appendChild(ui.saveNote); lim.appendChild(row5);
     add(lim);
 
     var runs = field("Supervisor runs");
-    ui.objective = el("textarea", { id: "supobjective", rows: "2", placeholder: "What done looks like, e.g. \\"A summary of this week's support tickets is in reports/weekly.md\\"", style: "width:100%" });
+    ui.objective = el("textarea", { id: "supobjective", rows: "2", placeholder: "What done looks like, e.g. \\"A summary of this week's support tickets is in reports/weekly.md\\"", class: "ui-w-full" });
     ui.start = el("button", { class: "btn" }, "Start a supervised goal");
-    ui.startNote = el("span", { class: "dim", style: "margin-left:8px" });
+    ui.startNote = el("span", { class: "dim" });
     ui.start.addEventListener("click", start);
-    ui.runs = el("div", { id: "supruns", style: "margin-top:8px" });
-    ui.detail = el("pre", { id: "suprundetail", style: "display:none;max-height:260px;overflow:auto;font-size:11px;white-space:pre-wrap" });
-    runs.appendChild(ui.objective); var row6 = el("div", { style: "margin-top:6px" }); row6.appendChild(ui.start); row6.appendChild(ui.startNote); runs.appendChild(row6);
+    ui.runs = el("div", { id: "supruns", class: "ui-gap" });
+    ui.detail = el("pre", { id: "suprundetail", class: "ui-log", style: "display:none" });
+    runs.appendChild(ui.objective); var row6 = el("div", { class: "ui-row ui-gap" }); row6.appendChild(ui.start); row6.appendChild(ui.startNote); runs.appendChild(row6);
     runs.appendChild(ui.runs); runs.appendChild(ui.detail);
     add(runs);
 
@@ -149,10 +149,10 @@ export const SUPERVISION_JS = `(function () {
       if (d.runs.length === 0) { ui.runs.appendChild(el("div", { class: "dim" }, "No runs yet.")); return; }
       d.runs.slice(0, 20).forEach(function (run) {
         if (run.state === "running" && run.goalId) watching[run.goalId] = run.id;
-        var row = el("div", { style: "display:flex;gap:8px;align-items:center;font-size:12px;padding:3px 0;border-bottom:1px solid var(--border)" });
-        row.appendChild(el("span", { style: "width:64px" }, run.state));
-        row.appendChild(el("span", { style: "width:40px" }, run.goalId || "—"));
-        row.appendChild(el("span", { style: "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap", title: run.objective }, run.objective));
+        var row = el("div", { class: "ui-list-row" });
+        row.appendChild(el("span", { class: "ui-w-xs" }, run.state));
+        row.appendChild(el("span", { class: "ui-w-xs" }, run.goalId || "—"));
+        row.appendChild(el("span", { class: "ui-grow", title: run.objective }, run.objective));
         row.appendChild(el("span", { class: "dim" }, (run.outcome || "") + (run.modelCalls !== undefined ? " · " + run.modelCalls + " calls" : "") + (run.tokens ? " · " + (run.tokens.input + run.tokens.output) + " tokens" : "") + (run.error ? " · " + run.error : "")));
         var view = el("a", { href: "#" }, "view");
         view.addEventListener("click", function (event) { event.preventDefault(); show(run.id); });
@@ -186,7 +186,7 @@ export const SUPERVISION_JS = `(function () {
     for (var i = 0; i < links.length; i++) {
       var id = links[i].getAttribute("data-task");
       var badge = links[i].parentNode && links[i].parentNode.querySelector(".supbadge");
-      if (watching[id] && !badge) links[i].parentNode.appendChild(el("span", { class: "supbadge dim", style: "margin-left:6px;font-size:11px", title: "A supervisor is watching this goal" }, "supervised"));
+      if (watching[id] && !badge) links[i].parentNode.appendChild(el("span", { class: "supbadge dim ui-badge", title: "A supervisor is watching this goal" }, "supervised"));
       if (!watching[id] && badge) badge.parentNode.removeChild(badge);
     }
   }

@@ -17,18 +17,17 @@ export const INLINE_ASK_JS = `(function () {
     return new Promise(function (resolve) {
       var card = document.createElement("div");
       card.id = "inlineask";
-      card.style.cssText = "position:fixed;z-index:9999;max-width:420px;padding:10px;background:var(--surface,#fff);border:1px solid var(--border-strong,#ccc);border-radius:var(--radius-md,8px);box-shadow:0 6px 24px rgba(0,0,0,.18);font-size:13px";
+      card.className = "ui-ask";
       var text = document.createElement("div");
-      text.style.cssText = "white-space:pre-wrap;margin-bottom:6px";
+      text.className = "ui-pre";
       text.textContent = question;
       var field = document.createElement("input");
       field.type = type || "text";
       field.id = "inlineaskfield";
       field.value = initial || "";
-      field.style.cssText = "width:100%;box-sizing:border-box;margin-bottom:6px";
       var ok = document.createElement("button"); ok.className = "btn accent"; ok.id = "inlineaskok"; ok.textContent = "OK";
       var cancel = document.createElement("button"); cancel.className = "btn ghost"; cancel.textContent = "Cancel";
-      var row = document.createElement("div"); row.style.cssText = "display:flex;gap:6px;justify-content:flex-end";
+      var row = document.createElement("div"); row.className = "ui-actions";
       row.appendChild(cancel); row.appendChild(ok);
       card.appendChild(text); card.appendChild(field); card.appendChild(row);
       document.body.appendChild(card);

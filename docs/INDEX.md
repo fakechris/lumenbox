@@ -29,6 +29,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [22-domain-model](22-domain-model.md) | The domain model: people, doors, workers, rooms | current | 2026-11-01 |
 | [27-testing-and-release](27-testing-and-release.md) | Testing and release stability: ours, against OpenClaw and Hermes | current | 2026-10-26 |
 | [57-agent-consumer-contract](57-agent-consumer-contract.md) | Agent 消费者合同：谁去拉，谁保证，不同架构怎么统一 | current | 2026-09-15 |
+| [92-web-ui](92-web-ui.md) | The web UI's visual rules: type, spacing, components | current | 2026-11-03 |
 
 ## guide
 
