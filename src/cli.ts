@@ -17,8 +17,8 @@ import { AgentRegistry, defaultAgentsRoot } from "./agents/registry.ts";
 import { BundleStore, planMigration } from "./host/bundles.ts";
 import { ScopeStore } from "./host/scopes.ts";
 import { attachedBox, tokenOf } from "./box/boxes.ts";
+import { applyUpdate, dockerUpdateDeps } from "./box/box-update.ts";
 import {
-  BACKUP_CARRIES,
   BOX_IMAGE_REPO,
   type BoxConfig,
   BoxManager,
@@ -42,7 +42,7 @@ import { startEgressRelay } from "./egress/relay.ts";
 import { relayOptionsFromFlags } from "./egress/relay-cli.ts";
 import { NetworkEventLog, networkEventsPath, summariseEvents } from "./egress/events.ts";
 import { describeAbsences } from "./host/absences.ts";
-import { backupNow, backupRoot } from "./host/backup.ts";
+import { backupNow } from "./host/backup.ts";
 import { Orchestrator, STARTER_TEAM } from "./host/orchestrator.ts";
 import {
   createClient,
@@ -141,20 +141,6 @@ async function cmdBoxUp(argv: string[]): Promise<number> {
       }
       out(dim("--yes given; continuing."));
     }
-    if (!argv.includes("--no-backup")) {
-      const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      const destination = join(backupRoot(), `${stamp}-volumes`);
-      out(dim(`Backing up volumes to ${destination} …`));
-      try {
-        for (const file of await manager.backupVolumes(destination)) out(dim(`  ${file}`));
-        out(dim(`  ${BACKUP_CARRIES}`));
-      } catch (error) {
-        // A failed backup stops the upgrade. The whole point of taking it here is that
-        // the next step is the irreversible one.
-        err(`Backup failed, so the box was not upgraded: ${error instanceof Error ? error.message : error}`);
-        return 1;
-      }
-    }
   }
 
   if (!recreate) {
@@ -167,37 +153,15 @@ async function cmdBoxUp(argv: string[]): Promise<number> {
     }
   }
 
-  let { status } = await manager.up({
-    recreate,
-    onOutput: line => out(dim(line)),
-  });
-
-  // Only after a recreate. A plain start returns the same container that was working a
-  // moment ago, and rolling *that* back would be inventing a problem.
+  // A recreate is the shared update sequence (INV-1538): recreate keeping the volumes, check, go back to the old image if it fails.
+  // No volume backup unless asked (--backup): an update does not touch the volumes.
+  let status: BoxStatus;
   if (recreate) {
-    out(dim("checking the box that came back …"));
-    const broken = await verifyBox(await manager.connect());
-    if (broken !== undefined) {
-      err("");
-      err(`The upgraded box does not work: ${broken}`);
-      const rolled = await rollBack(withHost, line => out(dim(line)));
-      if (rolled === undefined) {
-        err("");
-        err(
-          `There is no \`${BOX_IMAGE_REPO}:previous\` to go back to, so the box has been left as ` +
-            "it is. Rebuild a working image and run `agentbox box up --recreate` again. " +
-            "Your data is in the backup taken a moment ago."
-        );
-        return 1;
-      }
-      status = rolled;
-      out("");
-      out(bold("Rolled back to the previous image."));
-      // Said plainly: a rollback that reports success looks like an upgrade that worked,
-      // and the broken image is still what the next build starts from.
-      out("The box is running the image it had before. The new one is still broken.");
-    }
-  }
+    const result = await applyUpdate(dockerUpdateDeps(manager, { busy: async () => [], verify: async () => verifyBox(await manager.connect()), onOutput: line => out(dim(line)) }), { force: true, backup: argv.includes("--backup") });
+    if (result.outcome === "failed" || result.status === undefined) { err(""); err(result.detail); return 1; }
+    if (result.outcome === "rolled_back") { out(""); out(bold("Rolled back to the image the box had.")); out(result.detail); }
+    status = result.status;
+  } else status = (await manager.up({ onOutput: line => out(dim(line)) })).status;
   out("");
   out(`${bold("Box running")} (${status.containerName})`);
   if (status.boxdUrl) out(`  daemon:  ${status.boxdUrl}`);

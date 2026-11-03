@@ -43,6 +43,7 @@ import { JEV_SETTINGS_JS, jevSettings, jevSettingsChange } from "./jev-settings.
 import { defaultSupervisionLog, supervisionRoute } from "./supervision-routes.ts";
 import { SUPERVISION_JS } from "./supervision-ui.ts";
 import { SUPERVISION_WIZARD_JS } from "./supervision-wizard.ts";
+import { BOX_UPDATE_JS } from "./box-update-ui.ts";
 import { desktopRunner } from "../host/operation-desktop.ts";
 import { buildInfo } from "../host/build-info.ts";
 import { faceBaseUrl, RENEW_EVERY_MS, ROUTE_PATH } from "../host/mcp-face.ts";
@@ -157,7 +158,6 @@ import {
   profilesFor,
   shelfTemplates,
 } from "../host/catalog.ts";
-import { preflight } from "../box/preflight.ts";
 import { rescueMessage, rescueStuck } from "../host/rescue.ts";
 import { Deliveries, deliveriesPath } from "../host/deliveries.ts";
 import { Ingress, ingressPath } from "../channels/ingress.ts";
@@ -179,12 +179,8 @@ import { SentRootsLedger, sentRootsPath } from "../channels/sent-roots.ts";
 import { randomUUID } from "node:crypto";
 import { isLive, isTaskStatus, type Task } from "../host/tasks.ts";
 import { connectorSatisfied } from "../host/mcp-connectors.ts";
-import { adminRecipients, decideUpgrade, upgradeMessage } from "../host/upgrade.ts";
-import {
-  lossesFingerprint,
-  recordUpgradeConsent,
-  upgradeConsentPath,
-} from "../host/upgrade-consent.ts";
+import { adminRecipients } from "../host/upgrade.ts";
+import { BoxUpdateService, boxUpdateRoute } from "./box-update-routes.ts";
 import { PRESET_MODELS, providerConfigured, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { BootstrapAdmins } from "../host/bootstrap.ts";
 import { Principals, principalsPath, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
@@ -199,7 +195,6 @@ import {
   rosterText,
   scheduleLine,
   unknownAgent,
-  upgradeApproved,
 } from "../channels/strings.ts";
 import { CardLedger } from "../channels/card-ledger.ts";
 import { type DocReader, docReaderForChat, FeishuDocReader } from "../channels/feishu-docs.ts";
@@ -1260,15 +1255,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       approve: identity => {
         const waiting = upgradeWaiting;
         if (waiting === undefined) return NO_UPGRADE_WAITING;
-        recordUpgradeConsent(upgradeConsentPath(agentboxHome()), {
-          image: waiting.image,
-          losses: waiting.losses,
-          by: identity,
-          at: new Date().toISOString(),
-        });
-        log(`upgrade approved: ${waiting.image} by ${identity}`);
-        const who = principals.list().find(person => person.identities.includes(identity));
-        return upgradeApproved(waiting.image, who?.name ?? identity);
+        const started = boxUpdate.start({ whenIdle: true, backup: false });
+        log(`box update ${started ? "started" : "already running"}: ${waiting.image} by ${identity}`);
+        return started ? `Updating the box to ${waiting.image}. It waits for work in progress first; files and logins stay. Progress: Settings → Boxes.` : "An update is already running; progress is in Settings → Boxes.";
       },
     },
     // One scope per chat: binding moves the chat, it does not accumulate. The scope
@@ -2416,55 +2405,24 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   }, 60_000);
   wedgeTimer.unref();
 
-  // An upgrade nobody knows about is an upgrade that does not happen. This tells the
-  // people who may decide, and deliberately does not act: a web server that recreates the
-  // box underneath the people using it is a worse surprise than an out-of-date image.
-  // Performing an upgrade is `agentbox box upgrade`, which is safe to put on a timer.
+  const boxUpdate = new BoxUpdateService({ activeTurns: () => orchestrator.bus.activeCount(), reconnect: async () => { box = await orchestrator.connectBox(); }, broadcast: (line, done) => broadcast({ type: "box_setup", line, ...(done !== undefined ? { done: true, ok: done.ok } : {}) }), log });
+  void boxUpdate.check();
+  // The box's image against the one this app expects (INV-1538, docs/12 §6). Checked every ten minutes; admins are told once per
+  // image, in their chats and on the attention page; the update itself is Settings → Boxes → Apply update, or "upgrade" in reply —
+  // both run the one shared sequence in box-update.ts (wait for work in flight, recreate keeping the volumes, verify, go back).
   let upgradeToldAbout: string | undefined;
   const upgradeTimer = setInterval(() => {
     void (async () => {
-      try {
-        const availability = await provisioner.upgradeAvailable?.();
-        if (availability?.available !== true) return;
-        // Once per image, not once per check: a notice repeated every six hours is one
-        // people filter out, including the time it matters.
-        if (upgradeToldAbout === availability.built) return;
-
-        const box = await provisioner.connect().catch(() => undefined);
-        const findings = box
-          ? await preflight(box)
-          : { runningJobs: [], strayFiles: [], moreStrayFiles: false, unknown: "the box could not be reached" };
-        const decision = decideUpgrade({
-          preflight: findings,
-          watching: clients.size,
-          ...(loadConfig().upgradeHour !== undefined
-            ? { quietHour: loadConfig().upgradeHour as number }
-            : {}),
-          hour: new Date().getHours(),
-        });
-        // "wait" and "go" are for whatever performs upgrades to act on; there is nothing
-        // here a person needs to read, and saying it anyway is how notices get ignored.
-        if (decision.action !== "ask" && decision.action !== "announce") return;
-
-        // What the "upgrade" verb is an answer *to*. Held with the fingerprint of what the
-        // person is about to read, not just the image id: their yes is to this image losing
-        // exactly these files, and `consentFor` refuses to match it to anything else.
-        upgradeWaiting =
-          decision.action === "ask" && availability.built !== undefined
-            ? { image: availability.built, losses: lossesFingerprint(decision.detail) }
-            : undefined;
-        upgradeToldAbout = availability.built;
-        const text = upgradeMessage(decision, "Your box");
-        broadcast({ type: "error", boxId: registry.box.id, message: text });
-        for (const { adapter, identity } of adminRecipients(principals.list())) {
-          void channels.push(adapter, identity, text);
-        }
-        log(`upgrade available (${availability.running} -> ${availability.built}): ${decision.action}`);
-      } catch {
-        // Never the reason the server falls over: this is a notice about housekeeping.
-      }
-    })();
-  }, 6 * 60 * 60_000);
+      const state = await boxUpdate.check();
+      if (state?.available !== true || upgradeToldAbout === state.expectedRef) return;
+      upgradeToldAbout = state.expectedRef;
+      upgradeWaiting = { image: state.expectedRef, losses: "" };
+      const text = `Your box can be updated to ${state.expectedRef} (it runs ${state.runningRef ?? "an older image"}). Settings → Boxes → Apply update, or reply "upgrade". It waits for work in progress and keeps the box's files and browser logins.`;
+      broadcast({ type: "error", boxId: registry.box.id, message: text });
+      for (const { adapter, identity } of adminRecipients(principals.list())) void channels.push(adapter, identity, text);
+      log(`box update available (${state.runningRef} -> ${state.expectedRef})`);
+    })().catch(() => {}); // housekeeping is never why the server falls over
+  }, 10 * 60_000);
   upgradeTimer.unref?.();
 
   orchestrator.policy.onApprovalRequested = approval => {
@@ -3565,7 +3523,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
         // Settings → Supervision (INV-1528): its own script and routes, like the decision model's below.
-        if (route === "GET /app/supervision.js") { res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(SUPERVISION_JS + SUPERVISION_WIZARD_JS); return; }
+        if (route === "GET /app/supervision.js") { res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(SUPERVISION_JS + SUPERVISION_WIZARD_JS + BOX_UPDATE_JS); return; } // + Settings → Boxes → Apply update (INV-1538)
         const supervised = await supervisionRoute(route, { home: agentboxHome(), configPath: configPath(), agents: () => registry.list().map(agent => agent.profile.name), readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: role => refusedRole(role), logFile: defaultSupervisionLog() });
         if (supervised !== undefined) { if (supervised.status !== 0) send(res, supervised.status, supervised.body); return; }
         // Settings → Model → Decision model (INV-1412): its own script, its own two routes.
@@ -5743,6 +5701,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // to go find a terminal is the product giving up. The docker output streams to
         // every connected page as events, because an image pull is minutes long and a
         // silent minutes-long button is indistinguishable from a broken one.
+        const boxUpdated = await boxUpdateRoute(route, boxUpdate, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin") }); // Apply update / reset (INV-1538)
+        if (boxUpdated !== undefined) { if (boxUpdated.status !== 0) send(res, boxUpdated.status, boxUpdated.body); return; }
         if (route === "POST /api/box/up") {
           if (refused()) return;
           if (boxUpInFlight) {
@@ -6138,6 +6098,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             active: taskActive,
             ...(me === undefined ? { all: true } : {}),
           });
+          const update = boxUpdate.available(); // an admin is shown a box that can be updated (INV-1538)
+          if (update !== undefined && (me === undefined || roleAtLeast(principals.roleOf(me.id), "admin"))) answer.mine.unshift({ kind: "box-update", ref: "box", title: "The box can be updated", detail: `It runs ${update.runningRef ?? "an older image"}; this app expects ${update.expectedRef}. Settings → Boxes → Apply update.` });
           send(res, 200, { ...answer, who: me?.name ?? "this installation" });
           return;
         }

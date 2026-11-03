@@ -2,7 +2,7 @@
      title: Upgrading somebody's box
      family: guide
      status: current
-     updated: 2026-09-28
+     updated: 2026-11-02
 -->
 # Upgrading somebody's box
 
@@ -69,9 +69,12 @@ Before that existed, `health()` returned a version hardcoded to `"0.1.0"` that n
 compared, and a box running behind its host presented as unrelated failures in whichever
 route had moved.
 
-**R4 — Back up the volumes, not just the host state.** `box up --recreate` copies both
-box volumes into a dated directory under the backup root before it destroys anything, and
-stops if the copy fails — the next step is the irreversible one. The host-side backup
+**R4 — An update does not touch the volumes; a backup is on request.** Recreating replaces
+the container and leaves `work` and `.config` where they are, so an update copies nothing by
+default (2026-11-02: the copy of a working box's browser profiles took minutes and protected
+against a step that does not touch them). `--backup` on the CLI, or *back up the box's files
+first* in Settings, copies both volumes into a dated directory under `~/.agentbox/backups`
+first and stops if the copy fails. What the volumes are not safe from is the rest: the host-side backup
 covers `~/.agentbox` on the reasoning that the box is disposable and its work is on a
 volume; that is true of `docker rm` and false of `docker volume rm`, a bad migration, and
 a disk. The config volume is not scratch either — it holds people's logged-in browser
@@ -79,8 +82,10 @@ sessions, and on a working box it is by far the larger of the two.
 
 **R5 — Say what is about to be lost.** The prompt tells agents to put durable work under
 `/home/box/work`, and an agent that wrote a report to its home directory did not read that
-sentence. `box up --recreate` lists recently-changed files outside the two volumes and
-refuses unless `--yes` is given. Pruning matters as much as finding: the first version also
+sentence. `box up --recreate` lists files the box wrote outside the two volumes and
+refuses unless `--yes` is given. "Wrote" is measured against `/etc/lumenbox/sealed`, which
+the Dockerfile touches as its last step, so nothing the image shipped can be listed; an
+image older than the seal falls back to "changed in the last 30 days". Pruning matters as much as finding: the first version also
 listed the image's own files and the desktop launchers, and the two files that actually
 mattered were lost in the middle of it.
 
@@ -93,8 +98,9 @@ the roster and the channels — and the people connected get told before, not af
 near sufficient, and this is not theoretical: an image whose `box-chrome` pointed at a
 nonexistent binary still printed `box ready: display :1` and still passed health. So
 `box up --recreate` opens a known page and checks it rendered, which exercises the desktop,
-the browser and the debugging port together, and recreates from `:previous` when it does
-not. The page is a `data:` URL, not a website — a verification that reaches the network
+the browser and the debugging port together, and recreates from the image the box ran before —
+by its image id, read before the update, not by a tag that a later build may have moved —
+when it does not. The page is a `data:` URL, not a website — a verification that reaches the network
 turns every passing blip into a rollback, which is a more destructive failure than the one
 it guards against. `agentbox box rollback` does the same by hand, for a box that breaks
 later rather than during an upgrade.
@@ -164,10 +170,10 @@ rather than waiting forever.
 9. **Report** what was lost — jobs killed, tabs closed — to the people who were told in
    step 4, and to whoever decided in step 3.
 
-Steps 2, 5, 6, 7 and 8 exist in code and run on `box up --recreate`:
-`src/box/preflight.ts` for the check before and the verification after,
-`BoxManager.backupVolumes` for the copy, `scripts/build-image.mjs` for the tags that make
-step 8 possible. Steps 1 and 4 are the web server's upgrade timer. Step 9 — reporting what
+Step 5 is optional (R4). Steps 2, 5, 6, 7 and 8 are one function, `applyUpdate` in
+`src/box/box-update.ts`, which `box up --recreate`, `box upgrade` and Settings → Boxes all
+run; `src/box/preflight.ts` holds the check before and the verification after. Steps 1 and 4
+are the web server's ten-minute check. Step 9 — reporting what
 was lost, afterwards, to the people who were told — is still design.
 
 Step 3, **deciding**, is split across the two halves on purpose, and the split is the
@@ -187,8 +193,8 @@ since invalidates it rather than riding along on yesterday's yes; and it goes st
 day. It also authorises only the *loss* — the rules about interrupting connected people and
 about the quiet window still run underneath, because nobody spoke to those.
 
-The recording is the whole of the chat's power here. The destructive sequence exists once,
-in the CLI, and the web server still does not perform an upgrade — see below.
+`agentbox box upgrade` still decides this way. The app's own path (§6) is simpler: the
+person who presses *Apply update*, or replies `upgrade`, has decided.
 
 ## 5. What is missing before this is safe unattended
 
@@ -204,11 +210,11 @@ All eight rules are implemented.
 - `agentbox box up --recreate` is the same destructive step without the deciding, for when
   a person has already decided.
 - `agentbox box rollback` goes back a version by hand.
-- The web server notices an available upgrade and tells every admin, once per image. It
-  deliberately does not perform one — a server that recreates the box underneath the people
-  using it is a worse surprise than an out-of-date image. An admin's `upgrade` reply is
-  *recorded* there, not acted on, for the same reason: one copy of the destructive sequence,
-  and it is the one with the rollback in it.
+- The web server notices an available update and tells every admin, once per image. Since
+  INV-1538 it also performs one, when an admin asks (§6). The earlier ruling — the server
+  never recreates the box — was there to keep one copy of the destructive sequence, the one
+  with the rollback in it. That copy is now a function both sides call, so the reason is
+  kept and the restriction is not.
 - Anything the notice offers must be wired before it is offered. The first version ended
   `Reply "upgrade" to go ahead` with no handler for the word anywhere. Replying was answered
   by silence, somebody reasonably concluded the bot could act on the box, and the next
@@ -234,3 +240,33 @@ Postponing is a design, not code: the announcement says to reply "wait", and not
 listens for it. `ANNOUNCE_MINUTES` is likewise a number nothing counts down. Both belong
 with the multi-person work, because both are really questions about how a bot holds a
 conversation with a room rather than with a person.
+
+## 6. The product path: Settings → Boxes → Apply update (INV-1538)
+
+The box is updated the way an app is, not by a procedure an operator runs. The image is the
+app's, the person's data is on volumes, and an update swaps the first under the second:
+
+| Kept | Replaced |
+| --- | --- |
+| `work` volume — what agents made | the container and everything outside the volumes |
+| `.config` volume — browser logins | the image: `fakechris/lumenbox:<app version>` |
+| `~/.agentbox` on the host — chats, team, memory | |
+
+- **Noticing.** Every ten minutes the server compares the box's image with the one this app
+  expects — the reference and the image id, so a rebuilt image under the same tag counts.
+  When they differ, admins get one message per image and an item on the "needs you" list.
+- **Applying.** Settings → Boxes shows both images and *Apply update*. By default it waits for
+  turns and background jobs to finish (up to two hours; the page says what it is waiting
+  for), pulls the image if it is not on this machine, recreates, checks the box drives a
+  browser, and goes back to the previous image id if it does not. The progress shows on the
+  page. Replying `upgrade` in a chat does the same thing.
+- **No backup by default** (R4); one checkbox asks for it.
+- **Reset is a separate act.** *Reset the box…* deletes the container and the `work` and
+  `.config` volumes and starts a new box. That loses what agents made and every login, so
+  the request has to name the box. An update never does this.
+
+Verified 2026-11-02 on a throwaway box: an update from 0.3.10 to an image built from this
+branch waited 30 s for a 20 s job, kept a file in `work` and one in `.config`, and dropped a
+file written in the home directory. The pre-check on the new image listed only a file the box
+wrote. An update to an image with the browser removed failed verification and came back on
+the previous image id, with `work` intact.

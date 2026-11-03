@@ -67,8 +67,8 @@ export function describePreflight(preflight: Preflight): string {
   }
   if (preflight.strayFiles.length > 0) {
     parts.push(
-      `Files changed in the last ${RECENT_DAYS} days outside /home/box/work and ` +
-        `/home/box/.config. Only those two survive an upgrade, so these would be lost:\n` +
+      `Files written in the box outside /home/box/work and /home/box/.config. ` +
+        `Only those two survive an update, so these would be lost:\n` +
         preflight.strayFiles.map(path => `  ${path}`).join("\n") +
         (preflight.moreStrayFiles ? `\n  … and more` : "")
     );
@@ -110,13 +110,17 @@ export async function preflight(box: BoxClient): Promise<Preflight> {
     //
     // Hidden directories go as a class, the same rule the upload guard uses: they hold
     // configuration, not work somebody would miss.
+    // Since INV-1538 the image stamps /etc/lumenbox/sealed as its last build step, so "newer than the seal"
+    // is exactly "written since the box started": image files (/opt/box-checks was the one that slipped past
+    // the list below) are never reported. An image from before the seal keeps the 30-day rule.
     const find =
+      `if [ -f /etc/lumenbox/sealed ]; then AGE="-newer /etc/lumenbox/sealed"; else AGE="-mtime -${RECENT_DAYS}"; fi; ` +
       `find /home/box /srv /opt /root -xdev \\( ` +
       `-path /home/box/work -o -path /home/box/.config -o -path /home/box/Desktop ` +
       `-o -path /home/box/reference -o -path /opt/box-reference ` +
       `-o -path /opt/boxd -o -path /opt/hostd ` +
       `-o \\( -type d -name '.*' \\) -o -name node_modules -o -name .git ` +
-      `\\) -prune -o -type f -mtime -${RECENT_DAYS} -print 2>/dev/null | head -${MAX_LISTED + 1}`;
+      `\\) -prune -o -type f $AGE -print 2>/dev/null | head -${MAX_LISTED + 1}`;
     const found = await box.exec(find, { timeoutMs: 30_000, actor: "host:preflight" });
     const paths = found.stdout
       .split("\n")
