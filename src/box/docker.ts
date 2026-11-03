@@ -15,7 +15,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { BOXD_PORT, UI_PORT } from "../protocol/index.ts";
-import { BoxClient } from "./client.ts"; import { defaultCpuLimit } from "./box-cpus.ts";
+import { BoxClient } from "./client.ts"; import { ensureCpuLimit } from "./box-cpus.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -852,8 +852,7 @@ export class BoxManager {
       );
       onOutput?.(`starting container ${this.config.containerName}`);
       await this.ensureNetwork();
-      const cpus = chosenBoxCpus() ?? (await defaultCpuLimit()); if (cpus !== undefined) onOutput?.(`cpu limit: ${cpus} cores`); // INV-1552, box-cpus.ts
-      await docker(this.runArguments(cpus), 120_000);
+      await docker(this.runArguments(), 120_000);
     } else if (state === "exited" || state === "created") {
       onOutput?.(`restarting container ${this.config.containerName}`);
       await docker(["start", this.config.containerName], 60_000);
@@ -865,7 +864,7 @@ export class BoxManager {
           "resolve it manually or re-run with --recreate."
       );
     }
-
+    await ensureCpuLimit(this.config.containerName, chosenBoxCpus(), onOutput); // every box this starts or reuses, not only a new one (INV-1552)
     const status = await this.status();
     if (!status.boxdUrl) {
       throw new DockerError(

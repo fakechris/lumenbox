@@ -30,6 +30,9 @@ export const BOX_UPDATE_JS = `(function () {
     if (!d.running && timer) { clearInterval(timer); timer = null; }
   }
   function showLimits(d, said) {
+    // Not while somebody is typing: the image poll calls this every few seconds.
+    if (!said && (ui.cpusDirty || document.activeElement === ui.cpus)) return;
+    ui.cpusDirty = false;
     ui.cpus.value = d.chosen || (d.limit !== null ? String(d.limit) : "");
     ui.cpusOf.textContent = d.engine ? "of " + d.engine + " cores" : "cores";
     ui.cpus.disabled = d.fromEnvironment; ui.cpus.parentNode.querySelector("button").disabled = d.fromEnvironment;
@@ -73,6 +76,7 @@ export const BOX_UPDATE_JS = `(function () {
     ui.cpus = el("input", { type: "number", min: "0.5", step: "0.5", id: "boxcpusinput", class: "ui-w-sm" });
     ui.cpusOf = el("span", { class: "dim", id: "boxcpusof" }, "");
     var cpuSave = el("button", { class: "btn", id: "boxcpussave" }, "Save");
+    ui.cpus.oninput = function () { ui.cpusDirty = true; };
     cpuRow.appendChild(ui.cpus); cpuRow.appendChild(ui.cpusOf); cpuRow.appendChild(cpuSave);
     ui.cpusNote = el("div", { class: "fieldnote", id: "boxcpusnote" }, "");
     wrap.appendChild(ui.line); wrap.appendChild(row); wrap.appendChild(nowAsk); wrap.appendChild(note); wrap.appendChild(ui.progress); wrap.appendChild(cpuRow); wrap.appendChild(ui.cpusNote); wrap.appendChild(reset); wrap.appendChild(ask);

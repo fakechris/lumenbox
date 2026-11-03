@@ -18,6 +18,8 @@
  */
 
 import { assertCompatible, BoxClient } from "./client.ts";
+import { ensureCpuLimit } from "./box-cpus.ts";
+import { chosenBoxCpus } from "../config.ts";
 import {
   BoxManager,
   defaultBoxConfig,
@@ -133,6 +135,8 @@ export class DockerBoxProvisioner implements BoxProvisioner {
   async connect(): Promise<BoxClient> {
     const client = await this.manager.connect();
     assertCompatible(await client.health(), this.label);
+    // A box that was already running when this app started gets its ceiling here, not at its next restart (INV-1552).
+    await ensureCpuLimit(this.manager.config.containerName, chosenBoxCpus(), line => console.error(`[box] ${line}`));
     return client;
   }
 

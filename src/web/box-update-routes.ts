@@ -11,7 +11,7 @@
 import { type ImageState, applyUpdate, dockerUpdateDeps, imageState, resetBox } from "../box/box-update.ts";
 import { BoxManager, defaultBoxConfig } from "../box/docker.ts";
 import { cpuLimitOf, defaultCpusFor, engineCpus, setCpuLimit } from "../box/box-cpus.ts";
-import { boxCpusFromEnvironment, loadConfig, saveConfig } from "../config.ts";
+import { boxCpusFromEnvironment, loadConfig, saveConfig, validCpus } from "../config.ts";
 import { verifyBox } from "../box/preflight.ts";
 
 export interface BoxUpdateDeps {
@@ -158,8 +158,9 @@ export async function boxUpdateRoute(route: string, service: BoxUpdateService, d
     if (route === "POST /api/box/limits") {
       if (fromEnv !== undefined) return { status: 409, body: { error: `AGENTBOX_CPUS=${fromEnv} is set in the environment, and it wins over this setting. Unset it to choose here.` } };
       const raw = (await deps.readJson()).cpus;
-      const wanted = raw === null || raw === "" || raw === undefined ? undefined : Number(raw);
-      if (wanted !== undefined && (!Number.isFinite(wanted) || wanted < 0.5 || (engine !== undefined && wanted > engine))) {
+      const cleared = raw === null || raw === "" || raw === undefined;
+      const wanted = cleared ? undefined : validCpus(raw) === undefined ? Number.NaN : Number(validCpus(raw));
+      if (wanted !== undefined && (!Number.isFinite(wanted) || (engine !== undefined && wanted > engine))) {
         return { status: 400, body: { error: `Choose between 0.5 and ${engine ?? "the engine's"} cores.` } };
       }
       saveConfig({ boxCpus: wanted === undefined ? null : String(wanted) });

@@ -363,9 +363,7 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
     ...(readString(raw.boxImage, "boxImage", onWarn) !== undefined
       ? { boxImage: readString(raw.boxImage, "boxImage", onWarn) }
       : {}),
-    ...(readString(raw.boxCpus, "boxCpus", onWarn) !== undefined && Number(readString(raw.boxCpus, "boxCpus", onWarn)) > 0
-      ? { boxCpus: readString(raw.boxCpus, "boxCpus", onWarn) }
-      : {}),
+    ...(validCpus(readString(raw.boxCpus, "boxCpus", onWarn)) !== undefined ? { boxCpus: validCpus(readString(raw.boxCpus, "boxCpus", onWarn))! } : {}),
     ...(readEnvMap(raw.env, onWarn) !== undefined ? { env: readEnvMap(raw.env, onWarn) } : {}),
     ...(readStringList(raw.channelAllow, "channelAllow", onWarn) !== undefined
       ? { channelAllow: readStringList(raw.channelAllow, "channelAllow", onWarn) }
@@ -614,6 +612,13 @@ function readHostExec(
  * box is handed (box/docker.ts). Absent means host processes get no network at all.
  */
 /** The box's CPU ceiling somebody chose (INV-1552): AGENTBOX_CPUS, then the boxCpus setting; undefined means the default. */
+/** A CPU ceiling Docker accepts and the limits page allows: finite, from 0.5 to 1024 cores (INV-1552). */
+export function validCpus(raw: unknown): string | undefined {
+  if (typeof raw !== "number" && !(typeof raw === "string" && /^\s*\d+(\.\d+)?\s*$/.test(raw))) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0.5 && n <= 1024 ? String(n) : undefined;
+}
+
 export function boxCpusFromEnvironment(env: NodeJS.ProcessEnv = process.env): string | undefined {
   return env.AGENTBOX_CPUS?.trim() || undefined;
 }

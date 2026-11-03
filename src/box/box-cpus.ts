@@ -20,9 +20,27 @@ export function defaultCpusFor(engine: number): string {
   return String(Math.max(2, Math.floor(engine / 2)));
 }
 
-export async function defaultCpuLimit(): Promise<string | undefined> {
+/** The default for this engine; the floor of 2 when its core count cannot be read, rather than no ceiling. */
+export async function defaultCpuLimit(): Promise<string> {
   const n = await engineCpus();
-  return n === undefined ? undefined : defaultCpusFor(n);
+  return n === undefined ? "2" : defaultCpusFor(n);
+}
+
+/**
+ * Puts the chosen ceiling (or the default) on a box that is up, when it does not have it already —
+ * so a box created before ceilings existed, or one a person changed, is brought in line when it is
+ * next started or reused. A failure is said, not thrown: a box without its ceiling still works.
+ */
+export async function ensureCpuLimit(containerName: string, chosen: string | undefined, say?: (line: string) => void): Promise<void> {
+  try {
+    const wanted = Number(chosen ?? (await defaultCpuLimit()));
+    const current = await cpuLimitOf(containerName);
+    if (current !== undefined && Math.abs(current - wanted) < 0.01) return;
+    await setCpuLimit(containerName, String(wanted));
+    say?.(`cpu limit: ${wanted} cores${current === undefined ? " (it had none)" : ` (it had ${current})`}`);
+  } catch (error) {
+    say?.(`cpu limit not applied: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 /** The running container's ceiling, in cores; undefined for none. */
