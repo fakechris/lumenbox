@@ -17,7 +17,7 @@ import { AgentRegistry, defaultAgentsRoot } from "./agents/registry.ts";
 import { BundleStore, planMigration } from "./host/bundles.ts";
 import { ScopeStore } from "./host/scopes.ts";
 import { attachedBox, tokenOf } from "./box/boxes.ts";
-import { applyUpdate, dockerUpdateDeps } from "./box/box-update.ts";
+import { applyUpdate, dockerUpdateDeps } from "./box/box-update.ts"; import { holdBoxDown, releaseBoxDown } from "./box/held-down.ts";
 import {
   BOX_IMAGE_REPO,
   type BoxConfig,
@@ -123,7 +123,7 @@ async function cmdBoxPush(): Promise<number> {
 async function cmdBoxUp(argv: string[]): Promise<number> {
   // --with-host puts the orchestrator in the container: the production shape, where the only thing outside the box is a browser. Without it the box is driven from here.
   const withHost = argv.includes("--with-host");
-  const manager = new BoxManager(boxConfig({ withHost }));
+  const manager = new BoxManager(boxConfig({ withHost })); releaseBoxDown(manager.config.containerName); // up again: the keeper may start it (INV-1550)
   const recreate = argv.includes("--recreate");
 
   // Recreating destroys everything not on a volume, so it asks before it does — but only when there is something to lose, because a confirmation that always appears is one
@@ -264,7 +264,7 @@ async function cmdBoxStatus(): Promise<number> {
 
 async function cmdBoxDown(argv: string[]): Promise<number> {
   const manager = new BoxManager(boxConfig());
-  await manager.down({ remove: argv.includes("--rm") });
+  holdBoxDown(manager.config.containerName, "agentbox box down"); await manager.down({ remove: argv.includes("--rm") }); // the app's keeper leaves it stopped (INV-1550)
   out(argv.includes("--rm") ? "Box stopped and removed." : "Box stopped.");
   return 0;
 }

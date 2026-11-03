@@ -554,3 +554,27 @@ test("the agents with a turn in flight are named whole: worker keys split on NUL
     cleanup();
   }
 });
+
+test("interruptAgents stops a real turn in flight for the named agents only, and says whose (INV-1550)", async () => {
+  const { registry, cleanup } = tempRegistry();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bob = registry.create({ name: "Bob" });
+    const aborted: string[] = [];
+    const events: BusEvent[] = [];
+    const runner = async (agent: { id: string }, _inbound: readonly InboundMessage[], signal: AbortSignal) => {
+      await new Promise<void>(resolve => { if (signal.aborted) resolve(); signal.addEventListener("abort", () => { aborted.push(agent.id); resolve(); }); setTimeout(resolve, 2000); });
+    };
+    const bus = new AgentBus(registry, runner as never, event => events.push(event));
+    bus.sendFromUser(ada.id, "work"); bus.sendFromUser(bob.id, "work");
+    const done = Promise.all([bus.wake(ada.id), bus.wake(bob.id)]);
+    await until(() => bus.activeAgentIds().length === 2, "both turns started");
+    assert.deepEqual(bus.interruptAgents([ada.id], "box_down"), [ada.id]);
+    await until(() => aborted.length === 1, "ada's turn saw the abort");
+    assert.deepEqual(aborted, [ada.id], "bob's turn was not touched");
+    assert.ok(events.some(e => e.type === "turn_interrupted" && e.agentId === ada.id && e.reason === "box_down"));
+    await done;
+  } finally {
+    cleanup();
+  }
+});

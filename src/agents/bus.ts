@@ -748,6 +748,22 @@ export class AgentBus {
     return this.active.size;
   }
 
+  /**
+   * Stops every turn these agents have in flight, saying why — their box went away under them
+   * (INV-1550). A stopped turn keeps what it completed; the keeper wakes the agent when the box is back.
+   */
+  interruptAgents(agentIds: readonly string[], reason: string): string[] {
+    const stopped = new Set<string>();
+    for (const [key, running] of this.active) {
+      const agentId = agentOfKey(key);
+      if (!agentIds.includes(agentId)) continue;
+      this.onEvent({ type: "turn_interrupted", agentId, reason });
+      running.controller.abort();
+      stopped.add(agentId);
+    }
+    return [...stopped];
+  }
+
   /** The distinct conversations an agent currently has messages queued for. */
   private pendingConversations(agentId: string): string[] {
     const queue = this.pending.get(agentId);

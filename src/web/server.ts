@@ -36,7 +36,7 @@ import { isRecoveryCommand, recoverTask } from "../host/task-recovery.ts";
 import { isRetryCommand, retryLastAnswer } from "../host/retry-recovery.ts";
 import type { BusEvent } from "../agents/bus.ts";
 import { BoxManager, defaultBoxConfig } from "../box/docker.ts";
-import { resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
+import { managesLocalDocker, resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts"; import { boxHeldDown, releaseBoxDown } from "../box/held-down.ts";
 import { classifyBox, auditNotice } from "../box/access.ts";
 import { configPath, envNumber } from "../config.ts";
 import { JEV_SETTINGS_JS, jevSettings, jevSettingsChange } from "./jev-settings.ts";
@@ -180,7 +180,7 @@ import { randomUUID } from "node:crypto";
 import { isLive, isTaskStatus, type Task } from "../host/tasks.ts"; import { UnknownAgentError } from "../host/task-agents.ts";
 import { connectorSatisfied } from "../host/mcp-connectors.ts";
 import { adminRecipients } from "../host/upgrade.ts";
-import { BoxUpdateService, boxUpdateRoute } from "./box-update-routes.ts";
+import { BoxUpdateService, boxUpdateRoute } from "./box-update-routes.ts"; import { BoxKeeper } from "./box-keeper.ts";
 import { PRESET_MODELS, providerConfigured, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { BootstrapAdmins } from "../host/bootstrap.ts";
 import { Principals, principalsPath, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
@@ -2449,7 +2449,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   }, 60_000);
   teachWatch.unref();
 
-  let boxWasHealthy = false;
+  // The local box's half of the watch (INV-1550): reconnect, tell admins, stop turns that can only fail, start a box nobody meant to stop.
+  const ownDocker = options.useBox !== false && managesLocalDocker(), ownManager = () => new BoxManager(defaultBoxConfig());
+  const keeper = new BoxKeeper({ client: () => orchestrator.boxClient(), connect: () => orchestrator.connectBox(), log, recreating: () => boxUpdate.view().running === true,
+    ...(ownDocker ? { container: { name: defaultBoxConfig().containerName, status: () => ownManager().status(), start: async () => { await ownManager().up({ onOutput: () => {} }); } } } : {}),
+    heldDown: () => boxHeldDown(defaultBoxConfig().containerName), agentsOnBox: () => registry.list().filter(agent => registry.boxOf(agent.id).id === registry.box.id).map(agent => agent.id),
+    interrupt: (ids, reason) => orchestrator.bus.interruptAgents(ids, reason), wake: (id, text) => { void orchestrator.prompt(id, text, undefined, { lane: "background", synthetic: true, steerable: false }).catch(() => {}); },
+    notify: text => { broadcast({ type: "error", boxId: registry.box.id, message: text }); for (const { adapter, identity } of adminRecipients(principals.list())) void channels.push(adapter, identity, text); } });
   const boxWatch = setInterval(() => {
     // The attached boxes, on their own: one that stops answering (a tunnel that died, a VM
     // that rebooted) is dialled again every tick and announced only on the change.
@@ -2459,41 +2465,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         broadcast({ type: "error", boxId: registry.boxByName(change.name)?.id ?? "", message: change.connected ? `Box ${change.name} is back.` : `Box ${change.name} stopped answering: ${change.detail}` });
       }
     }).catch(() => {});
-    void (async () => {
-      const client = orchestrator.boxClient();
-      if (client !== undefined) {
-        try {
-          await client.health();
-          boxWasHealthy = true;
-          return;
-        } catch (error) {
-          const detail = error instanceof Error ? error.message : String(error);
-          // Written every time, not only on the transition: the page reads this, and a
-          // value set once at startup is a claim about one moment presented as the
-          // present. The *announcement* stays edge-triggered — a box that stays down
-          // does not deserve a notification a minute.
-          box = { connected: false, detail };
-          if (boxWasHealthy) {
-            boxWasHealthy = false;
-            log(`box stopped answering: ${detail}`);
-            broadcast({ type: "error", boxId: registry.box.id, message: `The box stopped answering: ${detail}` });
-          }
-        }
-      }
-
-      // Down, or never up. Try again — and try *resolving* it again rather than
-      // retrying the address we already have, because a box that was updated or
-      // recreated comes back on a different published port. Watching without
-      // reconnecting is what made "restart the app" the recovery for an event the
-      // product's own promise says should need no attention.
-      const attempt = await orchestrator.connectBox();
-      box = attempt;
-      if (!attempt.connected) return;
-      boxWasHealthy = true;
-      log(`box reachable again: ${attempt.detail}`);
-      broadcast({ type: "error", boxId: registry.box.id, message: `The box is back: ${attempt.detail}` });
-      // A desktop is started by its next GUI request, not by box recovery.
-    })();
+    void keeper.tick().then(state => { box = state; }).catch(error => log(`box watch: ${error instanceof Error ? error.message : String(error)}`));
     // Configurable only so a test can watch a recovery without waiting half a minute
     // for each tick; nothing in production has a reason to change it.
   }, envNumber("AGENTBOX_BOX_WATCH_MS", 30_000));
@@ -5715,7 +5687,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 200, { ok: true, detail: box.detail });
             return;
           }
-          boxUpInFlight = true;
+          boxUpInFlight = true; releaseBoxDown(defaultBoxConfig().containerName); // a person asked for it up (INV-1550)
           send(res, 202, { starting: true });
           void (async () => {
             try {
