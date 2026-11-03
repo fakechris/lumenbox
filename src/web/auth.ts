@@ -40,6 +40,27 @@ export const USER_HEADER = "x-agentbox-user";
 export const ROLE_HEADER = "x-agentbox-role";
 
 /**
+ * The names and addresses a container uses for the machine it runs on: Docker Desktop's and
+ * OrbStack's `host.docker.internal` (and its IPs), Lima's, Podman's.
+ */
+const BOX_SIDE_HOSTS = new Set(["host.docker.internal", "gateway.docker.internal", "docker.for.mac.localhost", "host.lima.internal", "host.containers.internal", "0.250.250.254", "192.168.65.254"]);
+
+/**
+ * Why a request is refused because it came from the box side, or undefined (INV-1543).
+ *
+ * The web binds loopback, and under Docker a box still reaches it as host.docker.internal; on
+ * OrbStack its connections even arrive from 127.0.0.1. The box's Chromium once opened this page
+ * there, and its cookie jar kept the UI token for weeks. Under those names only the agents' MCP
+ * face (`/mcp/r/<key>`) is served. A shell can forge Host; a browser cannot, and the token is
+ * what a shell would need.
+ */
+export function boxSideRefusal(hostHeader: string | undefined, path: string): string | undefined {
+  const name = (hostHeader ?? "").trim().toLowerCase().replace(/:\d+$/, "");
+  if (!BOX_SIDE_HOSTS.has(name) || /^\/mcp\/r\/[0-9a-f]{32}$/.test(path)) return undefined;
+  return `${name} is how a box reaches this machine; the LumenBox page and its API are not served on it.`;
+}
+
+/**
  * The control plane's wire vocabulary (`src/control/store.ts`), which is not ours.
  *
  * One vocabulary, one meaning (INV-537). The box used to carry a second role type —
@@ -75,9 +96,11 @@ export interface Caller {
  */
 export function callerOf(
   headers: { [key: string]: string | string[] | undefined },
-  allowedByToken: boolean
+  allowedByToken: boolean,
+  /** A gateway stands in front (`trustsGatewayIdentity`). Without one the headers are anyone's words (INV-1543). */
+  behindGateway: boolean
 ): Caller {
-  if (!allowedByToken) return { userId: undefined, role: undefined };
+  if (!allowedByToken || !behindGateway) return { userId: undefined, role: undefined };
   const first = (name: string): string | undefined => {
     const value = headers[name];
     return Array.isArray(value) ? value[0] : value;

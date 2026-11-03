@@ -608,6 +608,41 @@ function readHostExec(
  * The egress relay host processes should speak to (INV-1344), from the same two variables the
  * box is handed (box/docker.ts). Absent means host processes get no network at all.
  */
+/**
+ * Whether identity headers on a request are a gateway's word (INV-1543). The control plane sets
+ * AGENTBOX_TRUST_GATEWAY_IDENTITY=1 on the boxes it runs behind its gateway; nothing else does.
+ * Off, `x-agentbox-user` and `x-agentbox-role` are ignored: on a desktop the UI token is the
+ * operator's own, and a box that reached it could otherwise claim to be anyone, as admin.
+ */
+export function trustsGatewayIdentity(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.AGENTBOX_TRUST_GATEWAY_IDENTITY === "1";
+}
+
+/**
+ * This machine's own web credential, kept out of what agents are shown (INV-1543): the UI token
+ * from the environment (an in-box orchestrator's) and from the token file, which is only read,
+ * never created here. Name → value, for the redactor.
+ */
+const heldHostTokens = new Set<string>();
+
+/** A token this process's web answers to, from a flag or generated at start: kept out like the file's (INV-1543). */
+export function holdHostToken(value: string): void {
+  if (value.trim() !== "") heldHostTokens.add(value.trim());
+}
+
+export function hostTokens(env: NodeJS.ProcessEnv = process.env): Map<string, string> {
+  const held = new Map<string, string>();
+  for (const value of heldHostTokens) held.set(held.size === 0 ? "LUMENBOX_UI_TOKEN" : `LUMENBOX_UI_TOKEN_${held.size + 1}`, value);
+  const fromEnv = env.AGENTBOX_UI_TOKEN?.trim();
+  if (fromEnv && !heldHostTokens.has(fromEnv)) held.set(held.size === 0 ? "LUMENBOX_UI_TOKEN" : `LUMENBOX_UI_TOKEN_${held.size + 1}`, fromEnv);
+  // Under test with no home set there is no installation, and so no token file to keep out.
+  const home = env.AGENTBOX_HOME ?? (env.AGENTBOX_TEST === "1" ? undefined : join(homedir(), ".agentbox"));
+  const file = home === undefined ? undefined : join(home, "ui-token");
+  const fromFile = file !== undefined && existsSync(file) ? readFileSync(file, "utf8").trim() : "";
+  if (fromFile && ![...held.values()].includes(fromFile)) held.set(held.size === 0 ? "LUMENBOX_UI_TOKEN" : `LUMENBOX_UI_TOKEN_${held.size + 1}`, fromFile);
+  return held;
+}
+
 export function egressRelayFromEnv(env: NodeJS.ProcessEnv = process.env): { relay: string; token: string } | undefined {
   const relay = env.AGENTBOX_EGRESS_RELAY;
   const token = env.AGENTBOX_EGRESS_TOKEN;

@@ -168,6 +168,9 @@ export class ComposeAllocator extends StoreBackedAllocator {
         // box has both a relay token and the real key, and the relay protects nothing.
         relayed: this.options.relayUrl !== undefined && tokens.relay !== undefined,
         runArgs: [
+          // Behind this control plane's gateway, whose identity headers the box may believe (INV-1543).
+          "--env",
+          "AGENTBOX_TRUST_GATEWAY_IDENTITY=1",
           // The relay, when there is one. This is what replaces a provider key in the box: the box
           // is told an address and a token of its own, and the real credential stays outside.
           ...(this.options.relayUrl !== undefined && tokens.relay !== undefined
@@ -195,7 +198,7 @@ export class ComposeAllocator extends StoreBackedAllocator {
           ...(this.options.controlUrl !== undefined
             ? ["--env", `AGENTBOX_CONTROL_URL=${this.options.controlUrl}`, "--add-host", "host.docker.internal:host-gateway"]
             : []),
-          ...Object.entries(spec.env ?? {}).flatMap(([key, value]) => [
+          ...Object.entries(spec.env ?? {}).filter(([key]) => key !== "AGENTBOX_TRUST_GATEWAY_IDENTITY").flatMap(([key, value]) => [
             "--env",
             `${key}=${value}`,
           ]),

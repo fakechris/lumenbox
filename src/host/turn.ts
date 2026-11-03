@@ -8,7 +8,7 @@
 
 import { createHash } from "node:crypto";
 import { buildInfo } from "./build-info.ts";
-import { envNumber } from "../config.ts";
+import { envNumber, hostTokens } from "../config.ts";
 import { randomUUID } from "node:crypto";
 import type Anthropic from "@anthropic-ai/sdk";
 import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
@@ -144,7 +144,7 @@ import { TOOL_BUDGET_WARNING } from "./mcp.ts";
 import { imageRefusalOf, replaceRefusedImages } from "./image-refusal.ts";
 import { budgetReport, budgetWarning, replayNote, TurnBudget, type TurnBudgetConfig } from "./turn-budget.ts";
 import { writePathKey, writePaths } from "./write-path.ts";
-import { outboundRedactor, redactEvent } from "./redact-outbound.ts";
+import { outboundRedactor, redactEvent, redactResult } from "./redact-outbound.ts";
 import { lookupPair, splitRoster } from "./tool-roster.ts";
 import { narrowTools, toolAllowed } from "./scopes.ts";
 import { conversationIdFor, MAIN_CONVERSATION } from "../agents/registry.ts";
@@ -1492,7 +1492,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   const baseEmit = deps.onEvent ?? (() => {});
   // Held values never leave on the stream (INV-1360): the words a person reads are scrubbed here,
   // at the one door every text and interim event goes through; the record keeps `recordAs`.
-  const redactOut = outboundRedactor(deps.vault?.heldValues());
+  const hostHeld = hostTokens(), redactHost = outboundRedactor(hostHeld), redactOut = outboundRedactor([...(deps.vault?.heldValues() ?? []), ...hostHeld]); // this machine's web token leaves tool results too (INV-1543)
   const emit: typeof baseEmit = event => baseEmit(redactEvent({ ...event, conversation }, redactOut));
   const provider = deps.provider ?? FULL_CLAUDE;
 
@@ -1765,7 +1765,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
         const entry = {
           role: "user",
           kind: "results",
-          blocks: replayed,
+          blocks: replayed.map(block => redactResult(block, redactHost)), // a resumed result is a result (INV-1543)
           at: new Date().toISOString(),
           turnId,
         } satisfies TranscriptEntry;
@@ -1869,7 +1869,7 @@ ${outcome.text}`;
         const entry = {
           role: "user",
           kind: "results",
-          blocks: answered,
+          blocks: answered.map(block => redactResult(block, redactHost)), // a resumed result is a result (INV-1543)
           at: new Date().toISOString(),
           turnId,
         } satisfies TranscriptEntry;
@@ -3519,7 +3519,7 @@ ${outcome.text}`;
     const toolNames = new Map(toolUses.map(use => [use.id, use.name] as const));
     for (const entry of done) {
       if (entry === undefined) continue;
-      results.push(entry.block);
+      results.push(redactResult(entry.block, redactHost));
     }
     // The 80% warning rides on the last result of the round, once (INV-1354).
     if (budgetWarningDue && results.length > 0) {

@@ -8,6 +8,9 @@ import { UsageLog } from "../host/usage.ts";
 import { Principals } from "../host/principals.ts";
 import { AgentRegistry } from "../agents/registry.ts";
 
+// These requests carry identity the way the hosted gateway sends it, so this file runs as a box behind one (INV-1543).
+process.env.AGENTBOX_TRUST_GATEWAY_IDENTITY = "1";
+
 test("member provisioning uses canonical owner, rejects injected host options, enforces quota and hides other members' boxes", async () => {
   const home = mkdtempSync(join(tmpdir(), "personal-http-"));
   const previous = process.env.AGENTBOX_HOME;

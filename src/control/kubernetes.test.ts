@@ -628,7 +628,8 @@ test("controlUrl and spec env are plain env on the container, never in the Secre
     const acme = store.upsertTenant({ name: "acme" });
     const handle = await allocator.allocate(acme.id, {
       image: "agentbox/box:test",
-      env: { AGENTBOX_PROVIDER: "minimax", EXTRA_FLAG: "1" },
+      // A spec may not turn the gateway's trust off (INV-1543): the key is dropped, not passed on.
+      env: { AGENTBOX_PROVIDER: "minimax", EXTRA_FLAG: "1", AGENTBOX_TRUST_GATEWAY_IDENTITY: "0" },
     });
 
     const container = (fake.pods.get(handle.externalId)!.spec.containers as Record<string, unknown>[])[0]!;
@@ -636,6 +637,8 @@ test("controlUrl and spec env are plain env on the container, never in the Secre
       // Always on: the gateway proxies to the box's UI, which only listens when the in-box
       // orchestrator is enabled.
       { name: "AGENTBOX_HOST_ENABLED", value: "1" },
+      // Always on too: the gateway in front is what makes its identity headers worth believing (INV-1543).
+      { name: "AGENTBOX_TRUST_GATEWAY_IDENTITY", value: "1" },
       { name: "AGENTBOX_CONTROL_URL", value: "http://agentbox-control.agentbox.svc:8080" },
       { name: "AGENTBOX_PROVIDER", value: "minimax" },
       { name: "EXTRA_FLAG", value: "1" },

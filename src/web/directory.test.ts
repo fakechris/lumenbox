@@ -7,6 +7,9 @@ import { startWebServer } from "./server.ts";
 import { AgentRegistry } from "../agents/registry.ts";
 import { Principals } from "../host/principals.ts";
 
+// These requests carry identity the way the hosted gateway sends it, so this file runs as a box behind one (INV-1543).
+process.env.AGENTBOX_TRUST_GATEWAY_IDENTITY = "1";
+
 test("directory API scopes quotas to authenticated links and retains snapshots on failure", async () => {
   const home = mkdtempSync(join(tmpdir(), "directory-api-"));
   const previous = process.env.AGENTBOX_HOME;

@@ -27,3 +27,12 @@ test("no held values means the identity, and only text and interim events are to
   const other = { type: "tool_start", agentId: "a", tool: "bash", input: { command: secret } };
   assert.equal(redactEvent(other, redact), other, "a tool_start is the record's business, not the stream's");
 });
+
+test("two sources may use one name and both values are still replaced; a tool's summary line is scrubbed too (INV-1543)", () => {
+  const vault = "vault-value-0123456789abcdef";
+  const host = "host-token-fedcba9876543210";
+  const redact = outboundRedactor([["LUMENBOX_UI_TOKEN", vault], ["LUMENBOX_UI_TOKEN", host]]);
+  assert.equal(redact(`${vault} and ${host}`), "[vault:LUMENBOX_UI_TOKEN] and [vault:LUMENBOX_UI_TOKEN]");
+  const ended = redactEvent({ type: "tool_end", summary: `cookie agentbox_ui=${host}` }, redact);
+  assert.equal(ended.summary, "cookie agentbox_ui=[vault:LUMENBOX_UI_TOKEN]");
+});

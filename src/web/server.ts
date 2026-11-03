@@ -61,11 +61,10 @@ import {
   authorize,
   callerOf,
   type AuthDecision,
-  isLoopback,
+  isLoopback, boxSideRefusal,
   mayDrive,
   parseCookies,
   refusalToDrive,
-  ROLE_HEADER,
   safeNext,
   type Caller,
 } from "./auth.ts";
@@ -127,7 +126,7 @@ function withinWork(path: string): boolean {
   return normalised === WORK_DIR || normalised.startsWith(`${WORK_DIR}/`);
 }
 
-import { agentboxHome, egressRelayFromEnv, isPersonalBoxQuota, loadConfig, lockedConfigEnv, reapplyConfigEnv, saveConfig, type AgentboxConfig } from "../config.ts";
+import { agentboxHome, egressRelayFromEnv, holdHostToken, isPersonalBoxQuota, trustsGatewayIdentity, loadConfig, lockedConfigEnv, reapplyConfigEnv, saveConfig, type AgentboxConfig } from "../config.ts";
 
 type AgentboxConfigHostExec = NonNullable<AgentboxConfig["hostExec"]>;
 import { ChannelManager } from "../channels/manager.ts";
@@ -3139,6 +3138,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       const url = new URL(req.url ?? "/", "http://localhost");
       const route = `${req.method} ${url.pathname}`;
       if (process.env.AGENTBOX_LOG_HTTP === "1") log(`web: ${route} from ${req.socket.remoteAddress}`);
+      const boxSide = boxSideRefusal(req.headers.host, url.pathname); if (boxSide !== undefined) { send(res, 403, { error: boxSide }); return; } // INV-1543
 
       const decision = admit({
         authorization: req.headers.authorization,
@@ -3324,7 +3324,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // code for. Both are only read on an authorised request, and the second is signed
       // by a key derived from the token that authorised it.
       principals.reload();
-      const gatewayCaller = callerOf(req.headers, decision.allow);
+      const gatewayCaller = callerOf(req.headers, decision.allow, trustsGatewayIdentity());
       const webIdentity = decision.allow
         ? readSession(parseCookies(req.headers.cookie).get(SESSION_COOKIE), sessionSecret)?.identity
         : undefined;
@@ -3345,7 +3345,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // tenant's roster lives there, and this pod's own roster is empty — consulting it
       // turned a tenant's owner into a viewer on their first click (2026-09-08, k8s).
       const assertedByGateway =
-        gatewayCaller.userId !== undefined && req.headers[ROLE_HEADER] !== undefined;
+        gatewayCaller.userId !== undefined && gatewayCaller.role !== undefined;
 
       const refused = (agentId?: string): boolean => {
         // Whoever the session says this is, their authority is the roster's answer —
@@ -6893,7 +6893,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     const desktop = desktopRouteOf(
       pathname ?? "",
       query ? `?${query}` : "",
-      mayDrive(callerOf(req.headers, upgradeDecision.allow))
+      mayDrive(callerOf(req.headers, upgradeDecision.allow, trustsGatewayIdentity()))
     );
 
     if (!desktop) {
@@ -6901,7 +6901,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       return;
     }
 
-    const gateway = callerOf(req.headers, upgradeDecision.allow);
+    const gateway = callerOf(req.headers, upgradeDecision.allow, trustsGatewayIdentity());
     const identity = gateway.userId ?? readSession(parseCookies(req.headers.cookie).get(SESSION_COOKIE), sessionSecret)?.identity;
     principals.reload();
     const targetBox = registry.boxById(desktop.boxId ?? registry.box.id);
@@ -6990,9 +6990,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     token = undefined;
   } else if (!token && !isLoopback(host)) {
     token = randomBytes(16).toString("hex");
-    log(`bound to ${host} with no token configured; generated one`);
-    log(`open: http://${host}:${options.port}/?token=${token}`);
+    log(`bound to ${host} with no token configured; generated one — open: http://${host}:${options.port}/?token=${token}`);
   }
+  if (token) holdHostToken(token); // whatever this web answers to is kept out of what agents see (INV-1543)
   /**
    * A published installation over plain HTTP (docs/10 S-2, INV-578).
    *
