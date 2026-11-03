@@ -755,7 +755,7 @@ export class AgentBus {
   interruptAgents(agentIds: readonly string[], reason: string): string[] {
     const stopped = new Set<string>();
     for (const [key, running] of this.active) {
-      const agentId = key.slice(0, key.indexOf(" "));
+      const agentId = agentOfKey(key);
       if (!agentIds.includes(agentId)) continue;
       this.onEvent({ type: "turn_interrupted", agentId, reason });
       running.controller.abort();
