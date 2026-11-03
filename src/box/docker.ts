@@ -7,7 +7,7 @@
  * reimplement. Every call is execFile with an argument array — no shell.
  */
 
-import { agentboxHome, envNumber, loadConfig } from "../config.ts";
+import { agentboxHome, chosenBoxCpus, envNumber, loadConfig } from "../config.ts";
 import { execFile, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -15,7 +15,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { BOXD_PORT, UI_PORT } from "../protocol/index.ts";
-import { BoxClient } from "./client.ts";
+import { BoxClient } from "./client.ts"; import { defaultCpuLimit } from "./box-cpus.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -662,7 +662,7 @@ export class BoxManager {
   }
 
   /** Exposed for the test that pins where the daemon is published. */
-  runArguments(): string[] {
+  runArguments(cpus?: string): string[] {
     const { config } = this;
     /**
      * The same thing, bound to one address.
@@ -735,10 +735,9 @@ export class BoxManager {
       // starve the engine host.
       "--memory",
       process.env.AGENTBOX_MEMORY ?? "4g",
-      // A ceiling, if one is wanted. Unset by default: the split that matters is inside
-      // the box — the desktop ahead of the agent's work — and a wrong number here just
-      // makes the agent slow for no reason. Set it when a box shares a machine.
-      ...(process.env.AGENTBOX_CPUS ? ["--cpus", process.env.AGENTBOX_CPUS] : []),
+      // A ceiling: once unset because agent work runs under nice inside the box, which says nothing about
+      // the machine a desktop box always shares — agent scans held a Mac at load 50 for hours (INV-1552).
+      ...(cpus ? ["--cpus", cpus] : []),
       // Egress, when a relay was named. host.docker.internal resolves on Docker Desktop
       // already; the mapping is what makes the same name work on a Linux engine, so the
       // relay address does not have to change per platform.
@@ -853,7 +852,8 @@ export class BoxManager {
       );
       onOutput?.(`starting container ${this.config.containerName}`);
       await this.ensureNetwork();
-      await docker(this.runArguments(), 120_000);
+      const cpus = chosenBoxCpus() ?? (await defaultCpuLimit()); if (cpus !== undefined) onOutput?.(`cpu limit: ${cpus} cores`); // INV-1552, box-cpus.ts
+      await docker(this.runArguments(cpus), 120_000);
     } else if (state === "exited" || state === "created") {
       onOutput?.(`restarting container ${this.config.containerName}`);
       await docker(["start", this.config.containerName], 60_000);
