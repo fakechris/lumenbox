@@ -326,7 +326,7 @@ export class DockerError extends Error {
   }
 }
 
-async function docker(
+export async function docker(
   args: readonly string[],
   timeoutMs = 120_000
 ): Promise<string> {

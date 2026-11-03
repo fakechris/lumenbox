@@ -738,6 +738,11 @@ export class AgentBus {
     return this.active.has(workerKey(agentId, conversation));
   }
 
+  /** How many turns are in flight across every agent: what a box update waits for (INV-1538). */
+  activeCount(): number {
+    return this.active.size;
+  }
+
   /** The distinct conversations an agent currently has messages queued for. */
   private pendingConversations(agentId: string): string[] {
     const queue = this.pending.get(agentId);

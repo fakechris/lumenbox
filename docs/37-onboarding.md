@@ -81,6 +81,13 @@ saved to `~/.agentbox/config.json` as `boxImage` (empty again means the release 
 failure it was: the registry answered *no such image* (update the app — a just-released
 version can race its image), or the registry never answered (network; set the mirror).
 
+**Updating the box.** A new app version usually expects a new box image. The app notices, and
+Settings → Boxes says *an update is available*. *Apply update* waits for work in progress to
+finish, then recreates the box on the new image. What agents made and your browser logins stay:
+they are on volumes, not in the box. Anything written elsewhere in the box does not stay. If the
+new box does not work, it goes back to the image it had. *Reset the box…* is different. It starts
+an empty box and deletes what agents made and every login, so it asks for the box's name.
+
 ### 3b. Docker on another machine
 
 If you keep Docker on a server (a NAS, a homelab box, a cloud VM), point the app at it the way

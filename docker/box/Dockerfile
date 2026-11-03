@@ -377,6 +377,10 @@ RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/start-display /usr/loca
       /usr/local/bin/box-keepalive \
       /usr/local/bin/xwatchdog
 
+# The image is sealed here, last: every file the image ships is older than this stamp, so what an
+# update's pre-check reports as "would be lost" is only what the box wrote after it started (INV-1538).
+RUN mkdir -p /etc/lumenbox && touch /etc/lumenbox/sealed
+
 # box-init is PID 1 rather than tini, for one reason: only PID 1 sees an orphan die, and
 # tini reaped every one of them and discarded the status. Everything unsupervised in here
 # dies as an orphan — a browser the agent abandoned, a binary it installed and ran — so a
