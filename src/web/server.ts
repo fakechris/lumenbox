@@ -44,6 +44,7 @@ import { defaultSupervisionLog, supervisionRoute } from "./supervision-routes.ts
 import { SUPERVISION_JS } from "./supervision-ui.ts";
 import { SUPERVISION_WIZARD_JS } from "./supervision-wizard.ts";
 import { BOX_UPDATE_JS } from "./box-update-ui.ts";
+import { INLINE_ASK_JS } from "./inline-ask.ts";
 import { desktopRunner } from "../host/operation-desktop.ts";
 import { buildInfo } from "../host/build-info.ts";
 import { faceBaseUrl, RENEW_EVERY_MS, ROUTE_PATH } from "../host/mcp-face.ts";
@@ -3524,7 +3525,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
         // Settings → Supervision (INV-1528): its own script and routes, like the decision model's below.
-        if (route === "GET /app/supervision.js") { res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(SUPERVISION_JS + SUPERVISION_WIZARD_JS + BOX_UPDATE_JS); return; } // + Settings → Boxes → Apply update (INV-1538)
+        if (route === "GET /app/supervision.js") { res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(INLINE_ASK_JS + SUPERVISION_JS + SUPERVISION_WIZARD_JS + BOX_UPDATE_JS); return; } // + Apply update (INV-1538), askInline (INV-1540)
         const supervised = await supervisionRoute(route, { home: agentboxHome(), configPath: configPath(), agents: () => registry.list().map(agent => agent.profile.name), readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: role => refusedRole(role), logFile: defaultSupervisionLog() });
         if (supervised !== undefined) { if (supervised.status !== 0) send(res, supervised.status, supervised.body); return; }
         // Settings → Model → Decision model (INV-1412): its own script, its own two routes.

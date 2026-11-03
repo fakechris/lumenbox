@@ -1873,9 +1873,9 @@ document.getElementById("setmemlines").addEventListener("click", function (event
   } else if (t.getAttribute("data-memedit")) {
     event.preventDefault();
     var current = rowEl.querySelector(".memtext").textContent;
-    var next = prompt("Correct this line. The old one is withdrawn and this is kept in its place:", current);
-    if (next === null || next.trim() === "" || next.trim() === current.trim()) return;
-    changeMemory(rowEl, next.trim());
+    askInline(t, "Correct this line. The old one is withdrawn and this is kept in its place:", current).then(function (next) {
+      if (next !== null && next.trim() !== "" && next.trim() !== current.trim()) changeMemory(rowEl, next.trim());
+    });
   }
 });
 
@@ -2332,28 +2332,26 @@ document.addEventListener("click", function (event) {
     .then(function (data) {
       var people = data.principals || [];
       var current = (button.getAttribute("title") || "");
-      var typed = window.prompt(
-        "Who is " + name + " for?\n\nType names separated by commas, or the word everyone.\nKnown people: " + people.map(function (p) { return p.name; }).join(", ") + "\n\nNow: " + current,
-        ""
-      );
-      if (typed === null) return;
-      var wanted = typed.trim();
-      var members;
-      if (wanted === "" || wanted.toLowerCase() === "everyone") members = "everyone";
-      else {
-        members = [];
-        var missing = [];
-        wanted.split(/[,，]/).forEach(function (piece) {
-          var want = piece.trim().toLowerCase();
-          if (!want) return;
-          var found = people.filter(function (p) { return (p.name || "").toLowerCase() === want; })[0];
-          if (found) members.push(found.id); else missing.push(piece.trim());
-        });
-        if (missing.length) { $("setboxesstatus").textContent = "Nobody on the roster is called " + missing.join(", ") + "."; return; }
-      }
-      return fetch("/api/boxes/update", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: name, members: members }) })
-        .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "could not change the members"); return d; }); })
-        .then(function () { $("setboxesstatus").textContent = name + " updated."; return renderBoxes(); });
+      return askInline(button, "Who is " + name + " for?\n\nType names separated by commas, or the word everyone.\nKnown people: " + people.map(function (p) { return p.name; }).join(", ") + "\n\nNow: " + current, "").then(function (typed) {
+        if (typed === null) return;
+        var wanted = typed.trim();
+        var members;
+        if (wanted === "" || wanted.toLowerCase() === "everyone") members = "everyone";
+        else {
+          members = [];
+          var missing = [];
+          wanted.split(/[,，]/).forEach(function (piece) {
+            var want = piece.trim().toLowerCase();
+            if (!want) return;
+            var found = people.filter(function (p) { return (p.name || "").toLowerCase() === want; })[0];
+            if (found) members.push(found.id); else missing.push(piece.trim());
+          });
+          if (missing.length) { $("setboxesstatus").textContent = "Nobody on the roster is called " + missing.join(", ") + "."; return; }
+        }
+        return fetch("/api/boxes/update", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: name, members: members }) })
+          .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "could not change the members"); return d; }); })
+          .then(function () { $("setboxesstatus").textContent = name + " updated."; return renderBoxes(); });
+      });
     })
     .catch(function (err) { $("setboxesstatus").textContent = String(err.message || err); });
 });
@@ -3108,16 +3106,16 @@ function renderAgents() {
     renames[r].onclick = function (event) {
       event.preventDefault();
       var from = this.dataset.team;
-      var to = prompt("Rename team \u201c" + from + "\u201d on every member to:", from);
-      if (to === null || to.trim() === "" || to.trim() === from) return;
-      fetch("/api/teams/rename", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ from: from, to: to.trim() }) })
-        .then(function (res) { return res.json(); })
-        .then(function (data) {
-          if (data.error) { alert(data.error); return; }
-          if (teamFilter === from) { teamFilter = to.trim().toLowerCase().replace(/\s+/g, "-"); savePreference({ team: teamFilter }); }
-          return refresh();
-        })
-        .catch(function () {});
+      askInline(this, "Rename team \u201c" + from + "\u201d on every member to:", from).then(function (to) {
+        if (to === null || to.trim() === "" || to.trim() === from) return;
+        return fetch("/api/teams/rename", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ from: from, to: to.trim() }) })
+          .then(function (res) { return res.json(); })
+          .then(function (data) {
+            if (data.error) { alert(data.error); return; }
+            if (teamFilter === from) { teamFilter = to.trim().toLowerCase().replace(/\s+/g, "-"); savePreference({ team: teamFilter }); }
+            return refresh();
+          });
+      }).catch(function () {});
     };
   }
 }
@@ -5750,9 +5748,9 @@ document.addEventListener("click", function (event) {
   } else if (drop) {
     fetch("/api/tasks/update", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: drop.getAttribute("data-att-drop"), status: "dropped" }) }).then(done);
   } else if (snooze) {
-    var until = window.prompt("Look again after which date? (YYYY-MM-DD)", "");
-    if (!until) return;
-    fetch("/api/tasks/update", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: snooze.getAttribute("data-att-snooze"), snoozeUntil: until.trim() }) }).then(done);
+    askInline(snooze, "Look again after which date?", "", "date").then(function (until) {
+      if (until) fetch("/api/tasks/update", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: snooze.getAttribute("data-att-snooze"), snoozeUntil: until.trim() }) }).then(done);
+    });
   } else if (open) {
     // A question is answered where it was asked: the same conversation, in the chat
     // column. A task opens its card on the board beside this panel.
