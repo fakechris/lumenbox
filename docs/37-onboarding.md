@@ -161,7 +161,10 @@ the supervisor's model and the agent's model spend.
   `~/Library/Logs/LumenBox/server.log`: a `catch-up looked at …` line every five minutes means
   the channel is being checked; `replaying …` means a message the socket missed was picked up.
 
-- **The page says the box is unavailable.** Settings → Box → Start; or `agentbox box up` in
+- **The page says the box is unavailable.** If something outside LumenBox stopped it (a
+  `docker stop`, an engine restart), LumenBox starts it again within a minute, tells admins,
+  and lets agents whose turns it stopped go on. A box you stopped with `agentbox box down`
+  stays stopped. To start it yourself: Settings → Box → Start; or `agentbox box up` in
   a terminal (the CLI is `dist/cli.js` inside the app bundle, or `npm run agentbox --` from a
   checkout).
 - **Docker is fine but the desktop never comes up.** `agentbox box doctor` prints what the

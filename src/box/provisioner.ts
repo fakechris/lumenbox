@@ -147,6 +147,11 @@ export class DockerBoxProvisioner implements BoxProvisioner {
  * AGENTBOX_BOXD_URL wins, because naming a box explicitly is how every deployment that
  * is not a developer's laptop will do it. Docker is the fallback and the default.
  */
+/** Whether this installation's own box is a Docker container on this machine's engine — one the host may start (INV-1550). */
+export function managesLocalDocker(provisioner: BoxProvisioner = resolveBoxProvisioner()): boolean {
+  return provisioner instanceof DockerBoxProvisioner;
+}
+
 export function resolveBoxProvisioner(): BoxProvisioner {
   const url = process.env.AGENTBOX_BOXD_URL?.trim();
   if (url) return new AttachedBoxProvisioner({ baseUrl: url });
