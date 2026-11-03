@@ -2405,7 +2405,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   }, 60_000);
   wedgeTimer.unref();
 
-  const boxUpdate = new BoxUpdateService({ activeTurns: () => orchestrator.bus.activeCount(), reconnect: async () => { box = await orchestrator.connectBox(); }, broadcast: (line, done) => broadcast({ type: "box_setup", line, ...(done !== undefined ? { done: true, ok: done.ok } : {}) }), log });
+  const boxUpdate = new BoxUpdateService({ activeTurns: () => orchestrator.bus.activeAgentIds().filter(id => registry.tryGet(id) !== undefined && registry.boxOf(id).id === registry.box.id).length, reconnect: async () => { box = await orchestrator.connectBox(); }, broadcast: (line, done) => broadcast({ type: "box_setup", line, ...(done !== undefined ? { done: true, ok: done.ok } : {}) }), log });
   void boxUpdate.check();
   // The box's image against the one this app expects (INV-1538, docs/12 §6). Checked every ten minutes; admins are told once per
   // image, in their chats and on the attention page; the update itself is Settings → Boxes → Apply update, or "upgrade" in reply —

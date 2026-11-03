@@ -534,3 +534,23 @@ test("kickoffs queued together each get a turn of their own; chat messages still
     cleanup();
   }
 });
+
+test("the agents with a turn in flight are named whole: worker keys split on NUL, not a space (INV-1551)", async () => {
+  // activeAgentIds once sliced at indexOf(" "), which is -1 for a NUL key: every id lost its last
+  // character, a box update counted no turns on its box, and deleting an agent mid-turn was allowed.
+  const { registry, cleanup } = tempRegistry();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const { turns, runner } = gatedRunner();
+    const bus = new AgentBus(registry, runner);
+    bus.sendFromUser(ada.id, "work");
+    const done = bus.wake(ada.id);
+    await until(() => turns.length === 1, "the turn started");
+    assert.deepEqual(bus.activeAgentIds(), [ada.id]);
+    turns[0]!.release();
+    await done;
+    assert.deepEqual(bus.activeAgentIds(), []);
+  } finally {
+    cleanup();
+  }
+});

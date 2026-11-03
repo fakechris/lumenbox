@@ -2,7 +2,7 @@
      title: Upgrading somebody's box
      family: guide
      status: current
-     updated: 2026-11-02
+     updated: 2026-11-03
 -->
 # Upgrading somebody's box
 
@@ -51,7 +51,9 @@ tabs, and any file an agent wrote outside `work` and `.config`.
 orchestrator for turns in progress. A background job is killed with no record beyond its
 log file, and a turn interrupted mid-way leaves a ledger entry that will be retried against
 a box that is no longer the one it started on. Drain first, or refuse and say what is
-running.
+running. Two exceptions (INV-1551): a box that is stopped or does not answer has nothing to
+interrupt, so its update does not wait; and *Update now…* interrupts on purpose, after an
+admin is told what it stops.
 
 **R2 — Never leave yourself without the image you replaced.** `docker build -t …:latest`
 overwrites the tag in place, and the image it replaced survives only as an untagged layer
@@ -255,11 +257,14 @@ app's, the person's data is on volumes, and an update swaps the first under the 
 - **Noticing.** Every ten minutes the server compares the box's image with the one this app
   expects — the reference and the image id, so a rebuilt image under the same tag counts.
   When they differ, admins get one message per image and an item on the "needs you" list.
-- **Applying.** Settings → Boxes shows both images and *Apply update*. By default it waits for
+- **Applying.** Settings → Boxes shows both images and *Apply update*. It waits for this box's
   turns and background jobs to finish (up to two hours; the page says what it is waiting
-  for), pulls the image if it is not on this machine, recreates, checks the box drives a
-  browser, and goes back to the previous image id if it does not. The progress shows on the
-  page. Replying `upgrade` in a chat does the same thing.
+  for). A box that is stopped or does not answer has nothing to interrupt, so the update does
+  not wait for it (INV-1551: a box stopped from outside left four turns retrying against it,
+  and the update waited them out). *Update now…* does not wait at all, after saying what it
+  interrupts. Either way it pulls the image if it is not on this machine, recreates, checks
+  the box drives a browser, and goes back to the previous image id if it does not. The
+  progress shows on the page. Replying `upgrade` in a chat is *Apply update*: it waits.
 - **No backup by default** (R4); one checkbox asks for it.
 - **Reset is a separate act.** *Reset the box…* deletes the container and the `work` and
   `.config` volumes and starts a new box. That loses what agents made and every login, so

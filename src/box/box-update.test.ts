@@ -72,3 +72,10 @@ test("a box that comes back broken goes back to the image it had, by id; when th
   const fresh = fake({ state: { expectedRef: "fakechris/lumenbox:0.3.10", available: false, needsPull: true }, verify: ["no"] });
   assert.equal((await applyUpdate(fresh.deps, { force: true })).outcome, "failed", "no box before: nothing to go back to");
 });
+
+test("a person who chose Update now is not made to wait, and a refusal says how to go on (INV-1551)", async () => {
+  const busy = fake({ busy: [["job j1: npm test"]] });
+  assert.equal((await applyUpdate(busy.deps, { interrupt: true })).outcome, "updated", "interrupt does not wait");
+  const refused = await applyUpdate(fake({ busy: [["job j1: npm test"]] }).deps);
+  assert.match(refused.detail, /not updated.*Update now/, "the refusal names the way forward");
+});

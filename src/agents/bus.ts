@@ -236,7 +236,12 @@ interface ActiveTurn {
  * framework's terms, is one running turn keyed like this.
  */
 function workerKey(agentId: string, conversation: string): string {
-  return `${agentId} ${conversation}`;
+  return `${agentId}\0${conversation}`;
+}
+
+/** The agent a worker key belongs to: everything before the NUL (INV-1551; the space it was read with was never there). */
+function agentOfKey(key: string): string {
+  return key.slice(0, key.indexOf("\0"));
 }
 
 /** A message a running turn may absorb at a round boundary: the user's, and not a kickoff. */
@@ -738,7 +743,7 @@ export class AgentBus {
     return this.active.has(workerKey(agentId, conversation));
   }
 
-  /** How many turns are in flight across every agent: what a box update waits for (INV-1538). */
+  /** How many turns are in flight across every agent (INV-1538). */
   activeCount(): number {
     return this.active.size;
   }
@@ -914,9 +919,8 @@ export class AgentBus {
 
   /** Ids of agents with at least one turn in flight (any conversation). For status. */
   activeAgentIds(): string[] {
-    // Keys are `agentId conversation`; the agent id is everything before the space.
     const ids = new Set<string>();
-    for (const key of this.active.keys()) ids.add(key.slice(0, key.indexOf(" ")));
+    for (const key of this.active.keys()) ids.add(agentOfKey(key));
     return [...ids];
   }
 

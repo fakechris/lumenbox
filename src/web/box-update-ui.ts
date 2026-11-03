@@ -20,6 +20,7 @@ export const BOX_UPDATE_JS = `(function () {
     if (!s) { ui.line.textContent = "The box's image could not be read."; return; }
     ui.line.textContent = "Runs " + short(s.runningRef) + "; this app expects " + short(s.expectedRef) + (s.available ? " — an update is available" + (s.needsPull ? " (it will be downloaded first)" : "") + "." : " — up to date.");
     ui.apply.disabled = d.running || !s.available;
+    ui.now.style.display = d.running || !s.available ? "none" : "";
     ui.apply.textContent = d.running ? "Updating…" : "Apply update";
     var lines = d.progress.slice();
     if (d.last && !d.running) lines.push(d.last.outcome + ": " + d.last.detail);
@@ -41,12 +42,16 @@ export const BOX_UPDATE_JS = `(function () {
     var row = el("div", { style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px" });
     ui.apply = el("button", { class: "btn", id: "boxupdateapply" }, "Apply update");
     var check = el("a", { href: "#" }, "check again");
-    ui.idle = el("input", { type: "checkbox", id: "boxupdateidle" }); ui.idle.checked = true;
+    // Apply update waits for work in progress; Update now interrupts it, after saying so (INV-1551).
+    ui.now = el("a", { href: "#", id: "boxupdatenow" }, "Update now…");
     ui.backup = el("input", { type: "checkbox", id: "boxupdatebackup" });
-    row.appendChild(ui.apply); row.appendChild(check);
-    row.appendChild(ui.idle); row.appendChild(el("span", { class: "dim" }, "wait for work in progress to finish"));
+    row.appendChild(ui.apply); row.appendChild(ui.now); row.appendChild(check);
     row.appendChild(ui.backup); row.appendChild(el("span", { class: "dim" }, "back up the box's files first"));
-    var note = el("div", { class: "fieldnote" }, "Updating recreates the box on the new image. What agents made (work) and browser logins stay; anything written elsewhere in the box does not. If the new box does not come up working, it goes back to the image it had.");
+    var nowAsk = el("div", { id: "boxupdatenowask", style: "display:none;margin-top:6px" });
+    nowAsk.appendChild(el("div", { class: "fieldnote" }, "Updating now does not wait: background jobs in the box are stopped, and turns using the box may fail while it is recreated. What agents made and your logins stay."));
+    var nowGo = el("button", { class: "btn", id: "boxupdatenowgo" }, "Update now");
+    nowAsk.appendChild(nowGo);
+    var note = el("div", { class: "fieldnote" }, "Apply update waits until work in progress on the box has finished, then recreates the box on the new image. What agents made (work) and browser logins stay; anything written elsewhere in the box does not. If the new box does not come up working, it goes back to the image it had.");
     ui.progress = el("pre", { id: "boxupdateprogress", style: "display:none;max-height:180px;overflow:auto;font-size:11px;white-space:pre-wrap" });
     var reset = el("a", { href: "#", style: "color:var(--danger, #b42318);font-size:12px", id: "boxreset" }, "Reset the box…");
     var ask = el("div", { id: "boxresetask", style: "display:none;margin-top:6px" });
@@ -54,11 +59,16 @@ export const BOX_UPDATE_JS = `(function () {
     var askName = el("input", { type: "text", id: "boxresetname", placeholder: "agentbox-box", style: "width:200px" });
     var askGo = el("button", { class: "btn", id: "boxresetgo" }, "Reset");
     ask.appendChild(askName); ask.appendChild(askGo);
-    wrap.appendChild(ui.line); wrap.appendChild(row); wrap.appendChild(note); wrap.appendChild(ui.progress); wrap.appendChild(reset); wrap.appendChild(ask);
+    wrap.appendChild(ui.line); wrap.appendChild(row); wrap.appendChild(nowAsk); wrap.appendChild(note); wrap.appendChild(ui.progress); wrap.appendChild(reset); wrap.appendChild(ask);
     modal.insertBefore(wrap, anchor ? anchor.nextSibling : null);
     ui.apply.onclick = function () {
       ui.apply.disabled = true;
-      call("POST", "/api/box/image/update", { whenIdle: ui.idle.checked, backup: ui.backup.checked }).then(load).catch(function (e) { ui.line.textContent = e.message; ui.apply.disabled = false; });
+      call("POST", "/api/box/image/update", { whenIdle: true, backup: ui.backup.checked }).then(load).catch(function (e) { ui.line.textContent = e.message; ui.apply.disabled = false; });
+    };
+    ui.now.onclick = function (e) { e.preventDefault(); nowAsk.style.display = nowAsk.style.display === "none" ? "block" : "none"; };
+    nowGo.onclick = function () {
+      nowAsk.style.display = "none";
+      call("POST", "/api/box/image/update", { interrupt: true, backup: ui.backup.checked }).then(load).catch(function (e) { ui.line.textContent = e.message; });
     };
     check.onclick = function (e) { e.preventDefault(); call("POST", "/api/box/image/check").then(render).catch(function (x) { ui.line.textContent = x.message; }); };
     reset.onclick = function (e) { e.preventDefault(); ask.style.display = ask.style.display === "none" ? "block" : "none"; };

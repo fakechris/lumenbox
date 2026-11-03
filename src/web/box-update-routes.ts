@@ -13,7 +13,7 @@ import { BoxManager, defaultBoxConfig } from "../box/docker.ts";
 import { verifyBox } from "../box/preflight.ts";
 
 export interface BoxUpdateDeps {
-  /** Turns in flight now. */
+  /** Turns in flight now on this box's agents: turns on another box are not this update's to wait for. */
   activeTurns: () => number;
   /** Reconnect the server to the box after it was recreated. */
   reconnect: () => Promise<void>;
@@ -61,17 +61,20 @@ export class BoxUpdateService {
   }
 
   private async busy(manager: BoxManager): Promise<string[]> {
+    // A box that is stopped or does not answer has nothing on it to interrupt: turns that need it can only fail
+    // and retry, and waiting for them waited out two hours while recreating was the fix (INV-1551).
+    const box = await manager.connect().catch(() => undefined);
+    if (box === undefined || !(await box.health().then(() => true, () => false))) return [];
     const busy: string[] = [];
     const turns = this.deps.activeTurns();
     if (turns > 0) busy.push(`${turns} turn(s) in progress`);
-    // No box, nothing running in it. A box whose jobs cannot be read throws: the update stops rather than guess idle.
-    const box = await manager.connect().catch(() => undefined);
-    if (box !== undefined) for (const job of (await box.jobs()).jobs) if (job.running) busy.push(`job ${job.job_id}: ${job.command}`);
+    // A box that answers but whose jobs cannot be read throws: the update stops rather than guess idle.
+    for (const job of (await box.jobs()).jobs) if (job.running) busy.push(`job ${job.job_id}: ${job.command}`);
     return busy;
   }
 
   /** Starts an update in the background; false when one is already running. */
-  start(options: { whenIdle: boolean; backup: boolean }): boolean {
+  start(options: { whenIdle: boolean; backup: boolean; interrupt?: boolean }): boolean {
     if (this.running) return false;
     this.running = true;
     this.progress = [];
@@ -82,7 +85,7 @@ export class BoxUpdateService {
           busy: () => this.busy(manager),
           verify: async () => verifyBox(await manager.connect()),
           onOutput: line => this.say(line),
-        }), { whenIdle: options.whenIdle, backup: options.backup });
+        }), { whenIdle: options.whenIdle, backup: options.backup, ...(options.interrupt === true ? { interrupt: true } : {}) });
         this.last = { outcome: result.outcome, detail: result.busy?.length ? `${result.detail} ${result.busy.join("; ")}` : result.detail, at: new Date().toISOString() };
         this.say(this.last.detail);
         if (result.outcome === "updated" || result.outcome === "rolled_back") await this.deps.reconnect();
@@ -140,7 +143,7 @@ export async function boxUpdateRoute(route: string, service: BoxUpdateService, d
   if (route === "POST /api/box/image/update") {
     if (deps.refusedAdmin()) return { status: 0, body: null };
     const body = await deps.readJson();
-    const started = service.start({ whenIdle: body.whenIdle !== false, backup: body.backup === true });
+    const started = service.start({ whenIdle: body.whenIdle !== false, backup: body.backup === true, interrupt: body.interrupt === true });
     return started ? { status: 202, body: { started: true } } : { status: 409, body: { error: "An update is already running." } };
   }
   if (route === "POST /api/box/reset") {
