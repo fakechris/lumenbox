@@ -738,9 +738,14 @@ export class AgentBus {
     return this.active.has(workerKey(agentId, conversation));
   }
 
-  /** How many turns are in flight across every agent: what a box update waits for (INV-1538). */
+  /** How many turns are in flight across every agent (INV-1538). */
   activeCount(): number {
     return this.active.size;
+  }
+
+  /** The agents with a turn in flight, once each: a box update counts those on its own box (INV-1551). */
+  activeAgents(): string[] {
+    return [...new Set([...this.active.keys()].map(key => key.slice(0, key.indexOf(" "))))];
   }
 
   /** The distinct conversations an agent currently has messages queued for. */

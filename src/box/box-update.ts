@@ -74,6 +74,8 @@ export interface UpdateOptions {
   force?: boolean;
   /** Wait for work in flight to finish instead of answering "waiting". */
   whenIdle?: boolean;
+  /** Update now, interrupting work in flight: a person confirmed it (INV-1551). */
+  interrupt?: boolean;
   maxWaitMs?: number;
   pollMs?: number;
   backup?: boolean;
@@ -86,9 +88,9 @@ export async function applyUpdate(deps: UpdateDeps, options: UpdateOptions = {})
   const before = await deps.state();
   if (!before.available && !options.force) return { outcome: "current", detail: `The box already runs ${before.expectedRef}.` };
 
-  let busy = await deps.busy();
+  let busy = options.interrupt ? [] : await deps.busy();
   if (busy.length > 0) {
-    if (!options.whenIdle) return { outcome: "waiting", detail: "Work is in progress; updating now would interrupt it.", busy };
+    if (!options.whenIdle) return { outcome: "waiting", detail: "Work is in progress, so the box was not updated. Wait for it to finish, or choose Update now, which interrupts it.", busy };
     const until = now() + (options.maxWaitMs ?? 2 * 60 * 60_000);
     say(`waiting for work in progress to finish: ${busy.join("; ")}`);
     while (busy.length > 0 && now() < until) {
