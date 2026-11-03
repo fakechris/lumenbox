@@ -296,7 +296,8 @@ export class KubernetesAllocator extends StoreBackedAllocator {
               ...(this.options.controlUrl !== undefined
                 ? [{ name: "AGENTBOX_CONTROL_URL", value: this.options.controlUrl }]
                 : []),
-              ...Object.entries(spec.env ?? {}).map(([key, value]) => ({ name: key, value })),
+              // The trust flag is the control plane's to set, never a spec's to unset (INV-1543).
+              ...Object.entries(spec.env ?? {}).filter(([key]) => key !== "AGENTBOX_TRUST_GATEWAY_IDENTITY").map(([key, value]) => ({ name: key, value })),
             ],
             resources: {
               requests: {

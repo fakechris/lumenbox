@@ -121,8 +121,11 @@ Closed, in this order of importance:
   `AGENTBOX_TRUST_GATEWAY_IDENTITY=1`, which the Kubernetes and Compose allocators set on the boxes
   they run. Holding the UI token still makes a caller the operator; it no longer lets anyone claim
   to be someone else.
-- **The token is named, not shown, in tool results** (`redactResult`): the model and the
-  transcript see `[vault:LUMENBOX_UI_TOKEN]`.
+- **The token is named, not shown, in the text of tool results** (`redactResult`), resumed ones
+  included: the model and the transcript see `[vault:LUMENBOX_UI_TOKEN]`. So does the stream,
+  a tool's summary line included. Whatever the web answers to is held: the token file, the
+  environment's, a `--token` flag's, one generated at start. Not covered: image blocks, and a
+  value split across two streamed deltas — the model cannot type a token it was never shown.
 
 Not closed: anything that reaches the box is readable there, because `box` has passwordless sudo.
 The box's own command log (snoopy) records argv verbatim and cannot redact it. The answer is the

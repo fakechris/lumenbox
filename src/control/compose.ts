@@ -198,7 +198,7 @@ export class ComposeAllocator extends StoreBackedAllocator {
           ...(this.options.controlUrl !== undefined
             ? ["--env", `AGENTBOX_CONTROL_URL=${this.options.controlUrl}`, "--add-host", "host.docker.internal:host-gateway"]
             : []),
-          ...Object.entries(spec.env ?? {}).flatMap(([key, value]) => [
+          ...Object.entries(spec.env ?? {}).filter(([key]) => key !== "AGENTBOX_TRUST_GATEWAY_IDENTITY").flatMap(([key, value]) => [
             "--env",
             `${key}=${value}`,
           ]),

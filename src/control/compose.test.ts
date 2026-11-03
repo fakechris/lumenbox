@@ -298,7 +298,8 @@ test("provider configuration reaches the box as environment", async () => {
     const acme = store.upsertTenant({ name: "acme" });
     await allocator.allocate(acme.id, {
       image: "agentbox/box:test",
-      env: { AGENTBOX_PROVIDER: "minimax", AGENTBOX_COMPACT_AT_TOKENS: "40000" },
+      // A spec may not turn the gateway's trust off (INV-1543): the key is dropped, not passed on.
+      env: { AGENTBOX_PROVIDER: "minimax", AGENTBOX_COMPACT_AT_TOKENS: "40000", AGENTBOX_TRUST_GATEWAY_IDENTITY: "0" },
     });
     const up = engine.calls.find(call => call.action === "up");
     assert.deepEqual(up?.env, [

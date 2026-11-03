@@ -1492,7 +1492,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   const baseEmit = deps.onEvent ?? (() => {});
   // Held values never leave on the stream (INV-1360): the words a person reads are scrubbed here,
   // at the one door every text and interim event goes through; the record keeps `recordAs`.
-  const hostHeld = hostTokens(), redactHost = outboundRedactor(hostHeld), redactOut = outboundRedactor(new Map([...(deps.vault?.heldValues() ?? []), ...hostHeld])); // this machine's web token leaves tool results too (INV-1543)
+  const hostHeld = hostTokens(), redactHost = outboundRedactor(hostHeld), redactOut = outboundRedactor([...(deps.vault?.heldValues() ?? []), ...hostHeld]); // this machine's web token leaves tool results too (INV-1543)
   const emit: typeof baseEmit = event => baseEmit(redactEvent({ ...event, conversation }, redactOut));
   const provider = deps.provider ?? FULL_CLAUDE;
 
@@ -1765,7 +1765,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
         const entry = {
           role: "user",
           kind: "results",
-          blocks: replayed,
+          blocks: replayed.map(block => redactResult(block, redactHost)), // a resumed result is a result (INV-1543)
           at: new Date().toISOString(),
           turnId,
         } satisfies TranscriptEntry;
@@ -1869,7 +1869,7 @@ ${outcome.text}`;
         const entry = {
           role: "user",
           kind: "results",
-          blocks: answered,
+          blocks: answered.map(block => redactResult(block, redactHost)), // a resumed result is a result (INV-1543)
           at: new Date().toISOString(),
           turnId,
         } satisfies TranscriptEntry;

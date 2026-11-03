@@ -126,7 +126,7 @@ function withinWork(path: string): boolean {
   return normalised === WORK_DIR || normalised.startsWith(`${WORK_DIR}/`);
 }
 
-import { agentboxHome, egressRelayFromEnv, isPersonalBoxQuota, trustsGatewayIdentity, loadConfig, lockedConfigEnv, reapplyConfigEnv, saveConfig, type AgentboxConfig } from "../config.ts";
+import { agentboxHome, egressRelayFromEnv, holdHostToken, isPersonalBoxQuota, trustsGatewayIdentity, loadConfig, lockedConfigEnv, reapplyConfigEnv, saveConfig, type AgentboxConfig } from "../config.ts";
 
 type AgentboxConfigHostExec = NonNullable<AgentboxConfig["hostExec"]>;
 import { ChannelManager } from "../channels/manager.ts";
@@ -6990,9 +6990,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     token = undefined;
   } else if (!token && !isLoopback(host)) {
     token = randomBytes(16).toString("hex");
-    log(`bound to ${host} with no token configured; generated one`);
-    log(`open: http://${host}:${options.port}/?token=${token}`);
+    log(`bound to ${host} with no token configured; generated one — open: http://${host}:${options.port}/?token=${token}`);
   }
+  if (token) holdHostToken(token); // whatever this web answers to is kept out of what agents see (INV-1543)
   /**
    * A published installation over plain HTTP (docs/10 S-2, INV-578).
    *

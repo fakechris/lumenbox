@@ -38,7 +38,9 @@ test("a tool result that prints the host UI token reaches the model and the reco
       reply([{ type: "tool_use", id: "toolu_1", name: "bash", input: { command: "python3 decrypt_cookies.py" } }], "tool_use"),
       reply([{ type: "text", text: "Read it.", citations: null }], "end_turn"),
     ], { capture, streamText: true });
-    await runTurn(ada, [{ id: "m1", fromId: "user", fromName: "user", text: "read the board", priority: false, receivedAt: "" }], new AbortController().signal, { client, registry, bus: new AgentBus(registry, async () => {}), box, resolution: undefined });
+    const events: unknown[] = [];
+    await runTurn(ada, [{ id: "m1", fromId: "user", fromName: "user", text: "read the board", priority: false, receivedAt: "" }], new AbortController().signal, { client, registry, bus: new AgentBus(registry, async () => {}), box, resolution: undefined, onEvent: event => events.push(event) });
+    assert.ok(!JSON.stringify(events).includes(TOKEN), "nor the stream: the tool's summary line printed it first");
 
     const sentAfterTool = JSON.stringify(capture.params[1]);
     assert.ok(sentAfterTool.includes("agentbox_ui="), "the result itself still reaches the model");
@@ -50,4 +52,11 @@ test("a tool result that prints the host UI token reaches the model and the reco
     delete process.env.AGENTBOX_HOME;
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("a token the web was given by flag or generated at start is held like the file's", async () => {
+  const { holdHostToken, hostTokens } = await import("../config.ts");
+  const flagged = "flag-token-00112233445566778899aabbccddeeff";
+  holdHostToken(flagged);
+  assert.ok([...hostTokens({ AGENTBOX_TEST: "1" }).values()].includes(flagged));
 });

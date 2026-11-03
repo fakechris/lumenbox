@@ -23,10 +23,12 @@ import { MIN_EXACT_LENGTH } from "./secret-scan.ts";
 export type Redactor = (text: string) => string;
 
 /** A redactor over the values held now. Built once per turn; cheap to call per event. */
-export function outboundRedactor(held: ReadonlyMap<string, string> | undefined): Redactor {
-  if (held === undefined || held.size === 0) return text => text;
+export function outboundRedactor(held: Iterable<readonly [string, string]> | undefined): Redactor {
+  // Pairs, not only a Map: two sources may use one name, and neither value may be dropped for it.
+  const pairs = held === undefined ? [] : [...held];
+  if (pairs.length === 0) return text => text;
   const forms: { form: string; stand: string }[] = [];
-  for (const [name, value] of held) {
+  for (const [name, value] of pairs) {
     if (typeof value !== "string" || value.length < MIN_EXACT_LENGTH) continue;
     for (const form of new Set(encodings(value))) {
       if (form.length >= MIN_EXACT_LENGTH) forms.push({ form, stand: `[vault:${name}]` });
@@ -56,10 +58,12 @@ export function redactResult<T extends { content?: unknown }>(block: T, redact: 
   return { ...block, content: content.map((item: { type?: string; text?: unknown }) => (item?.type === "text" && typeof item.text === "string" ? { ...item, text: redact(item.text) } : item)) };
 }
 
-/** The events that carry words to a person; everything else passes untouched. */
+/** The events that carry words to a person: text, interim, and a tool's summary line; everything else passes untouched. */
 export function redactEvent<T extends { type: string }>(event: T, redact: Redactor): T {
-  const typed = event as { type: string; delta?: string; text?: string };
+  const typed = event as { type: string; delta?: string; text?: string; summary?: string };
   if (typed.type === "text" && typeof typed.delta === "string") return { ...event, delta: redact(typed.delta) };
   if (typed.type === "interim" && typeof typed.text === "string") return { ...event, text: redact(typed.text) };
+  // A tool's first line, shown as it ends: a command that prints a held value prints it here too (INV-1543).
+  if (typed.type === "tool_end" && typeof typed.summary === "string") return { ...event, summary: redact(typed.summary) };
   return event;
 }

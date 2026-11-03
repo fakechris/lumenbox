@@ -628,7 +628,8 @@ test("controlUrl and spec env are plain env on the container, never in the Secre
     const acme = store.upsertTenant({ name: "acme" });
     const handle = await allocator.allocate(acme.id, {
       image: "agentbox/box:test",
-      env: { AGENTBOX_PROVIDER: "minimax", EXTRA_FLAG: "1" },
+      // A spec may not turn the gateway's trust off (INV-1543): the key is dropped, not passed on.
+      env: { AGENTBOX_PROVIDER: "minimax", EXTRA_FLAG: "1", AGENTBOX_TRUST_GATEWAY_IDENTITY: "0" },
     });
 
     const container = (fake.pods.get(handle.externalId)!.spec.containers as Record<string, unknown>[])[0]!;

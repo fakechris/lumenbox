@@ -623,15 +623,23 @@ export function trustsGatewayIdentity(env: NodeJS.ProcessEnv = process.env): boo
  * from the environment (an in-box orchestrator's) and from the token file, which is only read,
  * never created here. Name → value, for the redactor.
  */
+const heldHostTokens = new Set<string>();
+
+/** A token this process's web answers to, from a flag or generated at start: kept out like the file's (INV-1543). */
+export function holdHostToken(value: string): void {
+  if (value.trim() !== "") heldHostTokens.add(value.trim());
+}
+
 export function hostTokens(env: NodeJS.ProcessEnv = process.env): Map<string, string> {
   const held = new Map<string, string>();
+  for (const value of heldHostTokens) held.set(held.size === 0 ? "LUMENBOX_UI_TOKEN" : `LUMENBOX_UI_TOKEN_${held.size + 1}`, value);
   const fromEnv = env.AGENTBOX_UI_TOKEN?.trim();
-  if (fromEnv) held.set("LUMENBOX_UI_TOKEN", fromEnv);
+  if (fromEnv && !heldHostTokens.has(fromEnv)) held.set(held.size === 0 ? "LUMENBOX_UI_TOKEN" : `LUMENBOX_UI_TOKEN_${held.size + 1}`, fromEnv);
   // Under test with no home set there is no installation, and so no token file to keep out.
   const home = env.AGENTBOX_HOME ?? (env.AGENTBOX_TEST === "1" ? undefined : join(homedir(), ".agentbox"));
   const file = home === undefined ? undefined : join(home, "ui-token");
   const fromFile = file !== undefined && existsSync(file) ? readFileSync(file, "utf8").trim() : "";
-  if (fromFile && fromFile !== fromEnv) held.set(fromEnv ? "LUMENBOX_UI_TOKEN_FILE" : "LUMENBOX_UI_TOKEN", fromFile);
+  if (fromFile && ![...held.values()].includes(fromFile)) held.set(held.size === 0 ? "LUMENBOX_UI_TOKEN" : `LUMENBOX_UI_TOKEN_${held.size + 1}`, fromFile);
   return held;
 }
 
