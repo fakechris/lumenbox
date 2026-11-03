@@ -65,7 +65,6 @@ import {
   mayDrive,
   parseCookies,
   refusalToDrive,
-  ROLE_HEADER,
   safeNext,
   type Caller,
 } from "./auth.ts";
@@ -127,7 +126,7 @@ function withinWork(path: string): boolean {
   return normalised === WORK_DIR || normalised.startsWith(`${WORK_DIR}/`);
 }
 
-import { agentboxHome, egressRelayFromEnv, isPersonalBoxQuota, loadConfig, lockedConfigEnv, reapplyConfigEnv, saveConfig, type AgentboxConfig } from "../config.ts";
+import { agentboxHome, egressRelayFromEnv, isPersonalBoxQuota, trustsGatewayIdentity, loadConfig, lockedConfigEnv, reapplyConfigEnv, saveConfig, type AgentboxConfig } from "../config.ts";
 
 type AgentboxConfigHostExec = NonNullable<AgentboxConfig["hostExec"]>;
 import { ChannelManager } from "../channels/manager.ts";
@@ -508,6 +507,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   };
   // The door out of the box, from config: off unless an operator turned it on; read once, like the provider.
   const hostRunner = new HostRunner(hostRunnerConfig(loadConfig().hostExec ?? {}), hostProcess);
+  const behindGateway = trustsGatewayIdentity(); // identity headers are believed only then (INV-1543)
   if (hostRunner.enabled) log("host execution is on; every host command still asks for approval");
 
 
@@ -3324,7 +3324,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // code for. Both are only read on an authorised request, and the second is signed
       // by a key derived from the token that authorised it.
       principals.reload();
-      const gatewayCaller = callerOf(req.headers, decision.allow);
+      const gatewayCaller = callerOf(req.headers, decision.allow, behindGateway);
       const webIdentity = decision.allow
         ? readSession(parseCookies(req.headers.cookie).get(SESSION_COOKIE), sessionSecret)?.identity
         : undefined;
@@ -3345,7 +3345,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // tenant's roster lives there, and this pod's own roster is empty — consulting it
       // turned a tenant's owner into a viewer on their first click (2026-09-08, k8s).
       const assertedByGateway =
-        gatewayCaller.userId !== undefined && req.headers[ROLE_HEADER] !== undefined;
+        gatewayCaller.userId !== undefined && gatewayCaller.role !== undefined;
 
       const refused = (agentId?: string): boolean => {
         // Whoever the session says this is, their authority is the roster's answer —
@@ -6893,7 +6893,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     const desktop = desktopRouteOf(
       pathname ?? "",
       query ? `?${query}` : "",
-      mayDrive(callerOf(req.headers, upgradeDecision.allow))
+      mayDrive(callerOf(req.headers, upgradeDecision.allow, behindGateway))
     );
 
     if (!desktop) {
@@ -6901,7 +6901,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       return;
     }
 
-    const gateway = callerOf(req.headers, upgradeDecision.allow);
+    const gateway = callerOf(req.headers, upgradeDecision.allow, behindGateway);
     const identity = gateway.userId ?? readSession(parseCookies(req.headers.cookie).get(SESSION_COOKIE), sessionSecret)?.identity;
     principals.reload();
     const targetBox = registry.boxById(desktop.boxId ?? registry.box.id);

@@ -291,6 +291,8 @@ export class KubernetesAllocator extends StoreBackedAllocator {
               // here the way it is for a laptop box: without it nothing listens on the UI port
               // and every proxied request is a 502. Compose sets the same variable (box/docker.ts).
               { name: "AGENTBOX_HOST_ENABLED", value: "1" },
+              // The gateway's identity headers are believed only where a gateway is in front (INV-1543).
+              { name: "AGENTBOX_TRUST_GATEWAY_IDENTITY", value: "1" },
               ...(this.options.controlUrl !== undefined
                 ? [{ name: "AGENTBOX_CONTROL_URL", value: this.options.controlUrl }]
                 : []),

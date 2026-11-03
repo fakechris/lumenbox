@@ -10,6 +10,9 @@ import { catalogTemplate } from "../host/template.ts";
 import { CATALOG_EXPERTS } from "../host/catalog.ts";
 import { startWebServer } from "./server.ts";
 
+// These requests carry identity the way the hosted gateway sends it, so this file runs as a box behind one (INV-1543).
+process.env.AGENTBOX_TRUST_GATEWAY_IDENTITY = "1";
+
 test("template reads and installation respect both source and target box membership", async () => {
   const home = mkdtempSync(join(tmpdir(), "template-membership-"));
   const previous = process.env.AGENTBOX_HOME;

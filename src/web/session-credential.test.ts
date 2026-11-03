@@ -17,6 +17,9 @@ import { join } from "node:path";
 import { AgentRegistry } from "../agents/registry.ts";
 import { startWebServer } from "./server.ts";
 
+// These requests carry identity the way the hosted gateway sends it, so this file runs as a box behind one (INV-1543).
+process.env.AGENTBOX_TRUST_GATEWAY_IDENTITY = "1";
+
 const PORT = 7942;
 const BASE = `http://127.0.0.1:${PORT}`;
 

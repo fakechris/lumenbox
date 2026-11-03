@@ -93,28 +93,36 @@ test("identity is read only from a request authentication accepted", () => {
 
   // A box reachable directly — a developer's laptop, a misconfigured publish — would otherwise
   // accept any claimed identity. The token is the proof the request came through the gateway.
-  assert.deepEqual(callerOf(headers, false), { userId: undefined, role: undefined });
-  assert.deepEqual(callerOf(headers, true), { userId: "u1", role: "viewer" });
+  assert.deepEqual(callerOf(headers, false, true), { userId: undefined, role: undefined });
+  assert.deepEqual(callerOf(headers, true, true), { userId: "u1", role: "viewer" });
+});
+
+test("without a gateway in front, identity headers are nobody's word: a box holding the token cannot claim to be anyone (INV-1543)", () => {
+  // On a desktop the UI token is the operator's own. A box agent that reached it sent
+  // x-agentbox-user and x-agentbox-role: owner and was believed, as admin.
+  const claimed = { "x-agentbox-user": "someone-else", "x-agentbox-role": "owner" };
+  assert.deepEqual(callerOf(claimed, true, false), { userId: undefined, role: undefined });
+  assert.deepEqual(callerOf(claimed, true, true), { userId: "someone-else", role: "admin" }, "behind the gateway, as before");
 });
 
 test("the gateway's words are translated here and nowhere else; an absent role asserts nothing (INV-537)", () => {
   // Three cases, and conflating the last two is a privilege escalation.
-  assert.equal(callerOf({}, true).role, undefined, "nobody asserted anything; the server decides what that means");
-  assert.equal(callerOf({ "x-agentbox-role": "owner" }, true).role, "admin");
-  assert.equal(callerOf({ "x-agentbox-role": "member" }, true).role, "driver");
-  assert.equal(callerOf({ "x-agentbox-role": "viewer" }, true).role, "viewer");
+  assert.equal(callerOf({}, true, true).role, undefined, "nobody asserted anything; the server decides what that means");
+  assert.equal(callerOf({ "x-agentbox-role": "owner" }, true, true).role, "admin");
+  assert.equal(callerOf({ "x-agentbox-role": "member" }, true, true).role, "driver");
+  assert.equal(callerOf({ "x-agentbox-role": "viewer" }, true, true).role, "viewer");
   assert.equal(
-    callerOf({ "x-agentbox-role": "superuser" }, true).role,
+    callerOf({ "x-agentbox-role": "superuser" }, true, true).role,
     "viewer",
     "something upstream is wrong, so the answer is least privilege, not most"
   );
   // And an unasserted caller — the installation's own credential — still drives.
-  assert.equal(mayDrive(callerOf({}, true)), true);
+  assert.equal(mayDrive(callerOf({}, true, true)), true);
 });
 
 test("a viewer may watch but not drive, and is told which role would", () => {
-  const viewer = callerOf({ "x-agentbox-role": "viewer" }, true);
-  const member = callerOf({ "x-agentbox-role": "member" }, true);
+  const viewer = callerOf({ "x-agentbox-role": "viewer" }, true, true);
+  const member = callerOf({ "x-agentbox-role": "member" }, true, true);
 
   const reason = refusalToDrive(viewer);
   assert.ok(reason, "a viewer cannot drive");
@@ -125,9 +133,9 @@ test("a viewer may watch but not drive, and is told which role would", () => {
 });
 
 test("driving is not asked about the agent any more: authority lives on the box (INV-540)", () => {
-  const alice = callerOf({ "x-agentbox-user": "u-alice", "x-agentbox-role": "member" }, true);
-  const bob = callerOf({ "x-agentbox-user": "u-bob", "x-agentbox-role": "member" }, true);
-  const viewer = callerOf({ "x-agentbox-user": "u-vic", "x-agentbox-role": "viewer" }, true);
+  const alice = callerOf({ "x-agentbox-user": "u-alice", "x-agentbox-role": "member" }, true, true);
+  const bob = callerOf({ "x-agentbox-user": "u-bob", "x-agentbox-role": "member" }, true, true);
+  const viewer = callerOf({ "x-agentbox-user": "u-vic", "x-agentbox-role": "viewer" }, true, true);
 
   // Two drivers get the same answer about the same work, whoever created it — docs/22 §0's
   // uniformity, which the retired per-agent `visibility` check made false in the running

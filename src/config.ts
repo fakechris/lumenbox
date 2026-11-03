@@ -608,6 +608,16 @@ function readHostExec(
  * The egress relay host processes should speak to (INV-1344), from the same two variables the
  * box is handed (box/docker.ts). Absent means host processes get no network at all.
  */
+/**
+ * Whether identity headers on a request are a gateway's word (INV-1543). The control plane sets
+ * AGENTBOX_TRUST_GATEWAY_IDENTITY=1 on the boxes it runs behind its gateway; nothing else does.
+ * Off, `x-agentbox-user` and `x-agentbox-role` are ignored: on a desktop the UI token is the
+ * operator's own, and a box that reached it could otherwise claim to be anyone, as admin.
+ */
+export function trustsGatewayIdentity(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.AGENTBOX_TRUST_GATEWAY_IDENTITY === "1";
+}
+
 export function egressRelayFromEnv(env: NodeJS.ProcessEnv = process.env): { relay: string; token: string } | undefined {
   const relay = env.AGENTBOX_EGRESS_RELAY;
   const token = env.AGENTBOX_EGRESS_TOKEN;

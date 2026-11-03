@@ -75,9 +75,11 @@ export interface Caller {
  */
 export function callerOf(
   headers: { [key: string]: string | string[] | undefined },
-  allowedByToken: boolean
+  allowedByToken: boolean,
+  /** A gateway stands in front (`trustsGatewayIdentity`). Without one the headers are anyone's words (INV-1543). */
+  behindGateway: boolean
 ): Caller {
-  if (!allowedByToken) return { userId: undefined, role: undefined };
+  if (!allowedByToken || !behindGateway) return { userId: undefined, role: undefined };
   const first = (name: string): string | undefined => {
     const value = headers[name];
     return Array.isArray(value) ? value[0] : value;
