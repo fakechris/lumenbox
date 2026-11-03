@@ -45,7 +45,7 @@ export const SUPERVISION_WIZARD_JS = `(function () {
     return fetch(path, method === "GET" ? {} : { method: method, headers: { "content-type": "application/json" }, body: JSON.stringify(body || {}) })
       .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || ("HTTP " + r.status)); return d; }); });
   }
-  var box, info, state = { step: 1, choices: {}, done: false }, tested = false, poll = null;
+  var box, openLink, info, state = { step: 1, choices: {}, done: false }, tested = false, poll = null;
 
   function others(show) {
     var fields = document.querySelectorAll('.field[data-settab="supervision"]');
@@ -61,10 +61,11 @@ export const SUPERVISION_WIZARD_JS = `(function () {
       if (!c.provider) c.provider = s.provider; if (!c.model) c.model = s.model;
       if (c.agent === undefined) c.agent = s.agent || ""; if (c.budget === undefined) c.budget = s.budget === undefined ? "" : s.budget;
       if (!c.maxMinutes) c.maxMinutes = s.maxMinutes; if (!c.maxCalls) c.maxCalls = s.maxModelCalls;
-      box.style.display = "block"; others(false); render();
+      // The open button hides while the wizard is up: above the panel it read as its title, and clicking it changed nothing (INV-1547).
+      box.style.display = "block"; openLink.style.display = "none"; others(false); render();
     });
   }
-  function close() { box.style.display = "none"; others(true); if (poll) { clearInterval(poll); poll = null; } }
+  function close() { box.style.display = "none"; openLink.style.display = ""; others(true); if (poll) { clearInterval(poll); poll = null; } }
 
   function nav(back, next, nextOk) {
     var row = el("div", { style: "display:flex;gap:8px;margin-top:12px" });
@@ -172,7 +173,7 @@ export const SUPERVISION_WIZARD_JS = `(function () {
     if (!anchor || document.getElementById("supwizard")) return false;
     var intro = anchor.closest(".field").previousSibling;
     var holder = el("div", { class: "field settab-off", "data-settab": "supervision", id: "supwizard" });
-    var openLink = el("button", { class: "btn", id: "supwizopen" }, T.open);
+    openLink = el("button", { class: "btn", id: "supwizopen" }, T.open);
     box = el("div", { id: "supwizbox", style: "display:none;border:1px solid var(--border);border-radius:var(--radius-md);padding:12px;margin-top:8px" });
     openLink.onclick = function () { open(); };
     holder.appendChild(openLink); holder.appendChild(box);
