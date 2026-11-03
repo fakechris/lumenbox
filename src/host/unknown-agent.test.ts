@@ -54,12 +54,12 @@ test("the mirror resolves for an id that is not an agent, against the real regis
   }
 });
 
-test("the board refuses a made-up assignee or reviewer and names the agents; a store on its own takes any id", () => {
+test("the board refuses a made-up assignee or reviewer, naming no other agent; a store on its own takes any id", () => {
   const store = new TaskStore(null);
   assert.ok(store.create({ title: "unchecked", requester: "web", assigneeId: MADE_UP }), "no check wired: tests and tools keep working");
-  store.agents = { has: id => id === "a1", describe: () => "Ada (a1)" };
+  store.agents = { has: id => id === "a1" };
   assert.throws(() => store.create({ title: "x", requester: "web", assigneeId: MADE_UP }), (error: unknown) =>
-    error instanceof UnknownAgentError && error.role === "assignee" && /The agents are: Ada \(a1\)/.test(error.message));
+    error instanceof UnknownAgentError && error.role === "assignee" && error.message.includes(MADE_UP) && !error.message.includes("a1"));
   assert.throws(() => store.create({ title: "x", requester: "web", assigneeId: "a1", reviewerId: "Bob" }), UnknownAgentError);
   const real = store.create({ title: "real", requester: "web", assigneeId: "a1", reviewerId: "a1" })!;
   assert.throws(() => store.update(real.id, { reviewerId: MADE_UP }, "web"), UnknownAgentError);
@@ -75,7 +75,7 @@ test("the orchestrator wires both: its board knows the team, and a memory change
   try {
     const orchestrator = new Orchestrator({ registry, useBox: false, inbox: null, tasks: new TaskStore(null), turns: new TurnLedger(join(root, "turns.jsonl")) });
     const ada = registry.create({ name: "Ada" });
-    assert.throws(() => orchestrator.tasks!.create({ title: "x", requester: "web", assigneeId: MADE_UP }), /The agents are: Ada/);
+    assert.throws(() => orchestrator.tasks!.create({ title: "x", requester: "web", assigneeId: MADE_UP }), (error: unknown) => error instanceof UnknownAgentError && !error.message.includes(ada.id), "the refusal lists nobody");
     assert.ok(orchestrator.tasks!.create({ title: "y", requester: "web", assigneeId: ada.id }));
     registry.onMemoryChanged!(MADE_UP); // what an old board's made-up assignee used to set off
     await new Promise(resolve => setTimeout(resolve, 50));

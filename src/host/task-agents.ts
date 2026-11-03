@@ -9,13 +9,12 @@
 
 export interface TaskAgents {
   has: (id: string) => boolean;
-  /** The agents, for the refusal to name: "Ada (id), Bob (id)". */
-  describe: () => string;
 }
 
 export class UnknownAgentError extends Error {
-  constructor(readonly role: "assignee" | "reviewer", readonly id: string, team: string) {
-    super(`No agent with id ${id} to be the ${role}.${team === "" ? "" : ` The agents are: ${team}.`}`);
+  // The refusal names no agents: the caller may not be allowed to see every box's roster.
+  constructor(readonly role: "assignee" | "reviewer", readonly id: string) {
+    super(`No agent with id ${id} to be the ${role}. Name an agent of this team by its id.`);
     this.name = "UnknownAgentError";
   }
 }
@@ -24,6 +23,6 @@ export class UnknownAgentError extends Error {
 export function refuseUnknownAgents(agents: TaskAgents | undefined, named: { assigneeId?: string | null; reviewerId?: string | null }): void {
   if (agents === undefined) return;
   for (const [role, id] of [["assignee", named.assigneeId], ["reviewer", named.reviewerId]] as const) {
-    if (typeof id === "string" && !agents.has(id)) throw new UnknownAgentError(role, id, agents.describe());
+    if (typeof id === "string" && !agents.has(id)) throw new UnknownAgentError(role, id);
   }
 }
