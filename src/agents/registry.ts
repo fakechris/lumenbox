@@ -1120,14 +1120,13 @@ export class AgentRegistry {
   onMemoryChanged: ((agentId: string) => void) | undefined;
 
   appendMemoryRecords(agentId: string, records: readonly MemoryRecord[]): void {
+    if (this.tryGet(agentId) === undefined) throw new AgentNotFoundError(agentId); // memory is an agent's; anything else got a directory of its own (INV-1542)
     this.assertContextCurrent();
     const mode = this.contextScope.getStore()?.mode;
     if (mode !== undefined && mode !== "normal") throw new Error(`${mode === "clean" ? "Clean" : "Recovery"} context: refusing to write learned memory`);
     if (records.length === 0) return;
     refuseCredentialInMemory(records);
-    const revoked = existsSync(this.memoryRecordsPathFor(agentId))
-      ? revokedMemorySources(this.readMemoryRecords(agentId))
-      : new Set<string>();
+    const revoked = existsSync(this.memoryRecordsPathFor(agentId)) ? revokedMemorySources(this.readMemoryRecords(agentId)) : new Set<string>();
     const blocked = records.find(record => recordHasRevokedSource(record, revoked));
     if (blocked !== undefined) throw new Error("Memory source was withdrawn: refusing to re-import its derived record");
     mkdirSync(this.dirFor(agentId), { recursive: true });

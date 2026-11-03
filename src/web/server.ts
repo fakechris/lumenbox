@@ -178,7 +178,7 @@ import {
 import { ConversationDirectory, conversationsPath } from "../channels/conversations.ts";
 import { SentRootsLedger, sentRootsPath } from "../channels/sent-roots.ts";
 import { randomUUID } from "node:crypto";
-import { isLive, isTaskStatus, type Task } from "../host/tasks.ts";
+import { isLive, isTaskStatus, type Task } from "../host/tasks.ts"; import { UnknownAgentError } from "../host/task-agents.ts";
 import { connectorSatisfied } from "../host/mcp-connectors.ts";
 import { adminRecipients } from "../host/upgrade.ts";
 import { BoxUpdateService, boxUpdateRoute } from "./box-update-routes.ts";
@@ -6865,7 +6865,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         log(`error on ${route}: ${message}`);
-        if (!res.headersSent) send(res, 500, { error: message });
+        if (!res.headersSent) send(res, error instanceof UnknownAgentError ? 400 : 500, { error: message });
       }
     })();
   });
