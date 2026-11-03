@@ -20,7 +20,10 @@ function fakeRegistry(records: MemoryRecord[], agents: { id: string; name: strin
     homes,
     registry: {
       readMemoryRecords: () => records,
-      get: (id: string) => list.find(a => a.id === id),
+      // As the real registry: tryGet answers undefined, get throws. A fake whose get returned
+      // undefined is how a throw here reached production as a crash (INV-1542).
+      tryGet: (id: string) => list.find(a => a.id === id),
+      get: (id: string) => { const found = list.find(a => a.id === id); if (found === undefined) throw new Error(`No agent found with id ${id}.`); return found; },
       list: () => list,
       // The standing files (INV-777) ride the same sync; they need a host directory to be seeded in.
       dirFor: (id: string) => homes.get(id),
@@ -201,7 +204,7 @@ test("the read-only memory mirror is keyed by agent id: two names that slug alik
   ];
   const registry = {
     readMemoryRecords: (id: string) => records.get(id) ?? [],
-    get: (id: string) => agents.find(agent => agent.id === id),
+    tryGet: (id: string) => agents.find(agent => agent.id === id),
     list: () => agents,
     dirFor: (id: string) => homes.get(id),
   } as never;

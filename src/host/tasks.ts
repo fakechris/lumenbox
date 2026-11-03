@@ -31,6 +31,7 @@ import { applyFlag, type FlagOutcome, type TaskFlag } from "./task-flag.ts";
 import { applyRevalidation, applyWithdrawal, grantMandate, type Mandate, type MandateWorld, type RevalidationResult } from "./mandate.ts";
 import { Receipts } from "./receipts.ts";
 import { clampDescription, dueOf, type TaskContract } from "./task-fields.ts";
+import { refuseUnknownAgents, type TaskAgents } from "./task-agents.ts";
 
 export { clampContract, clampDescription, DESCRIPTION_LIMIT, dueOf, type TaskContract } from "./task-fields.ts";
 
@@ -231,6 +232,8 @@ export class TaskStore {
   private readonly tasks = new Map<string, Task>();
   private counter = 0;
   private lines = 0;
+  /** Who may be named assignee or reviewer, set by the orchestrator; unset takes any id (INV-1542). */
+  agents: TaskAgents | undefined;
   /**
    * Called after every recorded change with the task as it now stands. The auto-audit
    * listens here for tasks landing in review; the channel wiring listens for blocked
@@ -319,6 +322,7 @@ export class TaskStore {
   }): Task | undefined {
     const title = input.title.replace(/\s+/g, " ").trim().slice(0, 200);
     if (title === "") return undefined;
+    refuseUnknownAgents(this.agents, input);
     const at = (input.now ?? new Date()).toISOString();
     this.counter += 1;
     const task: Task = {
@@ -507,6 +511,7 @@ export class TaskStore {
   ): { task: Task; coerced?: string } | undefined {
     const task = this.tasks.get(id);
     if (task === undefined) return undefined;
+    refuseUnknownAgents(this.agents, changes);
 
     const at = now.toISOString();
     let coerced: string | undefined;
@@ -640,16 +645,8 @@ export class TaskStore {
         ? { description: clampDescription(changes.description) }
         : {}),
       ...(status !== undefined ? { status } : {}),
-      ...(changes.assigneeId !== undefined
-        ? changes.assigneeId === null
-          ? { assigneeId: undefined }
-          : { assigneeId: changes.assigneeId }
-        : {}),
-      ...(changes.reviewerId !== undefined
-        ? changes.reviewerId === null
-          ? { reviewerId: undefined }
-          : { reviewerId: changes.reviewerId }
-        : {}),
+      ...(changes.assigneeId !== undefined ? { assigneeId: changes.assigneeId ?? undefined } : {}),
+      ...(changes.reviewerId !== undefined ? { reviewerId: changes.reviewerId ?? undefined } : {}),
       ...(changes.due !== undefined ? (changes.due === null ? { due: undefined } : dueOf(changes.due) !== undefined ? { due: dueOf(changes.due)! } : {}) : {}),
       ...(changes.waitingOn !== undefined ? (changes.waitingOn === null || changes.waitingOn.trim() === "" ? { waitingOn: undefined } : { waitingOn: changes.waitingOn.replace(/\s+/g, " ").trim().slice(0, 120) }) : {}),
       ...(changes.snoozeUntil !== undefined ? (changes.snoozeUntil === null ? { snoozeUntil: undefined } : dueOf(changes.snoozeUntil) !== undefined ? { snoozeUntil: dueOf(changes.snoozeUntil)! } : {}) : {}),

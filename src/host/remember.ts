@@ -273,6 +273,11 @@ export class Rememberer {
     detail: string;
     principal?: string;
   }): Promise<void> {
+    // A task can name someone who is not an agent; there is nobody to keep the note for (INV-1542).
+    if (this.deps.registry.tryGet(input.agentId) === undefined) {
+      this.log(`no pitfall from ${input.source}: ${input.agentId} is not an agent here`);
+      return;
+    }
     const guard = this.deps.registry.contextWriteGuard();
     await this.enqueue(input.agentId, () => this.writePitfall(input, guard));
   }

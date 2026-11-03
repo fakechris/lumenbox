@@ -972,9 +972,8 @@ export class Orchestrator {
       box: agentId => this.boxFor(agentId),
       log: line => console.error(`[memory-mirror] ${line}`),
     });
-    this.registry.onMemoryChanged = agentId => {
-      void this.memoryMirror.sync(agentId);
-    };
+    this.registry.onMemoryChanged = agentId => void this.memoryMirror.sync(agentId).catch((error: unknown) => console.error(`[memory-mirror] ${agentId}: ${error instanceof Error ? error.message : String(error)}`)); // nobody awaits it: a log line, never the process (INV-1542)
+    if (this.tasks !== undefined) this.tasks.agents = { has: id => this.registry.tryGet(id) !== undefined };
     this.defaultProvider = options.provider ?? resolveProvider();
     // `null` is how a test says "no tracer even if the environment names one";
     // omitted reads AGENTBOX_TRACE_URL, which unset means the feature does not exist.

@@ -26,7 +26,7 @@ function hashOf(text: string): string {
 }
 
 export interface MemoryMirrorDeps {
-  registry: Pick<AgentRegistry, "readMemoryRecords" | "get" | "list" | "dirFor">;
+  registry: Pick<AgentRegistry, "readMemoryRecords" | "tryGet" | "list" | "dirFor">;
   /** The agent's box now, or none: the mirror is written when there is somewhere to write it. */
   box: (agentId: string) => MemoryMirrorBox | undefined;
   log?: (line: string) => void;
@@ -46,7 +46,9 @@ export class MemoryMirror {
   /** Writes what changed for one agent. Resolves either way; failures are a log line. */
   async sync(agentId: string): Promise<{ written: number }> {
     const box = this.deps.box(agentId);
-    const agent = this.deps.registry.get(agentId);
+    // tryGet, not get: get throws for an unknown id, and a throw here was an unhandled rejection
+    // that stopped the server (INV-1542).
+    const agent = this.deps.registry.tryGet(agentId);
     if (box === undefined || agent === undefined) return { written: 0 };
     // The memory mirror is read-only in the box, so "what we last wrote" is what the box holds and
     // an unchanged file is skipped. The standing files (INV-777) ride the same sync but are
