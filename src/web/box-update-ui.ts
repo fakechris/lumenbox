@@ -29,7 +29,18 @@ export const BOX_UPDATE_JS = `(function () {
     if (d.running && !timer) timer = setInterval(load, 3000);
     if (!d.running && timer) { clearInterval(timer); timer = null; }
   }
-  function load() { call("GET", "/api/box/image").then(render).catch(function (e) { ui.line.textContent = e.message; }); }
+  function showLimits(d, said) {
+    // Not while somebody is typing: the image poll calls this every few seconds.
+    if (!said && (ui.cpusDirty || document.activeElement === ui.cpus)) return;
+    ui.cpusDirty = false;
+    ui.cpus.value = d.chosen || (d.limit !== null ? String(d.limit) : "");
+    ui.cpusOf.textContent = d.engine ? "of " + d.engine + " cores" : "cores";
+    ui.cpus.disabled = d.fromEnvironment; ui.cpus.parentNode.querySelector("button").disabled = d.fromEnvironment;
+    ui.cpusNote.textContent = d.notApplied || (d.fromEnvironment ? "Set by AGENTBOX_CPUS in the environment, which wins over this setting." :
+      (said ? said + " " : "") + "Agents' work in the box uses no more than this, so the rest of this machine stays responsive. Default: half the engine's cores" + (d["default"] ? " (" + d["default"] + ")" : "") + ". Empty means the default. A change applies at once, without restarting the box.");
+  }
+  function load() {
+    call("GET", "/api/box/limits").then(function (d) { showLimits(d); }).catch(function () {}); call("GET", "/api/box/image").then(render).catch(function (e) { ui.line.textContent = e.message; }); }
   function mount() {
     var modal = document.querySelector("#settingswrap .modal");
     var tabs = document.getElementById("settabs");
@@ -59,7 +70,20 @@ export const BOX_UPDATE_JS = `(function () {
     var askName = el("input", { type: "text", id: "boxresetname", placeholder: "agentbox-box", class: "ui-w-md" });
     var askGo = el("button", { class: "btn", id: "boxresetgo" }, "Reset");
     ask.appendChild(askName); ask.appendChild(askGo);
-    wrap.appendChild(ui.line); wrap.appendChild(row); wrap.appendChild(nowAsk); wrap.appendChild(note); wrap.appendChild(ui.progress); wrap.appendChild(reset); wrap.appendChild(ask);
+    // How much of this machine the box may use (INV-1552): changed in place, no restart.
+    var cpuRow = el("div", { class: "ui-row ui-gap", id: "boxcpus" });
+    cpuRow.appendChild(el("span", { class: "dim" }, "The box may use up to"));
+    ui.cpus = el("input", { type: "number", min: "0.5", step: "0.5", id: "boxcpusinput", class: "ui-w-sm" });
+    ui.cpusOf = el("span", { class: "dim", id: "boxcpusof" }, "");
+    var cpuSave = el("button", { class: "btn", id: "boxcpussave" }, "Save");
+    ui.cpus.oninput = function () { ui.cpusDirty = true; };
+    cpuRow.appendChild(ui.cpus); cpuRow.appendChild(ui.cpusOf); cpuRow.appendChild(cpuSave);
+    ui.cpusNote = el("div", { class: "fieldnote", id: "boxcpusnote" }, "");
+    wrap.appendChild(ui.line); wrap.appendChild(row); wrap.appendChild(nowAsk); wrap.appendChild(note); wrap.appendChild(ui.progress); wrap.appendChild(cpuRow); wrap.appendChild(ui.cpusNote); wrap.appendChild(reset); wrap.appendChild(ask);
+    cpuSave.onclick = function () {
+      var v = ui.cpus.value.trim();
+      call("POST", "/api/box/limits", { cpus: v === "" ? null : v }).then(function (d) { showLimits(d, "Saved."); }).catch(function (e) { ui.cpusNote.textContent = e.message; });
+    };
     modal.insertBefore(wrap, anchor ? anchor.nextSibling : null);
     ui.apply.onclick = function () {
       ui.apply.disabled = true;

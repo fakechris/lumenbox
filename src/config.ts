@@ -68,6 +68,8 @@ export interface AgentboxConfig {
    * file is the entrance that launch path actually has.
    */
   boxImage?: string;
+  /** How many of the engine's cores the box may use, e.g. "6" (INV-1552). Unset: half the engine's, at least 2. */
+  boxCpus?: string;
   /**
    * Environment variables applied at startup, under the real environment: a variable
    * already set in the shell always wins. This is where an API key lives when it is not
@@ -361,6 +363,7 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
     ...(readString(raw.boxImage, "boxImage", onWarn) !== undefined
       ? { boxImage: readString(raw.boxImage, "boxImage", onWarn) }
       : {}),
+    ...(validCpus(readString(raw.boxCpus, "boxCpus", onWarn)) !== undefined ? { boxCpus: validCpus(readString(raw.boxCpus, "boxCpus", onWarn))! } : {}),
     ...(readEnvMap(raw.env, onWarn) !== undefined ? { env: readEnvMap(raw.env, onWarn) } : {}),
     ...(readStringList(raw.channelAllow, "channelAllow", onWarn) !== undefined
       ? { channelAllow: readStringList(raw.channelAllow, "channelAllow", onWarn) }
@@ -608,6 +611,22 @@ function readHostExec(
  * The egress relay host processes should speak to (INV-1344), from the same two variables the
  * box is handed (box/docker.ts). Absent means host processes get no network at all.
  */
+/** The box's CPU ceiling somebody chose (INV-1552): AGENTBOX_CPUS, then the boxCpus setting; undefined means the default. */
+/** A CPU ceiling Docker accepts and the limits page allows: finite, from 0.5 to 1024 cores (INV-1552). */
+export function validCpus(raw: unknown): string | undefined {
+  if (typeof raw !== "number" && !(typeof raw === "string" && /^\s*\d+(\.\d+)?\s*$/.test(raw))) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0.5 && n <= 1024 ? String(n) : undefined;
+}
+
+export function boxCpusFromEnvironment(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return env.AGENTBOX_CPUS?.trim() || undefined;
+}
+
+export function chosenBoxCpus(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return env.AGENTBOX_CPUS?.trim() || loadConfig().boxCpus || undefined;
+}
+
 /**
  * Whether identity headers on a request are a gateway's word (INV-1543). The control plane sets
  * AGENTBOX_TRUST_GATEWAY_IDENTITY=1 on the boxes it runs behind its gateway; nothing else does.
@@ -780,7 +799,7 @@ export function resetConfigEnvForTests(): void {
  * already; the file's own mode says so a second time.
  */
 export function saveConfig(
-  changes: Partial<Record<"provider" | "model" | "baseUrl" | "boxImage", string | null>> & {
+  changes: Partial<Record<"provider" | "model" | "baseUrl" | "boxImage" | "boxCpus", string | null>> & {
     env?: Record<string, string | null>;
     channelAllow?: string[] | null;
     hostExec?: AgentboxConfig["hostExec"] | null;
@@ -806,7 +825,7 @@ export function saveConfig(
     }
   }
 
-  for (const key of ["provider", "model", "baseUrl", "boxImage"] as const) {
+  for (const key of ["provider", "model", "baseUrl", "boxImage", "boxCpus"] as const) {
     const value = changes[key];
     if (value === undefined) continue;
     if (value === null) delete raw[key];

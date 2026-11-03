@@ -277,3 +277,19 @@ branch waited 30 s for a 20 s job, kept a file in `work` and one in `.config`, a
 file written in the home directory. The pre-check on the new image listed only a file the box
 wrote. An update to an image with the browser removed failed verification and came back on
 the previous image id, with `work` intact.
+
+## 7. How much of the machine the box may use (INV-1552)
+
+A box has a memory ceiling (`--memory`, 4 GB unless `AGENTBOX_MEMORY` says otherwise), and since
+INV-1552 a CPU ceiling too: **half the engine's cores, at least 2**, unless `AGENTBOX_CPUS` or
+Settings → Boxes says otherwise. Agent work inside the box already runs under `nice`, behind the
+desktop. That orders processes inside the box and says nothing about the machine the box shares.
+A desktop box always shares one: on 2026-11-03, agents' scans inside one held a Mac's load at
+45–55 for hours and timed out its test suite.
+
+Settings → Boxes shows the ceiling and the engine's total, and changes it in place
+(`docker update --cpus`, no restart). Empty means the default. When `AGENTBOX_CPUS` is set, it
+wins and the page says so. An attached remote box is not changed.
+
+Verified on a throwaway box: created with 6 of 12 cores; under 12 busy loops the cgroup counted
+2.03 cores once the ceiling was set to 2.

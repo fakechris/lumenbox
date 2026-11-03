@@ -10,6 +10,8 @@
 
 import { type ImageState, applyUpdate, dockerUpdateDeps, imageState, resetBox } from "../box/box-update.ts";
 import { BoxManager, defaultBoxConfig } from "../box/docker.ts";
+import { cpuLimitOf, defaultCpusFor, engineCpus, setCpuLimit } from "../box/box-cpus.ts";
+import { boxCpusFromEnvironment, loadConfig, saveConfig, validCpus } from "../config.ts";
 import { verifyBox } from "../box/preflight.ts";
 
 export interface BoxUpdateDeps {
@@ -145,6 +147,28 @@ export async function boxUpdateRoute(route: string, service: BoxUpdateService, d
     const body = await deps.readJson();
     const started = service.start({ whenIdle: body.whenIdle !== false, backup: body.backup === true, interrupt: body.interrupt === true });
     return started ? { status: 202, body: { started: true } } : { status: 409, body: { error: "An update is already running." } };
+  }
+  // The box's CPU ceiling (INV-1552): what it is, what the engine has, and a change applied in place.
+  if (route === "GET /api/box/limits" || route === "POST /api/box/limits") {
+    if (deps.refusedAdmin()) return { status: 0, body: null };
+    const container = defaultBoxConfig().containerName;
+    const engine = await engineCpus();
+    const fromEnv = boxCpusFromEnvironment();
+    let notApplied: string | undefined;
+    if (route === "POST /api/box/limits") {
+      if (fromEnv !== undefined) return { status: 409, body: { error: `AGENTBOX_CPUS=${fromEnv} is set in the environment, and it wins over this setting. Unset it to choose here.` } };
+      const raw = (await deps.readJson()).cpus;
+      const cleared = raw === null || raw === "" || raw === undefined;
+      const wanted = cleared ? undefined : validCpus(raw) === undefined ? Number.NaN : Number(validCpus(raw));
+      if (wanted !== undefined && (!Number.isFinite(wanted) || (engine !== undefined && wanted > engine))) {
+        return { status: 400, body: { error: `Choose between 0.5 and ${engine ?? "the engine's"} cores.` } };
+      }
+      saveConfig({ boxCpus: wanted === undefined ? null : String(wanted) });
+      const apply = wanted !== undefined ? String(wanted) : engine !== undefined ? defaultCpusFor(engine) : undefined;
+      if (apply !== undefined) await setCpuLimit(container, apply).catch((error: unknown) => { notApplied = `Saved; the running box did not take it (${error instanceof Error ? error.message : String(error)}). It applies when the box is next created.`; });
+    }
+    const live = await cpuLimitOf(container).catch(() => undefined);
+    return { status: 200, body: { engine: engine ?? null, limit: live ?? null, chosen: fromEnv ?? loadConfig().boxCpus ?? null, fromEnvironment: fromEnv !== undefined, default: engine !== undefined ? defaultCpusFor(engine) : null, ...(notApplied !== undefined ? { notApplied } : {}) } };
   }
   if (route === "POST /api/box/reset") {
     if (deps.refusedAdmin()) return { status: 0, body: null };
