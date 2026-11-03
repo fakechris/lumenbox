@@ -112,7 +112,8 @@ export async function applyUpdate(deps: UpdateDeps, options: UpdateOptions = {})
     return goBack(deps, before, `the new box could not be created: ${why}`);
   }
   say("checking the box that came back");
-  const broken = await deps.verify();
+  // A box that cannot even be connected to is the broken box the rollback is for, not an error.
+  const broken = await deps.verify().catch((error: unknown) => error instanceof Error ? error.message : String(error));
   if (broken === undefined) return { outcome: "updated", detail: `The box now runs ${before.expectedRef}.`, status };
   return goBack(deps, before, `the updated box does not work: ${broken}`);
 }

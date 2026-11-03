@@ -10,7 +10,7 @@
 
 import { type ImageState, applyUpdate, dockerUpdateDeps, imageState, resetBox } from "../box/box-update.ts";
 import { BoxManager, defaultBoxConfig } from "../box/docker.ts";
-import { preflight, verifyBox } from "../box/preflight.ts";
+import { verifyBox } from "../box/preflight.ts";
 
 export interface BoxUpdateDeps {
   /** Turns in flight now. */
@@ -64,8 +64,9 @@ export class BoxUpdateService {
     const busy: string[] = [];
     const turns = this.deps.activeTurns();
     if (turns > 0) busy.push(`${turns} turn(s) in progress`);
+    // No box, nothing running in it. A box whose jobs cannot be read throws: the update stops rather than guess idle.
     const box = await manager.connect().catch(() => undefined);
-    if (box !== undefined) for (const job of (await preflight(box)).runningJobs) busy.push(`job ${job.id}: ${job.command}`);
+    if (box !== undefined) for (const job of (await box.jobs()).jobs) if (job.running) busy.push(`job ${job.job_id}: ${job.command}`);
     return busy;
   }
 

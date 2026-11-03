@@ -73,7 +73,7 @@ route had moved.
 the container and leaves `work` and `.config` where they are, so an update copies nothing by
 default (2026-11-02: the copy of a working box's browser profiles took minutes and protected
 against a step that does not touch them). `--backup` on the CLI, or *back up the box's files
-first* in Settings, copies both volumes into a dated directory under `~/.agentbox/backups`
+first* in Settings, copies `work` and `.config` into a dated directory under `~/.agentbox/backups`
 first and stops if the copy fails. What the volumes are not safe from is the rest: the host-side backup
 covers `~/.agentbox` on the reasoning that the box is disposable and its work is on a
 volume; that is true of `docker rm` and false of `docker volume rm`, a bad migration, and
@@ -263,7 +263,9 @@ app's, the person's data is on volumes, and an update swaps the first under the 
 - **No backup by default** (R4); one checkbox asks for it.
 - **Reset is a separate act.** *Reset the box…* deletes the container and the `work` and
   `.config` volumes and starts a new box. That loses what agents made and every login, so
-  the request has to name the box. An update never does this.
+  the request has to name the box. An update never does this. With `--with-host`, the
+  `<box>-hostd` volume is kept by an update and by a reset alike, and the update backup does
+  not copy it.
 
 Verified 2026-11-02 on a throwaway box: an update from 0.3.10 to an image built from this
 branch waited 30 s for a 20 s job, kept a file in `work` and one in `.config`, and dropped a

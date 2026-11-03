@@ -6,7 +6,7 @@ import { applyUpdate, type ImageState, type UpdateDeps } from "./box-update.ts";
 
 const OLD: ImageState = { runningRef: "fakechris/lumenbox:0.3.9", runningId: "sha256:old0000000000000", expectedRef: "fakechris/lumenbox:0.3.10", expectedId: "sha256:new", available: true, needsPull: false };
 
-function fake(overrides: Partial<{ state: ImageState; busy: string[][]; verify: (string | undefined)[]; recreateFails: number }> = {}) {
+function fake(overrides: Partial<{ state: ImageState; busy: string[][]; verify: (string | Error | undefined)[]; recreateFails: number }> = {}) {
   const recreated: (string | undefined)[] = [];
   const said: string[] = [];
   let backedUp = false;
@@ -17,7 +17,7 @@ function fake(overrides: Partial<{ state: ImageState; busy: string[][]; verify: 
     state: async () => overrides.state ?? OLD,
     busy: async () => busy.length > 1 ? busy.shift()! : busy[0]!,
     recreate: async image => { recreated.push(image); if (failures-- > 0) throw new Error("pull failed"); return { containerName: "agentbox-box", state: "running" } as never; },
-    verify: async () => verify.length > 1 ? verify.shift() : verify[0],
+    verify: async () => { const v = verify.length > 1 ? verify.shift() : verify[0]; if (v instanceof Error) throw v; return v; },
     backup: async () => { backedUp = true; return ["work.tar", "config.tar"]; },
     onOutput: line => said.push(line),
     sleep: async () => {},
@@ -62,6 +62,8 @@ test("a box that comes back broken goes back to the image it had, by id; when th
   assert.equal(rolled.outcome, "rolled_back");
   assert.deepEqual(broken.recreated, [undefined, "sha256:old0000000000000"], "back to the old image id, not a :previous tag");
   assert.match(rolled.detail, /browser could not be driven.*back on the image it had/);
+  const unreachable = fake({ verify: [new Error("the box is not running"), undefined] });
+  assert.equal((await applyUpdate(unreachable.deps)).outcome, "rolled_back", "a box that cannot be connected to is broken, and goes back");
   const worse = fake({ verify: ["no", "still no"] });
   assert.equal((await applyUpdate(worse.deps)).outcome, "failed");
   const pullFails = fake({ recreateFails: 1 });

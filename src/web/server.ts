@@ -2414,7 +2414,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const upgradeTimer = setInterval(() => {
     void (async () => {
       const state = await boxUpdate.check();
-      if (state?.available !== true || upgradeToldAbout === state.expectedRef) return;
+      if (state?.available !== true) { upgradeWaiting = undefined; return; } // updated since: "upgrade" has nothing to start
+      if (upgradeToldAbout === state.expectedRef) return;
       upgradeToldAbout = state.expectedRef;
       upgradeWaiting = { image: state.expectedRef, losses: "" };
       const text = `Your box can be updated to ${state.expectedRef} (it runs ${state.runningRef ?? "an older image"}). Settings → Boxes → Apply update, or reply "upgrade". It waits for work in progress and keeps the box's files and browser logins.`;
