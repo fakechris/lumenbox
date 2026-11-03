@@ -12,6 +12,13 @@ function desktopAuth(env = process.env) {
       try { token = fs.readFileSync(file, "utf8").trim(); }
       catch { throw new Error("The configured LumenBox UI token file cannot be read."); }
       if (!token) throw new Error("The configured LumenBox UI token file is empty.");
+    } else {
+      // No token yet: make one rather than serve without (INV-1543). Loopback is not isolation:
+      // a box reaches this web as host.docker.internal, from 127.0.0.1 on OrbStack, and a shell
+      // can claim any Host. Same format and mode as the CLI's (src/box/docker.ts tokenFile).
+      token = require("node:crypto").randomBytes(32).toString("hex");
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, `${token}\n`, { mode: 0o600, flag: "wx" });
     }
   }
   if (token && /[\r\n]/.test(token)) throw new Error("The LumenBox UI token must be a single line.");
