@@ -6,8 +6,9 @@
  * and wakes the agent with a host note saying how long it was paused and by whom; the messages that
  * queued meanwhile are read in that turn.
  *
- * Background jobs carry no owner the host can read back, but every one an agent starts answers
- * "Started as job-…" into its own record — so the tail of that record names them.
+ * Background jobs carry no owner the host can read back, but every one an agent has is named in its
+ * own record: "Started as job-…" for one it started, "continuing as job-…" for a command that outlived
+ * its foreground time (exec-format.ts) — so the tail of that record names them.
  */
 
 import { closeSync, existsSync, fstatSync, openSync, readdirSync, readSync } from "node:fs";
@@ -28,7 +29,7 @@ export interface AgentPauseDeps {
   now?: () => Date;
 }
 
-const JOB_STARTED = /Started as (job-[0-9a-f]{16})/g;
+const JOB_STARTED = /(?:Started as|continuing as) (job-[0-9a-f]{8}(?:[0-9a-f]{8})?)\b/g;
 const TAIL_BYTES = 2_000_000;
 
 /** The job ids an agent's record says it started, from the last few megabytes. */
