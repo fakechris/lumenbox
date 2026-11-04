@@ -33,6 +33,7 @@ import {
 } from "./goal-mode.ts";
 import type { GoalTurnReport } from "./goal-loop.ts";
 import { describeWorktree, worktreeDirty, type WorktreeState } from "./worktree-state.ts";
+import { accountRefusal, type ClaimAccount } from "./claim-account.ts";
 
 export interface GoalGateDeps {
   tasks: TaskStore;
@@ -77,7 +78,7 @@ export class GoalGate {
    * The executor's claim, from the Goal tool. Returns what the tool answers. Only an accepted
    * claim starts a verifier; a rejected one is a rejection on the record, like the verifier's.
    */
-  async claim(taskId: string, agentId: string, evidence: readonly { id: string; evidence: string }[]): Promise<ClaimResult> {
+  async claim(taskId: string, agentId: string, evidence: readonly { id: string; evidence: string }[], account: ClaimAccount): Promise<ClaimResult> {
     const task = this.deps.tasks.get(taskId);
     const pursuit = task?.pursuit;
     if (task === undefined || pursuit === undefined) return { accepted: false, text: `No goal ${taskId}.` };
@@ -87,6 +88,9 @@ export class GoalGate {
     if (pursuit.checklist.length === 0) return { accepted: false, text: "The checklist is empty. Add what would prove the objective is done (checklist_add) before claiming it is." };
     const conversation = task.conversation;
     if (conversation === undefined) return { accepted: false, text: `Goal ${taskId} has no conversation.` };
+    // What the work decided and what its checks left out, for the verifier and the person (INV-1574).
+    const unaccounted = accountRefusal(account);
+    if (unaccounted !== undefined) return { accepted: false, text: unaccounted };
 
     // The host's own checks (docs/74 §3.4 step 1). Todos are the executor's own list, so an open
     // one is a hint rather than proof of anything — but claiming "done" over "doing" is the
@@ -144,7 +148,7 @@ export class GoalGate {
       current => ({
         ...current,
         status: "verifying",
-        claim: { at, items },
+        claim: { at, items, decisions: account.decisions, unchecked: account.unchecked },
         verifying: { startedAt: at, conversation: verifyConversation, attempt: 1, ...(manifest !== undefined ? { manifestHash: manifestHashOf(manifest) } : {}) },
       }),
       `claim ${claimNo}: completion claimed; verifying in ${verifyConversation}`
@@ -211,7 +215,7 @@ export class GoalGate {
           status: "complete",
           verifying: undefined,
           checklist: current.checklist.map(item => ({ ...item, verdict: verdict.items.find(entry => entry.id === item.id)?.verdict ?? item.verdict })),
-          lastVerdict: { at: this.now().toISOString(), passed: true, items: verdict.items },
+          lastVerdict: { at: this.now().toISOString(), passed: true, items: verdict.items, ...(verdict.decisions !== undefined ? { decisions: verdict.decisions } : {}) },
         }),
         `verified complete on attempt ${marker.verify.attempt}: every item proven; awaiting the person's acceptance`
       );

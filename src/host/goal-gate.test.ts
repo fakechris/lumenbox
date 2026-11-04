@@ -1,3 +1,4 @@
+import { claimAccountOf } from "./claim-account.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -14,7 +15,7 @@ const CHECKLIST: ChecklistItem[] = [
   { id: "c4", text: "reads well" },
 ];
 
-const REPORT_PASS = "Status: complete\nIntegrity: clean\nContract audit: aligned\nItem c1: proven — q3.md, 2.1 KB\nItem c2: proven — exit 0\nItem c3: proven — judged from lint output\nItem c4: proven — read it\nNext action: none\n\nAll four hold.";
+const REPORT_PASS = "Status: complete\nIntegrity: clean\nContract audit: aligned\nItem c1: proven — q3.md, 2.1 KB\nItem c2: proven — exit 0\nItem c3: proven — judged from lint output\nItem c4: proven — read it\nNext action: none\nDecisions: consistent — the report is in RMB throughout\n\nAll four hold.";
 const REPORT_FAIL = "Status: incomplete\nIntegrity: clean\nContract audit: aligned\nItem c1: proven — q3.md exists\nItem c2: contradicted — exit 1: 3 errors\nItem c3: unverified\nItem c4: incomplete — section 3 is a stub\nNext action: fix the three lint errors and finish section 3";
 
 function harness(over: Partial<GoalGateDeps> = {}) {
@@ -47,6 +48,7 @@ function harness(over: Partial<GoalGateDeps> = {}) {
 }
 
 const EVIDENCE = [{ id: "c1", evidence: "/home/box/work/q3.md" }, { id: "c2", evidence: "ran it, exit 0" }, { id: "c4", evidence: "read it twice" }];
+const ACCOUNT = { decisions: ["figures in RMB, as the earlier reports use"], unchecked: ["the regional split was not cross-checked against the ledger"] };
 
 test("the verdict parser: headers, one line per item, the next action; anything less is no verdict", () => {
   const pass = parseGoalVerdict(REPORT_PASS, CHECKLIST)!;
@@ -69,16 +71,25 @@ test("the verdict parser: headers, one line per item, the next action; anything 
 test("a claim is refused for the wrong agent, over open todos, and rejected outright over a missing artifact", async () => {
   const h = harness();
   try {
-    assert.match((await h.gate.claim(h.task.id, "someone-else", EVIDENCE)).text, /nova's to claim/);
+    assert.match((await h.gate.claim(h.task.id, "someone-else", EVIDENCE, ACCOUNT)).text, /nova's to claim/);
+    // Without what it decided and what its checks left out, there is nothing for the person to review (INV-1574).
+    const bare = await h.gate.claim(h.task.id, "nova", EVIDENCE, { decisions: [], unchecked: [] });
+    assert.equal(bare.accepted, false);
+    assert.match(bare.text, /give decisions and unchecked with claim_complete/);
+    assert.match((await h.gate.claim(h.task.id, "nova", EVIDENCE, { decisions: ["none"], unchecked: [] })).text, /give unchecked with claim_complete/);
+    assert.equal(h.pursuit().spent.rejections, 0, "an unaccounted claim is refused, not a rejection");
+    // What the tool hands the gate: entries that are not text are not a decision.
+    assert.deepEqual(claimAccountOf({ decisions: [{ text: "use RMB" }, " RMB ", ""], unchecked: "ledger" }), { decisions: ["RMB"], unchecked: ["ledger"] });
+    assert.deepEqual(claimAccountOf({ decisions: [{ text: "use RMB" }] }).decisions, [], "an object alone leaves decisions empty, so the gate refuses");
     h.setTodos([{ status: "doing", text: "write section 3" }]);
-    const overTodos = await h.gate.claim(h.task.id, "nova", EVIDENCE);
+    const overTodos = await h.gate.claim(h.task.id, "nova", EVIDENCE, ACCOUNT);
     assert.equal(overTodos.accepted, false);
     assert.match(overTodos.text, /1 todo\(s\) are still doing \(write section 3\)/);
     assert.equal(h.pursuit().status, "active");
     assert.equal(h.pursuit().spent.rejections, 0, "a refusal is not a rejection");
     h.setTodos([]);
     h.setManifest(new Map());
-    const missing = await h.gate.claim(h.task.id, "nova", EVIDENCE);
+    const missing = await h.gate.claim(h.task.id, "nova", EVIDENCE, ACCOUNT);
     assert.equal(missing.accepted, false);
     assert.match(missing.text, /Produce the missing artifact\(s\): \/home\/box\/work\/q3\.md/);
     assert.equal(h.pursuit().status, "active");
@@ -92,7 +103,7 @@ test("a claim is refused for the wrong agent, over open todos, and rejected outr
 test("an accepted claim becomes verifying and starts a verifier with read tools and only the confirmed commands", async () => {
   const h = harness();
   try {
-    const result = await h.gate.claim(h.task.id, "nova", EVIDENCE);
+    const result = await h.gate.claim(h.task.id, "nova", EVIDENCE, ACCOUNT);
     assert.equal(result.accepted, true);
     const pursuit = h.pursuit();
     assert.equal(pursuit.status, "verifying");
@@ -107,15 +118,18 @@ test("an accepted claim becomes verifying and starts a verifier with read tools 
     assert.match(wake.text, /c2: lint passes\n {3}check: run exactly: npm run lint — proven when it exits 0/);
     assert.match(wake.text, /c3: tests pass\n {3}check: a command was proposed but the person did not confirm it/);
     assert.match(wake.text, /executor's pointer: read it twice/);
+    assert.deepEqual([pursuit.claim?.decisions, pursuit.claim?.unchecked], [ACCOUNT.decisions, ACCOUNT.unchecked]);
+    assert.match(wake.text, /The executor's account \(claims to test, not facts\):\n- decided: figures in RMB, as the earlier reports use\n- says it did not check: the regional split/);
+    assert.match(wake.text, /^Decisions: consistent\|mismatch — whether the decisions above match what the artifacts actually do/m);
     assert.doesNotMatch(wake.text, /ReadHistory/, "the verifier is not sent to the executor's account");
-    assert.match((await h.gate.claim(h.task.id, "nova", EVIDENCE)).text, /already being verified/);
+    assert.match((await h.gate.claim(h.task.id, "nova", EVIDENCE, ACCOUNT)).text, /already being verified/);
   } finally { h.cleanup(); }
 });
 
 test("a passing verdict moves the goal to review for the person; the checklist carries the verdicts", async () => {
   const h = harness();
   try {
-    await h.gate.claim(h.task.id, "nova", EVIDENCE);
+    await h.gate.claim(h.task.id, "nova", EVIDENCE, ACCOUNT);
     await h.gate.verifierEnded({ marker: h.wakes[0]!.goal!, how: "done", worked: true, finalText: REPORT_PASS });
     const pursuit = h.pursuit();
     assert.equal(pursuit.status, "complete");
@@ -124,6 +138,9 @@ test("a passing verdict moves the goal to review for the person; the checklist c
     assert.deepEqual(pursuit.checklist.map(item => item.verdict), ["proven", "proven", "proven", "proven"]);
     assert.equal(pursuit.lastVerdict?.passed, true);
     assert.match(h.told[0] ?? "", /目标 t1 验证通过[\s\S]*等你验收/);
+    // What it decided and left unchecked comes above the verdict, with the verifier's check of the decisions.
+    assert.match(h.told[0] ?? "", /它替你做的决定：\n- figures in RMB, as the earlier reports use\n它的检查没有覆盖：\n- the regional split was not cross-checked against the ledger\n验证者对这些决定的核对：consistent: the report is in RMB throughout\n验证结论：\n- c1 proven/);
+    assert.equal(pursuit.lastVerdict?.decisions, "consistent: the report is in RMB throughout");
     // The person's word is done; the assignee's is not.
     assert.equal(h.tasks.update(h.task.id, { status: "done" }, "nova")?.task.status, "review");
     assert.equal(h.tasks.update(h.task.id, { status: "done" }, "principal-user")?.task.status, "done");
@@ -134,7 +151,7 @@ test("a rejection returns the goal to active with the next action; the third in 
   const h = harness();
   try {
     for (let n = 1; n <= MAX_VERIFY_REJECTIONS; n++) {
-      const claim = await h.gate.claim(h.task.id, "nova", EVIDENCE);
+      const claim = await h.gate.claim(h.task.id, "nova", EVIDENCE, ACCOUNT);
       assert.equal(claim.accepted, true, `claim ${n}`);
       await h.gate.verifierEnded({ marker: h.wakes.at(-1)!.goal!, how: "done", worked: true, finalText: REPORT_FAIL });
       const pursuit = h.pursuit();
@@ -156,7 +173,7 @@ test("a rejection returns the goal to active with the next action; the third in 
 test("no verdict is never a pass: a verifier that fails or rambles is run once more, then the person decides", async () => {
   const h = harness();
   try {
-    await h.gate.claim(h.task.id, "nova", EVIDENCE);
+    await h.gate.claim(h.task.id, "nova", EVIDENCE, ACCOUNT);
     await h.gate.verifierEnded({ marker: h.wakes[0]!.goal!, how: "failed", worked: false });
     assert.equal(h.pursuit().status, "verifying");
     assert.equal(h.pursuit().verifying?.attempt, 2);
@@ -176,7 +193,7 @@ test("no verdict is never a pass: a verifier that fails or rambles is run once m
 test("a workspace that changed during verification voids it, whatever the verifier said", async () => {
   const h = harness();
   try {
-    await h.gate.claim(h.task.id, "nova", EVIDENCE);
+    await h.gate.claim(h.task.id, "nova", EVIDENCE, ACCOUNT);
     h.setManifest(new Map([["/home/box/work/q3.md", "bbb"]]));
     await h.gate.verifierEnded({ marker: h.wakes[0]!.goal!, how: "done", worked: true, finalText: REPORT_PASS });
     assert.equal(h.pursuit().status, "active");
@@ -188,7 +205,7 @@ test("a workspace that changed during verification voids it, whatever the verifi
 test("after a restart a goal left verifying finds its verdict in the transcript, or is rejected as interrupted", async () => {
   const h = harness();
   try {
-    await h.gate.claim(h.task.id, "nova", EVIDENCE);
+    await h.gate.claim(h.task.id, "nova", EVIDENCE, ACCOUNT);
     h.setTranscript([{ role: "user", text: "…", host: true }, { role: "assistant", kind: "blocks", blocks: [{ type: "text", text: REPORT_PASS }] }]);
     const fresh = new GoalGate((h.gate as unknown as { deps: GoalGateDeps }).deps);
     assert.equal(await fresh.rearm(), 1);
@@ -196,7 +213,7 @@ test("after a restart a goal left verifying finds its verdict in the transcript,
 
     const again = harness();
     try {
-      await again.gate.claim(again.task.id, "nova", EVIDENCE);
+      await again.gate.claim(again.task.id, "nova", EVIDENCE, ACCOUNT);
       again.setTranscript([{ role: "user", text: "…", host: true }]);
       const restarted = new GoalGate((again.gate as unknown as { deps: GoalGateDeps }).deps);
       assert.equal(await restarted.rearm(), 1);
@@ -211,7 +228,7 @@ test("after a restart a goal left verifying finds its verdict in the transcript,
 test("the verifier's spend lands on the goal's bill (INV-772)", async () => {
   const h = harness();
   try {
-    await h.gate.claim(h.task.id, "nova", EVIDENCE);
+    await h.gate.claim(h.task.id, "nova", EVIDENCE, ACCOUNT);
     await h.gate.verifierEnded({ marker: h.wakes[0]!.goal!, how: "done", worked: true, finalText: REPORT_PASS, cost: 1234 });
     assert.equal(h.pursuit().spent.cost, 1234);
     assert.equal(h.pursuit().status, "complete");
@@ -225,7 +242,7 @@ test("a repo-clean item is answered by git: tracked changes refuse the claim wit
   const h = harness({ worktree: async path => { asked.push(path); return state; } });
   try {
     h.tasks.setPursuit(h.task.id, pursuit => ({ ...pursuit, checklist: [...pursuit.checklist, { id: "c9", text: "everything committed", check: { kind: "repo-clean", path: "/home/box/work/repo" } }] }), "repo-clean item");
-    const dirty = await h.gate.claim(h.task.id, "nova", EVIDENCE);
+    const dirty = await h.gate.claim(h.task.id, "nova", EVIDENCE, ACCOUNT);
     assert.equal(dirty.accepted, false);
     assert.match(dirty.text, /Commit \(or deliberately discard\) the tracked changes still in \/home\/box\/work\/repo \(2 modified, 1 untracked, 3 unpushed\)/);
     assert.deepEqual(asked, ["/home/box/work/repo"]);
@@ -235,7 +252,7 @@ test("a repo-clean item is answered by git: tracked changes refuse the claim wit
 
     // Untracked files and unpushed commits alone are said, not refused.
     state = { kind: "repo", modified: 0, untracked: 4, unpushed: 2 };
-    assert.equal((await h.gate.claim(h.task.id, "nova", EVIDENCE)).accepted, true);
+    assert.equal((await h.gate.claim(h.task.id, "nova", EVIDENCE, ACCOUNT)).accepted, true);
   } finally { h.cleanup(); }
 });
 
@@ -243,6 +260,6 @@ test("a repo-clean item over a tree git cannot see is unknown, and unknown refus
   const h = harness({ worktree: async () => ({ kind: "unknown", why: "git did not answer within 10s" }) });
   try {
     h.tasks.setPursuit(h.task.id, pursuit => ({ ...pursuit, checklist: [...pursuit.checklist, { id: "c9", text: "committed", check: { kind: "repo-clean", path: "/r" } }] }), "repo-clean item");
-    assert.equal((await h.gate.claim(h.task.id, "nova", EVIDENCE)).accepted, true);
+    assert.equal((await h.gate.claim(h.task.id, "nova", EVIDENCE, ACCOUNT)).accepted, true);
   } finally { h.cleanup(); }
 });

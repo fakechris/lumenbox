@@ -17,6 +17,7 @@ import type { Task, TaskStatus, TaskStore } from "./tasks.ts";
 import type { ContextMode } from "../agents/context-epoch.ts";
 import { randomUUID } from "node:crypto";
 import { MAIN_CONVERSATION } from "../agents/registry.ts";
+import { accountForVerifier, accountLines, decisionsVerdictOf } from "./claim-account.ts";
 
 export type PursuitStatus = "active" | "verifying" | "paused" | "complete" | "cleared";
 
@@ -87,12 +88,14 @@ export interface Pursuit {
    */
   verifying?: { startedAt: string; conversation: string; attempt: number; manifestHash?: string; turnId?: string };
   /** The executor's last claim of completion: evidence per checklist item, as pointers. */
-  claim?: { at: string; items: { id: string; evidence: string }[] };
+  claim?: { at: string; items: { id: string; evidence: string }[]; decisions?: string[]; unchecked?: string[] }; // the account is INV-1574
   lastVerdict?: {
     at: string;
     passed: boolean;
     items: { id: string; verdict: NonNullable<ChecklistItem["verdict"]>; evidence?: string }[];
     nextAction?: string;
+    /** The verifier's check of the executor's decisions against the artifacts (INV-1574). */
+    decisions?: string;
   };
   /** The channel message that created it — the idempotency key for a resent `/goal`. */
   sourceMessageId?: string;
@@ -591,6 +594,7 @@ export interface GoalVerdict {
   items: { id: string; verdict: ItemVerdict; evidence?: string }[];
   nextAction?: string;
   body: string;
+  decisions?: string;
 }
 
 /**
@@ -617,6 +621,7 @@ export function verifierPrompt(task: Pick<Task, "id" | "pursuit">, chinese: bool
    check: ${check}${evidence !== undefined ? `
    executor's pointer: ${evidence}` : ""}`;
   });
+  const account = accountForVerifier(pursuit.claim?.decisions !== undefined || pursuit.claim?.unchecked !== undefined ? { decisions: pursuit.claim.decisions ?? [], unchecked: pursuit.claim.unchecked ?? [] } : undefined);
   const lines = [
     `[host verification: goal ${task.id}] You are verifying, not continuing. The executor claims the objective below is met. Decide from current evidence only.`,
     "",
@@ -632,6 +637,7 @@ export function verifierPrompt(task: Pick<Task, "id" | "pursuit">, chinese: bool
     "",
     "Checklist:",
     ...items,
+    ...account.section,
     "",
     "Reply with exactly these lines first, then your evidence in prose:",
     "Status: complete|incomplete|blocked",
@@ -639,6 +645,7 @@ export function verifierPrompt(task: Pick<Task, "id" | "pursuit">, chinese: bool
     "Contract audit: aligned|needs_revision|unknown",
     ...pursuit.checklist.map(item => `Item ${item.id}: proven|contradicted|incomplete|unverified — one line of evidence`),
     "Next action: what the executor should do next, or none",
+    ...account.answer,
     "",
     "Status is complete only when every item is proven.",
     ...(chinese ? ["", "证据和下一步可以用中文写；头部行保持英文格式。"] : []),
@@ -661,14 +668,16 @@ export function parseGoalVerdict(text: string, checklist: readonly ChecklistItem
   const next = /^Next action:\s*(.+)$/im.exec(text)?.[1]?.trim();
   const nextAction = next !== undefined && !/^none\.?$/i.test(next) ? next.slice(0, 300) : undefined;
   const passed = status === "complete" && integrity === "clean" && items.every(item => item.verdict === "proven");
-  return { passed, items, ...(nextAction !== undefined ? { nextAction } : {}), body: text };
+  const decisions = decisionsVerdictOf(text);
+  return { passed, items, ...(nextAction !== undefined ? { nextAction } : {}), ...(decisions !== undefined ? { decisions } : {}), body: text };
 }
 
 /** What the person is told when the gate settles a claim. */
 export function verdictNotice(task: Pick<Task, "id" | "pursuit">, verdict: GoalVerdict | undefined, outcome: "passed" | "rejected" | "needs_person" | "interrupted"): string {
   const pursuit = task.pursuit!;
   if (outcome === "passed") {
-    return `目标 ${task.id} 验证通过：${pursuit.objective.slice(0, 80)}\n${verdict?.items.map(item => `- ${item.id} ${item.verdict}${item.evidence !== undefined ? `：${item.evidence}` : ""}`).join("\n") ?? ""}\n它现在在板上等你验收；回复「可以」即为完成，或者说哪里还不对。`;
+    const account = accountLines(pursuit.claim?.decisions !== undefined || pursuit.claim?.unchecked !== undefined ? { decisions: pursuit.claim.decisions ?? [], unchecked: pursuit.claim.unchecked ?? [] } : undefined, verdict?.decisions);
+    return `目标 ${task.id} 验证通过：${pursuit.objective.slice(0, 80)}\n${account.length > 0 ? `${account.join("\n")}\n验证结论：\n` : ""}${verdict?.items.map(item => `- ${item.id} ${item.verdict}${item.evidence !== undefined ? `：${item.evidence}` : ""}`).join("\n") ?? ""}\n它现在在板上等你验收；回复「可以」即为完成，或者说哪里还不对。`;
   }
   if (outcome === "needs_person") {
     return `目标 ${task.id} 已暂停：验证连续 ${pursuit.spent.rejections} 次没通过，需要你来判断。最近一次：${verdict?.items.filter(item => item.verdict !== "proven").map(item => `${item.id} ${item.verdict}`).join("、") || "无逐项结论"}${verdict?.nextAction !== undefined ? `；建议下一步：${verdict.nextAction}` : ""}。/goal 查看，/goal resume 让它按建议继续，/goal clear 放弃。`;
