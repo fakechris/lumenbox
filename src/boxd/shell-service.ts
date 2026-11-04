@@ -12,6 +12,8 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { closeSync, mkdirSync, openSync, readdirSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { join } from "node:path";
+import { JobLimitError } from "./job-limits.ts";
+import { killTree } from "./process-tree.ts";
 import { DURABLE_RESULT_CHARS, type ExecRequest, type ExecResult, type JobStartedResult } from "../protocol/index.ts";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -431,6 +433,8 @@ export function runShell(request: ExecRequest, pinned: Record<string, string> = 
       try {
         job = adopt({ child, command, head });
       } catch (error) {
+        // At the agent's job limit (INV-1557) it is stopped, not waited on: waiting would hold the turn for the whole timeout.
+        if (error instanceof JobLimitError) { settled = true; clearTimeout(timer); killTree(child.pid!); stdout.close(); stderr.close(); resolve({ stdout: stdout.toString("stdout"), stderr: `${stderr.toString("stderr")}\n[stopped after ${Math.round(window! / 1000)}s instead of continuing as a background job: ${error.message}]`, exit_code: 137, timed_out: false, timeout_ms: timeoutMs }); return; }
         stderr.push(Buffer.from(`\n[could not hand the command to the job service: ${error instanceof Error ? error.message : String(error)}; still waiting for it]`));
         child.stdout.on("data", chunk => stdout.push(chunk as Buffer));
         child.stderr.on("data", chunk => stderr.push(chunk as Buffer));

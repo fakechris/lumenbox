@@ -2,7 +2,7 @@
      title: Deployment
      family: guide
      status: current
-     updated: 2026-10-20
+     updated: 2026-11-04
 -->
 # Deployment
 
@@ -94,7 +94,7 @@ box (the orchestrator inside the container) needs nothing: the face uses loopbac
 | `AGENTBOX_PROVIDER` / `_MODEL` / `_BASE_URL` / `_KEY_ENV` / `_AUTH` | anthropic | Which endpoint |
 | `ANTHROPIC_API_KEY`, `MINIMAX_CODE_CN_API_KEY`, `AGENTBOX_API_KEY` | — | Model credential |
 | `AGENTBOX_WIDTH` / `_HEIGHT` | 1280×800 | Desktop size |
-| `AGENTBOX_MEMORY` / `_CPUS` | 4g / unset | Container limits |
+| `AGENTBOX_MEMORY` / `_CPUS` | 4g / half the engine's cores (at least 2) | Container limits; the CPU one is also in Settings → Boxes |
 | `AGENTBOX_EGRESS_RELAY` / `_TOKEN` | — | Egress |
 | `AGENTBOX_K8S_NAMESPACE` | `agentbox` | Namespace the kubernetes allocator creates boxes in |
 | `AGENTBOX_K8S_STORAGE_CLASS` | cluster default | StorageClass for box PVCs |
@@ -103,6 +103,8 @@ box (the orchestrator inside the container) needs nothing: the face uses loopbac
 | `AGENTBOX_SETTLE_MS` | 2000 | Capture settle |
 | `AGENTBOX_MAX_ROUNDS` | 400 | Turn round limit |
 | `BOXD_AGENT_NICE` | 19 | How far behind the desktop the agent runs |
+| `BOXD_JOBS_PER_AGENT` | 4 | Background jobs one agent may run at once; past it a new one is refused with the reason (0 = no limit) |
+| `BOXD_JOB_MEMORY_MB` | 1024 | Resident memory one job's processes may hold, measured every 3 s; a job past it is stopped and its log says why (0 = off) |
 | `BOXD_SUPERVISE_MS`, `BOXD_MAX_RESTARTS`, `BOXD_RESTART_WINDOW_MS`, `BOXD_BACKOFF_*`, `BOXD_GIVE_UP_EPISODES` | see design | Supervision tuning |
 
 **`config.json`** for what is decided once: currently `activityLimit`, and `turnBudget`

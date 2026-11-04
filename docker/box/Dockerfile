@@ -18,7 +18,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     DISPLAY=:1 \
     DISPLAY_WIDTH=1280 \
     DISPLAY_HEIGHT=800 \
-    HOME=/home/box
+    HOME=/home/box \
+    RIPGREP_CONFIG_PATH=/etc/ripgreprc
 
 # 1. The computer-use toolchain. xdotool synthesizes input, ffmpeg captures the
 #    framebuffer, xrandr/xdpyinfo report geometry, xmodmap lends keycodes to
@@ -41,6 +42,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       poppler-utils \
       sudo tini snoopy \
     && rm -rf /var/lib/apt/lists/* \
+    # ripgrep starts one thread per core by default, so on a twelve-core engine every agent scan
+    # ran seven (2026-11-04). Two by default; an explicit -j still wins (INV-1557).
+    && printf '%s\n' '--threads=2' > /etc/ripgreprc \
     && mkdir -p /var/log/xwatchdog \
     && printf '%s\n' \
       '[snoopy]' \

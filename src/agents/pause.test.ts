@@ -100,15 +100,15 @@ test("pausing stops the turn in flight and only this agent's running background 
       dirFor: () => root,
       wake: () => {},
       interrupt: ids => { interrupted.push(ids); return ids; },
-      box: () => ({ jobs: async () => ({ jobs: [{ job_id: "job-aaaaaaaaaaaaaaaa", running: true }, { job_id: "job-bbbbbbbbbbbbbbbb", running: false }, { job_id: "job-cccccccccccccccc", running: true }] }), killJob: async id => { killed.push(id); } }),
+      box: () => ({ jobs: async () => ({ jobs: [{ job_id: "job-aaaaaaaaaaaaaaaa", running: true }, { job_id: "job-bbbbbbbbbbbbbbbb", running: false }, { job_id: "job-cccccccccccccccc", running: true }, { job_id: "job-dddddddd", running: true, owner: "agent:bob" }] }), killJob: async id => { killed.push(id); } }),
       tell: async (_id, text) => { told.push(text); },
       receipt: (subject, decision) => receipts.push(`${subject} ${decision}`),
       log: () => {},
       now: () => new Date("2026-11-04T00:10:00Z"),
     });
     const done = await pauses.pause("bob", "Chris", "probing the host");
-    assert.deepEqual([done.turnStopped, done.jobsStopped], [true, ["job-aaaaaaaaaaaaaaaa"]], "its running job only — not an ended one, not someone else's");
-    assert.deepEqual(killed, ["job-aaaaaaaaaaaaaaaa"]);
+    assert.deepEqual([done.turnStopped, done.jobsStopped], [true, ["job-aaaaaaaaaaaaaaaa", "job-dddddddd"]], "its running jobs only — named in its record or owned by it (INV-1557); not an ended one, not someone else's");
+    assert.deepEqual(killed, ["job-aaaaaaaaaaaaaaaa", "job-dddddddd"]);
     assert.equal(readPause(root)?.reason, "probing the host");
     assert.equal(await pauses.resume("bob", "Chris"), true);
     assert.equal(readPause(root), undefined);
