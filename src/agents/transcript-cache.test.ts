@@ -16,7 +16,8 @@ function scratch() {
   const dir = mkdtempSync(join(tmpdir(), "agentbox-transcript-cache-"));
   return { dir, path: join(dir, "conversation.jsonl"), cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
-const line = (i: number) => `${JSON.stringify({ role: i % 2 ? "assistant" : "user", content: [{ type: "text", text: `turn ${i}` }] })}\n`;
+// Multi-byte text throughout: lines are split from bytes, so a newline must never be found inside a character.
+const line = (i: number) => `${JSON.stringify({ role: i % 2 ? "assistant" : "user", content: [{ type: "text", text: `turn ${i} 第${i}轮 ✓ 🧪` }] })}\n`;
 
 test("read twice, parsed once; appended to, only the new lines are parsed; always what the file says", () => {
   const { path, cleanup } = scratch();

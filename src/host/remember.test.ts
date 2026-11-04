@@ -439,3 +439,50 @@ test("a flush shows the extractor at most its total, the most recent exchanges, 
   assert.ok(total <= 12_000 + groups.length, `within the total: ${total} characters in ${groups.length} exchanges`);
   assert.match(groups.at(-1)!.text, /question 4999/, "the most recent exchange is the one kept");
 });
+
+test("rendering only the exchanges shown changes nothing about them (INV-1566)", () => {
+  // The grouping as it was before INV-1566 — every entry rendered, then the last that fit kept — verbatim.
+  const before = (entries: readonly Record<string, unknown>[]) => {
+    const groups: { lines: string[]; first: string; last: string; external: boolean }[] = [];
+    for (const entry of entries as never[]) {
+      const e = entry as { at?: string; kind?: string; role?: string; text?: string; blocks?: { type?: string; text?: string }[] };
+      const at = e.at ?? "";
+      const readsOutside = touchesExternalContent([entry], readsExternalContent);
+      let line: string | undefined;
+      if (!("kind" in e)) line = `${e.role === "user" ? "They said" : "You replied"}: ${e.text!.trim()}`;
+      else if (e.kind === "blocks") {
+        const said = e.blocks!.filter(block => block.type === "text").map(block => block.text!.trim()).filter(text => text !== "").join("\n");
+        if (said !== "") line = `You replied: ${said}`;
+      }
+      if (readsOutside) {
+        const current = groups[groups.length - 1];
+        if (current !== undefined) current.external = true;
+        else groups.push({ lines: [], first: at, last: at, external: true });
+      }
+      if (line === undefined || line.trim() === "") continue;
+      const opens = !("kind" in e) && e.role === "user";
+      const current = groups[groups.length - 1];
+      if (opens || current === undefined) groups.push({ lines: [line], first: at, last: at, external: readsOutside });
+      else { current.lines.push(line); if (at > current.last) current.last = at; }
+    }
+    const kept = groups.filter(group => !group.external && group.lines.length > 0);
+    const share = Math.max(400, Math.min(4_000, Math.floor(12_000 / Math.max(1, kept.length))));
+    return kept.slice(-Math.max(1, Math.floor(12_000 / share))).map(group => {
+      const joined = group.lines.join("\n\n");
+      return { text: joined.length > share ? `${joined.slice(0, share)}…` : joined, at: group.last };
+    });
+  };
+  // Plain messages, blank and padded text, text and tool blocks, a block with only blank text, results, and a
+  // call that reads outside content — at sizes that exercise both the per-exchange share and the total.
+  const at = (i: number) => `2026-11-04T00:${String(Math.floor(i / 60)).padStart(2, "0")}:${String(i % 60).padStart(2, "0")}Z`;
+  for (const count of [3, 40, 600]) {
+    const entries: Record<string, unknown>[] = [];
+    for (let i = 0; i < count; i++) {
+      entries.push({ role: "user", text: i % 7 === 0 ? "   " : `  ask ${i} ${"y".repeat((i * 37) % 900)}  `, at: at(i * 4) });
+      entries.push({ role: "assistant", kind: "blocks", at: at(i * 4 + 1), blocks: [{ type: "text", text: i % 5 === 0 ? "  " : `thinking ${i}` }, { type: "tool_use", id: `t${i}`, name: i % 11 === 0 ? "browser_read" : "bash", input: {} }] });
+      entries.push({ role: "user", kind: "results", at: at(i * 4 + 2), blocks: [{ type: "tool_result", tool_use_id: `t${i}`, content: "ok" }] });
+      entries.push({ role: "assistant", text: `done ${i}\n\n`, at: at(i * 4 + 3) });
+    }
+    assert.deepEqual(exchangesOf(entries as never, "main").map(group => ({ text: group.text, at: group.at })), before(entries), `${count} exchanges`);
+  }
+});

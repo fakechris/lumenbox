@@ -10,7 +10,9 @@
  * Every SAMPLE_MS it records the host's heap and RSS, the box cgroup's memory and CPU, the watched
  * jobs and turns in flight, and the transcripts' size on disk, into a TSV. With --snapshots it also
  * writes heap snapshots at the start, at peak load and at the end, and sums each by constructor so the
- * structures that grew can be named.
+ * structures that grew can be named. With --alloc-profile it samples every allocation for the whole run,
+ * collected ones too, and names the functions that allocate the most: what a snapshot cannot show,
+ * because a snapshot is taken after a GC and short-lived garbage is gone by then.
  *
  * Not part of `npm test`: it needs Docker, a box image and minutes. Run:
  *   node --experimental-transform-types scripts/load-bench.ts --out <dir> [--agents 4] [--jobs 8]
@@ -28,9 +30,12 @@ import type Anthropic from "@anthropic-ai/sdk";
 const arg = (name: string, fallback: string) => { const i = process.argv.indexOf(`--${name}`); return i >= 0 ? process.argv[i + 1]! : fallback; };
 const AGENTS = Number(arg("agents", "4")), JOBS = Number(arg("jobs", "8")), JOB_SECONDS = Number(arg("job-seconds", "60"));
 const BYTES = Number(arg("bytes", "200000")), SECONDS = Number(arg("seconds", "240")), IMAGE = arg("image", "fakechris/lumenbox:0.3.14");
-const OUT = arg("out", ""), SNAPSHOTS = process.argv.includes("--snapshots"), SAMPLE_MS = 2_000;
+const OUT = arg("out", ""), SNAPSHOTS = process.argv.includes("--snapshots"), ALLOC = process.argv.includes("--alloc-profile"), SAMPLE_MS = 2_000;
 // Real agents carry long histories (35 MB on 2026-11-04); a fresh one carries none. Pre-fills each worker's transcript.
 const SEED_MB = Number(arg("seed-transcript-mb", "0"));
+// A long-lived record has been compacted: its active window starts at the newest summary. Without this the
+// seed is a record that never was, and every agent's first turn summarises all of it at once.
+const SEED_COMPACTED = process.argv.includes("--seed-compacted");
 if (OUT === "") throw new Error("--out <dir> is required (keep results out of the repository)");
 mkdirSync(OUT, { recursive: true });
 
@@ -92,6 +97,8 @@ if (SEED_MB > 0) {
       const line = JSON.stringify({ role: i % 2 === 0 ? "user" : "assistant", text: randomBytes(600).toString("base64"), at: new Date(Date.now() - 86_400_000 + i * 1000).toISOString() });
       lines.push(line); bytes += line.length + 1;
     }
+    // 200 lines from the end, standing in for everything before it, as compaction leaves a real record.
+    if (SEED_COMPACTED) lines.splice(lines.length - 200, 0, JSON.stringify({ role: "user", kind: "summary", covers: lines.length - 200, text: "**Threads** seeded\n**Done** seeded\n**State** seeded\n**Artifacts** none", at: new Date(Date.now() - 3_600_000).toISOString() }));
     writeFileSync(path, lines.join("\n") + "\n");
   }
 }
@@ -124,6 +131,13 @@ const t0 = Date.now();
 const snapshot = (label: string) => { if (!SNAPSHOTS) return; const path = writeHeapSnapshot(join(OUT, `${label}.heapsnapshot`)); console.error(`[bench] snapshot ${label}: ${path}`); };
 
 snapshot("start");
+// Sampling allocation profile, garbage included (INV-1566): which functions allocate the most over the run.
+const { Session } = await import("node:inspector/promises");
+const inspector = new Session();
+if (ALLOC) {
+  inspector.connect();
+  await inspector.post("HeapProfiler.startSampling", { samplingInterval: 256 * 1024, includeObjectsCollectedByMajorGC: true, includeObjectsCollectedByMinorGC: true } as never);
+}
 for (const worker of workers) void orch.prompt(worker.id, "Start the load.").catch(error => console.error(`[bench] ${worker.profile.name}: ${String(error)}`));
 const probe = setInterval(() => { const at = Date.now(); void orch.prompt("probe", "ping").then(() => { probeLatency = Date.now() - at; }, () => {}); }, 5_000);
 let peakHeap = 0, peakTaken = false;
@@ -139,6 +153,22 @@ while (Date.now() - t0 < SECONDS * 1000) {
 }
 clearInterval(probe);
 snapshot("end");
+type ProfileNode = { callFrame: { functionName: string; url: string; lineNumber: number }; selfSize: number; children: ProfileNode[] };
+const allocations: { site: string; stack: string; bytes: number }[] = [];
+if (ALLOC) {
+  const { profile } = (await inspector.post("HeapProfiler.stopSampling")) as unknown as { profile: { head: ProfileNode } };
+  writeFileSync(join(OUT, "alloc.heapprofile"), JSON.stringify(profile));
+  const where = (frame: ProfileNode["callFrame"]) => `${frame.functionName || "(anonymous)"} (${frame.url.replace(/^.*\/src\//, "").replace(/^file:\/\/.*\//, "")}:${frame.lineNumber + 1})`;
+  const walk = (node: ProfileNode, path: ProfileNode["callFrame"][]) => {
+    const stack = [...path, node.callFrame];
+    if (node.selfSize > 0) {
+      const ours = stack.filter(frame => /\/(src|scripts)\//.test(frame.url)).slice(-3).reverse().map(where).join(" ← ");
+      allocations.push({ site: where(node.callFrame), stack: ours || "(no repository frame)", bytes: node.selfSize });
+    }
+    for (const child of node.children) walk(child, stack);
+  };
+  walk(profile.head, []);
+}
 
 // ── what grew: heap snapshots summed by constructor ─────────────────────────────────────────────────
 function byConstructor(path: string): Map<string, { count: number; bytes: number }> {
@@ -156,11 +186,17 @@ function byConstructor(path: string): Map<string, { count: number; bytes: number
   }
   return out;
 }
-const report: string[] = [`# Load bench ${new Date().toISOString()}`, "", `agents ${AGENTS} × jobs ${JOBS}, each printing ${BYTES} random bytes (base64) a second for ${JOB_SECONDS} s; transcripts seeded to ${SEED_MB} MB; ran ${SECONDS} s on ${IMAGE}.`, `peak heapUsed ${mb(peakHeap)} MB. Samples: samples.tsv.`, ""];
+const report: string[] = [`# Load bench ${new Date().toISOString()}`, "", `agents ${AGENTS} × jobs ${JOBS}, each printing ${BYTES} random bytes (base64) a second for ${JOB_SECONDS} s; transcripts seeded to ${SEED_MB} MB${SEED_COMPACTED ? " (compacted: active window = summary + 200)" : ""}; ran ${SECONDS} s on ${IMAGE}.`, `peak heapUsed ${mb(peakHeap)} MB. Samples: samples.tsv.`, ""];
 if (SNAPSHOTS && existsSync(join(OUT, "start.heapsnapshot")) && existsSync(join(OUT, "peak.heapsnapshot"))) {
   const start = byConstructor(join(OUT, "start.heapsnapshot")), peak = byConstructor(join(OUT, "peak.heapsnapshot"));
   const grown = [...peak].map(([key, row]) => ({ key, count: row.count - (start.get(key)?.count ?? 0), bytes: row.bytes - (start.get(key)?.bytes ?? 0) })).sort((a, b) => b.bytes - a.bytes).slice(0, 15);
   report.push("## Grew between start and peak (self size, by constructor)", "", "| constructor | Δ count | Δ MB |", "|---|---:|---:|", ...grown.map(row => `| ${row.key.replace(/\|/g, "\\|").slice(0, 60)} | ${row.count} | ${mb(row.bytes)} |`), "");
+}
+if (ALLOC) {
+  const byStack = new Map<string, number>();
+  for (const row of allocations) byStack.set(row.stack, (byStack.get(row.stack) ?? 0) + row.bytes);
+  const total = allocations.reduce((sum, row) => sum + row.bytes, 0);
+  report.push(`## Allocated over the run, collected included (sampled): ${mb(total)} MB`, "", "| MB | share | nearest repository frames (innermost first) |", "|---:|---:|---|", ...[...byStack].sort((a, b) => b[1] - a[1]).slice(0, 20).map(([stack, bytes]) => `| ${mb(bytes)} | ${((100 * bytes) / total).toFixed(1)}% | ${stack.replace(/\|/g, "\\|")} |`), "");
 }
 // Since INV-1564 a read is a cache lookup; what costs is a parse. Absent before the cache existed.
 const parses = (registry as unknown as { transcripts?: { counts: { full: number; appended: number; hits: number } } }).transcripts?.counts;
