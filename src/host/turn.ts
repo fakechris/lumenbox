@@ -90,7 +90,7 @@ import {
   replacedRange,
   type SummaryEntry,
 } from "./compaction.ts";
-import { anchorOf } from "./history.ts";
+import { anchorOf } from "./history.ts"; import { summaryInputFor } from "./summary-input.ts";
 import { DURABLE_RESULT_CHARS, type ResolutionConfig } from "../protocol/index.ts";
 import type { KeptEvidence } from "./resume.ts";
 import { keepToolResult, readKeptSources, RESULT_KEPT_MARKER } from "./results.ts";
@@ -997,13 +997,13 @@ async function summarise(
   summaryProvider: ProviderProfile,
   meter?: Meter
 ): Promise<SummaryEntry | undefined> {
-  const ask = async (extra?: string): Promise<string> => {
+  const bounded = summaryInputFor(entries, summaryProvider.model); const ask = async (extra?: string): Promise<string> => { // within the summary model's budget (INV-1570)
     const response = await client.messages.create({
       model: summaryProvider.model,
       // Enough for a dense summary and no more; a summary that runs to pages defeats the purpose.
       max_tokens: Math.min(4096, summaryProvider.maxTokens),
       messages: [
-        { role: "user", content: buildSummaryPrompt(entries) + (extra ?? "") },
+        { role: "user", content: buildSummaryPrompt(bounded.entries) + (extra ?? "") },
       ],
     });
     meter?.("summarize", summaryProvider, response.usage);
@@ -1041,7 +1041,7 @@ async function summarise(
 
   // Exact strings, harvested from the full blocks before any rendering clip and
   // appended outside the model's output — a model paraphrases, a regex does not.
-  const anchors = extractAnchors(entries);
+  const anchors = extractAnchors(bounded.entries);
   if (anchors.length > 0) {
     text += `\n\n**Exact references (mechanically extracted — trust these over the prose above):**\n${anchors.join("\n")}`;
   }
