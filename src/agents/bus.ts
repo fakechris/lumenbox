@@ -750,6 +750,11 @@ export class AgentBus {
     return this.active.has(workerKey(agentId, conversation));
   }
 
+  /** Says an agent's command reached for this machine's credentials or past the box (INV-1553); the host decides what follows. */
+  reportProbe(agentId: string, probe: { kind: string; detail: string }): void {
+    this.onEvent({ type: "boundary_probe", agentId, kind: probe.kind, detail: probe.detail });
+  }
+
   /** Whether a person paused this agent, and why (INV-1554). */
   pauseOf(agentId: string): ReturnType<typeof readPause> {
     return this.registry.has(agentId) ? readPause(this.registry.dirFor(agentId)) : undefined;
@@ -986,5 +991,6 @@ export type BusEvent =
       waiting: number;
     }
   | { type: "turn_interrupted"; agentId: string; reason: string }
+  | { type: "boundary_probe"; agentId: string; kind: string; detail: string }
   /** The teammate chain budget stopped a send (INV-1277); the attention panel shows the pair. */
   | ({ type: "chain_paused" } & PausedChain);

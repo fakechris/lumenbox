@@ -132,6 +132,13 @@ Closed, in this order of importance:
   forged Host. The desktop now makes one (`electron/ui-auth.cjs`). `agentbox web` from a
   terminal still serves loopback without one when none is configured.
 
+- **Probing is refused and said** (INV-1553, INV-1554). After the fix, agents kept trying other
+  ways for hours: the daemon's token from `/proc/1/environ`, the cookie jar's fixed key, a forged
+  Host, `x-agentbox-role: owner`, greps for 64-hex tokens. Every one failed, and nobody knew. The
+  shell guard now names those commands from their text (`src/host/boundary-probe.ts`), refuses
+  them before the box sees them, and tells admins. The third in an hour pauses the agent until a
+  person resumes it (Settings → Team).
+
 Not closed: anything that reaches the box is readable there, because `box` has passwordless sudo.
 The box's own command log (snoopy) records argv verbatim and cannot redact it. The answer is the
 one above: this machine's credential never enters the box.

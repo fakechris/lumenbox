@@ -180,7 +180,7 @@ import { randomUUID } from "node:crypto";
 import { isLive, isTaskStatus, type Task } from "../host/tasks.ts"; import { UnknownAgentError } from "../host/task-agents.ts";
 import { connectorSatisfied } from "../host/mcp-connectors.ts";
 import { adminRecipients } from "../host/upgrade.ts";
-import { BoxUpdateService, boxUpdateRoute } from "./box-update-routes.ts"; import { BoxKeeper } from "./box-keeper.ts"; import { AgentPauses } from "../host/agent-pause.ts"; import { agentPauseRoute } from "./agent-pause-routes.ts"; import { AGENT_PAUSE_JS } from "./agent-pause-ui.ts";
+import { BoxUpdateService, boxUpdateRoute } from "./box-update-routes.ts"; import { BoxKeeper } from "./box-keeper.ts"; import { AgentPauses } from "../host/agent-pause.ts"; import { ProbeKeeper, type ProbeKind } from "../host/boundary-probe.ts"; import { agentPauseRoute } from "./agent-pause-routes.ts"; import { AGENT_PAUSE_JS } from "./agent-pause-ui.ts";
 import { PRESET_MODELS, providerConfigured, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { BootstrapAdmins } from "../host/bootstrap.ts";
 import { Principals, principalsPath, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
@@ -573,6 +573,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   /** Desktops handed to the person, by agent. */
   const pendingHandovers = new Map<string, { agentId: string; agentName: string; instruction: string; reason: string; conversation?: string; at: string; desktopPath?: string }>();
 
+  let probeKeeper: ProbeKeeper | undefined; // set once the pauses exist; a probe before that is only broadcast (INV-1553)
   const orchestrator = new Orchestrator({
     mandateWorld: () => mandateWorld(),
     pendingQuestions: (agentId, conversation) => questions.list().filter(item => item.agentId === agentId && item.conversation === conversation && item.expiresAt > Date.now()).length,
@@ -734,7 +735,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       );
       for (const listener of channelTurnListeners) listener(event);
     },
-    onBusEvent: broadcast,
+    onBusEvent: event => { broadcast(event); if (event.type === "boundary_probe") void probeKeeper?.report(event.agentId, { kind: event.kind as ProbeKind, detail: event.detail }).catch(error => log(`boundary probe: ${error instanceof Error ? error.message : String(error)}`)); }, // INV-1553
   });
 
   // ── chat channels ────────────────────────────────────────────────────────────
@@ -2406,6 +2407,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   wedgeTimer.unref();
 
   const boxUpdate = new BoxUpdateService({ activeTurns: () => orchestrator.bus.activeAgentIds().filter(id => registry.tryGet(id) !== undefined && registry.boxOf(id).id === registry.box.id).length, reconnect: async () => { box = await orchestrator.connectBox(); }, broadcast: (line, done) => broadcast({ type: "box_setup", line, ...(done !== undefined ? { done: true, ok: done.ok } : {}) }), log });
+  probeKeeper = new ProbeKeeper({ nameOf: id => registry.tryGet(id)?.profile.name ?? id, isPaused: id => agentPauses.pauseOf(id) !== undefined, pause: (id, why) => agentPauses.pause(id, "LumenBox (boundary probes)", why), log, notify: text => { broadcast({ type: "error", boxId: registry.box.id, message: text }); for (const { adapter, identity } of adminRecipients(principals.list())) void channels.push(adapter, identity, text); } }); // INV-1553
   const agentPauses = new AgentPauses({ dirFor: id => registry.dirFor(id), wake: id => { void orchestrator.bus.wake(id); }, interrupt: (ids, why) => orchestrator.bus.interruptAgents(ids, why), box: () => orchestrator.boxClient(), log, tell: async (id, text) => { void orchestrator.prompt(id, text, undefined, { lane: "user", synthetic: true, steerable: false }).catch(error => log(`resume: ${error instanceof Error ? error.message : String(error)}`)); }, receipt: (subject, decision, because) => orchestrator.receipts.write({ at: new Date().toISOString(), by: "host", subject, decision, because }) }); // INV-1554
   void boxUpdate.check();
   // The box's image against the one this app expects (INV-1538, docs/12 §6). Checked every ten minutes; admins are told once per
@@ -6076,6 +6078,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           });
           const update = boxUpdate.available(); // an admin is shown a box that can be updated (INV-1538)
           if (update !== undefined && (me === undefined || roleAtLeast(principals.roleOf(me.id), "admin"))) answer.mine.unshift({ kind: "box-update", ref: "box", title: "The box can be updated", detail: `It runs ${update.runningRef ?? "an older image"}; this app expects ${update.expectedRef}. Settings → Boxes → Apply update.` });
+          if (me === undefined || roleAtLeast(principals.roleOf(me.id), "admin")) for (const probe of probeKeeper?.recent() ?? []) answer.mine.unshift({ kind: "boundary-probe", ref: probe.agentId, title: `${probe.agentName} reached for this machine's credentials`, detail: `${probe.count} attempt${probe.count === 1 ? "" : "s"} in the last hour, refused; the latest ${probe.detail}.${probe.paused ? ` ${probe.agentName} is paused — Settings → Team.` : ""}` }); // INV-1553
           send(res, 200, { ...answer, who: me?.name ?? "this installation" });
           return;
         }

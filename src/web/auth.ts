@@ -43,7 +43,7 @@ export const ROLE_HEADER = "x-agentbox-role";
  * The names and addresses a container uses for the machine it runs on: Docker Desktop's and
  * OrbStack's `host.docker.internal` (and its IPs), Lima's, Podman's.
  */
-const BOX_SIDE_HOSTS = new Set(["host.docker.internal", "gateway.docker.internal", "docker.for.mac.localhost", "host.lima.internal", "host.containers.internal", "0.250.250.254", "192.168.65.254"]);
+import { BOX_SIDE_HOSTS } from "../box/host-names.ts";
 
 /**
  * Why a request is refused because it came from the box side, or undefined (INV-1543).
