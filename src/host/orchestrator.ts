@@ -311,7 +311,7 @@ export class Orchestrator {
   readonly hooks: HookRunner | undefined;
   /** The commands turns let go of past their foreground window (INV-1461); their end wakes the agent on the background lane. */
   readonly generations = new BoxGenerations(line => console.error(`[box] ${line}`)); // which incarnation of each box a slow callback belongs to (INV-1476); bumped on every (re)connect
-  readonly jobWatch = new JobWatch({ box: () => this.boxClient(), log: line => console.error(`[jobs] ${line}`), wake: (agentId, conversation, text) => this.prompt(agentId, text, undefined, { conversation, steerable: false, lane: "background", synthetic: true }).then(() => undefined), generation: agentId => this.generations.current(this.registry.boxOf(agentId).id) });
+  readonly jobWatch = new JobWatch({ box: () => this.boxClient(), log: line => console.error(`[jobs] ${line}`), wake: (agentId, conversation, text) => this.prompt(agentId, text, undefined, { conversation, steerable: false, lane: "background", synthetic: true, origin: "host:jobs" }).then(() => undefined), generation: agentId => this.generations.current(this.registry.boxOf(agentId).id) });
   /**
    * Agents whose current turn is installing a template, by the template's id (docs/29 §5.3).
    * Set around the setup prompt and cleared after it, never by the agent.
@@ -831,7 +831,7 @@ export class Orchestrator {
             ...(task.conversation !== undefined ? { conversation: task.conversation } : {}),
           }),
           undefined,
-          { steerable: false, lane: "background" }
+          { steerable: false, lane: "background", origin: "host:audit" }
         );
         const after = await this.workspaceManifest();
         if (before !== undefined && after !== undefined) {
@@ -1022,7 +1022,7 @@ export class Orchestrator {
             // The same run a Fork child gets: its own conversation of the agent, serialised by
             // the bus, answered in its transcript.
             runChild: async (agentId, conversation, brief) => {
-              this.bus.sendFromUser(agentId, brief, { conversation, steerable: false });
+              this.bus.sendFromUser(agentId, brief, { conversation, steerable: false, origin: "host:orchestrate" });
               await this.bus.runExclusive(agentId, { conversation });
               return (this.registry.readTranscript(agentId, conversation) as { role?: string; kind?: string; text?: string }[])
                 .filter(entry => entry.role === "assistant" && entry.kind === undefined && typeof entry.text === "string")
@@ -2351,7 +2351,7 @@ export class Orchestrator {
       conversation?: string;
       steerable?: boolean;
       lane?: Lane;
-      synthetic?: boolean;
+      synthetic?: boolean; origin?: string; // the host part that wrote it (INV-1571); see InboundMessage.origin
       /** False when a room message named nobody (INV-775); see `InboundMessage.addressed`. */
       addressed?: boolean;
       /** The message's id from the door it came through (INV-613); see `AgentBus.sendFromUser`. */
@@ -2367,7 +2367,7 @@ export class Orchestrator {
     this.bus.sendFromUser(agent.id, text, {
       conversation,
       ...(caller?.userId !== undefined ? { principalId: caller.userId } : {}),
-      ...(options.synthetic === true ? { synthetic: true } : {}),
+      ...(options.synthetic === true ? { synthetic: true } : {}), ...(options.origin !== undefined ? { origin: options.origin } : {}),
       ...(options.steerable === false ? { steerable: false } : {}),
       ...(options.lane !== undefined ? { lane: options.lane } : {}),
       ...(options.messageId !== undefined ? { messageId: options.messageId } : {}),
@@ -2517,7 +2517,7 @@ export class Orchestrator {
       return undefined;
     }
     console.error(`[commitments] ${slug}: ${checks.filter(c => c.missing.length > 0).length} of ${checks.length} commitment(s) not held`);
-    await this.prompt(agent, gaps.cue, undefined, { steerable: false, lane: "background", synthetic: true, conversation });
+    await this.prompt(agent, gaps.cue, undefined, { steerable: false, lane: "background", synthetic: true, origin: "host:commitments", conversation });
     await this.settle();
     // What the cue actually produced, checked rather than believed (INV-534): the agent
     // saying "created" is a sentence, and the ledger is about what exists. Whatever is

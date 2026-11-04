@@ -86,7 +86,7 @@ import {
   SUMMARY_WORD_CAP,
   summaryEntry,
   clampSummaryToBudget,
-  type HistoryEntry,
+  type HistoryEntry, isHostAuthored,
   replacedRange,
   type SummaryEntry,
 } from "./compaction.ts";
@@ -1993,7 +1993,7 @@ ${outcome.text}`;
     ...(personOpened ? { fromPerson: true as const } : {}),
     ...(chainHops > 0 ? { hops: chainHops } : {}),
     // A continuation wake is the host's text; compaction must never pin it as the ask (INV-766).
-    ...(goal !== undefined ? { host: true as const } : {}),
+    ...(goal !== undefined || (inbound.length > 0 && inbound.every(message => message.origin !== undefined)) ? { host: true as const } : {}), // and a turn only the host's prompts opened (INV-1571)
     turnId,
   } satisfies TranscriptEntry, conversation);
 
@@ -3718,12 +3718,12 @@ export function reviewInputFor(options: {
   const harnessSpeaking = (text: string): boolean => text.startsWith(AGENT_WAKE_CUE) || text.startsWith(TEMPLATE_CUE);
   for (const entry of options.transcript) {
     if (entry.role !== "user" || "kind" in entry || typeof entry.text !== "string") continue;
-    (harnessSpeaking(entry.text) ? untrusted : trusted).push(entry.text);
+    (harnessSpeaking(entry.text) || isHostAuthored(entry as HistoryEntry) ? untrusted : trusted).push(entry.text); // the host's own prompts are not the person's words (INV-1571)
   }
   // The turn's own messages are usually already the transcript's last entries; only what is not
   // there yet is added, so nothing is shown to the classifier twice.
   for (const message of options.inbound) {
-    const side = message.fromId === "user" && !harnessSpeaking(message.text) ? trusted : untrusted;
+    const side = message.fromId === "user" && message.origin === undefined && !harnessSpeaking(message.text) ? trusted : untrusted;
     if (!trusted.includes(message.text) && !untrusted.includes(message.text)) side.push(message.text);
   }
   for (const message of options.messages) {
