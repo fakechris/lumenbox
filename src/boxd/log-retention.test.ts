@@ -45,20 +45,21 @@ test("a log under its ceiling is untouched", async () => {
 });
 
 test("ended jobs' files age out and go oldest first past the total; running ones and other files stay", async () => {
-  const { dir, jobs, cleanup } = service({ keepMs: 7 * 24 * 3_600_000, keepBytes: 2_500 });
+  const { dir, jobs, cleanup } = service({ keepMs: 7 * 24 * 3_600_000, keepBytes: 15_000 });
+  let running: { job_id: string; log_path: string } | undefined;
   try {
     const now = Date.now();
     const age = (name: string, days: number) => utimesSync(join(dir, name), (now - days * 86_400_000) / 1000, (now - days * 86_400_000) / 1000);
     // Old and ended; recent and ended (two of them, oldest first past the total); an agent's own file in .jobs.
     for (const [id, days] of [["job-0000000a", 9], ["job-0000000b", 2], ["job-0000000c", 1]] as const) {
-      writeFileSync(join(dir, `${id}.log`), Buffer.alloc(1000));
+      writeFileSync(join(dir, `${id}.log`), Buffer.alloc(10_000));
       writeFileSync(join(dir, `${id}.exit`), JSON.stringify({ job_id: id, exit_code: 0 }));
       age(`${id}.log`, days);
       age(`${id}.exit`, days);
     }
     writeFileSync(join(dir, "sources.json"), Buffer.alloc(5000));
     age("sources.json", 30);
-    const running = jobs.start({ command: "echo ready; sleep 30", nice: 0, scrubbedEnv: process.env });
+    running = jobs.start({ command: "echo ready; sleep 30", nice: 0, scrubbedEnv: process.env });
     await jobs.wait({ job_id: running.job_id, until: "ready", timeout_ms: 5_000 });
     utimesSync(running.log_path, (now - 30 * 86_400_000) / 1000, (now - 30 * 86_400_000) / 1000);
 
@@ -72,9 +73,8 @@ test("ended jobs' files age out and go oldest first past the total; running ones
     const fresh = new JobService(join(dir, "not-yet"), jobLimitsFrom({}), logLimitsFrom({}));
     fresh.pruneLogs(now);
     assert.equal(existsSync(join(dir, "not-yet", ".retention.json")), true, "a fresh box, with no jobs directory yet, still leaves the record");
-    jobs.kill(running.job_id);
-    await jobs.wait({ job_id: running.job_id, timeout_ms: 5_000 });
   } finally {
+    if (running !== undefined) { jobs.kill(running.job_id); await jobs.wait({ job_id: running.job_id, timeout_ms: 5_000 }); }
     cleanup();
   }
 });
