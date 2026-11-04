@@ -15,7 +15,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { BOXD_PORT, UI_PORT } from "../protocol/index.ts";
-import { BoxClient } from "./client.ts"; import { ensureCpuLimit } from "./box-cpus.ts";
+import { BoxClient } from "./client.ts"; import { ensureCpuLimit } from "./box-cpus.ts"; import { redactSecretAssignments, secretsOutOfArgs } from "./secret-env.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -330,8 +330,9 @@ export async function docker(
   args: readonly string[],
   timeoutMs = 120_000
 ): Promise<string> {
+  const secretFree = secretsOutOfArgs(args); // INV-1560: secret values travel as environment, not argv
   try {
-    const { stdout } = await execFileAsync("docker", [...args], {
+    const { stdout } = await execFileAsync("docker", secretFree.args, { env: { ...process.env, ...secretFree.env },
       timeout: timeoutMs,
       maxBuffer: 16 * 1024 * 1024,
     });
@@ -344,7 +345,7 @@ export async function docker(
     const how =
       stderr ||
       `${failure.message.replace(/\n[\s\S]*$/, "")} (exit ${String(failure.code ?? "?")}${failure.signal ? `, signal ${failure.signal}` : ""}; docker resolved on PATH=${(process.env.PATH ?? "").split(":").slice(0, 3).join(":")}…)`;
-    throw new DockerError(`docker ${args[0]} failed: ${how}`, stderr);
+    throw new DockerError(redactSecretAssignments(`docker ${args[0]} failed: ${how}`), redactSecretAssignments(stderr));
   }
 }
 
