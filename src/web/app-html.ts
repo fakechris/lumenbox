@@ -360,7 +360,7 @@ export const APP_HTML = String.raw`<!doctype html>
   #progress { flex: none; margin: 12px 18px 0; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); padding: 10px 14px; font-size: 12px; }
   #progresshead { color: var(--text-soft); }
   #progresshead b { font-weight: 600; color: var(--text); }
-  #progresslist { color: var(--muted); margin-top: 2px; }
+  #progresslist { color: var(--muted); margin-top: 2px; max-height: 33vh; overflow-y: auto; } /* a long plan scrolls inside, the conversation stays in view (INV-1569) */
 
   /* ── the conversation ─────────────────────────────────────────────────────── */
   #chat { padding: 18px 18px 8px; display: flex; flex-direction: column; gap: 6px; }
@@ -4818,12 +4818,12 @@ function refreshProgress() {
         var arrow = det.querySelector("summary .dim:last-child"); if (arrow) arrow.textContent = det.open ? "▾" : "▸";
       };
       list.style.display = open ? "" : "none";
-      list.innerHTML = todos.map(function (t) {
-        var mark = t.status === "done" ? "&#10003;" : t.status === "doing" ? "&rarr;" :
-          t.status === "blocked" ? "&#9888;" : "&middot;";
-        var dim = t.status === "done" ? "opacity:0.5;text-decoration:line-through" : "";
-        return '<div style="' + dim + '">' + mark + " " + esc(t.text) + "</div>";
+      var foldKey = planKey + ":done", folds = (window.planFolds = window.planFolds || {}), fold = done > 3, hadFocus = !!(document.activeElement && document.activeElement.hasAttribute && document.activeElement.hasAttribute("data-plan-done")); try { fold = fold && (folds[foldKey] || localStorage.getItem(foldKey)) !== "show"; } catch (error) { fold = fold && folds[foldKey] !== "show"; } // more than three done fold to one line; what is open stays (INV-1569). Kept in memory too, for when storage is refused.
+      list.innerHTML = (done > 3 ? '<div>&#10003; ' + done + ' done &middot; <a href="#" data-plan-done>' + (fold ? "show" : "hide") + "</a></div>" : "") + todos.filter(function (t) { return !(fold && t.status === "done"); }).map(function (t) {
+        var mark = t.status === "done" ? "&#10003;" : t.status === "doing" ? "&rarr;" : t.status === "blocked" ? "&#9888;" : "&middot;";
+        return '<div style="' + (t.status === "done" ? "opacity:0.5;text-decoration:line-through" : "") + '">' + mark + " " + esc(t.text) + "</div>";
       }).join("");
+      var doneLink = list.querySelector("[data-plan-done]"); if (doneLink) { doneLink.onclick = function (event) { event.preventDefault(); folds[foldKey] = fold ? "show" : "hide"; try { localStorage.setItem(foldKey, folds[foldKey]); } catch (error) {} refreshProgress(); }; if (hadFocus) doneLink.focus(); } // the poll re-renders this: a keyboard user keeps their place
     })
     .catch(function () {});
 }
