@@ -1102,12 +1102,12 @@ export async function compactHistory(options: {
   const summaryKey = `${agent.id}/${conversation}`;
   const active = activeWindow(history as HistoryEntry[]);
   // Where each entry lives, as ReadHistory names it, so the person's carried words point
-  // back at the whole message (INV-1187). Entries in `active` are the same objects as in
-  // `history`, which is this context version's transcript in file order.
-  const positionOf = new Map<unknown, number>(history.map((entry, index) => [entry, index]));
+  // back at the whole message (INV-1187). Entries in `active` are the same objects as in `history`, this context
+  // version's transcript in file order. Built on first use: most calls return "none" below (INV-1566).
+  let positionOf: Map<unknown, number> | undefined;
   const epoch = registry.contextVersion(agent.id, conversation);
   const sourceOf = (entry: HistoryEntry): string | undefined => {
-    const index = positionOf.get(entry);
+    if (positionOf === undefined) positionOf = new Map<unknown, number>(history.map((entry, index) => [entry, index])); const index = positionOf.get(entry);
     // Always qualified, even in epoch 0: these anchors are carried forward, and after a /new
     // a bare `#i` would resolve against the newest epoch, not the one it was written in.
     return index === undefined ? undefined : anchorOf(index, epoch);

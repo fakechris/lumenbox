@@ -722,43 +722,48 @@ export function exchangesOf(
   conversation: string,
   external: (tool: string) => boolean = readsExternalContent
 ): { text: string; ref: string; at: string }[] {
-  const groups: { lines: string[]; first: string; last: string; external: boolean }[] = [];
+  // Grouped first and rendered after, only for the exchanges shown (INV-1566): rendering every entry
+  // of a 36k-entry record to keep the last 30 made ~200 MB of strings per flush.
+  const lineOf = (entry: HistoryEntry): string | undefined => {
+    if (!("kind" in entry)) return `${entry.role === "user" ? "They said" : "You replied"}: ${entry.text.trim()}`;
+    if (entry.kind !== "blocks") return undefined;
+    const said = entry.blocks
+      .filter((block): block is { type: "text"; text: string } => (block as { type?: string }).type === "text")
+      .map(block => block.text.trim())
+      .filter(text => text !== "")
+      .join("\n");
+    return said !== "" ? `You replied: ${said}` : undefined;
+  };
+  // Whether an entry contributes a line, without building it: a plain entry always does (its prefix is not
+  // blank); a blocks entry does when one of its text blocks is not blank.
+  const hasLine = (entry: HistoryEntry): boolean =>
+    !("kind" in entry) || (entry.kind === "blocks" && entry.blocks.some(block => (block as { type?: string }).type === "text" && (block as { text: string }).text.trim() !== ""));
+  const groups: { entries: HistoryEntry[]; first: string; last: string; external: boolean }[] = [];
   for (const entry of entries) {
     const at = (entry as { at?: string }).at ?? "";
     // An exchange that read outside content is dropped whole (INV-894); the tool call
     // itself is not a line, so it is noted on the exchange it belongs to.
     const readsOutside = touchesExternalContent([entry], external);
-    let line: string | undefined;
-    if (!("kind" in entry)) {
-      line = `${entry.role === "user" ? "They said" : "You replied"}: ${entry.text.trim()}`;
-    } else if (entry.kind === "blocks") {
-      const said = entry.blocks
-        .filter((block): block is { type: "text"; text: string } => (block as { type?: string }).type === "text")
-        .map(block => block.text.trim())
-        .filter(text => text !== "")
-        .join("\n");
-      if (said !== "") line = `You replied: ${said}`;
-    }
     if (readsOutside) {
       const current = groups[groups.length - 1];
       if (current !== undefined) current.external = true;
-      else groups.push({ lines: [], first: at, last: at, external: true });
+      else groups.push({ entries: [], first: at, last: at, external: true });
     }
-    if (line === undefined || line.trim() === "") continue;
+    if (!hasLine(entry)) continue;
     const opensExchange = !("kind" in entry) && entry.role === "user";
     const current = groups[groups.length - 1];
-    if (opensExchange || current === undefined) groups.push({ lines: [line], first: at, last: at, external: readsOutside });
+    if (opensExchange || current === undefined) groups.push({ entries: [entry], first: at, last: at, external: readsOutside });
     else {
-      current.lines.push(line);
+      current.entries.push(entry);
       if (at > current.last) current.last = at;
     }
   }
-  const kept = groups.filter(group => !group.external && group.lines.length > 0);
+  const kept = groups.filter(group => !group.external && group.entries.length > 0);
   const share = Math.max(400, Math.min(FLUSH_EXCHANGE_CHARS, Math.floor(FLUSH_CHAR_CAP / Math.max(1, kept.length))));
   // The cap is the total (INV-1565): the 400-character floor let 36k exchanges of a 30 MB record
   // become a 14 MB prompt. Past what fits, the most recent are the ones shown.
   return kept.slice(-Math.max(1, Math.floor(FLUSH_CHAR_CAP / share))).map(group => {
-    const joined = group.lines.join("\n\n");
+    const joined = group.entries.map(entry => lineOf(entry)!).join("\n\n");
     const text = joined.length > share ? `${joined.slice(0, share)}…` : joined;
     const when = group.first === "" ? new Date() : new Date(group.first);
     return { text, ref: memoryRef(conversation, Number.isNaN(when.getTime()) ? new Date() : when), at: group.last };

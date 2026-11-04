@@ -48,7 +48,7 @@ export class TranscriptCache {
 
   constructor(options: TranscriptCacheOptions = {}) {
     this.maxBytes = options.maxBytes ?? 256 * 1024 * 1024;
-    this.idleMs = options.idleMs ?? 2 * 60_000;
+    this.idleMs = options.idleMs ?? 10 * 60_000; // longer than an agent waits on a job: a woken agent re-parsed its whole record (INV-1566)
     this.now = options.now ?? Date.now;
   }
 
@@ -74,7 +74,7 @@ export class TranscriptCache {
           // Only whole lines: a write caught mid-line is left for the next read.
           const end = added.lastIndexOf(0x0a) + 1;
           if (end > 0) {
-            before.entries.push(...parseLines(added.subarray(0, end).toString("utf8")));
+            for (const entry of parseLines(added.subarray(0, end))) before.entries.push(entry);
             before.size += end;
             before.edge = readRange(fd, Math.max(0, before.size - EDGE), before.size);
             before.mtimeMs = end === added.length ? stat.mtimeMs : -1;
@@ -82,15 +82,15 @@ export class TranscriptCache {
           before.usedAt = this.now();
           this.counts.appended++;
           // What follows the last newline is returned, as the uncached read did, but not kept.
-          return end === added.length ? before.entries.slice() : [...before.entries, ...parseLines(added.subarray(end).toString("utf8"))];
+          return end === added.length ? before.entries.slice() : [...before.entries, ...parseLines(added.subarray(end))];
         }
       }
       const whole = readRange(fd, 0, stat.size);
       const end = whole.lastIndexOf(0x0a) + 1;
-      const entries = parseLines(whole.toString("utf8"));
+      const entries = parseLines(whole);
       // A last line without its newline is parsed but not kept as settled: the next read re-reads from scratch.
       // The edge is copied: a subarray would keep the whole file's buffer alive for as long as the entry is kept.
-      this.kept.set(path, { ino: stat.ino, size: end, mtimeMs: end === whole.length ? stat.mtimeMs : -1, edge: Buffer.from(whole.subarray(Math.max(0, end - EDGE), end)), entries: end === whole.length ? entries : parseLines(whole.subarray(0, end).toString("utf8")), usedAt: this.now() });
+      this.kept.set(path, { ino: stat.ino, size: end, mtimeMs: end === whole.length ? stat.mtimeMs : -1, edge: Buffer.from(whole.subarray(Math.max(0, end - EDGE), end)), entries: end === whole.length ? entries : parseLines(whole.subarray(0, end)), usedAt: this.now() });
       this.counts.full++;
       this.trim();
       return entries.slice();
@@ -135,9 +135,18 @@ function readRange(fd: number, from: number, to: number): Buffer {
   return buffer.subarray(0, read);
 }
 
-function parseLines(text: string): unknown[] {
+/**
+ * One entry per line, decoded line by line from the bytes: the whole file never becomes one string,
+ * nor an array of every line (INV-1566: five agents parsing 30 MB at once held both at the peak). A
+ * newline byte never occurs inside a UTF-8 sequence, so this splits exactly where `split("\n")` does.
+ */
+function parseLines(bytes: Buffer): unknown[] {
   const entries: unknown[] = [];
-  for (const line of text.split("\n")) {
+  for (let start = 0; start < bytes.length; ) {
+    const newline = bytes.indexOf(0x0a, start);
+    const end = newline === -1 ? bytes.length : newline;
+    const line = bytes.toString("utf8", start, end);
+    start = end + 1;
     if (line.trim() === "") continue;
     try {
       entries.push(deepFreeze(JSON.parse(line)));
