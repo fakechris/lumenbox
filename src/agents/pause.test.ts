@@ -9,6 +9,7 @@ import { AgentRegistry } from "./registry.ts";
 import { AgentBus, type InboundMessage } from "./bus.ts";
 import { clearPause, readPause, writePause } from "./pause.ts";
 import { AgentPauses, jobsNamedIn } from "../host/agent-pause.ts";
+import { stillRunningNote } from "../host/exec-format.ts";
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
@@ -114,6 +115,18 @@ test("pausing stops the turn in flight and only this agent's running background 
     assert.match(told[0] ?? "", /Chris resumed you.*Chris had paused you \(probing the host\)/);
     assert.deepEqual(receipts, ["agent:bob paused", "agent:bob resumed"]);
     assert.equal(await pauses.resume("bob", "Chris"), false, "resuming what is not paused does nothing");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a command that outlived its foreground time and went on as a job is one of the agent's jobs too (INV-1555)", () => {
+  const root = mkdtempSync(join(tmpdir(), "agentbox-pause-adopted-"));
+  try {
+    const transcript = join(root, "conversation.jsonl");
+    const note = stillRunningNote({ job_id: "job-d96823f1", pid: 127761, log_path: "/home/box/work/.jobs/job-d96823f1.log" } as never, 120_000);
+    writeFileSync(transcript, `${JSON.stringify({ text: note })}\n{"text":"Started as job-aaaaaaaaaaaaaaaa (pid 1)."}\n`);
+    assert.deepEqual(jobsNamedIn(transcript).sort(), ["job-aaaaaaaaaaaaaaaa", "job-d96823f1"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
