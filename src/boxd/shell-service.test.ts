@@ -265,6 +265,16 @@ test("yesterday's spool is reaped; today's is left alone", async () => {
     assert.equal(existsSync(join(dir, "old.log")), false);
     assert.equal(existsSync(join(dir, "new.log")), true, "evidence for a live turn stays");
     assert.equal(reapSpool(join(dir, "not-a-directory")), 0, "a missing spool is not an error");
+
+    // Past the size ceiling the oldest go first, whatever their age — but never one a command may still be writing (INV-1558).
+    const now = Date.now();
+    for (const [name, hoursAgo] of [["a.out.log", 3], ["b.out.log", 2], ["c.out.log", 0.05]] as const) {
+      writeFileSync(join(dir, name), Buffer.alloc(1000));
+      utimesSync(join(dir, name), (now - hoursAgo * 3_600_000) / 1000, (now - hoursAgo * 3_600_000) / 1000);
+    }
+    rmSync(join(dir, "new.log"));
+    assert.equal(reapSpool(dir, undefined, 500, now), 2, "the two oldest go; the three-minute-old one stays though the total is still over");
+    assert.equal(existsSync(join(dir, "c.out.log")), true);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

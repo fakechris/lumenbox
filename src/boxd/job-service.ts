@@ -39,6 +39,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { killTree, readProcessTable, type ProcessRow } from "./process-tree.ts";
 import { capRefusal, JobLimitError, jobLimitsFrom, memoryNote, treeResident, type JobLimits } from "./job-limits.ts";
+import { CappedLog, logLimitsFrom, pruneLogs, type LogLimits, type PruneResult } from "./log-retention.ts";
 import type { JobStartedResult, JobStatus, JobWaitRequest, JobWaitResult } from "../protocol/index.ts";
 
 /** Where logs live: inside the work directory, so the file tools and backups can see them. */
@@ -70,7 +71,7 @@ export class JobService {
    * restart made every job vanish from `/jobs`, and the host could not tell "finished" from
    * "never existed".
    */
-  constructor(private readonly dir: string = JOBS_DIR, private readonly limits: JobLimits = jobLimitsFrom({})) {
+  constructor(private readonly dir: string = JOBS_DIR, private readonly limits: JobLimits = jobLimitsFrom({}), private readonly logLimits: LogLimits = logLimitsFrom({})) {
     this.recover();
   }
 
@@ -97,6 +98,24 @@ export class JobService {
       stopped.push(jobId);
     }
     return stopped;
+  }
+
+  /**
+   * Removes ended jobs' files past the retention limits, and forgets the jobs it
+   * removed (INV-1558). Running jobs are never touched.
+   */
+  pruneLogs(now?: number): PruneResult {
+    const running = new Set([...this.jobs].filter(([, job]) => job.status.running).map(([id]) => id));
+    const result = pruneLogs({ jobsDir: this.dir, running, limits: this.logLimits, ...(now !== undefined ? { now } : {}) });
+    for (const id of result.removedJobs) this.jobs.delete(id);
+    return result;
+  }
+
+  /** Prunes at start and every hour for as long as boxd runs; never keeps it alive. */
+  watchLogs(everyMs = 60 * 60_000): void {
+    const run = () => { try { this.pruneLogs(); } catch { /* next hour */ } };
+    run();
+    setInterval(run, everyMs).unref?.();
   }
 
   /** Runs the memory guard every few seconds for as long as boxd runs; never keeps it alive. */
@@ -270,8 +289,10 @@ export class JobService {
   private track(child: ChildProcess, jobId: string, command: string, logPath: string, log: WriteStream, onSettled: (() => void) | undefined, head = 0, actor?: string): JobStartedResult {
     // Both streams into one file, interleaved as they arrive: a build's errors belong
     // beside the step that produced them, and two files would lose that ordering.
-    child.stdout?.pipe(log, { end: false });
-    child.stderr?.pipe(log, { end: false });
+    // Through a ceiling: the head on disk, the end kept and written when the job ends (INV-1558).
+    const sink = new CappedLog(log, this.logLimits, head);
+    child.stdout?.pipe(sink, { end: false });
+    child.stderr?.pipe(sink, { end: false });
 
     const status: JobStatus = {
       job_id: jobId,
@@ -302,6 +323,7 @@ export class JobService {
         } catch {
           // The job's record does not depend on whoever asked to hear about its end.
         }
+        sink.flushTail();
         if (note !== undefined) log.write(note);
         log.end();
         log.on("finish", () => resolve());

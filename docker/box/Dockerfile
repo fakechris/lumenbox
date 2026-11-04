@@ -44,7 +44,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     # ripgrep starts one thread per core by default, so on a twelve-core engine every agent scan
     # ran seven (2026-11-04). Two by default; an explicit -j still wins (INV-1557).
-    && printf '%s\n' '--threads=2' > /etc/ripgreprc \
+    # And a search of the workspace does not walk the box's own job logs and spool — even with
+    # --hidden --no-ignore, which do not lift an --ignore-file — so a scan's output is not the next
+    # scan's input. Naming .jobs or .spool still searches them (INV-1558).
+    && printf '%s\n' '--threads=2' '--ignore-file=/etc/ripgrep-ignore' > /etc/ripgreprc \
+    && printf '%s\n' '.jobs/' '.spool/' > /etc/ripgrep-ignore \
     && mkdir -p /var/log/xwatchdog \
     && printf '%s\n' \
       '[snoopy]' \

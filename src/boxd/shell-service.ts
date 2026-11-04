@@ -211,20 +211,39 @@ export class BoundedOutput {
  * Kept because they are evidence for the turn that made them and dead weight after
  * it: a box that ran a hundred verbose builds should not carry every one of them
  * forever. A day is well past the life of any transcript entry that still points here.
+ *
+ * A day was not a ceiling: agents auditing their own history wrote 3.2 GB of spool inside one
+ * (2026-11-04). Past `maxTotalBytes` the oldest go first, whatever their age, except a file
+ * written in the last ten minutes — a command may still be writing it (INV-1558).
  */
-export function reapSpool(dir: string = SPOOL_DIR, olderThanMs = 24 * 3_600_000): number {
+export function reapSpool(dir: string = SPOOL_DIR, olderThanMs = 24 * 3_600_000, maxTotalBytes = Number.POSITIVE_INFINITY, now = Date.now()): number {
   let removed = 0;
   try {
-    const cutoff = Date.now() - olderThanMs;
+    const cutoff = now - olderThanMs;
+    const kept: { path: string; mtime: number; bytes: number }[] = [];
     for (const name of readdirSync(dir)) {
       const path = join(dir, name);
       try {
-        if (statSync(path).mtimeMs < cutoff) {
+        const stat = statSync(path);
+        if (stat.mtimeMs < cutoff) {
           unlinkSync(path);
           removed += 1;
+        } else if (stat.isFile()) {
+          kept.push({ path, mtime: stat.mtimeMs, bytes: stat.size });
         }
       } catch {
         // Raced with something else, or not ours to delete. Skip it.
+      }
+    }
+    let total = kept.reduce((sum, file) => sum + file.bytes, 0);
+    for (const file of kept.sort((a, b) => a.mtime - b.mtime)) {
+      if (total <= maxTotalBytes || now - file.mtime < 10 * 60_000) break;
+      try {
+        unlinkSync(file.path);
+        removed += 1;
+        total -= file.bytes;
+      } catch {
+        // As above.
       }
     }
   } catch {
