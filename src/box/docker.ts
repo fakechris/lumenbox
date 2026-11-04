@@ -15,7 +15,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { BOXD_PORT, UI_PORT } from "../protocol/index.ts";
-import { BoxClient } from "./client.ts"; import { ensureCpuLimit } from "./box-cpus.ts"; import { redactSecretAssignments, secretsOutOfArgs } from "./secret-env.ts";
+import { BoxClient } from "./client.ts"; import { ensureCpuLimit } from "./box-cpus.ts"; import { redactSecretAssignments, secretsOutOfArgs } from "./secret-env.ts"; import { runContainer } from "./run-container.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -853,7 +853,7 @@ export class BoxManager {
       );
       onOutput?.(`starting container ${this.config.containerName}`);
       await this.ensureNetwork();
-      await docker(this.runArguments(), 120_000);
+      await runContainer({ run: () => docker(this.runArguments(), 120_000), state: () => this.state(), start: () => docker(["start", this.config.containerName], 60_000), remove: () => docker(["rm", "--force", this.config.containerName], 60_000), say: line => onOutput?.(line) }); // a run that hangs or fails is settled by what it left (INV-1561)
     } else if (state === "exited" || state === "created") {
       onOutput?.(`restarting container ${this.config.containerName}`);
       await docker(["start", this.config.containerName], 60_000);
