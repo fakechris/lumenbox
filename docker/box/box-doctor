@@ -250,6 +250,22 @@ else
   warn job-logs "no pruning record in ${jobs_dir} yet; spool ${spool_mb:-0} MB"
 fi
 
+# ── how much a job may write, and how full the workspace may get (INV-1573) ────────
+# boxd stops a job past its output quota and refuses new jobs below the waterline: the larger of
+# 512 MiB and 5% of the volume kept free. Reported here so the margin is visible before it bites.
+quota_mb="${BOXD_JOB_OUTPUT_MAX_MB:-1024}"
+read -r total_kb free_kb < <(df -Pk /home/box/work 2>/dev/null | awk 'NR==2 {print $2, $4}')
+if [ -n "${total_kb:-}" ] && [ -n "${free_kb:-}" ]; then
+  floor_kb=$(( total_kb / 20 )); [ "${floor_kb}" -lt 524288 ] && floor_kb=524288
+  if [ "${free_kb}" -lt "${floor_kb}" ]; then
+    warn job-output "$(( free_kb / 1024 )) MB free on /home/box/work is below the $(( floor_kb / 1024 )) MB waterline: new jobs are refused; job output quota ${quota_mb} MB"
+  else
+    pass job-output "$(( free_kb / 1024 )) MB free on /home/box/work, waterline $(( floor_kb / 1024 )) MB; job output quota ${quota_mb} MB"
+  fi
+else
+  warn job-output "could not read free space on /home/box/work; job output quota ${quota_mb} MB"
+fi
+
 printf '[box-doctor] SUMMARY %s passed, %s failed, %s warned' "${PASSED}" "${FAILED}" "${WARNED}"
 if [ "${FAILED}" -gt 0 ]; then
   printf ' (%s)\n' "${FAILURES[*]}"

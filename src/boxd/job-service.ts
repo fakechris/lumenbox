@@ -40,6 +40,7 @@ import { randomUUID } from "node:crypto";
 import { killTree, readProcessTable, type ProcessRow } from "./process-tree.ts";
 import { capRefusal, JobLimitError, jobLimitsFrom, memoryNote, treeResident, type JobLimits } from "./job-limits.ts";
 import { CappedLog, logLimitsFrom, pruneLogs, type LogLimits, type PruneResult } from "./log-retention.ts";
+import { diskRefusal, outputLimitsFrom, outputRefusal, stopNote, treeWritten, type DiskSpace, type OutputLimits } from "./job-output-guard.ts";
 import type { JobStartedResult, JobStatus, JobWaitRequest, JobWaitResult } from "../protocol/index.ts";
 
 /** Where logs live: inside the work directory, so the file tools and backups can see them. */
@@ -71,15 +72,25 @@ export class JobService {
    * restart made every job vanish from `/jobs`, and the host could not tell "finished" from
    * "never existed".
    */
-  constructor(private readonly dir: string = JOBS_DIR, private readonly limits: JobLimits = jobLimitsFrom({}), private readonly logLimits: LogLimits = logLimitsFrom({})) {
+  constructor(private readonly dir: string = JOBS_DIR, private readonly limits: JobLimits = jobLimitsFrom({}), private readonly logLimits: LogLimits = logLimitsFrom({}), private readonly output: OutputLimits = outputLimitsFrom({}), private readonly space: (dir: string) => DiskSpace | undefined = () => undefined) { // boxd passes the real reader; elsewhere (tests, a host) there is no workspace volume to guard
     this.recover();
   }
 
   /** Refuses a new job for an agent already running as many as one may (INV-1557). */
   private admit(actor: string | undefined): void {
     const running = [...this.jobs.values()].filter(job => job.status.running && job.status.owner === actor).map(job => job.status);
-    const refusal = capRefusal(actor, running, this.limits);
+    const refusal = capRefusal(actor, running, this.limits) ?? diskRefusal(this.space(this.dir), this.output);
     if (refusal !== undefined) throw new JobLimitError(refusal);
+  }
+
+  /** Every `checkEvery` bytes a job writes: past its output quota, or with the disk below the waterline, it stops (INV-1573). */
+  private checkOutput(jobId: string, emitted: number): void {
+    const job = this.jobs.get(jobId);
+    if (job === undefined || !job.status.running || job.stopNote !== undefined || job.pid <= 1) return;
+    const reason = outputRefusal(emitted, this.output) ?? diskRefusal(this.space(this.dir), this.output);
+    if (reason === undefined) return;
+    job.stopNote = stopNote(reason);
+    killTree(job.pid);
   }
 
   /**
@@ -118,10 +129,30 @@ export class JobService {
     setInterval(run, everyMs).unref?.();
   }
 
-  /** Runs the memory guard every few seconds for as long as boxd runs; never keeps it alive. */
+  private readonly lastWritten = new Map<string, number>();
+
+  /**
+   * Below the waterline, stops each running job whose tree wrote anything since the last look —
+   * to a file as much as to its output, which is how a disk fills (INV-1573). Returns the ids it stopped.
+   */
+  guardDisk(table: readonly ProcessRow[] = readProcessTable(), written?: (pid: number) => number): string[] {
+    const reason = diskRefusal(this.space(this.dir), this.output);
+    const stopped: string[] = [];
+    for (const [jobId, job] of this.jobs) {
+      if (!job.status.running || job.pid <= 1) { this.lastWritten.delete(jobId); continue; }
+      const now = treeWritten(job.pid, table, written), before = this.lastWritten.get(jobId);
+      this.lastWritten.set(jobId, now);
+      if (reason === undefined || before === undefined || now <= before || job.stopNote !== undefined) continue;
+      job.stopNote = stopNote(reason);
+      killTree(job.pid, table);
+      stopped.push(jobId);
+    }
+    return stopped;
+  }
+
+  /** Runs the memory and disk guards every few seconds for as long as boxd runs; never keeps it alive. */
   watchMemory(everyMs = 3_000): void {
-    if (this.limits.memoryBytes === 0) return;
-    setInterval(() => { try { this.guardMemory(); } catch { /* a /proc read racing an exit is the next tick's */ } }, everyMs).unref?.();
+    setInterval(() => { try { if (this.limits.memoryBytes !== 0) this.guardMemory(); this.guardDisk(); } catch { /* a /proc read racing an exit is the next tick's */ } }, everyMs).unref?.();
   }
 
   private recover(): void {
@@ -290,7 +321,7 @@ export class JobService {
     // Both streams into one file, interleaved as they arrive: a build's errors belong
     // beside the step that produced them, and two files would lose that ordering.
     // Through a ceiling: the head on disk, the end kept and written when the job ends (INV-1558).
-    const sink = new CappedLog(log, this.logLimits, head);
+    const sink = new CappedLog(log, this.logLimits, head, { every: this.output.checkEvery, onEmitted: emitted => this.checkOutput(jobId, emitted) });
     child.stdout?.pipe(sink, { end: false });
     child.stderr?.pipe(sink, { end: false });
 
