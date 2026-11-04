@@ -11,6 +11,32 @@ import { clearPause, readPause, writePause } from "./pause.ts";
 import { AgentPauses, jobsNamedIn } from "../host/agent-pause.ts";
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
+
+test("resumed: the note comes with what people sent, teammates follow, and a chat thread's queue is woken too", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agentbox-pause-lanes-"));
+  try {
+    const registry = new AgentRegistry(root);
+    const bob = registry.create({ name: "Bob" }), ada = registry.create({ name: "Ada" });
+    const turns: { conversation: string; texts: string[] }[] = [];
+    const bus = new AgentBus(registry, (async (_agent: unknown, inbound: readonly InboundMessage[], _signal: AbortSignal, conversation: string) => { turns.push({ conversation, texts: inbound.map(m => m.text) }); }) as never);
+    const pauses = new AgentPauses({ dirFor: id => registry.dirFor(id), interrupt: () => [], box: () => undefined, receipt: () => {}, log: () => {},
+      tell: async (id, text) => { bus.sendFromUser(id, text, { lane: "user" }); }, wake: id => { void bus.wake(id); } });
+    await pauses.pause(bob.id, "Chris", "looking into it");
+    bus.send({ fromId: ada.id, toId: bob.id, text: "from Ada" });
+    bus.sendFromUser(bob.id, "from Chris");
+    bus.sendFromUser(bob.id, "in a chat thread", { conversation: "feishu:chat-1" });
+    await settle();
+    assert.equal(turns.length, 0, "nothing while paused");
+    await pauses.resume(bob.id, "Chris");
+    await settle();
+    const main = turns.filter(t => t.conversation !== "feishu:chat-1");
+    assert.match(main[0]!.texts.join("\n"), /from Chris[\s\S]*Chris resumed you|Chris resumed you[\s\S]*from Chris/, "the first turn has the note and the person's message");
+    assert.ok(main.slice(1).some(t => t.texts.includes("from Ada")), "the teammate's comes after");
+    assert.ok(turns.some(t => t.conversation === "feishu:chat-1" && t.texts.includes("in a chat thread")), "the chat thread is woken too");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 async function settle() { for (let i = 0; i < 50; i++) await tick(); }
 
 type Turn = { agent: string; texts: string[] };
@@ -71,7 +97,7 @@ test("pausing stops the turn in flight and only this agent's running background 
     const killed: string[] = [], receipts: string[] = [], told: string[] = [], interrupted: string[][] = [];
     const pauses = new AgentPauses({
       dirFor: () => root,
-      transcriptPath: () => transcript,
+      wake: () => {},
       interrupt: ids => { interrupted.push(ids); return ids; },
       box: () => ({ jobs: async () => ({ jobs: [{ job_id: "job-aaaaaaaaaaaaaaaa", running: true }, { job_id: "job-bbbbbbbbbbbbbbbb", running: false }, { job_id: "job-cccccccccccccccc", running: true }] }), killJob: async id => { killed.push(id); } }),
       tell: async (_id, text) => { told.push(text); },

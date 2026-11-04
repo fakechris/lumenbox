@@ -10,17 +10,19 @@
  * "Started as job-…" into its own record — so the tail of that record names them.
  */
 
-import { closeSync, existsSync, fstatSync, openSync, readSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, openSync, readdirSync, readSync } from "node:fs";
+import { join } from "node:path";
 import { clearPause, readPause, writePause, type Pause } from "../agents/pause.ts";
 
 export interface AgentPauseDeps {
   dirFor: (agentId: string) => string;
-  transcriptPath: (agentId: string) => string;
   /** Ends its turns in flight; returns whose it ended. */
   interrupt: (agentIds: string[], reason: string) => string[];
   box: () => { jobs(): Promise<{ jobs: { job_id: string; running: boolean }[] }>; killJob(jobId: string): Promise<unknown> } | undefined;
-  /** Gives the agent a host message, which wakes it with whatever else is queued. */
+  /** Gives the agent a host message in the lane drained first, so it arrives with what people sent meanwhile. */
   tell: (agentId: string, text: string) => Promise<void>;
+  /** Wakes every conversation with a queue: a chat thread's messages wait as long as the main one's. */
+  wake: (agentId: string) => void;
   receipt: (subject: string, decision: string, because: string) => void;
   log: (line: string) => void;
   now?: () => Date;
@@ -44,6 +46,15 @@ export function jobsNamedIn(path: string, tailBytes = TAIL_BYTES): string[] {
   }
 }
 
+/** Every record in an agent's directory — each conversation, each context epoch — where a job it started is named. */
+export function recordsIn(agentDir: string): string[] {
+  if (!existsSync(agentDir)) return [];
+  const found: string[] = [];
+  const walk = (dir: string) => { for (const entry of readdirSync(dir, { withFileTypes: true })) { const path = join(dir, entry.name); if (entry.isDirectory()) walk(path); else if (entry.name.endsWith(".jsonl")) found.push(path); } };
+  walk(agentDir);
+  return found;
+}
+
 export class AgentPauses {
   constructor(private readonly deps: AgentPauseDeps) {}
 
@@ -57,7 +68,7 @@ export class AgentPauses {
     const jobsStopped: string[] = [];
     const box = this.deps.box();
     if (box !== undefined) {
-      const named = new Set(jobsNamedIn(this.deps.transcriptPath(agentId)));
+      const named = new Set(recordsIn(this.deps.dirFor(agentId)).flatMap(path => jobsNamedIn(path)));
       const running = (await box.jobs().catch((error: unknown) => { this.deps.log(`pause: could not list jobs: ${error instanceof Error ? error.message : String(error)}`); return { jobs: [] }; })).jobs.filter(job => job.running && named.has(job.job_id));
       for (const job of running) {
         await box.killJob(job.job_id).then(() => jobsStopped.push(job.job_id), error => this.deps.log(`pause: could not stop ${job.job_id}: ${error instanceof Error ? error.message : String(error)}`));
@@ -74,7 +85,8 @@ export class AgentPauses {
     clearPause(this.deps.dirFor(agentId));
     this.deps.receipt(`agent:${agentId}`, "resumed", `${by}; paused since ${pause.at} by ${pause.by}`);
     const since = pause.at ? Math.max(1, Math.round(((this.deps.now?.() ?? new Date()).getTime() - Date.parse(pause.at)) / 60_000)) : undefined;
-    await this.deps.tell(agentId, `<host_notification source="pause">${by} resumed you${since !== undefined ? ` after about ${since} minute${since === 1 ? "" : "s"}` : ""}; ${pause.by} had paused you${pause.reason ? ` (${pause.reason})` : ""}. Your background jobs from before were stopped. Messages that arrived meanwhile are below; read them before doing anything else.</host_notification>`);
+    await this.deps.tell(agentId, `<host_notification source="pause">${by} resumed you${since !== undefined ? ` after about ${since} minute${since === 1 ? "" : "s"}` : ""}; ${pause.by} had paused you${pause.reason ? ` (${pause.reason})` : ""}. Your background jobs from before were stopped. Messages people sent you meanwhile come with this note; teammates' follow after. Read them before picking anything else back up.</host_notification>`);
+    this.deps.wake(agentId);
     return true;
   }
 }
