@@ -2833,7 +2833,7 @@ export async function dispatchTool(
           ...(input.cwd ? { cwd: String(input.cwd) } : {}),
           ...(context.displayIndex !== undefined ? { display: context.displayIndex } : {}),
           ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
-          jobId,
+          jobId, actor: `agent:${context.agent.id}`, // the per-agent job limit and pause-by-owner (INV-1557)
           ...callFor(context, jobId),
         });
         return {
@@ -3370,7 +3370,7 @@ export async function dispatchTool(
           ...(input.cwd ? { cwd: String(input.cwd) } : {}),
           ...(Object.keys(jobEnv).length > 0 ? { env: jobEnv } : {}),
           ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
-          jobId,
+          jobId, actor: `agent:${context.agent.id}`, // the per-agent job limit and pause-by-owner (INV-1557)
           ...callFor(context, jobId),
         });
       } catch (error) {

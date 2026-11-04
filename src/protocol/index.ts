@@ -413,7 +413,7 @@ export interface JobStartedResult {
 export interface JobStatus {
   job_id: string;
   command: string;
-  running: boolean;
+  running: boolean; owner?: string; pid?: number; // who started it (`agent:<id>`) and its process (INV-1557)
   /**
    * True for a job that was running when the daemon last stopped: its process is gone or
    * orphaned and its exit was never observed, so `exit_code` is absent and the log is all

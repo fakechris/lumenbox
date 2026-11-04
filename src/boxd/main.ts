@@ -93,7 +93,7 @@ import { CALL_ENV, CallRegistry, callEnvironment } from "../egress/call.ts";
 import { RecordService, RECORDINGS_DIR } from "./record-service.ts";
 import { AGENT_NICE, reapSpool, runShell, withoutBoxToken } from "./shell-service.ts";
 import { AcpOpenError, AcpService } from "./acp-service.ts";
-import { JobService } from "./job-service.ts";
+import { JobService } from "./job-service.ts"; import { JobLimitError, jobLimitsFrom } from "./job-limits.ts";
 import { BrowserService, StaleSnapshotError, IrreversibleActionError } from "./browser-service.ts";
 import { BrowserEndpointRegistry, EndpointConflictError } from "./browser-endpoints.ts";
 import { currentRoots, downloadFile, listDir, readFile, uploadFile, writeFile } from "./fs-service.ts";
@@ -424,7 +424,7 @@ function proxyVnc(req: IncomingMessage, res: ServerResponse, path: string): void
 type Handler = (body: any) => Promise<unknown>;
 
 /** Background jobs live for the life of the daemon, like the shell sessions do. */
-const jobs = new JobService();
+const jobs = new JobService(undefined, jobLimitsFrom(process.env)); jobs.watchMemory(); // per-job memory and per-agent limits (INV-1557)
 /** Delegated engines kept alive between prompts (INV-1234); same directory as the jobs. */
 const acp = new AcpService();
 
@@ -672,19 +672,19 @@ const routes: Record<string, Handler> = {
           env: { ...body.env, ...environmentForCall(body.call) },
           ...(body.display !== undefined ? { display: body.display } : {}),
           ...(body.job_id !== undefined ? { jobId: body.job_id } : {}),
-          nice: AGENT_NICE,
+          nice: AGENT_NICE, ...(body.actor !== undefined ? { actor: body.actor } : {}),
           scrubbedEnv: withoutBoxToken(process.env),
           onSettled: release,
         });
       } catch (error) {
         release();
-        throw error;
+        throw error instanceof JobLimitError ? new HttpError(429, error.message) : error;
       }
     }
     try {
       // A command past its foreground window is adopted as a job (INV-1461); the call stays vouched for until that job ends.
       let adopted = false;
-      const result = await runShell(body, environmentForCall(body.call), input => { adopted = true; return jobs.adopt({ ...input, onSettled: release }); });
+      const result = await runShell(body, environmentForCall(body.call), input => { const job = jobs.adopt({ ...input, onSettled: release, ...(body.actor !== undefined ? { actor: body.actor } : {}) }); adopted = true; return job; });
       if (adopted) return result;
       release();
       return result;

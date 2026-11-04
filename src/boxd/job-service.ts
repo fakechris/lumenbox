@@ -37,7 +37,8 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { killTree } from "./process-tree.ts";
+import { killTree, readProcessTable, type ProcessRow } from "./process-tree.ts";
+import { capRefusal, JobLimitError, jobLimitsFrom, memoryNote, treeResident, type JobLimits } from "./job-limits.ts";
 import type { JobStartedResult, JobStatus, JobWaitRequest, JobWaitResult } from "../protocol/index.ts";
 
 /** Where logs live: inside the work directory, so the file tools and backups can see them. */
@@ -51,6 +52,8 @@ interface Job {
   pid: number;
   /** Resolved when the process exits; how a wait attaches without polling the OS. */
   finished: Promise<void>;
+  /** Written as the log's last line when boxd itself stopped it, saying why (INV-1557). */
+  stopNote?: string;
 }
 
 /** The shape a caller-minted id must have. */
@@ -67,8 +70,39 @@ export class JobService {
    * restart made every job vanish from `/jobs`, and the host could not tell "finished" from
    * "never existed".
    */
-  constructor(private readonly dir: string = JOBS_DIR) {
+  constructor(private readonly dir: string = JOBS_DIR, private readonly limits: JobLimits = jobLimitsFrom({})) {
     this.recover();
+  }
+
+  /** Refuses a new job for an agent already running as many as one may (INV-1557). */
+  private admit(actor: string | undefined): void {
+    const running = [...this.jobs.values()].filter(job => job.status.running && job.status.owner === actor).map(job => job.status);
+    const refusal = capRefusal(actor, running, this.limits);
+    if (refusal !== undefined) throw new JobLimitError(refusal);
+  }
+
+  /**
+   * Stops each running job whose process tree holds more resident memory than one job may, with
+   * the reason as its log's last line (INV-1557). Returns the ids it stopped.
+   */
+  guardMemory(table: readonly ProcessRow[] = readProcessTable(), resident?: (pid: number) => number): string[] {
+    if (this.limits.memoryBytes === 0 || table.length === 0) return [];
+    const stopped: string[] = [];
+    for (const [jobId, job] of this.jobs) {
+      if (!job.status.running || job.pid <= 1) continue;
+      const held = treeResident(job.pid, table, resident);
+      if (held <= this.limits.memoryBytes) continue;
+      job.stopNote = memoryNote(held, this.limits);
+      killTree(job.pid, table);
+      stopped.push(jobId);
+    }
+    return stopped;
+  }
+
+  /** Runs the memory guard every few seconds for as long as boxd runs; never keeps it alive. */
+  watchMemory(everyMs = 3_000): void {
+    if (this.limits.memoryBytes === 0) return;
+    setInterval(() => { try { this.guardMemory(); } catch { /* a /proc read racing an exit is the next tick's */ } }, everyMs).unref?.();
   }
 
   private recover(): void {
@@ -165,6 +199,8 @@ export class JobService {
     jobId?: string;
     /** Called once when the job has ended, however it ended. Errors in it are the caller's. */
     onSettled?: () => void;
+    /** Who asked (`agent:<id>`), for the per-agent limit and so the host can stop an agent's jobs by owner. */
+    actor?: string;
   }): JobStartedResult {
     mkdirSync(this.dir, { recursive: true });
     if (input.jobId !== undefined) {
@@ -174,6 +210,7 @@ export class JobService {
         return { job_id: input.jobId, pid: existing.pid, log_path: existing.status.log_path };
       }
     }
+    this.admit(input.actor);
     const jobId = input.jobId ?? `job-${randomUUID().slice(0, 8)}`;
     const logPath = join(this.dir, `${jobId}.log`);
     const log = createWriteStream(logPath, { flags: "a" });
@@ -210,7 +247,7 @@ export class JobService {
       }
     );
 
-    return this.track(child, jobId, input.command, logPath, log, input.onSettled);
+    return this.track(child, jobId, input.command, logPath, log, input.onSettled, 0, input.actor);
   }
 
   /**
@@ -220,16 +257,17 @@ export class JobService {
    * like any job's. The process is not touched — the caller's timer, not this, was what would
    * have killed it.
    */
-  adopt(input: { child: ChildProcess; command: string; head: Buffer; onSettled?: () => void }): JobStartedResult {
+  adopt(input: { child: ChildProcess; command: string; head: Buffer; onSettled?: () => void; actor?: string }): JobStartedResult {
+    this.admit(input.actor);
     mkdirSync(this.dir, { recursive: true });
     const jobId = `job-${randomUUID().slice(0, 8)}`;
     const logPath = join(this.dir, `${jobId}.log`);
     const log = createWriteStream(logPath, { flags: "a" });
     if (input.head.length > 0) log.write(input.head);
-    return this.track(input.child, jobId, input.command, logPath, log, input.onSettled, input.head.length);
+    return this.track(input.child, jobId, input.command, logPath, log, input.onSettled, input.head.length, input.actor);
   }
 
-  private track(child: ChildProcess, jobId: string, command: string, logPath: string, log: WriteStream, onSettled: (() => void) | undefined, head = 0): JobStartedResult {
+  private track(child: ChildProcess, jobId: string, command: string, logPath: string, log: WriteStream, onSettled: (() => void) | undefined, head = 0, actor?: string): JobStartedResult {
     // Both streams into one file, interleaved as they arrive: a build's errors belong
     // beside the step that produced them, and two files would lose that ordering.
     child.stdout?.pipe(log, { end: false });
@@ -242,6 +280,8 @@ export class JobService {
       started_at: new Date().toISOString(),
       log_path: logPath,
       log_bytes: head,
+      ...(actor !== undefined ? { owner: actor } : {}),
+      ...(child.pid !== undefined ? { pid: child.pid } : {}),
     };
 
     // Resolved when the log is *on disk*, not when the process exited.
@@ -269,7 +309,7 @@ export class JobService {
         const guard = setTimeout(() => resolve(), 2_000);
         guard.unref?.();
       };
-      child.on("close", code => settle(code ?? 1));
+      child.on("close", code => settle(code ?? 1, this.jobs.get(jobId)?.stopNote));
       child.on("error", error => settle(127, `failed to start: ${error.message}\n`));
     });
 

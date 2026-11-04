@@ -19,7 +19,7 @@ export interface AgentPauseDeps {
   dirFor: (agentId: string) => string;
   /** Ends its turns in flight; returns whose it ended. */
   interrupt: (agentIds: string[], reason: string) => string[];
-  box: () => { jobs(): Promise<{ jobs: { job_id: string; running: boolean }[] }>; killJob(jobId: string): Promise<unknown> } | undefined;
+  box: () => { jobs(): Promise<{ jobs: { job_id: string; running: boolean; owner?: string }[] }>; killJob(jobId: string): Promise<unknown> } | undefined;
   /** Gives the agent a host message in the lane drained first, so it arrives with what people sent meanwhile. */
   tell: (agentId: string, text: string) => Promise<void>;
   /** Wakes every conversation with a queue: a chat thread's messages wait as long as the main one's. */
@@ -70,7 +70,7 @@ export class AgentPauses {
     const box = this.deps.box();
     if (box !== undefined) {
       const named = new Set(recordsIn(this.deps.dirFor(agentId)).flatMap(path => jobsNamedIn(path)));
-      const running = (await box.jobs().catch((error: unknown) => { this.deps.log(`pause: could not list jobs: ${error instanceof Error ? error.message : String(error)}`); return { jobs: [] }; })).jobs.filter(job => job.running && named.has(job.job_id));
+      const running = (await box.jobs().catch((error: unknown) => { this.deps.log(`pause: could not list jobs: ${error instanceof Error ? error.message : String(error)}`); return { jobs: [] }; })).jobs.filter(job => job.running && (job.owner === `agent:${agentId}` || named.has(job.job_id)));
       for (const job of running) {
         await box.killJob(job.job_id).then(() => jobsStopped.push(job.job_id), error => this.deps.log(`pause: could not stop ${job.job_id}: ${error instanceof Error ? error.message : String(error)}`));
       }
