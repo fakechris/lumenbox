@@ -47,6 +47,7 @@ import {
 } from "../host/memory.ts";
 import { envNumber } from "../config.ts";
 import { redactDeep } from "../host/secret-redaction.ts";
+import { TranscriptCache } from "./transcript-cache.ts";
 
 export const AGENT_NAME_MAX_LENGTH = 72;
 export const AGENT_DESCRIPTION_MAX_LENGTH = 12_000;
@@ -1393,18 +1394,10 @@ export class AgentRegistry {
     return store.versions().map(epoch => ({ epoch, entries: this.readTranscriptFile(store.path("transcript", epoch)) }));
   }
 
+  /** Parsed once and then only what was appended (INV-1564): a turn read the whole file about five times. */
+  private readonly transcripts = new TranscriptCache();
   private readTranscriptFile(path: string): unknown[] {
-    if (!existsSync(path)) return [];
-    return readFileSync(path, "utf8")
-      .split("\n")
-      .filter(line => line.trim() !== "")
-      .flatMap(line => {
-        try {
-          return [JSON.parse(line)];
-        } catch {
-          return [];
-        }
-      });
+    return this.transcripts.read(path);
   }
 
   /**

@@ -162,6 +162,9 @@ if (SNAPSHOTS && existsSync(join(OUT, "start.heapsnapshot")) && existsSync(join(
   const grown = [...peak].map(([key, row]) => ({ key, count: row.count - (start.get(key)?.count ?? 0), bytes: row.bytes - (start.get(key)?.bytes ?? 0) })).sort((a, b) => b.bytes - a.bytes).slice(0, 15);
   report.push("## Grew between start and peak (self size, by constructor)", "", "| constructor | Δ count | Δ MB |", "|---|---:|---:|", ...grown.map(row => `| ${row.key.replace(/\|/g, "\\|").slice(0, 60)} | ${row.count} | ${mb(row.bytes)} |`), "");
 }
+// Since INV-1564 a read is a cache lookup; what costs is a parse. Absent before the cache existed.
+const parses = (registry as unknown as { transcripts?: { counts: { full: number; appended: number; hits: number } } }).transcripts?.counts;
+if (parses !== undefined) report.push("## Transcript parses (INV-1564 cache)", "", `full ${parses.full}, appended ${parses.appended}, hits ${parses.hits}`, "");
 report.push("## Whole-transcript reads by caller", "", "| caller | reads |", "|---|---:|", ...[...readers].sort((a, b) => b[1] - a[1]).slice(0, 15).map(([caller, n]) => `| ${caller.replace(/\|/g, "\\|")} | ${n} |`), "");
 writeFileSync(join(OUT, "bench.md"), report.join("\n"));
 console.error(`[bench] done: ${OUT}`);
