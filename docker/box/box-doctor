@@ -237,6 +237,19 @@ else
   pass work-location "nothing loose in ${HOME:-/home/box}"
 fi
 
+# ── how much of its own output the box keeps (INV-1558) ───────────────────────────
+# boxd prunes ended jobs' logs at start and hourly and leaves its last result here. No record
+# means boxd has not pruned since it started, which on a box older than a few minutes is a
+# daemon that is not keeping the limit.
+jobs_dir=/home/box/work/.jobs
+spool_mb=$(du -sm /home/box/work/.spool 2>/dev/null | cut -f1)
+if [ -f "${jobs_dir}/.retention.json" ]; then
+  record=$(python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print("%s: kept %d MB, removed %d file(s)" % (r["at"], r["keptBytes"]//1048576, r["removedFiles"]))' "${jobs_dir}/.retention.json" 2>/dev/null)
+  pass job-logs "last pruned ${record:-(unreadable record)}; spool ${spool_mb:-0} MB"
+else
+  warn job-logs "no pruning record in ${jobs_dir} yet; spool ${spool_mb:-0} MB"
+fi
+
 printf '[box-doctor] SUMMARY %s passed, %s failed, %s warned' "${PASSED}" "${FAILED}" "${WARNED}"
 if [ "${FAILED}" -gt 0 ]; then
   printf ' (%s)\n' "${FAILURES[*]}"
