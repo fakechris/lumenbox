@@ -180,7 +180,7 @@ import { randomUUID } from "node:crypto";
 import { isLive, isTaskStatus, type Task } from "../host/tasks.ts"; import { UnknownAgentError } from "../host/task-agents.ts";
 import { connectorSatisfied } from "../host/mcp-connectors.ts";
 import { adminRecipients } from "../host/upgrade.ts";
-import { BoxUpdateService, boxUpdateRoute } from "./box-update-routes.ts"; import { CLAIM_ACCOUNT_JS } from "./claim-account-ui.ts"; import { BoxKeeper } from "./box-keeper.ts"; import { AgentPauses } from "../host/agent-pause.ts"; import { ProbeKeeper, type ProbeKind } from "../host/boundary-probe.ts"; import { agentPauseRoute } from "./agent-pause-routes.ts"; import { AGENT_PAUSE_JS } from "./agent-pause-ui.ts"; import { diagnosticsRoute } from "./diagnostics-routes.ts"; import { DIAGNOSTICS_JS } from "./diagnostics-ui.ts";
+import { BoxUpdateService, boxUpdateRoute } from "./box-update-routes.ts"; import { CLAIM_ACCOUNT_JS } from "./claim-account-ui.ts"; import { DIGEST_HOUR, heldSection, PushBudget } from "../host/push-budget.ts"; import { pushBudgetRoute } from "./push-budget-routes.ts"; import { PUSH_BUDGET_JS } from "./push-budget-ui.ts"; import { BoxKeeper } from "./box-keeper.ts"; import { AgentPauses } from "../host/agent-pause.ts"; import { ProbeKeeper, type ProbeKind } from "../host/boundary-probe.ts"; import { agentPauseRoute } from "./agent-pause-routes.ts"; import { AGENT_PAUSE_JS } from "./agent-pause-ui.ts"; import { diagnosticsRoute } from "./diagnostics-routes.ts"; import { DIAGNOSTICS_JS } from "./diagnostics-ui.ts";
 import { PRESET_MODELS, providerConfigured, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { BootstrapAdmins } from "../host/bootstrap.ts";
 import { Principals, principalsPath, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
@@ -526,6 +526,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // What the host has already said to each room today, so four rails do not each start their own conversation (INV-535). Kept across a restart: a budget that resets when
   // the process does is not a budget.
   const followUps = new FollowUpBudget(join(agentboxHome(), "follow-ups.jsonl"));
+  const pushBudget = new PushBudget(join(agentboxHome(), "push-budget.jsonl")); // what an agent may push unprompted per day (INV-1576)
 
   /**
    * One JSON-RPC call to Involute's MCP endpoint, as one agent (INV-553).
@@ -692,7 +693,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // knows a principal's name, and an operator should not have to paste a uuid.
     principalName: principalId => principals.list().find(person => person.id === principalId)?.name,
     principalIdentities: principalId => principals.list().find(person => person.id === principalId)?.identities,
-    deliverToChat: async (chatKey, text, fromAgentId) => {
+    deliverToChat: async (chatKey, text, fromAgentId, exempt) => {
       // A routine reports into its own box's rooms (INV-541). A chat nobody has driven is
       // nobody's — a skill file may name a room the bot has never been messaged in, and
       // that is an ordinary setup, so it is allowed. A chat that *another box's* agents
@@ -718,6 +719,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // The receipt, not the swallowing door (INV-802): a vendor failure here must read as
       // undelivered, or the next identical result is silenced against a send nobody got.
       if (chats === undefined) return { delivered: false, why: "no channels are configured" };
+      // Past the agent's daily allowance the push waits for the chat's digest; what needs a person is never held (INV-1576).
+      if (pushBudget.admit({ ...(fromAgentId !== undefined ? { agentId: fromAgentId } : {}), chatKey, text, exempt: exempt === true }) === "hold") {
+        log(`push from ${fromAgentId} held for ${chatKey}'s digest: past its ${pushBudget.perDayOf(fromAgentId!)}-a-day allowance`);
+        return { delivered: true, why: "held for today's digest: past the agent's daily allowance" };
+      }
       return chats.tryPushToChat(chatKey, text, { kind: "notice", about: `report from ${fromAgentId ?? "a routine"}` });
     },
     onTurnEvent: event => {
@@ -2097,7 +2103,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     for (const [chatKey, hour] of Object.entries(configured)) {
       if (now.getHours() !== hour || digestsSent.get(chatKey) === today) continue;
       digestsSent.set(chatKey, today);
-      void channels.pushToChat(chatKey, digestFor(chatKey), { kind: "notice", about: "daily digest" });
+      const held = pushBudget.heldFor(chatKey); // held pushes ride in the briefing the chat already has (INV-1576)
+      void channels.tryPushToChat(chatKey, [digestFor(chatKey), heldSection(held, displayName)].filter(Boolean).join("\n\n"), { kind: "notice", about: "daily digest" }).then(result => { if (result.delivered) pushBudget.release(chatKey, held.length); });
+    }
+    // A chat without a briefing gets its held pushes once, early evening; a failed send keeps them held for the next tick.
+    for (const chatKey of pushBudget.heldChats()) {
+      if (chatKey in configured || now.getHours() !== DIGEST_HOUR || digestsSent.get(`held:${chatKey}`) === today) continue;
+      digestsSent.set(`held:${chatKey}`, today);
+      const held = pushBudget.heldFor(chatKey);
+      void channels.tryPushToChat(chatKey, heldSection(held, displayName), { kind: "notice", about: "held updates" }).then(result => { if (result.delivered) pushBudget.release(chatKey, held.length); else digestsSent.delete(`held:${chatKey}`); });
     }
   }, 10 * 60_000);
   digestTimer.unref?.();
@@ -3500,7 +3514,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
         // Settings → Supervision (INV-1528): its own script and routes, like the decision model's below.
-        if (route === "GET /app/supervision.js") { res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(UI_STYLE_JS + INLINE_ASK_JS + AGENT_PAUSE_JS + SUPERVISION_JS + SUPERVISION_WIZARD_JS + BOX_UPDATE_JS + DIAGNOSTICS_JS + CLAIM_ACCOUNT_JS); return; } // + Apply update (INV-1538), askInline (INV-1540)
+        if (route === "GET /app/supervision.js") { res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(UI_STYLE_JS + INLINE_ASK_JS + AGENT_PAUSE_JS + SUPERVISION_JS + SUPERVISION_WIZARD_JS + BOX_UPDATE_JS + DIAGNOSTICS_JS + CLAIM_ACCOUNT_JS + PUSH_BUDGET_JS); return; } // + Apply update (INV-1538), askInline (INV-1540)
         const supervised = await supervisionRoute(route, { home: agentboxHome(), configPath: configPath(), agents: () => registry.list().map(agent => agent.profile.name), readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: role => refusedRole(role), logFile: defaultSupervisionLog() });
         if (supervised !== undefined) { if (supervised.status !== 0) send(res, supervised.status, supervised.body); return; }
         // Settings → Model → Decision model (INV-1412): its own script, its own two routes.
@@ -5680,6 +5694,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // silent minutes-long button is indistinguishable from a broken one.
         const boxUpdated = await boxUpdateRoute(route, boxUpdate, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin") }); // Apply update / reset (INV-1538)
         if (boxUpdated !== undefined) { if (boxUpdated.status !== 0) send(res, boxUpdated.status, boxUpdated.body); return; }
+        const pushRoute = await pushBudgetRoute(route, pushBudget, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id) }); if (pushRoute !== undefined) { if (pushRoute.status !== 0) send(res, pushRoute.status, pushRoute.body); return; } // INV-1576
         const pauseRoute = await agentPauseRoute(route, agentPauses, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id), caller: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator") }); if (pauseRoute !== undefined) { if (pauseRoute.status !== 0) send(res, pauseRoute.status, pauseRoute.body); return; } // INV-1554
         const diagnostics = await diagnosticsRoute(route, { refusedAdmin: () => refusedRole("admin"), agents: () => registry.list().map(agent => ({ id: agent.id, name: agent.profile.name })), activeTurns: id => orchestrator.bus.activeTurnsOf(id), queued: id => orchestrator.bus.pendingCount(id), watchedJobs: id => orchestrator.jobWatch.countFor(id), eventSubscribers: () => clients.size, box: () => orchestrator.boxClient(), home: agentboxHome() }); if (diagnostics !== undefined) { if (diagnostics.status !== 0) send(res, diagnostics.status, diagnostics.body); return; } // INV-1559
         if (route === "POST /api/box/up") {
