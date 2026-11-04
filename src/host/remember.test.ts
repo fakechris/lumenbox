@@ -427,3 +427,15 @@ test("extraction: a judge that does not answer holds every candidate rather than
   assert.deepEqual(appended.map(r => [r.text, (r.held as { question: string }).question]), [["they use pnpm", "unjudged"]]);
   assert.ok(logs.some(line => /the memory judge did not answer .*holding 1 candidate/.test(line)));
 });
+
+test("a flush shows the extractor at most its total, the most recent exchanges, however long the record (INV-1565)", () => {
+  // 5000 exchanges: the 400-character floor per exchange used to make this 2 MB, and a 30 MB record 14 MB.
+  const entries = Array.from({ length: 5000 }, (_, i) => [
+    { role: "user" as const, text: `question ${i} ${"x".repeat(600)}`, at: `2026-11-04T00:00:${String(i).padStart(5, "0")}Z` },
+    { role: "assistant" as const, text: `answer ${i}`, at: `2026-11-04T00:00:${String(i).padStart(5, "0")}Z` },
+  ]).flat();
+  const groups = exchangesOf(entries as never, "main");
+  const total = groups.reduce((sum, group) => sum + group.text.length, 0);
+  assert.ok(total <= 12_000 + groups.length, `within the total: ${total} characters in ${groups.length} exchanges`);
+  assert.match(groups.at(-1)!.text, /question 4999/, "the most recent exchange is the one kept");
+});

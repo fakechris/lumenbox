@@ -755,7 +755,9 @@ export function exchangesOf(
   }
   const kept = groups.filter(group => !group.external && group.lines.length > 0);
   const share = Math.max(400, Math.min(FLUSH_EXCHANGE_CHARS, Math.floor(FLUSH_CHAR_CAP / Math.max(1, kept.length))));
-  return kept.map(group => {
+  // The cap is the total (INV-1565): the 400-character floor let 36k exchanges of a 30 MB record
+  // become a 14 MB prompt. Past what fits, the most recent are the ones shown.
+  return kept.slice(-Math.max(1, Math.floor(FLUSH_CHAR_CAP / share))).map(group => {
     const joined = group.lines.join("\n\n");
     const text = joined.length > share ? `${joined.slice(0, share)}…` : joined;
     const when = group.first === "" ? new Date() : new Date(group.first);
