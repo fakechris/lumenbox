@@ -14,7 +14,7 @@
 import type { ResumeMarker } from "../host/resume.ts";
 import type { GoalMarker } from "../host/goal-mode.ts";
 import { randomUUID } from "node:crypto";
-import { envNumber } from "../config.ts";
+import { envNumber } from "../config.ts"; import { batchLimitsFrom, boundBatch } from "./turn-batch.ts";
 import type { Inbox } from "./inbox.ts";
 import { readPause } from "./pause.ts";
 import {
@@ -255,7 +255,7 @@ export class AgentBus {
   private readonly recentSends = new Map<string, { text: string; at: number }[]>();
   /** Chains the budget stopped, keyed sender→recipient; cleared when a person-opened turn sends. */
   private readonly paused = new Map<string, PausedChain>();
-  private readonly pending = new Map<string, InboundMessage[]>();
+  private readonly pending = new Map<string, InboundMessage[]>(); readonly batchLimits = batchLimitsFrom(); // how much one turn takes (INV-1572)
   /** Tail of each (agent, conversation) serialized turn chain, by workerKey. Never rejects. */
   private readonly chains = new Map<string, Promise<void>>();
   /** In-flight turns, by workerKey — one per agent-and-conversation at most. */
@@ -625,8 +625,8 @@ export class AgentBus {
     const otherPrincipal = inLane.findIndex(message => message.principalId !== inLane[0]?.principalId);
     const samePrincipal = otherPrincipal < 0 ? inLane : inLane.slice(0, otherPrincipal);
     const firstKickoff = samePrincipal.findIndex(message => message.steerable === false);
-    const taken =
-      firstKickoff === 0 ? samePrincipal.slice(0, 1) : firstKickoff > 0 ? samePrincipal.slice(0, firstKickoff) : samePrincipal;
+    const taken = boundBatch( // and at most so many, so much: the rest is the next turn's (INV-1572)
+      firstKickoff === 0 ? samePrincipal.slice(0, 1) : firstKickoff > 0 ? samePrincipal.slice(0, firstKickoff) : samePrincipal, this.batchLimits);
     const left = queue.filter(message => !taken.includes(message));
     if (left.length === 0) this.pending.delete(agentId);
     else this.pending.set(agentId, left);
