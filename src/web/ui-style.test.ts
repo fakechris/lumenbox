@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { UI_CSS } from "./ui-style.ts";
 
-const SECTIONS = ["supervision-ui.ts", "supervision-wizard.ts", "box-update-ui.ts", "jev-settings.ts", "inline-ask.ts"];
+const SECTIONS = ["supervision-ui.ts", "supervision-wizard.ts", "box-update-ui.ts", "jev-settings.ts", "inline-ask.ts", "agent-pause-ui.ts"];
 
 /** Inline style written as layout: a `style: "…"` attribute other than display:none, or cssText. */
 export function inlineLayout(source: string): string[] {

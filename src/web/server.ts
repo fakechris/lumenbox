@@ -180,7 +180,7 @@ import { randomUUID } from "node:crypto";
 import { isLive, isTaskStatus, type Task } from "../host/tasks.ts"; import { UnknownAgentError } from "../host/task-agents.ts";
 import { connectorSatisfied } from "../host/mcp-connectors.ts";
 import { adminRecipients } from "../host/upgrade.ts";
-import { BoxUpdateService, boxUpdateRoute } from "./box-update-routes.ts"; import { BoxKeeper } from "./box-keeper.ts";
+import { BoxUpdateService, boxUpdateRoute } from "./box-update-routes.ts"; import { BoxKeeper } from "./box-keeper.ts"; import { AgentPauses } from "../host/agent-pause.ts"; import { agentPauseRoute } from "./agent-pause-routes.ts"; import { AGENT_PAUSE_JS } from "./agent-pause-ui.ts";
 import { PRESET_MODELS, providerConfigured, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { BootstrapAdmins } from "../host/bootstrap.ts";
 import { Principals, principalsPath, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
@@ -2406,6 +2406,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   wedgeTimer.unref();
 
   const boxUpdate = new BoxUpdateService({ activeTurns: () => orchestrator.bus.activeAgentIds().filter(id => registry.tryGet(id) !== undefined && registry.boxOf(id).id === registry.box.id).length, reconnect: async () => { box = await orchestrator.connectBox(); }, broadcast: (line, done) => broadcast({ type: "box_setup", line, ...(done !== undefined ? { done: true, ok: done.ok } : {}) }), log });
+  const agentPauses = new AgentPauses({ dirFor: id => registry.dirFor(id), transcriptPath: id => registry.transcriptPathFor(id), interrupt: (ids, why) => orchestrator.bus.interruptAgents(ids, why), box: () => orchestrator.boxClient(), log, tell: async (id, text) => { void orchestrator.prompt(id, text, undefined, { lane: "background", synthetic: true, steerable: false }).catch(error => log(`resume: ${error instanceof Error ? error.message : String(error)}`)); }, receipt: (subject, decision, because) => orchestrator.receipts.write({ at: new Date().toISOString(), by: "host", subject, decision, because }) }); // INV-1554
   void boxUpdate.check();
   // The box's image against the one this app expects (INV-1538, docs/12 §6). Checked every ten minutes; admins are told once per
   // image, in their chats and on the attention page; the update itself is Settings → Boxes → Apply update, or "upgrade" in reply —
@@ -3497,7 +3498,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
         // Settings → Supervision (INV-1528): its own script and routes, like the decision model's below.
-        if (route === "GET /app/supervision.js") { res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(UI_STYLE_JS + INLINE_ASK_JS + SUPERVISION_JS + SUPERVISION_WIZARD_JS + BOX_UPDATE_JS); return; } // + Apply update (INV-1538), askInline (INV-1540)
+        if (route === "GET /app/supervision.js") { res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(UI_STYLE_JS + INLINE_ASK_JS + AGENT_PAUSE_JS + SUPERVISION_JS + SUPERVISION_WIZARD_JS + BOX_UPDATE_JS); return; } // + Apply update (INV-1538), askInline (INV-1540)
         const supervised = await supervisionRoute(route, { home: agentboxHome(), configPath: configPath(), agents: () => registry.list().map(agent => agent.profile.name), readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: role => refusedRole(role), logFile: defaultSupervisionLog() });
         if (supervised !== undefined) { if (supervised.status !== 0) send(res, supervised.status, supervised.body); return; }
         // Settings → Model → Decision model (INV-1412): its own script, its own two routes.
@@ -5677,6 +5678,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // silent minutes-long button is indistinguishable from a broken one.
         const boxUpdated = await boxUpdateRoute(route, boxUpdate, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin") }); // Apply update / reset (INV-1538)
         if (boxUpdated !== undefined) { if (boxUpdated.status !== 0) send(res, boxUpdated.status, boxUpdated.body); return; }
+        const pauseRoute = await agentPauseRoute(route, agentPauses, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id), caller: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator") }); if (pauseRoute !== undefined) { if (pauseRoute.status !== 0) send(res, pauseRoute.status, pauseRoute.body); return; } // INV-1554
         if (route === "POST /api/box/up") {
           if (refused()) return;
           if (boxUpInFlight) {
