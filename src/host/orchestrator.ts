@@ -235,7 +235,7 @@ export interface OrchestratorOptions {
    * on the session (`delivery.py:72-75`), and we had nothing.
    */
   /** Sends a routine's result into a chat and says whether anybody got it (INV-802). */
-  deliverToChat?: (chatKey: string, text: string, fromAgentId?: string) => Promise<DeliveryOutcome>;
+  deliverToChat?: (chatKey: string, text: string, fromAgentId?: string, exempt?: boolean) => Promise<DeliveryOutcome>; // exempt: needs a person, never held by the push budget (INV-1576)
   /** Questions waiting on a person in a conversation (INV-770): a goal does not continue over one. */
   pendingQuestions?: (agentId: string, conversation: string) => number;
   /**
@@ -1111,7 +1111,7 @@ export class Orchestrator {
       notify: async (task, text) => {
         const chatKey = task.pursuit?.chatKey;
         if (chatKey === undefined) { console.error(`[goal] ${task.id}: no chat to tell; the board has the note`); return; }
-        await this.options.deliverToChat?.(chatKey, text, task.assigneeId);
+        await this.options.deliverToChat?.(chatKey, text, task.assigneeId, true);
       },
       revalidate: task => this.options.mandateWorld === undefined || this.tasks!.revalidate(task.id, task.requester, this.options.mandateWorld()).status === "ok",
       judgeExperiment: (prompt, agentId) => this.askCheaply(this.registry.get(agentId), prompt), // the ledger's one question per continuation (INV-1475)
@@ -1134,7 +1134,7 @@ export class Orchestrator {
           console.error(`[goal] ${task.id}: no chat to tell; the board has the verdict`);
           return;
         }
-        await this.options.deliverToChat?.(chatKey, text, task.assigneeId);
+        await this.options.deliverToChat?.(chatKey, text, task.assigneeId, true);
       },
       log: line => console.error(`[goal] ${line}`),
     });
