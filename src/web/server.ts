@@ -2173,7 +2173,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         conversation: question.conversation,
       });
       void orchestrator
-        .prompt(question.agentId, expiry.cue, undefined, { conversation: question.conversation, steerable: false, lane: "background", synthetic: true })
+        .prompt(question.agentId, expiry.cue, undefined, { conversation: question.conversation, steerable: false, lane: "background", synthetic: true, origin: "host:questions" })
         .catch(error => log(`question: could not wake ${question.agentName} after expiry (${error instanceof Error ? error.message : String(error)})`));
     }
   }, 60_000);
@@ -2457,7 +2457,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const keeper = new BoxKeeper({ client: () => orchestrator.boxClient(), connect: () => orchestrator.connectBox(), log, recreating: () => boxUpdate.view().running === true,
     ...(ownDocker ? { container: { name: defaultBoxConfig().containerName, status: () => ownManager().status(), start: async () => { await ownManager().up({ onOutput: () => {} }); } } } : {}),
     heldDown: () => boxHeldDown(defaultBoxConfig().containerName), agentsOnBox: () => registry.list().filter(agent => registry.boxOf(agent.id).id === registry.box.id).map(agent => agent.id),
-    interrupt: (ids, reason) => orchestrator.bus.interruptAgents(ids, reason), wake: (id, text) => { void orchestrator.prompt(id, text, undefined, { lane: "background", synthetic: true, steerable: false }).catch(() => {}); },
+    interrupt: (ids, reason) => orchestrator.bus.interruptAgents(ids, reason), wake: (id, text) => { void orchestrator.prompt(id, text, undefined, { lane: "background", synthetic: true, origin: "host:pause", steerable: false }).catch(() => {}); },
     notify: text => { broadcast({ type: "error", boxId: registry.box.id, message: text }); for (const { adapter, identity } of adminRecipients(principals.list())) void channels.push(adapter, identity, text); } });
   const boxWatch = setInterval(() => {
     // The attached boxes, on their own: one that stops answering (a tunnel that died, a VM

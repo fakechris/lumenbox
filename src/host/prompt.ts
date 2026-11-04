@@ -1433,7 +1433,7 @@ export function buildTurnPrompt(inbound: readonly InboundMessage[]): string {
 
   const parts: string[] = [];
   if (fromUser.length > 0) {
-    parts.push(fromUser.map(message => message.text).join("\n\n"));
+    parts.push(fromUser.map(message => (message.origin !== undefined && !/^\[[^\]\n]{1,80}\]/.test(message.text) ? `[from the host (${message.origin}), not from a person] ${message.text}` : message.text)).join("\n\n")); // the model can tell who is asking (INV-1571); a text opening with its own [marker] already says
   }
   if (fromPeers.length > 0) {
     parts.push(buildWakePrompt(fromPeers));

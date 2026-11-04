@@ -2958,7 +2958,7 @@ export async function dispatchTool(
         try {
           const seq = context.bus.sendFromUser(context.agent.id, brief, {
             conversation,
-            steerable: false,
+            steerable: false, origin: "host:fork", // the parent agent's brief, not the person's words (INV-1571)
           });
           if (ids[index] !== undefined) context.pendingWork?.admitted(ids[index]!, seq);
           await context.bus.runExclusive(context.agent.id, { conversation });

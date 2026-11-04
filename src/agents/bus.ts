@@ -137,7 +137,7 @@ export interface InboundMessage {
    * webhook's own brief was drawn in the chat as the person's words, and the turn was treated
    * as one the person was waiting on.
    */
-  synthetic?: boolean;
+  synthetic?: boolean; /** Which part of the host wrote it, e.g. "host:audit" (INV-1571): never a person's words, whatever opened the turn. */ origin?: string;
   /**
    * A person said this in a room without addressing this agent (INV-775): a group message
    * that names nobody, on a door that runs every message. The turn is a person's, but nobody
@@ -552,7 +552,7 @@ export class AgentBus {
       conversation?: string;
       steerable?: boolean;
       lane?: Lane;
-      synthetic?: boolean;
+      synthetic?: boolean; origin?: string; // the host part that wrote it (INV-1571); implies synthetic
       /** False when the message named nobody in a room; see `InboundMessage.addressed`. */
       addressed?: boolean;
       /**
@@ -577,7 +577,7 @@ export class AgentBus {
       ...(options.principalId !== undefined ? { principalId: options.principalId } : {}),
       fromId: "user",
       fromName: "user",
-      ...(options.synthetic === true ? { synthetic: true } : {}),
+      ...(options.synthetic === true || options.origin !== undefined ? { synthetic: true } : {}), ...(options.origin !== undefined ? { origin: options.origin } : {}),
       ...(options.addressed === false ? { addressed: false as const } : {}),
       text: clampMessage(text, AGENT_MESSAGE_MAX_LENGTH),
       priority: false,
