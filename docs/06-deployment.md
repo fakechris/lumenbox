@@ -108,6 +108,7 @@ box (the orchestrator inside the container) needs nothing: the face uses loopbac
 | `BOXD_JOB_LOG_MAX_MB` | 64 | One job log's ceiling: past it the head stays, the last 2 MB are written when the job ends, with how much was cut |
 | `BOXD_LOG_KEEP_DAYS` / `BOXD_LOG_KEEP_MB` | 7 / 1024 | Ended jobs' files kept; older ones go, and the oldest first while the total is over. Running jobs are never touched |
 | `BOXD_SPOOL_KEEP_MB` | 512 | The exec spool's ceiling on top of its one-day age; oldest first, never a file written in the last ten minutes |
+| `BOXD_JOB_OUTPUT_MAX_MB` | 1024 | Output one job may write; past it the job is stopped and its log says why (0 = off). Separately, below max(512 MiB, 5%) free on the work volume, new jobs are refused and jobs that are writing are stopped |
 | `BOXD_SUPERVISE_MS`, `BOXD_MAX_RESTARTS`, `BOXD_RESTART_WINDOW_MS`, `BOXD_BACKOFF_*`, `BOXD_GIVE_UP_EPISODES` | see design | Supervision tuning |
 
 **`config.json`** for what is decided once: currently `activityLimit`, and `turnBudget`

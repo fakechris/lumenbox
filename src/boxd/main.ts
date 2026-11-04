@@ -93,7 +93,7 @@ import { CALL_ENV, CallRegistry, callEnvironment } from "../egress/call.ts";
 import { RecordService, RECORDINGS_DIR } from "./record-service.ts";
 import { AGENT_NICE, reapSpool, runShell, withoutBoxToken } from "./shell-service.ts";
 import { AcpOpenError, AcpService } from "./acp-service.ts";
-import { JobService } from "./job-service.ts"; import { JobLimitError, jobLimitsFrom } from "./job-limits.ts"; import { logLimitsFrom } from "./log-retention.ts";
+import { JobService } from "./job-service.ts"; import { JobLimitError, jobLimitsFrom } from "./job-limits.ts"; import { logLimitsFrom } from "./log-retention.ts"; import { diskSpace, outputLimitsFrom } from "./job-output-guard.ts";
 import { BrowserService, StaleSnapshotError, IrreversibleActionError } from "./browser-service.ts";
 import { BrowserEndpointRegistry, EndpointConflictError } from "./browser-endpoints.ts";
 import { currentRoots, downloadFile, listDir, readFile, uploadFile, writeFile } from "./fs-service.ts";
@@ -424,7 +424,7 @@ function proxyVnc(req: IncomingMessage, res: ServerResponse, path: string): void
 type Handler = (body: any) => Promise<unknown>;
 
 /** Background jobs live for the life of the daemon, like the shell sessions do. */
-const jobs = new JobService(undefined, jobLimitsFrom(process.env), logLimitsFrom(process.env)); jobs.watchMemory(); jobs.watchLogs(); // per-job memory and per-agent limits (INV-1557)
+const jobs = new JobService(undefined, jobLimitsFrom(process.env), logLimitsFrom(process.env), outputLimitsFrom(process.env), diskSpace); jobs.watchMemory(); jobs.watchLogs(); // per-job memory and per-agent limits (INV-1557)
 /** Delegated engines kept alive between prompts (INV-1234); same directory as the jobs. */
 const acp = new AcpService();
 

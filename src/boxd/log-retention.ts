@@ -45,13 +45,27 @@ export class CappedLog extends Writable {
   private tail: Buffer[] = [];
   private tailLength = 0;
   private omitted = 0;
+  /** Everything the job has written, kept or not: what the output quota counts (INV-1573). */
+  private emitted: number;
+  private nextCheck: number;
 
-  constructor(private readonly out: WriteStream, private readonly limits: Pick<LogLimits, "capBytes" | "tailBytes">, alreadyWritten = 0) {
+  constructor(private readonly out: WriteStream, private readonly limits: Pick<LogLimits, "capBytes" | "tailBytes">, alreadyWritten = 0, private readonly watch?: { every: number; onEmitted: (emitted: number) => void }) {
     super();
     this.written = alreadyWritten;
+    this.emitted = alreadyWritten;
+    this.nextCheck = watch === undefined ? Number.POSITIVE_INFINITY : alreadyWritten + watch.every;
   }
 
-  override _write(chunk: Buffer, _encoding: BufferEncoding, done: (error?: Error | null) => void): void {
+  override _write(chunk: Buffer, encoding: BufferEncoding, done: (error?: Error | null) => void): void {
+    this.emitted += chunk.length;
+    if (this.emitted >= this.nextCheck && this.watch !== undefined) {
+      this.nextCheck = this.emitted + this.watch.every;
+      try { this.watch.onEmitted(this.emitted); } catch { /* a failed check is not a failed write */ }
+    }
+    this.keep(chunk, encoding, done);
+  }
+
+  private keep(chunk: Buffer, _encoding: BufferEncoding, done: (error?: Error | null) => void): void {
     const headRoom = this.limits.capBytes - this.limits.tailBytes - this.written;
     if (!this.capped && chunk.length <= headRoom) {
       this.written += chunk.length;
