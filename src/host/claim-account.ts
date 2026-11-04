@@ -38,7 +38,8 @@ export const CLAIM_ACCOUNT_SCHEMA = {
 export function claimAccountOf(input: Record<string, unknown>): ClaimAccount {
   const list = (value: unknown) =>
     (Array.isArray(value) ? value : typeof value === "string" ? [value] : [])
-      .map(entry => String(entry ?? "").trim().slice(0, MAX_CHARS))
+      // Only text counts: an object would become "[object Object]" and pass for a decision.
+      .map(entry => (typeof entry === "string" || typeof entry === "number" ? String(entry).trim().slice(0, MAX_CHARS) : ""))
       .filter(entry => entry !== "")
       .slice(0, MAX_ENTRIES);
   return { decisions: list(input.decisions), unchecked: list(input.unchecked) };

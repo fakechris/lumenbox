@@ -1,3 +1,4 @@
+import { claimAccountOf } from "./claim-account.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -77,6 +78,9 @@ test("a claim is refused for the wrong agent, over open todos, and rejected outr
     assert.match(bare.text, /give decisions and unchecked with claim_complete/);
     assert.match((await h.gate.claim(h.task.id, "nova", EVIDENCE, { decisions: ["none"], unchecked: [] })).text, /give unchecked with claim_complete/);
     assert.equal(h.pursuit().spent.rejections, 0, "an unaccounted claim is refused, not a rejection");
+    // What the tool hands the gate: entries that are not text are not a decision.
+    assert.deepEqual(claimAccountOf({ decisions: [{ text: "use RMB" }, " RMB ", ""], unchecked: "ledger" }), { decisions: ["RMB"], unchecked: ["ledger"] });
+    assert.deepEqual(claimAccountOf({ decisions: [{ text: "use RMB" }] }).decisions, [], "an object alone leaves decisions empty, so the gate refuses");
     h.setTodos([{ status: "doing", text: "write section 3" }]);
     const overTodos = await h.gate.claim(h.task.id, "nova", EVIDENCE, ACCOUNT);
     assert.equal(overTodos.accepted, false);
