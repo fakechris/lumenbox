@@ -16,6 +16,7 @@ import type { GoalMarker } from "../host/goal-mode.ts";
 import { randomUUID } from "node:crypto";
 import { envNumber } from "../config.ts";
 import type { Inbox } from "./inbox.ts";
+import { readPause } from "./pause.ts";
 import {
   AgentNotFoundError,
   clampMessage,
@@ -411,6 +412,12 @@ export class AgentBus {
     // recorded and queued. An acknowledgement that cannot be told apart from agreement is where a
     // team of agents starts holding conversations to build the ack layer it does not have — "you
     // sure?" / "sure" / "ok starting" — which costs a turn each and confirms nothing.
+    const paused = this.pauseOf(target.id);
+    if (paused !== undefined) {
+      // Said, so a teammate stops waiting on an answer that will not come until a person resumes them (INV-1554).
+      return `Recorded and queued for ${target.profile.name}, as message ${message.id}, but ${target.profile.name} is paused` +
+        ` (by ${paused.by}${paused.reason ? `: ${paused.reason}` : ""}). Nothing will read it until a person resumes them; do not wait on it.`;
+    }
     const promise =
       `Recorded and queued for ${target.profile.name}, as message ${message.id}. That is the whole ` +
       `of what this guarantees: it is written down and it will be delivered. It does not mean ` +
@@ -743,6 +750,11 @@ export class AgentBus {
     return this.active.has(workerKey(agentId, conversation));
   }
 
+  /** Whether a person paused this agent, and why (INV-1554). */
+  pauseOf(agentId: string): ReturnType<typeof readPause> {
+    return this.registry.has(agentId) ? readPause(this.registry.dirFor(agentId)) : undefined;
+  }
+
   /** How many turns are in flight across every agent (INV-1538). */
   activeCount(): number {
     return this.active.size;
@@ -801,6 +813,7 @@ export class AgentBus {
 
     const run = (async () => {
       await previous;
+      if (this.pauseOf(agentId) !== undefined) return; // paused: its messages stay queued until a person resumes it (INV-1554)
 
       const controller = new AbortController();
       this.active.set(key, {
@@ -885,7 +898,8 @@ export class AgentBus {
       loops.push(
         (async () => {
           try {
-            while (this.queuedCount(agentId, conversation) > 0) {
+            // A paused agent's queue waits for a person, not for this loop (INV-1554): spinning on it would never end.
+            while (this.queuedCount(agentId, conversation) > 0 && this.pauseOf(agentId) === undefined) {
               try {
                 await this.runExclusive(agentId, { userDriven: false, conversation });
               } catch (error) {
