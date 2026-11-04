@@ -4818,12 +4818,12 @@ function refreshProgress() {
         var arrow = det.querySelector("summary .dim:last-child"); if (arrow) arrow.textContent = det.open ? "▾" : "▸";
       };
       list.style.display = open ? "" : "none";
-      var foldKey = planKey + ":done", fold = done > 3; try { fold = fold && localStorage.getItem(foldKey) !== "show"; } catch (error) {} // more than three done fold to one line; what is open stays (INV-1569)
+      var foldKey = planKey + ":done", folds = (window.planFolds = window.planFolds || {}), fold = done > 3, hadFocus = !!(document.activeElement && document.activeElement.hasAttribute && document.activeElement.hasAttribute("data-plan-done")); try { fold = fold && (folds[foldKey] || localStorage.getItem(foldKey)) !== "show"; } catch (error) { fold = fold && folds[foldKey] !== "show"; } // more than three done fold to one line; what is open stays (INV-1569). Kept in memory too, for when storage is refused.
       list.innerHTML = (done > 3 ? '<div>&#10003; ' + done + ' done &middot; <a href="#" data-plan-done>' + (fold ? "show" : "hide") + "</a></div>" : "") + todos.filter(function (t) { return !(fold && t.status === "done"); }).map(function (t) {
         var mark = t.status === "done" ? "&#10003;" : t.status === "doing" ? "&rarr;" : t.status === "blocked" ? "&#9888;" : "&middot;";
         return '<div style="' + (t.status === "done" ? "opacity:0.5;text-decoration:line-through" : "") + '">' + mark + " " + esc(t.text) + "</div>";
       }).join("");
-      var doneLink = list.querySelector("[data-plan-done]"); if (doneLink) doneLink.onclick = function (event) { event.preventDefault(); try { localStorage.setItem(foldKey, fold ? "show" : "hide"); } catch (error) {} refreshProgress(); };
+      var doneLink = list.querySelector("[data-plan-done]"); if (doneLink) { doneLink.onclick = function (event) { event.preventDefault(); folds[foldKey] = fold ? "show" : "hide"; try { localStorage.setItem(foldKey, folds[foldKey]); } catch (error) {} refreshProgress(); }; if (hadFocus) doneLink.focus(); } // the poll re-renders this: a keyboard user keeps their place
     })
     .catch(function () {});
 }
