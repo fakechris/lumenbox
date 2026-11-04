@@ -765,6 +765,9 @@ export class AgentBus {
     return this.active.size;
   }
 
+  /** How many of one agent's conversations have a turn in flight (INV-1559 diagnostics). */
+  activeTurnsOf(agentId: string): number { let n = 0; for (const key of this.active.keys()) if (agentOfKey(key) === agentId) n++; return n; }
+
   /**
    * Stops every turn these agents have in flight, saying why — their box went away under them
    * (INV-1550). A stopped turn keeps what it completed; the keeper wakes the agent when the box is back.

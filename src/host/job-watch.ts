@@ -75,6 +75,11 @@ export class JobWatch {
     void this.follow(watched).catch(error => this.deps.log(`job watch ${job.jobId}: ${error instanceof Error ? error.message : String(error)}`)).finally(() => this.open.delete(job.jobId));
   }
 
+  /** How many of this agent's jobs are being watched, across its conversations (INV-1559 diagnostics). */
+  countFor(agentId: string): number {
+    return [...this.open.values()].filter(job => job.agentId === agentId).length;
+  }
+
   /** The jobs still running that this agent let go of in this conversation. */
   openJobs(agentId: string, conversation: string): WatchedJob[] {
     return [...this.open.values()].filter(job => job.agentId === agentId && job.conversation === conversation);
