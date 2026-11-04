@@ -21,6 +21,8 @@
  * which tool to use instead, which is the part that changes behaviour.
  */
 
+import { probeOf, probeRefusal, type Probe } from "./boundary-probe.ts";
+
 /**
  * Driving the screen directly, rather than through the desktop tool.
  *
@@ -67,7 +69,10 @@ export interface GuardVerdict {
  * gets retried with a different spelling — which is both a wasted turn and the behaviour
  * this exists to prevent.
  */
-export function guardShellCommand(command: string): GuardVerdict {
+export function guardShellCommand(command: string, report?: (probe: Probe) => void): GuardVerdict {
+  // A reach for this machine's credentials or past the box (INV-1553): refused, and said to a person.
+  const probe = probeOf(command);
+  if (probe !== undefined) { report?.(probe); return { refusal: probeRefusal(probe) }; }
   if (BROWSER_CONTROL.test(command)) {
     return {
       refusal:

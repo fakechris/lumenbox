@@ -2823,8 +2823,7 @@ export async function dispatchTool(
       // Before the box is even required: a shell that drives the browser or the screen
       // directly reaches the same outcome as the tools while passing none of the checks
       // attached to them, and that is true whether or not a box is up.
-      const guarded = guardShellCommand(command);
-      if (guarded.refusal !== undefined) return { text: guarded.refusal, isError: true };
+      const guarded = guardShellCommand(command, probe => context.bus.reportProbe(context.agent.id, probe)); if (guarded.refusal !== undefined) return { text: guarded.refusal, isError: true };
       const box = requireBox(context);
       if (input.desktop === true) await context.ensureDesktop?.();
       if (input.background === true) {
