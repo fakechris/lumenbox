@@ -710,7 +710,7 @@ test("a goal is verified by a turn that never saw the work: a premature claim is
         if ((all.match(/"name":"bash"/g) ?? []).length < 2) return { call: "bash", input: { command: "test -e /home/box/work/q3.md" } };
         const exitZero = results.some(text => /exit code:?\s*0\b/i.test(text)) && !results.some(text => /exit code:?\s*[1-9]/i.test(text));
         return exitZero
-          ? { say: "Status: complete\nIntegrity: clean\nContract audit: aligned\nItem c1: proven — test -e exited 0\nItem c2: proven — read the file\nNext action: none" }
+          ? { say: "Status: complete\nIntegrity: clean\nContract audit: aligned\nItem c1: proven — test -e exited 0\nItem c2: proven — read the file\nNext action: none\nDecisions: consistent — the report is markdown at that path" }
           : { say: "Status: incomplete\nIntegrity: clean\nContract audit: aligned\nItem c1: contradicted — test -e exited 1\nItem c2: unverified\nNext action: write /home/box/work/q3.md first" };
       }
       if (/Continue working toward goal t1/.test(all)) {
@@ -719,10 +719,10 @@ test("a goal is verified by a turn that never saw the work: a premature claim is
         if (/"action":"claim_complete"/.test(tail)) return { say: "申请了。" };
         // The first continuation claims before doing anything — the shape the gate exists to
         // catch; the next one writes the file first.
-        if (claims === 0) { claims += 1; return { call: "Goal", input: { action: "claim_complete", evidence: [{ id: "c1", evidence: "will be there" }, { id: "c2", evidence: "trust me" }] } }; }
+        if (claims === 0) { claims += 1; return { call: "Goal", input: { action: "claim_complete", evidence: [{ id: "c1", evidence: "will be there" }, { id: "c2", evidence: "trust me" }], decisions: ["markdown, not a slide deck"], unchecked: ["none"] } }; }
         if (!/"name":"write_file"/.test(tail)) return { call: "write_file", input: { path: "/home/box/work/q3.md", content: "# Q3\n…" } };
         claims += 1;
-        return { call: "Goal", input: { action: "claim_complete", evidence: [{ id: "c1", evidence: "/home/box/work/q3.md" }, { id: "c2", evidence: "wrote it" }] } };
+        return { call: "Goal", input: { action: "claim_complete", evidence: [{ id: "c1", evidence: "/home/box/work/q3.md" }, { id: "c2", evidence: "wrote it" }], decisions: ["markdown, not a slide deck"], unchecked: ["the figures were not checked against the finance export"] } };
       }
       if (/\[host\] 目标 t1 已由人创建/.test(all)) {
         if (!/"name":"Goal"/.test(all)) return { call: "Goal", input: { action: "checklist_add", items: [{ text: "报告文件存在", command: "test -e /home/box/work/q3.md", expect_exit: 0 }, { text: "报告读得通" }] } };
@@ -766,6 +766,9 @@ test("a goal is verified by a turn that never saw the work: a premature claim is
         assert.equal(tasks.get("t1")!.status, "review");
         assert.deepEqual(tasks.get("t1")!.pursuit!.checklist.map(item => item.verdict), ["proven", "proven"]);
         assert.ok(told.some(text => /目标 t1 验证通过/.test(text)), `the person is told to accept: ${JSON.stringify(told)}`);
+        // INV-1574: the verifier tested the executor's account, and the person reads it above the verdict.
+        assert.ok(verifierRequests.some(request => /decided: markdown, not a slide deck/.test(request)), "the verifier was given the decisions to test");
+        assert.ok(told.some(text => /它替你做的决定：\n- markdown, not a slide deck\n它的检查没有覆盖：\n- the figures were not checked against the finance export\n验证者对这些决定的核对：consistent/.test(text)), `the review shows the account: ${JSON.stringify(told)}`);
         assert.ok(told.some(text => /没有通过验证/.test(text)), "and was told of the rejection");
         assert.equal(claims >= 2, true);
       } finally { manager.stop(); }

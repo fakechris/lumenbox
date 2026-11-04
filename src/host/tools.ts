@@ -61,7 +61,7 @@ import { KEPT_MARKER, keepFetchedPage, keptPointer, pruneOccasionally } from "./
 import { ABSENT, type FileVersions, versionOf } from "./files.ts";
 import { executeForget, ForgetPlans, forgetOutcomeReport, forgetPlanReport, forgettable, inventory } from "./forget.ts";
 import type { GoalGate } from "./goal-gate.ts";
-import { checklistAdditions, describePursuit } from "./goal-mode.ts";
+import { checklistAdditions, describePursuit } from "./goal-mode.ts"; import { CLAIM_ACCOUNT_SCHEMA, claimAccountOf } from "./claim-account.ts";
 import { AROUND_ENTRY_CHARS, describeHistory, ENTRY_CHARS, readEpochHistory, readHistory } from "./history.ts";
 import type { HostRunner } from "./host-runner.ts";
 import { resolveHostSecrets } from "./host-secrets.ts";
@@ -1713,15 +1713,15 @@ export function buildTools(
         "objective is done; give a command (exit code) or an artifact path where one exists. " +
         "The checklist only grows; removing an item needs the person's agreement. An item with a " +
         "command is a proposal until the person confirms it (/goal confirm n). 'claim_complete' is " +
-        "how a goal ends from your side: give a pointer per checklist item (a path, a command's " +
-        "output, a URL) and a verifier that has not seen this conversation checks every item " +
+        "how a goal ends from your side: give a pointer per checklist item (a path, a command's output, a URL), the decisions you made and what your checks did not cover, " +
+        "and a verifier that has not seen this conversation checks every item " +
         "against the current state. Claim only when every item is actually true now — an open " +
         "todo or a missing artifact is refused outright, and three rejections hand the goal to " +
         "the person. Stopping is not finishing.",
       input_schema: {
         type: "object",
         properties: {
-          action: { type: "string", enum: ["status", "checklist_add", "claim_complete"] },
+          action: { type: "string", enum: ["status", "checklist_add", "claim_complete"] }, ...CLAIM_ACCOUNT_SCHEMA, // what the work decided and left unchecked (INV-1574)
           evidence: {
             type: "array",
             description: "For claim_complete: per checklist item, where the proof is.",
@@ -5026,7 +5026,7 @@ export async function dispatchTool(
               return { id: String(record.id ?? ""), evidence: String(record.evidence ?? "") };
             })
           : [];
-        const result = await context.goalGate.claim(task.id, context.agent.id, evidence);
+        const result = await context.goalGate.claim(task.id, context.agent.id, evidence, claimAccountOf(input));
         return { text: result.text, ...(result.accepted ? {} : { isError: true }) };
       }
       return { text: `Unknown Goal action "${action}"; use status, checklist_add or claim_complete.`, isError: true };
