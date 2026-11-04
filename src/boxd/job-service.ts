@@ -37,6 +37,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { killTree } from "./process-tree.ts";
 import type { JobStartedResult, JobStatus, JobWaitRequest, JobWaitResult } from "../protocol/index.ts";
 
 /** Where logs live: inside the work directory, so the file tools and backups can see them. */
@@ -290,15 +291,8 @@ export class JobService {
     const job = this.jobs.get(jobId);
     if (job === undefined) return undefined;
     if (job.status.running) {
-      try {
-        process.kill(-job.pid, "SIGKILL");
-      } catch {
-        try {
-          process.kill(job.pid, "SIGKILL");
-        } catch {
-          // Already gone. The close handler has, or will, record the ending.
-        }
-      }
+      // Its group, and what `timeout`/`setsid` moved out of it (INV-1556). Gone already is fine: the close handler records the ending.
+      killTree(job.pid);
     }
     return this.withSize(job.status);
   }
