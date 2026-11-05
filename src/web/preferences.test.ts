@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer } from "node:net";
 import { OPERATOR_KEY, PreferenceStore } from "./preferences.ts";
 
 test("a preference follows the person across browsers, and the operator has a seat of their own", () => {
@@ -36,7 +37,10 @@ test("the routes: /api/me carries the preferences, a post changes them, and a re
   const home = mkdtempSync(join(tmpdir(), "agentbox-prefs-http-"));
   const previous = process.env.AGENTBOX_HOME;
   process.env.AGENTBOX_HOME = home;
-  const port = 7937;
+  // A port the OS hands out: a fixed one collided with another file under the parallel suite.
+  const port = await new Promise<number>((resolve, reject) => {
+    const probe = createServer().listen(0, "127.0.0.1", () => { const address = probe.address(); probe.close(() => (typeof address === "object" && address !== null ? resolve(address.port) : reject(new Error("no port")))); });
+  });
   let stop: (() => void) | undefined;
   try {
     const { mkdirSync } = await import("node:fs");
