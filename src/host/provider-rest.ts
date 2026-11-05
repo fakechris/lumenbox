@@ -20,7 +20,62 @@
 
 import { createHash } from "node:crypto";
 import type Anthropic from "@anthropic-ai/sdk";
+import { quotaHoldError, quotaStatusLine } from "./quota-window.ts";
 import { classifyFailure } from "./transient.ts";
+import { vendorCodeOf } from "./disposition.ts";
+
+export { quotaStatusLine };
+
+/** A refused call, tokens all zero, so the next postmortem is not ledger-blind (INV-1612). */
+export interface RejectionEntry {
+  agentId: string;
+  agentName: string;
+  provider: string;
+  model: string;
+  round: number;
+  reason: string;
+  rejection: "quota_hold" | "retry_after";
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
+
+let onRejection: ((entry: RejectionEntry) => void) | undefined;
+
+export function setRejectionNote(listener: (entry: RejectionEntry) => void): void {
+  onRejection = listener;
+}
+
+export function rejectionEntry(note: { disposition: "quota_hold" | "retry_after"; code?: string; label: string }): RejectionEntry {
+  return {
+    agentId: "host",
+    agentName: note.label,
+    provider: note.label,
+    model: "rejected",
+    round: 0,
+    reason: `rejected ${note.disposition}${note.code !== undefined && note.code !== "" ? ` ${note.code}` : ""}`,
+    rejection: note.disposition,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+  };
+}
+
+function noteRejection(label: string, error: unknown): void {
+  // A hold we raised before the call is already decided. Noting every waiting agent would
+  // write one row per attempt, which is the amplification this exists to stop.
+  if (error !== null && typeof error === "object" && (error as { providerResting?: unknown }).providerResting === true) return;
+  const kind = classifyFailure(error);
+  const disposition = kind === "usage_limit" ? "quota_hold" as const : kind === "capacity" ? "retry_after" as const : undefined;
+  if (disposition === undefined || onRejection === undefined) return;
+  try {
+    onRejection(rejectionEntry({ disposition, code: vendorCodeOf(error), label }));
+  } catch {
+    // The row is how the next postmortem sees the refusal. Failing to write it is not the turn's problem.
+  }
+}
 
 /** Rest lengths after the first, second and later failures, when the provider gives no reset time. */
 const STEPS_MS = [15 * 60_000, 60 * 60_000, 4 * 60 * 60_000];
@@ -168,7 +223,13 @@ export const providerRests = new ProviderRests();
  * fails for usage, and ending the rest when it answers. A refused stream is a stream that fails from
  * `finalMessage`, which is where its callers meet a provider's errors.
  */
-export function gateClient(client: Anthropic, account: string, label: string, rests: ProviderRests = providerRests): Anthropic {
+export function gateClient(
+  client: Anthropic,
+  account: string,
+  label: string,
+  rests: ProviderRests = providerRests,
+  hold: (label: string) => Error | undefined = quotaHoldError
+): Anthropic {
   const messages = client.messages as unknown as Record<string, unknown>;
   const create = messages.create;
   if (typeof create === "function") {
@@ -177,11 +238,15 @@ export function gateClient(client: Anthropic, account: string, label: string, re
       // The SDK's own stream helper calls `create({ stream: true })` and then `.withResponse()` on what
       // it returns; that call was already gated as a stream, and must get the SDK's promise back as is.
       if ((args[0] as { stream?: unknown } | undefined)?.stream === true) return bound(...args);
+      // A forecast or remains hold stops the call before the account rest is consulted, and does
+      // not start a second rest: the error already says usage_limit, so the retry loop stops.
+      const held = hold(label);
+      if (held !== undefined) return Promise.reject(held);
       const gate = rests.check(account);
       if (gate.refuse) return Promise.reject(gate.error);
       const pending = bound(...args);
       // Recorded on a side branch that handles its own rejection; the caller gets the SDK's promise, unchanged.
-      pending.then(() => rests.succeeded(account), error => { rests.failed(account, label, error, gate.probe); });
+      pending.then(() => rests.succeeded(account), error => { rests.failed(account, label, error, gate.probe); noteRejection(label, error); });
       return pending;
     };
   }
@@ -189,6 +254,11 @@ export function gateClient(client: Anthropic, account: string, label: string, re
   if (typeof stream === "function") {
     const bound = (stream as (...args: unknown[]) => { on: (...a: unknown[]) => unknown; finalMessage: () => Promise<unknown> }).bind(messages);
     messages.stream = (...args: unknown[]) => {
+      const held = hold(label);
+      if (held !== undefined) {
+        const refused = { on: () => refused, finalMessage: () => Promise.reject(held) };
+        return refused;
+      }
       const gate = rests.check(account);
       if (gate.refuse) {
         const refusal = gate.error;
@@ -204,6 +274,7 @@ export function gateClient(client: Anthropic, account: string, label: string, re
           return answer;
         } catch (error) {
           rests.failed(account, label, error, gate.probe);
+          noteRejection(label, error);
           throw error;
         }
       };

@@ -31,6 +31,7 @@
  */
 
 import { envNumber } from "../config.ts";
+import { dispositionOf } from "./disposition.ts";
 
 /** Codes that mean the connection broke, not that the request was wrong. */
 const TRANSIENT_ERRNO_CODES: ReadonlySet<string> = new Set([
@@ -175,6 +176,15 @@ export function classifyFailure(error: unknown): FailureKind {
   // retried four times, each attempt paying for input tokens on a request that can never succeed.
   const found = new Set<FailureKind>();
   collect(error, new Set(), found);
+  // A vendor code outranks the phrase scan. 2062 next to "用量上限" is still a rate limit;
+  // 2056, insufficient_quota, and a spend cap without retry-after are the plan. An unknown
+  // 429 names no disposition and stays capacity from its status. The codes are not written here.
+  const disposition = dispositionOf(error);
+  if (disposition === "quota_hold") found.add("usage_limit");
+  if (disposition === "retry_after") {
+    found.delete("usage_limit");
+    found.add("capacity");
+  }
 
   // Permanent wins, because the two mistakes are not symmetrical. Calling a transient failure
   // permanent loses the turn — which is what happened before any of this existed. Calling a

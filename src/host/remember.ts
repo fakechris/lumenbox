@@ -24,6 +24,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type { AgentRegistry } from "../agents/registry.ts";
 import { envNumber } from "../config.ts";
+import { effortConfig } from "./provider.ts";
 import type { HistoryEntry } from "./compaction.ts";
 import {
   buildEpisodePrompt,
@@ -671,7 +672,7 @@ export class Rememberer {
       // Small: three lines of memory or six sentences of episode. A cap this tight is also a guard
       // against an extractor that decides to narrate. Maintenance asks for twice that: a JSON
       // list of ten proposals with their text does not fit in one thousand tokens.
-      max_tokens: Math.min(maxTokens, this.deps.provider.maxTokens),
+      max_tokens: Math.min(maxTokens, this.deps.provider.maxTokens), ...effortConfig(this.deps.provider, "memory"),
       messages: [{ role: "user", content: prompt }],
     });
     this.deps.usage?.recordAside({

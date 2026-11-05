@@ -11,12 +11,17 @@ export interface ProviderRestDeps {
   refusedAdmin: () => boolean;
   readJson: () => Promise<Record<string, unknown>>;
   rests: ProviderRests;
+  /** Window forecast, hold, and the disposition name. Omitted by callers that have not wired it. */
+  quotaLine?: () => string;
 }
 
 export async function providerRestRoute(route: string, deps: ProviderRestDeps): Promise<{ status: number; body: unknown } | undefined> {
   if (route !== "GET /api/provider/rests" && route !== "POST /api/provider/rests/retry") return undefined;
   if (deps.refusedAdmin()) return { status: 0, body: null };
-  if (route === "GET /api/provider/rests") return { status: 200, body: { rests: deps.rests.list() } };
+  if (route === "GET /api/provider/rests") {
+    const quota = deps.quotaLine?.();
+    return { status: 200, body: { rests: deps.rests.list(), ...(quota !== undefined && quota !== "" ? { quota } : {}) } };
+  }
   const account = String((await deps.readJson()).account ?? "");
   return deps.rests.retryNow(account)
     ? { status: 200, body: { retrying: true } }

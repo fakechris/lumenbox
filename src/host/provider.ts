@@ -21,7 +21,9 @@ import { envNumber } from "../config.ts";
 import Anthropic from "@anthropic-ai/sdk";
 import { OpenAIWireClient } from "./openai-wire.ts";
 import { accountOf, gateClient } from "./provider-rest.ts";
+import { startRemainsPolling } from "./quota-window.ts";
 import { currentRedactor } from "./secret-redaction.ts";
+import type { UsageKind } from "./usage.ts";
 
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -125,9 +127,11 @@ const MINIMAX: ProviderProfile = {
   // >512k input tier where every price doubles; the operator sets the trigger with
   // AGENTBOX_COMPACT_AT_TOKENS instead, below that boundary on purpose.
   vision: true,
-  // Accepted but not implemented. Omitted so behaviour is not left to chance.
+  // Adaptive thinking is accepted and not implemented, so it is not sent.
   adaptiveThinking: false,
-  effort: false,
+  // M3.1-Flash implements output_config.effort (INV-1612). Omitting the field leaves the
+  // vendor default, which is max. Thinking still counts against maxTokens.
+  effort: true,
   // False means "send no cache_control breakpoints", and that stays right — but not
   // because the endpoint cannot cache. Measured 2026-09-01: caching is *implicit*.
   // A repeated 88k prefix with a new tail came back input_tokens=113,
@@ -745,6 +749,28 @@ export function resolveSummaryProvider(agentProfile: ProviderProfile): ProviderP
   return profile;
 }
 
+/**
+ * How hard this call should think (INV-1612).
+ *
+ * Person-facing turns and a delegate stay at medium. Summaries, memory, review, selection
+ * and the other housekeeping calls stay at low. The caller's own effort, when they passed
+ * one, replaces the turn default. The vendor's default when the field is omitted is max,
+ * which is why a profile that implements effort always sends it.
+ */
+export function effortForKind(kind: UsageKind): Effort {
+  return kind === "turn" || kind === "delegate" ? "medium" : "low";
+}
+
+/** `output_config.effort`, or nothing when this profile does not implement the field. */
+export function effortConfig(
+  profile: ProviderProfile,
+  kind: UsageKind,
+  override?: Effort
+): { output_config: { effort: Effort } } | Record<string, never> {
+  if (!profile.effort) return {};
+  return { output_config: { effort: override ?? effortForKind(kind) } };
+}
+
 export function describeProvider(profile: ProviderProfile): string {
   const missing: string[] = [];
   if (!profile.vision) missing.push("no vision (computer tool withheld)");
@@ -763,3 +789,7 @@ export function credentialFor(keyEnv: string): string | undefined {
   const value = process.env[keyEnv] ?? (keyEnv === "ANTHROPIC_API_KEY" ? process.env.ANTHROPIC_AUTH_TOKEN : undefined);
   return value === undefined || value === "" ? undefined : value;
 }
+
+// Off unless AGENTBOX_QUOTA_REMAINS=1. The China host is the one the official FAQ names;
+// the key stays in the header and is never logged. A global-only install simply has no key here.
+startRemainsPolling(() => credentialFor("MINIMAX_CODE_CN_API_KEY"));

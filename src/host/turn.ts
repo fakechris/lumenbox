@@ -148,7 +148,7 @@ import { outboundRedactor, redactEvent, redactResult } from "./redact-outbound.t
 import { lookupPair, splitRoster } from "./tool-roster.ts";
 import { narrowTools, toolAllowed } from "./scopes.ts";
 import { conversationIdFor, MAIN_CONVERSATION } from "../agents/registry.ts";
-import { summaryRuntimeFor } from "./provider.ts";
+import { effortConfig, summaryRuntimeFor } from "./provider.ts";
 import type { Effort, ProviderProfile } from "./provider.ts";
 
 /**
@@ -1001,7 +1001,7 @@ async function summarise(
     const response = await client.messages.create({
       model: summaryProvider.model,
       // Enough for a dense summary and no more; a summary that runs to pages defeats the purpose.
-      max_tokens: Math.min(4096, summaryProvider.maxTokens),
+      max_tokens: Math.min(4096, summaryProvider.maxTokens), ...effortConfig(summaryProvider, "summarize"),
       messages: [
         { role: "user", content: buildSummaryPrompt(bounded.entries) + (extra ?? "") },
       ],
@@ -2510,15 +2510,12 @@ ${outcome.text}`;
         model: answering.model,
         max_tokens: answering.maxTokens,
         // Adaptive thinking with a summary, so the caller can show progress
-        // instead of a silent pause on a long turn. Both this and effort are
-        // Claude-only; a compatible endpoint that accepts them without
-        // implementing them is worse than one that never sees them.
+        // instead of a silent pause on a long turn. Effort is sent only where the
+        // profile implements it (Claude, MiniMax M3.1). A caller's effort wins.
         ...(provider.adaptiveThinking
           ? { thinking: { type: "adaptive" as const, display: "summarized" as const } }
           : {}),
-        ...(provider.effort
-          ? { output_config: { effort: deps.effort ?? "high" } }
-          : {}),
+        ...effortConfig(answering, "turn", deps.effort),
         system,
         tools,
         messages,

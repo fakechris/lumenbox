@@ -314,6 +314,7 @@ test("a turn caches the system prompt and sends the tool set", async () => {
 
     assert.ok((params.tools?.length ?? 0) > 0, "tools are declared");
     assert.deepEqual(params.thinking, { type: "adaptive", display: "summarized" });
+    assert.deepEqual(params.output_config, { effort: "medium" });
   } finally {
     cleanup();
   }
