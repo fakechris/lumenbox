@@ -2285,7 +2285,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               conversation: input.conversation,
               steerable: false,
               lane: "background",
-              synthetic: true,
+              synthetic: true, // model-text: involute
             });
             await orchestrator.settle();
             return orchestrator.replySince(input.agentId, before, input.conversation);
@@ -2422,7 +2422,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   const boxUpdate = new BoxUpdateService({ activeTurns: () => orchestrator.bus.activeAgentIds().filter(id => registry.tryGet(id) !== undefined && registry.boxOf(id).id === registry.box.id).length, reconnect: async () => { box = await orchestrator.connectBox(); }, broadcast: (line, done) => broadcast({ type: "box_setup", line, ...(done !== undefined ? { done: true, ok: done.ok } : {}) }), log });
   probeKeeper = new ProbeKeeper({ nameOf: id => registry.tryGet(id)?.profile.name ?? id, isPaused: id => agentPauses.pauseOf(id) !== undefined, pause: (id, why) => agentPauses.pause(id, "LumenBox (boundary probes)", why), log, notify: text => { broadcast({ type: "error", boxId: registry.box.id, message: text }); for (const { adapter, identity } of adminRecipients(principals.list())) void channels.push(adapter, identity, text); } }); // INV-1553
-  const agentPauses = new AgentPauses({ dirFor: id => registry.dirFor(id), wake: id => { void orchestrator.bus.wake(id); }, interrupt: (ids, why) => orchestrator.bus.interruptAgents(ids, why), box: () => orchestrator.boxClient(), log, tell: async (id, text) => { void orchestrator.prompt(id, text, undefined, { lane: "user", synthetic: true, steerable: false }).catch(error => log(`resume: ${error instanceof Error ? error.message : String(error)}`)); }, receipt: (subject, decision, because) => orchestrator.receipts.write({ at: new Date().toISOString(), by: "host", subject, decision, because }) }); // INV-1554
+  const agentPauses = new AgentPauses({ dirFor: id => registry.dirFor(id), wake: id => { void orchestrator.bus.wake(id); }, interrupt: (ids, why) => orchestrator.bus.interruptAgents(ids, why), box: () => orchestrator.boxClient(), log, tell: async (id, text) => { void orchestrator.prompt(id, text, undefined, { lane: "user", synthetic: true, steerable: false }).catch(error => log(`resume: ${error instanceof Error ? error.message : String(error)}`)); }, receipt: (subject, decision, because) => orchestrator.receipts.write({ at: new Date().toISOString(), by: "host", subject, decision, because }) }); // INV-1554 // model-text: pause-resume
   void boxUpdate.check();
   // The box's image against the one this app expects (INV-1538, docs/12 §6). Checked every ten minutes; admins are told once per
   // image, in their chats and on the attention page; the update itself is Settings → Boxes → Apply update, or "upgrade" in reply —

@@ -308,7 +308,7 @@ export async function cmdImprove(argv: string[], out: (line: string) => void = l
     runIsolated: async (agentId, request, index) => {
       const conversation = `fork/improve-${Date.now()}-${index}`;
       const before = registry.readTranscript(agentId, conversation).length;
-      orchestrator.bus.sendFromUser(agentId, request === "" ? " " : request, { conversation, steerable: false, lane: "background", synthetic: true, toolScope: READ_ONLY_TOOLS });
+      orchestrator.bus.sendFromUser(agentId, request === "" ? " " : request, { conversation, steerable: false, lane: "background", synthetic: true, toolScope: READ_ONLY_TOOLS }); // model-text: improve
       await orchestrator.bus.runExclusive(agentId, { conversation });
       return orchestrator.replySince(agentId, before, conversation);
     },

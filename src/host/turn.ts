@@ -53,8 +53,8 @@ import { chooseRelevant, memoryProjectionManifest, SHARED_CHAR_BUDGET, type Memo
 import { egressDeniedBlock, type NetworkEventLog } from "../egress/events.ts";
 import { needsReview, type ReviewInput, type ReviewMode, type Verdict } from "./auto-review.ts";
 import type { HookRunner } from "./hooks.ts";
-import { AGENT_WAKE_CUE, laneOf } from "../agents/bus.ts";
-import { TEMPLATE_CUE, TEMPLATE_SETUP_TOOLS } from "./template.ts";
+import { laneOf } from "../agents/bus.ts"; import { entryChannel, givesTasks, inboundChannel } from "./model-text.ts";
+import { TEMPLATE_SETUP_TOOLS } from "./template.ts";
 import {
   activeWindow,
   buildSummaryPrompt,
@@ -86,7 +86,7 @@ import {
   SUMMARY_WORD_CAP,
   summaryEntry,
   clampSummaryToBudget,
-  type HistoryEntry, isHostAuthored,
+  type HistoryEntry,
   replacedRange,
   type SummaryEntry,
 } from "./compaction.ts";
@@ -3715,15 +3715,15 @@ export function reviewInputFor(options: {
   const untrusted: string[] = [];
   // A template setup cue is a user entry too, and its names — the template's, its creator's, its
   // skills' — are third-party text; it goes on the untrusted side with the wakes.
-  const harnessSpeaking = (text: string): boolean => text.startsWith(AGENT_WAKE_CUE) || text.startsWith(TEMPLATE_CUE);
+  // Which side a text goes on is the channel table's call (model-text.ts, INV-1579): only a person's own words give tasks.
   for (const entry of options.transcript) {
     if (entry.role !== "user" || "kind" in entry || typeof entry.text !== "string") continue;
-    (harnessSpeaking(entry.text) || isHostAuthored(entry as HistoryEntry) ? untrusted : trusted).push(entry.text); // the host's own prompts are not the person's words (INV-1571)
+    (givesTasks(entryChannel(entry as HistoryEntry)) ? trusted : untrusted).push(entry.text);
   }
   // The turn's own messages are usually already the transcript's last entries; only what is not
   // there yet is added, so nothing is shown to the classifier twice.
   for (const message of options.inbound) {
-    const side = message.fromId === "user" && message.origin === undefined && !harnessSpeaking(message.text) ? trusted : untrusted;
+    const side = givesTasks(inboundChannel(message)) ? trusted : untrusted;
     if (!trusted.includes(message.text) && !untrusted.includes(message.text)) side.push(message.text);
   }
   for (const message of options.messages) {
