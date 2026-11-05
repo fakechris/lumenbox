@@ -61,7 +61,8 @@ test("a rejected request stays permanent even inside a transient-looking wrapper
   );
   assert.equal(classifyFailure(Object.assign(new Error("nope"), { status: 401 })), "permanent");
   assert.equal(classifyFailure(new Error("invalid x-api-key")), "permanent");
-  assert.equal(classifyFailure(new Error("Your credit balance is too low")), "permanent");
+  // Out of credit is not retried either, but it is the plan, not the request: usage_limit rests the account (INV-1577).
+  assert.equal(classifyFailure(new Error("Your credit balance is too low")), "usage_limit");
 });
 
 test("a busy provider is its own kind, retried sooner and fewer times", () => {
