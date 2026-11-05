@@ -69,7 +69,7 @@ import { sniffImage } from "./image-refusal.ts";
 import { appendLearning, hostOf, learningsDir, readLearnings, renderLearnings } from "./learnings.ts";
 import type { McpManager, ToolEffect } from "./mcp.ts";
 import { MCP_FACE_DIR, MCP_FACE_TOKEN_VARIABLE, type McpFace } from "./mcp-face.ts";
-import { dedupe, dedupeKey, describeFrom, memoryRef, validateRecord } from "./memory.ts"; import { recallMatches } from "./memory-relevance.ts";
+import { dedupe, dedupeKey, describeFrom, memoryRef, validateRecord } from "./memory.ts"; import { recallMatches } from "./memory-relevance.ts"; import { alreadyPending, forTeamTier, pendingNotice, teamReviewOn } from "./team-memory-review.ts";
 import { guardMemoryCandidate } from "./memory-guard.ts";
 import type { ModelRelay } from "./model-relay.ts";
 import { type OAuthGate, type OAuthProvider, oauthProvider, scrubToken, tokenHeaders } from "./oauth.ts";
@@ -4369,16 +4369,16 @@ export async function dispatchTool(
       const { exact: found, related } = recallMatches(String(input.search ?? ""), records);
       const whose = sharedOnly ? "the team has kept" : "you or the team have kept";
       const relatedLines = related.map(({ record, tier }) => `- [${tier}] (${record.at.slice(0, 10)}) ${record.text}${describeFrom(record.from)}`);
-      const alsoRelated = relatedLines.length > 0 ? `\n\nRelated by meaning (not every word you searched for):\n\n${relatedLines.join("\n")}` : "";
+      const alsoRelated = (relatedLines.length > 0 ? `\n\nRelated by meaning (not every word you searched for):\n\n${relatedLines.join("\n")}` : "") + pendingNotice(context.registry.readSharedMemory(context.agent.id), context.agent.id); // the writer's own team writes still under review (INV-1581)
       if (found.length === 0 && related.length > 0) return { text: `No record holds every word you searched for; ${related.length} of ${records.length} things ${whose} are related by meaning:\n\n${relatedLines.join("\n")}` };
       if (found.length === 0) {
         // Distinguished from "nothing was kept at all", because an agent that reads the
         // two the same way concludes it has no memory when it merely has no match.
         return {
           text:
-            records.length === 0
+            (records.length === 0
               ? `Nothing ${whose} yet.`
-              : `No match among the ${records.length} things ${whose}. Try fewer or different words.`,
+              : `No match among the ${records.length} things ${whose}. Try fewer or different words.`) + alsoRelated,
         };
       }
       // Newest first across both tiers, then cut. Concatenating the tiers and taking the
@@ -5281,7 +5281,7 @@ export async function dispatchTool(
           retracted = true;
         }
         if (target !== "" && team.some(record => dedupeKey(record.text) === target)) {
-          context.registry.appendSharedMemory(context.agent.id, [retraction]);
+          context.registry.appendSharedMemory(context.agent.id, forTeamTier([retraction])); // held for a person when team review is on (INV-1581)
           retracted = true;
         }
         if (!retracted) {
@@ -5300,7 +5300,7 @@ export async function dispatchTool(
       if ([...own, ...team].some(record => dedupeKey(record.text) === key)) {
         // Told, not silently swallowed: an agent that thinks a write failed will write it again in
         // different words, which is exactly what the dedupe key exists to prevent.
-        return { text: "That is already remembered, here or by a teammate, so nothing was added." };
+        return { text: alreadyPending(team, context.agent.id, fact) ? "That is already waiting for a person to approve it for the team, so nothing was added." : "That is already remembered, here or by a teammate, so nothing was added." };
       }
 
       // A setup turn's memories say where they came from, and are about nobody: they are the
@@ -5327,10 +5327,12 @@ export async function dispatchTool(
       };
       const withdrawn = retracted ? " The one it replaces has been withdrawn." : "";
       if (shared) {
+        if (teamReviewOn()) { // team review (INV-1581): the write waits for a person and only this agent is told
+          context.registry.appendSharedMemory(context.agent.id, forTeamTier([record], true));
+          return { text: `Kept for the team, waiting for a person's approval: teammates will have it once it is approved, not before. Until then it is not in anyone's memory, yours included.${retracted ? " Withdrawing the one it replaces waits for the same approval." : ""}` };
+        }
         context.registry.appendSharedMemory(context.agent.id, [record]);
-        return {
-          text: `Kept and shared. Every agent here will have it on their next turn.${withdrawn}`,
-        };
+        return { text: `Kept and shared. Every agent here will have it on their next turn.${withdrawn}` };
       }
       context.registry.appendMemoryRecords(context.agent.id, [record]);
       return { text: `Kept. It will be in your instructions on future turns.${withdrawn}` };

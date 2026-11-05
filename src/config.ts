@@ -215,6 +215,8 @@ export interface AgentboxConfig {
    * launch automatically at boot/login.
    */
   startupItem?: boolean;
+  /** Agents' writes to the team's shared memory wait for a person's approval (INV-1581); absent is off. */
+  teamMemoryReview?: boolean;
 }
 
 /**
@@ -391,6 +393,7 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
     ...(raw.personBoxQuotas !== undefined ? { personBoxQuotas: readQuotaMap(raw.personBoxQuotas, "personBoxQuotas", onWarn) } : {}),
     ...(raw.departmentBoxQuotas !== undefined ? { departmentBoxQuotas: readQuotaMap(raw.departmentBoxQuotas, "departmentBoxQuotas", onWarn) } : {}),
     ...(typeof raw.startupItem === "boolean" ? { startupItem: raw.startupItem } : {}),
+    ...(typeof raw.teamMemoryReview === "boolean" ? { teamMemoryReview: raw.teamMemoryReview } : {}),
     ...(readInvolute(raw.involute, onWarn) !== undefined ? { involute: readInvolute(raw.involute, onWarn) } : {}),
   };
 }
@@ -813,6 +816,7 @@ export function saveConfig(
     /** Per-chat patch: a null hour removes that chat's digest, others are left alone. */
     digests?: Record<string, number | null>;
     startupItem?: boolean | null;
+    teamMemoryReview?: boolean | null;
     personalBoxQuota?: number | null;
     personBoxQuotas?: Record<string, number | null>;
     departmentBoxQuotas?: Record<string, number | null>;
@@ -887,6 +891,10 @@ export function saveConfig(
     }
     if (Object.keys(current).length > 0) raw.digests = current;
     else delete raw.digests;
+  }
+  if (changes.teamMemoryReview !== undefined) {
+    if (changes.teamMemoryReview === null || changes.teamMemoryReview === false) delete raw.teamMemoryReview;
+    else raw.teamMemoryReview = true;
   }
   if (changes.startupItem !== undefined) {
     // false is written, not deleted: the desktop shell leaves an absent key alone.

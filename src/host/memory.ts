@@ -85,6 +85,8 @@ export interface MemoryRecord {
   revokedSources?: string[];
   /** Held by the write-time judge (INV-1333), not remembered: the question and its confidence. Out of recall, kept by compaction, for a person. */
   held?: { question: string; confidence: number };
+  /** A team-memory review decision (INV-1581): which held write it decides, how, and by whom. */
+  review?: { of: string; decision: "approved" | "rejected"; by: string };
 }
 
 /**
