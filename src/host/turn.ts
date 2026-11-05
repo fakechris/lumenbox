@@ -1564,8 +1564,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
 
   let ended = false;
   let endedHow: string | undefined;
-  let stoppedBy: "turn_budget" | "rounds" | undefined; // set when the turn stopped itself, so it ends "incomplete", not "done" (INV-1404)
-  let spendWarning: string | undefined; let spendHit: Extract<SpendVerdict, { kind: "hit_wake" | "hit_day" }> | undefined; // the agent's spend lines (INV-1615): a reminder due, or a line reached
+  let stoppedBy: "turn_budget" | "rounds" | undefined; let spendWarning: string | undefined; let spendHit: Extract<SpendVerdict, { kind: "hit_wake" | "hit_day" }> | undefined; // stoppedBy: set when the turn stopped itself, so it ends "incomplete", not "done" (INV-1404); the agent's spend lines (INV-1615): a reminder due, or a line reached
   let lastFinalText: string | undefined;
   /** The whole turn's spend, for a goal's budget (INV-772). */
   const turnUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
@@ -2339,8 +2338,7 @@ ${outcome.text}`;
       emit({ type: "text", agentId: agent.id, agentName: agent.profile.name, delta: report });
       emit({ type: "turn_budget_hit", agentId: agent.id, calls: budget.callsUsed, limit: budget.limits.calls });
       stoppedBy = "turn_budget";
-      if (spendHit?.kind === "hit_day") await spendHit.enforce(); // the daily line: paused once the hand-back is on the record (INV-1615)
-      console.error(`[turn] ${agent.profile.name}: ${spendHit !== undefined ? `spend line (${spendHit.kind})` : `turn budget hit (${budget.callsUsed} model calls)`}; handed back`);
+      if (spendHit?.kind === "hit_day") await spendHit.enforce(); /* the daily line: paused once the hand-back is on the record (INV-1615) */ console.error(`[turn] ${agent.profile.name}: ${spendHit !== undefined ? `spend line (${spendHit.kind})` : `turn budget hit (${budget.callsUsed} model calls)`}; handed back`);
       return;
     }
 
