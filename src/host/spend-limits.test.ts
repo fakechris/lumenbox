@@ -144,3 +144,19 @@ test("limits are validated and persisted; null returns to the defaults; today's 
     rmSync(join(path, ".."), { recursive: true, force: true });
   }
 });
+
+test("an unpriced cache read weighs a tenth: Ada's six rounds on 2026-11-05 no longer end the wake, and a runaway still does", () => {
+  const { limits } = harness();
+  // The rows that ended her turn under 0.3.19: ~90k of context per round, nearly all of it cache reads.
+  const ada: [number, number, number][] = [[81_067, 186, 1_702], [83_599, 188, 501], [9_991, 83_787, 288], [4_102, 93_778, 651], [2_320, 97_880, 1_610], [2_545, 100_200, 738]];
+  for (const [input, cacheRead, output] of ada) {
+    assert.equal(limits.note(row("ada", "t1", input, output, "MiniMax-M3.1-Flash", { cacheReadTokens: cacheRead })).kind, "ok");
+  }
+  const counted = limits.today("ada").unpricedTokens;
+  assert.ok(counted < 250_000, `counted ${counted}`);
+  assert.equal(counted, ada.reduce((sum, [input, cacheRead, output]) => sum + input + output + Math.round(cacheRead * 0.1), 0));
+  // A turn that keeps going still meets the line: 200 more rounds of the same shape crosses 2M.
+  let verdict = "ok";
+  for (let i = 0; i < 200 && verdict !== "hit_wake"; i++) verdict = limits.note(row("ada", "t1", 2_500, 700, "MiniMax-M3.1-Flash", { cacheReadTokens: 100_000 })).kind;
+  assert.equal(verdict, "hit_wake");
+});
