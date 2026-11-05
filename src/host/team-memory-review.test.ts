@@ -82,6 +82,21 @@ test("on: a rejected write is never live and is no longer waiting; the decision 
   }
 });
 
+test("on: replacing a team fact holds the withdrawal too, and says so; the old fact stays live until approved", async () => {
+  const w = world();
+  try {
+    await w.remember(w.ada, "the deploy window is Tuesday");
+    saveConfig({ teamMemoryReview: true });
+    const said = await dispatchTool("RememberFact", { fact: "the deploy window is Wednesday", scope: "team", replaces: "the deploy window is Tuesday" }, { agent: w.ada, registry: w.registry, bus: new AgentBus(w.registry, async () => {}), box: undefined });
+    assert.match(said.text, /Withdrawing the one it replaces waits for the same approval/);
+    assert.doesNotMatch(said.text, /has been withdrawn/);
+    assert.deepEqual(w.live(w.bob.id), ["the deploy window is Tuesday"], "nothing changes for the team before approval");
+    assert.equal(pendingReviews(w.registry.readSharedMemory()).length, 2, "the withdrawal and the new fact both wait");
+  } finally {
+    w.cleanup();
+  }
+});
+
 test("on: an agent's own tier is not reviewed", async () => {
   const w = world();
   try {

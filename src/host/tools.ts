@@ -5329,7 +5329,7 @@ export async function dispatchTool(
       if (shared) {
         if (teamReviewOn()) { // team review (INV-1581): the write waits for a person and only this agent is told
           context.registry.appendSharedMemory(context.agent.id, forTeamTier([record], true));
-          return { text: `Kept for the team, waiting for a person's approval: teammates will have it once it is approved, not before. Until then it is not in anyone's memory, yours included.${withdrawn}` };
+          return { text: `Kept for the team, waiting for a person's approval: teammates will have it once it is approved, not before. Until then it is not in anyone's memory, yours included.${retracted ? " Withdrawing the one it replaces waits for the same approval." : ""}` };
         }
         context.registry.appendSharedMemory(context.agent.id, [record]);
         return { text: `Kept and shared. Every agent here will have it on their next turn.${withdrawn}` };
