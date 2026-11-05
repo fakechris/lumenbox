@@ -9,11 +9,16 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer } from "node:net";
 import { AgentRegistry } from "../agents/registry.ts";
 import { readStanding, STANDING_BYTE_CAP } from "../host/standing.ts";
 import { startWebServer } from "./server.ts";
 
-const PORT = 7937;
+// A port the OS hands out, not a fixed one: preferences.test.ts also used 7937, and any fixed port
+// collides with another file, or with this one run four at a time by `npm run flaky`.
+const PORT = await new Promise<number>((resolve, reject) => {
+  const probe = createServer().listen(0, "127.0.0.1", () => { const address = probe.address(); probe.close(() => (typeof address === "object" && address !== null ? resolve(address.port) : reject(new Error("no port")))); });
+});
 const BASE = `http://127.0.0.1:${PORT}`;
 
 test("standing files are read and written on the host through the agent's API, capped and named", async () => {
