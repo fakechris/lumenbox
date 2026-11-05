@@ -217,7 +217,7 @@ const HARNESS_ACTORS: ReadonlySet<string> = new Set([
   "restart",
   "host",
   "web",
-  "audit-guard",
+  "audit-guard", "review-guard", // the K-reviewer record moving a task it settled (INV-1614)
 ]);
 
 /** Kept on each task so a snapshot stays one line, not a graph. */

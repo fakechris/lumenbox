@@ -106,7 +106,8 @@ export function buildAuditPrompt(input: {
     "Next action: what the assignee should do next, or none",
     "",
     "The host reads those lines, not your prose: a reply without them counts as no verdict, " +
-      "and no verdict is not a pass.",
+      "and no verdict is not a pass. Your verdict is kept as a record of this claim and its evidence, " +
+      "beside another reviewer's; two that agree settle it, and everyone else cites the record instead of checking again.",
     "",
     "Finally, move the task with the Tasks tool. If your own headers say complete and clean, " +
       "add a note saying what you verified and LEAVE IT IN REVIEW — done is the requester's " +
