@@ -99,7 +99,7 @@ import type { MandateWorld } from "./mandate.ts";
 import { BoxError } from "../box/client.ts";
 import { Receipts } from "./receipts.ts";
 import { WedgeWatch } from "./wedge.ts";
-import { buildAuditPrompt, manifestDiff, MANIFEST_COMMAND, parseManifest, settleAudit } from "./audit.ts";
+import { buildAuditPrompt, manifestDiff, MANIFEST_COMMAND, parseManifest } from "./audit.ts"; import { DEFAULT_REVIEWERS_PER_CLAIM, evidenceDigest, REVIEW_ACTOR, reviewRound, VerificationLedger } from "./review-dispatch.ts";
 import { ALL_MCP_TOOLS, ScopeStore } from "./scopes.ts";
 import { delegateEndedNote, settleDelegate } from "./engine-report.ts";
 import { BundleStore } from "./bundles.ts";
@@ -310,6 +310,7 @@ export class Orchestrator {
   readonly skillProvenance: SkillProvenance;
   readonly hooks: HookRunner | undefined;
   /** The commands turns let go of past their foreground window (INV-1461); their end wakes the agent on the background lane. */
+  readonly verifications = new VerificationLedger(join(agentboxHome(), "verifications.jsonl")); // what each reviewer found, by claim and evidence digest (INV-1614)
   readonly generations = new BoxGenerations(line => console.error(`[box] ${line}`)); // which incarnation of each box a slow callback belongs to (INV-1476); bumped on every (re)connect
   readonly jobWatch = new JobWatch({ box: () => this.boxClient(), log: line => console.error(`[jobs] ${line}`), wake: (agentId, conversation, text) => this.prompt(agentId, text, undefined, { conversation, steerable: false, lane: "background", synthetic: true, origin: "host:jobs" }).then(() => undefined), generation: agentId => this.generations.current(this.registry.boxOf(agentId).id) });
   /**
@@ -810,62 +811,26 @@ export class Orchestrator {
     if (task.status !== "review" || task.reviewerId === undefined) return;
     if (this.auditing.has(task.id)) return;
     const last = task.history[task.history.length - 1];
-    // The guard's own invalidation and the reviewer's own moves must not retrigger:
-    // after either, the next actor is a person or the assignee, not this machinery.
-    if (last?.by === "audit-guard" || last?.by === task.reviewerId) return;
-    const reviewer = this.registry.tryGet(task.reviewerId);
-    if (reviewer === undefined) return;
-    const assignee =
-      task.assigneeId !== undefined ? this.registry.tryGet(task.assigneeId) : undefined;
-
+    // The record's own moves and a reviewer's own moves must not retrigger: after either, the next actor is a person or the assignee.
+    if (last?.by === "audit-guard" || last?.by === REVIEW_ACTOR || last?.by === task.reviewerId || this.verifications.recordsFor(task.id, evidenceDigest(task)).some(r => r.reviewerId === last?.by)) return;
+    if (this.registry.tryGet(task.reviewerId) === undefined) return;
+    const assignee = task.assigneeId !== undefined ? this.registry.tryGet(task.assigneeId) : undefined;
     this.auditing.add(task.id);
-    void (async () => {
-      try {
+    // K reviewers, one record each, and the record moves the task (INV-1614); the workspace snapshot around each turn still voids a review that edited the work.
+    void reviewRound({
+      ledger: this.verifications, k: loadConfig().reviewersPerClaim ?? DEFAULT_REVIEWERS_PER_CLAIM, candidates: () => this.registry.list().map(agent => agent.id), nameOf: id => this.registry.tryGet(id)?.profile.name ?? id,
+      current: id => this.tasks?.get(id), move: (id, change) => { this.tasks?.update(id, change, REVIEW_ACTOR); }, log: line => console.error(`[audit] ${line}`),
+      ask: async (reviewerId, current) => {
         const before = await this.workspaceManifest();
-        const spoken = this.registry.readTranscript(reviewer.id).length;
-        await this.prompt(
-          reviewer.id,
-          buildAuditPrompt({
-            task,
-            assigneeName: assignee?.profile.name ?? task.assigneeId ?? "the assignee",
-            ...(task.conversation !== undefined ? { conversation: task.conversation } : {}),
-          }),
-          undefined,
-          { steerable: false, lane: "background", origin: "host:audit" }
-        );
+        const spoken = this.registry.readTranscript(reviewerId).length;
+        await this.prompt(reviewerId, buildAuditPrompt({ task: current, assigneeName: assignee?.profile.name ?? current.assigneeId ?? "the assignee", ...(current.conversation !== undefined ? { conversation: current.conversation } : {}) }), undefined, { steerable: false, lane: "background", origin: "host:audit" });
         const after = await this.workspaceManifest();
-        if (before !== undefined && after !== undefined) {
-          const changed = manifestDiff(before, after);
-          if (changed.length > 0) {
-            this.tasks?.update(
-              task.id,
-              {
-                status: "review",
-                note:
-                  `audit void: the review itself changed ${changed.length} file(s) ` +
-                  `(${changed.slice(0, 3).join(", ")}${changed.length > 3 ? ", …" : ""}) — ` +
-                  "a reviewer that edits the work is no longer reviewing it",
-              },
-              "audit-guard"
-            );
-            return;
-          }
-        }
-        // The verdict is parsed, not read (INV-817): the same parser as the goal gate, and
-        // no verdict is not a pass. Only a task the reviewer left in review is settled here —
-        // a reviewer that moved it back to doing itself has already said what it found.
-        const current = this.tasks?.get(task.id);
-        if (current?.status !== "review") return;
-        const settled = settleAudit(current, this.replySince(reviewer.id, spoken));
-        this.tasks?.update(task.id, { status: settled.status, note: settled.note }, "audit-guard");
-      } catch (error) {
-        console.error(
-          `[audit] ${task.id}: ${error instanceof Error ? error.message : String(error)}`
-        );
-      } finally {
-        this.auditing.delete(task.id);
-      }
-    })();
+        const changed = before !== undefined && after !== undefined ? manifestDiff(before, after) : [];
+        return changed.length > 0
+          ? { reply: "", voided: `the review itself changed ${changed.length} file(s) (${changed.slice(0, 3).join(", ")}${changed.length > 3 ? ", …" : ""}) — a reviewer that edits the work is no longer reviewing it` }
+          : { reply: this.replySince(reviewerId, spoken) };
+      },
+    }, task).catch(error => console.error(`[audit] ${task.id}: ${error instanceof Error ? error.message : String(error)}`)).finally(() => this.auditing.delete(task.id));
   }
 
   /** The box workspace as path→hash, or undefined when there is no box to ask. */
@@ -1936,7 +1901,7 @@ export class Orchestrator {
       boxKind: this.boxEntryOf(agent.id).kind,
       // The same cheap profile the summariser and the note-taker use: choosing memories is the least interesting work here.
       selectMemory: prompt => this.askCheaply(agent, prompt),
-      skillProvenance: this.skillProvenance, jobWatch: this.jobWatch, syncStanding: agentId => this.memoryMirror.sync(agentId),
+      skillProvenance: this.skillProvenance, jobWatch: this.jobWatch, verifications: this.verifications, syncStanding: agentId => this.memoryMirror.sync(agentId),
       ...(this.templateSetups.has(agent.id) ? { templateSetup: this.templateSetups.get(agent.id)! } : {}),
       templates: this.templates, hooks: this.hooks,
       // Same cheap profile. Shadow by default: the verdicts land in auto-review.jsonl and the web

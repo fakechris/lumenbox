@@ -86,7 +86,7 @@ import { skillWriteRefusal } from "./skill-contract.ts";
 import { skillSlugOf } from "./skill-provenance.ts";
 import { SKILL_FILENAME } from "./skills.ts";
 import { capRefusal, standingFileOf, writeStandingFromAgent } from "./standing.ts";
-import { clampContract, describeTask, isLive, isTaskStatus, TASK_STATUSES, type TaskStore } from "./tasks.ts";
+import { clampContract, describeTask, isLive, isTaskStatus, TASK_STATUSES, type Task, type TaskStore } from "./tasks.ts"; import { citationFor, DEFAULT_REVIEWERS_PER_CLAIM, type VerificationLedger } from "./review-dispatch.ts";
 import {
   type BotTemplate,
   describeTemplate,
@@ -264,7 +264,7 @@ export interface ToolContext {
   /** Durable inbound message ids this turn derives memory from. */
   memorySources?: readonly string[];
   /** The team's task board. Absent means the Tasks tool answers that there is none. */
-  tasks?: TaskStore;
+  tasks?: TaskStore; verifications?: VerificationLedger; reviewersPerClaim?: number; // what reviewers found about each claim (INV-1614): shown beside a task so nobody re-checks a settled one
   /** The completion gate (INV-771), where a goal's claim_complete goes. */
   goalGate?: GoalGate;
   /** The scopes registry, so a secret granted by the caller's scope resolves. */
@@ -5042,8 +5042,8 @@ export async function dispatchTool(
       }
       const action = String(input.action ?? "");
       const nameOf = (id: string) => context.registry.tryGet(id)?.profile.name ?? id;
-      /** An id or a name; teammates say names, the board stores ids. */
-      const resolveAgent = (raw: string): string | undefined => teammateNamed(context, raw)?.id;
+      const cited = (task: Task) => { const line = context.verifications !== undefined ? citationFor(task, context.verifications, context.reviewersPerClaim ?? DEFAULT_REVIEWERS_PER_CLAIM, nameOf) : undefined; return line === undefined ? "" : `\n  · ${line}`; }; // the record stands in for a re-check (INV-1614)
+      const resolveAgent = (raw: string): string | undefined => teammateNamed(context, raw)?.id; // an id or a name; teammates say names, the board stores ids
       const mayAssign = (taskId: string): boolean => {
         const task = board.get(taskId);
         return task === undefined || task.assigneeId === undefined ||
@@ -5056,7 +5056,7 @@ export async function dispatchTool(
           ? board.list({ status: wanted })
           : board.list().filter(task => isLive(task.status));
         if (all.length === 0) return { text: "The board is empty for that view." };
-        return { text: all.map(task => describeTask(task, nameOf)).join("\n") };
+        return { text: all.map(task => describeTask(task, nameOf) + cited(task)).join("\n") };
       }
 
       if (action === "read") {
@@ -5067,7 +5067,7 @@ export async function dispatchTool(
         if (task.assigneeId !== context.agent.id) {
           return { text: "Task details are available to its current assignee. Ask for assignment before reading them.", isError: true };
         }
-        return { text: `${describeTask(task, nameOf)}\n\n${task.description ?? "No additional description."}` };
+        return { text: `${describeTask(task, nameOf)}${cited(task)}\n\n${task.description ?? "No additional description."}` };
       }
 
       if (action === "create") {

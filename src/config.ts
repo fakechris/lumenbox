@@ -217,6 +217,8 @@ export interface AgentboxConfig {
   startupItem?: boolean;
   /** Agents' writes to the team's shared memory wait for a person's approval (INV-1581); absent is off. */
   teamMemoryReview?: boolean;
+  /** How many reviewers a claim in review is dispatched to (INV-1614); absent means 2. */
+  reviewersPerClaim?: number;
 }
 
 /**
@@ -394,6 +396,7 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
     ...(raw.departmentBoxQuotas !== undefined ? { departmentBoxQuotas: readQuotaMap(raw.departmentBoxQuotas, "departmentBoxQuotas", onWarn) } : {}),
     ...(typeof raw.startupItem === "boolean" ? { startupItem: raw.startupItem } : {}),
     ...(typeof raw.teamMemoryReview === "boolean" ? { teamMemoryReview: raw.teamMemoryReview } : {}),
+    ...(typeof raw.reviewersPerClaim === "number" && raw.reviewersPerClaim >= 1 ? { reviewersPerClaim: Math.floor(raw.reviewersPerClaim) } : {}),
     ...(readInvolute(raw.involute, onWarn) !== undefined ? { involute: readInvolute(raw.involute, onWarn) } : {}),
   };
 }
