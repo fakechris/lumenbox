@@ -96,11 +96,33 @@ const PERMANENT_PHRASES: readonly string[] = [
   "not_found_error",
   "invalid api key",
   "invalid x-api-key",
+];
+
+/**
+ * Phrases that mean the plan or the account is out of usage (INV-1577): a top-up or a reset fixes it,
+ * a retry in seconds never does. MiniMax answers "已达到 Token Plan 用量上限 … (2056)" with a 429 and
+ * `rate_limit_error`, which read as capacity and was retried three times a call, by every agent — 471
+ * failed calls on 2026-11-04. Checked before capacity and permanent, because it is the more specific.
+ */
+const USAGE_PHRASES: readonly string[] = [
+  "用量上限",
+  "token plan",
+  "余额不足",
+  "额度不足",
+  "insufficient_quota",
+  "exceeded your current quota",
+  "quota exceeded",
+  "usage limit",
+  "out of credits",
+  "insufficient credit",
+  "insufficient balance",
   "credit balance",
   "billing",
 ];
 
 export type FailureKind =
+  /** The plan or account is out of usage. Not retried; the account rests for every agent (INV-1577). */
+  | "usage_limit"
   /** The connection broke. Retry, patiently. */
   | "transient"
   /** The provider is busy. Retry, sooner and fewer times, and obey any retry-after. */
@@ -144,6 +166,7 @@ export function isFirstTokenStall(error: unknown): boolean {
  */
 export function classifyFailure(error: unknown): FailureKind {
   if (isFirstTokenStall(error)) return "transient";
+  if (typeof error === "object" && error !== null && (error as { providerResting?: unknown }).providerResting === true) return "usage_limit";
 
   // Every signal in the whole chain, then decided — not the first one found.
   //
@@ -157,6 +180,7 @@ export function classifyFailure(error: unknown): FailureKind {
   // permanent loses the turn — which is what happened before any of this existed. Calling a
   // permanent failure transient spends money repeatedly on a request that cannot succeed, and hides
   // the real error behind a delay.
+  if (found.has("usage_limit")) return "usage_limit";
   if (found.has("permanent")) return "permanent";
   if (found.has("capacity")) return "capacity";
   if (found.has("transient")) return "transient";
@@ -209,6 +233,7 @@ function collect(error: unknown, seen: Set<unknown>, into: Set<FailureKind>): vo
 
 function fromText(text: string): FailureKind | undefined {
   const lower = text.toLowerCase();
+  if (USAGE_PHRASES.some(phrase => lower.includes(phrase))) return "usage_limit";
   if (PERMANENT_PHRASES.some(phrase => lower.includes(phrase))) return "permanent";
   if (CAPACITY_PHRASES.some(phrase => lower.includes(phrase))) return "capacity";
   if (TRANSIENT_PHRASES.some(phrase => lower.includes(phrase))) return "transient";
@@ -348,9 +373,11 @@ export function decideRetry(input: RetryInput): RetryDecision {
       delayMs: 0,
       kind,
       reason:
-        kind === "permanent"
-          ? "the provider rejected the request, and would reject it again"
-          : "the failure was not recognised as one a retry could fix",
+        kind === "usage_limit"
+          ? "the provider's plan is out of usage; a retry cannot fix that, and the account is resting"
+          : kind === "permanent"
+            ? "the provider rejected the request, and would reject it again"
+            : "the failure was not recognised as one a retry could fix",
       serverPaced: false,
     };
   }

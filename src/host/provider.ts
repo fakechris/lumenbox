@@ -20,6 +20,7 @@
 import { envNumber } from "../config.ts";
 import Anthropic from "@anthropic-ai/sdk";
 import { OpenAIWireClient } from "./openai-wire.ts";
+import { accountOf, gateClient } from "./provider-rest.ts";
 import { currentRedactor } from "./secret-redaction.ts";
 
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
@@ -527,7 +528,8 @@ function clientFor(
   key: string | undefined,
   options?: { maxRetries?: number; timeout?: number }
 ): Anthropic {
-  return withRedaction(wireClientFor(profile, key, options));
+  // Past the account's rest (INV-1577): an account out of usage is not called again until it may be back.
+  return gateClient(withRedaction(wireClientFor(profile, key, options)), accountOf(profile, key), profile.label);
 }
 
 /**
