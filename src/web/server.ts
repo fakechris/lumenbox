@@ -246,7 +246,7 @@ import { catchUpFloor } from "../channels/ingress.ts";
 import { REPLAY_MAX_AGE_MS } from "../channels/feishu.ts";
 import { ActivityLog } from "./activity.ts";
 import { a2uiPath, vendorPath } from "./markdown.ts";
-import { toDisplayEntries } from "./transcript.ts";
+import { latestForDisplay, toDisplayEntries } from "./transcript.ts";
 import { isReactionEmoji, readReactions, setReaction } from "./reactions.ts";
 import { editDiffOf } from "./line-diff.ts";
 
@@ -5977,7 +5977,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             id: record.id,
             name: record.profile.name,
           }));
-          send(res, 200, toDisplayEntries(registry.readTranscript(id, conversation), roster));
+          send(res, 200, url.searchParams.get("all") === "1" ? toDisplayEntries(registry.readTranscript(id, conversation), roster) : latestForDisplay(toDisplayEntries(registry.readTranscript(id, conversation), roster))); // the newest part only, unless asked (INV-1624)
           return;
         }
 

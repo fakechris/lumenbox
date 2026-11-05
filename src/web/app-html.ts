@@ -4468,14 +4468,14 @@ function select(id, conversation) {
       var seenKey = "lumen-seen:" + id + ":" + currentConversation;
       var lastSeen = -1;
       try { lastSeen = Number(localStorage.getItem(seenKey) || "-1"); } catch (error) {}
-      var lastDay = "";
-      var newShown = false;
+      var lastDay = "", newShown = false;
+      var base = entries.length && entries[0].skipped ? entries[0].skipped - 1 : 0; // the server sent the newest part (INV-1624): indices stay the whole thread's, for unread and reactions
       for (var i = 0; i < entries.length; i++) {
         var e = entries[i];
         var day = e.at ? dayLabel(e.at) : "";
         if (day && day !== lastDay) { closeOpen(); pushItem({ kind: "divider", label: day, day: dayKey(e.at) }); lastDay = day; }
-        if (!newShown && lastSeen >= 0 && i > lastSeen && e.kind === "text") { closeOpen(); pushItem({ kind: "divider", label: "new", isNew: true }); newShown = true; }
-        replayEntry(id, e, i, lastSeen >= 0 && i > lastSeen);
+        if (!newShown && lastSeen >= 0 && i + base > lastSeen && e.kind === "text") { closeOpen(); pushItem({ kind: "divider", label: "new", isNew: true }); newShown = true; }
+        replayEntry(id, e, i + base, lastSeen >= 0 && i + base > lastSeen);
       }
       closeOpen();
       seenStoreKey = seenKey;
@@ -4489,7 +4489,7 @@ function select(id, conversation) {
       refreshPolicy();
       // Not marked seen here: the observer marks each message as it comes on screen, so a
       // long thread opened and left at the top stays unread below the fold.
-      if (lastSeen < 0) { try { localStorage.setItem(seenKey, String(entries.length - 1)); } catch (error) {} }
+      if (lastSeen < 0) { try { localStorage.setItem(seenKey, String(entries.length - 1 + base)); } catch (error) {} }
       $("chat").scrollTop = $("chat").scrollHeight;
       landMessageFromUrl();
       return loadTemplateCardInChat(id);
