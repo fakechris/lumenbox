@@ -89,7 +89,7 @@ import type { ResolutionConfig, DesktopResources } from "../protocol/index.ts";
 import { runTurn, TurnAborted, type TurnDeps, type TurnEvent } from "./turn.ts";
 import { readHandoff, type ToolContext } from "./tools.ts";
 import { JobWatch } from "./job-watch.ts";
-import { loadConfig } from "../config.ts";
+import { loadConfig } from "../config.ts"; import { FallbackRuntimes, fallbackNames } from "./provider-fallback.ts";
 import { McpManager } from "./mcp.ts";
 import { mergeServers } from "./mcp-connectors.ts";
 import { CapabilityLedger } from "./mcp-capabilities.ts";
@@ -1887,7 +1887,7 @@ export class Orchestrator {
         ? { callerIdentities: this.options.principalIdentities(this.callerFor(agent.id)!.userId!) ?? [] }
         : {}),
       skills,
-      client: runtime.client,
+      client: runtime.client, fallbacks: this.fallbackRuntimes.for(fallbackNames(agent.profile.fallbackProviders, loadConfig(() => {}).fallbackProviders, runtime.provider)),
       registry: this.registry,
       files: this.files,
       claims: this.claims,
@@ -2156,7 +2156,7 @@ export class Orchestrator {
    * clear message, which `createClient` already throws. So a build failure here is
    * caught by the turn, not hidden.
    */
-  private readonly runtimeCache = new Map<string, { client: Anthropic; provider: ProviderProfile }>();
+  private readonly runtimeCache = new Map<string, { client: Anthropic; provider: ProviderProfile }>(); private readonly fallbackRuntimes = new FallbackRuntimes(); // and the providers a turn goes on with (INV-1578)
 
   private runtimeForAgent(agent: AgentRecord): { client: Anthropic; provider: ProviderProfile } {
     const provider = effectiveProviderFor(agent.profile, this.provider);

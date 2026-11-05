@@ -44,10 +44,10 @@ import {
   type RoundRecord,
 } from "./progress.ts";
 import {
-  decideRetry,
+  decideRetry, classifyFailure,
   FirstTokenStallError,
   FIRST_TOKEN_DEADLINE_MS,
-} from "./transient.ts";
+} from "./transient.ts"; import { keyOf as fallbackKey, nextFallback, switchLine, type Runtime as FallbackRuntime } from "./provider-fallback.ts";
 import { cacheMetering, cacheReadShare, type UsageKind, type UsageLog } from "./usage.ts";
 import { chooseRelevant, memoryProjectionManifest, SHARED_CHAR_BUDGET, type MemoryRecall } from "./memory.ts";
 import { egressDeniedBlock, type NetworkEventLog } from "../egress/events.ts";
@@ -478,7 +478,7 @@ export interface TurnDeps {
   /** Presented on every box call, so the box can refuse another agent's desktop. */
   boxOwner?: string;
   /** Where what a turn cost is written. Absent in tests that do not care. */
-  usage?: UsageLog;
+  usage?: UsageLog; fallbacks?: readonly FallbackRuntime[]; // providers to go on with when this one is out of usage (INV-1578)
   /**
    * Asked whether this turn may keep going, and whether its tools may run.
    *
@@ -1481,7 +1481,7 @@ export async function runTurn(
 async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessage[], signal: AbortSignal, deps: TurnDeps): Promise<void> {
   if (inbound.length === 0) return;
 
-  const { registry, bus, box, client } = deps;
+  const { registry, bus, box } = deps; let { client } = deps; // reassigned when a fallback provider takes a round (INV-1578)
   const conversation = deps.conversation ?? MAIN_CONVERSATION;
   const contextMode = registry.contextMode(agent.id, conversation);
   const clean = contextMode === "clean";
@@ -1494,7 +1494,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   // at the one door every text and interim event goes through; the record keeps `recordAs`.
   const hostHeld = hostTokens(), redactHost = outboundRedactor(hostHeld), redactOut = outboundRedactor([...(deps.vault?.heldValues() ?? []), ...hostHeld]); // this machine's web token leaves tool results too (INV-1543)
   const emit: typeof baseEmit = event => baseEmit(redactEvent({ ...event, conversation }, redactOut));
-  const provider = deps.provider ?? FULL_CLAUDE;
+  const provider = deps.provider ?? FULL_CLAUDE; let answering = provider; const triedProviders = new Set([fallbackKey(provider)]); // who answers this turn: the agent's provider until it is out of usage (INV-1578)
 
   // Recorded before anything else, so a process that dies at any point after this leaves a begin
   // with no end — a fact, rather than a turn that simply stopped existing.
@@ -2507,8 +2507,8 @@ ${outcome.text}`;
     roundStartedAt = new Date().toISOString();
     const stream = client.messages.stream(
       {
-        model: provider.model,
-        max_tokens: provider.maxTokens,
+        model: answering.model,
+        max_tokens: answering.maxTokens,
         // Adaptive thinking with a summary, so the caller can show progress
         // instead of a silent pause on a long turn. Both this and effort are
         // Claude-only; a compatible endpoint that accepts them without
@@ -2630,7 +2630,7 @@ ${outcome.text}`;
       // Everything else: was this a failure a retry could fix? A long turn is exposed to a dropped
       // connection precisely because it holds one open the longest, and before this a single blip
       // ended the turn and the work with it.
-      const retry = decideRetry({
+      const fallback = classifyFailure(error) === "usage_limit" ? nextFallback(deps.fallbacks ?? [], triedProviders) : undefined; if (fallback !== undefined) { triedProviders.add(fallbackKey(fallback.provider)); const line = switchLine(answering, fallback.provider); client = fallback.client; answering = fallback.provider; console.error(`[turn] ${agent.profile.name}: ${line}`); emit({ type: "retrying", agentId: agent.id, round, attempt: attempts, delayMs: 0, kind: "usage_limit", discardPartial: outputProduced, detail: line }); round -= 1; continue; } const retry = decideRetry({ // before it: the round goes on with another provider, its messages and all (INV-1578)
         error,
         attempt: attempts + 1,
         aborted: signal.aborted,
@@ -2695,8 +2695,8 @@ ${outcome.text}`;
       const noted = deps.usage?.notePromptCache({
         agentId: agent.id,
         agentName: agent.profile.name,
-        provider: deps.provider?.label ?? "unknown",
-        model: deps.provider?.model ?? "unknown",
+        provider: deps.provider ? answering.label : "unknown",
+        model: deps.provider ? answering.model : "unknown",
         round,
         usage,
         changed: promptChanged,
@@ -2737,7 +2737,7 @@ ${outcome.text}`;
         (usage.cache_read_input_tokens ?? 0) +
         (usage.cache_creation_input_tokens ?? 0);
       noteRealInputTokens(
-        `${provider.label}|${provider.baseUrl ?? ""}`,
+        `${answering.label}|${answering.baseUrl ?? ""}`,
         requestEstimate.total,
         realInput > 0 ? realInput : undefined
       );
@@ -2767,8 +2767,8 @@ ${outcome.text}`;
       ...(deps.caller?.userId !== undefined ? { principal: deps.caller.userId } : {}),
       // Recorded from what was actually used, with a fallback rather than an optional field: a
       // usage record whose model is missing cannot be priced later.
-      provider: deps.provider?.label ?? "unknown",
-      model: deps.provider?.model ?? "unknown",
+      provider: deps.provider ? answering.label : "unknown", ...(answering !== provider ? { fallbackFor: provider.label } : {}),
+      model: deps.provider ? answering.model : "unknown",
       round,
       ...usage,
       ...(metering !== undefined ? { metering } : {}),
@@ -3167,8 +3167,8 @@ ${outcome.text}`;
         anomaly: "empty_output",
         agentId: agent.id,
         agentName: agent.profile.name,
-        provider: deps.provider?.label ?? "unknown",
-        model: deps.provider?.model ?? "unknown",
+        provider: deps.provider ? answering.label : "unknown",
+        model: deps.provider ? answering.model : "unknown",
         round,
         workId,
         turnId,

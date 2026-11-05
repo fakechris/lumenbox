@@ -616,6 +616,16 @@ export function createClient(profile: ProviderProfile): Anthropic {
   return clientFor(profile, process.env[profile.keyEnv]);
 }
 
+/** Whether a preset has a key to call it with (INV-1578): a fallback without one is no fallback. */
+export function hasCredential(profile: ProviderProfile): boolean {
+  return Boolean(process.env[profile.keyEnv]) || (profile.keyEnv === "ANTHROPIC_API_KEY" && Boolean(process.env.ANTHROPIC_AUTH_TOKEN));
+}
+
+/** The account a profile's client speaks for (INV-1577), for asking whether it rests. */
+export function accountFor(profile: ProviderProfile): string {
+  return accountOf(profile, process.env[profile.keyEnv]);
+}
+
 /**
  * The client to reach a summary profile through, resolved *with* the profile.
  *

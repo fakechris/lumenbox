@@ -228,6 +228,8 @@ export interface AgentProfile {
    */
   provider?: string;
   model?: string;
+  /** This agent's own fallback provider presets, in order, at most three; absent means the installation's (INV-1578). */
+  fallbackProviders?: string[];
   /**
    * The template this agent was created from, when it was (docs/29). Bound at creation like
    * the box: a record of origin, not a link — the copy is this installation's from then on.
@@ -840,6 +842,8 @@ export class AgentRegistry {
       /** Provider preset and model override; `null`/`""` clears back to the default. */
       provider?: string | null;
       model?: string | null;
+      /** Its own fallback presets (INV-1578); `null` or `[]` goes back to the installation's. */
+      fallbackProviders?: string[] | null;
       /** The teams it belongs to. An empty array removes it from all of them. */
       tags?: readonly string[];
       /** The template this agent carries, revised when it takes up a newer version (INV-411). */
@@ -879,6 +883,10 @@ export class AgentRegistry {
     if (changes.provider !== undefined) {
       if (changes.provider === null || changes.provider === "") delete profile.provider;
       else profile.provider = changes.provider;
+    }
+    if (changes.fallbackProviders !== undefined) {
+      const names = (changes.fallbackProviders ?? []).map(name => String(name).trim()).filter(Boolean).slice(0, 3);
+      if (names.length === 0) delete profile.fallbackProviders; else profile.fallbackProviders = names;
     }
     if (changes.model !== undefined) {
       if (changes.model === null || changes.model === "") delete profile.model;
