@@ -26,7 +26,7 @@ import { currentFlag } from "./task-flag.ts";
 import { STAGE_LABEL, stageWorldOf, type TaskStage, taskStage } from "./task-stage.ts";
 
 export interface AttentionItem {
-  kind: "question" | "close-proposal" | "review" | "nudged" | "waiting" | "unanswered" | "paused" | "reauthorize" | "undeliverable" | "flagged" | "box-update" | "boundary-probe" | "provider-resting" | "team-memory";
+  kind: "question" | "close-proposal" | "review" | "nudged" | "waiting" | "unanswered" | "paused" | "reauthorize" | "undeliverable" | "flagged" | "box-update" | "boundary-probe" | "provider-resting" | "team-memory" | "spend-limit";
   /** What to open: a task id, or the conversation a question was asked in. */
   ref: string;
   title: string;

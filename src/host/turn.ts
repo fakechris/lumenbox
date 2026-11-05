@@ -48,7 +48,7 @@ import {
   FirstTokenStallError,
   FIRST_TOKEN_DEADLINE_MS,
 } from "./transient.ts"; import { keyOf as fallbackKey, nextFallback, switchLine, type Runtime as FallbackRuntime } from "./provider-fallback.ts";
-import { cacheMetering, cacheReadShare, type UsageKind, type UsageLog } from "./usage.ts";
+import { cacheMetering, cacheReadShare, type UsageKind, type UsageLog, type UsageRecord } from "./usage.ts"; import type { SpendLimits, SpendVerdict } from "./spend-limits.ts";
 import { chooseRelevant, memoryProjectionManifest, SHARED_CHAR_BUDGET, type MemoryRecall } from "./memory.ts";
 import { egressDeniedBlock, type NetworkEventLog } from "../egress/events.ts";
 import { needsReview, type ReviewInput, type ReviewMode, type Verdict } from "./auto-review.ts";
@@ -478,7 +478,7 @@ export interface TurnDeps {
   /** Presented on every box call, so the box can refuse another agent's desktop. */
   boxOwner?: string;
   /** Where what a turn cost is written. Absent in tests that do not care. */
-  usage?: UsageLog; fallbacks?: readonly FallbackRuntime[]; // providers to go on with when this one is out of usage (INV-1578)
+  usage?: UsageLog; fallbacks?: readonly FallbackRuntime[]; spendLimits?: SpendLimits; // providers to go on with when this one is out of usage (INV-1578); the agent's own spend lines (INV-1615)
   /**
    * Asked whether this turn may keep going, and whether its tools may run.
    *
@@ -1564,7 +1564,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
 
   let ended = false;
   let endedHow: string | undefined;
-  let stoppedBy: "turn_budget" | "rounds" | undefined; // set when the turn stopped itself, so it ends "incomplete", not "done" (INV-1404)
+  let stoppedBy: "turn_budget" | "rounds" | undefined; let spendWarning: string | undefined; let spendHit: Extract<SpendVerdict, { kind: "hit_wake" | "hit_day" }> | undefined; // stoppedBy: set when the turn stopped itself, so it ends "incomplete", not "done" (INV-1404); the agent's spend lines (INV-1615): a reminder due, or a line reached
   let lastFinalText: string | undefined;
   /** The whole turn's spend, for a goal's budget (INV-772). */
   const turnUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
@@ -2332,13 +2332,13 @@ ${outcome.text}`;
     // outcome, said in the conversation and as an event — not thrown, not a 401st call.
     const spend = budget.call();
     if (spend === "warn") budgetWarningDue = true;
-    if (spend === "hit") {
-      const report = withCheckpoints(budgetReport(budget, callsThisTurn, chinese), registry.readDurableState(agent.id, conversation));
+    if (spend === "hit" || spendHit !== undefined) { // or the agent's spend line (INV-1615): the same hand-back
+      const report = withCheckpoints(spendHit?.report ?? budgetReport(budget, callsThisTurn, chinese), registry.readDurableState(agent.id, conversation));
       registry.appendTranscript(agent.id, { role: "assistant", text: report, at: new Date().toISOString(), turnId } satisfies TranscriptEntry, conversation);
       emit({ type: "text", agentId: agent.id, agentName: agent.profile.name, delta: report });
       emit({ type: "turn_budget_hit", agentId: agent.id, calls: budget.callsUsed, limit: budget.limits.calls });
       stoppedBy = "turn_budget";
-      console.error(`[turn] ${agent.profile.name}: turn budget hit (${budget.callsUsed} model calls); handed back`);
+      if (spendHit?.kind === "hit_day") await spendHit.enforce(); /* the daily line: paused once the hand-back is on the record (INV-1615) */ console.error(`[turn] ${agent.profile.name}: ${spendHit !== undefined ? `spend line (${spendHit.kind})` : `turn budget hit (${budget.callsUsed} model calls)`}; handed back`);
       return;
     }
 
@@ -2741,7 +2741,7 @@ ${outcome.text}`;
         realInput > 0 ? realInput : undefined
       );
     }
-    deps.usage?.record({
+    const usageRow: Omit<UsageRecord, "seq" | "at"> = {
       agentId: agent.id,
       agentName: agent.profile.name,
       // The turn loop's own spend. Was never set here, so every turn row read as
@@ -2772,7 +2772,8 @@ ${outcome.text}`;
       ...usage,
       ...(metering !== undefined ? { metering } : {}),
       ...(cacheShare !== undefined ? { cacheShare } : {}),
-    });
+    }; // Priced before it is written, so the day's first row is not counted twice when the ledger is read back (INV-1615).
+    const spendVerdict = deps.spendLimits?.note(usageRow); deps.usage?.record(usageRow); if (spendVerdict?.kind === "warn") spendWarning = spendVerdict.text; else if (spendVerdict !== undefined && spendVerdict.kind !== "ok") spendHit ??= spendVerdict;
 
     // A response the context squeezed rather than finished. Discarded, never appended: a tool call cut mid-JSON
     // is not evidence of anything, and an answer cut mid-sentence would be continued as though it were
@@ -3521,10 +3522,10 @@ ${outcome.text}`;
       results.push(redactResult(entry.block, redactHost));
     }
     // The 80% warning rides on the last result of the round, once (INV-1354).
-    if (budgetWarningDue && results.length > 0) {
-      budgetWarningDue = false;
+    if ((budgetWarningDue || spendWarning !== undefined) && results.length > 0) {
+      const lines = [...(budgetWarningDue ? [budgetWarning(budget, chinese)] : []), ...(spendWarning !== undefined ? [spendWarning] : [])]; budgetWarningDue = false; spendWarning = undefined; // and the spend reminder, the same way (INV-1615)
       const last = results[results.length - 1]!;
-      if (Array.isArray(last.content)) last.content.push({ type: "text", text: budgetWarning(budget, chinese) });
+      if (Array.isArray(last.content)) last.content.push({ type: "text", text: lines.join("\n") });
     }
     for (const entry of done) {
       if (entry === undefined) continue;
