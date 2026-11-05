@@ -381,3 +381,19 @@ test("a ShowUI call replays as the card's messages; a refused one carries the er
   assert.equal(tools[2]?.surface?.close, true);
   assert.deepEqual(tools[2]?.surface?.messages, [{ version: "v0.9", deleteSurface: { surfaceId: "plan" } }]);
 });
+
+test("a long conversation is drawn from its newest entries, led by one line counting what was left out (INV-1624)", async () => {
+  const { latestForDisplay, DISPLAY_TAIL } = await import("./transcript.ts");
+  const many = Array.from({ length: 13_943 }, (_, i) => ({ kind: "text" as const, role: "assistant" as const, text: `entry ${i}`, at: `2026-11-05T00:00:${String(i % 60).padStart(2, "0")}.000Z` }));
+  const shown = latestForDisplay(many);
+  assert.equal(shown.length, DISPLAY_TAIL + 1);
+  assert.equal(shown[0]!.kind, "trigger");
+  assert.match((shown[0] as { text: string }).text, /^13,543 earlier entries are not shown here/);
+  // The page adds skipped - 1 to each index, so entry j of the tail keeps its index in the whole thread (unread marker, reactions).
+  assert.equal((shown[0] as { skipped?: number }).skipped, 13_543);
+  assert.equal((shown[1] as { text: string }).text, `entry ${1 + 13_543 - 1}`);
+  assert.equal((shown.at(-1) as { text: string }).text, "entry 13942");
+  assert.equal((shown[1] as { text: string }).text, `entry ${13_943 - DISPLAY_TAIL}`);
+  const few = many.slice(0, 10);
+  assert.deepEqual(latestForDisplay(few), few);
+});

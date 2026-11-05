@@ -107,7 +107,7 @@ export type DisplayEntry =
    * Harmless while both sides looked alike; glaring the moment the person's messages became a
    * filled bubble (docs/46), which is the usual way a display bug is finally seen.
    */
-  | { kind: "trigger"; label: string; text: string; at?: string }
+  | { kind: "trigger"; label: string; text: string; at?: string; /** On the line that leads a shortened thread: how many entries came before it (INV-1624). */ skipped?: number }
   | { kind: "tools"; tools: DisplayTool[] };
 
 export interface RosterEntry {
@@ -237,4 +237,25 @@ export function toDisplayEntries(
   }
 
   return display;
+}
+
+/**
+ * How much of a conversation the chat draws when it opens (INV-1624). The page renders every
+ * entry it is sent, synchronously; on 2026-11-05 Vic's main chat was 13,943 entries (24 MB)
+ * and opening it froze the window at 1.3 GB and full CPU, so a click on an approval never left
+ * the page. The newest entries are what a person opens a chat to see; the rest stay on the
+ * record and in History.
+ */
+export const DISPLAY_TAIL = 400;
+
+/** The newest `limit` entries, led by one line saying how many earlier ones were left out. */
+export function latestForDisplay(display: readonly DisplayEntry[], limit = DISPLAY_TAIL): DisplayEntry[] {
+  if (display.length <= limit) return [...display];
+  const left = display.length - limit;
+  const tail = display.slice(left);
+  const at = tail.find(entry => "at" in entry && typeof entry.at === "string") as { at?: string } | undefined;
+  return [
+    { kind: "trigger", label: "Earlier", skipped: left, text: `${left.toLocaleString("en-US")} earlier entries are not shown here, so the chat stays responsive. They are still on the record, and the agent's History tool reaches them.`, ...(at?.at !== undefined ? { at: at.at } : {}) },
+    ...tail,
+  ];
 }
