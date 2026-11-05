@@ -662,7 +662,7 @@ export class Orchestrator {
       // How the run came out is read off the turn ledger afterwards (INV-1404): done, partial (the turn stopped itself) or failed.
       const resultOf = (agentId: string) => routineResult(this.turns?.endedSince(agentId, startedMs) ?? []);
       if (deliver === undefined) {
-        await this.prompt(agent, prompt, undefined, { steerable: false, lane: "background", synthetic: true, ...scope });
+        await this.prompt(agent, prompt, undefined, { steerable: false, lane: "background", synthetic: true, ...scope }); // model-text: routine
         return { result: resultOf(this.registry.resolve(agent).id) };
       }
       const conversation = conversationIdFor(deliver);
@@ -674,7 +674,7 @@ export class Orchestrator {
       await this.prompt(agent, prompt, undefined, {
         steerable: false,
         lane: "background",
-        synthetic: true,
+        synthetic: true, // model-text: routine
         conversation,
         ...scope,
       });
@@ -716,7 +716,7 @@ export class Orchestrator {
     runAndSay: async (agent, prompt, toolScope) => {
       const agentId = this.registry.resolve(agent).id;
       const before = this.registry.readTranscript(agentId).length;
-      await this.prompt(agent, prompt, undefined, { steerable: false, lane: "background", synthetic: true, ...(toolScope !== undefined ? { toolScope } : {}) });
+      await this.prompt(agent, prompt, undefined, { steerable: false, lane: "background", synthetic: true, ...(toolScope !== undefined ? { toolScope } : {}) }); // model-text: routine
       await this.settle();
       return this.replySince(agentId, before).trim();
     },
@@ -2096,7 +2096,7 @@ export class Orchestrator {
       }
 
       this.bus.sendFromUser(agent.id, resumePrompt(turn.about, turn.at), {
-        synthetic: true,
+        synthetic: true, // model-text: resume
         ...(turn.principalId !== undefined ? { principalId: turn.principalId } : {}),
         resumeOf: { id: turn.id, attempt: turn.cleanExit ? turn.attempt : turn.attempt + 1,
           ...(turn.workId !== undefined ? { workId: turn.workId } : {}) },
@@ -2134,7 +2134,7 @@ export class Orchestrator {
    */
   private continueTurn(turn: InterruptedTurn, approval?: { id: string; how: "allowed" | "refused" | "gone" }): void {
     this.bus.sendFromUser(turn.agentId, continuationNote(turn.about), {
-      synthetic: true,
+      synthetic: true, // model-text: continuation
       ...(turn.principalId !== undefined ? { principalId: turn.principalId } : {}),
       ...(turn.conversation !== undefined ? { conversation: turn.conversation } : {}),
       steerable: false,

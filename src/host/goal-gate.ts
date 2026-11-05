@@ -173,7 +173,7 @@ export class GoalGate {
     };
     this.deps.bus.sendFromUser(agentId, verifierPrompt(task, chinese), {
       conversation: pursuit.verifying!.conversation,
-      synthetic: true,
+      synthetic: true, // model-text: goal
       steerable: false,
       lane: "background",
       toolScope: VERIFIER_TOOLS,

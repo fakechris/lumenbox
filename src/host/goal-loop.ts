@@ -253,7 +253,7 @@ export class GoalLoop {
     this.deps.tasks.setPursuit(task.id, current => ({ ...current, spent: { ...current.spent, continuations: nth } }), limit === undefined ? `continuation ${nth} started` : `finish-only turn started: ${limit}`);
     this.deps.log(`goal ${task.id}: ${limit === undefined ? `continuation ${nth}` : `finish-only turn (${limit})`} for ${this.deps.agentName(key.agentId) ?? key.agentId} (workId ${pursuit.workId})`);
     const text = limit === undefined ? continuationNotice(task, nth) : finishOnlyNotice(task, limit);
-    this.deps.bus.sendFromUser(key.agentId, text, { conversation: key.conversation, synthetic: true, steerable: false, lane: "background", goal: marker });
+    this.deps.bus.sendFromUser(key.agentId, text, { conversation: key.conversation, synthetic: true, steerable: false, lane: "background", goal: marker }); // model-text: goal
     void this.deps.bus.wake(key.agentId);
   }
 
