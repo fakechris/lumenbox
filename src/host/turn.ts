@@ -113,7 +113,7 @@ import {
 import { malformedNudge, malformedOutput, sanitizeHistoryText } from "./output-integrity.ts";
 import { type GoalTurnReport, isWorkingTool } from "./goal-loop.ts";
 import { isReadTool, readLoadNudge, readLoadNudgeDue } from "./read-load.ts";
-import { commandIsConfirmed, type GoalGate } from "./goal-gate.ts";
+import { commandIsConfirmed, type GoalGate } from "./goal-gate.ts"; import { recordedEndsNote } from "./job-end.ts";
 import { DEFAULT_TOKEN_WEIGHTS, weightedCost } from "./goal-mode.ts";
 import {
   BOOKKEEPING_TOOLS,
@@ -1929,6 +1929,8 @@ ${outcome.text}`;
     deps.resumeOf === undefined && (!personOpened || inbound.every(message => message.addressed === false));
 
   const turnText = buildTurnPrompt(inbound);
+  // Ends of jobs this conversation was not woken for (INV-1613): said once, beside the message, not in the transcript.
+  const endedNote = continuing ? undefined : recordedEndsNote(deps.jobWatch?.takeRecorded(agent.id, conversation) ?? []);
 
   // Before assembling: a conversation that has grown past what fits is summarised, once, and the
   // summary is persisted so later turns pay nothing. Measured on this system at 158KB and 40k
@@ -1965,7 +1967,7 @@ ${outcome.text}`;
     ? historyToMessages(history)
     : [
         ...historyToMessages(history),
-        { role: "user", content: [turnText, standingNotice, tail, opener].filter(part => part !== undefined).join("\n\n") },
+        { role: "user", content: [turnText, endedNote, standingNotice, tail, opener].filter(part => part !== undefined).join("\n\n") },
       ];
   // A continued turn appends nothing new for the model to answer: the next observation is the
   // result it was waiting on, already in the history. The one exception is a history that

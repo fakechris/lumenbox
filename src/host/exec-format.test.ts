@@ -11,5 +11,10 @@ test("a finished command reads as before; one still running names its job first 
   assert.match(running, /^\[still running after 10s — continuing as job-abcdef12 \(pid 42\)/);
   assert.doesNotMatch(running, /exit code/);
   assert.match(running, /stdout:\nbuilding…/);
-  assert.match(stillRunningNote({ job_id: "job-1", pid: 1, log_path: "/l" }, 10_000), /do not wait for it or poll it/);
+  // The default wakes only on failure, so the note says what to do when the result is needed now (INV-1613).
+  assert.match(stillRunningNote({ job_id: "job-1", pid: 1, log_path: "/l" }, 10_000), /woken only if it fails[\s\S]*Jobs wait for it now/);
+  assert.match(stillRunningNote({ job_id: "job-1", pid: 1, log_path: "/l" }, 10_000, "wake"), /do not wait for it or poll it/);
+  assert.match(stillRunningNote({ job_id: "job-1", pid: 1, log_path: "/l" }, 10_000, "record"), /next turn opens with a note/);
+  assert.match(stillRunningNote({ job_id: "job-1", pid: 1, log_path: "/l" }, 10_000, "record", true), /only waits[\s\S]*instead of a sleep/);
+  assert.match(formatExec({ stdout: "", stderr: "", exit_code: -1, timed_out: false, still_running: { job_id: "job-2", pid: 3, log_path: "/l" } }, undefined, 10_000, { onEnd: "record", waitOnly: true }), /only waits/);
 });

@@ -77,6 +77,10 @@ test("effort follows the call, and a caller's value replaces the turn default", 
   const silent = { effort: false } as ProviderProfile;
   assert.equal(effortForKind("turn"), "medium");
   assert.equal(effortForKind("delegate"), "medium");
+  // A profile that names its own turn effort keeps it (INV-1613): Claude's turns were high before the split by kind.
+  assert.equal(effortForKind("turn", { turnEffort: "high" }), "high");
+  assert.equal(effortForKind("summarize", { turnEffort: "high" }), "low");
+  assert.deepEqual(effortConfig({ ...sending, turnEffort: "high" }, "turn"), { output_config: { effort: "high" } });
   for (const kind of ["summarize", "memory", "review", "select", "steward", "handoff", "anomaly", "switch"] as const) {
     assert.equal(effortForKind(kind), "low", kind);
   }
