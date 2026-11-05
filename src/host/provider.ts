@@ -57,6 +57,8 @@ export interface ProviderProfile {
   /** Claude-only request fields. Sent only where they mean something. */
   adaptiveThinking: boolean;
   effort: boolean;
+  /** The effort a person-facing turn or a delegate asks for, when not medium (INV-1613): Claude's turns stayed at high before the field was split by kind. */
+  turnEffort?: Effort;
   promptCaching: boolean;
   /**
    * What each token class costs relative to a fresh input token (INV-772): a goal's budget is
@@ -94,6 +96,7 @@ const ANTHROPIC: ProviderProfile = {
   vision: true,
   adaptiveThinking: true,
   effort: true,
+  turnEffort: "high",
   promptCaching: true,
   auth: "x-api-key",
   keyEnv: "ANTHROPIC_API_KEY",
@@ -752,13 +755,13 @@ export function resolveSummaryProvider(agentProfile: ProviderProfile): ProviderP
 /**
  * How hard this call should think (INV-1612).
  *
- * Person-facing turns and a delegate stay at medium. Summaries, memory, review, selection
+ * Person-facing turns and a delegate stay at medium, or at the profile's own turn effort. Summaries, memory, review, selection
  * and the other housekeeping calls stay at low. The caller's own effort, when they passed
  * one, replaces the turn default. The vendor's default when the field is omitted is max,
  * which is why a profile that implements effort always sends it.
  */
-export function effortForKind(kind: UsageKind): Effort {
-  return kind === "turn" || kind === "delegate" ? "medium" : "low";
+export function effortForKind(kind: UsageKind, profile?: Pick<ProviderProfile, "turnEffort">): Effort {
+  return kind === "turn" || kind === "delegate" ? (profile?.turnEffort ?? "medium") : "low";
 }
 
 /** `output_config.effort`, or nothing when this profile does not implement the field. */
@@ -768,7 +771,7 @@ export function effortConfig(
   override?: Effort
 ): { output_config: { effort: Effort } } | Record<string, never> {
   if (!profile.effort) return {};
-  return { output_config: { effort: override ?? effortForKind(kind) } };
+  return { output_config: { effort: override ?? effortForKind(kind, profile) } };
 }
 
 export function describeProvider(profile: ProviderProfile): string {

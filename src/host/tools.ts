@@ -3,7 +3,7 @@ import { inputValueHash, parseSensitiveInput, SENSITIVE_INPUT_TTL_MS } from "../
 import { approvalOf, computerWithVision, desktopGuard, visionActionSchema, visionExpectSchema } from "./computer-vision.ts";
 import { deliveryLine } from "../cua/delivery.ts";
 import { formatExec } from "./exec-format.ts";
-import type { JobWatch } from "./job-watch.ts";
+import { isWaitOnly, onEndSchema, parseOnEnd } from "./job-end.ts"; import type { JobWatch } from "./job-watch.ts";
 /**
  * Tool definitions and dispatch.
  *
@@ -934,7 +934,7 @@ export function buildTools(
                 "you need running while you do something else, a delegated engine. Its " +
                 "output goes to a file rather than into this result, so nothing is lost to " +
                 "truncation. Then use `Jobs` to wait for it, read it, or stop it.",
-            },
+            }, ...onEndSchema(), // what its end is worth (INV-1613)
           },
           required: ["command"],
         },
@@ -1080,14 +1080,14 @@ export function buildTools(
       {
         name: "Jobs",
         description:
-          "The background commands you started with `bash` and background: true. " +
+          "The background commands you started with `bash` (background: true, or one that ran on past its window). " +
           "`list` shows them; `wait` blocks until one finishes, until a line you name " +
           "appears in its output, or until your timeout runs out — whichever comes " +
           "first, and it tells you which; `kill` stops one. Waiting for a line is how " +
           "you handle something that never exits: a server that has printed its ready " +
           "line is ready, and waiting for it to finish would wait forever. Every job's " +
           "full output is in a file, so read_file it when the tail a wait returns is " +
-          "not enough.",
+          "not enough. When you need to wait for anything, wait here — never with a `sleep` in bash: a wait costs nothing while it waits, a sleep that outlives its window becomes a job whose end has nothing to say.",
         input_schema: {
           type: "object",
           properties: {
@@ -2827,8 +2827,7 @@ export async function dispatchTool(
       const box = requireBox(context);
       if (input.desktop === true) await context.ensureDesktop?.();
       if (input.background === true) {
-        // Minted here so the call token can name the job before it exists (INV-784).
-        const jobId = `job-${randomBytes(8).toString("hex")}`;
+        const jobId = `job-${randomBytes(8).toString("hex")}`; // minted here so the call token can name the job before it exists (INV-784)
         const started = await box.startJob(command, {
           ...(input.cwd ? { cwd: String(input.cwd) } : {}),
           ...(context.displayIndex !== undefined ? { display: context.displayIndex } : {}),
@@ -2836,6 +2835,7 @@ export async function dispatchTool(
           jobId, actor: `agent:${context.agent.id}`, // the per-agent job limit and pause-by-owner (INV-1557)
           ...callFor(context, jobId),
         });
+        if (parseOnEnd(input.on_end) !== undefined) context.jobWatch?.watch({ /* watched only when asked (INV-1613); a chosen background job is the agent's own business, so the cap does not kill it */ agentId: context.agent.id, conversation: context.conversation ?? MAIN_CONVERSATION, jobId: started.job_id, command, onEnd: parseOnEnd(input.on_end)!, ...(input.wake_when !== undefined ? { wakeWhen: String(input.wake_when) } : {}), capped: false });
         return {
           text:
             `Started as ${started.job_id} (pid ${started.pid}).\n` +
@@ -2861,8 +2861,9 @@ export async function dispatchTool(
         ...callFor(context),
       });
       // A command that outlived its window runs on as a job; the watch wakes this agent when it ends (INV-1461).
-      if (result.still_running !== undefined) context.jobWatch?.watch({ agentId: context.agent.id, conversation: context.conversation ?? MAIN_CONVERSATION, jobId: result.still_running.job_id, command });
-      return { text: formatExec(result, input.timeout_ms ? Number(input.timeout_ms) : undefined, foregroundMs) };
+      const ending = { /* the policy the agent declared, or wake_on_failure; a command that only waits is recorded and the agent pointed at Jobs wait (INV-1613) */ onEnd: isWaitOnly(command) ? "record" as const : parseOnEnd(input.on_end) ?? "wake_on_failure" as const, waitOnly: isWaitOnly(command) };
+      if (result.still_running !== undefined) context.jobWatch?.watch({ agentId: context.agent.id, conversation: context.conversation ?? MAIN_CONVERSATION, jobId: result.still_running.job_id, command, onEnd: ending.onEnd, ...(input.wake_when !== undefined ? { wakeWhen: String(input.wake_when) } : {}) });
+      return { text: formatExec(result, input.timeout_ms ? Number(input.timeout_ms) : undefined, foregroundMs, ending) };
     }
 
     case "Orchestrate": {
