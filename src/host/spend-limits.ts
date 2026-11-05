@@ -15,7 +15,10 @@
  *
  * Priced with the same `priceOf` every report uses. A model with no rate cannot be priced, so its
  * tokens count toward a separate token line and the reminder names the model: a line nobody can
- * price is a line nobody can tune, and silence would be the old failure again. Settings live in
+ * price is a line nobody can tune, and silence would be the old failure again. Those tokens are
+ * counted as fresh-input equivalents: a cache read at a tenth, which is what providers charge
+ * for one. Counted at full weight, a 90k-token context re-read each round crossed half a
+ * million in six rounds and ended ordinary turns (2026-11-05, 0.3.19). Settings live in
  * one ledger beside the push budget's, so a restart keeps them.
  */
 
@@ -28,13 +31,15 @@ export interface SpendLimitConfig {
   perDay: number;
   /** One wake's line, in the rates' currency. */
   perWake: number;
-  /** The day's line for models the rates cannot price, in tokens. */
+  /** The day's line for models the rates cannot price, in fresh-input-equivalent tokens (a cache read counts a tenth). */
   perDayTokens: number;
-  /** One wake's line for unpriced models, in tokens. */
+  /** One wake's line for unpriced models, in the same tokens. */
   perWakeTokens: number;
 }
 
-export const DEFAULT_SPEND_LIMITS: SpendLimitConfig = { perDay: 20, perWake: 2, perDayTokens: 5_000_000, perWakeTokens: 500_000 };
+export const DEFAULT_SPEND_LIMITS: SpendLimitConfig = { perDay: 20, perWake: 2, perDayTokens: 30_000_000, perWakeTokens: 2_000_000 };
+/** What a cache read weighs against a fresh input token in the unpriced line. */
+export const CACHE_READ_WEIGHT = 0.1;
 
 /** Where the reminder goes out, once per line per day or per wake. */
 const WARN_AT = 0.8;
@@ -218,7 +223,7 @@ export class SpendLimits {
   private add(into: { spent: number; unpricedTokens: number; unpricedModels: Set<string> }, row: Priceable, price: number | undefined): void {
     if (price !== undefined) into.spent += price;
     else {
-      into.unpricedTokens += row.inputTokens + row.outputTokens + row.cacheReadTokens + row.cacheWriteTokens;
+      into.unpricedTokens += row.inputTokens + row.outputTokens + row.cacheWriteTokens + Math.round(row.cacheReadTokens * CACHE_READ_WEIGHT);
       into.unpricedModels.add(row.model);
     }
   }
