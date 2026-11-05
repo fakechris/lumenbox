@@ -117,7 +117,7 @@ import type { PitfallSource } from "./pitfalls.ts";
 import { SkillCache } from "./skills.ts";
 import { parseSchedule, type Schedule, type Scheduled, Scheduler } from "./schedule.ts";
 import { heartbeatAgentOf, heartbeatItems, heartbeatSlug, readStanding, standingBoxDir } from "./standing.ts";
-import { UsageLog } from "./usage.ts";
+import { UsageLog } from "./usage.ts"; import type { SpendLimits } from "./spend-limits.ts";
 import { AcpDelegates } from "./acp-delegate.ts";
 import { worktreeState } from "./worktree-state.ts";
 import { tracerFromEnv, type Tracer } from "./trace.ts";
@@ -338,7 +338,7 @@ export class Orchestrator {
    * One per process rather than per turn: the sequence numbers a collector reads by have to be
    * monotonic across the whole file, and two logs would produce two sequences.
    */
-  readonly usage = new UsageLog();
+  readonly usage = new UsageLog(); spendLimits?: SpendLimits; // each agent's spend lines, set by the web server that owns the pauses (INV-1615)
 
   /**
    * Decides whether a turn may spend, continue, or run a given action.
@@ -1901,7 +1901,7 @@ export class Orchestrator {
       boxKind: this.boxEntryOf(agent.id).kind,
       // The same cheap profile the summariser and the note-taker use: choosing memories is the least interesting work here.
       selectMemory: prompt => this.askCheaply(agent, prompt),
-      skillProvenance: this.skillProvenance, jobWatch: this.jobWatch, verifications: this.verifications, syncStanding: agentId => this.memoryMirror.sync(agentId),
+      skillProvenance: this.skillProvenance, jobWatch: this.jobWatch, verifications: this.verifications, syncStanding: agentId => this.memoryMirror.sync(agentId), ...(this.spendLimits !== undefined ? { spendLimits: this.spendLimits } : {}),
       ...(this.templateSetups.has(agent.id) ? { templateSetup: this.templateSetups.get(agent.id)! } : {}),
       templates: this.templates, hooks: this.hooks,
       // Same cheap profile. Shadow by default: the verdicts land in auto-review.jsonl and the web

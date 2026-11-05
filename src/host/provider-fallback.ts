@@ -75,7 +75,7 @@ export function switchLine(from: ProviderProfile, to: ProviderProfile, rates: Ra
   return `${from.label} is out of usage; this turn continues on ${to.label} ${to.model} (${price}). The next turn tries ${from.label} again.`;
 }
 
-function configuredRates(): Rates {
+export function configuredRates(): Rates {
   try {
     return (JSON.parse(readFileSync(join(agentboxHome(), "config.json"), "utf8")) as { rates?: Rates }).rates ?? {};
   } catch {
