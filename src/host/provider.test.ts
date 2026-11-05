@@ -9,7 +9,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { describeProvider, effectiveProviderFor, providerConfigured, providerNames, resolveProvider } from "./provider.ts";
+import { describeProvider, effectiveProviderFor, effortConfig, effortForKind, providerConfigured, providerNames, resolveProvider, type ProviderProfile } from "./provider.ts";
 import { buildTools } from "./tools.ts";
 import { buildSystemPrompt } from "./prompt.ts";
 import { AgentRegistry } from "../agents/registry.ts";
@@ -65,10 +65,25 @@ test("minimax defaults to M3, which can see", () => {
     assert.equal(profile.auth, "bearer", "third-party endpoints want Bearer");
     // Verified live: M3 read a real 1280x800 WebP screenshot back correctly.
     assert.equal(profile.vision, true);
-    // Accepted by the endpoint but not implemented, so not sent.
+    // Caching markers and adaptive thinking are still not sent. Effort is: omitting it leaves max.
     assert.equal(profile.promptCaching, false);
     assert.equal(profile.adaptiveThinking, false);
+    assert.equal(profile.effort, true);
   });
+});
+
+test("effort follows the call, and a caller's value replaces the turn default", () => {
+  const sending = { effort: true } as ProviderProfile;
+  const silent = { effort: false } as ProviderProfile;
+  assert.equal(effortForKind("turn"), "medium");
+  assert.equal(effortForKind("delegate"), "medium");
+  for (const kind of ["summarize", "memory", "review", "select", "steward", "handoff", "anomaly", "switch"] as const) {
+    assert.equal(effortForKind(kind), "low", kind);
+  }
+  assert.deepEqual(effortConfig(sending, "turn"), { output_config: { effort: "medium" } });
+  assert.deepEqual(effortConfig(sending, "summarize"), { output_config: { effort: "low" } });
+  assert.deepEqual(effortConfig(sending, "turn", "xhigh"), { output_config: { effort: "xhigh" } });
+  assert.deepEqual(effortConfig(silent, "turn", "max"), {});
 });
 
 test("vision follows the model, not the provider", () => {

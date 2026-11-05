@@ -150,6 +150,8 @@ export function summariseSpend(records: readonly UsageRecord[], query: SpendQuer
     if (turnIds !== undefined && (record.turnId === undefined || !turnIds.has(record.turnId))) {
       return false;
     }
+    // A refused call is recorded so the next postmortem can see it. It is not spend.
+    if (record.rejection !== undefined || record.model === "rejected") return false;
     return true;
   });
 

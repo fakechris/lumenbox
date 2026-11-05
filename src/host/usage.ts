@@ -150,6 +150,12 @@ export interface UsageRecord {
   anomaly?: UsageAnomaly;
   /** One line saying why, on the rows that carry a reason (`prompt_cache_low`: which segments changed). */
   reason?: string;
+  /**
+   * Set when a call was refused (INV-1612): `quota_hold` or `retry_after`. Tokens are 0.
+   * The spend report skips the row, so a model named "rejected" cannot withhold a bill.
+   * Absent on every row written before the field existed.
+   */
+  rejection?: string;
   /** `cacheReadTokens / total input` for the call that opened a turn (INV-782); on `turn` rows of round 0. */
   cacheShare?: number;
   /**

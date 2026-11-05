@@ -1529,9 +1529,8 @@ Environment:
   AGENTBOX_RELAY_LIMIT_USD  Hard spend ceiling per box, enforced at the relay.
   AGENTBOX_RELAY_LIMIT_TOKENS  The same in tokens, which needs no rate table.
   AGENTBOX_RELAY_WINDOW_HOURS  How far the ceiling looks back (default 24).
-  AGENTBOX_RATES            {"model": {"inputPerM": n, "outputPerM": n}} — without
-                            it a money ceiling fails closed and says which model
-                            it could not price.
+  AGENTBOX_RATES            {"model":{"inputPerM":n,"outputPerM":n}}; without it a money ceiling fails closed and names the unpriced model
+  AGENTBOX_QUOTA_PAUSE_AT   Same unit as those rates. Unset: do not refuse. AGENTBOX_QUOTA_REMAINS=1 queries MiniMax remains (off by default; the key is never printed)
   AGENTBOX_SESSION_SECRET   Shared by two gateways so sessions survive either
   AGENTBOX_SECURE_COOKIES   1 when TLS terminates in front of the gateway
   AGENTBOX_K8S_NAMESPACE    Namespace for kubernetes allocator boxes (default agentbox)

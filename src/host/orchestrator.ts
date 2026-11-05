@@ -89,7 +89,7 @@ import type { ResolutionConfig, DesktopResources } from "../protocol/index.ts";
 import { runTurn, TurnAborted, type TurnDeps, type TurnEvent } from "./turn.ts";
 import { readHandoff, type ToolContext } from "./tools.ts";
 import { JobWatch } from "./job-watch.ts";
-import { loadConfig } from "../config.ts"; import { FallbackRuntimes, fallbackNames } from "./provider-fallback.ts";
+import { loadConfig } from "../config.ts"; import { FallbackRuntimes, fallbackNames } from "./provider-fallback.ts"; import { setRejectionNote } from "./provider-rest.ts";
 import { McpManager } from "./mcp.ts";
 import { mergeServers } from "./mcp-connectors.ts";
 import { CapabilityLedger } from "./mcp-capabilities.ts";
@@ -122,7 +122,7 @@ import { AcpDelegates } from "./acp-delegate.ts";
 import { worktreeState } from "./worktree-state.ts";
 import { tracerFromEnv, type Tracer } from "./trace.ts";
 import {
-  createClient,
+  createClient, effortConfig,
   describeProvider,
   summaryRuntimeFor,
   resolveProvider,
@@ -890,6 +890,7 @@ export class Orchestrator {
   }
 
   constructor(private readonly options: OrchestratorOptions = {}) {
+    setRejectionNote(entry => { this.usage.record(entry); });
     this.tasks =
       options.tasks === null
         ? undefined
@@ -1392,7 +1393,7 @@ export class Orchestrator {
       ...(caller?.userId === undefined ? {} : { principalId: caller.userId }) });
     if (!decision.allow) throw new Error(decision.reason);
     const { client, provider } = this.runtimeForAgent(agent);
-    const response = await client.messages.create({ model: provider.model, max_tokens: Math.min(TEACH_MAX_TOKENS, provider.maxTokens),
+    const response = await client.messages.create({ model: provider.model, max_tokens: Math.min(TEACH_MAX_TOKENS, provider.maxTokens), ...effortConfig(provider, "review"),
       messages: [{ role: "user", content: text }] });
     this.usage.recordAside({ kind: "review", agentId, agentName: agent.profile.name, provider: provider.label,
       model: provider.model, usage: response.usage, ...(caller?.userId === undefined ? {} : { principal: caller.userId }) });
@@ -2217,7 +2218,7 @@ export class Orchestrator {
       const { client, profile } = summaryRuntimeFor(this.provider, this.client);
       const response = await client.messages.create({
         model: profile.model,
-        max_tokens: Math.min(512, profile.maxTokens),
+        max_tokens: Math.min(512, profile.maxTokens), ...effortConfig(profile, kind),
         messages: [{ role: "user", content: prompt }],
       });
       this.usage.recordAside({
@@ -2262,7 +2263,7 @@ export class Orchestrator {
       const response = await client.messages.create(
         {
           model: profile.model,
-          max_tokens: Math.min(request.maxTokens, profile.maxTokens),
+          max_tokens: Math.min(request.maxTokens, profile.maxTokens), ...effortConfig(profile, request.kind),
           system: request.system,
           messages: [{ role: "user", content: request.prompt }],
         },

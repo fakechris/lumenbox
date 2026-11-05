@@ -12,6 +12,7 @@ export const PROVIDER_REST_JS = `(function () {
   var ui = {};
   function render(d) {
     ui.list.textContent = "";
+    if (d.quota) ui.list.appendChild(el("div", { class: "dim" }, d.quota));
     var rests = d.rests || [];
     if (!rests.length) { ui.list.appendChild(el("div", { class: "dim" }, "Every provider account is answering.")); return; }
     rests.forEach(function (r) {

@@ -78,6 +78,17 @@ test("money is only reported when every model in the window has a rate", () => {
   assert.doesNotMatch(describeSpend(report).join("\n"), /\$0\b/);
 });
 
+test("a rejected call is not spend: its tokens stay out and it does not withhold the bill", () => {
+  const records = [
+    row({ model: "claude-opus-5", inputTokens: 1_000_000, outputTokens: 0 }),
+    row({ model: "rejected", rejection: "quota_hold", inputTokens: 9_000_000, outputTokens: 9_000_000 }),
+  ];
+  const report = summariseSpend(records, { rates: { "claude-opus-5": { inputPerM: 1, outputPerM: 1 } } });
+  assert.equal(report.money, 1);
+  assert.deepEqual(report.unpriced, []);
+  assert.equal(report.totals.inputTokens, 1_000_000);
+});
+
 test("cache reads are priced apart from fresh input", () => {
   const records = [row({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 1_000_000 })];
   const rates = { "MiniMax-M3": { inputPerM: 10, outputPerM: 30, cacheReadPerM: 1 } };

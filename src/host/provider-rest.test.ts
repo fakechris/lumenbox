@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type Anthropic from "@anthropic-ai/sdk";
 import { classifyFailure, decideRetry } from "./transient.ts";
-import { accountOf, gateClient, ProviderRests, ProviderRestingError, type RestEvent } from "./provider-rest.ts";
+import { accountOf, gateClient, ProviderRests, ProviderRestingError, setRejectionNote, type RejectionEntry, type RestEvent } from "./provider-rest.ts";
 import { fakeModel } from "./testing/fake-model.ts";
 
 /** What MiniMax answered all evening on 2026-11-04, verbatim. */
@@ -157,5 +157,42 @@ test("scenario: five agents' turns on an exhausted plan — one call reaches the
   } finally {
     if (previousHome === undefined) delete process.env.AGENTBOX_HOME; else process.env.AGENTBOX_HOME = previousHome;
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a forecast hold is refused before the call and is not retried; a real 2056 is a zero-token row", async () => {
+  const rests = new ProviderRests();
+  let calls = 0;
+  const held = Object.assign(new Error("quota_hold: Forecast, not a bill. No call was made."), { providerResting: true as const });
+  const blocked = gateClient(fakeModel(() => { calls += 1; return reply("nope"); }), "acct", "MiniMax", rests, () => held);
+  await assert.rejects(blocked.messages.create({ model: "m", max_tokens: 1, messages: [] } as never), /quota_hold/);
+  await assert.rejects(blocked.messages.stream({ model: "m", max_tokens: 1, messages: [] } as never).finalMessage(), /quota_hold/);
+  assert.equal(calls, 0, "the forecast hold does not reach the provider");
+  assert.equal(rests.list().length, 0, "a forecast hold does not open a second rest");
+  assert.equal(classifyFailure(held), "usage_limit");
+  assert.equal(decideRetry({ error: held, attempt: 1, aborted: false, outputProduced: false }).retry, false);
+
+  const notes: RejectionEntry[] = [];
+  setRejectionNote(entry => notes.push(entry));
+  try {
+    const quota = () => { throw TOKEN_PLAN_2056; };
+    const live = gateClient(fakeModel(quota, { create: quota }), "acct-2", "MiniMax", new ProviderRests());
+    await assert.rejects(live.messages.create({ model: "m", max_tokens: 1, messages: [] } as never), /2056/);
+    assert.equal(notes.length, 1);
+    assert.equal(notes[0]!.rejection, "quota_hold");
+    assert.equal(notes[0]!.model, "rejected");
+    assert.equal(notes[0]!.inputTokens, 0);
+    assert.equal(notes[0]!.outputTokens, 0);
+    assert.match(notes[0]!.reason, /2056/);
+
+    const slow = Object.assign(new Error("速率限制 (2062)"), { status: 429 });
+    const pace = () => { throw slow; };
+    const paced = gateClient(fakeModel(pace, { create: pace }), "acct-3", "MiniMax", new ProviderRests());
+    await assert.rejects(paced.messages.create({ model: "m", max_tokens: 1, messages: [] } as never), /2062/);
+    assert.equal(notes[1]!.rejection, "retry_after");
+    assert.match(notes[1]!.reason, /2062/);
+    assert.equal(notes[1]!.inputTokens, 0);
+  } finally {
+    setRejectionNote(() => undefined);
   }
 });

@@ -386,6 +386,7 @@ test("the summariser is a separate, cheaper profile where one exists", () => {
   // deployment with one credential must still be able to compact. Better slow than stuck.
   const minimax = resolveProvider("minimax");
   assert.equal(resolveSummaryProvider(minimax).model, minimax.model);
+  assert.equal(resolveSummaryProvider(minimax).effort, true, "MiniMax sends effort; the summary profile is the agent's own");
 });
 
 test("an explicit summariser choice wins over the derived one", () => {
