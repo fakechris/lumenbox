@@ -25,9 +25,10 @@ test("paraphrased questions find the note written in other words; word overlap a
 test("on every other fixture, nothing word overlap found is lost", () => {
   for (const fixture of MEMORY_FIXTURES.filter(f => f.shape !== "paraphrase" && f.shape !== "wrong-box")) {
     const k = 5;
-    const before = hits(fixture.query, fixture.records, fixture.required, k, false);
-    const after = hits(fixture.query, fixture.records, fixture.required, k, true);
-    assert.ok(after >= before, `${fixture.id}: ${before} → ${after} required in the top ${k}`);
+    // The same records, not only as many: a different required record found would hide one lost.
+    const found = (meaning: boolean) => new Set(selectRelevant(fixture.query, dedupe(fixture.records), k, { meaning }).map(record => record.text).filter(text => fixture.required.includes(text)));
+    const after = found(true);
+    for (const text of found(false)) assert.ok(after.has(text), `${fixture.id}: "${text}" was in the top ${k} by words and is not now`);
   }
 });
 
