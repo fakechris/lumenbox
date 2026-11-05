@@ -69,7 +69,7 @@ import { sniffImage } from "./image-refusal.ts";
 import { appendLearning, hostOf, learningsDir, readLearnings, renderLearnings } from "./learnings.ts";
 import type { McpManager, ToolEffect } from "./mcp.ts";
 import { MCP_FACE_DIR, MCP_FACE_TOKEN_VARIABLE, type McpFace } from "./mcp-face.ts";
-import { dedupe, dedupeKey, describeFrom, memoryRef, validateRecord } from "./memory.ts";
+import { dedupe, dedupeKey, describeFrom, memoryRef, validateRecord } from "./memory.ts"; import { recallMatches } from "./memory-relevance.ts";
 import { guardMemoryCandidate } from "./memory-guard.ts";
 import type { ModelRelay } from "./model-relay.ts";
 import { type OAuthGate, type OAuthProvider, oauthProvider, scrubToken, tokenHeaders } from "./oauth.ts";
@@ -4365,14 +4365,12 @@ export async function dispatchTool(
         tier: "team",
       }));
       const records = [...own, ...team];
-      const words = String(input.search ?? "")
-        .toLowerCase()
-        .split(/\s+/)
-        .filter(word => word !== "");
-      const found = records.filter(({ record }) =>
-        words.every(word => record.text.toLowerCase().includes(word))
-      );
+      // Every word first, as always; then what is related by meaning but phrased otherwise (INV-1580).
+      const { exact: found, related } = recallMatches(String(input.search ?? ""), records);
       const whose = sharedOnly ? "the team has kept" : "you or the team have kept";
+      const relatedLines = related.map(({ record, tier }) => `- [${tier}] (${record.at.slice(0, 10)}) ${record.text}${describeFrom(record.from)}`);
+      const alsoRelated = relatedLines.length > 0 ? `\n\nRelated by meaning (not every word you searched for):\n\n${relatedLines.join("\n")}` : "";
+      if (found.length === 0 && related.length > 0) return { text: `No record holds every word you searched for; ${related.length} of ${records.length} things ${whose} are related by meaning:\n\n${relatedLines.join("\n")}` };
       if (found.length === 0) {
         // Distinguished from "nothing was kept at all", because an agent that reads the
         // two the same way concludes it has no memory when it merely has no match.
@@ -4398,7 +4396,7 @@ export async function dispatchTool(
             `- [${tier}] (${record.at.slice(0, 10)}) ${record.text}${describeFrom(record.from)}`
         );
       const more = found.length > 40 ? `\n\n(${found.length - 40} older matches not shown.)` : "";
-      return { text: `${found.length} of ${records.length} things ${whose}:\n\n${lines.join("\n")}${more}` };
+      return { text: `${found.length} of ${records.length} things ${whose}:\n\n${lines.join("\n")}${more}${alsoRelated}` };
     }
 
     case "ReadFeishuDoc": {

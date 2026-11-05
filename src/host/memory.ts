@@ -37,6 +37,7 @@ import { envNumber } from "../config.ts";
 import { credentialIn, credentialRefusal } from "./secret-scan.ts";
 import { type SwitchDeps, switched } from "./jev.ts";
 import { jevSelect, sufficiencySwitched } from "./memory-select-jev.ts";
+import { rankRelated } from "./memory-relevance.ts";
 import type { MemoryTypes } from "./memory-types.ts";
 
 /** A single thing remembered. One JSON object per line, appended, never edited in place. */
@@ -426,39 +427,13 @@ export function recall(
 }
 
 /**
- * The records most related to some text, by word overlap.
- *
- * Used when a set of candidates has to be narrowed — the extraction pass reasoning about what it
- * already knows. Plain lexical overlap, because these are short keyword-dense lines and that is the
- * easy case; an embedding here would be infrastructure bought to solve a problem nobody has
- * measured. **This function is the seam**: if the evidence ever calls for semantic retrieval, it is
- * the only thing that changes.
+ * The records most related to some text (INV-1580: words, stems and concepts, weighted by rarity;
+ * memory-relevance.ts). Used when a set of candidates has to be narrowed — the lexical fallback, the
+ * extractor's and the judge's shortlists. **This function is the seam** for relevance: it, and the
+ * Recall tool through the same module, are the only places that decide what is "related".
  */
-export function selectRelevant(
-  query: string,
-  records: readonly MemoryRecord[],
-  max: number
-): MemoryRecord[] {
-  if (max <= 0) return [];
-  // Two characters is a whole word in Chinese (密码, 部署, 配置) — the length gate
-  // exists to drop English "at"/"if" noise, so it exempts Han.
-  const wanted = new Set(
-    dedupeKey(query)
-      .split(" ")
-      .filter(word => word.length > 2 || /\p{Script=Han}/u.test(word))
-  );
-  if (wanted.size === 0) return [];
-  return records
-    .map(record => {
-      const words = new Set(dedupeKey(record.text).split(" "));
-      let overlap = 0;
-      for (const word of wanted) if (words.has(word)) overlap += 1;
-      return { record, overlap };
-    })
-    .filter(entry => entry.overlap > 0)
-    .sort((a, b) => b.overlap - a.overlap || b.record.at.localeCompare(a.record.at))
-    .slice(0, max)
-    .map(entry => entry.record);
+export function selectRelevant(query: string, records: readonly MemoryRecord[], max: number, options: { meaning?: boolean } = {}): MemoryRecord[] {
+  return max <= 0 ? [] : rankRelated(query, records, options).slice(0, max).map(entry => entry.record);
 }
 
 /**

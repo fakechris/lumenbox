@@ -13,13 +13,14 @@
  *   retracted    — a fact withdrawn (and, once, re-recorded after the withdrawal)
  *   wrong-box    — a shared record from another box; never seen (tested against the registry)
  *   distractor   — long notes that would eat the budget around one short required fact
+ *   paraphrase   — the question asked in other words than the note was written in (INV-1580)
  */
 
 import type { MemoryRecord } from "./memory.ts";
 
 export interface MemoryFixture {
   id: string;
-  shape: "relevant" | "synonym" | "conflict" | "retracted" | "wrong-box" | "distractor";
+  shape: "relevant" | "synonym" | "conflict" | "retracted" | "wrong-box" | "distractor" | "paraphrase";
   query: string;
   records: MemoryRecord[];
   /** Character budget for the prompt body. */
@@ -85,4 +86,13 @@ export const MEMORY_FIXTURES: readonly MemoryFixture[] = [
   { id: "distractor-episodes", shape: "distractor", query: "where is the runbook", budget: 500, records: [fact("the runbook is at /home/box/work/runbook.md", 30), ...Array.from({ length: 6 }, (_, i) => ({ ...longNote(i), kind: "episode" as const }))], required: ["the runbook is at /home/box/work/runbook.md"], forbidden: [] },
   { id: "distractor-cjk", shape: "distractor", query: "部署区域", budget: 500, records: [fact("部署区域是 eu-west-1", 20), ...Array.from({ length: 6 }, (_, i) => note(`第${i}次会议记录：${"讨论了路线图和后续事项；".repeat(12)}没有结论`, 1))], required: ["部署区域是 eu-west-1"], forbidden: [] },
   { id: "distractor-old-fact", shape: "distractor", query: "what is the budget cap", budget: 500, records: [fact("the monthly API budget cap is $50", 120), ...Array.from({ length: 6 }, (_, i) => longNote(i))], required: ["the monthly API budget cap is $50"], forbidden: [] },
+  // ── paraphrase (INV-1580) ────────────────────────────────────────────────────────────
+  { id: "paraphrase-ship", shape: "paraphrase", query: "where do we ship the app to", budget: 220, records: [fact("the deployment region is eu-west-1", 40), ...distractors(8, 1)], required: ["the deployment region is eu-west-1"], forbidden: [] },
+  { id: "paraphrase-calendar", shape: "paraphrase", query: "what is on my calendar for thursday", budget: 220, records: [fact("the standup moved to Thursdays at 9:30", 10), ...distractors(8, 1).filter(r => !r.text.includes("Thursdays"))], required: ["the standup moved to Thursdays at 9:30"], forbidden: [] },
+  { id: "paraphrase-brief", shape: "paraphrase", query: "how concise should my replies be", budget: 220, records: [fact("the user prefers short answers", 20), ...distractors(8, 1)], required: ["the user prefers short answers"], forbidden: [] },
+  { id: "paraphrase-cjk-db", shape: "paraphrase", query: "我们的数据库是什么", budget: 220, records: [fact("the production database is Postgres 16 on RDS", 30), ...distractors(8, 1)], required: ["the production database is Postgres 16 on RDS"], forbidden: [] },
+  { id: "paraphrase-mixed-doc", shape: "paraphrase", query: "上线流程的文档在哪里", budget: 220, records: [fact("the release runbook is docs/release.md", 15), ...distractors(8, 1)], required: ["the release runbook is docs/release.md"], forbidden: [] },
+  { id: "paraphrase-cjk-secret", shape: "paraphrase", query: "where are the staging credentials kept", budget: 220, records: [fact("staging 的密码在 1Password 的 Staging DB 条目里", 12), ...distractors(8, 1)], required: ["staging 的密码在 1Password 的 Staging DB 条目里"], forbidden: [] },
+  { id: "paraphrase-holiday", shape: "paraphrase", query: "when is Mia on vacation", budget: 220, records: [fact("Mia is on leave from 2026-09-20 to 2026-09-27", 5), ...distractors(8, 1)], required: ["Mia is on leave from 2026-09-20 to 2026-09-27"], forbidden: [] },
+  { id: "paraphrase-billing", shape: "paraphrase", query: "who handles the bills", budget: 220, records: [fact("Bill Ops owns invoice approvals", 25), ...distractors(8, 1).filter(r => !r.text.startsWith("invoices"))], required: ["Bill Ops owns invoice approvals"], forbidden: [] },
 ];
