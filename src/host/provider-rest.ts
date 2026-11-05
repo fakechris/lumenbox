@@ -101,6 +101,12 @@ export class ProviderRests {
     return [...this.entries.values()].map(entry => ({ ...entry.state }));
   }
 
+  /** Whether the account rests now, without claiming the probe (for choosing a fallback). */
+  resting(account: string): boolean {
+    const entry = this.entries.get(account);
+    return entry !== undefined && (entry.probing || this.now() < Date.parse(entry.state.until));
+  }
+
   /** Whether a call may go out now; a `probe` is the one call that finds out whether a rest is over. */
   check(account: string): { refuse: false; probe: boolean } | { refuse: true; error: ProviderRestingError } {
     const entry = this.entries.get(account);

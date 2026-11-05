@@ -159,6 +159,8 @@ export interface UsageRecord {
    */
   principal?: string;
   provider: string;
+  /** When a fallback answered, the provider it stood in for (INV-1578): fallback spend, kept apart. */
+  fallbackFor?: string;
   model: string;
   /** Which round of the turn: a turn that ran long is visible as such. */
   round: number;

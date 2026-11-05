@@ -156,6 +156,8 @@ export interface AgentboxConfig {
    * references/) cloned anywhere in the box, without copying it into the working set.
    */
   skillRoots?: string[];
+  /** Up to three provider presets to go on with when the default is out of usage (INV-1578). */
+  fallbackProviders?: string[];
   /**
    * Where our agents answer questions people put to them on a work item (INV-553, docs/54).
    *
@@ -378,6 +380,9 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
     ...(connectorVersions !== undefined ? { connectorVersions } : {}),
     ...(readMcpServers(raw.mcpServers, onWarn) !== undefined
       ? { mcpServers: readMcpServers(raw.mcpServers, onWarn) }
+      : {}),
+    ...(readStringList(raw.fallbackProviders, "fallbackProviders", onWarn) !== undefined
+      ? { fallbackProviders: readStringList(raw.fallbackProviders, "fallbackProviders", onWarn)!.slice(0, 3) }
       : {}),
     ...(readStringList(raw.skillRoots, "skillRoots", onWarn) !== undefined
       ? { skillRoots: readStringList(raw.skillRoots, "skillRoots", onWarn) }
@@ -802,6 +807,8 @@ export function saveConfig(
   changes: Partial<Record<"provider" | "model" | "baseUrl" | "boxImage" | "boxCpus", string | null>> & {
     env?: Record<string, string | null>;
     channelAllow?: string[] | null;
+    /** Up to three fallback provider presets (INV-1578); null or [] clears the list. */
+    fallbackProviders?: string[] | null;
     hostExec?: AgentboxConfig["hostExec"] | null;
     /** Per-chat patch: a null hour removes that chat's digest, others are left alone. */
     digests?: Record<string, number | null>;
@@ -830,6 +837,11 @@ export function saveConfig(
     if (value === undefined) continue;
     if (value === null) delete raw[key];
     else raw[key] = value;
+  }
+  if (changes.fallbackProviders !== undefined) {
+    const names = (changes.fallbackProviders ?? []).map(name => name.trim()).filter(Boolean).slice(0, 3);
+    if (names.length === 0) delete raw.fallbackProviders;
+    else raw.fallbackProviders = names;
   }
   if (changes.channelAllow !== undefined) {
     if (changes.channelAllow === null || changes.channelAllow.length === 0) {
