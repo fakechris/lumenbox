@@ -72,7 +72,7 @@ export const SIDE_DOOR_CAPABILITIES = {
   watch: true, // a long-poll change feed; streaming stays false (INV-1508).
   cancel: false,
   streaming: false,
-  files: false,
+  files: true, // fetch_deliverable reads a task's delivered files (INV-1668); nothing is uploaded through the door.
   sessions: false,
 } as const;
 

@@ -1464,11 +1464,14 @@ The box runs wherever your Docker engine points: set DOCKER_HOST or use
                            streaming, vision, long output, caching. Run before
                            trusting a new provider, and after a vendor update.
   mcp                      Bridge this installation to an MCP client over stdio.
-  mcp reload               Apply an edit to mcpServers in config.json without a restart.
-  extensions reload        Re-import ~/.agentbox/extensions/*.{mjs,js,ts} without a restart.
                            Needs AGENTBOX_MCP_TOKEN from Settings; the client
                            gets a box, a desktop and a team, billed to whoever
                            the token belongs to.
+  mcp reload               Apply an edit to mcpServers in config.json without a restart.
+  skill install [--claude] [--codex]
+                           Install the LumenBox skill for Claude Code (default) or Codex,
+                           and print the MCP config to add (with a token placeholder).
+  extensions reload        Re-import ~/.agentbox/extensions/*.{mjs,js,ts} without a restart.
 
 Quality:
   golden [provider...]     End-to-end golden tasks through a real orchestrator
@@ -1855,10 +1858,6 @@ async function main(): Promise<number> {
       return anyFail ? 1 : 0;
     }
 
-    // A stdio bridge to a running installation, because that is the shape every
-    // client already knows how to configure. It forwards JSON-RPC lines to /mcp and
-    // writes the replies back — no protocol of its own, so nothing here can disagree
-    // with the server about what MCP means.
     case "extensions": {
       if (rest[0] !== "reload") {
         err("Usage: agentbox extensions reload");
@@ -1891,36 +1890,10 @@ async function main(): Promise<number> {
         err("Set AGENTBOX_MCP_TOKEN to a token from Settings — the side door needs a person's name on it.");
         return 1;
       }
-      let buffer = "";
-      process.stdin.setEncoding("utf8");
-      process.stdin.on("data", chunk => {
-        buffer += chunk;
-        let at = buffer.indexOf("\n");
-        while (at >= 0) {
-          const line = buffer.slice(0, at).trim();
-          buffer = buffer.slice(at + 1);
-          at = buffer.indexOf("\n");
-          if (line === "") continue;
-          void fetch(url, {
-            method: "POST",
-            headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-            body: line,
-          })
-            .then(async response => {
-              const text = await response.text();
-              // A notification gets an empty object back and has no id; writing that
-              // to a client expecting nothing is noise, so it is dropped.
-              if (text.trim() !== "" && text.trim() !== "{}") process.stdout.write(`${text}\n`);
-            })
-            .catch((error: unknown) => {
-              err(`mcp bridge: ${error instanceof Error ? error.message : String(error)}`);
-            });
-        }
-      });
-      await new Promise<void>(resolve => process.stdin.on("end", () => resolve()));
-      return 0;
+      return (await import("./web/mcp-bridge.ts")).runMcpBridge(url, token, { stdin: process.stdin, write: text => process.stdout.write(text), err });
     }
 
+    case "skill": return (await import("./host/skill-pack.ts")).cmdSkill(rest, { out, err, home: homedir(), claudeDir: process.env.CLAUDE_CONFIG_DIR, codexHome: process.env.CODEX_HOME, mcpUrl: process.env.AGENTBOX_MCP_URL }); // INV-1668: the LumenBox skill pack for Claude Code / Codex
     case "where":
       out(`state:  ${agentboxHome()}`);
       out(`agents: ${defaultAgentsRoot()}`);

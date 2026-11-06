@@ -5,7 +5,7 @@
  * wording — believing the report again, one step removed. This is the same task as data: the
  * contract's outcome, the stage table's row, the mandate as it stands, the last moves, and for
  * a goal the gate's own numbers. Nothing here is a judgement the record does not already hold;
- * no memory, no conversation text, no files.
+ * no memory, no conversation text, and of files only what was delivered: names and digests, not bytes.
  */
 
 import type { Pursuit } from "../host/goal-mode.ts";
@@ -47,6 +47,8 @@ export interface TaskRecord {
   pursuit?: PursuitRecord;
   /** A supervisor's flag while it holds (INV-1509). */
   flag?: TaskFlag;
+  /** What the task handed over (INV-1663), oldest first: fetch_deliverable reads one (INV-1668). */
+  deliverables?: { id: string; name: string; size: number; sha256: string; note: string; at: string }[];
 }
 
 export function pursuitRecord(pursuit: Pursuit): PursuitRecord {
@@ -96,5 +98,6 @@ export function taskRecord(task: Task, deps: { nameOf: (id: string) => string; s
     })),
     ...(pursuit !== undefined ? { pursuit: pursuitRecord(pursuit) } : {}),
     ...(currentFlag(task) !== undefined ? { flag: currentFlag(task)! } : {}),
+    ...((task.deliverables ?? []).length > 0 ? { deliverables: task.deliverables!.map(item => ({ id: item.id, name: item.name, size: item.size, sha256: item.sha256, note: item.note, at: item.at })) } : {}),
   };
 }
