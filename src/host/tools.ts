@@ -3,7 +3,7 @@ import { inputValueHash, parseSensitiveInput, SENSITIVE_INPUT_TTL_MS } from "../
 import { approvalOf, computerWithVision, desktopGuard, visionActionSchema, visionExpectSchema } from "./computer-vision.ts";
 import { deliveryLine } from "../cua/delivery.ts";
 import { formatExec } from "./exec-format.ts";
-import { isWaitOnly, onEndSchema, parseOnEnd } from "./job-end.ts"; import type { JobWatch } from "./job-watch.ts";
+import { isWaitOnly, onEndSchema, parseOnEnd } from "./job-end.ts"; import { levelOfCurrentTask, parseLevel } from "./autonomy-level.ts"; import type { JobWatch } from "./job-watch.ts";
 /**
  * Tool definitions and dispatch.
  *
@@ -1804,7 +1804,7 @@ export function buildTools(
           note: {
             type: "string",
             description: "For update: what happened — a blocker, a finding, a handoff note.",
-          },
+          }, level: { type: "integer", minimum: 1, maximum: 5, description: "For create or update: how far the AI may take it alone, 1–5 (L1 tidy, L2 propose, L3 partial, L4 do it with outward steps confirmed, L5 end to end). Inferred by rule when absent; say why if you set it." },
           propose: {
             type: "boolean",
             description:
@@ -2641,8 +2641,8 @@ export async function dispatchTool(
     agentName: context.agent.profile.name,
     tool: name,
     input,
-    // Whose turn this is, so a rule a person wrote about their own routine work applies from whichever door they drove it (INV-156).
-    ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}),
+    // Whose turn this is, so a rule a person wrote about their own routine work applies from whichever door they drove it (INV-156); and the level of the task this turn is doing (INV-1650).
+    ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}), ...(levelOfCurrentTask(context) !== undefined ? { taskLevel: levelOfCurrentTask(context) } : {}),
     ...(context.callerName !== undefined ? { principalName: context.callerName } : {}),
     ...(context.turnId !== undefined ? { turnId: context.turnId } : {}),
   });
@@ -5105,7 +5105,7 @@ export async function dispatchTool(
           ...(context.conversation !== undefined ? { conversation: context.conversation } : {}),
           ...(contract !== undefined ? { contract } : {}),
           ...(propose ? { proposedBy: context.agent.id } : {}),
-          ...(typeof input.due === "string" && input.due.trim() !== "" ? { due: input.due } : {}),
+          ...(typeof input.due === "string" && input.due.trim() !== "" ? { due: input.due } : {}), ...(parseLevel(input.level) !== undefined ? { level: parseLevel(input.level)! } : {}), // INV-1650
         });
         if (created === undefined) return { text: "A task needs a title.", isError: true };
         const told = tellAssignee(context, created.id, created.title, assigneeId);
@@ -5180,7 +5180,7 @@ export async function dispatchTool(
         const updated = board.update(
           String(input.id ?? ""),
           {
-            ...(isTaskStatus(status) ? { status } : {}),
+            ...(isTaskStatus(status) ? { status } : {}), ...(parseLevel(input.level) !== undefined ? { level: parseLevel(input.level)! } : {}),
             ...(typeof input.due === "string" && input.due.trim() !== "" ? { due: input.due } : {}),
             ...(typeof input.waiting_on === "string" ? { waitingOn: input.waiting_on.trim() === "" ? null : input.waiting_on } : {}),
             ...(typeof input.snooze_until === "string" ? { snoozeUntil: input.snooze_until.trim() === "" ? null : input.snooze_until } : {}),

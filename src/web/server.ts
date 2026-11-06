@@ -222,7 +222,7 @@ import { PersonalBoxes, type PersonalBoxDriver } from "../host/personal-boxes.ts
 import { PersonalDocker } from "../box/personal.ts";
 import { personalAllocationRefusal, personalBoxesOf, personalQuotaFor } from "../host/box-quota.ts";
 import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
-import { attentionFor, isDecision, urgencyOf } from "../host/attention.ts"; import { openTurnsOf, staleApprovals } from "../host/approval-wait.ts";
+import { attentionFor, isDecision, urgencyOf } from "../host/attention.ts"; import { parseLevel } from "../host/autonomy-level.ts"; import { openTurnsOf, staleApprovals } from "../host/approval-wait.ts";
 import { stageWorldOf, taskStage } from "../host/task-stage.ts";
 import { ChangeFeed } from "./mcp-watch.ts";
 import { InvoluteConsumer } from "../host/involute-inbox.ts";
@@ -4289,7 +4289,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const updated = board.update(
             String(body.id ?? ""),
             {
-              ...(isTaskStatus(status) ? { status } : {}),
+              ...(isTaskStatus(status) ? { status } : {}), ...(parseLevel(body.level) !== undefined ? { level: parseLevel(body.level)! } : {}), // a person's own level (INV-1650)
               ...(typeof body.note === "string" && body.note.trim() !== ""
                 ? { note: body.note }
                 : {}),
@@ -6102,7 +6102,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (me === undefined || roleAtLeast(principals.roleOf(me.id), "admin")) for (const rest of providerRests.list()) answer.mine.unshift({ kind: "provider-resting", ref: rest.account, title: `${rest.label} is out of usage`, detail: `Every agent on it waits until ${new Date(rest.until).toLocaleString()}; top up the plan or Retry now in Settings → Model.` }); // INV-1577
           if (me === undefined || roleAtLeast(principals.roleOf(me.id), "admin")) for (const probe of probeKeeper?.recent() ?? []) answer.mine.unshift({ kind: "boundary-probe", ref: probe.agentId, title: `${probe.agentName} reached for this machine's credentials`, detail: `${probe.count} attempt${probe.count === 1 ? "" : "s"} in the last hour, refused; the latest ${probe.detail}.${probe.paused ? ` ${probe.agentName} is paused — Settings → Team.` : ""}` }); // INV-1553
           if (me === undefined || roleAtLeast(principals.roleOf(me.id), "admin")) for (const item of pendingReviews(registry.readSharedMemory())) answer.mine.unshift({ kind: "team-memory", ref: item.writer, title: `${registry.tryGet(item.writer)?.profile.name ?? "An agent"} wants the team to remember something`, detail: `"${item.record.text.slice(0, 140)}" — approve or reject in Settings → Team → Team memory.` }); // INV-1581
-          send(res, 200, { ...answer, mine: [...answer.mine].sort((a, b) => urgencyOf(a.kind) - urgencyOf(b.kind)).map(item => ({ ...item, decision: isDecision(item.kind) })), who: me?.name ?? "this installation" }); // decisions first and marked (INV-1647)
+          send(res, 200, { ...answer, mine: [...answer.mine].sort((a, b) => urgencyOf(a.kind) - urgencyOf(b.kind)).map(item => ({ ...item, decision: isDecision(item.kind), ...(board?.get(item.ref)?.level !== undefined ? { level: board!.get(item.ref)!.level } : {}) })), who: me?.name ?? "this installation" }); // decisions first and marked (INV-1647)
           return;
         }
 
