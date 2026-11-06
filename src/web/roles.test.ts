@@ -116,6 +116,26 @@ test("installation and organisation are an admin's; a person's own access is the
     assert.equal(await status("/api/prompt", vic, { agentId: "x", text: "go" }), 403, "driving");
     assert.equal(await status("/api/mcp/tokens", vic, { label: "nope" }), 403, "tokens");
     assert.equal(await status("/api/tasks", vic), 200, "but the board is readable");
+
+    // The desktop with nobody signed in (INV-1681) is the installation's one admin: its Mine
+    // lists that person's tokens — the supervision and watchdog ones are issued to them — and
+    // Issue gives it one, instead of an empty list and a 400. With no single admin it is asked whom.
+    const operator = async (path: string, body?: unknown) => {
+      const response = await fetch(`${BASE}${path}`, { method: body === undefined ? "GET" : "POST", headers: ui, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+      return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+    };
+    const nobody = await operator("/api/mcp/tokens", { label: "my editor" });
+    assert.equal(nobody.status, 400);
+    assert.match(String(nobody.body.error), /has 0 admins/, "no admin to issue it to is said, with the count");
+    const people = (await operator("/api/channels")).body.principals as unknown[];
+    assert.equal((await operator("/api/principals", { principals: [...people, { id: "chris", name: "Chris", role: "admin" }] })).status, 200);
+    const issued = await operator("/api/mcp/tokens", { label: "watchdog" });
+    assert.equal(issued.status, 200);
+    const listed = () => operator("/api/mcp").then(answer => answer.body.tokens as { principalId: string; label: string; createdAt: string; mine: boolean }[]);
+    const shown = (await listed()).filter(token => token.mine);
+    assert.deepEqual(shown.map(token => [token.principalId, token.label]), [["chris", "watchdog"]], "the admin's, not Dana's");
+    assert.equal((await operator("/api/mcp/tokens/revoke", { createdAt: shown[0]!.createdAt })).status, 200);
+    assert.equal((await listed()).some(token => token.mine), false, "and revoked from there");
   } finally {
     // Released, or the port and its timers outlive the test and the runner hangs.
     stop?.();

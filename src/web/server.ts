@@ -183,7 +183,7 @@ import { adminRecipients } from "../host/upgrade.ts";
 import { BoxUpdateService, boxUpdateRoute } from "./box-update-routes.ts"; import { personRoute } from "./person-routes.ts"; import { PERSON_JS } from "./person-ui.ts"; import { agentFactsRoute } from "./agent-facts.ts"; import { agentCaseText } from "../host/consent-case.ts"; import { ROW_ORDER_JS } from "./row-order.ts"; import { BOARD_ORDER_JS } from "./board-order.ts"; import { teamMemoryReviewRoute } from "./team-memory-review-routes.ts"; import { TEAM_MEMORY_REVIEW_JS } from "./team-memory-review-ui.ts"; import { pendingReviews } from "../host/team-memory-review.ts"; import { CLAIM_ACCOUNT_JS } from "./claim-account-ui.ts"; import { DIGEST_HOUR, heldSection, PushBudget } from "../host/push-budget.ts"; import { pushBudgetRoute } from "./push-budget-routes.ts"; import { PUSH_BUDGET_JS } from "./push-budget-ui.ts"; import { SpendLimits, todaysRows } from "../host/spend-limits.ts"; import { spendLimitRoute } from "./spend-limit-routes.ts"; import { SPEND_LIMIT_JS } from "./spend-limit-ui.ts"; import { configuredRates } from "../host/provider-fallback.ts"; import { BoxKeeper } from "./box-keeper.ts"; import { AgentPauses } from "../host/agent-pause.ts"; import { ProbeKeeper, type ProbeKind } from "../host/boundary-probe.ts"; import { agentPauseRoute } from "./agent-pause-routes.ts"; import { AGENT_PAUSE_JS } from "./agent-pause-ui.ts"; import { diagnosticsRoute } from "./diagnostics-routes.ts"; import { DIAGNOSTICS_JS } from "./diagnostics-ui.ts"; import { providerRests, quotaStatusLine } from "../host/provider-rest.ts"; import { providerRestRoute, restNotice } from "./provider-rest-routes.ts"; import { PROVIDER_REST_JS } from "./provider-rest-ui.ts"; import { fallbackRoute } from "./provider-fallback-routes.ts"; import { PROVIDER_FALLBACK_JS } from "./provider-fallback-ui.ts"; import { routineRunsRoute } from "./routine-runs-routes.ts"; import { ROUTINE_RUNS_JS } from "./routine-runs-ui.ts"; import { deliverableRoute } from "./deliverable-routes.ts"; import { DELIVERABLES_JS } from "./deliverables-ui.ts"; import { DIVISION_JS } from "./division-ui.ts"; import { taskGateRoute } from "./task-gate-routes.ts"; import { TASK_GATE_JS } from "./task-gate-ui.ts"; import { isForkChild } from "../host/pending-work.ts"; import { readToolPermissions, toolPermissionRoute } from "./tool-permission-routes.ts"; import { TOOL_PERMS_JS } from "./tool-permissions-ui.ts"; import { configVersionRoute } from "./config-version-routes.ts"; import { CONFIG_HISTORY_JS } from "./config-history-ui.ts"; import { switchesForTask } from "../agents/config-versions.ts"; import { CredentialWaits } from "../host/credential-waits.ts"; import { secretsNeededBy, taskCredentialEvent, templateCredentialEvent, templateSkillNeeds, type CredentialEvent } from "./credential-routes.ts"; import { CREDENTIALS_JS } from "./credentials-ui.ts";
 import { hasCredential, PRESET_MODELS, providerConfigured, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { BootstrapAdmins } from "../host/bootstrap.ts";
-import { Principals, principalsPath, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
+import { Principals, principalsPath, roleAtLeast, soleAdmin, type Principal, type Role } from "../host/principals.ts";
 import type { MandateWorld } from "../host/mandate.ts";
 import { blockedAnnouncement, boardView } from "../channels/board-view.ts";
 import {
@@ -4598,9 +4598,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "POST /api/mcp/tokens") {
           if (refusedRole("driver")) return;
           const body = await readJson(req);
-          const owner = caller.userId ?? String(body.principalId ?? "");
+          const owner = caller.userId ?? (String(body.principalId ?? "") || (soleAdmin(principals.list()) ?? "")); // nobody signed in: the one admin (INV-1681)
           if (owner === "") {
-            send(res, 400, { error: "A token belongs to a person; sign in or name one." });
+            send(res, 400, { error: `A token belongs to a person: sign in, or name one — this installation has ${principals.list().filter(person => person.role === "admin").length} admins, so there is no one admin to issue it to.` });
             return;
           }
           const minted = mcpTokens.mint(owner, String(body.label ?? ""));
@@ -4668,7 +4668,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             budget: TOOL_BUDGET_WARNING,
             extensions: orchestrator.extensions?.current() ?? null,
             // Never the secrets — only that they exist, whose they are, and when.
-            tokens: mcpTokens.list().map(entry => ({ ...entry, mine: entry.principalId === caller.userId })),
+            tokens: mcpTokens.list().map(entry => ({ ...entry, mine: entry.principalId === (caller.userId ?? soleAdmin(principals.list())) })), // unsigned: the one admin's (INV-1681)
           });
           return;
         }

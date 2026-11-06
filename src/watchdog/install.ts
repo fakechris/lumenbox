@@ -12,6 +12,7 @@
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { soleAdmin } from "../host/principals.ts";
 
 export const DEFAULT_LABEL = "com.lumenbox.watchdog";
 
@@ -96,9 +97,9 @@ export function principalFor(deps: Pick<InstallDeps, "home">, named?: string): s
     if (match === undefined) throw new Error(`No person ${named} on this installation.`);
     return match.id;
   }
-  const admins = people.filter(person => person.role === "admin");
-  if (admins.length !== 1) throw new Error(`Name whose token this is with --principal: the installation has ${admins.length} admins.`);
-  return admins[0]!.id;
+  const admin = soleAdmin(people);
+  if (admin === undefined) throw new Error(`Name whose token this is with --principal: the installation has ${people.filter(person => person.role === "admin").length} admins.`);
+  return admin;
 }
 
 export function readRecord(deps: Pick<InstallDeps, "home">): InstallRecord | undefined {
@@ -139,7 +140,7 @@ export async function installWatchdog(options: InstallOptions, deps: InstallDeps
   writeFileSync(plist, body);
   const loaded = deps.run("launchctl", ["bootstrap", `gui/${deps.uid}`, plist]);
   if (loaded.code !== 0) throw new Error(`launchctl bootstrap failed (${loaded.code}): ${loaded.stdout.trim()}`);
-  return [`Installed ${label}: it starts at login, restarts when it exits, and watches ${options.url}${options.judge ? " with the decision model as a second opinion" : ""}.`, `Its token belongs to ${principalId}: signed in as them, it is "watchdog" in Settings → Mine → Your MCP tokens. Log: ${logPath(deps)}.`];
+  return [`Installed ${label}: it starts at login, restarts when it exits, and watches ${options.url}${options.judge ? " with the decision model as a second opinion" : ""}.`, `Its token belongs to ${principalId}: it is "watchdog" in their Settings → Mine → Your MCP tokens, which is also this desktop's with nobody signed in when they are its one admin. Log: ${logPath(deps)}.`];
 }
 
 export async function uninstallWatchdog(deps: InstallDeps): Promise<string[]> {
@@ -164,9 +165,9 @@ export async function uninstallWatchdog(deps: InstallDeps): Promise<string[]> {
       headers: { "content-type": "application/json", authorization: `Bearer ${deps.uiToken()}` },
       body: JSON.stringify({ createdAt: record.createdAt }),
     });
-    lines.push(response.ok ? "Its token is revoked." : `The token was not revoked (HTTP ${response.status}); sign in as ${record.principalId} and revoke "watchdog" in Settings → Mine → Your MCP tokens.`);
+    lines.push(response.ok ? "Its token is revoked." : `The token was not revoked (HTTP ${response.status}); revoke "watchdog" in Settings → Mine → Your MCP tokens, signed in as ${record.principalId} — or with nobody signed in, when they are the installation's one admin.`);
   } catch (error) {
-    lines.push(`The web did not answer, so the token was not revoked (${error instanceof Error ? error.message : String(error)}); sign in as ${record.principalId} and revoke "watchdog" in Settings → Mine → Your MCP tokens.`);
+    lines.push(`The web did not answer, so the token was not revoked (${error instanceof Error ? error.message : String(error)}); revoke "watchdog" in Settings → Mine → Your MCP tokens, signed in as ${record.principalId} — or with nobody signed in, when they are the installation's one admin.`);
   }
   rmSync(tokenPath(deps), { force: true });
   rmSync(recordPath(deps), { force: true });
