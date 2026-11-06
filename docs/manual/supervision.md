@@ -56,7 +56,8 @@ agentbox supervise --objective "<what done looks like>" --token-file <file>
 ```
 
 These commands are not in `agentbox --help` yet. A token comes from Settings → Mine → Your
-MCP tokens.
+MCP tokens. On the desktop with nobody signed in, that list is the installation's admin's: the
+supervision and watchdog tokens are there, and Revoke ends either one.
 
 ## Where to see the result
 

@@ -70,6 +70,17 @@ export interface Principal {
   anchors?: string[];
 }
 
+/**
+ * Whom the installation itself stands for when nobody is signed in (INV-1681): its one admin.
+ * The desktop operator holds the UI token and acts as admin (`GET /api/me`), and what it owns
+ * — its MCP tokens, the supervision and watchdog tokens issued for it — belongs to that person.
+ * None or several admins: nobody, and whoever asks has to name one.
+ */
+export function soleAdmin(people: readonly { id: string; role: string }[]): string | undefined {
+  const admins = people.filter(person => person.role === "admin");
+  return admins.length === 1 ? admins[0]!.id : undefined;
+}
+
 /** A link as stored: the identity plus the incarnation it was bound under. */
 export interface IdentityLink {
   identity: string;

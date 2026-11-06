@@ -19,7 +19,8 @@ Nothing to install. The desktop app runs the watchdog, together with the supervi
 as one child process beside the server: `agentbox supervision`. The app starts it once the server
 is ready, restarts it if it exits, restarts it when settings change, and stops it on quit. On
 first start the process issues its own door token for the installation's admin, labelled
-"LumenBox supervision" under Settings → Mine → Your MCP tokens when signed in as that admin. It keeps the token in `~/.agentbox/supervision/token`
+"LumenBox supervision" under Settings → Mine → Your MCP tokens. On the desktop with nobody signed in
+that list is the admin's, so it is there to see and revoke. It keeps the token in `~/.agentbox/supervision/token`
 and reuses it from then on. If the door refuses it, the process issues a new one once. What a person
 should hear, such as the server not answering, a token refused, or a run that could not start,
 arrives as the app's own notification. The log is `~/Library/Logs/LumenBox/supervision.log`. The tray shows
@@ -28,8 +29,9 @@ whether supervision is running. Its settings are in Settings → Supervision, wh
 
 ## Running it by hand
 
-Sign in as the person the token is for, then mint a side-door token in Settings → Mine → Your MCP
-tokens; that list shows and issues only the signed-in person's own. The token belongs to a person, and every flag the
+Mint a side-door token in Settings → Mine → Your MCP tokens. That list shows and issues the
+signed-in person's own; with nobody signed in, as on a desktop install, it is the installation's one
+admin's. With no single admin, sign in as the person the token is for. The token belongs to a person, and every flag the
 watchdog raises is in that person's name. Then run:
 
 ```
@@ -61,7 +63,8 @@ agentbox watchdog uninstall          # stops it, revokes its token, removes its 
 `install` takes the same `--stall-minutes`, `--paused-minutes` and `--on-down` flags, plus
 `--principal <name>` when the installation has more than one admin and `--no-judge` to leave the
 decision model off. By default, a door that stops answering raises a macOS notification. The
-token is labelled "watchdog" in its owner's Settings → Mine → Your MCP tokens. It is kept in `~/.agentbox/watchdog/token`,
+token is labelled "watchdog" in its owner's Settings → Mine → Your MCP tokens, which with nobody
+signed in is the one admin's. It is kept in `~/.agentbox/watchdog/token`,
 readable only by you, and never in the launchd job file. The job runs the same `agentbox` that
 ran `install`, so install it from the app you use.
 
