@@ -95,7 +95,7 @@ const isLive = (task: Task): boolean => task.status !== "done" && task.status !=
  * something they may want to know (INV-1647). Only decisions reach the strip and the OS: a
  * channel that carries everything carries nothing.
  */
-export const DECISION_KINDS: ReadonlySet<AttentionItem["kind"]> = new Set(["approval", "question", "close-proposal", "review", "reauthorize", "spend-limit", "paused"]);
+export const DECISION_KINDS: ReadonlySet<AttentionItem["kind"]> = new Set(["approval", "question", "close-proposal", "reauthorize", "spend-limit", "paused"]); // a review is the board's, folded to one line in the strip: five of them once hid the agents
 export const isDecision = (kind: AttentionItem["kind"]): boolean => DECISION_KINDS.has(kind);
 
 export function urgencyOf(kind: AttentionItem["kind"]): number {

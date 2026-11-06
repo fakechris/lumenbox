@@ -165,7 +165,7 @@ test("a task an agent reviews is the team's, not mine, even for the operator; ev
   assert.deepEqual(out.mine.filter(item => item.kind === "review").map(item => item.ref), ["t-mine"]);
   assert.equal(out.stages["t-team"], "review");
   assert.equal(out.stages["t-mine"], "person/review");
-  assert.ok(isDecision("approval") && isDecision("question") && isDecision("review") && isDecision("close-proposal") && isDecision("reauthorize"));
+  assert.ok(isDecision("approval") && isDecision("question") && !isDecision("review") && isDecision("close-proposal") && isDecision("reauthorize"));
   assert.ok(!isDecision("provider-resting") && !isDecision("box-update") && !isDecision("boundary-probe") && !isDecision("undeliverable") && !isDecision("nudged") && !isDecision("team-memory") && !isDecision("flagged"));
   assert.ok(DECISION_KINDS.size >= 5);
 });
