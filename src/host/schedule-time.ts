@@ -312,6 +312,21 @@ export function nextFire(schedule: Schedule, after: Date, lastRun: Date | undefi
   return undefined;
 }
 
+/**
+ * The next `count` firings by the same rules as `nextFire`, each read from the one before (INV-1665):
+ * a cron in its zone, an interval from the last run, a one-time task once. What the routines page
+ * lists under "next", so a person checks "every weekday at nine" against five real dates.
+ */
+export function upcomingFires(schedule: Schedule, now: Date, lastRun: Date | undefined, timezone?: string, count = 5): Date[] {
+  const out: Date[] = [];
+  let next = nextFire(schedule, now, lastRun, timezone);
+  while (next !== undefined && out.length < count) {
+    out.push(next);
+    next = nextFire(schedule, next, next, timezone);
+  }
+  return out;
+}
+
 export function describeSchedule(schedule: Schedule): string {
   if (schedule.at !== undefined) return `once, at ${new Date(schedule.at).toISOString().slice(0, 16).replace("T", " ")} UTC`;
   if (schedule.everyMs !== undefined) {

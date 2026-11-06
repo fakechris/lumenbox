@@ -5260,7 +5260,7 @@ function automationRow(s, rows) {
     ? '<span style="color:var(--accent-2);font-size:10.5px;border:1px solid var(--border);border-radius:5px;padding:0 5px">by ' + esc(s.authoredBy) + "</span>"
     : "";
   var pausedTag = s.paused
-    ? '<span style="color:var(--warn);font-size:10.5px;border:1px solid var(--border);border-radius:5px;padding:0 5px">paused</span>'
+    ? '<span style="color:var(--warn);font-size:10.5px;border:1px solid var(--border);border-radius:5px;padding:0 5px"' + (s.hold ? ' title="' + esc(s.hold.reason) + '">paused by ' + esc(s.hold.by) : ">paused") + "</span>"
     : "";
   var toggle = s.paused
     ? '<button class="btn ghost sm" data-resume="' + esc(s.slug) + '">Turn on</button>'
@@ -5303,14 +5303,14 @@ function automationRow(s, rows) {
     '<div style="display:flex;gap:9px;align-items:baseline">' +
       '<span style="flex:1;font-size:13px;font-weight:500">' + esc(s.name) + " " + origin + " " + pausedTag + " " + modeTag + "</span>" +
       modeSwitch + toggle +
-      '<button class="btn ghost sm" data-run="' + esc(s.slug) + '"' + (s.running || s.paused ? " disabled" : "") + ">Run now</button>" +
+      '<button class="btn ghost sm" data-run="' + esc(s.slug) + '"' + (s.running || s.paused ? " disabled" : "") + ">Run now</button>" + '<button class="btn ghost sm" data-runs="' + esc(s.slug) + '" title="The last 20 runs and the next 5 times (routine-runs-ui.ts)">Runs</button>' +
     "</div>" +
     '<div class="dim" style="font-size:11px;margin-top:3px">' + when +
       (s.agent ? " · as " + esc(s.agent) : "") + " · " + where + "</div>" +
     '<div class="dim" style="font-size:11px">' + last + ' · <span class="mono">' + esc(s.schedule) + "</span></div>" +
     (s.because ? '<div class="dim" style="font-size:11px;font-style:italic">' + esc(s.because) + "</div>" : "") +
-    lastResult + observed +
-    hookBlock +
+    (s.hold ? '<div style="color:var(--warn);font-size:11px;margin-top:3px">Paused ' + esc(new Date(s.hold.at).toLocaleString()) + ": " + esc(s.hold.reason) + " \u2014 Turn on resumes it.</div>" : "") + lastResult + observed +
+    hookBlock + '<div data-runs-for="' + esc(s.slug) + '" style="display:none"></div>' +
   "</div>";
 }
 
@@ -5703,7 +5703,7 @@ function attentionRow(item, owed, onBoard) {
     item.kind === "close-proposal" ? '<button class="btn sm ghost" data-att-keep="' + esc(item.ref) + '">' + esc(t("ui.attention.keepOpen")) + "</button>" :
     item.kind === "nudged" ? '<button class="btn sm ghost" data-att-drop="' + esc(item.ref) + '">' + esc(t("ui.attention.close")) + '</button><button class="btn sm ghost" data-att-snooze="' + esc(item.ref) + '">' + esc(t("ui.attention.notNow")) + "</button>" :
     item.kind === "question" && !/^t\d+$/.test(item.ref) ? '<button class="btn sm ghost" data-att-open="' + esc(item.ref) + '">' + esc(t("ui.attention.answer")) + "</button>" :
-    item.kind === "paused" ? '<button class="btn sm ghost" data-att-open="' + esc(item.ref) + '">' + esc(t("ui.attention.open")) + "</button>" :
+    item.kind === "paused" ? '<button class="btn sm ghost" data-att-open="' + esc(item.ref) + '">' + esc(t("ui.attention.open")) + "</button>" : item.kind === "routine-paused" ? '<button class="btn sm" data-routine-resume="' + esc(item.ref) + '">Resume</button>' : // routine-runs-ui.ts (INV-1665)
     onBoard ? "" : '<button class="btn sm ghost" data-att-task="' + esc(item.ref) + '">' + esc(t("ui.attention.open")) + "</button>";
   return '<div style="display:flex;gap:8px;align-items:baseline;padding:3px 0;font-size:12.5px' + (onBoard ? ";color:" + (owed ? "var(--warn)" : "var(--muted)") : "") + '" title="' + esc(item.title + " — " + item.detail) + '"><span class="dim mono" style="font-size:11px;min-width:58px">' + esc(item.deadline ? whenOf(item.deadline) : "") + "</span>" +
     '<span style="flex:1">' + (onBoard ? (owed ? "needs you: " : "waiting: ") : (item.level ? '<span class="chip" style="font-size:10px" title="the task\'s autonomy level">L' + item.level + "</span> " : "") + esc(item.title) + " ") + '<span class="dim">' + esc(item.detail) + (item.stage && !onBoard ? " · " + esc(item.stage) : "") + "</span></span>" + (owed ? act : "") + "</div>"; // on the board the row is the task's own (INV-1654): its mark says what is owed, the card below is already open
