@@ -14,8 +14,8 @@
  *   node scripts/docs-reference.mjs --check   the same; what the suite runs
  *   node scripts/docs-reference.mjs --write   rewrite the stale pages
  *
- * The pages sit at the top of docs/ as `family: guide` until the manual family exists
- * (INV-1661), which moves them under docs/manual/. Rendering imports TypeScript, so the CLI
+ * The pages sit in docs/manual/ as `family: manual` (INV-1661), each covering its registry, beside
+ * the written pages that explain the concepts. Rendering imports TypeScript, so the CLI
  * re-runs itself under `--experimental-transform-types` with the suite's hermetic environment:
  * a tool description that reads a variable must not render differently on one machine.
  */
@@ -31,13 +31,13 @@ const src = path => pathToFileURL(join(root, "src", path)).href;
 
 /** Where each page lives, relative to the repository. */
 export const PAGES = {
-  tools: "docs/reference-tools.md",
-  skills: "docs/reference-skills.md",
-  templates: "docs/reference-templates.md",
-  promptParts: "docs/reference-prompt-parts.md",
-  commands: "docs/reference-commands.md",
-  settings: "docs/reference-settings.md",
-  rules: "docs/reference-rules.md",
+  tools: "docs/manual/reference-tools.md",
+  skills: "docs/manual/reference-skills.md",
+  templates: "docs/manual/reference-templates.md",
+  promptParts: "docs/manual/reference-prompt-parts.md",
+  commands: "docs/manual/reference-commands.md",
+  settings: "docs/manual/reference-settings.md",
+  rules: "docs/manual/reference-rules.md",
 };
 
 /** Every connector `buildTools` can be handed, for the all-on combination. */
@@ -60,8 +60,9 @@ function header(slug, title, about) {
   return [
     `<!-- doc: ${slug}`,
     `     title: ${title}`,
-    "     family: guide",
+    "     family: manual",
     "     status: current",
+    `     covers: ${slug}`,
     "     updated: generated",
     "     generated: true",
     "-->",
@@ -193,7 +194,7 @@ async function renderTemplates() {
     ...header("reference-templates", "Reference: the template shelf", "`shelfTemplates()`, `CATALOG_EXPERTS`, `CATALOG_CREWS` and `CATALOG_CONNECTORS` (src/host/catalog.ts)"),
     "## Templates",
     "",
-    `${templates.length} ready-made templates (\`lumenbox-template/1\`, src/host/catalog-data/templates): a whole working bot each — persona, memory, skills, routines, connectors.`,
+    `${templates.length} ready-made templates (\`lumenbox-template/1\`, src/host/catalog-data/templates): a whole working agent each — persona, memory, skills, routines, connectors.`,
     "",
     ...table(["slug", "name", "title", "skills", "routines", "connectors", "memories"], templates.map(t => [`\`${t.slug}\``, t.name, t.title, t.skills.length, t.routines.length, list(t.connectors), t.memoryCount])),
     "",

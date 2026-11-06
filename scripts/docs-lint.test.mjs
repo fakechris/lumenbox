@@ -157,3 +157,36 @@ test("a deprecated synonym is reported by file and line, in the listed files and
     ]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("the manual: one page per concept, named by the concept, each with the skeleton, and listed in the index (INV-1661)", () => {
+  const { lintManual, renderIndex } = awaitImported;
+  const shipped = lintManual(join(docs, "manual"));
+  assert.deepEqual(shipped.problems, [], shipped.problems.join("\n"));
+  for (const concept of ["box", "agent", "channels", "templates", "skills", "memory", "tasks-and-records", "approvals", "automations", "supervision"]) {
+    assert.ok(shipped.pages.has(concept), `the manual has a ${concept} page`);
+  }
+  assert.match(renderIndex(lintDocs(docs).docs), /## manual\n[\s\S]*\| \[manual\/box\]\(manual\/box\.md\) \|/, "the index lists the manual under its own heading");
+
+  const dir = mkdtempSync(join(tmpdir(), "manual-"));
+  try {
+    const skeleton = "Intro line.\n\n## What it is\n\nx\n\n## How to do it\n\n### In the app\n\nx\n\n### In a chat\n\nx\n\n### From the command line\n\nx\n\n## Where to see the result\n\nx\n\n## Limits\n\nx\n\n## Next\n\n- [Box](box.md)\n";
+    const page = (slug, covers, body = skeleton, extra = "     audience: user\n") =>
+      writeFileSync(join(dir, `${slug}.md`), `<!-- doc: ${slug}\n     title: ${slug}\n     family: manual\n     status: current\n     covers: ${covers}\n${extra}-->\n# ${slug}\n\n${body}`);
+    page("box", "box");
+    assert.deepEqual(lintManual(dir).problems, [], "a whole page passes");
+
+    page("boxes", "box");
+    assert.ok(lintManual(dir).problems.some(p => p === "two current manual pages cover box: box, boxes. One concept, one page; merge them or supersede one."), "one concept, one page");
+    rmSync(join(dir, "boxes.md"));
+
+    page("12-agent", "agent");
+    assert.ok(lintManual(dir).problems.some(p => /12-agent\.md: a manual page is named by its concept, not by a number/.test(p)));
+    rmSync(join(dir, "12-agent.md"));
+
+    page("memory", "memory", skeleton.replace("### In a chat\n\nx\n\n", "").replace("[Box](box.md)", "[Gone](gone.md)"), "");
+    const problems = lintManual(dir).problems;
+    assert.ok(problems.some(p => /memory\.md: the skeleton is .*In a chat.*; this page has /.test(p)), "the three ways in are the skeleton");
+    assert.ok(problems.some(p => /memory\.md: a written manual page says audience: user/.test(p)), "the glossary's words are checked on it");
+    assert.ok(problems.some(p => /memory\.md: links to gone\.md, which is not there/.test(p)));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

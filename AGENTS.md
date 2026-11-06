@@ -103,12 +103,19 @@ Every file in `docs/` opens with a header block naming what it is:
   `domain:`**, which is the rule that stops two documents legislating the same thing.
   **`decision`** — a dated record of why something was decided: never rewritten, only
   superseded. **`guide`** — how to do something, kept current. **`handoff`** — what was
-  true at the end of a session.
+  true at the end of a session. **`manual`** — how a person uses the product, one page per
+  concept, in `docs/manual/`.
 - **Supersession is a field, not a sentence.** `status: superseded` +
   `superseded-by: <slug>` + `why:` one line. The check refuses a target that does not
   exist or is itself superseded, because a chain is a chain a reader gets wrong.
 - **A number is a name.** The code cites `docs/22` 47 times; two current documents may not
-  share a number. A renumbering updates the citations in the same commit.
+  share a number. A renumbering updates the citations in the same commit. The manual is the
+  exception: a page in `docs/manual/` (`family: manual`) is written for a person, is named by
+  its concept and never numbered (`approvals.md`, not `95-approvals.md`), and says which
+  concept it `covers:` — two current pages may not cover one. A written page carries
+  `audience: user` and the fixed skeleton (What it is → How to do it: In the app / In a chat /
+  From the command line → Where to see the result → Limits → Next); a decision says why, the
+  manual says how.
 - **New document?** Take the next free number, write the header, run the suite — it
   regenerates nothing for you, but it tells you what is inconsistent, and `docs/INDEX.md`
   is generated from the headers.

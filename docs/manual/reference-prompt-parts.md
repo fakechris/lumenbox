@@ -1,7 +1,8 @@
 <!-- doc: reference-prompt-parts
      title: Reference: the prompt parts
-     family: guide
+     family: manual
      status: current
+     covers: reference-prompt-parts
      updated: generated
      generated: true
 -->

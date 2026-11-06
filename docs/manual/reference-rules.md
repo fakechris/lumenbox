@@ -1,7 +1,8 @@
 <!-- doc: reference-rules
      title: Reference: the rules file grammar
-     family: guide
+     family: manual
      status: current
+     covers: reference-rules
      updated: generated
      generated: true
 -->

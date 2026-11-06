@@ -1,7 +1,8 @@
 <!-- doc: reference-templates
      title: Reference: the template shelf
-     family: guide
+     family: manual
      status: current
+     covers: reference-templates
      updated: generated
      generated: true
 -->
@@ -12,7 +13,7 @@ and the source disagree. Change the source and run `node scripts/docs-reference.
 
 ## Templates
 
-55 ready-made templates (`lumenbox-template/1`, src/host/catalog-data/templates): a whole working bot each — persona, memory, skills, routines, connectors.
+55 ready-made templates (`lumenbox-template/1`, src/host/catalog-data/templates): a whole working agent each — persona, memory, skills, routines, connectors.
 
 | slug | name | title | skills | routines | connectors | memories |
 |---|---|---|---|---|---|---|

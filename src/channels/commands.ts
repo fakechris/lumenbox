@@ -7,7 +7,7 @@
  * read was whatever somebody had last written by hand. Now each command is one entry: what it is
  * written as (every alias, the Chinese verbs included), what it does in a sentence, where it works
  * and who may use it. The manager and the host dispatch through the parsers below, `/help` is
- * rendered from the table, `docs/reference-commands.md` is generated from it, and
+ * rendered from the table, `docs/manual/reference-commands.md` is generated from it, and
  * architecture-guard fails a slash command or a word list that appears anywhere else.
  *
  * Every verb is whole-message: "停下来改用另一个文件夹" is an instruction that mentions stopping,

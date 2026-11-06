@@ -16,7 +16,7 @@
 import { existsSync, globSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-export const FAMILIES = new Set(["spec", "decision", "guide", "handoff"]);
+export const FAMILIES = new Set(["spec", "decision", "guide", "handoff", "manual"]);
 export const STATUSES = new Set(["current", "superseded", "archived"]);
 const TRANSLATION = /^(.+)\.[a-z]{2}$/;
 
@@ -67,8 +67,12 @@ export function lintDocs(dir) {
     if (header.status === "superseded" && (header["superseded-by"] ?? "") === "") {
       problems.push(`${file}: superseded by what? Name the document, and say why in one line.`);
     }
+    if (header.family === "manual") problems.push(`${file}: a manual page lives in docs/manual/, named by its concept.`);
     docs.set(slug, header);
   }
+  const manual = lintManual(join(dir, "manual"));
+  problems.push(...manual.problems);
+  for (const [slug, header] of manual.pages) docs.set(`manual/${slug}`, header);
   // Supersession points at something that exists, and never at a document that is itself
   // superseded (a chain a reader has to walk is a chain a reader gets wrong).
   for (const [slug, header] of docs) {
@@ -113,6 +117,73 @@ export function lintDocs(dir) {
   }
   problems.push(...lintSolutions(join(dir, "solutions")));
   return { docs, problems };
+}
+
+/**
+ * The manual (INV-1661): `docs/manual/<concept>.md`, written for a person rather than for the
+ * next engineer. A decision says why; a manual page says how, so they are never the same file.
+ * A manual page is named by its concept, never by a number — the numbers are how the code cites
+ * the design record, and a person looking for "approvals" should find `approvals.md`. Each page
+ * says which concept it `covers:`, and two current pages may not cover one concept: that is the
+ * one-spec-per-domain rule again, for the pages a person reads. A written page (not a generated
+ * reference page, not the home page) keeps one skeleton, so a reader who learned one page can
+ * read them all: what it is, how to do it in the app, in a chat and from the command line,
+ * where to see the result, its limits, and what to read next.
+ */
+export const MANUAL_HOME = "README";
+export const MANUAL_SECTIONS = ["What it is", "How to do it", "Where to see the result", "Limits", "Next"];
+export const MANUAL_ENTRIES = ["In the app", "In a chat", "From the command line"];
+
+/** The relative links in a page that point at a file which is not there. */
+function brokenLinks(dir, text) {
+  const broken = [];
+  for (const match of text.matchAll(/\]\(([^)\s]+)\)/g)) {
+    const target = match[1].split("#")[0];
+    if (target === "" || /^[a-z]+:/i.test(target)) continue;
+    if (!existsSync(join(dir, target))) broken.push(match[1]);
+  }
+  return broken;
+}
+
+export function lintManual(dir) {
+  const problems = [];
+  const pages = new Map();
+  if (!existsSync(dir)) return { pages, problems };
+  for (const file of readdirSync(dir).filter(f => f.endsWith(".md")).sort()) {
+    const slug = file.replace(/\.md$/, "");
+    const at = `manual/${file}`;
+    const text = readFileSync(join(dir, file), "utf8");
+    const header = parseHeader(text);
+    if (header === undefined) { problems.push(`${at}: no header block.`); continue; }
+    if (header.doc !== slug) problems.push(`${at}: header says doc: ${header.doc ?? "(none)"}, filename says ${slug}.`);
+    if (header.family !== "manual") problems.push(`${at}: family: ${header.family ?? "(none)"}; a page in docs/manual/ is family: manual.`);
+    if (!STATUSES.has(header.status)) problems.push(`${at}: status: ${header.status ?? "(none)"} is not one of ${[...STATUSES].join(", ")}.`);
+    if (/^\d/.test(slug)) problems.push(`${at}: a manual page is named by its concept, not by a number.`);
+    if ((header.covers ?? "") === "") problems.push(`${at}: which concept does it cover? Say so with covers:.`);
+    const generated = header.generated === "true";
+    if (!generated && header.audience !== "user") problems.push(`${at}: a written manual page says audience: user, so the glossary's words are checked on it.`);
+    const title = titleOf(text);
+    if (title !== undefined && header.title !== undefined && header.title !== title) problems.push(`${at}: header title "${header.title}" is not the heading "${title}".`);
+    for (const link of brokenLinks(dir, text)) problems.push(`${at}: links to ${link}, which is not there.`);
+    if (!generated && slug !== MANUAL_HOME) {
+      const headings = [...text.matchAll(/^(#{2,3}) (.+)$/gm)].map(m => `${m[1]} ${m[2].trim()}`);
+      const expected = [...MANUAL_SECTIONS.slice(0, 2).map(s => `## ${s}`), ...MANUAL_ENTRIES.map(s => `### ${s}`), ...MANUAL_SECTIONS.slice(2).map(s => `## ${s}`)];
+      const found = headings.filter(h => expected.includes(h));
+      if (found.join("\n") !== expected.join("\n")) problems.push(`${at}: the skeleton is ${expected.join(" → ")}; this page has ${found.join(" → ") || "none of it"}.`);
+      const intro = text.slice(text.indexOf("\n# ") + 1).split("\n").slice(1).find(line => line.trim() !== "");
+      if (intro === undefined || intro.startsWith("#")) problems.push(`${at}: open with one line that says what the page is for, before the first section.`);
+    }
+    pages.set(slug, header);
+  }
+  const byConcept = new Map();
+  for (const [slug, header] of pages) {
+    if (header.status !== "current" || (header.covers ?? "") === "") continue;
+    byConcept.set(header.covers, [...(byConcept.get(header.covers) ?? []), slug]);
+  }
+  for (const [concept, owners] of byConcept) {
+    if (owners.length > 1) problems.push(`two current manual pages cover ${concept}: ${owners.join(", ")}. One concept, one page; merge them or supersede one.`);
+  }
+  return { pages, problems };
 }
 
 /**
@@ -267,9 +338,10 @@ export function renderIndex(docs) {
     "- **decision** — a dated record of why something was decided. Never rewritten; superseded, with a pointer.",
     "- **guide** — how to do something. Kept current.",
     "- **handoff** — what was true at the end of a session. Historical by nature.",
+    "- **manual** — how a person uses the product, one page per concept, in `manual/`. Start at [the manual](manual/README.md).",
     "",
   ];
-  for (const family of ["spec", "guide", "decision", "handoff"]) {
+  for (const family of ["spec", "manual", "guide", "decision", "handoff"]) {
     const rows = [...docs.entries()].filter(([, h]) => h.family === family).sort(([a], [b]) => a.localeCompare(b));
     if (rows.length === 0) continue;
     lines.push(`## ${family}`, "", "| doc | title | status | updated |", "|---|---|---|---|");

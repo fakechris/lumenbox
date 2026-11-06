@@ -1,7 +1,8 @@
 <!-- doc: reference-tools
      title: Reference: the built-in tools
-     family: guide
+     family: manual
      status: current
+     covers: reference-tools
      updated: generated
      generated: true
 -->

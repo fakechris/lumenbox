@@ -9,7 +9,9 @@
 What a person does on day one, path by path. The README says the short version; this is the
 whole of it. Product name LumenBox; the command line still says `agentbox`.
 Each word for a thing you meet here (box, agent, channel, team, task) means one thing, and
-[the glossary](glossary.md) says what.
+[the glossary](glossary.md) says what. This page is the quickstart; [the manual](manual/README.md)
+has a page for each thing you meet afterwards — what it is, and how to use it from the app, a
+chat and the command line.
 
 ## What you need
 
@@ -173,8 +175,9 @@ the supervisor's model and the agent's model spend.
   stays stopped. To start it yourself: Settings → Box → Start; or `agentbox box up` in
   a terminal (the CLI is `dist/cli.js` inside the app bundle, or `npm run agentbox --` from a
   checkout).
-- **Docker is fine but the desktop never comes up.** `agentbox box doctor` prints what the
-  container sees; docs/38 §5.2.
+- **Docker is fine but the desktop never comes up.** `agentbox box status` prints the
+  container's state, ports and health, and `agentbox box logs` what it printed; docs/38
+  "The desktop" says what each part is.
 - **The agent says it has no key.** Settings → provider; keys are per installation, and a
   restart applies them.
 - **An attached box went away.** It has to be reachable on the network you attached it over
