@@ -675,7 +675,7 @@ type TurnEventBody =
        * show what the agent actually saw, which is the difference between
        * trusting its account of the screen and checking it.
        */
-      screenshot?: string;
+      screenshot?: string; gate?: import("./gate-verdict.ts").GateVerdict; // and the policy gate's verdict on this step and why, when it checked one (INV-1664)
     }
   | { type: "round"; agentId: string; round: number }
   /**
@@ -3436,7 +3436,7 @@ ${outcome.text}`;
         agentName: agent.profile.name,
         tool: toolUse.name,
         summary: outcome.text.split("\n")[0]?.slice(0, 200) ?? "",
-        screenshot: outcome.images?.[0]?.data,
+        screenshot: outcome.images?.[0]?.data, ...(deps.policy?.verdicts.get(toolUse.id) !== undefined ? { gate: deps.policy.verdicts.get(toolUse.id)! } : {}),
       });
 
       // What the relay refused while this call ran, as a block on the result (INV-784,

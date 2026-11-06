@@ -2644,7 +2644,7 @@ export async function dispatchTool(
     // Whose turn this is, so a rule a person wrote about their own routine work applies from whichever door they drove it (INV-156); and the level of the task this turn is doing (INV-1650).
     ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}), ...(levelOfCurrentTask(context) !== undefined ? { taskLevel: levelOfCurrentTask(context) } : {}),
     ...(context.callerName !== undefined ? { principalName: context.callerName } : {}),
-    ...(context.turnId !== undefined ? { turnId: context.turnId } : {}),
+    ...(context.turnId !== undefined ? { turnId: context.turnId } : {}), ...(context.toolUseId !== undefined ? { callId: context.toolUseId } : {}), // the step the verdict is drawn on (INV-1664)
   });
   if (decision !== undefined && !decision.allow) {
     return { text: decision.reason, isError: true, ...(decision.approval !== undefined ? { approval: { id: decision.approval.id } } : {}) };
@@ -4258,7 +4258,7 @@ export async function dispatchTool(
             agentName: context.agent.profile.name,
             tool: name,
             input,
-            irreversible: finding,
+            irreversible: finding, ...(context.toolUseId !== undefined ? { callId: context.toolUseId } : {}),
             ...(sensitive !== undefined && context.turnId !== undefined && context.conversation !== undefined ? {
               inputScope: { ...sensitive, turnId: context.turnId, conversation: context.conversation,
                 principal: context.caller?.userId ?? "", target: `${context.registry.boxOf(context.agent.id).id}:${context.displayIndex ?? 1}` },
@@ -5444,7 +5444,7 @@ export async function dispatchTool(
         agentId: context.agent.id,
         agentName: context.agent.profile.name,
         tool: target,
-        input: (input.arguments ?? {}) as Record<string, unknown>,
+        input: (input.arguments ?? {}) as Record<string, unknown>, ...(context.toolUseId !== undefined ? { callId: context.toolUseId } : {}),
       });
       if (inner !== undefined && !inner.allow) return { text: inner.reason, isError: true };
       try {

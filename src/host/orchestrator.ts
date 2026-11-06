@@ -965,7 +965,7 @@ export class Orchestrator {
       externalTool: tool => this.readsExternalContent(tool), heldValues: () => this.options.vault?.heldValues() ?? new Map(),
       onKept: (agentId, kept, principal) => { const added = this.people.absorb(kept, agentId, { ...(principal !== undefined ? { principal, name: this.personName?.(principal) } : {}) }); if (added.length > 0) console.error(`[memory] ${added.length} line(s) about the person taken from ${agentId}'s kept memories`); }, // INV-1653
     });
-    this.policy.externalTool = tool => this.readsExternalContent(tool);
+    this.policy.externalTool = tool => this.readsExternalContent(tool); this.policy.agentPermissions = agentId => this.registry.tryGet(agentId)?.profile.toolPermissions; // an agent's ask-before settings, read per call (INV-1664)
 
     this.extensions =
       options.extensions === null

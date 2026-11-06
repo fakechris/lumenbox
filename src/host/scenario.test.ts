@@ -2935,3 +2935,56 @@ test("a routine that fails three times in a row is paused with why, asks a perso
     assert.ok(result.score.said.some(line => /Checked: nothing new/.test(line.text)), "the run after resuming is a real turn that answered");
   } finally { result.cleanup(); }
 });
+
+// INV-1664: a person set one agent's shell to "ask me" in its Configure dialog, and wanted to see,
+// step by step in the chat, what the gate did. Before this the setting did not exist below an
+// administrator's rule file, and the step showed nothing of the gate either way.
+//
+// What the harness must hold: the shell command waits for a consent card that names the agent's
+// setting, runs only once the person allows it, the same agent's file read is not asked about, and
+// each step carries the verdict the chat draws — live on tool_end, and again from the ledger on reload.
+test("an agent whose shell is set to ask waits for the person's card, while its file read runs, and each step carries the gate's mark (INV-1664)", async () => {
+  const { PolicyGate } = await import("./policy.ts");
+  const { toDisplayEntries } = await import("../web/transcript.ts");
+  const { rmSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-toolperm-scenario-"));
+  const policy = new PolicyGate({
+    path: join(dir, "policy.jsonl"),
+    limits: { budgetWindowHours: 24, wakesPerWindow: 30, wakeWindowMinutes: 10, approvalRequiredTools: [], approvalRequiredCommands: [], tierGate: "off" },
+  });
+  const marks: { tool: string; verdict?: string; basis?: string }[] = [];
+  let cardBeforeRun = "";
+  const result = await runEpisode({
+    team: [{ name: "Nova", toolPermissions: { tools: { bash: "ask" } } }], says: ["读一下 notes.md，然后把 hi 写进 out.txt"],
+    policy,
+    files: { "/home/box/work/notes.md": "hi" },
+    onEvent: event => { if (event.type === "tool_end") marks.push({ tool: event.tool, verdict: event.gate?.verdict, basis: event.gate?.basis }); },
+    script: ({ round }) => {
+      if (round === 0) return { call: "read_file", input: { path: "/home/box/work/notes.md" } };
+      if (round === 1) return { call: "bash", input: { command: "echo hi > /home/box/work/out.txt" } };
+      if (round === 2) {
+        // The person reads the card and allows it once; the agent, told it was allowed, goes on.
+        cardBeforeRun = policy.pending()[0]?.description ?? "";
+        policy.grant(policy.pending()[0]!.id);
+        return { call: "bash", input: { command: "echo hi > /home/box/work/out.txt" } };
+      }
+      return { say: "已读 notes.md，并在你允许后写好了 out.txt。" };
+    },
+  });
+  try {
+    assert.match(cardBeforeRun, /^\[rule agent:Nova\/bash\] /, "the card names the agent's own setting");
+    assert.equal(result.score.refusals.filter(line => /approv/i.test(line)).length, 1, "the first shell call did not run: it waited on the person");
+    assert.equal(result.files.get("/home/box/work/out.txt"), "hi", "and it ran once they allowed it");
+    assert.deepEqual(marks.map(mark => `${mark.tool}:${mark.verdict}`), ["read_file:allowed", "bash:waiting", "bash:asked"], "live, each step carries its verdict");
+    assert.match(marks[1]!.basis ?? "", /the agent's setting \(Nova: ask before bash\)/, "and why");
+    // On reload the page draws the steps from the transcript, joined to the gate's ledger by call id.
+    const front = result.registry.list()[0]!;
+    const tools = toDisplayEntries(result.registry.readTranscript(front.id), [], callId => policy.verdicts.get(callId))
+      .flatMap(entry => (entry.kind === "tools" ? entry.tools : []));
+    assert.deepEqual(tools.map(tool => `${tool.name}:${tool.gate?.verdict}`), ["read_file:allowed", "bash:asked", "bash:asked"], "the answered card's step no longer says waiting");
+    assert.match(tools[1]!.gate!.basis, /^a person allowed it/);
+  } finally {
+    result.cleanup();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

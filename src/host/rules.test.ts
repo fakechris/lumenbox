@@ -126,3 +126,24 @@ test("a rule can be written about one person, and an unattributed turn never inh
     "[everyone] (allow) Anyone here may push.",
   ]);
 });
+
+test("a rule can be written about one agent's calls, and a call nobody named never matches it (INV-1664)", () => {
+  // The scene: the operator wants Nova — the one that writes to customers — to ask before any
+  // shell command, and nobody else. Rex's identical command runs as before.
+  const { rule } = parseRuleFile("nova-shell", ["---", "effect: ask", "tool: bash", "agent: Nova", "---", "Nova's shell commands are reviewed."].join("\n"));
+  assert.ok(rule);
+  assert.deepEqual(rule.agents, ["Nova"]);
+  const input = { command: "ls" };
+  assert.equal(ruleMatches(rule, "bash", input, { agentId: "a-1", agentName: "nova" }), true, "by name, whatever its case");
+  assert.equal(ruleMatches(rule, "bash", input, { agentId: "a-2", agentName: "Rex" }), false, "another agent's call is not Nova's");
+  assert.equal(ruleMatches(rule, "bash", input, { name: "Chris" }), false, "a call no agent is named on matches nothing");
+  assert.equal(ruleMatches(rule, "read_file", input, { agentName: "Nova" }), false, "and it is still about the tool");
+  const { rule: byId } = parseRuleFile("by-id", ["---", "effect: deny", "agent: a-1", "---", "Nothing for this one."].join("\n"));
+  assert.ok(byId);
+  assert.equal(ruleMatches(byId, "anything", {}, { agentId: "a-1" }), true, "an agent matcher alone is a matcher");
+  assert.match(renderRulesForReview([rule])[0]!, /\(ask on Nova's calls\)/);
+  // The store decides an agent's own setting with the operator's rules, strictest first.
+  const agentAsk = { ...rule, id: "agent:Nova/bash", source: "agent" as const, agents: ["a-1"] };
+  const operatorAllow = parseRuleFile("shell-ok", ["---", "effect: allow", "tool: bash", "---", "Shell is routine."].join("\n")).rule!;
+  assert.equal(decidingRule([operatorAllow, agentAsk], "bash", input, { agentId: "a-1" })?.id, "agent:Nova/bash", "the agent's ask tightens an operator's allow");
+});

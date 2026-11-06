@@ -37,12 +37,14 @@ import { appendLine, appendLineDurably, archiveSettled, type LedgerKind } from "
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
-import type { RuleReader } from "./rules.ts";
+import { decidingRule, type Rule, type RuleReader } from "./rules.ts";
+import { agentRulesFor, type ToolPermissions } from "./tool-permissions.ts";
+import { askReasons, type GateVerdict, GateVerdicts, verdictOf } from "./gate-verdict.ts"; import type { PolicyLimits } from "./policy-limits.ts";
 import { sideEffectOf, tierAsks, tierGateMode, type SideEffectTier, type TierGateMode } from "./side-effects.ts"; import { levelAllows } from "./autonomy-level.ts";
 import { describeTaint, noteAllowedCall, type Taint, taintOf, TurnTaint } from "./egress-taint.ts";
 import { approvalReason, describeRequest, fingerprintOf, tooLargeToApprove } from "./policy-describe.ts";
 
-export { describeRequest, fingerprintOf, MAX_APPROVABLE_DESCRIPTION, tooLargeToApprove } from "./policy-describe.ts";
+export { describeRequest, fingerprintOf, MAX_APPROVABLE_DESCRIPTION, tooLargeToApprove } from "./policy-describe.ts"; export type { PolicyLimits } from "./policy-limits.ts";
 
 /**
  * What was asked of the gate and who decided it: a record (INV-812).
@@ -103,6 +105,8 @@ export type PolicyRequest =
       irreversible?: string; taskLevel?: 1 | 2 | 3 | 4 | 5; why?: string; // why (INV-1651): the agent's one-line case, shown as its claim, never in the fingerprint; taskLevel (INV-1650): the level of the task this call serves; outward calls ask below L5 and are refused below L3; set by dispatch from the board
       /** The turn this call belongs to, for the taint rule (INV-1309): set by dispatch, never by the model. */
       turnId?: string;
+      /** The model's tool_use id this check is for (INV-1664): ties the verdict to the step the chat draws. Set by dispatch. */
+      callId?: string;
       /** Trusted box observation plus host execution identity, never model input (INV-955). */
       inputScope?: SensitiveInput & {
         turnId: string; conversation: string; principal: string; target: string;
@@ -152,58 +156,6 @@ export interface PendingApproval {
 }
 
 // ── limits ────────────────────────────────────────────────────────────────────────────
-
-export interface PolicyLimits {
-  /**
-   * Tokens this box may spend in a rolling window before every model call is refused.
-   *
-   * Undefined means no ceiling, which is today's behaviour and is stated rather than defaulted to
-   * some number that would surprise someone.
-   */
-  budgetTokens?: number;
-  /**
-   * A ceiling each person's own spend may not cross in the window — "no one channel
-   * user gets more than X". Distinct from the box-wide budgetTokens, which caps
-   * everyone together; a run can be under the box budget and over one person's.
-   */
-  perPrincipalBudgetTokens?: number;
-  /**
-   * A ceiling on one *agent's* own spend in the window — its allowance.
-   *
-   * The unit a person means by "give it a daily budget and let it decide inside that":
-   * the budget belongs to the worker, not to the human who asked and not to the whole
-   * box. Without it the only way to bound an agent that acts on its own — a routine it
-   * wrote for itself — was to forbid it from acting on its own, which trades a large
-   * capability for a small risk that was already measurable.
-   */
-  perAgentBudgetTokens?: number;
-  /** The window the budget applies over, in hours. */
-  budgetWindowHours: number;
-  /** How many times one agent may wake teammates in the window below. */
-  wakesPerWindow: number;
-  wakeWindowMinutes: number;
-  /**
-   * Tools whose calls need a person's consent, by name.
-   *
-   * Empty by default. Turning this on for `bash` would ask about every command, which trains a
-   * person to click through — so the useful configuration is narrow, and the mechanism exists
-   * before the policy does.
-   */
-  approvalRequiredTools: readonly string[];
-  /**
-   * Shell commands matching any of these need consent, whatever the tool.
-   *
-   * Substring matches on the command line, because that is the level a person can actually review.
-   * Regular expressions were considered and rejected: an operator writing one under time pressure
-   * gets it subtly wrong, and a policy that fails open is worse than none.
-   */
-  approvalRequiredCommands: readonly string[];
-  /**
-   * The side-effect tier gate (INV-691): `shadow` records what it would have asked and changes
-   * nothing, `enforce` asks, `off` does neither. Absent means shadow. `AGENTBOX_TIER_GATE`.
-   */
-  tierGate?: TierGateMode;
-}
 
 /**
  * The limits as the environment states them, read when asked — not when this module loads.
@@ -279,6 +231,9 @@ type PolicyEvent =
       tier?: SideEffectTier;
       /** Allowed, but the tier gate would have asked a person had it been enforcing. The tool is named for the summary. */
       wouldAsk?: string;
+      /** The step this check was for, and its verdict as the chat shows it (INV-1664). */
+      callId?: string;
+      gate?: GateVerdict;
     }
   | { at: string; kind: "rules-loaded"; hash: string; ids: string[]; problems: { id: string; problem: string }[] }
   | { at: string; kind: "stop"; agentId: string; by: string }
@@ -390,6 +345,10 @@ export class PolicyGate {
   /** Turns that read a secret (INV-1309) or outside content (INV-1366, per `externalTool`, set by the orchestrator). */
   readonly taint = new TurnTaint();
   externalTool: ((tool: string) => boolean) | undefined;
+  /** An agent's own ask-before settings (INV-1664), read per call from its profile; assigned like `externalTool`, the registry being built after the gate. */
+  agentPermissions: ((agentId: string) => ToolPermissions | undefined) | undefined;
+  /** Each step's verdict, by tool_use id, for the chat's marks (INV-1664). */
+  readonly verdicts = new GateVerdicts();
 
   /**
    * Called the moment a new approval is created, with what a notifier needs.
@@ -454,6 +413,8 @@ export class PolicyGate {
    */
   check(request: PolicyRequest): PolicyDecision {
     const { decision, consequence, inputGrant } = this.decide(request);
+    const gate = request.kind === "tool" && request.callId !== undefined ? this.verdictFor(decision, consequence) : undefined;
+    if (gate !== undefined) this.verdicts.note(request.kind === "tool" ? request.callId! : "", gate);
     this.append({
       at: this.now().toISOString(),
       kind: "checked",
@@ -465,6 +426,7 @@ export class PolicyGate {
       ...(request.kind === "tool" && this.lastTier !== undefined ? { tier: this.lastTier } : {}),
       ...(request.kind === "tool" && decision.allow && this.lastWouldAsk ? { wouldAsk: request.tool } : {}),
       ...(request.kind === "tool" && this.lastTaint !== undefined ? { taint: this.lastTaint } : {}),
+      ...(gate !== undefined && request.kind === "tool" ? { callId: request.callId, gate } : {}),
     });
     if (request.kind === "tool" && decision.allow && this.lastWouldAsk) {
       this.noteShadowAsk({ at: this.now().toISOString(), tool: request.tool, agentId: request.agentId, request: describeRequest(request) });
@@ -508,6 +470,7 @@ export class PolicyGate {
   }
 
   private decide(request: PolicyRequest): Outcome {
+    this.lastRuleDecided = undefined; this.lastAsks = []; // a stopped agent's refusal must not wear the previous call's rule (INV-1664)
     // Checked first for every kind: a person who pressed stop meant all of it, not just the model
     // call that happened to come next.
     if (this.stopped.has(request.agentId)) {
@@ -608,6 +571,8 @@ export class PolicyGate {
 
   /** A wake refused because the task's mandate no longer holds (INV-1457). */
   notifyMandateStale(taskId: string, by: string, reasons: readonly string[]): void { this.append({ at: this.now().toISOString(), kind: "mandate-stale", taskId, by, reasons: [...reasons] }); }
+  /** What the operator's configuration requires, for the Configure dialog's greyed chips (INV-1664). */
+  floorContext(): { rules: readonly Rule[]; approvalTools: readonly string[]; tierGate: TierGateMode | undefined } { return { rules: this.rules?.list() ?? [], approvalTools: this.limits.approvalRequiredTools, tierGate: this.limits.tierGate ?? "shadow" }; }
   rulesHash(): string | undefined { return this.rules?.currentHash() || undefined; } // The rule set as loaded now, for a mandate to be granted and checked under.
   notifyReplyRefused(purpose: string, chatKey: string, reason: string): void { this.append({ at: this.now().toISOString(), kind: "reply-refused", purpose, chatKey, reason }); }
   notifyObserved(slug: string, would: string): void { this.append({ at: this.now().toISOString(), kind: "observed", slug, would }); }
@@ -621,6 +586,19 @@ export class PolicyGate {
   private lastTier: SideEffectTier | undefined;
   private lastWouldAsk = false;
   private lastTaint: Taint | undefined; // For the audit row: the kind of thing read and the target, never content.
+
+  private lastAsks: string[] = []; private lastRuleDecided: Rule | undefined; // what made the last tool check ask, and the rule that decided it (INV-1664)
+
+  private verdictFor(decision: PolicyDecision, consequence: PolicyEvent | undefined): GateVerdict {
+    const used = consequence?.kind === "approval-used" ? consequence.id : undefined;
+    const grant = used === undefined ? undefined
+      : [...this.always.values()].some(entry => entry.id === used) ? "standing" as const
+      : [...this.session.values()].some(entry => entry.id === used) ? "session" as const : "once" as const;
+    return verdictOf({
+      allow: decision.allow, ...(decision.allow ? {} : { reason: decision.reason }), ...(!decision.allow && decision.approval !== undefined ? { approvalId: decision.approval.id } : {}),
+      ...(grant !== undefined ? { grant } : {}), ...(this.lastRuleDecided !== undefined ? { rule: this.lastRuleDecided } : {}), asks: this.lastAsks, wouldAsk: this.lastWouldAsk,
+    });
+  }
 
   private decideTool(request: Extract<PolicyRequest, { kind: "tool" }>): Outcome {
     this.lastRule = undefined;
@@ -638,12 +616,14 @@ export class PolicyGate {
     // forces the approval below with the rule on the card; allow lifts only the
     // operator's own approval lists — never a host command, never the box's
     // irreversible finding, which are not the operator's to lift.
-    const rule = this.rules?.decide(request.tool, request.input, {
-      ...(request.principalId !== undefined ? { id: request.principalId } : {}),
-      ...(request.principalName !== undefined ? { name: request.principalName } : {}),
-    });
+    // The agent's own settings (INV-1664) are rules on the same path: the strictest of the
+    // operator's and the agent's decides, so an agent's "allow" — which makes no rule — never
+    // loosens what the operator asked for.
+    const caller = { ...(request.principalId !== undefined ? { id: request.principalId } : {}), ...(request.principalName !== undefined ? { name: request.principalName } : {}), agentId: request.agentId, agentName: request.agentName };
+    const own = agentRulesFor({ id: request.agentId, name: request.agentName }, this.agentPermissions?.(request.agentId), request.tool);
+    const rule = this.rules !== undefined ? this.rules.decide(request.tool, request.input, caller, own) : decidingRule(own, request.tool, request.input, caller);
     if (rule !== undefined) {
-      this.lastRule = rule.id;
+      this.lastRule = rule.id; this.lastRuleDecided = rule;
       if (rule.effect === "deny") {
         return {
           decision: {
@@ -659,6 +639,8 @@ export class PolicyGate {
     const configuredAsk = this.needsApproval(request) || (gate === "enforce" && tierWouldAsk) || byLevel === "ask";
     const mustAsk = request.tool === "RunOnHost" || request.irreversible !== undefined || this.lastTaint !== undefined;
     const asks = rule?.effect === "ask" || mustAsk || (configuredAsk && rule?.effect !== "allow");
+    this.lastAsks = askReasons({ ...(rule !== undefined ? { rule } : {}), hostCommand: request.tool === "RunOnHost", ...(request.irreversible !== undefined ? { irreversible: request.irreversible } : {}), tainted: this.lastTaint !== undefined,
+      approvalList: this.needsApproval({ ...request, irreversible: undefined }) && request.tool !== "RunOnHost", ...(gate === "enforce" && tierWouldAsk ? { tierEnforced: tier } : {}), ...(byLevel === "ask" && request.taskLevel !== undefined ? { levelAsks: request.taskLevel } : {}) });
     if (!asks) {
       // Shadow: allowed as before, and the row says a person would have been asked.
       this.lastWouldAsk = gate === "shadow" && tierWouldAsk && rule?.effect !== "allow";
@@ -956,6 +938,7 @@ export class PolicyGate {
 
   /** After the answer is on the record, never before: a listener's failure changes nothing. */
   private settled(approval: PendingApproval, how: "allowed" | "refused"): void {
+    this.verdicts.settle(approval.id, how);
     try {
       this.onApprovalSettled?.(approval, how);
     } catch {
@@ -1038,6 +1021,7 @@ export class PolicyGate {
       }
       switch (event.kind) {
         case "checked":
+          if (event.callId !== undefined && event.gate !== undefined) this.verdicts.note(event.callId, event.gate);
           if (event.wouldAsk !== undefined) {
             this.noteShadowAsk({ at: event.at, tool: event.wouldAsk, agentId: event.agentId, request: event.request });
           }
@@ -1064,6 +1048,7 @@ export class PolicyGate {
           break;
         }
         case "approval-granted": {
+          this.verdicts.settle(event.id, "allowed");
           const approval = byId.get(event.id);
           if (approval === undefined) break;
           this.awaiting.delete(approval.fingerprint);
@@ -1071,6 +1056,7 @@ export class PolicyGate {
           break;
         }
         case "approval-granted-session": {
+          this.verdicts.settle(event.id, "allowed");
           // The question was answered, so it is no longer pending — but the grant
           // itself belonged to a process that has ended, so it is not rebuilt.
           const approval = byId.get(event.id);
@@ -1078,6 +1064,7 @@ export class PolicyGate {
           break;
         }
         case "approval-granted-always":
+          this.verdicts.settle(event.id, "allowed");
           this.awaiting.delete(event.fingerprint);
           this.always.set(event.fingerprint, {
             fingerprint: event.fingerprint,
@@ -1092,6 +1079,7 @@ export class PolicyGate {
           break;
         case "approval-denied":
         case "approval-expired": case "approval-used": {
+          if (event.kind !== "approval-used") this.verdicts.settle(event.id, "refused");
           const approval = byId.get(event.id);
           if (approval === undefined) break;
           this.awaiting.delete(approval.fingerprint);

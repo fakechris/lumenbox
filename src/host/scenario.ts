@@ -43,7 +43,8 @@ import type { Skill } from "./skills.ts";
 import type { SpendLimits } from "./spend-limits.ts"; import { OPERATOR, type PersonRecords } from "./person.ts";
 import type { TaskStore } from "./tasks.ts";
 import { fakeModel } from "./testing/fake-model.ts";
-import { runTurn } from "./turn.ts";
+import { runTurn, type TurnEvent } from "./turn.ts";
+import type { ToolPermissions } from "./tool-permissions.ts";
 import type { Vault } from "./vault.ts";
 
 /** One model reply, in the shape the script writes it. */
@@ -300,7 +301,7 @@ function message(content: Anthropic.ContentBlock[], stop: Anthropic.Message["sto
 
 export interface EpisodeOptions {
   /** The agents the episode starts with. The first is the one the person talks to. */
-  team: { name: string; description?: string; tools?: readonly string[] }[];
+  team: { name: string; description?: string; tools?: readonly string[]; toolPermissions?: ToolPermissions }[];
   /** What the person says, in order. Each is sent to the front agent and awaited. */
   says: string[];
   /** What the model does. Unused when `client` is given. */
@@ -314,6 +315,8 @@ export interface EpisodeOptions {
   provider?: ProviderProfile;
   /** A policy gate every tool call is checked against (INV-753); absent means allow, as before. */
   policy?: PolicyGate;
+  /** What the turns emit — tool_start, tool_end with the gate's verdict (INV-1664) — as the page would receive it. */
+  onEvent?: (event: TurnEvent) => void;
   /**
    * The write-time memory judge (INV-1333). Absent clears every candidate, so episodes about other
    * things are unchanged; `"model"` uses the real one, whose prompt the script answers by its first line.
@@ -395,13 +398,16 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
   for (const member of options.team) {
     // The box is named rather than defaulted, the same rule the guard test holds every other
     // create site to: an episode's team lives in the episode's own box.
-    registry.create({
+    const created = registry.create({
       name: member.name,
       boxId: registry.box.id,
       ...(member.description !== undefined ? { description: member.description } : {}),
       ...(member.tools !== undefined ? { tools: member.tools } : {}),
     });
+    if (member.toolPermissions !== undefined) registry.update(created.id, { toolPermissions: member.toolPermissions });
   }
+  // The agents' own ask-before settings (INV-1664), read from this episode's roster as the orchestrator reads its own.
+  if (options.policy !== undefined && options.policy.agentPermissions === undefined) options.policy.agentPermissions = agentId => registry.tryGet(agentId)?.profile.toolPermissions;
   const front = registry.list()[0]!;
   for (const entry of options.history ?? []) registry.appendTranscript(front.id, entry);
 
@@ -477,6 +483,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       client,
       ...(options.provider !== undefined ? { provider: options.provider } : {}),
       ...(options.policy !== undefined ? { policy: options.policy } : {}),
+      ...(options.onEvent !== undefined ? { onEvent: options.onEvent } : {}),
       ...(options.mcp !== undefined ? { mcp: options.mcp } : {}),
       ...(options.tasks !== undefined ? { tasks: options.tasks } : {}),
       ...(options.pendingWork !== undefined ? { pendingWork: options.pendingWork } : {}),
