@@ -3060,6 +3060,8 @@ test("a Configure save mid-turn leaves the running turn on its version; the next
     result.cleanup();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
 // INV-1666: a skill that works on GitHub, an agent with no GitHub connection. The run used to start,
 // reach the first call that needed the token, and stop on an in-chat "needs a secret" card — for a
 // routine at night, until morning. Now the check runs before the turn: the chat hears what is
