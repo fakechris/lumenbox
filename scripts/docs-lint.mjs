@@ -13,7 +13,7 @@
  * disagree. Nothing here reads prose; it reads the header block, which is the point.
  */
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, globSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 export const FAMILIES = new Set(["spec", "decision", "guide", "handoff"]);
@@ -147,6 +147,105 @@ export function lintSolutions(dir) {
     if (!/^# .+/m.test(text)) problems.push(`solutions/${file}: no title heading.`);
     for (const section of SOLUTION_SECTIONS) if (!new RegExp(`^\\*\\*${section}\\.\\*\\*`, "m").test(text)) problems.push(`solutions/${file}: no **${section}.** paragraph.`);
   }
+  return problems;
+}
+
+/**
+ * The controlled vocabulary (docs/glossary.md, INV-1657): one concept, one word. A page written
+ * for a person may not use a word the glossary lists as a deprecated synonym — "door" where the
+ * person reads "channel", "bot" where they read "agent". Specs keep their internal words; this
+ * reads only the pages in `USER_FACING_DOCS` and any document whose header says `audience: user`.
+ *
+ * What is checked is prose: inline code, fenced blocks, URLs, link targets, HTML attributes and
+ * the header comment are blanked first, so a command or a file name keeps its spelling, and the
+ * glossary's allowed names (a product called Grok Bot) are blanked too.
+ */
+export const GLOSSARY = "docs/glossary.md";
+export const USER_FACING_DOCS = ["README.md", "docs/37-onboarding.md", "docs/38-operators-guide.md"];
+
+/** The glossary's tables, by the heading above each: rows of trimmed cells, header and rule rows dropped. */
+function tablesOf(text) {
+  const tables = new Map();
+  let heading = "";
+  for (const line of text.split("\n")) {
+    const h = /^##\s+(.+)$/.exec(line);
+    if (h) { heading = h[1].trim(); continue; }
+    if (!line.startsWith("|")) continue;
+    const cells = line.replace(/^\|/, "").replace(/\|\s*$/, "").split("|").map(c => c.trim());
+    if (cells.every(c => /^-+$/.test(c))) continue;
+    tables.set(heading, [...(tables.get(heading) ?? []), cells]);
+  }
+  for (const rows of tables.values()) rows.shift(); // the header row
+  return tables;
+}
+
+const ticked = cell => [...cell.matchAll(/`([^`]+)`/g)].map(m => m[1]);
+
+export function parseGlossary(text) {
+  const tables = tablesOf(text);
+  const deprecated = [];
+  for (const [terms, instead] of tables.get("Deprecated synonyms") ?? []) {
+    for (const term of ticked(terms)) deprecated.push({ term, instead: (instead ?? "").replace(/`/g, "") });
+  }
+  const allowed = (tables.get("Allowed names") ?? []).flatMap(([name]) => ticked(name));
+  return { concepts: tables.get("Concepts") ?? [], deprecated, allowed };
+}
+
+/** A line with everything that is not prose blanked out. */
+function proseOf(line, allowed) {
+  let prose = line
+    .replace(/`[^`]*`/g, " ")
+    .replace(/<!--.*?-->/g, " ")
+    .replace(/\]\([^)]*\)/g, "] ")
+    .replace(/[\w:-]+\s*=\s*"[^"]*"/g, " ")
+    .replace(/[a-z]+:\/\/\S+/gi, " ");
+  for (const name of allowed) prose = prose.replace(new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), " ");
+  return prose;
+}
+
+function matcherFor(term) {
+  // A Chinese term has no word boundary to look for; a substring is the word.
+  if ([...term].some(ch => ch.charCodeAt(0) > 127)) return text => text.includes(term);
+  const body = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+  const re = new RegExp(`(?<![\\p{L}\\p{N}_-])${body}(?![\\p{L}\\p{N}_-])`, "iu");
+  return text => re.test(text);
+}
+
+/** `file:line` for every deprecated synonym in one text. */
+export function vocabularyProblems(file, text, glossary) {
+  const problems = [];
+  const rules = glossary.deprecated.map(rule => ({ ...rule, hit: matcherFor(rule.term) }));
+  const lines = text.split("\n");
+  let fenced = false;
+  let header = text.startsWith("<!--");
+  lines.forEach((line, index) => {
+    if (header) { if (line.includes("-->")) header = false; return; }
+    if (/^\s*(```|~~~)/.test(line)) { fenced = !fenced; return; }
+    if (fenced) return;
+    const prose = proseOf(line, glossary.allowed);
+    for (const rule of rules) {
+      if (rule.hit(prose)) problems.push(`${file}:${index + 1}: "${rule.term}" is a deprecated synonym; write "${rule.instead}" (${GLOSSARY}).`);
+    }
+  });
+  return problems;
+}
+
+/**
+ * The check: `patterns` are files or globs relative to `root` (default: the user-facing pages),
+ * plus every `docs/` document whose header says `audience: user`.
+ */
+export function lintVocabulary(root, patterns = USER_FACING_DOCS, glossaryPath = join(root, GLOSSARY)) {
+  const glossary = parseGlossary(readFileSync(glossaryPath, "utf8"));
+  const problems = [];
+  if (glossary.deprecated.length === 0) problems.push(`${GLOSSARY}: no "Deprecated synonyms" table, so nothing is checked.`);
+  glossary.concepts.forEach((cells, index) => {
+    if (cells.length !== 5 || cells.some(c => c === "")) problems.push(`${GLOSSARY}: concept row ${index + 1} needs all five columns filled.`);
+  });
+  const files = new Set(patterns.flatMap(pattern => globSync(pattern, { cwd: root })));
+  for (const file of globSync("docs/**/*.md", { cwd: root })) {
+    if (parseHeader(readFileSync(join(root, file), "utf8"))?.audience === "user") files.add(file);
+  }
+  for (const file of [...files].sort()) problems.push(...vocabularyProblems(file, readFileSync(join(root, file), "utf8"), glossary));
   return problems;
 }
 

@@ -8,7 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -120,5 +120,40 @@ test("a solution page needs its frontmatter and its four paragraphs; a page that
     assert.ok(problems.some(p => /problem_type guesswork is not one of/.test(p)));
     assert.ok(problems.some(p => /no \*\*Verify\.\*\* paragraph/.test(p)));
     assert.deepEqual(parseSolutionFrontmatter("no front"), undefined);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("user-facing pages use the glossary's words, and the glossary names every concept in five columns (INV-1657)", () => {
+  const { lintVocabulary, parseGlossary, GLOSSARY } = awaitImported;
+  assert.deepEqual(lintVocabulary(root), [], lintVocabulary(root).join("\n"));
+  const glossary = parseGlossary(readFileSync(join(root, GLOSSARY), "utf8"));
+  assert.ok(glossary.concepts.length >= 19, `${glossary.concepts.length} concepts; the audit named 19`);
+  assert.ok(glossary.deprecated.some(rule => rule.term === "door" && rule.instead === "channel"));
+});
+
+test("a deprecated synonym is reported by file and line, in the listed files and in audience: user pages; code, links, allowed names and specs are not checked", () => {
+  const { lintVocabulary, GLOSSARY } = awaitImported;
+  const dir = mkdtempSync(join(tmpdir(), "vocabulary-"));
+  try {
+    writeFileSync(join(dir, "guide.md"), [
+      "# Guide",
+      "",
+      "Open Settings → Channels and add a channel.",
+      "Then message the bot in the group chat.",
+      "Run `agentbox door list` or read [the spec](docs/22-door.md); Grok Bot is a product.",
+      "```",
+      "a door inside a code block",
+      "```",
+      "把它放进箱子里。",
+    ].join("\n"));
+    mkdirSync(join(dir, "docs"));
+    writeFileSync(join(dir, "docs", "22-spec.md"), "<!-- doc: 22-spec\n     family: spec\n-->\n# A spec\n\nThe door grants nothing.\n");
+    writeFileSync(join(dir, "docs", "manual.md"), "<!-- doc: manual\n     audience: user\n-->\n# A page\n\nEvery door opens into one box.\n");
+    const problems = lintVocabulary(dir, ["gui*.md"], join(root, GLOSSARY));
+    assert.deepEqual(problems, [
+      'docs/manual.md:6: "door" is a deprecated synonym; write "channel" (docs/glossary.md).',
+      'guide.md:4: "bot" is a deprecated synonym; write "agent" (docs/glossary.md).',
+      'guide.md:9: "箱子" is a deprecated synonym; write "box" (docs/glossary.md).',
+    ]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

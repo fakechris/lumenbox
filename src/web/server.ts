@@ -3087,7 +3087,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       const currentDoor = channelRecords.find(entry => entry.id === channelId);
       const currentEnv = loadConfig().env ?? {};
       if (!currentDoor || currentDoor.incarnation !== pending.incarnation || (process.env[`${base}_APP_ID`] ?? currentEnv[`${base}_APP_ID`]) !== pending.appId) {
-        send(res, 409, { error: "The sign-in door changed; start again." }); return;
+        send(res, 409, { error: "The sign-in channel changed; start again." }); return;
       }
       if (pending.bootstrapCode !== undefined) {
         if (!bootstrap.redeem(pending.bootstrapCode, identity, info.data?.name ?? openId, currentDoor.incarnation)) {
@@ -3146,7 +3146,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         const escapeHtml = (value: string) => value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
         res.setHeader("cache-control", "no-store");
         res.setHeader("referrer-policy", "no-referrer");
-        send(res, 200, `<!doctype html><meta charset="utf-8"><title>First administrator</title><body style="font:16px system-ui;max-width:600px;margin:80px auto;padding:20px"><h1>First administrator</h1><p>Retrieve the one-use code from the installation's local bootstrap-code file. Sign in with Feishu to become its first administrator.</p><form id="bootstrap"><label>Code <input id="code" type="password" autocomplete="off" maxlength="128" required></label><label> Door <select id="door">${doors.map(door => `<option value="${escapeHtml(door.id)}">${escapeHtml(door.name)}</option>`).join("")}</select></label><button ${doors.length ? "" : "disabled"}>Sign in with Feishu</button></form><p id="status">${doors.length ? "The code expires after 24 hours and works once." : "Configure a Feishu door and public URL on this installation first."}</p><script>document.getElementById('bootstrap').onsubmit=async function(event){event.preventDefault();var button=this.querySelector('button');button.disabled=true;try{var response=await fetch('/auth/'+encodeURIComponent(document.getElementById('door').value),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bootstrapCode:document.getElementById('code').value})});var data=await response.json();if(!response.ok)throw new Error(data.error);document.getElementById('code').value='';location.assign(data.url);}catch(error){document.getElementById('status').textContent=error.message;button.disabled=false;}};</script></body>`, "text/html");
+        send(res, 200, `<!doctype html><meta charset="utf-8"><title>First administrator</title><body style="font:16px system-ui;max-width:600px;margin:80px auto;padding:20px"><h1>First administrator</h1><p>Retrieve the one-use code from the installation's local bootstrap-code file. Sign in with Feishu to become its first administrator.</p><form id="bootstrap"><label>Code <input id="code" type="password" autocomplete="off" maxlength="128" required></label><label> Channel <select id="door">${doors.map(door => `<option value="${escapeHtml(door.id)}">${escapeHtml(door.name)}</option>`).join("")}</select></label><button ${doors.length ? "" : "disabled"}>Sign in with Feishu</button></form><p id="status">${doors.length ? "The code expires after 24 hours and works once." : "Configure a Feishu channel and public URL on this installation first."}</p><script>document.getElementById('bootstrap').onsubmit=async function(event){event.preventDefault();var button=this.querySelector('button');button.disabled=true;try{var response=await fetch('/auth/'+encodeURIComponent(document.getElementById('door').value),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bootstrapCode:document.getElementById('code').value})});var data=await response.json();if(!response.ok)throw new Error(data.error);document.getElementById('code').value='';location.assign(data.url);}catch(error){document.getElementById('status').textContent=error.message;button.disabled=false;}};</script></body>`, "text/html");
         } catch { if (!res.headersSent) send(res, 503, { error: "First-admin bootstrap is unavailable." }); }
         return;
       }
@@ -3790,7 +3790,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const body = await readJson(req);
           if (refusedRole("admin")) return;
           const credentials = directoryCredentials(String(body.channelId ?? ""));
-          if (!credentials) { send(res, 400, { error: "Choose a configured Feishu or DingTalk door." }); return; }
+          if (!credentials) { send(res, 400, { error: "Choose a configured Feishu or DingTalk channel." }); return; }
           try {
             await directories.sync(credentials.source, () => credentials.provider.fetchDirectory({
               clientId: credentials.clientId, clientSecret: credentials.clientSecret, fetchFn: options.directoryFetch ?? fetch,
@@ -5681,7 +5681,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             locked,
             restartNeeded,
             note: restartNeeded
-              ? "Model settings are in force now; the host door, startup item or box image change takes effect when the server restarts."
+              ? "Model settings are in force now; a change to host execution, the startup item or the box image takes effect when the server restarts."
               : locked.length > 0
                 ? `Saved. ${locked.join(", ")} is set in the server's environment and overrides the file until the server starts without it.`
                 : "Saved and in force. Turns already running finish on the previous model.",
@@ -6515,7 +6515,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             const versions = orchestrator.stagedTemplates(agent.id);
             const version = Number.isInteger(wanted) && wanted > 0 ? versions.find(entry => entry.version === wanted) : versions.at(-1);
             if (version === undefined) {
-              send(res, 404, { error: "No staged version to publish. Ask the bot to draft one first." });
+              send(res, 404, { error: "No staged version to publish. Ask the agent to draft one first." });
               return;
             }
             const visibility = body.visibility === "tenant" ? "tenant" : "public";

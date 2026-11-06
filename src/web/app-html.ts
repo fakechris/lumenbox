@@ -1235,7 +1235,7 @@ ${SETTINGS_DIALOG_HTML}
       <label>From catalog</label>
       <div id="agcatalog" class="toolchips"></div>
       <div id="agcatalogpreview" style="display:none;margin-top:8px;padding:10px 12px;border:1px solid var(--border-strong);border-radius:var(--radius-md);background:var(--bg);font-size:12px"></div>
-      <div class="fieldnote">Specialists and crews that ship with the install. A specialist fills
+      <div class="fieldnote">Agents and crews that ship with the install. An agent entry fills
         this form; a crew adds its members in one step. Not seeded — adding is a choice.</div>
     </div>
     <div class="field" id="agimportwrap">
@@ -2008,7 +2008,7 @@ function renderChannels() {
         var st = statuses[rec.id];
         var cls = st && st.running ? "ok" : st && st.configured ? "bad" : "";
         var detail = st ? st.detail : rec.credentialsSet
-          ? "restart to open this door"
+          ? "restart to connect this channel"
           : "set " + rec.envBase + "_APP_ID + _APP_SECRET";
         return '<div style="display:flex;gap:9px;align-items:center;font-size:13px;flex-wrap:wrap">' +
           '<span class="dot ' + cls + '"></span>' +
@@ -2107,7 +2107,7 @@ document.getElementById("setchannels").addEventListener("click", function (event
 
 $("setchadd").onclick = function () {
   var id = $("setchid").value.trim();
-  if (!id) { $("setchstatus").textContent = "The door needs an id — it becomes the identity prefix."; return; }
+  if (!id) { $("setchstatus").textContent = "The channel needs an id — it becomes the identity prefix."; return; }
   $("setchstatus").textContent = "…";
   fetch("/api/channels/records", {
     method: "POST",
@@ -2125,7 +2125,7 @@ $("setchadd").onclick = function () {
     .then(function (d) {
       if (d.error) { $("setchstatus").textContent = d.error; return; }
       $("setchstatus").textContent = d.started
-        ? "Saved — the door is opening now. Its dot goes green when the wire connects."
+        ? "Saved — the channel is connecting now. Its dot goes green when it connects."
         : d.restartNeeded
           ? "Saved. Restart the web process to apply the new credentials — and wait a " +
             "minute between stop and start, or Feishu keeps the dead connection."
@@ -7343,7 +7343,7 @@ function openShelf(preferredBox) {
     var html = "";
     var market = d.marketplace || [];
     if (market.length) {
-      html += '<div class="eyebrow" style="margin:6px 0;display:flex;justify-content:space-between;align-items:center"><span>Ready-made bots (' + market.length + ')</span>' +
+      html += '<div class="eyebrow" style="margin:6px 0;display:flex;justify-content:space-between;align-items:center"><span>Ready-made agents (' + market.length + ')</span>' +
         '<input id="shelffilter" placeholder="filter" style="height:22px;font-size:11px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);padding:0 6px;width:140px;text-transform:none;letter-spacing:0"></div>';
       html += market.map(function (t) {
         var badges = [t.skills.length + " skill" + (t.skills.length === 1 ? "" : "s")];
@@ -7446,7 +7446,7 @@ function refreshSetup() {
       { done: s.box, head: t("ui.setup.box"), sub: t("ui.setup.boxWhy"), act: t("ui.setup.boxAct"), cli: "agentbox box up", go: function () { openSettings("boxes"); } },
       { done: s.agentTurn, head: t("ui.setup.agent"), sub: t("ui.setup.agentWhy"), act: t("ui.setup.agentAct"), cli: "agentbox agent new <name>", go: openShelf },
       { done: s.search || searchSkipped, skip: "search", head: t("ui.setup.search"), sub: t("ui.setup.searchWhy"), act: t("ui.setup.searchAct"), cli: "Settings → Model", go: function () { openSettings("model"); } },
-      { done: s.door || doorSkipped, skip: "door", head: t("ui.setup.door"), sub: t("ui.setup.doorWhy"), act: t("ui.setup.doorAct"), cli: "Settings → Doors (no CLI yet)", go: function () { openSettings("doors"); } },
+      { done: s.door || doorSkipped, skip: "door", head: t("ui.setup.door"), sub: t("ui.setup.doorWhy"), act: t("ui.setup.doorAct"), cli: "Settings → Channels (no CLI yet)", go: function () { openSettings("doors"); } },
       { done: s.review, head: t("ui.setup.work"), sub: t("ui.setup.workWhy"), act: t("ui.setup.workAct"), cli: "agentbox chat <name> \"…\"", go: function () { var tab = $("tabtasks"); if (tab) tab.click(); } }
     ];
     if (steps.every(function (x) { return x.done; }) && !guideForced) { card.style.display = "none"; return; }
