@@ -15,6 +15,7 @@ test("the table, row by row", () => {
   assert.equal(taskStage(fixture("blocked", { history: [{ at: "t", by: "a1", status: "blocked", note: "which region?", options: ["us", "eu"] }] }), quiet), "person/answer", "a blocker with options is a question");
   assert.equal(taskStage(fixture("doing", { mandate: { by: "p", strength: "explicit", grantedAt: "t", stale: { at: "t", reasons: ["rules-changed"] } } }), quiet), "person/answer", "a stale mandate waits for its person");
   assert.equal(taskStage(fixture("review"), quiet), "person/review");
+  assert.equal(taskStage(fixture("review"), { ...quiet, reviewerIsAgent: true }), "review", "an agent named as reviewer: the team's record settles it, no person is asked (INV-1647)");
   assert.equal(taskStage(fixture("blocked", { history: [{ at: "t", by: "a1", status: "blocked", note: "needs the key" }] }), quiet), "person/blocked");
   assert.equal(taskStage(fixture("open"), quiet), "working/queued");
   assert.equal(taskStage(fixture("doing"), { ...quiet, active: true }), "working");
@@ -29,9 +30,9 @@ test("every status × world combination lands on exactly one stage, and every st
   for (const status of TASK_STATUSES) {
     for (const undelivered of [false, true]) {
       for (const questionPending of [false, true]) {
-        for (const active of [false, true]) {
+        for (const active of [false, true]) for (const reviewerIsAgent of [false, true]) {
           for (const options of [undefined, ["a", "b"]]) {
-            const stage = taskStage(fixture(status, { history: [{ at: "t", by: "x", ...(options !== undefined ? { options, note: "q" } : {}) }] }), { undelivered, questionPending, active });
+            const stage = taskStage(fixture(status, { history: [{ at: "t", by: "x", ...(options !== undefined ? { options, note: "q" } : {}) }] }), { undelivered, questionPending, active, reviewerIsAgent });
             assert.ok(stage in STAGE_LABEL, `${status}/${undelivered}/${questionPending}/${active} → ${stage} has no label`);
             seen.add(stage);
           }

@@ -1063,8 +1063,8 @@ export const APP_HTML = String.raw`<!doctype html>
       <button class="btn sm" id="taskadd">Add</button>
     </div>
     <!-- What needs me, before what the board has (INV-543): two lists and their clocks. -->
-    <div id="attention" style="display:none;border-bottom:1px solid var(--border);padding:10px 16px"></div>
-    <div class="scroll" id="tasklist"></div>
+    <div id="attention" title="Above: what is waiting on a person, with its clock. Below: every task on the board." style="display:none;border-bottom:1px solid var(--border);padding:10px 16px"></div>
+    <div class="scroll" id="tasklist" title="The board: every task, newest change first within each status."></div>
   </div>
   <!-- What runs without anyone asking. The page a person checks when they want to know
        whether the 06:30 brief is actually armed, when it last fired, and where it
@@ -4676,7 +4676,7 @@ function refresh() {
     $("model").innerHTML = "<b>" + esc(state.provider) + "</b>";
     boxState = { ok: !!state.box.ok, detail: String(state.box.detail || "") };
     dockerState = state.box.docker || null;
-    $("boxinfo").textContent = (state.box.ok ? state.box.detail : "box unavailable") +
+    $("boxinfo").textContent = (state.box.ok ? (state.box.detail === "answering" ? "box online" : state.box.detail) : "box unavailable") + // the probe's word, said plainly: nothing for the person to do
       (state.boxes && state.boxes.length > 1 ? " · " + state.boxes.length + " boxes (" + state.boxes.filter(function (b) { return b.connected; }).length + " up)" : "");
     $("boxdot").className = "dot " + (state.box.ok ? "ok" : "bad");
     showBoxClass(state.box);
@@ -4804,7 +4804,7 @@ function refreshProgress() {
       var remembered = null;
       try { remembered = localStorage.getItem(planKey); } catch (error) {}
       var open = remembered === "open" ? true : remembered === "shut" ? false : !complete;
-      head.innerHTML = '<details' + (open ? " open" : "") + '><summary><b>plan</b> ' + (hasPlan ? esc(state.plan.split("\n")[0]) : "&mdash;") +
+      head.innerHTML = '<details' + (open ? " open" : "") + ' title="This conversation\'s current plan: replaced when the agent sets a new one"><summary><b>' + (complete ? "plan done" : "plan") + '</b> ' + (hasPlan ? esc(state.plan.split("\n")[0]) : "&mdash;") +
         (todos.length ? ' <span class="dim mono">' + done + "/" + todos.length + " done</span>" : "") +
         ' <span class="dim">' + (open ? "▾" : "▸") + "</span></summary></details>";
       var det = head.querySelector("details");
@@ -5714,7 +5714,7 @@ function renderAttention() {
       };
       // The first screen (INV-1464): the person/* rows, counted, above the agents; healthy takes no space.
       // The strip is for what blocks (INV-1627): a consent, a question, a pause, a message that could not land. Tasks waiting for review are the board's, folded into one line here — 234 of them once filled the whole column.
-      var needs = mine.filter(function (i) { return i.kind === "approval" || i.kind === "spend-limit" || i.kind === "question" || i.kind === "paused" || i.kind === "undeliverable"; }), reviews = mine.filter(function (i) { return !!i.stage && i.stage.indexOf("person/") === 0; }).length, shown = needs.slice(0, 5);
+      var needs = mine.filter(function (i) { return i.decision === true; }), reviews = mine.filter(function (i) { return !!i.stage && i.stage.indexOf("person/") === 0; }).length, shown = needs.slice(0, 5);
       $("needsme").style.display = needs.length || reviews ? "" : "none";
       $("needsme").innerHTML = (needs.length ? '<div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--warn);margin-bottom:4px">' + esc(t("ui.attention.needsMe")) + " · " + needs.length + "</div>" + shown.map(function (i) { return row(i, true); }).join("") + (needs.length > shown.length ? '<a href="#" class="dim" data-att-board="1" style="font-size:12px">+' + (needs.length - shown.length) + " more on the board</a>" : "") : "") + (reviews ? '<a href="#" class="dim" data-att-board="1" style="display:block;font-size:12px;margin-top:4px">' + reviews + " task" + (reviews === 1 ? "" : "s") + " waiting for your review · open the board</a>" : "");
       if (!mine.length && !theirs.length) {
@@ -5753,7 +5753,7 @@ document.addEventListener("click", function (event) {
     // column. A task opens its card on the board beside this panel.
     var conversation = open.getAttribute("data-att-open");
     if (conversation) select(current, conversation);
-    else { openTask = open.getAttribute("data-att-task"); taskScrolled = true; showTab("tasks"); } // the board is where a task opens; from the chat view that means switching to it
+    else { openTask = open.getAttribute("data-att-task"); taskScrolled = false; showTab("tasks"); } // scrolled is reset so the board brings the card into view // the board is where a task opens; from the chat view that means switching to it
   }
 });
 

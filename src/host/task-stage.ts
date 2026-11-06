@@ -16,6 +16,8 @@ export type TaskStage =
   | "person/delivery"
   | "person/answer"
   | "person/review"
+  /** In review with an agent named as reviewer (INV-1647): the K-reviewer record settles it, no person is asked. */
+  | "review"
   | "person/blocked"
   | "working/queued"
   | "working"
@@ -30,18 +32,21 @@ export interface StageWorld {
   questionPending: boolean;
   /** A turn of the assignee runs in this task's conversation right now, or a command it let go of still runs (INV-1461). */
   active: boolean;
+  /** The named reviewer is an agent (INV-1647): the review is the team's, and only the person's own asks wait for the person. */
+  reviewerIsAgent?: boolean;
 }
 
 /** The world for one task from what the host holds; the attention page and the side door read it the same way (INV-1506). */
-export function stageWorldOf<T extends Pick<Task, "conversation" | "assigneeId">>(
+export function stageWorldOf<T extends Pick<Task, "conversation" | "assigneeId" | "reviewerId">>(
   task: T,
-  reads: { undeliverableChats: ReadonlySet<string>; chatKeyOf?: (conversation: string) => string | undefined; questions: readonly { conversation?: string; agentId?: string }[]; active?: (task: T) => boolean },
+  reads: { undeliverableChats: ReadonlySet<string>; chatKeyOf?: (conversation: string) => string | undefined; questions: readonly { conversation?: string; agentId?: string }[]; agentIds?: ReadonlySet<string>; active?: (task: T) => boolean },
 ): StageWorld {
   const chatKey = task.conversation !== undefined ? reads.chatKeyOf?.(task.conversation) : undefined;
   return {
     undelivered: chatKey !== undefined && reads.undeliverableChats.has(chatKey),
     questionPending: reads.questions.some(question => question.conversation === task.conversation && (task.assigneeId === undefined || question.agentId === task.assigneeId)),
     active: reads.active?.(task) ?? false,
+    reviewerIsAgent: task.reviewerId !== undefined && (reads.agentIds?.has(task.reviewerId) ?? false),
   };
 }
 
@@ -53,7 +58,8 @@ export function stageWorldOf<T extends Pick<Task, "conversation" | "assigneeId">
  * | ended           | status done or dropped                                                |
  * | person/delivery | a message for this task's conversation is undeliverable               |
  * | person/answer   | a question is pending on it, the board asks with options, or its mandate is stale |
- * | person/review   | status review                                                         |
+ * | review          | status review, an agent named as reviewer: the team's record settles it  |
+ * | person/review   | status review, otherwise                                               |
  * | person/blocked  | status blocked, no options to choose from                             |
  * | working/queued  | status open: nobody has started it                                    |
  * | working         | status doing and something of it runs now                             |
@@ -66,7 +72,7 @@ export function taskStage(task: Pick<Task, "status" | "history" | "mandate" | "p
   const asksWithOptions = task.status === "blocked" && last?.options !== undefined && last.options.length > 0;
   const staleMandate = task.mandate?.stale !== undefined && task.mandate.withdrawn === undefined;
   if (world.questionPending || asksWithOptions || staleMandate) return "person/answer";
-  if (task.status === "review") return "person/review";
+  if (task.status === "review") return world.reviewerIsAgent === true ? "review" : "person/review";
   if (task.status === "blocked") return "person/blocked";
   if (task.status === "open") return "working/queued";
   return world.active ? "working" : "idle";
@@ -79,6 +85,7 @@ export const STAGE_LABEL: Record<TaskStage, string> = {
   "person/delivery": "undeliverable",
   "person/answer": "awaiting answer",
   "person/review": "awaiting review",
+  review: "under the team's review",
   "person/blocked": "blocked",
   "working/queued": "queued",
   working: "working",

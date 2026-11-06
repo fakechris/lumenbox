@@ -820,7 +820,7 @@ export class Orchestrator {
     // K reviewers, one record each, and the record moves the task (INV-1614); the workspace snapshot around each turn still voids a review that edited the work.
     void reviewRound({
       ledger: this.verifications, k: loadConfig().reviewersPerClaim ?? DEFAULT_REVIEWERS_PER_CLAIM, candidates: () => this.registry.list().map(agent => agent.id), nameOf: id => this.registry.tryGet(id)?.profile.name ?? id,
-      current: id => this.tasks?.get(id), move: (id, change) => { this.tasks?.update(id, change, REVIEW_ACTOR); }, log: line => console.error(`[audit] ${line}`),
+      current: id => this.tasks?.get(id), move: (id, change) => { this.tasks?.update(id, change, REVIEW_ACTOR); }, log: line => console.error(`[audit] ${line}`), isAgent: id => this.registry.has(id), // an agent's own ask closes on a passing record (INV-1647)
       ask: async (reviewerId, current) => {
         const before = await this.workspaceManifest();
         const spoken = this.registry.readTranscript(reviewerId).length;

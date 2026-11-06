@@ -32,6 +32,8 @@ export interface AttentionItem {
   title: string;
   /** One line a person can act on without opening anything. */
   detail: string;
+  /** Whether the person's answer changes what happens next (INV-1647); set where the list is assembled. */
+  decision?: boolean;
   /** When the clock runs out, if it does. */
   deadline?: string;
   /** Which agent or person this is with. */
@@ -64,6 +66,8 @@ export interface AttentionInput {
    * be a strange kind of privacy.
    */
   unanswered?: readonly { work: string; agent: string; detail: string; deadline?: string }[];
+  /** The agents (INV-1647): a task an agent reviews is the team's to settle, not the person's. */
+  agentIds?: ReadonlySet<string>;
   /** Pending approvals, the most common block (INV-1622/1627): one item each, answered from the strip. */
   approvals?: readonly { id: string; agentId: string; agentName: string; description: string; action?: string; requestedAt: string }[];
   /** Teammate chains the bus stopped (INV-1277): shown to everyone, since no person is in them by definition. */
@@ -86,6 +90,14 @@ export interface AttentionInput {
 const isLive = (task: Task): boolean => task.status !== "done" && task.status !== "dropped";
 
 /** What goes first on the strip: a parked command and a question with a clock, then the rest (INV-1627). */
+/**
+ * A decision is an item where the person's answer changes what happens next; a notice is
+ * something they may want to know (INV-1647). Only decisions reach the strip and the OS: a
+ * channel that carries everything carries nothing.
+ */
+export const DECISION_KINDS: ReadonlySet<AttentionItem["kind"]> = new Set(["approval", "question", "close-proposal", "review", "reauthorize", "spend-limit", "paused"]);
+export const isDecision = (kind: AttentionItem["kind"]): boolean => DECISION_KINDS.has(kind);
+
 export function urgencyOf(kind: AttentionItem["kind"]): number {
   return kind === "approval" ? 0 : kind === "question" ? 1 : kind === "spend-limit" || kind === "paused" ? 2 : 3;
 }
@@ -163,7 +175,7 @@ export function attentionFor(input: AttentionInput): Attention {
   const undeliverableChats = new Set((input.undeliverable ?? []).map(receipt => receipt.chatKey));
   for (const task of input.tasks) {
     if (!isLive(task)) continue;
-    stages[task.id] = taskStage(task, stageWorldOf(task, { undeliverableChats, questions: input.questions, ...(input.chatKeyOf !== undefined ? { chatKeyOf: input.chatKeyOf } : {}), ...(input.active !== undefined ? { active: input.active } : {}) }));
+    stages[task.id] = taskStage(task, stageWorldOf(task, { undeliverableChats, questions: input.questions, ...(input.agentIds !== undefined ? { agentIds: input.agentIds } : {}), ...(input.chatKeyOf !== undefined ? { chatKeyOf: input.chatKeyOf } : {}), ...(input.active !== undefined ? { active: input.active } : {}) }));
   }
   for (const task of input.tasks) {
     if (!isLive(task)) continue;
@@ -201,7 +213,7 @@ export function attentionFor(input: AttentionInput): Attention {
       });
       continue;
     }
-    if (task.status === "review" && isMe(task.reviewerId)) {
+    if (task.status === "review" && isMe(task.reviewerId) && !(task.reviewerId !== undefined && input.agentIds?.has(task.reviewerId))) { // an agent reviewer settles it by the record (INV-1614/1647)
       mine.push({
         kind: "review",
         ref: task.id, stage: stages[task.id],
