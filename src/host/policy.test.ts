@@ -1032,12 +1032,12 @@ test("an approval expired by the host is refused on the record as approval-expir
 test("the task's level sits beside the operator's lists (INV-1650): L2 refuses a change in the box, L4 asks before an outward call, L5 lets it through", () => {
   const { gate, cleanup } = fixture({ approvalRequiredTools: [] });
   try {
-    const inBox = (taskLevel: 1 | 2 | 3 | 4 | 5): PolicyRequest => ({ ...toolRequest("echo hi"), taskLevel });
+    const inBox = (taskLevel: 1 | 2 | 3 | 4 | 5): PolicyRequest => ({ kind: "tool", agentId: "agent-1", agentName: "Ada", tool: "bash", input: { command: "echo hi" }, taskLevel });
     const outward = (taskLevel: 1 | 2 | 3 | 4 | 5): PolicyRequest => ({ kind: "tool", agentId: "agent-1", agentName: "Ada", tool: "browser_upload", input: { path: "/work/report.pdf" }, taskLevel });
     const planOnly = gate.check(inBox(2));
     assert.equal(planOnly.allow, false);
     assert.match((planOnly as { reason: string }).reason, /at L2: it stops before acting on the world/);
-    assert.equal(gate.check({ ...inBox(2), tool: "read_file", input: { path: "/work/a.md" } }).allow, true, "looking is allowed at every level");
+    assert.equal(gate.check({ kind: "tool", agentId: "agent-1", agentName: "Ada", tool: "read_file", input: { path: "/work/a.md" }, taskLevel: 2 }).allow, true, "looking is allowed at every level");
     assert.equal(gate.check(inBox(3)).allow, true, "work inside the box from L3");
     const confirmFirst = gate.check(outward(4));
     assert.equal(confirmFirst.allow, false);
