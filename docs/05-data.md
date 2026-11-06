@@ -38,6 +38,7 @@ skill-provenance.jsonl      which agent the host saw write each skill (skill-pro
 hooks.json                  lifecycle hooks in Claude Code's dialect (hooks.ts); read on mtime
 agents/<agentId>/
   profile.json              identity and persona
+  config-versions.jsonl     every version of its configuration, and where conversations and tasks switched (INV-1669)
   conversation.jsonl        legacy/current transcript until the first explicit context switch
   conversation.jsonl.epochs/
     state.json              context epoch, mode, schema and idempotent switch operations
@@ -73,6 +74,23 @@ from listings rather than failing the roster.
 `displayIndex` is allocated as the lowest free index, so a deleted agent's desktop is reused,
 capped at 32. An agent created before the field existed is backfilled on first use rather than
 defaulted to 1, which would silently share a desktop.
+
+### 2.1a `config-versions.jsonl` — the configuration's versions (INV-1669)
+
+Beside `profile.json` (`src/agents/config-versions.ts`). A `version` line per version, numbered from
+1: when, who (a person's name, or `before version history` / `as first seen` / `changed outside
+Configure` / `standing files changed in the box`), `restoredFrom` when it is "go back to version n",
+and the configuration — persona, `tools`, `toolPermissions`, provider, model, fallbacks, scope, and a
+16-hex hash per standing file as the last turn read it. The files themselves are the box's and are
+not kept here: the hash says that one changed and when. Name and teams are not configuration.
+
+A Configure save writes a version when the settings differ from the last; going back writes a new
+one and rewrites none. A turn records the version it began under (`configVersion` on the turn
+ledger's `begin` in `turns.jsonl`) and is held to it until it ends — the offered tools, the model
+and the ask-before setting the policy gate reads — so a save applies from the next turn. A `use`
+line is written only when a conversation or a task starts running under a version it was not
+already on: these are the switch points the task detail and the conversation header show. Never
+compacted; it grows by a line per save and per switch.
 
 ### 2.2 `conversation.jsonl`
 

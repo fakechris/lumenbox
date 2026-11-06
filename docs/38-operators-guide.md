@@ -728,6 +728,15 @@ writer. A `priority` message aborts a running *background* turn so the agent can
 with a stop-or-supersede instruction — but never a turn the user started, because
 yanking that away mid-answer is worse than a few seconds of delay.
 
+Every save in an agent's Configure dialog is a version of its configuration — persona, tools and
+what each asks before, provider and model, scope, and a hash of each standing file — kept in
+`config-versions.jsonl` beside the profile. The dialog's **History** tab lists them with who saved
+each and what it changed, compares two, and goes back to one by making a new version. **A save
+applies from the agent's next turn; a turn already running keeps the version it started with** —
+its tool list, its model and its ask-before settings alike — so to stop what it is doing now, use
+Stop or pause the agent. The conversation header says which version the conversation runs on, and
+a task's detail lists each version it ran under and where it switched.
+
 There is no router. Which agent handles what, and when to pull in a teammate, is
 decided by the models through those tools. What looks like coordination at runtime is
 emergent, not encoded.

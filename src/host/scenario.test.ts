@@ -2988,3 +2988,73 @@ test("an agent whose shell is set to ask waits for the person's card, while its 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// INV-1669: a person changed an agent's tools in Configure while it was in the middle of a task —
+// turned on write_file and set bash to "ask me" — and wanted to know two things afterwards: did the
+// turn already running change under it, and which version did each part of the task run on. Before
+// this, "off" was fixed for the turn (the offer is built once) but "ask" was read live on every
+// call, so one save took effect halfway through a turn on one axis and not the other, and no record
+// said which settings a turn had been held to.
+//
+// What the harness must hold: the running turn keeps the version it began with on both axes — the
+// tool list the model is offered and the ask-before setting the gate reads — the next turn runs on
+// the saved version, and the task records both versions with where it switched.
+test("a Configure save mid-turn leaves the running turn on its version; the next turn runs the new one; the task shows the switch (INV-1669)", async () => {
+  const { PolicyGate } = await import("./policy.ts");
+  const { switchesForTask } = await import("../agents/config-versions.ts");
+  const { rmSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-config-version-scenario-"));
+  const policy = new PolicyGate({
+    path: join(dir, "policy.jsonl"),
+    limits: { budgetWindowHours: 24, wakesPerWindow: 30, wakeWindowMinutes: 10, approvalRequiredTools: [], approvalRequiredCommands: [], tierGate: "off" },
+  });
+  const tasks = new TaskStore(join(dir, "tasks.jsonl"));
+  const offered: { turn: string; tools: string[] }[] = [];
+  let roster: AgentRegistry | undefined;
+  let taskId = "";
+  const result = await runEpisode({
+    team: [{ name: "Nova", tools: ["read_file", "bash", "Tasks"] }], says: [], tasks, policy,
+    drive: async ({ registry, frontId, say }) => {
+      roster = registry;
+      const task = tasks.create({ title: "写两份周报", requester: "user", assigneeId: frontId })!;
+      tasks.update(task.id, { status: "doing" }, frontId);
+      taskId = task.id;
+      await say("第一份");
+      await say("第二份");
+    },
+    script: ({ offered: names, messages }) => {
+      // The round counter spans the episode, so the turn is read off the person's latest line.
+      const turn = messages.filter(message => typeof message.content === "string").map(message => String(message.content)).some(text => text.includes("第二份")) ? "second" : "first";
+      offered.push({ turn, tools: names });
+      const ran = JSON.stringify(messages.at(-1)).includes("tool_result");
+      if (turn === "first" && !ran) {
+        // The person saves Configure while this turn runs: write_file on, bash to "ask me".
+        const front = roster!.list()[0]!;
+        const after = roster!.update(front.id, { tools: ["read_file", "bash", "Tasks", "write_file"], toolPermissions: { tools: { bash: "ask" } } }).profile;
+        roster!.configVersions.saved(front.id, after, "Chris");
+        return { call: "bash", input: { command: "echo one > /home/box/work/one.txt" } };
+      }
+      if (turn === "second" && !ran) return { call: "bash", input: { command: "echo two > /home/box/work/two.txt" } };
+      return { say: turn === "first" ? "第一份写好了。" : "第二份要等你允许再写。" };
+    },
+  });
+  try {
+    const first = offered.filter(entry => entry.turn === "first");
+    const second = offered.filter(entry => entry.turn === "second");
+    assert.ok(first.length >= 2 && first.every(entry => !entry.tools.includes("write_file")), "the running turn is offered the tools it began with, after the save too");
+    assert.equal(result.files.get("/home/box/work/one.txt"), "one", "and its bash ran unasked: the turn began before bash was set to ask");
+    assert.ok(second.length > 0 && second.every(entry => entry.tools.includes("write_file")), "the next turn is offered the saved tool list");
+    assert.equal(result.files.get("/home/box/work/two.txt"), undefined, "and its bash waits for the person");
+    assert.match(policy.pending()[0]?.description ?? "", /^\[rule agent:Nova\/bash\] /, "on a card that names the agent's setting");
+
+    // The task detail: the version in effect, and where the task switched to it.
+    const switches = switchesForTask(result.registry, taskId);
+    assert.deepEqual(switches.map(entry => [entry.agentName, entry.n]), [["Nova", 1], ["Nova", 2]], "two versions, in order");
+    assert.equal(switches[1]!.by, "Chris", "the second is the person's save");
+    assert.ok(switches[0]!.from < switches[1]!.from, "each from the turn that first ran under it");
+    assert.notEqual(switches[0]!.turn, switches[1]!.turn);
+  } finally {
+    result.cleanup();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -114,6 +114,8 @@ interface BeginRecord {
   };
   /** Which version of the agent this turn ran under — standing files, offered skills, prompt parts — as hashes (INV-1474). */
   agentVersion?: AgentVersion;
+  /** Which version of the agent's configuration — the Configure dialog's — this turn began under and was held to (INV-1669, agents/config-versions.ts). */
+  configVersion?: number;
 }
 
 /** The three parts of an assembled prompt that can each break the provider's cache on their own. */
@@ -257,6 +259,7 @@ export class TurnLedger {
     contextMode?: "normal" | "clean" | "recover";
     memoryProjection?: BeginRecord["memoryProjection"];
     agentVersion?: AgentVersion;
+    configVersion?: number;
     now?: Date;
   }): string {
     const record: BeginRecord = {
@@ -281,6 +284,7 @@ export class TurnLedger {
       ...(options.contextMode !== undefined ? { contextMode: options.contextMode } : {}),
       ...(options.memoryProjection !== undefined ? { memoryProjection: options.memoryProjection } : {}),
       ...(options.agentVersion !== undefined ? { agentVersion: options.agentVersion } : {}),
+      ...(options.configVersion !== undefined ? { configVersion: options.configVersion } : {}),
     };
     this.append(record, true);
     return record.id;

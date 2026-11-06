@@ -85,8 +85,13 @@ export function parseLevel(raw: unknown): Level | undefined {
   return n === 1 || n === 2 || n === 3 || n === 4 || n === 5 ? n : undefined;
 }
 
+/** The task an agent is doing in this conversation: the policy gate's level (below) and the config version a turn records against (INV-1669). */
+export function currentTaskOf<T extends { status: string; conversation?: string }>(context: { agent: { id: string }; conversation?: string; tasks?: { forAgent: (agentId: string) => readonly T[] } }): T | undefined {
+  const here = context.conversation ?? "main";
+  return context.tasks?.forAgent(context.agent.id).find(task => task.status === "doing" && (task.conversation ?? "main") === here);
+}
+
 /** The level of the task an agent is doing in this conversation, for the policy gate; none when it has no task in hand. */
 export function levelOfCurrentTask(context: { agent: { id: string }; conversation?: string; tasks?: { forAgent: (agentId: string) => readonly { status: string; conversation?: string; level?: Level }[] } }): Level | undefined {
-  const here = context.conversation ?? "main";
-  return context.tasks?.forAgent(context.agent.id).find(task => task.status === "doing" && (task.conversation ?? "main") === here)?.level;
+  return currentTaskOf(context)?.level;
 }

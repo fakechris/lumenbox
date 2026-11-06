@@ -1309,7 +1309,7 @@ ${SETTINGS_DIALOG_HTML}
       <label>Tools</label>
       <div id="agtools" class="toolchips"></div>
       <div class="fieldnote">Click a tool to cycle allowed → ask me → off. Off is withheld: not in the agent's prompt at all.
-        A dashed chip is one your organisation already asks about; hover it for where that comes from.</div>
+        A dashed chip is one your organisation already asks about; hover it for where that comes from. A save applies from the agent's next turn; a turn already running keeps the version it started with.</div>
     </div>
     <div class="field" id="agtemplatewrap" style="display:none">
       <label>Share as template</label>
@@ -4456,7 +4456,7 @@ function select(id, conversation) {
   if (switching) refreshConversations(id);
   updateComposerTarget();
   resetThread();
-  live.delete(id); markViewed(id, currentConversation);
+  live.delete(id); markViewed(id, currentConversation); if (window.configVersionChip) window.configVersionChip(id, currentConversation); // the configuration version this conversation runs on (INV-1669)
 
   return fetch("/api/transcript?agent=" + encodeURIComponent(id) +
       "&conversation=" + encodeURIComponent(currentConversation))
@@ -5658,7 +5658,7 @@ function taskDetail(t) {
         : esc(t.conversation))
     : "the team room";
   return '<div style="margin:8px 0 2px 26px;padding:8px 10px;border-left:2px solid var(--border)">' +
-    (t.description ? '<div style="font-size:12px;margin-bottom:6px">' + esc(t.description) + "</div>" : "") + (window.claimAccountHtml ? window.claimAccountHtml(t) : "") + (window.deliverablesHtml ? window.deliverablesHtml(t) : "") + // a claimed goal's decisions and unchecked parts (INV-1574), then its deliverables (INV-1663), above its history
+    (t.description ? '<div style="font-size:12px;margin-bottom:6px">' + esc(t.description) + "</div>" : "") + (window.claimAccountHtml ? window.claimAccountHtml(t) : "") + (window.deliverablesHtml ? window.deliverablesHtml(t) : "") + (window.configVersionsHtml ? window.configVersionsHtml(t) : "") + // a claimed goal's decisions and unchecked parts (INV-1574), then its deliverables (INV-1663) and the configuration versions it ran under (INV-1669), above its history
     '<div class="dim" style="font-size:11px;margin-bottom:6px">' +
       "asked by " + esc(nameOf(t.requester) || t.requester) + " · in " + conversation +
       " · created " + esc(new Date(t.createdAt).toLocaleString()) +
@@ -6269,7 +6269,7 @@ stream.onmessage = function (raw) {
 
   if (e.type === "turn_started") {
     busy.add(e.agentId); renderAgents();
-    if (inView(e)) showWorking();
+    if (inView(e)) { showWorking(); if (window.configVersionChip) window.configVersionChip(e.agentId, currentConversation); } // a new turn may run a newer version (INV-1669)
     return;
   }
 
@@ -7011,7 +7011,7 @@ function openAgentModal(mode, agent) {
     return '<span class="toolchip' + (on ? " on" : "") + '" data-tool="' + esc(tool) + '">' +
       esc(tool) + "</span>";
   }).join("");
-  if (window.toolPerms) window.toolPerms.mount(agent); // allowed / ask me / off, the group row and the floors (INV-1664)
+  if (window.toolPerms) window.toolPerms.mount(agent); if (window.configHistory) window.configHistory.mount(agent); // allowed / ask me / off, the group row and the floors (INV-1664); the History tab (INV-1669)
   renderAgentScope(agent ? String(agent.scopeId || "") : "");
   renderAgentProvider(agent ? String(agent.provider || "") : "");
   $("agmodel").value = agent ? String(agent.model || "") : "";
@@ -7197,7 +7197,7 @@ function saveAgentModal() {
       return refresh().then(function () {
         if (isNew && d.id) return select(d.id);
         if (!isNew && current) {
-          $("title").textContent = nameOf(current);
+          $("title").textContent = nameOf(current); if (window.configVersionChip) window.configVersionChip(current, currentConversation); // "next turn" once a save made a version (INV-1669)
           var edited = agentById(current);
           $("titlerole").textContent = edited ? String(edited.title || "") : "";
         }
