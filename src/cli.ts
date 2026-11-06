@@ -1417,6 +1417,7 @@ Box:
 Agents:
   agents                    List agents
   agent new <name> [desc]   Create an agent
+  routines runs <slug>      A routine's last 20 runs, and whether the host paused it
 
 Templates (through the running web server; docs/29):
   template import <file> [--name N]
@@ -1609,7 +1610,7 @@ async function main(): Promise<number> {
     case "watchdog": return (await import("./watchdog/main.ts")).cmdWatchdog(rest, { token: process.env.AGENTBOX_WATCHDOG_TOKEN, processEnv: process.env }); // INV-1509, docs/91
     case "supervise": return (await import("./supervisor/main.ts")).cmdSupervise(rest, { openaiToken: process.env.OPENAI_TOKEN ?? process.env.OPENAI_API_KEY, doorToken: process.env.AGENTBOX_SUPERVISOR_TOKEN }); // INV-1518, docs/90 §3.5
     case "supervision": return (await import("./supervision/main.ts")).cmdSupervision(rest, { uiToken: process.env.AGENTBOX_UI_TOKEN, keyFor: name => process.env[name] ?? (name === "OPENAI_API_KEY" ? process.env.OPENAI_TOKEN : undefined) }); // INV-1527: the app's watchdog + supervisor process
-    case "bundle": return cmdBundle(rest);
+    case "bundle": return cmdBundle(rest); case "routines": return (await import("./host/routine-runs-cli.ts")).cmdRoutines(rest, out, err); // INV-1665
 
     case "host": {
       const [sub, ...hostArgs] = rest;

@@ -26,7 +26,7 @@ import { currentFlag } from "./task-flag.ts";
 import { STAGE_LABEL, stageWorldOf, type TaskStage, taskStage } from "./task-stage.ts";
 
 export interface AttentionItem {
-  kind: "approval" | "question" | "close-proposal" | "review" | "nudged" | "waiting" | "unanswered" | "paused" | "reauthorize" | "undeliverable" | "flagged" | "box-update" | "boundary-probe" | "provider-resting" | "team-memory" | "spend-limit";
+  kind: "approval" | "question" | "close-proposal" | "review" | "nudged" | "waiting" | "unanswered" | "paused" | "reauthorize" | "undeliverable" | "flagged" | "box-update" | "boundary-probe" | "provider-resting" | "team-memory" | "spend-limit" | "routine-paused";
   /** What to open: a task id, or the conversation a question was asked in. */
   ref: string;
   title: string;
@@ -72,6 +72,8 @@ export interface AttentionInput {
   approvals?: readonly { id: string; agentId: string; agentName: string; description: string; action?: string; requestedAt: string; why?: string; taskLevel?: number }[];
   /** Teammate chains the bus stopped (INV-1277): shown to everyone, since no person is in them by definition. */
   paused?: readonly { fromName: string; toName: string; hops: number; at: string; fromId: string }[];
+  /** Routines the host stopped (INV-1665): failing K times in a row is one reason. Everyone's, since a person must turn it back on. */
+  routinesHeld?: readonly { slug: string; name: string; at: string; by: string; code: string; reason: string }[];
   /**
    * No person: the installation's own credential, which is the operator. They get
    * everything with a clock on it rather than nothing — an empty page for the one caller
@@ -95,11 +97,11 @@ const isLive = (task: Task): boolean => task.status !== "done" && task.status !=
  * something they may want to know (INV-1647). Only decisions reach the strip and the OS: a
  * channel that carries everything carries nothing.
  */
-export const DECISION_KINDS: ReadonlySet<AttentionItem["kind"]> = new Set(["approval", "question", "close-proposal", "reauthorize", "spend-limit", "paused"]); // a review is the board's, folded to one line in the strip: five of them once hid the agents
+export const DECISION_KINDS: ReadonlySet<AttentionItem["kind"]> = new Set(["approval", "question", "close-proposal", "reauthorize", "spend-limit", "paused", "routine-paused"]); // a review is the board's, folded to one line in the strip: five of them once hid the agents
 export const isDecision = (kind: AttentionItem["kind"]): boolean => DECISION_KINDS.has(kind);
 
 export function urgencyOf(kind: AttentionItem["kind"]): number {
-  return kind === "approval" ? 0 : kind === "question" ? 1 : kind === "spend-limit" || kind === "paused" ? 2 : 3;
+  return kind === "approval" ? 0 : kind === "question" ? 1 : kind === "spend-limit" || kind === "paused" || kind === "routine-paused" ? 2 : 3;
 }
 
 export function attentionFor(input: AttentionInput): Attention {
@@ -147,6 +149,11 @@ export function attentionFor(input: AttentionInput): Attention {
       detail: `${chain.fromName} wanted to message ${chain.toName} again; message either of them to decide`,
       with: chain.fromName,
     });
+  }
+
+  // A routine the host stopped: nothing runs again until a person resumes it, which is one click.
+  for (const held of input.routinesHeld ?? []) {
+    mine.push({ kind: "routine-paused", ref: held.slug, title: `Routine ${held.name} is paused: ${held.reason}`, detail: `Paused ${held.at.slice(0, 16).replace("T", " ")}Z; fix the cause, then resume it — its failure count starts again.` });
   }
 
   for (const receipt of input.undeliverable ?? []) {

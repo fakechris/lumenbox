@@ -35,10 +35,12 @@
 import { describeSchedule, isDue, nextFire, type Schedule } from "./schedule-time.ts";
 import { envNumber } from "../config.ts";
 import { webhookPrompt } from "./webhooks.ts";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { appendLine } from "./jsonl.ts";
 import type { DeliverWhen } from "./routine-resolve.ts";
 import type { RunResult } from "./run-result.ts";
+import { readRunLedger, RoutineHolds, runsOf, type RoutineHold, type RoutineReason, type RoutineRun, type RunRecord } from "./routine-runs.ts";
+import { upcomingFires } from "./schedule-time.ts";
 import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
 export { ONCE_GRACE_MS, describeSchedule, isDue, knownTimezone, nextFire, parseSchedule, wallClock, type Schedule } from "./schedule-time.ts";
@@ -181,29 +183,9 @@ export function scheduleLogPath(): string {
   return process.env.AGENTBOX_SCHEDULE_LOG ?? join(agentboxHome(), "schedules.jsonl");
 }
 
-/** One thing that happened to one schedule. Append-only, like everything else durable here. */
 /** How a routine is allowed to act (INV-1458): off = never evaluated; observe = the trigger is recorded as "would run", nothing runs; auto = runs. */
 export type RoutineMode = "off" | "observe" | "auto";
 
-interface RunRecord {
-  slug: string;
-  at: string;
-  event: "started" | "finished" | "skipped" | "observed";
-  /** On `observed`: what would have run, in one line (INV-1458). */
-  would?: string;
-  /** Which agent ran it. On `started` and `finished`. */
-  agent?: string;
-  /**
-   * Tokens billed to that agent between start and finish, on `finished`. The agent runs its
-   * turns one at a time, so what it spent in that window is this run — give or take a memory
-   * write from the turn before. Absent when there is no usage log to ask.
-   */
-  tokens?: number;
-  /** How long the run took, on `finished`. */
-  ms?: number;
-  /** How the run came out, on `finished` (INV-1404): done, partial or failed; absent when the runner did not say. */
-  result?: RunResult;
-}
 
 /**
  * What the ledger knows about a schedule, after reading it back.
@@ -245,7 +227,7 @@ export interface SchedulerDeps {
    * a listener passes no slug, because a listener run is not reconciled, but its results
    * are its own — not one `ad-hoc` history every listener shares.
    */
-  run: (agent: string, prompt: string, deliver?: string, slug?: string, toolScope?: readonly string[], deliverWhen?: DeliverWhen, identity?: string) => Promise<void | { result: RunResult }>;
+  run: (agent: string, prompt: string, deliver?: string, slug?: string, toolScope?: readonly string[], deliverWhen?: DeliverWhen, identity?: string) => Promise<void | { result: RunResult; reason?: string }>;
   /** A routine in observe mode was triggered and did not run (INV-1458); the audit row. */
   observed?: (slug: string, would: string) => void;
   /**
@@ -289,6 +271,10 @@ export class Scheduler {
   private readonly now: () => Date;
   private readonly log: (line: string) => void;
   private readonly path: string | undefined;
+  /** The ledger as read and written, newest last, so the run list needs no second read of the file (INV-1665). */
+  private readonly records: RunRecord[] = [];
+  /** Routines the host stopped, and the failure streaks that stop them (INV-1665). */
+  readonly holds = new RoutineHolds();
 
   constructor(
     private readonly deps: SchedulerDeps,
@@ -309,21 +295,14 @@ export class Scheduler {
    * automation firing twice is not a cosmetic problem, it is a duplicate side effect nobody watched.
    */
   private loadHistory(): void {
-    if (this.path === undefined || !existsSync(this.path)) return;
+    if (this.path === undefined) return;
     const states = new Map<string, RunState>();
     try {
-      for (const line of readFileSync(this.path, "utf8").split("\n")) {
-        if (line.trim() === "") continue;
-        let record: RunRecord;
-        try {
-          record = JSON.parse(line) as RunRecord;
-        } catch {
-          // A torn last line is the normal cost of append-only. Skip it rather than refusing to
-          // start, which would make one bad byte turn every automation off.
-          continue;
-        }
+      for (const record of readRunLedger(this.path)) {
         const at = new Date(record.at);
-        if (Number.isNaN(at.getTime()) || typeof record.slug !== "string") continue;
+        this.remember(record);
+        this.holds.replay(record);
+        if (record.event === "held" || record.event === "resumed" || record.event === "pause-after") continue;
         const state = states.get(record.slug) ?? { lastRun: undefined, interrupted: false };
         if (record.event === "started") {
           state.lastRun = at;
@@ -350,18 +329,18 @@ export class Scheduler {
     }
   }
 
-  private record(
-    slug: string,
-    event: RunRecord["event"],
-    extra: Pick<RunRecord, "agent" | "tokens" | "ms" | "would" | "result"> = {}
-  ): void {
+  private remember(record: RunRecord): void {
+    this.records.push(record);
+    if (this.records.length > 20_000) this.records.splice(0, this.records.length - 10_000);
+  }
+
+  private record(slug: string, event: RunRecord["event"], extra: Omit<RunRecord, "slug" | "at" | "event"> = {}): void {
+    const line = { slug, at: this.now().toISOString(), event, ...extra } satisfies RunRecord;
+    this.remember(line);
     if (this.path === undefined) return;
     try {
       mkdirSync(dirname(this.path), { recursive: true });
-      appendLine(
-        this.path,
-        JSON.stringify({ slug, at: this.now().toISOString(), event, ...extra } satisfies RunRecord)
-      );
+      appendLine(this.path, JSON.stringify(line));
     } catch (error) {
       // Never stop firing over bookkeeping. The cost of a lost record is a window that may repeat
       // after a restart, which is the behaviour this whole file used to have.
@@ -383,16 +362,88 @@ export class Scheduler {
 
   /** The observe records of one routine, newest first, for the automations page. */
   observedOf(slug: string, limit = 5): { at: string; would: string }[] {
-    if (this.path === undefined || !existsSync(this.path)) return [];
-    const out: { at: string; would: string }[] = [];
-    for (const line of readFileSync(this.path, "utf8").split("\n")) {
-      if (line.trim() === "") continue;
-      try {
-        const record = JSON.parse(line) as RunRecord;
-        if (record.slug === slug && record.event === "observed") out.push({ at: record.at, would: record.would ?? "" });
-      } catch { /* torn line */ }
-    }
-    return out.slice(-limit).reverse();
+    return this.records.filter(record => record.slug === slug && record.event === "observed").slice(-limit).reverse().map(record => ({ at: record.at, would: record.would ?? "" }));
+  }
+
+  /** One routine's runs, newest first (INV-1665): what the expanded row and `agentbox routines runs` list. */
+  runs(slug: string, limit = 20): RoutineRun[] {
+    return runsOf(this.records, slug, { limit, running: this.running.has(slug) });
+  }
+
+  /**
+   * A window that came round and did not run, written down with why (INV-1665). The overlap rule
+   * is one reason; a check before the run (INV-1666's credentials) is another through the same door.
+   */
+  skip(skill: { slug: string; name: string }, reason: RoutineReason): void {
+    this.log(`${skill.name}: skipped, ${reason.text}`);
+    this.record(skill.slug, "skipped", { code: reason.code, reason: reason.text });
+  }
+
+  /** Stops a routine until a person resumes it, with why; the attention list shows it. */
+  hold(skill: { slug: string; name: string }, reason: RoutineReason, by = "host"): RoutineHold {
+    const hold = this.holds.hold(skill.slug, reason, this.now().toISOString(), by);
+    this.record(skill.slug, "held", { by, code: reason.code, reason: reason.text });
+    this.log(`${skill.name}: paused by ${by} — ${reason.text}`);
+    return hold;
+  }
+
+  /** A person turned it back on: the hold and the failure streak are cleared. Whether it was held. */
+  resume(slug: string, by: string): boolean {
+    const was = this.holds.release(slug);
+    if (was) this.record(slug, "resumed", { by });
+    return was;
+  }
+
+  /** K: how many failures in a row pause a routine. 0 turns automatic pausing off. */
+  setPauseAfter(pauseAfter: number): void {
+    if (!Number.isInteger(pauseAfter) || pauseAfter < 0 || pauseAfter > 100) throw new Error("pauseAfter must be a whole number from 0 to 100");
+    this.holds.pauseAfter = pauseAfter;
+    this.record("*", "pause-after", { pauseAfter });
+  }
+
+  /** Every routine the host is holding, for the attention list. */
+  held(): { slug: string; hold: RoutineHold }[] {
+    return this.holds.all();
+  }
+
+  /**
+   * Starts one run and writes down how it ended — the one path a timer, a message, a webhook and
+   * "run now" share, so the record and the failure streak cannot differ by what started it.
+   */
+  private launch(
+    skill: { slug: string; name: string },
+    agent: string,
+    start: () => Promise<void | { result: RunResult; reason?: string }>,
+    started: { deliver?: string; manual?: boolean } = {}
+  ): Promise<void> {
+    this.running.add(skill.slug);
+    const startedAt = this.now();
+    let outcome: { result?: RunResult; reason?: string } = {};
+    this.record(skill.slug, "started", { agent, ...started });
+    return start()
+      .then(result => { if (result) outcome = result; })
+      .catch(error => {
+        // Reported and dropped. A run that failed comes round again, and retrying now would be a
+        // second unasked-for turn on top of one that just went wrong.
+        const reason = error instanceof Error ? error.message : String(error);
+        this.log(`${skill.name}: run failed — ${reason}`);
+        outcome = { result: "failed", reason };
+      })
+      .finally(() => {
+        this.running.delete(skill.slug);
+        this.record(skill.slug, "finished", {
+          agent,
+          ...(outcome.result !== undefined ? { result: outcome.result } : {}),
+          ...(outcome.reason !== undefined ? { reason: outcome.reason.slice(0, 300) } : {}),
+          ms: this.now().getTime() - startedAt.getTime(),
+          ...(this.deps.spentSinceAgent !== undefined ? { tokens: this.deps.spentSinceAgent(startedAt.getTime(), agent) } : {}),
+        });
+        const hold = this.holds.noteFinished(skill.slug, outcome.result, outcome.reason, this.now().toISOString());
+        if (hold !== undefined) {
+          this.record(skill.slug, "held", { by: hold.by, code: hold.code, reason: hold.reason });
+          this.log(`${skill.name}: paused — ${hold.reason}`);
+        }
+      });
   }
 
   /** Message ids already answered by a listener, so a redelivered message fires nothing twice. */
@@ -428,57 +479,32 @@ export class Scheduler {
     }
     const fired: string[] = [];
     for (const skill of listening) {
-      if (skill.paused === true) continue;
+      if (skill.paused === true || this.holds.holdOf(skill.slug) !== undefined) continue;
       if (skill.chat !== undefined && skill.chat !== message.chatKey && !message.chatKey.startsWith(`${skill.chat}/`)) continue;
       if (skill.mode === "off" || !listenerMatches(skill.match, message.text)) continue;
       if (this.running.has(skill.slug)) {
-        this.log(`${skill.name}: skipped a matching message, the previous run has not finished`);
-        this.record(skill.slug, "skipped");
+        this.skip(skill, { code: "overlap_in_flight", text: "a matching message came while the previous run had not finished" });
         continue;
       }
       const agent = this.runnerFor(skill);
       if (agent === undefined) continue;
       const deliver = message.threadKey ?? message.chatKey;
       if (skill.mode === "observe") { this.observe(skill, agent, `run as ${agent} for a message in ${deliver} matching ${skill.match}`); fired.push(skill.slug); continue; }
-      this.running.add(skill.slug);
-      const startedAt = this.now();
-      let result: RunResult | undefined;
-      this.record(skill.slug, "started", { agent });
       this.log(`${skill.name}: fired by a message in ${deliver}`);
       fired.push(skill.slug);
-      void this.deps
-        .run(
-          agent,
-          listenerPrompt(skill.name, skill.path, {
-            text: message.text,
-            sender: message.senderLabel ?? "someone",
-            chatKey: deliver,
-          }),
-          deliver,
-          // No slug, as before: a listener run is not reconciled against commitments.
-          undefined,
-          skill.allowedTools,
-          undefined,
-          // But its results are its own (INV-802): keyed by the listener, and by the room
-          // it answered in, so a second listener saying the same words, or this one in
-          // another room, is not silenced by a result that room never heard.
-          skill.slug
-        )
-        .then(outcome => { result = outcome?.result; })
-        .catch(error => {
-          this.log(`${skill.name}: run failed — ${error instanceof Error ? error.message : String(error)}`);
-        })
-        .finally(() => {
-          this.running.delete(skill.slug);
-          this.record(skill.slug, "finished", {
-            agent,
-            ...(result !== undefined ? { result } : {}),
-            ms: this.now().getTime() - startedAt.getTime(),
-            ...(this.deps.spentSinceAgent !== undefined
-              ? { tokens: this.deps.spentSinceAgent(startedAt.getTime(), agent) }
-              : {}),
-          });
-        });
+      void this.launch(skill, agent, () => this.deps.run(
+        agent,
+        listenerPrompt(skill.name, skill.path, { text: message.text, sender: message.senderLabel ?? "someone", chatKey: deliver }),
+        deliver,
+        // No slug, as before: a listener run is not reconciled against commitments.
+        undefined,
+        skill.allowedTools,
+        undefined,
+        // But its results are its own (INV-802): keyed by the listener, and by the room it answered
+        // in, so a second listener saying the same words, or this one in another room, is not
+        // silenced by a result that room never heard.
+        skill.slug
+      ), { deliver });
     }
     return fired;
   }
@@ -497,16 +523,15 @@ export class Scheduler {
     for (const skill of scheduled) {
       // Paused is not due. Not logged per tick: a routine somebody switched off would fill the
       // log with the fact every thirty seconds.
-      if (skill.paused === true || skill.mode === "off") continue;
+      if (skill.paused === true || skill.mode === "off" || this.holds.holdOf(skill.slug) !== undefined) continue;
       if (!isDue(skill.schedule, this.now(), this.lastRun.get(skill.slug), skill.timezone)) continue;
 
       if (this.running.has(skill.slug)) {
         // Said, not silent. An hourly job taking seventy minutes meets its own next fire, and piling
         // a second run on top turns a slow problem into an avalanche — but a skip nobody is told
         // about is indistinguishable from a schedule that stopped working.
-        this.log(`${skill.name}: skipped, the previous run has not finished`);
         this.lastRun.set(skill.slug, this.now());
-        this.record(skill.slug, "skipped");
+        this.skip(skill, { code: "overlap_in_flight", text: "the previous run has not finished" });
         continue;
       }
 
@@ -519,41 +544,16 @@ export class Scheduler {
 
       // Marked before starting, so a slow first tick cannot be overtaken by the next one.
       this.lastRun.set(skill.slug, this.now());
-      this.running.add(skill.slug);
-      const startedAt = this.now();
-      let result: RunResult | undefined;
-      this.record(skill.slug, "started", { agent });
       this.log(`${skill.name}: firing (${describeSchedule(skill.schedule)})`);
-
       const prior = this.deps.priorCommitments?.(skill.slug);
-      void this.deps
-        .run(
-          agent,
-          triggerPrompt(skill.name, skill.path, describeSchedule(skill.schedule), skill.deliver) + (prior !== undefined ? `\n\n${prior}` : ""),
-          skill.deliver,
-          skill.slug,
-          skill.allowedTools,
-          skill.deliverWhen
-        )
-        .then(outcome => { result = outcome?.result; })
-        .catch(error => {
-          // Reported and dropped. A scheduled run that failed will come round again, and retrying
-          // now would be a second unasked-for turn on top of one that just went wrong.
-          this.log(
-            `${skill.name}: run failed — ${error instanceof Error ? error.message : String(error)}`
-          );
-        })
-        .finally(() => {
-          this.running.delete(skill.slug);
-          this.record(skill.slug, "finished", {
-            agent,
-            ...(result !== undefined ? { result } : {}),
-            ms: this.now().getTime() - startedAt.getTime(),
-            ...(this.deps.spentSinceAgent !== undefined
-              ? { tokens: this.deps.spentSinceAgent(startedAt.getTime(), agent) }
-              : {}),
-          });
-        });
+      void this.launch(skill, agent, () => this.deps.run(
+        agent,
+        triggerPrompt(skill.name, skill.path, describeSchedule(skill.schedule), skill.deliver) + (prior !== undefined ? `\n\n${prior}` : ""),
+        skill.deliver,
+        skill.slug,
+        skill.allowedTools,
+        skill.deliverWhen
+      ), skill.deliver !== undefined ? { deliver: skill.deliver } : {});
     }
   }
 
@@ -588,6 +588,12 @@ export class Scheduler {
       mode: RoutineMode;
       modeDefaulted: boolean;
       observed: { at: string; would: string }[];
+      /** The host's pause, when it stopped this routine itself (INV-1665): `paused` is true and this says why. */
+      hold: RoutineHold | undefined;
+      /** Failed runs in a row, towards the pause. */
+      failures: number;
+      /** The next five firings, by the tick's rules; empty when paused or on call. */
+      upcoming: string[];
     }[]
   > {
     const skills = await this.deps.due().catch(() => []);
@@ -603,12 +609,13 @@ export class Scheduler {
       authoredBy: skill.authoredBy,
       because: skill.because,
       lastRun: this.lastRun.get(skill.slug)?.toISOString(),
-      nextRun: skill.paused === true ? undefined : nextFire(skill.schedule, this.now(), this.lastRun.get(skill.slug), skill.timezone)?.toISOString(),
+      nextRun: skill.paused === true || this.holds.holdOf(skill.slug) !== undefined ? undefined : nextFire(skill.schedule, this.now(), this.lastRun.get(skill.slug), skill.timezone)?.toISOString(),
       running: this.running.has(skill.slug),
-      paused: skill.paused === true,
+      paused: skill.paused === true || this.holds.holdOf(skill.slug) !== undefined,
+      upcoming: skill.paused === true || this.holds.holdOf(skill.slug) !== undefined ? [] : upcomingFires(skill.schedule, this.now(), this.lastRun.get(skill.slug), skill.timezone).map(at => at.toISOString()),
       kind: skill.schedule.at !== undefined ? ("once" as const) : ("schedule" as const),
       boxId: skill.boxId,
-      mode: skill.mode ?? "auto", modeDefaulted: skill.mode === undefined, observed: this.observedOf(skill.slug),
+      mode: skill.mode ?? "auto", modeDefaulted: skill.mode === undefined, observed: this.observedOf(skill.slug), hold: this.holds.holdOf(skill.slug), failures: this.holds.streakOf(skill.slug),
     }));
     // Webhook routines belong in the same list: to a person, "what runs by itself" is one
     // question, and a routine that is missing from the automations page is a routine nobody
@@ -630,10 +637,11 @@ export class Scheduler {
         lastRun: this.lastRun.get(skill.slug)?.toISOString(),
         nextRun: undefined,
         running: this.running.has(skill.slug),
-        paused: skill.paused === true,
+        paused: skill.paused === true || this.holds.holdOf(skill.slug) !== undefined,
+        upcoming: [],
         kind: "webhook" as const,
         boxId: skill.boxId,
-        mode: skill.mode ?? "auto", modeDefaulted: skill.mode === undefined, observed: this.observedOf(skill.slug),
+        mode: skill.mode ?? "auto", modeDefaulted: skill.mode === undefined, observed: this.observedOf(skill.slug), hold: this.holds.holdOf(skill.slug), failures: this.holds.streakOf(skill.slug),
       })),
     ];
   }
@@ -708,6 +716,8 @@ export class Scheduler {
     const skill = hooked.find(candidate => candidate.slug === slug);
     if (skill === undefined) return { ok: false, reason: `No webhook routine "${slug}".` };
     if (skill.paused === true) return { ok: false, reason: `${skill.name} is paused; turn it on first.` };
+    const held = this.holds.holdOf(slug);
+    if (held !== undefined) return { ok: false, reason: `${skill.name} is paused (${held.reason}); resume it first.` };
     if (skill.mode === "off") return { ok: false, reason: `${skill.name} is switched off (mode: off).` };
     // Refused rather than queued: a shortcut pressed twice on a train should not stack two runs
     // of the same routine, and the second press is nearly always the same content.
@@ -716,11 +726,7 @@ export class Scheduler {
     if (agent === undefined) return { ok: false, reason: `No agent to run ${skill.name}.` };
     if (skill.mode === "observe") { this.observe(skill, agent, `run as ${agent} for a webhook call${from !== undefined ? ` from ${from}` : ""}`); return { ok: true, said: `${skill.name} is in observe mode: recorded what it would have done, nothing ran.` }; }
 
-    this.running.add(slug);
-    const startedAt = this.now();
-    let result: RunResult | undefined;
-    this.record(slug, "started", { agent });
-    this.lastRun.set(slug, startedAt);
+    this.lastRun.set(slug, this.now());
     this.log(`${skill.name}: fired by webhook`);
     const prompt = webhookPrompt({
       skillName: skill.name,
@@ -729,39 +735,26 @@ export class Scheduler {
       ...(from !== undefined ? { from } : {}),
       ...(skill.deliver !== undefined ? { deliver: skill.deliver } : {}),
     });
-    const finish = () => {
-      this.running.delete(slug);
-      this.record(slug, "finished", {
-        agent,
-        ...(result !== undefined ? { result } : {}),
-        ms: this.now().getTime() - startedAt.getTime(),
-        ...(this.deps.spentSinceAgent !== undefined
-          ? { tokens: this.deps.spentSinceAgent(startedAt.getTime(), agent) }
-          : {}),
-      });
-    };
+    const deliver = skill.deliver !== undefined ? { deliver: skill.deliver } : {};
 
     // The caller asked to be told what happened, and is holding a connection open for it. Awaited
     // here rather than fired and forgotten, and the bookkeeping is the same either way.
     if (options.wait === true && this.deps.runAndSay !== undefined) {
-      try {
-        const said = await this.deps.runAndSay(agent, prompt, skill.allowedTools);
-        return { ok: true, said };
-      } catch (error) {
-        this.log(`${skill.name}: webhook run failed — ${error instanceof Error ? error.message : String(error)}`);
-        return { ok: false, reason: error instanceof Error ? error.message : String(error) };
-      } finally {
-        finish();
-      }
+      const runAndSay = this.deps.runAndSay;
+      let said: string | undefined;
+      let failure: string | undefined;
+      await this.launch(skill, agent, async () => {
+        try {
+          said = await runAndSay(agent, prompt, skill.allowedTools);
+        } catch (error) {
+          failure = error instanceof Error ? error.message : String(error);
+          throw error;
+        }
+      }, deliver);
+      return failure === undefined ? { ok: true, ...(said !== undefined ? { said } : {}) } : { ok: false, reason: failure };
     }
 
-    void this.deps
-      .run(agent, prompt, skill.deliver, skill.slug, skill.allowedTools, skill.deliverWhen)
-      .then(outcome => { result = outcome?.result; })
-      .catch(error => {
-        this.log(`${skill.name}: webhook run failed — ${error instanceof Error ? error.message : String(error)}`);
-      })
-      .finally(finish);
+    void this.launch(skill, agent, () => this.deps.run(agent, prompt, skill.deliver, skill.slug, skill.allowedTools, skill.deliverWhen), deliver);
     return { ok: true };
   }
 
@@ -770,44 +763,25 @@ export class Scheduler {
     const skill = skills.find(candidate => candidate.slug === slug);
     if (skill === undefined) return { ok: false, reason: `No scheduled skill "${slug}".` };
     if (skill.paused === true) return { ok: false, reason: `${skill.name} is paused; turn it on first.` };
+    const held = this.holds.holdOf(slug);
+    if (held !== undefined) return { ok: false, reason: `${skill.name} is paused (${held.reason}); resume it first.` };
     if (this.running.has(slug)) return { ok: false, reason: `${skill.name} is already running.` };
     const agent = this.runnerFor(skill);
     if (agent === undefined) return { ok: false, reason: `No agent to run ${skill.name}.` };
 
-    this.running.add(slug);
-    const startedAt = this.now();
-    let result: RunResult | undefined;
-      this.record(slug, "started", { agent });
     this.log(`${skill.name}: firing now, by hand`);
     // By hand is still this routine running (INV-534): same slug, same opening with last
     // time's commitments, same reconcile afterwards. Without them "run it now" was a
     // different code path that skipped the very thing a person clicks it to test.
     const priorByHand = this.deps.priorCommitments?.(skill.slug);
-    void this.deps
-      .run(
-        agent,
-        triggerPrompt(skill.name, skill.path, describeSchedule(skill.schedule), skill.deliver) + (priorByHand !== undefined ? `\n\n${priorByHand}` : ""),
-        skill.deliver,
-        skill.slug,
-        skill.allowedTools,
-        skill.deliverWhen
-      )
-      .catch(error => {
-        this.log(
-          `${skill.name}: run failed — ${error instanceof Error ? error.message : String(error)}`
-        );
-      })
-      .finally(() => {
-        this.running.delete(slug);
-        this.record(slug, "finished", {
-            agent,
-            ...(result !== undefined ? { result } : {}),
-            ms: this.now().getTime() - startedAt.getTime(),
-            ...(this.deps.spentSinceAgent !== undefined
-              ? { tokens: this.deps.spentSinceAgent(startedAt.getTime(), agent) }
-              : {}),
-          });
-      });
+    void this.launch(skill, agent, () => this.deps.run(
+      agent,
+      triggerPrompt(skill.name, skill.path, describeSchedule(skill.schedule), skill.deliver) + (priorByHand !== undefined ? `\n\n${priorByHand}` : ""),
+      skill.deliver,
+      skill.slug,
+      skill.allowedTools,
+      skill.deliverWhen
+    ), { ...(skill.deliver !== undefined ? { deliver: skill.deliver } : {}), manual: true });
     return { ok: true };
   }
 
