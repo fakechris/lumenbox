@@ -3,7 +3,7 @@ import { inputValueHash, parseSensitiveInput, SENSITIVE_INPUT_TTL_MS } from "../
 import { approvalOf, computerWithVision, desktopGuard, visionActionSchema, visionExpectSchema } from "./computer-vision.ts";
 import { deliveryLine } from "../cua/delivery.ts";
 import { formatExec } from "./exec-format.ts";
-import { isWaitOnly, onEndSchema, parseOnEnd } from "./job-end.ts"; import { levelOfCurrentTask, parseLevel } from "./autonomy-level.ts"; import { splitWhy, WHY_FIELD } from "./consent-case.ts"; import type { JobWatch } from "./job-watch.ts";
+import { isWaitOnly, onEndSchema, parseOnEnd } from "./job-end.ts"; import { levelOfCurrentTask, parseLevel } from "./autonomy-level.ts"; import { splitWhy, WHY_FIELD } from "./consent-case.ts"; import { describeDiscovery, DISCOVERY_FIELDS, parseDiscovery } from "./discovery.ts"; import type { JobWatch } from "./job-watch.ts";
 /**
  * Tool definitions and dispatch.
  *
@@ -1805,7 +1805,7 @@ export function buildTools(
             type: "string",
             description: "For update: what happened — a blocker, a finding, a handoff note.",
           }, level: { type: "integer", minimum: 1, maximum: 5, description: "For create or update: how far the AI may take it alone, 1–5 (L1 tidy, L2 propose, L3 partial, L4 do it with outward steps confirmed, L5 end to end). Inferred by rule when absent; say why if you set it." },
-          propose: {
+          ...DISCOVERY_FIELDS, propose: { // the discovery fields: INV-1652
             type: "boolean",
             description:
               "For create: this is a proposal, not committed work. It goes on the board marked " +
@@ -5072,7 +5072,7 @@ export async function dispatchTool(
 
       if (action === "create") {
         const contract = clampContract(input as Record<string, unknown>);
-        const propose = input.propose === true;
+        const discovery = parseDiscovery(input); const propose = input.propose === true || discovery !== undefined; const already = discovery !== undefined ? board.byFingerprint(discovery.fingerprint) : undefined; if (already !== undefined) return { text: `Not proposed again: ${already.id} (${already.status}${already.proposedBy !== undefined ? ", awaiting a person's commit" : ""}) already carries this finding from ${discovery!.source}.${already.status === "dropped" ? " It was dismissed; do not raise it again unless the evidence changed." : ""}`, isError: true };
         const assigneeRaw = String(input.assignee ?? "").trim();
         const reviewerRaw = String(input.reviewer ?? "").trim();
         const assigneeId = assigneeRaw === "" ? undefined : resolveAgent(assigneeRaw);
@@ -5104,7 +5104,7 @@ export async function dispatchTool(
           ...(reviewerId !== undefined ? { reviewerId } : {}),
           ...(context.conversation !== undefined ? { conversation: context.conversation } : {}),
           ...(contract !== undefined ? { contract } : {}),
-          ...(propose ? { proposedBy: context.agent.id } : {}),
+          ...(propose ? { proposedBy: context.agent.id } : {}), ...(discovery !== undefined ? { discovery } : {}),
           ...(typeof input.due === "string" && input.due.trim() !== "" ? { due: input.due } : {}), ...(parseLevel(input.level) !== undefined ? { level: parseLevel(input.level)! } : {}), // INV-1650
         });
         if (created === undefined) return { text: "A task needs a title.", isError: true };
