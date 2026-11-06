@@ -38,7 +38,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
 import type { RuleReader } from "./rules.ts";
-import { sideEffectOf, tierAsks, tierGateMode, type SideEffectTier, type TierGateMode } from "./side-effects.ts";
+import { sideEffectOf, tierAsks, tierGateMode, type SideEffectTier, type TierGateMode } from "./side-effects.ts"; import { levelAllows } from "./autonomy-level.ts";
 import { describeTaint, noteAllowedCall, type Taint, taintOf, TurnTaint } from "./egress-taint.ts";
 import { approvalReason, describeRequest, fingerprintOf, tooLargeToApprove } from "./policy-describe.ts";
 
@@ -100,7 +100,7 @@ export type PolicyRequest =
        * an approval whatever the configured lists say, and the description the person reads
        * (and the fingerprint binds) carries it, so consent is to *that* button on *that* page.
        */
-      irreversible?: string;
+      irreversible?: string; taskLevel?: 1 | 2 | 3 | 4 | 5; // taskLevel (INV-1650): the level of the task this call serves; outward calls ask below L5 and are refused below L3; set by dispatch from the board
       /** The turn this call belongs to, for the taint rule (INV-1309): set by dispatch, never by the model. */
       turnId?: string;
       /** Trusted box observation plus host execution identity, never model input (INV-955). */
@@ -655,8 +655,8 @@ export class PolicyGate {
     }
     // The tier gate is the operator's list by another name: enforcing, it asks like
     // AGENTBOX_APPROVAL_TOOLS would, and an operator's allow rule lifts it the same way.
-    const tierWouldAsk = gate !== "off" && tierAsks(tier);
-    const configuredAsk = this.needsApproval(request) || (gate === "enforce" && tierWouldAsk);
+    const tierWouldAsk = gate !== "off" && tierAsks(tier); const byLevel = request.taskLevel !== undefined ? levelAllows(request.taskLevel, tier) : "allow"; /* the task's own level (INV-1650): a refusal says where the task stops; an ask joins the card below */ if (byLevel === "deny") return { decision: { allow: false, reason: `This task is at L${request.taskLevel}: it stops before acting on the world — hand back what you have (a summary at L1, a plan at L2) and say what the next step would be.` } };
+    const configuredAsk = this.needsApproval(request) || (gate === "enforce" && tierWouldAsk) || byLevel === "ask";
     const mustAsk = request.tool === "RunOnHost" || request.irreversible !== undefined || this.lastTaint !== undefined;
     const asks = rule?.effect === "ask" || mustAsk || (configuredAsk && rule?.effect !== "allow");
     if (!asks) {

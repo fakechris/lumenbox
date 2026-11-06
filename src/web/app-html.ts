@@ -5710,7 +5710,7 @@ function renderAttention() {
           item.kind === "paused" ? '<button class="btn sm ghost" data-att-open="' + esc(item.ref) + '">' + esc(t("ui.attention.open")) + "</button>" :
           '<button class="btn sm ghost" data-att-task="' + esc(item.ref) + '">' + esc(t("ui.attention.open")) + "</button>";
         return '<div style="display:flex;gap:8px;align-items:baseline;padding:3px 0;font-size:12.5px"><span class="dim mono" style="font-size:11px;min-width:58px">' + esc(item.deadline ? whenOf(item.deadline) : "") + "</span>" +
-          '<span style="flex:1">' + esc(item.title) + ' <span class="dim">' + esc(item.detail) + (item.stage ? " · " + esc(item.stage) : "") + "</span></span>" + (owed ? act : "") + "</div>";
+          '<span style="flex:1">' + (item.level ? '<span class="chip" style="font-size:10px" title="the task\'s autonomy level">L' + item.level + "</span> " : "") + esc(item.title) + ' <span class="dim">' + esc(item.detail) + (item.stage ? " · " + esc(item.stage) : "") + "</span></span>" + (owed ? act : "") + "</div>";
       };
       // The first screen (INV-1464): the person/* rows, counted, above the agents; healthy takes no space.
       // The strip is for what blocks (INV-1627): a consent, a question, a pause, a message that could not land. Tasks waiting for review are the board's, folded into one line here — 234 of them once filled the whole column.
@@ -5805,7 +5805,7 @@ function refreshTasks() {
             (open ? ";background:var(--surface)" : "") + '">' +
           '<div style="display:flex;gap:9px;align-items:baseline">' +
             '<a href="#" data-open="' + esc(t.id) + '" class="mono" style="font-size:11px;color:var(--muted);text-decoration:none">' + esc(t.id) + "</a>" +
-            '<a href="#" data-open="' + esc(t.id) + '" style="flex:1;font-size:13px;font-weight:500;color:var(--text);text-decoration:none">' + esc(t.title) + "</a>" + proposed +
+            '<a href="#" data-open="' + esc(t.id) + '" style="flex:1;font-size:13px;font-weight:500;color:var(--text);text-decoration:none">' + esc(t.title) + "</a>" + proposed + (t.level ? '<select data-level="' + esc(t.id) + '" title="How far the AI may take this alone (INV-1650): L1 tidy · L2 propose · L3 partial · L4 do it, outward steps confirmed · L5 end to end — set by ' + esc(t.levelBy || "rule") + '" style="height:24px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--muted);font-size:11px">' + [1, 2, 3, 4, 5].map(function (l) { return '<option value="' + l + '"' + (l === t.level ? " selected" : "") + ">L" + l + "</option>"; }).join("") + "</select>" : "") +
             '<select data-task="' + esc(t.id) + '" style="height:24px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:' + taskStatusColor(t.status) + ';font-size:11px">' +
               TASK_STATUSES.map(function (s) {
                 return '<option value="' + s + '"' + (s === t.status ? " selected" : "") + ">" + s + "</option>";
@@ -5875,12 +5875,12 @@ document.getElementById("tasklist").addEventListener("change", function (event) 
       .catch(function () {});
     return;
   }
-  var id = event.target.getAttribute && event.target.getAttribute("data-task");
-  if (!id) return;
+  var id = event.target.getAttribute && event.target.getAttribute("data-task"), levelOf = event.target.getAttribute && event.target.getAttribute("data-level"); // a level change rides the same route (INV-1650)
+  if (!id && !levelOf) return;
   fetch("/api/tasks/update", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ id: id, status: event.target.value })
+    body: JSON.stringify(levelOf ? { id: levelOf, level: Number(event.target.value) } : { id: id, status: event.target.value })
   })
     .then(function (r) { return r.json(); })
     .then(function (d) {

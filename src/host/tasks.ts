@@ -31,7 +31,7 @@ import { applyFlag, type FlagOutcome, type TaskFlag } from "./task-flag.ts";
 import { applyRevalidation, applyWithdrawal, grantMandate, type Mandate, type MandateWorld, type RevalidationResult } from "./mandate.ts";
 import { Receipts } from "./receipts.ts";
 import { clampDescription, dueOf, type TaskContract } from "./task-fields.ts";
-import { refuseUnknownAgents, type TaskAgents } from "./task-agents.ts";
+import { refuseUnknownAgents, type TaskAgents } from "./task-agents.ts"; import { inferLevel, LEVEL_MEANING, type Level } from "./autonomy-level.ts";
 
 export { clampContract, clampDescription, DESCRIPTION_LIMIT, dueOf, type TaskContract } from "./task-fields.ts";
 
@@ -123,6 +123,8 @@ export interface Task {
    * proposed task, which is the whole point of the field.
    */
   proposedBy?: string;
+  /** How far the AI may take it on its own, 1–5, and who set it: "rule" or a person (INV-1650). */
+  level?: Level; levelBy?: string;
   conversation?: string;
   /** When it is due, as an ISO date or instant (INV-527). Absent means no date was given. */
   due?: string;
@@ -318,12 +320,13 @@ export class TaskStore {
     goal?: { area: string; commitment?: string };
     pursuit?: Pursuit;
     mandate?: { source?: string; rulesHash?: string }; // What the mandate rests on (INV-1457).
+    level?: Level; // A person's own setting (INV-1650); absent, the rule infers one.
     now?: Date;
   }): Task | undefined {
     const title = input.title.replace(/\s+/g, " ").trim().slice(0, 200);
     if (title === "") return undefined;
     refuseUnknownAgents(this.agents, input);
-    const at = (input.now ?? new Date()).toISOString();
+    const at = (input.now ?? new Date()).toISOString(); const inferred = inferLevel({ title, ...(input.description !== undefined ? { description: input.description } : {}), hasContract: input.contract !== undefined, isPursuit: input.pursuit !== undefined, requesterIsAgent: this.agents?.has(input.requester) ?? false }); // INV-1650
     this.counter += 1;
     const task: Task = {
       id: `t${this.counter}`,
@@ -345,9 +348,9 @@ export class TaskStore {
         ? { goal: { area: input.goal.area.trim().slice(0, 80), ...(input.goal.commitment?.trim() ? { commitment: input.goal.commitment.trim().slice(0, 500) } : {}) } }
         : {}),
       ...(input.pursuit !== undefined ? { pursuit: input.pursuit } : {}),
-      createdAt: at,
+      level: input.level ?? inferred.level, levelBy: input.level !== undefined ? input.requester : "rule", createdAt: at,
       updatedAt: at,
-      history: [{ at, by: input.requester, status: input.pursuit !== undefined ? taskStatusFor(input.pursuit) : "open", note: input.proposedBy !== undefined ? "proposed, awaiting a person's commit" : input.pursuit !== undefined ? "goal set by the person" : "created" }],
+      history: [{ at, by: input.requester, status: input.pursuit !== undefined ? taskStatusFor(input.pursuit) : "open", note: `${input.proposedBy !== undefined ? "proposed, awaiting a person's commit" : input.pursuit !== undefined ? "goal set by the person" : "created"} · L${input.level ?? inferred.level}${input.level !== undefined ? " set by the requester" : ` by rule: ${inferred.reasons.join("; ")}`}` }],
     };
     this.tasks.set(task.id, task);
     this.append({ kind: "task", task });
@@ -489,7 +492,7 @@ export class TaskStore {
   update(
     id: string,
     changes: {
-      status?: TaskStatus;
+      status?: TaskStatus; level?: Level; // a person's own level (INV-1650): recorded with who set it
       assigneeId?: string | null;
       reviewerId?: string | null;
       note?: string;
@@ -632,7 +635,7 @@ export class TaskStore {
     if (change.note === undefined) {
       // A snooze or a waiting-on with nothing else said is still a decision about the
       // work, and the history is where a person looks to see who decided it (INV-532).
-      if (changes.snoozeUntil !== undefined && changes.snoozeUntil !== null) change.note = `not now: look again after ${dueOf(changes.snoozeUntil) ?? changes.snoozeUntil}`;
+      if (changes.level !== undefined) change.note = `level L${task.level ?? "?"} → L${changes.level}, set by ${by}`; else if (changes.snoozeUntil !== undefined && changes.snoozeUntil !== null) change.note = `not now: look again after ${dueOf(changes.snoozeUntil) ?? changes.snoozeUntil}`;
       else if (changes.waitingOn !== undefined && changes.waitingOn !== null && changes.waitingOn.trim() !== "") change.note = `waiting on ${changes.waitingOn.trim().slice(0, 120)}`;
     }
 
@@ -647,7 +650,7 @@ export class TaskStore {
       ...(status !== undefined ? { status } : {}),
       ...(changes.assigneeId !== undefined ? { assigneeId: changes.assigneeId ?? undefined } : {}),
       ...(changes.reviewerId !== undefined ? { reviewerId: changes.reviewerId ?? undefined } : {}),
-      ...(changes.due !== undefined ? (changes.due === null ? { due: undefined } : dueOf(changes.due) !== undefined ? { due: dueOf(changes.due)! } : {}) : {}),
+      ...(changes.due !== undefined ? (changes.due === null ? { due: undefined } : dueOf(changes.due) !== undefined ? { due: dueOf(changes.due)! } : {}) : {}), ...(changes.level !== undefined ? { level: changes.level, levelBy: by } : {}), // INV-1650
       ...(changes.waitingOn !== undefined ? (changes.waitingOn === null || changes.waitingOn.trim() === "" ? { waitingOn: undefined } : { waitingOn: changes.waitingOn.replace(/\s+/g, " ").trim().slice(0, 120) }) : {}),
       ...(changes.snoozeUntil !== undefined ? (changes.snoozeUntil === null ? { snoozeUntil: undefined } : dueOf(changes.snoozeUntil) !== undefined ? { snoozeUntil: dueOf(changes.snoozeUntil)! } : {}) : {}),
       updatedAt: at,
@@ -1043,6 +1046,6 @@ export function describeTask(task: Task, nameOf: (id: string) => string): string
   const reviewer = task.reviewerId !== undefined ? ` · review by ${nameOf(task.reviewerId)}` : "";
   const proposed = task.proposedBy !== undefined ? " (proposed — a person commits it before anyone starts)" : "";
   const goal = task.goal !== undefined ? ` · goal (${task.goal.area}${task.goal.commitment !== undefined ? `: ${task.goal.commitment}` : ""})` : "";
-  const pursuit = task.pursuit !== undefined ? ` · pursuing (${task.pursuit.status})` : "";
-  return `${task.id} [${task.status}]${assignee} ${task.title}${goal}${pursuit}${reviewer}${proposed}`;
+  const pursuit = task.pursuit !== undefined ? ` · pursuing (${task.pursuit.status})` : ""; const level = task.level !== undefined ? ` · ${LEVEL_MEANING[task.level]}` : "";
+  return `${task.id} [${task.status}]${assignee} ${task.title}${goal}${pursuit}${reviewer}${proposed}${level}`;
 }

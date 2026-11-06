@@ -186,7 +186,7 @@ test("describeTask reads like a board row", () => {
   try {
     store.create({ title: "Write the brief", requester: "web", assigneeId: "a1", reviewerId: "b2" });
     const line = describeTask(store.get("t1")!, id => (id === "a1" ? "Ada" : "Bob"));
-    assert.equal(line, "t1 [open] @Ada Write the brief · review by Bob");
+    assert.equal(line, "t1 [open] @Ada Write the brief · review by Bob · L4 — do most of it: any step that reaches outside the box (a send, a publish, a payment, a delete) waits for the person's confirmation, then continues"); // the level rides on the row since INV-1650
   } finally {
     cleanup();
   }
@@ -462,4 +462,23 @@ test("a thread follow-up is noted on its task and handed back once (INV-1462)", 
     store.followUpDelivered(created.id, "m2");
     assert.equal(store.get(created.id)!.followUp?.handedBack, undefined, "a new follow-up can be handed back again");
   } finally { cleanup(); }
+});
+
+test("a task starts at the level the rule infers, says why, and a person may set it, which is recorded (INV-1650)", () => {
+  const store = new TaskStore(null);
+  const tidy = store.create({ title: "整理本周会议记录，输出摘要", requester: "p-chris" })!;
+  assert.equal(tidy.level, 1);
+  assert.equal(tidy.levelBy, "rule");
+  assert.match(tidy.history[0]!.note!, /created · L1 by rule: asks to collect or summarise/);
+  const send = store.create({ title: "Email the report to the board", requester: "p-chris", contract: { acceptance: "the board has it" } })!;
+  assert.equal(send.level, 4);
+  assert.match(send.history[0]!.note!, /L4 by rule: .*reaches outside/);
+  const chosen = store.create({ title: "Email the report to the board", requester: "p-chris", level: 2 })!;
+  assert.equal(chosen.level, 2);
+  assert.equal(chosen.levelBy, "p-chris");
+  assert.match(chosen.history[0]!.note!, /L2 set by the requester/);
+  const moved = store.update(tidy.id, { level: 3 }, "p-chris")!.task;
+  assert.equal(moved.level, 3);
+  assert.equal(moved.levelBy, "p-chris");
+  assert.equal(moved.history.at(-1)!.note, "level L1 → L3, set by p-chris");
 });
