@@ -56,23 +56,26 @@ export const JEV_SETTINGS_JS = `(function () {
     return node;
   }
   function post(body, status) {
-    status.textContent = "Saving…";
+    status.textContent = "{{ui.jev-settings.saving}}";
     fetch("/api/jev", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
-      .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "save failed"); return d; }); })
-      .then(function (d) { render(d); status.textContent = "Saved; in force from the next judgement."; })
+      .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "{{ui.jev-settings.save-failed}}"); return d; }); })
+      .then(function (d) { render(d); status.textContent = "{{ui.jev-settings.saved-in-force-from-the}}"; })
       .catch(function (e) { status.textContent = e.message; });
   }
+  // The points' words by point: the API's label is English, the page's are the bundle's (INV-1684).
+  var LABEL = { memory_judge: "{{ui.jev.memory_judge}}", answer_review: "{{ui.jev.answer_review}}", memory_select: "{{ui.jev.memory_select}}", auto_review: "{{ui.jev.auto_review}}", routine_resolve: "{{ui.jev.routine_resolve}}", computer_verify: "{{ui.jev.computer_verify}}", computer_wait: "{{ui.jev.computer_wait}}", computer_click: "{{ui.jev.computer_click}}", computer_guard: "{{ui.jev.computer_guard}}" };
+  var MODE = { off: "{{ui.jev.mode-off}}", shadow: "{{ui.jev.mode-shadow}}", on: "{{ui.jev.mode-on}}" };
   var field, status, keyNote, rows;
   function render(data) {
-    keyNote.textContent = data.keyPresent ? "A key is set (TYPESAFE_TOKEN)." : "No key: every switch acts as off until TYPESAFE_TOKEN is set or pasted here.";
+    keyNote.textContent = data.keyPresent ? "{{ui.jev-settings.a-key-is-set-typesafe}}" : "{{ui.jev-settings.no-key-every-switch-acts}}";
     rows.textContent = "";
     data.points.forEach(function (p) {
       var row = el("div", { class: "ui-row" });
       var select = el("select", { "data-point": p.point, class: "ui-w-sm" });
-      p.modes.forEach(function (m) { var o = el("option", { value: m }, m); if (m === p.mode) o.selected = true; select.appendChild(o); });
+      p.modes.forEach(function (m) { var o = el("option", { value: m }, MODE[m] || m); if (m === p.mode) o.selected = true; select.appendChild(o); });
       select.addEventListener("change", function () { var points = {}; points[p.point] = select.value; post({ points: points }, status); });
       row.appendChild(select);
-      row.appendChild(el("span", { class: "dim ui-small" }, p.label));
+      row.appendChild(el("span", { class: "dim ui-small" }, LABEL[p.point] || p.label));
       rows.appendChild(row);
     });
   }
@@ -84,11 +87,11 @@ export const JEV_SETTINGS_JS = `(function () {
     var anchor = keyField && keyField.nextElementSibling;
     if (!anchor || document.getElementById("setjev")) return;
     field = el("div", { class: "field", id: "setjev", "data-tier": "installation", "data-settab": "model" });
-    field.appendChild(el("label", {}, "Decision model"));
-    field.appendChild(el("div", { class: "fieldnote" }, "A fast yes/no and multiple-choice model for the host's own judgements. off makes no call; shadow keeps today's behaviour and logs both answers to ~/.agentbox/jev-shadow.jsonl; on uses it and falls back when it fails. It never alone allows an action."));
+    field.appendChild(el("label", {}, "{{ui.jev-settings.decision-model}}"));
+    field.appendChild(el("div", { class: "fieldnote" }, "{{ui.jev-settings.a-fast-yes-no-and}}"));
     keyNote = el("div", { class: "fieldnote" });
     field.appendChild(keyNote);
-    var key = el("input", { type: "password", placeholder: "paste a TypeSafe key (optional)", autocomplete: "off", spellcheck: "false" });
+    var key = el("input", { type: "password", placeholder: "{{ui.jev-settings.paste-a-typesafe-key-optional}}", autocomplete: "off", spellcheck: "false" });
     key.addEventListener("change", function () { if (key.value.trim() !== "") { post({ key: key.value.trim() }, status); key.value = ""; } });
     field.appendChild(key);
     rows = el("div", { class: "ui-stack ui-gap" });

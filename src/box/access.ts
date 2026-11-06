@@ -21,6 +21,9 @@
  */
 
 import type { AgentboxConfig, BoxAccess } from "../config.ts";
+// The words are the bundle's (INV-1684), said here in the default language; the page says them again in its reader's.
+import { DEFAULT_LOCALE } from "../i18n/locale.ts";
+import { tr } from "../i18n/messages.ts";
 
 export type { BoxAccess };
 
@@ -63,7 +66,7 @@ export const PRIVATE_IS_ENFORCED = false;
 const PRIVATE: BoxClass = {
   access: "private",
   enforced: true,
-  badge: "私有 box",
+  badge: tr("ui.access.private"),
   // An enforced private box makes a promise instead of a disclaimer, and the promise is
   // not a guarantee of secrecy from the software: docs/18 §7 is the long form.
   notice: "",
@@ -97,7 +100,7 @@ export function classifyBox(
     return {
       access: "private",
       enforced: false,
-      badge: "私有 box(未生效)",
+      badge: tr("ui.access.privateUnenforced"),
       notice: unenforcedPrivateNotice(),
     };
   }
@@ -105,7 +108,7 @@ export function classifyBox(
     access: "shared",
     ...(group ? { group } : {}),
     enforced: true,
-    badge: "共享 box",
+    badge: tr("ui.access.shared"),
     notice: sharedNotice(group),
   };
 }
@@ -118,10 +121,7 @@ export function classifyBox(
  * private, and the first thing they need is that it is not.
  */
 export function unenforcedPrivateNotice(): string {
-  return (
-    "这台 box 被标成了私有,但**私有还没有生效**:能打开它的人都能看它的屏幕、读它的文件和命令历史," +
-    "备份也会带走你在这里登录过的东西。在功能补齐之前,请当成共享 box 用。"
-  );
+  return tr("ui.access.privateUnenforcedNotice");
 }
 
 /**
@@ -132,11 +132,7 @@ export function unenforcedPrivateNotice(): string {
  * them in too" is the consequence the person is actually deciding about.
  */
 export function sharedNotice(group?: string): string {
-  const who = group ? `${group} 里的人` : "所有能打开它的人";
-  return (
-    `这是一台共享的 box。${who}都能看它的屏幕、读它的文件和命令历史,备份也会带走你在这里登录过的东西。` +
-    "在这里登录任何账号,等于替他们一起登录。"
-  );
+  return tr("ui.access.sharedNotice", DEFAULT_LOCALE, { who: group ? tr("ui.access.whoGroup", DEFAULT_LOCALE, { group }) : tr("ui.access.whoAll") });
 }
 
 /**
@@ -146,8 +142,5 @@ export function sharedNotice(group?: string): string {
  * commands and window activity are recorded against your identity, and it is not for personal use.
  */
 export function auditNotice(): string {
-  return (
-    "这是一台公司运维用的跳板机。你在这里执行的命令与窗口活动会被记录、审计,并绑定到你的企业身份;" +
-    "请仅用于公司运维,不要用于个人或私人事务。"
-  );
+  return tr("ui.access.auditNotice");
 }

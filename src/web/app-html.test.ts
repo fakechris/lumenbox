@@ -18,13 +18,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { runInNewContext } from "node:vm";
-import { APP_HTML } from "./app-html.ts";
+import { APP_PAGE } from "./page-locale.ts";
+/** The page as an English reader receives it: its words filled from the bundle (INV-1684). */
+const APP_HTML = APP_PAGE("en");
 
 /** Every `id="…"` the document defines. */
 const definedIds = new Set([...APP_HTML.matchAll(/id="([A-Za-z0-9_-]+)"/g)].map(match => match[1]!));
 
 test("unknown provider cache usage cannot display a fabricated cache hit rate", () => {
-  assert.match(APP_HTML, /if \(\(report\.unmeasured \|\| \[\]\)\.length\) return .*缓存命中 未知/);
+  assert.match(APP_PAGE("zh"), /if \(\(report\.unmeasured \|\| \[\]\)\.length\) return .*缓存命中：未知/);
+  assert.match(APP_HTML, /if \(\(report\.unmeasured \|\| \[\]\)\.length\) return .*Cache hit: unknown/);
   assert.match(APP_HTML, /No cost or cache hit rate shown: provider usage/);
 });
 
@@ -178,7 +181,7 @@ test("desktop context stays discoverable and opens the desktop tab", () => {
   assert.match(APP_HTML, /<a href="#" id="desktoptitle"><\/a>/);
   assert.match(APP_HTML, /"desktoptitle"\)\.title = desktopLabel \+ " — open Desktop tab"/);
   assert.match(APP_HTML, /getElementById\("desktoptitle"\)\.addEventListener\("click", function \(e\) \{ e\.preventDefault\(\); showTab\("desktop"\); \}\)/);
-  assert.match(APP_HTML, /badge\.textContent = box\.badge;/, "the shared-box badge must not inherit a potentially long group name");
+  assert.match(APP_HTML, /badge\.textContent = box\.access === "shared" \? t\("ui\.access\.shared"\)/, "the shared-box badge must not inherit a potentially long group name");
   assert.match(APP_HTML, /badge\.title = \(box\.group \? box\.group/, "the full group must remain available on hover");
 });
 

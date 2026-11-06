@@ -18,22 +18,22 @@ export const SPEND_LIMIT_JS = `(function () {
       var t = today[a.id]; if (!t) return;
       var row = el("div", { class: "ui-list-row" });
       row.appendChild(el("span", { class: "ui-w-md" }, a.name));
-      var spent = money(t.spent) + " of " + money(t.limits.perDay) + " today" + (t.unpricedTokens ? " · " + Math.round(t.unpricedTokens / 1000) + "k unpriced tokens (" + t.unpricedModels.join(", ") + ")" : "") + (t.pausedAt ? " · paused at the line" : "");
+      var spent = money(t.spent) + " {{ui.spend-limit.of}} " + money(t.limits.perDay) + " {{ui.spend-limit.today}}" + (t.unpricedTokens ? " · " + Math.round(t.unpricedTokens / 1000) + "{{ui.spend-limit.k-unpriced-tokens}}" + t.unpricedModels.join(", ") + ")" : "") + (t.pausedAt ? " {{ui.spend-limit.paused-at-the-line}}" : "");
       row.appendChild(el("span", { class: "ui-grow dim", title: spent }, spent));
       function field(key, label, step) {
-        var input = el("input", { type: "number", min: "0", step: step, value: String(t.limits[key]), "aria-label": label + " for " + a.name, title: label, class: "ui-w-xs" });
+        var input = el("input", { type: "number", min: "0", step: step, value: String(t.limits[key]), "aria-label": label + " {{ui.spend-limit.for}} " + a.name, title: label, class: "ui-w-xs" });
         input.onchange = function () {
           var body = { id: a.id }; body[key] = input.value === "" ? null : Number(input.value);
           call("POST", "/api/agents/spend-limits", body)
-            .then(function (d) { today[a.id] = d; note.textContent = a.name + ": " + money(d.limits.perDay) + " a day, " + money(d.limits.perWake) + " a wake."; render(); })
+            .then(function (d) { today[a.id] = d; note.textContent = a.name + ": " + money(d.limits.perDay) + " {{ui.spend-limit.a-day}} " + money(d.limits.perWake) + " {{ui.spend-limit.a-wake}}"; render(); })
             .catch(function (e) { note.textContent = e.message; });
         };
         return input;
       }
-      row.appendChild(el("span", { class: "dim" }, "day"));
-      row.appendChild(field("perDay", "Daily spend line", "1"));
-      row.appendChild(el("span", { class: "dim" }, "wake"));
-      row.appendChild(field("perWake", "Spend line for one wake", "0.5"));
+      row.appendChild(el("span", { class: "dim" }, "{{ui.spend-limit.day}}"));
+      row.appendChild(field("perDay", "{{ui.spend-limit.daily-spend-line}}", "1"));
+      row.appendChild(el("span", { class: "dim" }, "{{ui.spend-limit.wake}}"));
+      row.appendChild(field("perWake", "{{ui.spend-limit.spend-line-for-one-wake}}", "0.5"));
       list.appendChild(row);
     });
   }
@@ -43,8 +43,8 @@ export const SPEND_LIMIT_JS = `(function () {
     if (!modal || document.getElementById("spendlimits")) return false;
     var actions = modal.querySelector(".actions");
     var field = el("div", { class: "field settab-off", "data-settab": "team", id: "spendlimits" });
-    field.appendChild(el("label", {}, "Spend"));
-    field.appendChild(el("div", { class: "fieldnote" }, "What each agent may spend on the model, in the currency of the rates in config.json. At 80% of a line the agent is reminded; at the wake line its turn ends and hands back; at the daily line it is paused until tomorrow and the admins are told. Models without a rate are counted in tokens and named."));
+    field.appendChild(el("label", {}, "{{ui.spend-limit.spend}}"));
+    field.appendChild(el("div", { class: "fieldnote" }, "{{ui.spend-limit.what-each-agent-may-spend}}"));
     list = el("div", { id: "spendlimitlist", class: "ui-gap" });
     note = el("div", { class: "fieldnote", id: "spendlimitnote" }, "");
     field.appendChild(list); field.appendChild(note);

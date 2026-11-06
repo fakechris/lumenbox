@@ -26,7 +26,7 @@ export const INLINE_ASK_JS = `(function () {
       field.id = "inlineaskfield";
       field.value = initial || "";
       var ok = document.createElement("button"); ok.className = "btn accent"; ok.id = "inlineaskok"; ok.textContent = "OK";
-      var cancel = document.createElement("button"); cancel.className = "btn ghost"; cancel.textContent = "Cancel";
+      var cancel = document.createElement("button"); cancel.className = "btn ghost"; cancel.textContent = "{{ui.inline-ask.cancel}}";
       var row = document.createElement("div"); row.className = "ui-actions";
       row.appendChild(cancel); row.appendChild(ok);
       card.appendChild(text); card.appendChild(field); card.appendChild(row);

@@ -13,7 +13,9 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { runInNewContext } from "node:vm";
 import { deliverableRoute } from "../web/deliverable-routes.ts";
-import { DELIVERABLES_JS } from "../web/deliverables-ui.ts";
+import { DELIVERABLES_JS as DELIVERABLES_JS_TEMPLATE } from "../web/deliverables-ui.ts";
+import { localizeScript } from "../web/page-locale.ts";
+const DELIVERABLES_JS = localizeScript(DELIVERABLES_JS_TEMPLATE, "en");
 import { runEpisode, type Script } from "./scenario.ts";
 import { TaskStore } from "./tasks.ts";
 

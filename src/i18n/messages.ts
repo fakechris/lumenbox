@@ -20,8 +20,22 @@
  */
 
 import { DEFAULT_LOCALE, type Locale } from "./locale.ts";
+import { UI_APP } from "./ui-app.ts";
+import { UI_PAGE } from "./ui-page.ts";
+import { UI_SECTIONS } from "./ui-sections.ts";
+import { SETTINGS_PANES } from "../web/settings-registry.ts";
 
-export const MESSAGES: Record<Locale, Record<string, string>> = {
+/** The web UI's words, kept as `[zh, en]` pairs so a translator reads both on one line (INV-1684). */
+const UI_WORDS: Record<string, readonly [zh: string, en: string]> = {
+  ...UI_PAGE,
+  ...UI_APP,
+  ...UI_SECTIONS,
+  ...Object.fromEntries(SETTINGS_PANES.map(pane => [`ui.pane.${pane.key}`, [pane.titleZh, pane.title] as const])),
+};
+
+const uiIn = (index: 0 | 1) => Object.fromEntries(Object.entries(UI_WORDS).map(([key, pair]) => [key, pair[index]]));
+
+const CHAT_AND_SETUP: Record<Locale, Record<string, string>> = {
   zh: {
     "team": "团队",
     "card.queued": "排队中",
@@ -66,7 +80,7 @@ export const MESSAGES: Record<Locale, Record<string, string>> = {
     "run.steered": "带到了,{who}接着做。",
     "run.steeredAnon": "带到了,接着做。",
     "guests.closed": "这个渠道只对已经登记过的人开放,不收新的申请。要用的话,请让管理员先把你加进来。",
-    "file.tooBig": "「{name}」太大,飞书不让机器人下载这个尺寸的附件。压缩一下、拆小一点再发,或者换个格式。",
+    "file.tooBig": "「{name}」太大,飞书不允许下载这么大的附件。压缩一下、拆小一点再发,或者换个格式。",
     "file.failed": "「{name}」我没拿下来(飞书下载接口报错{code})。再发一次试试,或换个发法。",
     "schedules.none": "现在没有自动运行的任务。要加一个,让 agent 在 skill 的开头写上 schedule,比如每天早上 6:30 报一次。",
     "schedules.disarmed": "(定时器当前是关的,下面这些不会自动跑。)",
@@ -115,6 +129,14 @@ export const MESSAGES: Record<Locale, Record<string, string>> = {
     "ui.boxes.none": "还没有 box。box 是 agent 干活的那台电脑——用上面的按钮建一台 Docker 的,或者在终端里跑 agentbox box up。",
     "ui.box.dockerMissing": "box 是一台跑在本机 Docker 里的 Linux 电脑。这台机器上还没有 docker 命令——先安装并启动下面的其中一款,再回到这里按「启动 box」:",
     "ui.box.dockerStopped": "Docker 已安装,但引擎没有响应。启动 Docker Desktop(或 OrbStack),再按「启动 box」。",
+    "ui.access.shared": "共享 box",
+    "ui.access.private": "私有 box",
+    "ui.access.privateUnenforced": "私有 box(未生效)",
+    "ui.access.whoAll": "所有能打开它的人",
+    "ui.access.whoGroup": "{group} 里的人",
+    "ui.access.sharedNotice": "这是一台共享的 box。{who}都能看它的屏幕、读它的文件和命令历史,备份也会带走你在这里登录过的东西。在这里登录任何账号,等于替他们一起登录。",
+    "ui.access.privateUnenforcedNotice": "这台 box 被标成了私有,但**私有还没有生效**:能打开它的人都能看它的屏幕、读它的文件和命令历史,备份也会带走你在这里登录过的东西。在功能补齐之前,请当成共享 box 用。",
+    "ui.access.auditNotice": "这是一台公司运维用的跳板机。你在这里执行的命令与窗口活动会被记录、审计,并绑定到你的企业身份;请仅用于公司运维,不要用于个人或私人事务。",
   },
   en: {
     "team": "the team",
@@ -160,7 +182,7 @@ export const MESSAGES: Record<Locale, Record<string, string>> = {
     "run.steered": "Passed on — {who} carries on with it.",
     "run.steeredAnon": "Passed on; carrying on.",
     "guests.closed": "This channel is open only to people who are already registered, and takes no new requests. Ask an admin to add you first.",
-    "file.tooBig": "\"{name}\" is too large — Feishu will not let a bot download an attachment that size. Compress it, split it, or send another format.",
+    "file.tooBig": "\"{name}\" is too large — Feishu will not let an app download an attachment that size. Compress it, split it, or send another format.",
     "file.failed": "I could not fetch \"{name}\" (the download API returned{code}). Send it again, or another way.",
     "schedules.none": "Nothing runs on its own here. To add one, have an agent write a schedule at the top of a skill — a 06:30 brief, say.",
     "schedules.disarmed": "(The timer is off, so none of these will fire.)",
@@ -209,7 +231,20 @@ export const MESSAGES: Record<Locale, Record<string, string>> = {
     "ui.boxes.none": "No boxes yet. A box is the computer your agents work on — create the Docker box with the button above, or run agentbox box up in a terminal.",
     "ui.box.dockerMissing": "The box is a Linux computer running in Docker on this machine, and this machine has no docker command yet. Install and start one of the following, then come back and press Start the box:",
     "ui.box.dockerStopped": "Docker is installed, but its engine did not answer. Start Docker Desktop (or OrbStack), then press Start the box.",
+    "ui.access.shared": "Shared box",
+    "ui.access.private": "Private box",
+    "ui.access.privateUnenforced": "Private box (not in effect)",
+    "ui.access.whoAll": "Everyone who can open it",
+    "ui.access.whoGroup": "The people in {group}",
+    "ui.access.sharedNotice": "This is a shared box. {who} can see its screen and read its files and command history, and a backup takes whatever you logged in to here. Logging in to any account here logs them in too.",
+    "ui.access.privateUnenforcedNotice": "This box is marked private, but **private is not in effect yet**: anyone who can open it can see its screen and read its files and command history, and a backup takes whatever you logged in to here. Treat it as a shared box until the feature is complete.",
+    "ui.access.auditNotice": "This is a company operations jump box. The commands you run and the windows you use here are recorded, audited and tied to your company identity; use it for company operations only, not for personal matters.",
   },
+};
+
+export const MESSAGES: Record<Locale, Record<string, string>> = {
+  zh: { ...CHAT_AND_SETUP.zh, ...uiIn(0) },
+  en: { ...CHAT_AND_SETUP.en, ...uiIn(1) },
 };
 
 /**

@@ -11,17 +11,17 @@ export const TEAM_MEMORY_REVIEW_JS = `(function () {
     toggle.checked = !!d.on;
     list.textContent = "";
     var pending = d.pending || [];
-    if (pending.length === 0) { list.appendChild(el("div", { class: "fieldnote" }, d.on ? "Nothing is waiting." : "")); return; }
+    if (pending.length === 0) { list.appendChild(el("div", { class: "fieldnote" }, d.on ? "{{ui.team-memory-review.nothing-is-waiting}}" : "")); return; }
     pending.forEach(function (item) {
       var row = el("div", { class: "ui-list-row", "data-team-review": item.writer + ":" + item.version });
       row.appendChild(el("span", { class: "ui-grow", title: item.text }, item.writerName + ": " + item.text));
       row.appendChild(el("span", { class: "dim" }, (item.at || "").slice(0, 10)));
-      [["approved", "Approve"], ["rejected", "Reject"]].forEach(function (pair) {
+      [["approved", "{{ui.team-memory-review.approve}}"], ["rejected", "{{ui.team-memory-review.reject}}"]].forEach(function (pair) {
         var b = el("button", { class: "btn", "data-decision": pair[0] }, pair[1]);
         b.onclick = function () {
           b.disabled = true;
           call("POST", "/api/memory/team-review/decide", { writer: item.writer, version: item.version, decision: pair[0] })
-            .then(function (d) { note.textContent = pair[1] === "Approve" ? "Approved: every agent has it on its next turn." : "Rejected: no agent will see it."; render(d); })
+            .then(function (d) { note.textContent = pair[1] === "Approve" ? "{{ui.team-memory-review.approved-every-agent-has-it}}" : "{{ui.team-memory-review.rejected-no-agent-will-see}}"; render(d); })
             .catch(function (e) { note.textContent = e.message; if (e.data) render(e.data); });
         };
         row.appendChild(b);
@@ -35,18 +35,18 @@ export const TEAM_MEMORY_REVIEW_JS = `(function () {
     if (!modal || document.getElementById("teammemoryreview")) return false;
     var actions = modal.querySelector(".actions");
     var field = el("div", { class: "field settab-off", "data-settab": "team", id: "teammemoryreview" });
-    field.appendChild(el("label", {}, "Team memory"));
+    field.appendChild(el("label", {}, "{{ui.team-memory-review.team-memory}}"));
     var line = el("div", { class: "ui-row", style: "flex-wrap:nowrap;align-items:flex-start" });
     toggle = el("input", { type: "checkbox", id: "teammemoryreviewon", style: "height:auto;margin-top:3px;flex:none" });
     line.appendChild(toggle);
-    line.appendChild(el("span", { style: "flex:1;min-width:0" }, "Review first: an agent's write to the team's shared memory waits for an admin's approval"));
+    line.appendChild(el("span", { style: "flex:1;min-width:0" }, "{{ui.team-memory-review.review-first-an-agents-write}}"));
     field.appendChild(line);
-    field.appendChild(el("div", { class: "fieldnote" }, "Every agent reads the team's memory, including agents working on a schedule while nobody watches. With this on, what an agent shares reaches the others only after an admin approves it here; an agent's own memory is not affected."));
+    field.appendChild(el("div", { class: "fieldnote" }, "{{ui.team-memory-review.every-agent-reads-the-teams}}"));
     list = el("div", { id: "teammemoryreviewlist", class: "ui-gap" });
     note = el("div", { class: "fieldnote", id: "teammemoryreviewnote" }, "");
     field.appendChild(list); field.appendChild(note);
     toggle.onchange = function () {
-      call("POST", "/api/memory/team-review/setting", { on: toggle.checked }).then(function (d) { note.textContent = d.on ? "On: new team writes wait for approval." : "Off: team writes are shared at once, as before."; render(d); }).catch(function (e) { note.textContent = e.message; refresh(); });
+      call("POST", "/api/memory/team-review/setting", { on: toggle.checked }).then(function (d) { note.textContent = d.on ? "{{ui.team-memory-review.on-new-team-writes-wait}}" : "{{ui.team-memory-review.off-team-writes-are-shared}}"; render(d); }).catch(function (e) { note.textContent = e.message; refresh(); });
     };
     modal.insertBefore(field, actions);
     document.getElementById("settabs").addEventListener("click", function (event) { var a = event.target.closest("a[data-settab]"); if (a && a.getAttribute("data-settab") === "team") refresh(); });

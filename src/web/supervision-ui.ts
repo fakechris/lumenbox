@@ -9,8 +9,6 @@
  * watching, wherever the page shows that task. ES5 and string building, like the page it joins.
  */
 
-import { settingsPane } from "./settings-registry.ts";
-
 export const SUPERVISION_JS = `(function () {
   function el(tag, attrs, text) {
     var node = document.createElement(tag);
@@ -35,31 +33,31 @@ export const SUPERVISION_JS = `(function () {
     var tabs = document.getElementById("settabs");
     var modal = document.querySelector("#settingswrap .modal");
     if (!tabs || !modal || document.getElementById("supwatchdog")) return;
-    tabs.appendChild(el("a", { href: "#", class: "tab", "data-settab": "supervision" }, ${JSON.stringify(settingsPane("supervision").title)}));
+    tabs.appendChild(el("a", { href: "#", class: "tab", "data-settab": "supervision" }, "{{ui.pane.supervision}}"));
     var fields = modal.querySelectorAll(".field[data-settab]");
     var anchor = fields.length ? fields[fields.length - 1] : null;
     var after = anchor ? anchor.nextSibling : null;
     function add(node) { modal.insertBefore(node, after); }
 
     var intro = field();
-    intro.appendChild(el("div", { class: "fieldnote" }, "Supervision runs beside LumenBox, outside its server: a watchdog that flags work which stops moving, and a supervisor you can give a goal to watch through to the end. Neither can touch the box, mark work done, resume what the system stopped, or raise a budget."));
+    intro.appendChild(el("div", { class: "fieldnote" }, "{{ui.supervision.supervision-runs-beside-lumenbox-outside}}"));
     add(intro);
 
-    var wd = field("Watchdog");
+    var wd = field("{{ui.supervision.watchdog}}");
     ui.wdOn = el("input", { type: "checkbox", id: "supwatchdog" });
     ui.wdJudge = el("input", { type: "checkbox", id: "supjudge" });
     ui.stall = number("supstall"); ui.paused = number("suppaused");
     var row1 = el("div", { class: "ui-row" });
-    row1.appendChild(ui.wdOn); row1.appendChild(el("span", {}, "on"));
-    row1.appendChild(el("span", { class: "dim" }, "flag work in hand after")); row1.appendChild(ui.stall); row1.appendChild(el("span", { class: "dim" }, "min still,"));
-    row1.appendChild(el("span", { class: "dim" }, "a stopped goal after")); row1.appendChild(ui.paused); row1.appendChild(el("span", { class: "dim" }, "min unattended"));
+    row1.appendChild(ui.wdOn); row1.appendChild(el("span", {}, "{{ui.supervision.on}}"));
+    row1.appendChild(el("span", { class: "dim" }, "{{ui.supervision.flag-work-in-hand-after}}")); row1.appendChild(ui.stall); row1.appendChild(el("span", { class: "dim" }, "{{ui.supervision.min-still}}"));
+    row1.appendChild(el("span", { class: "dim" }, "{{ui.supervision.a-stopped-goal-after}}")); row1.appendChild(ui.paused); row1.appendChild(el("span", { class: "dim" }, "{{ui.supervision.min-unattended}}"));
     var row2 = el("div", { class: "ui-row ui-gap" });
-    row2.appendChild(ui.wdJudge); row2.appendChild(el("span", { class: "dim" }, "ask the decision model, once an hour per active goal, whether it is moving"));
+    row2.appendChild(ui.wdJudge); row2.appendChild(el("span", { class: "dim" }, "{{ui.supervision.ask-the-decision-model-once}}"));
     ui.flag = el("div", { class: "fieldnote" });
     wd.appendChild(row1); wd.appendChild(row2); wd.appendChild(ui.flag);
     add(wd);
 
-    var sv = field("Supervisor model");
+    var sv = field("{{ui.supervision.supervisor-model}}");
     ui.provider = el("select", { id: "supprovider" });
     ui.model = el("input", { id: "supmodel", spellcheck: "false", class: "ui-w-md" });
     ui.keyNote = el("div", { class: "fieldnote" });
@@ -69,23 +67,23 @@ export const SUPERVISION_JS = `(function () {
     ui.provider.addEventListener("change", function () { var p = providerNamed(ui.provider.value); if (p && !ui.model.value) ui.model.value = p.defaultModel; renderKey(); });
     add(sv);
 
-    var lim = field("Runs, by default");
+    var lim = field("{{ui.supervision.runs-by-default}}");
     ui.agent = el("select", { id: "supagent" });
-    ui.budget = number("supbudget"); ui.budget.placeholder = "none";
+    ui.budget = number("supbudget"); ui.budget.placeholder = "{{ui.supervision.none}}";
     ui.maxMinutes = number("supmaxmin"); ui.maxCalls = number("supmaxcalls");
     var row4 = el("div", { class: "ui-row" });
     row4.appendChild(el("span", { class: "dim" }, "agent")); row4.appendChild(ui.agent);
-    row4.appendChild(el("span", { class: "dim" }, "budget")); row4.appendChild(ui.budget);
-    row4.appendChild(el("span", { class: "dim" }, "at most")); row4.appendChild(ui.maxMinutes); row4.appendChild(el("span", { class: "dim" }, "min and")); row4.appendChild(ui.maxCalls); row4.appendChild(el("span", { class: "dim" }, "model calls"));
-    ui.save = el("button", { class: "btn" }, "Save supervision settings");
+    row4.appendChild(el("span", { class: "dim" }, "{{ui.supervision.budget}}")); row4.appendChild(ui.budget);
+    row4.appendChild(el("span", { class: "dim" }, "{{ui.supervision.at-most}}")); row4.appendChild(ui.maxMinutes); row4.appendChild(el("span", { class: "dim" }, "{{ui.supervision.min-and}}")); row4.appendChild(ui.maxCalls); row4.appendChild(el("span", { class: "dim" }, "{{ui.supervision.model-calls}}"));
+    ui.save = el("button", { class: "btn" }, "{{ui.supervision.save-supervision-settings}}");
     ui.saveNote = el("span", { class: "dim" });
     ui.save.addEventListener("click", save);
     lim.appendChild(row4); var row5 = el("div", { class: "ui-actions" }); row5.appendChild(ui.save); row5.appendChild(ui.saveNote); lim.appendChild(row5);
     add(lim);
 
-    var runs = field("Supervisor runs");
-    ui.objective = el("textarea", { id: "supobjective", rows: "2", placeholder: "What done looks like, e.g. \\"A summary of this week's support tickets is in reports/weekly.md\\"", class: "ui-w-full" });
-    ui.start = el("button", { class: "btn" }, "Start a supervised goal");
+    var runs = field("{{ui.supervision.supervisor-runs}}");
+    ui.objective = el("textarea", { id: "supobjective", rows: "2", placeholder: "{{ui.supervision.what-done-looks-like-e}}", class: "ui-w-full" });
+    ui.start = el("button", { class: "btn" }, "{{ui.supervision.start-a-supervised-goal}}");
     ui.startNote = el("span", { class: "dim" });
     ui.start.addEventListener("click", start);
     ui.runs = el("div", { id: "supruns", class: "ui-gap" });
@@ -103,7 +101,7 @@ export const SUPERVISION_JS = `(function () {
   function providerNamed(name) { if (!data) return null; for (var i = 0; i < data.providers.length; i++) if (data.providers[i].name === name) return data.providers[i]; return null; }
   function renderKey() {
     var p = providerNamed(ui.provider.value);
-    ui.keyNote.textContent = !p ? "" : p.hasKey ? "Uses the " + p.label + " key set in Settings → Model." : "No " + p.label + " key yet: add it in Settings → Model, or a run will not start.";
+    ui.keyNote.textContent = !p ? "" : p.hasKey ? "{{ui.supervision.uses-the}} " + p.label + " {{ui.supervision.key-set-in-settings-model}}" : "{{ui.supervision.no}} " + p.label + " {{ui.supervision.key-yet-add-it-in}}";
   }
 
   function load() {
@@ -112,11 +110,11 @@ export const SUPERVISION_JS = `(function () {
       var s = d.settings;
       ui.wdOn.checked = s.watchdog.enabled; ui.wdJudge.checked = s.watchdog.judge;
       ui.stall.value = s.watchdog.stallMinutes; ui.paused.value = s.watchdog.pausedMinutes;
-      ui.flag.textContent = d.lastFlag ? "Last flag: " + d.lastFlag : "No flag raised yet.";
+      ui.flag.textContent = d.lastFlag ? "{{ui.supervision.last-flag}} " + d.lastFlag : "{{ui.supervision.no-flag-raised-yet}}";
       ui.provider.textContent = "";
-      d.providers.forEach(function (p) { var o = el("option", { value: p.name }, p.label + (p.hasKey ? "" : " (no key)")); if (p.name === s.supervisor.provider) o.selected = true; ui.provider.appendChild(o); });
+      d.providers.forEach(function (p) { var o = el("option", { value: p.name }, p.label + (p.hasKey ? "" : " {{ui.supervision.no-key}}")); if (p.name === s.supervisor.provider) o.selected = true; ui.provider.appendChild(o); });
       ui.model.value = s.supervisor.model;
-      ui.agent.textContent = ""; ui.agent.appendChild(el("option", { value: "" }, "the coordinator"));
+      ui.agent.textContent = ""; ui.agent.appendChild(el("option", { value: "" }, "{{ui.supervision.the-coordinator}}"));
       d.agents.forEach(function (name) { var o = el("option", { value: name }, name); if (name === s.supervisor.agent) o.selected = true; ui.agent.appendChild(o); });
       ui.budget.value = s.supervisor.budget === undefined ? "" : s.supervisor.budget;
       ui.maxMinutes.value = s.supervisor.maxMinutes; ui.maxCalls.value = s.supervisor.maxModelCalls;
@@ -127,7 +125,7 @@ export const SUPERVISION_JS = `(function () {
   }
 
   function save() {
-    ui.saveNote.textContent = "Saving…";
+    ui.saveNote.textContent = "{{ui.supervision.saving}}";
     call("POST", "/api/supervision/settings", {
       watchdog: { enabled: ui.wdOn.checked, judge: ui.wdJudge.checked, stallMinutes: ui.stall.value, pausedMinutes: ui.paused.value },
       supervisor: { provider: ui.provider.value, model: ui.model.value, agent: ui.agent.value, budget: ui.budget.value, maxMinutes: ui.maxMinutes.value, maxModelCalls: ui.maxCalls.value },
@@ -136,11 +134,11 @@ export const SUPERVISION_JS = `(function () {
 
   function start() {
     var objective = ui.objective.value.trim();
-    if (!objective) { ui.startNote.textContent = "Write what done looks like first."; return; }
-    if (!confirm("This creates a task on your board for " + (ui.agent.value || "the coordinator") + ", and both the supervisor's model and the agent's model will spend. Start?")) return;
-    ui.startNote.textContent = "Starting…";
+    if (!objective) { ui.startNote.textContent = "{{ui.supervision.write-what-done-looks-like}}"; return; }
+    if (!confirm("{{ui.supervision.this-creates-a-task-on}} " + (ui.agent.value || "{{ui.supervision.the-coordinator}}") + "{{ui.supervision.and-both-the-supervisors-model}}")) return;
+    ui.startNote.textContent = "{{ui.supervision.starting}}";
     call("POST", "/api/supervision/runs", { objective: objective, agent: ui.agent.value, budget: ui.budget.value })
-      .then(function () { ui.objective.value = ""; ui.startNote.textContent = "Queued; the supervisor picks it up within seconds."; refreshRuns(); })
+      .then(function () { ui.objective.value = ""; ui.startNote.textContent = "{{ui.supervision.queued-the-supervisor-picks-it}}"; refreshRuns(); })
       .catch(function (e) { ui.startNote.textContent = e.message; });
   }
 
@@ -148,19 +146,19 @@ export const SUPERVISION_JS = `(function () {
     call("GET", "/api/supervision/runs").then(function (d) {
       watching = {};
       ui.runs.textContent = "";
-      if (d.runs.length === 0) { ui.runs.appendChild(el("div", { class: "dim" }, "No runs yet.")); return; }
+      if (d.runs.length === 0) { ui.runs.appendChild(el("div", { class: "dim" }, "{{ui.supervision.no-runs-yet}}")); return; }
       d.runs.slice(0, 20).forEach(function (run) {
         if (run.state === "running" && run.goalId) watching[run.goalId] = run.id;
         var row = el("div", { class: "ui-list-row" });
         row.appendChild(el("span", { class: "ui-w-xs" }, run.state));
         row.appendChild(el("span", { class: "ui-w-xs" }, run.goalId || "—"));
         row.appendChild(el("span", { class: "ui-grow", title: run.objective }, run.objective));
-        row.appendChild(el("span", { class: "dim" }, (run.outcome || "") + (run.modelCalls !== undefined ? " · " + run.modelCalls + " calls" : "") + (run.tokens ? " · " + (run.tokens.input + run.tokens.output) + " tokens" : "") + (run.error ? " · " + run.error : "")));
-        var view = el("a", { href: "#" }, "view");
+        row.appendChild(el("span", { class: "dim" }, (run.outcome || "") + (run.modelCalls !== undefined ? " · " + run.modelCalls + " {{ui.supervision.calls}}" : "") + (run.tokens ? " · " + (run.tokens.input + run.tokens.output) + " {{ui.supervision.tokens}}" : "") + (run.error ? " · " + run.error : "")));
+        var view = el("a", { href: "#" }, "{{ui.supervision.view}}");
         view.addEventListener("click", function (event) { event.preventDefault(); show(run.id); });
         row.appendChild(view);
         if (run.state === "running" || run.state === "queued") {
-          var stop = el("a", { href: "#" }, "stop");
+          var stop = el("a", { href: "#" }, "{{ui.supervision.stop}}");
           stop.addEventListener("click", function (event) { event.preventDefault(); call("POST", "/api/supervision/runs/" + run.id + "/stop").then(refreshRuns); });
           row.appendChild(stop);
         }
@@ -172,9 +170,9 @@ export const SUPERVISION_JS = `(function () {
 
   function show(id) {
     call("GET", "/api/supervision/runs/" + id).then(function (d) {
-      var lines = [d.summary || ("Run " + id + ": " + d.run.state)];
+      var lines = [d.summary || ("{{ui.supervision.run}} " + id + ": " + d.run.state)];
       d.transcript.forEach(function (e) {
-        if (e.kind === "model") lines.push("model #" + e.n + ": " + (e.calls.length ? e.calls.map(function (c) { return c.name; }).join(", ") : "") + (e.text ? " — " + e.text : ""));
+        if (e.kind === "model") lines.push("{{ui.supervision.model}}" + e.n + ": " + (e.calls.length ? e.calls.map(function (c) { return c.name; }).join(", ") : "") + (e.text ? " — " + e.text : ""));
         else if (e.kind === "tool") lines.push("  " + e.name + (e.isError || e.refused ? " REFUSED: " : ": ") + String(e.reply || e.refused || "").split("\\n")[0]);
       });
       ui.detail.textContent = lines.join("\\n");
@@ -188,7 +186,7 @@ export const SUPERVISION_JS = `(function () {
     for (var i = 0; i < links.length; i++) {
       var id = links[i].getAttribute("data-task");
       var badge = links[i].parentNode && links[i].parentNode.querySelector(".supbadge");
-      if (watching[id] && !badge) links[i].parentNode.appendChild(el("span", { class: "supbadge dim ui-badge", title: "A supervisor is watching this goal" }, "supervised"));
+      if (watching[id] && !badge) links[i].parentNode.appendChild(el("span", { class: "supbadge dim ui-badge", title: "{{ui.supervision.a-supervisor-is-watching-this}}" }, "{{ui.supervision.supervised}}"));
       if (!watching[id] && badge) badge.parentNode.removeChild(badge);
     }
   }

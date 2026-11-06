@@ -34,8 +34,8 @@ export const TOOL_PERMS_JS = `(function () {
   ].join("\\n");
   document.head.appendChild(style);
 
-  var LABEL = { allowed: "allowed", asked: "asked you", waiting: "waiting for you", refused: "refused" };
-  var GROUP = { desk: "Desk", web: "Web", code: "Code", team: "Team", other: "Other" };
+  var LABEL = { allowed: "{{ui.tool-permissions.allowed}}", asked: "{{ui.tool-permissions.asked-you}}", waiting: "{{ui.tool-permissions.waiting-for-you}}", refused: "{{ui.tool-permissions.refused}}" };
+  var GROUP = { desk: "{{ui.tool-permissions.desk}}", web: "{{ui.tool-permissions.web}}", code: "{{ui.tool-permissions.code}}", team: "{{ui.tool-permissions.team}}", other: "{{ui.tool-permissions.other}}" };
   var state = null;
 
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
@@ -56,9 +56,9 @@ export const TOOL_PERMS_JS = `(function () {
     var tool = chip.getAttribute("data-tool"), now = stateOf(tool), floor = state.floors[tool];
     var cls = "toolchip" + (now !== "off" ? " on" : "") + (now === "ask" ? " ask" : "") + (floor ? " floor" : "") + (floor && floor.effect === "deny" ? " denied" : "");
     if (chip.className !== cls) chip.className = cls;
-    var title = floor ? (floor.effect === "deny" ? "Refused whatever is set here: " : "Always asks, whatever is set here: ") + floor.source
-      : state.never.indexOf(tool) >= 0 ? "Talks to you or runs the turn itself: allowed or off, never asked"
-      : now === "ask" ? "Asks you before every call" + (state.tools[tool] ? "" : " (the " + GROUP[groupOf(tool)] + " default)") : now === "allow" ? "Runs without asking (the gate's own rules still apply)" : "Off: not offered to the agent";
+    var title = floor ? (floor.effect === "deny" ? "{{ui.tool-permissions.refused-whatever-is-set-here}} " : "{{ui.tool-permissions.always-asks-whatever-is-set}} ") + floor.source
+      : state.never.indexOf(tool) >= 0 ? "{{ui.tool-permissions.talks-to-you-or-runs}}"
+      : now === "ask" ? "{{ui.tool-permissions.asks-you-before-every-call}}" + (state.tools[tool] ? "" : " {{ui.tool-permissions.the}} " + GROUP[groupOf(tool)] + " {{ui.tool-permissions.default}}") : now === "allow" ? "{{ui.tool-permissions.runs-without-asking-the-gates}}" : "{{ui.tool-permissions.off-not-offered-to-the}}";
     if (chip.title !== title) chip.title = title;
   }
   function paint() {
@@ -81,7 +81,7 @@ export const TOOL_PERMS_JS = `(function () {
     var row = document.createElement("div"); row.id = "tpgroups"; row.className = "tpgroups";
     row.innerHTML = Object.keys(GROUP).filter(function (g) { return (state.groups[g] || []).length > 0; }).map(function (g) {
       return '<span class="tpgroup"><b>' + GROUP[g] + "</b>" + ["allow", "ask", "off"].map(function (v) {
-        return '<button type="button" data-g="' + g + '" data-v="' + v + '">' + (v === "ask" ? "ask me" : v) + "</button>";
+        return '<button type="button" data-g="' + g + '" data-v="' + v + '">' + ({ allow: "{{ui.tool-permissions.allow}}", ask: "{{ui.tool-permissions.ask-me}}", off: "{{ui.tool-permissions.off}}" }[v]) + "</button>";
       }).join("") + "</span>";
     }).join("");
     row.addEventListener("click", function (event) {
@@ -154,7 +154,7 @@ export const TOOL_PERMS_JS = `(function () {
     event.preventDefault(); event.stopPropagation();
     var row = mark.closest("details"), shown = row && row.querySelector(":scope > .gatebasis");
     if (shown) { shown.remove(); return; }
-    var note = document.createElement("div"); note.className = "gatebasis"; note.textContent = "Gate: " + mark.getAttribute("data-basis");
+    var note = document.createElement("div"); note.className = "gatebasis"; note.textContent = "{{ui.tool-permissions.gate}} " + mark.getAttribute("data-basis");
     var summary = row && row.querySelector(":scope > summary");
     if (summary) { summary.insertAdjacentElement("afterend", note); row.open = true; }
   }, true);

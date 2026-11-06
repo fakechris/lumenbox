@@ -15,19 +15,19 @@ export const DIAGNOSTICS_JS = `(function () {
   function render(d) {
     ui.list.textContent = "";
     var p = d.process || {}, loop = d.eventLoop || {}, box = d.box || {};
-    row("This app", mb(p.rss) + " resident; JavaScript heap " + mb(p.heapUsed) + " of " + mb(p.heapTotal) + "; buffers " + mb(p.arrayBuffers));
-    row("Responsiveness", "event-loop delay p99 " + loop.p99Ms + " ms, worst " + loop.maxMs + " ms" + (loop.sinceStart ? " (since this panel first asked)" : " (since the last refresh)"));
-    row("Open pages", String(d.eventSubscribers) + " event stream(s)");
-    if (box.error) row("Box", "not readable: " + box.error);
+    row("{{ui.diagnostics.this-app}}", mb(p.rss) + " resident; JavaScript heap " + mb(p.heapUsed) + " {{ui.diagnostics.of}} " + mb(p.heapTotal) + "; buffers " + mb(p.arrayBuffers));
+    row("{{ui.diagnostics.responsiveness}}", "{{ui.diagnostics.event-loop-delay-p99}} " + loop.p99Ms + " {{ui.diagnostics.ms-worst}} " + loop.maxMs + " ms" + (loop.sinceStart ? " {{ui.diagnostics.since-this-panel-first-asked}}" : " {{ui.diagnostics.since-the-last-refresh}}"));
+    row("{{ui.diagnostics.open-pages}}", String(d.eventSubscribers) + " {{ui.diagnostics.event-stream-s}}");
+    if (box.error) row("{{ui.diagnostics.box}}", "{{ui.diagnostics.not-readable}} " + box.error);
     else {
       var ev = box.memoryEvents || {}, cpu = box.cpu || {};
-      row("Box memory", mb(box.memoryCurrent) + " of " + (box.memoryMax === "max" ? "no limit" : mb(box.memoryMax)) + (ev.oom_kill ? "; the kernel has stopped " + ev.oom_kill + " process(es) for memory" : ""));
-      row("Box CPU", cpu.usage_usec !== undefined ? Math.round(cpu.usage_usec / 1e6) + " CPU-seconds used" + (cpu.nr_throttled ? "; held back " + cpu.nr_throttled + " time(s) by its limit" : "") : "—");
+      row("{{ui.diagnostics.box-memory}}", mb(box.memoryCurrent) + " {{ui.diagnostics.of}} " + (box.memoryMax === "max" ? "{{ui.diagnostics.no-limit}}" : mb(box.memoryMax)) + (ev.oom_kill ? "; the kernel has stopped " + ev.oom_kill + " process(es) for memory" : ""));
+      row("{{ui.diagnostics.box-cpu}}", cpu.usage_usec !== undefined ? Math.round(cpu.usage_usec / 1e6) + " {{ui.diagnostics.cpu-seconds-used}}" + (cpu.nr_throttled ? "; held back " + cpu.nr_throttled + " time(s) by its limit" : "") : "—");
     }
     (d.agents || []).filter(function (a) { return a.activeTurns || a.queued || a.watchedJobs; }).forEach(function (a) {
-      row(a.name, a.activeTurns + " turn(s) running, " + a.queued + " message(s) waiting, " + a.watchedJobs + " background job(s) watched");
+      row(a.name, a.activeTurns + " turn(s) running, " + a.queued + " message(s) waiting, " + a.watchedJobs + " {{ui.diagnostics.background-job-s-watched}}");
     });
-    ui.line.textContent = "As of " + new Date(d.at).toLocaleTimeString() + ".";
+    ui.line.textContent = "{{ui.diagnostics.as-of}} " + new Date(d.at).toLocaleTimeString() + ".";
   }
   function load() { call("GET", "/api/diagnostics/resources").then(render).catch(function (e) { ui.line.textContent = e.message; }); }
   function mount() {
@@ -35,20 +35,20 @@ export const DIAGNOSTICS_JS = `(function () {
     var tabs = document.getElementById("settabs");
     if (!modal || !tabs || document.getElementById("diagnostics")) return false;
     var wrap = el("div", { class: "field settab-off", "data-settab": "boxes", id: "diagnostics" });
-    wrap.appendChild(el("label", {}, "Resources"));
-    wrap.appendChild(el("div", { class: "fieldnote" }, "What this app and its box are holding now. Read-only: nothing here changes anything."));
+    wrap.appendChild(el("label", {}, "{{ui.diagnostics.resources}}"));
+    wrap.appendChild(el("div", { class: "fieldnote" }, "{{ui.diagnostics.what-this-app-and-its}}"));
     ui.list = el("div", { id: "diagnosticslist", class: "ui-gap" });
     ui.line = el("div", { class: "fieldnote", id: "diagnosticsline" }, "…");
     var actions = el("div", { class: "ui-row ui-gap" });
-    var refresh = el("button", { class: "btn", id: "diagnosticsrefresh" }, "Refresh");
-    var snap = el("a", { href: "#", class: "ui-link", id: "diagnosticssnapshot" }, "Write a heap snapshot…");
+    var refresh = el("button", { class: "btn", id: "diagnosticsrefresh" }, "{{ui.diagnostics.refresh}}");
+    var snap = el("a", { href: "#", class: "ui-link", id: "diagnosticssnapshot" }, "{{ui.diagnostics.write-a-heap-snapshot}}");
     refresh.onclick = function () { load(); };
     snap.onclick = function (event) {
       event.preventDefault();
-      window.askInline(snap, "A heap snapshot is a copy of everything this app holds in memory, conversations included. It is written to the diagnostics folder in the app's data directory, can be hundreds of megabytes, and the app pauses while it is written. Type yes to write one:", "").then(function (answer) {
+      window.askInline(snap, "{{ui.diagnostics.a-heap-snapshot-is-a}}", "").then(function (answer) {
         if (answer === null || String(answer).trim().toLowerCase() !== "yes") return;
-        ui.line.textContent = "Writing…";
-        call("POST", "/api/diagnostics/heap-snapshot").then(function (d) { ui.line.textContent = "Written: " + d.path + " (" + mb(d.bytes) + "). " + d.note; }).catch(function (e) { ui.line.textContent = e.message; });
+        ui.line.textContent = "{{ui.diagnostics.writing}}";
+        call("POST", "/api/diagnostics/heap-snapshot").then(function (d) { ui.line.textContent = "{{ui.diagnostics.written}} " + d.path + " (" + mb(d.bytes) + "). " + d.note; }).catch(function (e) { ui.line.textContent = e.message; });
       });
     };
     actions.appendChild(refresh); actions.appendChild(snap);

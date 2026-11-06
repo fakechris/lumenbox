@@ -14,12 +14,12 @@ export const PROVIDER_REST_JS = `(function () {
     ui.list.textContent = "";
     if (d.quota) ui.list.appendChild(el("div", { class: "dim" }, d.quota));
     var rests = d.rests || [];
-    if (!rests.length) { ui.list.appendChild(el("div", { class: "dim" }, "Every provider account is answering.")); return; }
+    if (!rests.length) { ui.list.appendChild(el("div", { class: "dim" }, "{{ui.provider-rest.every-provider-account-is-answering}}")); return; }
     rests.forEach(function (r) {
       var row = el("div", { class: "ui-list-row" });
       row.appendChild(el("span", { class: "ui-w-md" }, r.label));
-      row.appendChild(el("span", { class: "ui-grow dim" }, "Out of usage since " + new Date(r.since).toLocaleString() + "; resting until " + new Date(r.until).toLocaleString() + " (" + r.streak + " answer" + (r.streak === 1 ? "" : "s") + " in a row). " + r.reason));
-      var b = el("button", { class: "btn", type: "button" }, "Retry now");
+      row.appendChild(el("span", { class: "ui-grow dim" }, "{{ui.provider-rest.out-of-usage-since}} " + new Date(r.since).toLocaleString() + "{{ui.provider-rest.resting-until}} " + new Date(r.until).toLocaleString() + " (" + r.streak + " {{ui.provider-rest.answer}}" + (r.streak === 1 ? "" : "{{ui.plural.s}}") + " {{ui.provider-rest.in-a-row}} " + r.reason));
+      var b = el("button", { class: "btn", type: "button" }, "{{ui.provider-rest.retry-now}}");
       b.onclick = function () { b.disabled = true; call("POST", "/api/provider/rests/retry", { account: r.account }).then(load).catch(function (e) { ui.line.textContent = e.message; b.disabled = false; }); };
       row.appendChild(b);
       ui.list.appendChild(row);
@@ -31,8 +31,8 @@ export const PROVIDER_REST_JS = `(function () {
     var tabs = document.getElementById("settabs");
     if (!modal || !tabs || document.getElementById("providerrests")) return false;
     var wrap = el("div", { class: "field settab-off", "data-settab": "model", id: "providerrests" });
-    wrap.appendChild(el("label", {}, "Provider status"));
-    wrap.appendChild(el("div", { class: "fieldnote" }, "A provider whose plan is out of usage rests for every agent at once instead of being retried; one call checks when the rest ends."));
+    wrap.appendChild(el("label", {}, "{{ui.provider-rest.provider-status}}"));
+    wrap.appendChild(el("div", { class: "fieldnote" }, "{{ui.provider-rest.a-provider-whose-plan-is}}"));
     ui.list = el("div", { id: "providerrestlist", class: "ui-gap" });
     ui.line = el("div", { class: "fieldnote" });
     wrap.appendChild(ui.list);

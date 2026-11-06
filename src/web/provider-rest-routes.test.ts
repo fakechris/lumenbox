@@ -6,7 +6,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ProviderRests } from "../host/provider-rest.ts";
 import { providerRestRoute } from "./provider-rest-routes.ts";
-import { PROVIDER_REST_JS } from "./provider-rest-ui.ts";
+import { PROVIDER_REST_JS as PROVIDER_REST_JS_TEMPLATE } from "./provider-rest-ui.ts";
+import { localizeScript } from "./page-locale.ts";
+const PROVIDER_REST_JS = localizeScript(PROVIDER_REST_JS_TEMPLATE, "en");
 
 test("the provider status payload carries the forecast line, and the page prints it", async () => {
   assert.match(PROVIDER_REST_JS, /d\.quota/);

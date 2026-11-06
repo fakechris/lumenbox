@@ -12,7 +12,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { APP_HTML } from "./app-html.ts";
+import { APP_PAGE } from "./page-locale.ts";
+/** The page as an English reader receives it: its words filled from the bundle (INV-1684). */
+const APP_HTML = APP_PAGE("en");
 
 function loadAuditModule(): {
   esc: (v: unknown) => string;

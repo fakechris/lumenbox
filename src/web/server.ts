@@ -56,7 +56,7 @@ import { Orchestrator } from "../host/orchestrator.ts";
 import { describeProvider, type ProviderProfile } from "../host/provider.ts";
 import { configuredProviders, SEARCH_PROVIDERS } from "../host/web.ts";
 import type { TurnEvent } from "../host/turn.ts";
-import { APP_HTML, LOGIN_HTML } from "./app-html.ts";
+import { APP_PAGE, LOGIN_PAGE, localeOf, localizeScript } from "./page-locale.ts";
 import {
   authorize,
   callerOf,
@@ -355,7 +355,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const auditedClass = <T extends { notice: string }>(box: T): T => {
     if (process.env.AGENTBOX_AUDIT !== "1") return box;
     const sep = box.notice.trim() === "" ? "" : " ";
-    return { ...box, notice: `${box.notice}${sep}${auditNotice()}` };
+    return { ...box, audited: true, notice: `${box.notice}${sep}${auditNotice()}` };
   };
 
   const publicBase = (): string =>
@@ -3165,7 +3165,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         return;
       }
       if (route === "GET /login") {
-        send(res, 200, LOGIN_HTML, "text/html");
+        send(res, 200, LOGIN_PAGE(localeOf(req, url)), "text/html");
         return;
       }
       // The Feishu doors' sign-in, also before the gate and for the same reason as
@@ -3467,7 +3467,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             (requestedBox && !mayReadBox(requestedBox))) { send(res, 403, { error: "This box is not available to this caller." }); return; }
         }
         if (route === "GET /") {
-          send(res, 200, APP_HTML, "text/html");
+          send(res, 200, APP_PAGE(localeOf(req, url)), "text/html");
           return;
         }
 
@@ -3517,13 +3517,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
         // Settings → Supervision (INV-1528): its own script and routes, like the decision model's below.
-        if (route === "GET /app/supervision.js") { res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(ROW_ORDER_JS + BOARD_ORDER_JS + UI_STYLE_JS + INLINE_ASK_JS + AGENT_PAUSE_JS + SUPERVISION_JS + SUPERVISION_WIZARD_JS + BOX_UPDATE_JS + DIAGNOSTICS_JS + CLAIM_ACCOUNT_JS + PUSH_BUDGET_JS + SPEND_LIMIT_JS + PROVIDER_REST_JS + TEAM_MEMORY_REVIEW_JS + PROVIDER_FALLBACK_JS + PERSON_JS + ROUTINE_RUNS_JS + DELIVERABLES_JS + TOOL_PERMS_JS + CONFIG_HISTORY_JS + CREDENTIALS_JS + DIVISION_JS + TASK_GATE_JS + INSTALLATION_JS); return; } // + Apply update (INV-1538), askInline (INV-1540)
+        if (route === "GET /app/supervision.js") { res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(localizeScript(ROW_ORDER_JS + BOARD_ORDER_JS + UI_STYLE_JS + INLINE_ASK_JS + AGENT_PAUSE_JS + SUPERVISION_JS + SUPERVISION_WIZARD_JS + BOX_UPDATE_JS + DIAGNOSTICS_JS + CLAIM_ACCOUNT_JS + PUSH_BUDGET_JS + SPEND_LIMIT_JS + PROVIDER_REST_JS + TEAM_MEMORY_REVIEW_JS + PROVIDER_FALLBACK_JS + PERSON_JS + ROUTINE_RUNS_JS + DELIVERABLES_JS + TOOL_PERMS_JS + CONFIG_HISTORY_JS + CREDENTIALS_JS + DIVISION_JS + TASK_GATE_JS + INSTALLATION_JS, localeOf(req, url))); return; } // + Apply update (INV-1538), askInline (INV-1540)
         const supervised = await supervisionRoute(route, { home: agentboxHome(), configPath: configPath(), agents: () => registry.list().map(agent => agent.profile.name), readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: role => refusedRole(role), logFile: defaultSupervisionLog() });
         if (supervised !== undefined) { if (supervised.status !== 0) send(res, supervised.status, supervised.body); return; }
         // Settings → Model → Decision model (INV-1412): its own script, its own two routes.
         if (route === "GET /app/jev-settings.js") {
           res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" });
-          res.end(JEV_SETTINGS_JS);
+          res.end(localizeScript(JEV_SETTINGS_JS, localeOf(req, url)));
           return;
         }
         if (route === "GET /api/jev" || route === "POST /api/jev") {
@@ -6057,10 +6057,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // the chat strings, so the same installation stops speaking Chinese in Feishu and
         // English on the page; `?lang=` is the override before there is anywhere to store a preference.
         if (route === "GET /api/i18n") {
-          const locale = resolveLocale({
-            ...(url.searchParams.get("lang") !== null ? { preference: url.searchParams.get("lang")! } : {}),
-            ...(typeof req.headers["accept-language"] === "string" ? { acceptLanguage: req.headers["accept-language"] } : {}),
-          });
+          const locale = localeOf(req, url);
           send(res, 200, { locale, messages: MESSAGES[locale] });
           return;
         }

@@ -18,13 +18,13 @@ export const DELIVERABLES_JS = `(function () {
         '<div style="display:flex;gap:8px;align-items:center">' +
           '<span class="mono" style="font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(d.path || d.name) + '">' + esc(d.name) + "</span>" +
           '<span class="dim" style="white-space:nowrap;font-size:11px">' + esc(size(d.size)) + "</span>" +
-          '<a class="btn sm ghost" href="' + esc(href) + '" download="' + esc(d.name) + '">Download</a>' +
+          '<a class="btn sm ghost" href="' + esc(href) + '" download="' + esc(d.name) + '">{{ui.deliverables.download}}</a>' +
         "</div>" +
         '<div class="dim" style="font-size:11px">' + (d.note ? esc(d.note) + " · " : "") + esc(new Date(d.at).toLocaleString()) + "</div>" +
       "</div>";
     }).join("");
     return '<div data-deliverables style="margin:0 0 8px;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-md)">' +
-      '<div style="font-size:12px;font-weight:600;margin-bottom:2px">Deliverables</div>' + rows + "</div>";
+      '<div style="font-size:12px;font-weight:600;margin-bottom:2px">{{ui.deliverables.deliverables}}</div>' + rows + "</div>";
   };
 })();
 `;

@@ -13,10 +13,10 @@
  * that forked it talks to a fork.
  */
 export const DIVISION_JS = `(function () {
-  var WORD = { running: "running", done: "done", stuck: "stuck", fenced: "fenced", dropped: "dropped" };
-  var MEANS = { running: "still working", done: "handed off done", stuck: "handed off partial, blocked or without a verdict", fenced: "stopped by the fence: it tried something a fork may not do", dropped: "dropped by a restart before its findings reached the parent" };
+  var WORD = { running: "{{ui.division.running}}", done: "{{ui.division.done}}", stuck: "{{ui.division.stuck}}", fenced: "{{ui.division.fenced}}", dropped: "{{ui.division.dropped}}" };
+  var MEANS = { running: "{{ui.division.still-working}}", done: "{{ui.division.handed-off-done}}", stuck: "{{ui.division.handed-off-partial-blocked-or}}", fenced: "{{ui.division.stopped-by-the-fence-it}}", dropped: "{{ui.division.dropped-by-a-restart-before}}" };
   var COLOR = { running: "var(--accent)", done: "var(--success)", stuck: "var(--warn)", fenced: "var(--danger)", dropped: "var(--muted)" };
-  var STEP = { "fork.spawned": "sent", "fork.started": "started", "fork.fenced": "fenced", "fork.reported": "reported", "fork.merged": "merged", "fork.dropped": "dropped" };
+  var STEP = { "fork.spawned": "{{ui.division.sent}}", "fork.started": "{{ui.division.started}}", "fork.fenced": "{{ui.division.fenced}}", "fork.reported": "{{ui.division.reported}}", "fork.merged": "{{ui.division.merged}}", "fork.dropped": "{{ui.division.dropped}}" };
   var open = {};
   function e(text) { return typeof esc === "function" ? esc(text) : String(text == null ? "" : text); }
   function ago(iso) { return typeof fmtAgo === "function" ? fmtAgo(iso) : ""; }
@@ -35,7 +35,7 @@ export const DIVISION_JS = `(function () {
     if (!forks.length) return "";
     var shown = open[c.id] !== undefined ? open[c.id] : forks.some(function (f) { return f.id === viewed; });
     var head = '<div class="row dim" data-forktoggle="' + e(c.id) + '" style="padding-left:20px;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' +
-      (shown ? "▾ " : "▸ ") + forks.length + " fork" + (forks.length === 1 ? "" : "s") + " · " + e(tally(forks)) + "</div>";
+      (shown ? "▾ " : "▸ ") + forks.length + " {{ui.division.fork}}" + (forks.length === 1 ? "" : "{{ui.plural.s}}") + " · " + e(tally(forks)) + "</div>";
     if (!shown) return head;
     return head + forks.map(function (f) {
       return '<a href="#" class="row' + (f.id === viewed ? " on" : "") + '" data-conv="' + e(f.id) + '" data-fork-child style="padding-left:28px">' +
@@ -47,9 +47,9 @@ export const DIVISION_JS = `(function () {
   window.forkLabel = function (id, loaded) {
     for (var i = 0; i < (loaded || []).length; i++) {
       var forks = loaded[i].forks || [];
-      for (var j = 0; j < forks.length; j++) if (forks[j].id === id) return "fork · " + String(forks[j].brief || id).slice(0, 40) + " (" + (WORD[forks[j].status] || forks[j].status) + ")";
+      for (var j = 0; j < forks.length; j++) if (forks[j].id === id) return "{{ui.division.fork-2}} " + String(forks[j].brief || id).slice(0, 40) + " (" + (WORD[forks[j].status] || forks[j].status) + ")";
     }
-    return "fork · " + id.slice(5, 45);
+    return "{{ui.division.fork-2}} " + id.slice(5, 45);
   };
 
   document.addEventListener("click", function (event) {
@@ -73,7 +73,7 @@ export const DIVISION_JS = `(function () {
           ' <span class="dim">' + e(new Date(s.at).toLocaleTimeString()) + "</span></span>";
       }).join(" → ");
       var link = task.assigneeId
-        ? '<a href="#" data-openconv="' + e(f.child) + '" data-agent="' + e(task.assigneeId) + '">open</a>'
+        ? '<a href="#" data-openconv="' + e(f.child) + '" data-agent="' + e(task.assigneeId) + '">{{ui.division.open}}</a>'
         : "";
       return '<div data-fork="' + e(f.child) + '" style="padding:4px 0;font-size:12px' + (index > 0 ? ";border-top:1px solid var(--border)" : "") + '">' +
         '<div style="display:flex;gap:8px;align-items:baseline">' + chip(f.status) +
@@ -85,7 +85,7 @@ export const DIVISION_JS = `(function () {
       "</div>";
     }).join("");
     return '<div data-division style="margin:0 0 8px;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-md)">' +
-      '<div style="font-size:12px;font-weight:600;margin-bottom:2px">Division of work <span class="dim" style="font-weight:400">' + forks.length + " fork" + (forks.length === 1 ? "" : "s") + " · " + e(tally(forks)) + "</span></div>" + rows + "</div>";
+      '<div style="font-size:12px;font-weight:600;margin-bottom:2px">{{ui.division.division-of-work}} <span class="dim" style="font-weight:400">' + forks.length + " {{ui.division.fork}}" + (forks.length === 1 ? "" : "{{ui.plural.s}}") + " · " + e(tally(forks)) + "</span></div>" + rows + "</div>";
   };
 })();
 `;
