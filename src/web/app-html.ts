@@ -4720,7 +4720,7 @@ function refresh() {
 
 // Every few seconds, because an approval and a ticked-off todo both arrive without an event to ride
 // on. Slow enough to be free, fast enough that a person is not kept waiting by the interface.
-setInterval(function () { refreshPolicy(); refreshProgress(); }, 4000);
+setInterval(function () { refreshPolicy(); refreshProgress(); renderAttention(); }, 4000); // the strip follows approvals, questions and pauses as they come and go (INV-1627)
 // Skills change when someone writes one, which is rare. Slow enough to be free.
 setInterval(refreshSkills, 30000);
 // Only while the files tab is open: polling a listing nobody is looking at is work for nothing.
@@ -5707,6 +5707,7 @@ function renderAttention() {
       var theirs = data.theirs || [];
       var row = function (item, owed) {
         var act =
+          item.kind === "approval" ? '<button class="btn sm" data-att-approve="' + esc(item.ref) + '">' + esc(t("consent.once")) + '</button><button class="btn sm ghost" data-att-deny="' + esc(item.ref) + '">' + esc(t("consent.deny")) + "</button>" :
           item.kind === "close-proposal" ? '<button class="btn sm ghost" data-att-keep="' + esc(item.ref) + '">' + esc(t("ui.attention.keepOpen")) + "</button>" :
           item.kind === "nudged" ? '<button class="btn sm ghost" data-att-drop="' + esc(item.ref) + '">' + esc(t("ui.attention.close")) + '</button><button class="btn sm ghost" data-att-snooze="' + esc(item.ref) + '">' + esc(t("ui.attention.notNow")) + "</button>" :
           item.kind === "question" && !/^t\d+$/.test(item.ref) ? '<button class="btn sm ghost" data-att-open="' + esc(item.ref) + '">' + esc(t("ui.attention.answer")) + "</button>" :
@@ -5716,7 +5717,7 @@ function renderAttention() {
           '<span style="flex:1">' + esc(item.title) + ' <span class="dim">' + esc(item.detail) + (item.stage ? " · " + esc(item.stage) : "") + "</span></span>" + (owed ? act : "") + "</div>";
       };
       // The first screen (INV-1464): the person/* rows, counted, above the agents; healthy takes no space.
-      var needs = mine.filter(function (i) { return i.stage ? i.stage.indexOf("person/") === 0 : i.kind === "question" || i.kind === "paused" || i.kind === "undeliverable"; });
+      var needs = mine.filter(function (i) { return i.stage ? i.stage.indexOf("person/") === 0 : i.kind === "approval" || i.kind === "spend-limit" || i.kind === "question" || i.kind === "paused" || i.kind === "undeliverable"; });
       $("needsme").style.display = needs.length ? "" : "none";
       $("needsme").innerHTML = needs.length ? '<div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--warn);margin-bottom:4px">' + esc(t("ui.attention.needsMe")) + " · " + needs.length + "</div>" + needs.map(function (i) { return row(i, true); }).join("") : "";
       if (!mine.length && !theirs.length) {
@@ -5736,14 +5737,13 @@ function renderAttention() {
 document.addEventListener("click", function (event) {
   var target = event.target && event.target.closest ? event.target : null;
   if (!target) return;
-  var keep = target.closest("[data-att-keep]");
-  var drop = target.closest("[data-att-drop]");
-  var snooze = target.closest("[data-att-snooze]");
-  var open = target.closest("[data-att-open]") || target.closest("[data-att-task]");
-  if (!keep && !drop && !snooze && !open) return;
+  var keep = target.closest("[data-att-keep]"), drop = target.closest("[data-att-drop]"), snooze = target.closest("[data-att-snooze]");
+  var open = target.closest("[data-att-open]") || target.closest("[data-att-task]"), consent = target.closest("[data-att-approve]") || target.closest("[data-att-deny]"); // consent is answered from the strip (INV-1627)
+  if (!keep && !drop && !snooze && !open && !consent) return;
   event.preventDefault();
-  var done = function () { return renderAttention().then(refreshTasks); };
-  if (keep) {
+  var done = function () { return renderAttention().then(refreshTasks); }; if (consent) {
+    fetch(consent.hasAttribute("data-att-approve") ? "/api/approve" : "/api/deny", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: consent.getAttribute("data-att-approve") || consent.getAttribute("data-att-deny") }) }).then(done).then(refreshPolicy);
+  } else if (keep) {
     fetch("/api/tasks/oppose-close", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: keep.getAttribute("data-att-keep") }) }).then(done);
   } else if (drop) {
     fetch("/api/tasks/update", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: drop.getAttribute("data-att-drop"), status: "dropped" }) }).then(done);

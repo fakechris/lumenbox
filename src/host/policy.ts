@@ -301,7 +301,7 @@ type PolicyEvent =
       agentId: string;
     }
   | { at: string; kind: "approval-revoked"; fingerprint: string; by: string }
-  | { at: string; kind: "approval-denied"; id: string; by: string; reason?: string }
+  | { at: string; kind: "approval-denied" | "approval-expired"; id: string; by: string; reason?: string } // expired: nothing waited on it any more, or it waited a day (INV-1622)
   | { at: string; kind: "approval-used"; id: string };
 
 /** A grant that outlives the moment: same agent, same exact action, until revoked. */
@@ -978,11 +978,11 @@ export class PolicyGate {
     return true;
   }
 
-  deny(id: string, by = "user", reason?: string): boolean {
+  deny(id: string, by = "user", reason?: string, kind: "approval-denied" | "approval-expired" = "approval-denied"): boolean {
     const found = [...this.awaiting.values()].find(approval => approval.id === id);
     if (found === undefined) return false;
     this.awaiting.delete(found.fingerprint);
-    this.append({ at: this.now().toISOString(), kind: "approval-denied", id, by, ...(reason ? { reason } : {}) });
+    this.append({ at: this.now().toISOString(), kind, id, by, ...(reason ? { reason } : {}) });
     this.settled(found, "refused");
     return true;
   }
@@ -1091,7 +1091,7 @@ export class PolicyGate {
           this.always.delete(event.fingerprint);
           break;
         case "approval-denied":
-        case "approval-used": {
+        case "approval-expired": case "approval-used": {
           const approval = byId.get(event.id);
           if (approval === undefined) break;
           this.awaiting.delete(approval.fingerprint);

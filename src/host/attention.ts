@@ -26,7 +26,7 @@ import { currentFlag } from "./task-flag.ts";
 import { STAGE_LABEL, stageWorldOf, type TaskStage, taskStage } from "./task-stage.ts";
 
 export interface AttentionItem {
-  kind: "question" | "close-proposal" | "review" | "nudged" | "waiting" | "unanswered" | "paused" | "reauthorize" | "undeliverable" | "flagged" | "box-update" | "boundary-probe" | "provider-resting" | "team-memory" | "spend-limit";
+  kind: "approval" | "question" | "close-proposal" | "review" | "nudged" | "waiting" | "unanswered" | "paused" | "reauthorize" | "undeliverable" | "flagged" | "box-update" | "boundary-probe" | "provider-resting" | "team-memory" | "spend-limit";
   /** What to open: a task id, or the conversation a question was asked in. */
   ref: string;
   title: string;
@@ -64,6 +64,8 @@ export interface AttentionInput {
    * be a strange kind of privacy.
    */
   unanswered?: readonly { work: string; agent: string; detail: string; deadline?: string }[];
+  /** Pending approvals, the most common block (INV-1622/1627): one item each, answered from the strip. */
+  approvals?: readonly { id: string; agentId: string; agentName: string; description: string; action?: string; requestedAt: string }[];
   /** Teammate chains the bus stopped (INV-1277): shown to everyone, since no person is in them by definition. */
   paused?: readonly { fromName: string; toName: string; hops: number; at: string; fromId: string }[];
   /**
@@ -83,12 +85,28 @@ export interface AttentionInput {
 
 const isLive = (task: Task): boolean => task.status !== "done" && task.status !== "dropped";
 
+/** What goes first on the strip: a parked command and a question with a clock, then the rest (INV-1627). */
+export function urgencyOf(kind: AttentionItem["kind"]): number {
+  return kind === "approval" ? 0 : kind === "question" ? 1 : kind === "spend-limit" || kind === "paused" ? 2 : 3;
+}
+
 export function attentionFor(input: AttentionInput): Attention {
   const now = (input.now ?? new Date()).getTime();
   const mine: AttentionItem[] = [];
   const theirs: AttentionItem[] = [];
   const isMe = (id: string | undefined): boolean =>
     input.all === true || (id !== undefined && (id === input.principalId || input.identities.includes(id)));
+
+  // A command waiting for consent: the agent is parked until a person answers, so it goes first.
+  for (const approval of input.approvals ?? []) {
+    mine.push({
+      kind: "approval",
+      ref: approval.id,
+      title: `${approval.agentName || input.nameOf(approval.agentId)} ${approval.action !== undefined ? `wants to ${approval.action}` : "needs your consent"}`, // the ledger replays an approval without its agent's name
+      detail: `${approval.description.replace(/\s+/g, " ").slice(0, 160)} · asked ${approval.requestedAt.slice(0, 16).replace("T", " ")}Z`,
+      with: approval.agentName || input.nameOf(approval.agentId),
+    });
+  }
 
   // A question with my name on it. The default and the deadline travel with it, because
   // "answer this or it decides for you" is the whole point of the clock (INV-526/533).
