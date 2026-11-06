@@ -289,3 +289,11 @@ naming five tools while the door served nine, so the list here was brought up to
 `skills/lumenbox/SKILL.md` teaches the same ten to Claude Code and Codex, and
 `agentbox skill install [--claude] [--codex]` puts it where each client reads it and prints the
 `agentbox mcp` entry with a token placeholder; a test holds SKILL.md's list to the door's.
+
+**The reply is on the task (INV-1676, 2026-11-06).** A task the door assigned closed with its
+status and whatever notes the agent wrote; an agent that answered in prose, wrote no note and
+delivered no file left the caller `completed` and nothing to read. Before `turnFinished`, the door
+now writes the turn's final reply on the task — selected by the message's own id, so a turn queued
+beside it is never taken for its answer; scrubbed of held values as a chat reply is; cut at
+2000 characters — as a history move marked `reply: true`. `task_status` shows it as
+`replied: …` in the text and `reply: {at, by, text}` in the record.

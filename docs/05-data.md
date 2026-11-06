@@ -670,6 +670,13 @@ which is how it reaches the person there. Not kept: versions or diffs between de
 library across tasks. Not yet pruned: a closed task that leaves the board at compaction leaves its
 snapshots behind.
 
+A task assigned through the side door (`assign_task`) also keeps the agent's final reply to the
+turn it ran (INV-1676, `src/host/task-reply.ts`): one history move by the agent, `reply: true`,
+its note the reply as the transcript has it for that message, held values scrubbed, cut at 2000
+characters. It is written before the turn closes the task, and `task_status` carries the latest
+as `reply`. The whole reply stays in the agent's transcript; the task is not a copy of the
+conversation, and a reply in a chat is still delivered to that chat as before.
+
 ### 2.7b `fork-events.jsonl` — what a person sees of the forks (INV-1667)
 
 Beside `pending-work.jsonl` (`src/host/fork-events.ts`). The fork ledger is compacted to nothing

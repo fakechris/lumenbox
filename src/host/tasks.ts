@@ -27,7 +27,7 @@ import { agentboxHome, envNumber } from "../config.ts";
 import { deliveredFollowUp, type FollowUp, type HandBackResult, handBack as handBackFollowUp } from "./follow-up.ts";
 import { conversationOfTask, GOAL_GATE_ACTOR, type Pursuit, taskStatusFor } from "./goal-mode.ts";
 import { appendLine, type LedgerKind } from "./jsonl.ts";
-import { applyFlag, type FlagOutcome, type TaskFlag } from "./task-flag.ts"; import { applyDeliverable, type TaskDeliverable } from "./task-deliverables.ts";
+import { applyFlag, type FlagOutcome, type TaskFlag } from "./task-flag.ts"; import { applyDeliverable, type TaskDeliverable } from "./task-deliverables.ts"; import { applyReply } from "./task-reply.ts";
 import { applyRevalidation, applyWithdrawal, grantMandate, type Mandate, type MandateWorld, type RevalidationResult } from "./mandate.ts";
 import { Receipts } from "./receipts.ts";
 import { clampDescription, dueOf, type TaskContract } from "./task-fields.ts";
@@ -75,7 +75,7 @@ export interface TaskChange {
   assigneeId?: string;
   note?: string;
   /** The turn (run) an agent made this change in, when it was an agent. */
-  run?: string;
+  run?: string; reply?: true; // reply: the note is the agent's final reply to a side-door task (INV-1676), task-reply.ts
   /**
    * The review gate redirected this move: the assignee tried to accept its own work.
    *
@@ -937,7 +937,7 @@ export class TaskStore {
     const result = applyFlag(this.tasks.get(id), by, note, now, HISTORY_LIMIT);
     if (result.task !== undefined) { this.tasks.set(id, result.task); this.append({ kind: "task", task: result.task }); for (const listener of this.listeners) listener(result.task); }
     return result.outcome;
-  } /** Records a deliverable whose snapshot is already written (INV-1663); undefined for an unknown task. */ deliver(id: string, item: Omit<TaskDeliverable, "id">): TaskDeliverable | undefined { const result = applyDeliverable(this.tasks.get(id), item, HISTORY_LIMIT); if (result !== undefined) { this.tasks.set(id, result.task); this.append({ kind: "task", task: result.task }); for (const listener of this.listeners) listener(result.task); } return result?.item; }
+  } /** Records a deliverable whose snapshot is already written (INV-1663); undefined for an unknown task. */ deliver(id: string, item: Omit<TaskDeliverable, "id">): TaskDeliverable | undefined { const result = applyDeliverable(this.tasks.get(id), item, HISTORY_LIMIT); if (result !== undefined) { this.tasks.set(id, result.task); this.append({ kind: "task", task: result.task }); for (const listener of this.listeners) listener(result.task); } return result?.item; } /** Records an agent's final reply on a task (INV-1676); false for an unknown task or an empty reply. */ recordReply(id: string, by: string, text: string, now: Date = new Date()): boolean { const task = applyReply(this.tasks.get(id), by, text, now, HISTORY_LIMIT); if (task === undefined) return false; this.tasks.set(id, task); this.append({ kind: "task", task }); for (const listener of this.listeners) listener(task); return true; }
 
   /** Change a pursuit: the board status follows it (docs/74 §7 R7), recorded under the gate's name — the one path a pursuit moves through. */
   setPursuit(
