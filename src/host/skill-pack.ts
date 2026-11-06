@@ -62,14 +62,14 @@ export function mcpSnippet(client: SkillClient, mcpUrl: string | undefined): str
   if (client === "claude") {
     const env: Record<string, string> = { AGENTBOX_MCP_TOKEN: TOKEN_PLACEHOLDER, ...(url === DEFAULT_MCP_URL ? {} : { AGENTBOX_MCP_URL: url }) };
     return [
-      "Add the side door to Claude Code — either run:",
+      "Add the LumenBox MCP endpoint to Claude Code — either run:",
       `  claude mcp add lumenbox --scope user --env AGENTBOX_MCP_TOKEN='${TOKEN_PLACEHOLDER}'${urlEnv} -- agentbox mcp`,
       "or put this in .mcp.json (or ~/.claude.json) under mcpServers:",
       ...JSON.stringify({ mcpServers: { lumenbox: { command: "agentbox", args: ["mcp"], env } } }, null, 2).split("\n").map(line => `  ${line}`),
     ];
   }
   return [
-    "Add the side door to Codex — either run:",
+    "Add the LumenBox MCP endpoint to Codex — either run:",
     `  codex mcp add lumenbox --env AGENTBOX_MCP_TOKEN='${TOKEN_PLACEHOLDER}'${urlEnv} -- agentbox mcp`,
     "or put this in config.toml in your Codex home (~/.codex, or CODEX_HOME):",
     "  [mcp_servers.lumenbox]",
