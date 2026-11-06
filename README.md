@@ -25,7 +25,7 @@ board of what they owe you. How that differs from a coding-agent CLI or a hosted
 is one table in [the product spec](docs/02-product.md#11-how-it-differs).
 
 <p align="center">
-  <img src="assets/screens/team-room.png" width="860" alt="The team room: agents on the left, the conversation in the middle, the desktop and steps on the right">
+  <img src="assets/screens/team-room.png" width="860" alt="The team chat: agents on the left, the conversation in the middle, the desktop and steps on the right">
 </p>
 
 ## What it believes · 设计理念
@@ -65,13 +65,13 @@ The whole argument, with the layers, the decisions and the paths refused:
 - **A real computer.** Every agent gets its own Linux desktop with a browser and a shell — a
   container on your Mac, or a machine of yours anywhere. You can watch each desktop live and
   drive it with your own mouse while the agent keeps working elsewhere.
-- **In your chat apps.** Connect Feishu (飞书) or DingTalk (钉钉): a message in the room is a
-  message to the agent, replies land in the thread, files go both ways, long jobs show a card
+- **In your chat apps.** Connect Feishu (飞书) or DingTalk (钉钉): a message in the group chat
+  is a message to the agent, replies land in the thread, files go both ways, long jobs show a card
   that updates as they run, and approvals are buttons.
 - **Memory that is yours.** What an agent learns about you and your work is kept in plain files
   you can read and edit, per agent and per team, and never leaves your machine.
 - **Skills you can install and share.** A skill is a folder with a `SKILL.md` — the format four
-  other projects use — so what you write for one agent works for another, and a whole bot can
+  other projects use — so what you write for one agent works for another, and a whole agent can
   be packed and handed to someone as a template.
 - **Honest about what it did.** Every tool call, every screenshot, every approval is on the
   record, and the agent is held to it: a claim it did not check is sent back to check.
@@ -103,7 +103,7 @@ The box does not have to be on your Mac.
 - **Docker elsewhere.** Point the app at a remote engine the way you point `docker` at one
   (`DOCKER_HOST` or a docker context).
 - **A Grok Bot's box.** Add the [LumenBox Bridge](https://x.ai/bot/U8xEPyVxQHL_JznVhVotB)
-  template to Grok Bot; the bot it creates prepares its own box over your Tailscale network and
+  template to Grok Bot; the Grok Bot it creates prepares its own box over your Tailscale network and
   tells you what to paste. Nothing of the Grok bot's is touched.
 - **Any Linux machine.** One script, `lumen-bridge.sh`, from the releases page.
 

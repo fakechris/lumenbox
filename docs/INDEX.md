@@ -32,6 +32,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [92-web-ui](92-web-ui.md) | The web UI's visual rules: type, spacing, components | current | 2026-11-03 |
 | [93-skills](93-skills.md) | Skills: the SKILL.md contract, where skills live, and how a skill becomes a routine | current | 2026-11-05 |
 | [94-catalog](94-catalog.md) | The catalog: experts, crews, connectors and shelf templates | current | 2026-11-05 |
+| [glossary](glossary.md) | Glossary and controlled vocabulary | current | 2026-11-06 |
 
 ## guide
 
@@ -42,7 +43,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [13-design-review](13-design-review.md) | What goes to adversarial review before it is built | current | 2026-08-25 |
 | [17-two-agents](17-two-agents.md) | Two agents on one repository | current | 2026-08-26 |
 | [19-pitfalls](19-pitfalls.md) | Pitfalls: remembering how things went wrong | current | 2026-08-28 |
-| [37-onboarding](37-onboarding.md) | Getting started, every way in | current | 2026-11-02 |
+| [37-onboarding](37-onboarding.md) | Getting started, every way in | current | 2026-11-06 |
 | [38-operators-guide](38-operators-guide.md) | The operator's guide (what the README used to be) | current | 2026-11-06 |
 | [55-external-desktops](55-external-desktops.md) | External browsers and desktop control | current | 2026-09-15 |
 | [56-teaching-upgrade](56-teaching-upgrade.md) | Teaching draft upgrade | current | 2026-09-15 |

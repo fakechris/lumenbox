@@ -2,12 +2,14 @@
      title: Getting started, every way in
      family: guide
      status: current
-     updated: 2026-11-02
+     updated: 2026-11-06
 -->
 # 37 — Getting started, every way in
 
 What a person does on day one, path by path. The README says the short version; this is the
 whole of it. Product name LumenBox; the command line still says `agentbox`.
+Each word for a thing you meet here (box, agent, channel, team, task) means one thing, and
+[the glossary](glossary.md) says what.
 
 ## What you need
 
@@ -38,7 +40,7 @@ quitting the window keeps the box running.
 
 ## 2. First run: the two things it asks for
 
-*The page also shows a four-step card — a box, your first agent, a door, your first piece
+*The page also shows a four-step card — a box, your first agent, a channel, your first piece
 of work — which disappears when all four are done and comes back from the `?` button. Each
 step names the command that does the same thing, for an installation running on a server
 where there is nothing to click (INV-542).*
@@ -102,7 +104,7 @@ LumenBox can drive a box it did not start, as long as that box runs the LumenBox
 you can reach it over a private network. Two cases:
 
 - **A Grok Bot box.** Open the *LumenBox Bridge* template —
-  https://x.ai/bot/U8xEPyVxQHL_JznVhVotB — and press *Add to Grok Bot*. The bot it creates
+  https://x.ai/bot/U8xEPyVxQHL_JznVhVotB — and press *Add to Grok Bot*. The Grok Bot it creates
   prepares its own box: joins your Tailscale network (it sends you the login link), installs the
   daemon on a desktop of its own, and tells you exactly what to paste into LumenBox → Settings →
   Boxes → Attach. Nothing of the Grok bot's own desktop or files is touched. docs/35 is the whole
@@ -124,11 +126,15 @@ box and stay there; each box keeps its own desktops, skills and memory.
 
 ## 4. Your first agent, your first message
 
-The app ships a small starter team (Ada coordinates; Bob and Vic help). Type in the team room.
+The app ships a small starter team (Ada coordinates; Bob and Vic help). Type in the team chat.
 Ada replies first, then works — you can watch her desktop in the *Desktop* tab and take the
 mouse yourself at any time. Ask for something real: "open the news site and summarise the
 front page", "clone this repo and run the tests". A first-run cue tells each new agent to say
 hello and ask one question.
+
+A **team** is a label that lists agents together; an agent can be on several. A **crew** is a
+catalog entry in the New agent form that adds several agents in one step, as one team. The
+agent that answers a message naming nobody is the channel's **default agent**.
 
 ## 5. Talking to it from a chat app
 
@@ -173,7 +179,7 @@ the supervisor's model and the agent's model spend.
   restart applies them.
 - **An attached box went away.** It has to be reachable on the network you attached it over
   (Tailscale, a tunnel); Settings → Boxes shows the last error. A Grok box after a reboot:
-  tell the bot "把 LumenBox 桥拉起来".
+  tell that Grok Bot "把 LumenBox 桥拉起来".
 
 ## 7. Uninstalling
 

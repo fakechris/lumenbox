@@ -266,14 +266,14 @@ whatever credential the box itself has.
 
 ### Groups: answer everything, or only when addressed
 
-Each door has a group rule, set in Settings → channels (or `POST /api/channels/records` with
+Each channel has a group rule, set in Settings → Channels (or `POST /api/channels/records` with
 `groupMessages`). `all`, the default, runs a turn for every group message the vendor
-delivers. `addressed` runs a turn only for a direct message, a mention of the bot, or a reply
-to (or inside a topic opened by) something the bot said; everything else the room says is
+delivers. `addressed` runs a turn only for a direct message, a mention of the agent, or a reply
+to (or inside a topic opened by) something the agent said; everything else the group chat says is
 kept as the last forty lines of context beside the conversation and shown to the agent's
 next turn as background it must not act on. The ingress ledger records those as `heard`.
-Use `addressed` for a busy room where the bot is one participant among many; keep `all`
-for a room that exists to talk to the bot.
+Use `addressed` for a busy group chat where the agent is one participant among many; keep
+`all` for a group chat that exists to talk to the agent.
 
 ## Who may drive the agents
 
@@ -297,14 +297,14 @@ does not start.
 **Two tokens, not one** (INV-572, 2026-09-16). `~/.agentbox/ui-token` is *this machine's*
 web — the desktop app's child host and the CLI. `~/.agentbox/box-ui-token` is the **box's
 own** orchestrator, the one `box up --with-host` runs inside the container. They used to be
-one file, so a leak was two doors and rotating either kicked the other out — which is a
+one file, so a leak opened both and rotating either kicked the other out — which is a
 good way to ensure neither is ever rotated. The box's is minted fresh rather than derived,
 because the point is that they are not related; nothing is forced to change, since a
 container already running keeps the value it started with and takes the new one the next
 time it starts. Rotating either is deleting its file and restarting what reads it.
 
 **That token is now the machine's, not a person's** (2026-09-15). Signing in — through a
-Feishu door or an invite code — issues a *session* for that person and never hands over the
+Feishu channel or an invite code — issues a *session* for that person and never hands over the
 installation token; the session is signed with a key derived from it, so rotating the token
 still ends every session, and a person removed from the roster stops being served on their
 next request. What they may then do is their roster role (`viewer` / `driver` / `admin`) and
@@ -317,7 +317,7 @@ single-person installation with an empty roster.
 
 The use case, end to end: somebody reading a work item in Involute wants to know why an agent
 judged something. They type `@iris 为什么当时用轮询?` in a comment. A minute later the answer is
-in that thread, posted by Iris — not by "the bot", not by whoever's token the process holds.
+in that thread, posted by Iris — not by an unnamed app account, not by whoever's token the process holds.
 
 ### What happens, in order
 

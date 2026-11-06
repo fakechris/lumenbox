@@ -15,7 +15,7 @@ export const SETTINGS_DIALOG_HTML = `
     <div id="settabs" class="tabs" style="display:flex;gap:6px;flex-wrap:wrap">
       <a href="#" class="tab on" data-settab="model">Model</a>
       <a href="#" class="tab" data-settab="boxes">Boxes</a>
-      <a href="#" class="tab" data-settab="doors">Doors</a>
+      <a href="#" class="tab" data-settab="doors">Channels</a>
       <a href="#" class="tab" data-settab="team">Team</a>
       <a href="#" class="tab" data-settab="mine">Mine</a>
       <a href="#" class="tab" data-settab="memory">Memory</a>
@@ -72,7 +72,7 @@ export const SETTINGS_DIALOG_HTML = `
     <div class="fieldnote">Saved to ~/.agentbox/config.json on this machine, mode 0600. A key stored
       here is used only when the environment does not already provide one, and is never placed
       inside the box. Provider, model, vision and summary model take effect on save; turns already
-      running finish on the previous model. The host door, startup item and box image wait for a
+      running finish on the previous model. Host execution, the startup item and the box image wait for a
       restart.</div>
     <div class="field" data-tier="installation" data-settab="model" id="setpartswrap" style="display:none">
       <label>Built-in rules</label>
@@ -107,7 +107,7 @@ export const SETTINGS_DIALOG_HTML = `
       <div class="fieldnote">Limits apply when assigning a box to one person. Blank means unlimited by default, or inherit for a person. Lowering a limit keeps existing allocations. Self-service creation is not available yet.</div>
       <input id="setquotadefault" type="number" min="0" max="99" step="1" placeholder="Default: unlimited">
       <div id="setdirectories"></div>
-      <div class="fieldnote">Sync enrolls a door in directory allocation checks. Resync within 24 hours; stale or failed sync pauses new allocations. Existing boxes remain. Person overrides take priority; multiple departments use the smallest configured limit.</div>
+      <div class="fieldnote">Sync enrolls a channel in directory allocation checks. Resync within 24 hours; stale or failed sync pauses new allocations. Existing boxes remain. Person overrides take priority; multiple departments use the smallest configured limit.</div>
       <div id="setquotadepartments"></div>
       <div id="setquotapeople"></div>
       <button class="btn sm" id="setquotasave" type="button">Save allocation limits</button>
@@ -133,7 +133,7 @@ export const SETTINGS_DIALOG_HTML = `
       <label class="radio"><input type="checkbox" id="sethostenabled">
         Let agents run commands on this computer, outside the box</label>
       <input id="sethostcwd" placeholder="Working directory, e.g. /Users/you/projects" spellcheck="false">
-      <div class="fieldnote">Off by default, and the one door through the box's wall — the way an
+      <div class="fieldnote">Off by default, and the one way through the box's wall — the way an
         agent reaches a USB device, an AppleScript, or a CLI tool on the host like <code>pi</code>,
         <code>claude</code> or <code>git</code>. Every host command still stops for your approval
         before it runs. Takes effect after a restart.</div>
@@ -176,7 +176,7 @@ export const SETTINGS_DIALOG_HTML = `
       <div class="fieldnote" id="setsecstatus"></div>
     </div>
     <div class="field" data-tier="installation" data-settab="doors">
-      <label>Connected services</label>
+      <label>Connectors</label>
       <div id="setconns" style="display:flex;flex-direction:column;gap:6px"></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <select id="setconnprov" style="min-width:120px"></select>
@@ -205,15 +205,15 @@ export const SETTINGS_DIALOG_HTML = `
         <select id="setchagent" style="height:38px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 8px"></select>
         <input id="setchappid" placeholder="App/Client ID" spellcheck="false" style="flex:1;min-width:90px">
         <input id="setchsecret" type="password" placeholder="Secret" spellcheck="false" autocomplete="off" style="flex:1;min-width:90px">
-        <button class="btn sm" id="setchadd">Add door</button>
+        <button class="btn sm" id="setchadd">Add channel</button>
       </div>
-      <div class="fieldnote">Each row is a door: a bot on a wire, opening into this box. A channel
+      <div class="fieldnote">Each row is a channel: an app on a chat platform, opening into this box. A channel
         turns on when its credentials are present (in the environment, or saved here into the
         config's env map under &lt;ID&gt;_APP_ID + _APP_SECRET). The id becomes the prefix of every
-        identity the door mints and is chosen once (lowercase letters, digits, hyphens); the
+        identity the channel mints and is chosen once (lowercase letters, digits, hyphens); the
         display name and the default agent — who answers when a message names nobody — change
-        freely and apply at once. Second doors: Feishu and DingTalk (Telegram still needs its
-        prefix work); with credentials in hand a new door opens immediately, no restart.</div>
+        freely and apply at once. Second channels: Feishu and DingTalk (Telegram still needs its
+        prefix work); with credentials in hand a new channel connects immediately, no restart.</div>
       <div class="fieldnote" id="setchstatus"></div>
     </div>
     <div class="field" data-tier="installation" id="setmcpwrap" style="display:none" data-settab="team">
@@ -235,9 +235,9 @@ export const SETTINGS_DIALOG_HTML = `
         unchanged keep running, changed or removed ones stop, new ones start.</div>
     </div>
     <div class="field" data-tier="organisation" id="setknockswrap" style="display:none" data-settab="doors">
-      <label>Waiting at the door</label>
+      <label>Waiting to be let in</label>
       <div id="setknocks" style="display:flex;flex-direction:column;gap:6px"></div>
-      <div class="fieldnote">People who messaged the bot and are not on the list yet. One click
+      <div class="fieldnote">People who messaged an agent and are not on the list yet. One click
         lets them in, and they are told so on the channel they knocked from.</div>
     </div>
     <div class="field" data-tier="organisation" data-settab="team">
@@ -253,7 +253,7 @@ export const SETTINGS_DIALOG_HTML = `
         <span id="setinviteout" class="mono" style="font-size:12px"></span>
       </div>
       <div class="fieldnote">An invite code works once, for 15 minutes: the person sends
-        <span class="mono">bind CODE</span> to the bot on any channel and they are in — no ids
+        <span class="mono">bind CODE</span> to an agent on any channel and they are in — no ids
         to copy. viewer reads, driver commands the agents, admin also changes settings; changing
         a role below applies to the next message, no restart.</div>
       <details style="margin-top:2px">
