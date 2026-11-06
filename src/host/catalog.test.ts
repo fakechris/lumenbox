@@ -137,31 +137,45 @@ test("the CreateAgent menu names every slug", () => {
   for (const crew of CATALOG_CREWS) assert.match(menu, new RegExp(`\\b${crew.slug}\\b`));
 });
 
-test("installing a crew creates each member once, with catalog tools", () => {
-  const root = mkdtempSync(join(tmpdir(), "agentbox-catalog-"));
-  const registry = new AgentRegistry(root);
+// Through the route the New agent dialog calls, not a copy of its loop: the copy passed while
+// the route forgot the team, and a crew landed under NO TEAM (INV-1680).
+test("installing a crew creates each member once, on the crew's team, with catalog tools", async () => {
+  const home = mkdtempSync(join(tmpdir(), "agentbox-catalog-"));
+  const previous = process.env.AGENTBOX_HOME;
+  process.env.AGENTBOX_HOME = home;
+  let stop: (() => void) | undefined;
   try {
-    const rows = profilesFor("ship")!;
-    const existing = new Set(registry.list().map(agent => agent.profile.name));
-    for (const row of rows) {
-      if (existing.has(row.name)) continue;
-      registry.create({
-        name: row.name,
-        description: row.description,
-        title: row.title,
-        tools: [...row.tools],
+    const { startWebServer } = await import("../web/server.ts");
+    let base = "";
+    stop = await startWebServer({ port: 0, host: "127.0.0.1", token: "catalog-fixture", useBox: false, onLog: () => {}, onReady: url => { base = url; } });
+    const install = async (slug: string) => {
+      const response = await fetch(`${base}/api/catalog/install`, {
+        method: "POST",
+        headers: { authorization: "Bearer catalog-fixture", "content-type": "application/json" },
+        body: JSON.stringify({ slug }),
       });
-      existing.add(row.name);
+      assert.equal(response.status, 200);
+      return (await response.json()) as { created: { name: string }[]; skipped: string[] };
+    };
+    const first = await install("ship");
+    assert.deepEqual(first.created.map(row => row.name).sort(), ["Heng", "Lin", "Mo"]);
+    const agents = () => new AgentRegistry(join(home, "agents")).list();
+    for (const name of ["Heng", "Lin", "Mo"]) {
+      assert.deepEqual(agents().find(agent => agent.profile.name === name)?.profile.tags, ["ship"], `${name} is on the ship team`);
     }
-    const names = registry.list().map(agent => agent.profile.name).sort();
-    assert.deepEqual(names, ["Heng", "Lin", "Mo"]);
-    const lin = registry.list().find(agent => agent.profile.name === "Lin")!;
+    const lin = agents().find(agent => agent.profile.name === "Lin")!;
     assert.ok(lin.profile.tools?.includes("Delegate"));
     assert.ok(!lin.profile.tools?.includes("CreateAgent"));
-    const again = profilesFor("ship")!;
-    const skipped = again.filter(row => existing.has(row.name));
-    assert.equal(skipped.length, 3);
+    const again = await install("ship");
+    assert.equal(again.created.length, 0);
+    assert.equal(again.skipped.length, 3);
+    const expert = CATALOG_EXPERTS.find(entry => !CATALOG_CREWS.some(crew => crew.members.includes(entry.slug)))!;
+    const single = await install(expert.slug);
+    const added = agents().find(agent => agent.profile.name === single.created[0]!.name)!;
+    assert.deepEqual(added.profile.tags ?? [], [], "a single expert joins no team");
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    stop?.();
+    if (previous === undefined) delete process.env.AGENTBOX_HOME; else process.env.AGENTBOX_HOME = previous;
+    rmSync(home, { recursive: true, force: true });
   }
 });

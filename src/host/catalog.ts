@@ -301,6 +301,15 @@ export function crewNamed(slug: string): CatalogCrew | undefined {
   return CATALOG_CREWS.find(entry => entry.slug === slug);
 }
 
+/**
+ * The team a catalog install puts its new agents on (docs/45): a crew arrives as a team named
+ * after the crew, so its members are found together without anyone tidying up; a single
+ * expert joins none. Every install path asks here — the web routes and CreateAgent alike.
+ */
+export function crewTeam(slug: string): string[] {
+  return crewNamed(slug) !== undefined ? [slug] : [];
+}
+
 /** The expert rows a slug will install: one expert, or every member of a crew. */
 export function profilesFor(slug: string): CatalogExpert[] | undefined {
   const expert = expertNamed(slug);

@@ -71,7 +71,7 @@ card asks for it instead of the agent failing halfway.
 
 | | Minimal | Daily |
 |---|---|---|
-| Agents | Mo, Lin and Heng, as the crew adds them | The same three, on the `ship` team |
+| Agents | Mo, Lin and Heng, on the `ship` team the crew puts them on | The same three |
 | Box | The default Docker box | A box with the repository checked out under `/home/box/work` and an engine installed (`engine-check`) |
 | Tools | As the catalog gives them | Heng: `edit_file` off; Lin: `bash` on ask me until you trust it |
 | Review | You read Heng's review file | A task with Heng as reviewer: Lin's `done` moves it to `review`, Heng's closes it |
@@ -106,11 +106,10 @@ Then run `agentbox usage --task tN` on the task.
 ### In the app
 
 1. Press `+` beside *Agents*. Under *From catalog*, press `研发小队`.
-2. Read the three members in the preview and press *Create these 3 in <box>*.
-3. The crew's members are not put on a team by themselves yet. Open Configure on each one and
-   type `ship` under *Teams*; the sidebar then lists them under SHIP.
-4. Pick Mo and write the wish: who it is for, and what counts as done.
-5. When the spec is in the box, ask Lin to build it and to hand the result to Heng.
+2. Read the three members in the preview and press *Create these 3 in <box>*. They arrive on
+   the `ship` team, and the sidebar lists them under SHIP.
+3. Pick Mo and write the wish: who it is for, and what counts as done.
+4. When the spec is in the box, ask Lin to build it and to hand the result to Heng.
 
 ### In a chat
 
@@ -164,10 +163,10 @@ install command.
   arithmetic is above, so it can be re-run.
 - The minimal version, reproduced on 2026-11-06 in a new, empty home. It ran
   `agentbox web --no-box` with a scripted model that has no key (`AGENTBOX_PROVIDER=custom`
-  pointed at a local stub). Steps 1–4 of *In the app* ran: the crew was added,
-  three agents appeared, Mo answered with one usage row (`in 1,200 out 60`), and
+  pointed at a local stub). Steps 1–3 of *In the app* ran: the crew was added,
+  three agents appeared (on the `ship` team since INV-1680), Mo answered with one usage row (`in 1,200 out 60`), and
   `agentbox usage` printed it. Without a box, each member logged "cannot install its recipe; it
-  will start blank". Not reproduced: step 5 (it needs a box and a model), the chat steps, and
+  will start blank". Not reproduced: step 4 (it needs a box and a model), the chat steps, and
   any cost.
 - Design: [docs/94](../../94-catalog.md) (the catalog), [docs/75](../../75-cost-per-accepted-task.md)
   (why a cost is per accepted task).

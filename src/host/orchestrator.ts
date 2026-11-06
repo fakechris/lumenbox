@@ -1654,6 +1654,7 @@ export class Orchestrator {
       shareId?: string;
       /** Which box the new agent lives in (docs/30). Absent means the installation's own. */
       boxId?: string;
+      /** Team labels for a newly created agent (docs/45); an existing one keeps its own. */ tags?: readonly string[];
       log?: (line: string) => void;
     } = {}
   ): { agent: AgentRecord; id: string; pending: TemplatePending; settled: Promise<ReconcileResult | undefined>; existing?: "same-version" | "updated" } {
@@ -1718,9 +1719,7 @@ export class Orchestrator {
       })();
       return { agent: already, id, pending, settled, existing: "updated" };
     }
-    if (this.registry.agentsIn(targetBoxId).some(agent => agent.profile.name === name)) {
-      throw new Error(`An agent named ${name} already exists here; pass another name.`);
-    }
+    if (this.registry.agentsIn(targetBoxId).some(agent => agent.profile.name === name)) throw new Error(`An agent named ${name} already exists here; pass another name.`);
     const wanted = toolsOf(template);
     const tools = wanted === undefined ? options.creatorTools : intersectTools(wanted, options.creatorTools);
     const agent = this.registry.create({
@@ -1731,6 +1730,7 @@ export class Orchestrator {
       ...(tools !== undefined ? { tools: [...tools] } : {}),
       ...(options.caller?.userId !== undefined ? { ownerUserId: options.caller.userId } : {}),
       ...(options.boxId !== undefined ? { boxId: options.boxId } : {}),
+      ...(options.tags !== undefined && options.tags.length > 0 ? { tags: options.tags } : {}),
       visibility: "shared",
       importedFrom: {
         id,
