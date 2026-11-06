@@ -30,7 +30,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [27-testing-and-release](27-testing-and-release.md) | Testing and release stability: ours, against OpenClaw and Hermes | current | 2026-10-26 |
 | [57-agent-consumer-contract](57-agent-consumer-contract.md) | Agent 消费者合同：谁去拉，谁保证，不同架构怎么统一 | current | 2026-09-15 |
 | [92-web-ui](92-web-ui.md) | The web UI's visual rules: type, spacing, components | current | 2026-11-03 |
-| [93-skills](93-skills.md) | Skills: the SKILL.md contract, where skills live, and how a skill becomes a routine | current | 2026-11-05 |
+| [93-skills](93-skills.md) | Skills: the SKILL.md contract, where skills live, and how a skill becomes a routine | current | 2026-11-06 |
 | [94-catalog](94-catalog.md) | The catalog: experts, crews, connectors and shelf templates | current | 2026-11-05 |
 | [glossary](glossary.md) | Glossary and controlled vocabulary | current | 2026-11-06 |
 
@@ -101,7 +101,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [50-enterprise-primitives](50-enterprise-primitives.md) | 企业级 agent 的高层规划：原语、数据、控制、记忆、审计、运行时 | current | 2026-11-06 |
 | [51-follow-through](51-follow-through.md) | 跟进（follow-through）：问题、承诺与挂着的工作如何不再无声 | current | 2026-09-15 |
 | [52-multiuser-and-product](52-multiuser-and-product.md) | 多用户与产品面：一次对账与打磨 | current | 2026-09-14 |
-| [53-connector-doors](53-connector-doors.md) | Connector doors: the SaaS integrations a third-party template names, on by credential | current | 2026-09-14 |
+| [53-connector-doors](53-connector-doors.md) | Connector doors: the SaaS integrations a third-party template names, on by credential | current | 2026-11-06 |
 | [54-agent-identity-and-threads](54-agent-identity-and-threads.md) | Agent 身份与在工作项上的对话 | current | 2026-09-18 |
 | [58-daily-research-digest](58-daily-research-digest.md) | 每日 research 总结：把一天的输入和逐条 research 横向综合，而不是再列一遍 | current | 2026-09-19 |
 | [59-daily-digest-review](59-daily-digest-review.md) | 每日 research 总结的方案 review：参考 OVP 还是结合 OVP | current | 2026-09-19 |

@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: skills
-     updated: 2026-11-05
+     updated: 2026-11-06
 -->
 # Skills: the SKILL.md contract, where skills live, and how a skill becomes a routine
 
@@ -88,6 +88,8 @@ refused, because the description is the only thing read when choosing a skill.
 | `authored_by` | Who wrote it, when an agent did. Provenance, not a permission; turns on the authoring hints. | — | — |
 | `because` | Why it exists, in the author's words. Shown wherever the routine is listed. | — | — |
 | `allowed-tools` | The tools the skill needs, comma- or space-separated, optionally in `[…]`. Claude Code names map through `engine-tools.ts`; `mcp__server__tool` is our `server__tool`. When the skill runs unattended, the turn is offered only tools the agent already had **and** the skill named — a narrowing, never a grant. A turn a person drives is not narrowed. | No narrowing. | — (an unknown name is reported in a note and contributes nothing). |
+| `connectors` | The connectors the skill's work needs, comma- or space-separated: an OAuth connection (`github`, kept in the vault as `oauth:github`) or an MCP door / configured server (`mcp:notion`). Read before a run, a task or a template's setup starts (`credential-coverage.ts`, INV-1666): a routine missing one is skipped and paused with `missing_credentials`, a task waits with a "before this can start" card. A statement, never a grant. | Nothing is checked. | — |
+| `secrets` | The vault secret ids its host commands name (`RunOnHost`'s `secrets`), same list form. Checked the same way: the secret must exist and a live grant (or the box's bundle) must cover the agent. | Nothing is checked. | — |
 
 Advice that never refuses (`authoringHints`, shown for a skill with `authored_by`): a
 description that says what but not when, and an unattended skill whose body points at "the

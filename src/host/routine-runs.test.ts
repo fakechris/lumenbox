@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { attentionFor } from "./attention.ts";
 import { cmdRoutines } from "./routine-runs-cli.ts";
 import { runsOf, type RunRecord } from "./routine-runs.ts";
-import { parseSchedule, Scheduler, type Scheduled } from "./schedule.ts";
+import { parseSchedule, Scheduler, type Scheduled, type SchedulerDeps } from "./schedule.ts";
 import { upcomingFires } from "./schedule-time.ts";
 
 function scheduleOf(text: string) {
@@ -22,7 +22,7 @@ function scheduleOf(text: string) {
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
-function fixture(path: string | null, outcomes: (() => Promise<void | { result: "done" | "failed"; reason?: string }>)[]) {
+function fixture(path: string | null, outcomes: (() => Promise<void | { result: "done" | "failed"; reason?: string }>)[], precheck?: SchedulerDeps["precheck"]) {
   let clock = new Date("2026-11-05T09:00:00Z");
   const fired: number[] = [];
   const skill: Scheduled = { slug: "hourly", name: "Hourly check", path: "/p", schedule: scheduleOf("@every 1h") };
@@ -36,6 +36,7 @@ function fixture(path: string | null, outcomes: (() => Promise<void | { result: 
     defaultAgent: () => "agent-ada",
     now: () => clock,
     path,
+    ...(precheck !== undefined ? { precheck } : {}),
   });
   return { make, fired, advance: (hours: number) => { clock = new Date(clock.getTime() + hours * 3_600_000); } };
 }
@@ -70,6 +71,32 @@ test("three failures in a row pause a routine with the last reason; resuming cle
   await settle();
   assert.equal(f.fired.length, 4, "and runs at its next window");
   assert.equal(scheduler.runs("hourly")[0]?.outcome, "done");
+});
+
+test("a routine missing a credential is skipped and paused before it starts, and runs once a person resumes it with the credential there (INV-1666)", async () => {
+  let missing = true;
+  const asked: string[] = [];
+  const f = fixture(null, [], async (skill, agent) => {
+    asked.push(`${skill.slug} as ${agent}`);
+    return missing ? { code: "missing_credentials", text: "missing before it could start: connector github (GitHub is not connected here)" } : undefined;
+  });
+  const scheduler = f.make();
+  await scheduler.tick();
+  await settle();
+  assert.equal(f.fired.length, 0, "nothing ran");
+  assert.deepEqual(asked, ["hourly as agent-ada"]);
+  assert.deepEqual(scheduler.runs("hourly").map(run => `${run.outcome} ${run.code}`), ["skipped missing_credentials"]);
+  assert.equal(scheduler.holds.holdOf("hourly")?.code, "missing_credentials", "held through the same door as the failure streak");
+  f.advance(1);
+  await scheduler.tick();
+  assert.equal(asked.length, 1, "a held routine is not asked again every window");
+  assert.match(JSON.stringify(await scheduler.runNow("hourly")), /paused \(missing before it could start: connector github/);
+
+  missing = false;
+  scheduler.resume("hourly", "Chris");
+  await scheduler.tick();
+  await settle();
+  assert.equal(f.fired.length, 1, "resumed with the credential there, it runs at its next window");
 });
 
 test("a run that ends done breaks the streak; K is a setting and 0 never pauses", async () => {

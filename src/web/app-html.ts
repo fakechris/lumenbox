@@ -1647,7 +1647,7 @@ function renderSecrets() {
     })
     .then(function (data) {
       if (!data) return;
-      secrets = data.secrets || [];
+      secrets = data.secrets || []; window.secretNeeds = data.neededBy || {}; // who needs each (INV-1666)
       if (!secrets.length) {
         $("setsecrets").innerHTML = '<div class="fieldnote" style="margin:0">No secrets yet. Add one to give an agent a credential for a host command.</div>';
         return;
@@ -1659,7 +1659,7 @@ function renderSecrets() {
         var sites = (s.kind === "git" ? "git credential for " + ((s.domains || []).join(", ") || "github.com") + " (handed to git, not to the command)" : (s.domains || []).length ? "sites: " + s.domains.join(", ") : "not fillable in a browser (no sites)");
         return '<div style="display:flex;gap:8px;align-items:center;font-size:13px">' +
           '<span class="mono" style="min-width:110px;font-weight:600">' + esc(s.id) + "</span>" +
-          '<span class="dim" style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis">' + esc(who) + " · " + esc(sites) + "</span>" +
+          '<span class="dim" style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis">' + esc(who) + " · " + esc(sites) + (window.neededByHtml ? window.neededByHtml(s.id) : "") + "</span>" +
           '<a href="#" data-secrm="' + i + '" style="color:var(--danger);font-size:12px">Remove</a></div>';
       }).join("");
     })
@@ -1692,7 +1692,7 @@ document.getElementById("setsecrets").addEventListener("click", function (event)
   if (idx === null || idx === undefined) return;
   event.preventDefault();
   var s = secrets[Number(idx)];
-  if (!s) return;
+  if (!s || (window.confirmRemoveSecret && !window.confirmRemoveSecret(s.id))) return; // says whose work it would stop (INV-1666)
   fetch("/api/vault/remove", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: s.id }) })
     .then(renderSecrets);
 });
@@ -4224,6 +4224,7 @@ function drawItem(item) {
             '<button class="btn sm ghost" data-secret-dismiss="1">Dismiss</button></div>' +
             '<div class="note">Stored in this machine\'s vault with a grant to ' + esc(item.agentName) + " only. The agent never sees the value; the box never holds it.</div>"
           : '<div class="settledline"></div>');
+    } else if (item.card === "credentials") { html = window.credentialsCardHtml ? window.credentialsCardHtml(item, pending) : ""; // what a start waits on (INV-1666)
     } else {
       html = '<div class="chead"><span class="dot"></span>Computer &mdash; ' + esc(item.agentName) + (pending ? " is waiting for you (" + esc(item.reason) + ")" : " had the desktop handed over") + "</div>" +
         '<div style="padding:4px 0 8px;font-size:14px" class="instr"></div>' +
@@ -5840,7 +5841,7 @@ $("taskadd").onclick = function () {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ title: title, assigneeId: $("taskassign").value })
-  }).then(function () { $("tasknew").value = ""; refreshTasks(); });
+  }).then(function (r) { return r.json(); }).then(function (d) { $("tasknew").value = ""; refreshTasks(); if (d && d.coverage && window.showTaskCoverage) window.showTaskCoverage(d); }); // a task that waits on a credential says so here (INV-1666)
 };
 
 // Opening a task, and following it to the conversation it came from. Both are links
@@ -6288,6 +6289,7 @@ stream.onmessage = function (raw) {
     return;
   }
 
+  if (e.type === "credentials_needed" || e.type === "credentials_covered") { if (e.type === "credentials_covered") settleCard("credentials:" + e.key, "in place · the work starts"); else if (e.agentId === current) showCard("credentials:" + e.key, { card: "credentials", agentId: e.agentId, agentName: e.agentName, title: e.title, items: e.items }); return; } // INV-1666
   if (e.type === "secret_requested") {
     if (e.agentId === current) showCard("secret:" + e.id, { card: "secret", id: e.id, agentId: e.agentId, agentName: e.agentName, description: e.description });
     return;

@@ -34,6 +34,9 @@ import { retryLastAnswer } from "./retry-recovery.ts";
 import { runEpisode, type Script } from "./scenario.ts";
 import { recoverTask } from "./task-recovery.ts";
 import { TaskStore } from "./tasks.ts";
+import { CredentialChecks, CredentialWaits } from "./credential-waits.ts";
+import { parseSkillFile, skillFrom } from "./skills.ts";
+import { Vault } from "./vault.ts";
 
 test("two people in one conversation receive separate turns rather than sharing one principal's execution", async () => {
   const opened: string[] = [];
@@ -3057,4 +3060,75 @@ test("a Configure save mid-turn leaves the running turn on its version; the next
     result.cleanup();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// INV-1666: a skill that works on GitHub, an agent with no GitHub connection. The run used to start,
+// reach the first call that needed the token, and stop on an in-chat "needs a secret" card — for a
+// routine at night, until morning. Now the check runs before the turn: the chat hears what is
+// missing and where to set it, the model is never called, and once the connection lands the same
+// task starts by itself.
+test("a task whose skill needs an unconnected GitHub waits before it starts, and the same task starts once GitHub is connected (INV-1666)", async () => {
+  let rounds = 0;
+  const episode = await runEpisode({
+    team: [{ name: "Ada" }], says: [],
+    script: () => { rounds++; return { say: "PR #12 已审完：两处需要改。" }; },
+    drive: async ({ bus, registry, frontId }) => {
+      const vault = new Vault(join(registry.root, "vault.json"), join(registry.root, "vault-audit.jsonl"));
+      const tasks = new TaskStore(null);
+      const review = skillFrom("pr-review", parseSkillFile("---\nname: PR review\ndescription: Use when a pull request needs a review.\nscope: agent\nowner: Ada\nconnectors: github\n---\nRead the diff with connector_request."));
+      assert.ok("skill" in review);
+      const checks = new CredentialChecks({
+        agent: id => { const record = registry.tryGet(id) ?? registry.list().find(entry => entry.profile.name === id); return record === undefined ? undefined : { id: record.id, name: record.profile.name, boxId: registry.box.id }; },
+        skillsIn: () => [review.skill],
+        world: () => ({ secrets: vault.list(), servers: [], env: {} }),
+      });
+      const cards: string[] = [];
+      const waits = new CredentialWaits({ tasks: () => tasks, check: (agentId, principalId) => checks.forAgent(agentId, [], principalId), announce: event => cards.push(event.kind) });
+      let released: Promise<string[]> | undefined;
+      vault.onChange(() => { released = waits.recheck(); });
+
+      const heard: string[] = [];
+      let receive!: (message: ChannelMessage) => Promise<string | undefined>;
+      const adapter: ChannelAdapter = { name: "feishu", start: async handler => { receive = handler; }, stop() {}, send: async (_to, text) => { heard.push(text); return undefined; } };
+      const manager = new ChannelManager({
+        mayDrive: () => true, log() {},
+        ask: async (_agent, text) => {
+          bus.sendFromUser(frontId, text, { steerable: false });
+          await bus.runExclusive(frontId, { userDriven: true });
+          const entries = registry.readTranscript(frontId) as { role?: string; text?: string }[];
+          return entries.filter(entry => entry.role === "assistant" && entry.text).at(-1)?.text ?? "";
+        },
+        board: {
+          open: input => tasks.create({ title: input.title, requester: "chris", assigneeId: frontId })?.id,
+          started: id => { tasks.update(id, { status: "doing" }, "channel"); },
+          closed: (id, outcome) => { if (outcome === "done") tasks.turnFinished(id); return outcome === "done" ? "done" : "failed"; },
+        },
+        credentials: { gate: (taskId, start) => waits.gateText(taskId, "channel", start) },
+      });
+      manager.register(adapter, true, "test"); manager.start();
+      await new Promise(resolve => setImmediate(resolve));
+      try {
+        await receive({ identity: "feishu:chris", chatKey: "feishu:room", senderLabel: "Chris", text: "帮我审一下 PR #12" });
+        await manager.idle();
+        assert.equal(rounds, 0, "the agent did not start");
+        assert.equal(heard.length, 1);
+        assert.match(heard[0]!, /Ada 开始前需要：\n· 连接器 github：GitHub is not connected here（在 Settings → Channels → Connectors 配置；skill pr-review 需要）/);
+        const [waiting] = tasks.list();
+        assert.equal(waiting?.status, "blocked");
+        assert.match(waiting?.waitingOn ?? "", /^credentials: connector github/);
+        assert.deepEqual(cards, ["needed"], "the web hears it too, as a card");
+
+        vault.setSecret({ id: "unrelated", value: "x", grants: [{ holder: "*" }] });
+        assert.deepEqual(await released, [], "a credential it does not need releases nothing");
+        vault.setSecret({ id: "oauth:github", value: "gho_test", grants: [{ holder: `agent:${frontId}` }], oauth: { provider: "github", kind: "authorization_code" } });
+        assert.deepEqual(await released, [waiting!.id], "the same task, not a new one");
+        assert.equal(rounds, 1, "and now the agent starts");
+        assert.match(heard.at(-1)!, /PR #12 已审完/);
+        assert.equal(tasks.list().length, 1);
+        assert.notEqual(tasks.get(waiting!.id)?.status, "blocked");
+        assert.deepEqual(cards, ["needed", "covered"]);
+      } finally { manager.stop(); }
+    },
+  });
+  try { assert.equal(episode.score.turns, 1); } finally { episode.cleanup(); }
 });
