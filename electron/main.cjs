@@ -141,7 +141,7 @@ function startServer() {
   const cli = path.join(REPO, "src", "cli.ts");
   serverChild = spawn(
     process.execPath,
-    ["--experimental-transform-types", cli, "web", "--port", String(PORT)],
+    ["--experimental-transform-types", cli, "web", "--port", String(PORT), "--desktop"], // --desktop: this is the desktop app, so a first start makes the Owner (INV-1685)
     {
       cwd: REPO,
       env: withToolPath({ ...process.env, ELECTRON_RUN_AS_NODE: "1", ...(uiAuth.token ? { AGENTBOX_UI_TOKEN: uiAuth.token } : {}) }),

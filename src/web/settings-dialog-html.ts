@@ -253,7 +253,9 @@ ${renderSettingsTabs()}
       <div class="fieldnote">An invite code works once, for 15 minutes: the person sends
         <span class="mono">bind CODE</span> to an agent on any channel and they are in — no ids
         to copy. viewer reads, driver commands the agents, admin also changes settings; changing
-        a role below applies to the next message, no restart.</div>
+        a role below applies to the next message, no restart. On the desktop app the one person is
+        the Owner (机主); letting a second person in asks first, and the Owner becomes the first
+        Admin (管理员).</div>
       <details style="margin-top:2px">
         <summary class="fieldnote" style="cursor:pointer;margin:0">Add by id manually…</summary>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px">

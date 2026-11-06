@@ -35,6 +35,7 @@
  */
 
 import { withRosterLock } from "./roster-lock.ts";
+import { guardRoster, installationOf, OwnerConversionRequired, type Installation } from "./installation.ts";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
@@ -71,7 +72,9 @@ export interface Principal {
 }
 
 /**
- * Whom the installation itself stands for when nobody is signed in (INV-1681): its one admin.
+ * Whom the installation itself stands for when nobody is signed in (INV-1681): its one admin —
+ * on the desktop app, the Owner created at first start (INV-1685), so the unsigned operator is a
+ * person and not a role.
  * The desktop operator holds the UI token and acts as admin (`GET /api/me`), and what it owns
  * — its MCP tokens, the supervision and watchdog tokens issued for it — belongs to that person.
  * None or several admins: nobody, and whoever asks has to name one.
@@ -97,6 +100,8 @@ interface StoredPrincipal {
 
 interface PrincipalsFile {
   bootstrap?: Record<string, unknown>;
+  /** Owner or Admin (INV-1685): written by installation.ts, carried unchanged by every save here. */
+  installation?: unknown;
   principals: Array<{
     id: string;
     name: string;
@@ -126,6 +131,7 @@ export function principalsPath(): string {
  */
 export class Principals {
   private stored: StoredPrincipal[] = [];
+  private mode: Installation = { mode: "organisation" };
   private byIdentity = new Map<string, Principal>();
   /** anchor → the principals holding it. Several means a conflict, which never auto-merges. */
   private byAnchor = new Map<string, StoredPrincipal[]>();
@@ -154,9 +160,11 @@ export class Principals {
     this.stored = [];
     this.byIdentity.clear();
     this.byAnchor.clear();
+    this.mode = { mode: "organisation" };
     if (!existsSync(this.path)) return;
     try {
       const parsed = JSON.parse(readFileSync(this.path, "utf8")) as PrincipalsFile;
+      this.mode = installationOf(parsed);
       const claimed = new Set<string>();
       for (const raw of parsed.principals ?? []) {
         if (typeof raw?.id !== "string" || typeof raw?.name !== "string") continue;
@@ -211,6 +219,17 @@ export class Principals {
       identities: principal.links.map(link => link.identity),
       ...(principal.anchors.length > 0 ? { anchors: [...principal.anchors] } : {}),
     };
+  }
+
+  /** Owner or Admin: what kind of installation this roster belongs to (INV-1685). */
+  installation(): Installation {
+    return { ...this.mode };
+  }
+
+  /** Throws `OwnerConversionRequired` on a single-machine installation: for an act that admits a new person without a roster save yet, such as an invite code. */
+  requireOrganisation(): void {
+    this.reload();
+    if (this.mode.mode === "single-machine") throw new OwnerConversionRequired();
   }
 
   list(): Principal[] {
@@ -286,8 +305,11 @@ export class Principals {
     mkdirSync(dirname(this.path), { recursive: true });
     const temp = `${this.path}.${process.pid}.tmp`;
     const previousFile = existsSync(this.path) ? JSON.parse(readFileSync(this.path, "utf8")) as PrincipalsFile : undefined;
+    // Read under the lock, so a conversion confirmed a moment ago is the state this save is checked against.
+    guardRoster(installationOf(previousFile), cleaned);
     const bootstrap = previousFile?.bootstrap ?? (previousFile?.principals?.length ? { disabled: true } : undefined);
     const file: PrincipalsFile = {
+      ...(previousFile?.installation !== undefined ? { installation: previousFile.installation } : {}),
       ...(cleaned.length ? { bootstrap: { disabled: true, ...(bootstrap?.redeemedAt !== undefined ? { redeemedAt: bootstrap.redeemedAt, redeemedBy: bootstrap.redeemedBy } : {}) } } : bootstrap ? { bootstrap } : {}),
       principals: cleaned.map(principal => ({
         id: principal.id,

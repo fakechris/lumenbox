@@ -53,7 +53,9 @@ credentials in `~/.agentbox/config.json`.
 
 - Settings → Channels: each channel and whether it is connected.
 - The chat itself: in a Feishu group, the reply is a thread under your message.
-- Settings → Team: each person and their role — viewer, driver or admin.
+- Settings → Team: each person and their role — viewer, driver or admin. On the desktop app
+  with one person, that person is the Owner (机主). Letting a second person in asks first; on
+  yes, the Owner becomes the first Admin (管理员).
 
 ## Limits
 

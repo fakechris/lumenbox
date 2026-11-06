@@ -2,7 +2,7 @@
      title: The enterprise use case, and the editions that share one core
      family: decision
      status: current
-     updated: 2026-09-11
+     updated: 2026-11-06
 -->
 # The enterprise use case, and the editions that share one core
 
@@ -24,7 +24,9 @@ the Electron shell is a supervisor around it (three jobs: spawn, window,
 tray — `electron/main.cjs`), not a product of its own. A personal edition is
 the degenerate case of the multiuser model: one Principal (admin), one box,
 `members: everyone` — which is exactly what runs today, needing nothing
-turned on. An enterprise edition is *the same core run as a server* with the
+turned on. (Amended 2026-11-06, INV-1685: that Principal is the **Owner**
+(机主), created by the desktop app's first start; an organisation
+installation has Admins (管理员) instead — docs/22 §1a.) An enterprise edition is *the same core run as a server* with the
 multiuser data filled in — doors that log in, a synced directory, boxes with
 member sets — plus one thing personal never has: **box hosts elsewhere** and
 **credentials in managed surfaces** instead of a laptop's env.
@@ -161,7 +163,15 @@ The invite-code machinery already redeems a code into a Principal
   invite, and writes the first audit row of the installation.
 
 No config flag, no "first user is admin" race: the code is the
-serialization. (Multica's creator-is-owner reads cleaner in a SaaS signup;
+serialization.
+
+Amended 2026-11-06 (INV-1685): this is the **server** path, and it stays.
+The desktop app does not mint a code: its first start on an empty roster
+creates the Owner (机主) and closes bootstrap in the same locked write
+(docs/22 §1a). The signal is explicit — the Electron shell passes
+`--desktop` — so a server never creates an Owner. A desktop installation
+that lets a second person in converts, on a person's confirmation, into an
+organisation whose first Admin (管理员) is the former Owner. (Multica's creator-is-owner reads cleaner in a SaaS signup;
 here the installation is brought up by an operator *before* any user
 exists, and the code is how the operator hands it over.)
 

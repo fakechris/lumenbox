@@ -113,7 +113,7 @@ test("everything here is an owner's business, and a refusal is audited", async (
     store.putMembership(bob.id, tenant.id, "member");
     const asMember: Session = { userId: bob.id, tenantId: tenant.id, role: "member" };
 
-    assert.equal(requireOwner(asMember)?.includes("Only an owner"), true);
+    assert.equal(requireOwner(asMember)?.includes("Only an account holder"), true);
 
     const refused = await call("GET", "/api/admin/users", {}, asMember);
     assert.equal(refused.status, 403);
@@ -167,7 +167,7 @@ test("a tenant cannot be left with nobody who can manage it", async () => {
     // Demoting the only owner.
     const demoted = await call("PATCH", `/api/admin/users/${alice.id}`, { role: "member" });
     assert.equal(demoted.status, 409);
-    assert.match(JSON.stringify(demoted.body), /only owner/);
+    assert.match(JSON.stringify(demoted.body), /only account holder/);
     assert.equal(store.membership(alice.id, tenant.id)?.role, "owner", "and it did not happen");
 
     // Removing the only owner.
