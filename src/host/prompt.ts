@@ -483,6 +483,8 @@ export interface PromptContext {
    * Absent renders nothing: an isolated context, or a test that did not set one up.
    */
   standing?: StandingSnapshot;
+  /** The host's record of the person driving (INV-1653), already rendered; one text for every agent. */
+  person?: string;
 }
 
 /** One teammate line: name, id, and a clamped description. */
@@ -1117,6 +1119,7 @@ export const VOLATILE_SECTIONS: readonly PromptSection[] = [
   },
   // The standing files (INV-777): the last thing that changes from turn to turn, so an edit to
   // USER.md invalidates only this and the recap; nothing above it moves by a byte.
+  { name: "person", render: context => context.person ?? "" }, // the host's one record of the person (INV-1653), before the agent's own USER.md, which adds to it
   { name: "standing", render: context => renderStanding(context.standing, context.agent.id) },
   // Last, always. See CRITICAL_RECAP: the tail is where a model reads best, and it was
   // being spent on the roster.
