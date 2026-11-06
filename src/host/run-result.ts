@@ -36,6 +36,14 @@ export function routineResult(ends: readonly { how: string; category?: string }[
   return "done";
 }
 
+/** Why a routine run that was not done came out that way, in one line for its run history (INV-1665). */
+export function routineReason(ends: readonly { how: string; category?: string }[]): string | undefined {
+  const end = ends.find(e => e.how === "failed" || e.how === "aborted") ?? ends.find(e => e.how === "incomplete");
+  if (end === undefined) return undefined;
+  const what = end.how === "failed" ? "its turn failed" : end.how === "aborted" ? "its turn was stopped" : "its turn stopped itself before finishing";
+  return end.category !== undefined ? `${what} (${end.category})` : what;
+}
+
 /** The sentence a header or a line carries. */
 export function describeRunResult(counts: RunCounts): string {
   if (counts.result === "done") return `done (${counts.doneCount} of ${counts.doneCount + counts.notDoneCount})`;

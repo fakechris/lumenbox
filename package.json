@@ -1,8 +1,8 @@
 {
   "name": "agentbox",
-  "version": "0.3.26",
+  "version": "0.3.27",
   "private": true,
-  "description": "Multi-agent orchestrator with a remote Docker box and Linux computer-use",
+  "description": "Your own team of AI agents, each with a real computer to work on — reached from your desktop and your chat apps, taken over at any moment, and believed on the record, not on its word.",
   "type": "module",
   "bin": {
     "agentbox": "./dist/cli.js"

@@ -11,7 +11,7 @@ import { bindingsOf, CommitmentLedger, describeGaps, parseCommitments, priorComm
 import { finishRoutineRun, PendingAttachments, RoutineResultLedger, routineResolveMode, type DeliveryOutcome } from "./routine-resolve.ts";
 import { BoxGenerations } from "./box-generation.ts";
 import { writeEvalCase } from "./eval-cases.ts";
-import { routineResult } from "./run-result.ts";
+import { routineReason, routineResult } from "./run-result.ts";
 import { learningsDir } from "./learnings.ts";
 import { replyForMessage, silenceForMessage } from "./reply.ts";
 import { contextTaskBlockers, isContextCommand } from "./context-recovery.ts";
@@ -666,9 +666,11 @@ export class Orchestrator {
       const startedMs = Date.now();
       // How the run came out is read off the turn ledger afterwards (INV-1404): done, partial (the turn stopped itself) or failed.
       const resultOf = (agentId: string) => routineResult(this.turns?.endedSince(agentId, startedMs) ?? []);
+      const why = (agentId: string) => { const reason = routineReason(this.turns?.endedSince(agentId, startedMs) ?? []); return reason === undefined ? {} : { reason }; }; // the run history's line (INV-1665)
       if (deliver === undefined) {
         await this.prompt(agent, prompt, undefined, { steerable: false, lane: "background", synthetic: true, ...scope }); // model-text: routine
-        return { result: resultOf(this.registry.resolve(agent).id) };
+        const id = this.registry.resolve(agent).id;
+        return { result: resultOf(id), ...why(id) };
       }
       const conversation = conversationIdFor(deliver);
       const record = this.registry.resolve(agent);
@@ -687,7 +689,7 @@ export class Orchestrator {
       const said = this.replySince(agentId, before, conversation).trim();
       const result = resultOf(agentId);
       // The box was reconnected under the run (INV-1476): its result is the old incarnation's and is not delivered.
-      if (this.generations.stale(stamp, `routine ${slug ?? identity ?? "ad-hoc"} delivery`)) return { result };
+      if (this.generations.stale(stamp, `routine ${slug ?? identity ?? "ad-hoc"} delivery`)) return { result, ...why(agentId) };
       // Execute is over. What it said is written down and a resolve step decides whether the chat hears it (INV-776).
       await finishRoutineRun(
         {
@@ -715,7 +717,7 @@ export class Orchestrator {
           log: line => console.error(`[routine] ${line}`),
         }
       );
-      return { result };
+      return { result, ...why(agentId) };
     },
     // A waiting webhook: the same turn, but the caller is told what came of it.
     runAndSay: async (agent, prompt, toolScope) => {
