@@ -4,6 +4,7 @@
  * (mcp-contract.ts) and the tools that honour it live together.
  */
 
+import { randomUUID } from "node:crypto";
 import type { AgentRegistry } from "../agents/registry.ts";
 import type { Orchestrator } from "../host/orchestrator.ts";
 import type { StageWorld } from "../host/task-stage.ts";
@@ -34,6 +35,8 @@ export interface McpToolsDeps {
   notifyTask?: (task: Task, text: string) => void;
   /** Who may read a task's files (INV-1668): the board's own rule; absent, only the task's requester. */
   mayReadTask?: (task: Task, principalId: string) => boolean;
+  /** Scrubs held secrets from a reply before it is written on a task (INV-1676), as a chat reply is on its way out; absent, the reply as said. */
+  redact?: (text: string) => string;
 }
 
 export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
@@ -58,7 +61,7 @@ export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
     // Anyone with a token may read any task: the board is the team's shared record,
     // and hiding a colleague's row from a colleague's agent would be theatre.
     const history = task.history
-      .map(change => `  ${change.at} ${nameOf(change.by)} ${change.status ?? ""} ${change.note ?? ""}`.trimEnd())
+      .map(change => `  ${change.at} ${nameOf(change.by)} ${change.status ?? ""} ${change.reply === true ? "replied: " : ""}${change.note ?? ""}`.trimEnd())
       .join("\n");
     // The division of work (INV-1667): one line per fork of its turns, how it stands, and the brief.
     const forks = (orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []).map(fork => `  fork ${fork.child} ${fork.status}${fork.reason !== undefined ? ` (${fork.reason})` : ""} "${fork.brief}" last ${fork.lastAt}`);
@@ -100,10 +103,19 @@ export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
           if (event.type === "stuck") orchestrator.tasks?.update(task.id, { status: "review", note: `incomplete (rounds): ${event.reason.split("\n")[0]?.slice(0, 160) ?? "stopped"}` }, agent.id);
         });
         // Not awaited: the caller gets an id now and asks later, which is the only
-        // shape that works for work measured in minutes. The task closes when the turn does.
+        // shape that works for work measured in minutes. The task closes when the turn does,
+        // and first records what the agent said at the end of it (INV-1676): an agent that
+        // answered in prose and wrote no note otherwise leaves the caller "completed" and nothing else.
+        // The reply is read by the message's own id, so a turn queued beside it is never taken for its answer.
+        const messageId = randomUUID();
         void orchestrator
-          .prompt(agent.id, brief, { userId: principalId }, { lane: "agent" })
-          .then(() => { if (task !== undefined) orchestrator.tasks?.turnFinished(task.id); })
+          .prompt(agent.id, brief, { userId: principalId }, { lane: "agent", messageId })
+          .then(() => {
+            if (task === undefined) return;
+            const said = orchestrator.replyForMessage(agent.id, messageId);
+            orchestrator.tasks?.recordReply(task.id, agent.id, deps.redact !== undefined ? deps.redact(said) : said);
+            orchestrator.tasks?.turnFinished(task.id);
+          })
           .catch(error => {
             const detail = error instanceof Error ? error.message : String(error);
             log(`mcp task failed: ${detail}`);
@@ -120,7 +132,7 @@ export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
       description:
         "How a task is going: its state (in_progress | completed | failed | incomplete | cancelled, " +
         "with the reason), who has it, and every move anybody made on it. With no id, the tasks you asked for that are still open. " +
-        "structuredContent carries the same tasks as data: outcome, stage, mandate, recent history, and a goal's checklist and spend.",
+        "structuredContent carries the same tasks as data: outcome, stage, mandate, recent history, the agent's final reply, and a goal's checklist and spend.",
       inputSchema: {
         type: "object",
         properties: { task_id: { type: "string", description: "A task id like t42." }, scope: { type: "string", enum: ["mine", "all"], description: "With no id: your open tasks (mine, default) or every open task (all)." } },

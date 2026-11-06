@@ -5,7 +5,8 @@
  * wording — believing the report again, one step removed. This is the same task as data: the
  * contract's outcome, the stage table's row, the mandate as it stands, the last moves, and for
  * a goal the gate's own numbers. Nothing here is a judgement the record does not already hold;
- * no memory, no conversation text, and of files only what was delivered: names and digests, not bytes.
+ * no memory, no conversation text but the reply the agent ended its turn with (INV-1676, written on
+ * the task as a move), and of files only what was delivered: names and digests, not bytes.
  */
 
 import type { ForkChild } from "../host/fork-events.ts";
@@ -13,6 +14,7 @@ import type { Pursuit } from "../host/goal-mode.ts";
 import { currentFlag, type TaskFlag } from "../host/task-flag.ts";
 import type { StageWorld } from "../host/task-stage.ts";
 import { taskStage } from "../host/task-stage.ts";
+import { lastReply } from "../host/task-reply.ts";
 import type { Task } from "../host/tasks.ts";
 import { outcomeOf, type TaskOutcome } from "./mcp-contract.ts";
 
@@ -44,7 +46,9 @@ export interface TaskRecord {
   mandate?: { by: string; strength: string; state: "valid" | "stale" | "withdrawn"; staleReasons?: string[] };
   createdAt: string;
   updatedAt: string;
-  history: { at: string; by: string; status?: string; note?: string }[];
+  history: { at: string; by: string; status?: string; note?: string; reply?: true }[];
+  /** The agent's final reply to the turn the task ran (INV-1676), cut at REPLY_MAX: what it said when it wrote no note and delivered no file. */
+  reply?: { at: string; by: string; text: string };
   pursuit?: PursuitRecord;
   /** A supervisor's flag while it holds (INV-1509). */
   flag?: TaskFlag;
@@ -96,6 +100,7 @@ export function taskRecord(task: Task, deps: { nameOf: (id: string) => string; s
   const mandate = mandateRecord(task);
   const pursuit = task.pursuit;
   const forks = deps.forksOf?.(task.id) ?? [];
+  const reply = lastReply(task);
   return {
     id: task.id,
     title: task.title,
@@ -112,7 +117,9 @@ export function taskRecord(task: Task, deps: { nameOf: (id: string) => string; s
       by: deps.nameOf(change.by),
       ...(change.status !== undefined ? { status: change.status } : {}),
       ...(change.note !== undefined ? { note: change.note } : {}),
+      ...(change.reply === true ? { reply: true as const } : {}),
     })),
+    ...(reply !== undefined ? { reply: { at: reply.at, by: deps.nameOf(reply.by), text: reply.note! } } : {}),
     ...(pursuit !== undefined ? { pursuit: pursuitRecord(pursuit) } : {}),
     ...(currentFlag(task) !== undefined ? { flag: currentFlag(task)! } : {}),
     ...((task.deliverables ?? []).length > 0 ? { deliverables: task.deliverables!.map(item => ({ id: item.id, name: item.name, size: item.size, sha256: item.sha256, note: item.note, at: item.at })) } : {}),
