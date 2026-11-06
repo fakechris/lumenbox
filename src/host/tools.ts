@@ -38,7 +38,7 @@ import {
 import type { AcpDelegates } from "./acp-delegate.ts";
 import { optionLabel } from "./ask-options.ts";
 import type { BundleStore } from "./bundles.ts";
-import { catalogMenu, intersectTools, profilesFor } from "./catalog.ts";
+import { catalogMenu, crewTeam, intersectTools, profilesFor } from "./catalog.ts";
 import { type Claims, heldElsewhere } from "./claims.ts";
 import { namesControlSurface } from "./control-surfaces.ts";
 import { deliveryInstructions } from "./delegate-report.ts";
@@ -4765,9 +4765,9 @@ export async function dispatchTool(
             title: row.title,
             tools: [...intersectTools(row.tools, held)],
             beside: context.agent.id,
-            // A crew arrives as a team. Tagged with the catalog entry it came from, so five
-            // agents stamped in one go are findable together without anyone tidying up.
-            tags: askedTags.length > 0 ? askedTags : [from],
+            // A crew arrives as a team named after it (crewTeam); a single expert joins its
+            // creator's teams, the way any new teammate does.
+            tags: askedTags.length > 0 ? askedTags : crewTeam(from).length > 0 ? crewTeam(from) : (context.agent.profile.tags ?? []),
           });
           existing.add(name);
           created.push({ name: record.profile.name, id: record.id });

@@ -66,7 +66,7 @@ signed in on that agent's desktop: take it over and sign in yourself.
 
 | | Minimal | Daily |
 |---|---|---|
-| Agents | Jian, He and Jing, as the crew adds them | The same three, on the `media-desk` team |
+| Agents | Jian, He and Jing, on the `media-desk` team the crew puts them on | The same three |
 | Input | One link or file per request | A routine that collects sources each morning (Automations → *+ New*) |
 | Search | The box browser | A search key in Settings → Model |
 | Hand-off | You ask He and Jing after Jian finishes | Jian is told to hand the article on; the division of work shows the chain |
@@ -91,12 +91,10 @@ three files ([docs/75](../../75-cost-per-accepted-task.md)).
 ### In the app
 
 1. Press `+` beside *Agents*. Under *From catalog*, press `内容小队`, then *Create these 3 in
-   <box>*.
-2. Open Configure on each member and type `media-desk` under *Teams*. The crew does not set the
-   team by itself yet.
-3. Pick Jian, paste the source and say who reads it.
-4. When the article is in the box, ask He for a note and Jing for a script from it.
-5. Open the task: *Deliverables* lists each file with *Download*.
+   <box>*. They arrive on the `media-desk` team, listed together in the sidebar.
+2. Pick Jian, paste the source and say who reads it.
+3. When the article is in the box, ask He for a note and Jing for a script from it.
+4. Open the task: *Deliverables* lists each file with *Download*.
 
 ### In a chat
 

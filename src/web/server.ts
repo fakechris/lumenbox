@@ -154,6 +154,7 @@ import {
   CATALOG_CONNECTORS,
   CATALOG_CREWS,
   CATALOG_EXPERTS,
+  crewTeam,
   expertNamed,
   profilesFor,
   shelfTemplates,
@@ -5134,17 +5135,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const created: { id: string; name: string }[] = [];
           const skipped: string[] = [];
           for (const row of rows) {
-            if (existing.has(row.name)) {
-              skipped.push(row.name);
-              continue;
-            }
+            if (existing.has(row.name)) { skipped.push(row.name); continue; }
             // The catalog is the first-party shelf of the same format (docs/29 §6): an expert
             // is installed the way any template is, so its origin is on its profile and its
-            // first turn is the same first turn.
+            // first turn is the same first turn. A crew's members arrive on the crew's team.
             const imported = orchestrator.importTemplate(catalogTemplate(row), {
               caller,
               connected: ["browser", ...channelRecords.map(record => record.type)],
-              shareId: `catalog:${row.slug}`,
+              shareId: `catalog:${row.slug}`, tags: crewTeam(slug),
               ...(targetBox !== undefined ? { boxId: targetBox } : {}),
               log,
             });
@@ -5230,7 +5228,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               const imported = orchestrator.importTemplate(catalogTemplate(row), {
                 caller,
                 connected: ["browser", ...channelRecords.map(record => record.type)],
-                shareId: `catalog:${row.slug}`,
+                shareId: `catalog:${row.slug}`, tags: crewTeam(body.catalogSlug),
                 ...(boxId !== undefined ? { boxId } : {}),
                 ...(name !== undefined && rows.length === 1 ? { name } : {}),
                 log,
