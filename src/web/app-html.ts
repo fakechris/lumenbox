@@ -3039,7 +3039,7 @@ function oneAgentRow(a, index) {
  * group rather than disappearing.
  */
 function renderAgents() {
-  var list = agentsInView();
+  var list = typeof rowOrder === "function" ? rowOrder(agentsInView(), groupBy === "az" ? "az" : "recent") : agentsInView(); // waiting first, then what moved (INV-1626)
   var tagged = list.some(function (a) { return (a.tags || []).length > 0; });
   $("groupby").textContent = groupBy === "teams" ? "teams" : "a\u2013z";
   $("groupby").style.display = tagged ? "" : "none";
@@ -3069,19 +3069,16 @@ function renderAgents() {
         groups[tags[t]].push(a);
       }
     }
-    order.sort();
+    if (loose.length > 0) groups[""] = loose; // the untagged, a group like the others so a waiting one is not buried under the teams
+    order = typeof teamOrder === "function" ? teamOrder(groups, groupBy === "az" ? "az" : "recent") : Object.keys(groups).sort(); // teams by their newest member (INV-1626)
     for (var g = 0; g < order.length; g++) {
       var members = groups[order[g]];
-      // The heading is the filter (INV-120); the pencil is the rename, for an admin (INV-119).
-      html += '<div class="teamhead"><a href="#" class="teamonly" data-team="' + esc(order[g]) + '" title="Show only this team" style="color:inherit;text-decoration:none">' + esc(order[g]) + "</a>" +
+      // The heading is the filter (INV-120); the pencil is the rename, for an admin (INV-119); the untagged have neither.
+      html += order[g] === "" ? '<div class="teamhead">no team <span class="count">' + members.length + "</span></div>" : '<div class="teamhead"><a href="#" class="teamonly" data-team="' + esc(order[g]) + '" title="Show only this team" style="color:inherit;text-decoration:none">' + esc(order[g]) + "</a>" +
         ' <span class="count">' + members.length + "</span>" +
         (myRole === "admin" ? ' <a href="#" class="teamrename dim" data-team="' + esc(order[g]) + '" title="Rename this team on every member" style="float:right;text-transform:none;letter-spacing:0">rename</a>' : "") +
         "</div>";
       for (var m = 0; m < members.length; m++) html += oneAgentRow(members[m], index++);
-    }
-    if (loose.length > 0) {
-      html += '<div class="teamhead">no team <span class="count">' + loose.length + "</span></div>";
-      for (var n = 0; n < loose.length; n++) html += oneAgentRow(loose[n], index++);
     }
   }
   $("agents").innerHTML = html;

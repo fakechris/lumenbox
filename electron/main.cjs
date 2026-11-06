@@ -34,6 +34,7 @@ const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
 const { desktopAuth } = require("./ui-auth.cjs");
+const { badgeCount, notificationsDue } = require("./attention-signals.cjs");
 const { syncLoginItem } = require("./login-item.cjs");
 const uiAuth = desktopAuth();
 
@@ -268,11 +269,11 @@ function restartSupervision() {
 /**
  * System notifications, from the server's own event stream.
  *
- * Exactly three kinds of event leave the page and reach the OS: an agent waiting on
- * consent (the turn is paused until a person answers), a turn finishing while nobody
- * is looking at the window (the unattended-run case), and the box or server going
- * away. Everything else stays in the activity feed, because a notification channel
- * that carries everything carries nothing.
+ * Exactly three kinds of thing leave the page and reach the OS (INV-1626): an agent that
+ * started waiting on the person (a consent, a question, a spend pause — "needs you", with
+ * sound), a turn that ended with something new to read while nobody was looking ("done",
+ * silent), and the box or server going away. Everything else stays in the activity feed,
+ * because a notification channel that carries everything carries nothing.
  */
 let eventsRequest = null;
 /** Agents with a turn in flight, from the server's event stream: the memory guard
@@ -283,11 +284,34 @@ function windowIsVisible() {
   return mainWindow !== null && mainWindow.isVisible() && mainWindow.isFocused();
 }
 
-function notify(title, body) {
+function notify(title, body, options = {}) {
   if (!Notification.isSupported()) return;
-  const notification = new Notification({ title, body: body.slice(0, 240) });
-  notification.on("click", () => createWindow());
+  const notification = new Notification({ title, body: body.slice(0, 240), silent: options.silent === true });
+  // Clicking opens the window on the agent the notice was about.
+  notification.on("click", () => { createWindow(); if (options.agentId) mainWindow?.webContents.executeJavaScript(`select(${JSON.stringify(options.agentId)})`).catch(() => {}); });
   notification.show();
+}
+
+/**
+ * The agents as the server last reported them, with their facts (INV-1625): the dock badge is
+ * the unread they carry, and a change between two reports is what a notification is about
+ * (INV-1626). Read every ten seconds and right after a turn ends or a consent is asked for, so
+ * the badge moves with the window closed.
+ */
+let lastAgents = [];
+const notificationsSent = new Map();
+function readAgentFacts() {
+  http.get(`${PAGE}api/state`, { headers: uiAuth.headers }, response => {
+    let body = "";
+    response.on("data", chunk => { body += String(chunk); });
+    response.on("end", () => {
+      let agents;
+      try { agents = JSON.parse(body).agents || []; } catch { return; }
+      if (process.platform === "darwin") app.setBadgeCount(badgeCount(agents));
+      for (const due of notificationsDue(lastAgents, agents, windowIsVisible(), Date.now(), notificationsSent)) notify(due.title, due.body, { silent: due.silent, agentId: due.agentId });
+      lastAgents = agents;
+    });
+  }).on("error", () => {});
 }
 
 function watchEvents() {
@@ -324,14 +348,8 @@ function handleServerEvent(event) {
   if (event.type === "turn_finished" || event.type === "turn_failed" || event.type === "turn_interrupted") {
     busyAgents.delete(event.agentId);
   }
-  if (event.type === "approval_pending") {
-    notify(`${event.agentName || "An agent"} needs your consent`, `${event.description} — the turn is paused until you answer`);
-    return;
-  }
-  if (event.type === "turn_finished" && !windowIsVisible()) {
-    notify("A turn finished", "Open LumenBox to read what the agent said.");
-    return;
-  }
+  // A consent asked for or a turn ended: the facts moved, and the badge and notices follow them.
+  if (event.type === "approval_pending" || event.type === "turn_finished" || event.type === "turn_failed") readAgentFacts();
   if (event.type === "error" && /box stopped answering/i.test(String(event.message ?? ""))) {
     notify("The box stopped answering", String(event.message));
   }
@@ -523,6 +541,7 @@ if (!app.requestSingleInstanceLock()) {
     createTray();
     createWindow();
     startMemoryGuard();
+    setInterval(readAgentFacts, 10_000); setTimeout(readAgentFacts, 4_000);
     // A laptop that slept comes back with chat sockets that still claim to be connected and
     // a Docker engine that is still waking. Ask the server to sweep the vendors now rather
     // than at the next ten-minute tick — the box watch recovers on its own within a minute.
