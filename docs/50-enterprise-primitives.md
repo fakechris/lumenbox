@@ -2,7 +2,7 @@
      title: 企业级 agent 的高层规划：原语、数据、控制、记忆、审计、运行时
      family: decision
      status: current
-     updated: 2026-09-14
+     updated: 2026-11-06
 -->
 # 50. 企业级 agent 的高层规划：原语、数据、控制、记忆、审计、运行时
 
@@ -108,6 +108,7 @@ Claude Tag 的 Workspace 是一个权限文件夹加一个运行环境，Channel
 
 - I1 **用户可写的 auto-mode 规则**：PolicyGate 新增 `rules/*.md` 由管理员书写（"读只读的 API 不问、写 Jira 评论不问、任何删除必问"），auto-review 分类器把规则作为判据；与 CUA 计划 B1 的确定性门互补。验收：规则命中的调用不弹审批且留痕；规则文件变更进审计。
   - **按人的规则（INV-156，2026-09-15 落地）**：frontmatter 增加 `principal:`（写名字或 id），规则只在**为这个人跑的回合里**生效——他的常驻意图跟着人走，从任何一道门驱动都算数，不必按渠道各批一次。**无人归属的回合（定时、webhook、重启）不继承任何按人规则**，这是 fail-closed 的方向：人给出的放行不该被机器自己动作时捡走。审阅行会写出"(allow for Chris)"，因为"某人的 allow"和"所有人的 allow"是两条不同的常驻指令。`RunOnHost` 与不可逆动作仍然一律要问——它们不是操作者能豁免的（docs/08、INV-401）。
+  - **按 agent 的规则与每个 agent 的三档工具权限（INV-1664，2026-11-06 落地）**：frontmatter 增加 `agent:`（名字或 id），只匹配这个 agent 自己的调用，无 agent 的调用不匹配。Configure 对话框里每个工具三态（允许 / 先问我 / 关闭），按档位（desk / web / code / team / other）设整组默认、单工具覆盖，存在 agent 档案的 `toolPermissions`（"关闭"仍是 `tools` 清单）。"先问我"在门里变成一条 `agents:` 限定的规则（`src/host/tool-permissions.ts`），与操作者的规则走同一条 `decidingRule`，最严者胜：**组织策略 > agent 设置 > 档位默认**；agent 的"允许"不生成规则，所以放宽不了操作者的 ask/deny、审批清单、副作用门、主机命令与不可逆动作——这些在对话框里置灰并写明来源。每个工具步骤带门的判决（放行 / 问过你 / 等你 / 被拒）与依据，写进 policy ledger 的 `checked` 行（按 tool_use id），聊天实时与重载都画出来（`src/host/gate-verdict.ts`）。
 - I2 **指令按地方拼接**：installation 级与 box 级 instructions 段按 org → box → agent 顺序拼进 system prompt；bundle 的 instructions 随 bundle 生效。
 - I3 **门的名称规则与 guest 开关**：door 级 `autoJoin: {allow: [...], deny: [...]}` 按群名前缀自动加入或拒绝（docs/35 U2 目录自动链接的一部分）；door 级 `guest: on|off` 决定未链接身份能否敲门。
   - **落地（INV-429，2026-09-15）**：door 记录上加 `autoJoin: {allow, deny}` 与 `guest: on|off`。`deny` 绝对优先（写 never 的那条列表是针对某次具体事故写的）；`allow` 非空时这道门变成白名单，只在名字命中的房间和私聊里应答；**看不到名字的房间，在有白名单时一律不进**（fail-closed，否则白名单恰好在它为之而写的那些房间上失效），并留一行日志说明为什么安静。`guest: off` 的门对未链接身份**直接拒绝而不收 knock**——一屋子陌生人的门，每一次敲门都是要人分诊的噪音。房间名由飞书的 catch-up 清扫顺带缓存，不额外调 API。

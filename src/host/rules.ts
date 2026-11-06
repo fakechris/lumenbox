@@ -19,6 +19,7 @@
  *     command: jira comment    # optional; the command must start with one of these
  *     host: *.atlassian.net    # optional; for browser_open / WebFetch, the URL's host
  *     principal: Chris         # optional; only when the turn runs for this person (INV-156)
+ *     agent: Nova              # optional; only for this agent's own calls, by id or name (INV-1664)
  *     ---
  *     Commenting on a Jira issue is routine work here. Creating or transitioning one is not.
  *
@@ -63,6 +64,17 @@ export interface Rule {
    * of "this person pre-authorised it".
    */
   principals: string[];
+  /**
+   * Which agents' calls this rule is about, by id or name (INV-1664). Absent or empty means every
+   * agent's. Named, a call by any other agent — or by nobody in particular — never matches.
+   */
+  agents?: string[];
+  /**
+   * `"agent"` when the rule is an agent's own setting from its Configure dialog
+   * (tool-permissions.ts), made per call; absent for a file an operator wrote. The gate decides
+   * both on one path, and the verdict says which spoke.
+   */
+  source?: "agent";
   /** The standing instruction, as the reviewer reads it. */
   text: string;
 }
@@ -97,6 +109,7 @@ export function parseRuleFile(id: string, content: string): { rule?: Rule; probl
       commands: list(meta.command ?? meta.commands),
       hosts: list(meta.host ?? meta.hosts).map(host => host.toLowerCase()),
       principals: list(meta.principal ?? meta.principals),
+      agents: list(meta.agent ?? meta.agents),
       text,
     },
   };
@@ -125,6 +138,9 @@ function hostOfInput(input: Record<string, unknown>): string | undefined {
 export interface RuleCaller {
   id?: string;
   name?: string;
+  /** The agent making the call, for a rule with an `agent:` matcher (INV-1664). */
+  agentId?: string;
+  agentName?: string;
 }
 
 export function ruleMatches(
@@ -133,7 +149,13 @@ export function ruleMatches(
   input: Record<string, unknown>,
   caller?: RuleCaller
 ): boolean {
-  if (rule.tools.length === 0 && rule.commands.length === 0 && rule.hosts.length === 0 && rule.principals.length === 0) return false;
+  const agents = rule.agents ?? [];
+  if (rule.tools.length === 0 && rule.commands.length === 0 && rule.hosts.length === 0 && rule.principals.length === 0 && agents.length === 0) return false;
+  if (agents.length > 0) {
+    // The same fail-closed shape as a principal: a rule about one agent never reaches a call nobody named.
+    const calling = [caller?.agentId, caller?.agentName].filter((value): value is string => value !== undefined && value !== "").map(value => value.toLowerCase());
+    if (!agents.some(value => calling.includes(value.toLowerCase()))) return false;
+  }
   if (rule.principals.length > 0) {
     // Fail closed on an unattributed turn: a schedule, a webhook and a restart all arrive
     // with nobody attached, and a person's standing allowance is not theirs to inherit.
@@ -177,7 +199,7 @@ export function renderRulesForReview(rules: readonly Rule[]): string[] {
   // person's name and "allow" for everybody are different standing instructions, and a
   // reviewer shown only the second would mark an ordinary refusal as a rule violation.
   return rules.map(rule => {
-    const whose = rule.principals.length > 0 ? ` for ${rule.principals.join(", ")}` : "";
+    const whose = (rule.principals.length > 0 ? ` for ${rule.principals.join(", ")}` : "") + ((rule.agents ?? []).length > 0 ? ` on ${rule.agents!.join(", ")}'s calls` : "");
     return `[${rule.id}] (${rule.effect}${whose}) ${rule.text}`;
   });
 }
@@ -237,8 +259,9 @@ export class RuleStore {
     return [...this.problems];
   }
 
-  decide(tool: string, input: Record<string, unknown>, caller?: RuleCaller): Rule | undefined {
-    return decidingRule(this.rules, tool, input, caller);
+  /** `extra`: the calling agent's own settings as rules (INV-1664), decided with the operator's, strictest first. */
+  decide(tool: string, input: Record<string, unknown>, caller?: RuleCaller, extra: readonly Rule[] = []): Rule | undefined {
+    return decidingRule(extra.length === 0 ? this.rules : [...this.rules, ...extra], tool, input, caller);
   }
 
   forReview(): string[] {
@@ -261,7 +284,7 @@ export function lazyRuleStore(get: () => RuleStore | undefined): RuleReader {
     list: () => get()?.list() ?? [],
     currentHash: () => get()?.currentHash() ?? "",
     ignored: () => get()?.ignored() ?? [],
-    decide: (tool, input, caller) => get()?.decide(tool, input, caller),
+    decide: (tool, input, caller, extra = []) => get()?.decide(tool, input, caller, extra) ?? decidingRule(extra, tool, input, caller),
     forReview: () => get()?.forReview() ?? [],
   };
 }

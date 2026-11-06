@@ -29,7 +29,7 @@ import {
   statSync,
 } from "node:fs";
 import { appendLine } from "../host/jsonl.ts";
-import { guardMemoryCandidate } from "../host/memory-guard.ts";
+import { guardMemoryCandidate } from "../host/memory-guard.ts"; import type { ToolPermissions } from "../host/tool-permissions.ts";
 import { BOX_RECORD_FILENAME, ensureBoxRecord, type BoxRecord } from "../box/identity.ts";
 import { BOXES_FILENAME, type BoxEntry, ensureBoxes, saveBoxes } from "../box/boxes.ts";
 import { DEFAULT_CONTAINER } from "../box/docker.ts";
@@ -204,6 +204,7 @@ export interface AgentProfile {
    * `CreateAgent`, which passes its creator's set down.
    */
   tools?: readonly string[];
+  toolPermissions?: ToolPermissions; // ask-before, per group and per tool (INV-1664); "off" stays `tools` — host/tool-permissions.ts
   /**
    * The scope this agent works in, if any. A scope confers a tool set and secret
    * grants as one named bundle — see host/scopes.ts. When set, the scope's tool list
@@ -837,6 +838,7 @@ export class AgentRegistry {
        * which is what keeps "nothing grants what the granter does not hold" true.
        */
       tools?: readonly string[] | null;
+      toolPermissions?: ToolPermissions | null; // ask-before settings (INV-1664), `null` clears; UI path only, like `tools`
       /** The scope to place it in, `null`/`""` to remove it from one. UI path only. */
       scopeId?: string | null;
       /** Provider preset and model override; `null`/`""` clears back to the default. */
@@ -872,10 +874,8 @@ export class AgentRegistry {
     if (changes.avatarColor !== undefined) profile.avatarColor = changes.avatarColor;
     if (changes.hidden !== undefined) profile.hidden = changes.hidden;
     if (changes.importedFrom !== undefined) profile.importedFrom = { ...changes.importedFrom };
-    if (changes.tools !== undefined) {
-      if (changes.tools === null) delete profile.tools;
-      else profile.tools = [...changes.tools];
-    }
+    if (changes.tools !== undefined) { if (changes.tools === null) delete profile.tools; else profile.tools = [...changes.tools]; }
+    if (changes.toolPermissions !== undefined) { if (changes.toolPermissions === null) delete profile.toolPermissions; else profile.toolPermissions = structuredClone(changes.toolPermissions); }
     if (changes.scopeId !== undefined) {
       if (changes.scopeId === null || changes.scopeId === "") delete profile.scopeId;
       else profile.scopeId = changes.scopeId;

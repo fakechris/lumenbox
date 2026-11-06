@@ -1308,8 +1308,8 @@ ${SETTINGS_DIALOG_HTML}
     <div class="field">
       <label>Tools</label>
       <div id="agtools" class="toolchips"></div>
-      <div class="fieldnote">An unchecked tool is withheld — it does not appear in the agent's
-        prompt at all. Leaving everything checked means everything, including tools added later.</div>
+      <div class="fieldnote">Click a tool to cycle allowed → ask me → off. Off is withheld: not in the agent's prompt at all.
+        A dashed chip is one your organisation already asks about; hover it for where that comes from.</div>
     </div>
     <div class="field" id="agtemplatewrap" style="display:none">
       <label>Share as template</label>
@@ -4366,7 +4366,7 @@ function drawCall(call) {
   var oneLine = String(call.detail == null ? "" : call.detail).replace(/\s+/g, " ");
   var diff = call.diff && call.diff.lines ? diffHtml(call.diff) : null;
   var summary = diff ? esc((call.diff.path || oneLine).slice(0, 120)) + ' <span class="dim">' + esc(diff.summary) + "</span>" : esc(oneLine.slice(0, 140));
-  row.innerHTML = "<summary>" + '<span class="nm">' + esc(call.name) + "</span> " + summary + "</summary>" + (diff ? diff.html : "") + '<div class="det"></div>';
+  row.innerHTML = "<summary>" + '<span class="nm">' + esc(call.name) + "</span> " + summary + (window.gateMark ? window.gateMark(call.gate) : "") + "</summary>" + (diff ? diff.html : "") + '<div class="det"></div>';
   // The diff is the call; the detail box then carries only the result. Without a diff it is the call as text.
   row.querySelector(".det").textContent = diff ? String(call.result || "") : String(call.detail == null ? "" : call.detail) + (call.result ? "\n\n" + String(call.result) : "");
   if (diff && !call.result) row.querySelector(".det").style.display = "none";
@@ -4409,7 +4409,7 @@ function replayEntry(id, entry, index, unread) {
     var drawn = [];
     for (var t = 0; t < entry.tools.length; t++) {
       var c = entry.tools[t];
-      openWork.calls.push({ name: c.name, detail: c.detail, result: c.result, isError: c.isError });
+      openWork.calls.push({ name: c.name, detail: c.detail, result: c.result, isError: c.isError, gate: c.gate });
       if (c.question) asked = c.question;
       // A refused ShowUI drew nothing then, so it draws nothing now.
       if (c.surface && !c.isError) drawn.push(c.surface);
@@ -6249,7 +6249,7 @@ stream.onmessage = function (raw) {
     var pending = openCall.get(e.agentId);
     openCall.delete(e.agentId);
     if (!inView(e) || !pending) return;
-    pending.call.result = e.summary || "";
+    pending.call.result = e.summary || ""; pending.call.gate = e.gate || null; // the gate's verdict (INV-1664)
     if (e.screenshot) pending.call.shot = e.screenshot;
     redrawItem(pending.work);
     return;
@@ -7011,6 +7011,7 @@ function openAgentModal(mode, agent) {
     return '<span class="toolchip' + (on ? " on" : "") + '" data-tool="' + esc(tool) + '">' +
       esc(tool) + "</span>";
   }).join("");
+  if (window.toolPerms) window.toolPerms.mount(agent); // allowed / ask me / off, the group row and the floors (INV-1664)
   renderAgentScope(agent ? String(agent.scopeId || "") : "");
   renderAgentProvider(agent ? String(agent.provider || "") : "");
   $("agmodel").value = agent ? String(agent.model || "") : "";
@@ -7061,6 +7062,7 @@ $("agtools").addEventListener("click", function (event) {
   // In a scope the tools come from the scope, not from here.
   if ($("agscope").value !== "") return;
   var tool = chip.getAttribute("data-tool");
+  if (window.toolPerms && window.toolPerms.cycle(chip, tool)) return; // three states (INV-1664)
   agentModal.tools[tool] = !agentModal.tools[tool];
   chip.className = "toolchip" + (agentModal.tools[tool] ? " on" : "");
 });
@@ -7168,6 +7170,7 @@ function saveAgentModal() {
     description: $("agpersona").value,
     // A full set is sent as null — "everything", which stays true for future tools.
     tools: granted.length === allTools.length && unshown.length === 0 ? null : granted.concat(unshown),
+    toolPermissions: window.toolPerms ? window.toolPerms.value() : undefined, // ask-before settings (INV-1664); undefined keeps what was saved
     // In a scope, the scope owns the tools; send them anyway as the fallback for if
     // it is ever removed from the scope.
     scopeId: $("agscope").value,

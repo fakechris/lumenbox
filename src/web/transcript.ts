@@ -16,6 +16,7 @@ import { parseWakePrompt, type WakeMessage } from "../host/prompt.ts";
 import { optionLabel } from "../host/ask-options.ts";
 import { type SurfaceDraw, surfaceDrawOf } from "../host/show-ui-catalog.ts";
 import { type EditDiff, editDiffOf } from "./line-diff.ts";
+import type { GateVerdict } from "../host/gate-verdict.ts";
 
 export interface DisplayTool {
   name: string;
@@ -30,6 +31,8 @@ export interface DisplayTool {
   surface?: SurfaceDraw;
   /** For edit_file: what changed, as `-`/`+` lines, so the row reads as a diff rather than two paragraphs (INV-112). */
   diff?: EditDiff;
+  /** The policy gate's verdict on this step and why (INV-1664), joined from its ledger by the call's id. */
+  gate?: GateVerdict;
 }
 
 /**
@@ -151,7 +154,9 @@ function resultText(block: Record<string, unknown>): string {
 
 export function toDisplayEntries(
   entries: readonly unknown[],
-  roster: readonly RosterEntry[]
+  roster: readonly RosterEntry[],
+  /** The gate's verdict for a call by its tool_use id, when the gate kept one (INV-1664). */
+  verdictOf: (callId: string) => GateVerdict | undefined = () => undefined
 ): DisplayEntry[] {
   const display: DisplayEntry[] = [];
   const knownNames = roster.map(entry => entry.name);
@@ -184,6 +189,7 @@ export function toDisplayEntries(
           ? { surface: surfaceDrawOf(block.input)! }
           : {}),
         ...(editDiffOf(String(block.name ?? ""), block.input) !== undefined ? { diff: editDiffOf(String(block.name ?? ""), block.input)! } : {}),
+        ...(verdictOf(String(block.id ?? "")) !== undefined ? { gate: verdictOf(String(block.id ?? ""))! } : {}),
       }));
       if (tools.length > 0) {
         const entryWithTools = { kind: "tools" as const, tools };
