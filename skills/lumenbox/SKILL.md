@@ -57,8 +57,10 @@ The names below are the server's. Your client may prefix them, for example
   `scope: "all"` lists every open task.
 - **Returns:** a first line `status: in_progress | completed | failed | incomplete | cancelled`,
   with the reason in brackets, then the task and its history. `structuredContent.tasks[]` has
-  the same as data: `outcome`, `stage`, `history`, and `deliverables` (id, name, size,
-  sha256, note) once the task has delivered files.
+  the same as data: `outcome`, `stage`, `history`, `reply` (the agent's final reply when
+  its turn ended: `at`, `by`, `text`, at most 2000 characters), and `deliverables` (id, name,
+  size, sha256, note) once the task has delivered files. In the text, the reply is the
+  history line that says `replied:`.
 - **Waiting for you:** a `stage` that starts with `person/` means the work waits for the user.
   `person/answer`: an agent asked a question. `person/review`: the work is back for review.
   `person/blocked` and `person/delivery` also wait for the user. Say so plainly. The user
@@ -131,9 +133,10 @@ The names below are the server's. Your client may prefix them, for example
   your review".
 - **Completed is not checked:** `completed` means the task says so. Read the deliverable
   before you summarise it, and say what you read.
-- **A reply is not a deliverable:** the result is in the deliverables, and
-  `fetch_deliverable` gets it. A task with none may have answered in its chat. Say that, and
-  do not invent a file.
+- **A reply is not a deliverable:** files are in the deliverables, and `fetch_deliverable`
+  gets them. A task with none may still have answered: its `reply` is what the agent said
+  when it finished, cut at 2000 characters. Quote it as the agent's answer, say it was cut
+  when it ends in `…`, and do not invent a file it only mentions.
 
 ## When it does not work
 
