@@ -19,7 +19,7 @@ this file and the headers disagree. Edit the header, not this table.
 | doc | title | status | updated |
 |---|---|---|---|
 | [01-requirements](01-requirements.md) | Requirements | current | 2026-08-22 |
-| [02-product](02-product.md) | Product | current | 2026-08-19 |
+| [02-product](02-product.md) | Product | current | 2026-11-06 |
 | [03-architecture](03-architecture.md) | Architecture | current | 2026-09-22 |
 | [04-design](04-design.md) | Design | current | 2026-09-27 |
 | [05-data](05-data.md) | Data | current | 2026-11-01 |
@@ -43,7 +43,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [17-two-agents](17-two-agents.md) | Two agents on one repository | current | 2026-08-26 |
 | [19-pitfalls](19-pitfalls.md) | Pitfalls: remembering how things went wrong | current | 2026-08-28 |
 | [37-onboarding](37-onboarding.md) | Getting started, every way in | current | 2026-11-02 |
-| [38-operators-guide](38-operators-guide.md) | The operator's guide (what the README used to be) | current | 2026-09-29 |
+| [38-operators-guide](38-operators-guide.md) | The operator's guide (what the README used to be) | current | 2026-11-06 |
 | [55-external-desktops](55-external-desktops.md) | External browsers and desktop control | current | 2026-09-15 |
 | [56-teaching-upgrade](56-teaching-upgrade.md) | Teaching draft upgrade | current | 2026-09-15 |
 | [70-cua-linux-validation](70-cua-linux-validation.md) | Linux CUA 回归矩阵与状态验收 | current | 2026-09-22 |

@@ -2864,3 +2864,74 @@ test("an instruction read out of a file is held by the judge, named by its quest
     assert.equal(view?.heldBy, "fromContent 0.91");
   } finally { result.cleanup(); }
 });
+
+// ── 2026-11-05, the hourly routine that failed all night (INV-1665) ──────────────────────────
+//
+// A routine whose provider key was revoked failed every hour until somebody read the log the next
+// morning. On the real stack — the scheduler firing real turns through the bus, the scripted model
+// rejecting them the way a provider does — the third failure in a row pauses it with the reason,
+// the fourth window does not fire, the pause is a decision on the attention list, and resuming it
+// lets the next window run. The window that met a run still going is in the list as a skip.
+
+test("a routine that fails three times in a row is paused with why, asks a person, and runs again once resumed (INV-1665)", async () => {
+  const { Scheduler, parseSchedule } = await import("./schedule.ts");
+  const { attentionFor } = await import("./attention.ts");
+  let calls = 0;
+  let openGate: (() => void) | undefined;
+  const gate = new Promise<void>(resolve => { openGate = resolve; });
+  const script: Script = async () => {
+    calls += 1;
+    if (calls === 1) await gate; // the first run is still going when the next window comes round
+    if (calls <= 3) throw Object.assign(new Error("401 invalid x-api-key"), { status: 401 });
+    return { say: "Checked: nothing new." };
+  };
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: [], script,
+    drive: async ({ bus, frontId }) => {
+      let clock = new Date("2026-11-05T22:00:00Z");
+      const parsed = parseSchedule("@every 1h");
+      assert.ok("schedule" in parsed);
+      const routine = { slug: "hourly-check", name: "Hourly check", path: "/home/box/work/skills/hourly-check/SKILL.md", schedule: parsed.schedule };
+      const scheduler = new Scheduler({
+        due: async () => [routine],
+        run: async (agent, prompt) => {
+          bus.sendFromUser(agent, prompt, { steerable: false, lane: "background", synthetic: true });
+          await bus.runExclusive(agent, { userDriven: true });
+          return { result: "done" };
+        },
+        defaultAgent: () => frontId,
+        now: () => clock,
+        path: null,
+      });
+      const settle = () => new Promise(resolve => setTimeout(resolve, 20));
+      const hour = async () => { await scheduler.tick(); await settle(); clock = new Date(clock.getTime() + 3_600_000); };
+
+      await hour(); // 22:00 starts, and waits
+      await hour(); // 23:00 meets it: skipped
+      openGate?.();
+      await settle();
+      await hour(); // 00:00
+      await hour(); // 01:00: the third failure in a row
+      assert.equal(calls, 3);
+      await hour(); // 02:00: paused, not fired
+      assert.equal(calls, 3, "the fourth window does not fire");
+
+      const held = (await scheduler.status()).filter(entry => entry.hold !== undefined).map(entry => ({ slug: entry.slug, name: entry.name, ...entry.hold! }));
+      const attention = attentionFor({ principalId: "", identities: [], tasks: [], questions: [], nameOf: id => id, routinesHeld: held, all: true });
+      const item = attention.mine.find(entry => entry.kind === "routine-paused");
+      assert.match(item?.title ?? "", /Routine Hourly check is paused: failed 3 times in a row; the last: 401 invalid x-api-key/);
+
+      assert.equal(scheduler.resume("hourly-check", "the operator"), true);
+      await hour();
+      assert.equal(calls, 4, "resumed, the next window runs");
+
+      const runs = scheduler.runs("hourly-check");
+      assert.deepEqual(runs.map(run => run.outcome), ["done", "failed", "failed", "skipped", "failed"]);
+      assert.equal(runs[3]?.code, "overlap_in_flight");
+      assert.match(runs[3]?.reason ?? "", /previous run has not finished/);
+    },
+  });
+  try {
+    assert.ok(result.score.said.some(line => /Checked: nothing new/.test(line.text)), "the run after resuming is a real turn that answered");
+  } finally { result.cleanup(); }
+});
