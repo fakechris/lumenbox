@@ -264,3 +264,14 @@ test("a login's next is checked by safeNext in web/auth.ts and nowhere else (INV
     .map(file => file.path);
   assert.deepEqual(elsewhere, [], "check a redirect target with safeNext from src/web/auth.ts");
 });
+
+test("a SKILL.md key is parsed in skills.ts and explained in docs/93, and the two lists are one (INV-1658)", async () => {
+  // The contract used to live only in skills.ts comments, and docs/25, 29 and 44 each told a
+  // part of it. One page owns it now; a key added to the parser and not to the page, or the
+  // other way round, is the drift that made the page necessary.
+  const { SKILL_FRONTMATTER_KEYS } = await import("./skills.ts");
+  const page = readFileSync(join(ROOT, "..", "docs", "93-skills.md"), "utf8");
+  const documented = [...page.matchAll(/^\| `([a-z_-]+)` \|/gm)].map(match => match[1]!);
+  assert.ok(documented.length > 0, "docs/93 §2 has a table of keys, one `key` per row");
+  assert.deepEqual([...documented].sort(), [...SKILL_FRONTMATTER_KEYS].sort(), "document the key in docs/93 §2, or stop parsing it");
+});

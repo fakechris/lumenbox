@@ -2,12 +2,13 @@
      title: Webhook triggers
      family: decision
      status: current
-     updated: 2026-09-14
+     updated: 2026-11-05
 -->
 # 44 · Webhook triggers
 
 *2026-09-09. A URL per routine, so anything that can make an HTTP request can set an agent
-working. Companion to the skills/routines mechanism (a routine is a skill file).*
+working. Companion to the skills/routines mechanism (a routine is a skill file; the SKILL.md contract
+is [docs/93](93-skills.md)).*
 
 ## What was missing
 

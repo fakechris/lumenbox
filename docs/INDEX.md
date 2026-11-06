@@ -30,6 +30,8 @@ this file and the headers disagree. Edit the header, not this table.
 | [27-testing-and-release](27-testing-and-release.md) | Testing and release stability: ours, against OpenClaw and Hermes | current | 2026-10-26 |
 | [57-agent-consumer-contract](57-agent-consumer-contract.md) | Agent 消费者合同：谁去拉，谁保证，不同架构怎么统一 | current | 2026-09-15 |
 | [92-web-ui](92-web-ui.md) | The web UI's visual rules: type, spacing, components | current | 2026-11-03 |
+| [93-skills](93-skills.md) | Skills: the SKILL.md contract, where skills live, and how a skill becomes a routine | current | 2026-11-05 |
+| [94-catalog](94-catalog.md) | The catalog: experts, crews, connectors and shelf templates | current | 2026-11-05 |
 
 ## guide
 
@@ -70,9 +72,9 @@ this file and the headers disagree. Edit the header, not this table.
 | [20-completion-standard](20-completion-standard.md) | The standard of completion, written before the work | current | 2026-09-14 |
 | [23-context-compaction](23-context-compaction.md) | Why the agent kept compacting, and what long-horizon systems do instead | current | 2026-09-27 |
 | [24-context-memory](24-context-memory.md) | Context, memory and compaction: ours, against Hermes and OpenClaw | current | 2026-11-01 |
-| [25-workbuddy](25-workbuddy.md) | Workbuddy: skills, presets, delegated engines — the hands-on program | current | 2026-10-21 |
+| [25-workbuddy](25-workbuddy.md) | Workbuddy: skills, presets, delegated engines — the hands-on program | current | 2026-11-05 |
 | [26-inbound-reliability](26-inbound-reliability.md) | Inbound reliability: what a message goes through, and what mature harnesses do | current | 2026-11-01 |
-| [29-bot-templates](29-bot-templates.md) | Bot templates: the bot packs itself, the new bot installs itself | current | 2026-11-01 |
+| [29-bot-templates](29-bot-templates.md) | Bot templates: the bot packs itself, the new bot installs itself | current | 2026-11-05 |
 | [30-multi-box](30-multi-box.md) | Many boxes, one host: the multi-box mode | current | 2026-11-01 |
 | [31-harness-review](31-harness-review.md) | The turn engine, reviewed against the incident and three references | current | 2026-09-26 |
 | [32-coordination-protocol](32-coordination-protocol.md) | Coordination as protocol, slice one: a fork ledger that survives restarts, and fenced children | current | 2026-11-01 |
@@ -86,7 +88,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [41-chat-grammar](41-chat-grammar.md) | The chat column, rebuilt: one grammar for everything that appears in it | current | 2026-09-08 |
 | [42-front-and-workers](42-front-and-workers.md) | One front, invisible workers | current | 2026-10-19 |
 | [43-scenarios](43-scenarios.md) | Episodes as tests | current | 2026-09-26 |
-| [44-webhook-triggers](44-webhook-triggers.md) | Webhook triggers | current | 2026-09-14 |
+| [44-webhook-triggers](44-webhook-triggers.md) | Webhook triggers | current | 2026-11-05 |
 | [45-teams](45-teams.md) | Teams | current | 2026-09-09 |
 | [46-chat-as-a-chat](46-chat-as-a-chat.md) | The chat is a chat | current | 2026-09-09 |
 | [47-jumpbox-audit](47-jumpbox-audit.md) | Jump-box behaviour audit | current | 2026-09-11 |

@@ -1,33 +1,4 @@
-/**
- * Work an agent has done once and can do again.
- *
- * The whole model in one sentence, and it is worth keeping that small: **a skill is a saved prompt
- * the agent runs.** Not a plugin, not a DSL, not a workflow graph. A markdown file saying how to do
- * something, optionally with scripts beside it.
- *
- * Where they live is the decision that makes everything else easy. `/home/box/work/skills/<slug>/`,
- * which is the box's work volume, because that is the only place that satisfies all three things a
- * skill has to be:
- *
- *   - **writable by the agent** with the tools it already has — it can write a skill with `bash` or
- *     `write_file` the moment it works something out, without a new tool for authoring;
- *   - **readable and editable by a person**, through the files view that already serves that
- *     directory;
- *   - **durable**, since that volume is the one that survives a rebuild.
- *
- * The third argument is the decisive one on its own: a skill with a helper script needs the script
- * where `bash` can run it. Anywhere outside the box fails that immediately.
- *
- * **Bodies are not in the prompt.** The prompt carries names, descriptions and paths — enough to
- * decide which skill applies — and the agent reads the one it wants. A dozen skills pasted into every
- * request would cost more than the conversation, and the same reasoning already governs memory and
- * compaction here: load an index, drill down on demand.
- *
- * No new tool for invoking one, deliberately. The agent has `read_file`; a `UseSkill` tool would be a
- * second way to read a file, and the framing a skill needs ("this is a recipe you wrote, adapt it
- * where the situation differs") belongs in the one place the list is rendered rather than in a tool
- * result nobody sees until they call it.
- */
+/** Skills: a saved prompt the agent runs, read from the box — what one is and the SKILL.md contract are docs/93. */
 
 import { envNumber } from "../config.ts";
 import { namesControlSurface } from "./control-surfaces.ts";
@@ -36,7 +7,7 @@ import { parseDeliverWhen } from "./routine-resolve.ts";
 import { declaredTools } from "./side-effects.ts";
 import { engineToolNames } from "./engine-tools.ts";
 
-/** Where skills live inside the box. Under the work volume for the reasons in the module comment. */
+/** Where skills live inside the box: the work volume, for the reasons in docs/93 §1. */
 export const SKILLS_DIR = "/home/box/work/skills";
 
 /** The one file that makes a directory a skill. */
@@ -220,8 +191,11 @@ export function allowedToolsFrom(raw: string, ours: ReadonlySet<string> | undefi
   return { tools: [...tools], unknown };
 }
 
-/** Frontmatter keys that mean something. Anything else is ignored rather than rejected. */
-const KNOWN_KEYS = new Set([
+/**
+ * Frontmatter keys that mean something. Anything else is ignored rather than rejected.
+ * docs/93 §2 explains each; architecture-guard.test.ts holds that table to this list.
+ */
+export const SKILL_FRONTMATTER_KEYS: ReadonlySet<string> = new Set([
   "name",
   "description",
   "scope",
@@ -266,7 +240,7 @@ export function parseSkillFile(text: string): ParsedSkill {
     const at = line.indexOf(":");
     if (at <= 0) continue;
     const key = line.slice(0, at).trim().toLowerCase();
-    if (!KNOWN_KEYS.has(key)) continue;
+    if (!SKILL_FRONTMATTER_KEYS.has(key)) continue;
     // Quotes stripped because a person writing frontmatter by hand will sometimes add them, and a
     // name of `"Weekly report"` with the quotes in it looks like a bug in our code.
     // Hub skills (WorkBuddy / skill-hub) use YAML `|` blocks for description; fold them

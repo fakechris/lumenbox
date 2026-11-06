@@ -1,19 +1,4 @@
-/**
- * Built-in specialists, crews and connectors.
- *
- * Architecture, matching WorkBuddy / Doubao expert packs:
- *
- *   - A **crew** is several experts, not one persona wearing many hats.
- *   - An **expert** is a standing persona (how they work) plus a bound set of
- *     **standard skills** from the skill hub — the same packages other workbenches
- *     ship. The skill bodies live in `catalog-data/skills/` and are seeded into
- *     the box; the persona's skill-routing table says when to read which.
- *   - The starter team stays four. Catalog rows are installable, not seeded as
- *     agents.
- *
- * Personas are rewritten (no identity theatre, no fake KPIs, no frozen tool
- * names). Skill packages are copied, not paraphrased.
- */
+/** The built-in catalog — experts, crews, connectors, shelf templates; what each is and how it installs are docs/94. */
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
