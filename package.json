@@ -1,6 +1,6 @@
 {
   "name": "agentbox",
-  "version": "0.3.27",
+  "version": "0.3.28",
   "private": true,
   "description": "Your own team of AI agents, each with a real computer to work on — reached from your desktop and your chat apps, taken over at any moment, and believed on the record, not on its word.",
   "type": "module",
