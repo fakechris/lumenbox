@@ -12,7 +12,7 @@
  *   `connectors:` / `secrets:` frontmatter, docs/93 §2 — its own agent-scoped skills and the ones
  *   its box's bundles name) and its box's bundles (`refsFor(...).needs`, INV-421);
  * - **what is here** is read against the vault (Team → Secrets; an OAuth connection is the secret
- *   `oauth:<provider>`, Doors → Connected services) and the live MCP servers and doors
+ *   `oauth:<provider>`, Channels → Connectors) and the live MCP servers and doors
  *   (`connectorSatisfied`, mcp-connectors.ts).
  *
  * A need is `present`, `missing` (with why: not there, or there but not granted to this agent) or
@@ -134,7 +134,7 @@ function connectorKey(name: string): string {
 }
 
 const SECRETS_WHERE = { tab: "team", label: "Settings → Team → Secrets" } as const;
-const SERVICES_WHERE = { tab: "doors", label: "Settings → Doors → Connected services" } as const;
+const SERVICES_WHERE = { tab: "doors", label: "Settings → Channels → Connectors" } as const;
 
 /**
  * Whether one vault secret is usable by this agent now: there, covered by a live grant (or the
@@ -214,7 +214,7 @@ export function missingLine(coverage: Coverage): string {
 export function beforeStartText(coverage: Coverage, agentName: string): string {
   const lines = coverage.items
     .filter(item => item.state === "missing")
-    .map(item => `· ${item.kind === "connector" ? "连接" : "密钥"} ${item.id}：${item.why}（在 ${item.where.label} 配置；${item.by.join("、")} 需要）`);
+    .map(item => `· ${item.kind === "connector" ? "连接器" : "密钥"} ${item.id}：${item.why}（在 ${item.where.label} 配置；${item.by.join("、")} 需要）`);
   return [`${agentName} 开始前需要：`, ...lines, "配好后这条任务会自动开始，不用再发一遍。"].join("\n");
 }
 

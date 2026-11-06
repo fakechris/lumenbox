@@ -3110,7 +3110,7 @@ test("a task whose skill needs an unconnected GitHub waits before it starts, and
         await manager.idle();
         assert.equal(rounds, 0, "the agent did not start");
         assert.equal(heard.length, 1);
-        assert.match(heard[0]!, /Ada 开始前需要：\n· 连接 github：GitHub is not connected here（在 Settings → Doors → Connected services 配置；skill pr-review 需要）/);
+        assert.match(heard[0]!, /Ada 开始前需要：\n· 连接器 github：GitHub is not connected here（在 Settings → Channels → Connectors 配置；skill pr-review 需要）/);
         const [waiting] = tasks.list();
         assert.equal(waiting?.status, "blocked");
         assert.match(waiting?.waitingOn ?? "", /^credentials: connector github/);

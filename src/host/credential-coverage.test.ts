@@ -55,7 +55,7 @@ test("a connector is present through a configured server, a live door or an OAut
   assert.equal(coverage.ok, false);
   const figma = coverage.items.find(item => item.id === "mcp:figma")!;
   assert.equal(figma.where.tab, "doors");
-  assert.match(missingLine(coverage), /connector mcp:figma \(mcp:figma is not connected here .*Connected services; needed by bundle b\)/);
+  assert.match(missingLine(coverage), /connector mcp:figma \(mcp:figma is not connected here .*Connectors; needed by bundle b\)/);
 
   const ungranted = credentialCoverage({ ...ada, bundles: [{ name: "b", needs: { connectors: ["github"] } }] }, [], world([{ ...github, grants: [{ holder: "agent:someone-else" }] }]));
   assert.equal(ungranted.items[0]!.state, "missing");
