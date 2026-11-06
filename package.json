@@ -1,6 +1,6 @@
 {
   "name": "agentbox",
-  "version": "0.3.25",
+  "version": "0.3.26",
   "private": true,
   "description": "Multi-agent orchestrator with a remote Docker box and Linux computer-use",
   "type": "module",
