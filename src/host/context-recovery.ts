@@ -6,9 +6,8 @@ import type { DraftLookup } from "./handoff-draft.ts";
 import type { Task } from "./tasks.ts";
 import { pursuitBlockers } from "./goal-mode.ts";
 
-export function isContextCommand(text: string): boolean {
-  return /^\/new(?:\s|$)/i.test(text.trim());
-}
+/** `/new` is a chat command; its shape lives in the command table (INV-1660). */
+export { isContextCommand } from "../channels/commands.ts";
 
 export interface NewContextInput {
   agentId: string;

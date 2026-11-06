@@ -9,6 +9,8 @@
  * watching, wherever the page shows that task. ES5 and string building, like the page it joins.
  */
 
+import { settingsPane } from "./settings-registry.ts";
+
 export const SUPERVISION_JS = `(function () {
   function el(tag, attrs, text) {
     var node = document.createElement(tag);
@@ -33,7 +35,7 @@ export const SUPERVISION_JS = `(function () {
     var tabs = document.getElementById("settabs");
     var modal = document.querySelector("#settingswrap .modal");
     if (!tabs || !modal || document.getElementById("supwatchdog")) return;
-    tabs.appendChild(el("a", { href: "#", class: "tab", "data-settab": "supervision" }, "Supervision"));
+    tabs.appendChild(el("a", { href: "#", class: "tab", "data-settab": "supervision" }, ${JSON.stringify(settingsPane("supervision").title)}));
     var fields = modal.querySelectorAll(".field[data-settab]");
     var anchor = fields.length ? fields[fields.length - 1] : null;
     var after = anchor ? anchor.nextSibling : null;

@@ -9,19 +9,10 @@
  * branch does not want to rely on the model's judgement each time. Rules are the third
  * thing: written once by an administrator, applied before any model, audited by id.
  *
- * One Markdown file per rule under ~/.agentbox/rules. Frontmatter carries the matchers
- * and the effect; the body is what the reviewer reads as a standing instruction:
- *
- *     ---
- *     name: jira-comments
- *     effect: allow            # allow | ask | deny
- *     tool: bash, RunOnHost    # optional; names, or * for any
- *     command: jira comment    # optional; the command must start with one of these
- *     host: *.atlassian.net    # optional; for browser_open / WebFetch, the URL's host
- *     principal: Chris         # optional; only when the turn runs for this person (INV-156)
- *     agent: Nova              # optional; only for this agent's own calls, by id or name (INV-1664)
- *     ---
- *     Commenting on a Jira issue is routine work here. Creating or transitioning one is not.
+ * One Markdown file per rule under ~/.agentbox/rules: frontmatter carries the matchers and the
+ * effect, the body is what the reviewer reads as a standing instruction. The keys, their
+ * spellings and what each matches are defined once, in rules-grammar.ts (INV-1660), which this
+ * file parses with and docs/reference-rules.md is generated from.
  *
  * `principal:` is how a person pre-authorises their own routine work (INV-156): the rule
  * applies only while a turn is running for them, from whichever door they drove it —
@@ -41,8 +32,9 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { agentboxHome } from "../config.ts";
+import { fieldValue, isRuleEffect, RULE_EFFECTS, RULE_FIELDS, ruleField, type RuleEffect, type RuleFieldTarget } from "./rules-grammar.ts";
 
-export type RuleEffect = "allow" | "ask" | "deny";
+export type { RuleEffect } from "./rules-grammar.ts";
 
 export interface Rule {
   id: string;
@@ -96,20 +88,27 @@ export function parseRuleFile(id: string, content: string): { rule?: Rule; probl
     if (at <= 0) continue;
     meta[line.slice(0, at).trim().toLowerCase()] = line.slice(at + 1).replace(/\s+#.*$/, "").trim();
   }
-  const effect = (meta.effect ?? "").toLowerCase();
-  if (effect !== "allow" && effect !== "ask" && effect !== "deny") return { problem: `effect must be allow, ask or deny (got ${JSON.stringify(meta.effect ?? "")})` };
+  const effect = (fieldValue(meta, ruleField("effect")) ?? "").toLowerCase();
+  if (!isRuleEffect(effect)) return { problem: `effect must be ${RULE_EFFECTS.slice(0, -1).join(", ")} or ${RULE_EFFECTS.at(-1)} (got ${JSON.stringify(fieldValue(meta, ruleField("effect")) ?? "")})` };
   const text = match[2]!.trim();
   if (text === "") return { problem: "the body is empty; say what the rule means, in words a person and a reviewer can read" };
+  const lists: Partial<Record<RuleFieldTarget, string[]>> = {};
+  for (const field of RULE_FIELDS) {
+    if (!field.list) continue;
+    const values = list(fieldValue(meta, field));
+    lists[field.target] = field.lowercase === true ? values.map(value => value.toLowerCase()) : values;
+  }
+  const name = fieldValue(meta, ruleField("name"));
   return {
     rule: {
       id,
-      name: meta.name?.trim() !== "" && meta.name !== undefined ? meta.name.trim() : id,
+      name: name?.trim() !== "" && name !== undefined ? name.trim() : id,
       effect,
-      tools: list(meta.tool ?? meta.tools),
-      commands: list(meta.command ?? meta.commands),
-      hosts: list(meta.host ?? meta.hosts).map(host => host.toLowerCase()),
-      principals: list(meta.principal ?? meta.principals),
-      agents: list(meta.agent ?? meta.agents),
+      tools: lists.tools ?? [],
+      commands: lists.commands ?? [],
+      hosts: lists.hosts ?? [],
+      principals: lists.principals ?? [],
+      agents: lists.agents ?? [],
       text,
     },
   };

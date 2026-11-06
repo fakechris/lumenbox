@@ -27,6 +27,7 @@ import {
   type TaskCardState,
 } from "./manager.ts";
 import { EMPTY_REPLY_NOTE, NO_UPGRADE_WAITING, UPGRADE_IS_ADMIN_CALL } from "./strings.ts";
+import { CHAT_COMMANDS, renderHelp } from "./commands.ts";
 
 function testAdapter(): ChannelAdapter & {
   inject: (message: InboundMessage) => Promise<string | undefined>;
@@ -2147,6 +2148,26 @@ test("「团队」answers on the wire with the door's roster; work words do not 
   await adapter.inject({ identity: "telegram:7", senderLabel: "chris", text: "让团队看看这个" });
   await sleep(20);
   assert.deepEqual(asked, ["让团队看看这个"], "work mentioning the team is still work");
+});
+
+test("/help answers on the wire with the command table, every command in it; a sentence about help is work", async () => {
+  const adapter = testAdapter();
+  const asked: string[] = [];
+  const manager = new ChannelManager({ mayDrive: () => true, ask: async (_agent, text) => { asked.push(text); return "did"; }, log: () => {} });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  const reply = await adapter.inject({ identity: "telegram:7", senderLabel: "chris", text: "/help" });
+  assert.equal(reply, renderHelp(), "the reply is the table's rendering, not a hand-written list");
+  for (const command of CHAT_COMMANDS) {
+    for (const form of command.forms) assert.ok(reply!.includes(form.syntax), `${command.key}: ${form.syntax} is listed`);
+    assert.ok(reply!.includes(command.summary.zh), `${command.key}'s summary is listed`);
+  }
+  assert.deepEqual(asked, [], "/help runs no turn");
+
+  await adapter.inject({ identity: "telegram:7", senderLabel: "chris", text: "/help me write a cover letter" });
+  await sleep(20);
+  assert.deepEqual(asked, ["/help me write a cover letter"], "only the whole message is the command");
 });
 
 test("「桌面」answers with the door's default agent's desktop link; work words pass through", async () => {

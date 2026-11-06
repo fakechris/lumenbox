@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseContinuation } from "./continuation.ts";
+import { parseContinuation } from "./commands.ts";
 
 test("natural language never establishes task ownership", () => {
   for (const text of ["好", "2", "另外介绍一个模型", "同时支持哪些格式？", "毛利改成百分比", "https://example.test/new", "25道题\n长短记忆的区别？", "also include the chart", "别发了"]) {
