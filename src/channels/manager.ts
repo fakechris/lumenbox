@@ -352,7 +352,7 @@ export interface ChannelManagerDeps {
    * Routine results waiting to ride along with the next reply in a chat (INV-776,
    * `attach_next`). Asked once per delivered reply; whatever comes back is appended.
    */
-  attachToReply?: (chatKey: string) => string | undefined;
+  attachToReply?: (chatKey: string) => string | undefined; /** "分了 N 个子任务，M 个完成" when the task's turns forked (INV-1667); absent or undefined, no line. */ forkTally?: (taskId: string) => string | undefined;
   /**
    * Told of every admitted message from a person, for routines that listen for a phrase. Fired
    * beside the ordinary handling, never instead of it; the callee decides what, if anything, runs.
@@ -2269,7 +2269,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       // A routine result that was judged not worth an interruption rides along here, under
       // the reply the person was waiting for anyway (INV-776).
       const attached = this.deps.attachToReply?.(targetChatKey) ?? this.deps.attachToReply?.(chatKey);
-      const trailer = [suggestion, attached].filter((part): part is string => part !== undefined).join("\n\n");
+      const trailer = [suggestion, attached, taskId !== undefined ? this.deps.forkTally?.(taskId) : undefined].filter((part): part is string => part !== undefined).join("\n\n");
       if (reply.trim() !== interim) {
         await deliver(`${reply.trim() === "" ? EMPTY_REPLY_NOTE : reply}${trailer === "" ? "" : `\n\n${trailer}`}`);
       } else {

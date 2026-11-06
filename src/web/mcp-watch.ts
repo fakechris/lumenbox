@@ -13,8 +13,13 @@
  * A task's creation is not on the board's change stream; its first move is, and that is when the feed first
  * shows it. The stage is read when the task changes. A turn starting or ending does not change the task, so
  * `working` versus `idle` moves without an event; status, the person/* rows and the goal do not.
+ *
+ * A fork of a task's turn is on the feed too (INV-1667): `fork.spawned`, `fork.started`, `fork.fenced`,
+ * `fork.reported`, `fork.merged`, `fork.dropped`, each an event carrying the task it was forked for —
+ * so a supervisor sees "split in two, one stuck" as it happens, not only the task's status after.
  */
 
+import type { ForkChild, ForkEvent, ForkEvents } from "../host/fork-events.ts";
 import type { Task } from "../host/tasks.ts";
 
 export const FEED_CAPACITY = 2000;
@@ -28,6 +33,8 @@ export interface WatchEvent {
   status: string;
   stage?: string;
   pursuit?: { status: string; pausedReason?: string };
+  /** Present when the event is a fork of the task's turn moving, not the task itself. */
+  fork?: { event: ForkEvent["event"]; id: string; child: string; brief: string; status: ForkChild["status"]; detail?: string };
 }
 
 export interface WatchResult {
@@ -67,6 +74,23 @@ export class ChangeFeed {
       ...(stage !== undefined ? { stage } : {}),
       ...(pursuit !== undefined ? { pursuit } : {}),
     };
+    this.push(event);
+  }
+
+  /** A fork of this task's turn moved (INV-1667): always an event, since each is a step nobody has seen. */
+  recordFork(task: Task, event: ForkEvent, fork: ForkChild): void {
+    const detail = event.detail ?? event.status;
+    this.push({
+      seq: ++this.seq,
+      at: event.at,
+      taskId: task.id,
+      requester: task.requester,
+      status: task.status,
+      fork: { event: event.event, id: fork.id, child: fork.child, brief: fork.brief, status: fork.status, ...(detail !== undefined ? { detail } : {}) },
+    });
+  }
+
+  private push(event: WatchEvent): void {
     this.events.push(event);
     if (this.events.length > (this.options.capacity ?? FEED_CAPACITY)) this.events.shift();
     for (const waiter of [...this.waiters]) if (waiter.matches(event)) waiter.wake();
@@ -103,9 +127,17 @@ export class ChangeFeed {
   }
 }
 
+/** Puts every fork step of a task's turns on the feed (INV-1667); a fork with no task (a chat aside, the team room) is not a task's change. */
+export function feedForks(feed: ChangeFeed, forks: ForkEvents | undefined, taskOf: (id: string) => Task | undefined): void {
+  forks?.onEvent((event, fork) => {
+    const task = fork.taskId !== undefined ? taskOf(fork.taskId) : undefined;
+    if (task !== undefined) feed.recordFork(task, event, fork);
+  });
+}
+
 export function describeWatch(result: WatchResult): string {
   if (result.reset) return `reset: some changes are no longer held; read task_status again. cursor: ${result.cursor}`;
   if (result.events.length === 0) return `no changes. cursor: ${result.cursor}`;
-  const lines = result.events.map(event => `${event.taskId} ${event.status}${event.stage !== undefined ? ` ${event.stage}` : ""}${event.pursuit !== undefined ? ` goal ${event.pursuit.status}${event.pursuit.pausedReason !== undefined ? ` (${event.pursuit.pausedReason})` : ""}` : ""} at ${event.at}`);
+  const lines = result.events.map(event => event.fork !== undefined ? `${event.taskId} ${event.fork.event} ${event.fork.child} (${event.fork.status}${event.fork.detail !== undefined ? `: ${event.fork.detail}` : ""}) "${event.fork.brief}" at ${event.at}` : `${event.taskId} ${event.status}${event.stage !== undefined ? ` ${event.stage}` : ""}${event.pursuit !== undefined ? ` goal ${event.pursuit.status}${event.pursuit.pausedReason !== undefined ? ` (${event.pursuit.pausedReason})` : ""}` : ""} at ${event.at}`);
   return `${lines.join("\n")}\ncursor: ${result.cursor}`;
 }

@@ -180,7 +180,7 @@ import { randomUUID } from "node:crypto";
 import { isLive, isTaskStatus, type Task } from "../host/tasks.ts"; import { UnknownAgentError } from "../host/task-agents.ts";
 import { connectorSatisfied } from "../host/mcp-connectors.ts";
 import { adminRecipients } from "../host/upgrade.ts";
-import { BoxUpdateService, boxUpdateRoute } from "./box-update-routes.ts"; import { personRoute } from "./person-routes.ts"; import { PERSON_JS } from "./person-ui.ts"; import { agentFactsRoute } from "./agent-facts.ts"; import { agentCaseText } from "../host/consent-case.ts"; import { ROW_ORDER_JS } from "./row-order.ts"; import { BOARD_ORDER_JS } from "./board-order.ts"; import { teamMemoryReviewRoute } from "./team-memory-review-routes.ts"; import { TEAM_MEMORY_REVIEW_JS } from "./team-memory-review-ui.ts"; import { pendingReviews } from "../host/team-memory-review.ts"; import { CLAIM_ACCOUNT_JS } from "./claim-account-ui.ts"; import { DIGEST_HOUR, heldSection, PushBudget } from "../host/push-budget.ts"; import { pushBudgetRoute } from "./push-budget-routes.ts"; import { PUSH_BUDGET_JS } from "./push-budget-ui.ts"; import { SpendLimits, todaysRows } from "../host/spend-limits.ts"; import { spendLimitRoute } from "./spend-limit-routes.ts"; import { SPEND_LIMIT_JS } from "./spend-limit-ui.ts"; import { configuredRates } from "../host/provider-fallback.ts"; import { BoxKeeper } from "./box-keeper.ts"; import { AgentPauses } from "../host/agent-pause.ts"; import { ProbeKeeper, type ProbeKind } from "../host/boundary-probe.ts"; import { agentPauseRoute } from "./agent-pause-routes.ts"; import { AGENT_PAUSE_JS } from "./agent-pause-ui.ts"; import { diagnosticsRoute } from "./diagnostics-routes.ts"; import { DIAGNOSTICS_JS } from "./diagnostics-ui.ts"; import { providerRests, quotaStatusLine } from "../host/provider-rest.ts"; import { providerRestRoute, restNotice } from "./provider-rest-routes.ts"; import { PROVIDER_REST_JS } from "./provider-rest-ui.ts"; import { fallbackRoute } from "./provider-fallback-routes.ts"; import { PROVIDER_FALLBACK_JS } from "./provider-fallback-ui.ts"; import { routineRunsRoute } from "./routine-runs-routes.ts"; import { ROUTINE_RUNS_JS } from "./routine-runs-ui.ts"; import { deliverableRoute } from "./deliverable-routes.ts"; import { DELIVERABLES_JS } from "./deliverables-ui.ts"; import { readToolPermissions, toolPermissionRoute } from "./tool-permission-routes.ts"; import { TOOL_PERMS_JS } from "./tool-permissions-ui.ts"; import { configVersionRoute } from "./config-version-routes.ts"; import { CONFIG_HISTORY_JS } from "./config-history-ui.ts"; import { switchesForTask } from "../agents/config-versions.ts"; import { CredentialWaits } from "../host/credential-waits.ts"; import { secretsNeededBy, taskCredentialEvent, templateCredentialEvent, templateSkillNeeds, type CredentialEvent } from "./credential-routes.ts"; import { CREDENTIALS_JS } from "./credentials-ui.ts";
+import { BoxUpdateService, boxUpdateRoute } from "./box-update-routes.ts"; import { personRoute } from "./person-routes.ts"; import { PERSON_JS } from "./person-ui.ts"; import { agentFactsRoute } from "./agent-facts.ts"; import { agentCaseText } from "../host/consent-case.ts"; import { ROW_ORDER_JS } from "./row-order.ts"; import { BOARD_ORDER_JS } from "./board-order.ts"; import { teamMemoryReviewRoute } from "./team-memory-review-routes.ts"; import { TEAM_MEMORY_REVIEW_JS } from "./team-memory-review-ui.ts"; import { pendingReviews } from "../host/team-memory-review.ts"; import { CLAIM_ACCOUNT_JS } from "./claim-account-ui.ts"; import { DIGEST_HOUR, heldSection, PushBudget } from "../host/push-budget.ts"; import { pushBudgetRoute } from "./push-budget-routes.ts"; import { PUSH_BUDGET_JS } from "./push-budget-ui.ts"; import { SpendLimits, todaysRows } from "../host/spend-limits.ts"; import { spendLimitRoute } from "./spend-limit-routes.ts"; import { SPEND_LIMIT_JS } from "./spend-limit-ui.ts"; import { configuredRates } from "../host/provider-fallback.ts"; import { BoxKeeper } from "./box-keeper.ts"; import { AgentPauses } from "../host/agent-pause.ts"; import { ProbeKeeper, type ProbeKind } from "../host/boundary-probe.ts"; import { agentPauseRoute } from "./agent-pause-routes.ts"; import { AGENT_PAUSE_JS } from "./agent-pause-ui.ts"; import { diagnosticsRoute } from "./diagnostics-routes.ts"; import { DIAGNOSTICS_JS } from "./diagnostics-ui.ts"; import { providerRests, quotaStatusLine } from "../host/provider-rest.ts"; import { providerRestRoute, restNotice } from "./provider-rest-routes.ts"; import { PROVIDER_REST_JS } from "./provider-rest-ui.ts"; import { fallbackRoute } from "./provider-fallback-routes.ts"; import { PROVIDER_FALLBACK_JS } from "./provider-fallback-ui.ts"; import { routineRunsRoute } from "./routine-runs-routes.ts"; import { ROUTINE_RUNS_JS } from "./routine-runs-ui.ts"; import { deliverableRoute } from "./deliverable-routes.ts"; import { DELIVERABLES_JS } from "./deliverables-ui.ts"; import { DIVISION_JS } from "./division-ui.ts"; import { isForkChild } from "../host/pending-work.ts"; import { readToolPermissions, toolPermissionRoute } from "./tool-permission-routes.ts"; import { TOOL_PERMS_JS } from "./tool-permissions-ui.ts"; import { configVersionRoute } from "./config-version-routes.ts"; import { CONFIG_HISTORY_JS } from "./config-history-ui.ts"; import { switchesForTask } from "../agents/config-versions.ts"; import { CredentialWaits } from "../host/credential-waits.ts"; import { secretsNeededBy, taskCredentialEvent, templateCredentialEvent, templateSkillNeeds, type CredentialEvent } from "./credential-routes.ts"; import { CREDENTIALS_JS } from "./credentials-ui.ts";
 import { hasCredential, PRESET_MODELS, providerConfigured, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { BootstrapAdmins } from "../host/bootstrap.ts";
 import { Principals, principalsPath, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
@@ -224,7 +224,7 @@ import { personalAllocationRefusal, personalBoxesOf, personalQuotaFor } from "..
 import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
 import { attentionFor, isDecision, urgencyOf } from "../host/attention.ts"; import { parseLevel } from "../host/autonomy-level.ts"; import { openTurnsOf, staleApprovals } from "../host/approval-wait.ts";
 import { stageWorldOf, taskStage } from "../host/task-stage.ts";
-import { ChangeFeed } from "./mcp-watch.ts";
+import { ChangeFeed, feedForks } from "./mcp-watch.ts";
 import { InvoluteConsumer } from "../host/involute-inbox.ts";
 import { mayAnswerFrom } from "../host/involute-askers.ts";
 import { describeQueues } from "../host/actor-queue.ts";
@@ -1150,7 +1150,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       sampled: messageId => orchestrator.sampledForAnswerReview(messageId),
       review: input => orchestrator.reviewAnswer(input),
     },
-    attachToReply: chatKey => orchestrator.routineAttachments.take(chatKey),
+    attachToReply: chatKey => orchestrator.routineAttachments.take(chatKey), forkTally: taskId => orchestrator.pendingWork?.forks?.tallyLine(taskId), // "分了 N 个子任务" under the reply (INV-1667)
     ingress,
     messages,
     listeners: message => {
@@ -2982,7 +2982,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // The outside door (docs/90 §2): a computer and a team, never our memory, files or settings; every call goes through a person's objects (INV-1358).
   const taskActive = (task: { assigneeId?: string; conversation?: string }) => task.assigneeId !== undefined && task.conversation !== undefined && (orchestrator.bus.isActive(task.assigneeId, task.conversation) || orchestrator.jobWatch.openJobs(task.assigneeId, task.conversation).length > 0);
   const sideDoorStage = (task: Task) => stageWorldOf(task, { undeliverableChats: new Set(outbox.problems().map(receipt => receipt.chatKey)), questions: questions.list(), agentIds: new Set(registry.list().map(agent => agent.id)), chatKeyOf: conversation => conversations.chatKeyFor(conversation), active: taskActive });
-  const changeFeed = new ChangeFeed({ stageOf: task => taskStage(task, sideDoorStage(task)) }); orchestrator.tasks?.onChange(task => changeFeed.record(task)); // watch (INV-1508)
+  const changeFeed = new ChangeFeed({ stageOf: task => taskStage(task, sideDoorStage(task)) }); orchestrator.tasks?.onChange(task => changeFeed.record(task)); feedForks(changeFeed, orchestrator.pendingWork?.forks, id => orchestrator.tasks?.get(id)); // watch (INV-1508), with the forks of a task's turns (INV-1667)
   const sideDoorTools = () => mcpServerTools({
     registry, orchestrator, principals, workDir: WORK_DIR, log, mayDrive: (agentId, principalId) => mayEnterBox(registry.boxOf(agentId), principalId) && mandateWorld().mayDrive(principalId), mayReadTask: (task, principalId) => (task.assigneeId !== undefined && registry.has(task.assigneeId) ? mayEnterBox(registry.boxOf(task.assigneeId), principalId) : task.requester === principalId), // INV-1668: a deliverable's bytes to whoever may see the task, as the web route has it
     stageWorld: sideDoorStage, changeFeed, listen: listener => { channelTurnListeners.add(listener); return () => channelTurnListeners.delete(listener); },
@@ -3517,7 +3517,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
         // Settings → Supervision (INV-1528): its own script and routes, like the decision model's below.
-        if (route === "GET /app/supervision.js") { res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(ROW_ORDER_JS + BOARD_ORDER_JS + UI_STYLE_JS + INLINE_ASK_JS + AGENT_PAUSE_JS + SUPERVISION_JS + SUPERVISION_WIZARD_JS + BOX_UPDATE_JS + DIAGNOSTICS_JS + CLAIM_ACCOUNT_JS + PUSH_BUDGET_JS + SPEND_LIMIT_JS + PROVIDER_REST_JS + TEAM_MEMORY_REVIEW_JS + PROVIDER_FALLBACK_JS + PERSON_JS + ROUTINE_RUNS_JS + DELIVERABLES_JS + TOOL_PERMS_JS + CONFIG_HISTORY_JS + CREDENTIALS_JS); return; } // + Apply update (INV-1538), askInline (INV-1540)
+        if (route === "GET /app/supervision.js") { res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(ROW_ORDER_JS + BOARD_ORDER_JS + UI_STYLE_JS + INLINE_ASK_JS + AGENT_PAUSE_JS + SUPERVISION_JS + SUPERVISION_WIZARD_JS + BOX_UPDATE_JS + DIAGNOSTICS_JS + CLAIM_ACCOUNT_JS + PUSH_BUDGET_JS + SPEND_LIMIT_JS + PROVIDER_REST_JS + TEAM_MEMORY_REVIEW_JS + PROVIDER_FALLBACK_JS + PERSON_JS + ROUTINE_RUNS_JS + DELIVERABLES_JS + TOOL_PERMS_JS + CONFIG_HISTORY_JS + CREDENTIALS_JS + DIVISION_JS); return; } // + Apply update (INV-1538), askInline (INV-1540)
         const supervised = await supervisionRoute(route, { home: agentboxHome(), configPath: configPath(), agents: () => registry.list().map(agent => agent.profile.name), readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: role => refusedRole(role), logFile: defaultSupervisionLog() });
         if (supervised !== undefined) { if (supervised.status !== 0) send(res, supervised.status, supervised.body); return; }
         // Settings → Model → Decision model (INV-1412): its own script, its own two routes.
@@ -3980,7 +3980,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         const mayReadTask = (task: Task) => caller.userId === undefined || (task.assigneeId ? mayReadAgent(task.assigneeId) : task.requester === principals.resolve(caller.userId).id); if (deliverableRoute(route, url, res, { tasks: orchestrator.tasks, mayReadTask, send })) return; // a task's deliverable, to whoever sees the task (INV-1663)
         if (route === "GET /api/tasks") {
-          send(res, 200, { tasks: orchestrator.tasks?.list().filter(mayReadTask).map(task => ({ ...task, configVersions: switchesForTask(registry, task.id) })) ?? [] }); // with the agent configuration versions it ran under (INV-1669)
+          send(res, 200, { tasks: orchestrator.tasks?.list().filter(mayReadTask).map(task => { const forks = orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []; return { ...task, configVersions: switchesForTask(registry, task.id), ...(forks.length > 0 ? { forks } : {}) }; }) ?? [] }); // with the agent configuration versions it ran under (INV-1669) and the division of work (INV-1667)
           return;
         }
 
@@ -6037,14 +6037,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // a room's worth of topics would pay it for entries nobody scrolled to.
           const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 50, 1), 200);
           const offset = Math.max(Number(url.searchParams.get("offset")) || 0, 0);
-          const page = sorted.slice(offset, offset + limit).map(conversation => {
+          const forks = orchestrator.pendingWork?.forks?.children(id) ?? []; const page = sorted.slice(offset, offset + limit).map(conversation => { // each thread's children, folded under it in the picker (INV-1667)
             // Labelled by what was said, because the id is a flattened chatKey nobody
             // can read. Head-of-file only, so a page stays cheap.
             const firstLine =
               conversation.id === MAIN_CONVERSATION
                 ? undefined
                 : registry.conversationFirstLine(id, conversation.id);
-            return { ...conversation, ...(firstLine !== undefined ? { firstLine } : {}) };
+            const children = forks.filter(fork => fork.parent === conversation.id).map(fork => ({ id: fork.child, brief: fork.brief, status: fork.status, ...(fork.reason !== undefined ? { reason: fork.reason } : {}), lastAt: fork.lastAt })); return { ...conversation, ...(firstLine !== undefined ? { firstLine } : {}), ...(children.length > 0 ? { forks: children } : {}) };
           });
           send(res, 200, { conversations: page, total: sorted.length });
           return;
@@ -6773,7 +6773,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const conversation =
             typeof body.conversation === "string" && body.conversation !== ""
               ? body.conversation
-              : MAIN_CONVERSATION;
+              : MAIN_CONVERSATION; if (isForkChild(conversation)) { send(res, 409, { error: "A fork's thread is read-only: its findings go back to the conversation that started it. Write there instead." }); return; } // INV-1667
 
           // A console message into a channel thread is a room message, not a whisper.
           // Without this, an operator's interjection and the agent's answer were visible

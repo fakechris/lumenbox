@@ -2170,7 +2170,7 @@ ${outcome.text}`;
 
   // Setup still belongs to the inbox. Persist the message ids before acknowledging
   // them, so startup can reconcile a crash between these two synchronous writes.
-  const agentVersion = agentVersionOf(standing, offeredSkills); const configVersion = registry.configVersions.beginTurn({ agentId: agent.id, profile: agent.profile, turnId, conversation, standing: agentVersion.standing, task: currentTaskOf({ agent, conversation, tasks: deps.tasks })?.id }); deps.turns?.begin({ // configVersion: the version this turn is held to until it ends (INV-1669)
+  if (isForkConversation(conversation)) deps.pendingWork?.forks?.started(agent.id, conversation); /* a fork's first turn is a step of its chain (INV-1667) */ const agentVersion = agentVersionOf(standing, offeredSkills); const configVersion = registry.configVersions.beginTurn({ agentId: agent.id, profile: agent.profile, turnId, conversation, standing: agentVersion.standing, task: currentTaskOf({ agent, conversation, tasks: deps.tasks })?.id }); deps.turns?.begin({ // configVersion: the version this turn is held to until it ends (INV-1669)
     id: turnId,
     agentId: agent.id,
     causedBy: inbound.map(message => message.id),

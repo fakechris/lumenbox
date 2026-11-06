@@ -39,7 +39,7 @@ export interface McpToolsDeps {
 export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
   const { registry, orchestrator, principals, workDir, log } = deps;
   const nameOf = (id: string) => registry.tryGet(id)?.profile.name ?? id;
-  const recordOf = (task: Task) => taskRecord(task, { nameOf, ...(deps.stageWorld !== undefined ? { stageWorld: deps.stageWorld } : {}) });
+  const recordOf = (task: Task) => taskRecord(task, { nameOf, forksOf: id => orchestrator.pendingWork?.forks?.ofTask(id) ?? [], ...(deps.stageWorld !== undefined ? { stageWorld: deps.stageWorld } : {}) });
   /** task_status, once: the text it always said, and the same tasks as the record has them (INV-1506). */
   const statusOf = (input: Record<string, unknown>, principalId: string): { text: string; structured: Record<string, unknown> } => {
     const board = orchestrator.tasks;
@@ -60,7 +60,9 @@ export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
     const history = task.history
       .map(change => `  ${change.at} ${nameOf(change.by)} ${change.status ?? ""} ${change.note ?? ""}`.trimEnd())
       .join("\n");
-    return { text: `${describeOutcome(outcomeOf(task))}\n${describeTask(task, nameOf)}\n${history}`, structured: { tasks: [recordOf(task)] } };
+    // The division of work (INV-1667): one line per fork of its turns, how it stands, and the brief.
+    const forks = (orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []).map(fork => `  fork ${fork.child} ${fork.status}${fork.reason !== undefined ? ` (${fork.reason})` : ""} "${fork.brief}" last ${fork.lastAt}`);
+    return { text: `${describeOutcome(outcomeOf(task))}\n${describeTask(task, nameOf)}\n${history}${forks.length > 0 ? `\nforks:\n${forks.join("\n")}` : ""}`, structured: { tasks: [recordOf(task)] } };
   };
   return [
     {
@@ -232,7 +234,7 @@ function watchTool(feed: ChangeFeed): McpServerTool {
   return {
     name: "watch",
     description:
-      "What changed since your cursor: a task's status, its stage, its goal's status. Waits up to wait_seconds (max " +
+      "What changed since your cursor: a task's status, its stage, its goal's status, and the forks of its turns (fork.spawned, fork.started, fork.fenced, fork.reported, fork.merged, fork.dropped). Waits up to wait_seconds (max " +
       `${WAIT_MAX_SECONDS}) for the next change when there is none. Call first without since to get a cursor. ` +
       "reset: true means some changes are gone; read task_status again. scope: mine (default, tasks you asked for) or all.",
     inputSchema: {

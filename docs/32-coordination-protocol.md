@@ -2,7 +2,7 @@
      title: Coordination as protocol, slice one: a fork ledger that survives restarts, and fenced children
      family: decision
      status: current
-     updated: 2026-11-01
+     updated: 2026-11-06
 -->
 # 32 — Coordination as protocol, slice one: a fork ledger that survives restarts, and fenced children
 
@@ -291,3 +291,29 @@ note instead of closing when the turn ends (`board.stillWorking`); the wake turn
 watched or killed here. Delegated engines (ACP sessions) are not in this path. The watch is in
 memory: a host restart forgets it, the job stays on the box's `/jobs` list, and `Jobs` still
 answers for it.
+
+
+## 11. Addendum 2026-11-06 (INV-1667): the division of work, seen
+
+The ledger says whether a fork's findings reached its parent; nothing showed a person that a
+job had been split at all. A fork's conversation lives under `conversations/fork/`, which the
+thread listing never descends into, so the children were invisible — the person saw "it seems to
+be working", not "it split in three, two done, one stuck".
+
+`src/host/fork-events.ts` keeps each fork's chain beside the ledger, keyed by the ledger's id
+(docs/05 §2.7b): `spawned` when the brief is admitted (with the parent agent's task in hand, the
+same lookup the policy gate uses for a task's level), `started` on the child's first turn,
+`fenced` when the dispatch refusal of §2 fires, `reported` with the handoff status, and `merged`
+or `dropped` from the ledger's own `commit` and `dropped` — so the chain's last step is written
+by the same call that settles the record, never before. A child's state for a person follows
+from its chain: running, done, stuck (partial, blocked, unstated, failed), stopped by the fence
+(a fence refusal and no `done`), or dropped by a restart.
+
+Shown in four places: folded under its parent in the thread picker (one line, "2 forks · 1 done ·
+1 fenced", opening to a row per child that opens its transcript); a "Division of
+work" section on the task card with each child's chain and times (`src/web/division-ui.ts`);
+the side door's `task_status` record (`forks`) and `watch` feed (`fork.*` events, scoped by the
+task's requester like every other event); and one line under a chat reply whose task forked.
+A fork's thread is read-only on the page: `POST /api/prompt` refuses a `fork/…` conversation,
+because nobody but the turn that forked it talks to a fork. Nothing here changes the fence, the
+ledger or recovery; it only records what they did.

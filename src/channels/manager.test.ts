@@ -2841,3 +2841,23 @@ test("a person's message in a task's thread runs as a follow-up on that task, no
     assert.equal(opened.length, 2, "a room without a thread is not a subscription: a new task as before");
   } finally { manager.stop(); }
 });
+
+test("a reply whose task forked carries one line counting the children and how many finished (INV-1667)", async () => {
+  for (const tally of ["分了 2 个子任务，1 个完成。", undefined]) {
+    const adapter = cardAdapter();
+    const asked: string[] = [];
+    const manager = new ChannelManager({
+      mayDrive: () => true, log() {},
+      ask: async () => "Acme pricing is three tiers from $9.",
+      board: { open: () => "t1", started() {}, closed: (_task, status) => status },
+      forkTally: taskId => { asked.push(taskId); return tally; },
+    });
+    manager.register(adapter, true, "test"); await started(manager);
+    await adapter.inject({ identity: "feishu:one", chatKey: "feishu:room", senderLabel: "one", text: "price check" });
+    await manager.idle();
+    const reply = adapter.chatSent.map(sent => sent.text).find(text => text.startsWith("Acme pricing"));
+    assert.equal(reply, tally === undefined ? "Acme pricing is three tiers from $9." : `Acme pricing is three tiers from $9.\n\n${tally}`);
+    assert.deepEqual(asked, ["t1"], "asked about the task this reply settles");
+    manager.stop();
+  }
+});

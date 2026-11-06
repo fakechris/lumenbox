@@ -670,6 +670,20 @@ which is how it reaches the person there. Not kept: versions or diffs between de
 library across tasks. Not yet pruned: a closed task that leaves the board at compaction leaves its
 snapshots behind.
 
+### 2.7b `fork-events.jsonl` — what a person sees of the forks (INV-1667)
+
+Beside `pending-work.jsonl` (`src/host/fork-events.ts`). The fork ledger is compacted to nothing
+whenever nothing is open — it is for recovery, not history — so the forks a page shows are kept
+here instead, one line per step and keyed by the ledger's id: `fork.spawned` (agent, parent
+conversation, child conversation, the brief's first 120 characters, the task in hand),
+`fork.started`, `fork.fenced` (the tool the fence refused), `fork.reported` (the handoff status),
+`fork.merged` (the ledger's `committed`) and `fork.dropped`. Read once at start; rewritten as the
+newest 500 forks, whole, past 4000 lines. Observation only: a failed write is a warning and the
+fork runs regardless. Read by the thread picker (`forks` on each thread from
+`GET /api/conversations`), the task card (`forks` on each task from `GET /api/tasks`), the side
+door's `task_status` record and its `watch` feed, and the line a chat reply carries
+("分了 N 个子任务，M 个完成").
+
 ### 2.8 `digest/<runKey>/package/`
 
 One day, assembled from what is already kept (`src/host/day-package/`, INV-669). The

@@ -8,7 +8,8 @@ import { TaskStore } from "../host/tasks.ts";
 import { SIDE_DOOR_CAPABILITIES } from "./mcp-contract.ts";
 import { handleMcpRequest, mintMcpToken, principalForToken } from "./mcp-server.ts";
 import { mcpServerTools } from "./mcp-tools.ts";
-import { ChangeFeed } from "./mcp-watch.ts";
+import { ForkEvents } from "../host/fork-events.ts";
+import { ChangeFeed, describeWatch, feedForks } from "./mcp-watch.ts";
 
 function wired(capacity?: number) {
   const board = new TaskStore(null);
@@ -53,6 +54,26 @@ test("only what a watcher reads is an event: status, stage, a goal's status and 
     ["goal", "doing", undefined, "active", undefined],
     ["goal", "blocked", undefined, "paused", "budget"],
   ], "the goal's note made no event; its pause did");
+});
+
+test("a fork of a task's turn is on the feed, step by step, for the task's requester; a fork with no task is not (INV-1667)", () => {
+  const { board, feed } = wired();
+  const forks = new ForkEvents(null);
+  feedForks(feed, forks, id => board.get(id));
+  const task = board.create({ title: "price check", requester: "p1" })!;
+  const cursor = feed.since(undefined, () => true).cursor;
+  forks.spawned({ id: "pw-1", agentId: "a1", parent: "main", child: "fork/main-q-1", brief: "find pricing", taskId: task.id });
+  forks.spawned({ id: "pw-2", agentId: "a1", parent: "main", child: "fork/main-q-2", brief: "aside" });
+  forks.fenced("a1", "fork/main-q-1", "SendToAgent");
+  forks.reported("pw-1", "blocked", "needs the team");
+  const seen = feed.since(cursor, mine("p1"));
+  assert.deepEqual(seen.events.map(event => [event.taskId, event.fork?.event, event.fork?.status]), [
+    [task.id, "fork.spawned", "running"],
+    [task.id, "fork.fenced", "fenced"],
+    [task.id, "fork.reported", "fenced"],
+  ]);
+  assert.match(describeWatch(seen), /fork\.fenced fork\/main-q-1 \(fenced: SendToAgent\) "find pricing"/);
+  assert.deepEqual(feed.since(cursor, mine("p2")).events, [], "scoped like every other event: by the task's requester");
 });
 
 test("a cursor older than the ring says reset; scope mine sees only my tasks; all sees everyone's", () => {
