@@ -4,7 +4,7 @@ LumenBox has no calendar of its own. It reaches a calendar only through a connec
 
 | Calendar | Route |
 |---|---|
-| Google Calendar | The Google door's tools (`google__…`). They exist only when the operator has turned that door on. |
+| Google Calendar | The Google connector's tools (`google__…`). They exist only when the operator has turned that connector on. |
 | Feishu calendar | `connector_request` with `feishu`. It acts as the Feishu app, so it reaches only the calendars the app has been given, not automatically the person's. |
 | Anything else | The box's browser, if they are signed in there. Otherwise there is no route; say so. |
 

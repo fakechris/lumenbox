@@ -37,10 +37,10 @@ export function mayEnterBox(box: Pick<BoxEntry, "members">, principalId: string 
  * changes with no event here. `nameOf` turns a principal id into the name a person reads.
  */
 export function membersLabel(box: Pick<BoxEntry, "members">, nameOf: (principalId: string) => string): string {
-  if (box.members === "everyone") return "共享箱子：这个安装放进来的任何人，从这个箱子的任何一个渠道或网页";
-  if (box.members.length === 0) return "无人箱子：成员集合是空的，只有安装自身的凭证进得来";
-  if (box.members.length === 1) return `${nameOf(box.members[0]!)} 的箱子：只有他/她进得来`;
-  return `${box.members.length} 人的箱子：${box.members.map(nameOf).join("、")}`;
+  if (box.members === "everyone") return "共享 box：这个安装放进来的任何人，从这个 box 的任何一个渠道或网页";
+  if (box.members.length === 0) return "无人 box：成员集合是空的，只有安装自身的凭证进得来";
+  if (box.members.length === 1) return `${nameOf(box.members[0]!)} 的 box：只有他/她进得来`;
+  return `${box.members.length} 人的 box：${box.members.map(nameOf).join("、")}`;
 }
 
 /** What somebody who is not a member is told — by name, because a blank refusal is a support ticket. */

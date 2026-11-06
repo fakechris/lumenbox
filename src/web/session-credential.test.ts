@@ -156,7 +156,7 @@ test("a box is for its members: the list, the web, and the chat door all say the
 
     // Everyone, which is what every installation has today: nothing changes.
     assert.equal((await boxes(dana)).length, 1);
-    assert.match((await boxes(dana))[0]!.membersLabel ?? "", /^共享箱子/);
+    assert.match((await boxes(dana))[0]!.membersLabel ?? "", /^共享 box/);
     assert.equal((await drive(dana)).status, 400, "reached the body");
     assert.equal((await drive(mia)).status, 400);
 
@@ -165,7 +165,7 @@ test("a box is for its members: the list, the web, and the chat door all say the
     const update = await fetch(`${base}/api/boxes/update`, { method: "POST", headers: ui, body: JSON.stringify({ name, members: [danaId] }) });
     assert.equal(update.status, 200);
     assert.equal((await boxes(dana)).length, 1);
-    assert.match((await boxes(dana))[0]!.membersLabel ?? "", /Dana 的箱子/);
+    assert.match((await boxes(dana))[0]!.membersLabel ?? "", /Dana 的 box/);
     assert.deepEqual(await boxes(mia), [], "a box she is not in is not a box she is told about");
     assert.equal((await drive(dana)).status, 400);
     const refused = await drive(mia);
