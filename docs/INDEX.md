@@ -53,6 +53,10 @@ this file and the headers disagree. Edit the header, not this table.
 | [87-prompt-parts](87-prompt-parts.md) | Built-in prompt parts: a team's override, and what happens when the default moves | current | 2026-11-01 |
 | [88-improve](88-improve.md) | A check-up for one agent: scenarios in isolation, a judged report, a proposal nobody applies | current | 2026-11-01 |
 | [91-watchdog](91-watchdog.md) | The watchdog: a control loop outside the orchestrator | current | 2026-11-02 |
+| [reference-prompt-parts](reference-prompt-parts.md) | Reference: the prompt parts | current | generated |
+| [reference-skills](reference-skills.md) | Reference: the skills that ship | current | generated |
+| [reference-templates](reference-templates.md) | Reference: the template shelf | current | generated |
+| [reference-tools](reference-tools.md) | Reference: the built-in tools | current | generated |
 
 ## decision
 
