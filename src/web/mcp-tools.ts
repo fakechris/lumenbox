@@ -10,6 +10,7 @@ import type { StageWorld } from "../host/task-stage.ts";
 import { describeTask, isLive, type Task, type TaskStore } from "../host/tasks.ts";
 import type { TurnEvent } from "../host/turn.ts";
 import { describeOutcome, outcomeOf } from "./mcp-contract.ts";
+import { fetchDeliverableTool } from "./mcp-deliverable-tool.ts";
 import { agentNamed, mcpGoalTools } from "./mcp-goal-tools.ts";
 import { taskRecord } from "./mcp-record.ts";
 import { type ChangeFeed, describeWatch, WAIT_MAX_SECONDS } from "./mcp-watch.ts";
@@ -31,6 +32,8 @@ export interface McpToolsDeps {
   changeFeed?: ChangeFeed;
   /** Tell the task's chat, through the outbound gate as a notice (INV-1509); absent, a flag reaches the attention page only. */
   notifyTask?: (task: Task, text: string) => void;
+  /** Who may read a task's files (INV-1668): the board's own rule; absent, only the task's requester. */
+  mayReadTask?: (task: Task, principalId: string) => boolean;
 }
 
 export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
@@ -213,6 +216,7 @@ export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
     ...(deps.mayDrive !== undefined ? mcpGoalTools({ registry, orchestrator, mayDrive: deps.mayDrive, nameOf: id => principals.resolve(id).name, log }) : []),
     ...(deps.changeFeed !== undefined ? [watchTool(deps.changeFeed)] : []),
     ...(orchestrator.tasks !== undefined ? [raiseAttentionTool(orchestrator.tasks, principals, deps.notifyTask)] : []),
+    ...(orchestrator.tasks !== undefined ? [fetchDeliverableTool(orchestrator.tasks, deps.mayReadTask ?? ((task, principalId) => task.requester === principalId))] : []),
   ];
 }
 
