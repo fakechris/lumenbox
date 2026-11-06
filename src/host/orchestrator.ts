@@ -88,7 +88,7 @@ import { classifyBox, type BoxClass } from "../box/access.ts";
 import type { ResolutionConfig, DesktopResources } from "../protocol/index.ts";
 import { runTurn, TurnAborted, type TurnDeps, type TurnEvent } from "./turn.ts";
 import { readHandoff, type ToolContext } from "./tools.ts";
-import { JobWatch } from "./job-watch.ts";
+import { JobWatch } from "./job-watch.ts"; import { ConversationState } from "./conversation-state.ts"; import { AgentFacts } from "../web/agent-facts.ts";
 import { loadConfig } from "../config.ts"; import { FallbackRuntimes, fallbackNames } from "./provider-fallback.ts"; import { setRejectionNote } from "./provider-rest.ts";
 import { McpManager } from "./mcp.ts";
 import { mergeServers } from "./mcp-connectors.ts";
@@ -312,6 +312,7 @@ export class Orchestrator {
   /** The commands turns let go of past their foreground window (INV-1461); their end wakes the agent on the background lane. */
   readonly verifications = new VerificationLedger(join(agentboxHome(), "verifications.jsonl")); // what each reviewer found, by claim and evidence digest (INV-1614)
   readonly generations = new BoxGenerations(line => console.error(`[box] ${line}`)); // which incarnation of each box a slow callback belongs to (INV-1476); bumped on every (re)connect
+  readonly agentFacts = new AgentFacts(new ConversationState(join(agentboxHome(), "conversation-state.jsonl")), { approvals: () => this.policy.pending(), questions: () => this.questionsOpen?.() ?? [], pausedForSpend: () => this.pausedForSpend?.() ?? [], working: id => this.bus.isActive(id) }); questionsOpen?: () => readonly { agentId: string; conversation: string; question: string; askedAt: number }[]; pausedForSpend?: () => readonly { agentId: string; day: string }[]; // the four facts a sidebar row is drawn from (INV-1625); the two readers are wired by the server
   readonly jobWatch = new JobWatch({ box: () => this.boxClient(), log: line => console.error(`[jobs] ${line}`), wake: (agentId, conversation, text) => this.prompt(agentId, text, undefined, { conversation, steerable: false, lane: "background", synthetic: true, origin: "host:jobs" }).then(() => undefined), generation: agentId => this.generations.current(this.registry.boxOf(agentId).id) });
   /**
    * Agents whose current turn is installing a template, by the template's id (docs/29 §5.3).
@@ -2340,7 +2341,7 @@ export class Orchestrator {
       ...(options.addressed === false ? { addressed: false } : {}),
       ...(options.toolScope !== undefined ? { toolScope: options.toolScope } : {}),
     });
-    const before = this.registry.readTranscript(agent.id, conversation).length;
+    const before = this.registry.readTranscript(agent.id, conversation).length; this.agentFacts.noteInbound(agent.id, conversation, { fromId: "user", ...(options.synthetic === true ? { synthetic: true } : {}), ...(options.origin !== undefined ? { origin: options.origin } : {}), ...(options.messageId !== undefined ? { messageId: options.messageId } : {}) }); // what reached the agent, for its row (INV-1625)
     await this.bus.runExclusive(agent.id, { userDriven: true, conversation });
 
     // After the turn, and not awaited: a person waiting on an answer should not also wait on
