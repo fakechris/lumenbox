@@ -160,15 +160,18 @@ export interface RoundDeps {
   ask: (reviewerId: string, task: Task) => Promise<{ reply: string; voided?: string }>;
   /** The board, as it stands when the round ends. */
   current: (taskId: string) => Task | undefined;
-  move: (taskId: string, change: { status?: "review" | "doing"; note: string }) => void;
+  move: (taskId: string, change: { status?: "review" | "doing" | "done"; note: string }) => void;
+  /** Whether an id is one of the agents (INV-1647): an agent's own ask is done when the record passes; a person's waits for their word. */
+  isAgent?: (id: string) => boolean;
   log: (line: string) => void;
 }
 
 /**
  * One review round for a claim: the K owed reviewers are asked at once, each verdict goes on
- * the record, and the record — not any one reply — moves the task. Settled pass stays in
- * review for the requester's word with the citation on it; settled fail goes back to doing
- * with the findings; a split is said and costs one more reviewer next time round.
+ * the record, and the record — not any one reply — moves the task. Settled pass is done when
+ * the requester is an agent (INV-1647) and stays in review for a person's word otherwise, the
+ * citation on it either way; settled fail goes back to doing with the findings; a split is said
+ * and costs one more reviewer next time round.
  */
 export async function reviewRound(deps: RoundDeps, task: Task): Promise<{ asked: string[]; settled?: Settled }> {
   const plan = planRound(task, deps.ledger, deps.candidates(), deps.k);
@@ -205,7 +208,8 @@ export async function reviewRound(deps: RoundDeps, task: Task): Promise<{ asked:
   }
   const names = settled.by.map(deps.nameOf).join(", ");
   if (settled.verdict === "pass") {
-    deps.move(task.id, { status: "review", note: `verified complete by ${names} on evidence ${plan.digest}; awaiting the requester's acceptance — others cite this record rather than re-checking` });
+    const agentsOwn = deps.isAgent?.(now.requester) === true;
+    deps.move(task.id, { status: agentsOwn ? "done" : "review", note: `verified complete by ${names} on evidence ${plan.digest}; ${agentsOwn ? "the requester is an agent, so the record closes it" : "awaiting the requester's acceptance"} — others cite this record rather than re-checking` });
   } else {
     const findings = records.filter(r => r.verdict === "fail").map(r => r.basis).join(" | ");
     deps.move(task.id, { status: "doing", note: `verified not complete by ${names} on evidence ${plan.digest}: ${findings}`.slice(0, 480) });

@@ -12,8 +12,8 @@ const PASS = "Status: complete\nIntegrity: clean\nContract audit: aligned\nItem 
 const FAIL = "Status: incomplete\nIntegrity: clean\nContract audit: aligned\nItem acceptance: contradicted — the file is empty\nNext action: write it";
 const names = (id: string) => id.toUpperCase();
 
-function claimed(store: TaskStore, evidence: string[] = ["/work/report.md: the report"]): Task {
-  const task = store.create({ title: "Write the report", requester: "chris", assigneeId: "ada", reviewerId: "bob", contract: { acceptance: "report.md exists and names the quarter" } })!;
+function claimed(store: TaskStore, evidence: string[] = ["/work/report.md: the report"], requester = "chris"): Task {
+  const task = store.create({ title: "Write the report", requester, assigneeId: "ada", reviewerId: "bob", contract: { acceptance: "report.md exists and names the quarter" } })!;
   store.update(task.id, { status: "doing" }, "ada");
   return store.update(task.id, { status: "review", evidence }, "ada")!.task;
 }
@@ -99,7 +99,7 @@ test("a round asks the owed reviewers at once and the record moves the task: pas
     ledger, k: 2, candidates: () => ["ada", "bob", "cy", "dee", "enzo"], nameOf: names, log: () => {},
     ask: async (reviewerId: string) => { asked.push(reviewerId); return { reply: replies[reviewerId] ?? "" }; },
     current: (id: string) => store.get(id),
-    move: (id: string, change: { status?: "review" | "doing"; note: string }) => { store.update(id, change, "review-guard"); },
+    move: (id: string, change: { status?: "review" | "doing" | "done"; note: string }) => { store.update(id, change, "review-guard"); },
   };
   const passing = claimed(store);
   const round = await reviewRound(deps, passing);
@@ -130,4 +130,24 @@ test("a round asks the owed reviewers at once and the record moves the task: pas
   assert.equal(sent.status, "doing");
   assert.match(sent.history.at(-1)!.note!, /^verified not complete by [A-Z]+, [A-Z]+ on evidence [0-9a-f]{16}: audit did not pass/);
   assert.deepEqual(verdictOf(passing, "I think it is fine"), { verdict: "none", basis: "audit gave no verdict (reply did not follow the protocol); not accepted — a person decides" });
+});
+
+test("a passing record closes an agent's own ask, and leaves a person's ask in review for their word (INV-1647)", async () => {
+  const store = new TaskStore(null);
+  const ledger = new VerificationLedger();
+  const deps = {
+    ledger, k: 2, candidates: () => ["ada", "bob", "cy", "dee"], nameOf: names, log: () => {},
+    ask: async () => ({ reply: PASS }),
+    current: (id: string) => store.get(id),
+    move: (id: string, change: { status?: "review" | "doing" | "done"; note: string }) => { store.update(id, change, "review-guard"); },
+    isAgent: (id: string) => id !== "p-chris",
+  };
+  const byAgent = claimed(store);
+  const first = await reviewRound(deps, byAgent);
+  assert.equal(first.settled?.verdict, "pass");
+  assert.equal(store.get(byAgent.id)!.status, "done", "an agent asked for it: the record is the acceptance");
+  assert.match(store.get(byAgent.id)!.history.at(-1)!.note!, /the requester is an agent, so the record closes it/);
+  const byPerson = claimed(store, ["/work/person.md: x"], "p-chris");
+  await reviewRound(deps, byPerson);
+  assert.equal(store.get(byPerson.id)!.status, "review", "a person asked for it: their word is the acceptance");
 });

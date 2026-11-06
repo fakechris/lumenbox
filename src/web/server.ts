@@ -222,7 +222,7 @@ import { PersonalBoxes, type PersonalBoxDriver } from "../host/personal-boxes.ts
 import { PersonalDocker } from "../box/personal.ts";
 import { personalAllocationRefusal, personalBoxesOf, personalQuotaFor } from "../host/box-quota.ts";
 import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
-import { attentionFor, urgencyOf } from "../host/attention.ts"; import { openTurnsOf, staleApprovals } from "../host/approval-wait.ts";
+import { attentionFor, isDecision, urgencyOf } from "../host/attention.ts"; import { openTurnsOf, staleApprovals } from "../host/approval-wait.ts";
 import { stageWorldOf, taskStage } from "../host/task-stage.ts";
 import { ChangeFeed } from "./mcp-watch.ts";
 import { InvoluteConsumer } from "../host/involute-inbox.ts";
@@ -2979,7 +2979,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   // The outside door (docs/90 §2): a computer and a team, never our memory, files or settings; every call goes through a person's objects (INV-1358).
   const taskActive = (task: { assigneeId?: string; conversation?: string }) => task.assigneeId !== undefined && task.conversation !== undefined && (orchestrator.bus.isActive(task.assigneeId, task.conversation) || orchestrator.jobWatch.openJobs(task.assigneeId, task.conversation).length > 0);
-  const sideDoorStage = (task: Task) => stageWorldOf(task, { undeliverableChats: new Set(outbox.problems().map(receipt => receipt.chatKey)), questions: questions.list(), chatKeyOf: conversation => conversations.chatKeyFor(conversation), active: taskActive });
+  const sideDoorStage = (task: Task) => stageWorldOf(task, { undeliverableChats: new Set(outbox.problems().map(receipt => receipt.chatKey)), questions: questions.list(), agentIds: new Set(registry.list().map(agent => agent.id)), chatKeyOf: conversation => conversations.chatKeyFor(conversation), active: taskActive });
   const changeFeed = new ChangeFeed({ stageOf: task => taskStage(task, sideDoorStage(task)) }); orchestrator.tasks?.onChange(task => changeFeed.record(task)); // watch (INV-1508)
   const sideDoorTools = () => mcpServerTools({
     registry, orchestrator, principals, workDir: WORK_DIR, log, mayDrive: (agentId, principalId) => mayEnterBox(registry.boxOf(agentId), principalId) && mandateWorld().mayDrive(principalId),
@@ -6090,7 +6090,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             questions: questions.list(),
             nameOf: id => registry.tryGet(id)?.profile.name ?? principals.list().find(person => person.id === id)?.name ?? id,
             unanswered: involuteUnanswered,
-            paused: orchestrator.bus.pausedChains(), approvals: orchestrator.policy.pending().filter(item => caller.userId === undefined || mayReadAgent(item.agentId)), // a parked command is the commonest block (INV-1627)
+            paused: orchestrator.bus.pausedChains(), agentIds: new Set(registry.list().map(agent => agent.id)), approvals: orchestrator.policy.pending().filter(item => caller.userId === undefined || mayReadAgent(item.agentId)), // a parked command is the commonest block (INV-1627)
             undeliverable: outbox.problems(),
             chatKeyOf: conversation => conversations.chatKeyFor(conversation), // The stage table's reads (INV-1464).
             active: taskActive,
@@ -6102,7 +6102,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (me === undefined || roleAtLeast(principals.roleOf(me.id), "admin")) for (const rest of providerRests.list()) answer.mine.unshift({ kind: "provider-resting", ref: rest.account, title: `${rest.label} is out of usage`, detail: `Every agent on it waits until ${new Date(rest.until).toLocaleString()}; top up the plan or Retry now in Settings → Model.` }); // INV-1577
           if (me === undefined || roleAtLeast(principals.roleOf(me.id), "admin")) for (const probe of probeKeeper?.recent() ?? []) answer.mine.unshift({ kind: "boundary-probe", ref: probe.agentId, title: `${probe.agentName} reached for this machine's credentials`, detail: `${probe.count} attempt${probe.count === 1 ? "" : "s"} in the last hour, refused; the latest ${probe.detail}.${probe.paused ? ` ${probe.agentName} is paused — Settings → Team.` : ""}` }); // INV-1553
           if (me === undefined || roleAtLeast(principals.roleOf(me.id), "admin")) for (const item of pendingReviews(registry.readSharedMemory())) answer.mine.unshift({ kind: "team-memory", ref: item.writer, title: `${registry.tryGet(item.writer)?.profile.name ?? "An agent"} wants the team to remember something`, detail: `"${item.record.text.slice(0, 140)}" — approve or reject in Settings → Team → Team memory.` }); // INV-1581
-          send(res, 200, { ...answer, mine: [...answer.mine].sort((a, b) => urgencyOf(a.kind) - urgencyOf(b.kind)), who: me?.name ?? "this installation" });
+          send(res, 200, { ...answer, mine: [...answer.mine].sort((a, b) => urgencyOf(a.kind) - urgencyOf(b.kind)).map(item => ({ ...item, decision: isDecision(item.kind) })), who: me?.name ?? "this installation" }); // decisions first and marked (INV-1647)
           return;
         }
 
