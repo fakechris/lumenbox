@@ -182,10 +182,34 @@ test("the manual: one page per concept, named by the concept, each with the skel
   const dir = mkdtempSync(join(tmpdir(), "manual-"));
   try {
     const skeleton = "Intro line.\n\n## What it is\n\nx\n\n## How to do it\n\n### In the app\n\nx\n\n### In a chat\n\nx\n\n### From the command line\n\nx\n\n## Where to see the result\n\nx\n\n## Limits\n\nx\n\n## Next\n\n- [Box](box.md)\n";
-    const page = (slug, covers, body = skeleton, extra = "     audience: user\n") =>
+    // Every page has its Chinese page beside it (INV-1684): the same headings, the Chinese skeleton.
+    const skeletonZh = "一句话说明。\n\n## 这是什么\n\nx\n\n## 怎么做\n\n### 在 app 里\n\nx\n\n### 在聊天里\n\nx\n\n### 在命令行里\n\nx\n\n## 在哪里看结果\n\nx\n\n## 限制\n\nx\n\n## 接下来\n\n- [Box](box.zh.md)\n";
+    const zhPage = (slug, covers, body = skeletonZh, source = "2026-11-01") =>
+      writeFileSync(join(dir, `${slug}.zh.md`), `<!-- doc: ${slug}.zh\n     title: ${slug}\n     family: manual\n     status: current\n     covers: ${covers}\n     audience: user\n     source-updated: ${source}\n-->\n# ${slug}\n\n${body}`);
+    const page = (slug, covers, body = skeleton, extra = "     audience: user\n     updated: 2026-11-01\n") => {
       writeFileSync(join(dir, `${slug}.md`), `<!-- doc: ${slug}\n     title: ${slug}\n     family: manual\n     status: current\n     covers: ${covers}\n${extra}-->\n# ${slug}\n\n${body}`);
+      zhPage(slug, covers);
+    };
     page("box", "box");
-    assert.deepEqual(lintManual(dir).problems, [], "a whole page passes");
+    assert.deepEqual(lintManual(dir).problems, [], "a whole page passes, in both languages");
+
+    rmSync(join(dir, "box.zh.md"));
+    assert.deepEqual(lintManual(dir).problems, ["manual/box.md: no Chinese page beside it; write box.zh.md (INV-1684)."]);
+    page("agent", "agent");
+    zhPage("box", "box", skeletonZh.replace("### 在聊天里\n\nx\n\n", "").replace("[Box](box.zh.md)", "[Agent](agent.md) · [English](box.md)"));
+    const zh = lintManual(dir).problems;
+    assert.ok(zh.some(p => /box\.zh\.md: its headings are not the original's/.test(p)), "the same headings at the same levels");
+    assert.ok(zh.some(p => /box\.zh\.md: links to agent\.md; the Chinese page is agent\.zh\.md/.test(p)), "a Chinese page links to Chinese pages");
+    assert.ok(!zh.some(p => /links to box\.md;/.test(p)), "except its own original, the way back to English");
+    rmSync(join(dir, "agent.md"));
+    rmSync(join(dir, "agent.zh.md"));
+    zhPage("box", "box", skeletonZh, "2026-10-25");
+    assert.ok(lintManual(dir).problems.some(p => /box\.zh\.md: behind box\.md \(translated from 2026-10-25, the original is 2026-11-01\): update it, or say so/.test(p)), "a translation behind its original says so");
+    zhPage("box", "box", skeletonZh.replace("一句话说明。", "一句话说明。\n\n> 译本落后于英文原文（2026-11-01）。"), "2026-10-25");
+    assert.deepEqual(lintManual(dir).problems, [], "marked as behind, and within the window");
+    zhPage("box", "box", skeletonZh, "2026-09-01");
+    assert.ok(lintManual(dir).problems.some(p => /box\.zh\.md: 61 days behind box\.md; a translation more than 30 days behind is not being kept/.test(p)), "a mark does not keep a translation forever");
+    zhPage("box", "box");
 
     page("boxes", "box");
     assert.ok(lintManual(dir).problems.some(p => p === "two current manual pages cover box: box, boxes. One concept, one page; merge them or supersede one."), "one concept, one page");
@@ -196,6 +220,7 @@ test("the manual: one page per concept, named by the concept, each with the skel
     rmSync(join(dir, "12-agent.md"));
 
     page("memory", "memory", skeleton.replace("### In a chat\n\nx\n\n", "").replace("[Box](box.md)", "[Gone](gone.md)"), "");
+    zhPage("memory", "memory", skeletonZh.replace("### 在聊天里\n\nx\n\n", ""));
     const problems = lintManual(dir).problems;
     assert.ok(problems.some(p => /memory\.md: the skeleton is .*In a chat.*; this page has /.test(p)), "the three ways in are the skeleton");
     assert.ok(problems.some(p => /memory\.md: a written manual page says audience: user/.test(p)), "the glossary's words are checked on it");
@@ -204,7 +229,7 @@ test("the manual: one page per concept, named by the concept, each with the skel
 });
 
 test("a team page has the team skeleton, covers a crew or a team, states its cost basis and is linked from the manual's home (INV-1662)", () => {
-  const { lintManual, renderIndex, TEAM_SECTIONS } = awaitImported;
+  const { lintManual, renderIndex, TEAM_SECTIONS, TEAM_SECTIONS_ZH } = awaitImported;
   const shipped = lintManual(join(docs, "manual"));
   assert.deepEqual(shipped.problems, [], shipped.problems.join("\n"));
   const teams = [...shipped.pages.keys()].filter(slug => slug.startsWith("teams/"));
@@ -215,9 +240,15 @@ test("a team page has the team skeleton, covers a crew or a team, states its cos
   try {
     mkdirSync(join(dir, "teams"));
     const body = TEAM_SECTIONS.map(h => `${h}\n\n${h === "## Running cost" ? "**Basis:** not measured yet." : "x"}\n`).join("\n");
-    const team = (slug, covers, text = body) =>
+    const bodyZh = TEAM_SECTIONS_ZH.map(h => `${h}\n\n${h === "## 运行成本" ? "**依据：**尚未测量。" : "x"}\n`).join("\n");
+    const team = (slug, covers, text = body) => {
       writeFileSync(join(dir, "teams", `${slug}.md`), `<!-- doc: ${slug}\n     title: ${slug}\n     family: manual\n     status: current\n     covers: ${covers}\n     audience: user\n-->\n# ${slug}\n\nIntro line.\n\n${text}`);
-    const home = links => writeFileSync(join(dir, "README.md"), `<!-- doc: README\n     title: Home\n     family: manual\n     status: current\n     covers: manual\n     audience: user\n-->\n# Home\n\n${links}\n`);
+      writeFileSync(join(dir, "teams", `${slug}.zh.md`), `<!-- doc: ${slug}.zh\n     title: ${slug}\n     family: manual\n     status: current\n     covers: ${covers}\n     audience: user\n     source-updated: 2026-11-01\n-->\n# ${slug}\n\n一句话说明。\n\n${text === body ? bodyZh : text}`);
+    };
+    const home = links => {
+      writeFileSync(join(dir, "README.md"), `<!-- doc: README\n     title: Home\n     family: manual\n     status: current\n     covers: manual\n     audience: user\n-->\n# Home\n\n${links}\n`);
+      writeFileSync(join(dir, "README.zh.md"), `<!-- doc: README.zh\n     title: 首页\n     family: manual\n     status: current\n     covers: manual\n     audience: user\n     source-updated: 2026-11-01\n-->\n# 首页\n\n${links.replace(/\.md\)/g, ".zh.md)")}\n`);
+    };
     home("[ship](teams/ship.md)");
     team("ship", "crew:ship");
     assert.deepEqual(lintManual(dir).problems, [], "a whole team page passes");
@@ -230,6 +261,7 @@ test("a team page has the team skeleton, covers a crew or a team, states its cos
     assert.ok(problems.some(p => /teams\/desk\.md: the running cost says its basis in a \*\*Basis:\*\* line/.test(p)), "a cost without its basis is refused");
     assert.ok(problems.some(p => /teams\/desk\.md: the manual's home page does not link to it/.test(p)), "the directory links every team page");
     rmSync(join(dir, "teams", "desk.md"));
+    rmSync(join(dir, "teams", "desk.zh.md"));
 
     team("ship-again", "crew:ship");
     home("[ship](teams/ship.md) [again](teams/ship-again.md)");

@@ -18,11 +18,11 @@
  * "${...}" would be evaluated here rather than shipped to the browser. The deliberate
  * interpolations are the Markdown options, which belong next to the tests that assert
  * what they guarantee, the Settings dialog's markup (settings-dialog-html.ts, so this
- * file's length can shrink) and the manual's URL, whose one home is manual-link.ts.
+ * file's length can shrink); the manual's URL is a bundle word ({{ui.manualUrl}}, from manual-link.ts).
  */
 
 import { MARKDOWN_OPTIONS } from "./markdown.ts";
-import { SETTINGS_DIALOG_HTML } from "./settings-dialog-html.ts"; import { MANUAL_URL } from "./manual-link.ts";
+import { SETTINGS_DIALOG_HTML } from "./settings-dialog-html.ts";
 
 export const APP_HTML = String.raw`<!doctype html>
 <html lang="{{@lang}}">
@@ -901,7 +901,7 @@ var MSG = {{@messages}}, MSG_LOCALE = "{{@locale}}";
         title="{{ui.page.tokens-spent-today-all-agents}}"></span>
   <span id="whoami" style="font-size:12px;color:var(--muted);white-space:nowrap"></span>
   <button id="guidebtn" class="btn ghost sm" title="{{ui.page.the-four-set-up-steps}}">{{ui.page.guide}}</button>
-  <button id="teachreviewbtn" class="btn ghost sm">{{ui.page.teaching-drafts}}</button> <a id="manuallink" class="btn ghost sm" href="${MANUAL_URL}" target="_blank" rel="noopener noreferrer" style="text-decoration:none">{{ui.manual}}</a> <button id="langbtn" class="btn ghost sm" title="{{ui.page.lang-title}}" aria-label="{{ui.page.lang-title}}">{{ui.page.lang-other}}</button>
+  <button id="teachreviewbtn" class="btn ghost sm">{{ui.page.teaching-drafts}}</button> <a id="manuallink" class="btn ghost sm" href="{{ui.manualUrl}}" target="_blank" rel="noopener noreferrer" style="text-decoration:none">{{ui.manual}}</a> <button id="langbtn" class="btn ghost sm" title="{{ui.page.lang-title}}" aria-label="{{ui.page.lang-title}}">{{ui.page.lang-other}}</button>
   <button id="settingsbtn" title="{{ui.page.settings}}" aria-label="{{ui.page.settings}}">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.56-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.56 1.03Z"/></svg>
   </button>

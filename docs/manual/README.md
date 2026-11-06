@@ -8,6 +8,8 @@
 -->
 # The LumenBox manual
 
+English · [中文](README.zh.md)
+
 How to use LumenBox, one page per thing you meet. Start with [docs/37](../37-onboarding.md) to
 install it; come here when you want to know what something is and where to find it.
 

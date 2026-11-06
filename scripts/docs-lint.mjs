@@ -206,6 +206,116 @@ function introProblem(at, text) {
   return intro === undefined || intro.startsWith("#") ? `${at}: open with one line that says what the page is for, before the first section.` : undefined;
 }
 
+/**
+ * The Chinese manual (INV-1684): every page has a `<page>.zh.md` beside it, and the two stay one
+ * page in two languages rather than two pages. The checks are structural, because nobody here
+ * reads both languages on every change: the same headings at the same levels in the same order
+ * (the Chinese skeleton below, word for word, where the English one is fixed), relative links
+ * that resolve and that point at the Chinese page where there is one, the original's `covers:`,
+ * and `source-updated:` — the original's `updated:` the translation was made from. A translation
+ * behind its original says so on the page, in a line beginning with the stale mark, and one more
+ * than STALE_DAYS behind fails: a translation that old is not being kept. A generated reference
+ * page has its translation generated with it (docs-reference.mjs), so it is never behind.
+ */
+const ZH_PAGE = /\.zh\.md$/;
+export const MANUAL_SECTIONS_ZH = ["这是什么", "怎么做", "在哪里看结果", "限制", "接下来"];
+export const MANUAL_ENTRIES_ZH = ["在 app 里", "在聊天里", "在命令行里"];
+export const TEAM_SECTIONS_ZH = [
+  "## 架构",
+  "## 核心设计",
+  "### 提示词",
+  "### 工具与权限",
+  "### Skill",
+  "### 记忆",
+  "### 凭据",
+  "## 配置：最小与日常",
+  "## 运行成本",
+  "## 搭一个最小版本",
+  ...MANUAL_ENTRIES_ZH.map(s => `### ${s}`),
+  "## 运行监控",
+  "## box 之外",
+  "## 扩展",
+  "## 本页依据的那次运行",
+];
+export const TEAM_COST_BASIS_ZH = "**依据：**";
+export const STALE_MARK = "> 译本落后于英文原文";
+export const STALE_DAYS = 30;
+
+/** The headings outside code blocks, as their levels: `#`, `##`, `###`. */
+function headingShape(text) {
+  const shape = [];
+  let fenced = false;
+  for (const line of text.split("\n")) {
+    if (/^\s*(```|~~~)/.test(line)) { fenced = !fenced; continue; }
+    const match = !fenced && /^(#{1,6}) \S/.exec(line);
+    if (match) shape.push(match[1]);
+  }
+  return shape;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** What is wrong with the Chinese page of one manual page. */
+function translationProblems(dir, file, at, original, kind) {
+  const slug = file.replace(/\.md$/, "");
+  const zhFile = `${slug}.zh.md`;
+  const zhAt = at.replace(/\.md$/, ".zh.md");
+  if (!existsSync(join(dir, zhFile))) return [`${at}: no Chinese page beside it; write ${zhFile} (INV-1684).`];
+  const problems = [];
+  const text = readFileSync(join(dir, zhFile), "utf8");
+  const header = parseHeader(text);
+  if (header === undefined) return [`${zhAt}: no header block.`];
+  if (header.doc !== `${slug}.zh`) problems.push(`${zhAt}: header says doc: ${header.doc ?? "(none)"}, filename says ${slug}.zh.`);
+  if (header.family !== "manual") problems.push(`${zhAt}: family: ${header.family ?? "(none)"}; a page in docs/manual/ is family: manual.`);
+  if (header.status !== original.status) problems.push(`${zhAt}: status: ${header.status ?? "(none)"}, but the original is ${original.status}.`);
+  if (header.covers !== original.covers) problems.push(`${zhAt}: covers: ${header.covers ?? "(none)"}, but the original covers ${original.covers}.`);
+  if (kind !== "generated" && header.audience !== "user") problems.push(`${zhAt}: a written manual page says audience: user, so the glossary's words are checked on it.`);
+  const title = titleOf(text);
+  if (title !== undefined && header.title !== title) problems.push(`${zhAt}: header title "${header.title}" is not the heading "${title}".`);
+  const english = readFileSync(join(dir, file), "utf8");
+  const shape = headingShape(text).join(" ");
+  if (shape !== headingShape(english).join(" ")) problems.push(`${zhAt}: its headings are not the original's: ${headingShape(english).join(" ")} in ${file}, ${shape || "none"} here.`);
+  for (const link of brokenLinks(dir, text)) problems.push(`${zhAt}: links to ${link}, which is not there.`);
+  for (const match of text.matchAll(/\]\(([^)\s#]+\.md)(#[^)]*)?\)/g)) {
+    const target = match[1];
+    // Its own original is the one English page it should link to: the way back to English.
+    if (/^[a-z]+:/i.test(target) || ZH_PAGE.test(target) || target === file) continue;
+    const zhTarget = target.replace(/\.md$/, ".zh.md");
+    if (existsSync(join(dir, zhTarget))) problems.push(`${zhAt}: links to ${target}; the Chinese page is ${zhTarget}.`);
+  }
+  if (kind === "concept") {
+    const expected = [...MANUAL_SECTIONS_ZH.slice(0, 2).map(s => `## ${s}`), ...MANUAL_ENTRIES_ZH.map(s => `### ${s}`), ...MANUAL_SECTIONS_ZH.slice(2).map(s => `## ${s}`)];
+    const skeleton = skeletonProblem(zhAt, text, expected);
+    if (skeleton !== undefined) problems.push(skeleton);
+  }
+  if (kind === "team") {
+    const skeleton = skeletonProblem(zhAt, text, TEAM_SECTIONS_ZH);
+    if (skeleton !== undefined) problems.push(skeleton);
+    if (!sectionOf(text, "## 运行成本").includes(TEAM_COST_BASIS_ZH)) problems.push(`${zhAt}: the running cost says its basis in a ${TEAM_COST_BASIS_ZH} line, as the original does.`);
+  }
+  if (kind !== "generated" && kind !== "home") {
+    const intro = introProblem(zhAt, text);
+    if (intro !== undefined) problems.push(intro);
+  }
+  if (kind === "generated") {
+    if (header.generated !== "true") problems.push(`${zhAt}: the original is generated, so its translation is too (scripts/docs-reference.mjs).`);
+    return problems;
+  }
+  const source = Date.parse(header["source-updated"] ?? "");
+  const current = Date.parse(original.updated ?? "");
+  if (Number.isNaN(source)) {
+    problems.push(`${zhAt}: say which version of the original it translates with source-updated: (the original's updated: then).`);
+  } else if (!Number.isNaN(current)) {
+    const behind = Math.round((current - source) / DAY_MS);
+    const marked = text.split("\n").some(line => line.startsWith(STALE_MARK));
+    if (behind < 0) problems.push(`${zhAt}: source-updated ${header["source-updated"]} is later than the original's updated ${original.updated}.`);
+    else if (behind > STALE_DAYS) problems.push(`${zhAt}: ${behind} days behind ${file}; a translation more than ${STALE_DAYS} days behind is not being kept — bring it up to date.`);
+    else if (behind > 0 && !marked) problems.push(`${zhAt}: behind ${file} (translated from ${header["source-updated"]}, the original is ${original.updated}): update it, or say so in a line beginning "${STALE_MARK}".`);
+    else if (behind === 0 && marked) problems.push(`${zhAt}: marked as behind, but it translates the current original; remove the mark.`);
+  }
+  return problems;
+}
+
 /** The text of one `## ` section, up to the next `## `. */
 function sectionOf(text, heading) {
   const start = text.indexOf(`\n${heading}\n`);
@@ -219,7 +329,7 @@ export function lintManual(dir) {
   const problems = [];
   const pages = new Map();
   if (!existsSync(dir)) return { pages, problems };
-  for (const file of readdirSync(dir).filter(f => f.endsWith(".md")).sort()) {
+  for (const file of readdirSync(dir).filter(f => f.endsWith(".md") && !ZH_PAGE.test(f)).sort()) {
     const at = `manual/${file}`;
     const page = lintManualPage(dir, file, at, problems);
     if (page === undefined) continue;
@@ -232,11 +342,12 @@ export function lintManual(dir) {
       if (intro !== undefined) problems.push(intro);
     }
     pages.set(slug, header);
+    problems.push(...translationProblems(dir, file, at, header, generated ? "generated" : slug === MANUAL_HOME ? "home" : "concept"));
   }
   const teamDir = join(dir, TEAM_DIR);
   const home = existsSync(join(dir, `${MANUAL_HOME}.md`)) ? readFileSync(join(dir, `${MANUAL_HOME}.md`), "utf8") : "";
   if (existsSync(teamDir)) {
-    for (const file of readdirSync(teamDir).filter(f => f.endsWith(".md")).sort()) {
+    for (const file of readdirSync(teamDir).filter(f => f.endsWith(".md") && !ZH_PAGE.test(f)).sort()) {
       const at = `manual/${TEAM_DIR}/${file}`;
       const page = lintManualPage(teamDir, file, at, problems);
       if (page === undefined) continue;
@@ -249,6 +360,7 @@ export function lintManual(dir) {
       if (!sectionOf(text, "## Running cost").includes(TEAM_COST_BASIS)) problems.push(`${at}: the running cost says its basis in a ${TEAM_COST_BASIS} line — tokens, time, price and date, or "not measured yet" and what would measure it.`);
       if (!home.includes(`](${TEAM_DIR}/${file})`)) problems.push(`${at}: the manual's home page does not link to it; add it to the directory in ${MANUAL_HOME}.md.`);
       pages.set(`${TEAM_DIR}/${slug}`, header);
+      problems.push(...translationProblems(teamDir, file, at, header, "team"));
     }
   }
   const byConcept = new Map();
