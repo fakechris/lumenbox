@@ -6,8 +6,8 @@ Each route out of LumenBox speaks as a different identity. Know which one before
 
 | Route | Who the recipient sees |
 |---|---|
-| Google door (`google__…` tools, Gmail) | The Google account that was connected to it. |
-| Slack door (`slack__…` tools) | The bot's Slack app, not the person. |
+| Google connector (`google__…` tools, Gmail) | The Google account that was connected to it. |
+| Slack connector (`slack__…` tools) | The bot's Slack app, not the person. |
 | `connector_request` to `feishu` | The Feishu app (it uses the app's tenant token), not the person. |
 | `connector_request` to `github` | The GitHub account that authorised the connection. |
 | The box's browser | Whoever is signed in there. Logins persist between turns. |

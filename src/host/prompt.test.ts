@@ -454,7 +454,7 @@ test("a shared box tells the agent who else is in the room", () => {
   // what it is given is the fact, not an order it would have to report success on.
   const shared = buildSystemPrompt({
     ...sharedBoxContext(),
-    boxAccess: { access: "shared" as const, group: "平台组", enforced: true, badge: "共享箱子", notice: "…" },
+    boxAccess: { access: "shared" as const, group: "平台组", enforced: true, badge: "共享 box", notice: "…" },
   });
   assert.match(shared, /shared/);
   assert.match(shared, /平台组/, "who 'shared' means, where it is known");
@@ -467,7 +467,7 @@ test("a shared box tells the agent who else is in the room", () => {
   assert.doesNotMatch(unclassified, /This box is \*\*shared\*\*/);
   const priv = buildSystemPrompt({
     ...sharedBoxContext(),
-    boxAccess: { access: "private" as const, enforced: true, badge: "私有箱子", notice: "" },
+    boxAccess: { access: "private" as const, enforced: true, badge: "私有 box", notice: "" },
   });
   assert.equal(priv, unclassified, "a private box is the ordinary case and adds nothing");
 });
@@ -480,7 +480,7 @@ test("an agent with no vision is still told the box is shared", () => {
   const prompt = buildSystemPrompt({
     ...sharedBoxContext(),
     vision: false,
-    boxAccess: { access: "shared" as const, enforced: true, badge: "共享箱子", notice: "…" },
+    boxAccess: { access: "shared" as const, enforced: true, badge: "共享 box", notice: "…" },
   });
   assert.match(prompt, /This box is \*\*shared\*\*/);
   assert.doesNotMatch(prompt, /Screenshots come to you/, "and it still has no screen");
@@ -495,7 +495,7 @@ test("a box labelled private with nothing behind it is described to the agent as
     boxAccess: {
       access: "private" as const,
       enforced: false,
-      badge: "私有箱子(未生效)",
+      badge: "私有 box(未生效)",
       notice: "…",
     },
   });

@@ -1135,7 +1135,7 @@ test("a dropped file is stored and acknowledged, and no task opens", async () =>
     files: [{ name: "a.txt", base64: "eA==" }],
   });
   await boxless.idle();
-  assert.match(adapter2.chatSent[0]!.text, /没有开着的工作机/);
+  assert.match(adapter2.chatSent[0]!.text, /没有开着的 box/);
 });
 
 test("a wordless drop is looked at: content first, then the chat hears what it is", async () => {

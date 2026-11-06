@@ -63,7 +63,7 @@ export const PRIVATE_IS_ENFORCED = false;
 const PRIVATE: BoxClass = {
   access: "private",
   enforced: true,
-  badge: "私有箱子",
+  badge: "私有 box",
   // An enforced private box makes a promise instead of a disclaimer, and the promise is
   // not a guarantee of secrecy from the software: docs/18 §7 is the long form.
   notice: "",
@@ -97,7 +97,7 @@ export function classifyBox(
     return {
       access: "private",
       enforced: false,
-      badge: "私有箱子(未生效)",
+      badge: "私有 box(未生效)",
       notice: unenforcedPrivateNotice(),
     };
   }
@@ -105,7 +105,7 @@ export function classifyBox(
     access: "shared",
     ...(group ? { group } : {}),
     enforced: true,
-    badge: "共享箱子",
+    badge: "共享 box",
     notice: sharedNotice(group),
   };
 }
@@ -119,8 +119,8 @@ export function classifyBox(
  */
 export function unenforcedPrivateNotice(): string {
   return (
-    "这台箱子被标成了私有,但**私有还没有生效**:能打开它的人都能看它的屏幕、读它的文件和命令历史," +
-    "备份也会带走你在这里登录过的东西。在功能补齐之前,请当成共享箱子用。"
+    "这台 box 被标成了私有,但**私有还没有生效**:能打开它的人都能看它的屏幕、读它的文件和命令历史," +
+    "备份也会带走你在这里登录过的东西。在功能补齐之前,请当成共享 box 用。"
   );
 }
 
@@ -134,7 +134,7 @@ export function unenforcedPrivateNotice(): string {
 export function sharedNotice(group?: string): string {
   const who = group ? `${group} 里的人` : "所有能打开它的人";
   return (
-    `这是一台共享的箱子。${who}都能看它的屏幕、读它的文件和命令历史,备份也会带走你在这里登录过的东西。` +
+    `这是一台共享的 box。${who}都能看它的屏幕、读它的文件和命令历史,备份也会带走你在这里登录过的东西。` +
     "在这里登录任何账号,等于替他们一起登录。"
   );
 }
