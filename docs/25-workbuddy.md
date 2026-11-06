@@ -2,7 +2,7 @@
      title: Workbuddy: skills, presets, delegated engines — the hands-on program
      family: decision
      status: current
-     updated: 2026-10-21
+     updated: 2026-11-05
 -->
 # Workbuddy: skills, presets, delegated engines — the hands-on program
 
@@ -27,8 +27,8 @@ the doubaowork companion crew (agents with built-in skills and personas).
 - **Prior design**: `research/CODING-AGENT-PRODUCT-PLAN.md` (+v3, +Grok review),
   `research/CODING-AGENT-BRIDGE-REPORT.md`, `research/AGENT-RUNTIME-PLAN.md` —
   read before re-deciding anything they decided.
-- **Skills**: `SkillCache`, the box skills directory, and `skillsMount`
-  projection per preset — the write-once-run-anywhere half is designed.
+- **Skills** ([docs/93](93-skills.md) is what one is): `SkillCache`, the box skills
+  directory, and `skillsMount` projection per preset — the write-once-run-anywhere half is designed.
 - **No ACP anywhere in src.** Whether opencode/pi speak ACP usefully is an
   experiment, not a fact.
 - **Persona/roster primitives**: agents already carry `tools` allowlists,
@@ -86,11 +86,8 @@ the settings-page "add this buddy" productization waits on the docs/13 rule.
 
 The settings-page half that E4/E5 deferred shipped the same day from the other
 side of the two-agent split: **the built-in catalog** (`src/host/catalog.ts` +
-`catalog-data/`). A crew is several experts; an expert is a standing persona
-(`catalog-data/experts/*.md`, rewritten — no identity theatre, no frozen tool
-names) plus vendored skill-hub packages (`catalog-data/skills/`, copied as-is,
-provenance in `SOURCE.md`, seeded globally into the box by starter-skills'
-marker mechanism). Seven experts (Lin 工程师, Heng 审查, Mo 产品, Jian 主笔,
+`catalog-data/`; what an expert, a crew and a connector are, and how they install, is
+[docs/94](94-catalog.md)). As shipped: seven experts (Lin 工程师, Heng 审查, Mo 产品, Jian 主笔,
 He 种草, Jing 编剧, Xi 分析师), two crews (`ship`, `media-desk`), three tool
 tiers (DESK/WEB/CODE) with `intersectTools` clamping a new agent to what its
 creator holds. Install paths: New-agent chips on the web page, `CreateAgent

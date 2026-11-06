@@ -2,7 +2,7 @@
      title: Bot templates: the bot packs itself, the new bot installs itself
      family: decision
      status: current
-     updated: 2026-11-01
+     updated: 2026-11-05
 -->
 # Bot templates: the bot packs itself, the new bot installs itself
 
@@ -26,16 +26,11 @@ Stages 1 and 2 shipped the same day, on `feat/bot-templates`:
   keys → `{placeholders}` + "Ask the importing user for:"), `packTemplate` (from the live
   files; a bot's `body` replaces only the markdown below the frontmatter; an `about` record
   refuses), `renderRecipe`, `templateSetupCue`, `reconcile`, `stampTemplateWrite`.
-- **`mode: off | observe | auto`** (INV-1458) — how a routine may act. `observe` records
-  "would have run as …" on the run history and `policy.jsonl` (`observed`) at every trigger —
-  schedule, listener match, webhook call — and runs nothing, tells no chat; the automations
-  page shows the last few and a one-click switch to `auto`. `off` is never evaluated. Absent
-  is `auto`, for every routine written before modes, and the page marks it "auto (no mode
-  set)". Agents are told to write `mode: observe` on every routine they create; "Run now" is a
-  person's explicit act and runs in any mode. `POST /api/schedules/mode` is the line.
-- **`paused: true`** — one frontmatter key (`skills.ts`); the tick and the listener skip it,
-  `runNow` refuses it, `status()` reports it; `POST /api/schedules/resume|pause` is the line,
-  and resume refuses while a `{placeholder}` is left.
+- **`mode: off | observe | auto`** (INV-1458) and **`paused: true`** — the two routine
+  switches, defined in [docs/93](93-skills.md) §4. What this work added: `observe` records on
+  the run history and `policy.jsonl` (`observed`), the automations page shows the last few with
+  a one-click switch to `auto`, and `POST /api/schedules/mode` and
+  `POST /api/schedules/resume|pause` are the lines; resume refuses while a `{placeholder}` is left.
 - **The setup turn** — `Orchestrator.importTemplate`: profile-only create with
   `importedFrom`, recipe as `~/work/templates/<slug>/recipe.md` + `.json` in the box, the
   cue on the background lane with the agent flagged `templateSetup`; during that turn
@@ -103,7 +98,7 @@ wrote its own skills on day one knows them the way one that had files copied in 
 Chris's live import shows the new bot rewriting an imported skill to a different engine two
 messages later. The host's job is rails, not hands.
 
-What we reuse: `write_file`/`edit_file` (how skills are authored today, `skills.ts:26-29`),
+What we reuse: `write_file`/`edit_file` (how skills are authored today, [docs/93](93-skills.md) §1),
 `RememberFact`, `Recall`, the memory mirror files (`~/work/memory/<agent>/profile.md`),
 `SkillProvenance` (which will attribute the new bot's writes to it *for free*),
 `firstRunCue` (`prompt.ts:868`), the starter-skills mechanism for served instructions,
@@ -147,7 +142,7 @@ Plus the secret prefilter (§4.4) over every string. A hit stops the export.
 
 One document, text only, ≤ 2 MiB, helpers inline. A tarball was rejected: a JSON pastes
 into a chat and diffs in a review. Skills and routines are the same object with one
-frontmatter line between them, as on disk. Memory entries are typed records so the importer
+frontmatter line between them, as on disk ([docs/93](93-skills.md) §4). Memory entries are typed records so the importer
 side can stamp and decay them like any other. `format` is the only version field.
 
 ## 3. Memory travels: conventions, never history, never people
