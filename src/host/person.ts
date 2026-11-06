@@ -108,7 +108,7 @@ export class PersonRecords {
     const rank = (entry: PersonEntry): number => (entry.source === "person" ? 0 : entry.source.startsWith("agent:") ? 1 : 2);
     return (this.entries.get(principal) ?? [])
       .filter(entry => !this.retracted.has(entry.id) && (entry.expiresAt === undefined || Date.parse(entry.expiresAt) > now))
-      .sort((a, b) => rank(a) - rank(b) || b.at.localeCompare(a.at));
+      .sort((a, b) => rank(a) - rank(b) || b.at.localeCompare(a.at) || a.id.localeCompare(b.id)); // the id breaks a same-millisecond tie, so the order is the same on every run
   }
 
   /** The section a turn reads, or nothing when the record is empty. */

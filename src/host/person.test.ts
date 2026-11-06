@@ -52,7 +52,7 @@ test("a judged memory becomes a line for the person driving, under the field its
     { kind: "fact", text: "Mia leads the data team", about: "p-mia", types: { episodic: 0, semantic: 0.9, procedural: 0, preference: 0 } },
   ], "ada", { principal: "p-chris", name: "Chris" });
   assert.deepEqual(added.map(e => [e.field, e.source]), [["preferences", "agent:ada"], ["projects", "agent:ada"]], "the Debian fact names nobody; Mia's line is about Mia and does not name Chris");
-  assert.deepEqual(people.live("p-chris").map(e => e.field), ["preferences", "projects"]);
+  assert.deepEqual(people.live("p-chris").map(e => e.field).sort(), ["preferences", "projects"]);
   assert.deepEqual(people.live("p-mia"), []);
   assert.equal(fieldOf("He is responsible for billing"), "responsibilities");
   assert.equal(fieldOf("wants to run a marathon next year"), "goals");
