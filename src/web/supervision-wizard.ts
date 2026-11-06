@@ -7,37 +7,14 @@
  */
 
 export const SUPERVISION_WIZARD_JS = `(function () {
-  var zh = /^zh/i.test(String(window.MSG_LOCALE || navigator.language || ""));
-  var T = zh ? {
-    open: "分步设置监督者", close: "关闭向导", back: "上一步", next: "下一步", step: "第 {n} / 5 步",
-    s1: "它是什么",
-    s1body: "监督者是在 LumenBox 之外运行的另一个模型。你给它一个目标，它替你启动，然后一直看着，直到做完或被停下。它能做的只有：启动目标、读任务记录、暂停它自己启动的目标、提请你注意。它不能碰 box，不能把工作标成完成，不能续跑系统叫停的目标，也不能加预算。这些决定都留给你。看门狗已经默认开着：工作卡住、目标被系统叫停却没人处理时，它会提醒你。",
-    s2: "选模型并测通",
-    s2body: "监督者只需要会调用工具，不需要最强的模型。推荐 OpenAI gpt-6.1-sol：实测判断准确、不多花推理 token。",
-    nokey: "这个 provider 还没有 key。粘贴一个，只为它保存，不改 agent 正在用的默认模型：", savekey: "保存 key", test: "测试", testing: "测试中…",
-    tested: "可用：{ms} 毫秒，能调用工具。", needtest: "先测通再继续。",
-    s3: "谁来干活，以及上限", agent: "干活的 agent", coordinator: "协调者", budget: "目标预算（折算 token，留空不设）", minutes: "最长分钟", calls: "最多模型调用",
-    estimate: "这次最多：监督者 {calls} 次调用，约 {tokens} 个 token（{model}）；干活的 agent {budget}。",
-    nobudget: "不设预算，由目标模式的其他闸门停下", withbudget: "最多花 {budget} 个折算 token", noagent: "还没有 agent：先在左侧建一个。",
-    s4: "第一个目标", s4body: "写成「做完是什么样」，而不是「去做什么」。可以从下面选一个改：",
-    ex: ["工作目录里有一份 work/summary.md，用一页说明这个目录里每个文件是做什么的", "work/open-tasks.md 列出任务板上本周还开着的任务，以及每个任务在谁手里", "工作目录里的 README 有一节简短的「如何运行」，与它描述的脚本一致"],
-    s5: "确认并启动", s5body: "这会在你的任务板上建一个任务，交给 {agent}；监督者的模型和 agent 的模型都会花钱。",
-    understand: "我明白，开始", start: "启动", started: "已排队。下面是这次运行的实时记录。", waiting: "等待监督者接手…", firstwake: "监督者已第一次醒来并启动目标。",
-  } : {
-    open: "Set up the supervisor step by step", close: "Close the wizard", back: "Back", next: "Next", step: "Step {n} of 5",
-    s1: "What it is",
-    s1body: "The supervisor is another model that runs outside LumenBox. You give it a goal; it starts it for you and watches it until it is done or stopped. All it can do is start the goal, read the task's record, pause a goal it started, and ask you to look. It cannot touch the box, mark work done, resume a goal the system stopped, or raise a budget. Those stay with you. The watchdog is already on: it tells you when work stops moving or a goal the system stopped has nobody looking at it.",
-    s2: "Choose a model and test it",
-    s2body: "The supervisor needs a model that calls tools well, not the strongest one. Recommended: OpenAI gpt-6.1-sol, which judged correctly in our tests without spending reasoning tokens.",
-    nokey: "This provider has no key yet. Paste one; it is saved for this provider only and does not change the model your agents use:", savekey: "Save key", test: "Test", testing: "Testing…",
-    tested: "Works: {ms} ms, and it calls tools.", needtest: "Test it before going on.",
-    s3: "Who does the work, and the limits", agent: "Agent doing the work", coordinator: "the coordinator", budget: "Goal budget (input-token equivalents; empty for none)", minutes: "At most minutes", calls: "At most model calls",
-    estimate: "At most this run: {calls} supervisor calls, about {tokens} tokens of {model}; the agent {budget}.",
-    nobudget: "with no budget, stopped by goal mode's other gates", withbudget: "up to {budget} input-token equivalents", noagent: "No agent yet: create one in the sidebar first.",
-    s4: "The first goal", s4body: "Write what done looks like, not what to do. Start from one of these:",
-    ex: ["work/summary.md explains, in one page, what each file in the work directory is for", "work/open-tasks.md lists this week's open tasks on the board and who has each", "The README in the work directory has a short 'How to run' section that matches the scripts it describes"],
-    s5: "Confirm and start", s5body: "This creates a task on your board for {agent}, and both the supervisor's model and the agent's model will spend.",
-    understand: "I understand; start it", start: "Start", started: "Queued. Below is this run as it happens.", waiting: "Waiting for the supervisor to pick it up…", firstwake: "The supervisor has woken and started the goal.",
+  var T = {
+    open: "{{ui.wizard.open}}", close: "{{ui.wizard.close}}", back: "{{ui.wizard.back}}", next: "{{ui.wizard.next}}", step: "{{ui.wizard.step}}", s1: "{{ui.wizard.s1}}",
+    s1body: "{{ui.wizard.s1body}}", s2: "{{ui.wizard.s2}}", s2body: "{{ui.wizard.s2body}}", nokey: "{{ui.wizard.nokey}}", savekey: "{{ui.wizard.savekey}}", test: "{{ui.wizard.test}}",
+    testing: "{{ui.wizard.testing}}", tested: "{{ui.wizard.tested}}", needtest: "{{ui.wizard.needtest}}", s3: "{{ui.wizard.s3}}", agent: "{{ui.wizard.agent}}",
+    coordinator: "{{ui.wizard.coordinator}}", budget: "{{ui.wizard.budget}}", minutes: "{{ui.wizard.minutes}}", calls: "{{ui.wizard.calls}}", estimate: "{{ui.wizard.estimate}}",
+    nobudget: "{{ui.wizard.nobudget}}", withbudget: "{{ui.wizard.withbudget}}", noagent: "{{ui.wizard.noagent}}", s4: "{{ui.wizard.s4}}", s4body: "{{ui.wizard.s4body}}",
+    ex: ["{{ui.wizard.ex-1}}", "{{ui.wizard.ex-2}}", "{{ui.wizard.ex-3}}"], s5: "{{ui.wizard.s5}}", s5body: "{{ui.wizard.s5body}}", understand: "{{ui.wizard.understand}}",
+    start: "{{ui.wizard.start}}", started: "{{ui.wizard.started}}", waiting: "{{ui.wizard.waiting}}", firstwake: "{{ui.wizard.firstwake}}",
   };
   function fmt(text, vars) { return String(text).replace(/\\{(\\w+)\\}/g, function (w, k) { return vars && k in vars ? String(vars[k]) : w; }); }
   function el(tag, attrs, text) { var n = document.createElement(tag); for (var k in attrs) n.setAttribute(k, attrs[k]); if (text !== undefined) n.textContent = text; return n; }
@@ -132,7 +109,7 @@ export const SUPERVISION_WIZARD_JS = `(function () {
     } else if (state.step === 5) {
       var who = c.agent || T.coordinator;
       box.appendChild(el("p", {}, fmt(T.s5body, { agent: who })));
-      var summary = el("pre", { class: "ui-log" }, [c.provider + "/" + c.model, who, c.budget ? fmt(T.withbudget, { budget: c.budget }) : T.nobudget, c.maxMinutes + " min · " + c.maxCalls + " calls", "", c.objective].join("\\n"));
+      var summary = el("pre", { class: "ui-log" }, [c.provider + "/" + c.model, who, c.budget ? fmt(T.withbudget, { budget: c.budget }) : T.nobudget, fmt("{{ui.wizard.min-calls}}", { min: c.maxMinutes, calls: c.maxCalls }), "", c.objective].join("\\n"));
       box.appendChild(summary);
       var agree = el("input", { type: "checkbox", id: "wizagree" });
       var start = el("button", { class: "btn", id: "wizstart" }, T.start); start.disabled = true;
@@ -158,7 +135,7 @@ export const SUPERVISION_WIZARD_JS = `(function () {
         var lines = [T.started, d.run.state + (d.run.goalId ? " · " + d.run.goalId : "") + (d.run.error ? " · " + d.run.error : "")];
         var woke = false;
         d.transcript.forEach(function (e) {
-          if (e.kind === "model") { woke = true; lines.push("model #" + e.n + ": " + e.calls.map(function (x) { return x.name; }).join(", ") + (e.text ? " — " + e.text : "")); }
+          if (e.kind === "model") { woke = true; lines.push(fmt("{{ui.wizard.model-n}}", { n: e.n }) + ": " + e.calls.map(function (x) { return x.name; }).join(", ") + (e.text ? " — " + e.text : "")); }
           else if (e.kind === "tool") lines.push("  " + e.name + ": " + String(e.reply || e.refused || "").split("\\n")[0]);
         });
         if (woke) lines.splice(1, 0, T.firstwake);

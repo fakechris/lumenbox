@@ -9,13 +9,18 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SETTINGS_DIALOG_HTML } from "./settings-dialog-html.ts";
 import { SETTINGS_PANES } from "./settings-registry.ts";
+import { tr } from "../i18n/messages.ts";
 
 const SRC = join(import.meta.dirname, "..");
 
 test("the dialog's tabs are the registry's page panes, in its order, the first one on", () => {
   const tabs = [...SETTINGS_DIALOG_HTML.matchAll(/<a href="#" class="tab( on)?" data-settab="([\w-]+)">([^<]+)<\/a>/g)];
   const page = SETTINGS_PANES.filter(pane => pane.mounted === "page");
-  assert.deepEqual(tabs.map(m => [m[2], m[3]]), page.map(pane => [pane.key, pane.title]));
+  assert.deepEqual(tabs.map(m => [m[2], m[3]]), page.map(pane => [pane.key, `{{ui.pane.${pane.key}}}`]));
+  for (const pane of page) {
+    assert.equal(tr(`ui.pane.${pane.key}`, "en"), pane.title, "the English tab reads the registry's title");
+    assert.equal(tr(`ui.pane.${pane.key}`, "zh"), pane.titleZh, "and the Chinese one its titleZh");
+  }
   assert.deepEqual(tabs.map(m => m[1] === " on"), page.map((_, i) => i === 0));
 });
 

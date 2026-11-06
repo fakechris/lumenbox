@@ -13,8 +13,11 @@
 export interface SettingsPane {
   key: string;
   title: string;
+  /** The title in Chinese: the page reads it in the person's language (INV-1684). */
+  titleZh: string;
   /** One sentence: what a person comes to this pane for. */
   about: string;
+  aboutZh: string;
   /** The `~/.agentbox/config.json` keys this pane edits; empty when it edits other stores. */
   config: readonly string[];
   /** The API routes the pane reads and writes. */
@@ -27,7 +30,9 @@ export const SETTINGS_PANES: readonly SettingsPane[] = [
   {
     key: "model",
     title: "Model",
+    titleZh: "模型",
     about: "The model provider, its model and key, the web search key, fallbacks when the plan runs out, the decision model and the built-in prompt parts.",
+    aboutZh: "模型 provider、模型和它的 key、联网搜索 key、额度用完时的备用 provider、决策模型，以及内置的提示词。",
     config: ["provider", "model", "baseUrl", "fallbackProviders", "env"],
     apis: ["/api/config", "/api/config/test", "/api/prompt-parts", "/api/provider/fallbacks", "/api/provider/rests", "/api/jev"],
     mounted: "page",
@@ -35,7 +40,9 @@ export const SETTINGS_PANES: readonly SettingsPane[] = [
   {
     key: "boxes",
     title: "Boxes",
+    titleZh: "Box",
     about: "The box and every machine attached to it, personal-box limits, host execution, the startup item, box image updates and resource diagnostics.",
+    aboutZh: "这台 box 和接入的每台机器、个人 box 限额、在本机执行命令、开机启动、box 镜像更新和资源诊断。",
     config: ["boxImage", "boxCpus", "boxes", "personalBoxQuota", "personBoxQuotas", "departmentBoxQuotas", "hostExec", "startupItem", "upgradeHour"],
     apis: ["/api/box/up", "/api/boxes", "/api/quotas", "/api/directories", "/api/box/image", "/api/diagnostics/resources"],
     mounted: "page",
@@ -43,7 +50,9 @@ export const SETTINGS_PANES: readonly SettingsPane[] = [
   {
     key: "doors",
     title: "Channels",
+    titleZh: "渠道",
     about: "The channels that open into this installation, the connectors linked to it, and the people waiting to be let in.",
+    aboutZh: "通往这个安装的渠道、接入的连接器，以及在等着被放进来的人。",
     config: ["channelAllow"],
     apis: ["/api/channels", "/api/connectors"],
     mounted: "page",
@@ -51,7 +60,9 @@ export const SETTINGS_PANES: readonly SettingsPane[] = [
   {
     key: "team",
     title: "Team",
+    titleZh: "团队",
     about: "Scopes, secrets, people and invites, MCP servers, and the team's limits: paused agents, push budgets, spend limits, routines that keep failing, shared-memory review.",
+    aboutZh: "权限范围、密钥、人员与邀请、MCP 服务器，以及团队的各项上限：暂停的 agent、推送额度、花费上限、反复失败的例行任务、共享记忆审核。",
     config: ["mcpServers", "teamMemoryReview"],
     apis: ["/api/scopes", "/api/vault", "/api/principals", "/api/mcp", "/api/extensions/reload", "/api/agents/pauses", "/api/agents/push-budget", "/api/agents/spend-limits", "/api/schedules/runs", "/api/memory/team-review"],
     mounted: "page",
@@ -59,7 +70,9 @@ export const SETTINGS_PANES: readonly SettingsPane[] = [
   {
     key: "mine",
     title: "Mine",
+    titleZh: "我的",
     about: "What is yours: your MCP tokens, your standing approvals, what the gate would have asked you, and what agents know about you.",
+    aboutZh: "属于你的东西：你的 MCP token、你的长期批准、闸门本会问你的事，以及 agent 对你的了解。",
     config: [],
     apis: ["/api/mcp/tokens", "/api/policy", "/api/person"],
     mounted: "page",
@@ -67,7 +80,9 @@ export const SETTINGS_PANES: readonly SettingsPane[] = [
   {
     key: "memory",
     title: "Memory",
+    titleZh: "记忆",
     about: "What each agent remembers, where each memory came from, and changing or removing it.",
+    aboutZh: "每个 agent 记住了什么、每条记忆从哪里来，以及修改或删除它。",
     config: [],
     apis: ["/api/memory"],
     mounted: "page",
@@ -75,7 +90,9 @@ export const SETTINGS_PANES: readonly SettingsPane[] = [
   {
     key: "supervision",
     title: "Supervision",
+    titleZh: "监督",
     about: "The watchdog that flags work which stops moving, and the supervisor you can give a goal to watch through to the end.",
+    aboutZh: "看门狗：工作停滞时提醒你；监督者：你给它一个目标，它一直盯到结束。",
     config: [],
     apis: ["/api/supervision"],
     mounted: "script",
@@ -88,11 +105,9 @@ export function settingsPane(key: string): SettingsPane {
   return pane;
 }
 
-const escapeHtml = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-
-/** The dialog's tab row: the panes in the markup, the first one on. */
+/** The dialog's tab row: the panes in the markup, the first one on, each title a bundle key (`ui.pane.<key>`). */
 export function renderSettingsTabs(): string {
   return SETTINGS_PANES.filter(pane => pane.mounted === "page")
-    .map((pane, i) => `      <a href="#" class="tab${i === 0 ? " on" : ""}" data-settab="${pane.key}">${escapeHtml(pane.title)}</a>`)
+    .map((pane, i) => `      <a href="#" class="tab${i === 0 ? " on" : ""}" data-settab="${pane.key}">{{ui.pane.${pane.key}}}</a>`)
     .join("\n");
 }

@@ -7,7 +7,7 @@
  *     host's command modules must be one the table lists, and no file there keeps a whole-message
  *     word list of its own (`[...].includes(t)`).
  *   - **settings** (src/web/settings-registry.ts): every `data-settab` key in src/web is a listed
- *     pane, every pane is used, and a tab anchor takes its title from the registry.
+ *     pane, every pane is used, and a tab anchor takes its title from the registry (`{{ui.pane.<key>}}`).
  *   - **rules** (src/host/rules-grammar.ts): rules.ts reads frontmatter only through the grammar's
  *     fields, never `meta.<key>` by hand.
  *
@@ -99,7 +99,7 @@ export function settingsProblems(files, panes) {
     }
     for (const line of file.text.split("\n")) {
       const anchor = /<a\b[^>]*data-settab=/.test(line) || /el\("a",\s*\{[^}]*"data-settab"/.test(line);
-      if (anchor && !line.includes("settingsPane(")) problems.push(`${file.path}: a Settings tab written by hand — render it from src/web/settings-registry.ts (renderSettingsTabs, or settingsPane(key).title)`);
+      if (anchor && !line.includes("settingsPane(") && !/\{\{ui\.pane\.[\w-]+\}\}/.test(line)) problems.push(`${file.path}: a Settings tab written by hand — render it from src/web/settings-registry.ts (renderSettingsTabs, or the pane's title as {{ui.pane.<key>}})`);
     }
   }
   for (const pane of panes) if (!used.has(pane.key)) problems.push(`settings pane ${pane.key} is listed but nothing in src/web carries data-settab="${pane.key}"`);

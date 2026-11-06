@@ -10,7 +10,7 @@ export const INSTALLATION_JS = `(function () {
   function single() { var i = window.installation; return !!(i && i.mode === "single-machine"); }
   window.ownerBadge = function (person) {
     if (!single() || person.id !== window.installation.ownerId) return "";
-    return '<span data-owner-badge class="dim" style="font-size:12px" title="The one person on this computer. Adding someone makes them the first Admin (管理员).">Owner · 机主</span>';
+    return '<span data-owner-badge class="dim" style="font-size:12px" title="{{ui.installation.the-one-person-on-this}}">{{ui.installation.owner}}</span>';
   };
   function ask(ownerName) {
     return new Promise(function (resolve) {
@@ -19,14 +19,14 @@ export const INSTALLATION_JS = `(function () {
         dialog = document.createElement("dialog");
         dialog.id = "ownerconvert";
         dialog.className = "modal";
-        dialog.innerHTML = '<h3>Add a second person?</h3>' +
-          '<div style="font-size:13px;line-height:1.6">This computer has one Owner (机主): <b data-owner-name></b>. ' +
-          'Adding someone makes this an organisation installation. The Owner becomes its first Admin (管理员) and keeps every permission. ' +
-          'The change is recorded with your name and the time, and it is not undone by removing the person later.</div>' +
-          '<div class="actions"><button class="btn accent" data-owner-confirm>Convert and continue</button><button class="btn ghost" data-owner-cancel>Cancel</button></div>';
+        dialog.innerHTML = '<h3>{{ui.installation.add-a-second-person}}</h3>' +
+          '<div style="font-size:13px;line-height:1.6">{{ui.installation.this-computer-has-one-owner}} <b data-owner-name></b>. ' +
+          '{{ui.installation.adding-someone-makes-this-an}} ' +
+          '{{ui.installation.the-change-is-recorded-with}}</div>' +
+          '<div class="actions"><button class="btn accent" data-owner-confirm>{{ui.installation.convert-and-continue}}</button><button class="btn ghost" data-owner-cancel>{{ui.installation.cancel}}</button></div>';
         document.body.appendChild(dialog);
       }
-      dialog.querySelector("[data-owner-name]").textContent = ownerName || "the Owner";
+      dialog.querySelector("[data-owner-name]").textContent = ownerName || "{{ui.installation.the-owner}}";
       var done = function (answer) { dialog.close(); resolve(answer); };
       dialog.querySelector("[data-owner-confirm]").onclick = function () { done(true); };
       dialog.querySelector("[data-owner-cancel]").onclick = function () { done(false); };

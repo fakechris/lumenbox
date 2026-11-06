@@ -25,13 +25,15 @@ import { MARKDOWN_OPTIONS } from "./markdown.ts";
 import { SETTINGS_DIALOG_HTML } from "./settings-dialog-html.ts"; import { MANUAL_URL } from "./manual-link.ts";
 
 export const APP_HTML = String.raw`<!doctype html>
-<html lang="en">
+<html lang="{{@lang}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>LumenBox</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'%3E%3Crect x='4' y='4' width='120' height='120' rx='30' fill='%23231a13'/%3E%3Cpath d='M64 32 96 49 64 66 32 49Z' fill='%23d9634a'/%3E%3Cpath d='M32 49 64 66v32L32 81Z' fill='%23d9634a' fill-opacity='.62'/%3E%3Cpath d='M96 49 64 66v32l32-17Z' fill='%23d9634a' fill-opacity='.34'/%3E%3C/svg%3E">
 <script>
+// The page's words for t(), in the language it was served in (INV-1684): defined first, so every script can read them.
+var MSG = {{@messages}}, MSG_LOCALE = "{{@locale}}";
 // The theme, before first paint: reading it after the stylesheet applies flashes the
 // wrong colors on every load for everyone on the non-default theme.
 (function () {
@@ -896,30 +898,30 @@ export const APP_HTML = String.raw`<!doctype html>
        defect whether or not anyone has complained about it yet. -->
   <span id="spendtoday" class="mono" role="button" tabindex="0"
         style="font-size:12px;color:var(--muted);white-space:nowrap"
-        title="Tokens spent today, all agents \u2014 open the spend view"></span>
+        title="{{ui.page.tokens-spent-today-all-agents}}"></span>
   <span id="whoami" style="font-size:12px;color:var(--muted);white-space:nowrap"></span>
-  <button id="guidebtn" class="btn ghost sm" title="The four set-up steps, and where each thing is">Guide</button>
-  <button id="teachreviewbtn" class="btn ghost sm">Teaching drafts</button> <a id="manuallink" class="btn ghost sm" href="${MANUAL_URL}" target="_blank" rel="noopener noreferrer" style="text-decoration:none">Manual</a>
-  <button id="settingsbtn" title="Settings" aria-label="Settings">
+  <button id="guidebtn" class="btn ghost sm" title="{{ui.page.the-four-set-up-steps}}">{{ui.page.guide}}</button>
+  <button id="teachreviewbtn" class="btn ghost sm">{{ui.page.teaching-drafts}}</button> <a id="manuallink" class="btn ghost sm" href="${MANUAL_URL}" target="_blank" rel="noopener noreferrer" style="text-decoration:none">{{ui.manual}}</a> <button id="langbtn" class="btn ghost sm" title="{{ui.page.lang-title}}" aria-label="{{ui.page.lang-title}}">{{ui.page.lang-other}}</button>
+  <button id="settingsbtn" title="{{ui.page.settings}}" aria-label="{{ui.page.settings}}">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.56-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.56 1.03Z"/></svg>
   </button>
-  <button id="theme" title="Switch theme" aria-label="Switch theme">
+  <button id="theme" title="{{ui.page.switch-theme}}" aria-label="{{ui.page.switch-theme}}">
     <svg id="themesun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
     <svg id="thememoon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>
   </button>
 </header>
 
-<div id="boxbar" role="tablist" aria-label="Boxes"></div>
+<div id="boxbar" role="tablist" aria-label="{{ui.page.boxes}}"></div>
 
 <div id="shell">
 
 <div class="pane" id="sidebar">
-  <div class="eyebrow-row"><span class="eyebrow">Agents</span>
-    <a href="#" id="groupby" class="dim" style="font-size:11px;margin-right:8px" title="Group the list by team, or list it A to Z">teams</a>
-    <button id="new" class="btn ghost sm" title="New agent">+</button></div>
+  <div class="eyebrow-row"><span class="eyebrow">{{ui.page.agents}}</span>
+    <a href="#" id="groupby" class="dim" style="font-size:11px;margin-right:8px" title="{{ui.page.group-the-list-by-team}}">{{ui.page.teams-2}}</a>
+    <button id="new" class="btn ghost sm" title="{{ui.page.new-agent}}">+</button></div>
   <div id="needsme" style="display:none;border-bottom:1px solid var(--border);padding:8px 12px"></div>
   <div class="scroll" id="agents"></div>
-  <div style="padding:6px 12px 4px"><button id="shelfopen" class="btn sm" style="width:100%;justify-content:space-between;display:flex" title="Templates: saved agents you can stamp into this box"><span>Templates</span><span class="dim">stamp ▸</span></button></div>
+  <div style="padding:6px 12px 4px"><button id="shelfopen" class="btn sm" style="width:100%;justify-content:space-between;display:flex" title="{{ui.page.templates-saved-agents-you-can}}"><span>{{ui.page.templates}}</span><span class="dim">{{ui.page.stamp}}</span></button></div>
   <div id="sidefoot">
     <div class="footrow"><span class="dot" id="boxdot"></span><span id="boxinfo">box</span></div>
     <div id="buildinfo"></div>
@@ -935,27 +937,27 @@ export const APP_HTML = String.raw`<!doctype html>
       <span id="convwrap" style="position:relative;flex:none">
         <a href="#" id="convbtn" class="btn sm" style="display:none;text-decoration:none;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></a>
         <div id="convpanel" style="display:none">
-          <input id="convfilter" placeholder="Filter threads&hellip;" autocomplete="off">
+          <input id="convfilter" placeholder="{{ui.page.filter-threads}}" autocomplete="off">
           <div id="convlist"></div>
-          <a href="#" id="convmore" class="row dim" style="display:none">Load more&hellip;</a>
+          <a href="#" id="convmore" class="row dim" style="display:none">{{ui.page.load-more}}</a>
         </div>
       </span>
-      <a href="#" id="agentcfg" style="font-size:12px;flex:none">Configure</a>
-      <a href="#" id="agentdel" style="font-size:12px;flex:none;color:var(--danger)" title="Delete this agent (asks first)">Delete</a>
+      <a href="#" id="agentcfg" style="font-size:12px;flex:none">{{ui.page.configure}}</a>
+      <a href="#" id="agentdel" style="font-size:12px;flex:none;color:var(--danger)" title="{{ui.page.delete-this-agent-asks-first}}">{{ui.page.delete}}</a>
     </span>
     <span class="headactions" style="position:relative">
-      <a href="#" id="sharebtn" title="Copy or download this thread, or its link">share ▾</a>
+      <a href="#" id="sharebtn" title="{{ui.page.copy-or-download-this-thread}}">{{ui.page.share}}</a>
       <div id="sharemenu">
-        <a href="#" data-share="md">Copy as Markdown</a>
-        <a href="#" data-share="file">Download .md</a>
-        <a href="#" data-share="link">Copy link to this thread</a>
+        <a href="#" data-share="md">{{ui.page.copy-as-markdown}}</a>
+        <a href="#" data-share="file">{{ui.page.download-md}}</a>
+        <a href="#" data-share="link">{{ui.page.copy-link-to-this-thread}}</a>
       </div>
-      <a href="#" id="searchbtn" title="Search this conversation (Ctrl+F)">search</a>
-      <a href="#" id="foldall" title="Fold or unfold every step in this conversation">fold steps</a>
+      <a href="#" id="searchbtn" title="{{ui.page.search-this-conversation-ctrl-f}}">{{ui.page.search}}</a>
+      <a href="#" id="foldall" title="{{ui.page.fold-or-unfold-every-step}}">{{ui.page.fold-steps}}</a>
       <span id="round" class="roundpill"></span>
       <!-- Only shown while a turn is running: a stop button with nothing to stop invites a click
            that does nothing, and then the real one is not trusted. -->
-      <button id="stop" class="btn sm" style="display:none">Stop</button>
+      <button id="stop" class="btn sm" style="display:none">{{ui.page.stop}}</button>
     </span>
   </div>
   <!-- Ahead of the conversation on purpose. An agent waiting on consent has stopped working, and a
@@ -965,37 +967,37 @@ export const APP_HTML = String.raw`<!doctype html>
     <div id="progresslist"></div>
   </div>
   <div id="searchbar">
-    <input type="search" id="searchq" placeholder="Search this conversation&hellip;" autocomplete="off" spellcheck="false">
-    <select id="searchwho" title="Whose messages to search">
-      <option value="all">anyone</option>
-      <option value="person">you</option>
-      <option value="agent">this agent</option>
-      <option value="teammate">teammates</option>
-      <option value="work">tool calls</option>
+    <input type="search" id="searchq" placeholder="{{ui.page.search-this-conversation}}" autocomplete="off" spellcheck="false">
+    <select id="searchwho" title="{{ui.page.whose-messages-to-search}}">
+      <option value="all">{{ui.page.anyone}}</option>
+      <option value="person">{{ui.page.you}}</option>
+      <option value="agent">{{ui.page.this-agent}}</option>
+      <option value="teammate">{{ui.page.teammates}}</option>
+      <option value="work">{{ui.page.tool-calls}}</option>
     </select>
-    <select id="searchwhen" title="How far back">
-      <option value="all">any time</option>
-      <option value="1">today</option>
-      <option value="7">last 7 days</option>
-      <option value="30">last 30 days</option>
+    <select id="searchwhen" title="{{ui.page.how-far-back}}">
+      <option value="all">{{ui.page.any-time}}</option>
+      <option value="1">{{ui.page.today}}</option>
+      <option value="7">{{ui.page.last-7-days}}</option>
+      <option value="30">{{ui.page.last-30-days}}</option>
     </select>
-    <input type="date" id="searchday" title="Jump to a day: the thread scrolls to that day's first message">
+    <input type="date" id="searchday" title="{{ui.page.jump-to-a-day-the}}">
     <span class="count" id="searchcount"></span>
-    <button class="btn ghost sm" id="searchprev" title="Previous match (Shift+Enter)">&uarr;</button>
-    <button class="btn ghost sm" id="searchnext" title="Next match (Enter)">&darr;</button>
-    <button class="btn ghost sm" id="searchclose" title="Close (Esc)">&times;</button>
+    <button class="btn ghost sm" id="searchprev" title="{{ui.page.previous-match-shift-enter}}">&uarr;</button>
+    <button class="btn ghost sm" id="searchnext" title="{{ui.page.next-match-enter}}">&darr;</button>
+    <button class="btn ghost sm" id="searchclose" title="{{ui.page.close-esc}}">&times;</button>
   </div>
   <div class="scroll" id="chat"></div>
 <div id="ctxmenu" role="menu"></div>
-  <button id="jumplatest" class="btn sm accent" type="button">↓ latest</button>
+  <button id="jumplatest" class="btn sm accent" type="button">{{ui.page.latest}}</button>
   <form id="form">
     <!-- Anchored above the composer so it does not cover what is being typed. -->
     <div id="slashmenu" style="display:none"></div>
     <div class="inputrow">
-      <textarea id="input" placeholder="Message this agent&hellip;"></textarea>
-      <button id="send" class="btn accent">Send</button>
+      <textarea id="input" placeholder="{{ui.page.message-this-agent}}"></textarea>
+      <button id="send" class="btn accent">{{ui.page.send}}</button>
     </div>
-    <div class="hintrow"><span>&#9166; send &middot; &#8679;&#9166; newline &middot; / skills</span></div>
+    <div class="hintrow"><span>{{ui.page.send-newline-skills}}</span></div>
   </form>
 </div>
 
@@ -1004,16 +1006,16 @@ export const APP_HTML = String.raw`<!doctype html>
     <!-- Tabs rather than a third panel: the files view needs the height, and stacking it under a
          150px-tall desktop gave neither enough room to be usable. -->
     <span class="lead">
-      <a href="#" id="tabdesktop" class="tab on">Desktop</a>
-      <a href="#" id="tabfiles" class="tab">Files</a>
-      <a href="#" id="tabtasks" class="tab">Tasks</a>
-      <a href="#" id="tabauto" class="tab">Automations</a>
-      <a href="#" id="tabaudit" class="tab">Audit</a>
+      <a href="#" id="tabdesktop" class="tab on">{{ui.page.desktop}}</a>
+      <a href="#" id="tabfiles" class="tab">{{ui.page.files}}</a>
+      <a href="#" id="tabtasks" class="tab">{{ui.page.tasks}}</a>
+      <a href="#" id="tabauto" class="tab">{{ui.page.automations}}</a>
+      <a href="#" id="tabaudit" class="tab">{{ui.page.audit}}</a>
     </span>
     <span class="headactions" id="desktopactions">
-      <a id="rec" href="#" title="Record this desktop">&#9679;</a>
-      <a id="full" href="#" target="_blank" rel="noopener" class="btn sm" style="text-decoration:none">Take over</a>
-      <a id="handback" href="#" class="btn sm" style="text-decoration:none;display:none" title="Give the desktop back to the agent">Hand back</a>
+      <a id="rec" href="#" title="{{ui.page.record-this-desktop}}">&#9679;</a>
+      <a id="full" href="#" target="_blank" rel="noopener" class="btn sm" style="text-decoration:none">{{ui.page.take-over}}</a>
+      <a id="handback" href="#" class="btn sm" style="text-decoration:none;display:none" title="{{ui.page.give-the-desktop-back-to}}">{{ui.page.hand-back}}</a>
     </span>
     <span class="desktopcontext">
       <a href="#" id="desktoptitle"></a>
@@ -1022,19 +1024,17 @@ export const APP_HTML = String.raw`<!doctype html>
   </div>
   <div id="desktopview">
     <div id="boxnotice" style="display:none"></div>
-    <div class="bar" id="desktopstart"><button class="btn" id="opendesktop" type="button">Open desktop</button><span> Starts when you need it.</span></div>
-    <div class="desktopwrap"><iframe id="vnc" title="box desktop"></iframe></div>
+    <div class="bar" id="desktopstart"><button class="btn" id="opendesktop" type="button">{{ui.page.open-desktop}}</button><span> {{ui.page.starts-when-you-need-it}}</span></div>
+    <div class="desktopwrap"><iframe id="vnc" title="{{ui.page.box-desktop}}"></iframe></div>
     <div class="bar" id="recordings" style="display:none"></div>
     <div class="bar" id="clipbar">
-      <b>clipboard</b>
-      <input id="cliptext" placeholder="text to paste into the box" spellcheck="false">
-      <button id="clipin" class="btn sm" title="Put this on the box's clipboard, then press Ctrl+V in the desktop">&rarr; box</button>
-      <button id="clipout" class="btn sm" title="Read the box's clipboard and copy it here">&larr; box</button>
+      <b>{{ui.page.clipboard}}</b>
+      <input id="cliptext" placeholder="{{ui.page.text-to-paste-into-the}}" spellcheck="false">
+      <button id="clipin" class="btn sm" title="{{ui.page.put-this-on-the-boxs}}">&rarr; box</button>
+      <button id="clipout" class="btn sm" title="{{ui.page.read-the-boxs-clipboard-and}}">&larr; box</button>
     </div>
     <div class="bar note">
-      Every agent has its own desktop, so they never fight over focus. This shows the
-      selected agent's. Click it for keyboard focus, or take it over full size &mdash; you
-      can drive one while the others keep working.
+      {{ui.page.every-agent-has-its-own}}
     </div>
   </div>
 
@@ -1043,29 +1043,29 @@ export const APP_HTML = String.raw`<!doctype html>
        what the old version did and why it was useless. -->
   <div id="filesview" style="display:none;flex:1;min-height:0;display:none">
     <div class="bar" id="filesbar">
-      <b id="filespath">/home/box/work</b>
+      <b id="filespath">{{ui.page.home-box-work}}</b>
       <span class="plain">
-        <a href="#" id="filesup">up</a>
-        <a href="#" id="filesrefresh">refresh</a>
-        <label class="dim">add file<input id="filesupload" type="file" multiple style="display:none"></label>
+        <a href="#" id="filesup">{{ui.page.up}}</a>
+        <a href="#" id="filesrefresh">{{ui.page.refresh}}</a>
+        <label class="dim">{{ui.page.add-file}}<input id="filesupload" type="file" multiple style="display:none"></label>
       </span>
     </div>
     <div id="filessplit" style="display:flex;flex:1;min-height:0">
       <div class="scroll" id="fileslist" style="width:44%;border-right:1px solid var(--border)"></div>
-      <div class="scroll" id="filespreview" style="flex:1"><div class="dim" style="padding:10px 14px">Select a file.</div></div>
+      <div class="scroll" id="filespreview" style="flex:1"><div class="dim" style="padding:10px 14px">{{ui.page.select-a-file}}</div></div>
     </div>
   </div>
   <!-- The task board: work as an object the whole team sees. Rows grouped by status;
        creating and moving needs the driver role, same as prompting. -->
   <div id="tasksview" style="display:none;flex:1;min-height:0;flex-direction:column">
     <div class="bar" style="display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--border)">
-      <input id="tasknew" placeholder="New task title&hellip;" spellcheck="false" style="flex:1;min-width:0;padding:4px 9px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:13px">
+      <input id="tasknew" placeholder="{{ui.page.new-task-title}}" spellcheck="false" style="flex:1;min-width:0;padding:4px 9px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:13px">
       <select id="taskassign" style="height:28px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font-size:12px"></select>
-      <button class="btn sm" id="taskadd">Add</button> <a href="#" id="inboxonly" class="dim" style="font-size:11px;white-space:nowrap" title="Only what the agents found and proposed (INV-1652): commit what is worth doing, dismiss the rest">inbox</a>
+      <button class="btn sm" id="taskadd">{{ui.page.add}}</button> <a href="#" id="inboxonly" class="dim" style="font-size:11px;white-space:nowrap" title="{{ui.page.only-what-the-agents-found}}">{{ui.page.inbox}}</a>
     </div>
     <!-- What needs me, before what the board has (INV-543): two lists and their clocks. -->
-    <div id="attention" title="What waits on a person and is not a task: a consent, a question, a pause. Tasks carry their own mark below." style="display:none;border-bottom:1px solid var(--border);padding:10px 16px"></div>
-    <div class="scroll" id="tasklist" title="The board: what waits on you first, then every task, newest change first within each status."></div>
+    <div id="attention" title="{{ui.page.what-waits-on-a-person}}" style="display:none;border-bottom:1px solid var(--border);padding:10px 16px"></div>
+    <div class="scroll" id="tasklist" title="{{ui.page.the-board-what-waits-on}}"></div>
   </div>
   <!-- What runs without anyone asking. The page a person checks when they want to know
        whether the 06:30 brief is actually armed, when it last fired, and where it
@@ -1073,72 +1073,72 @@ export const APP_HTML = String.raw`<!doctype html>
   <div id="autoview" style="display:none;flex:1;min-height:0;flex-direction:column">
     <div class="bar" style="display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--border)">
       <span class="dim" id="autostate" style="flex:1;font-size:12px"></span>
-      <a href="#" id="autonew" class="dim" style="font-size:12px">+ New</a>
-      <a href="#" id="autorefresh" class="dim" style="font-size:12px">refresh</a>
+      <a href="#" id="autonew" class="dim" style="font-size:12px">{{ui.page.new}}</a>
+      <a href="#" id="autorefresh" class="dim" style="font-size:12px">{{ui.page.refresh}}</a>
     </div>
     <div id="autocreate" style="display:none;padding:16px;border-bottom:1px solid var(--border)">
       <div style="display:flex;flex-direction:column;gap:12px">
         <!-- Name -->
         <div>
-          <div class="dim" style="font-size:11px;margin-bottom:4px">Name</div>
-          <input id="autoname" placeholder="Name this routine…" spellcheck="false" style="width:100%;box-sizing:border-box;padding:6px 10px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:13px">
+          <div class="dim" style="font-size:11px;margin-bottom:4px">{{ui.page.name}}</div>
+          <input id="autoname" placeholder="{{ui.page.name-this-routine}}" spellcheck="false" style="width:100%;box-sizing:border-box;padding:6px 10px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:13px">
         </div>
         <!-- Instruction -->
         <div>
-          <div class="dim" style="font-size:11px;margin-bottom:4px">Instruction</div>
-          <textarea id="autobody" placeholder="What should this routine do each time it runs?" rows="3" spellcheck="false" style="width:100%;box-sizing:border-box;padding:6px 10px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:13px;resize:vertical"></textarea>
+          <div class="dim" style="font-size:11px;margin-bottom:4px">{{ui.page.instruction}}</div>
+          <textarea id="autobody" placeholder="{{ui.page.what-should-this-routine-do}}" rows="3" spellcheck="false" style="width:100%;box-sizing:border-box;padding:6px 10px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:13px;resize:vertical"></textarea>
         </div>
         <!-- Trigger type -->
         <div>
-          <div class="dim" style="font-size:11px;margin-bottom:4px">When to run</div>
+          <div class="dim" style="font-size:11px;margin-bottom:4px">{{ui.page.when-to-run}}</div>
           <div id="autotrigger" style="display:flex;gap:6px">
-            <button class="btn sm" data-trigger="schedule" style="flex:1">⏱ On a schedule</button>
-            <button class="btn sm ghost" data-trigger="webhook" style="flex:1">🔗 Webhook</button>
-            <button class="btn sm ghost" data-trigger="message" style="flex:1">💬 Message</button>
+            <button class="btn sm" data-trigger="schedule" style="flex:1">{{ui.page.on-a-schedule}}</button>
+            <button class="btn sm ghost" data-trigger="webhook" style="flex:1">{{ui.page.webhook}}</button>
+            <button class="btn sm ghost" data-trigger="message" style="flex:1">{{ui.page.message}}</button>
           </div>
         </div>
         <!-- Schedule options (shown when schedule selected) -->
         <div id="autoschedule" style="display:flex;flex-direction:column;gap:8px">
           <div style="display:flex;flex-wrap:wrap;gap:6px" id="autopresets">
-            <button class="btn sm ghost" data-cron="0 * * * *">Every hour</button>
-            <button class="btn sm ghost" data-cron="0 9 * * *">Every day 09:00</button>
-            <button class="btn sm ghost" data-cron="0 9 * * 1-5">Weekdays 09:00</button>
-            <button class="btn sm ghost" data-cron="0 9 * * 1">Every Monday</button>
-            <button class="btn sm ghost" data-cron="custom">Custom…</button>
+            <button class="btn sm ghost" data-cron="0 * * * *">{{ui.page.every-hour}}</button>
+            <button class="btn sm ghost" data-cron="0 9 * * *">{{ui.page.every-day-09-00}}</button>
+            <button class="btn sm ghost" data-cron="0 9 * * 1-5">{{ui.page.weekdays-09-00}}</button>
+            <button class="btn sm ghost" data-cron="0 9 * * 1">{{ui.page.every-monday}}</button>
+            <button class="btn sm ghost" data-cron="custom">{{ui.page.custom}}</button>
           </div>
           <div id="autocronwrap" style="display:none">
-            <input id="autocron" placeholder="cron: 0 9 * * * or @daily" spellcheck="false" style="width:100%;box-sizing:border-box;padding:6px 10px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:12px;font-family:var(--mono)">
+            <input id="autocron" placeholder="{{ui.page.cron-0-9-or-daily}}" spellcheck="false" style="width:100%;box-sizing:border-box;padding:6px 10px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:12px;font-family:var(--mono)">
           </div>
           <div id="autocrondesc" class="dim" style="font-size:11px"></div>
         </div>
         <!-- Message options (hidden by default) -->
         <div id="automessage" style="display:none">
-          <div class="dim" style="font-size:11px;margin-bottom:4px">Match pattern (text or /regex/)</div>
-          <input id="automatch" placeholder="e.g. hello or /invoice .*/i" spellcheck="false" style="width:100%;box-sizing:border-box;padding:6px 10px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:13px">
+          <div class="dim" style="font-size:11px;margin-bottom:4px">{{ui.page.match-pattern-text-or-regex}}</div>
+          <input id="automatch" placeholder="{{ui.page.e-g-hello-or-invoice}}" spellcheck="false" style="width:100%;box-sizing:border-box;padding:6px 10px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:13px">
         </div>
         <!-- Webhook hint (hidden by default) -->
         <div id="autowebhook" style="display:none">
-          <div class="dim" style="font-size:11px">A URL and secret will be generated automatically. You can find them in the automation row after creation.</div>
+          <div class="dim" style="font-size:11px">{{ui.page.a-url-and-secret-will}}</div>
         </div>
         <!-- Agent -->
         <div>
-          <div class="dim" style="font-size:11px;margin-bottom:4px">Run as agent</div>
+          <div class="dim" style="font-size:11px;margin-bottom:4px">{{ui.page.run-as-agent}}</div>
           <select id="autoagent" style="width:100%;box-sizing:border-box;height:32px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font-size:13px"></select>
         </div>
         <!-- Deliver -->
         <div>
-          <div class="dim" style="font-size:11px;margin-bottom:4px">Report to <span class="dim">(optional chat key, e.g. feishu:oc_xxx)</span></div>
-          <input id="autodeliver" placeholder="Leave empty for no chat delivery" spellcheck="false" style="width:100%;box-sizing:border-box;padding:6px 10px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:13px">
+          <div class="dim" style="font-size:11px;margin-bottom:4px">{{ui.page.report-to}} <span class="dim">{{ui.page.optional-chat-key-e-g}}</span></div>
+          <input id="autodeliver" placeholder="{{ui.page.leave-empty-for-no-chat}}" spellcheck="false" style="width:100%;box-sizing:border-box;padding:6px 10px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:13px">
         </div>
         <!-- Timezone -->
         <div>
-          <div class="dim" style="font-size:11px;margin-bottom:4px">Timezone <span class="dim">(optional, e.g. Asia/Shanghai)</span></div>
-          <input id="autotimezone" placeholder="Host timezone" spellcheck="false" style="width:100%;box-sizing:border-box;padding:6px 10px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:13px">
+          <div class="dim" style="font-size:11px;margin-bottom:4px">{{ui.page.timezone}} <span class="dim">{{ui.page.optional-e-g-asia-shanghai}}</span></div>
+          <input id="autotimezone" placeholder="{{ui.page.host-timezone}}" spellcheck="false" style="width:100%;box-sizing:border-box;padding:6px 10px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:13px">
         </div>
         <!-- Actions -->
         <div style="display:flex;gap:8px;justify-content:flex-end">
-          <button class="btn sm ghost" id="autocancel">Cancel</button>
-          <button class="btn sm" id="autosave">Create (paused)</button>
+          <button class="btn sm ghost" id="autocancel">{{ui.page.cancel}}</button>
+          <button class="btn sm" id="autosave">{{ui.page.create-paused}}</button>
         </div>
         <div id="autoerror" style="display:none;color:var(--warn);font-size:12px"></div>
       </div>
@@ -1151,39 +1151,39 @@ export const APP_HTML = String.raw`<!doctype html>
     <div class="bar" id="auditstate" style="display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--border);font-size:12px;padding:6px 16px">
       <span id="auditstatetext" style="flex:1"></span>
       <label id="auditprobelabel" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-size:11.5px;color:var(--text-soft);user-select:none">
-        <input type="checkbox" id="audithideprobes" checked> Hide system probes<span id="auditprobecount" class="dim"></span>
+        <input type="checkbox" id="audithideprobes" checked> {{ui.page.hide-system-probes}}<span id="auditprobecount" class="dim"></span>
       </label>
     </div>
     <div class="scroll hide-probes" id="auditlist"></div>
   </div>
-  <div class="eyebrow-row activityhead"><span class="eyebrow">Activity &mdash; all agents</span></div>
+  <div class="eyebrow-row activityhead"><span class="eyebrow">{{ui.page.activity-all-agents}}</span></div>
   <div class="feed" id="feed"></div>
 </div>
 
 </div>
 
 <dialog id="teachreview" class="modal" style="width:min(850px,90vw);max-height:85vh;overflow:auto;color:var(--text);background:var(--surface)">
-  <h3>Teaching drafts</h3>
-  <p class="fieldnote">Review the proposed steps and inputs. Publish adds the skill to its original box; it does not run it. Only an admin can publish.</p>
+  <h3>{{ui.page.teaching-drafts}}</h3>
+  <p class="fieldnote">{{ui.page.review-the-proposed-steps-and}}</p>
   <div id="teachreviewlist"></div>
   <div id="teachreviewdetail" style="display:none">
     <p id="teachreviewsource" class="fieldnote"></p>
     <div id="teachreviewhints" class="fieldnote" style="display:none;white-space:pre-wrap;margin:6px 0"></div>
     <pre id="teachreviewtext" style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;padding:14px;border:1px solid var(--border)"></pre>
-    <details id="teachreviewhistory" style="display:none"><summary>Earlier questions and answers</summary><pre id="teachreviewhistorytext" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>
-    <details id="teachreviewversions" style="display:none"><summary>Published versions</summary><div id="teachreviewversionlist" class="fieldnote"></div></details>
+    <details id="teachreviewhistory" style="display:none"><summary>{{ui.page.earlier-questions-and-answers}}</summary><pre id="teachreviewhistorytext" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>
+    <details id="teachreviewversions" style="display:none"><summary>{{ui.page.published-versions}}</summary><div id="teachreviewversionlist" class="fieldnote"></div></details>
     <div id="teachreviewclarification" style="display:none;margin:14px 0">
-      <label for="teachreviewanswer">Answer the teaching question</label>
-      <textarea id="teachreviewanswer" rows="4" maxlength="4096" placeholder="Explain the goal, variable inputs and expected output. Do not include credentials." style="display:block;width:100%;box-sizing:border-box;margin:8px 0"></textarea>
-      <button id="teachreviewclarify" class="btn accent">Generate revised draft</button>
+      <label for="teachreviewanswer">{{ui.page.answer-the-teaching-question}}</label>
+      <textarea id="teachreviewanswer" rows="4" maxlength="4096" placeholder="{{ui.page.explain-the-goal-variable-inputs}}" style="display:block;width:100%;box-sizing:border-box;margin:8px 0"></textarea>
+      <button id="teachreviewclarify" class="btn accent">{{ui.page.generate-revised-draft}}</button>
     </div>
     <div class="actions">
-      <button id="teachreviewdryrun" class="btn ghost" style="display:none">Dry-run the operation's cases</button><button id="teachreviewpublish" class="btn accent">Publish reviewed skill</button>
-      <button id="teachreviewreject" class="btn ghost">Reject draft</button>
+      <button id="teachreviewdryrun" class="btn ghost" style="display:none">{{ui.page.dry-run-the-operations-cases}}</button><button id="teachreviewpublish" class="btn accent">{{ui.page.publish-reviewed-skill}}</button>
+      <button id="teachreviewreject" class="btn ghost">{{ui.page.reject-draft}}</button>
     </div>
   </div>
   <p id="teachreviewstatus" role="status" class="fieldnote"></p>
-  <div class="actions"><button id="teachreviewclose" class="btn ghost">Close</button></div>
+  <div class="actions"><button id="teachreviewclose" class="btn ghost">{{ui.page.close}}</button></div>
 </dialog>
 
 <!-- Where the month went. A different question from the rest of this page, which answers
@@ -1191,10 +1191,10 @@ export const APP_HTML = String.raw`<!doctype html>
      one number that was already in the header and did not open anything. -->
 <div id="spendwrap" style="display:none">
   <div class="modal">
-    <h3>Spend</h3>
+    <h3>{{ui.page.spend}}</h3>
     <div class="spendgrid">
       <div>
-        <div style="font-size:10.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--muted);padding:0 6px 4px">Day &middot; out</div>
+        <div style="font-size:10.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--muted);padding:0 6px 4px">{{ui.page.day-out}}</div>
         <div class="daylist" id="spenddays"></div>
       </div>
       <div>
@@ -1203,7 +1203,7 @@ export const APP_HTML = String.raw`<!doctype html>
       </div>
     </div>
     <div id="spendcaveat" class="caveat"></div>
-    <div class="actions"><button id="spendclose" class="btn ghost sm">Close</button></div>
+    <div class="actions"><button id="spendclose" class="btn ghost sm">{{ui.page.close}}</button></div>
   </div>
 </div>
 
@@ -1215,136 +1215,124 @@ ${SETTINGS_DIALOG_HTML}
 <!-- The shelf (docs/39 §2): everything a person can stamp into a box, with one verb. -->
 <div id="shelfwrap" style="display:none">
   <div class="modal" style="width:680px">
-    <h3>Templates</h3>
-    <div class="fieldnote">A template is a saved agent: persona, skills, routines, conventions — never history, never people. Stamping one makes a new agent in a box.</div>
-    <div class="field"><label>My personal boxes</label><div id="personalboxes"></div><button class="btn sm" id="personalcreate">Create personal box</button><div class="fieldnote" id="personalstatus"></div></div>
-    <div class="field"><label>Stamp into</label><select id="shelfbox" style="height:32px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 8px"></select></div>
+    <h3>{{ui.page.templates}}</h3>
+    <div class="fieldnote">{{ui.page.a-template-is-a-saved}}</div>
+    <div class="field"><label>{{ui.page.my-personal-boxes}}</label><div id="personalboxes"></div><button class="btn sm" id="personalcreate">{{ui.page.create-personal-box}}</button><div class="fieldnote" id="personalstatus"></div></div>
+    <div class="field"><label>{{ui.page.stamp-into}}</label><select id="shelfbox" style="height:32px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 8px"></select></div>
     <div id="shelfbody" class="scroll" style="max-height:52vh"></div>
     <div class="fieldnote" id="shelfstatus"></div>
     <div class="actions">
-      <button class="btn" id="shelfpaste">Paste or link…</button>
-      <button class="btn ghost" id="shelfclose">Close</button>
+      <button class="btn" id="shelfpaste">{{ui.page.paste-or-link}}</button>
+      <button class="btn ghost" id="shelfclose">{{ui.page.close}}</button>
     </div>
   </div>
 </div>
 
 <div id="agentwrap" style="display:none">
   <div class="modal">
-    <h3 id="agenttitle">New agent</h3>
+    <h3 id="agenttitle">{{ui.page.new-agent}}</h3>
     <div class="field" id="agcatalogwrap">
-      <label>From catalog</label>
+      <label>{{ui.page.from-catalog}}</label>
       <div id="agcatalog" class="toolchips"></div>
       <div id="agcatalogpreview" style="display:none;margin-top:8px;padding:10px 12px;border:1px solid var(--border-strong);border-radius:var(--radius-md);background:var(--bg);font-size:12px"></div>
-      <div class="fieldnote">Agents and crews that ship with the install. An agent entry fills
-        this form; a crew adds its members in one step. Not seeded — adding is a choice.</div>
+      <div class="fieldnote">{{ui.page.agents-and-crews-that-ship}}</div>
     </div>
     <div class="field" id="agimportwrap">
-      <label>Or import a template</label>
-      <textarea id="agimport" rows="3" spellcheck="false" placeholder="Paste a .lumenbox-template.json here" style="font-family:var(--font-mono);font-size:11px"></textarea>
+      <label>{{ui.page.or-import-a-template}}</label>
+      <textarea id="agimport" rows="3" spellcheck="false" placeholder="{{ui.page.paste-a-lumenbox-template-json}}" style="font-family:var(--font-mono);font-size:11px"></textarea>
       <div style="display:flex;gap:10px;align-items:center;margin-top:6px">
-        <button class="btn sm" id="agimportgo" type="button">Import</button>
-        <label class="btn sm ghost" for="agimportfile" style="cursor:pointer">Choose a file…</label>
+        <button class="btn sm" id="agimportgo" type="button">{{ui.page.import}}</button>
+        <label class="btn sm ghost" for="agimportfile" style="cursor:pointer">{{ui.page.choose-a-file}}</label>
         <input type="file" id="agimportfile" accept=".json,application/json" style="display:none">
         <span id="agimportname" class="dim" style="font-size:11px"></span>
       </div>
-      <div class="fieldnote">A template is another bot's recipe: profile, conventions, skills and paused
-        routines. The new bot installs it on its first turn and then asks you for whatever it still needs.
-        Nothing in a template can reach your logins or connectors.</div>
+      <div class="fieldnote">{{ui.page.a-template-is-another-bots}}</div>
     </div>
     <div class="field">
-      <label>Name</label>
+      <label>{{ui.page.name}}</label>
       <input id="agname" spellcheck="false" style="font-family:var(--font-sans)">
     </div>
     <div class="field">
-      <label>Role label</label>
-      <input id="agrole" placeholder="e.g. release manager" spellcheck="false" style="font-family:var(--font-sans)">
+      <label>{{ui.page.role-label}}</label>
+      <input id="agrole" placeholder="{{ui.page.e-g-release-manager}}" spellcheck="false" style="font-family:var(--font-sans)">
     </div>
     <div class="field">
-      <label>Teams</label>
-      <input id="agtags" placeholder="e.g. editorial, ops" spellcheck="false" style="font-family:var(--font-sans)">
-      <div class="fieldnote">Comma separated. Agents are grouped by these in the list, and an agent
-        can be in more than one &mdash; the ops agent every project uses belongs to each of them.
-        Agents set these themselves too, so a crew made in one go arrives as a team.</div>
+      <label>{{ui.page.teams}}</label>
+      <input id="agtags" placeholder="{{ui.page.e-g-editorial-ops}}" spellcheck="false" style="font-family:var(--font-sans)">
+      <div class="fieldnote">{{ui.page.comma-separated-agents-are-grouped}}</div>
     </div>
     <div class="field" id="agboxwrap">
-      <label>Box</label>
+      <label>{{ui.page.box}}</label>
       <select id="agbox" style="font-family:var(--font-sans)"></select>
-      <div class="fieldnote">Which machine it lives on. Chosen once: an agent's memory, files and
-        logins are its box's, and it never moves &mdash; make another one on the other box instead.</div>
+      <div class="fieldnote">{{ui.page.which-machine-it-lives-on}}</div>
     </div>
     <div class="field">
-      <label>Persona</label>
-      <textarea id="agpersona" placeholder="What is this agent for? This becomes its system prompt."></textarea>
+      <label>{{ui.page.persona}}</label>
+      <textarea id="agpersona" placeholder="{{ui.page.what-is-this-agent-for}}"></textarea>
     </div>
     <div class="field" id="agstandingwrap">
-      <label>Standing files</label>
+      <label>{{ui.page.standing-files}}</label>
       <div style="display:flex;gap:8px;align-items:center">
         <select id="agstandingname" style="font-family:var(--font-mono);font-size:12px">
           <option>AGENTS.md</option><option>SOUL.md</option><option>USER.md</option><option>HEARTBEAT.md</option>
         </select>
-        <button type="button" class="ghost" id="agstandingsave">Save file</button>
+        <button type="button" class="ghost" id="agstandingsave">{{ui.page.save-file}}</button>
         <span id="agstandingstatus" class="fieldnote" style="margin:0"></span>
       </div>
       <textarea id="agstandingtext" spellcheck="false" style="font-family:var(--font-mono);font-size:12px;min-height:120px"></textarea>
-      <div class="fieldnote">Read into every turn, editable by you and by the agent (8 KiB each). The agent is
-        told what changed; a SOUL.md change it mentions to you.</div>
+      <div class="fieldnote">{{ui.page.read-into-every-turn-editable}}</div>
     </div>
     <div class="field">
-      <label>Runtime</label>
+      <label>{{ui.page.runtime}}</label>
       <div style="display:flex;gap:8px">
         <select id="agprovider" style="flex:1"></select>
-        <input id="agmodel" placeholder="model (optional)" spellcheck="false" style="flex:1;font-family:var(--font-mono);font-size:12px">
+        <input id="agmodel" placeholder="{{ui.page.model-optional}}" spellcheck="false" style="flex:1;font-family:var(--font-mono);font-size:12px">
       </div>
-      <div class="fieldnote">Which model this agent runs on. Blank uses the installation default —
-        set it to run, say, the reviewer on a bigger model than the tidy-up agent. The provider's
-        key must be present in the environment.</div>
+      <div class="fieldnote">{{ui.page.which-model-this-agent-runs}}</div>
     </div>
     <div class="field">
-      <label>Scope</label>
+      <label>{{ui.page.scope}}</label>
       <select id="agscope"></select>
-      <div class="fieldnote">A scope confers a tool set and secret grants as one named bundle
-        (managed in Settings). In a scope, the tools below are set by it and locked here.</div>
+      <div class="fieldnote">{{ui.page.a-scope-confers-a-tool}}</div>
     </div>
     <div class="field">
-      <label>Tools</label>
+      <label>{{ui.page.tools}}</label>
       <div id="agtools" class="toolchips"></div>
-      <div class="fieldnote">Click a tool to cycle allowed → ask me → off. Off is withheld: not in the agent's prompt at all.
-        A dashed chip is one your organisation already asks about; hover it for where that comes from. A save applies from the agent's next turn; a turn already running keeps the version it started with.</div>
+      <div class="fieldnote">{{ui.page.click-a-tool-to-cycle}}</div>
     </div>
     <div class="field" id="agtemplatewrap" style="display:none">
-      <label>Share as template</label>
+      <label>{{ui.page.share-as-template}}</label>
       <div id="agtemplate" class="fieldnote"></div>
       <div style="display:flex;gap:10px;align-items:center;margin-top:6px">
-        <button class="btn sm" id="agshare" type="button">Ask it to draft a template</button>
-        <a href="#" id="agdownload" style="display:none;font-size:13px">Download latest</a>
+        <button class="btn sm" id="agshare" type="button">{{ui.page.ask-it-to-draft-a}}</button>
+        <a href="#" id="agdownload" style="display:none;font-size:13px">{{ui.page.download-latest}}</a>
       </div>
-      <div class="fieldnote">The bot reads its own memory, skills and routines, leaves out what is
-        private, and stages a version. Nothing leaves this box until you download the file.</div>
+      <div class="fieldnote">{{ui.page.the-bot-reads-its-own}}</div>
     </div>
     <div class="field" id="agdanger" style="display:none">
-      <label>Delete</label>
-      <div id="agdel1"><a href="#" id="agdelete" style="color:var(--danger);font-size:13px">Delete this agent&hellip;</a></div>
+      <label>{{ui.page.delete}}</label>
+      <div id="agdel1"><a href="#" id="agdelete" style="color:var(--danger);font-size:13px">{{ui.page.delete-this-agent}}</a></div>
       <div id="agdel2" style="display:none;flex-direction:column;gap:8px">
         <label class="radio"><input type="radio" name="agrecords" value="archive" checked>
-          Keep its records &mdash; the transcript, memory and plan are archived, restorable by moving them back</label>
+          {{ui.page.keep-its-records-the-transcript}}</label>
         <label class="radio"><input type="radio" name="agrecords" value="delete">
-          Delete everything it ever did</label>
+          {{ui.page.delete-everything-it-ever-did}}</label>
         <div style="display:flex;gap:10px;padding-top:2px">
-          <button class="btn sm danger" id="agdelconfirm">Delete agent</button>
-          <button class="btn sm ghost" id="agdelback">Back</button>
+          <button class="btn sm danger" id="agdelconfirm">{{ui.page.delete-agent}}</button>
+          <button class="btn sm ghost" id="agdelback">{{ui.page.back}}</button>
         </div>
       </div>
     </div>
     <div class="fieldnote" id="agstatus"></div>
     <div class="actions">
-      <button class="btn accent" id="agsave">Create</button>
-      <button class="btn ghost" id="agcancel">Cancel</button>
+      <button class="btn accent" id="agsave">{{ui.page.create}}</button>
+      <button class="btn ghost" id="agcancel">{{ui.page.cancel}}</button>
     </div>
   </div>
 </div>
 
 <script src="/vendor/markdown-it.js"></script>
-<script src="/app/jev-settings.js"></script><script src="/app/supervision.js"></script>
+<script src="/app/jev-settings.js?lang={{@locale}}"></script><script src="/app/supervision.js?lang={{@locale}}"></script>
 <script>
 "use strict";
 // Markdown rendering is markdown-it's job, served from node_modules by this server.
@@ -1393,6 +1381,7 @@ $("theme").onclick = function () {
   try { localStorage.setItem("lumen-theme", next); } catch (error) {}
   showThemeIcon();
 };
+$("langbtn").onclick = function () { document.cookie = "lumen-lang=" + (MSG_LOCALE === "zh" ? "en" : "zh") + "; path=/; max-age=31536000; samesite=lax"; location.reload(); }; // the person's choice, kept (INV-1684)
 showThemeIcon();
 
 // Under the desktop shell the top bar is also the window title bar.
@@ -1430,9 +1419,9 @@ function loadBoxQuotas() {
   fetch("/api/directories").then(function (r) { return r.json(); }).then(function (d) {
     if (d.error) throw new Error(d.error);
     $("setdirectories").innerHTML = d.directories.map(function (item) {
-      return '<p>' + esc(item.channelId) + ' · ' + esc(item.status) + ' · ' + item.people + ' people / ' + item.departments + ' departments' +
-        (item.syncedAt ? ' · last complete ' + esc(item.syncedAt) : '') +
-        '<button type="button" class="btn sm" data-directory-sync="' + esc(item.channelId) + '">Sync directory</button></p>';
+      return '<p>' + esc(item.channelId) + ' · ' + esc(item.status) + ' · ' + item.people + ' {{ui.app.people}} ' + item.departments + ' {{ui.app.departments}}' +
+        (item.syncedAt ? ' {{ui.app.last-complete}} ' + esc(item.syncedAt) : '') +
+        '<button type="button" class="btn sm" data-directory-sync="' + esc(item.channelId) + '">{{ui.app.sync-directory}}</button></p>';
     }).join("");
   }).catch(function (e) { $("setquotastatus").textContent = e.message; });
   fetch("/api/quotas").then(function (r) { return r.json(); }).then(function (d) {
@@ -1443,7 +1432,7 @@ function loadBoxQuotas() {
     }).join("");
     $("setquotadefault").value = d.personalBoxQuota === null ? "" : d.personalBoxQuota;
     $("setquotapeople").innerHTML = d.people.map(function (p) {
-      return '<label style="display:block;margin-top:8px">' + esc(p.name) + ' · ' + p.held + ' held' +
+      return '<label style="display:block;margin-top:8px">' + esc(p.name) + ' · ' + p.held + ' {{ui.app.held}}' +
         '<input data-quota-person="' + esc(p.id) + '" type="number" min="0" max="99" step="1" placeholder="Inherit default" value="' + (p.override === null ? "" : p.override) + '"></label>';
     }).join("");
   }).catch(function (e) { $("setquotastatus").textContent = e.message; });
@@ -1452,11 +1441,11 @@ $("setdirectories").onclick = function (event) {
   var button = event.target.closest("[data-directory-sync]");
   if (!button) return;
   button.disabled = true;
-  $("setquotastatus").textContent = "Syncing directory…";
+  $("setquotastatus").textContent = "{{ui.app.syncing-directory}}";
   fetch("/api/directories/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ channelId: button.getAttribute("data-directory-sync") }) })
     .then(function (r) { return r.json(); }).then(function (d) {
       if (d.error) throw new Error(d.error);
-      $("setquotastatus").textContent = "Directory synced.";
+      $("setquotastatus").textContent = "{{ui.app.directory-synced}}";
     }).catch(function (e) { $("setquotastatus").textContent = e.message; }).finally(loadBoxQuotas);
 };
 $("setquotasave").onclick = function () {
@@ -1473,7 +1462,7 @@ $("setquotasave").onclick = function () {
     personalBoxQuota: $("setquotadefault").value === "" ? null : Number($("setquotadefault").value), personBoxQuotas: people, departmentBoxQuotas: departments
   }) }).then(function (r) { return r.json(); }).then(function (d) {
     if (d.error) throw new Error(d.error);
-    $("setquotastatus").textContent = "Saved. Applies to the next allocation; no restart needed.";
+    $("setquotastatus").textContent = "{{ui.app.saved-applies-to-the-next}}";
     loadBoxQuotas();
   }).catch(function (e) { $("setquotastatus").textContent = e.message; }).finally(function () { button.disabled = false; });
 };
@@ -1485,9 +1474,9 @@ function loadPromptParts() {
     $("setpartswrap").style.display = parts.length ? "" : "none";
     $("setparts").innerHTML = parts.map(function (p) {
       var tag = p.status === "default-updated" ? '<span style="color:var(--warn);font-size:10.5px;border:1px solid var(--border);border-radius:5px;padding:0 5px">default updated</span>' : p.status === "overridden" ? '<span style="color:var(--accent-2);font-size:10.5px;border:1px solid var(--border);border-radius:5px;padding:0 5px">yours</span>' : "";
-      var decide = p.status === "default-updated" ? '<button class="btn ghost sm" data-part="' + esc(p.key) + '" data-part-decide="keep">Keep my text</button><button class="btn ghost sm" data-part="' + esc(p.key) + '" data-part-decide="default">Use the new default</button>' : p.status === "overridden" ? '<button class="btn ghost sm" data-part="' + esc(p.key) + '" data-part-decide="default">Back to default</button>' : "";
-      return '<div style="margin-top:8px"><div style="display:flex;gap:8px;align-items:baseline"><span style="flex:1;font-size:12.5px;font-weight:500">' + esc(p.title) + " " + tag + "</span>" + decide + '<button class="btn ghost sm" data-part="' + esc(p.key) + '" data-part-decide="edit">Save</button></div><div class="dim" style="font-size:11px">' + esc(p.about) + "</div>" +
-        (p.status === "default-updated" ? '<div class="dim" style="font-size:11px;margin-top:3px">New default:</div><pre class="mono" style="white-space:pre-wrap;font-size:11px;max-height:8em;overflow:auto;margin:2px 0">' + esc(p.text) + "</pre>" : "") +
+      var decide = p.status === "default-updated" ? '<button class="btn ghost sm" data-part="' + esc(p.key) + '" data-part-decide="keep">{{ui.app.keep-my-text}}</button><button class="btn ghost sm" data-part="' + esc(p.key) + '" data-part-decide="default">{{ui.app.use-the-new-default}}</button>' : p.status === "overridden" ? '<button class="btn ghost sm" data-part="' + esc(p.key) + '" data-part-decide="default">{{ui.app.back-to-default}}</button>' : "";
+      return '<div style="margin-top:8px"><div style="display:flex;gap:8px;align-items:baseline"><span style="flex:1;font-size:12.5px;font-weight:500">' + esc(p.title) + " " + tag + "</span>" + decide + '<button class="btn ghost sm" data-part="' + esc(p.key) + '" data-part-decide="edit">{{ui.app.save-2}}</button></div><div class="dim" style="font-size:11px">' + esc(p.about) + "</div>" +
+        (p.status === "default-updated" ? '<div class="dim" style="font-size:11px;margin-top:3px">{{ui.app.new-default}}</div><pre class="mono" style="white-space:pre-wrap;font-size:11px;max-height:8em;overflow:auto;margin:2px 0">' + esc(p.text) + "</pre>" : "") +
         '<textarea data-part-text="' + esc(p.key) + '" rows="5" spellcheck="false" style="width:100%;font-family:var(--font-mono);font-size:11px">' + esc(p.override ? p.override.text : p.text) + "</textarea></div>";
     }).join("");
   }).catch(function () { $("setpartswrap").style.display = "none"; });
@@ -1523,19 +1512,19 @@ function openSettings(tab) {
       searchConfigured = "";
       for (var si = 0; si < searchPresets.length; si++) if (searchPresets[si].keyPresent) searchConfigured = searchPresets[si].name;
       var ssel = $("setsearchprov");
-      ssel.innerHTML = '<option value="">not configured</option>' + searchPresets.map(function (p) {
+      ssel.innerHTML = '<option value="">{{ui.app.not-configured}}</option>' + searchPresets.map(function (p) {
         return '<option value="' + esc(p.name) + '">' + esc(p.name) + " &middot; " + esc(p.keyEnv) + "</option>";
       }).join("");
       ssel.value = searchConfigured;
       $("setsearchkey").value = "";
       $("setsearchnote").textContent = searchConfigured
-        ? "A " + searchConfigured + " key is already provided. Leave blank to keep it; pick “not configured” and save to clear it."
-        : "Optional. Without one of these keys the WebSearch tool is withheld and agents search through the box's browser.";
+        ? "A " + searchConfigured + " {{ui.app.key-is-already-provided-leave}}"
+        : "{{ui.app.optional-without-one-of-these}}";
       var host = data.hostExec || {};
       $("sethostenabled").checked = !!host.enabled;
       $("sethostcwd").value = host.cwd || "";
       $("sethoststatus").textContent = host.enabled
-        ? (host.unavailableReason ? "Enabled, but: " + host.unavailableReason : "Enabled and ready.")
+        ? (host.unavailableReason ? "{{ui.app.enabled-but}} " + host.unavailableReason : "{{ui.app.enabled-and-ready}}")
         : "";
       $("setstartupitem").checked = !!(data.config && data.config.startupItem);
       var settings = data.settings || {};
@@ -1553,7 +1542,7 @@ function openSettings(tab) {
       renderScopes();
       $("settingswrap").style.display = "flex";
     })
-    .catch(function () { feed("could not load settings", "err"); });
+    .catch(function () { feed("{{ui.app.could-not-load-settings}}", "err"); });
 }
 
 /** Scopes: named authority bundles. Each row edits its tool set and secret list inline. */
@@ -1568,17 +1557,17 @@ function renderScopes() {
       scopes = data.scopes || [];
       scopeTools = data.allTools || [];
       if (!scopes.length) {
-        $("setscopes").innerHTML = '<div class="fieldnote" style="margin:0">No scopes yet. Add one to bundle a tool set and secrets for a project.</div>';
+        $("setscopes").innerHTML = '<div class="fieldnote" style="margin:0">{{ui.app.no-scopes-yet-add-one}}</div>';
         return;
       }
       $("setscopes").innerHTML = scopes.map(function (s, i) {
-        var toolText = s.tools ? s.tools.length + " tools" : "all tools";
-        var secText = (s.secretIds || []).length + " secrets";
+        var toolText = s.tools ? s.tools.length + " {{ui.app.tools-2}}" : "{{ui.app.all-tools}}";
+        var secText = (s.secretIds || []).length + " {{ui.app.secrets}}";
         return '<div style="border:1px solid var(--border);border-radius:var(--radius-md);padding:8px 10px;display:flex;flex-direction:column;gap:6px">' +
           '<div style="display:flex;gap:8px;align-items:center">' +
             '<span style="flex:1;font-weight:600;font-size:13px">' + esc(s.name) + "</span>" +
             '<span class="dim" style="font-size:11px">' + toolText + " · " + secText + "</span>" +
-            '<a href="#" data-scoperm="' + i + '" style="color:var(--danger);font-size:12px">Remove</a>' +
+            '<a href="#" data-scoperm="' + i + '" style="color:var(--danger);font-size:12px">{{ui.app.remove}}</a>' +
           "</div>" +
           '<div class="toolchips" data-scopetools="' + i + '">' +
             scopeTools.map(function (t) {
@@ -1586,7 +1575,7 @@ function renderScopes() {
               return '<span class="toolchip' + (on ? " on" : "") + '" data-scopetool="' + esc(t) + '">' + esc(t) + "</span>";
             }).join("") +
           "</div>" +
-          '<input data-scopesecrets="' + i + '" value="' + esc((s.secretIds || []).join(", ")) + '" placeholder="secret ids, comma-separated" spellcheck="false" style="padding:4px 8px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font-family:var(--font-mono);font-size:12px">' +
+          '<input data-scopesecrets="' + i + '" value="' + esc((s.secretIds || []).join(", ")) + '" placeholder="{{ui.app.secret-ids-comma-separated}}" spellcheck="false" style="padding:4px 8px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font-family:var(--font-mono);font-size:12px">' +
         "</div>";
       }).join("");
     })
@@ -1594,14 +1583,14 @@ function renderScopes() {
 }
 
 function saveScopes() {
-  $("setscopestatus").textContent = "Saving…";
+  $("setscopestatus").textContent = "{{ui.app.saving}}";
   fetch("/api/scopes", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ scopes: scopes })
   })
-    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "save failed"); return d; }); })
-    .then(function () { $("setscopestatus").textContent = "Saved."; renderScopes(); })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "{{ui.app.save-failed-2}}"); return d; }); })
+    .then(function () { $("setscopestatus").textContent = "{{ui.app.saved-2}}"; renderScopes(); })
     .catch(function (error) { $("setscopestatus").textContent = error.message; });
 }
 
@@ -1649,18 +1638,18 @@ function renderSecrets() {
       if (!data) return;
       secrets = data.secrets || []; window.secretNeeds = data.neededBy || {}; // who needs each (INV-1666)
       if (!secrets.length) {
-        $("setsecrets").innerHTML = '<div class="fieldnote" style="margin:0">No secrets yet. Add one to give an agent a credential for a host command.</div>';
+        $("setsecrets").innerHTML = '<div class="fieldnote" style="margin:0">{{ui.app.no-secrets-yet-add-one}}</div>';
         return;
       }
       $("setsecrets").innerHTML = secrets.map(function (s, i) {
-        var who = (s.grants || []).map(function (g) { return g.holder + (g.expiresAt ? " (until " + g.expiresAt.slice(0,10) + ")" : ""); }).join(", ") || "nobody yet";
+        var who = (s.grants || []).map(function (g) { return g.holder + (g.expiresAt ? " {{ui.app.until-2}} " + g.expiresAt.slice(0,10) + ")" : ""); }).join(", ") || "{{ui.app.nobody-yet}}";
         // Where a browser may type it (INV-967): named, or said to be nowhere, so the person
         // who reads a refusal here sees the same fact the refusal was about.
-        var sites = (s.kind === "git" ? "git credential for " + ((s.domains || []).join(", ") || "github.com") + " (handed to git, not to the command)" : (s.domains || []).length ? "sites: " + s.domains.join(", ") : "not fillable in a browser (no sites)");
+        var sites = (s.kind === "git" ? "{{ui.app.git-credential-for}} " + ((s.domains || []).join(", ") || "github.com") + " {{ui.app.handed-to-git-not-to}}" : (s.domains || []).length ? "sites: " + s.domains.join(", ") : "{{ui.app.not-fillable-in-a-browser}}");
         return '<div style="display:flex;gap:8px;align-items:center;font-size:13px">' +
           '<span class="mono" style="min-width:110px;font-weight:600">' + esc(s.id) + "</span>" +
           '<span class="dim" style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis">' + esc(who) + " · " + esc(sites) + (window.neededByHtml ? window.neededByHtml(s.id) : "") + "</span>" +
-          '<a href="#" data-secrm="' + i + '" style="color:var(--danger);font-size:12px">Remove</a></div>';
+          '<a href="#" data-secrm="' + i + '" style="color:var(--danger);font-size:12px">{{ui.app.remove}}</a></div>';
       }).join("");
     })
     .catch(function () {});
@@ -1673,8 +1662,8 @@ $("setsecadd").onclick = function () {
   var sites = $("setsecsites").value.split(",").map(function (d) { return d.trim(); }).filter(Boolean);
   // A secret that exists may be re-saved without its value, to change its grants or sites.
   var exists = secrets.some(function (s) { return s.id === id; });
-  if (!id || (!value && !exists)) { $("setsecstatus").textContent = "A secret needs a name and a value."; return; }
-  $("setsecstatus").textContent = "Saving…";
+  if (!id || (!value && !exists)) { $("setsecstatus").textContent = "{{ui.app.a-secret-needs-a-name}}"; return; }
+  $("setsecstatus").textContent = "{{ui.app.saving}}";
   var body = { id: id, grants: grant ? [{ holder: grant }] : [], domains: sites.filter(function (d) { return d !== "git"; }), kind: sites.indexOf("git") >= 0 ? "git" : null }; // "git" among the sites marks a git credential (INV-1408)
   if (value) body.value = value;
   fetch("/api/vault", {
@@ -1682,8 +1671,8 @@ $("setsecadd").onclick = function () {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body)
   })
-    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "save failed"); return d; }); })
-    .then(function () { $("setsecid").value = ""; $("setsecval").value = ""; $("setsecgrant").value = ""; $("setsecsites").value = ""; $("setsecstatus").textContent = "Saved."; renderSecrets(); })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "{{ui.app.save-failed-2}}"); return d; }); })
+    .then(function () { $("setsecid").value = ""; $("setsecval").value = ""; $("setsecgrant").value = ""; $("setsecsites").value = ""; $("setsecstatus").textContent = "{{ui.app.saved-2}}"; renderSecrets(); })
     .catch(function (error) { $("setsecstatus").textContent = error.message; });
 };
 
@@ -1718,14 +1707,14 @@ function renderConnectors() {
       var connected = data.connected || [];
       $("setconns").innerHTML = connected.length
         ? connected.map(function (c) {
-            var who = (c.grants || []).map(function (g) { return g.holder; }).join(", ") || "nobody yet";
-            var until = c.expiresAt ? " · until " + c.expiresAt.slice(0, 16).replace("T", " ") : "";
+            var who = (c.grants || []).map(function (g) { return g.holder; }).join(", ") || "{{ui.app.nobody-yet}}";
+            var until = c.expiresAt ? " {{ui.app.until}} " + c.expiresAt.slice(0, 16).replace("T", " ") : "";
             return '<div style="display:flex;gap:8px;align-items:center;font-size:13px">' +
               '<span class="mono" style="min-width:110px;font-weight:600">' + esc(c.provider) + "</span>" +
               '<span class="dim" style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis">' + esc(who + until) + "</span>" +
-              '<a href="#" data-connrm="' + esc(c.id) + '" style="color:var(--danger);font-size:12px">Disconnect</a></div>';
+              '<a href="#" data-connrm="' + esc(c.id) + '" style="color:var(--danger);font-size:12px">{{ui.app.disconnect}}</a></div>';
           }).join("")
-        : '<div class="fieldnote" style="margin:0">Nothing connected yet.</div>';
+        : '<div class="fieldnote" style="margin:0">{{ui.app.nothing-connected-yet}}</div>';
     })
     .catch(function () {});
 }
@@ -1734,15 +1723,15 @@ $("setconnadd").onclick = function () {
   var provider = $("setconnprov").value;
   var p = connProviders.filter(function (x) { return x.id === provider; })[0];
   var body = { provider: provider, clientId: $("setconnid").value.trim(), clientSecret: $("setconnsecret").value, grant: $("setconngrant").value.trim() };
-  if (!body.clientId || !body.clientSecret) { $("setconnstatus").textContent = "Both the id and the secret are needed."; return; }
+  if (!body.clientId || !body.clientSecret) { $("setconnstatus").textContent = "{{ui.app.both-the-id-and-the}}"; return; }
   var code = p && p.kind === "authorization_code";
-  $("setconnstatus").textContent = code ? "Opening the provider…" : "Connecting…";
+  $("setconnstatus").textContent = code ? "{{ui.app.opening-the-provider}}" : "{{ui.app.connecting}}";
   fetch(code ? "/api/connectors/begin" : "/api/connectors/connect", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
-    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "failed"); return d; }); })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "{{ui.app.failed}}"); return d; }); })
     .then(function (d) {
       $("setconnsecret").value = "";
-      if (d.url) { window.open(d.url, "_blank"); $("setconnstatus").textContent = "Finish the authorization in the new tab, then this list updates."; }
-      else { $("setconnstatus").textContent = "Connected."; }
+      if (d.url) { window.open(d.url, "_blank"); $("setconnstatus").textContent = "{{ui.app.finish-the-authorization-in-the}}"; }
+      else { $("setconnstatus").textContent = "{{ui.app.connected-2}}"; }
       renderConnectors();
     })
     .catch(function (error) { $("setconnstatus").textContent = error.message; });
@@ -1760,18 +1749,18 @@ document.getElementById("setconns").addEventListener("click", function (event) {
 var memAgent = null;
 
 function renderMemorySummary() {
-  $("setmemstate").textContent = "Loading…";
+  $("setmemstate").textContent = "{{ui.app.loading}}";
   $("setmemdetail").style.display = "none";
   fetch("/api/memory")
     .then(function (r) {
-      if (r.status === 403) { $("setmemstate").textContent = "This account can watch but not open memory."; $("setmemsummary").innerHTML = ""; return null; }
+      if (r.status === 403) { $("setmemstate").textContent = "{{ui.app.this-account-can-watch-but}}"; $("setmemsummary").innerHTML = ""; return null; }
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json();
     })
     .then(function (data) {
       if (!data) return;
       var agents = data.agents || [];
-      if (!agents.length) { $("setmemstate").textContent = "Nothing kept yet. An agent remembers what it is told to remember — this fills in as they work."; $("setmemsummary").innerHTML = ""; return; }
+      if (!agents.length) { $("setmemstate").textContent = "{{ui.app.nothing-kept-yet-an-agent}}"; $("setmemsummary").innerHTML = ""; return; }
       $("setmemstate").textContent = "";
       var names = {};
       (data.boxes || []).forEach(function (b) { names[b.id] = b.name; });
@@ -1780,39 +1769,39 @@ function renderMemorySummary() {
       $("setmemsummary").innerHTML = Object.keys(byBox).map(function (boxId) {
         return '<div style="font-size:12px;font-weight:600;margin-top:4px">' + esc(names[boxId] || boxId) + "</div>" +
           byBox[boxId].map(function (a) {
-            var kinds = Object.keys(a.byKind || {}).map(function (k) { return a.byKind[k] + " " + k; }).join(", ") || "nothing live";
+            var kinds = Object.keys(a.byKind || {}).map(function (k) { return a.byKind[k] + " " + k; }).join(", ") || "{{ui.app.nothing-live}}";
             return '<div style="display:flex;gap:8px;align-items:center;font-size:13px">' +
               '<a href="#" data-memagent="' + esc(a.agentId) + '" style="min-width:110px;font-weight:500">' + esc(a.agentName) + "</a>" +
-              '<span class="dim" style="flex:1;font-size:12px">' + esc(kinds) + (a.retracted ? " · " + a.retracted + " withdrawn" : "") + (a.lastAt ? " · last " + esc(a.lastAt.slice(0, 10)) : "") + "</span></div>";
+              '<span class="dim" style="flex:1;font-size:12px">' + esc(kinds) + (a.retracted ? " · " + a.retracted + " {{ui.app.withdrawn-2}}" : "") + (a.lastAt ? " {{ui.app.last}} " + esc(a.lastAt.slice(0, 10)) : "") + "</span></div>";
           }).join("");
       }).join("");
     })
-    .catch(function (error) { $("setmemstate").textContent = "Could not read memory: " + error.message; });
+    .catch(function (error) { $("setmemstate").textContent = "{{ui.app.could-not-read-memory}} " + error.message; });
 }
 
 function renderMemoryDetail(agentId) {
   memAgent = agentId;
   $("setmemdetail").style.display = "";
-  $("setmemlines").innerHTML = '<div class="dim" style="font-size:12px">Loading…</div>';
+  $("setmemlines").innerHTML = '<div class="dim" style="font-size:12px">{{ui.app.loading}}</div>';
   fetch("/api/memory/agent?agent=" + encodeURIComponent(agentId))
-    .then(function (r) { if (!r.ok) throw new Error(r.status === 403 ? "not yours to open" : "HTTP " + r.status); return r.json(); })
+    .then(function (r) { if (!r.ok) throw new Error(r.status === 403 ? "{{ui.app.not-yours-to-open}}" : "HTTP " + r.status); return r.json(); })
     .then(function (data) {
       var lines = [];
       var row = function (v, scope) {
         var live = v.status === "live";
         var sourceActions = live && v.from ? v.from.map(function (source) {
-          return '<a href="#" data-memsource="' + esc(source) + '" style="color:var(--danger);font-size:11px">Withdraw ' + esc(source) + "</a>";
+          return '<a href="#" data-memsource="' + esc(source) + '" style="color:var(--danger);font-size:11px">{{ui.app.withdraw}} ' + esc(source) + "</a>";
         }).join("") : "";
         return '<div data-memkey="' + esc(v.key) + '" data-memver="' + esc(v.version) + '" data-memscope="' + scope + '" style="display:flex;gap:8px;align-items:flex-start;font-size:12px' + (live ? "" : ";opacity:.55") + '">' +
           '<span class="mono dim" style="min-width:76px">' + esc(v.at.slice(0, 10)) + "</span>" +
-          '<span class="dim" style="min-width:56px">' + esc(v.kind) + (scope === "shared" ? " · team" : "") + "</span>" +
-          '<span style="flex:1;white-space:pre-wrap" class="memtext">' + esc(v.text) + (v.from && v.from.length ? '<br><span class="dim">from ' + esc(v.from.join(", ")) + "</span>" : "") + (live ? "" : ' <span class="dim">(withdrawn' + (v.retractedBy ? " — " + esc(v.retractedBy) : "") + ")</span>") + "</span>" +
-          (live ? '<a href="#" data-memedit="1" class="dim" style="font-size:11px">Edit</a><a href="#" data-memdrop="1" style="color:var(--danger);font-size:11px">Withdraw</a>' + sourceActions : "") +
+          '<span class="dim" style="min-width:56px">' + esc(v.kind) + (scope === "shared" ? " {{ui.app.team}}" : "") + "</span>" +
+          '<span style="flex:1;white-space:pre-wrap" class="memtext">' + esc(v.text) + (v.from && v.from.length ? '<br><span class="dim">{{ui.app.from-3}} ' + esc(v.from.join(", ")) + "</span>" : "") + (live ? "" : ' <span class="dim">{{ui.app.withdrawn}}' + (v.retractedBy ? " — " + esc(v.retractedBy) : "") + ")</span>") + "</span>" +
+          (live ? '<a href="#" data-memedit="1" class="dim" style="font-size:11px">{{ui.app.edit}}</a><a href="#" data-memdrop="1" style="color:var(--danger);font-size:11px">{{ui.app.withdraw}}</a>' + sourceActions : "") +
           "</div>";
       };
       (data.own || []).forEach(function (v) { lines.push(row(v, "own")); });
       (data.shared || []).forEach(function (v) { lines.push(row(v, "shared")); });
-      $("setmemlines").innerHTML = lines.length ? lines.join("") : '<div class="dim" style="font-size:12px">Nothing kept yet.</div>';
+      $("setmemlines").innerHTML = lines.length ? lines.join("") : '<div class="dim" style="font-size:12px">{{ui.app.nothing-kept-yet}}</div>';
     })
     .catch(function (error) { $("setmemlines").innerHTML = '<div style="color:var(--danger);font-size:12px">' + esc(error.message) + "</div>"; });
 }
@@ -1824,7 +1813,7 @@ function changeMemory(rowEl, text) {
     .then(function (r) { return r.json().then(function (d) { return { status: r.status, data: d }; }); })
     .then(function (out) {
       if (out.status === 409) {
-        alert("That line changed since you saw it" + (out.data.current ? ":\n\n" + out.data.current.text : " and is no longer live.") + "\n\nThe list is refreshed; decide again.");
+        alert("{{ui.app.that-line-changed-since-you}}" + (out.data.current ? ":\n\n" + out.data.current.text : " {{ui.app.and-is-no-longer-live}}") + "{{ui.app.the-list-is-refreshed-decide}}");
       } else if (out.status !== 200) {
         alert(out.data.error || ("HTTP " + out.status));
       }
@@ -1839,8 +1828,8 @@ function withdrawMemorySource(source) {
     .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
     .then(function (impact) {
       var count = (impact.own || []).length + (impact.shared || []).length;
-      if (!count) { alert("This source has no live derived memory."); return; }
-      if (!confirm("Withdraw this source and disable " + count + " derived memory line(s)? Original conversations stay on record, and future automatic extraction from this source stays blocked.")) return;
+      if (!count) { alert("{{ui.app.this-source-has-no-live}}"); return; }
+      if (!confirm("{{ui.app.withdraw-this-source-and-disable}} " + count + " {{ui.app.derived-memory-line-s-original}}")) return;
       return request({ agent: memAgent, action: "withdraw", source: source, version: impact.version })
         .then(function (r) { return r.json().then(function (d) { return { status: r.status, data: d }; }); })
         .then(function (out) {
@@ -1848,7 +1837,7 @@ function withdrawMemorySource(source) {
           renderMemoryDetail(memAgent); renderMemorySummary();
         });
     })
-    .catch(function (error) { alert("Could not withdraw source: " + error.message); });
+    .catch(function (error) { alert("{{ui.app.could-not-withdraw-source}} " + error.message); });
 }
 
 document.getElementById("setmemsummary").addEventListener("click", function (event) {
@@ -1866,7 +1855,7 @@ document.getElementById("setmemlines").addEventListener("click", function (event
   if (!rowEl) return;
   if (t.getAttribute("data-memdrop")) {
     event.preventDefault();
-    if (!confirm("Withdraw this line? It stays on record as withdrawn; the agent stops recalling it.")) return;
+    if (!confirm("{{ui.app.withdraw-this-line-it-stays}}")) return;
     changeMemory(rowEl);
   } else if (t.getAttribute("data-memsource")) {
     event.preventDefault();
@@ -1874,7 +1863,7 @@ document.getElementById("setmemlines").addEventListener("click", function (event
   } else if (t.getAttribute("data-memedit")) {
     event.preventDefault();
     var current = rowEl.querySelector(".memtext").textContent;
-    askInline(t, "Correct this line. The old one is withdrawn and this is kept in its place:", current).then(function (next) {
+    askInline(t, "{{ui.app.correct-this-line-the-old}}", current).then(function (next) {
       if (next !== null && next.trim() !== "" && next.trim() !== current.trim()) changeMemory(rowEl, next.trim());
     });
   }
@@ -1890,9 +1879,9 @@ function renderMcpTokens(tokens) {
         return '<div style="display:flex;gap:8px;align-items:center;font-size:13px">' +
           '<span style="flex:1">' + esc(t.label) + "</span>" +
           '<span class="dim" style="font-size:11px">' + esc(new Date(t.createdAt).toLocaleDateString()) + "</span>" +
-          '<a href="#" data-revoke="' + esc(t.createdAt) + '" style="color:var(--danger);font-size:12px">Revoke</a></div>';
+          '<a href="#" data-revoke="' + esc(t.createdAt) + '" style="color:var(--danger);font-size:12px">{{ui.app.revoke}}</a></div>';
       }).join("")
-    : '<div class="fieldnote" style="margin:0">None yet.</div>';
+    : '<div class="fieldnote" style="margin:0">{{ui.app.none-yet}}</div>';
 }
 
 $("setmcpadd").onclick = function () {
@@ -1905,12 +1894,12 @@ $("setmcpadd").onclick = function () {
     .then(function (d) {
       // Shown once, because it is not stored anywhere it could be read back.
       $("setmcpnew").textContent = d.token
-        ? "Copy it now, it is not shown again: " + d.token
-        : (d.error || "failed");
+        ? "{{ui.app.copy-it-now-it-is}} " + d.token
+        : (d.error || "{{ui.app.failed}}");
       $("setmcplabel").value = "";
       renderMcp();
     })
-    .catch(function () { $("setmcpnew").textContent = "failed"; });
+    .catch(function () { $("setmcpnew").textContent = "{{ui.app.failed}}"; });
 };
 
 document.getElementById("setmcptokens").addEventListener("click", function (event) {
@@ -1926,32 +1915,32 @@ document.getElementById("setmcptokens").addEventListener("click", function (even
 
 document.getElementById("setextreload").addEventListener("click", function () {
   var note = $("setextreloaded");
-  note.textContent = "reloading…";
+  note.textContent = "{{ui.app.reloading}}";
   fetch("/api/extensions/reload", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })
     .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
     .then(function (x) {
-      if (!x.ok) { note.textContent = x.j.error || "reload failed"; return; }
-      note.textContent = "loaded " + (x.j.loaded || []).length + " file(s), " + (x.j.tools || []).length + " tool(s)" +
+      if (!x.ok) { note.textContent = x.j.error || "{{ui.app.reload-failed}}"; return; }
+      note.textContent = "{{ui.app.loaded}} " + (x.j.loaded || []).length + " {{ui.app.file-s}} " + (x.j.tools || []).length + " {{ui.app.tool-s}}" +
         ((x.j.problems || []).length ? "; " + x.j.problems.join("; ") : "");
       renderMcp();
     })
-    .catch(function () { note.textContent = "reload failed"; });
+    .catch(function () { note.textContent = "{{ui.app.reload-failed}}"; });
 });
 
 document.getElementById("setmcpreload").addEventListener("click", function () {
   var note = $("setmcpreloaded");
-  note.textContent = "reloading…";
+  note.textContent = "{{ui.app.reloading}}";
   fetch("/api/mcp/reload", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })
     .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
     .then(function (x) {
-      if (!x.ok) { note.textContent = x.j.error || "reload failed"; return; }
-      note.textContent = "started " + (x.j.started || []).length + ", stopped " + (x.j.stopped || []).length +
-        ", kept " + (x.j.kept || []).length;
+      if (!x.ok) { note.textContent = x.j.error || "{{ui.app.reload-failed}}"; return; }
+      note.textContent = "{{ui.app.started}} " + (x.j.started || []).length + "{{ui.app.stopped}} " + (x.j.stopped || []).length +
+        "{{ui.app.kept}} " + (x.j.kept || []).length;
       // Servers come up in the background; look again once they have had a moment.
       setTimeout(renderMcp, 1500);
       renderMcp();
     })
-    .catch(function () { note.textContent = "reload failed"; });
+    .catch(function () { note.textContent = "{{ui.app.reload-failed}}"; });
 });
 
 function renderMcp() {
@@ -1965,12 +1954,12 @@ function renderMcp() {
       document.getElementById("setmcpwrap").style.display = myRole === "admin" ? "" : "none";
       var ext = data.extensions;
       $("setext").textContent = ext
-        ? "Extensions (~/.agentbox/extensions): " + (ext.loaded.length ? ext.loaded.join(", ") : "none") +
-          (ext.tools.length ? " — tools: " + ext.tools.join(", ") : "") +
-          (ext.problems.length ? " — problems: " + ext.problems.join("; ") : "")
+        ? "{{ui.app.extensions-agentbox-extensions}} " + (ext.loaded.length ? ext.loaded.join(", ") : "{{ui.app.none}}") +
+          (ext.tools.length ? " {{ui.app.tools}} " + ext.tools.join(", ") : "") +
+          (ext.problems.length ? " {{ui.app.problems}} " + ext.problems.join("; ") : "")
         : "";
       if (!servers.length) {
-        $("setmcp").innerHTML = '<div class="dim" style="font-size:13px">none configured</div>';
+        $("setmcp").innerHTML = '<div class="dim" style="font-size:13px">{{ui.app.none-configured}}</div>';
         return;
       }
       $("setmcp").innerHTML = servers.map(function (s) {
@@ -1980,7 +1969,7 @@ function renderMcp() {
           '<span class="dot ' + (s.running ? "ok" : "bad") + '"></span>' +
           '<span style="min-width:80px">' + esc(s.name) + "</span>" +
           '<span class="dim mono" style="flex:1;font-size:11px">' + esc(s.detail) + "</span>" +
-          (heavy ? '<span style="font-size:11px;color:var(--warn,#b26b00)">in every prompt</span>' : "") +
+          (heavy ? '<span style="font-size:11px;color:var(--warn,#b26b00)">{{ui.app.in-every-prompt}}</span>' : "") +
         "</div>";
       }).join("");
     })
@@ -1998,7 +1987,7 @@ function renderChannels() {
       (data.channels || []).forEach(function (ch) { statuses[ch.name] = ch; });
       var agents = data.agents || [];
       var agentOptions = function (selected) {
-        return '<option value=""' + (selected ? "" : " selected") + ">(installation default)</option>" +
+        return '<option value=""' + (selected ? "" : " selected") + ">{{ui.app.installation-default-2}}</option>" +
           agents.map(function (agent) {
             return '<option value="' + esc(agent.name) + '"' +
               (agent.name === selected ? " selected" : "") + ">" + esc(agent.name) + "</option>";
@@ -2008,8 +1997,8 @@ function renderChannels() {
         var st = statuses[rec.id];
         var cls = st && st.running ? "ok" : st && st.configured ? "bad" : "";
         var detail = st ? st.detail : rec.credentialsSet
-          ? "restart to connect this channel"
-          : "set " + rec.envBase + "_APP_ID + _APP_SECRET";
+          ? "{{ui.app.restart-to-connect-this-channel}}"
+          : "{{ui.app.set}} " + rec.envBase + "_APP_ID + _APP_SECRET";
         return '<div style="display:flex;gap:9px;align-items:center;font-size:13px;flex-wrap:wrap">' +
           '<span class="dot ' + cls + '"></span>' +
           '<span style="min-width:70px">' + esc(rec.name) + "</span>" +
@@ -2019,12 +2008,12 @@ function renderChannels() {
             agentOptions(rec.defaultAgent) + "</select>" +
           '<select data-chgroup="' + esc(rec.id) + '" data-chtype="' + esc(rec.type) + '" title="What a group message that names nobody does"' +
             ' style="height:26px;font-size:12px;border-radius:6px;border:1px solid var(--border-strong);background:var(--bg);color:var(--text)">' +
-            '<option value="all"' + (rec.groupMessages === "addressed" ? "" : " selected") + '>groups: answer all</option>' +
-            '<option value="addressed"' + (rec.groupMessages === "addressed" ? " selected" : "") + '>groups: only when addressed</option>' +
+            '<option value="all"' + (rec.groupMessages === "addressed" ? "" : " selected") + '>{{ui.app.groups-answer-all}}</option>' +
+            '<option value="addressed"' + (rec.groupMessages === "addressed" ? " selected" : "") + '>{{ui.app.groups-only-when-addressed}}</option>' +
           "</select>" +
           '<span class="dim mono" style="font-size:11px;flex:1;min-width:80px;overflow:hidden;text-overflow:ellipsis">' + esc(detail || "") + "</span>" +
           (rec.grandfathered ? "" :
-            '<a href="#" data-chremove="' + esc(rec.id) + '" style="color:var(--danger);font-size:12px">Remove</a>') +
+            '<a href="#" data-chremove="' + esc(rec.id) + '" style="color:var(--danger);font-size:12px">{{ui.app.remove}}</a>') +
           "</div>";
       }).join("");
       var addSelect = document.getElementById("setchagent");
@@ -2037,9 +2026,9 @@ function renderChannels() {
           '<span style="font-weight:600">' + esc(k.senderLabel) + "</span>" +
           '<span class="dim">' + esc(k.channel) + "</span>" +
           '<span class="mono dim" style="font-size:11px;flex:1;min-width:80px;overflow:hidden;text-overflow:ellipsis">' + esc(k.identity) + "</span>" +
-          '<button class="btn sm" data-approve="' + esc(k.identity) + '" data-role="driver">Let in as driver</button>' +
-          '<button class="btn sm ghost" data-approve="' + esc(k.identity) + '" data-role="viewer">Viewer</button>' +
-          '<a href="#" data-dismiss="' + esc(k.identity) + '" style="color:var(--danger);font-size:12px">Ignore</a></div>';
+          '<button class="btn sm" data-approve="' + esc(k.identity) + '" data-role="driver">{{ui.app.let-in-as-driver}}</button>' +
+          '<button class="btn sm ghost" data-approve="' + esc(k.identity) + '" data-role="viewer">{{ui.app.viewer}}</button>' +
+          '<a href="#" data-dismiss="' + esc(k.identity) + '" style="color:var(--danger);font-size:12px">{{ui.app.ignore}}</a></div>';
       }).join("");
       // Flatten to one row per identity, which is what a person edits.
       people = []; window.installation = data.installation; // Owner or Admin (INV-1685): read by ownerBadge in installation-ui.ts
@@ -2067,8 +2056,8 @@ document.getElementById("setchannels").addEventListener("change", function (even
       .then(function (r) { return r.json(); })
       .then(function (d) {
         $("setchstatus").textContent = d.error || (target.value === "addressed"
-          ? "Saved — group messages that name nobody are kept as room context, not answered."
-          : "Saved — every group message runs a turn.");
+          ? "{{ui.app.saved-group-messages-that-name}}"
+          : "{{ui.app.saved-every-group-message-runs}}");
       });
     return;
   }
@@ -2081,9 +2070,9 @@ document.getElementById("setchannels").addEventListener("change", function (even
   })
     .then(function (r) { return r.json(); })
     .then(function (d) {
-      $("setchstatus").textContent = d.error || "Saved — the next message routes to it.";
+      $("setchstatus").textContent = d.error || "{{ui.app.saved-the-next-message-routes}}";
     })
-    .catch(function () { $("setchstatus").textContent = "failed"; });
+    .catch(function () { $("setchstatus").textContent = "{{ui.app.failed}}"; });
 });
 
 document.getElementById("setchannels").addEventListener("click", function (event) {
@@ -2099,15 +2088,15 @@ document.getElementById("setchannels").addEventListener("click", function (event
   })
     .then(function (r) { return r.json(); })
     .then(function (d) {
-      $("setchstatus").textContent = d.error || "Removed. Its adapter stops on the next restart.";
+      $("setchstatus").textContent = d.error || "{{ui.app.removed-its-adapter-stops-on}}";
       renderChannels();
     })
-    .catch(function () { $("setchstatus").textContent = "failed"; });
+    .catch(function () { $("setchstatus").textContent = "{{ui.app.failed}}"; });
 });
 
 $("setchadd").onclick = function () {
   var id = $("setchid").value.trim();
-  if (!id) { $("setchstatus").textContent = "The channel needs an id — it becomes the identity prefix."; return; }
+  if (!id) { $("setchstatus").textContent = "{{ui.app.the-channel-needs-an-id}}"; return; }
   $("setchstatus").textContent = "…";
   fetch("/api/channels/records", {
     method: "POST",
@@ -2125,16 +2114,16 @@ $("setchadd").onclick = function () {
     .then(function (d) {
       if (d.error) { $("setchstatus").textContent = d.error; return; }
       $("setchstatus").textContent = d.started
-        ? "Saved — the channel is connecting now. Its dot goes green when it connects."
+        ? "{{ui.app.saved-the-channel-is-connecting}}"
         : d.restartNeeded
-          ? "Saved. Restart the web process to apply the new credentials — and wait a " +
-            "minute between stop and start, or Feishu keeps the dead connection."
-          : "Saved.";
+          ? "{{ui.app.saved-restart-the-web-process}} " +
+            "{{ui.app.minute-between-stop-and-start}}"
+          : "{{ui.app.saved-2}}";
       $("setchid").value = ""; $("setchname").value = "";
       $("setchappid").value = ""; $("setchsecret").value = "";
       renderChannels();
     })
-    .catch(function () { $("setchstatus").textContent = "failed"; });
+    .catch(function () { $("setchstatus").textContent = "{{ui.app.failed}}"; });
 };
 
 document.getElementById("setknocks").addEventListener("click", function (event) {
@@ -2195,26 +2184,26 @@ $("setinvite").onclick = function () {
     .then(function (r) { return r.json(); })
     .then(function (d) {
       $("setinviteout").textContent = d.code
-        ? 'Have them send: bind ' + d.code + '  (15 min, once)'
-        : (d.error || "failed");
+        ? '{{ui.app.have-them-send-bind}} ' + d.code + '  {{ui.app.15-min-once}}'
+        : (d.error || "{{ui.app.failed}}");
     })
-    .catch(function () { $("setinviteout").textContent = "failed"; });
+    .catch(function () { $("setinviteout").textContent = "{{ui.app.failed}}"; });
 };
 
 function renderPeople() {
   if (!people.length) {
-    $("setpeople").innerHTML = '<div class="fieldnote" style="margin:0">Nobody yet. Add a person to let them command the agents from a channel.</div>';
+    $("setpeople").innerHTML = '<div class="fieldnote" style="margin:0">{{ui.app.nobody-yet-add-a-person}}</div>';
     return;
   }
   $("setpeople").innerHTML = people.map(function (p, i) {
     var roles = ["viewer", "driver", "admin"].map(function (role) {
-      return '<option value="' + role + '"' + (p.role === role ? " selected" : "") + ">" + role + "</option>";
+      return '<option value="' + role + '"' + (p.role === role ? " selected" : "") + ">" + ({ viewer: "{{ui.role.viewer}}", driver: "{{ui.role.driver}}", admin: "{{ui.role.admin}}" }[role] || role) + "</option>";
     }).join("");
     return '<div style="display:flex;gap:8px;align-items:center;font-size:13px">' +
       '<span style="min-width:80px;font-weight:600">' + esc(p.name) + "</span>" +
       '<span class="mono" style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis">' + esc(p.identity) + "</span>" +
       ((window.ownerBadge && window.ownerBadge(p)) || ('<select data-role-of="' + i + '" style="height:28px;border-radius:6px;border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 4px;font-size:12px">' + roles + "</select>" +
-      '<a href="#" data-remove="' + i + '" style="color:var(--danger);font-size:12px">Remove</a>')) + "</div>";
+      '<a href="#" data-remove="' + i + '" style="color:var(--danger);font-size:12px">{{ui.app.remove}}</a>')) + "</div>";
   }).join("");
 }
 
@@ -2237,21 +2226,21 @@ function savePeople() {
     if (!byId[p.id]) byId[p.id] = { id: p.id, name: p.name, role: p.role, identities: [] };
     if (p.identity) byId[p.id].identities.push(p.identity);
   });
-  $("setpeoplestatus").textContent = "Saving…";
+  $("setpeoplestatus").textContent = "{{ui.app.saving}}";
   (window.rosterFetch || fetch)("/api/principals", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ principals: Object.keys(byId).map(function (k) { return byId[k]; }) })
   })
-    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "save failed"); return d; }); })
-    .then(function () { $("setpeoplestatus").textContent = "Saved."; renderChannels(); })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "{{ui.app.save-failed-2}}"); return d; }); })
+    .then(function () { $("setpeoplestatus").textContent = "{{ui.app.saved-2}}"; renderChannels(); })
     .catch(function (error) { $("setpeoplestatus").textContent = error.message; });
 }
 
 $("setpadd").onclick = function () {
   var name = $("setpname").value.trim();
   var identity = $("setpid").value.trim();
-  if (!name || !identity) { $("setpeoplestatus").textContent = "A person needs a name and an id."; return; }
+  if (!name || !identity) { $("setpeoplestatus").textContent = "{{ui.app.a-person-needs-a-name}}"; return; }
   // Same name = same person; reuse their id so several identities group together.
   var existing = people.filter(function (p) { return p.name === name; })[0];
   people.push({ id: existing ? existing.id : identity, name: name, role: $("setprole").value, identity: identity });
@@ -2272,20 +2261,20 @@ document.getElementById("setpeople").addEventListener("click", function (event) 
 /** Resource figures belong to the daemon; no per-desktop memory estimates. */
 function renderDesktopResources(box) {
   var resources = box.resources;
-  if (!resources) return '<div class="dim" style="margin:4px 0 10px 16px">Desktop resource status unavailable.</div>';
+  if (!resources) return '<div class="dim" style="margin:4px 0 10px 16px">{{ui.app.desktop-resource-status-unavailable}}</div>';
   var desktops = resources.desktops || [];
   var running = desktops.filter(function (d) { return d.state === "ready" || d.state === "stopping"; }).length;
   var retained = desktops.filter(function (d) { return d.state === "ready" && d.retained_reason; }).length;
   var failed = desktops.filter(function (d) { return d.state === "failed"; }).length;
   var registered = agents.filter(function (a) { return a.boxId === box.id; }).length;
-  var summary = registered + " registered · " + running + " running · " + retained + " retained · " + failed + " failed (process state unknown) · " + resources.starts + " starts · " + resources.reclaims + " reclaimed";
-  if (typeof resources.memory_bytes === "number") summary += " · container " + Math.round(resources.memory_bytes / 1048576) + " MiB";
+  var summary = registered + " {{ui.app.registered}} " + running + " {{ui.app.running-3}} " + retained + " {{ui.app.retained}} " + failed + " {{ui.app.failed-process-state-unknown}} " + resources.starts + " {{ui.app.starts}} " + resources.reclaims + " {{ui.app.reclaimed}}";
+  if (typeof resources.memory_bytes === "number") summary += " {{ui.app.container}} " + Math.round(resources.memory_bytes / 1048576) + " MiB";
   var mode = resources.idle_ms > 0 ? "Empty managed desktops can be reclaimed after " + Math.round(resources.idle_ms / 60000 * 10) / 10 + " minutes. Used or uncertain sessions are kept." : "Automatic desktop reclamation is off.";
   return '<div class="dim" style="margin:4px 0 10px 16px">' + esc(summary) + '<br>' + esc(mode) +
     desktops.map(function (d) {
       var agent = agents.find(function (a) { return a.boxId === box.id && a.displayIndex === d.index; });
-      var button = agent && myRole !== "viewer" ? ' <button class="btn sm ghost" data-pin-agent="' + esc(agent.id) + '" data-pinned="' + (d.pinned ? "false" : "true") + '">' + (d.pinned ? "Unpin" : "Keep desktop") + '</button>' : "";
-      return '<div>' + esc(agent ? agent.name : "Desktop " + d.index) + " · " + esc(d.state) + (d.retained_reason ? " · " + esc(d.retained_reason) : "") + button + '</div>';
+      var button = agent && myRole !== "viewer" ? ' <button class="btn sm ghost" data-pin-agent="' + esc(agent.id) + '" data-pinned="' + (d.pinned ? "false" : "true") + '">' + (d.pinned ? "{{ui.app.unpin}}" : "{{ui.app.keep-desktop}}") + '</button>' : "";
+      return '<div>' + esc(agent ? agent.name : "{{ui.app.desktop-2}} " + d.index) + " · " + esc(d.state) + (d.retained_reason ? " · " + esc(d.retained_reason) : "") + button + '</div>';
     }).join("") + '</div>';
 }
 
@@ -2294,7 +2283,7 @@ document.addEventListener("click", function (event) {
   if (!button) return;
   button.disabled = true;
   fetch("/api/desktop/pin", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ agent: button.getAttribute("data-pin-agent"), pinned: button.getAttribute("data-pinned") === "true" }) })
-    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "Could not update desktop"); }); })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "{{ui.app.could-not-update-desktop}}"); }); })
     .then(renderBoxes)
     .catch(function (error) { $("setboxesstatus").textContent = String(error.message || error); button.disabled = false; });
 });
@@ -2306,13 +2295,13 @@ function renderBoxes() {
     .then(function (data) {
       var boxes = data.boxes || [];
       $("setboxes").innerHTML = boxes.map(function (b, i) {
-        var where = b.kind === "docker" ? "docker on this machine" : esc(b.endpoint || "attached");
+        var where = b.kind === "docker" ? "{{ui.app.docker-on-this-machine}}" : esc(b.endpoint || "{{ui.app.attached}}");
         return '<div style="display:flex;gap:8px;align-items:center;font-size:12.5px">' +
           '<span class="dot" style="width:8px;height:8px;background:' + (b.connected ? "var(--ok, #3fb950)" : "var(--warn)") + '"></span>' +
-          '<b>' + esc(b.name) + "</b>" + (i === 0 ? ' <span class="dim">(own)</span>' : "") +
-          '<span class="dim" style="flex:1">' + where + " · displays from :" + esc(b.displayFloor) + " · " + esc(b.agents) + " agent" + (b.agents === 1 ? "" : "s") + (b.connected ? "" : " · not connected") + "</span>" +
-          (myRole === "admin" ? '<button class="btn sm ghost" data-members-box="' + esc(b.name) + '" title="' + esc(b.membersLabel || "") + '">Members</button>' : "") +
-          (i === 0 ? "" : '<button class="btn sm ghost" data-detach-box="' + esc(b.name) + '"' + (b.agents > 0 ? ' disabled title="delete its agents first"' : "") + ">Detach</button>") +
+          '<b>' + esc(b.name) + "</b>" + (i === 0 ? ' <span class="dim">{{ui.app.own}}</span>' : "") +
+          '<span class="dim" style="flex:1">' + where + " {{ui.app.displays-from}}" + esc(b.displayFloor) + " · " + esc(b.agents) + " agent" + (b.agents === 1 ? "" : "{{ui.plural.s}}") + (b.connected ? "" : " {{ui.app.not-connected-2}}") + "</span>" +
+          (myRole === "admin" ? '<button class="btn sm ghost" data-members-box="' + esc(b.name) + '" title="' + esc(b.membersLabel || "") + '">{{ui.app.members}}</button>' : "") +
+          (i === 0 ? "" : '<button class="btn sm ghost" data-detach-box="' + esc(b.name) + '"' + (b.agents > 0 ? ' disabled title="delete its agents first"' : "") + ">{{ui.app.detach}}</button>") +
           "</div>" +
           // Who the box is for, in the words the members set produces (docs/22 §5, INV-538).
           // Not free text: a label somebody types is a label that stops being true.
@@ -2320,7 +2309,7 @@ function renderBoxes() {
       }).join("") ||
         '<div class="dim" style="font-size:12.5px">' + esc(t("ui.boxes.none")) + "</div>";
     })
-    .catch(function () { $("setboxes").innerHTML = '<div class="dim">Could not read the boxes.</div>'; });
+    .catch(function () { $("setboxes").innerHTML = '<div class="dim">{{ui.app.could-not-read-the-boxes}}</div>'; });
 }
 
 document.addEventListener("click", function (event) {
@@ -2333,7 +2322,7 @@ document.addEventListener("click", function (event) {
     .then(function (data) {
       var people = data.principals || [];
       var current = (button.getAttribute("title") || "");
-      return askInline(button, "Who is " + name + " for?\n\nType names separated by commas, or the word everyone.\nKnown people: " + people.map(function (p) { return p.name; }).join(", ") + "\n\nNow: " + current, "").then(function (typed) {
+      return askInline(button, "{{ui.app.who-is}} " + name + " {{ui.app.for-type-names-separated-by}} " + people.map(function (p) { return p.name; }).join(", ") + "{{ui.app.now}} " + current, "").then(function (typed) {
         if (typed === null) return;
         var wanted = typed.trim();
         var members;
@@ -2347,11 +2336,11 @@ document.addEventListener("click", function (event) {
             var found = people.filter(function (p) { return (p.name || "").toLowerCase() === want; })[0];
             if (found) members.push(found.id); else missing.push(piece.trim());
           });
-          if (missing.length) { $("setboxesstatus").textContent = "Nobody on the roster is called " + missing.join(", ") + "."; return; }
+          if (missing.length) { $("setboxesstatus").textContent = "{{ui.app.nobody-on-the-roster-is}} " + missing.join(", ") + "."; return; }
         }
         return fetch("/api/boxes/update", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: name, members: members }) })
-          .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "could not change the members"); return d; }); })
-          .then(function () { $("setboxesstatus").textContent = name + " updated."; return renderBoxes(); });
+          .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "{{ui.app.could-not-change-the-members}}"); return d; }); })
+          .then(function () { $("setboxesstatus").textContent = name + " {{ui.app.updated}}"; return renderBoxes(); });
       });
     })
     .catch(function (err) { $("setboxesstatus").textContent = String(err.message || err); });
@@ -2364,13 +2353,13 @@ $("setboxattach").onclick = function () {
     token: $("setboxtoken").value.trim(),
     displayFloor: Number($("setboxfloor").value.trim() || "1")
   };
-  if (!body.name || !body.baseUrl || !body.token) { $("setboxesstatus").textContent = "Name, URL and token are all needed."; return; }
+  if (!body.name || !body.baseUrl || !body.token) { $("setboxesstatus").textContent = "{{ui.app.name-url-and-token-are}}"; return; }
   $("setboxattach").disabled = true;
-  $("setboxesstatus").textContent = "Attaching…";
+  $("setboxesstatus").textContent = "{{ui.app.attaching}}";
   fetch("/api/boxes/attach", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
-    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "attach failed"); return d; }); })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "{{ui.app.attach-failed}}"); return d; }); })
     .then(function (d) {
-      $("setboxesstatus").textContent = d.detail || "attached";
+      $("setboxesstatus").textContent = d.detail || "{{ui.app.attached}}";
       $("setboxtoken").value = "";
       return renderBoxes().then(refresh);
     })
@@ -2383,15 +2372,15 @@ $("setboxes").addEventListener("click", function (e) {
   if (!name) return;
   e.target.disabled = true;
   fetch("/api/boxes/detach", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: name }) })
-    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "detach failed"); return d; }); })
-    .then(function () { $("setboxesstatus").textContent = "Detached " + name + "."; return renderBoxes().then(refresh); })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "{{ui.app.detach-failed}}"); return d; }); })
+    .then(function () { $("setboxesstatus").textContent = "{{ui.app.detached}} " + name + "."; return renderBoxes().then(refresh); })
     .catch(function (err) { $("setboxesstatus").textContent = String(err.message || err); e.target.disabled = false; });
 });
 
 function renderBoxSection() {
   renderBoxes();
   if (boxState.ok) {
-    $("setboxstate").textContent = "Running — " + boxState.detail;
+    $("setboxstate").textContent = "{{ui.app.running-2}} " + boxState.detail;
   } else if (dockerState && dockerState.state === "no-binary") {
     // The machine has no docker command at all. Say what a box is, name the two things to install, and link them — the old error told the reader to run docker version, which
     // assumed a reader who does not exist.
@@ -2401,7 +2390,7 @@ function renderBoxSection() {
   } else if (dockerState && dockerState.state === "no-engine") {
     $("setboxstate").textContent = t("ui.box.dockerStopped");
   } else {
-    $("setboxstate").textContent = "Not running. Agents have no desktop, shell or files until it is.";
+    $("setboxstate").textContent = "{{ui.app.not-running-agents-have-no}}";
   }
   $("setboxactions").style.display = boxState.ok ? "none" : "";
 }
@@ -2439,7 +2428,7 @@ function markOnboarded() {
 $("setboxup").onclick = function () {
   $("setboxup").disabled = true;
   $("setboxlog").style.display = "";
-  $("setboxlog").textContent = "starting…\n";
+  $("setboxlog").textContent = "{{ui.app.starting-2}}";
   fetch("/api/box/up", { method: "POST" })
     .then(function (r) { return r.json(); })
     .then(function (d) {
@@ -2468,7 +2457,7 @@ function renderStandingGrants() {
         return '<div style="display:flex;gap:10px;align-items:baseline">' +
           '<code style="flex:1;font-family:var(--font-mono);font-size:12px;word-break:break-all">' +
           esc(grant.description) + "</code>" +
-          '<a href="#" data-revoke="' + esc(grant.fingerprint) + '" style="font-size:12px;color:var(--danger)">Revoke</a>' +
+          '<a href="#" data-revoke="' + esc(grant.fingerprint) + '" style="font-size:12px;color:var(--danger)">{{ui.app.revoke}}</a>' +
           "</div>";
       }).join("");
     })
@@ -2488,11 +2477,11 @@ document.getElementById("setgrants").addEventListener("click", function (event) 
 
 // What is in force right now, and which saved values the server's own environment overrides.
 function renderEffective(effective, current) {
-  var line = "Now running: " + (current || "");
-  if (effective && effective.summaryModel) line += " · summaries on " + effective.summaryModel;
+  var line = "{{ui.app.now-running}} " + (current || "");
+  if (effective && effective.summaryModel) line += " {{ui.app.summaries-on}} " + effective.summaryModel;
   if (effective && effective.locked && effective.locked.length) {
-    line += " · locked by the server's environment: " + effective.locked.join(", ") +
-      " (the saved value applies once the server starts without it)";
+    line += " {{ui.app.locked-by-the-servers-environment}} " + effective.locked.join(", ") +
+      " {{ui.app.the-saved-value-applies-once}}";
   }
   $("seteffective").textContent = line;
 }
@@ -2509,12 +2498,12 @@ function settingsProviderChanged() {
   $("modellist").innerHTML = (preset.models || []).map(function (m) {
     return '<option value="' + esc(m) + '">';
   }).join("");
-  $("setmodel").placeholder = "preset default: " + preset.model;
+  $("setmodel").placeholder = "{{ui.app.preset-default}} " + preset.model;
   // Whether a credential is present is worth showing; the credential itself never leaves the server.
   $("setkeynote").textContent = preset.keyPresent
-    ? "A key for " + preset.keyEnv + " is already provided. Leave blank to keep using it."
-    : "No " + preset.keyEnv + " found — paste a key here, or export the variable before starting.";
-  $("setkey").placeholder = preset.keyPresent ? "provided by environment" : "paste API key";
+    ? "{{ui.app.a-key-for}} " + preset.keyEnv + " {{ui.app.is-already-provided-leave-blank}}"
+    : "{{ui.app.no}} " + preset.keyEnv + " {{ui.app.found-paste-a-key-here}}";
+  $("setkey").placeholder = preset.keyPresent ? "{{ui.app.provided-by-environment}}" : "{{ui.app.paste-api-key}}";
 }
 
 function saveSettings(thenRestart) {
@@ -2532,7 +2521,7 @@ function saveSettings(thenRestart) {
   var searchKey = $("setsearchkey").value.trim();
   var searchChoice = $("setsearchprov").value;
   if (searchKey !== "") {
-    if (searchChoice === "") { $("setstatus").textContent = "Pick a search provider for the key first."; return; }
+    if (searchChoice === "") { $("setstatus").textContent = "{{ui.app.pick-a-search-provider-for}}"; return; }
     body.searchProvider = searchChoice;
     body.searchKey = searchKey;
   } else if (searchChoice === "" && searchConfigured !== "") {
@@ -2543,7 +2532,7 @@ function saveSettings(thenRestart) {
   body.summaryModel = summaryModel === "" ? null : summaryModel;
   body.hostExec = { enabled: $("sethostenabled").checked, cwd: $("sethostcwd").value.trim() };
   body.startupItem = $("setstartupitem").checked;
-  $("setstatus").textContent = "Saving…";
+  $("setstatus").textContent = "{{ui.app.saving}}";
   fetch("/api/config", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -2551,7 +2540,7 @@ function saveSettings(thenRestart) {
   })
     .then(function (r) {
       return r.json().then(function (d) {
-        if (!r.ok) throw new Error(d.error || "save failed");
+        if (!r.ok) throw new Error(d.error || "{{ui.app.save-failed-2}}");
         return d;
       });
     })
@@ -2560,14 +2549,14 @@ function saveSettings(thenRestart) {
       renderEffective({ locked: d.locked || [] }, d.current);
       // Model settings are in force already; a restart is only for what still needs one.
       if (!thenRestart || !d.restartNeeded) {
-        $("setstatus").textContent = d.note || "Saved and in force.";
+        $("setstatus").textContent = d.note || "{{ui.app.saved-and-in-force}}";
         return;
       }
-      $("setstatus").textContent = "Restarting…";
+      $("setstatus").textContent = "{{ui.app.restarting}}";
       return fetch("/api/restart", { method: "POST" }).then(waitForRestart);
     })
     .catch(function (error) {
-      $("setstatus").textContent = "Save failed: " + error.message;
+      $("setstatus").textContent = "{{ui.app.save-failed}} " + error.message;
     });
 }
 
@@ -2580,12 +2569,12 @@ function waitForRestart() {
     fetch("/api/state")
       .then(function (r) {
         if (r.ok) { window.location.reload(); return; }
-        throw new Error("not yet");
+        throw new Error("{{ui.app.not-yet}}");
       })
       .catch(function () {
         if (tries > 60) {
           $("setstatus").textContent =
-            "The server did not come back — start it again yourself: agentbox web";
+            "{{ui.app.the-server-did-not-come}}";
           return;
         }
         setTimeout(poll, 1000);
@@ -2603,7 +2592,7 @@ $("settest").onclick = function () {
   var key = $("setkey").value.trim();
   if (key) body.key = key;
   $("settest").disabled = true;
-  $("setstatus").textContent = "Testing — one real request…";
+  $("setstatus").textContent = "{{ui.app.testing-one-real-request}}";
   fetch("/api/config/test", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -2612,10 +2601,10 @@ $("settest").onclick = function () {
     .then(function (r) { return r.json(); })
     .then(function (d) {
       $("setstatus").textContent = d.ok
-        ? "Connected — " + d.model + " answered in " + d.latencyMs + "ms."
-        : "Failed: " + d.error;
+        ? "{{ui.app.connected}} " + d.model + " {{ui.app.answered-in}} " + d.latencyMs + "ms."
+        : "{{ui.app.failed-2}} " + d.error;
     })
-    .catch(function (error) { $("setstatus").textContent = "Test failed: " + error.message; })
+    .catch(function (error) { $("setstatus").textContent = "{{ui.app.test-failed}} " + error.message; })
     .then(function () { $("settest").disabled = false; });
 };
 
@@ -2640,7 +2629,7 @@ function num(value) {
 
 /** "1 turn", not "1 turns". A report that cannot count to one is not read carefully after that. */
 function plural(count, word) {
-  return num(count) + " " + word + (count === 1 ? "" : "s");
+  return num(count) + " " + word + (count === 1 ? "" : "{{ui.plural.s}}");
 }
 
 /**
@@ -2671,7 +2660,7 @@ function taskLabel(title) {
  * That is the truth and worth showing: a column of zeroes would say these tasks were free.
  */
 function unknownCell() {
-  return '<td class="unknown" title="No usage row names this task\u2019s turns">\u2014</td>';
+  return '<td class="unknown" title="{{ui.app.no-usage-row-names-this}}">\u2014</td>';
 }
 
 function cell(row, key) {
@@ -2694,19 +2683,19 @@ function renderSpend(data) {
     ? esc(data.task.id) + " " + esc(data.task.title) + " &middot; " + esc(data.task.status)
     : esc(report.scope || "");
   $("spendhead").innerHTML =
-    "<b>" + heading + "</b> &middot; " + plural(report.records, "call") +
-    (report.turns ? " across " + plural(report.turns, "turn") : "") + "<br>" +
+    "<b>" + heading + "</b> &middot; " + plural(report.records, "{{ui.app.call}}") +
+    (report.turns ? " {{ui.app.across}} " + plural(report.turns, "{{ui.app.turn}}") : "") + "<br>" +
     // Tokens, exactly -- not thousands. Grouped with commas rather than abbreviated, because
     // a report a person is meant to re-derive by hand should print the number it counted.
-    num(totals.inputTokens) + " tokens in &middot; " + num(totals.outputTokens) +
-    " out &middot; " + num(totals.cacheReadTokens) + " cache read" +
+    num(totals.inputTokens) + " {{ui.app.tokens-in-2}} " + num(totals.outputTokens) +
+    " {{ui.app.out-2}} " + num(totals.cacheReadTokens) + " {{ui.app.cache-read}}" +
     // Cache hit rate: how much of the input was served from cache rather than paid for fresh.
     // The single number that says whether the caching lever is doing anything.
     (function () {
       var fresh = totals.inputTokens || 0, cached = totals.cacheReadTokens || 0;
-      if ((report.unmeasured || []).length) return ' &middot; <span title="provider usage incomplete">缓存命中 未知</span>';
+      if ((report.unmeasured || []).length) return ' &middot; <span title="{{ui.app.provider-usage-incomplete}}">{{ui.app.cache-hit-unknown}}</span>';
       return fresh + cached > 0
-        ? ' &middot; <span title="input served from cache vs paid fresh">缓存命中 ' + Math.round(cached / (fresh + cached) * 100) + "%</span>"
+        ? ' &middot; <span title="{{ui.app.input-served-from-cache-vs}}">{{ui.app.cache-hit}} ' + Math.round(cached / (fresh + cached) * 100) + "%</span>"
         : "";
     })() +
     (report.money !== undefined && report.money !== null
@@ -2721,11 +2710,11 @@ function renderSpend(data) {
     var label = key.slice(2).toLowerCase();
     sections.push(
       "<table class=\"spend\" style=\"margin-bottom:12px\"><tr><th>" + label +
-      "</th><th style=\"text-align:right\">tokens out</th>" +
-      "<th style=\"text-align:right\">tokens in</th>" +
+      "</th><th style=\"text-align:right\">{{ui.app.tokens-out}}</th>" +
+      "<th style=\"text-align:right\">{{ui.app.tokens-in}}</th>" +
       // Cache reads are most of the traffic here and were not shown at all, so the two
       // columns that were shown added to a fraction of the row and looked like all of it.
-      "<th style=\"text-align:right\">cache read</th></tr>" +
+      "<th style=\"text-align:right\">{{ui.app.cache-read}}</th></tr>" +
       rows.map(function (row) {
         return "<tr><td>" + esc(row[label] || "") + '</td><td class="num">' +
           num(row.totals.outputTokens) + '</td><td class="num">' + num(row.totals.inputTokens) +
@@ -2737,9 +2726,9 @@ function renderSpend(data) {
   var tasks = data.tasks || [];
   if (tasks.length) {
     sections.push(
-      "<table class=\"spend\"><tr><th>task</th><th>status</th><th style=\"text-align:right\">turns</th>" +
-      "<th style=\"text-align:right\">tokens out</th><th style=\"text-align:right\">tokens in</th>" +
-      "<th style=\"text-align:right\">cache read</th></tr>" +
+      "<table class=\"spend\"><tr><th>{{ui.app.task}}</th><th>{{ui.app.status}}</th><th style=\"text-align:right\">{{ui.app.turns}}</th>" +
+      "<th style=\"text-align:right\">{{ui.app.tokens-out}}</th><th style=\"text-align:right\">{{ui.app.tokens-in}}</th>" +
+      "<th style=\"text-align:right\">{{ui.app.cache-read}}</th></tr>" +
       tasks.map(function (row) {
         // The id is a link rather than the row being clickable: a <tr> with a handler is invisible to the keyboard and to anything reading the page aloud, and it gives no sign
         // that it can be clicked. Same defect the header number had.
@@ -2757,20 +2746,20 @@ function renderSpend(data) {
     // Otherwise a column of dashes reads as a bug. It is not: workId and turnId landed on
     // 2026-08-27, and every task older than that has no usage row that names its turns.
     sections.push('<div class="caveat" style="padding-top:6px">' +
-      "None of these can be costed yet: a usage row only names the turn it ran in from " +
-      "2026-08-27 onwards, and every task above was worked before that.</div>");
+      "{{ui.app.none-of-these-can-be}} " +
+      "{{ui.app.2026-08-27-onwards-and}}</div>");
   }
   if (data.tasksHidden) {
     // Said rather than filtered quietly: "no tasks" and "no task whose cost is recoverable"
     // are different facts and only one of them is true here.
     sections.push('<div class="caveat" style="padding-top:6px">' + num(data.tasksHidden) +
-      " task(s) not shown: nothing on file names the turns they were worked in.</div>");
+      " {{ui.app.task-s-not-shown-nothing}}</div>");
   }
   // What the board recorded, which is the "execution" half of the drill-down: the cost is
   // only half the answer to "what happened to this task".
   if (data.task) {
     sections.push(
-      "<table class=\"spend\"><tr><th>when</th><th>status</th><th>by</th><th>note</th></tr>" +
+      "<table class=\"spend\"><tr><th>{{ui.app.when}}</th><th>{{ui.app.status}}</th><th>{{ui.app.by}}</th><th>{{ui.app.note}}</th></tr>" +
       (data.task.history || []).map(function (change) {
         return "<tr><td>" + esc((change.at || "").replace("T", " ").slice(0, 19)) + "</td><td>" +
           esc(change.status || "") + "</td><td>" + esc((change.by || "").slice(0, 18)) +
@@ -2779,30 +2768,30 @@ function renderSpend(data) {
     );
   }
   $("spendbody").innerHTML = sections.join("") ||
-    '<div class="caveat">Nothing on file for this.</div>';
+    '<div class="caveat">{{ui.app.nothing-on-file-for-this}}</div>';
 
   var caveats = [];
   if (report.compacted) {
-    caveats.push("A lower bound: the usage file has been compacted, so older calls in this window are no longer on disk.");
+    caveats.push("{{ui.app.a-lower-bound-the-usage}}");
   }
   if ((report.unpriced || []).length) {
-    caveats.push("No cost shown: no rate for " + esc(report.unpriced.join(", ")) +
+    caveats.push("{{ui.app.no-cost-shown-no-rate}} " + esc(report.unpriced.join(", ")) +
       ". Add a \u201crates\u201d block to config.json to price them.");
   }
   if ((report.unmeasured || []).length) {
-    caveats.push("No cost or cache hit rate shown: provider usage is missing, contradictory, or lacks a verified cache breakdown (" +
+    caveats.push("{{ui.app.no-cost-or-cache-hit}}" +
       report.unmeasured.map(function (x) { return esc(x.status) + ": " + num(x.records); }).join(", ") + ").");
   }
   if ((report.unpricedCategories || []).length) {
-    caveats.push("No cost shown: missing cache class rates for " + esc(report.unpricedCategories.join(", ")) + ".");
+    caveats.push("{{ui.app.no-cost-shown-missing-cache}} " + esc(report.unpricedCategories.join(", ")) + ".");
   }
   if (report.unjoinable) caveats.push(esc(report.unjoinable));
   // The省钱 levers, named with where each lives, so a big number here is actionable rather than
   // just alarming: cheaper provider, tighter compaction, per-person budget.
   caveats.push(
-    "省钱杠杆:换更便宜的 provider 或开隐式缓存(设置 &rarr; Model)&middot; " +
-    "调压缩阈值 <span class=\"mono\">AGENTBOX_COMPACT_AT_TOKENS</span>(config.json 的 env)&middot; " +
-    "按人/回合预算(policy 限额)。"
+    "{{ui.app.cheaper-provider}} " +
+    "{{ui.app.tune-compaction}} <span class=\"mono\">AGENTBOX_COMPACT_AT_TOKENS</span>{{ui.app.config-json-env}} " +
+    "{{ui.app.budget-policy}}"
   );
   $("spendcaveat").innerHTML = caveats.join("<br>");
 }
@@ -2812,7 +2801,7 @@ function openSpend(query) {
   // only way it *could* be checked here: synthetic clicks do not reach this browser.
   location.hash = "spend" + (query || "");
   $("spendwrap").style.display = "flex";
-  $("spendbody").innerHTML = '<div class="caveat">Reading&hellip;</div>';
+  $("spendbody").innerHTML = '<div class="caveat">{{ui.app.reading}}</div>';
   fetch("/api/spend" + (query || ""))
     .then(function (r) { return r.json(); })
     .then(function (data) {
@@ -2934,10 +2923,10 @@ function feed(html, cls, at) {
 
 /** The box an agent lives in, as a small label with the connection dot. */
 function boxHeaderHtml(box, index) {
-  return '<div class="eyebrow-row" style="margin-top:' + (index === 0 ? "0" : "8px") + '" title="' + esc(box.kind === "docker" ? "the box on this machine" : "attached at " + (box.endpoint || "")) + '">' +
+  return '<div class="eyebrow-row" style="margin-top:' + (index === 0 ? "0" : "8px") + '" title="' + esc(box.kind === "docker" ? "{{ui.app.the-box-on-this-machine}}" : "{{ui.app.attached-at}} " + (box.endpoint || "")) + '">' +
     '<span class="eyebrow" style="display:flex;align-items:center;gap:6px">' +
       '<span class="dot" style="width:7px;height:7px;background:' + (box.connected ? "var(--ok, #3fb950)" : "var(--warn)") + '"></span>' +
-      esc(box.name) + (index === 0 ? ' <span class="dim" style="text-transform:none;font-weight:400">own</span>' : ' <span class="dim" style="text-transform:none;font-weight:400">attached · :' + esc(box.displayFloor) + "+</span>") +
+      esc(box.name) + (index === 0 ? ' <span class="dim" style="text-transform:none;font-weight:400">{{ui.app.own-2}}</span>' : ' <span class="dim" style="text-transform:none;font-weight:400">{{ui.app.attached-3}}' + esc(box.displayFloor) + "+</span>") +
     "</span></div>";
 }
 
@@ -2953,12 +2942,12 @@ function renderBoxBar() {
   if (!many) return;
   bar.innerHTML = boxesSeen.map(function (b) {
     return '<a href="#" role="tab" class="tab' + (b.id === currentBox ? " on" : "") + '" data-box="' + esc(b.id) + '"' +
-      ' title="' + esc(b.kind === "docker" ? "the box on this machine" : "attached at " + (b.baseUrl || b.address || "another machine")) + '">' +
+      ' title="' + esc(b.kind === "docker" ? "{{ui.app.the-box-on-this-machine}}" : "{{ui.app.attached-at}} " + (b.baseUrl || b.address || "{{ui.app.another-machine}}")) + '">' +
       '<span class="dot" style="background:' + (b.connected ? "var(--ok, #3fb950)" : "var(--warn)") + '"></span>' +
-      esc(b.name) + ' <span class="kind">' + esc(b.kind === "docker" ? "docker" : "attached") + "</span>" +
+      esc(b.name) + ' <span class="kind">' + esc(b.kind === "docker" ? "docker" : "{{ui.app.attached}}") + "</span>" +
       "</a>";
   }).join("") +
-    '<a href="#" class="tab" data-newbox="1" title="Create or attach a box">+ box</a>';
+    '<a href="#" class="tab" data-newbox="1" title="{{ui.app.create-or-attach-a-box}}">+ box</a>';
 }
 
 $("boxbar").onclick = function (event) {
@@ -3023,7 +3012,7 @@ function applyPreferences(prefs) {
 function oneAgentRow(a, index) {
   // The marker order a person needs (INV-1625): waiting on them, then unread, then working; the line under the name says what it waits for.
   var f = a.facts || {}, marker = f.awaiting ? "blocked" : f.unreadCount > 0 ? "unread" : busy.has(a.id) ? "busy" : "";
-  var line = f.awaiting ? "Waiting for you: " + f.awaiting.reason : busy.has(a.id) ? "Running" : String(a.title || a.description || "idle").slice(0, 40);
+  var line = f.awaiting ? "{{ui.app.waiting-for-you}} " + f.awaiting.reason : busy.has(a.id) ? "{{ui.app.running}}" : String(a.title || a.description || "{{ui.app.idle}}").slice(0, 40);
   return '<div class="agent ' + (a.id === current ? "on" : "") + (marker ? " " + marker : "") + '" data-id="' + esc(a.id) + '" title="' + esc(f.awaiting ? f.awaiting.reason : "") + '">' +
     '<div class="dot ' + marker + '" style="background:var(--c-' + ((index % 8) + 1) + ')"></div>' +
     '<div class="cols"><div class="nm">' + esc(a.name) + "</div>" + '<div class="ttl">' + esc(line) + "</div></div>" +
@@ -3042,7 +3031,7 @@ function oneAgentRow(a, index) {
 function renderAgents() {
   var list = typeof rowOrder === "function" ? rowOrder(agentsInView(), groupBy === "az" ? "az" : "recent") : agentsInView(); // waiting first, then what moved (INV-1626)
   var tagged = list.some(function (a) { return (a.tags || []).length > 0; });
-  $("groupby").textContent = groupBy === "teams" ? "teams" : "a\u2013z";
+  $("groupby").textContent = groupBy === "teams" ? "{{ui.app.teams}}" : "a\u2013z";
   $("groupby").style.display = tagged ? "" : "none";
 
   var html = "";
@@ -3051,9 +3040,9 @@ function renderAgents() {
   // team is being looked at so a short list is never mistaken for the whole roster.
   if (teamFilter) {
     var only = list.filter(function (a) { return (a.tags || []).indexOf(teamFilter) >= 0; });
-    html += '<div class="teamhead" id="teamviewing">viewing team ' + esc(teamFilter) + ' <span class="count">' + only.length + "</span>" +
-      ' <a href="#" id="teamall" class="dim" style="float:right;text-transform:none;letter-spacing:0" title="Show every agent again">all</a></div>';
-    if (only.length === 0) html += '<div class="dim" style="padding:8px 12px;font-size:12px">No agent is in this team' + (boxesSeen.length > 1 ? " in this box" : "") + ".</div>";
+    html += '<div class="teamhead" id="teamviewing">{{ui.app.viewing-team}} ' + esc(teamFilter) + ' <span class="count">' + only.length + "</span>" +
+      ' <a href="#" id="teamall" class="dim" style="float:right;text-transform:none;letter-spacing:0" title="{{ui.app.show-every-agent-again}}">{{ui.app.all}}</a></div>';
+    if (only.length === 0) html += '<div class="dim" style="padding:8px 12px;font-size:12px">{{ui.app.no-agent-is-in-this}}' + (boxesSeen.length > 1 ? " {{ui.app.in-this-box}}" : "") + ".</div>";
     for (var f = 0; f < only.length; f++) html += oneAgentRow(only[f], index++);
   } else if (groupBy !== "teams" || !tagged) {
     for (var i = 0; i < list.length; i++) html += oneAgentRow(list[i], index++);
@@ -3075,9 +3064,9 @@ function renderAgents() {
     for (var g = 0; g < order.length; g++) {
       var members = groups[order[g]];
       // The heading is the filter (INV-120); the pencil is the rename, for an admin (INV-119); the untagged have neither.
-      html += order[g] === "" ? '<div class="teamhead">no team <span class="count">' + members.length + "</span></div>" : '<div class="teamhead"><a href="#" class="teamonly" data-team="' + esc(order[g]) + '" title="Show only this team" style="color:inherit;text-decoration:none">' + esc(order[g]) + "</a>" +
+      html += order[g] === "" ? '<div class="teamhead">{{ui.app.no-team}} <span class="count">' + members.length + "</span></div>" : '<div class="teamhead"><a href="#" class="teamonly" data-team="' + esc(order[g]) + '" title="{{ui.app.show-only-this-team}}" style="color:inherit;text-decoration:none">' + esc(order[g]) + "</a>" +
         ' <span class="count">' + members.length + "</span>" +
-        (myRole === "admin" ? ' <a href="#" class="teamrename dim" data-team="' + esc(order[g]) + '" title="Rename this team on every member" style="float:right;text-transform:none;letter-spacing:0">rename</a>' : "") +
+        (myRole === "admin" ? ' <a href="#" class="teamrename dim" data-team="' + esc(order[g]) + '" title="{{ui.app.rename-this-team-on-every}}" style="float:right;text-transform:none;letter-spacing:0">{{ui.app.rename}}</a>' : "") +
         "</div>";
       for (var m = 0; m < members.length; m++) html += oneAgentRow(members[m], index++);
     }
@@ -3103,7 +3092,7 @@ function renderAgents() {
     renames[r].onclick = function (event) {
       event.preventDefault();
       var from = this.dataset.team;
-      askInline(this, "Rename team \u201c" + from + "\u201d on every member to:", from).then(function (to) {
+      askInline(this, "{{ui.app.rename-team}}" + from + "{{ui.app.on-every-member-to}}", from).then(function (to) {
         if (to === null || to.trim() === "" || to.trim() === from) return;
         return fetch("/api/teams/rename", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ from: from, to: to.trim() }) })
           .then(function (res) { return res.json(); })
@@ -3175,9 +3164,9 @@ function stepGroupBar() {
     while (before && !(before.classList && before.classList.contains("msg") && before.getAttribute("data-at"))) before = before.previousElementSibling;
     while (after && !(after.classList && after.classList.contains("msg") && after.getAttribute("data-at"))) after = after.nextElementSibling;
     var ms = before && after ? Date.parse(after.getAttribute("data-at")) - Date.parse(before.getAttribute("data-at")) : NaN;
-    var dur = isFinite(ms) && ms > 0 ? (ms < 60000 ? Math.round(ms / 1000) + "s" : Math.floor(ms / 60000) + "m " + Math.round((ms % 60000) / 1000) + "s") : "";
-    link.textContent = (shut ? "\u25b8 " : "\u25be ") + "Worked" + (dur ? " for " + dur : "") +
-      " · " + (calls ? calls + (calls === 1 ? " call" : " calls") : n + (n === 1 ? " step" : " steps"));
+    var dur = isFinite(ms) && ms > 0 ? (ms < 60000 ? Math.round(ms / 1000) + "{{ui.unit.sec}}" : Math.floor(ms / 60000) + "{{ui.unit.min}} " + Math.round((ms % 60000) / 1000) + "{{ui.unit.sec}}") : "";
+    link.textContent = (shut ? "\u25b8 " : "\u25be ") + "{{ui.app.worked}}" + (dur ? " {{ui.app.for}} " + dur : "") +
+      " · " + (calls ? calls + (calls === 1 ? " {{ui.app.call}}" : " {{ui.app.calls}}") : n + (n === 1 ? " {{ui.app.step}}" : " {{ui.app.steps}}"));
   };
   // Hiding, not collapsing. Each step keeps whatever it was \u2014 open or shut \u2014 so bringing
   // the group back gives the reader the view they left, which is what a tree does.
@@ -3205,7 +3194,7 @@ function beginStep(text, keepOpen) {
     '<summary><span class="lbl"></span><span class="cnt"></span></summary>' +
     '<div class="kids"></div>';
   var head = firstLineOf(text);
-  step.querySelector(".lbl").textContent = head || "working";
+  step.querySelector(".lbl").textContent = head || "{{ui.app.working-3}}";
   // Only the *rest* goes in the body. Putting the whole thing there repeated the first sentence directly under itself, which read as a rendering fault rather than as a
   // heading and its detail.
   var rest = restAfter(text, head);
@@ -3275,11 +3264,11 @@ function bubble(role, who, text, at, extra) {
   var chips = extra && extra.chips ? extra.chips.map(function (c) { return ' <span class="chip">' + esc(c) + "</span>"; }).join("") : "";
   div.innerHTML = '<div class="who">' + esc(who) + chips + (when ? ' <span style="text-transform:none;letter-spacing:0;font-weight:400" title="' + esc(String(at)) + '">' + esc(when) + "</span>" : "") + '</div><div class="body"></div>' +
     '<div class="mtools">' +
-      '<button type="button" data-act="copy" title="Copy the text">copy</button>' +
-      '<button type="button" data-act="md" title="Copy as Markdown">md</button>' +
-      '<button type="button" data-act="quote" title="Quote into the composer">quote</button>' +
-      (replayIndex >= 0 ? '<button type="button" data-act="link" title="Copy a link to this message">link</button>' : "") +
-      (role === "user" ? '<button type="button" data-act="resend" title="Put this back in the composer">resend</button>' : "") +
+      '<button type="button" data-act="copy" title="{{ui.app.copy-the-text}}">{{ui.app.copy-2}}</button>' +
+      '<button type="button" data-act="md" title="{{ui.app.copy-as-markdown}}">md</button>' +
+      '<button type="button" data-act="quote" title="{{ui.app.quote-into-the-composer}}">{{ui.app.quote}}</button>' +
+      (replayIndex >= 0 ? '<button type="button" data-act="link" title="{{ui.app.copy-a-link-to-this}}">{{ui.app.link}}</button>' : "") +
+      (role === "user" ? '<button type="button" data-act="resend" title="{{ui.app.put-this-back-in-the}}">{{ui.app.resend}}</button>' : "") +
     "</div>";
   var body = div.querySelector(".body");
   body.innerHTML = renderMarkdown(text);
@@ -3296,13 +3285,13 @@ function addCodeCopy(body) {
   for (var i = 0; i < pres.length; i++) {
     if (pres[i].querySelector(".precopy")) continue;
     var b = document.createElement("button");
-    b.type = "button"; b.className = "precopy"; b.textContent = "copy"; b.title = "Copy this code";
+    b.type = "button"; b.className = "precopy"; b.textContent = "{{ui.app.copy-2}}"; b.title = "{{ui.app.copy-this-code}}";
     b.onclick = (function (pre, btn) {
       return function (event) {
         event.preventDefault();
         var code = pre.querySelector("code");
         copyText(code ? code.textContent : pre.textContent.replace(/copy$/, ""));
-        btn.textContent = "copied"; setTimeout(function () { btn.textContent = "copy"; }, 1200);
+        btn.textContent = "{{ui.app.copied-2}}"; setTimeout(function () { btn.textContent = "{{ui.app.copy-2}}"; }, 1200);
       };
     })(pres[i], b);
     pres[i].appendChild(b);
@@ -3349,10 +3338,10 @@ function messageAction(msg, act) {
   var mdText = msg.__md || msg.querySelector(".body").textContent;
   if (act === "copy") { copyText(msg.querySelector(".body").innerText); return "copied"; }
   if (act === "md") { copyText(mdText); return "copied"; }
-  if (act === "quote") { intoComposer(mdText.split("\n").slice(0, 6).map(function (l) { return "> " + l; }).join("\n") + "\n"); return "quoted"; }
+  if (act === "quote") { intoComposer(mdText.split("\n").slice(0, 6).map(function (l) { return "> " + l; }).join("\n") + "\n"); return "{{ui.app.quoted}}"; }
   if (act === "link") { copyText(messageLink(msg.getAttribute("data-m"))); return "copied"; }
-  if (act === "resend") { intoComposer(mdText); return "in the composer"; }
-  if (act === "find") { openSearch(msg.querySelector(".body").innerText.trim().split(/\s+/).slice(0, 4).join(" ")); return "searching"; }
+  if (act === "resend") { intoComposer(mdText); return "{{ui.app.in-the-composer}}"; }
+  if (act === "find") { openSearch(msg.querySelector(".body").innerText.trim().split(/\s+/).slice(0, 4).join(" ")); return "{{ui.app.searching}}"; }
   if (act === "react") { openPicker(msg); return ""; }
   return "";
 }
@@ -3382,7 +3371,7 @@ function applyReaction(msg, emoji) {
   if (!chip) {
     chip = document.createElement("span");
     chip.className = "reaction";
-    chip.title = "Click to remove";
+    chip.title = "{{ui.app.click-to-remove}}";
     var body = msg.querySelector(".body");
     body.parentNode.insertBefore(chip, body.nextSibling);
   }
@@ -3397,8 +3386,8 @@ function sendReaction(msg, emoji) {
   var next = chip && chip.textContent === emoji ? null : (emoji || null);
   applyReaction(msg, next);
   post("/api/reactions", { agent: current, conversation: currentConversation, index: Number(index), emoji: next })
-    .then(function () { if (next === "\ud83d\udc4e" && msg.getAttribute("data-role") === "agent") feed("这条回答有问题？在对应私聊发送 /retry，可只按原始请求无副作用重答；系统不会自动清空。", "info"); })
-    .catch(function () { applyReaction(msg, chip ? chip.textContent : null); feed("could not save the reaction", "err"); });
+    .then(function () { if (next === "\ud83d\udc4e" && msg.getAttribute("data-role") === "agent") feed("{{ui.app.retry-hint}}", "info"); })
+    .catch(function () { applyReaction(msg, chip ? chip.textContent : null); feed("{{ui.app.could-not-save-the-reaction}}", "err"); });
 }
 
 $("chat").addEventListener("click", function (event) {
@@ -3544,8 +3533,8 @@ function runSearch(jump) {
   var rows = searchable($("searchwho").value, $("searchwhen").value);
   for (var i = 0; i < rows.length; i++) markInside(rows[i], needle);
   $("searchcount").textContent = searchHits.length === 0
-    ? "no matches"
-    : (searchHits.length === 1 ? "1 match" : searchHits.length + " matches");
+    ? "{{ui.app.no-matches}}"
+    : (searchHits.length === 1 ? "{{ui.app.1-match}}" : searchHits.length + " {{ui.app.matches}}");
   if (searchHits.length > 0 && jump !== false) stepSearch(1);
 }
 
@@ -3559,7 +3548,7 @@ function stepSearch(by) {
   var fold = hit.closest("details");
   while (fold) { fold.open = true; fold = fold.parentNode && fold.parentNode.closest ? fold.parentNode.closest("details") : null; }
   hit.scrollIntoView({ block: "center", behavior: "smooth" });
-  $("searchcount").textContent = (searchAt + 1) + " of " + searchHits.length;
+  $("searchcount").textContent = (searchAt + 1) + " {{ui.app.of}} " + searchHits.length;
 }
 
 function openSearch(prefill) {
@@ -3607,11 +3596,11 @@ function jumpToDay(wanted) {
     if (day === wanted) { target = dividers[i]; exact = true; break; }
     if (day > wanted && !target) target = dividers[i];
   }
-  if (!target) { $("searchcount").textContent = "nothing on or after " + wanted; return; }
+  if (!target) { $("searchcount").textContent = "{{ui.app.nothing-on-or-after}} " + wanted; return; }
   target.scrollIntoView({ block: "start", behavior: "smooth" });
   target.classList.add("on");
   setTimeout(function () { target.classList.remove("on"); }, 2500);
-  $("searchcount").textContent = exact ? "" : "nothing on " + wanted + " — showing " + target.getAttribute("data-day");
+  $("searchcount").textContent = exact ? "" : "{{ui.app.nothing-on}} " + wanted + " {{ui.app.showing}} " + target.getAttribute("data-day");
 }
 
 /** The days the thread spans, as the picker's bounds, so a person is not offered days with nothing in them. */
@@ -3650,14 +3639,14 @@ $("chat").addEventListener("contextmenu", function (event) {
   var isPerson = msg.getAttribute("data-role") === "user";
   var hasIndex = msg.getAttribute("data-m") !== null;
   var items = [
-    ["copy", "Copy text"],
-    ["md", "Copy as Markdown"],
-    ["quote", "Quote in a reply"],
+    ["copy", "{{ui.app.copy-text}}"],
+    ["md", "{{ui.app.copy-as-markdown}}"],
+    ["quote", "{{ui.app.quote-in-a-reply}}"],
   ];
-  if (hasIndex) items.push(["link", "Copy link to this message"]);
-  if (isPerson) items.push(["resend", "Send again"]);
+  if (hasIndex) items.push(["link", "{{ui.app.copy-link-to-this-message}}"]);
+  if (isPerson) items.push(["resend", "{{ui.app.send-again}}"]);
   items.push(["sep", ""]);
-  items.push(["find", "Find messages like this"]);
+  items.push(["find", "{{ui.app.find-messages-like-this}}"]);
   $("ctxmenu").innerHTML = items.map(function (item) {
     return item[0] === "sep" ? '<div class="sep"></div>' : '<button type="button" data-ctx="' + item[0] + '">' + esc(item[1]) + "</button>";
   }).join("");
@@ -3722,7 +3711,7 @@ function describeArg(value) {
     var labels = value.map(function (item) {
       return item && (item.text || item.title || item.name || item.action || item.id) || "";
     }).filter(Boolean);
-    return labels.length ? labels.join(" · ") : value.length + " items";
+    return labels.length ? labels.join(" · ") : value.length + " {{ui.app.items}}";
   }
   if (typeof value === "object") {
     return value.text || value.title || value.name || value.command || value.url ||
@@ -3750,7 +3739,7 @@ function countStep() {
   if (!openStep || !openStep.isConnected) return;
   var n = openStep.querySelectorAll(".kids > details.tool").length;
   var cnt = openStep.querySelector(".cnt");
-  if (cnt) cnt.textContent = n === 0 ? "" : n === 1 ? "1 call" : n + " calls";
+  if (cnt) cnt.textContent = n === 0 ? "" : n === 1 ? "{{ui.app.1-call}}" : n + " {{ui.app.calls}}";
 }
 
 /** Appends to an open row's body, for a result that arrives after the call. */
@@ -3793,14 +3782,14 @@ function peerNote(direction, name, text, priority, at) {
   if (direction === "to") {
     var foot = document.createElement("div");
     foot.className = "sentfoot";
-    foot.innerHTML = '<details><summary><span class="peerdot" style="background:' + colorOfName(name) + '"></span>Messaged ⟶ ' + esc(name) + (priority ? " (priority)" : "") + '</summary><div class="det"></div></details>';
+    foot.innerHTML = '<details><summary><span class="peerdot" style="background:' + colorOfName(name) + '"></span>{{ui.app.messaged}} ' + esc(name) + (priority ? " {{ui.app.priority}}" : "") + '</summary><div class="det"></div></details>';
     foot.querySelector(".det").textContent = String(text == null ? "" : text);
     el.appendChild(foot);
     if (stick) el.scrollTop = el.scrollHeight;
     return foot;
   }
-  var chips = ["teammate"];
-  if (priority) chips.push("priority");
+  var chips = ["{{ui.app.chip-teammate}}"];
+  if (priority) chips.push("{{ui.app.chip-priority}}");
   var body = bubble("peer", name, text, at, { colour: colorOfName(name), chips: chips });
   var msg = body.parentNode;
   // Runs: the third incoming teammate message in a row starts a fold line above the run.
@@ -3827,7 +3816,7 @@ function relabelPeerFold(fold, run) {
   var names = {};
   for (var i = 0; i < msgs.length; i++) names[msgs[i].querySelector(".who").firstChild.textContent] = 1;
   var m = Object.keys(names).length;
-  fold.textContent = (fold.classList.contains("shut") ? "▸ " : "▾ ") + msgs.length + " messages from " + m + (m === 1 ? " teammate" : " teammates");
+  fold.textContent = (fold.classList.contains("shut") ? "▸ " : "▾ ") + msgs.length + " {{ui.app.messages-from}} " + m + (m === 1 ? " {{ui.app.teammate}}" : " {{ui.app.teammates}}");
 }
 
 /**
@@ -3845,17 +3834,18 @@ function showBoxClass(box) {
     notice.style.display = "none";
     return;
   }
-  badge.textContent = box.badge;
+  badge.textContent = box.access === "shared" ? t("ui.access.shared") : box.enforced === false ? t("ui.access.privateUnenforced") : t("ui.access.private"); // the server's words are the chat's language; the page's are its reader's (INV-1684)
   // Warn-toned unless the class is actually enforced. A box labelled private with nothing
   // behind it must not read as the calm case; it is the shared case with a wrong label.
   badge.className = "boxclass " + (box.enforced === false ? "shared" : box.access);
   // The notice, or nothing. This used to fall through to "只有你能打开这台箱子" — the
   // strongest privacy claim in the product, arriving as an || fallback nobody decided on,
   // and false for every box that exists.
-  badge.title = (box.group ? box.group + " · " : "") + (box.notice || "");
+  var said = [box.access === "shared" ? t("ui.access.sharedNotice", { who: box.group ? t("ui.access.whoGroup", { group: box.group }) : t("ui.access.whoAll") }) : box.enforced === false ? t("ui.access.privateUnenforcedNotice") : "", box.audited ? t("ui.access.auditNotice") : ""].filter(Boolean).join(" ");
+  badge.title = (box.group ? box.group + " · " : "") + said;
   badge.style.display = "";
-  notice.textContent = box.notice || "";
-  notice.style.display = box.notice ? "" : "none";
+  notice.textContent = said;
+  notice.style.display = said ? "" : "none";
 }
 
 var openedDesktops = new Set();
@@ -3886,9 +3876,9 @@ function showDesktop(id) {
   var box = null;
   for (var j = 0; j < boxesSeen.length; j++) if (boxesSeen[j].id === agent.boxId) box = boxesSeen[j];
   var offline = !!(box && box.connected === false);
-  var desktopLabel = "Desktop: " + agent.name + " · display " + agent.displayIndex + (boxesSeen.length > 1 && agent.boxName ? " · " + agent.boxName : "") + (offline ? " · offline" : "");
+  var desktopLabel = "{{ui.app.desktop}} " + agent.name + " {{ui.app.display}} " + agent.displayIndex + (boxesSeen.length > 1 && agent.boxName ? " · " + agent.boxName : "") + (offline ? " {{ui.app.offline}}" : "");
   $("desktoptitle").textContent = desktopLabel;
-  $("desktoptitle").title = desktopLabel + " — open Desktop tab";
+  $("desktoptitle").title = desktopLabel + " {{ui.app.open-desktop-tab}}";
   var frame = $("vnc");
   if (offline) {
     // The box is not reachable, and the pane says so *now*. Pointing the frame at the proxy
@@ -3930,8 +3920,8 @@ $("vnc").onload = function () { this.style.opacity = ""; };
 function desktopOfflineDoc(boxName) {
   return "<!doctype html><html><head><meta charset=\"utf-8\"><style>html,body{margin:0;height:100%;background:#000;color:#8a8a8a;" +
     "font:13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}body{display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;box-sizing:border-box}" +
-    "small{display:block;margin-top:8px;color:#555}</style></head><body><div>Box " + esc(boxName) +
-    " is not connected<small>No desktop to show. The picture returns when the box is reachable again.</small></div></body></html>";
+    "small{display:block;margin-top:8px;color:#555}</style></head><body><div>{{ui.app.box}} " + esc(boxName) +
+    " {{ui.app.is-not-connected}}<small>{{ui.app.no-desktop-to-show-the}}</small></div></body></html>";
 }
 
 /**
@@ -3978,7 +3968,7 @@ function a2uiReady(fn) {
   var script = document.createElement("script");
   script.src = "/vendor/a2ui.js";
   script.onload = function () { a2uiState = "ready"; var fns = a2uiWaiting; a2uiWaiting = []; fns.forEach(function (f) { f(); }); };
-  script.onerror = function () { a2uiState = "failed"; a2uiWaiting = []; feed("cards cannot be drawn: /vendor/a2ui.js did not load (run npm run build:vendor)", "err"); };
+  script.onerror = function () { a2uiState = "failed"; a2uiWaiting = []; feed("{{ui.app.cards-cannot-be-drawn-vendor}}", "err"); };
   document.head.appendChild(script);
 }
 
@@ -4035,19 +4025,19 @@ function sendSurfaceAction(item, action) {
   // pressed again once the window has passed.
   var now = Date.now();
   if (item.lastSent && item.lastSent.text === text && now - item.lastSent.at < SURFACE_PRESS_WINDOW_MS) {
-    if (done) done.textContent = "sent: " + action.name + " (already sent, waiting for " + nameOf(current) + ")";
+    if (done) done.textContent = "{{ui.app.sent}} " + action.name + " {{ui.app.already-sent-waiting-for}} " + nameOf(current) + ")";
     return;
   }
   item.lastSent = { text: text, at: now };
   item.lastAction = action.name;
-  if (done) done.textContent = "you pressed: " + action.name;
+  if (done) done.textContent = "{{ui.app.you-pressed}} " + action.name;
   fetch("/api/prompt", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ agent: current, text: text, conversation: currentConversation })
   }).then(function (res) {
-    if (!res.ok) return res.text().then(function (t) { feed("action rejected: " + esc(t), "err"); });
-  }).catch(function (error) { feed("action failed: " + esc(error.message), "err"); });
+    if (!res.ok) return res.text().then(function (t) { feed("{{ui.app.action-rejected}} " + esc(t), "err"); });
+  }).catch(function (error) { feed("{{ui.app.action-failed}} " + esc(error.message), "err"); });
 }
 
 /**
@@ -4107,8 +4097,8 @@ function sendAnswer(item, text) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ agent: current, text: text, conversation: currentConversation })
   }).then(function (res) {
-    if (!res.ok) return res.text().then(function (t) { feed("answer rejected: " + esc(t), "err"); });
-  }).catch(function (error) { feed("answer failed: " + esc(error.message), "err"); });
+    if (!res.ok) return res.text().then(function (t) { feed("{{ui.app.answer-rejected}} " + esc(t), "err"); });
+  }).catch(function (error) { feed("{{ui.app.answer-failed}} " + esc(error.message), "err"); });
 }
 
 function pushItem(item) {
@@ -4143,13 +4133,13 @@ function whoLine(who, at, chips) {
 
 function toolsHtml(kind, hasIndex) {
   return '<div class="mtools">' +
-    '<button type="button" data-act="copy" title="Copy the text">copy</button>' +
-    '<button type="button" data-act="md" title="Copy as Markdown">md</button>' +
-    '<button type="button" data-act="quote" title="Quote into the composer">quote</button>' +
-    (hasIndex ? '<button type="button" data-act="link" title="Copy a link to this message">link</button>' : "") +
-    (hasIndex ? '<button type="button" data-act="react" title="React to this message">react</button>' : "") +
-    (kind === "person" ? '<button type="button" data-act="resend" title="Put this back in the composer">resend</button>' : "") +
-    '<button type="button" data-act="find" title="Search this conversation for these words">find</button>' +
+    '<button type="button" data-act="copy" title="{{ui.app.copy-the-text}}">{{ui.app.copy-2}}</button>' +
+    '<button type="button" data-act="md" title="{{ui.app.copy-as-markdown}}">md</button>' +
+    '<button type="button" data-act="quote" title="{{ui.app.quote-into-the-composer}}">{{ui.app.quote}}</button>' +
+    (hasIndex ? '<button type="button" data-act="link" title="{{ui.app.copy-a-link-to-this}}">{{ui.app.link}}</button>' : "") +
+    (hasIndex ? '<button type="button" data-act="react" title="{{ui.app.react-to-this-message}}">{{ui.app.react}}</button>' : "") +
+    (kind === "person" ? '<button type="button" data-act="resend" title="{{ui.app.put-this-back-in-the}}">{{ui.app.resend}}</button>' : "") +
+    '<button type="button" data-act="find" title="{{ui.app.search-this-conversation-for-these}}">{{ui.app.find}}</button>' +
     "</div>";
 }
 
@@ -4162,8 +4152,8 @@ function drawItem(item) {
     if (item.at) div.setAttribute("data-at", String(item.at));
     if (item.streaming) div.setAttribute("data-partial", "1");
     if (item.unread) div.classList.add("unread");
-    var who = item.kind === "person" ? "you" : item.kind === "teammate" ? item.from : nameOf(current);
-    var chips = item.kind === "teammate" ? ["teammate"].concat(item.priority ? ["priority"] : []) : [];
+    var who = item.kind === "person" ? "{{ui.app.you}}" : item.kind === "teammate" ? item.from : nameOf(current);
+    var chips = item.kind === "teammate" ? ["{{ui.app.chip-teammate}}"].concat(item.priority ? ["{{ui.app.chip-priority}}"] : []) : [];
     if (item.kind === "teammate") div.style.setProperty("--peer-colour", colorOfName(item.from));
     div.innerHTML = whoLine(who, item.at, chips) + '<div class="body"></div>' + toolsHtml(item.kind, item.index !== undefined);
     var body = div.querySelector(".body");
@@ -4174,7 +4164,7 @@ function drawItem(item) {
   }
   if (item.kind === "sent") {
     div.className = "sentfoot";
-    div.innerHTML = '<details><summary><span class="peerdot" style="background:' + colorOfName(item.to) + '"></span>Messaged ⟶ ' + esc(item.to) + (item.priority ? " (priority)" : "") + '</summary><div class="det"></div></details>';
+    div.innerHTML = '<details><summary><span class="peerdot" style="background:' + colorOfName(item.to) + '"></span>{{ui.app.messaged}} ' + esc(item.to) + (item.priority ? " {{ui.app.priority}}" : "") + '</summary><div class="det"></div></details>';
     div.querySelector(".det").textContent = String(item.text == null ? "" : item.text);
     return div;
   }
@@ -4186,8 +4176,8 @@ function drawItem(item) {
     det.open = item.open !== undefined ? item.open : !folded;
     var calls = item.calls || [];
     var ms = item.startAt && item.endAt ? Date.parse(item.endAt) - Date.parse(item.startAt) : NaN;
-    var dur = isFinite(ms) && ms > 0 ? (ms < 60000 ? Math.round(ms / 1000) + "s" : Math.floor(ms / 60000) + "m " + Math.round((ms % 60000) / 1000) + "s") : "";
-    var label = (item.done ? "Worked" : "Working") + (dur ? " for " + dur : "") + " · " + calls.length + (calls.length === 1 ? " call" : " calls");
+    var dur = isFinite(ms) && ms > 0 ? (ms < 60000 ? Math.round(ms / 1000) + "{{ui.unit.sec}}" : Math.floor(ms / 60000) + "{{ui.unit.min}} " + Math.round((ms % 60000) / 1000) + "{{ui.unit.sec}}") : "";
+    var label = (item.done ? "{{ui.app.worked}}" : "{{ui.app.working-2}}") + (dur ? " {{ui.app.for}} " + dur : "") + " · " + calls.length + (calls.length === 1 ? " {{ui.app.call}}" : " {{ui.app.calls}}");
     det.innerHTML = "<summary>" + esc(label) + '</summary><div class="calls"></div>';
     det.ontoggle = function () { item.open = det.open; };
     var host = det.querySelector(".calls");
@@ -4202,75 +4192,75 @@ function drawItem(item) {
     if (item.card === "consent") {
       // The exact text the fingerprint was taken over. Not a summary of it: consent is given to
       // what is read here, so anything shortened would be consent to something else.
-      html = '<div class="chead"><span class="dot"></span>' + (pending ? "Consent needed &mdash; " + esc(nameOf(current)) + " is waiting" : "Consent") + "</div>" +
+      html = '<div class="chead"><span class="dot"></span>' + (pending ? "Consent needed &mdash; " + esc(nameOf(current)) + " {{ui.app.is-waiting}}" : "{{ui.app.consent}}") + "</div>" +
         // What the tool does, in the host's words (INV-691) — above the verbatim action, never in it.
-        (item.action ? '<div class="note" style="font-weight:600">' + esc(item.action) + (item.taskLevel ? ' <span class="chip" style="font-size:10px">task L' + esc(String(item.taskLevel)) + "</span>" : "") + "</div>" : "") + (item.why ? '<div class="note"><b>' + esc(nameOf(item.agentId)) + " says</b> (its own words, not checked): " + esc(item.why) + "</div>" : "") + // the background and the agent's claim, apart from the verbatim action (INV-1651)
+        (item.action ? '<div class="note" style="font-weight:600">' + esc(item.action) + (item.taskLevel ? ' <span class="chip" style="font-size:10px">{{ui.app.task-l}}' + esc(String(item.taskLevel)) + "</span>" : "") + "</div>" : "") + (item.why ? '<div class="note"><b>' + esc(nameOf(item.agentId)) + " {{ui.app.says}}</b> {{ui.app.its-own-words-not-checked}} " + esc(item.why) + "</div>" : "") + // the background and the agent's claim, apart from the verbatim action (INV-1651)
         "<code></code>" +
         (pending
-          ? '<div class="note">Each button says what it covers: this exact action, once, for this session, or until you revoke it in Settings. This agent only — never another agent, never another command.</div>' +
+          ? '<div class="note">{{ui.app.each-button-says-what-it}}</div>' +
             '<div class="cactions">' +
-            '<button class="btn sm accent" data-approve="once">Allow once</button>' +
-            '<button class="btn sm" data-approve="session">This session</button>' +
-            '<button class="btn sm" data-approve="always">Always</button>' +
-            '<button class="btn sm ghost" data-deny="1">Refuse</button></div>'
+            '<button class="btn sm accent" data-approve="once">{{ui.app.allow-once}}</button>' +
+            '<button class="btn sm" data-approve="session">{{ui.app.this-session}}</button>' +
+            '<button class="btn sm" data-approve="always">{{ui.app.always}}</button>' +
+            '<button class="btn sm ghost" data-deny="1">{{ui.app.refuse}}</button></div>'
           : '<div class="settledline"></div>');
     } else if (item.card === "secret") {
-      html = '<div class="chead"><span class="dot"></span>' + esc(item.agentName) + " needs a secret: <code>" + esc(item.id) + "</code></div>" +
+      html = '<div class="chead"><span class="dot"></span>' + esc(item.agentName) + " {{ui.app.needs-a-secret}} <code>" + esc(item.id) + "</code></div>" +
         '<div class="note"></div>' +
         (pending
           ? '<div class="cactions" style="gap:8px;align-items:center">' +
-            '<input type="password" placeholder="paste the value" autocomplete="off" style="flex:1;height:30px;border-radius:6px;border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 8px">' +
-            '<button class="btn sm accent" data-secret-save="1">Save securely</button>' +
-            '<button class="btn sm ghost" data-secret-dismiss="1">Dismiss</button></div>' +
-            '<div class="note">Stored in this machine\'s vault with a grant to ' + esc(item.agentName) + " only. The agent never sees the value; the box never holds it.</div>"
+            '<input type="password" placeholder="{{ui.app.paste-the-value}}" autocomplete="off" style="flex:1;height:30px;border-radius:6px;border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 8px">' +
+            '<button class="btn sm accent" data-secret-save="1">{{ui.app.save-securely}}</button>' +
+            '<button class="btn sm ghost" data-secret-dismiss="1">{{ui.app.dismiss}}</button></div>' +
+            '<div class="note">{{ui.app.stored-in-this-machines-vault}} ' + esc(item.agentName) + " {{ui.app.only-the-agent-never-sees}}</div>"
           : '<div class="settledline"></div>');
     } else if (item.card === "credentials") { html = window.credentialsCardHtml ? window.credentialsCardHtml(item, pending) : ""; // what a start waits on (INV-1666)
     } else {
-      html = '<div class="chead"><span class="dot"></span>Computer &mdash; ' + esc(item.agentName) + (pending ? " is waiting for you (" + esc(item.reason) + ")" : " had the desktop handed over") + "</div>" +
+      html = '<div class="chead"><span class="dot"></span>{{ui.app.computer}} ' + esc(item.agentName) + (pending ? " {{ui.app.is-waiting-for-you}}" + esc(item.reason) + ")" : " {{ui.app.had-the-desktop-handed-over}}") + "</div>" +
         '<div style="padding:4px 0 8px;font-size:14px" class="instr"></div>' +
         (pending
           ? '<div class="cactions">' +
-            (item.desktopPath ? '<a class="btn sm" href="' + esc(item.desktopPath) + '" target="_blank" rel="noopener" style="text-decoration:none">Open computer</a>' : "") +
-            '<button class="btn sm accent" data-handback="1">Hand back</button></div>' +
-            '<div class="note">When you hand it back the agent is woken and looks at the screen first.</div>'
+            (item.desktopPath ? '<a class="btn sm" href="' + esc(item.desktopPath) + '" target="_blank" rel="noopener" style="text-decoration:none">{{ui.app.open-computer}}</a>' : "") +
+            '<button class="btn sm accent" data-handback="1">{{ui.app.hand-back-2}}</button></div>' +
+            '<div class="note">{{ui.app.when-you-hand-it-back}}</div>'
           : '<div class="settledline"></div>');
     }
     div.innerHTML = html;
     var code = div.querySelector("code"); if (code && item.card === "consent") code.textContent = item.description || "";
     var note = div.querySelector(".note"); if (note && item.card === "secret") note.textContent = item.description || "";
     var instr = div.querySelector(".instr"); if (instr) instr.textContent = item.instruction || "";
-    var sl = div.querySelector(".settledline"); if (sl) sl.textContent = item.settled || "settled";
+    var sl = div.querySelector(".settledline"); if (sl) sl.textContent = item.settled || "{{ui.app.settled}}";
     div.addEventListener("click", function (event) {
       var t = event.target; if (!t.getAttribute) return;
       var scope = t.getAttribute("data-approve");
       if (scope) {
         t.disabled = true;
         post("/api/approve", { id: item.id, scope: scope }).then(function (r) {
-          if (!r.ok) return r.text().then(function (x) { feed("approve failed: " + esc(x), "err"); });
-          settleCard(item.key, "you allowed it" + (scope === "session" ? " for this session" : scope === "always" ? ", standing until revoked" : " once") + " · the agent goes on");
+          if (!r.ok) return r.text().then(function (x) { feed("{{ui.app.approve-failed}} " + esc(x), "err"); });
+          settleCard(item.key, "{{ui.app.you-allowed-it}}" + (scope === "session" ? " {{ui.app.for-this-session}}" : scope === "always" ? "{{ui.app.standing-until-revoked}}" : " {{ui.app.once}}") + " {{ui.app.the-agent-goes-on}}");
         });
         return;
       }
       if (t.getAttribute("data-deny")) {
         t.disabled = true;
-        post("/api/deny", { id: item.id }).then(function () { settleCard(item.key, "you refused it"); });
+        post("/api/deny", { id: item.id }).then(function () { settleCard(item.key, "{{ui.app.you-refused-it}}"); });
         return;
       }
       if (t.getAttribute("data-secret-save")) {
         var field = div.querySelector("input"); var value = field ? field.value : "";
         if (!value) { field && field.focus(); return; }
         t.disabled = true;
-        post("/api/secrets/requests/answer", { id: item.id, value: value }).then(function () { if (field) field.value = ""; settleCard(item.key, "saved to the vault"); });
+        post("/api/secrets/requests/answer", { id: item.id, value: value }).then(function () { if (field) field.value = ""; settleCard(item.key, "{{ui.app.saved-to-the-vault}}"); });
         return;
       }
       if (t.getAttribute("data-secret-dismiss")) {
         t.disabled = true;
-        post("/api/secrets/requests/dismiss", { id: item.id }).then(function () { settleCard(item.key, "dismissed without saving"); });
+        post("/api/secrets/requests/dismiss", { id: item.id }).then(function () { settleCard(item.key, "{{ui.app.dismissed-without-saving}}"); });
         return;
       }
       if (t.getAttribute("data-handback")) {
         t.disabled = true;
-        post("/api/handover/back", { agent: item.agentId }).then(function () { settleCard(item.key, "handed back · the agent looks at the screen first"); });
+        post("/api/handover/back", { agent: item.agentId }).then(function () { settleCard(item.key, "{{ui.app.handed-back-the-agent-looks}}"); });
       }
     });
     return div;
@@ -4287,23 +4277,23 @@ function drawItem(item) {
   }
   if (item.kind === "working") {
     div.className = "working";
-    div.innerHTML = '<span class="dots"><span></span><span></span><span></span></span>' + esc(nameOf(current)) + " is on it";
+    div.innerHTML = '<span class="dots"><span></span><span></span><span></span></span>' + esc(nameOf(current)) + " {{ui.app.is-on-it}}";
     return div;
   }
   if (item.kind === "question") {
     div.className = "question";
     if (item.at) div.setAttribute("data-at", String(item.at));
     var opts = item.options || [];
-    var html = whoLine(nameOf(current), item.at, ["question"]) + '<div class="qtitle"></div>' + (item.recommended ? '<div class="qdone">' + esc(nameOf(current)) + " leans to: <b>" + esc(item.recommended) + "</b></div>" : ""); // INV-1651
+    var html = whoLine(nameOf(current), item.at, ["{{ui.app.chip-question}}"]) + '<div class="qtitle"></div>' + (item.recommended ? '<div class="qdone">' + esc(nameOf(current)) + " {{ui.app.leans-to}} <b>" + esc(item.recommended) + "</b></div>" : ""); // INV-1651
     for (var o = 0; o < opts.length; o++) {
       html += '<button type="button" class="qopt' + (item.answered === opts[o] ? " chosen" : "") + '" data-opt="' + o + '"' + (item.answered !== undefined ? " disabled" : "") + '>' +
         '<span class="qkey">' + String.fromCharCode(65 + o) + "</span><span></span></button>";
     }
     if (item.answered === undefined) {
-      html += '<form class="qfree"><input placeholder="Type your own answer" spellcheck="false"><button type="submit" class="btn sm accent">Send</button></form>';
-      if (item.fallback) html += '<div class="qdone">or move on, and it will: <b class="fb"></b></div>';
+      html += '<form class="qfree"><input placeholder="{{ui.app.type-your-own-answer}}" spellcheck="false"><button type="submit" class="btn sm accent">{{ui.app.send}}</button></form>';
+      if (item.fallback) html += '<div class="qdone">{{ui.app.or-move-on-and-it}} <b class="fb"></b></div>';
     } else if (opts.indexOf(item.answered) < 0) {
-      html += '<div class="qdone">you moved on: <b></b></div>';
+      html += '<div class="qdone">{{ui.app.you-moved-on}} <b></b></div>';
     }
     div.innerHTML = html;
     div.querySelector(".qtitle").textContent = item.question || "";
@@ -4329,15 +4319,15 @@ function drawItem(item) {
     div.className = "surface" + (item.closed ? " closed" : "");
     if (item.at) div.setAttribute("data-at", String(item.at));
     div.setAttribute("data-surface", String(item.surfaceId));
-    div.innerHTML = whoLine(item.agentName || nameOf(current), item.at, ["card"]) +
-      '<div class="stitle"></div><div class="sbody"><span class="loading">drawing the card…</span></div><div class="sdone"></div>';
+    div.innerHTML = whoLine(item.agentName || nameOf(current), item.at, ["{{ui.app.chip-card}}"]) +
+      '<div class="stitle"></div><div class="sbody"><span class="loading">{{ui.app.drawing-the-card}}</span></div><div class="sdone"></div>';
     div.querySelector(".stitle").textContent = item.title || "";
     if (!item.title) div.querySelector(".stitle").remove();
     // The feedback line stays in the DOM even when empty (INV-1275): the first press writes into
     // it, and a card that said nothing when pressed was pressed twelve times.
     var sdone = div.querySelector(".sdone");
-    if (item.closed) sdone.textContent = "closed";
-    else if (item.lastAction) sdone.textContent = "you pressed: " + item.lastAction;
+    if (item.closed) sdone.textContent = "{{ui.app.closed}}";
+    else if (item.lastAction) sdone.textContent = "{{ui.app.you-pressed}} " + item.lastAction;
     // The body is filled once the node is in the document; see mountSurface.
     setTimeout(function () { a2uiReady(function () { mountSurface(item); }); }, 0);
     return div;
@@ -4446,7 +4436,7 @@ function select(id, conversation) {
   $("title").textContent = nameOf(id);
   var selected = agentById(id);
   $("titlerole").textContent = selected
-    ? String(selected.title || "") + (boxesSeen.length > 1 && selected.boxName ? (selected.title ? " · " : "") + "on " + selected.boxName : "")
+    ? String(selected.title || "") + (boxesSeen.length > 1 && selected.boxName ? (selected.title ? " · " : "") + "{{ui.app.on}} " + selected.boxName : "")
     : "";
   $("round").textContent = "";
   spend = { input: 0, output: 0 };
@@ -4472,7 +4462,7 @@ function select(id, conversation) {
         var e = entries[i];
         var day = e.at ? dayLabel(e.at) : "";
         if (day && day !== lastDay) { closeOpen(); pushItem({ kind: "divider", label: day, day: dayKey(e.at) }); lastDay = day; }
-        if (!newShown && lastSeen >= 0 && i + base > lastSeen && e.kind === "text") { closeOpen(); pushItem({ kind: "divider", label: "new", isNew: true }); newShown = true; }
+        if (!newShown && lastSeen >= 0 && i + base > lastSeen && e.kind === "text") { closeOpen(); pushItem({ kind: "divider", label: "{{ui.app.new-divider}}", isNew: true }); newShown = true; }
         replayEntry(id, e, i + base, lastSeen >= 0 && i + base > lastSeen);
       }
       closeOpen();
@@ -4506,17 +4496,17 @@ function fmtAgo(iso) {
   var ms = Date.now() - Date.parse(iso);
   if (!isFinite(ms) || ms < 0) return "";
   var minutes = Math.floor(ms / 60000);
-  if (minutes < 1) return "now";
-  if (minutes < 60) return minutes + "m";
-  if (minutes < 60 * 24) return Math.floor(minutes / 60) + "h";
-  return Math.floor(minutes / (60 * 24)) + "d";
+  if (minutes < 1) return "{{ui.app.now-short}}";
+  if (minutes < 60) return minutes + "{{ui.unit.min}}";
+  if (minutes < 60 * 24) return Math.floor(minutes / 60) + "{{ui.unit.hour}}";
+  return Math.floor(minutes / (60 * 24)) + "{{ui.unit.day}}";
 }
 
 /** One line for the button: where it came from and what was said. */
 function conversationLabel(c) {
-  if (!c || c.id === "main") return "Team room";
+  if (!c || c.id === "main") return "{{ui.app.team-room}}";
   if (String(c.id).indexOf("fork/") === 0 && window.forkLabel) return window.forkLabel(String(c.id), convLoaded); // a fork's thread, by its brief and state (INV-1667)
-  var channel = String(c.id).split("-")[0] || "chat";
+  var channel = String(c.id).split("-")[0] || "{{ui.app.chat}}";
   var words = c.firstLine ? String(c.firstLine).slice(0, 40) : c.id;
   return channel + " · " + words;
 }
@@ -4552,14 +4542,14 @@ function renderConvList() {
     if (!needle) return true;
     return (String(c.firstLine || "") + " " + c.id).toLowerCase().indexOf(needle) !== -1;
   }).map(function (c) {
-    var channel = c.id === "main" ? "team" : (String(c.id).split("-")[0] || "chat");
-    var words = c.id === "main" ? "Team room" : (c.firstLine || c.id);
+    var channel = c.id === "main" ? "{{ui.app.team-label}}" : (String(c.id).split("-")[0] || "{{ui.app.chat}}");
+    var words = c.id === "main" ? "{{ui.app.team-room}}" : (c.firstLine || c.id);
     return '<a href="#" class="row' + (c.id === currentConversation ? " on" : "") + '" data-conv="' + esc(c.id) + '">' +
       '<span class="when">' + esc(fmtAgo(c.lastAt)) + '</span>' +
       '<span class="who">' + esc(channel) + '</span> ' +
       '<span class="what">' + esc(words) + '</span></a>' + (window.forkRowsHtml ? window.forkRowsHtml(c, currentConversation) : ""); // its forks, folded under it (INV-1667)
   }).join("");
-  $("convlist").innerHTML = rows || '<div class="row dim">Nothing matches</div>';
+  $("convlist").innerHTML = rows || '<div class="row dim">{{ui.app.nothing-matches}}</div>';
   // More pages exist and no filter is narrowing: filtering only searches what is
   // loaded, so the link stays visible then too, as the way to widen the search.
   $("convmore").style.display = convLoaded.length < convTotal ? "" : "none";
@@ -4605,7 +4595,7 @@ $("foldall").onclick = function (event) {
   var works = document.querySelectorAll("details.work");
   for (var b = 0; b < works.length; b++) works[b].open = !folded;
   for (var t = 0; t < thread.length; t++) if (thread[t].kind === "work") thread[t].open = !folded;
-  $("foldall").textContent = folded ? "unfold work" : "fold work";
+  $("foldall").textContent = folded ? "{{ui.app.unfold-work}}" : "{{ui.app.fold-work}}";
 };
 
 $("convbtn").onclick = function (event) {
@@ -4658,10 +4648,10 @@ function updateComposerTarget() {
     if (convLoaded[i].id === currentConversation) { viewed = convLoaded[i]; break; }
   }
   $("input").placeholder = currentConversation === "main"
-    ? "Message " + name + "…"
-    : currentConversation.indexOf("fork/") === 0 ? "A fork's thread is read-only — its findings go back to the conversation that started it" // nobody but its parent talks to a fork (INV-1667)
-    : "Reply in " + conversationLabel(viewed || { id: currentConversation }) +
-      " — reaches that chat, not the team room…";
+    ? "{{ui.app.message}} " + name + "…"
+    : currentConversation.indexOf("fork/") === 0 ? "{{ui.app.a-forks-thread-is-read}}" // nobody but its parent talks to a fork (INV-1667)
+    : "{{ui.app.reply-in}} " + conversationLabel(viewed || { id: currentConversation }) +
+      " {{ui.app.reaches-that-chat-not-the}}";
 }
 
 function refresh() {
@@ -4680,8 +4670,8 @@ function refresh() {
     $("model").innerHTML = "<b>" + esc(state.provider) + "</b>";
     boxState = { ok: !!state.box.ok, detail: String(state.box.detail || "") };
     dockerState = state.box.docker || null;
-    $("boxinfo").textContent = (state.box.ok ? (state.box.detail === "answering" ? "box online" : state.box.detail) : "box unavailable") + // the probe's word, said plainly: nothing for the person to do
-      (state.boxes && state.boxes.length > 1 ? " · " + state.boxes.length + " boxes (" + state.boxes.filter(function (b) { return b.connected; }).length + " up)" : "");
+    $("boxinfo").textContent = (state.box.ok ? (state.box.detail === "answering" ? "{{ui.app.box-online}}" : state.box.detail) : "{{ui.app.box-unavailable}}") + // the probe's word, said plainly: nothing for the person to do
+      (state.boxes && state.boxes.length > 1 ? " · " + state.boxes.length + " boxes (" + state.boxes.filter(function (b) { return b.connected; }).length + " {{ui.app.up}}" : "");
     $("boxdot").className = "dot " + (state.box.ok ? "ok" : "bad");
     showBoxClass(state.box);
     if (!onboardChecked) {
@@ -4695,14 +4685,14 @@ function refresh() {
       var today = state.usageToday;
       $("spendtoday").textContent = today.records === 0
         ? ""
-        : "today " + fmtTokens(today.inputTokens) + " in / " + fmtTokens(today.outputTokens) + " out";
+        : "{{ui.app.today}} " + fmtTokens(today.inputTokens) + " {{ui.app.in-2}} " + fmtTokens(today.outputTokens) + " {{ui.app.out}}";
       // Who spent it, on hover — the per-person breakdown the enterprise framework asks for.
       var by = state.usageByPrincipal || [];
       $("spendtoday").title = by.length
-        ? "Today, by person:\n" + by.map(function (p) {
-            return "  " + p.name + ": " + fmtTokens(p.inputTokens) + " in / " + fmtTokens(p.outputTokens) + " out";
+        ? "{{ui.app.today-by-person}}" + by.map(function (p) {
+            return "  " + p.name + ": " + fmtTokens(p.inputTokens) + " {{ui.app.in-2}} " + fmtTokens(p.outputTokens) + " {{ui.app.out}}";
           }).join("\n")
-        : "Tokens spent today, all agents";
+        : "{{ui.app.tokens-spent-today-all-agents}}";
     }
     if (!current && agents.length) {
       var wantAgent = new URLSearchParams(location.search).get("agent");
@@ -4768,7 +4758,7 @@ function reconcileCards(pending, secretRequests, handovers) {
     showCard("computer:" + h.agentId, { card: "computer", agentId: h.agentId, agentName: h.agentName, instruction: h.instruction, reason: h.reason, desktopPath: h.desktopPath, at: h.at });
   });
   cards.forEach(function (item, key) {
-    if (item.state === "pending" && !alive[key]) settleCard(key, "answered elsewhere");
+    if (item.state === "pending" && !alive[key]) settleCard(key, "{{ui.app.answered-elsewhere}}");
   });
 }
 
@@ -4782,7 +4772,7 @@ document.getElementById("stop").addEventListener("click", function () {
   }).then(function () {
     // It takes effect at the next round boundary, not instantly — aborting mid-request would leave
     // a tool call with no result. Said here so the delay does not read as the button not working.
-    feed("stopping " + esc(nameOf(current)) + " at the end of this round", "warn");
+    feed("{{ui.app.stopping-2}} " + esc(nameOf(current)) + " {{ui.app.at-the-end-of-this}}", "warn");
   }).finally(function () { $("stop").disabled = false; });
 });
 
@@ -4808,8 +4798,8 @@ function refreshProgress() {
       var remembered = null;
       try { remembered = localStorage.getItem(planKey); } catch (error) {}
       var open = remembered === "open" ? true : remembered === "shut" ? false : !complete;
-      head.innerHTML = '<details' + (open ? " open" : "") + ' title="This conversation\'s current plan: replaced when the agent sets a new one"><summary><b>' + (complete ? "plan done" : "plan") + '</b> ' + (hasPlan ? esc(state.plan.split("\n")[0]) : "&mdash;") +
-        (todos.length ? ' <span class="dim mono">' + done + "/" + todos.length + " done</span>" : "") +
+      head.innerHTML = '<details' + (open ? " {{ui.app.open}}" : "") + ' title="{{ui.app.this-conversations-current-plan-replaced}}"><summary><b>' + (complete ? "{{ui.app.plan-done}}" : "{{ui.app.plan}}") + '</b> ' + (hasPlan ? esc(state.plan.split("\n")[0]) : "&mdash;") +
+        (todos.length ? ' <span class="dim mono">' + done + "/" + todos.length + " {{ui.app.done-2}}</span>" : "") +
         ' <span class="dim">' + (open ? "▾" : "▸") + "</span></summary></details>";
       var det = head.querySelector("details");
       det.ontoggle = function () {
@@ -4819,7 +4809,7 @@ function refreshProgress() {
       };
       list.style.display = open ? "" : "none";
       var foldKey = planKey + ":done", folds = (window.planFolds = window.planFolds || {}), fold = done > 3, hadFocus = !!(document.activeElement && document.activeElement.hasAttribute && document.activeElement.hasAttribute("data-plan-done")); try { fold = fold && (folds[foldKey] || localStorage.getItem(foldKey)) !== "show"; } catch (error) { fold = fold && folds[foldKey] !== "show"; } // more than three done fold to one line; what is open stays (INV-1569). Kept in memory too, for when storage is refused.
-      list.innerHTML = (done > 3 ? '<div>&#10003; ' + done + ' done &middot; <a href="#" data-plan-done>' + (fold ? "show" : "hide") + "</a></div>" : "") + todos.filter(function (t) { return !(fold && t.status === "done"); }).map(function (t) {
+      list.innerHTML = (done > 3 ? '<div>&#10003; ' + done + ' {{ui.app.done-3}} <a href="#" data-plan-done>' + (fold ? "{{ui.app.show-2}}" : "{{ui.app.hide-2}}") + "</a></div>" : "") + todos.filter(function (t) { return !(fold && t.status === "done"); }).map(function (t) {
         var mark = t.status === "done" ? "&#10003;" : t.status === "doing" ? "&rarr;" : t.status === "blocked" ? "&#9888;" : "&middot;";
         return '<div style="' + (t.status === "done" ? "opacity:0.5;text-decoration:line-through" : "") + '">' + mark + " " + esc(t.text) + "</div>";
       }).join("");
@@ -4868,10 +4858,10 @@ function fmtWhen(iso) {
   var then = new Date(iso).getTime();
   if (!then) return "";
   var secs = Math.round((Date.now() - then) / 1000);
-  if (secs < 60) return "just now";
-  if (secs < 3600) return Math.round(secs / 60) + "m ago";
-  if (secs < 86400) return Math.round(secs / 3600) + "h ago";
-  return Math.round(secs / 86400) + "d ago";
+  if (secs < 60) return "{{ui.app.just-now}}";
+  if (secs < 3600) return Math.round(secs / 60) + "{{ui.app.m-ago}}";
+  if (secs < 86400) return Math.round(secs / 3600) + "{{ui.app.h-ago}}";
+  return Math.round(secs / 86400) + "{{ui.app.d-ago}}";
 }
 
 function fileUrl(path, download) {
@@ -4894,7 +4884,7 @@ function refreshFiles(dir) {
         return String(b.modified || "").localeCompare(String(a.modified || ""));
       });
       if (!entries.length) {
-        $("fileslist").innerHTML = '<div class="dim" style="padding:10px 12px">Nothing here yet. Agents write to this directory; you can drop a file in.</div>';
+        $("fileslist").innerHTML = '<div class="dim" style="padding:10px 12px">{{ui.app.nothing-here-yet-agents-write}}</div>';
         return;
       }
       $("fileslist").innerHTML = entries.map(function (e) {
@@ -4907,7 +4897,7 @@ function refreshFiles(dir) {
       }).join("");
     })
     .catch(function () {
-      $("fileslist").innerHTML = '<div class="dim" style="padding:10px 12px">Could not read the work directory.</div>';
+      $("fileslist").innerHTML = '<div class="dim" style="padding:10px 12px">{{ui.app.could-not-read-the-work}}</div>';
     });
 }
 
@@ -4916,8 +4906,8 @@ function previewFile(path) {
   var name = path.split("/").pop();
   var kind = fileKind(name);
   var head = '<div class="bar" style="border-bottom:1px solid var(--border)"><b>' + esc(name) + "</b>" +
-    ' <span><a href="' + fileUrl(path, true) + '">save</a> ' +
-    '<a href="' + fileUrl(path) + '" target="_blank" rel="noopener">open</a></span></div>';
+    ' <span><a href="' + fileUrl(path, true) + '">{{ui.app.save}}</a> ' +
+    '<a href="' + fileUrl(path) + '" target="_blank" rel="noopener">{{ui.app.open}}</a></span></div>';
 
   if (kind === "image") {
     $("filespreview").innerHTML = head + '<img src="' + fileUrl(path) + '" alt="' + esc(name) + '">';
@@ -4932,12 +4922,12 @@ function previewFile(path) {
     // preview it wastes the one action a person came here to take.
     $("filespreview").innerHTML = head +
       '<div class="dim" style="padding:10px 14px">' +
-      (kind === "pdf" ? "PDF — open it in a tab, or save it." : "Not a text file. Save it to look at it.") +
+      (kind === "pdf" ? "{{ui.app.pdf-open-it-in-a}}" : "{{ui.app.not-a-text-file-save}}") +
       "</div>";
     return Promise.resolve();
   }
 
-  $("filespreview").innerHTML = head + '<div class="dim" style="padding:10px 14px">Loading…</div>';
+  $("filespreview").innerHTML = head + '<div class="dim" style="padding:10px 14px">{{ui.app.loading}}</div>';
   return fetch(fileUrl(path))
     .then(function (r) { return r.text(); })
     .then(function (body) {
@@ -4949,7 +4939,7 @@ function previewFile(path) {
           : "<pre>" + esc(body) + "</pre>");
     })
     .catch(function () {
-      $("filespreview").innerHTML = head + '<div class="dim" style="padding:10px 14px">Could not read it.</div>';
+      $("filespreview").innerHTML = head + '<div class="dim" style="padding:10px 14px">{{ui.app.could-not-read-it}}</div>';
     });
 }
 
@@ -4985,8 +4975,8 @@ function uploadOne(file) {
         .then(function (r) { return r.json(); })
         .then(function (result) {
           feed(result.error
-            ? "upload failed: " + esc(result.error)
-            : "added " + esc(file.name) + " to " + esc(filesDir), result.error ? "err" : "");
+            ? "{{ui.app.upload-failed}} " + esc(result.error)
+            : "{{ui.app.added}} " + esc(file.name) + " {{ui.app.to}} " + esc(filesDir), result.error ? "err" : "");
           resolve();
         })
         .catch(function () { resolve(); });
@@ -5047,7 +5037,7 @@ function showTab(which) {
 document.getElementById("tabdesktop").addEventListener("click", function (e) { e.preventDefault(); showTab("desktop"); });
 document.getElementById("desktoptitle").addEventListener("click", function (e) { e.preventDefault(); showTab("desktop"); });
 document.getElementById("tabfiles").addEventListener("click", function (e) { e.preventDefault(); showTab("files"); });
-document.getElementById("tabtasks").addEventListener("click", function (e) { e.preventDefault(); showTab("tasks"); }); document.getElementById("inboxonly").addEventListener("click", function (e) { e.preventDefault(); window.inboxOnly = !window.inboxOnly; this.textContent = window.inboxOnly ? "all" : "inbox"; refreshTasks(); }); // INV-1652
+document.getElementById("tabtasks").addEventListener("click", function (e) { e.preventDefault(); showTab("tasks"); }); document.getElementById("inboxonly").addEventListener("click", function (e) { e.preventDefault(); window.inboxOnly = !window.inboxOnly; this.textContent = window.inboxOnly ? "{{ui.app.all}}" : "{{ui.app.inbox}}"; refreshTasks(); }); // INV-1652
 document.getElementById("tabauto").addEventListener("click", function (e) { e.preventDefault(); showTab("auto"); });
 document.getElementById("tabaudit").addEventListener("click", function (e) { e.preventDefault(); showTab("audit"); });
 document.getElementById("audithideprobes").addEventListener("change", function () {
@@ -5121,7 +5111,7 @@ function auditRow(e) {
     if (action === "heartbeat") return "";
     var systemText = '<span class="dim">' + esc(action || "system") + "</span>";
     if (action === "shutdown_signal") {
-      systemText = '<b style="color:var(--danger)">auditor received ' + esc(String(d.signal || "signal")) + " — shutting down</b>";
+      systemText = '<b style="color:var(--danger)">{{ui.app.auditor-received}} ' + esc(String(d.signal || "{{ui.app.signal}}")) + " {{ui.app.shutting-down}}</b>";
     }
     body = '<div class="audit-body">' + systemText + "</div>";
   }
@@ -5141,17 +5131,17 @@ function renderAuditState(meta) {
   var labelEl = $("auditprobelabel");
   if (!statEl) return;
   if (meta.forbidden) {
-    statEl.innerHTML = '<span class="dim">Audit is admin-only.</span>';
+    statEl.innerHTML = '<span class="dim">{{ui.app.audit-is-admin-only}}</span>';
     if (labelEl) labelEl.style.display = "none";
     return;
   }
   if (labelEl) labelEl.style.display = "inline-flex";
   if (meta.atRisk) {
-    statEl.innerHTML = '<span style="color:var(--danger);font-weight:600">⚠ HIGH-RISK: the auditor is not answering on this box — it may have been stopped on a session that can sudo.</span>';
+    statEl.innerHTML = '<span style="color:var(--danger);font-weight:600">{{ui.app.high-risk-the-auditor-is}}</span>';
     return;
   }
-  var age = meta.heartbeatAgeMs !== undefined ? " · last heartbeat " + Math.round(meta.heartbeatAgeMs / 1000) + "s ago" : "";
-  statEl.innerHTML = '<span class="dot ok"></span> auditor live' + esc(age) + ' <span class="dim">commands &amp; window focus · no keystrokes (docs/47)</span>';
+  var age = meta.heartbeatAgeMs !== undefined ? " {{ui.app.last-heartbeat}} " + Math.round(meta.heartbeatAgeMs / 1000) + "{{ui.app.s-ago}}" : "";
+  statEl.innerHTML = '<span class="dot ok"></span> {{ui.app.auditor-live}}' + esc(age) + ' <span class="dim">{{ui.app.commands-window-focus-no-keystrokes}}</span>';
 }
 
 function pollAudit() {
@@ -5221,10 +5211,10 @@ function automationGroups(list, rows, boxes, defaultBox) {
     if (!byBox[id]) { byBox[id] = []; order.push(id); }
     byBox[id].push(s);
   });
-  var kinds = [["schedule", "Recurring"], ["once", "One-time"], ["webhook", "On call"]];
+  var kinds = [["schedule", "{{ui.app.recurring}}"], ["once", "{{ui.app.one-time}}"], ["webhook", "{{ui.app.on-call}}"]];
   return order.map(function (id) {
     var head = boxes.length > 1
-      ? '<div style="padding:8px 16px 2px;font-size:12px;font-weight:600">' + esc(names[id] || id || "this box") + "</div>"
+      ? '<div style="padding:8px 16px 2px;font-size:12px;font-weight:600">' + esc(names[id] || id || "{{ui.app.this-box}}") + "</div>"
       : "";
     return head + kinds.map(function (kind) {
       var items = byBox[id].filter(function (s) { return (s.kind || "schedule") === kind[0]; });
@@ -5238,67 +5228,67 @@ function automationGroups(list, rows, boxes, defaultBox) {
 function automationRow(s, rows) {
   var when = esc(s.described) + (s.timezone ? ' <span class="dim">(' + esc(s.timezone) + ")</span>" : "");
   var last = s.running
-    ? '<span style="color:var(--accent)">running now</span>'
+    ? '<span style="color:var(--accent)">{{ui.app.running-now}}</span>'
     : s.lastRun
-      ? "last ran " + esc(new Date(s.lastRun).toLocaleString())
-      : '<span style="color:var(--warn)">never run</span>';
+      ? "{{ui.app.last-ran}} " + esc(new Date(s.lastRun).toLocaleString())
+      : '<span style="color:var(--warn)">{{ui.app.never-run}}</span>';
   // Next, by the tick's own rules.
-  if (s.nextRun && !s.running) last += " · next " + esc(new Date(s.nextRun).toLocaleString());
-  else if (s.kind === "once" && s.lastRun) last += " · done";
+  if (s.nextRun && !s.running) last += " {{ui.app.next}} " + esc(new Date(s.nextRun).toLocaleString());
+  else if (s.kind === "once" && s.lastRun) last += " {{ui.app.done}}";
   // Where it reports: a skill with no deliver says nothing in any chat.
   var where = s.deliver
-    ? "reports to " + esc(s.deliver)
-    : '<span class="dim">writes files only — no chat hears it</span>';
-  if (s.deliver && s.deliverWhen === "always") where += ' <span class="dim">(every run)</span>';
+    ? "{{ui.app.reports-to}} " + esc(s.deliver)
+    : '<span class="dim">{{ui.app.writes-files-only-no-chat}}</span>';
+  if (s.deliver && s.deliverWhen === "always") where += ' <span class="dim">{{ui.app.every-run}}</span>';
   // The last run's result, delivered or not (INV-776).
   var lastResult = s.lastResult
-    ? '<div class="dim" style="font-size:11px;margin-top:3px">last result ' + esc(new Date(s.lastResult.at).toLocaleString()) + (s.lastResult.result && s.lastResult.result !== "done" ? ' <span class="' + (s.lastResult.result === "failed" ? "danger" : "warn") + '">' + esc(s.lastResult.result) + "</span>" : "") + " \u00b7 " +
-        (s.lastResult.verdict === "silent" ? "not delivered" : s.lastResult.verdict === "attach_next" ? "attached to the next reply" : s.lastResult.verdict === "push_now" ? "delivered" : esc(s.lastResult.verdict)) +
+    ? '<div class="dim" style="font-size:11px;margin-top:3px">{{ui.app.last-result}} ' + esc(new Date(s.lastResult.at).toLocaleString()) + (s.lastResult.result && s.lastResult.result !== "done" ? ' <span class="' + (s.lastResult.result === "failed" ? "danger" : "warn") + '">' + esc(s.lastResult.result) + "</span>" : "") + " \u00b7 " +
+        (s.lastResult.verdict === "silent" ? "{{ui.app.not-delivered}}" : s.lastResult.verdict === "attach_next" ? "{{ui.app.attached-to-the-next-reply}}" : s.lastResult.verdict === "push_now" ? "delivered" : esc(s.lastResult.verdict)) +
         (s.lastResult.reason ? " \u2014 " + esc(s.lastResult.reason) : "") +
         (s.lastResult.text ? '<div class="mono" style="white-space:pre-wrap;margin-top:2px;max-height:6em;overflow:auto">' + esc(s.lastResult.text) + "</div>" : "") +
       "</div>"
     : "";
   // Provenance, not permission: reviewed afterwards rather than approved beforehand.
   var origin = s.authoredBy
-    ? '<span style="color:var(--accent-2);font-size:10.5px;border:1px solid var(--border);border-radius:5px;padding:0 5px">by ' + esc(s.authoredBy) + "</span>"
+    ? '<span style="color:var(--accent-2);font-size:10.5px;border:1px solid var(--border);border-radius:5px;padding:0 5px">{{ui.app.by}} ' + esc(s.authoredBy) + "</span>"
     : "";
   var pausedTag = s.paused
-    ? '<span style="color:var(--warn);font-size:10.5px;border:1px solid var(--border);border-radius:5px;padding:0 5px"' + (s.hold ? ' title="' + esc(s.hold.reason) + '">paused by ' + esc(s.hold.by) : ">paused") + "</span>"
+    ? '<span style="color:var(--warn);font-size:10.5px;border:1px solid var(--border);border-radius:5px;padding:0 5px"' + (s.hold ? ' title="' + esc(s.hold.reason) + '">{{ui.app.paused-by}} ' + esc(s.hold.by) : ">{{ui.app.paused-2}}") + "</span>"
     : "";
   var toggle = s.paused
-    ? '<button class="btn ghost sm" data-resume="' + esc(s.slug) + '">Turn on</button>'
-    : '<button class="btn ghost sm" data-pause="' + esc(s.slug) + '">Pause</button>';
+    ? '<button class="btn ghost sm" data-resume="' + esc(s.slug) + '">{{ui.app.turn-on}}</button>'
+    : '<button class="btn ghost sm" data-pause="' + esc(s.slug) + '">{{ui.app.pause}}</button>';
   // How it may act (INV-1458); a file that says nothing is auto, marked so.
   var mode = s.mode || "auto";
   var modeTag = mode === "auto" && !s.modeDefaulted ? "" :
     '<span style="color:' + (mode === "observe" ? "var(--accent-2)" : mode === "off" ? "var(--warn)" : "var(--muted)") + ';font-size:10.5px;border:1px solid var(--border);border-radius:5px;padding:0 5px">' +
-      (s.modeDefaulted ? "auto (no mode set)" : mode) + "</span>";
+      (s.modeDefaulted ? "{{ui.app.auto-no-mode-set}}" : mode) + "</span>";
   var modeSwitch = mode === "auto"
-    ? '<button class="btn ghost sm" data-mode="observe" data-mode-slug="' + esc(s.slug) + '" title="Record what it would run; nothing runs">Observe</button>'
-    : '<button class="btn ghost sm" data-mode="auto" data-mode-slug="' + esc(s.slug) + '" title="Let it run">Let it run</button>';
+    ? '<button class="btn ghost sm" data-mode="observe" data-mode-slug="' + esc(s.slug) + '" title="{{ui.app.record-what-it-would-run}}">{{ui.app.observe}}</button>'
+    : '<button class="btn ghost sm" data-mode="auto" data-mode-slug="' + esc(s.slug) + '" title="{{ui.app.let-it-run}}">{{ui.app.let-it-run}}</button>';
   var observed = (s.observed || []).length
-    ? '<div class="dim" style="font-size:11px;margin-top:3px">would have run ' + s.observed.length + ' time' + (s.observed.length === 1 ? "" : "s") + ' \u00b7 last ' + esc(new Date(s.observed[0].at).toLocaleString()) + ': ' + esc(s.observed[0].would) + "</div>"
+    ? '<div class="dim" style="font-size:11px;margin-top:3px">{{ui.app.would-have-run}} ' + s.observed.length + ' {{ui.app.time}}' + (s.observed.length === 1 ? "" : "{{ui.plural.s}}") + ' {{ui.app.last}} ' + esc(new Date(s.observed[0].at).toLocaleString()) + ': ' + esc(s.observed[0].would) + "</div>"
     : "";
   // A webhook routine's URL and secret are its whole interface; keyed on the hook data alone (two
   // endpoints saying the same fact once disagreed and the URL vanished).
   var hook = (rows || hookRows)[s.slug];
   var hookBlock = hook
     ? '<div style="margin-top:6px;padding:8px 10px;border:1px solid var(--border);border-radius:8px">' +
-        '<div class="dim" style="font-size:11px">POST here, with <span class="mono">Authorization: Bearer &lt;secret&gt;</span></div>' +
+        '<div class="dim" style="font-size:11px">{{ui.app.post-here-with}} <span class="mono">Authorization: Bearer &lt;secret&gt;</span></div>' +
         '<div class="mono" style="font-size:11px;word-break:break-all;margin-top:3px">' + esc(hook.url) + "</div>" +
         '<div style="display:flex;gap:6px;align-items:center;margin-top:5px">' +
           '<span class="mono secret" data-secret-for="' + esc(s.slug) + '" style="font-size:11px;word-break:break-all;flex:1">' + "•".repeat(24) + "</span>" +
-          '<button class="btn ghost sm" data-reveal="' + esc(s.slug) + '">Show</button>' +
-          '<button class="btn ghost sm" data-copyhook="' + esc(s.slug) + '">Copy</button>' +
-          '<button class="btn ghost sm" data-rotate="' + esc(s.slug) + '">New secret</button>' +
+          '<button class="btn ghost sm" data-reveal="' + esc(s.slug) + '">{{ui.app.show}}</button>' +
+          '<button class="btn ghost sm" data-copyhook="' + esc(s.slug) + '">{{ui.app.copy}}</button>' +
+          '<button class="btn ghost sm" data-rotate="' + esc(s.slug) + '">{{ui.app.new-secret}}</button>' +
           (s.previousUntil
-            ? ' <span class="dim" style="font-size:11px">old secret works until ' + esc(new Date(s.previousUntil).toLocaleString()) + '</span>' +
-              ' <button class="btn ghost sm" data-revoke-previous="' + esc(s.slug) + '">Stop it now</button>'
+            ? ' <span class="dim" style="font-size:11px">{{ui.app.old-secret-works-until}} ' + esc(new Date(s.previousUntil).toLocaleString()) + '</span>' +
+              ' <button class="btn ghost sm" data-revoke-previous="' + esc(s.slug) + '">{{ui.app.stop-it-now}}</button>'
             : "") +
         "</div>" +
         '<div class="dim" style="font-size:11px;margin-top:4px">' +
-          (hook.fired ? "called " + hook.fired + " time" + (hook.fired === 1 ? "" : "s") : "never called") +
-          (hook.lastFiredAt ? " · last " + esc(new Date(hook.lastFiredAt).toLocaleString()) + (hook.lastResult && hook.lastResult !== "ran" ? " (" + esc(hook.lastResult) + ")" : "") : "") +
+          (hook.fired ? "{{ui.app.called}} " + hook.fired + " {{ui.app.time}}" + (hook.fired === 1 ? "" : "{{ui.plural.s}}") : "{{ui.app.never-called}}") +
+          (hook.lastFiredAt ? " {{ui.app.last}} " + esc(new Date(hook.lastFiredAt).toLocaleString()) + (hook.lastResult && hook.lastResult !== "ran" ? " (" + esc(hook.lastResult) + ")" : "") : "") +
         "</div>" +
       "</div>"
     : "";
@@ -5306,13 +5296,13 @@ function automationRow(s, rows) {
     '<div style="display:flex;gap:9px;align-items:baseline">' +
       '<span style="flex:1;font-size:13px;font-weight:500">' + esc(s.name) + " " + origin + " " + pausedTag + " " + modeTag + "</span>" +
       modeSwitch + toggle +
-      '<button class="btn ghost sm" data-run="' + esc(s.slug) + '"' + (s.running || s.paused ? " disabled" : "") + ">Run now</button>" + '<button class="btn ghost sm" data-runs="' + esc(s.slug) + '" title="The last 20 runs and the next 5 times (routine-runs-ui.ts)">Runs</button>' +
+      '<button class="btn ghost sm" data-run="' + esc(s.slug) + '"' + (s.running || s.paused ? " disabled" : "") + ">{{ui.app.run-now}}</button>" + '<button class="btn ghost sm" data-runs="' + esc(s.slug) + '" title="{{ui.app.the-last-20-runs-and}}">{{ui.app.runs}}</button>' +
     "</div>" +
     '<div class="dim" style="font-size:11px;margin-top:3px">' + when +
-      (s.agent ? " · as " + esc(s.agent) : "") + " · " + where + "</div>" +
+      (s.agent ? " {{ui.app.as}} " + esc(s.agent) : "") + " · " + where + "</div>" +
     '<div class="dim" style="font-size:11px">' + last + ' · <span class="mono">' + esc(s.schedule) + "</span></div>" +
     (s.because ? '<div class="dim" style="font-size:11px;font-style:italic">' + esc(s.because) + "</div>" : "") +
-    (s.hold ? '<div style="color:var(--warn);font-size:11px;margin-top:3px">Paused ' + esc(new Date(s.hold.at).toLocaleString()) + ": " + esc(s.hold.reason) + " \u2014 Turn on resumes it.</div>" : "") + lastResult + observed +
+    (s.hold ? '<div style="color:var(--warn);font-size:11px;margin-top:3px">{{ui.app.paused}} ' + esc(new Date(s.hold.at).toLocaleString()) + ": " + esc(s.hold.reason) + " {{ui.app.turn-on-resumes-it}}</div>" : "") + lastResult + observed +
     hookBlock + '<div data-runs-for="' + esc(s.slug) + '" style="display:none"></div>' +
   "</div>";
 }
@@ -5342,18 +5332,18 @@ function refreshAutomations() {
       // A URL nothing outside can reach is a trap: it works from this machine and silently
       // does not from the phone it was made for. Said once, above the list.
       var unreachable = !data.reachable && Object.keys(rows).length > 0
-        ? '<div style="color:var(--warn);font-size:11px;margin-top:3px">The webhook URLs below point at this machine. For a phone to reach them, set AGENTBOX_PUBLIC_URL to an address that resolves from outside (a tunnel, or a host on your network).</div>'
+        ? '<div style="color:var(--warn);font-size:11px;margin-top:3px">{{ui.app.the-webhook-urls-below-point}}</div>'
         : "";
       $("autostate").innerHTML = unreachable + (data.schedules && data.schedules.armed
-        ? list.length + " automation" + (list.length === 1 ? "" : "s") + " armed" +
-          (Object.keys(rows).length > 0 ? " · " + Object.keys(rows).length + " with a webhook URL" : "")
-        : '<span style="color:var(--warn)">The scheduler is off (AGENTBOX_SCHEDULER=0) — nothing below will fire.</span>');
+        ? list.length + " {{ui.app.automation}}" + (list.length === 1 ? "" : "{{ui.plural.s}}") + " {{ui.app.armed}}" +
+          (Object.keys(rows).length > 0 ? " · " + Object.keys(rows).length + " {{ui.app.with-a-webhook-url}}" : "")
+        : '<span style="color:var(--warn)">{{ui.app.the-scheduler-is-off-agentbox}}</span>');
       $("autolist").innerHTML = list.length
         ? automationGroups(list, rows, data.schedules.boxes || [], data.schedules.defaultBox)
-        : '<div class="dim" style="padding:12px 16px;font-size:13px">Nothing runs by itself. A skill becomes an automation by adding <span class="mono">schedule:</span> (a timer), <span class="mono">trigger: webhook</span> (a URL anything can call) or <span class="mono">trigger: message</span> to its frontmatter — plus <span class="mono">timezone:</span> if the time was agreed in someone else’s zone, and <span class="mono">deliver:</span> for the chat that should receive the report.</div>';
+        : '<div class="dim" style="padding:12px 16px;font-size:13px">{{ui.app.nothing-runs-by-itself-a}} <span class="mono">{{ui.app.schedule}}</span> {{ui.app.a-timer}} <span class="mono">{{ui.app.trigger-webhook}}</span> {{ui.app.a-url-anything-can-call}} <span class="mono">{{ui.app.trigger-message}}</span> {{ui.app.to-its-frontmatter-plus}} <span class="mono">{{ui.app.timezone}}</span> {{ui.app.if-the-time-was-agreed}} <span class="mono">{{ui.app.deliver}}</span> {{ui.app.for-the-chat-that-should}}</div>';
     })
     .catch(function () {
-      $("autolist").innerHTML = '<div class="dim" style="padding:12px 16px">Could not read the automations.</div>';
+      $("autolist").innerHTML = '<div class="dim" style="padding:12px 16px">{{ui.app.could-not-read-the-automations}}</div>';
     });
 }
 
@@ -5377,7 +5367,7 @@ document.getElementById("autolist").addEventListener("click", function (e) {
       var shown = field.getAttribute("data-shown") === "1";
       field.textContent = shown ? "\u2022".repeat(24) : row.secret;
       field.setAttribute("data-shown", shown ? "0" : "1");
-      e.target.textContent = shown ? "Show" : "Hide";
+      e.target.textContent = shown ? "{{ui.app.show}}" : "{{ui.app.hide}}";
     }
     return;
   }
@@ -5390,8 +5380,8 @@ document.getElementById("autolist").addEventListener("click", function (e) {
       // shortcut or a terminal and have work.
       var snippet = "curl -X POST " + entry.url + " \\\n  -H 'Authorization: Bearer " + entry.secret + "' \\\n  -H 'Content-Type: text/plain' \\\n  --data 'https://example.com/the-thing'";
       navigator.clipboard.writeText(snippet).then(function () {
-        e.target.textContent = "Copied";
-        setTimeout(function () { e.target.textContent = "Copy"; }, 1200);
+        e.target.textContent = "{{ui.app.copied}}";
+        setTimeout(function () { e.target.textContent = "{{ui.app.copy}}"; }, 1200);
       });
     }
     return;
@@ -5399,7 +5389,7 @@ document.getElementById("autolist").addEventListener("click", function (e) {
   var rotate = get("data-rotate");
   if (rotate) {
     e.preventDefault();
-    if (!confirm("Make a new secret for this routine? The old one keeps working for 24 hours so you can update what uses it.")) return;
+    if (!confirm("{{ui.app.make-a-new-secret-for}}")) return;
     e.target.disabled = true;
     fetch("/api/hooks/rotate", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: rotate }) })
       .then(function (r) { return r.json(); })
@@ -5410,7 +5400,7 @@ document.getElementById("autolist").addEventListener("click", function (e) {
   var revokePrevious = get("data-revoke-previous");
   if (revokePrevious) {
     e.preventDefault();
-    if (!confirm("Stop the old secret now? Anything still using it stops working.")) return;
+    if (!confirm("{{ui.app.stop-the-old-secret-now}}")) return;
     e.target.disabled = true;
     fetch("/api/hooks/revoke-previous", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: revokePrevious }) })
       .then(function (r) { return r.json(); })
@@ -5471,7 +5461,7 @@ document.getElementById("autonew").addEventListener("click", function (e) {
   $("autocreate").style.display = autoCreateOpen ? "" : "none";
   if (autoCreateOpen) {
     // populate agent dropdown
-    $("autoagent").innerHTML = '<option value="">(first agent)</option>' +
+    $("autoagent").innerHTML = '<option value="">{{ui.app.first-agent}}</option>' +
       agents.map(function (a) { return '<option value="' + esc(a.name) + '">' + esc(a.name) + '</option>'; }).join("");
   }
 });
@@ -5526,8 +5516,8 @@ $("autocron").addEventListener("input", function () {
 $("autosave").addEventListener("click", function () {
   var name = $("autoname").value.trim();
   var body = $("autobody").value.trim();
-  if (!name) { $("autoerror").textContent = "A name is required."; $("autoerror").style.display = ""; return; }
-  if (!body) { $("autoerror").textContent = "An instruction is required."; $("autoerror").style.display = ""; return; }
+  if (!name) { $("autoerror").textContent = "{{ui.app.a-name-is-required}}"; $("autoerror").style.display = ""; return; }
+  if (!body) { $("autoerror").textContent = "{{ui.app.an-instruction-is-required}}"; $("autoerror").style.display = ""; return; }
   
   var payload = {
     name: name,
@@ -5537,12 +5527,12 @@ $("autosave").addEventListener("click", function () {
   
   if (autoTrigger === "schedule") {
     var cron = autoCron || $("autocron").value.trim();
-    if (!cron) { $("autoerror").textContent = "Pick a schedule or enter a cron expression."; $("autoerror").style.display = ""; return; }
+    if (!cron) { $("autoerror").textContent = "{{ui.app.pick-a-schedule-or-enter}}"; $("autoerror").style.display = ""; return; }
     payload.schedule = cron;
   }
   if (autoTrigger === "message") {
     var match = $("automatch").value.trim();
-    if (!match) { $("autoerror").textContent = "A match pattern is required for message triggers."; $("autoerror").style.display = ""; return; }
+    if (!match) { $("autoerror").textContent = "{{ui.app.a-match-pattern-is-required}}"; $("autoerror").style.display = ""; return; }
     payload.match = match;
   }
   
@@ -5565,7 +5555,7 @@ $("autosave").addEventListener("click", function () {
   .then(function (result) {
     $("autosave").disabled = false;
     if (!result.ok) {
-      $("autoerror").textContent = result.data.error || "Something went wrong.";
+      $("autoerror").textContent = result.data.error || "{{ui.app.something-went-wrong}}";
       $("autoerror").style.display = "";
       return;
     }
@@ -5577,7 +5567,7 @@ $("autosave").addEventListener("click", function () {
   })
   .catch(function () {
     $("autosave").disabled = false;
-    $("autoerror").textContent = "Could not reach the server.";
+    $("autoerror").textContent = "{{ui.app.could-not-reach-the-server}}";
     $("autoerror").style.display = "";
   });
 });
@@ -5647,10 +5637,10 @@ function taskDetail(t) {
       (h.note ? '<span class="dim" style="flex:1;font-style:italic">' + esc(h.note) + "</span>" : "") +
     "</div>" +
     (h.evidence && h.evidence.length
-      ? '<div class="dim mono" style="font-size:11px;padding-left:12px">evidence: ' + h.evidence.map(esc).join(" · ") + "</div>"
+      ? '<div class="dim mono" style="font-size:11px;padding-left:12px">{{ui.app.evidence}} ' + h.evidence.map(esc).join(" · ") + "</div>"
       : "") +
     (h.checked && h.checked.length
-      ? '<div class="dim mono" style="font-size:11px;padding-left:12px">checked: ' + h.checked.map(esc).join(" · ") + "</div>"
+      ? '<div class="dim mono" style="font-size:11px;padding-left:12px">{{ui.app.checked}} ' + h.checked.map(esc).join(" · ") + "</div>"
       : "");
   }).join("");
   // The conversation is a link only when there is an agent whose transcript to open it
@@ -5659,34 +5649,25 @@ function taskDetail(t) {
     ? (t.assigneeId
         ? '<a href="#" data-openconv="' + esc(t.conversation) + '" data-agent="' + esc(t.assigneeId) + '">' + esc(t.conversation) + "</a>"
         : esc(t.conversation))
-    : "the team room";
+    : "{{ui.app.the-team-room}}";
   return '<div style="margin:8px 0 2px 26px;padding:8px 10px;border-left:2px solid var(--border)">' +
     (t.description ? '<div style="font-size:12px;margin-bottom:6px">' + esc(t.description) + "</div>" : "") + (window.claimAccountHtml ? window.claimAccountHtml(t) : "") + (window.deliverablesHtml ? window.deliverablesHtml(t) : "") + (window.configVersionsHtml ? window.configVersionsHtml(t) : "") + (window.divisionHtml ? window.divisionHtml(t) : "") + (window.taskGateHtml ? window.taskGateHtml(t) : "") + // a claimed goal's decisions and unchecked parts (INV-1574), then its deliverables (INV-1663), the configuration versions it ran under (INV-1669), its division of work (INV-1667) and the gate's verdicts on its steps (INV-1672), above its history
     '<div class="dim" style="font-size:11px;margin-bottom:6px">' +
-      "asked by " + esc(nameOf(t.requester) || t.requester) + " · in " + conversation +
-      " · created " + esc(new Date(t.createdAt).toLocaleString()) +
+      "{{ui.app.asked-by}} " + esc(nameOf(t.requester) || t.requester) + " {{ui.app.in-3}} " + conversation +
+      " {{ui.app.created}} " + esc(new Date(t.createdAt).toLocaleString()) +
     "</div>" +
     (rows ? '<div style="max-height:220px;overflow:auto">' + rows + "</div>" : "") +
   "</div>";
 }
 
-// The page's words, from the same bundle the chat strings come from (INV-544). Loaded
-// once at boot; until it answers, t() returns the key itself, which is ugly and findable
-// rather than blank — the parity test is what stops that ever shipping.
-var MSG = {};
-var MSG_LOCALE = "";
+// A sentence with blanks, from the chat's bundle (INV-544): the page arrives with its words filled (page-locale.ts),
+// and t() fills the ones that need a value at run time. An unknown key reads as itself; the parity test stops that.
 function t(key, vars) {
   var text = MSG[key];
   if (text === undefined) return key;
   return String(text).replace(/\{(\w+)\}/g, function (whole, name) {
     return vars && name in vars ? String(vars[name]) : whole;
   });
-}
-function loadMessages() {
-  return fetch("/api/i18n")
-    .then(function (r) { return r.json(); })
-    .then(function (data) { MSG = data.messages || {}; MSG_LOCALE = data.locale || ""; })
-    .catch(function () { /* the page still works in the words it was written in */ });
 }
 
 /** Relative, because "in 3 hours" is the thing a person acts on; absolute dates read as decoration. */
@@ -5695,8 +5676,8 @@ function whenOf(iso) {
   var ms = Date.parse(iso) - Date.now();
   var past = ms < 0;
   var minutes = Math.round(Math.abs(ms) / 60000);
-  var text = minutes < 90 ? minutes + "m" : minutes < 2160 ? Math.round(minutes / 60) + "h" : Math.round(minutes / 1440) + "d";
-  return past ? text + " ago" : "in " + text;
+  var text = minutes < 90 ? minutes + "{{ui.unit.min}}" : minutes < 2160 ? Math.round(minutes / 60) + "{{ui.unit.hour}}" : Math.round(minutes / 1440) + "{{ui.unit.day}}";
+  return t(past ? "ui.when.ago" : "ui.when.in", { t: text });
 }
 
 // One attention item as a line: in the panel above the board, or (onBoard) as the mark on its task's own row (INV-1654).
@@ -5706,10 +5687,10 @@ function attentionRow(item, owed, onBoard) {
     item.kind === "close-proposal" ? '<button class="btn sm ghost" data-att-keep="' + esc(item.ref) + '">' + esc(t("ui.attention.keepOpen")) + "</button>" :
     item.kind === "nudged" ? '<button class="btn sm ghost" data-att-drop="' + esc(item.ref) + '">' + esc(t("ui.attention.close")) + '</button><button class="btn sm ghost" data-att-snooze="' + esc(item.ref) + '">' + esc(t("ui.attention.notNow")) + "</button>" :
     item.kind === "question" && !/^t\d+$/.test(item.ref) ? '<button class="btn sm ghost" data-att-open="' + esc(item.ref) + '">' + esc(t("ui.attention.answer")) + "</button>" :
-    item.kind === "paused" ? '<button class="btn sm ghost" data-att-open="' + esc(item.ref) + '">' + esc(t("ui.attention.open")) + "</button>" : item.kind === "routine-paused" ? '<button class="btn sm" data-routine-resume="' + esc(item.ref) + '">Resume</button>' : // routine-runs-ui.ts (INV-1665)
+    item.kind === "paused" ? '<button class="btn sm ghost" data-att-open="' + esc(item.ref) + '">' + esc(t("ui.attention.open")) + "</button>" : item.kind === "routine-paused" ? '<button class="btn sm" data-routine-resume="' + esc(item.ref) + '">{{ui.app.resume}}</button>' : // routine-runs-ui.ts (INV-1665)
     onBoard ? "" : '<button class="btn sm ghost" data-att-task="' + esc(item.ref) + '">' + esc(t("ui.attention.open")) + "</button>";
   return '<div style="display:flex;gap:8px;align-items:baseline;padding:3px 0;font-size:12.5px' + (onBoard ? ";color:" + (owed ? "var(--warn)" : "var(--muted)") : "") + '" title="' + esc(item.title + " — " + item.detail) + '"><span class="dim mono" style="font-size:11px;min-width:58px">' + esc(item.deadline ? whenOf(item.deadline) : "") + "</span>" +
-    '<span style="flex:1">' + (onBoard ? (owed ? "needs you: " : "waiting: ") : (item.level ? '<span class="chip" style="font-size:10px" title="the task\'s autonomy level">L' + item.level + "</span> " : "") + esc(item.title) + " ") + '<span class="dim">' + esc(item.detail) + (item.stage && !onBoard ? " · " + esc(item.stage) : "") + "</span></span>" + (owed ? act : "") + "</div>"; // on the board the row is the task's own (INV-1654): its mark says what is owed, the card below is already open
+    '<span style="flex:1">' + (onBoard ? (owed ? "{{ui.app.needs-you}} " : "waiting: ") : (item.level ? '<span class="chip" style="font-size:10px" title="{{ui.app.the-tasks-autonomy-level}}">L' + item.level + "</span> " : "") + esc(item.title) + " ") + '<span class="dim">' + esc(item.detail) + (item.stage && !onBoard ? " · " + esc(item.stage) : "") + "</span></span>" + (owed ? act : "") + "</div>"; // on the board the row is the task's own (INV-1654): its mark says what is owed, the card below is already open
 }
 function renderAttention() {
   return fetch("/api/attention")
@@ -5722,7 +5703,7 @@ function renderAttention() {
       var needs = mine.filter(function (i) { return i.decision === true; }), reviews = mine.filter(function (i) { return !!i.stage && i.stage.indexOf("person/") === 0; }).length;
       $("needsme").style.display = needs.length || reviews ? "" : "none";
       $("needsme").innerHTML = '<a href="#" data-att-board="1" style="display:flex;gap:8px;align-items:baseline;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-decoration:none"><span style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--warn)">' + esc(t("ui.attention.needsMe")) + "</span>" +
-        (needs.length ? "<span>" + needs.length + " decision" + (needs.length === 1 ? "" : "s") + "</span>" : "") + (reviews ? '<span class="dim">' + reviews + " review" + (reviews === 1 ? "" : "s") + "</span>" : "") + '<span class="dim">' + esc(t("ui.attention.open")) + " ›</span></a>";
+        (needs.length ? "<span>" + needs.length + " {{ui.app.decision}}" + (needs.length === 1 ? "" : "{{ui.plural.s}}") + "</span>" : "") + (reviews ? '<span class="dim">' + reviews + " {{ui.app.review}}" + (reviews === 1 ? "" : "{{ui.plural.s}}") + "</span>" : "") + '<span class="dim">' + esc(t("ui.attention.open")) + " ›</span></a>";
       // Only what has no task row (INV-1654): a consent, a question, a pause. Tasks carry their own mark on the board below.
       var loose = typeof looseItems === "function" ? looseItems(mine) : [];
       $("attention").style.display = loose.length ? "" : "none";
@@ -5747,7 +5728,7 @@ document.addEventListener("click", function (event) {
   } else if (drop) {
     fetch("/api/tasks/update", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: drop.getAttribute("data-att-drop"), status: "dropped" }) }).then(done);
   } else if (snooze) {
-    askInline(snooze, "Look again after which date?", "", "date").then(function (until) {
+    askInline(snooze, "{{ui.app.look-again-after-which-date}}", "", "date").then(function (until) {
       if (until) fetch("/api/tasks/update", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: snooze.getAttribute("data-att-snooze"), snoozeUntil: until.trim() }) }).then(done);
     });
   } else if (open) {
@@ -5762,14 +5743,14 @@ document.addEventListener("click", function (event) {
 function refreshTasks() {
   // What needs me is read first (INV-543) and then merged onto the board's rows (INV-1654): one list, the owed rows on top.
   // The assignee picker doubles as the roster; refreshed with the board.
-  $("taskassign").innerHTML = '<option value="">unassigned</option>' +
+  $("taskassign").innerHTML = '<option value="">{{ui.app.unassigned}}</option>' +
     agents.map(function (a) { return '<option value="' + esc(a.id) + '">' + esc(a.name) + "</option>"; }).join("");
   return renderAttention().then(function () { return fetch("/api/tasks"); })
     .then(function (r) { return r.json(); })
     .then(function (data) {
       var tasks = data.tasks || [];
       if (!tasks.length) {
-        $("tasklist").innerHTML = '<div class="dim" style="padding:12px 16px;font-size:13px">Nothing on the board. Add a task above, or an agent will when work outlives one reply.</div>';
+        $("tasklist").innerHTML = '<div class="dim" style="padding:12px 16px;font-size:13px">{{ui.app.nothing-on-the-board-add}}</div>';
         return;
       }
       // Owed rows first, then live statuses before closed, newest change first within a group (board-order.ts).
@@ -5778,29 +5759,29 @@ function refreshTasks() {
       var rows = typeof boardOrder === "function" ? boardOrder(tasks, att.mine || [], att.theirs || []) : tasks.map(function (t) { return { task: t }; });
       rows.forEach(function (r) { marks[r.task.id] = r.mine ? attentionRow(r.mine, true, true) : r.theirs ? attentionRow(r.theirs, false, true) : ""; });
       $("tasklist").innerHTML = rows.map(function (r) { var t = r.task;
-        var assignee = t.assigneeId ? nameOf(t.assigneeId) : "unassigned";
-        var reviewer = t.reviewerId ? " · review by " + esc(nameOf(t.reviewerId)) : "";
+        var assignee = t.assigneeId ? nameOf(t.assigneeId) : "{{ui.app.unassigned}}";
+        var reviewer = t.reviewerId ? " {{ui.app.review-by}} " + esc(nameOf(t.reviewerId)) : "";
         var last = t.history && t.history.length ? t.history[t.history.length - 1] : null;
         var lastNote = last && last.note ? esc(last.note) : "";
         var open = t.id === openTask;
         var proposed = t.proposedBy
-          ? ' <span class="chip" style="font-size:10px">proposed</span>' +
-            ' <button class="btn sm accent" data-commit="' + esc(t.id) + '" title="Make this proposal real work: agents may take it after you commit">Commit</button>' + (t.status !== "dropped" ? ' <button class="btn sm ghost" data-dismiss="' + esc(t.id) + '" title="Not worth doing: closes it, and the same finding is not proposed again">Dismiss</button>' : "") + (t.discovery ? ' <span class="chip" style="font-size:10px" title="' + esc(t.discovery.evidence) + '">' + esc(t.discovery.kind) + " from " + esc(t.discovery.source) + (t.discovery.whyNow ? " — " + esc(t.discovery.whyNow) : "") + "</span>" : "")
+          ? ' <span class="chip" style="font-size:10px">{{ui.app.proposed}}</span>' +
+            ' <button class="btn sm accent" data-commit="' + esc(t.id) + '" title="{{ui.app.make-this-proposal-real-work}}">{{ui.app.commit}}</button>' + (t.status !== "dropped" ? ' <button class="btn sm ghost" data-dismiss="' + esc(t.id) + '" title="{{ui.app.not-worth-doing-closes-it}}">{{ui.app.dismiss}}</button>' : "") + (t.discovery ? ' <span class="chip" style="font-size:10px" title="' + esc(t.discovery.evidence) + '">' + esc(t.discovery.kind) + " {{ui.app.from-3}} " + esc(t.discovery.source) + (t.discovery.whyNow ? " — " + esc(t.discovery.whyNow) : "") + "</span>" : "")
           : "";
         // Due, ageing and a pending close (INV-527/529): said on the row, so an overdue or
         // idle task is not one more line that looks like every other.
         var live = t.status !== "done" && t.status !== "dropped";
         var overdue = live && t.due && Date.parse(t.due) < Date.now();
-        var dueChip = t.due ? ' <span class="chip" style="font-size:10px' + (overdue ? ';color:var(--danger)' : '') + '" title="due">' + (overdue ? "overdue " : "due ") + esc(String(t.due).slice(0, 10)) + "</span>" : "";
-        var agingChip = live && t.aging ? ' <span class="chip" style="font-size:10px;color:var(--warn)" title="nudged ' + t.aging.nudges + ' time(s), ' + esc(t.aging.reason) + '">nudged ' + t.aging.nudges + "/2</span>" : "";
+        var dueChip = t.due ? ' <span class="chip" style="font-size:10px' + (overdue ? ';color:var(--danger)' : '') + '" title="{{ui.app.due}}">' + (overdue ? "{{ui.app.overdue}} " : "{{ui.app.due}} ") + esc(String(t.due).slice(0, 10)) + "</span>" : "";
+        var agingChip = live && t.aging ? ' <span class="chip" style="font-size:10px;color:var(--warn)" title="{{ui.app.nudged}} ' + t.aging.nudges + ' time(s), ' + esc(t.aging.reason) + '">{{ui.app.nudged}} ' + t.aging.nudges + "/2</span>" : "";
         var closeChip = live && t.closeProposal
-          ? ' <span class="chip" style="font-size:10px;color:var(--warn)" title="' + esc(t.closeProposal.reason) + '">close proposed by ' + esc(nameOf(t.closeProposal.by)) + ", closes " + esc(String(t.closeProposal.decideBy).slice(0, 16).replace("T", " ")) + "</span>" +
-            ' <button class="btn ghost sm" data-oppose="' + esc(t.id) + '">Keep open</button>'
+          ? ' <span class="chip" style="font-size:10px;color:var(--warn)" title="' + esc(t.closeProposal.reason) + '">{{ui.app.close-proposed-by}} ' + esc(nameOf(t.closeProposal.by)) + "{{ui.app.closes}} " + esc(String(t.closeProposal.decideBy).slice(0, 16).replace("T", " ")) + "</span>" +
+            ' <button class="btn ghost sm" data-oppose="' + esc(t.id) + '">{{ui.app.keep-open}}</button>'
           : "";
         // Waiting on somebody, or asked to come back later (INV-532): both say why this
         // one is not late, which is what a person reading a row of overdue chips needs.
-        var waitingChip = live && t.waitingOn ? ' <span class="chip" style="font-size:10px" title="waiting on somebody outside this box: asked about, never archived">waiting on ' + esc(String(t.waitingOn).slice(0, 40)) + "</span>" : "";
-        var snoozeChip = live && t.snoozeUntil && Date.parse(t.snoozeUntil) > Date.now() ? ' <span class="chip" style="font-size:10px;color:var(--muted)" title="quiet until then">not until ' + esc(String(t.snoozeUntil).slice(0, 10)) + "</span>" : "";
+        var waitingChip = live && t.waitingOn ? ' <span class="chip" style="font-size:10px" title="{{ui.app.waiting-on-somebody-outside-this}}">{{ui.app.waiting-on}} ' + esc(String(t.waitingOn).slice(0, 40)) + "</span>" : "";
+        var snoozeChip = live && t.snoozeUntil && Date.parse(t.snoozeUntil) > Date.now() ? ' <span class="chip" style="font-size:10px;color:var(--muted)" title="{{ui.app.quiet-until-then}}">{{ui.app.not-until}} ' + esc(String(t.snoozeUntil).slice(0, 10)) + "</span>" : "";
         proposed += dueChip + waitingChip + snoozeChip + agingChip + closeChip;
         return '<div style="padding:10px 16px;border-bottom:1px solid var(--border)' +
             (open ? ";background:var(--surface)" : "") + '">' +
@@ -5922,27 +5903,27 @@ var selectedTeachingDraft = null;
 function showTeachingDraft(draft) {
   selectedTeachingDraft = draft;
   $("teachreviewdetail").style.display = "block";
-  showSkillVersions(draft).catch(function () {}); var op = draft.files && draft.files["operation.json"]; $("teachreviewdryrun").style.display = op && draft.status === "draft" ? "" : "none"; if (op) $("teachreviewtext").textContent = (draft.skill || "") + "\n\n--- operation.json ---\n" + op + "\n--- cases.json ---\n" + (draft.files["cases.json"] || "") + (draft.dryRun ? "\n--- last dry run: " + draft.dryRun.passed + "/" + draft.dryRun.total + " passed ---\n" + draft.dryRun.failures.join("\n") : "\n--- not dry-run yet: publishing needs one ---");
-  $("teachreviewsource").textContent = draft.status + " · agent " + draft.agentId + " · box " + draft.boxId + " · session " + draft.sessionId + " · trace " + draft.eventsPath + (draft.videoPath ? " · video " + draft.videoPath : "") + (draft.redactedCredentials && draft.redactedCredentials.length ? " · credentials removed from the trace before the model read it: " + draft.redactedCredentials.join(", ") : "") + (draft.source ? (draft.source.kind === "eval" ? " · revision of " + draft.source.skillDir + " from evaluation " + draft.source.from + " (failing tasks: " + draft.source.basis.join(", ") + ")" : " · imported from " + draft.source.from + (draft.files ? " with " + Object.keys(draft.files).length + " helper file(s)" : "")) : "") + (draft.unknownTools && draft.unknownTools.length ? " · tools with no equivalent here, dropped: " + draft.unknownTools.join(", ") : "");
+  showSkillVersions(draft).catch(function () {}); var op = draft.files && draft.files["operation.json"]; $("teachreviewdryrun").style.display = op && draft.status === "draft" ? "" : "none"; if (op) $("teachreviewtext").textContent = (draft.skill || "") + "\n\n--- operation.json ---\n" + op + "\n--- cases.json ---\n" + (draft.files["cases.json"] || "") + (draft.dryRun ? "{{ui.app.last-dry-run}} " + draft.dryRun.passed + "/" + draft.dryRun.total + " {{ui.app.passed}}" + draft.dryRun.failures.join("\n") : "{{ui.app.not-dry-run-yet-publishing}}");
+  $("teachreviewsource").textContent = draft.status + " · agent " + draft.agentId + " · box " + draft.boxId + " {{ui.app.session}} " + draft.sessionId + " {{ui.app.trace}} " + draft.eventsPath + (draft.videoPath ? " {{ui.app.video}} " + draft.videoPath : "") + (draft.redactedCredentials && draft.redactedCredentials.length ? " {{ui.app.credentials-removed-from-the-trace}} " + draft.redactedCredentials.join(", ") : "") + (draft.source ? (draft.source.kind === "eval" ? " {{ui.app.revision-of}} " + draft.source.skillDir + " {{ui.app.from-evaluation}} " + draft.source.from + " {{ui.app.failing-tasks}} " + draft.source.basis.join(", ") + ")" : " {{ui.app.imported-from}} " + draft.source.from + (draft.files ? " {{ui.app.with}} " + Object.keys(draft.files).length + " {{ui.app.helper-file-s}}" : "")) : "") + (draft.unknownTools && draft.unknownTools.length ? " {{ui.app.tools-with-no-equivalent-here}} " + draft.unknownTools.join(", ") : "");
   $("teachreviewtext").textContent = draft.skill || draft.question;
   // Advice on the wording, from the same check the skills page uses; publishing is never blocked by it.
   $("teachreviewhints").style.display = (draft.hints || []).length ? "block" : "none";
-  $("teachreviewhints").textContent = (draft.hints || []).map(function (hint) { return "Hint: " + hint; }).join("\n");
+  $("teachreviewhints").textContent = (draft.hints || []).map(function (hint) { return "{{ui.app.hint}} " + hint; }).join("\n");
   $("teachreviewclarification").style.display = !draft.skill && draft.status === "draft" ? "block" : "none";
   $("teachreviewanswer").value = "";
   $("teachreviewclarify").disabled = draft.status !== "draft";
   $("teachreviewhistory").style.display = (draft.clarifications || []).length ? "block" : "none";
   $("teachreviewhistorytext").textContent = (draft.clarifications || []).map(function (item) {
-    return item.at + " · " + item.actor + "\nQuestion: " + item.question + "\nAnswer: " + item.answer;
+    return item.at + " · " + item.actor + "{{ui.app.question}} " + item.question + "{{ui.app.answer}} " + item.answer;
   }).join("\n\n");
   $("teachreviewpublish").disabled = !draft.skill || (draft.status !== "draft" && draft.status !== "publishing");
-  $("teachreviewpublish").textContent = draft.status === "publishing" ? "Retry approved publication" : "Publish reviewed skill";
+  $("teachreviewpublish").textContent = draft.status === "publishing" ? "{{ui.app.retry-approved-publication}}" : "{{ui.app.publish-reviewed-skill}}";
   $("teachreviewreject").disabled = draft.status !== "draft";
 }
 async function refreshTeachingDrafts() {
   var response = await fetch("/api/teaching-drafts");
   var payload = await response.json();
-  if (!response.ok) throw new Error(payload.error || "Could not load teaching drafts");
+  if (!response.ok) throw new Error(payload.error || "{{ui.app.could-not-load-teaching-drafts}}");
   teachingDrafts = payload.drafts || [];
   $("teachreviewlist").replaceChildren();
   teachingDrafts.forEach(function (draft) {
@@ -5953,12 +5934,12 @@ async function refreshTeachingDrafts() {
     button.onclick = function () { showTeachingDraft(draft); };
     $("teachreviewlist").appendChild(button);
   });
-  if (!teachingDrafts.length) $("teachreviewlist").textContent = "No teaching drafts yet.";
+  if (!teachingDrafts.length) $("teachreviewlist").textContent = "{{ui.app.no-teaching-drafts-yet}}";
 }
 $("teachreviewbtn").onclick = function () {
   $("teachreview").showModal();
   $("teachreviewdetail").style.display = "none";
-  $("teachreviewstatus").textContent = "Loading…";
+  $("teachreviewstatus").textContent = "{{ui.app.loading}}";
   refreshTeachingDrafts().then(function () { $("teachreviewstatus").textContent = ""; }).catch(function (e) { $("teachreviewstatus").textContent = e.message; });
 };
 $("teachreviewclose").onclick = function () { $("teachreview").close(); };
@@ -5966,17 +5947,17 @@ async function decideTeachingDraft(action) {
   var draft = selectedTeachingDraft;
   if (!draft) return;
   var answer = $("teachreviewanswer").value.trim();
-  if (action === "clarify" && !answer) { $("teachreviewstatus").textContent = "Enter an answer first."; return; }
+  if (action === "clarify" && !answer) { $("teachreviewstatus").textContent = "{{ui.app.enter-an-answer-first}}"; return; }
   $("teachreviewclarify").disabled = true;
   $("teachreviewpublish").disabled = true;
   $("teachreviewreject").disabled = true;
-  $("teachreviewstatus").textContent = action === "clarify" ? "Generating a new draft…" : "Saving…";
+  $("teachreviewstatus").textContent = action === "clarify" ? "{{ui.app.generating-a-new-draft}}" : "{{ui.app.saving}}";
   try {
     var response = await fetch("/api/teaching-drafts/" + action, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: draft.id, digest: draft.digest, answer: action === "clarify" ? answer : undefined }) });
     var payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || "Could not save this decision");
+    if (!response.ok) throw new Error(payload.error || "{{ui.app.could-not-save-this-decision}}");
     showTeachingDraft(payload.draft);
-    $("teachreviewstatus").textContent = action === "approve" ? "Published. The skill is available for a requested dry run; nothing was executed." : action === "clarify" ? "Revised draft saved. Review it before publishing; nothing was executed." : "Draft rejected.";
+    $("teachreviewstatus").textContent = action === "approve" ? "{{ui.app.published-the-skill-is-available}}" : action === "clarify" ? "{{ui.app.revised-draft-saved-review-it}}" : "{{ui.app.draft-rejected}}";
     await refreshTeachingDrafts();
     if (action === "approve") await refreshSkills();
   } catch (e) {
@@ -5987,10 +5968,10 @@ async function decideTeachingDraft(action) {
   }
 }
 // A published skill's versions (INV-1376); rolling back publishes that version again as a new one.
-async function showSkillVersions(draft) { var list = $("teachreviewversionlist"); $("teachreviewversions").style.display = draft.status === "published" ? "" : "none"; list.replaceChildren(); if (draft.status !== "published") return; var r = await fetch("/api/teaching-drafts/versions?id=" + encodeURIComponent(draft.id)); var p = await r.json(); var vs = p.versions || []; if (!r.ok || !vs.length) { list.textContent = p.error || "No recorded versions."; return; }
-  vs.forEach(function (v, i) { var row = document.createElement("div"); row.textContent = "v" + v.version + " · " + v.at + " · " + v.author + " · " + v.message + " "; if (i < vs.length - 1) { var b = document.createElement("button"); b.className = "btn ghost sm"; b.textContent = "Roll back to v" + v.version; b.onclick = async function () { var x = await fetch("/api/teaching-drafts/rollback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: draft.id, version: v.version }) }); var y = await x.json(); $("teachreviewstatus").textContent = x.ok ? "Published v" + v.version + " again as a new version; nothing was run." : (y.error || "Rollback failed"); showSkillVersions(draft); if (x.ok) refreshSkills(); }; row.appendChild(b); } list.appendChild(row); });
+async function showSkillVersions(draft) { var list = $("teachreviewversionlist"); $("teachreviewversions").style.display = draft.status === "published" ? "" : "none"; list.replaceChildren(); if (draft.status !== "published") return; var r = await fetch("/api/teaching-drafts/versions?id=" + encodeURIComponent(draft.id)); var p = await r.json(); var vs = p.versions || []; if (!r.ok || !vs.length) { list.textContent = p.error || "{{ui.app.no-recorded-versions}}"; return; }
+  vs.forEach(function (v, i) { var row = document.createElement("div"); row.textContent = "v" + v.version + " · " + v.at + " · " + v.author + " · " + v.message + " "; if (i < vs.length - 1) { var b = document.createElement("button"); b.className = "btn ghost sm"; b.textContent = "{{ui.app.roll-back-to-v}}" + v.version; b.onclick = async function () { var x = await fetch("/api/teaching-drafts/rollback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: draft.id, version: v.version }) }); var y = await x.json(); $("teachreviewstatus").textContent = x.ok ? "{{ui.app.published-v}}" + v.version + " {{ui.app.again-as-a-new-version}}" : (y.error || "{{ui.app.rollback-failed}}"); showSkillVersions(draft); if (x.ok) refreshSkills(); }; row.appendChild(b); } list.appendChild(row); });
 }
-$("teachreviewdryrun").onclick = async function () { var d = selectedTeachingDraft; if (!d) return; $("teachreviewstatus").textContent = "Running the cases on the agent's desktop; nothing commits…"; var r = await fetch("/api/teaching-drafts/dryrun", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: d.id }) }); var p = await r.json(); $("teachreviewstatus").textContent = r.ok ? "Dry run: " + p.draft.dryRun.passed + "/" + p.draft.dryRun.total + " cases passed." : (p.error || "Dry run failed"); if (r.ok) showTeachingDraft(p.draft); };
+$("teachreviewdryrun").onclick = async function () { var d = selectedTeachingDraft; if (!d) return; $("teachreviewstatus").textContent = "{{ui.app.running-the-cases-on-the}}"; var r = await fetch("/api/teaching-drafts/dryrun", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: d.id }) }); var p = await r.json(); $("teachreviewstatus").textContent = r.ok ? "{{ui.app.dry-run}} " + p.draft.dryRun.passed + "/" + p.draft.dryRun.total + " {{ui.app.cases-passed}}" : (p.error || "{{ui.app.dry-run-failed}}"); if (r.ok) showTeachingDraft(p.draft); };
 $("teachreviewclarify").onclick = function () { decideTeachingDraft("clarify"); };
 $("teachreviewpublish").onclick = function () { decideTeachingDraft("approve"); };
 $("teachreviewreject").onclick = function () { decideTeachingDraft("reject"); };
@@ -6035,7 +6016,7 @@ function renderSlash() {
   if (!found.length) {
     menu.style.display = "";
     menu.innerHTML = '<div class="dim" style="padding:8px 11px">' +
-      (skills.length ? "No skill matches." : "No skills yet. Ask an agent to write one when it works something out.") +
+      (skills.length ? "{{ui.app.no-skill-matches}}" : "{{ui.app.no-skills-yet-ask-an}}") +
       "</div>";
     return;
   }
@@ -6067,12 +6048,12 @@ function renderMention() {
   if (query === null) return false;
   var found = mentionMatches(query);
   menu.style.display = "";
-  if (!found.length) { menu.innerHTML = '<div class="dim" style="padding:8px 11px">No agent in this box matches.</div>'; return true; }
+  if (!found.length) { menu.innerHTML = '<div class="dim" style="padding:8px 11px">{{ui.app.no-agent-in-this-box}}</div>'; return true; }
   if (mentionIndex >= found.length) mentionIndex = 0;
   menu.innerHTML = found.map(function (a, index) {
     return '<div class="row' + (index === mentionIndex ? " on" : "") + '" data-mention="' + esc(a.name) + '">' +
       '<span class="peerdot" style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:' + colorOfName(a.name) + '"></span>' +
-      "<b>" + esc(a.name) + "</b>" + (a.id === current ? ' <span class="dim">(this chat)</span>' : "") +
+      "<b>" + esc(a.name) + "</b>" + (a.id === current ? ' <span class="dim">{{ui.app.this-chat}}</span>' : "") +
       '<div class="dim" style="font-size:11px">' + esc(a.title || a.description || "") + "</div></div>";
   }).join("");
   return true;
@@ -6130,8 +6111,8 @@ function who(name) {
 }
 
 function activityLine(e) {
-  if (e.type === "prompt") return { html: "<b>you</b> &rarr; " + who(nameOf(e.agentId)), cls: "" };
-  if (e.type === "turn_started") return { html: who(nameOf(e.agentId)) + " started a turn", cls: "" };
+  if (e.type === "prompt") return { html: "<b>{{ui.app.you}}</b> &rarr; " + who(nameOf(e.agentId)), cls: "" };
+  if (e.type === "turn_started") return { html: who(nameOf(e.agentId)) + " {{ui.app.started-a-turn}}", cls: "" };
   if (e.type === "tool_start") {
     // The plain-language line when the server attached one (INV-783); the bare tool
     // name is the fallback for events stored before phrases existed.
@@ -6142,7 +6123,7 @@ function activityLine(e) {
   if (e.type === "message_sent") {
     return {
       html: who(e.fromName) + " &rarr; " + who(e.toName) +
-        (e.priority ? " (priority)" : "") + ": " + esc(String(e.text).slice(0, 90)),
+        (e.priority ? " {{ui.app.priority}}" : "") + ": " + esc(String(e.text).slice(0, 90)),
       cls: "mail"
     };
   }
@@ -6150,12 +6131,12 @@ function activityLine(e) {
     return { html: who(nameOf(e.agentId)) + " failed: " + esc(e.error), cls: "err" };
   }
   if (e.type === "turn_interrupted") {
-    return { html: who(nameOf(e.agentId)) + " interrupted (" + esc(e.reason) + ")", cls: "warn" };
+    return { html: who(nameOf(e.agentId)) + " {{ui.app.interrupted}}" + esc(e.reason) + ")", cls: "warn" };
   }
   if (e.type === "error") return { html: esc(e.message), cls: "err" };
   if (e.type === "question") return { html: who(e.agentName) + " asked: " + esc(String(e.question).slice(0, 90)), cls: "warn" };
-  if (e.type === "chain_paused") return { html: who(e.fromName) + " &rarr; " + esc(e.toName) + ": paused after " + esc(String(e.hops)) + " turns with no person &mdash; message either of them to decide", cls: "warn" };
-  if (e.type === "surface") return { html: who(e.agentName) + " showed a card: " + esc(String(e.title || e.surfaceId).slice(0, 90)), cls: "info" };
+  if (e.type === "chain_paused") return { html: who(e.fromName) + " &rarr; " + esc(e.toName) + "{{ui.app.paused-after}} " + esc(String(e.hops)) + " turns with no person &mdash; message either of them to decide", cls: "warn" };
+  if (e.type === "surface") return { html: who(e.agentName) + " {{ui.app.showed-a-card}} " + esc(String(e.title || e.surfaceId).slice(0, 90)), cls: "info" };
   if (e.type === "template_import") {
     return { html: who(e.agentName) + " &larr; template: " + esc(e.summary), cls: e.complete && /but not all/.test(e.summary) ? "warn" : "" };
   }
@@ -6281,7 +6262,7 @@ stream.onmessage = function (raw) {
     return;
   }
   if (e.type === "approval_settled") {
-    settleCard("consent:" + e.id, e.how === "allowed" ? "allowed" + (e.scope === "session" ? " for this session" : e.scope === "always" ? ", standing" : " once") + " · the agent goes on" : "refused");
+    settleCard("consent:" + e.id, e.how === "allowed" ? "{{ui.app.allowed-card}}" + (e.scope === "session" ? " {{ui.app.for-this-session}}" : e.scope === "always" ? "{{ui.app.standing}}" : " {{ui.app.once}}") + " {{ui.app.the-agent-goes-on}}" : "{{ui.app.refused-card}}");
     return;
   }
   if (e.type === "reaction") {
@@ -6291,7 +6272,7 @@ stream.onmessage = function (raw) {
     return;
   }
 
-  if (e.type === "credentials_needed" || e.type === "credentials_covered") { if (e.type === "credentials_covered") settleCard("credentials:" + e.key, "in place · the work starts"); else if (e.agentId === current) showCard("credentials:" + e.key, { card: "credentials", agentId: e.agentId, agentName: e.agentName, title: e.title, items: e.items }); return; } // INV-1666
+  if (e.type === "credentials_needed" || e.type === "credentials_covered") { if (e.type === "credentials_covered") settleCard("credentials:" + e.key, "{{ui.app.in-place-the-work-starts}}"); else if (e.agentId === current) showCard("credentials:" + e.key, { card: "credentials", agentId: e.agentId, agentName: e.agentName, title: e.title, items: e.items }); return; } // INV-1666
   if (e.type === "secret_requested") {
     if (e.agentId === current) showCard("secret:" + e.id, { card: "secret", id: e.id, agentId: e.agentId, agentName: e.agentName, description: e.description });
     return;
@@ -6334,7 +6315,7 @@ stream.onmessage = function (raw) {
     if (inView(e)) {
       // A round starting is the clearest signal a turn is live, and the only one that is not a guess.
       $("stop").style.display = "";
-      roundLabel = "round " + (e.round + 1);
+      roundLabel = "{{ui.app.round}} " + (e.round + 1);
       $("round").textContent = spendLabel ? roundLabel + " · " + spendLabel : roundLabel;
     }
     return;
@@ -6349,7 +6330,7 @@ stream.onmessage = function (raw) {
     boxLog.scrollTop = boxLog.scrollHeight;
     if (e.done) {
       refresh().then(renderBoxSection);
-      feed(e.ok ? "the box is up" : "starting the box failed — " + esc(e.line), e.ok ? "mail" : "err");
+      feed(e.ok ? "{{ui.app.the-box-is-up}}" : "{{ui.app.starting-the-box-failed}} " + esc(e.line), e.ok ? "mail" : "err");
     }
     return;
   }
@@ -6358,8 +6339,8 @@ stream.onmessage = function (raw) {
     // Explained rather than left as a pause. A silent gap while a connection is retried is
     // indistinguishable from a hang, and a person watching one reaches for the reload button.
     feed(
-      "<b>" + esc(nameOf(e.agentId)) + "</b> retrying round " + (e.round + 1) +
-        " in " + Math.round(e.delayMs / 100) / 10 + "s &mdash; " + esc(e.detail),
+      "<b>" + esc(nameOf(e.agentId)) + "</b> {{ui.app.retrying-round}} " + (e.round + 1) +
+        " " + t("ui.when.in", { t: Math.round(e.delayMs / 100) / 10 + "{{ui.unit.sec}}" }) + " &mdash; " + esc(e.detail),
       "warn"
     );
     if (inView(e) && e.discardPartial) {
@@ -6377,7 +6358,7 @@ stream.onmessage = function (raw) {
     if (!inView(e)) return;
     spend.input += e.inputTokens;
     spend.output += e.outputTokens;
-    spendLabel = fmtTokens(spend.input) + " in / " + fmtTokens(spend.output) + " out";
+    spendLabel = fmtTokens(spend.input) + " {{ui.app.in-2}} " + fmtTokens(spend.output) + " {{ui.app.out}}";
     $("round").textContent = roundLabel ? roundLabel + " · " + spendLabel : spendLabel;
     return;
   }
@@ -6401,7 +6382,7 @@ $("form").onsubmit = function (event) {
   if (addressed && addressed.agent.id !== current && addressed.rest.trim()) {
     target = addressed.agent.id; conversation = "main"; text = addressed.rest.trim();
     select(target);
-    feed("to " + esc(addressed.agent.name), "");
+    feed("{{ui.app.to}} " + esc(addressed.agent.name), "");
   }
   $("input").value = "";
   $("send").disabled = true;
@@ -6412,9 +6393,9 @@ $("form").onsubmit = function (event) {
     // and replying should reach that chat, not surface in the room the reader left.
     body: JSON.stringify({ agent: target, text: text, conversation: conversation })
   }).then(function (res) {
-    if (!res.ok) return res.text().then(function (t) { feed("prompt rejected: " + esc(t), "err"); });
+    if (!res.ok) return res.text().then(function (t) { feed("{{ui.app.prompt-rejected}} " + esc(t), "err"); });
   }).catch(function (error) {
-    feed("prompt failed: " + esc(error.message), "err");
+    feed("{{ui.app.prompt-failed}} " + esc(error.message), "err");
   }).then(function () {
     $("send").disabled = false;
     $("input").focus();
@@ -6519,7 +6500,7 @@ function clipboard(text) {
     body: JSON.stringify(body)
   }).then(function (r) {
     return r.json().then(function (data) {
-      if (!r.ok) throw new Error(data.error || "clipboard failed");
+      if (!r.ok) throw new Error(data.error || "{{ui.app.clipboard-failed}}");
       return data;
     });
   });
@@ -6536,7 +6517,7 @@ $("clipin").onclick = function () {
   var text = $("cliptext").value;
   if (!text) return;
   clipboard(text).then(function () {
-    flashButton($("clipin"), "on the box");
+    flashButton($("clipin"), "{{ui.app.on-the-box}}");
   }).catch(function (error) {
     feed("clipboard: " + esc(error.message), "err");
   });
@@ -6547,19 +6528,19 @@ $("clipout").onclick = function () {
   clipboard().then(function (data) {
     $("cliptext").value = data.text;
     if (!data.text) {
-      flashButton($("clipout"), "empty");
+      flashButton($("clipout"), "{{ui.app.empty}}");
       return;
     }
     // Best effort: this needs a secure context and permission, and the field is
     // already filled either way, so a refusal is not worth an error row.
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(data.text).then(function () {
-        flashButton($("clipout"), "copied here");
+        flashButton($("clipout"), "{{ui.app.copied-here}}");
       }, function () {
-        flashButton($("clipout"), "in the field");
+        flashButton($("clipout"), "{{ui.app.in-the-field}}");
       });
     } else {
-      flashButton($("clipout"), "in the field");
+      flashButton($("clipout"), "{{ui.app.in-the-field}}");
     }
   }).catch(function (error) {
     feed("clipboard: " + esc(error.message), "err");
@@ -6582,7 +6563,7 @@ function renderRecordings(list) {
     box.style.display = "none";
     return;
   }
-  var html = "<b>recordings</b> ";
+  var html = "<b>{{ui.app.recordings}}</b> ";
   for (var i = 0; i < Math.min(list.length, 6); i++) {
     var item = list[i];
     var size = item.size_bytes ? Math.round(item.size_bytes / 1024) + "KB" : "recording…";
@@ -6603,14 +6584,14 @@ function loadRecordings() {
 // Taking over tells the box first, so the agent's next write is refused rather than typed
 // into the person's hands (INV-404); the noVNC tab opens once the box has said yes.
 function setDesktopControl(controller) {
-  if (!current) return Promise.reject(new Error("no agent selected"));
+  if (!current) return Promise.reject(new Error("{{ui.app.no-agent-selected}}"));
   return fetch("/api/desktop/control", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ agent: current, controller: controller })
   }).then(function (r) {
     return r.json().then(function (data) {
-      if (!r.ok) throw new Error(data.error || "failed");
+      if (!r.ok) throw new Error(data.error || "{{ui.app.failed}}");
       return data;
     });
   });
@@ -6622,16 +6603,16 @@ $("full").onclick = function (event) {
     $("handback").style.display = "";
     window.open(url, "_blank", "noopener");
   }).catch(function (error) {
-    feed("take over: " + esc(error.message), "err");
+    feed("{{ui.app.take-over}} " + esc(error.message), "err");
   });
 };
 $("handback").onclick = function (event) {
   event.preventDefault();
   setDesktopControl("agent").then(function () {
     $("handback").style.display = "none";
-    feed("desktop handed back to the agent", "mail");
+    feed("{{ui.app.desktop-handed-back-to-the}}", "mail");
   }).catch(function (error) {
-    feed("hand back: " + esc(error.message), "err");
+    feed("{{ui.app.hand-back}} " + esc(error.message), "err");
   });
 };
 
@@ -6640,7 +6621,7 @@ $("rec").onclick = function (event) {
   if (!current) return;
   var starting = recording === null;
   var link = $("rec");
-  link.textContent = starting ? "starting…" : "stopping…";
+  link.textContent = starting ? "{{ui.app.starting}}" : "{{ui.app.stopping}}";
 
   fetch("/api/record", {
     method: "POST",
@@ -6648,17 +6629,17 @@ $("rec").onclick = function (event) {
     body: JSON.stringify({ agent: current, action: starting ? "start" : "stop" })
   }).then(function (r) {
     return r.json().then(function (data) {
-      if (!r.ok) throw new Error(data.error || "failed");
+      if (!r.ok) throw new Error(data.error || "{{ui.app.failed}}");
       return data;
     });
   }).then(function (data) {
     recording = starting ? data.file : null;
-    link.textContent = starting ? "■" : "●"; link.title = starting ? "Stop recording" : "Record this desktop";
+    link.textContent = starting ? "■" : "●"; link.title = starting ? "{{ui.app.stop-recording}}" : "{{ui.app.record-this-desktop}}";
     link.className = starting ? "on" : "";
-    if (!starting) feed("recording saved: " + esc(data.file), "mail");
+    if (!starting) feed("{{ui.app.recording-saved}} " + esc(data.file), "mail");
     return loadRecordings();
   }).catch(function (error) {
-    link.textContent = "●"; link.title = "Record this desktop";
+    link.textContent = "●"; link.title = "{{ui.app.record-this-desktop}}";
     link.className = "";
     recording = null;
     feed("recording: " + esc(error.message), "err");
@@ -6678,9 +6659,9 @@ function renderBoxSelect(agent) {
   for (var i = 0; i < boxesSeen.length; i++) {
     var b = boxesSeen[i];
     html += '<option value="' + esc(b.id) + '"' + (agent && agent.boxId === b.id ? " selected" : "") + (b.connected ? "" : " disabled") + ">" +
-      esc(b.name) + (i === 0 ? " (own)" : "") + (b.connected ? "" : " — not connected") + "</option>";
+      esc(b.name) + (i === 0 ? " {{ui.app.own}}" : "") + (b.connected ? "" : " {{ui.app.not-connected}}") + "</option>";
   }
-  select.innerHTML = html || '<option value="">(no box)</option>';
+  select.innerHTML = html || '<option value="">{{ui.app.no-box}}</option>';
   // Chosen once: in Configure the field shows where the agent is and cannot change it.
   select.disabled = !!agent;
 }
@@ -6709,7 +6690,7 @@ function renderAgentCatalog() {
     html += '<span class="toolchip" data-kind="crew" data-slug="' + esc(crew.slug) + '">' +
       esc(crew.name) + "</span>";
   }
-  $("agcatalog").innerHTML = html || "<span class=\"fieldnote\">No catalog loaded.</span>";
+  $("agcatalog").innerHTML = html || "<span class=\"fieldnote\">{{ui.app.no-catalog-loaded}}</span>";
 }
 
 function installCrew(slug, boxId) {
@@ -6718,12 +6699,12 @@ function installCrew(slug, boxId) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ slug: slug, boxId: boxId || undefined })
   })
-    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "install failed"); return d; }); })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "{{ui.app.install-failed-2}}"); return d; }); })
     .then(function (d) {
       $("agentwrap").style.display = "none";
       return refresh().then(function () { if (d.created && d.created[0]) return select(d.created[0].id); });
     })
-    .catch(function (error) { $("agstatus").textContent = "Install failed: " + error.message; })
+    .catch(function (error) { $("agstatus").textContent = "{{ui.app.install-failed}} " + error.message; })
     .then(function () { $("agsave").disabled = false; });
 }
 
@@ -6746,18 +6727,18 @@ $("agcatalog").onclick = function (event) {
       return typeof m === "string" ? m : ((m && m.name) || slugOf) + (m && m.title ? "（" + m.title + "）" : "");
     }) : [];
     var boxSel = $("agbox");
-    var boxName = boxSel && boxSel.options[boxSel.selectedIndex] ? boxSel.options[boxSel.selectedIndex].textContent : "this box";
+    var boxName = boxSel && boxSel.options[boxSel.selectedIndex] ? boxSel.options[boxSel.selectedIndex].textContent : "{{ui.app.this-box}}";
     // Right under the chips, where the eye is — not at the far bottom of the dialog.
     var preview = $("agcatalogpreview");
     preview.style.display = "";
     preview.innerHTML = '<div><b>' + esc(crew ? crew.name : slug) + "</b> — " + esc(crew ? crew.summary : "") + "</div>" +
       '<ul style="margin:6px 0 8px 16px;padding:0">' + members.map(function (m) { return "<li>" + esc(m) + "</li>"; }).join("") + "</ul>" +
-      '<button class="btn sm accent" id="agcrewgo" type="button">Create these ' + members.length + " in " + esc(boxName) + "</button>" +
-      ' <button class="btn sm ghost" id="agcrewno" type="button">Not now</button>';
+      '<button class="btn sm accent" id="agcrewgo" type="button">{{ui.app.create-these}} ' + members.length + " {{ui.app.in}} " + esc(boxName) + "</button>" +
+      ' <button class="btn sm ghost" id="agcrewno" type="button">{{ui.app.not-now}}</button>';
     $("agcrewno").onclick = function () { preview.style.display = "none"; preview.innerHTML = ""; };
     $("agcrewgo").onclick = function () {
       $("agcrewgo").disabled = true;
-      preview.innerHTML = "Adding " + esc(crew ? crew.name : slug) + "…";
+      preview.innerHTML = "{{ui.app.adding}} " + esc(crew ? crew.name : slug) + "…";
       $("agsave").disabled = true;
       installCrew(slug, boxSel ? boxSel.value : undefined);
     };
@@ -6771,7 +6752,7 @@ $("agcatalog").onclick = function (event) {
     })
       .then(function (r) {
         return r.json().then(function (d) {
-          if (!r.ok) throw new Error(d.error || "install failed");
+          if (!r.ok) throw new Error(d.error || "{{ui.app.install-failed-2}}");
           return d;
         });
       })
@@ -6781,7 +6762,7 @@ $("agcatalog").onclick = function (event) {
           if (d.created && d.created[0]) return select(d.created[0].id);
         });
       })
-      .catch(function (error) { $("agstatus").textContent = "Install failed: " + error.message; })
+      .catch(function (error) { $("agstatus").textContent = "{{ui.app.install-failed}} " + error.message; })
       .then(function () { $("agsave").disabled = false; });
     return;
   }
@@ -6813,20 +6794,20 @@ $("agcatalog").onclick = function (event) {
  */
 function templateCardHtml(info) {
   var share = info.share
-    ? '<div style="margin-top:6px;font-size:12px">Published (' + esc(info.share.visibility) + '): <a href="' + esc(info.share.url) + '" target="_blank">' + esc(info.share.url) + '</a> ' +
-      '<button class="btn sm ghost" data-unpublish="' + esc(info.agentId) + '">Unpublish</button></div>'
+    ? '<div style="margin-top:6px;font-size:12px">{{ui.app.published}}' + esc(info.share.visibility) + '): <a href="' + esc(info.share.url) + '" target="_blank">' + esc(info.share.url) + '</a> ' +
+      '<button class="btn sm ghost" data-unpublish="' + esc(info.agentId) + '">{{ui.app.unpublish}}</button></div>'
     : info.canPublish
       ? '<div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap">' +
-        '<button class="btn sm" data-publish="' + esc(info.agentId) + '" data-version="' + esc(String(info.version)) + '" data-visibility="public">Publish a link</button>' +
-        '<button class="btn sm ghost" data-publish="' + esc(info.agentId) + '" data-version="' + esc(String(info.version)) + '" data-visibility="tenant">Team only</button>' +
+        '<button class="btn sm" data-publish="' + esc(info.agentId) + '" data-version="' + esc(String(info.version)) + '" data-visibility="public">{{ui.app.publish-a-link}}</button>' +
+        '<button class="btn sm ghost" data-publish="' + esc(info.agentId) + '" data-version="' + esc(String(info.version)) + '" data-visibility="tenant">{{ui.app.team-only}}</button>' +
         "</div>"
-      : '<div class="dim" style="margin-top:6px;font-size:11px">Links need a control plane; this box has none, so the file is the way to share.</div>';
+      : '<div class="dim" style="margin-top:6px;font-size:11px">{{ui.app.links-need-a-control-plane}}</div>';
   return '<div class="consent" data-template-card="' + esc(info.agentId) + '" style="margin:8px 0">' +
-    '<div class="chead"><span class="dot"></span>Template staged &mdash; version ' + esc(String(info.version)) + ', not shared until you say so</div>' +
+    '<div class="chead"><span class="dot"></span>{{ui.app.template-staged-version}} ' + esc(String(info.version)) + '{{ui.app.not-shared-until-you-say}}</div>' +
     '<div style="font-size:13px;font-weight:500;margin-top:4px">' + esc(info.name) + '</div>' +
     '<div style="font-size:12px;margin-top:2px">' + esc(info.description) + '</div>' +
     '<div class="dim" style="font-size:11px;margin-top:4px">' + esc(info.counts) + "</div>" +
-    '<div style="margin-top:6px"><a href="/api/templates/download?agent=' + encodeURIComponent(info.agentId) + '&version=' + esc(String(info.version)) + '" style="font-size:12px">Download the file</a></div>' +
+    '<div style="margin-top:6px"><a href="/api/templates/download?agent=' + encodeURIComponent(info.agentId) + '&version=' + esc(String(info.version)) + '" style="font-size:12px">{{ui.app.download-the-file}}</a></div>' +
     share +
     '<div class="dim" id="tplstatus-' + esc(info.agentId) + '" style="font-size:11px;margin-top:4px"></div>' +
   "</div>";
@@ -6869,7 +6850,7 @@ $("chat").addEventListener("click", function (e) {
   e.target.disabled = true;
   var agentId = publish || unpublish;
   var status = $("tplstatus-" + agentId);
-  if (status) status.textContent = publish ? "Publishing…" : "Unpublishing…";
+  if (status) status.textContent = publish ? "{{ui.app.publishing}}" : "{{ui.app.unpublishing}}";
   fetch(publish ? "/api/templates/publish" : "/api/templates/unpublish", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -6877,7 +6858,7 @@ $("chat").addEventListener("click", function (e) {
       ? { agent: agentId, version: Number(get("data-version")), visibility: get("data-visibility") }
       : { agent: agentId })
   })
-    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "failed"); return d; }); })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "{{ui.app.failed}}"); return d; }); })
     .then(function () { return loadTemplateCardInChat(agentId); })
     .catch(function (err) {
       e.target.disabled = false;
@@ -6886,29 +6867,29 @@ $("chat").addEventListener("click", function (e) {
 });
 
 function loadTemplateCard(agentId) {
-  $("agtemplate").textContent = "Loading…";
+  $("agtemplate").textContent = "{{ui.app.loading}}";
   $("agdownload").style.display = "none";
   return fetch("/api/templates/mine?agent=" + encodeURIComponent(agentId))
     .then(function (r) { return r.json(); })
     .then(function (data) {
       var versions = data.versions || [];
       var origin = data.importedFrom
-        ? "Created from the template “" + esc(data.importedFrom.name) + "”" + (data.importedFrom.createdBy ? " by " + esc(data.importedFrom.createdBy) : "") + ". "
+        ? "{{ui.app.created-from-the-template}}" + esc(data.importedFrom.name) + "”" + (data.importedFrom.createdBy ? " {{ui.app.by}} " + esc(data.importedFrom.createdBy) : "") + ". "
         : "";
       if (!versions.length) {
-        $("agtemplate").innerHTML = origin + "No template staged yet.";
-        $("agshare").textContent = "Ask it to draft a template";
+        $("agtemplate").innerHTML = origin + "{{ui.app.no-template-staged-yet}}";
+        $("agshare").textContent = "{{ui.app.ask-it-to-draft-a}}";
         return;
       }
       var latest = versions[versions.length - 1];
-      $("agtemplate").innerHTML = origin + "Version " + latest.version + " staged" +
+      $("agtemplate").innerHTML = origin + "{{ui.app.version}} " + latest.version + " {{ui.app.staged}}" +
         (latest.stagedAt ? " " + esc(new Date(latest.stagedAt).toLocaleString()) : "") +
         ": <b>" + esc(latest.name) + "</b> — " + esc(latest.description);
-      $("agshare").textContent = "Ask it to update the template";
+      $("agshare").textContent = "{{ui.app.ask-it-to-update-the}}";
       $("agdownload").href = "/api/templates/download?agent=" + encodeURIComponent(agentId) + "&version=" + latest.version;
       $("agdownload").style.display = "";
     })
-    .catch(function () { $("agtemplate").textContent = "Could not read the template state."; });
+    .catch(function () { $("agtemplate").textContent = "{{ui.app.could-not-read-the-template}}"; });
 }
 
 $("agshare").onclick = function () {
@@ -6922,7 +6903,7 @@ $("agshare").onclick = function () {
     .then(function (r) { return r.json(); })
     .then(function () {
       $("agentwrap").style.display = "none";
-      feed("asked " + esc(nameOf(agentModal.id)) + " to draft a template — watch the chat; the card is in Configure once it is staged", "");
+      feed("{{ui.app.asked}} " + esc(nameOf(agentModal.id)) + " to draft a template — watch the chat; the card is in Configure once it is staged", "");
       return select(agentModal.id);
     })
     .catch(function (err) { $("agstatus").textContent = String(err.message || err); })
@@ -6946,22 +6927,22 @@ function landImportFromUrl() {
   if (!shareId) return;
   history.replaceState(null, "", location.pathname);
   fetch("/api/templates/preview?shareId=" + encodeURIComponent(shareId))
-    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "could not fetch the template"); return d; }); })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "{{ui.app.could-not-fetch-the-template}}"); return d; }); })
     .then(function (d) {
       openAgentModal("new", null);
       $("agname").value = d.name || "";
       $("agimport").value = d.document || "";
-      $("agstatus").textContent = "Shared template “" + (d.name || "") + "” by " + (d.ownerName || "someone") + " — " + (d.description || "") + " Press Import to add your own copy.";
+      $("agstatus").textContent = "{{ui.app.shared-template}}" + (d.name || "") + "{{ui.app.by-2}} " + (d.ownerName || "{{ui.app.someone}}") + " — " + (d.description || "") + " {{ui.app.press-import-to-add-your}}";
       $("agimportgo").setAttribute("data-share-id", shareId);
     })
-    .catch(function (err) { feed("could not open the shared template: " + esc(String(err.message || err)), "err"); });
+    .catch(function (err) { feed("{{ui.app.could-not-open-the-shared}} " + esc(String(err.message || err)), "err"); });
 }
 
 $("agimportgo").onclick = function () {
   var text = $("agimport").value.trim();
-  if (!text) { $("agstatus").textContent = "Paste a template first."; return; }
+  if (!text) { $("agstatus").textContent = "{{ui.app.paste-a-template-first}}"; return; }
   $("agimportgo").disabled = true;
-  $("agstatus").textContent = "Importing…";
+  $("agstatus").textContent = "{{ui.app.importing-2}}";
   fetch("/api/templates/import", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -6969,13 +6950,13 @@ $("agimportgo").onclick = function () {
   })
     .then(function (r) {
       return r.json().then(function (d) {
-        if (!r.ok) throw new Error(d.error || "import failed");
+        if (!r.ok) throw new Error(d.error || "{{ui.app.import-failed}}");
         return d;
       });
     })
     .then(function (d) {
       $("agentwrap").style.display = "none";
-      feed("importing " + esc(d.name) + " — it installs its recipe on its first turn", "");
+      feed("{{ui.app.importing}} " + esc(d.name) + " {{ui.app.it-installs-its-recipe-on}}", "");
       return refresh().then(function () { return select(d.id); });
     })
     .catch(function (err) { $("agstatus").textContent = String(err.message || err); })
@@ -6987,8 +6968,8 @@ function openAgentModal(mode, agent) {
   if (preview0) { preview0.style.display = "none"; preview0.innerHTML = ""; }
   agentModal.mode = mode;
   agentModal.id = agent ? agent.id : null;
-  $("agenttitle").textContent = mode === "new" ? "New agent" : "Configure " + agent.name;
-  $("agsave").textContent = mode === "new" ? "Create" : "Save";
+  $("agenttitle").textContent = mode === "new" ? "{{ui.app.new-agent}}" : "{{ui.app.configure}} " + agent.name;
+  $("agsave").textContent = mode === "new" ? "{{ui.app.create}}" : "{{ui.app.save-2}}";
   $("agcatalogwrap").style.display = mode === "new" ? "" : "none";
   $("agimportwrap").style.display = mode === "new" ? "" : "none";
   $("agtemplatewrap").style.display = mode === "new" ? "none" : "";
@@ -7046,13 +7027,13 @@ $("agdelconfirm").onclick = function () {
   })
     .then(function (r) {
       return r.json().then(function (d) {
-        if (!r.ok) throw new Error(d.error || "delete failed");
+        if (!r.ok) throw new Error(d.error || "{{ui.app.delete-failed}}");
         return d;
       });
     })
     .then(function (d) {
       $("agentwrap").style.display = "none";
-      feed("agent deleted" + (d.archivedTo ? " — records archived" : ""), "warn");
+      feed("{{ui.app.agent-deleted}}" + (d.archivedTo ? " {{ui.app.records-archived}}" : ""), "warn");
       current = null;
       return refresh();
     })
@@ -7078,13 +7059,13 @@ function renderAgentScope(selected) {
     .then(function (r) { return r.status === 403 ? null : r.json(); })
     .then(function (data) {
       agentScopes = data ? (data.scopes || []) : [];
-      $("agscope").innerHTML = '<option value="">— no scope (tools set here) —</option>' +
+      $("agscope").innerHTML = '<option value="">{{ui.app.no-scope-tools-set-here}}</option>' +
         agentScopes.map(function (s) {
           return '<option value="' + esc(s.id) + '"' + (s.id === selected ? " selected" : "") + ">" + esc(s.name) + "</option>";
         }).join("");
       applyScopeToTools();
     })
-    .catch(function () { $("agscope").innerHTML = '<option value="">— no scope —</option>'; });
+    .catch(function () { $("agscope").innerHTML = '<option value="">{{ui.app.no-scope}}</option>'; });
 }
 
 /** When a scope is chosen, its tool set fills and locks the chips. */
@@ -7113,12 +7094,12 @@ function renderAgentProvider(selected) {
     .then(function (r) { return r.status === 403 ? null : r.json(); })
     .then(function (data) {
       var presets = data ? (data.presets || []) : [];
-      $("agprovider").innerHTML = '<option value="">— installation default —</option>' +
+      $("agprovider").innerHTML = '<option value="">{{ui.app.installation-default}}</option>' +
         presets.map(function (p) {
           return '<option value="' + esc(p.name) + '"' + (p.name === selected ? " selected" : "") + ">" + esc(p.label) + "</option>";
         }).join("");
     })
-    .catch(function () { $("agprovider").innerHTML = '<option value="">— default —</option>'; });
+    .catch(function () { $("agprovider").innerHTML = '<option value="">{{ui.app.default}}</option>'; });
 }
 
 /** The standing files (INV-777) of the agent in the modal: one at a time, saved on their own button. */
@@ -7144,21 +7125,21 @@ $("agstandingsave").onclick = function () {
   if (agentModal.mode === "new") return;
   var name = $("agstandingname").value;
   var text = $("agstandingtext").value;
-  $("agstandingstatus").textContent = "Saving…";
+  $("agstandingstatus").textContent = "{{ui.app.saving}}";
   fetch("/api/standing", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ agent: agentModal.id, name: name, text: text })
   })
-    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "save failed"); return d; }); })
-    .then(function (d) { standingFiles = d.files || standingFiles; $("agstandingstatus").textContent = "Saved " + name + "."; })
-    .catch(function (error) { $("agstandingstatus").textContent = "Not saved: " + error.message; });
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "{{ui.app.save-failed-2}}"); return d; }); })
+    .then(function (d) { standingFiles = d.files || standingFiles; $("agstandingstatus").textContent = "{{ui.app.saved}} " + name + "."; })
+    .catch(function (error) { $("agstandingstatus").textContent = "{{ui.app.not-saved}} " + error.message; });
 };
 
 function saveAgentModal() {
   var name = $("agname").value.trim();
   if (!name) {
-    $("agstatus").textContent = "The agent needs a name.";
+    $("agstatus").textContent = "{{ui.app.the-agent-needs-a-name}}";
     return;
   }
   var granted = allTools.filter(function (tool) { return agentModal.tools[tool]; });
@@ -7183,7 +7164,7 @@ function saveAgentModal() {
   };
   if (!isNew) body.id = agentModal.id;
   if (isNew && $("agbox").value) body.boxId = $("agbox").value;
-  $("agstatus").textContent = "Saving…";
+  $("agstatus").textContent = "{{ui.app.saving}}";
   $("agsave").disabled = true;
   fetch(isNew ? "/api/agents" : "/api/agents/update", {
     method: "POST",
@@ -7192,7 +7173,7 @@ function saveAgentModal() {
   })
     .then(function (r) {
       return r.json().then(function (d) {
-        if (!r.ok) throw new Error(d.error || "save failed");
+        if (!r.ok) throw new Error(d.error || "{{ui.app.save-failed-2}}");
         return d;
       });
     })
@@ -7207,7 +7188,7 @@ function saveAgentModal() {
         }
       });
     })
-    .catch(function (error) { $("agstatus").textContent = "Save failed: " + error.message; })
+    .catch(function (error) { $("agstatus").textContent = "{{ui.app.save-failed}} " + error.message; })
     .then(function () { $("agsave").disabled = false; });
 }
 
@@ -7236,7 +7217,7 @@ fetch("/api/me")
   .then(function (me) {
     myRole = me.role || "viewer";
     $("whoami").textContent = me.name ? me.name + " · " + (me.label || me.role) : ""; // "owner" on a single-machine installation (INV-1685)
-    $("whoami").title = me.identity ? "signed in as " + me.identity : "";
+    $("whoami").title = me.identity ? "{{ui.app.signed-in-as}} " + me.identity : "";
     applyRole();
     applyPreferences(me.preferences);
   })
@@ -7281,7 +7262,7 @@ function shelfCard(head, sub, action, dataAttr, preview) {
     '<div style="display:flex;gap:10px;align-items:center">' +
     '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:500">' + head + "</div>" +
     '<div class="dim" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + sub + "</div></div>" +
-    (preview ? '<button class="btn sm ghost" data-preview="1" type="button">Preview</button>' : "") +
+    (preview ? '<button class="btn sm ghost" data-preview="1" type="button">{{ui.app.preview}}</button>' : "") +
     '<button class="btn sm accent" ' + dataAttr + '>' + action + "</button></div>" +
     (preview ? '<div class="shelfpreview" style="display:none;margin:8px 0 2px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--bg);font-size:12px;line-height:1.5">' + preview + "</div>" : "") +
     "</div>";
@@ -7290,13 +7271,13 @@ function shelfCard(head, sub, action, dataAttr, preview) {
 var personalRequestId = null;
 var personalPoll = null;
 function renderPersonalBoxes(d) {
-  $("personalstatus").textContent = d.held + " allocated / " + (d.quota === null ? "unlimited" : d.quota) + " quota";
+  $("personalstatus").textContent = d.held + " {{ui.app.allocated}} " + (d.quota === null ? "{{ui.app.unlimited}}" : d.quota) + " {{ui.app.quota}}";
   $("personalcreate").disabled = d.quota !== null && d.held >= d.quota;
   $("personalboxes").innerHTML = (d.boxes || []).map(function (b) {
     return '<div style="padding:6px 0"><span>' + esc(b.name) + ' — ' + esc(b.status) + '</span>' +
       (b.error ? '<div class="fieldnote">' + esc(b.error) + '</div>' : '') +
-      (['failed', 'interrupted', 'detached', 'deleting'].indexOf(b.status) >= 0 ? ' <button class="btn sm" data-personal-retry="' + esc(b.id) + '">Retry / recover</button>' : '') +
-      (['ready', 'failed', 'detached'].indexOf(b.status) >= 0 ? ' <button class="btn sm ghost" data-personal-keep="' + esc(b.id) + '">Remove, keep data</button> <button class="btn sm ghost" data-personal-delete="' + esc(b.id) + '">Delete box and data</button>' : '') + '</div>';
+      (['failed', 'interrupted', 'detached', 'deleting'].indexOf(b.status) >= 0 ? ' <button class="btn sm" data-personal-retry="' + esc(b.id) + '">{{ui.app.retry-recover}}</button>' : '') +
+      (['ready', 'failed', 'detached'].indexOf(b.status) >= 0 ? ' <button class="btn sm ghost" data-personal-keep="' + esc(b.id) + '">{{ui.app.remove-keep-data}}</button> <button class="btn sm ghost" data-personal-delete="' + esc(b.id) + '">{{ui.app.delete-box-and-data}}</button>' : '') + '</div>';
   }).join('');
   clearTimeout(personalPoll);
   if ((d.boxes || []).some(function (b) { return b.status === 'provisioning' || b.status === 'deleting'; })) personalPoll = setTimeout(loadPersonalBoxes, 2000);
@@ -7306,10 +7287,10 @@ function loadPersonalBoxes() {
   fetch('/api/personal-boxes').then(function (r) { return r.json(); }).then(function (d) {
     if (d.error) { $("personalstatus").textContent = d.error; $("personalcreate").disabled = true; $("personalboxes").innerHTML = ''; return; }
     renderPersonalBoxes(d);
-  }).catch(function () { $("personalstatus").textContent = 'Could not load personal boxes. Reopen Templates to retry.'; });
+  }).catch(function () { $("personalstatus").textContent = '{{ui.app.could-not-load-personal-boxes}}'; });
 }
 function personalAction(action, body) {
-  $("personalstatus").textContent = 'Working…';
+  $("personalstatus").textContent = '{{ui.app.working}}';
   $("personalcreate").disabled = true;
   fetch('/api/personal-boxes/' + action, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     .then(function (r) { return r.json(); }).then(function (d) {
@@ -7317,7 +7298,7 @@ function personalAction(action, body) {
       if (action === 'create') personalRequestId = null;
       renderPersonalBoxes(d);
       openShelf(d.boxId);
-    }).catch(function () { $("personalstatus").textContent = 'Connection interrupted. Retry uses the same request; no duplicate box.'; $("personalcreate").disabled = false; });
+    }).catch(function () { $("personalstatus").textContent = '{{ui.app.connection-interrupted-retry-uses-the}}'; $("personalcreate").disabled = false; });
 }
 $("personalcreate").onclick = function () {
   if (!personalRequestId) personalRequestId = crypto.randomUUID();
@@ -7331,54 +7312,54 @@ $("personalboxes").onclick = function (event) {
   var erase = button.getAttribute('data-personal-delete');
   if (retry) personalAction('retry', { id: retry });
   if (keep) personalAction('remove', { id: keep, deleteData: false });
-  if (erase && confirm('Permanently delete this personal box and its saved data? Remove its agents first.')) personalAction('remove', { id: erase, deleteData: true });
+  if (erase && confirm('{{ui.app.permanently-delete-this-personal-box}}')) personalAction('remove', { id: erase, deleteData: true });
 };
 
 function openShelf(preferredBox) {
   $("shelfwrap").style.display = "";
   loadPersonalBoxes();
   $("shelfstatus").textContent = "";
-  $("shelfbody").innerHTML = '<div class="dim">Loading…</div>';
+  $("shelfbody").innerHTML = '<div class="dim">{{ui.app.loading}}</div>';
   fetch("/api/templates/shelf").then(function (r) { return r.json(); }).then(function (d) {
     var boxes = d.boxes || [];
     $("shelfbox").innerHTML = boxes.map(function (b) {
-      return '<option value="' + esc(b.id) + '"' + (b.id === (preferredBox || currentBox) ? " selected" : "") + ">" + esc(b.name) + (b.kind === "docker" ? " (docker)" : " (attached)") + "</option>";
+      return '<option value="' + esc(b.id) + '"' + (b.id === (preferredBox || currentBox) ? " selected" : "") + ">" + esc(b.name) + (b.kind === "docker" ? " {{ui.app.docker}}" : " {{ui.app.attached-2}}") + "</option>";
     }).join("");
     var html = "";
     var market = d.marketplace || [];
     if (market.length) {
-      html += '<div class="eyebrow" style="margin:6px 0;display:flex;justify-content:space-between;align-items:center"><span>Ready-made agents (' + market.length + ')</span>' +
-        '<input id="shelffilter" placeholder="filter" style="height:22px;font-size:11px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);padding:0 6px;width:140px;text-transform:none;letter-spacing:0"></div>';
+      html += '<div class="eyebrow" style="margin:6px 0;display:flex;justify-content:space-between;align-items:center"><span>{{ui.app.ready-made-agents}}' + market.length + ')</span>' +
+        '<input id="shelffilter" placeholder="{{ui.app.filter}}" style="height:22px;font-size:11px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);padding:0 6px;width:140px;text-transform:none;letter-spacing:0"></div>';
       html += market.map(function (t) {
-        var badges = [t.skills.length + " skill" + (t.skills.length === 1 ? "" : "s")];
-        if (t.routines.length) badges.push(t.routines.length + " routine" + (t.routines.length === 1 ? "" : "s"));
-        if (t.connectors.length) badges.push("needs " + t.connectors.join(", "));
-        if (t.memoryCount) badges.push(t.memoryCount + " conventions");
+        var badges = [t.skills.length + " skill" + (t.skills.length === 1 ? "" : "{{ui.plural.s}}")];
+        if (t.routines.length) badges.push(t.routines.length + " {{ui.app.routine}}" + (t.routines.length === 1 ? "" : "{{ui.plural.s}}"));
+        if (t.connectors.length) badges.push("{{ui.app.needs}} " + t.connectors.join(", "));
+        if (t.memoryCount) badges.push(t.memoryCount + " {{ui.app.conventions}}");
         var preview = '<div>' + esc(t.description) + "</div>" +
-          (t.skills.length ? '<div style="margin-top:6px"><b>Skills:</b> ' + t.skills.map(esc).join(" · ") + "</div>" : "") +
-          (t.routines.length ? '<div style="margin-top:4px"><b>Routines:</b> ' + t.routines.map(esc).join(" · ") + "</div>" : "") +
-          (t.createdBy ? '<div class="dim" style="margin-top:4px">by ' + esc(t.createdBy) + " · ported from Grok Bot</div>" : "");
+          (t.skills.length ? '<div style="margin-top:6px"><b>{{ui.app.skills}}</b> ' + t.skills.map(esc).join(" · ") + "</div>" : "") +
+          (t.routines.length ? '<div style="margin-top:4px"><b>{{ui.app.routines}}</b> ' + t.routines.map(esc).join(" · ") + "</div>" : "") +
+          (t.createdBy ? '<div class="dim" style="margin-top:4px">{{ui.app.by}} ' + esc(t.createdBy) + " {{ui.app.ported-from-grok-bot}}</div>" : "");
         return shelfCard(esc(t.name) + (t.title && t.title !== t.name ? ' <span class="dim">' + esc(t.title) + "</span>" : "") + ' <span class="dim" style="font-weight:400">' + esc(badges.join(" · ")) + "</span>",
           esc(t.description), "Stamp", 'data-stamp-template="' + esc(t.slug) + '" data-stamp-name="' + esc(t.name) + '"', preview);
       }).join("");
     }
     var mine = d.mine || [];
-    html += '<div class="eyebrow" style="margin:12px 0 6px">Mine</div>';
+    html += '<div class="eyebrow" style="margin:12px 0 6px">{{ui.app.mine}}</div>';
     html += mine.length ? mine.map(function (t) {
-      return shelfCard(esc(t.name) + ' <span class="dim">v' + esc(String(t.version)) + " · from " + esc(t.agentName) + "</span>",
-        esc(t.description || t.counts || "") + (t.stamped ? " · stamped " + t.stamped + "×" : ""),
+      return shelfCard(esc(t.name) + ' <span class="dim">v' + esc(String(t.version)) + " {{ui.app.from-2}} " + esc(t.agentName) + "</span>",
+        esc(t.description || t.counts || "") + (t.stamped ? " {{ui.app.stamped-2}} " + t.stamped + "×" : ""),
         "Stamp", 'data-stamp-agent="' + esc(t.agentId) + '" data-stamp-version="' + esc(String(t.version)) + '" data-stamp-name="' + esc(t.name) + '"');
-    }).join("") : '<div class="dim" style="font-size:12px;padding:4px">None yet — open an agent\'s Configure and press “Ask it to draft a template”.</div>';
+    }).join("") : '<div class="dim" style="font-size:12px;padding:4px">{{ui.app.none-yet-open-an-agents}}</div>';
     var imported = d.imported || [];
     if (imported.length) {
-      html += '<div class="eyebrow" style="margin:10px 0 6px">Stamped here from elsewhere</div>';
+      html += '<div class="eyebrow" style="margin:10px 0 6px">{{ui.app.stamped-here-from-elsewhere}}</div>';
       html += imported.map(function (a) {
-        return '<div class="dim" style="font-size:12px;padding:3px 4px">' + esc(a.agentName) + " — from “" + esc(a.from.name || "") + "”" + (a.from.createdBy ? " by " + esc(a.from.createdBy) : "") + "</div>";
+        return '<div class="dim" style="font-size:12px;padding:3px 4px">' + esc(a.agentName) + " {{ui.app.from}}" + esc(a.from.name || "") + "”" + (a.from.createdBy ? " {{ui.app.by}} " + esc(a.from.createdBy) : "") + "</div>";
       }).join("");
     }
-    html += '<div class="eyebrow" style="margin:10px 0 6px">Roles (persona only — the same as + agent)</div>';
+    html += '<div class="eyebrow" style="margin:10px 0 6px">{{ui.app.roles-persona-only-the-same}}</div>';
     html += (d.catalog || []).map(function (c) {
-      return shelfCard(esc(c.name) + (c.title ? ' <span class="dim">' + esc(c.title) + "</span>" : "") + (c.kind === "crew" ? ' <span class="chip">crew of ' + c.members.length + "</span>" : ""),
+      return shelfCard(esc(c.name) + (c.title ? ' <span class="dim">' + esc(c.title) + "</span>" : "") + (c.kind === "crew" ? ' <span class="chip">{{ui.app.crew-of}} ' + c.members.length + "</span>" : ""),
         esc(c.summary || ""), "Stamp", 'data-stamp-catalog="' + esc(c.slug) + '" data-stamp-name="' + esc(c.name) + '"');
     }).join("");
     $("shelfbody").innerHTML = html;
@@ -7391,7 +7372,7 @@ function openShelf(preferredBox) {
         rows[i].style.display = !q || rows[i].textContent.toLowerCase().indexOf(q) >= 0 ? "" : "none";
       }
     };
-  }).catch(function (e) { $("shelfbody").innerHTML = '<div class="dim">Could not read the shelf: ' + esc(String(e.message || e)) + "</div>"; });
+  }).catch(function (e) { $("shelfbody").innerHTML = '<div class="dim">{{ui.app.could-not-read-the-shelf}} ' + esc(String(e.message || e)) + "</div>"; });
 }
 
 $("shelfopen").onclick = function (e) { e.preventDefault(); openShelf(); };
@@ -7412,14 +7393,14 @@ $("shelfbody").onclick = function (event) {
   if (btn.getAttribute("data-stamp-template")) body.templateSlug = btn.getAttribute("data-stamp-template");
   else if (btn.getAttribute("data-stamp-catalog")) body.catalogSlug = btn.getAttribute("data-stamp-catalog");
   else { body.agentId = btn.getAttribute("data-stamp-agent"); body.version = Number(btn.getAttribute("data-stamp-version")); }
-  $("shelfstatus").textContent = "Stamping…";
+  $("shelfstatus").textContent = "{{ui.app.stamping}}";
   btn.disabled = true;
   fetch("/api/templates/stamp", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
-    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "stamp failed"); return d; }); })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "{{ui.app.stamp-failed}}"); return d; }); })
     .then(function (d) {
       $("shelfwrap").style.display = "none";
       var made = (d.created || []).map(function (c) { return c.name; }).join(", ");
-      feed("stamped " + esc(made) + " — it installs its recipe on its first turn", "");
+      feed("{{ui.app.stamped}} " + esc(made) + " {{ui.app.it-installs-its-recipe-on}}", "");
       return refresh().then(function () { if (d.created && d.created[0]) select(d.created[0].id); });
     })
     .catch(function (err) { $("shelfstatus").textContent = String(err.message || err); btn.disabled = false; });
@@ -7446,12 +7427,12 @@ function refreshSetup() {
       doorSkipped = localStorage.getItem("lumen-skip-door") === "1";
     } catch (error) {}
     var steps = [
-      { done: s.key, head: t("ui.setup.key"), sub: t("ui.setup.keyWhy"), act: t("ui.setup.keyAct"), cli: "Settings → Model", go: function () { openSettings("model"); } },
+      { done: s.key, head: t("ui.setup.key"), sub: t("ui.setup.keyWhy"), act: t("ui.setup.keyAct"), cli: "{{ui.app.settings-model}}", go: function () { openSettings("model"); } },
       { done: s.box, head: t("ui.setup.box"), sub: t("ui.setup.boxWhy"), act: t("ui.setup.boxAct"), cli: "agentbox box up", go: function () { openSettings("boxes"); } },
       { done: s.agentTurn, head: t("ui.setup.agent"), sub: t("ui.setup.agentWhy"), act: t("ui.setup.agentAct"), cli: "agentbox agent new <name>", go: openShelf },
-      { done: s.search || searchSkipped, skip: "search", head: t("ui.setup.search"), sub: t("ui.setup.searchWhy"), act: t("ui.setup.searchAct"), cli: "Settings → Model", go: function () { openSettings("model"); } },
-      { done: s.door || doorSkipped, skip: "door", head: t("ui.setup.door"), sub: t("ui.setup.doorWhy"), act: t("ui.setup.doorAct"), cli: "Settings → Channels (no CLI yet)", go: function () { openSettings("doors"); } },
-      { done: s.review, head: t("ui.setup.work"), sub: t("ui.setup.workWhy"), act: t("ui.setup.workAct"), cli: "agentbox chat <name> \"…\"", go: function () { var tab = $("tabtasks"); if (tab) tab.click(); } }
+      { done: s.search || searchSkipped, skip: "search", head: t("ui.setup.search"), sub: t("ui.setup.searchWhy"), act: t("ui.setup.searchAct"), cli: "{{ui.app.settings-model}}", go: function () { openSettings("model"); } },
+      { done: s.door || doorSkipped, skip: "door", head: t("ui.setup.door"), sub: t("ui.setup.doorWhy"), act: t("ui.setup.doorAct"), cli: "{{ui.app.settings-channels-no-cli-yet}}", go: function () { openSettings("doors"); } },
+      { done: s.review, head: t("ui.setup.work"), sub: t("ui.setup.workWhy"), act: t("ui.setup.workAct"), cli: "{{ui.app.agentbox-chat}} <name> \"…\"", go: function () { var tab = $("tabtasks"); if (tab) tab.click(); } }
     ];
     if (steps.every(function (x) { return x.done; }) && !guideForced) { card.style.display = "none"; return; }
     card.style.display = "";
@@ -7480,7 +7461,7 @@ function refreshSetup() {
     };
   }).catch(function () {});
 }
-loadMessages().then(function () { $("manuallink").textContent = t("ui.manual"); refreshSetup(); });
+refreshSetup();
 setInterval(refreshSetup, 30000);
 $("guidebtn").onclick = function () { guideForced = true; refreshSetup(); };
 
@@ -7500,9 +7481,9 @@ function dayLabel(at) {
   var d = new Date(at);
   if (isNaN(d.getTime())) return "";
   var now = new Date();
-  if (d.toDateString() === now.toDateString()) return "today";
+  if (d.toDateString() === now.toDateString()) return "{{ui.app.today}}";
   var y = new Date(now); y.setDate(now.getDate() - 1);
-  if (d.toDateString() === y.toDateString()) return "yesterday";
+  if (d.toDateString() === y.toDateString()) return "{{ui.app.yesterday}}";
   return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
 }
 function divider(label, isNew) {
@@ -7526,7 +7507,7 @@ var chatObserver = new MutationObserver(function (records) {
   }
   if (!added) return;
   unseenSinceScroll += added;
-  $("jumplatest").textContent = "↓ " + unseenSinceScroll + " new";
+  $("jumplatest").textContent = "↓ " + unseenSinceScroll + " {{ui.app.new}}";
   $("jumplatest").style.display = "";
 });
 chatObserver.observe($("chat"), { childList: true });
@@ -7539,7 +7520,7 @@ function threadAsMarkdown() {
   for (var i = 0; i < nodes.length; i++) {
     var n = nodes[i];
     if (n.classList.contains("msg")) {
-      var who = n.getAttribute("data-role") === "user" ? "You" : nameOf(current);
+      var who = n.getAttribute("data-role") === "user" ? "{{ui.app.you-2}}" : nameOf(current);
       var when = whenLabel(n.getAttribute("data-at"));
       out.push("**" + who + "**" + (when ? " (" + when + ")" : "") + "\n\n" + (n.__md || n.querySelector(".body").innerText) + "\n");
     } else if (n.classList.contains("divider")) {
@@ -7568,7 +7549,7 @@ $("sharemenu").onclick = function (event) {
   if (!a) return;
   event.preventDefault();
   var what = a.getAttribute("data-share");
-  if (what === "md") { copyText(threadAsMarkdown()); feed("thread copied as Markdown", ""); }
+  if (what === "md") { copyText(threadAsMarkdown()); feed("{{ui.app.thread-copied-as-markdown}}", ""); }
   else if (what === "file") {
     var blob = new Blob([threadAsMarkdown()], { type: "text/markdown" });
     var url = URL.createObjectURL(blob);
@@ -7579,7 +7560,7 @@ $("sharemenu").onclick = function (event) {
   } else if (what === "link") {
     var u = new URL(location.href); u.search = "";
     u.searchParams.set("agent", current); u.searchParams.set("conversation", currentConversation);
-    copyText(u.toString()); feed("thread link copied", "");
+    copyText(u.toString()); feed("{{ui.app.thread-link-copied}}", "");
   }
   $("sharemenu").style.display = "none";
 };
@@ -7614,11 +7595,11 @@ function landMessageFromUrl() {
  * every session at once. Both are said plainly here rather than discovered later.
  */
 export const LOGIN_HTML = `<!doctype html>
-<html lang="en">
+<html lang="{{@lang}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>LumenBox &mdash; sign in</title>
+<title>{{ui.login.lumenbox-sign-in}}</title>
 <style>
   :root { color-scheme: light dark; --bg:#fbfbfa; --text:#1d1d1b; --muted:#6b6b66; --border:#e3e3df; --accent:#2f6f4f; }
   @media (prefers-color-scheme: dark) { :root { --bg:#161615; --text:#eceae4; --muted:#9a9a92; --border:#2c2c2a; --accent:#7fbf9a; } }
@@ -7640,24 +7621,23 @@ export const LOGIN_HTML = `<!doctype html>
 </head>
 <body>
 <div class="card">
-  <h1>Sign in to LumenBox</h1>
-  <p class="sub">An admin gives you a code &mdash; the same one that works in chat.</p>
-  <p class="note"><a href="/bootstrap">Set up the first administrator</a> on a new installation.</p>
-  <label for="code">Invite code</label>
+  <h1>{{ui.login.sign-in-to-lumenbox}}</h1>
+  <p class="sub">{{ui.login.an-admin-gives-you-a}}</p>
+  <p class="note"><a href="/bootstrap">{{ui.login.set-up-the-first-administrator}}</a> {{ui.login.on-a-new-installation}}</p>
+  <label for="code">{{ui.login.invite-code}}</label>
   <input id="code" autocomplete="off" spellcheck="false" placeholder="4F7KQZ" autofocus>
-  <label for="name">Your name</label>
-  <input id="name" autocomplete="name" placeholder="How your work should be signed">
-  <button id="go">Sign in</button>
+  <label for="name">{{ui.login.your-name}}</label>
+  <input id="name" autocomplete="name" placeholder="{{ui.login.how-your-work-should-be}}">
+  <button id="go">{{ui.login.sign-in}}</button>
   <div class="err" id="err"></div>
-  <div class="note">Codes last 15 minutes and work once. What you may do here comes from
-    the role the admin gave you, not from the code.</div>
+  <div class="note">{{ui.login.codes-last-15-minutes-and}}</div>
 </div>
 <script>
 var go = document.getElementById("go");
 function submit() {
   var code = document.getElementById("code").value.trim();
   var name = document.getElementById("name").value.trim();
-  if (!code) { document.getElementById("err").textContent = "Enter the code you were given."; return; }
+  if (!code) { document.getElementById("err").textContent = "{{ui.login.enter-the-code-you-were}}"; return; }
   go.disabled = true;
   document.getElementById("err").textContent = "";
   fetch("/api/login", {
@@ -7665,7 +7645,7 @@ function submit() {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ code: code, name: name })
   })
-    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "sign-in failed"); return d; }); })
+    .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "{{ui.login.sign-in-failed}}"); return d; }); })
     .then(function () { location.href = "/"; })
     .catch(function (error) { go.disabled = false; document.getElementById("err").textContent = error.message; });
 }

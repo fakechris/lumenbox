@@ -149,11 +149,23 @@ test("a deprecated synonym is reported by file and line, in the listed files and
     mkdirSync(join(dir, "docs"));
     writeFileSync(join(dir, "docs", "22-spec.md"), "<!-- doc: 22-spec\n     family: spec\n-->\n# A spec\n\nThe door grants nothing.\n");
     writeFileSync(join(dir, "docs", "manual.md"), "<!-- doc: manual\n     audience: user\n-->\n# A page\n\nEvery door opens into one box.\n");
+    // The language bundle is read like a user page (INV-1684): both the Chinese and the English.
+    mkdirSync(join(dir, "src", "i18n"), { recursive: true });
+    writeFileSync(join(dir, "src", "i18n", "ui-page.ts"), [
+      "export const UI_PAGE = {",
+      '  "ui.page.ask": ["问机器人", "Ask the agent"],',
+      '  "ui.page.fine": ["box 已启动", "The box is up"],',
+      '  "ui.page.door": ["渠道", "Add a door"],',
+      '  const bot = "bot";',
+      "};",
+    ].join("\n"));
     const problems = lintVocabulary(dir, ["gui*.md"], join(root, GLOSSARY));
     assert.deepEqual(problems, [
       'docs/manual.md:6: "door" is a deprecated synonym; write "channel" (docs/glossary.md).',
       'guide.md:4: "bot" is a deprecated synonym; write "agent" (docs/glossary.md).',
       'guide.md:9: "箱子" is a deprecated synonym; write "box" (docs/glossary.md).',
+      'src/i18n/ui-page.ts:2: "机器人" is a deprecated synonym; write "agent" (docs/glossary.md).',
+      'src/i18n/ui-page.ts:4: "door" is a deprecated synonym; write "channel" (docs/glossary.md).',
     ]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

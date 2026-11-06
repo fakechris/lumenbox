@@ -393,6 +393,30 @@ export function lintVocabulary(root, patterns = USER_FACING_DOCS, glossaryPath =
     if (parseHeader(readFileSync(join(root, file), "utf8"))?.audience === "user") files.add(file);
   }
   for (const file of [...files].sort()) problems.push(...vocabularyProblems(file, readFileSync(join(root, file), "utf8"), glossary));
+  for (const file of globSync(BUNDLE, { cwd: root }).sort()) problems.push(...bundleVocabularyProblems(file, readFileSync(join(root, file), "utf8"), glossary));
+  return problems;
+}
+
+/** The language bundle: the chat's words and the web UI's (INV-1684). A person reads every value. */
+export const BUNDLE = "src/i18n/{messages,ui-*}.ts";
+
+/**
+ * The bundle's values, checked like a user page. The files are read as text, one entry per line —
+ * `"key": "text",` or `"key": ["中文", "English"],` — so the check needs no TypeScript.
+ */
+export function bundleVocabularyProblems(file, text, glossary) {
+  const problems = [];
+  const rules = glossary.deprecated.map(rule => ({ ...rule, hit: matcherFor(rule.term) }));
+  text.split("\n").forEach((line, index) => {
+    if (!/^\s*"[\w.-]+": [["]/.test(line)) return;
+    const strings = [...line.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map(match => JSON.parse(`"${match[1]}"`));
+    for (const value of strings.slice(1)) {
+      const prose = proseOf(value, glossary.allowed);
+      for (const rule of rules) {
+        if (rule.hit(prose)) problems.push(`${file}:${index + 1}: "${rule.term}" is a deprecated synonym; write "${rule.instead}" (${GLOSSARY}).`);
+      }
+    }
+  });
   return problems;
 }
 

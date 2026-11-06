@@ -10,7 +10,9 @@ import { runInNewContext } from "node:vm";
 import type { GateVerdict } from "../host/gate-verdict.ts";
 import type { Task } from "../host/tasks.ts";
 import { doingSpans, type TaskGate, taskGateOf, taskGateRoute } from "./task-gate-routes.ts";
-import { TASK_GATE_JS } from "./task-gate-ui.ts";
+import { TASK_GATE_JS as TASK_GATE_JS_TEMPLATE } from "./task-gate-ui.ts";
+import { localizeScript } from "./page-locale.ts";
+const TASK_GATE_JS = localizeScript(TASK_GATE_JS_TEMPLATE, "en");
 
 const call = (turnId: string, at: string, ...uses: [id: string, name: string, input: Record<string, unknown>][]) => [
   { role: "assistant", kind: "blocks", at, turnId, blocks: uses.map(([id, name, input]) => ({ type: "tool_use", id, name, input })) },

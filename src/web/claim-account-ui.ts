@@ -15,9 +15,9 @@ export const CLAIM_ACCOUNT_JS = `(function () {
     if (!claim || (!(claim.decisions || []).length && !(claim.unchecked || []).length)) return "";
     var check = pursuit.lastVerdict && pursuit.lastVerdict.decisions;
     return '<div data-claim-account style="margin:0 0 8px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius-md)">' +
-      list("Decided on your behalf", claim.decisions) +
-      list("Not covered by its checks", claim.unchecked) +
-      (check ? '<div class="dim" style="font-size:11px;margin-top:4px">Verifier on these decisions: ' + esc(check) + "</div>" : "") +
+      list("{{ui.claim-account.decided-on-your-behalf}}", claim.decisions) +
+      list("{{ui.claim-account.not-covered-by-its-checks}}", claim.unchecked) +
+      (check ? '<div class="dim" style="font-size:11px;margin-top:4px">{{ui.claim-account.verifier-on-these-decisions}} ' + esc(check) + "</div>" : "") +
     "</div>";
   };
 })();

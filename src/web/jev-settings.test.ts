@@ -2,7 +2,9 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { JEV_SETTINGS_JS, jevSettings, jevSettingsChange } from "./jev-settings.ts";
+import { JEV_SETTINGS_JS as JEV_SETTINGS_JS_TEMPLATE, jevSettings, jevSettingsChange } from "./jev-settings.ts";
+import { localizeScript } from "./page-locale.ts";
+const JEV_SETTINGS_JS = localizeScript(JEV_SETTINGS_JS_TEMPLATE, "en");
 
 test("a save writes each point's variable, clears it for off, and refuses unknown points and modes a point does not take", () => {
   assert.deepEqual(jevSettingsChange({ points: { memory_judge: "on", answer_review: "off" } }), {
@@ -31,4 +33,13 @@ test("the page is told whether a key exists and each point's mode, never the key
     }
   }
   assert.ok(!JEV_SETTINGS_JS.includes("${"), "the script ships as written");
+});
+
+test("each point's English words on the page are the label the API gives, so the two cannot drift (INV-1684)", async () => {
+  const { JEV_POINTS } = await import("./jev-settings.ts");
+  const { tr } = await import("../i18n/messages.ts");
+  for (const entry of JEV_POINTS) {
+    assert.equal(tr(`ui.jev.${entry.point}`, "en"), entry.label);
+    assert.match(JEV_SETTINGS_JS, new RegExp(`${entry.point}: "[^"]+"`), `${entry.point} has its words in the page's table`);
+  }
 });

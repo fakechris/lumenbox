@@ -137,7 +137,10 @@ Electron 壳、MCP face、webhook、模板与 bundle 的装卸、跟进 rails（
    所以现有调用点一个都不用改、钉住中文措辞的测试也全绿。web 通过 `GET /api/i18n` 取同一份，
    **第一片**（attention 面板、首次运行卡、boxes 空状态）已接上，`?lang=en` 当场切。
    **剩下的**：`app-html.ts` 还有几千行英文字面量，按屏迁移不一次性动——半迁移的界面比
-   一门语言更难读。
+   一门语言更难读。**INV-1684 迁完**：网页的每个字都是 bundle 里的 key（`src/i18n/ui-*.ts`，
+   一行一个 `[中文, English]`），模板里写 `{{ui.key}}`，服务端按语言填好再发（`web/page-locale.ts`），
+   `<html lang>` 跟着走，顶栏一个按钮切语言并记进 cookie；`ui-literals.test.ts` 拦新写死的字，
+   术语检查也读 bundle。服务端自己说的话（API 报错、提示词片段说明、连接器指引）还是英文。
 4. **飞书里做不完的事没有清单**。哪些必须回 web？没人列过。列出来才知道要补哪几个卡片。
 5. **空状态与错误**：没有 box 时、没有 agent 时、门没连时，页面是空的而不是有指引。
 

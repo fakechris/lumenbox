@@ -6,7 +6,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
-import { APP_HTML } from "./app-html.ts";
+import { APP_PAGE } from "./page-locale.ts";
+/** The page as an English reader receives it: its words filled from the bundle (INV-1684). */
+const APP_HTML = APP_PAGE("en");
 import { MANUAL_URL } from "./manual-link.ts";
 import { MESSAGES } from "../i18n/messages.ts";
 
@@ -23,7 +25,8 @@ test("the top bar's Manual link opens the manual on GitHub in a new window, besi
   assert.match(anchor, /rel="noopener noreferrer"/);
   const bar = APP_HTML.slice(APP_HTML.indexOf('<header id="topbar"'), APP_HTML.indexOf("</header>"));
   assert.ok(bar.indexOf('id="manuallink"') > 0 && bar.indexOf('id="manuallink"') < bar.indexOf('id="settingsbtn"'), "it sits in the top bar, just before Settings");
-  assert.match(APP_HTML, /\$\("manuallink"\)\.textContent = t\("ui\.manual"\)/, "its label goes through the page's words");
+  assert.match(APP_HTML, /<a id="manuallink"[^>]*>Manual<\/a>/, "its label is the bundle's word, in English");
+  assert.match(APP_PAGE("zh"), /<a id="manuallink"[^>]*>手册<\/a>/, "and in Chinese");
   assert.equal(MESSAGES.en["ui.manual"], "Manual");
   assert.equal(MESSAGES.zh["ui.manual"], "手册");
 });

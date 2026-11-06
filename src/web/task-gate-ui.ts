@@ -10,7 +10,7 @@
  * line shows what was last fetched and asks again when it is older than a few seconds.
  */
 export const TASK_GATE_JS = `(function () {
-  var WORD = { allowed: "allowed", asked: "asked you", waiting: "waiting for you", refused: "refused" };
+  var WORD = { allowed: "{{ui.task-gate.allowed}}", asked: "{{ui.task-gate.asked-you}}", waiting: "{{ui.task-gate.waiting-for-you}}", refused: "{{ui.task-gate.refused}}" };
   var FRESH_MS = 10000;
   var cache = {}, open = {};
   function e(text) { return typeof esc === "function" ? esc(text) : String(text == null ? "" : text); }
@@ -19,9 +19,9 @@ export const TASK_GATE_JS = `(function () {
     if (!total) return "";
     var c = data.counts;
     var line = ["allowed", "asked", "waiting", "refused"].map(function (k) { return '<span data-gate-count="' + k + '">' + (c[k] || 0) + " " + WORD[k] + "</span>"; }).join(" · ") +
-      (data.unchecked ? ' · <span class="dim" data-gate-count="unchecked" title="The gate did not check these steps, or checked them longer ago than the verdicts it keeps.">' + data.unchecked + " not checked</span>" : "");
-    var head = '<div data-task-gate-toggle="' + e(id) + '" style="font-size:12px;cursor:pointer"><span style="font-weight:600">' + (open[id] ? "▾" : "▸") + " Gate</span> " +
-      '<span class="dim">' + total + " step" + (total === 1 ? "" : "s") + "</span> · " + line + "</div>";
+      (data.unchecked ? ' · <span class="dim" data-gate-count="unchecked" title="{{ui.task-gate.the-gate-did-not-check}}">' + data.unchecked + " {{ui.task-gate.not-checked}}</span>" : "");
+    var head = '<div data-task-gate-toggle="' + e(id) + '" style="font-size:12px;cursor:pointer"><span style="font-weight:600">' + (open[id] ? "▾" : "▸") + " {{ui.task-gate.gate}}</span> " +
+      '<span class="dim">' + total + " {{ui.task-gate.step}}" + (total === 1 ? "" : "{{ui.plural.s}}") + "</span> · " + line + "</div>";
     if (!open[id]) return head;
     var rows = data.steps.map(function (s, index) {
       return '<div data-gate-step style="padding:3px 0;font-size:12px' + (index > 0 ? ";border-top:1px solid var(--border)" : "") + '">' +
@@ -34,7 +34,7 @@ export const TASK_GATE_JS = `(function () {
         (s.gate && s.gate.basis ? '<div class="dim" style="font-size:11px;padding-left:12px">' + e(s.gate.basis) + "</div>" : "") +
       "</div>";
     }).join("");
-    var earlier = data.earlier ? '<div class="dim" style="font-size:11px">' + data.earlier + " earlier steps are counted above and not listed.</div>" : "";
+    var earlier = data.earlier ? '<div class="dim" style="font-size:11px">' + data.earlier + " {{ui.task-gate.earlier-steps-are-counted-above}}</div>" : "";
     return head + '<div style="max-height:260px;overflow:auto;margin-top:4px">' + earlier + rows + "</div>";
   }
   function paint(id) {

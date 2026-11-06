@@ -14,7 +14,7 @@ export const AGENT_PAUSE_JS = `(function () {
     var rows = document.querySelectorAll(".agent[data-id]");
     for (var i = 0; i < rows.length; i++) {
       var id = rows[i].getAttribute("data-id"), tag = rows[i].querySelector(".pausetag");
-      if (paused[id] && !tag) rows[i].appendChild(el("span", { class: "pausetag dim ui-badge", title: "Paused by " + paused[id].by + (paused[id].reason ? ": " + paused[id].reason : "") }, "paused"));
+      if (paused[id] && !tag) rows[i].appendChild(el("span", { class: "pausetag dim ui-badge", title: "{{ui.agent-pause.paused-by}} " + paused[id].by + (paused[id].reason ? ": " + paused[id].reason : "") }, "{{ui.agent-pause.paused}}"));
       if (!paused[id] && tag) tag.remove();
     }
   }
@@ -26,13 +26,13 @@ export const AGENT_PAUSE_JS = `(function () {
       var p = paused[a.id];
       var row = el("div", { class: "ui-list-row" });
       row.appendChild(el("span", { class: "ui-w-md" }, a.name));
-      row.appendChild(el("span", { class: "ui-grow dim" }, p ? "Paused by " + p.by + (p.reason ? ": " + p.reason : "") : "Running"));
-      var b = el("button", { class: "btn", "data-pause": a.id }, p ? "Resume" : "Pause");
+      row.appendChild(el("span", { class: "ui-grow dim" }, p ? "{{ui.agent-pause.paused-by}} " + p.by + (p.reason ? ": " + p.reason : "") : "{{ui.agent-pause.running}}"));
+      var b = el("button", { class: "btn", "data-pause": a.id }, p ? "{{ui.agent-pause.resume}}" : "{{ui.agent-pause.pause}}");
       b.onclick = function () {
         if (p) { call("POST", "/api/agents/resume", { id: a.id }).then(refresh).catch(function (e) { note.textContent = e.message; }); return; }
-        window.askInline(b, "Pause " + a.name + "? Its turn stops, its background jobs stop, and nothing starts it until someone resumes it. Why (optional):", "").then(function (reason) {
+        window.askInline(b, "{{ui.agent-pause.pause}} " + a.name + "{{ui.agent-pause.its-turn-stops-its-background}}", "").then(function (reason) {
           if (reason === null) return;
-          call("POST", "/api/agents/pause", { id: a.id, reason: reason }).then(function (d) { note.textContent = a.name + " paused" + (d.jobsStopped && d.jobsStopped.length ? "; " + d.jobsStopped.length + " background job(s) stopped." : "."); refresh(); }).catch(function (e) { note.textContent = e.message; });
+          call("POST", "/api/agents/pause", { id: a.id, reason: reason }).then(function (d) { note.textContent = a.name + " {{ui.agent-pause.paused}}" + (d.jobsStopped && d.jobsStopped.length ? "; " + d.jobsStopped.length + " {{ui.agent-pause.background-job-s-stopped}}" : "."); refresh(); }).catch(function (e) { note.textContent = e.message; });
         });
       };
       row.appendChild(b);
@@ -45,8 +45,8 @@ export const AGENT_PAUSE_JS = `(function () {
     if (!modal || document.getElementById("agentpauses")) return false;
     var actions = modal.querySelector(".actions");
     var field = el("div", { class: "field settab-off", "data-settab": "team", id: "agentpauses" });
-    field.appendChild(el("label", {}, "Agents"));
-    field.appendChild(el("div", { class: "fieldnote" }, "Pause stops an agent and keeps it stopped: no turn starts for it, its background jobs stop, and messages to it wait until someone resumes it. Stop, in the chat, only ends the turn in flight."));
+    field.appendChild(el("label", {}, "{{ui.agent-pause.agents}}"));
+    field.appendChild(el("div", { class: "fieldnote" }, "{{ui.agent-pause.pause-stops-an-agent-and}}"));
     list = el("div", { id: "agentpauselist", class: "ui-gap" });
     note = el("div", { class: "fieldnote", id: "agentpausenote" }, "");
     field.appendChild(list); field.appendChild(note);

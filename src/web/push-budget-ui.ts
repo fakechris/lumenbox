@@ -18,12 +18,12 @@ export const PUSH_BUDGET_JS = `(function () {
       var c = counts[a.id] || { sent: 0, held: 0, exempt: 0, perDay: 8 };
       var row = el("div", { class: "ui-list-row", "data-pushes": a.id });
       row.appendChild(el("span", { class: "ui-w-md" }, a.name));
-      var said = c.sent + " of " + c.perDay + " sent today" + (c.held ? " · " + c.held + " held for the digest" : "") + (c.exempt ? " · " + c.exempt + " needing a person" : "");
+      var said = c.sent + " {{ui.push-budget.of}} " + c.perDay + " {{ui.push-budget.sent-today}}" + (c.held ? " · " + c.held + " {{ui.push-budget.held-for-the-digest}}" : "") + (c.exempt ? " · " + c.exempt + " {{ui.push-budget.needing-a-person}}" : "");
       row.appendChild(el("span", { class: "ui-grow dim", title: said }, said));
-      var input = el("input", { type: "number", min: "0", max: "1000", value: String(c.perDay), "aria-label": "Daily allowance for " + a.name, class: "ui-w-xs" });
+      var input = el("input", { type: "number", min: "0", max: "1000", value: String(c.perDay), "aria-label": "{{ui.push-budget.daily-allowance-for}} " + a.name, class: "ui-w-xs" });
       input.onchange = function () {
         call("POST", "/api/agents/push-budget", { id: a.id, perDay: input.value === "" ? null : Number(input.value) })
-          .then(function (d) { counts[a.id] = d; note.textContent = a.name + ": " + d.perDay + " a day."; render(); })
+          .then(function (d) { counts[a.id] = d; note.textContent = a.name + ": " + d.perDay + " {{ui.push-budget.a-day}}"; render(); })
           .catch(function (e) { note.textContent = e.message; });
       };
       row.appendChild(input);
@@ -36,8 +36,8 @@ export const PUSH_BUDGET_JS = `(function () {
     if (!modal || document.getElementById("pushbudgets")) return false;
     var actions = modal.querySelector(".actions");
     var field = el("div", { class: "field settab-off", "data-settab": "team", id: "pushbudgets" });
-    field.appendChild(el("label", {}, "Pushes"));
-    field.appendChild(el("div", { class: "fieldnote" }, "What each agent sends people on its own, like a routine's result. Past its daily allowance, the rest are held and go out once, in the chat's daily briefing or at 18:00. Anything that needs a person is never held."));
+    field.appendChild(el("label", {}, "{{ui.push-budget.pushes}}"));
+    field.appendChild(el("div", { class: "fieldnote" }, "{{ui.push-budget.what-each-agent-sends-people}}"));
     list = el("div", { id: "pushbudgetlist", class: "ui-gap" });
     note = el("div", { class: "fieldnote", id: "pushbudgetnote" }, "");
     field.appendChild(list); field.appendChild(note);

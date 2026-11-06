@@ -13,7 +13,7 @@ const placeholdersOf = (text: string): string[] => [...text.matchAll(/\{(\w+)\}/
 
 test("every language has every key, with the same placeholders in each", () => {
   const keys = Object.keys(MESSAGES.zh).sort();
-  assert.ok(keys.length > 40, "the bundle is the whole chat vocabulary, not a sample");
+  assert.ok(keys.length > 1000, "the bundle is the chat's and the page's whole vocabulary, not a sample");
   for (const locale of LOCALES) {
     assert.deepEqual(Object.keys(MESSAGES[locale]).sort(), keys, `${locale} has a different key set`);
     for (const key of keys) {
@@ -22,7 +22,8 @@ test("every language has every key, with the same placeholders in each", () => {
         placeholdersOf(MESSAGES.zh[key]!),
         `${locale}.${key} does not fill the same blanks`
       );
-      assert.notEqual(MESSAGES[locale][key]!.trim(), "", `${locale}.${key} is empty`);
+      // Only an English inflection may be nothing in Chinese: "3 call" + "s".
+      if (!(locale === "zh" && key.startsWith("ui.plural."))) assert.notEqual(MESSAGES[locale][key]!.trim(), "", `${locale}.${key} is empty`);
     }
   }
 });
@@ -38,4 +39,24 @@ test("a message is filled, and an unknown key is not a blank screen", () => {
   // what stops it ever shipping.
   assert.equal(tr("nothing.like.this", "en"), "nothing.like.this");
   assert.equal(tr("card.done"), "已完成", "the default locale is what every chat string here already was");
+});
+
+test("every word the page names is in both languages, and a word inside a script cannot break out of its string (INV-1684)", async () => {
+  const { keysIn } = await import("../web/page-locale.ts");
+  const { uiSources, templatesIn } = await import("./ui-literals.ts");
+  const inScript = new Set<string>();
+  for (const { kind, raw: template } of uiSources().flatMap(source => templatesIn(source.text))) {
+    for (const key of keysIn(template)) {
+      for (const locale of LOCALES) assert.ok(key in MESSAGES[locale], `the page names {{${key}}}, which ${locale} does not have`);
+    }
+    const scripts = kind === "script" ? [template] : [...template.matchAll(/<script\b(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)].map(match => match[1]!);
+    for (const script of scripts) for (const key of keysIn(script)) inScript.add(key);
+  }
+  assert.ok(inScript.size > 500, "the script's words are found");
+  for (const key of inScript) {
+    for (const locale of LOCALES) {
+      // The page's script puts these into HTML as often as into text, so neither reading may differ.
+      assert.doesNotMatch(MESSAGES[locale][key]!, /[<>"\\]/, `${locale}.${key} lands inside a script string: no < > " or backslash`);
+    }
+  }
 });

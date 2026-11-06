@@ -46,7 +46,7 @@ export const CONFIG_HISTORY_JS = `(function () {
   function configHtml(config) {
     var perms = config.toolPermissions || {};
     var asks = Object.keys(perms.tools || {}).filter(function (t) { return perms.tools[t] === "ask"; });
-    var groups = Object.keys(perms.groups || {}).map(function (g) { return g + " " + (perms.groups[g] === "ask" ? "ask me" : "allowed"); });
+    var groups = Object.keys(perms.groups || {}).map(function (g) { return g + " " + (perms.groups[g] === "ask" ? "{{ui.config-history.ask-me}}" : "allowed"); });
     var standing = Object.keys(config.standing || {}).map(function (n) { return n + ".md " + String(config.standing[n]).slice(0, 8); });
     var rows = [
       ["Tools", config.tools ? config.tools.join(", ") : "all"],
@@ -68,7 +68,7 @@ export const CONFIG_HISTORY_JS = `(function () {
     if (!m || document.getElementById("cvtabs")) return;
     var tabs = document.createElement("div");
     tabs.id = "cvtabs"; tabs.className = "cvtabs";
-    tabs.innerHTML = '<button type="button" data-cvtab="settings" class="sel">Settings</button><button type="button" data-cvtab="history">History</button>';
+    tabs.innerHTML = '<button type="button" data-cvtab="settings" class="sel">{{ui.config-history.settings}}</button><button type="button" data-cvtab="history">{{ui.config-history.history}}</button>';
     var panel = document.createElement("div");
     panel.id = "aghistory"; panel.style.display = "none";
     var title = document.getElementById("agenttitle");
@@ -95,7 +95,7 @@ export const CONFIG_HISTORY_JS = `(function () {
   function load() {
     var panel = document.getElementById("aghistory");
     if (!state.agent) return;
-    panel.innerHTML = '<div class="cvnote">Loading…</div>';
+    panel.innerHTML = '<div class="cvnote">{{ui.config-history.loading}}</div>';
     fetch("/api/agents/config-versions?agent=" + encodeURIComponent(state.agent))
       .then(function (r) { return r.ok ? r.json() : r.json().then(function (d) { throw new Error(d.error || r.statusText); }); })
       .then(function (d) { state.data = d; render(); })
@@ -107,20 +107,20 @@ export const CONFIG_HISTORY_JS = `(function () {
     var versions = (d && d.versions) || [];
     var html = '<div class="cvnote">' + esc(BOUNDARY) + "</div>";
     if (!versions.length) {
-      panel.innerHTML = html + '<div class="cvnote">No versions yet: the first save, or the agent\\'s next turn, makes version 1.</div>';
+      panel.innerHTML = html + '<div class="cvnote">{{ui.config-history.no-versions-yet-the-first}}</div>';
       return;
     }
-    html += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px"><button type="button" class="btn sm" data-cvcompare' + (state.picked.length === 2 ? "" : " disabled") + '>Compare ticked</button><span class="dim" style="font-size:11px">Tick two versions to see what differs.</span></div>';
-    if (diff) html += '<div class="cvnote" data-cvdiff style="color:var(--text)"><b>v' + diff.from + " → v" + diff.to + "</b>" + (diff.changes.length ? changesHtml(diff.changes) : " — the same settings") + "</div>";
+    html += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px"><button type="button" class="btn sm" data-cvcompare' + (state.picked.length === 2 ? "" : " disabled") + '>{{ui.config-history.compare-ticked}}</button><span class="dim" style="font-size:11px">{{ui.config-history.tick-two-versions-to-see}}</span></div>';
+    if (diff) html += '<div class="cvnote" data-cvdiff style="color:var(--text)"><b>v' + diff.from + " → v" + diff.to + "</b>" + (diff.changes.length ? changesHtml(diff.changes) : " {{ui.config-history.the-same-settings}}") + "</div>";
     html += versions.slice().reverse().map(function (v) {
       var current = v.n === d.current;
       var open = state.open === v.n;
       return '<div class="cvrow' + (open ? " open" : "") + '" data-cvversion="' + v.n + '">' +
         '<div class="cvhead"><input type="checkbox" data-cvpick="' + v.n + '"' + (state.picked.indexOf(v.n) >= 0 ? " checked" : "") + ">" +
-          "<b>v" + v.n + "</b>" + (current ? ' <span class="cvchip">in effect</span>' : "") +
-          '<span class="dim" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(when(v.at)) + " · " + esc(v.by) + (v.restoredFrom ? " · back to v" + v.restoredFrom : "") + "</span>" +
-          '<a href="#" data-cvview="' + v.n + '" style="font-size:11.5px">' + (open ? "Hide" : "View") + "</a>" +
-          (current ? "" : '<button type="button" class="btn sm ghost" data-cvrestore="' + v.n + '">Go back to this version</button>') +
+          "<b>v" + v.n + "</b>" + (current ? ' <span class="cvchip">{{ui.config-history.in-effect}}</span>' : "") +
+          '<span class="dim" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(when(v.at)) + " · " + esc(v.by) + (v.restoredFrom ? " {{ui.config-history.back-to-v}}" + v.restoredFrom : "") + "</span>" +
+          '<a href="#" data-cvview="' + v.n + '" style="font-size:11.5px">' + (open ? "{{ui.config-history.hide}}" : "{{ui.config-history.view}}") + "</a>" +
+          (current ? "" : '<button type="button" class="btn sm ghost" data-cvrestore="' + v.n + '">{{ui.config-history.go-back-to-this-version}}</button>') +
         "</div>" +
         (v.n === 1 && !v.changes.length ? "" : changesHtml(v.changes)) +
         (open ? configHtml(v.config) : "") +
@@ -190,7 +190,7 @@ export const CONFIG_HISTORY_JS = `(function () {
     return switches.map(function (s, i) {
       return '<div style="padding:2px 0"><a href="#" data-cvopen="' + esc(s.agentId) + '" data-cvn="' + s.n + '"><b>v' + s.n + "</b></a>" +
         (s.agentName && s.multi ? " " + esc(s.agentName) : "") +
-        ' <span class="dim">' + (i === 0 ? "from " : "switched ") + esc(when(s.from)) + " · " + esc(s.by) + "</span></div>";
+        ' <span class="dim">' + (i === 0 ? "{{ui.config-history.from}} " : "{{ui.config-history.switched}} ") + esc(when(s.from)) + " · " + esc(s.by) + "</span></div>";
     }).join("");
   }
   document.addEventListener("click", function (event) {
@@ -216,8 +216,8 @@ export const CONFIG_HISTORY_JS = `(function () {
         var switches = d.switches || [];
         var last = switches[switches.length - 1];
         var shown = last ? last.n : d.current;
-        chip.textContent = "config v" + shown + (last && last.n !== d.current ? " · v" + d.current + " next turn" : "");
-        chip.title = last ? "This conversation runs on configuration version " + last.n + " since " + when(last.from) + (last.n !== d.current ? "; version " + d.current + " was saved since and applies from the next turn" : "") : "Configuration version " + d.current + "; this conversation has not run a turn under any version yet";
+        chip.textContent = "{{ui.config-history.config-v}}" + shown + (last && last.n !== d.current ? " · v" + d.current + " {{ui.config-history.next-turn}}" : "");
+        chip.title = last ? "{{ui.config-history.this-conversation-runs-on-configuration}} " + last.n + " {{ui.config-history.since}} " + when(last.from) + (last.n !== d.current ? "{{ui.config-history.version}} " + d.current + " {{ui.config-history.was-saved-since-and-applies}}" : "") : "{{ui.config-history.configuration-version}} " + d.current + "{{ui.config-history.this-conversation-has-not-run}}";
         chip.style.display = "";
         chip.onclick = function (event) {
           event.preventDefault();
@@ -225,10 +225,10 @@ export const CONFIG_HISTORY_JS = `(function () {
           if (old) { old.remove(); return; }
           var pop = document.createElement("div");
           pop.id = "cvpop"; pop.className = "cvpop";
-          pop.innerHTML = '<div style="font-weight:600;margin-bottom:4px">Configuration in this conversation</div>' +
-            (switches.length ? switchesHtml(switches) : '<div class="dim">No turn here has run under a recorded version yet.</div>') +
+          pop.innerHTML = '<div style="font-weight:600;margin-bottom:4px">{{ui.config-history.configuration-in-this-conversation}}</div>' +
+            (switches.length ? switchesHtml(switches) : '<div class="dim">{{ui.config-history.no-turn-here-has-run}}</div>') +
             '<div class="dim" style="margin-top:6px;font-size:11px">' + esc(BOUNDARY) + "</div>" +
-            '<div style="margin-top:6px"><a href="#" data-cvopen="' + esc(agentId) + '" data-cvn="' + d.current + '">All versions…</a></div>';
+            '<div style="margin-top:6px"><a href="#" data-cvopen="' + esc(agentId) + '" data-cvn="' + d.current + '">{{ui.config-history.all-versions}}</a></div>';
           chip.parentNode.appendChild(pop);
         };
       })
@@ -245,9 +245,9 @@ export const CONFIG_HISTORY_JS = `(function () {
     var last = switches[switches.length - 1];
     var rows = switches.map(function (s) { return { agentId: s.agentId, agentName: s.agentName, n: s.n, from: s.from, by: s.by, multi: multi }; });
     return '<div data-config-versions style="margin:0 0 8px;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-md);font-size:12px">' +
-      '<div style="font-weight:600;margin-bottom:2px">Configuration <a href="#" data-cvopen="' + esc(last.agentId) + '" data-cvn="' + last.n + '" style="font-weight:400">' + esc((multi ? last.agentName + " " : "") + "v" + last.n) + "</a>" +
+      '<div style="font-weight:600;margin-bottom:2px">{{ui.config-history.configuration}} <a href="#" data-cvopen="' + esc(last.agentId) + '" data-cvn="' + last.n + '" style="font-weight:400">' + esc((multi ? last.agentName + " " : "") + "v" + last.n) + "</a>" +
         ' <span class="dim" style="font-weight:400">(' + esc(when(last.savedAt)) + ")</span></div>" +
-      (switches.length > 1 ? '<div class="dim" style="font-size:11px;margin-bottom:2px">This task ran under ' + switches.length + " versions, each from the first turn that ran under it.</div>" + switchesHtml(rows) : "") +
+      (switches.length > 1 ? '<div class="dim" style="font-size:11px;margin-bottom:2px">{{ui.config-history.this-task-ran-under}} ' + switches.length + " {{ui.config-history.versions-each-from-the-first}}</div>" + switchesHtml(rows) : "") +
     "</div>";
   };
 })();
