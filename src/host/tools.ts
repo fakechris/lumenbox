@@ -1663,8 +1663,8 @@ export function buildTools(
         "Record what was actually said, not your interpretation of it: a name or product you " +
         "do not recognise is something to look up (WebSearch/WebFetch), never to \"correct\" " +
         "to one you do — a plausible-sounding substitution written here misleads the whole " +
-        "team on every future turn. Memory lives outside the box; there is no file in the " +
-        "work directory to check, and this tool plus Recall are the only doors to it.",
+        "team on every future turn. Your own memory is mirrored read-only in the box (the memory " +
+        "section gives the path); edits there are overwritten, so this tool is how memory changes.",
       input_schema: {
         type: "object",
         properties: {
@@ -2174,11 +2174,11 @@ export function buildTools(
       "not shown, this is how you reach them, and 'it is not in my prompt' is not evidence " +
       "that you never knew it.\n\n" +
       "Search when a person refers to something you agreed before, when a task sounds like one " +
-      "you have done, or when you are about to say you have no record of something. Plain word " +
-      "matching — every word must appear in one record, so search with one or two words that " +
-      "would actually have been written, not a whole phrase. Searches your own and the team's " +
-      "memory together; a write is visible here immediately (there is no index to wait for, " +
-      "and no memory file in the box to look for).",
+      "you have done, or when you are about to say you have no record of something. Records " +
+      "holding every word come first, then ones related by meaning (a shared stem or a common " +
+      "topic, e.g. 数据库 and database); one or two words that would have been written work best. " +
+      "Searches your own and the team's memory together; a write is visible here immediately. Your " +
+      "own memory is also mirrored read-only in the box (the memory section gives the path) for grep.",
     input_schema: {
       type: "object",
       properties: {

@@ -2,7 +2,7 @@
      title: The watchdog: a control loop outside the orchestrator
      family: guide
      status: current
-     updated: 2026-11-02
+     updated: 2026-11-06
 -->
 # The watchdog: a control loop outside the orchestrator
 
@@ -19,7 +19,7 @@ Nothing to install. The desktop app runs the watchdog, together with the supervi
 as one child process beside the server: `agentbox supervision`. The app starts it once the server
 is ready, restarts it if it exits, restarts it when settings change, and stops it on quit. On
 first start the process issues its own door token for the installation's admin, labelled
-"LumenBox supervision" in Settings → MCP. It keeps the token in `~/.agentbox/supervision/token`
+"LumenBox supervision" in that admin's Settings → Mine → Your MCP tokens. It keeps the token in `~/.agentbox/supervision/token`
 and reuses it from then on. If the door refuses it, the process issues a new one once. What a person
 should hear, such as the server not answering, a token refused, or a run that could not start,
 arrives as the app's own notification. The log is `~/Library/Logs/LumenBox/supervision.log`. The tray shows
@@ -28,7 +28,7 @@ whether supervision is running. Its settings are in Settings → Supervision, wh
 
 ## Running it by hand
 
-Mint a side-door token in Settings → MCP. The token belongs to a person, and every flag the
+Mint a side-door token in Settings → Mine → Your MCP tokens. The token belongs to a person, and every flag the
 watchdog raises is in that person's name. Then run:
 
 ```
@@ -60,7 +60,7 @@ agentbox watchdog uninstall          # stops it, revokes its token, removes its 
 `install` takes the same `--stall-minutes`, `--paused-minutes` and `--on-down` flags, plus
 `--principal <name>` when the installation has more than one admin and `--no-judge` to leave the
 decision model off. By default, a door that stops answering raises a macOS notification. The
-token is labelled "watchdog" in Settings → MCP. It is kept in `~/.agentbox/watchdog/token`,
+token is labelled "watchdog" in Settings → Mine → Your MCP tokens. It is kept in `~/.agentbox/watchdog/token`,
 readable only by you, and never in the launchd job file. The job runs the same `agentbox` that
 ran `install`, so install it from the app you use.
 
