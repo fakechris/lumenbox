@@ -27,7 +27,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [08-control-plane](08-control-plane.md) | Control plane | current | 2026-09-12 |
 | [11-roadmap](11-roadmap.md) | Roadmap and backlog | current | 2026-09-28 |
 | [21-dingtalk-wire](21-dingtalk-wire.md) | The DingTalk wire | current | 2026-08-28 |
-| [22-domain-model](22-domain-model.md) | The domain model: people, doors, workers, rooms | current | 2026-11-01 |
+| [22-domain-model](22-domain-model.md) | The domain model: people, doors, workers, rooms | current | 2026-11-06 |
 | [27-testing-and-release](27-testing-and-release.md) | Testing and release stability: ours, against OpenClaw and Hermes | current | 2026-10-26 |
 | [57-agent-consumer-contract](57-agent-consumer-contract.md) | Agent 消费者合同：谁去拉，谁保证，不同架构怎么统一 | current | 2026-09-15 |
 | [92-web-ui](92-web-ui.md) | The web UI's visual rules: type, spacing, components | current | 2026-11-03 |
@@ -66,7 +66,7 @@ this file and the headers disagree. Edit the header, not this table.
 | doc | title | status | updated |
 |---|---|---|---|
 | [06-deployment](06-deployment.md) | Deployment | current | 2026-11-04 |
-| [12-upgrades](12-upgrades.md) | Upgrading somebody's box | current | 2026-11-03 |
+| [12-upgrades](12-upgrades.md) | Upgrading somebody's box | current | 2026-11-06 |
 | [13-design-review](13-design-review.md) | What goes to adversarial review before it is built | current | 2026-08-25 |
 | [17-two-agents](17-two-agents.md) | Two agents on one repository | current | 2026-08-26 |
 | [19-pitfalls](19-pitfalls.md) | Pitfalls: remembering how things went wrong | current | 2026-08-28 |
@@ -106,7 +106,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [34-extensions](34-extensions.md) | Extensions: the edges you can edit without restarting the core (R36) | current | 2026-09-29 |
 | [35-grok-onboarding](35-grok-onboarding.md) | Onboarding a Grok Bot box: the bot prepares its own box, the person connects from the laptop | current | 2026-09-03 |
 | [35-multiuser](35-multiuser.md) | Multiuser: doors as login, the org as the roster, boxes as the boundary | superseded by [36-enterprise](36-enterprise.md) — §4 revises the stage plan; §0 answers the edition question | 2026-09-03 |
-| [36-enterprise](36-enterprise.md) | The enterprise use case, and the editions that share one core | current | 2026-09-11 |
+| [36-enterprise](36-enterprise.md) | The enterprise use case, and the editions that share one core | current | 2026-11-06 |
 | [39-ui-objects](39-ui-objects.md) | The objects a person can see: box, agent, template | current | 2026-09-07 |
 | [40-chat-area](40-chat-area.md) | The chat area: what a person can do with a message | current | 2026-09-08 |
 | [41-chat-grammar](41-chat-grammar.md) | The chat column, rebuilt: one grammar for everything that appears in it | current | 2026-09-08 |

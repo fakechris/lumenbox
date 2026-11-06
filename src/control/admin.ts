@@ -93,11 +93,11 @@ export function adminRouteOf(method: string, pathname: string): AdminRoute {
   return undefined;
 }
 
-/** Whether the session may use this surface at all. Everything here is an owner's business. */
+/** Whether the session may use this surface at all. Everything here is an owner's business — the "account holder" a person reads (docs/glossary.md, INV-1685); the code value stays `owner`. */
 export function requireOwner(session: Session): string | undefined {
   return session.role === "owner"
     ? undefined
-    : "Only an owner of this tenant can do that. Ask an owner to change your role, or to do it.";
+    : "Only an account holder of this tenant can do that. Ask an account holder to change your role, or to do it.";
 }
 
 export interface AdminResult {
@@ -187,7 +187,7 @@ export async function handleAdmin(
       const role = String(body.role ?? "member");
       if (username === "") return { status: 400, body: { error: "A username is required." } };
       if (!isRole(role)) {
-        return { status: 400, body: { error: `Unknown role "${role}". Use owner, member or viewer.` } };
+        return { status: 400, body: { error: `Unknown role "${role}". Use owner, member or viewer (owner is the account holder).` } };
       }
       audit("admin.invite", username, { role });
       const user = store.upsertUser({ username });
@@ -210,7 +210,7 @@ export async function handleAdmin(
     case "set-role": {
       const role = String(body.role ?? "");
       if (!isRole(role)) {
-        return { status: 400, body: { error: `Unknown role "${role}". Use owner, member or viewer.` } };
+        return { status: 400, body: { error: `Unknown role "${role}". Use owner, member or viewer (owner is the account holder).` } };
       }
       const existing = store.membership(route.userId, tenant.id);
       if (existing === undefined) {
@@ -223,7 +223,7 @@ export async function handleAdmin(
           status: 409,
           body: {
             error:
-              "That is the only owner. Make someone else an owner first, or this tenant would have " +
+              "That is the only account holder. Make someone else an account holder (role owner) first, or this tenant would have " +
               "nobody who can manage it.",
           },
         };
@@ -250,7 +250,7 @@ export async function handleAdmin(
       if (existing.role === "owner" && countOwners(store, tenant.id) === 1) {
         return {
           status: 409,
-          body: { error: "That is the only owner; the tenant would have nobody who can manage it." },
+          body: { error: "That is the only account holder; the tenant would have nobody who can manage it." },
         };
       }
       audit("admin.remove-member", existing.username, { role: existing.role });

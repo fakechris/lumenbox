@@ -2,7 +2,7 @@
      title: Upgrading somebody's box
      family: guide
      status: current
-     updated: 2026-11-03
+     updated: 2026-11-06
 -->
 # Upgrading somebody's box
 
@@ -293,3 +293,17 @@ wins and the page says so. An attached remote box is not changed.
 
 Verified on a throwaway box: created with 6 of 12 cores; under 12 busy loops the cgroup counted
 2.03 cores once the ceiling was set to 2.
+
+## 8. An empty roster on the desktop app gets its Owner (INV-1685)
+
+Before INV-1685 the desktop app started with nobody on its roster and armed a bootstrap code
+that only a channel sign-in could redeem, so a desktop-only installation never had a person.
+The first start of the desktop app after the upgrade checks the roster under its lock. When
+nobody is on it and the bootstrap code was never redeemed, it creates the Owner (机主), closes
+bootstrap and deletes the old code file, in that order (docs/22 §1a). The server log says so in
+one line, which starts `upgrade:` (on macOS, `~/Library/Logs/LumenBox/server.log`).
+
+Nothing else changes. A roster with anyone on it, a redeemed code, or a server started without
+`--desktop` keeps what it had. Verified on a temporary home: a roster holding only an armed
+bootstrap code, started with `agentbox web --no-box --desktop`, came up with the Owner, no
+`bootstrap-code` file, `/bootstrap` answering 404, and the `upgrade:` line in the log.

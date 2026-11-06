@@ -1352,7 +1352,7 @@ async function cmdWeb(argv: string[]): Promise<number> {
       host,
       token: typeof tokenFlag === "string" ? tokenFlag : undefined,
       provider,
-      useBox: !flags.has("--no-box"),
+      useBox: !flags.has("--no-box"), desktop: flags.has("--desktop"), // passed by the Electron shell only: the desktop app may create the Owner (INV-1685)
       onLog: line => out(dim(line)),
       onReady: url => {
         out("");

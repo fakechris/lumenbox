@@ -36,6 +36,16 @@ renamed: `door`, `worker`, `expert`, `front` stay in the code and the specs.
      its turns short and hands heavy work to background runs. A person sees *the default
      agent* (who answers a message that names nobody) and *background runs*; the words
      front agent and worker are not user-facing.
+4. **Owner, Admin and account holder are three layers, one word each** (INV-1685). Each word
+   names one layer, and no layer borrows another's word.
+   - The **Owner** (机主) is the one person of the desktop app on one computer. The app's first
+     start creates them; nobody signs in to become the Owner.
+   - An **Admin** (管理员) runs an organisation installation: a server deployment, whose first
+     Admin redeems the bootstrap code, or a desktop installation that let a second person in.
+     Adding that person asks first; on yes, the Owner becomes the first Admin, and the change is
+     recorded. An installation shows an Owner or Admins, never both.
+   - An **account holder** (账户持有人) manages a tenant on the control plane (docs/08). The code
+     value stays `owner` (`src/control`); only the words a person reads say account holder.
 
 ## Concepts
 
@@ -50,6 +60,9 @@ renamed: `door`, `worker`, `expert`, `front` stay in the code and the specs.
 | **channel** / 渠道 | door, Channel record (docs/22, docs/53) | channel id, the prefix of every identity it mints, e.g. `feishu-work:ou_…` | connected · not connected · needs a restart | Settings → Channels · the chat itself · — |
 | **group chat** / 群 | chat, "room" in channel code | platform chat id, e.g. `oc_…` | group rule `addressed` · `all` | Settings → Channels group rule · the group · — |
 | **person** / 人 | Principal, Identity | principal id; identity `<channel id>:<subject>` | viewer · driver · admin | Settings → Team → People · `bind CODE` · — |
+| **Owner** / 机主 | Principal with role `admin` on an installation whose `installation.mode` is `single-machine` (installation.ts, docs/22 §1a) | principal id `local:owner` | Owner · became an Admin | Settings → Team → People (Owner · 机主) · — · `agentbox web --desktop` (the app passes it) |
+| **Admin** / 管理员 | Principal with role `admin` on an organisation installation (`installation.mode` absent or `organisation`) | principal id | admin | Settings → Team → People · the bootstrap code's sign-in page · — |
+| **account holder** / 账户持有人 | control-plane membership role `owner` (src/control/store.ts) | user id in the tenant | account holder · member · viewer | the control plane's admin surface · — · `scripts/control-admin.sh` |
 | **task** / 任务 | Task, the board | `tN`, e.g. `t12` | open · doing · blocked · review · done · dropped | Tasks tab · `/continue tN`, `/recover tN`, 停, 可以 · MCP `task_status` |
 | **goal** / 目标 | pursuit (goal-mode.ts); not `Task.goal`, which is a reminder of a person's aim (docs/74) | the task it lives on, `tN` | active · verifying · paused · complete · cleared | Settings → Supervision · `/goal <text>` · MCP `goal_start` |
 | **routine** / 例行任务 | routine: a skill with `schedule:` or `trigger:` (docs/44) | skill slug | off · observe · auto | Automations tab · reports to a group chat · `agentbox routines runs <slug>` |

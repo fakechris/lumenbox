@@ -2042,7 +2042,7 @@ function renderChannels() {
           '<a href="#" data-dismiss="' + esc(k.identity) + '" style="color:var(--danger);font-size:12px">Ignore</a></div>';
       }).join("");
       // Flatten to one row per identity, which is what a person edits.
-      people = [];
+      people = []; window.installation = data.installation; // Owner or Admin (INV-1685): read by ownerBadge in installation-ui.ts
       (data.principals || []).forEach(function (p) {
         (p.identities.length ? p.identities : [""]).forEach(function (identity) {
           people.push({ id: p.id, name: p.name, role: p.role, identity: identity });
@@ -2167,7 +2167,7 @@ document.getElementById("setknocks").addEventListener("click", function (event) 
   }
   var approve = target.getAttribute("data-approve");
   if (approve) {
-    fetch("/api/channels/approve", {
+    (window.rosterFetch || fetch)("/api/channels/approve", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ identity: approve, role: target.getAttribute("data-role") })
@@ -2187,7 +2187,7 @@ document.getElementById("setknocks").addEventListener("click", function (event) 
 
 $("setinvite").onclick = function () {
   $("setinviteout").textContent = "…";
-  fetch("/api/channels/invite", {
+  (window.rosterFetch || fetch)("/api/channels/invite", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ role: $("setinvrole").value })
@@ -2213,8 +2213,8 @@ function renderPeople() {
     return '<div style="display:flex;gap:8px;align-items:center;font-size:13px">' +
       '<span style="min-width:80px;font-weight:600">' + esc(p.name) + "</span>" +
       '<span class="mono" style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis">' + esc(p.identity) + "</span>" +
-      '<select data-role-of="' + i + '" style="height:28px;border-radius:6px;border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 4px;font-size:12px">' + roles + "</select>" +
-      '<a href="#" data-remove="' + i + '" style="color:var(--danger);font-size:12px">Remove</a></div>';
+      ((window.ownerBadge && window.ownerBadge(p)) || ('<select data-role-of="' + i + '" style="height:28px;border-radius:6px;border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 4px;font-size:12px">' + roles + "</select>" +
+      '<a href="#" data-remove="' + i + '" style="color:var(--danger);font-size:12px">Remove</a>')) + "</div>";
   }).join("");
 }
 
@@ -2238,7 +2238,7 @@ function savePeople() {
     if (p.identity) byId[p.id].identities.push(p.identity);
   });
   $("setpeoplestatus").textContent = "Saving…";
-  fetch("/api/principals", {
+  (window.rosterFetch || fetch)("/api/principals", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ principals: Object.keys(byId).map(function (k) { return byId[k]; }) })
@@ -7235,7 +7235,7 @@ fetch("/api/me")
   .then(function (r) { return r.json(); })
   .then(function (me) {
     myRole = me.role || "viewer";
-    $("whoami").textContent = me.name ? me.name + " · " + me.role : "";
+    $("whoami").textContent = me.name ? me.name + " · " + (me.label || me.role) : ""; // "owner" on a single-machine installation (INV-1685)
     $("whoami").title = me.identity ? "signed in as " + me.identity : "";
     applyRole();
     applyPreferences(me.preferences);

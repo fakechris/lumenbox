@@ -183,7 +183,7 @@ import { connectorSatisfied } from "../host/mcp-connectors.ts";
 import { adminRecipients } from "../host/upgrade.ts";
 import { BoxUpdateService, boxUpdateRoute } from "./box-update-routes.ts"; import { personRoute } from "./person-routes.ts"; import { PERSON_JS } from "./person-ui.ts"; import { agentFactsRoute } from "./agent-facts.ts"; import { agentCaseText } from "../host/consent-case.ts"; import { ROW_ORDER_JS } from "./row-order.ts"; import { BOARD_ORDER_JS } from "./board-order.ts"; import { teamMemoryReviewRoute } from "./team-memory-review-routes.ts"; import { TEAM_MEMORY_REVIEW_JS } from "./team-memory-review-ui.ts"; import { pendingReviews } from "../host/team-memory-review.ts"; import { CLAIM_ACCOUNT_JS } from "./claim-account-ui.ts"; import { DIGEST_HOUR, heldSection, PushBudget } from "../host/push-budget.ts"; import { pushBudgetRoute } from "./push-budget-routes.ts"; import { PUSH_BUDGET_JS } from "./push-budget-ui.ts"; import { SpendLimits, todaysRows } from "../host/spend-limits.ts"; import { spendLimitRoute } from "./spend-limit-routes.ts"; import { SPEND_LIMIT_JS } from "./spend-limit-ui.ts"; import { configuredRates } from "../host/provider-fallback.ts"; import { BoxKeeper } from "./box-keeper.ts"; import { AgentPauses } from "../host/agent-pause.ts"; import { ProbeKeeper, type ProbeKind } from "../host/boundary-probe.ts"; import { agentPauseRoute } from "./agent-pause-routes.ts"; import { AGENT_PAUSE_JS } from "./agent-pause-ui.ts"; import { diagnosticsRoute } from "./diagnostics-routes.ts"; import { DIAGNOSTICS_JS } from "./diagnostics-ui.ts"; import { providerRests, quotaStatusLine } from "../host/provider-rest.ts"; import { providerRestRoute, restNotice } from "./provider-rest-routes.ts"; import { PROVIDER_REST_JS } from "./provider-rest-ui.ts"; import { fallbackRoute } from "./provider-fallback-routes.ts"; import { PROVIDER_FALLBACK_JS } from "./provider-fallback-ui.ts"; import { routineRunsRoute } from "./routine-runs-routes.ts"; import { ROUTINE_RUNS_JS } from "./routine-runs-ui.ts"; import { deliverableRoute } from "./deliverable-routes.ts"; import { DELIVERABLES_JS } from "./deliverables-ui.ts"; import { DIVISION_JS } from "./division-ui.ts"; import { taskGateRoute } from "./task-gate-routes.ts"; import { TASK_GATE_JS } from "./task-gate-ui.ts"; import { isForkChild } from "../host/pending-work.ts"; import { readToolPermissions, toolPermissionRoute } from "./tool-permission-routes.ts"; import { TOOL_PERMS_JS } from "./tool-permissions-ui.ts"; import { configVersionRoute } from "./config-version-routes.ts"; import { CONFIG_HISTORY_JS } from "./config-history-ui.ts"; import { switchesForTask } from "../agents/config-versions.ts"; import { CredentialWaits } from "../host/credential-waits.ts"; import { secretsNeededBy, taskCredentialEvent, templateCredentialEvent, templateSkillNeeds, type CredentialEvent } from "./credential-routes.ts"; import { CREDENTIALS_JS } from "./credentials-ui.ts";
 import { hasCredential, PRESET_MODELS, providerConfigured, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
-import { BootstrapAdmins } from "../host/bootstrap.ts";
+import { BootstrapAdmins } from "../host/bootstrap.ts"; import { openRoster, roleLabel } from "../host/installation.ts"; import { installationRoute, routeErrorReply } from "./installation-routes.ts"; import { INSTALLATION_JS } from "./installation-ui.ts";
 import { Principals, principalsPath, roleAtLeast, soleAdmin, type Principal, type Role } from "../host/principals.ts";
 import type { MandateWorld } from "../host/mandate.ts";
 import { blockedAnnouncement, boardView } from "../channels/board-view.ts";
@@ -270,7 +270,7 @@ export interface WebOptions {
    * that read it answered 500 for any caller that left it out.
    */
   provider?: ProviderProfile;
-  useBox?: boolean;
+  useBox?: boolean; /** Started by the desktop app (`agentbox web --desktop`, passed by the Electron shell): a first start on an empty roster creates the Owner (INV-1685). */ desktop?: boolean;
   onReady?: (url: string) => void;
   onLog?: (line: string) => void;
 }
@@ -762,9 +762,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     ...(orchestrator.policy.rulesHash() !== undefined ? { rulesHash: orchestrator.policy.rulesHash()! } : {}),
   });
   const bootstrap = new BootstrapAdmins(principalsPath(), join(agentboxHome(), "bootstrap-code"));
-  try {
-    if (bootstrap.ensure()) log("First-admin bootstrap is available at /bootstrap; retrieve the code from the local bootstrap-code file (24h, one use).");
-  } catch { log("First-admin bootstrap disabled: repair the local roster/bootstrap state."); }
   const directoryQuotaContext = (id: string) => directories.membership(
     principals.list().find(person => person.id === id)?.identities ?? [id], directorySources(), Date.now(), identity => principals.hasCurrentIdentity(id, identity));
 
@@ -798,6 +795,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       saveConfig({ channelAllow: null });
       log(`migrated ${unclaimed.length} channel grant(s) to driver principals`);
     }
+    // After the migration, so legacy grants count as people: the Owner only on an empty roster, then the server's bootstrap code (INV-1685).
+    openRoster({ desktop: options.desktop === true, path: principalsPath(), codePath: bootstrap.codePath, bootstrap, reload: () => principals.reload(), log });
   }
 
   // Letting somebody in is one click, not an id copied around. A stranger's message
@@ -3518,7 +3517,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
         // Settings → Supervision (INV-1528): its own script and routes, like the decision model's below.
-        if (route === "GET /app/supervision.js") { res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(ROW_ORDER_JS + BOARD_ORDER_JS + UI_STYLE_JS + INLINE_ASK_JS + AGENT_PAUSE_JS + SUPERVISION_JS + SUPERVISION_WIZARD_JS + BOX_UPDATE_JS + DIAGNOSTICS_JS + CLAIM_ACCOUNT_JS + PUSH_BUDGET_JS + SPEND_LIMIT_JS + PROVIDER_REST_JS + TEAM_MEMORY_REVIEW_JS + PROVIDER_FALLBACK_JS + PERSON_JS + ROUTINE_RUNS_JS + DELIVERABLES_JS + TOOL_PERMS_JS + CONFIG_HISTORY_JS + CREDENTIALS_JS + DIVISION_JS + TASK_GATE_JS); return; } // + Apply update (INV-1538), askInline (INV-1540)
+        if (route === "GET /app/supervision.js") { res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(ROW_ORDER_JS + BOARD_ORDER_JS + UI_STYLE_JS + INLINE_ASK_JS + AGENT_PAUSE_JS + SUPERVISION_JS + SUPERVISION_WIZARD_JS + BOX_UPDATE_JS + DIAGNOSTICS_JS + CLAIM_ACCOUNT_JS + PUSH_BUDGET_JS + SPEND_LIMIT_JS + PROVIDER_REST_JS + TEAM_MEMORY_REVIEW_JS + PROVIDER_FALLBACK_JS + PERSON_JS + ROUTINE_RUNS_JS + DELIVERABLES_JS + TOOL_PERMS_JS + CONFIG_HISTORY_JS + CREDENTIALS_JS + DIVISION_JS + TASK_GATE_JS + INSTALLATION_JS); return; } // + Apply update (INV-1538), askInline (INV-1540)
         const supervised = await supervisionRoute(route, { home: agentboxHome(), configPath: configPath(), agents: () => registry.list().map(agent => agent.profile.name), readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: role => refusedRole(role), logFile: defaultSupervisionLog() });
         if (supervised !== undefined) { if (supervised.status !== 0) send(res, supervised.status, supervised.body); return; }
         // Settings → Model → Decision model (INV-1412): its own script, its own two routes.
@@ -3896,11 +3895,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         if (route === "GET /api/me") {
-          const principal =
-            caller.userId === undefined ? undefined : principals.resolve(caller.userId);
+          const principal = // nobody signed in: the installation's one admin — on the desktop app, its Owner (INV-1685)
+            caller.userId === undefined ? principals.list().find(person => person.id === soleAdmin(principals.list())) : principals.resolve(caller.userId);
           send(res, 200, {
             identity: caller.userId ?? null,
-            name: principal?.name ?? null,
+            name: principal?.name ?? null, label: roleLabel(principals.installation(), principal?.id, caller.userId === undefined ? "admin" : (principal?.role ?? "viewer")),
             // No identity at all is the direct operator: the token holder, unrestricted,
             // exactly as this UI has always behaved.
             role: caller.userId === undefined ? "admin" : (principal?.role ?? "viewer"),
@@ -4697,7 +4696,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               .list()
               .filter(record => record.profile.hidden !== true)
               .map(record => ({ id: record.id, name: record.profile.name })),
-            principals: principals.list(),
+            principals: principals.list(), installation: principals.installation(),
             knocks: [...knocks.values()],
             invites: [...invites.entries()].map(([code, invite]) => ({
               code,
@@ -4873,7 +4872,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // new person at the named role.
         if (route === "POST /api/channels/invite") {
           if (refusedRole("admin")) return;
-          const body = await readJson(req);
+          const body = await readJson(req); if (typeof body.principalId !== "string" || body.principalId === "") principals.requireOrganisation(); // a code for a new person: Owner → Admin first (INV-1685)
           const role: Role =
             body.role === "admin" || body.role === "driver" || body.role === "viewer"
               ? (body.role as Role)
@@ -5694,7 +5693,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (boxUpdated !== undefined) { if (boxUpdated.status !== 0) send(res, boxUpdated.status, boxUpdated.body); return; }
         const pushRoute = await pushBudgetRoute(route, pushBudget, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id) }); if (pushRoute !== undefined) { if (pushRoute.status !== 0) send(res, pushRoute.status, pushRoute.body); return; } // INV-1576
         const teamReview = await teamMemoryReviewRoute(route, { registry, readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator"), log }); if (teamReview !== undefined) { if (teamReview.status !== 0) send(res, teamReview.status, teamReview.body); return; } // INV-1581
-        const person = await personRoute(route, orchestrator.people, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, caller: () => (caller.userId === undefined ? undefined : { id: caller.userId, name: principals.resolve(caller.userId).name ?? caller.userId }) }); if (person !== undefined) { send(res, person.status, person.body); return; } /* INV-1653 */ const factsRoute = await agentFactsRoute(route, orchestrator.agentFacts.state, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: () => refused(), hasAgent: id => registry.has(id) }); if (factsRoute !== undefined) { if (factsRoute.status !== 0) send(res, factsRoute.status, factsRoute.body); return; } /* INV-1625 */ const pauseRoute = await agentPauseRoute(route, agentPauses, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id), caller: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator") }); if (pauseRoute !== undefined) { if (pauseRoute.status !== 0) send(res, pauseRoute.status, pauseRoute.body); return; } const spendRoute = await spendLimitRoute(route, spendLimits, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id) }); if (spendRoute !== undefined) { if (spendRoute.status !== 0) send(res, spendRoute.status, spendRoute.body); return; } const permRoute = await toolPermissionRoute(route, url, { refused: id => refused(id), agent: id => { const record = registry.tryGet(id); return record === undefined ? undefined : { id, name: record.profile.name, ...(record.profile.toolPermissions !== undefined ? { toolPermissions: record.profile.toolPermissions } : {}) }; }, allTools: ALL_TOOLS, floorContext: () => orchestrator.policy.floorContext() }); if (permRoute !== undefined) { if (permRoute.status !== 0) send(res, permRoute.status, permRoute.body); return; } const versionRoute = await configVersionRoute(route, url, { registry, refused: id => refused(id), readJson: () => readJson(req) as Promise<Record<string, unknown>>, by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator"), log }); if (versionRoute !== undefined) { if (versionRoute.status !== 0) send(res, versionRoute.status, versionRoute.body); return; } // INV-1554, INV-1615, INV-1664, INV-1669
+        const person = await personRoute(route, orchestrator.people, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, caller: () => (caller.userId === undefined ? undefined : { id: caller.userId, name: principals.resolve(caller.userId).name ?? caller.userId }) }); if (person !== undefined) { send(res, person.status, person.body); return; } /* INV-1653 */ const factsRoute = await agentFactsRoute(route, orchestrator.agentFacts.state, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: () => refused(), hasAgent: id => registry.has(id) }); if (factsRoute !== undefined) { if (factsRoute.status !== 0) send(res, factsRoute.status, factsRoute.body); return; } /* INV-1625 */ const pauseRoute = await agentPauseRoute(route, agentPauses, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id), caller: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator") }); if (pauseRoute !== undefined) { if (pauseRoute.status !== 0) send(res, pauseRoute.status, pauseRoute.body); return; } const spendRoute = await spendLimitRoute(route, spendLimits, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id) }); if (spendRoute !== undefined) { if (spendRoute.status !== 0) send(res, spendRoute.status, spendRoute.body); return; } const permRoute = await toolPermissionRoute(route, url, { refused: id => refused(id), agent: id => { const record = registry.tryGet(id); return record === undefined ? undefined : { id, name: record.profile.name, ...(record.profile.toolPermissions !== undefined ? { toolPermissions: record.profile.toolPermissions } : {}) }; }, allTools: ALL_TOOLS, floorContext: () => orchestrator.policy.floorContext() }); if (permRoute !== undefined) { if (permRoute.status !== 0) send(res, permRoute.status, permRoute.body); return; } const versionRoute = await configVersionRoute(route, url, { registry, refused: id => refused(id), readJson: () => readJson(req) as Promise<Record<string, unknown>>, by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator"), log }); if (versionRoute !== undefined) { if (versionRoute.status !== 0) send(res, versionRoute.status, versionRoute.body); return; } const installed = await installationRoute(route, { path: principalsPath(), principals, readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator"), log }); if (installed !== undefined) { if (installed.status !== 0) send(res, installed.status, installed.body); return; } // INV-1554, INV-1615, INV-1664, INV-1669
         const diagnostics = await diagnosticsRoute(route, { refusedAdmin: () => refusedRole("admin"), agents: () => registry.list().map(agent => ({ id: agent.id, name: agent.profile.name })), activeTurns: id => orchestrator.bus.activeTurnsOf(id), queued: id => orchestrator.bus.pendingCount(id), watchedJobs: id => orchestrator.jobWatch.countFor(id), eventSubscribers: () => clients.size, box: () => orchestrator.boxClient(), home: agentboxHome() }); if (diagnostics !== undefined) { if (diagnostics.status !== 0) send(res, diagnostics.status, diagnostics.body); return; } // INV-1559
         const rest = await providerRestRoute(route, { refusedAdmin: () => refusedRole("admin"), readJson: () => readJson(req) as Promise<Record<string, unknown>>, rests: providerRests, quotaLine: quotaStatusLine }); if (rest !== undefined) { if (rest.status !== 0) send(res, rest.status, rest.body); return; } // INV-1577
         const fallbacks = await fallbackRoute(route, { refusedAdmin: () => refusedRole("admin"), readJson: () => readJson(req) as Promise<Record<string, unknown>>, names: () => loadConfig().fallbackProviders ?? [], save: names => { saveConfig({ fallbackProviders: names }); }, presets: () => providerNames().map(name => { const profile = resolveProvider(name); return { name, label: profile.label, model: profile.model, hasKey: hasCredential(profile) }; }), usage: () => orchestrator.usage.since(0, Number.MAX_SAFE_INTEGER) }); if (fallbacks !== undefined) { if (fallbacks.status !== 0) send(res, fallbacks.status, fallbacks.body); return; } // INV-1578
@@ -6863,7 +6862,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         log(`error on ${route}: ${message}`);
-        if (!res.headersSent) send(res, error instanceof UnknownAgentError ? 400 : 500, { error: message });
+        if (!res.headersSent) { const reply = routeErrorReply(error); send(res, reply.status ?? (error instanceof UnknownAgentError ? 400 : 500), { error: message, ...(reply.needs !== undefined ? { needs: reply.needs } : {}) }); }
       }
     })();
   });

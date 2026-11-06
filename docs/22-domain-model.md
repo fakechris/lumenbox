@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: identity-and-authority
-     updated: 2026-11-01
+     updated: 2026-11-06
 -->
 # The domain model: people, doors, workers, rooms
 
@@ -71,6 +71,38 @@ Principal ─1..n─ Identity ─minted by─ Channel ─routes into─▶ Box �
 
 `defaultAgent` must name an agent whose `boxId` is the channel's `boxId` — a door
 pointing at another room's worker is a schema error, not a runtime surprise.
+
+## 1a. Owner and Admin: an installation-mode field, not a role (INV-1685)
+
+The desktop app on one computer has one person, the **Owner** (机主); an organisation
+installation has **Admins** (管理员). The words are the glossary's (docs/glossary.md, decision 4).
+
+- **Decision: a mode field.** The roster file (`principals.json`) carries
+  `installation: { mode: "single-machine" | "organisation", ownerId, createdAt, conversion? }`.
+  The Owner's `role` is `admin`, so every permission check (`roleAtLeast`, `soleAdmin`,
+  `adminRecipients`, `principalFor`) is unchanged. A fourth role `owner` was rejected: Owner and
+  Admin may do the same things, so a role would have meant editing every `role === "admin"` site
+  in the access-control path, and a person left holding `owner` after a second person joined is
+  exactly the "Owner beside an Admin" state this must make impossible. One field per
+  installation makes "Owner or Admin, never both" a property of the data. No field, or one the
+  code cannot read, is `organisation`: the shape of every installation before INV-1685.
+- **Who creates the Owner.** `ensureOwner` (`src/host/installation.ts`), under the roster lock
+  that bootstrap redemption and every save share, and only when all of these hold: the process
+  is the desktop app (the Electron shell starts `agentbox web --desktop`; nothing infers it),
+  the roster is empty, and bootstrap was neither redeemed nor closed. The same atomic write
+  closes bootstrap; the code file is deleted after it. Two concurrent starts create one Owner.
+  A server deployment never passes `--desktop`, so it keeps the bootstrap code that produces its
+  first Admin (docs/36 §2).
+- **The unsigned operator is the Owner.** With nobody signed in, the desktop acts as the one
+  admin (`soleAdmin`, INV-1681), which on a single-machine installation is the Owner
+  (`local:owner`): MCP tokens and the watchdog's token are issued to them with no person named.
+- **The conversion.** While the mode is `single-machine`, a roster save that holds anyone but
+  the Owner, or drops or demotes the Owner, is refused (`guardRoster`): the web answers 409 with
+  `needs: "owner-conversion"`, and so does an invite code for a new person. The page asks; on
+  the person's yes it posts `POST /api/installation/convert` with `confirm: true`, which writes
+  `mode: "organisation"` and the audit record `conversion: { at, by, ownerId }` in one atomic
+  roster replacement. The Owner stays, as the first Admin. A conversion is not undone by
+  removing people later, and an emptied organisation roster never grows an Owner back.
 
 ## 2. Doors route; boxes authorize
 
