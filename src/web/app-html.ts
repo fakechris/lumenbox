@@ -297,7 +297,7 @@ export const APP_HTML = String.raw`<!doctype html>
   .dot { width: 7px; height: 7px; border-radius: var(--radius-pill); background: var(--muted); flex: none; }
   .dot.busy { animation: pulse 1.2s infinite; }
   .dot.ok { background: var(--success); }
-  .dot.bad { background: var(--danger); }
+  .dot.bad { background: var(--danger); } .dot.unread { box-shadow: 0 0 0 2px var(--accent); } .dot.blocked { background: var(--warn) !important; box-shadow: 0 0 0 2px var(--warn); } .agent.blocked .ttl { color: var(--warn); } .agent .cnt { flex: none; min-width: 18px; padding: 0 5px; border-radius: var(--radius-pill); background: var(--accent); color: #fff; font-size: 10.5px; line-height: 18px; text-align: center; }
   @keyframes pulse { 50% { opacity: 0.3; } }
   .agent .cols { flex: 1; min-width: 0; }
   .agent .nm { font-weight: 600; font-size: 0.92rem; }
@@ -3020,14 +3020,13 @@ function applyPreferences(prefs) {
 }
 
 function oneAgentRow(a, index) {
-  return '<div class="agent ' + (a.id === current ? "on" : "") + '" data-id="' + esc(a.id) + '">' +
-    '<div class="dot ' + (busy.has(a.id) ? "busy" : "") +
-    '" style="background:var(--c-' + ((index % 8) + 1) + ')"></div>' +
-    '<div class="cols"><div class="nm">' + esc(a.name) + "</div>" +
-    '<div class="ttl">' + esc(busy.has(a.id) ? "Running" : String(a.title || a.description || "idle").slice(0, 40)) +
-    "</div></div>" +
-    (a.displayIndex ? '<span class="dnum">d' + esc(a.displayIndex) + "</span>" : "") +
-    "</div>";
+  // The marker order a person needs (INV-1625): waiting on them, then unread, then working; the line under the name says what it waits for.
+  var f = a.facts || {}, marker = f.awaiting ? "blocked" : f.unreadCount > 0 ? "unread" : busy.has(a.id) ? "busy" : "";
+  var line = f.awaiting ? "Waiting for you: " + f.awaiting.reason : busy.has(a.id) ? "Running" : String(a.title || a.description || "idle").slice(0, 40);
+  return '<div class="agent ' + (a.id === current ? "on" : "") + (marker ? " " + marker : "") + '" data-id="' + esc(a.id) + '" title="' + esc(f.awaiting ? f.awaiting.reason : "") + '">' +
+    '<div class="dot ' + marker + '" style="background:var(--c-' + ((index % 8) + 1) + ')"></div>' +
+    '<div class="cols"><div class="nm">' + esc(a.name) + "</div>" + '<div class="ttl">' + esc(line) + "</div></div>" +
+    (f.unreadCount > 0 ? '<span class="cnt">' + f.unreadCount + "</span>" : "") + (a.displayIndex ? '<span class="dnum">d' + esc(a.displayIndex) + "</span>" : "") + "</div>";
 }
 
 /**
@@ -4459,7 +4458,7 @@ function select(id, conversation) {
   if (switching) refreshConversations(id);
   updateComposerTarget();
   resetThread();
-  live.delete(id);
+  live.delete(id); markViewed(id, currentConversation);
 
   return fetch("/api/transcript?agent=" + encodeURIComponent(id) +
       "&conversation=" + encodeURIComponent(currentConversation))
@@ -6202,6 +6201,7 @@ var roundLabel = "";
  * would splice itself into the team room the operator is reading. An event with no
  * conversation is the main room, matching how a pre-conversations turn is stored.
  */
+var viewedTimer = null; function markViewed(id, conversation) { if (!id || !document.hasFocus()) return; clearTimeout(viewedTimer); viewedTimer = setTimeout(function () { fetch("/api/agents/viewed", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: id, conversation: conversation }) }).then(refresh).catch(function () {}); }, 400); } window.addEventListener("focus", function () { markViewed(current, currentConversation); }); // the person looked (INV-1625): debounced, only while the window has focus
 function inView(e) {
   return e.agentId === current && (e.conversation || "main") === currentConversation;
 }
@@ -6222,7 +6222,7 @@ stream.onmessage = function (raw) {
   }
 
   if (e.type === "text") {
-    if (!inView(e)) return;
+    if (!inView(e)) return; markViewed(current, currentConversation); // read as it lands, while the person is looking (INV-1625)
     // Prose is a message. If the agent was mid-work, that work is done; what follows is a
     // new message, drawn the same way whether it turns out to be the answer or a sentence
     // before more calls. Nothing is shrunk or re-filed later.
