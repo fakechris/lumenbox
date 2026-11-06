@@ -5,7 +5,7 @@
 <h1 align="center">LumenBox</h1>
 
 <p align="center">
-  Your own team of AI agents, with a real computer to work on — on your Mac, in your chat apps.
+  Your own team of AI agents, each with a real computer to work on — reached from your desktop and your chat apps, taken over at any moment, and believed on the record, not on its word.
 </p>
 
 <p align="center">
@@ -19,9 +19,10 @@
 ---
 
 LumenBox gives you a small team of agents — each with a name, a memory, its own desktop and a
-shell — living in one Linux "box" you can watch and take over at any moment. You talk to them
-in the app or from Feishu and DingTalk; they read documents, browse, write code, run it, and
-keep a task board of what they owe you.
+shell — on a Linux "box" you can watch and take over at any moment. You talk to them in the app
+or from Feishu and DingTalk; they read documents, browse, write code, run it, and keep a task
+board of what they owe you. How that differs from a coding-agent CLI or a hosted agent platform
+is one table in [the product spec](docs/02-product.md#11-how-it-differs).
 
 <p align="center">
   <img src="assets/screens/team-room.png" width="860" alt="The team room: agents on the left, the conversation in the middle, the desktop and steps on the right">

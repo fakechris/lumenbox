@@ -2,7 +2,7 @@
      title: The operator's guide (what the README used to be)
      family: guide
      status: current
-     updated: 2026-09-29
+     updated: 2026-11-06
 -->
 # 38 — The operator's guide (what the README used to be)
 
@@ -11,7 +11,10 @@ provider matrix, where the orchestrator and the box can each run, testing. Moved
 2026-09-04 when the README became the product's front page; nothing was cut. The CLI and
 internal names still use the working name `agentbox`.
 
-A multi-agent orchestrator with a remote Docker "box" and Linux computer-use.
+> Your own team of AI agents, each with a real computer to work on — reached from your desktop and your chat apps, taken over at any moment, and believed on the record, not on its word.
+
+That is the product, defined in [02-product](02-product.md) §1. In engineering terms: a
+multi-agent orchestrator with a Docker "box" — local or remote — and Linux computer-use.
 
 This is an independent implementation of an architecture described in local research
 notes, built around the three parts that make it interesting:
