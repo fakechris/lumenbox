@@ -1,7 +1,8 @@
 <!-- doc: reference-settings
      title: Reference: the Settings panes
-     family: guide
+     family: manual
      status: current
+     covers: reference-settings
      updated: generated
      generated: true
 -->

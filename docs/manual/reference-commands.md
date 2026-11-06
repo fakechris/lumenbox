@@ -1,7 +1,8 @@
 <!-- doc: reference-commands
      title: Reference: what you can say in a chat
-     family: guide
+     family: manual
      status: current
+     covers: reference-commands
      updated: generated
      generated: true
 -->

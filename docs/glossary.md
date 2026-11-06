@@ -41,7 +41,7 @@ renamed: `door`, `worker`, `expert`, `front` stay in the code and the specs.
 
 | User-facing name (en / zh) | Internal name (code, specs) | Identifier | State words | Entry points (app · IM · CLI) |
 |---|---|---|---|---|
-| **box** / box | Box; "room" in docs/22 §1 | box name, e.g. `default`; Docker container `agentbox-box` | running · stopped · unavailable | Settings → Boxes, `+ box` · — · `agentbox box up/attach/list/down/doctor` |
+| **box** / box | Box; "room" in docs/22 §1 | box name, e.g. `default`; Docker container `agentbox-box` | running · stopped · unavailable | Settings → Boxes, `+ box` · — · `agentbox box up/attach/list/down/status` |
 | **agent** / agent | Agent, AgentProfile; "worker" in docs/22 | agent id (lowercase name), e.g. `ada` | idle · working · paused | sidebar `+`, Configure, Settings → Team · `@name` · `agentbox agent new` |
 | **team** / 团队 | agent `tags` | lowercase name with hyphens, at most 24 characters | — (a label: on or off an agent) | Configure → Teams field · — · `CreateAgent`/`UpdateAgent` `tags` |
 | **crew** / 小队 | `CATALOG_CREWS` (catalog.ts) | crew slug, e.g. `media-desk` | in the catalog · added | New agent → catalog chips · — · `GET /api/catalog` |
@@ -52,10 +52,10 @@ renamed: `door`, `worker`, `expert`, `front` stay in the code and the specs.
 | **person** / 人 | Principal, Identity | principal id; identity `<channel id>:<subject>` | viewer · driver · admin | Settings → Team → People · `bind CODE` · — |
 | **task** / 任务 | Task, the board | `tN`, e.g. `t12` | open · doing · blocked · review · done · dropped | Tasks tab · `/continue tN`, `/recover tN`, 停, 可以 · MCP `task_status` |
 | **goal** / 目标 | pursuit (goal-mode.ts); not `Task.goal`, which is a reminder of a person's aim (docs/74) | the task it lives on, `tN` | active · verifying · paused · complete · cleared | Settings → Supervision · `/goal <text>` · MCP `goal_start` |
-| **routine** / 例行任务 | routine: a skill with `schedule:` or `trigger:` (docs/44) | skill slug | off · observe · auto | Automations tab · reports to a group chat · `agentbox routines` |
+| **routine** / 例行任务 | routine: a skill with `schedule:` or `trigger:` (docs/44) | skill slug | off · observe · auto | Automations tab · reports to a group chat · `agentbox routines runs <slug>` |
 | **skill** / skill | Skill, `SKILL.md` | folder slug under `/home/box/work/skills/` | — (present or absent in a box) | `/` in the chat box lists them · — · `agentbox skills import/improve` |
 | **engine** / 引擎 | preset, `Delegate`, ACP session (docs/81, docs/84) | preset name, e.g. `claude`, `codex`, `self` | running · finished · failed | background run on a task · — · `Delegate` tool |
-| **background run** / 后台运行 | worker, `Delegate` preset `self` (docs/42) | the job id on the task | running · finished · failed | task detail steps · progress card · — |
+| **background run** / 后台运行 | worker, `Delegate` preset `self` (docs/42) | the job id on the task | running · finished · failed | the task stays `doing` on the Tasks tab · — · — |
 | **extension** / 扩展 | extension module (docs/34) | file name in `~/.agentbox/extensions/` | loaded · failed | Settings → Team → Reload extensions · — · `agentbox extensions reload` |
 | **memory** / 记忆 | MemoryRecord; own tier and team tier (docs/24) | record id | live · held · waiting for approval · approved · rejected | Settings → Memory · — · `RememberFact`/`Recall`/`Forget` |
 | **record** / 记录 | ledgers, transcripts, audit (docs/05) | ledger file and line | — (append-only) | Audit tab · — · `agentbox usage`, `agentbox audit export` |
@@ -66,7 +66,7 @@ renamed: `door`, `worker`, `expert`, `front` stay in the code and the specs.
 | **MCP endpoint** / MCP 入口 | MCP face, side door (docs/33) | the endpoint `/mcp` and its token | token valid · revoked | — · — · `agentbox mcp` |
 | **watchdog** / 看门狗 | watchdog (docs/91) | — (one per installation) | on · off | Settings → Supervision · alerts in a chat · `agentbox watchdog` |
 | **supervisor** / 监督者 | outside supervisor (docs/90) | the goal it watches | idle · watching · stopped | Settings → Supervision · — · `agentbox supervise`, `agentbox supervision` |
-| **deliverable** / 交付物 | `DeliverFile`, task deliverables (INV-1663) | file digest on the task | delivered · held back (broken file) | task detail → Files · the file in the chat · `DeliverFile` tool |
+| **deliverable** / 交付物 | `DeliverFile`, task deliverables (INV-1663) | file digest on the task | delivered · refused (broken file) | task detail → Deliverables · the file in the chat · `DeliverFile` tool, MCP `fetch_deliverable` |
 | **bundle** / bundle | Bundle (docs/22 §8) | bundle name | — (attached to a box or not) | — · — · `agentbox bundle migrate` |
 
 ## Deprecated synonyms

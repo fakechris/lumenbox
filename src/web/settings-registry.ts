@@ -6,7 +6,7 @@
  * The tabs used to be literal anchors in settings-dialog-html.ts, and a script-mounted pane
  * (Supervision) wrote its own; a pane's name was whatever each place last typed. Now the dialog
  * renders its tab row from this list, a pane mounted by a script takes its title from here,
- * `docs/reference-settings.md` is generated from it, and architecture-guard fails a
+ * `docs/manual/reference-settings.md` is generated from it, and architecture-guard fails a
  * `data-settab` key that is not listed or a tab anchor written anywhere else.
  */
 

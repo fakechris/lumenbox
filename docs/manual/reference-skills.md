@@ -1,7 +1,8 @@
 <!-- doc: reference-skills
      title: Reference: the skills that ship
-     family: guide
+     family: manual
      status: current
+     covers: reference-skills
      updated: generated
      generated: true
 -->

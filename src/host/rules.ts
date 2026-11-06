@@ -12,7 +12,7 @@
  * One Markdown file per rule under ~/.agentbox/rules: frontmatter carries the matchers and the
  * effect, the body is what the reviewer reads as a standing instruction. The keys, their
  * spellings and what each matches are defined once, in rules-grammar.ts (INV-1660), which this
- * file parses with and docs/reference-rules.md is generated from.
+ * file parses with and docs/manual/reference-rules.md is generated from.
  *
  * `principal:` is how a person pre-authorises their own routine work (INV-156): the rule
  * applies only while a turn is running for them, from whichever door they drove it —

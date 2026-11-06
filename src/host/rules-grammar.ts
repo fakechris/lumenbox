@@ -1,6 +1,6 @@
 /**
  * The grammar of a rule file under ~/.agentbox/rules (INV-1660): the one definition of what
- * may be written in one, which `rules.ts` parses with and `docs/reference-rules.md` is
+ * may be written in one, which `rules.ts` parses with and `docs/manual/reference-rules.md` is
  * generated from.
  *
  * The syntax used to be described in a comment at the top of rules.ts and read field by field

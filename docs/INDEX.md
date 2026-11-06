@@ -13,6 +13,7 @@ this file and the headers disagree. Edit the header, not this table.
 - **decision** — a dated record of why something was decided. Never rewritten; superseded, with a pointer.
 - **guide** — how to do something. Kept current.
 - **handoff** — what was true at the end of a session. Historical by nature.
+- **manual** — how a person uses the product, one page per concept, in `manual/`. Start at [the manual](manual/README.md).
 
 ## spec
 
@@ -34,6 +35,29 @@ this file and the headers disagree. Edit the header, not this table.
 | [94-catalog](94-catalog.md) | The catalog: experts, crews, connectors and shelf templates | current | 2026-11-05 |
 | [glossary](glossary.md) | Glossary and controlled vocabulary | current | 2026-11-06 |
 
+## manual
+
+| doc | title | status | updated |
+|---|---|---|---|
+| [manual/agent](manual/agent.md) | Agent | current | 2026-11-06 |
+| [manual/approvals](manual/approvals.md) | Approvals | current | 2026-11-06 |
+| [manual/automations](manual/automations.md) | Automations | current | 2026-11-06 |
+| [manual/box](manual/box.md) | Box | current | 2026-11-06 |
+| [manual/channels](manual/channels.md) | Channels | current | 2026-11-06 |
+| [manual/memory](manual/memory.md) | Memory | current | 2026-11-06 |
+| [manual/README](manual/README.md) | The LumenBox manual | current | 2026-11-06 |
+| [manual/reference-commands](manual/reference-commands.md) | Reference: what you can say in a chat | current | generated |
+| [manual/reference-prompt-parts](manual/reference-prompt-parts.md) | Reference: the prompt parts | current | generated |
+| [manual/reference-rules](manual/reference-rules.md) | Reference: the rules file grammar | current | generated |
+| [manual/reference-settings](manual/reference-settings.md) | Reference: the Settings panes | current | generated |
+| [manual/reference-skills](manual/reference-skills.md) | Reference: the skills that ship | current | generated |
+| [manual/reference-templates](manual/reference-templates.md) | Reference: the template shelf | current | generated |
+| [manual/reference-tools](manual/reference-tools.md) | Reference: the built-in tools | current | generated |
+| [manual/skills](manual/skills.md) | Skills | current | 2026-11-06 |
+| [manual/supervision](manual/supervision.md) | Supervision | current | 2026-11-06 |
+| [manual/tasks-and-records](manual/tasks-and-records.md) | Tasks and records | current | 2026-11-06 |
+| [manual/templates](manual/templates.md) | Templates | current | 2026-11-06 |
+
 ## guide
 
 | doc | title | status | updated |
@@ -54,13 +78,6 @@ this file and the headers disagree. Edit the header, not this table.
 | [87-prompt-parts](87-prompt-parts.md) | Built-in prompt parts: a team's override, and what happens when the default moves | current | 2026-11-01 |
 | [88-improve](88-improve.md) | A check-up for one agent: scenarios in isolation, a judged report, a proposal nobody applies | current | 2026-11-01 |
 | [91-watchdog](91-watchdog.md) | The watchdog: a control loop outside the orchestrator | current | 2026-11-02 |
-| [reference-commands](reference-commands.md) | Reference: what you can say in a chat | current | generated |
-| [reference-prompt-parts](reference-prompt-parts.md) | Reference: the prompt parts | current | generated |
-| [reference-rules](reference-rules.md) | Reference: the rules file grammar | current | generated |
-| [reference-settings](reference-settings.md) | Reference: the Settings panes | current | generated |
-| [reference-skills](reference-skills.md) | Reference: the skills that ship | current | generated |
-| [reference-templates](reference-templates.md) | Reference: the template shelf | current | generated |
-| [reference-tools](reference-tools.md) | Reference: the built-in tools | current | generated |
 
 ## decision
 
