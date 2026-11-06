@@ -15,14 +15,14 @@
  *
  * The embedded script uses string concatenation instead of template literals
  * throughout. It has to: this file is itself a template literal, so an inner
- * "${...}" would be evaluated here rather than shipped to the browser. The two
- * deliberate interpolations are the Markdown options, which belong next to the tests
- * that assert what they guarantee, and the Settings dialog's markup, extracted to
- * settings-dialog-html.ts so this file's length can shrink.
+ * "${...}" would be evaluated here rather than shipped to the browser. The deliberate
+ * interpolations are the Markdown options, which belong next to the tests that assert
+ * what they guarantee, the Settings dialog's markup (settings-dialog-html.ts, so this
+ * file's length can shrink) and the manual's URL, whose one home is manual-link.ts.
  */
 
 import { MARKDOWN_OPTIONS } from "./markdown.ts";
-import { SETTINGS_DIALOG_HTML } from "./settings-dialog-html.ts";
+import { SETTINGS_DIALOG_HTML } from "./settings-dialog-html.ts"; import { MANUAL_URL } from "./manual-link.ts";
 
 export const APP_HTML = String.raw`<!doctype html>
 <html lang="en">
@@ -899,7 +899,7 @@ export const APP_HTML = String.raw`<!doctype html>
         title="Tokens spent today, all agents \u2014 open the spend view"></span>
   <span id="whoami" style="font-size:12px;color:var(--muted);white-space:nowrap"></span>
   <button id="guidebtn" class="btn ghost sm" title="The four set-up steps, and where each thing is">Guide</button>
-  <button id="teachreviewbtn" class="btn ghost sm">Teaching drafts</button>
+  <button id="teachreviewbtn" class="btn ghost sm">Teaching drafts</button> <a id="manuallink" class="btn ghost sm" href="${MANUAL_URL}" target="_blank" rel="noopener noreferrer" style="text-decoration:none">Manual</a>
   <button id="settingsbtn" title="Settings" aria-label="Settings">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.56-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.56 1.03Z"/></svg>
   </button>
@@ -7480,7 +7480,7 @@ function refreshSetup() {
     };
   }).catch(function () {});
 }
-loadMessages().then(refreshSetup);
+loadMessages().then(function () { $("manuallink").textContent = t("ui.manual"); refreshSetup(); });
 setInterval(refreshSetup, 30000);
 $("guidebtn").onclick = function () { guideForced = true; refreshSetup(); };
 

@@ -36,6 +36,7 @@ const path = require("node:path");
 const { desktopAuth } = require("./ui-auth.cjs");
 const { badgeCount, notificationsDue } = require("./attention-signals.cjs");
 const { syncLoginItem } = require("./login-item.cjs");
+const { windowOpenAction } = require("./external-links.cjs");
 const uiAuth = desktopAuth();
 
 const PORT = Number(process.env.LUMENBOX_PORT || 7777);
@@ -463,6 +464,13 @@ function createWindow() {
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
   mainWindow.setMenuBarVisibility(false);
+  // The Manual link and any other off-origin link open in the system browser: not a bare
+  // child window, and not in place of the app when a link has no target="_blank".
+  const openOutside = url => shell.openExternal(url).catch(err => log(`could not open ${url}: ${err.message}`));
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => windowOpenAction(url, new URL(PAGE).origin, openOutside));
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    if (windowOpenAction(url, new URL(PAGE).origin, openOutside).action === "deny") event.preventDefault();
+  });
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
