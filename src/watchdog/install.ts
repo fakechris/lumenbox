@@ -139,7 +139,7 @@ export async function installWatchdog(options: InstallOptions, deps: InstallDeps
   writeFileSync(plist, body);
   const loaded = deps.run("launchctl", ["bootstrap", `gui/${deps.uid}`, plist]);
   if (loaded.code !== 0) throw new Error(`launchctl bootstrap failed (${loaded.code}): ${loaded.stdout.trim()}`);
-  return [`Installed ${label}: it starts at login, restarts when it exits, and watches ${options.url}${options.judge ? " with the decision model as a second opinion" : ""}.`, `Its token is in your name (${principalId}), labelled "watchdog" in Settings → MCP. Log: ${logPath(deps)}.`];
+  return [`Installed ${label}: it starts at login, restarts when it exits, and watches ${options.url}${options.judge ? " with the decision model as a second opinion" : ""}.`, `Its token belongs to ${principalId}: signed in as them, it is "watchdog" in Settings → Mine → Your MCP tokens. Log: ${logPath(deps)}.`];
 }
 
 export async function uninstallWatchdog(deps: InstallDeps): Promise<string[]> {
@@ -164,9 +164,9 @@ export async function uninstallWatchdog(deps: InstallDeps): Promise<string[]> {
       headers: { "content-type": "application/json", authorization: `Bearer ${deps.uiToken()}` },
       body: JSON.stringify({ createdAt: record.createdAt }),
     });
-    lines.push(response.ok ? "Its token is revoked." : `The token was not revoked (HTTP ${response.status}); revoke "watchdog" in Settings → MCP.`);
+    lines.push(response.ok ? "Its token is revoked." : `The token was not revoked (HTTP ${response.status}); sign in as ${record.principalId} and revoke "watchdog" in Settings → Mine → Your MCP tokens.`);
   } catch (error) {
-    lines.push(`The web did not answer, so the token was not revoked (${error instanceof Error ? error.message : String(error)}); revoke "watchdog" in Settings → MCP.`);
+    lines.push(`The web did not answer, so the token was not revoked (${error instanceof Error ? error.message : String(error)}); sign in as ${record.principalId} and revoke "watchdog" in Settings → Mine → Your MCP tokens.`);
   }
   rmSync(tokenPath(deps), { force: true });
   rmSync(recordPath(deps), { force: true });
