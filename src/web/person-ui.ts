@@ -54,7 +54,7 @@ export const PERSON_JS = `(function () {
     row.appendChild(pick); row.appendChild(input); row.appendChild(btn);
     note = el("div", { class: "fieldnote", id: "aboutmenote" }, "");
     field.appendChild(list); field.appendChild(row); field.appendChild(note);
-    modal.insertBefore(field, actions);
+    modal.insertBefore(field, document.getElementById("setmcptokenswrap") || actions); // first on the tab: the person is what "Mine" is about
     document.getElementById("settabs").addEventListener("click", function (event) { var a = event.target.closest("a[data-settab]"); if (a && a.getAttribute("data-settab") === "mine") refresh(); });
     return true;
   }
