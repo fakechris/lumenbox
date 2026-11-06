@@ -34,6 +34,8 @@ export interface WatchedQuestion {
   question: string;
   /** What the agent said it would do without an answer. */
   fallback?: string;
+  /** Which answer the agent leans to, in its words (INV-1651). */
+  recommended?: string;
   /** Who was asked, when a person was: only their reply answers it. */
   asker?: string;
   askedAt: number;
@@ -83,7 +85,7 @@ export class QuestionWatch {
    * the ledger, because a question that vanished without a verdict is exactly the hole
    * this file exists to close.
    */
-  ask(input: { agentId: string; agentName: string; conversation: string; question: string; fallback?: string; asker?: string; ttlMs?: number; now?: number }): { question: WatchedQuestion; superseded?: WatchedQuestion } {
+  ask(input: { agentId: string; agentName: string; conversation: string; question: string; fallback?: string; recommended?: string; asker?: string; ttlMs?: number; now?: number }): { question: WatchedQuestion; superseded?: WatchedQuestion } {
     const now = input.now ?? Date.now();
     const ttl = Math.min(QUESTION_TTL_MAX_MS, Math.max(QUESTION_TTL_MIN_MS, input.ttlMs ?? QUESTION_TTL_MS));
     const key = this.keyOf(input.agentId, input.conversation);
@@ -98,7 +100,7 @@ export class QuestionWatch {
       agentName: input.agentName,
       conversation: input.conversation,
       question: input.question,
-      ...(input.fallback !== undefined ? { fallback: input.fallback } : {}),
+      ...(input.fallback !== undefined ? { fallback: input.fallback } : {}), ...(input.recommended !== undefined ? { recommended: input.recommended } : {}),
       ...(input.asker !== undefined ? { asker: input.asker } : {}),
       askedAt: now,
       expiresAt: now + ttl,

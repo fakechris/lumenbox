@@ -1055,3 +1055,12 @@ test("a surface card draws the lines as one block and each press as a button tha
   assert.match(untitled.header.title.content, /Ada 给你看一张卡片/);
   assert.equal(untitled.elements.length, 0);
 });
+
+test("the consent card shows the agent's case as a note apart from the action, and nothing when it said nothing (INV-1651)", () => {
+  const withCase = renderApprovalCard({ approvalId: "a1", agentName: "Ada", description: "rm -rf build", stakes: "stopped until answered", agentCase: "Ada says (its own words, not checked): the build is stale" }) as { elements: { tag: string; text?: { content: string }; elements?: { content: string }[] }[] };
+  const note = withCase.elements.find(e => e.tag === "note" && e.elements?.[0]?.content.startsWith("Ada says"));
+  assert.ok(note, "the case is its own note");
+  assert.equal(withCase.elements[0]!.text?.content, "rm -rf build", "the action text is untouched");
+  const without = renderApprovalCard({ approvalId: "a1", agentName: "Ada", description: "rm -rf build", stakes: "s" }) as { elements: { tag: string }[] };
+  assert.equal(without.elements.filter(e => e.tag === "note").length, 1);
+});

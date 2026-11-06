@@ -1049,3 +1049,23 @@ test("the task's level sits beside the operator's lists (INV-1650): L2 refuses a
     cleanup();
   }
 });
+
+test("the agent's case rides on the pending approval beside the task's level, outside the fingerprint (INV-1651)", () => {
+  const { gate, cleanup, restart } = fixture({ approvalRequiredTools: ["bash"] });
+  try {
+    const asked = gate.check({ kind: "tool", agentId: "agent-1", agentName: "Ada", tool: "bash", input: { command: "rm -rf build" }, why: "the build directory is stale and the next step rebuilds it", taskLevel: 4 });
+    assert.equal(asked.allow, false);
+    const pending = gate.pending();
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0]!.why, "the build directory is stale and the next step rebuilds it");
+    assert.equal(pending[0]!.taskLevel, 4);
+    assert.doesNotMatch(pending[0]!.description, /stale/, "the case is not in the action text");
+    const again = gate.check({ kind: "tool", agentId: "agent-1", agentName: "Ada", tool: "bash", input: { command: "rm -rf build" }, why: "reworded" });
+    assert.equal((again as { approval?: { id: string } }).approval?.id, pending[0]!.id, "a reworded case is the same pending action");
+    const after = restart().pending()[0]!;
+    assert.equal(after.why, "the build directory is stale and the next step rebuilds it", "the case survives a restart");
+    assert.equal(after.taskLevel, 4);
+  } finally {
+    cleanup();
+  }
+});

@@ -20,7 +20,7 @@
  */
 
 import type { Task } from "./tasks.ts";
-import type { WatchedQuestion } from "./question-expiry.ts";
+import type { WatchedQuestion } from "./question-expiry.ts"; import { agentCaseText, questionLeanText } from "./consent-case.ts";
 import { describeStale } from "./mandate.ts";
 import { currentFlag } from "./task-flag.ts";
 import { STAGE_LABEL, stageWorldOf, type TaskStage, taskStage } from "./task-stage.ts";
@@ -69,7 +69,7 @@ export interface AttentionInput {
   /** The agents (INV-1647): a task an agent reviews is the team's to settle, not the person's. */
   agentIds?: ReadonlySet<string>;
   /** Pending approvals, the most common block (INV-1622/1627): one item each, answered from the strip. */
-  approvals?: readonly { id: string; agentId: string; agentName: string; description: string; action?: string; requestedAt: string }[];
+  approvals?: readonly { id: string; agentId: string; agentName: string; description: string; action?: string; requestedAt: string; why?: string; taskLevel?: number }[];
   /** Teammate chains the bus stopped (INV-1277): shown to everyone, since no person is in them by definition. */
   paused?: readonly { fromName: string; toName: string; hops: number; at: string; fromId: string }[];
   /**
@@ -115,7 +115,7 @@ export function attentionFor(input: AttentionInput): Attention {
       kind: "approval",
       ref: approval.id,
       title: `${approval.agentName || input.nameOf(approval.agentId)} ${approval.action !== undefined ? `wants to ${approval.action}` : "needs your consent"}`, // the ledger replays an approval without its agent's name
-      detail: `${approval.description.replace(/\s+/g, " ").slice(0, 160)} · asked ${approval.requestedAt.slice(0, 16).replace("T", " ")}Z`,
+      detail: `${approval.description.replace(/\s+/g, " ").slice(0, 160)} · asked ${approval.requestedAt.slice(0, 16).replace("T", " ")}Z${approval.taskLevel !== undefined ? ` · task L${approval.taskLevel}` : ""}${agentCaseText(approval.agentName || input.nameOf(approval.agentId), approval.why) !== undefined ? ` · ${agentCaseText(approval.agentName || input.nameOf(approval.agentId), approval.why)}` : ""}`, // the background and the agent's claim (INV-1651)
       with: approval.agentName || input.nameOf(approval.agentId),
     });
   }
@@ -129,9 +129,9 @@ export function attentionFor(input: AttentionInput): Attention {
       ref: question.conversation,
       title: question.question,
       detail:
-        question.fallback !== undefined
+        (question.fallback !== undefined
           ? `${question.agentName} is waiting; with no answer it goes with: ${question.fallback}`
-          : `${question.agentName} is waiting; with no answer it decides and says which way`,
+          : `${question.agentName} is waiting; with no answer it decides and says which way`) + (questionLeanText(question.agentName, question.recommended) !== undefined ? ` · ${questionLeanText(question.agentName, question.recommended)}` : ""), // INV-1651
       deadline: new Date(question.expiresAt).toISOString(),
       with: question.agentName,
     });

@@ -4203,7 +4203,7 @@ function drawItem(item) {
       // what is read here, so anything shortened would be consent to something else.
       html = '<div class="chead"><span class="dot"></span>' + (pending ? "Consent needed &mdash; " + esc(nameOf(current)) + " is waiting" : "Consent") + "</div>" +
         // What the tool does, in the host's words (INV-691) — above the verbatim action, never in it.
-        (item.action ? '<div class="note" style="font-weight:600">' + esc(item.action) + "</div>" : "") +
+        (item.action ? '<div class="note" style="font-weight:600">' + esc(item.action) + (item.taskLevel ? ' <span class="chip" style="font-size:10px">task L' + esc(String(item.taskLevel)) + "</span>" : "") + "</div>" : "") + (item.why ? '<div class="note"><b>' + esc(nameOf(item.agentId)) + " says</b> (its own words, not checked): " + esc(item.why) + "</div>" : "") + // the background and the agent's claim, apart from the verbatim action (INV-1651)
         "<code></code>" +
         (pending
           ? '<div class="note">Each button says what it covers: this exact action, once, for this session, or until you revoke it in Settings. This agent only — never another agent, never another command.</div>' +
@@ -4292,7 +4292,7 @@ function drawItem(item) {
     div.className = "question";
     if (item.at) div.setAttribute("data-at", String(item.at));
     var opts = item.options || [];
-    var html = whoLine(nameOf(current), item.at, ["question"]) + '<div class="qtitle"></div>';
+    var html = whoLine(nameOf(current), item.at, ["question"]) + '<div class="qtitle"></div>' + (item.recommended ? '<div class="qdone">' + esc(nameOf(current)) + " leans to: <b>" + esc(item.recommended) + "</b></div>" : ""); // INV-1651
     for (var o = 0; o < opts.length; o++) {
       html += '<button type="button" class="qopt' + (item.answered === opts[o] ? " chosen" : "") + '" data-opt="' + o + '"' + (item.answered !== undefined ? " disabled" : "") + '>' +
         '<span class="qkey">' + String.fromCharCode(65 + o) + "</span><span></span></button>";
@@ -4751,7 +4751,7 @@ function reconcileCards(pending, secretRequests, handovers) {
   pending.forEach(function (p) {
     if (p.agentId !== current) return;
     alive["consent:" + p.id] = true;
-    showCard("consent:" + p.id, { card: "consent", id: p.id, agentId: p.agentId, description: p.description, action: p.action, at: p.requestedAt });
+    showCard("consent:" + p.id, { card: "consent", id: p.id, agentId: p.agentId, description: p.description, action: p.action, why: p.why, taskLevel: p.taskLevel, at: p.requestedAt });
   });
   secretRequests.forEach(function (r) {
     if (r.agentId !== current) return;
@@ -6282,7 +6282,7 @@ stream.onmessage = function (raw) {
   }
 
   if (e.type === "approval_pending") {
-    if (e.agentId === current) showCard("consent:" + e.id, { card: "consent", id: e.id, agentId: e.agentId, description: e.description, action: e.action });
+    if (e.agentId === current) showCard("consent:" + e.id, { card: "consent", id: e.id, agentId: e.agentId, description: e.description, action: e.action, why: e.why, taskLevel: e.taskLevel });
     return;
   }
   if (e.type === "approval_settled") {
@@ -6308,7 +6308,7 @@ stream.onmessage = function (raw) {
   if (e.type === "question") {
     if (!inView(e)) return;
     closeOpen();
-    openQuestion = pushItem({ kind: "question", question: e.question, options: e.options || [], fallback: e.fallback, at: new Date().toISOString() });
+    openQuestion = pushItem({ kind: "question", question: e.question, options: e.options || [], fallback: e.fallback, recommended: e.recommended, at: new Date().toISOString() });
     return;
   }
 
