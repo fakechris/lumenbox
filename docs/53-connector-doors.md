@@ -2,7 +2,7 @@
      title: Connector doors: the SaaS integrations a third-party template names, on by credential
      family: decision
      status: current
-     updated: 2026-09-14
+     updated: 2026-11-06
 -->
 # 53 — Connector doors: the SaaS integrations a third-party template names, on by credential
 
@@ -104,3 +104,31 @@ never carry the token: it exists in `vault.json` (0600) and in one request heade
 What this still does not do: the MCP doors of §2 do not read the gate — a `mcp:github`
 door driven by an OAuth token is a follow-up, once one is wanted; and providers beyond
 GitHub and Feishu are a catalog entry each in `OAUTH_PROVIDERS`.
+
+## 5. Asked before work starts (INV-1666, 2026-11-06)
+
+The import flow's "connected / pending" was the only place anything asked what was missing; a
+task or a routine started blind and met the gap halfway through, as an agent's "needs a secret"
+card — for a routine at night, a run that sat waiting until morning. `credentialCoverage`
+(`src/host/credential-coverage.ts`) is the same question asked before every start, and the
+answer is the one this document already gives: a connector is satisfied by a configured server
+or a live door (`connectorSatisfied`) or by the OAuth secret `oauth:<provider>` with a live grant
+to the agent; a vault secret by existing with a grant (or the box's bundle) covering the agent.
+
+What is needed is read from statements only: the agent's tool list (`mcp:<slug>__…`), its box's
+bundles (`refsFor(...).needs`), and the `connectors:` / `secrets:` frontmatter of the skills it
+carries (its own agent-scoped ones and those its bundles name, docs/93 §2) — plus, for a routine,
+the routine itself, and for an import, the template's skills. Three starts ask it:
+
+- **a task** — from the Tasks panel or a chat. Missing means the board row goes to blocked with
+  `waitingOn: credentials: …`, the thread shows a "before this can start" card with a button to
+  the settings tab that fixes each item, a chat hears the same list, and the model is not called.
+  The vault's change listener re-asks; when it is covered the same task opens and, from a chat,
+  starts (`src/host/credential-waits.ts`).
+- **a routine** — the scheduler's `precheck`: skipped with `missing_credentials` and held, through
+  the run history's own `skip` / `hold` (INV-1665). A person resumes it from the attention list.
+- **an import** — the new agent's setup still runs; the card says what the imported work lacks.
+
+Expiring (the agent's only grant, or a token the host cannot re-mint, ends within three days) is
+shown and does not stop work. Settings → Team → Secrets says who needs each secret, and Remove
+asks first when somebody does. Nothing here requests a credential or changes an OAuth flow.

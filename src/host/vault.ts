@@ -87,7 +87,8 @@ export interface SecretView {
   grants: Grant[];
   domains?: string[];
   kind?: "git";
-  oauth?: { provider: string; kind: OAuthMeta["kind"]; expiresAt?: string; scopes?: string[] };
+  /** `refreshable`: the host can mint the next token itself (a refresh token, or client credentials), so an expiry is not the person's problem. */
+  oauth?: { provider: string; kind: OAuthMeta["kind"]; expiresAt?: string; scopes?: string[]; refreshable?: true };
 }
 
 function oauthOfRaw(raw: unknown): OAuthMeta | undefined {
@@ -134,8 +135,8 @@ export function vaultAuditPath(): string {
   return process.env.AGENTBOX_VAULT_AUDIT ?? join(agentboxHome(), "vault-audit.jsonl");
 }
 
-/** Whether a grant covers this caller right now. */
-function grantCovers(
+/** Whether a grant covers this caller right now. Exported for the coverage check before a run (credential-coverage.ts), which must agree with `resolve`. */
+export function grantCovers(
   grant: Grant,
   caller: { agentId: string; principalId?: string },
   now: number
@@ -157,6 +158,12 @@ function grantCovers(
 export class Vault {
   private secrets: Secret[] = [];
   private retired: RetiredValue[] = [];
+  private readonly listeners: (() => void)[] = [];
+
+  /** Called after every write (INV-1666): a credential that lands may let waiting work start. */
+  onChange(listener: () => void): void {
+    this.listeners.push(listener);
+  }
 
   constructor(
     private readonly path: string = vaultPath(),
@@ -223,6 +230,7 @@ export class Vault {
               kind: secret.oauth.kind,
               ...(secret.oauth.expiresAt !== undefined ? { expiresAt: secret.oauth.expiresAt } : {}),
               ...(secret.oauth.scopes !== undefined ? { scopes: [...secret.oauth.scopes] } : {}),
+              ...(secret.oauth.refreshToken !== undefined || secret.oauth.kind === "client_credentials" ? { refreshable: true as const } : {}),
             },
           }
         : {}),
@@ -373,6 +381,13 @@ export class Vault {
     });
     renameSync(temp, this.path);
     chmodSync(this.path, 0o600);
+    for (const listener of this.listeners) {
+      try {
+        listener();
+      } catch {
+        // A listener's failure is its own; the write has happened and stays happened.
+      }
+    }
   }
 
   private audit(entry: Record<string, unknown>): void {

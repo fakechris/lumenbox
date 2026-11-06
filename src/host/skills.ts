@@ -134,6 +134,27 @@ export interface Skill {
    * is worth holding it to. A turn a person drives is not narrowed. Absent means no narrowing.
    */
   allowedTools?: readonly string[];
+  /**
+   * The credentials this skill's work needs (INV-1666): connectors by name (`github`, `mcp:notion`)
+   * and vault secrets by id. Read before a run starts so a missing one is asked for then, not
+   * discovered halfway through by the agent. A statement, never a grant.
+   */
+  needs?: SkillNeeds;
+}
+
+/** What a skill says it needs to run, from `connectors:` and `secrets:` (docs/93 §2). */
+export interface SkillNeeds {
+  connectors?: readonly string[];
+  secrets?: readonly string[];
+}
+
+/** `connectors:` / `secrets:` as lists: comma- or space-separated, optionally in [brackets]; absent when both are empty. */
+export function skillNeedsFrom(meta: Record<string, string>): SkillNeeds | undefined {
+  const list = (raw: string | undefined) => (raw ?? "").replace(/^\s*\[|\]\s*$/g, "").split(/[\s,]+/).map(name => name.trim().replace(/^["']|["']$/g, "")).filter(name => name !== "");
+  const connectors = [...new Set(list(meta.connectors))];
+  const secrets = [...new Set(list(meta.secrets))];
+  if (connectors.length === 0 && secrets.length === 0) return undefined;
+  return { ...(connectors.length > 0 ? { connectors } : {}), ...(secrets.length > 0 ? { secrets } : {}) };
 }
 
 export type SkillScope = "global" | "agent";
@@ -213,6 +234,8 @@ export const SKILL_FRONTMATTER_KEYS: ReadonlySet<string> = new Set([
   "chat",
   "paused",
   "allowed-tools",
+  "connectors",
+  "secrets",
 ]);
 
 export interface ParsedSkill {
@@ -437,6 +460,7 @@ export function skillFrom(
       ...(parsed.meta.paused?.trim() === "true" ? { paused: true } : {}),
       ...(mode !== undefined ? { mode } : {}),
       ...(allowed !== undefined ? { allowedTools: allowed.tools } : {}),
+      ...(skillNeedsFrom(parsed.meta) !== undefined ? { needs: skillNeedsFrom(parsed.meta)! } : {}),
     },
     ...(note === undefined ? {} : { note }),
   };

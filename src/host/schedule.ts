@@ -228,6 +228,12 @@ export interface SchedulerDeps {
    * are its own — not one `ad-hoc` history every listener shares.
    */
   run: (agent: string, prompt: string, deliver?: string, slug?: string, toolScope?: readonly string[], deliverWhen?: DeliverWhen, identity?: string) => Promise<void | { result: RunResult; reason?: string }>;
+  /**
+   * Asked before every run (INV-1666): a reason means "not now" — the window is skipped with it and
+   * the routine is held until a person resumes it, through the same `skip` / `hold` doors as the
+   * overlap rule and the failure streak. Undefined, or no check at all, runs.
+   */
+  precheck?: (skill: { slug: string; name: string; boxId?: string }, agent: string) => Promise<RoutineReason | undefined>;
   /** A routine in observe mode was triggered and did not run (INV-1458); the audit row. */
   observed?: (slug: string, would: string) => void;
   /**
@@ -387,6 +393,28 @@ export class Scheduler {
     return hold;
   }
 
+  /**
+   * The check before a run: undefined to go ahead, else the reason it was skipped. A routine stopped
+   * here is held as well — a missing credential stays missing until a person acts, and a skip every
+   * window until then would be the same line on the run list forty times.
+   */
+  private async refusal(skill: { slug: string; name: string; boxId?: string }, agent: string): Promise<RoutineReason | undefined> {
+    if (this.deps.precheck === undefined) return undefined;
+    let reason: RoutineReason | undefined;
+    try {
+      reason = await this.deps.precheck(skill, agent);
+    } catch (error) {
+      // A check that cannot answer does not stop the run: it is advice about credentials, and the
+      // run's own use of them is still gated where they are resolved.
+      this.log(`${skill.name}: the check before the run failed (${error instanceof Error ? error.message : String(error)}); running anyway`);
+      return undefined;
+    }
+    if (reason === undefined) return undefined;
+    this.skip(skill, reason);
+    if (this.holds.holdOf(skill.slug) === undefined) this.hold(skill, reason);
+    return reason;
+  }
+
   /** A person turned it back on: the hold and the failure streak are cleared. Whether it was held. */
   resume(slug: string, by: string): boolean {
     const was = this.holds.release(slug);
@@ -490,6 +518,7 @@ export class Scheduler {
       if (agent === undefined) continue;
       const deliver = message.threadKey ?? message.chatKey;
       if (skill.mode === "observe") { this.observe(skill, agent, `run as ${agent} for a message in ${deliver} matching ${skill.match}`); fired.push(skill.slug); continue; }
+      if (await this.refusal(skill, agent) !== undefined) continue;
       this.log(`${skill.name}: fired by a message in ${deliver}`);
       fired.push(skill.slug);
       void this.launch(skill, agent, () => this.deps.run(
@@ -541,6 +570,10 @@ export class Scheduler {
         continue;
       }
       if (skill.mode === "observe") { this.observe(skill, agent, `run as ${agent} (${describeSchedule(skill.schedule)})${skill.deliver !== undefined ? `, report to ${skill.deliver}` : ""}`); continue; }
+      if (await this.refusal(skill, agent) !== undefined) {
+        this.lastRun.set(skill.slug, this.now());
+        continue;
+      }
 
       // Marked before starting, so a slow first tick cannot be overtaken by the next one.
       this.lastRun.set(skill.slug, this.now());
@@ -725,6 +758,8 @@ export class Scheduler {
     const agent = this.runnerFor(skill);
     if (agent === undefined) return { ok: false, reason: `No agent to run ${skill.name}.` };
     if (skill.mode === "observe") { this.observe(skill, agent, `run as ${agent} for a webhook call${from !== undefined ? ` from ${from}` : ""}`); return { ok: true, said: `${skill.name} is in observe mode: recorded what it would have done, nothing ran.` }; }
+    const refused = await this.refusal(skill, agent);
+    if (refused !== undefined) return { ok: false, reason: `${skill.name} did not run and is paused: ${refused.text}` };
 
     this.lastRun.set(slug, this.now());
     this.log(`${skill.name}: fired by webhook`);
@@ -768,6 +803,8 @@ export class Scheduler {
     if (this.running.has(slug)) return { ok: false, reason: `${skill.name} is already running.` };
     const agent = this.runnerFor(skill);
     if (agent === undefined) return { ok: false, reason: `No agent to run ${skill.name}.` };
+    const refused = await this.refusal(skill, agent);
+    if (refused !== undefined) return { ok: false, reason: `${skill.name} did not run and is paused: ${refused.text}` };
 
     this.log(`${skill.name}: firing now, by hand`);
     // By hand is still this routine running (INV-534): same slug, same opening with last

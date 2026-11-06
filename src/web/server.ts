@@ -180,7 +180,7 @@ import { randomUUID } from "node:crypto";
 import { isLive, isTaskStatus, type Task } from "../host/tasks.ts"; import { UnknownAgentError } from "../host/task-agents.ts";
 import { connectorSatisfied } from "../host/mcp-connectors.ts";
 import { adminRecipients } from "../host/upgrade.ts";
-import { BoxUpdateService, boxUpdateRoute } from "./box-update-routes.ts"; import { personRoute } from "./person-routes.ts"; import { PERSON_JS } from "./person-ui.ts"; import { agentFactsRoute } from "./agent-facts.ts"; import { agentCaseText } from "../host/consent-case.ts"; import { ROW_ORDER_JS } from "./row-order.ts"; import { BOARD_ORDER_JS } from "./board-order.ts"; import { teamMemoryReviewRoute } from "./team-memory-review-routes.ts"; import { TEAM_MEMORY_REVIEW_JS } from "./team-memory-review-ui.ts"; import { pendingReviews } from "../host/team-memory-review.ts"; import { CLAIM_ACCOUNT_JS } from "./claim-account-ui.ts"; import { DIGEST_HOUR, heldSection, PushBudget } from "../host/push-budget.ts"; import { pushBudgetRoute } from "./push-budget-routes.ts"; import { PUSH_BUDGET_JS } from "./push-budget-ui.ts"; import { SpendLimits, todaysRows } from "../host/spend-limits.ts"; import { spendLimitRoute } from "./spend-limit-routes.ts"; import { SPEND_LIMIT_JS } from "./spend-limit-ui.ts"; import { configuredRates } from "../host/provider-fallback.ts"; import { BoxKeeper } from "./box-keeper.ts"; import { AgentPauses } from "../host/agent-pause.ts"; import { ProbeKeeper, type ProbeKind } from "../host/boundary-probe.ts"; import { agentPauseRoute } from "./agent-pause-routes.ts"; import { AGENT_PAUSE_JS } from "./agent-pause-ui.ts"; import { diagnosticsRoute } from "./diagnostics-routes.ts"; import { DIAGNOSTICS_JS } from "./diagnostics-ui.ts"; import { providerRests, quotaStatusLine } from "../host/provider-rest.ts"; import { providerRestRoute, restNotice } from "./provider-rest-routes.ts"; import { PROVIDER_REST_JS } from "./provider-rest-ui.ts"; import { fallbackRoute } from "./provider-fallback-routes.ts"; import { PROVIDER_FALLBACK_JS } from "./provider-fallback-ui.ts"; import { routineRunsRoute } from "./routine-runs-routes.ts"; import { ROUTINE_RUNS_JS } from "./routine-runs-ui.ts"; import { deliverableRoute } from "./deliverable-routes.ts"; import { DELIVERABLES_JS } from "./deliverables-ui.ts"; import { readToolPermissions, toolPermissionRoute } from "./tool-permission-routes.ts"; import { TOOL_PERMS_JS } from "./tool-permissions-ui.ts"; import { configVersionRoute } from "./config-version-routes.ts"; import { CONFIG_HISTORY_JS } from "./config-history-ui.ts"; import { switchesForTask } from "../agents/config-versions.ts";
+import { BoxUpdateService, boxUpdateRoute } from "./box-update-routes.ts"; import { personRoute } from "./person-routes.ts"; import { PERSON_JS } from "./person-ui.ts"; import { agentFactsRoute } from "./agent-facts.ts"; import { agentCaseText } from "../host/consent-case.ts"; import { ROW_ORDER_JS } from "./row-order.ts"; import { BOARD_ORDER_JS } from "./board-order.ts"; import { teamMemoryReviewRoute } from "./team-memory-review-routes.ts"; import { TEAM_MEMORY_REVIEW_JS } from "./team-memory-review-ui.ts"; import { pendingReviews } from "../host/team-memory-review.ts"; import { CLAIM_ACCOUNT_JS } from "./claim-account-ui.ts"; import { DIGEST_HOUR, heldSection, PushBudget } from "../host/push-budget.ts"; import { pushBudgetRoute } from "./push-budget-routes.ts"; import { PUSH_BUDGET_JS } from "./push-budget-ui.ts"; import { SpendLimits, todaysRows } from "../host/spend-limits.ts"; import { spendLimitRoute } from "./spend-limit-routes.ts"; import { SPEND_LIMIT_JS } from "./spend-limit-ui.ts"; import { configuredRates } from "../host/provider-fallback.ts"; import { BoxKeeper } from "./box-keeper.ts"; import { AgentPauses } from "../host/agent-pause.ts"; import { ProbeKeeper, type ProbeKind } from "../host/boundary-probe.ts"; import { agentPauseRoute } from "./agent-pause-routes.ts"; import { AGENT_PAUSE_JS } from "./agent-pause-ui.ts"; import { diagnosticsRoute } from "./diagnostics-routes.ts"; import { DIAGNOSTICS_JS } from "./diagnostics-ui.ts"; import { providerRests, quotaStatusLine } from "../host/provider-rest.ts"; import { providerRestRoute, restNotice } from "./provider-rest-routes.ts"; import { PROVIDER_REST_JS } from "./provider-rest-ui.ts"; import { fallbackRoute } from "./provider-fallback-routes.ts"; import { PROVIDER_FALLBACK_JS } from "./provider-fallback-ui.ts"; import { routineRunsRoute } from "./routine-runs-routes.ts"; import { ROUTINE_RUNS_JS } from "./routine-runs-ui.ts"; import { deliverableRoute } from "./deliverable-routes.ts"; import { DELIVERABLES_JS } from "./deliverables-ui.ts"; import { readToolPermissions, toolPermissionRoute } from "./tool-permission-routes.ts"; import { TOOL_PERMS_JS } from "./tool-permissions-ui.ts"; import { configVersionRoute } from "./config-version-routes.ts"; import { CONFIG_HISTORY_JS } from "./config-history-ui.ts"; import { switchesForTask } from "../agents/config-versions.ts"; import { CredentialWaits } from "../host/credential-waits.ts"; import { secretsNeededBy, taskCredentialEvent, templateCredentialEvent, templateSkillNeeds, type CredentialEvent } from "./credential-routes.ts"; import { CREDENTIALS_JS } from "./credentials-ui.ts";
 import { hasCredential, PRESET_MODELS, providerConfigured, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { BootstrapAdmins } from "../host/bootstrap.ts";
 import { Principals, principalsPath, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
@@ -296,6 +296,7 @@ type OutboundEvent =
   | { type: "approval_settled"; id: string; agentId: string; how: "allowed" | "refused"; scope?: string }
   /** An agent asked the person for a secret by name; the page shows a card. */
   | { type: "secret_requested"; agentId: string; agentName: string; id: string; description: string }
+  | CredentialEvent // a start that waits on a credential, and its release (INV-1666)
   /** An agent handed its desktop to the person; the page shows the instruction and a hand-back. */
   | { type: "handover_pending"; agentId: string; agentName: string; instruction: string; reason: string }
   /** An imported bot's setup turn ended; `summary` says what landed (docs/29 §5.4). */
@@ -1005,8 +1006,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const acked = new Set<string>();
   const outbox = new Outbox(join(agentboxHome(), "outbox.jsonl"));
   const outboxSender = new OutboxSender(outbox, log);
+  const credentialWaits = new CredentialWaits({ tasks: () => orchestrator.tasks, check: (agentId, principalId) => orchestrator.credentials.forAgent(agentId, [], principalId), announce: event => broadcast(taskCredentialEvent(event)), log }); vault.onChange(() => { void credentialWaits.recheck(); }); // a credential that lands releases the work waiting on it (INV-1666)
   const channels = new ChannelManager({
-    outbox: outboxSender,
+    outbox: outboxSender, credentials: { gate: (taskId, start) => credentialWaits.gateText(taskId, "channel", start) },
     // The speaking right of a host push (INV-1459): the world each purpose claims, read now; a refusal is audited.
     outbound: (purpose, chatKey) => {
       const verdict = outboundVerdict(purpose, {
@@ -3515,7 +3517,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
         // Settings → Supervision (INV-1528): its own script and routes, like the decision model's below.
-        if (route === "GET /app/supervision.js") { res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(ROW_ORDER_JS + BOARD_ORDER_JS + UI_STYLE_JS + INLINE_ASK_JS + AGENT_PAUSE_JS + SUPERVISION_JS + SUPERVISION_WIZARD_JS + BOX_UPDATE_JS + DIAGNOSTICS_JS + CLAIM_ACCOUNT_JS + PUSH_BUDGET_JS + SPEND_LIMIT_JS + PROVIDER_REST_JS + TEAM_MEMORY_REVIEW_JS + PROVIDER_FALLBACK_JS + PERSON_JS + ROUTINE_RUNS_JS + DELIVERABLES_JS + TOOL_PERMS_JS + CONFIG_HISTORY_JS); return; } // + Apply update (INV-1538), askInline (INV-1540)
+        if (route === "GET /app/supervision.js") { res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(ROW_ORDER_JS + BOARD_ORDER_JS + UI_STYLE_JS + INLINE_ASK_JS + AGENT_PAUSE_JS + SUPERVISION_JS + SUPERVISION_WIZARD_JS + BOX_UPDATE_JS + DIAGNOSTICS_JS + CLAIM_ACCOUNT_JS + PUSH_BUDGET_JS + SPEND_LIMIT_JS + PROVIDER_REST_JS + TEAM_MEMORY_REVIEW_JS + PROVIDER_FALLBACK_JS + PERSON_JS + ROUTINE_RUNS_JS + DELIVERABLES_JS + TOOL_PERMS_JS + CONFIG_HISTORY_JS + CREDENTIALS_JS); return; } // + Apply update (INV-1538), askInline (INV-1540)
         const supervised = await supervisionRoute(route, { home: agentboxHome(), configPath: configPath(), agents: () => registry.list().map(agent => agent.profile.name), readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: role => refusedRole(role), logFile: defaultSupervisionLog() });
         if (supervised !== undefined) { if (supervised.status !== 0) send(res, supervised.status, supervised.body); return; }
         // Settings → Model → Decision model (INV-1412): its own script, its own two routes.
@@ -4172,18 +4174,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             title: String(body.title ?? ""),
             ...(typeof body.description === "string" ? { description: body.description } : {}),
             requester: caller.userId ?? "web",
-            ...(typeof body.assigneeId === "string" && body.assigneeId !== ""
-              ? { assigneeId: body.assigneeId }
-              : {}),
-            ...(typeof body.reviewerId === "string" && body.reviewerId !== ""
-              ? { reviewerId: body.reviewerId }
-              : {}),
+            ...(typeof body.assigneeId === "string" && body.assigneeId !== "" ? { assigneeId: body.assigneeId } : {}),
+            ...(typeof body.reviewerId === "string" && body.reviewerId !== "" ? { reviewerId: body.reviewerId } : {}),
           });
           if (created === undefined) {
             send(res, 400, { error: "A task needs a title." });
             return;
           }
-          send(res, 200, { task: created });
+          const waiting = credentialWaits.gate(created.id, caller.userId ?? "web"); // before it is anyone's to start (INV-1666): a credential its assignee lacks blocks it now, with a card
+          send(res, 200, { task: board.get(created.id) ?? created, ...(waiting !== undefined ? { coverage: waiting.coverage } : {}) });
           return;
         }
 
@@ -4378,7 +4377,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // only, because a secret's grants are who-may-do-what.
         if (route === "GET /api/vault") {
           if (refusedRole("admin")) return;
-          send(res, 200, { secrets: vault.list() });
+          send(res, 200, { secrets: vault.list(), neededBy: secretsNeededBy(orchestrator.credentials, registry.list().map(agent => agent.id), registry.listBoxes().flatMap(box => orchestrator.skillsFor(box.id).current().skills)) }); // who needs each, for the Secrets list (INV-1666)
           return;
         }
 
@@ -6431,7 +6430,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               complete: true,
             });
           });
-          send(res, 200, { id: agent.id, name: agent.profile.name, templateId: imported.id, pending });
+          const coverage = orchestrator.credentials.forAgent(agent.id, templateSkillNeeds([...parsed.template.skills, ...parsed.template.routines]), caller.userId)?.coverage; const said = coverage === undefined ? undefined : templateCredentialEvent({ id: agent.id, name: agent.profile.name }, parsed.template.profile.name, coverage); if (said !== undefined) broadcast(said); // what the imported work needs and lacks, said before anyone asks it for anything (INV-1666)
+          send(res, 200, { id: agent.id, name: agent.profile.name, templateId: imported.id, pending, ...(coverage !== undefined ? { coverage } : {}) });
           return;
         }
 

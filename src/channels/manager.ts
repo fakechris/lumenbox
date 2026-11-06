@@ -638,10 +638,8 @@ export interface ChannelManagerDeps {
    * Returns the saved names (as the chat should hear them), or undefined when there
    * is nowhere to store them — which the chat is told plainly.
    */
-  receiveFiles?: (
-    chatKey: string,
-    files: { name: string; base64: string }[]
-  ) => Promise<string[] | undefined>;
+  receiveFiles?: (chatKey: string, files: { name: string; base64: string }[]) => Promise<string[] | undefined>;
+  credentials?: { gate: (taskId: string, start: () => Promise<void>) => string | undefined }; // before a new task's turn (INV-1666): a line for the chat when a credential it needs is missing; the task waits and `start` begins it once one lands
   /**
    * The files a finished turn left in this chat's outbox — name and bytes, smallest
    * first. Collected once per task, after the reply lands; an empty answer is the
@@ -2332,6 +2330,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         if (options.recoveryOperationId !== undefined) this.deps.recover?.started(options.existingTaskId, options.recoveryOperationId);
         this.deps.board?.started(options.existingTaskId);
       }
+      const waiting = taskId !== undefined && options?.existingTaskId === undefined ? this.deps.credentials?.gate(taskId, () => this.runTask(adapter, message, agentName, text, droppedFiles, { ...options, existingTaskId: taskId })) : undefined; if (waiting !== undefined) { clearTimeout(ackTimer); await deliver(waiting); return; }
       // The opening line goes out the moment the model says it, so the person reads "我先查
       // 一下" while the search runs instead of silence until it ends. Remembered so the
       // final reply is not the same sentence twice when a model repeats itself.
@@ -2473,7 +2472,6 @@ function heldBack(file: { name: string; base64: string }): string | undefined {
   return `${file.name} — ${reasons.join("; ")}`;
 }
 
-/** The instruction as a card header: its first line, clamped. */
 /**
  * A card's title, from the message it came from.
  *

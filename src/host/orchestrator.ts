@@ -120,6 +120,7 @@ import { heartbeatAgentOf, heartbeatItems, heartbeatSlug, readStanding, standing
 import { UsageLog } from "./usage.ts"; import type { SpendLimits } from "./spend-limits.ts"; import { OPERATOR, PersonRecords } from "./person.ts";
 import { AcpDelegates } from "./acp-delegate.ts";
 import { worktreeState } from "./worktree-state.ts";
+import { CredentialChecks } from "./credential-waits.ts";
 import { tracerFromEnv, type Tracer } from "./trace.ts";
 import {
   createClient, effortConfig,
@@ -599,7 +600,30 @@ export class Orchestrator {
     );
   }
 
+  /**
+   * What an agent's work needs in credentials and which are here (INV-1666): asked before a task, a
+   * routine or a template's setup starts. The world is read fresh on each ask — the vault, the MCP
+   * servers and doors, the box's bundles — so a credential that just landed counts at once.
+   */
+  readonly credentials = new CredentialChecks({
+    agent: idOrName => {
+      const record = this.registry.tryGet(idOrName) ?? this.registry.list().find(entry => entry.profile.name === idOrName);
+      if (record === undefined) return undefined;
+      const box = this.registry.boxOf(record.id);
+      return { id: record.id, name: record.profile.name, boxId: box.id, ...(record.profile.tools !== undefined ? { tools: record.profile.tools } : {}), bundles: this.bundles.refsFor(box) };
+    },
+    skillsIn: boxId => this.skillsFor(boxId ?? this.registry.box.id).current().skills,
+    world: agent => ({
+      secrets: this.options.vault?.list() ?? [],
+      servers: this.mcp.statuses().map(status => status.name),
+      env: process.env,
+      connected: ["browser"],
+      bundleGrants: id => { const box = this.registry.boxById(agent.boxId); return box !== undefined && this.bundles.grantsSecret(box, id); },
+    }),
+  });
+
   readonly scheduler = new Scheduler({
+    precheck: async (skill, agent) => this.credentials.forRoutine(skill, agent), // skipped and held with missing_credentials (INV-1666)
     spentSinceAgent: (sinceMs, agentId) => this.usage.spentSinceAgent(sinceMs, agentId),
     due: async () => {
       const everywhere = await this.skillsEverywhere();
