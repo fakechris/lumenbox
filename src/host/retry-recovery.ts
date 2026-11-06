@@ -22,9 +22,8 @@ export type RetryResult =
   | { status: "ready"; text: string; prompt: string; operationId: string; epoch: number }
   | { status: "replayed" | "refused"; text: string };
 
-export function isRetryCommand(text: string): boolean {
-  return /^\/retry(?:\s|$)/i.test(text.trim());
-}
+/** `/retry` is a chat command; its shape lives in the command table (INV-1660). */
+export { isRetryCommand } from "../channels/commands.ts";
 
 function validPrivateConversation(input: RetryInput): boolean {
   return input.privateChat && input.conversation !== MAIN_CONVERSATION &&

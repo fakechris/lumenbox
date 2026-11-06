@@ -135,9 +135,9 @@ export const BUDGET_WARN_AT = 0.8;
 const OBJECTIVE_MAX = 4_000;
 const CHECKLIST_MAX = 40;
 
-export function isGoalCommand(text: string): boolean {
-  return /^\/goal(?:\s|$)/i.test(text.trim());
-}
+/** `/goal` is a chat command; its shape and usage line live in the command table (INV-1660). */
+export { GOAL_USAGE, isGoalCommand } from "../channels/commands.ts";
+import { GOAL_USAGE } from "../channels/commands.ts";
 
 export type GoalCommand =
   | { kind: "status" }
@@ -149,9 +149,6 @@ export type GoalCommand =
   | { kind: "clear" }
   | { kind: "confirm"; index: number }
   | { kind: "usage" };
-
-export const GOAL_USAGE =
-  "用法：/goal <目标> [--budget <额度>] 创建；/goal 查看；/goal pause | resume | clear；/goal replace <目标>；/goal confirm <序号> 确认清单里的命令；/goal budget <额度> 给当前目标设预算（折算输入 token 数）。";
 
 /** `--budget N` anywhere in an objective, N in input-token equivalents (k/m suffixes allowed). */
 function takeBudget(text: string): { text: string; budget?: number } {

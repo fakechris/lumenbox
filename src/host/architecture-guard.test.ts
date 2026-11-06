@@ -275,3 +275,22 @@ test("a SKILL.md key is parsed in skills.ts and explained in docs/93, and the tw
   assert.ok(documented.length > 0, "docs/93 §2 has a table of keys, one `key` per row");
   assert.deepEqual([...documented].sort(), [...SKILL_FRONTMATTER_KEYS].sort(), "document the key in docs/93 §2, or stop parsing it");
 });
+
+test("a chat command, a Settings pane and a rule-file key each have one home, and the guard finds a second (INV-1660)", async () => {
+  // @ts-expect-error -- a script, not a typed module
+  const guard = await import("../../scripts/registry-guard.mjs");
+  const { registeredSlashWords } = await import("../channels/commands.ts");
+  const { SETTINGS_PANES } = await import("../web/settings-registry.ts");
+  assert.deepEqual(await guard.registryProblems(), [], "the tree as it is holds");
+
+  const manager = { path: "channels/manager.ts", text: 'if (text === "/stop") return x;\nif (text.trim() === "/frobnicate") return "x"; // a planted command' };
+  assert.deepEqual(guard.commandProblems([manager], registeredSlashWords()).length, 1, "an unregistered command in the manager is found");
+  assert.match(guard.commandProblems([{ path: "channels/verbs.ts", text: 'return ["退出", "/quit"].includes(t);' }], registeredSlashWords()).join("\n"), /\/quit[\s\S]*word list/);
+
+  const pane = { path: "web/x-ui.ts", text: 'var f = el("div", { "data-settab": "billing" });\ntabs.appendChild(el("a", { href: "#", "data-settab": "billing" }, "Billing"));' };
+  const settings = guard.settingsProblems([pane, ...SETTINGS_PANES.map((p: { key: string }) => ({ path: "web/y.ts", text: `data-settab="${p.key}"` }))], SETTINGS_PANES);
+  assert.equal(settings.filter((line: string) => /billing/.test(line)).length, 1, "an unlisted pane key");
+  assert.equal(settings.filter((line: string) => /by hand/.test(line)).length, 1, "a tab anchor with its own title");
+
+  assert.equal(guard.rulesProblems([{ path: "host/rules.ts", text: "const tier = meta.tier;" }]).length, 1, "a rule key read by hand");
+});

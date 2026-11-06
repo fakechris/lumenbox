@@ -54,7 +54,10 @@ this file and the headers disagree. Edit the header, not this table.
 | [87-prompt-parts](87-prompt-parts.md) | Built-in prompt parts: a team's override, and what happens when the default moves | current | 2026-11-01 |
 | [88-improve](88-improve.md) | A check-up for one agent: scenarios in isolation, a judged report, a proposal nobody applies | current | 2026-11-01 |
 | [91-watchdog](91-watchdog.md) | The watchdog: a control loop outside the orchestrator | current | 2026-11-02 |
+| [reference-commands](reference-commands.md) | Reference: what you can say in a chat | current | generated |
 | [reference-prompt-parts](reference-prompt-parts.md) | Reference: the prompt parts | current | generated |
+| [reference-rules](reference-rules.md) | Reference: the rules file grammar | current | generated |
+| [reference-settings](reference-settings.md) | Reference: the Settings panes | current | generated |
 | [reference-skills](reference-skills.md) | Reference: the skills that ship | current | generated |
 | [reference-templates](reference-templates.md) | Reference: the template shelf | current | generated |
 | [reference-tools](reference-tools.md) | Reference: the built-in tools | current | generated |
@@ -79,7 +82,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [30-multi-box](30-multi-box.md) | Many boxes, one host: the multi-box mode | current | 2026-11-01 |
 | [31-harness-review](31-harness-review.md) | The turn engine, reviewed against the incident and three references | current | 2026-09-26 |
 | [32-coordination-protocol](32-coordination-protocol.md) | Coordination as protocol, slice one: a fork ledger that survives restarts, and fenced children | current | 2026-11-01 |
-| [33-mcp-face](33-mcp-face.md) | The box gets an MCP face: a per-job route on the host, never a credential in the box | current | 2026-09-03 |
+| [33-mcp-face](33-mcp-face.md) | The box gets an MCP face: a per-job route on the host, never a credential in the box | current | 2026-11-06 |
 | [34-extensions](34-extensions.md) | Extensions: the edges you can edit without restarting the core (R36) | current | 2026-09-29 |
 | [35-grok-onboarding](35-grok-onboarding.md) | Onboarding a Grok Bot box: the bot prepares its own box, the person connects from the laptop | current | 2026-09-03 |
 | [35-multiuser](35-multiuser.md) | Multiuser: doors as login, the org as the roster, boxes as the boundary | superseded by [36-enterprise](36-enterprise.md) — §4 revises the stage plan; §0 answers the edition question | 2026-09-03 |

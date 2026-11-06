@@ -2,7 +2,7 @@
      title: The box gets an MCP face: a per-job route on the host, never a credential in the box
      family: decision
      status: current
-     updated: 2026-09-03
+     updated: 2026-11-06
 -->
 # 33 — The box gets an MCP face: a per-job route on the host, never a credential in the box
 
@@ -274,3 +274,18 @@ and `mcp-tools.ts`:
 
 Not done, on purpose: no OpenAI Responses compatibility, no change to the Delegate route (§1),
 no cancel — `cancel: false` is the honest line until there is one.
+
+**The door as it stands (INV-1668, 2026-11-06).** Ten tools, all in `src/web/mcp-tools.ts` and
+the modules it composes: `assign_task`, `task_status`, `list_agents`, `run_on_box`,
+`box_screenshot`, `goal_start` / `goal_control` (INV-1507), `watch` (INV-1508),
+`raise_attention` (INV-1509), and `fetch_deliverable` — a task's delivered file (INV-1663's
+snapshot, checked against its digest) to whoever may see the task on the board, text as text and
+other files as base64 in `structuredContent` up to 1 MiB; `task_status`'s record lists a task's
+deliverables. That is what made `files` true: the door reads what a task handed over, and
+uploads nothing (`SIDE_DOOR_CAPABILITIES` in mcp-contract.ts also carries `structured`, `goals`
+and `watch: true` since INV-1506–1508). `box_screenshot` was reported missing from the code; it never was (it has
+served since the door was built, 2026-08-24) — the divergence was the other way, this section
+naming five tools while the door served nine, so the list here was brought up to the code.
+`skills/lumenbox/SKILL.md` teaches the same ten to Claude Code and Codex, and
+`agentbox skill install [--claude] [--codex]` puts it where each client reads it and prints the
+`agentbox mcp` entry with a token placeholder; a test holds SKILL.md's list to the door's.

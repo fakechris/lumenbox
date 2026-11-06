@@ -5,7 +5,8 @@
  * The hand-written tool table in docs/02 stopped at seven tools while the product grew to fifty:
  * a table somebody has to remember to update is a table that is wrong. The sources are already
  * machine-readable — `buildTools()` and the tiers in side-effects.ts, the starter and hub skills,
- * the catalog shelf, the prompt parts — so the pages are rendered from them, and `npm test`
+ * the catalog shelf, the prompt parts, and (INV-1660) the chat commands, the Settings panes and
+ * the rules grammar — so the pages are rendered from them, and `npm test`
  * (docs-reference.test.mjs) fails when a page on disk and its rendering disagree, the way
  * docs-lint holds docs/INDEX.md to the headers.
  *
@@ -34,6 +35,9 @@ export const PAGES = {
   skills: "docs/reference-skills.md",
   templates: "docs/reference-templates.md",
   promptParts: "docs/reference-prompt-parts.md",
+  commands: "docs/reference-commands.md",
+  settings: "docs/reference-settings.md",
+  rules: "docs/reference-rules.md",
 };
 
 /** Every connector `buildTools` can be handed, for the all-on combination. */
@@ -231,6 +235,46 @@ async function renderPromptParts() {
   ].join("\n");
 }
 
+async function renderCommands() {
+  const { CHAT_COMMANDS, WHO_MEANS } = await import(src("channels/commands.ts"));
+  const where = { every: "every channel", private: "an independent private chat" };
+  const rows = CHAT_COMMANDS.map(command => {
+    const forms = command.forms.map(form => `\`${form.syntax}\`${form.does ? ` — ${form.does.en}` : ""}`).join("<br>");
+    const also = command.forms.flatMap(form => (form.words ?? []).filter(word => word !== form.syntax)).map(word => `\`${word}\``).join(", ");
+    return [`\`${command.key}\``, forms, also || "—", `${command.summary.en}${command.when ? ` Only ${command.when.en}` : ""}`, where[command.doors], WHO_MEANS[command.who], command.answered === "wire" ? "on the wire" : "a model turn"];
+  });
+  return [
+    ...header("reference-commands", "Reference: what you can say in a chat", "`CHAT_COMMANDS` (src/channels/commands.ts), the table the channel manager dispatches through and `/help` answers with"),
+    `${CHAT_COMMANDS.length} commands, in the order a message is checked against them. A message is a command only when it is the whole message — "停下来改用另一个文件夹" is an instruction, not a stop — and every other message is work for an agent.`,
+    "",
+    "- **also** — every other spelling the command answers to, compared case-insensitively.",
+    "- **answered** — `on the wire` is the host answering without a model turn; `a model turn` starts or steers one.",
+    "",
+    ...table(["command", "forms", "also", "what it does", "where", "who", "answered"], rows),
+    "",
+  ].join("\n");
+}
+
+async function renderSettings() {
+  const { SETTINGS_PANES } = await import(src("web/settings-registry.ts"));
+  const codes = list => (list.length === 0 ? "—" : list.map(item => `\`${item}\``).join(", "));
+  return [
+    ...header("reference-settings", "Reference: the Settings panes", "`SETTINGS_PANES` (src/web/settings-registry.ts), which the dialog renders its tabs from"),
+    `${SETTINGS_PANES.length} panes. **config** is what the pane edits in \`~/.agentbox/config.json\`; **API** is the routes behind it. A pane mounted by a script appears when that script has loaded.`,
+    "",
+    ...table(["key", "pane", "what it is for", "config", "API", "mounted"], SETTINGS_PANES.map(pane => [`\`${pane.key}\``, pane.title, pane.about, codes(pane.config), codes(pane.apis), pane.mounted === "page" ? "in the page" : "by a script"])),
+    "",
+  ].join("\n");
+}
+
+async function renderRules() {
+  const { describeGrammar } = await import(src("host/rules-grammar.ts"));
+  return [
+    ...header("reference-rules", "Reference: the rules file grammar", "`describeGrammar()` (src/host/rules-grammar.ts), the grammar src/host/rules.ts parses with"),
+    describeGrammar(),
+  ].join("\n");
+}
+
 /** Every page, rendered: `{ path, text }` with the path relative to the repository. */
 export async function renderReference() {
   return [
@@ -238,6 +282,9 @@ export async function renderReference() {
     { path: PAGES.skills, text: await renderSkills() },
     { path: PAGES.templates, text: await renderTemplates() },
     { path: PAGES.promptParts, text: await renderPromptParts() },
+    { path: PAGES.commands, text: await renderCommands() },
+    { path: PAGES.settings, text: await renderSettings() },
+    { path: PAGES.rules, text: await renderRules() },
   ];
 }
 
