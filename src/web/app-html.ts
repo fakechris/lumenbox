@@ -5713,9 +5713,10 @@ function renderAttention() {
           '<span style="flex:1">' + esc(item.title) + ' <span class="dim">' + esc(item.detail) + (item.stage ? " · " + esc(item.stage) : "") + "</span></span>" + (owed ? act : "") + "</div>";
       };
       // The first screen (INV-1464): the person/* rows, counted, above the agents; healthy takes no space.
-      var needs = mine.filter(function (i) { return i.stage ? i.stage.indexOf("person/") === 0 : i.kind === "approval" || i.kind === "spend-limit" || i.kind === "question" || i.kind === "paused" || i.kind === "undeliverable"; });
-      $("needsme").style.display = needs.length ? "" : "none";
-      $("needsme").innerHTML = needs.length ? '<div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--warn);margin-bottom:4px">' + esc(t("ui.attention.needsMe")) + " · " + needs.length + "</div>" + needs.map(function (i) { return row(i, true); }).join("") : "";
+      // The strip is for what blocks (INV-1627): a consent, a question, a pause, a message that could not land. Tasks waiting for review are the board's, folded into one line here — 234 of them once filled the whole column.
+      var needs = mine.filter(function (i) { return i.kind === "approval" || i.kind === "spend-limit" || i.kind === "question" || i.kind === "paused" || i.kind === "undeliverable"; }), reviews = mine.filter(function (i) { return !!i.stage && i.stage.indexOf("person/") === 0; }).length, shown = needs.slice(0, 5);
+      $("needsme").style.display = needs.length || reviews ? "" : "none";
+      $("needsme").innerHTML = (needs.length ? '<div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--warn);margin-bottom:4px">' + esc(t("ui.attention.needsMe")) + " · " + needs.length + "</div>" + shown.map(function (i) { return row(i, true); }).join("") + (needs.length > shown.length ? '<a href="#" class="dim" data-att-board="1" style="font-size:12px">+' + (needs.length - shown.length) + " more on the board</a>" : "") : "") + (reviews ? '<a href="#" class="dim" data-att-board="1" style="display:block;font-size:12px;margin-top:4px">' + reviews + " task" + (reviews === 1 ? "" : "s") + " waiting for your review · open the board</a>" : "");
       if (!mine.length && !theirs.length) {
         $("attention").style.display = "";
         $("attention").innerHTML = '<div class="dim" style="font-size:12.5px">' + esc(t("ui.attention.empty")) + "</div>";
@@ -5734,7 +5735,7 @@ document.addEventListener("click", function (event) {
   var target = event.target && event.target.closest ? event.target : null;
   if (!target) return;
   var keep = target.closest("[data-att-keep]"), drop = target.closest("[data-att-drop]"), snooze = target.closest("[data-att-snooze]");
-  var open = target.closest("[data-att-open]") || target.closest("[data-att-task]"), consent = target.closest("[data-att-approve]") || target.closest("[data-att-deny]"); // consent is answered from the strip (INV-1627)
+  var open = target.closest("[data-att-open]") || target.closest("[data-att-task]") || target.closest("[data-att-board]"), consent = target.closest("[data-att-approve]") || target.closest("[data-att-deny]"); // consent is answered from the strip (INV-1627)
   if (!keep && !drop && !snooze && !open && !consent) return;
   event.preventDefault();
   var done = function () { return renderAttention().then(refreshTasks); }; if (consent) {
@@ -5752,7 +5753,7 @@ document.addEventListener("click", function (event) {
     // column. A task opens its card on the board beside this panel.
     var conversation = open.getAttribute("data-att-open");
     if (conversation) select(current, conversation);
-    else { openTask = open.getAttribute("data-att-task"); taskScrolled = true; refreshTasks(); }
+    else { openTask = open.getAttribute("data-att-task"); taskScrolled = true; showTab("tasks"); } // the board is where a task opens; from the chat view that means switching to it
   }
 });
 
