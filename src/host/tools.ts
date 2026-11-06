@@ -3,7 +3,7 @@ import { inputValueHash, parseSensitiveInput, SENSITIVE_INPUT_TTL_MS } from "../
 import { approvalOf, computerWithVision, desktopGuard, visionActionSchema, visionExpectSchema } from "./computer-vision.ts";
 import { deliveryLine } from "../cua/delivery.ts";
 import { formatExec } from "./exec-format.ts";
-import { isWaitOnly, onEndSchema, parseOnEnd } from "./job-end.ts"; import { levelOfCurrentTask, parseLevel } from "./autonomy-level.ts"; import { splitWhy, WHY_FIELD } from "./consent-case.ts"; import { describeDiscovery, DISCOVERY_FIELDS, parseDiscovery } from "./discovery.ts"; import type { JobWatch } from "./job-watch.ts";
+import { isWaitOnly, onEndSchema, parseOnEnd } from "./job-end.ts"; import { levelOfCurrentTask, parseLevel } from "./autonomy-level.ts"; import { splitWhy, WHY_FIELD } from "./consent-case.ts"; import { describeDiscovery, DISCOVERY_FIELDS, parseDiscovery } from "./discovery.ts"; import type { JobWatch } from "./job-watch.ts"; import { deliverFileTool, withDeliverFileTool } from "./deliver-file-tool.ts";
 /**
  * Tool definitions and dispatch.
  *
@@ -457,7 +457,7 @@ export const FORK_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
   "SendToAgent",
   "CreateAgent",
   "UpdateAgent",
-  "Tasks",
+  "Tasks", "DeliverFile",
   "HandBack",
   "ClaimWork",
   "RememberFact",
@@ -555,7 +555,7 @@ export const MAX_FORKS = 12;
  * at build time, which is what keeps the classification out of the model's hands.
  */
 export const BOOKKEEPING_TOOLS: ReadonlySet<string> = new Set([
-  "Tasks",
+  "Tasks", "DeliverFile",
   "HandBack",
   "RememberFact",
   "SetTodos",
@@ -1855,7 +1855,7 @@ export function buildTools(
         required: ["action"],
       },
     }
-  );
+  ); withDeliverFileTool(tools); // a task's deliverables (INV-1663)
 
   // The door out of the box, only when an operator has built one. Not added-and-
   // withheld — absent, so a box without host execution never puts the idea in an
@@ -4077,7 +4077,7 @@ export async function dispatchTool(
       }
     }
 
-    case "RunOperation": return runOperationTool(context, input); // INV-1378
+    case "DeliverFile": return deliverFileTool(context, input); case "RunOperation": return runOperationTool(context, input); // INV-1663; INV-1378
     case "browser_verify_write":
       return { text: writePaths.verify(writePathKey(context.agent.id, context.conversation), String(input.mark ?? ""), (["done", "not_done", "unknown"] as const).find(v => v === input.verdict) ?? "unknown", String(input.evidence ?? "").slice(0, 300)) };
     case "browser_open":

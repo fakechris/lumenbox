@@ -18,7 +18,7 @@
  */
 
 /** Where the box keeps an agent's work. Paths outside it are not ours to deliver. */
-const WORK_ROOT = "/home/box/work";
+export const WORK_ROOT = "/home/box/work";
 
 /**
  * Absolute box paths a reply names, in the order they appear, deduplicated.

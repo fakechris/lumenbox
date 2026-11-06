@@ -2679,6 +2679,7 @@ export const ALL_TOOLS: readonly string[] = [
   "Recall",
   "OtherThreads",
   "Tasks",
+  "DeliverFile",
   "HandBack",
   "Goal",
   "RunOnHost",
