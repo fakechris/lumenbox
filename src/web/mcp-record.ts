@@ -8,6 +8,7 @@
  * no memory, no conversation text, and of files only what was delivered: names and digests, not bytes.
  */
 
+import type { ForkChild } from "../host/fork-events.ts";
 import type { Pursuit } from "../host/goal-mode.ts";
 import { currentFlag, type TaskFlag } from "../host/task-flag.ts";
 import type { StageWorld } from "../host/task-stage.ts";
@@ -49,6 +50,21 @@ export interface TaskRecord {
   flag?: TaskFlag;
   /** What the task handed over (INV-1663), oldest first: fetch_deliverable reads one (INV-1668). */
   deliverables?: { id: string; name: string; size: number; sha256: string; note: string; at: string }[];
+  /** The forks of its turns (INV-1667): each child, how it stands, and its chain of events. */
+  forks?: ForkRecord[];
+}
+
+export interface ForkRecord {
+  child: string;
+  brief: string;
+  status: ForkChild["status"];
+  reason?: string;
+  lastAt: string;
+  steps: ForkChild["steps"];
+}
+
+export function forkRecord(fork: ForkChild): ForkRecord {
+  return { child: fork.child, brief: fork.brief, status: fork.status, ...(fork.reason !== undefined ? { reason: fork.reason } : {}), lastAt: fork.lastAt, steps: fork.steps.map(step => ({ ...step })) };
 }
 
 export function pursuitRecord(pursuit: Pursuit): PursuitRecord {
@@ -74,11 +90,12 @@ function mandateRecord(task: Task): TaskRecord["mandate"] {
   return { by: mandate.by, strength: mandate.strength, state, ...(state === "stale" ? { staleReasons: [...mandate.stale!.reasons] } : {}) };
 }
 
-export function taskRecord(task: Task, deps: { nameOf: (id: string) => string; stageWorld?: (task: Task) => StageWorld }): TaskRecord {
+export function taskRecord(task: Task, deps: { nameOf: (id: string) => string; stageWorld?: (task: Task) => StageWorld; forksOf?: (taskId: string) => readonly ForkChild[] }): TaskRecord {
   const ended = task.status === "done" || task.status === "dropped";
   const stage = deps.stageWorld !== undefined ? taskStage(task, deps.stageWorld(task)) : ended ? "ended" : undefined;
   const mandate = mandateRecord(task);
   const pursuit = task.pursuit;
+  const forks = deps.forksOf?.(task.id) ?? [];
   return {
     id: task.id,
     title: task.title,
@@ -99,5 +116,6 @@ export function taskRecord(task: Task, deps: { nameOf: (id: string) => string; s
     ...(pursuit !== undefined ? { pursuit: pursuitRecord(pursuit) } : {}),
     ...(currentFlag(task) !== undefined ? { flag: currentFlag(task)! } : {}),
     ...((task.deliverables ?? []).length > 0 ? { deliverables: task.deliverables!.map(item => ({ id: item.id, name: item.name, size: item.size, sha256: item.sha256, note: item.note, at: item.at })) } : {}),
+    ...(forks.length > 0 ? { forks: forks.map(forkRecord) } : {}),
   };
 }

@@ -26,6 +26,7 @@ import { AgentBus, type BusEvent, type InboundMessage, type Lane } from "../agen
 import { Inbox, inboxPath } from "../agents/inbox.ts";
 import { Claims, claimsPath } from "./claims.ts";
 import { PendingWork, isForkChild, pendingWorkPath } from "./pending-work.ts";
+import { ForkEvents, forkEventsPath } from "./fork-events.ts";
 import { McpFace } from "./mcp-face.ts";
 import { ModelRelay } from "./model-relay.ts";
 import { DelegateSessions } from "./delegate-sessions.ts";
@@ -941,6 +942,8 @@ export class Orchestrator {
         ? undefined
         : (options.pendingWork ??
           new PendingWork(pendingWorkPath(), line => console.error(`[pending-work] ${line}`)));
+    // What a person sees of the forks (INV-1667), kept beside the ledger the host itself made; a ledger a test hands in brings its own or none.
+    if (options.pendingWork === undefined && this.pendingWork !== undefined) this.pendingWork.forks = new ForkEvents(forkEventsPath(), line => console.error(`[fork-events] ${line}`));
     this.skillProvenance =
       options.skillProvenance === null
         ? new SkillProvenance(null)

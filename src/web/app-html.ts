@@ -4515,6 +4515,7 @@ function fmtAgo(iso) {
 /** One line for the button: where it came from and what was said. */
 function conversationLabel(c) {
   if (!c || c.id === "main") return "Team room";
+  if (String(c.id).indexOf("fork/") === 0 && window.forkLabel) return window.forkLabel(String(c.id), convLoaded); // a fork's thread, by its brief and state (INV-1667)
   var channel = String(c.id).split("-")[0] || "chat";
   var words = c.firstLine ? String(c.firstLine).slice(0, 40) : c.id;
   return channel + " · " + words;
@@ -4556,7 +4557,7 @@ function renderConvList() {
     return '<a href="#" class="row' + (c.id === currentConversation ? " on" : "") + '" data-conv="' + esc(c.id) + '">' +
       '<span class="when">' + esc(fmtAgo(c.lastAt)) + '</span>' +
       '<span class="who">' + esc(channel) + '</span> ' +
-      '<span class="what">' + esc(words) + '</span></a>';
+      '<span class="what">' + esc(words) + '</span></a>' + (window.forkRowsHtml ? window.forkRowsHtml(c, currentConversation) : ""); // its forks, folded under it (INV-1667)
   }).join("");
   $("convlist").innerHTML = rows || '<div class="row dim">Nothing matches</div>';
   // More pages exist and no filter is narrowing: filtering only searches what is
@@ -4658,6 +4659,7 @@ function updateComposerTarget() {
   }
   $("input").placeholder = currentConversation === "main"
     ? "Message " + name + "…"
+    : currentConversation.indexOf("fork/") === 0 ? "A fork's thread is read-only — its findings go back to the conversation that started it" // nobody but its parent talks to a fork (INV-1667)
     : "Reply in " + conversationLabel(viewed || { id: currentConversation }) +
       " — reaches that chat, not the team room…";
 }
@@ -5659,7 +5661,7 @@ function taskDetail(t) {
         : esc(t.conversation))
     : "the team room";
   return '<div style="margin:8px 0 2px 26px;padding:8px 10px;border-left:2px solid var(--border)">' +
-    (t.description ? '<div style="font-size:12px;margin-bottom:6px">' + esc(t.description) + "</div>" : "") + (window.claimAccountHtml ? window.claimAccountHtml(t) : "") + (window.deliverablesHtml ? window.deliverablesHtml(t) : "") + (window.configVersionsHtml ? window.configVersionsHtml(t) : "") + // a claimed goal's decisions and unchecked parts (INV-1574), then its deliverables (INV-1663) and the configuration versions it ran under (INV-1669), above its history
+    (t.description ? '<div style="font-size:12px;margin-bottom:6px">' + esc(t.description) + "</div>" : "") + (window.claimAccountHtml ? window.claimAccountHtml(t) : "") + (window.deliverablesHtml ? window.deliverablesHtml(t) : "") + (window.configVersionsHtml ? window.configVersionsHtml(t) : "") + (window.divisionHtml ? window.divisionHtml(t) : "") + // a claimed goal's decisions and unchecked parts (INV-1574), then its deliverables (INV-1663), the configuration versions it ran under (INV-1669) and its division of work (INV-1667), above its history
     '<div class="dim" style="font-size:11px;margin-bottom:6px">' +
       "asked by " + esc(nameOf(t.requester) || t.requester) + " · in " + conversation +
       " · created " + esc(new Date(t.createdAt).toLocaleString()) +

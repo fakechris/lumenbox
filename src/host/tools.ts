@@ -3,7 +3,7 @@ import { inputValueHash, parseSensitiveInput, SENSITIVE_INPUT_TTL_MS } from "../
 import { approvalOf, computerWithVision, desktopGuard, visionActionSchema, visionExpectSchema } from "./computer-vision.ts";
 import { deliveryLine } from "../cua/delivery.ts";
 import { formatExec } from "./exec-format.ts";
-import { isWaitOnly, onEndSchema, parseOnEnd } from "./job-end.ts"; import { levelOfCurrentTask, parseLevel } from "./autonomy-level.ts"; import { splitWhy, WHY_FIELD } from "./consent-case.ts"; import { describeDiscovery, DISCOVERY_FIELDS, parseDiscovery } from "./discovery.ts"; import type { JobWatch } from "./job-watch.ts"; import { deliverFileTool, withDeliverFileTool } from "./deliver-file-tool.ts";
+import { isWaitOnly, onEndSchema, parseOnEnd } from "./job-end.ts"; import { currentTaskOf, levelOfCurrentTask, parseLevel } from "./autonomy-level.ts"; import { splitWhy, WHY_FIELD } from "./consent-case.ts"; import { describeDiscovery, DISCOVERY_FIELDS, parseDiscovery } from "./discovery.ts"; import type { JobWatch } from "./job-watch.ts"; import { deliverFileTool, withDeliverFileTool } from "./deliver-file-tool.ts";
 /**
  * Tool definitions and dispatch.
  *
@@ -2652,7 +2652,7 @@ export async function dispatchTool(
   // The fence (docs/32 §2), at dispatch and not only in the offer: a forged or replayed call
   // for a withheld tool is refused here whatever list the model was shown. `Fork` keeps its
   // own refusal below, which says why a fork cannot fork.
-  if (isForkConversation(context.conversation) && FORK_WITHHELD_TOOLS.has(name) && name !== "Fork") {
+  if (isForkConversation(context.conversation) && FORK_WITHHELD_TOOLS.has(name) && name !== "Fork") { context.pendingWork?.forks?.fenced(context.agent.id, context.conversation!, name); // shown on the fork's row (INV-1667)
     return {
       text:
         `${name} is not available in a fork. Your findings go back to the turn that forked you ` +
@@ -2961,7 +2961,7 @@ export async function dispatchTool(
             conversation,
             steerable: false, origin: "host:fork", // the parent agent's brief, not the person's words (INV-1571)
           });
-          if (ids[index] !== undefined) context.pendingWork?.admitted(ids[index]!, seq);
+          if (ids[index] !== undefined) { context.pendingWork?.admitted(ids[index]!, seq); const taskId = currentTaskOf({ agent: context.agent, conversation: parent, ...(context.tasks !== undefined ? { tasks: context.tasks } : {}) })?.id; context.pendingWork?.forks?.spawned({ id: ids[index]!, agentId: context.agent.id, parent, child: conversation, brief, ...(taskId !== undefined ? { taskId } : {}) }); } // what a person sees of it (INV-1667)
           await context.bus.runExclusive(context.agent.id, { conversation });
           const said = context.registry
             .readTranscript(context.agent.id, conversation)
@@ -2977,7 +2977,7 @@ export async function dispatchTool(
           // reads "blocked: needs the board" before the prose, and "unstated" is a fact
           // about the child, not a success by default.
           const handoff = readHandoff(said);
-          handoffs[index] = handoff.status;
+          handoffs[index] = handoff.status; if (ids[index] !== undefined) context.pendingWork?.forks?.reported(ids[index]!, handoff.status, handoff.reason);
           const label =
             handoff.status === "done"
               ? ""
@@ -2986,7 +2986,7 @@ export async function dispatchTool(
         } catch (error) {
           // One fork failing is a gap in the findings, not a failure of the fan-out:
           // reported in place so the caller can see which piece is missing.
-          hows[index] = "failed";
+          hows[index] = "failed"; if (ids[index] !== undefined) context.pendingWork?.forks?.reported(ids[index]!, "failed", error instanceof Error ? error.message.slice(0, 200) : undefined);
           result = `--- fork ${index + 1} FAILED ---\n${error instanceof Error ? error.message : String(error)}`;
         }
         landed[index] = result;

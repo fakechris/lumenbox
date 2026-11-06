@@ -20,6 +20,7 @@ import { randomUUID } from "node:crypto";
 import { agentboxHome } from "../config.ts";
 import { appendLine, appendLineDurably } from "./jsonl.ts";
 import { judgeDelegate } from "./engine-report.ts";
+import type { ForkEvents } from "./fork-events.ts";
 
 export function pendingWorkPath(): string {
   return process.env.AGENTBOX_PENDING_WORK ?? join(agentboxHome(), "pending-work.jsonl");
@@ -137,6 +138,8 @@ export function isForkChild(conversation: string): boolean {
 export class PendingWork {
   private readonly path: string | undefined;
   private lines = 0;
+  /** What a person sees of the same forks (INV-1667): told of every commit and drop, and reachable from wherever the ledger is. */
+  forks: ForkEvents | undefined;
 
   constructor(
     path: string | null = pendingWorkPath(),
@@ -200,12 +203,14 @@ export class PendingWork {
         ...(entry.worktree !== undefined ? { worktree: entry.worktree } : {}),
         at: now.toISOString(),
       });
+      this.forks?.settled(entry.id, "merged", entry.how, now);
     }
     this.maybeCompact();
   }
 
   dropped(id: string, why: DropWhy, now = new Date()): void {
     this.append({ event: "dropped", id, why, at: now.toISOString() });
+    this.forks?.settled(id, "dropped", why, now);
     this.maybeCompact();
   }
 
