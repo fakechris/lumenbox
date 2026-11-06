@@ -132,3 +132,20 @@ test("every live task has a stage by the table, a blocked task with options is a
   assert.match(question?.detail ?? "", /us or eu\? — us \/ eu/);
   assert.equal(answer.theirs.find(item => item.ref === "t4")?.stage, "working");
 });
+
+test("a pending approval is mine, first on the strip, with the agent, what it asked and when (INV-1627)", async () => {
+  const { urgencyOf } = await import("./attention.ts");
+  const out = attentionFor({
+    principalId: "p-chris", identities: [], tasks: [], nameOf,
+    questions: [question({})],
+    approvals: [{ id: "ap-1", agentId: "a2", agentName: "Vic", description: "bash — cd /home/box/work;\n  find . -name '.scratch*' | xargs rm", action: "run a command in the box", requestedAt: "2026-11-04T02:36:16.275Z" }],
+    now: new Date(T0),
+  });
+  const approval = out.mine.find(item => item.kind === "approval");
+  assert.ok(approval);
+  assert.equal(approval.ref, "ap-1");
+  assert.equal(approval.title, "Vic wants to run a command in the box");
+  assert.match(approval.detail, /^bash — cd \/home\/box\/work; find \. -name '\.scratch\*' \| xargs rm · asked 2026-11-04 02:36Z$/);
+  assert.equal(approval.with, "Vic");
+  assert.ok(urgencyOf("approval") < urgencyOf("question") && urgencyOf("question") < urgencyOf("spend-limit") && urgencyOf("spend-limit") < urgencyOf("review"));
+});

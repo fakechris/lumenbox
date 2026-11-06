@@ -44,7 +44,7 @@ import {
   continuationNote,
   type InterruptedTurn,
   openTurnFor,
-} from "./resume.ts";
+} from "./resume.ts"; import { approvalsHolding, describeHolding, openTurnsOf } from "./approval-wait.ts";
 import { AgentRegistry, type AgentRecord } from "../agents/registry.ts";
 import type { BoxClient } from "../box/client.ts";
 import { MemoryMirror } from "./memory-mirror.ts";
@@ -493,8 +493,8 @@ export class Orchestrator {
   }
 
   /** Begin/end per turn. A begin with no end is a turn the process died underneath. */
-  private readonly turns: TurnLedger | undefined;
-  private readonly steps: StepLedger | undefined;
+  readonly turns: TurnLedger | undefined;
+  readonly steps: StepLedger | undefined;
   private readonly networkEvents: NetworkEventLog | undefined;
   readonly pendingWork: PendingWork | undefined;
   /** Engines kept alive as sessions (docs/81). */
@@ -1987,8 +1987,8 @@ export class Orchestrator {
       if (work.kind === "reminder") continue;
       if (work.agentId === agentId && work.parent === conversation) blockers.push(`委派 ${work.id} 尚未结束`);
     }
-    // Approvals predate per-conversation custody, so conservatively block this agent as a whole.
-    if (this.policy.pending().some(item => item.agentId === agentId)) blockers.push("agent 有待处理审批");
+    // Only an approval a turn in this conversation is parked on (INV-1622): the person's answer must not land in a conversation that moved.
+    for (const held of approvalsHolding(openTurnsOf(this.turns, this.steps), agentId, conversation, this.policy.pending())) blockers.push(describeHolding(held, Date.now()));
     return blockers;
   }
 

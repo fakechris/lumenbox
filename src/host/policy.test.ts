@@ -1010,3 +1010,21 @@ test("through the lazy store the orchestrator hands the gate, a rule scoped to a
     cleanup();
   }
 });
+
+test("an approval expired by the host is refused on the record as approval-expired and stays gone after a restart (INV-1622)", () => {
+  const { gate, cleanup, restart, path } = fixture({ approvalRequiredTools: ["bash"] });
+  try {
+    const decision = gate.check(toolRequest("old"));
+    const id = (!decision.allow && decision.approval?.id) as string;
+    assert.equal(gate.pending().length, 1);
+    assert.equal(gate.deny(id, "host", "the turn that asked has ended", "approval-expired"), true);
+    assert.equal(gate.pending().length, 0);
+    assert.equal(gate.grant(id), false, "a late click on the card runs nothing");
+    const line = readFileSync(path, "utf8").trim().split("\n").map(l => JSON.parse(l)).find(e => e.kind === "approval-expired");
+    assert.ok(line, "the ledger says expired, not denied");
+    assert.equal(line.reason, "the turn that asked has ended");
+    assert.equal(restart().pending().length, 0);
+  } finally {
+    cleanup();
+  }
+});
