@@ -180,7 +180,7 @@ import { randomUUID } from "node:crypto";
 import { isLive, isTaskStatus, type Task } from "../host/tasks.ts"; import { UnknownAgentError } from "../host/task-agents.ts";
 import { connectorSatisfied } from "../host/mcp-connectors.ts";
 import { adminRecipients } from "../host/upgrade.ts";
-import { BoxUpdateService, boxUpdateRoute } from "./box-update-routes.ts"; import { agentFactsRoute } from "./agent-facts.ts"; import { ROW_ORDER_JS } from "./row-order.ts"; import { teamMemoryReviewRoute } from "./team-memory-review-routes.ts"; import { TEAM_MEMORY_REVIEW_JS } from "./team-memory-review-ui.ts"; import { pendingReviews } from "../host/team-memory-review.ts"; import { CLAIM_ACCOUNT_JS } from "./claim-account-ui.ts"; import { DIGEST_HOUR, heldSection, PushBudget } from "../host/push-budget.ts"; import { pushBudgetRoute } from "./push-budget-routes.ts"; import { PUSH_BUDGET_JS } from "./push-budget-ui.ts"; import { SpendLimits, todaysRows } from "../host/spend-limits.ts"; import { spendLimitRoute } from "./spend-limit-routes.ts"; import { SPEND_LIMIT_JS } from "./spend-limit-ui.ts"; import { configuredRates } from "../host/provider-fallback.ts"; import { BoxKeeper } from "./box-keeper.ts"; import { AgentPauses } from "../host/agent-pause.ts"; import { ProbeKeeper, type ProbeKind } from "../host/boundary-probe.ts"; import { agentPauseRoute } from "./agent-pause-routes.ts"; import { AGENT_PAUSE_JS } from "./agent-pause-ui.ts"; import { diagnosticsRoute } from "./diagnostics-routes.ts"; import { DIAGNOSTICS_JS } from "./diagnostics-ui.ts"; import { providerRests, quotaStatusLine } from "../host/provider-rest.ts"; import { providerRestRoute, restNotice } from "./provider-rest-routes.ts"; import { PROVIDER_REST_JS } from "./provider-rest-ui.ts"; import { fallbackRoute } from "./provider-fallback-routes.ts"; import { PROVIDER_FALLBACK_JS } from "./provider-fallback-ui.ts";
+import { BoxUpdateService, boxUpdateRoute } from "./box-update-routes.ts"; import { agentFactsRoute } from "./agent-facts.ts"; import { agentCaseText } from "../host/consent-case.ts"; import { ROW_ORDER_JS } from "./row-order.ts"; import { teamMemoryReviewRoute } from "./team-memory-review-routes.ts"; import { TEAM_MEMORY_REVIEW_JS } from "./team-memory-review-ui.ts"; import { pendingReviews } from "../host/team-memory-review.ts"; import { CLAIM_ACCOUNT_JS } from "./claim-account-ui.ts"; import { DIGEST_HOUR, heldSection, PushBudget } from "../host/push-budget.ts"; import { pushBudgetRoute } from "./push-budget-routes.ts"; import { PUSH_BUDGET_JS } from "./push-budget-ui.ts"; import { SpendLimits, todaysRows } from "../host/spend-limits.ts"; import { spendLimitRoute } from "./spend-limit-routes.ts"; import { SPEND_LIMIT_JS } from "./spend-limit-ui.ts"; import { configuredRates } from "../host/provider-fallback.ts"; import { BoxKeeper } from "./box-keeper.ts"; import { AgentPauses } from "../host/agent-pause.ts"; import { ProbeKeeper, type ProbeKind } from "../host/boundary-probe.ts"; import { agentPauseRoute } from "./agent-pause-routes.ts"; import { AGENT_PAUSE_JS } from "./agent-pause-ui.ts"; import { diagnosticsRoute } from "./diagnostics-routes.ts"; import { DIAGNOSTICS_JS } from "./diagnostics-ui.ts"; import { providerRests, quotaStatusLine } from "../host/provider-rest.ts"; import { providerRestRoute, restNotice } from "./provider-rest-routes.ts"; import { PROVIDER_REST_JS } from "./provider-rest-ui.ts"; import { fallbackRoute } from "./provider-fallback-routes.ts"; import { PROVIDER_FALLBACK_JS } from "./provider-fallback-ui.ts";
 import { hasCredential, PRESET_MODELS, providerConfigured, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { BootstrapAdmins } from "../host/bootstrap.ts";
 import { Principals, principalsPath, roleAtLeast, type Principal, type Role } from "../host/principals.ts";
@@ -487,7 +487,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     agentId: string;
     agentName: string;
     description: string;
-    action?: string;
+    action?: string; why?: string; taskLevel?: number; // the agent's case and the task's level, the card's background (INV-1651)
   }) => {
     broadcast({
       type: "approval_pending",
@@ -495,7 +495,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       agentId: approval.agentId,
       agentName: approval.agentName,
       description: approval.description,
-      ...(approval.action !== undefined ? { action: approval.action } : {}),
+      ...(approval.action !== undefined ? { action: approval.action } : {}), ...(approval.why !== undefined ? { why: approval.why } : {}), ...(approval.taskLevel !== undefined ? { taskLevel: approval.taskLevel } : {}),
     });
   };
 
@@ -665,7 +665,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         agentName: input.agentName,
         question: input.question,
         ...(input.options !== undefined ? { options: input.options } : {}),
-        ...(input.fallback !== undefined ? { fallback: input.fallback } : {}),
+        ...(input.fallback !== undefined ? { fallback: input.fallback } : {}), ...(input.recommended !== undefined ? { recommended: input.recommended } : {}),
         ...(input.conversation !== undefined ? { conversation: input.conversation } : {}),
       });
       // Watched first, so the card can say what the watch will do and when (INV-533);
@@ -677,7 +677,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         agentName: input.agentName,
         conversation: input.conversation ?? "main",
         question: input.question,
-        ...(input.fallback !== undefined ? { fallback: input.fallback } : {}),
+        ...(input.fallback !== undefined ? { fallback: input.fallback } : {}), ...(input.recommended !== undefined ? { recommended: input.recommended } : {}),
         ...(input.expiresInMinutes !== undefined ? { ttlMs: input.expiresInMinutes * 60_000 } : {}),
       }).question;
       const where = chats?.askQuestion({ ...input, questionId: watched.id, expiresAt: watched.expiresAt });
@@ -2453,7 +2453,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       approval.id,
       approval.agentName,
       approval.description,
-      approval.action
+      approval.action, agentCaseText(approval.agentName, approval.why) // the agent's claim, labelled (INV-1651)
     );
   };
 

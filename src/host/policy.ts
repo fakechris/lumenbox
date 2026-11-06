@@ -100,7 +100,7 @@ export type PolicyRequest =
        * an approval whatever the configured lists say, and the description the person reads
        * (and the fingerprint binds) carries it, so consent is to *that* button on *that* page.
        */
-      irreversible?: string; taskLevel?: 1 | 2 | 3 | 4 | 5; // taskLevel (INV-1650): the level of the task this call serves; outward calls ask below L5 and are refused below L3; set by dispatch from the board
+      irreversible?: string; taskLevel?: 1 | 2 | 3 | 4 | 5; why?: string; // why (INV-1651): the agent's one-line case, shown as its claim, never in the fingerprint; taskLevel (INV-1650): the level of the task this call serves; outward calls ask below L5 and are refused below L3; set by dispatch from the board
       /** The turn this call belongs to, for the taint rule (INV-1309): set by dispatch, never by the model. */
       turnId?: string;
       /** Trusted box observation plus host execution identity, never model input (INV-955). */
@@ -148,7 +148,7 @@ export interface PendingApproval {
    */
   harnessResumes?: boolean;
   /** Only "once" may be granted (INV-1309): a tainted turn's outbound call is never a standing grant. */
-  onceOnly?: true;
+  onceOnly?: true; why?: string; taskLevel?: 1 | 2 | 3 | 4 | 5; // why: the agent's one-line case for the step, as its claim (INV-1651); taskLevel: the task it serves (INV-1650) — the card's background
 }
 
 // ── limits ────────────────────────────────────────────────────────────────────────────
@@ -286,7 +286,7 @@ type PolicyEvent =
   | { at: string; kind: "reply-refused"; purpose: string; chatKey: string; reason: string } // A host push whose purpose's claim did not hold (INV-1459).
   | { at: string; kind: "observed"; slug: string; would: string } // A routine in observe mode was triggered and did not run (INV-1458).
   | { at: string; kind: "resume"; agentId: string; by: string }
-  | { at: string; kind: "approval-requested"; id: string; fingerprint: string; agentId: string; description: string; action?: string; harnessResumes?: boolean }
+  | { at: string; kind: "approval-requested"; id: string; fingerprint: string; agentId: string; description: string; action?: string; harnessResumes?: boolean; why?: string; taskLevel?: 1 | 2 | 3 | 4 | 5 } // why/taskLevel: the card's background survives a restart (INV-1651)
   | { at: string; kind: "approval-granted"; id: string; by: string }
   | { at: string; kind: "approval-granted-session"; id: string; by: string }
   | {
@@ -761,7 +761,7 @@ export class PolicyGate {
       agentName: request.agentName,
       description,
       ...(effect.action !== undefined ? { action: effect.action } : {}),
-      requestedAt: this.now().toISOString(),
+      requestedAt: this.now().toISOString(), ...(request.why !== undefined ? { why: request.why } : {}), ...(request.taskLevel !== undefined ? { taskLevel: request.taskLevel } : {}),
       ...(this.lastTaint !== undefined ? { onceOnly: true as const } : {}),
     };
     this.awaiting.set(fingerprint, approval);
@@ -780,7 +780,7 @@ export class PolicyGate {
         fingerprint,
         agentId: approval.agentId,
         description,
-        ...(approval.action !== undefined ? { action: approval.action } : {}),
+        ...(approval.action !== undefined ? { action: approval.action } : {}), ...(approval.why !== undefined ? { why: approval.why } : {}), ...(approval.taskLevel !== undefined ? { taskLevel: approval.taskLevel } : {}),
       },
     };
   }
@@ -1055,7 +1055,7 @@ export class PolicyGate {
             agentId: event.agentId,
             agentName: "",
             description: event.description,
-            ...(event.action !== undefined ? { action: event.action } : {}),
+            ...(event.action !== undefined ? { action: event.action } : {}), ...(event.why !== undefined ? { why: event.why } : {}), ...(event.taskLevel !== undefined ? { taskLevel: event.taskLevel } : {}),
             ...(event.harnessResumes === true ? { harnessResumes: true } : {}),
             requestedAt: event.at,
           };

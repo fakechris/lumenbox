@@ -3,7 +3,7 @@ import { inputValueHash, parseSensitiveInput, SENSITIVE_INPUT_TTL_MS } from "../
 import { approvalOf, computerWithVision, desktopGuard, visionActionSchema, visionExpectSchema } from "./computer-vision.ts";
 import { deliveryLine } from "../cua/delivery.ts";
 import { formatExec } from "./exec-format.ts";
-import { isWaitOnly, onEndSchema, parseOnEnd } from "./job-end.ts"; import { levelOfCurrentTask, parseLevel } from "./autonomy-level.ts"; import type { JobWatch } from "./job-watch.ts";
+import { isWaitOnly, onEndSchema, parseOnEnd } from "./job-end.ts"; import { levelOfCurrentTask, parseLevel } from "./autonomy-level.ts"; import { splitWhy, WHY_FIELD } from "./consent-case.ts"; import type { JobWatch } from "./job-watch.ts";
 /**
  * Tool definitions and dispatch.
  *
@@ -195,7 +195,7 @@ export interface ToolContext {
     question: string;
     options?: string[];
     /** What the agent does if the person moves on without answering. */
-    fallback?: string;
+    fallback?: string; recommended?: string; // which answer it leans to, in its words (INV-1651)
     /** How long the question is open before the default (or a skip) is applied. */
     expiresInMinutes?: number;
     conversation?: string;
@@ -914,7 +914,7 @@ export function buildTools(
         input_schema: {
           type: "object",
           properties: {
-            command: { type: "string", description: "The command to run." },
+            command: { type: "string", description: "The command to run." }, ...WHY_FIELD, // INV-1651
             ...(canUseDesktop ? { desktop: { type: "boolean", description: "Set true when launching a GUI application. Starts your desktop first. Ordinary shell and file work need no desktop." } } : {}),
             cwd: {
               type: "string",
@@ -1176,7 +1176,7 @@ export function buildTools(
               description: "The answers you can act on, if it is a choice between a few.",
               items: { type: "string" },
             },
-            default: {
+            recommended: { type: "string", description: "Which answer you lean to and why, in one sentence, when you have a view. Shown beside the question as yours." }, default: { // recommended: INV-1651
               type: "string",
               description:
                 "What you will do if they move on without answering — one sentence. Always " +
@@ -1881,7 +1881,7 @@ export function buildTools(
       input_schema: {
         type: "object",
         properties: {
-          command: { type: "string", description: "The command to run on the host." },
+          command: { type: "string", description: "The command to run on the host." }, ...WHY_FIELD, // INV-1651
           secrets: {
             type: "array",
             items: { type: "string" },
@@ -2032,7 +2032,7 @@ export function buildTools(
         input_schema: {
           type: "object",
           properties: {
-            action: { type: "string", enum: ["click", "type", "key", "hover"] },
+            action: { type: "string", enum: ["click", "type", "key", "hover"] }, ...WHY_FIELD, // INV-1651
             ref: { type: "string", description: "Handle from the outline, e.g. e4 or e2@f1." },
             snapshot: {
               type: "string",
@@ -2640,7 +2640,7 @@ export async function dispatchTool(
     agentId: context.agent.id,
     agentName: context.agent.profile.name,
     tool: name,
-    input,
+    input: splitWhy(input).input, ...(splitWhy(input).why !== undefined ? { why: splitWhy(input).why } : {}), // the agent's case rides beside the action, never inside it (INV-1651)
     // Whose turn this is, so a rule a person wrote about their own routine work applies from whichever door they drove it (INV-156); and the level of the task this turn is doing (INV-1650).
     ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}), ...(levelOfCurrentTask(context) !== undefined ? { taskLevel: levelOfCurrentTask(context) } : {}),
     ...(context.callerName !== undefined ? { principalName: context.callerName } : {}),
@@ -3745,7 +3745,7 @@ export async function dispatchTool(
         agentName: context.agent.profile.name,
         question,
         ...(options !== undefined && options.length > 0 ? { options } : {}),
-        ...(fallback !== undefined ? { fallback } : {}),
+        ...(fallback !== undefined ? { fallback } : {}), ...(typeof input.recommended === "string" && input.recommended.trim() !== "" ? { recommended: input.recommended.trim().slice(0, 200) } : {}),
         ...(typeof input.expires_in_minutes === "number" && Number.isFinite(input.expires_in_minutes) ? { expiresInMinutes: input.expires_in_minutes } : {}),
         ...(context.conversation !== undefined ? { conversation: context.conversation } : {}),
       });

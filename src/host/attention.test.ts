@@ -169,3 +169,14 @@ test("a task an agent reviews is the team's, not mine, even for the operator; ev
   assert.ok(!isDecision("provider-resting") && !isDecision("box-update") && !isDecision("boundary-probe") && !isDecision("undeliverable") && !isDecision("nudged") && !isDecision("team-memory") && !isDecision("flagged"));
   assert.ok(DECISION_KINDS.size >= 5);
 });
+
+test("an approval item carries the task's level and the agent's labelled case; a question item says what the agent leans to (INV-1651)", () => {
+  const out = attentionFor({
+    principalId: "p-chris", identities: [], tasks: [], nameOf,
+    questions: [question({ asker: "p-chris", recommended: "the work account" })],
+    approvals: [{ id: "ap-1", agentId: "a2", agentName: "Vic", description: "bash — rm -rf build", requestedAt: "2026-11-06T04:00:00.000Z", why: "the build is stale", taskLevel: 4 }],
+    now: new Date(T0),
+  });
+  assert.match(out.mine.find(item => item.kind === "approval")!.detail, /· task L4 · Vic says \(its own words, not checked\): the build is stale$/);
+  assert.match(out.mine.find(item => item.kind === "question")!.detail, /· Ada leans to: the work account$/);
+});

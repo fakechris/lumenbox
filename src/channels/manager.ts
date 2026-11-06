@@ -292,7 +292,7 @@ export interface ApprovalCardState {
   approvalId: string;
   agentName: string;
   /** The original action, verbatim — an approval that paraphrases is an injection surface. */
-  description: string;
+  description: string; agentCase?: string; // agentCase (INV-1651): the agent's own one-line case, labelled as its claim, apart from the action, never in it
   /**
    * What is at stake in answering, and in not answering.
    *
@@ -1027,7 +1027,7 @@ export class ChannelManager {
     question: string;
     options?: string[];
     /** What the agent does with no answer, and by when — said on the card (INV-533). */
-    fallback?: string;
+    fallback?: string; recommended?: string; // which answer the agent leans to, in its words (INV-1651)
     expiresAt?: number;
   }): string | undefined {
     const asker = input.conversation !== undefined
@@ -1060,7 +1060,7 @@ export class ChannelManager {
           {
             questionId,
             agentName: input.agentName,
-            question: `${input.question}${terms}`,
+            question: `${input.question}${terms}${input.recommended !== undefined ? `\n（${input.agentName} 倾向：${input.recommended}）` : ""}`,
             options: input.options,
           },
           asker.chatKey
@@ -1076,7 +1076,7 @@ export class ChannelManager {
 
 ${input.options.map(option => `· ${option}`).join("\n")}`
         : "";
-    const text = questionText(input.agentName, `${input.question}${terms}`, choices) + `\n\n回复：/answer ${questionId} 你的答案`;
+    const text = questionText(input.agentName, `${input.question}${terms}${input.recommended !== undefined ? `\n（${input.agentName} 倾向：${input.recommended}）` : ""}`, choices) + `\n\n回复：/answer ${questionId} 你的答案`;
     // Into the thread that asked, where the adapter can address one: a question with
     // no surrounding context is a question about everything at once.
     const push =
@@ -1130,7 +1130,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
    * remembers it so a one-word reply from them answers it. Nothing when the agent was
    * not driven from a channel — the web page covers that.
    */
-  notifyApproval(agentId: string, approvalId: string, agentName: string, description: string, action?: string): void {
+  notifyApproval(agentId: string, approvalId: string, agentName: string, description: string, action?: string, agentCase?: string): void { // agentCase (INV-1651): the agent's labelled claim, shown apart from the verbatim action
     const asker = this.lastAsker.get(agentId);
     if (asker === undefined) return;
     this.awaitingApproval.set(asker.identity, { approvalId, description });
@@ -1145,7 +1145,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
             agentName,
             description,
             stakes: APPROVAL_STAKES,
-            ...(action !== undefined ? { action } : {}),
+            ...(action !== undefined ? { action } : {}), ...(agentCase !== undefined ? { agentCase } : {}),
           },
           asker.chatKey
         )
@@ -1154,7 +1154,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         });
       return;
     }
-    const message = `${action !== undefined ? `${action}\n` : ""}${consentFallbackText(agentName, description)}`;
+    const message = `${action !== undefined ? `${action}\n` : ""}${consentFallbackText(agentName, description)}${agentCase !== undefined ? `\n${agentCase}` : ""}`;
     // Same thread-first routing as a question, for the same reason.
     const push =
       asker.chatKey !== undefined && asker.adapter.sendToChat !== undefined
