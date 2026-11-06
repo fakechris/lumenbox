@@ -13,7 +13,7 @@ this file and the headers disagree. Edit the header, not this table.
 - **decision** — a dated record of why something was decided. Never rewritten; superseded, with a pointer.
 - **guide** — how to do something. Kept current.
 - **handoff** — what was true at the end of a session. Historical by nature.
-- **manual** — how a person uses the product, one page per concept, in `manual/`. Start at [the manual](manual/README.md).
+- **manual** — how a person uses the product, one page per concept, in `manual/`, and one page per team in `manual/teams/`. Start at [the manual](manual/README.md).
 
 ## spec
 
@@ -56,6 +56,9 @@ this file and the headers disagree. Edit the header, not this table.
 | [manual/skills](manual/skills.md) | Skills | current | 2026-11-06 |
 | [manual/supervision](manual/supervision.md) | Supervision | current | 2026-11-06 |
 | [manual/tasks-and-records](manual/tasks-and-records.md) | Tasks and records | current | 2026-11-06 |
+| [manual/teams/media-desk](manual/teams/media-desk.md) | Media desk: one source, three forms | current | 2026-11-06 |
+| [manual/teams/ship](manual/teams/ship.md) | Ship: a product, an engineer and a reviewer | current | 2026-11-06 |
+| [manual/teams/starter](manual/teams/starter.md) | The starter team: a coordinator on call, with a researcher, an operator and a reviewer | current | 2026-11-06 |
 | [manual/templates](manual/templates.md) | Templates | current | 2026-11-06 |
 
 ## guide

@@ -123,12 +123,25 @@ Settings → Mine → About me.
 may use a tool at all, or must ask first. An *approval* is the answer to one request, in the
 moment. An "ask me" permission is one of the things that brings up an approval card.
 
+## Teams
+
+Whole designs you can copy: who does what, what one real run cost and how that was measured,
+how to build the smallest version, and what to watch while it runs.
+
+| Team | What it is for | Agents | Cost on record | Page |
+|---|---|---|---|---|
+| ship (研发小队) | Code: a spec, a change, a review by somebody else | Mo, Lin, Heng | one reviewer's turns | [ship](teams/ship.md) |
+| media-desk (内容小队) | Content: one source as an article, a note and a script | Jian, He, Jing | not measured yet | [media desk](teams/media-desk.md) |
+| starter team | Your chat group's first contact, research, machine work and checking | Ada, Rex, Ops, Vera | docs/83's measured episodes | [starter team](teams/starter.md) |
+
 ## Pages
 
 Concepts: [box](box.md) · [agent](agent.md) · [channels](channels.md) ·
 [templates](templates.md) · [skills](skills.md) · [memory](memory.md) ·
 [tasks and records](tasks-and-records.md) · [approvals](approvals.md) ·
 [automations](automations.md) · [supervision](supervision.md).
+
+Teams: [ship](teams/ship.md) · [media desk](teams/media-desk.md) · [starter team](teams/starter.md).
 
 Reference, generated from the code: [chat commands](reference-commands.md) ·
 [Settings panes](reference-settings.md) · [tools](reference-tools.md) ·
