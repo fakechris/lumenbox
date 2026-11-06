@@ -853,6 +853,7 @@ export const APP_HTML = String.raw`<!doctype html>
 
   .activityhead { border-top: 1px solid var(--border); padding-top: 12px; }
   .feed { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 0 8px; }
+  .feed.yields { flex: 0 0 auto; max-height: 18vh; } /* on the Tasks tab the board has the column (INV-1654); the feed stays a strip */
   /* Waiting items can outnumber the visible board. Keep them scrollable inside
      Tasks so neither the board nor the Activity feed is painted over. */
   #attention { flex: none; max-height: 60%; overflow-y: auto; }
@@ -1063,8 +1064,8 @@ export const APP_HTML = String.raw`<!doctype html>
       <button class="btn sm" id="taskadd">Add</button> <a href="#" id="inboxonly" class="dim" style="font-size:11px;white-space:nowrap" title="Only what the agents found and proposed (INV-1652): commit what is worth doing, dismiss the rest">inbox</a>
     </div>
     <!-- What needs me, before what the board has (INV-543): two lists and their clocks. -->
-    <div id="attention" title="Above: what is waiting on a person, with its clock. Below: every task on the board." style="display:none;border-bottom:1px solid var(--border);padding:10px 16px"></div>
-    <div class="scroll" id="tasklist" title="The board: every task, newest change first within each status."></div>
+    <div id="attention" title="What waits on a person and is not a task: a consent, a question, a pause. Tasks carry their own mark below." style="display:none;border-bottom:1px solid var(--border);padding:10px 16px"></div>
+    <div class="scroll" id="tasklist" title="The board: what waits on you first, then every task, newest change first within each status."></div>
   </div>
   <!-- What runs without anyone asking. The page a person checks when they want to know
        whether the 06:30 brief is actually armed, when it last fired, and where it
@@ -5025,7 +5026,7 @@ filesView.addEventListener("drop", function (event) {
 function showTab(which) {
   $("desktopview").style.display = which === "desktop" ? "" : "none";
   $("filesview").style.display = which === "files" ? "flex" : "none";
-  $("tasksview").style.display = which === "tasks" ? "flex" : "none";
+  $("tasksview").style.display = which === "tasks" ? "flex" : "none"; $("feed").classList.toggle("yields", which === "tasks"); // INV-1654
   $("autoview").style.display = which === "auto" ? "flex" : "none";
   $("auditview").style.display = which === "audit" ? "flex" : "none";
   $("tabdesktop").className = "tab" + (which === "desktop" ? " on" : "");
@@ -5695,37 +5696,34 @@ function whenOf(iso) {
   return past ? text + " ago" : "in " + text;
 }
 
+// One attention item as a line: in the panel above the board, or (onBoard) as the mark on its task's own row (INV-1654).
+function attentionRow(item, owed, onBoard) {
+  var act =
+    item.kind === "approval" ? '<button class="btn sm" data-att-approve="' + esc(item.ref) + '">' + esc(t("consent.once")) + '</button><button class="btn sm ghost" data-att-deny="' + esc(item.ref) + '">' + esc(t("consent.deny")) + "</button>" :
+    item.kind === "close-proposal" ? '<button class="btn sm ghost" data-att-keep="' + esc(item.ref) + '">' + esc(t("ui.attention.keepOpen")) + "</button>" :
+    item.kind === "nudged" ? '<button class="btn sm ghost" data-att-drop="' + esc(item.ref) + '">' + esc(t("ui.attention.close")) + '</button><button class="btn sm ghost" data-att-snooze="' + esc(item.ref) + '">' + esc(t("ui.attention.notNow")) + "</button>" :
+    item.kind === "question" && !/^t\d+$/.test(item.ref) ? '<button class="btn sm ghost" data-att-open="' + esc(item.ref) + '">' + esc(t("ui.attention.answer")) + "</button>" :
+    item.kind === "paused" ? '<button class="btn sm ghost" data-att-open="' + esc(item.ref) + '">' + esc(t("ui.attention.open")) + "</button>" :
+    onBoard ? "" : '<button class="btn sm ghost" data-att-task="' + esc(item.ref) + '">' + esc(t("ui.attention.open")) + "</button>";
+  return '<div style="display:flex;gap:8px;align-items:baseline;padding:3px 0;font-size:12.5px' + (onBoard ? ";color:" + (owed ? "var(--warn)" : "var(--muted)") : "") + '" title="' + esc(item.title + " — " + item.detail) + '"><span class="dim mono" style="font-size:11px;min-width:58px">' + esc(item.deadline ? whenOf(item.deadline) : "") + "</span>" +
+    '<span style="flex:1">' + (onBoard ? (owed ? "needs you: " : "waiting: ") : (item.level ? '<span class="chip" style="font-size:10px" title="the task\'s autonomy level">L' + item.level + "</span> " : "") + esc(item.title) + " ") + '<span class="dim">' + esc(item.detail) + (item.stage && !onBoard ? " · " + esc(item.stage) : "") + "</span></span>" + (owed ? act : "") + "</div>"; // on the board the row is the task's own (INV-1654): its mark says what is owed, the card below is already open
+}
 function renderAttention() {
   return fetch("/api/attention")
     .then(function (r) { return r.json(); })
     .then(function (data) {
       var mine = data.mine || [];
-      var theirs = data.theirs || [];
-      var row = function (item, owed) {
-        var act =
-          item.kind === "approval" ? '<button class="btn sm" data-att-approve="' + esc(item.ref) + '">' + esc(t("consent.once")) + '</button><button class="btn sm ghost" data-att-deny="' + esc(item.ref) + '">' + esc(t("consent.deny")) + "</button>" :
-          item.kind === "close-proposal" ? '<button class="btn sm ghost" data-att-keep="' + esc(item.ref) + '">' + esc(t("ui.attention.keepOpen")) + "</button>" :
-          item.kind === "nudged" ? '<button class="btn sm ghost" data-att-drop="' + esc(item.ref) + '">' + esc(t("ui.attention.close")) + '</button><button class="btn sm ghost" data-att-snooze="' + esc(item.ref) + '">' + esc(t("ui.attention.notNow")) + "</button>" :
-          item.kind === "question" && !/^t\d+$/.test(item.ref) ? '<button class="btn sm ghost" data-att-open="' + esc(item.ref) + '">' + esc(t("ui.attention.answer")) + "</button>" :
-          item.kind === "paused" ? '<button class="btn sm ghost" data-att-open="' + esc(item.ref) + '">' + esc(t("ui.attention.open")) + "</button>" :
-          '<button class="btn sm ghost" data-att-task="' + esc(item.ref) + '">' + esc(t("ui.attention.open")) + "</button>";
-        return '<div style="display:flex;gap:8px;align-items:baseline;padding:3px 0;font-size:12.5px' + (owed ? ";white-space:nowrap" : "") + '" title="' + esc(item.title + " — " + item.detail) + '"><span class="dim mono" style="font-size:11px;min-width:58px">' + esc(item.deadline ? whenOf(item.deadline) : "") + "</span>" +
-          '<span style="flex:1' + (owed ? ";overflow:hidden;text-overflow:ellipsis" : "") + '">' + (item.level ? '<span class="chip" style="font-size:10px" title="the task\'s autonomy level">L' + item.level + "</span> " : "") + esc(item.title) + ' <span class="dim">' + esc(item.detail) + (item.stage ? " · " + esc(item.stage) : "") + "</span></span>" + (owed ? act : "") + "</div>"; // a strip row is one line (INV-1646): the sidebar is the agents' first
-      };
+      var theirs = data.theirs || []; window.lastAttention = data; var row = attentionRow; // the board merges these onto its rows (INV-1654)
       // The first screen (INV-1464) is the agents'. Above them there is at most one line (2026-11-06 rule): how many decisions wait,
       // how many reviews, and a way to open them on the board. Never rows here — twice a list in this column hid every agent.
       var needs = mine.filter(function (i) { return i.decision === true; }), reviews = mine.filter(function (i) { return !!i.stage && i.stage.indexOf("person/") === 0; }).length;
       $("needsme").style.display = needs.length || reviews ? "" : "none";
       $("needsme").innerHTML = '<a href="#" data-att-board="1" style="display:flex;gap:8px;align-items:baseline;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-decoration:none"><span style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--warn)">' + esc(t("ui.attention.needsMe")) + "</span>" +
         (needs.length ? "<span>" + needs.length + " decision" + (needs.length === 1 ? "" : "s") + "</span>" : "") + (reviews ? '<span class="dim">' + reviews + " review" + (reviews === 1 ? "" : "s") + "</span>" : "") + '<span class="dim">' + esc(t("ui.attention.open")) + " ›</span></a>";
-      if (!mine.length && !theirs.length) {
-        $("attention").style.display = "";
-        $("attention").innerHTML = '<div class="dim" style="font-size:12.5px">' + esc(t("ui.attention.empty")) + "</div>";
-        return;
-      }
-      $("attention").style.display = "";
-      $("attention").innerHTML = (mine.length ? '<div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:4px">' + esc(t("ui.attention.mine")) + "</div>" + mine.map(function (i) { return row(i, true); }).join("") : "") +
-        (theirs.length ? '<div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:8px 0 4px">' + esc(t("ui.attention.theirs")) + "</div>" + theirs.map(function (i) { return row(i, false); }).join("") : "");
+      // Only what has no task row (INV-1654): a consent, a question, a pause. Tasks carry their own mark on the board below.
+      var loose = typeof looseItems === "function" ? looseItems(mine) : [];
+      $("attention").style.display = loose.length ? "" : "none";
+      $("attention").innerHTML = loose.length ? '<div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:4px">' + esc(t("ui.attention.mine")) + "</div>" + loose.map(function (i) { return row(i, true); }).join("") : "";
     })
     .catch(function () { $("attention").style.display = "none"; $("needsme").style.display = "none"; });
 }
@@ -5759,12 +5757,11 @@ document.addEventListener("click", function (event) {
 });
 
 function refreshTasks() {
-  // What needs me, above the board (INV-543).
-  renderAttention();
+  // What needs me is read first (INV-543) and then merged onto the board's rows (INV-1654): one list, the owed rows on top.
   // The assignee picker doubles as the roster; refreshed with the board.
   $("taskassign").innerHTML = '<option value="">unassigned</option>' +
     agents.map(function (a) { return '<option value="' + esc(a.id) + '">' + esc(a.name) + "</option>"; }).join("");
-  return fetch("/api/tasks")
+  return renderAttention().then(function () { return fetch("/api/tasks"); })
     .then(function (r) { return r.json(); })
     .then(function (data) {
       var tasks = data.tasks || [];
@@ -5772,12 +5769,12 @@ function refreshTasks() {
         $("tasklist").innerHTML = '<div class="dim" style="padding:12px 16px;font-size:13px">Nothing on the board. Add a task above, or an agent will when work outlives one reply.</div>';
         return;
       }
-      // Live statuses first, closed at the bottom; within a group, newest change first.
-      var order = { open: 0, doing: 1, blocked: 2, review: 3, done: 4, dropped: 5 }; if (window.inboxOnly) tasks = tasks.filter(function (t) { return t.proposedBy && t.status !== "dropped"; }); // the inbox: proposals awaiting a person (INV-1652)
-      tasks.sort(function (a, b) {
-        return (order[a.status] - order[b.status]) || b.updatedAt.localeCompare(a.updatedAt);
-      });
-      $("tasklist").innerHTML = tasks.map(function (t) {
+      // Owed rows first, then live statuses before closed, newest change first within a group (board-order.ts).
+      if (window.inboxOnly) tasks = tasks.filter(function (t) { return t.proposedBy && t.status !== "dropped"; }); // the inbox: proposals awaiting a person (INV-1652)
+      var att = window.lastAttention || {}, marks = {};
+      var rows = typeof boardOrder === "function" ? boardOrder(tasks, att.mine || [], att.theirs || []) : tasks.map(function (t) { return { task: t }; });
+      rows.forEach(function (r) { marks[r.task.id] = r.mine ? attentionRow(r.mine, true, true) : r.theirs ? attentionRow(r.theirs, false, true) : ""; });
+      $("tasklist").innerHTML = rows.map(function (r) { var t = r.task;
         var assignee = t.assigneeId ? nameOf(t.assigneeId) : "unassigned";
         var reviewer = t.reviewerId ? " · review by " + esc(nameOf(t.reviewerId)) : "";
         var last = t.history && t.history.length ? t.history[t.history.length - 1] : null;
@@ -5814,13 +5811,13 @@ function refreshTasks() {
             "</select>" +
           "</div>" +
           '<div class="dim" style="font-size:11px;padding-left:26px">' + esc(assignee) + reviewer +
-            (lastNote ? ' — <span style="font-style:italic">' + lastNote + "</span>" : "") + "</div>" +
+            (lastNote ? ' — <span style="font-style:italic">' + lastNote + "</span>" : "") + "</div>" + (marks[t.id] ? '<div style="padding-left:26px">' + marks[t.id] + "</div>" : "") +
           (open ? taskDetail(t) : "") +
         "</div>";
       }).join("");
       if (openTask) {
         var row = document.querySelector('[data-open="' + openTask + '"]');
-        if (row && !taskScrolled) { row.scrollIntoView({ block: "center" }); taskScrolled = true; }
+        if (row && !taskScrolled) { row.scrollIntoView({ block: "start" }); taskScrolled = true; } // from the top: the card below it is the point (INV-1654)
       }
     })
     .catch(function () {});
