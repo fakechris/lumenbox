@@ -5661,7 +5661,7 @@ function taskDetail(t) {
         : esc(t.conversation))
     : "the team room";
   return '<div style="margin:8px 0 2px 26px;padding:8px 10px;border-left:2px solid var(--border)">' +
-    (t.description ? '<div style="font-size:12px;margin-bottom:6px">' + esc(t.description) + "</div>" : "") + (window.claimAccountHtml ? window.claimAccountHtml(t) : "") + (window.deliverablesHtml ? window.deliverablesHtml(t) : "") + (window.configVersionsHtml ? window.configVersionsHtml(t) : "") + (window.divisionHtml ? window.divisionHtml(t) : "") + // a claimed goal's decisions and unchecked parts (INV-1574), then its deliverables (INV-1663), the configuration versions it ran under (INV-1669) and its division of work (INV-1667), above its history
+    (t.description ? '<div style="font-size:12px;margin-bottom:6px">' + esc(t.description) + "</div>" : "") + (window.claimAccountHtml ? window.claimAccountHtml(t) : "") + (window.deliverablesHtml ? window.deliverablesHtml(t) : "") + (window.configVersionsHtml ? window.configVersionsHtml(t) : "") + (window.divisionHtml ? window.divisionHtml(t) : "") + (window.taskGateHtml ? window.taskGateHtml(t) : "") + // a claimed goal's decisions and unchecked parts (INV-1574), then its deliverables (INV-1663), the configuration versions it ran under (INV-1669), its division of work (INV-1667) and the gate's verdicts on its steps (INV-1672), above its history
     '<div class="dim" style="font-size:11px;margin-bottom:6px">' +
       "asked by " + esc(nameOf(t.requester) || t.requester) + " · in " + conversation +
       " · created " + esc(new Date(t.createdAt).toLocaleString()) +
