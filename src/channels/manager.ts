@@ -28,8 +28,9 @@ import { mandateNote, reauthorisationNeeded } from "./mandate-text.ts";
 import { followUpPrompt } from "../host/follow-up.ts";
 import { describePurpose, type OutboundPurpose } from "../host/outbound.ts";
 import type { OutboxSender } from "./outbox-sender.ts";
-import { parseAcceptance, parseStopRequest } from "./verbs.ts";
-export { parseAcceptance, parseStopRequest } from "./verbs.ts";
+import { claimsReference, contextMode, isContextCommand, isGoalCommand, isPlainRetry, isRecoveryCommand, isRetryCommand, parseAcceptance, parseAddress, parseApprovalReply, parseBind, parseBoardRequest, parseContinuation, parseDesktopRequest, parseDigestRequest, parseHelpRequest, parseMeetingJoinRequest, parseRecoveryCommand, parseRosterRequest, parseSchedulesRequest, parseScopeRequest, parseScreenRequest, parseStopRequest, parseUpgradeApproval, renderHelp, chatCommand } from "./commands.ts";
+export { parseAcceptance, parseAddress, parseApprovalReply, parseBind, parseBoardRequest, parseDesktopRequest, parseDigestRequest, parseMeetingJoinRequest, parseRosterRequest, parseSchedulesRequest, parseScopeRequest, parseScreenRequest, parseStopRequest, parseUpgradeApproval, type ApprovalReply, type DigestRequest, type ScopeRequest } from "./commands.ts";
+import type { ApprovalReply } from "./commands.ts";
 import { roomDecision } from "./identity.ts";
 import type { Ingress } from "./ingress.ts";
 import type { Messages } from "./messages.ts";
@@ -38,13 +39,10 @@ import { channelHealth, type ChannelHealth } from "./liveness.ts";
 import { boxPathsNamed, undelivered } from "../host/named-files.ts";
 import { checkDeliverable, isBroken } from "../host/deliverables.ts";
 import { boardText, type BoardView } from "./board-view.ts";
-import { parseContinuation } from "./continuation.ts";
 import type { A2uiMessage } from "../host/show-ui-catalog.ts";
 import { type SurfaceCardState, surfaceCard, surfaceText } from "./surface-card.ts";
-import { isContextCommand } from "../host/context-recovery.ts";
-import { isGoalCommand } from "../host/goal-mode.ts";
-import { isRecoveryCommand, parseRecoveryCommand, type RecoverTaskResult } from "../host/task-recovery.ts";
-import { isRetryCommand, type RetryResult } from "../host/retry-recovery.ts";
+import type { RecoverTaskResult } from "../host/task-recovery.ts";
+import type { RetryResult } from "../host/retry-recovery.ts";
 import { recoverySuggestion, type AnswerReviewInput, type AnswerReviewMode, type AnswerVerdict } from "../host/answer-review.ts";
 import type { CardRecord } from "./card-ledger.ts";
 
@@ -318,25 +316,6 @@ export interface ChannelStatus {
   configured: boolean;
   running: boolean;
   detail: string;
-}
-
-/** How a one-word reply on a chat answers a pending approval. */
-export type ApprovalReply = "once" | "always" | "session" | "deny";
-
-/**
- * Reads a whole message as an approval answer, or nothing.
- *
- * The message must be *only* the verb — "allow" answers, "allow the download" does not,
- * because the second is a person talking about the request, not deciding it, and a
- * loose match would approve a dangerous action from an offhand sentence.
- */
-export function parseApprovalReply(text: string): ApprovalReply | undefined {
-  const t = text.trim().toLowerCase().replace(/[.!]+$/, "");
-  if (["allow", "approve", "yes", "ok", "y", "允许", "同意", "批准", "好"].includes(t)) return "once";
-  if (["allow always", "always", "一直允许", "总是允许"].includes(t)) return "always";
-  if (["allow session", "session", "本次会话"].includes(t)) return "session";
-  if (["deny", "refuse", "reject", "no", "n", "拒绝", "不"].includes(t)) return "deny";
-  return undefined;
 }
 
 /**
@@ -701,55 +680,6 @@ const QUESTION_STALE_MS = 30 * 60_000;
 const STREAM_UPDATE_MS = 700;
 const STREAM_TAIL_CHARS = 4_000;
 
-/**
- * Whether a whole message is a request to see the desktop.
- *
- * Whole-message like the approval verbs, and for the same reason: "看看屏幕上的报错"
- * is a person talking about the screen, not asking for a picture of it.
- */
-export function parseScreenRequest(text: string): boolean {
-  const t = text.trim().toLowerCase().replace(/[.!?。!?]+$/, "");
-  return ["screen", "screenshot", "屏幕", "看屏幕", "看看屏幕", "截图", "/screen"].includes(t);
-}
-
-/**
- * 「团队」is a look at who works here — answered on the wire like the board, and for
- * the same reason: asking who is available while something runs must not steer it.
- * Whole-message, because "让团队看看这个" is work for the team, not a roster request.
- */
-export function parseRosterRequest(text: string): boolean {
-  const t = text.trim().toLowerCase().replace(/[.!?。!?]+$/, "");
-  return ["team", "roster", "团队", "成员", "谁在", "/team", "/roster"].includes(t);
-}
-
-/**
- * 「入会 123456789」 asks the agent to join a meeting by number — the trigger
- * that does not depend on the vendor's invite machinery (R37: with the VC
- * event subscribed, an *invitation* to the bot can be treated as an official
- * agent-invite and refused server-side, taking the meeting down with it; a
- * chat message cannot be). Returns the meeting number, or undefined.
- */
-export function parseMeetingJoinRequest(text: string): string | undefined {
-  const match = /^(?:\/join|入会|加入会议)\s*(\d{9})$/.exec(text.trim());
-  return match?.[1];
-}
-
-/**
- * 「桌面」asks for the live screen, as a link — where 「屏幕」 asks for a still.
- * Whole-message like both of its siblings: "帮我看下桌面上的报错" is work.
- */
-export function parseDesktopRequest(text: string): boolean {
-  const t = text.trim().toLowerCase().replace(/[.!?。!?]+$/, "");
-  return ["desktop", "vnc", "桌面", "开桌面", "看桌面", "/desktop", "/vnc"].includes(t);
-}
-
-/** `@Name rest of the message` addresses a specific agent; anything else is the default. */
-export function parseAddress(text: string): { agentName?: string; text: string } {
-  const match = /^@([\p{L}\p{N}_-]+)\s+([\s\S]+)$/u.exec(text.trim());
-  if (match === null) return { text: text.trim() };
-  return { agentName: match[1], text: match[2]!.trim() };
-}
-
 export function refusal(identity: string): string {
   return (
     `Not authorised. This LumenBox only answers people on its allow list.\n` +
@@ -770,75 +700,6 @@ export function knockRefusal(identity: string): string {
     `invite code, send it as: bind <code>\n` +
     `(Your id, for the manual path: ${identity})`
   );
-}
-
-/** A whole message of the shape `bind <code>` / `绑定 <码>`, or nothing. */
-export function parseBind(text: string): string | undefined {
-  const match = /^(?:bind|绑定)[\s::]+([a-z0-9-]{4,12})$/i.exec(text.trim());
-  return match === null ? undefined : match[1]!.toUpperCase();
-}
-
-export type ScopeRequest = { kind: "show" } | { kind: "bind"; name: string } | { kind: "off" };
-
-/** A whole message about this chat's scope: `scope` shows, `scope <name>` binds, `scope off` unbinds. */
-export function parseScopeRequest(text: string): ScopeRequest | undefined {
-  const t = text.trim();
-  if (/^scope$/i.test(t)) return { kind: "show" };
-  if (/^scope\s+(?:off|解绑)$/i.test(t)) return { kind: "off" };
-  const bind = /^scope\s+([\p{L}\p{N}._-]{1,60})$/iu.exec(t);
-  if (bind !== null) return { kind: "bind", name: bind[1]! };
-  return undefined;
-}
-
-/**
- * A whole message approving the upgrade the box has asked about.
- *
- * Whole-message like every verb here, and for a sharper reason than most: this one
- * authorises destroying a box, so "upgrade the deploy script" must never be read as
- * consent. The English word is the one the notice itself prints (`UPGRADE_WORD`), and a
- * test holds the two together.
- */
-export function parseUpgradeApproval(text: string): boolean {
-  const t = text.trim().toLowerCase().replace(/[.!?。!?~]+$/, "");
-  return ["upgrade", "/upgrade", "升级", "确认升级", "同意升级"].includes(t);
-}
-
-/**
- * A whole message asking to see the board: what is on the plate right now, said in
- * the chat where the tasks were asked for. Whole-message like every verb here — a
- * sentence *about* the board ("看板上加一条") is work, not a command.
- */
-export function parseBoardRequest(text: string): boolean {
-  const t = text.trim().toLowerCase().replace(/[.!?。!?~]+$/, "");
-  return ["看板", "任务", "任务列表", "board", "tasks", "/board", "/tasks"].includes(t);
-}
-
-/**
- * A whole message asking what runs by itself. Whole-message like every verb here — a
- * sentence *about* automation ("定时任务改成七点") is work for an agent, not a command.
- */
-export function parseSchedulesRequest(text: string): boolean {
-  const t = text.trim().toLowerCase().replace(/[.!?。!?~]+$/, "");
-  return ["定时", "自动化", "定时任务", "schedules", "automations", "/schedules", "/auto"].includes(t);
-}
-
-export type DigestRequest = { kind: "now" } | { kind: "schedule"; hour: number } | { kind: "off" };
-
-/**
- * A whole message asking about the digest: "早报" reads it now, "早报 8点" schedules
- * it, "早报 关" stops it. Whole-message like every other verb here, and for the same
- * reason: a sentence *about* the digest is a task, not a command.
- */
-export function parseDigestRequest(text: string): DigestRequest | undefined {
-  const t = text.trim().toLowerCase();
-  if (["早报", "日报", "digest"].includes(t)) return { kind: "now" };
-  if (/^(?:早报|日报|digest)\s*(?:off|关|停止?)$/.test(t)) return { kind: "off" };
-  const scheduled = /^(?:早报|日报|digest)\s*(?:at\s*)?(\d{1,2})\s*[点时]?$/.exec(t);
-  if (scheduled !== null) {
-    const hour = Number(scheduled[1]);
-    if (hour >= 0 && hour <= 23) return { kind: "schedule", hour };
-  }
-  return undefined;
 }
 
 export class ChannelManager {
@@ -1526,7 +1387,8 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     const control = parseAddress(message.text);
     if (isContextCommand(control.text)) {
       const command = control.text.trim().toLowerCase();
-      if (command !== "/new" && command !== "/new --clean") return "目前仅支持 /new 和 /new --clean；本次没有修改上下文。";
+      const mode = contextMode(command);
+      if (mode === undefined) return "目前仅支持 /new 和 /new --clean；本次没有修改上下文。";
       if (message.files?.length) return "请单独发送 /new；附件未作为新任务消费。";
       const key = message.threadKey ?? message.chatKey ?? message.identity;
       const busy = this.runningWork.get(key) ?? [];
@@ -1539,7 +1401,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         operationId: message.messageId === undefined ? "" : JSON.stringify([adapter.name, key, message.identity, message.messageId]),
         privateChat: message.privateChat === true,
         blockers: blocked ? ["渠道仍有运行中、排队、待回答/审批或待处理附件"] : [],
-        mode: command === "/new --clean" ? "clean" : "normal",
+        mode,
       }) ?? "此入口尚未接入安全的上下文切换；本次没有修改会话。";
     }
     if (isGoalCommand(control.text)) {
@@ -1577,7 +1439,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     }
     if (isRecoveryCommand(control.text)) {
       const taskId = parseRecoveryCommand(control.text);
-      if (taskId === undefined) return "用法：/recover t任务号（例如 /recover t25）。本次没有修改任务。";
+      if (taskId === undefined) return chatCommand("recover").usage!;
       if (message.files?.length) return "请单独发送 /recover t任务号；附件未作为恢复来源消费。";
       if (this.deps.recover === undefined) return "此入口尚未接入任务恢复；本次没有修改任务。";
       const mandate = this.deps.board?.revalidate?.(taskId, message.identity);
@@ -1612,7 +1474,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       return prepared.text;
     }
     if (isRetryCommand(control.text)) {
-      if (control.text.trim().toLowerCase() !== "/retry") return "用法：/retry。本次没有修改上下文。";
+      if (!isPlainRetry(control.text)) return chatCommand("retry").usage!;
       if (message.files?.length) return "请单独发送 /retry；附件未作为重答来源消费。";
       if (this.deps.retry === undefined) return "此入口尚未接入安全重答；本次没有修改上下文。";
       const key = message.threadKey ?? message.chatKey ?? message.identity;
@@ -1701,6 +1563,9 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       return boardText(view);
     }
 
+    // 「/help」 is the command table itself, rendered from commands.ts — answered on the wire.
+    if (parseHelpRequest(message.text)) return renderHelp();
+
     // 「团队」 is a look at who works here — answered on the wire, before the
     // running-work routing, so asking mid-task never reads as steering.
     if (parseRosterRequest(message.text) && this.deps.roster !== undefined) {
@@ -1785,7 +1650,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       if (mandate?.status === "withdrawn" || mandate?.status === "stale") return reauthorisationNeeded(reference.id, mandate);
       // Even an explicit addition gets a tracked turn: fire-and-forget steering can race the old turn's exit.
       addition = { agentName: target.agentName, text: `[Additional instruction for task ${reference.id}; handle after the current turn]${mandateNote(mandate?.reauthorised)}\n\n${reference.text}` };
-    } else if (/^\/(?:answer|continue)(?:\s|$)/u.test(text)) {
+    } else if (claimsReference(text)) {
       return "请使用 /answer 问题编号 答案，或 /continue 任务编号 追加内容。";
     }
     // A person's message in a task's own thread is that task's agent's to decide first (INV-1462): a follow-up turn

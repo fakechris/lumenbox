@@ -147,3 +147,17 @@ test("a rule can be written about one agent's calls, and a call nobody named nev
   const operatorAllow = parseRuleFile("shell-ok", ["---", "effect: allow", "tool: bash", "---", "Shell is routine."].join("\n")).rule!;
   assert.equal(decidingRule([operatorAllow, agentAsk], "bash", input, { agentId: "a-1" })?.id, "agent:Nova/bash", "the agent's ask tightens an operator's allow");
 });
+
+test("the grammar's example parses, and every key the grammar lists reaches the rule it fills (INV-1660)", async () => {
+  const { RULE_EXAMPLE, RULE_FIELDS } = await import("./rules-grammar.ts");
+  const { rule, problem } = parseRuleFile("example", RULE_EXAMPLE);
+  assert.equal(problem, undefined);
+  for (const field of RULE_FIELDS) {
+    const value = rule![field.target];
+    assert.ok(Array.isArray(value) ? value.length > 0 : value !== undefined && value !== "example", `${field.key}: is written in the example and read by the parser`);
+    for (const alias of field.aliases) {
+      const spelled = parseRuleFile("alias", `---\neffect: deny\n${alias}: ${field.example}\n---\nAn alias.`).rule!;
+      if (field.list) assert.deepEqual(spelled[field.target], rule![field.target], `${alias} is ${field.key}`);
+    }
+  }
+});

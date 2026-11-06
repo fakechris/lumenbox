@@ -12,13 +12,8 @@ export interface RecoverTaskInput {
   taskId: string;
 }
 
-export function isRecoveryCommand(text: string): boolean {
-  return /^\/recover(?:\s|$)/i.test(text.trim());
-}
-
-export function parseRecoveryCommand(text: string): string | undefined {
-  return /^\/recover\s+(t\d+)$/i.exec(text.trim())?.[1]?.toLowerCase();
-}
+/** `/recover` is a chat command; its shape lives in the command table (INV-1660). */
+export { isRecoveryCommand, parseRecoveryCommand } from "../channels/commands.ts";
 
 export interface RecoverTaskDeps {
   registry: AgentRegistry;

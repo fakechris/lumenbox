@@ -4,8 +4,11 @@
  * dialog is the largest self-contained, interpolation-free chunk in it. It is composed
  * back in at the position it always occupied; the browser script that drives these ids
  * still lives in app-html.ts, and app-html.test.ts checks the composed result, so an id
- * lost in the move fails the build rather than a person's first load.
+ * lost in the move fails the build rather than a person's first load. The tab row is rendered
+ * from settings-registry.ts, the panes' one home (INV-1660).
  */
+import { renderSettingsTabs } from "./settings-registry.ts";
+
 export const SETTINGS_DIALOG_HTML = `
 <!-- Settings. What is here is exactly what the config file holds: the provider choice
      the launch command used to carry, its model override, and the key. -->
@@ -13,12 +16,7 @@ export const SETTINGS_DIALOG_HTML = `
   <div class="modal">
     <h3>Settings</h3>
     <div id="settabs" class="tabs" style="display:flex;gap:6px;flex-wrap:wrap">
-      <a href="#" class="tab on" data-settab="model">Model</a>
-      <a href="#" class="tab" data-settab="boxes">Boxes</a>
-      <a href="#" class="tab" data-settab="doors">Channels</a>
-      <a href="#" class="tab" data-settab="team">Team</a>
-      <a href="#" class="tab" data-settab="mine">Mine</a>
-      <a href="#" class="tab" data-settab="memory">Memory</a>
+${renderSettingsTabs()}
     </div>
     <div class="fieldnote" id="setwelcome" style="display:none;border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 12px;color:var(--text-soft)">
       Welcome. LumenBox needs two things before agents can work: a model provider with a

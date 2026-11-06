@@ -9,7 +9,7 @@
       "src/boxd/main.ts": 1315,
       "src/channels/dingtalk.ts": 1540,
       "src/channels/feishu.ts": 2418,
-      "src/channels/manager.ts": 2505,
+      "src/channels/manager.ts": 2370,
       "src/cli.ts": 2151,
       "src/control/store.ts": 1341,
       "src/cua/x11-executor.ts": 1359,

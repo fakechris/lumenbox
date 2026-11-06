@@ -11,6 +11,9 @@
  *   - **env**: `process.env` is read only in the configuration and startup layers (`allowed`).
  *     Files reading it elsewhere are listed; a listed file may stop, never a new one start.
  *
+ * Beside the two, `scripts/registry-guard.mjs` holds the three registries (chat commands, Settings
+ * panes, the rules grammar) to their one home each, and its problems are this check's problems.
+ *
  * Three ways to fail: a new violation; a baseline entry added or a ceiling raised (checked
  * against the merge base's copy when git can show one); an entry that no longer violates and
  * was not removed. `--write-baseline` lowers and removes, never adds; `--init` writes the first
@@ -19,7 +22,7 @@
  *   node scripts/arch-ratchet.mjs                  check
  *   node scripts/arch-ratchet.mjs --write-baseline  lower ceilings / drop entries that now pass
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
@@ -120,6 +123,17 @@ export function lowered(baseline, files) {
   return { size: { limit: now.size.limit, files: kept }, env: { allowed: now.env.allowed, files: envKept } };
 }
 
+/**
+ * The registry guard (INV-1660): a chat command, a Settings pane or a rule-file key outside its one
+ * home. Run as its own process because it imports the TypeScript registries.
+ */
+function registryProblems(root) {
+  const run = spawnSync(process.execPath, [join(root, "scripts", "registry-guard.mjs")], { cwd: root, encoding: "utf8" });
+  if (run.status === 0) return [];
+  const lines = `${run.stdout ?? ""}${run.stderr ?? ""}`.split("\n").filter(line => line.trim() !== "");
+  return lines.length > 0 ? lines : [`registry guard exited ${run.status} without saying why`];
+}
+
 function previousBaseline(root) {
   try {
     const base = execFileSync("git", ["merge-base", "HEAD", "origin/main"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
@@ -149,7 +163,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exit(0);
   }
   const previous = previousBaseline(root);
-  const problems = verify(baseline, files, previous);
+  const problems = [...verify(baseline, files, previous), ...registryProblems(root)];
   if (problems.length > 0) {
     console.error(`[arch] ${problems.length} problem(s):\n  ${problems.join("\n  ")}`);
     process.exit(1);
