@@ -145,35 +145,111 @@ function brokenLinks(dir, text) {
   return broken;
 }
 
+/**
+ * A team page (INV-1662): `docs/manual/teams/<slug>.md`, one per crew or team a person can set
+ * up, written as a design a person can copy rather than a concept to learn. It has its own
+ * skeleton — what each role does, how it is built, the minimal and the daily configuration,
+ * what one real run cost, how to build the minimal version from the app, a chat and the command
+ * line, what to watch, what stays the person's job, where to take it next — and ends with the
+ * run its numbers come from. It `covers: crew:<slug>` or `team:<slug>`, the directory on the
+ * manual's home page links to it, and its cost section states its basis: a figure without the
+ * tokens, the time, the price and the date behind it is a claim, not a cost.
+ */
+export const TEAM_DIR = "teams";
+export const TEAM_SECTIONS = [
+  "## Architecture",
+  "## Core design",
+  "### Prompt",
+  "### Tools and permissions",
+  "### Skills",
+  "### Memory",
+  "### Credentials",
+  "## Configuration: minimal and daily",
+  "## Running cost",
+  "## Build the minimal version",
+  ...MANUAL_ENTRIES.map(s => `### ${s}`),
+  "## Run monitoring",
+  "## Outside the box",
+  "## Extensions",
+  "## The run this page is based on",
+];
+export const TEAM_COST_BASIS = "**Basis:**";
+
+/** The checks every manual page shares, a concept page and a team page alike. */
+function lintManualPage(dir, file, at, problems) {
+  const slug = file.replace(/\.md$/, "");
+  const text = readFileSync(join(dir, file), "utf8");
+  const header = parseHeader(text);
+  if (header === undefined) { problems.push(`${at}: no header block.`); return undefined; }
+  if (header.doc !== slug) problems.push(`${at}: header says doc: ${header.doc ?? "(none)"}, filename says ${slug}.`);
+  if (header.family !== "manual") problems.push(`${at}: family: ${header.family ?? "(none)"}; a page in docs/manual/ is family: manual.`);
+  if (!STATUSES.has(header.status)) problems.push(`${at}: status: ${header.status ?? "(none)"} is not one of ${[...STATUSES].join(", ")}.`);
+  if (/^\d/.test(slug)) problems.push(`${at}: a manual page is named by its concept, not by a number.`);
+  if ((header.covers ?? "") === "") problems.push(`${at}: which concept does it cover? Say so with covers:.`);
+  const generated = header.generated === "true";
+  if (!generated && header.audience !== "user") problems.push(`${at}: a written manual page says audience: user, so the glossary's words are checked on it.`);
+  const title = titleOf(text);
+  if (title !== undefined && header.title !== undefined && header.title !== title) problems.push(`${at}: header title "${header.title}" is not the heading "${title}".`);
+  for (const link of brokenLinks(dir, text)) problems.push(`${at}: links to ${link}, which is not there.`);
+  return { slug, text, header, generated };
+}
+
+function skeletonProblem(at, text, expected) {
+  const headings = [...text.matchAll(/^(#{2,3}) (.+)$/gm)].map(m => `${m[1]} ${m[2].trim()}`);
+  const found = headings.filter(h => expected.includes(h));
+  if (found.join("\n") !== expected.join("\n")) return `${at}: the skeleton is ${expected.join(" → ")}; this page has ${found.join(" → ") || "none of it"}.`;
+  return undefined;
+}
+
+function introProblem(at, text) {
+  const intro = text.slice(text.indexOf("\n# ") + 1).split("\n").slice(1).find(line => line.trim() !== "");
+  return intro === undefined || intro.startsWith("#") ? `${at}: open with one line that says what the page is for, before the first section.` : undefined;
+}
+
+/** The text of one `## ` section, up to the next `## `. */
+function sectionOf(text, heading) {
+  const start = text.indexOf(`\n${heading}\n`);
+  if (start < 0) return "";
+  const rest = text.slice(start + heading.length + 2);
+  const next = rest.search(/^## /m);
+  return next < 0 ? rest : rest.slice(0, next);
+}
+
 export function lintManual(dir) {
   const problems = [];
   const pages = new Map();
   if (!existsSync(dir)) return { pages, problems };
   for (const file of readdirSync(dir).filter(f => f.endsWith(".md")).sort()) {
-    const slug = file.replace(/\.md$/, "");
     const at = `manual/${file}`;
-    const text = readFileSync(join(dir, file), "utf8");
-    const header = parseHeader(text);
-    if (header === undefined) { problems.push(`${at}: no header block.`); continue; }
-    if (header.doc !== slug) problems.push(`${at}: header says doc: ${header.doc ?? "(none)"}, filename says ${slug}.`);
-    if (header.family !== "manual") problems.push(`${at}: family: ${header.family ?? "(none)"}; a page in docs/manual/ is family: manual.`);
-    if (!STATUSES.has(header.status)) problems.push(`${at}: status: ${header.status ?? "(none)"} is not one of ${[...STATUSES].join(", ")}.`);
-    if (/^\d/.test(slug)) problems.push(`${at}: a manual page is named by its concept, not by a number.`);
-    if ((header.covers ?? "") === "") problems.push(`${at}: which concept does it cover? Say so with covers:.`);
-    const generated = header.generated === "true";
-    if (!generated && header.audience !== "user") problems.push(`${at}: a written manual page says audience: user, so the glossary's words are checked on it.`);
-    const title = titleOf(text);
-    if (title !== undefined && header.title !== undefined && header.title !== title) problems.push(`${at}: header title "${header.title}" is not the heading "${title}".`);
-    for (const link of brokenLinks(dir, text)) problems.push(`${at}: links to ${link}, which is not there.`);
+    const page = lintManualPage(dir, file, at, problems);
+    if (page === undefined) continue;
+    const { slug, text, header, generated } = page;
     if (!generated && slug !== MANUAL_HOME) {
-      const headings = [...text.matchAll(/^(#{2,3}) (.+)$/gm)].map(m => `${m[1]} ${m[2].trim()}`);
       const expected = [...MANUAL_SECTIONS.slice(0, 2).map(s => `## ${s}`), ...MANUAL_ENTRIES.map(s => `### ${s}`), ...MANUAL_SECTIONS.slice(2).map(s => `## ${s}`)];
-      const found = headings.filter(h => expected.includes(h));
-      if (found.join("\n") !== expected.join("\n")) problems.push(`${at}: the skeleton is ${expected.join(" → ")}; this page has ${found.join(" → ") || "none of it"}.`);
-      const intro = text.slice(text.indexOf("\n# ") + 1).split("\n").slice(1).find(line => line.trim() !== "");
-      if (intro === undefined || intro.startsWith("#")) problems.push(`${at}: open with one line that says what the page is for, before the first section.`);
+      const skeleton = skeletonProblem(at, text, expected);
+      if (skeleton !== undefined) problems.push(skeleton);
+      const intro = introProblem(at, text);
+      if (intro !== undefined) problems.push(intro);
     }
     pages.set(slug, header);
+  }
+  const teamDir = join(dir, TEAM_DIR);
+  const home = existsSync(join(dir, `${MANUAL_HOME}.md`)) ? readFileSync(join(dir, `${MANUAL_HOME}.md`), "utf8") : "";
+  if (existsSync(teamDir)) {
+    for (const file of readdirSync(teamDir).filter(f => f.endsWith(".md")).sort()) {
+      const at = `manual/${TEAM_DIR}/${file}`;
+      const page = lintManualPage(teamDir, file, at, problems);
+      if (page === undefined) continue;
+      const { slug, text, header } = page;
+      if (!/^(crew|team):[a-z0-9-]+$/.test(header.covers ?? "")) problems.push(`${at}: a team page covers crew:<slug> or team:<slug>, not ${header.covers ?? "(none)"}.`);
+      const skeleton = skeletonProblem(at, text, TEAM_SECTIONS);
+      if (skeleton !== undefined) problems.push(skeleton);
+      const intro = introProblem(at, text);
+      if (intro !== undefined) problems.push(intro);
+      if (!sectionOf(text, "## Running cost").includes(TEAM_COST_BASIS)) problems.push(`${at}: the running cost says its basis in a ${TEAM_COST_BASIS} line — tokens, time, price and date, or "not measured yet" and what would measure it.`);
+      if (!home.includes(`](${TEAM_DIR}/${file})`)) problems.push(`${at}: the manual's home page does not link to it; add it to the directory in ${MANUAL_HOME}.md.`);
+      pages.set(`${TEAM_DIR}/${slug}`, header);
+    }
   }
   const byConcept = new Map();
   for (const [slug, header] of pages) {
@@ -338,7 +414,7 @@ export function renderIndex(docs) {
     "- **decision** — a dated record of why something was decided. Never rewritten; superseded, with a pointer.",
     "- **guide** — how to do something. Kept current.",
     "- **handoff** — what was true at the end of a session. Historical by nature.",
-    "- **manual** — how a person uses the product, one page per concept, in `manual/`. Start at [the manual](manual/README.md).",
+    "- **manual** — how a person uses the product, one page per concept, in `manual/`, and one page per team in `manual/teams/`. Start at [the manual](manual/README.md).",
     "",
   ];
   for (const family of ["spec", "manual", "guide", "decision", "handoff"]) {

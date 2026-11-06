@@ -190,3 +190,37 @@ test("the manual: one page per concept, named by the concept, each with the skel
     assert.ok(problems.some(p => /memory\.md: links to gone\.md, which is not there/.test(p)));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("a team page has the team skeleton, covers a crew or a team, states its cost basis and is linked from the manual's home (INV-1662)", () => {
+  const { lintManual, renderIndex, TEAM_SECTIONS } = awaitImported;
+  const shipped = lintManual(join(docs, "manual"));
+  assert.deepEqual(shipped.problems, [], shipped.problems.join("\n"));
+  const teams = [...shipped.pages.keys()].filter(slug => slug.startsWith("teams/"));
+  assert.ok(teams.length >= 3 && teams.length <= 5, `three to five team pages, not ${teams.length}`);
+  assert.match(renderIndex(lintDocs(docs).docs), /\| \[manual\/teams\/ship\]\(manual\/teams\/ship\.md\) \|/, "the index lists a team page under the manual");
+
+  const dir = mkdtempSync(join(tmpdir(), "manual-teams-"));
+  try {
+    mkdirSync(join(dir, "teams"));
+    const body = TEAM_SECTIONS.map(h => `${h}\n\n${h === "## Running cost" ? "**Basis:** not measured yet." : "x"}\n`).join("\n");
+    const team = (slug, covers, text = body) =>
+      writeFileSync(join(dir, "teams", `${slug}.md`), `<!-- doc: ${slug}\n     title: ${slug}\n     family: manual\n     status: current\n     covers: ${covers}\n     audience: user\n-->\n# ${slug}\n\nIntro line.\n\n${text}`);
+    const home = links => writeFileSync(join(dir, "README.md"), `<!-- doc: README\n     title: Home\n     family: manual\n     status: current\n     covers: manual\n     audience: user\n-->\n# Home\n\n${links}\n`);
+    home("[ship](teams/ship.md)");
+    team("ship", "crew:ship");
+    assert.deepEqual(lintManual(dir).problems, [], "a whole team page passes");
+    assert.ok(lintManual(dir).pages.has("teams/ship"));
+
+    team("desk", "desk", body.replace("**Basis:** not measured yet.", "about 0.30").replace("### Memory\n\nx\n\n", ""));
+    const problems = lintManual(dir).problems;
+    assert.ok(problems.some(p => /teams\/desk\.md: a team page covers crew:<slug> or team:<slug>, not desk/.test(p)), "a crew or a team, by slug");
+    assert.ok(problems.some(p => /teams\/desk\.md: the skeleton is .*### Memory.*; this page has /.test(p)), "the team skeleton, not the concept one");
+    assert.ok(problems.some(p => /teams\/desk\.md: the running cost says its basis in a \*\*Basis:\*\* line/.test(p)), "a cost without its basis is refused");
+    assert.ok(problems.some(p => /teams\/desk\.md: the manual's home page does not link to it/.test(p)), "the directory links every team page");
+    rmSync(join(dir, "teams", "desk.md"));
+
+    team("ship-again", "crew:ship");
+    home("[ship](teams/ship.md) [again](teams/ship-again.md)");
+    assert.ok(lintManual(dir).problems.some(p => /two current manual pages cover crew:ship: teams\/ship-again, teams\/ship\./.test(p)), "one crew, one page");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
