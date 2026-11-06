@@ -1663,8 +1663,8 @@ export function buildTools(
         "Record what was actually said, not your interpretation of it: a name or product you " +
         "do not recognise is something to look up (WebSearch/WebFetch), never to \"correct\" " +
         "to one you do — a plausible-sounding substitution written here misleads the whole " +
-        "team on every future turn. Your own memory is mirrored read-only in the box (the memory " +
-        "section gives the path); edits there are overwritten, so this tool is how memory changes.",
+        "team on every future turn. When you have a box, your own memory is mirrored read-only in it " +
+        "(the memory section gives the path); editing that copy changes nothing kept — this tool does.",
       input_schema: {
         type: "object",
         properties: {
@@ -2178,7 +2178,7 @@ export function buildTools(
       "holding every word come first, then ones related by meaning (a shared stem or a common " +
       "topic, e.g. 数据库 and database); one or two words that would have been written work best. " +
       "Searches your own and the team's memory together; a write is visible here immediately. Your " +
-      "own memory is also mirrored read-only in the box (the memory section gives the path) for grep.",
+      "own memory is also mirrored read-only in your box, when you have one, for grep (path in the memory section).",
     input_schema: {
       type: "object",
       properties: {
