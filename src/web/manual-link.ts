@@ -6,3 +6,6 @@
  * Manual link interpolates it, and the desktop shell sends it to the system browser.
  */
 export const MANUAL_URL = "https://github.com/fakechris/lumenbox/blob/main/docs/manual/README.md";
+
+/** The Chinese manual (INV-1684), beside the English one: the page links to the one in its reader's language. */
+export const MANUAL_URL_ZH = MANUAL_URL.replace(/\.md$/, ".zh.md");
