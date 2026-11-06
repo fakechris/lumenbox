@@ -198,6 +198,8 @@ export interface RememberDeps {
   heldValues?: () => ReadonlyMap<string, string>;
   /** Answers the four questions about each candidate (INV-1333); defaults to one call on the cheap profile. */
   judge?: MemoryJudge;
+  /** Told what the judge kept, with the person driving, so the host's record of the person can take its lines (INV-1653). */
+  onKept?: (agentId: string, kept: readonly MemoryRecord[], principal: string | undefined) => void;
   /** The decision-model switch's dependencies (INV-1412); tests replace them, production reads the environment. */
   jev?: SwitchDeps;
 }
@@ -541,6 +543,7 @@ export class Rememberer {
       for (const line of judged.log) this.log(`memory judge: ${line}`);
       const writes = [...judged.retractions, ...judged.keep, ...judged.refreshed, ...judged.held];
       if (writes.length > 0) this.deps.registry.appendMemoryRecords(agentId, writes);
+      if (judged.keep.length > 0) this.deps.onKept?.(agentId, judged.keep, principal);
       this.log(`kept ${judged.keep.length} memor${judged.keep.length === 1 ? "y" : "ies"} from ${exchanges.length} exchanges${judged.held.length > 0 ? `, held ${judged.held.length} for a person` : ""}`);
     }
 

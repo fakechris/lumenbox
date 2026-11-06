@@ -561,7 +561,7 @@ export interface TurnDeps {
    * Pushes the agent's standing files to its box before the turn reads them (INV-777), so the
    * copy it may edit is the copy the prompt carries. Absent means no mirror — tests, or no box.
    */
-  syncStanding?: (agentId: string) => Promise<unknown>;
+  syncStanding?: (agentId: string) => Promise<unknown>; person?: (principalId: string | undefined) => string | undefined; // the host's record of the person driving, rendered (INV-1653)
   /** The template this turn installs, when it is an imported bot's setup turn (docs/29). */
   templateSetup?: string;
   /** Where a packed template is staged; absent withholds PackTemplate. */
@@ -1589,7 +1589,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     await deps.syncStanding(agent.id).catch(() => undefined);
   }
   const standing = isolated ? undefined : readStanding(registry.dirFor(agent.id), agent.profile.name);
-  const standingNotice = standing === undefined ? undefined : changeNotice(takeChanges(registry.dirFor(agent.id), standing));
+  const standingNotice = standing === undefined ? undefined : changeNotice(takeChanges(registry.dirFor(agent.id), standing)); const person = isolated ? undefined : deps.person?.(deps.caller?.userId); // INV-1653
 
   // Both personal and shared memories pass the same relevance gate, even below budget.
   const ownMemory = isolated ? [] : registry.readMemoryRecords(agent.id);
@@ -1642,7 +1642,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
         .filter(entry => entry.id !== conversation).length,
       // One lane per turn (bus.ts), so the first message's lane is the turn's (INV-780).
       ...(inbound.length > 0 ? { lane: laneOf(inbound[0]!) } : {}),
-      ...(standing !== undefined ? { standing } : {}),
+      ...(standing !== undefined ? { standing } : {}), ...(person !== undefined ? { person } : {}),
     });
   const builtPromptParts = buildParts(memoryRecall);
   const promptParts = isolated ? {

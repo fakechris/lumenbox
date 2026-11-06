@@ -40,7 +40,7 @@ import type { ProviderProfile } from "./provider.ts";
 import { Rememberer, readsExternalContent, summariseExchange, turnReadOutside } from "./remember.ts";
 import { compileSurface, type SurfaceRecord } from "./show-ui.ts";
 import type { Skill } from "./skills.ts";
-import type { SpendLimits } from "./spend-limits.ts";
+import type { SpendLimits } from "./spend-limits.ts"; import { OPERATOR, type PersonRecords } from "./person.ts";
 import type { TaskStore } from "./tasks.ts";
 import { fakeModel } from "./testing/fake-model.ts";
 import { runTurn } from "./turn.ts";
@@ -361,6 +361,8 @@ export interface EpisodeOptions {
   memory?: boolean;
   /** The agents' spend lines (INV-1615), when an episode is about them. */
   spendLimits?: SpendLimits;
+  /** The host's record of the person (INV-1653), when an episode is about what the agents are told of them. */
+  person?: PersonRecords;
   /**
    * Drive concurrent channel arrivals through the real bus instead of sequential says.
    * `say` is one line of `says`, with the same after-turn bookkeeping, for a drive that
@@ -480,6 +482,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       ...(options.pendingWork !== undefined ? { pendingWork: options.pendingWork } : {}),
       ...(acpDelegates !== undefined ? { acpDelegates } : {}),
       ...(options.spendLimits !== undefined ? { spendLimits: options.spendLimits } : {}),
+      ...(options.person !== undefined ? { person: (principalId: string | undefined) => options.person!.render(principalId ?? OPERATOR, "the operator") } : {}),
       registry,
       bus,
       box,
