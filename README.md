@@ -11,6 +11,7 @@
 <p align="center">
   <a href="https://github.com/fakechris/lumenbox/releases/latest">Download for macOS</a> ·
   <a href="docs/37-onboarding.md">Getting started</a> ·
+  <a href="docs/manual/README.md">Manual</a> ·
   <a href="docs/38-operators-guide.md">Operator's guide</a> ·
   <a href="docs/03-architecture.md">Architecture</a> ·
   <a href="docs/89-thesis.md">Design</a> (<a href="docs/89-thesis.zh.md">中文</a>)
@@ -127,6 +128,7 @@ makes sure a promise is followed by an action.
 ## Documentation
 
 - [Getting started](docs/37-onboarding.md) — install, first run, every way to get a box.
+- [Manual](docs/manual/README.md) — how to use each thing, one page per concept.
 - [Operator's guide](docs/38-operators-guide.md) — every command, every setting, providers, testing.
 - [The design of LumenBox](docs/89-thesis.md) ([中文](docs/89-thesis.zh.md)) — the layers, principles and decisions in one argument.
 - [Architecture](docs/03-architecture.md) and [the design docs](docs/) — how it works and why.
