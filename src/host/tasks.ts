@@ -31,7 +31,7 @@ import { applyFlag, type FlagOutcome, type TaskFlag } from "./task-flag.ts";
 import { applyRevalidation, applyWithdrawal, grantMandate, type Mandate, type MandateWorld, type RevalidationResult } from "./mandate.ts";
 import { Receipts } from "./receipts.ts";
 import { clampDescription, dueOf, type TaskContract } from "./task-fields.ts";
-import { refuseUnknownAgents, type TaskAgents } from "./task-agents.ts"; import { inferLevel, LEVEL_MEANING, type Level } from "./autonomy-level.ts";
+import { refuseUnknownAgents, type TaskAgents } from "./task-agents.ts"; import { inferLevel, LEVEL_MEANING, type Level } from "./autonomy-level.ts"; import type { Discovery } from "./discovery.ts";
 
 export { clampContract, clampDescription, DESCRIPTION_LIMIT, dueOf, type TaskContract } from "./task-fields.ts";
 
@@ -124,7 +124,7 @@ export interface Task {
    */
   proposedBy?: string;
   /** How far the AI may take it on its own, 1–5, and who set it: "rule" or a person (INV-1650). */
-  level?: Level; levelBy?: string;
+  level?: Level; levelBy?: string; discovery?: Discovery; // discovery (INV-1652): what a sensing routine found — kind, source, evidence, and the fingerprint that stops a repeat
   conversation?: string;
   /** When it is due, as an ISO date or instant (INV-527). Absent means no date was given. */
   due?: string;
@@ -289,7 +289,7 @@ export class TaskStore {
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
-  get(id: string): Task | undefined {
+  byFingerprint(fingerprint: string): Task | undefined { return [...this.tasks.values()].find(task => task.discovery?.fingerprint === fingerprint); } /* the task, live or closed, that already carries this finding (INV-1652): proposed once, a dismissed one stays dismissed */ get(id: string): Task | undefined {
     const task = this.tasks.get(id);
     return task === undefined ? undefined : {
       ...task,
@@ -320,7 +320,7 @@ export class TaskStore {
     goal?: { area: string; commitment?: string };
     pursuit?: Pursuit;
     mandate?: { source?: string; rulesHash?: string }; // What the mandate rests on (INV-1457).
-    level?: Level; // A person's own setting (INV-1650); absent, the rule infers one.
+    level?: Level; discovery?: Discovery; // level: a person's own setting (INV-1650), else the rule infers one; discovery: from a sensing routine (INV-1652), always a proposal
     now?: Date;
   }): Task | undefined {
     const title = input.title.replace(/\s+/g, " ").trim().slice(0, 200);
@@ -341,7 +341,7 @@ export class TaskStore {
       ...(input.reviewerId !== undefined ? { reviewerId: input.reviewerId } : {}),
       ...(input.conversation !== undefined ? { conversation: input.conversation } : {}),
       ...(input.contract !== undefined ? { contract: input.contract } : {}),
-      ...(input.proposedBy !== undefined ? { proposedBy: input.proposedBy } : {}),
+      ...(input.proposedBy !== undefined ? { proposedBy: input.proposedBy } : {}), ...(input.discovery !== undefined ? { discovery: input.discovery } : {}),
       mandate: grantMandate({ by: input.requester, ...(input.proposedBy !== undefined ? { proposedBy: input.proposedBy } : {}), ...input.mandate, now: input.now ?? new Date() }),
       ...(dueOf(input.due) !== undefined ? { due: dueOf(input.due)! } : {}),
       ...(input.goal !== undefined && input.goal.area.trim() !== ""
@@ -580,7 +580,7 @@ export class TaskStore {
       coerced =
         `This task names ${task.reviewerId} as its reviewer, so its assignee cannot mark it ` +
         `done. It is now in review instead; ${task.reviewerId} accepting it is what done means.`;
-    } else if (status === "dropped" && by !== task.requester && by !== task.reviewerId && by !== AGING_ACTOR && !HARNESS_ACTORS.has(by)) {
+    } else if (status === "dropped" && task.proposedBy === undefined && by !== task.requester && by !== task.reviewerId && by !== AGING_ACTOR && !HARNESS_ACTORS.has(by)) { // a proposal is not work yet: anyone may dismiss it (INV-1652)
       // Dropping is ending the work too, and it was never gated (INV-531). docs/51 says
       // "an agent does not archive; it proposes and the proposal is answerable" — but the
       // only checked terminal status was `done`, so any agent could drop any task on the

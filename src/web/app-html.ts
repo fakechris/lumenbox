@@ -1060,7 +1060,7 @@ export const APP_HTML = String.raw`<!doctype html>
     <div class="bar" style="display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--border)">
       <input id="tasknew" placeholder="New task title&hellip;" spellcheck="false" style="flex:1;min-width:0;padding:4px 9px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:13px">
       <select id="taskassign" style="height:28px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font-size:12px"></select>
-      <button class="btn sm" id="taskadd">Add</button>
+      <button class="btn sm" id="taskadd">Add</button> <a href="#" id="inboxonly" class="dim" style="font-size:11px;white-space:nowrap" title="Only what the agents found and proposed (INV-1652): commit what is worth doing, dismiss the rest">inbox</a>
     </div>
     <!-- What needs me, before what the board has (INV-543): two lists and their clocks. -->
     <div id="attention" title="Above: what is waiting on a person, with its clock. Below: every task on the board." style="display:none;border-bottom:1px solid var(--border);padding:10px 16px"></div>
@@ -5043,7 +5043,7 @@ function showTab(which) {
 document.getElementById("tabdesktop").addEventListener("click", function (e) { e.preventDefault(); showTab("desktop"); });
 document.getElementById("desktoptitle").addEventListener("click", function (e) { e.preventDefault(); showTab("desktop"); });
 document.getElementById("tabfiles").addEventListener("click", function (e) { e.preventDefault(); showTab("files"); });
-document.getElementById("tabtasks").addEventListener("click", function (e) { e.preventDefault(); showTab("tasks"); });
+document.getElementById("tabtasks").addEventListener("click", function (e) { e.preventDefault(); showTab("tasks"); }); document.getElementById("inboxonly").addEventListener("click", function (e) { e.preventDefault(); window.inboxOnly = !window.inboxOnly; this.textContent = window.inboxOnly ? "all" : "inbox"; refreshTasks(); }); // INV-1652
 document.getElementById("tabauto").addEventListener("click", function (e) { e.preventDefault(); showTab("auto"); });
 document.getElementById("tabaudit").addEventListener("click", function (e) { e.preventDefault(); showTab("audit"); });
 document.getElementById("audithideprobes").addEventListener("change", function () {
@@ -5772,7 +5772,7 @@ function refreshTasks() {
         return;
       }
       // Live statuses first, closed at the bottom; within a group, newest change first.
-      var order = { open: 0, doing: 1, blocked: 2, review: 3, done: 4, dropped: 5 };
+      var order = { open: 0, doing: 1, blocked: 2, review: 3, done: 4, dropped: 5 }; if (window.inboxOnly) tasks = tasks.filter(function (t) { return t.proposedBy && t.status !== "dropped"; }); // the inbox: proposals awaiting a person (INV-1652)
       tasks.sort(function (a, b) {
         return (order[a.status] - order[b.status]) || b.updatedAt.localeCompare(a.updatedAt);
       });
@@ -5784,7 +5784,7 @@ function refreshTasks() {
         var open = t.id === openTask;
         var proposed = t.proposedBy
           ? ' <span class="chip" style="font-size:10px">proposed</span>' +
-            ' <button class="btn sm accent" data-commit="' + esc(t.id) + '" title="Make this proposal real work: agents may take it after you commit">Commit</button>'
+            ' <button class="btn sm accent" data-commit="' + esc(t.id) + '" title="Make this proposal real work: agents may take it after you commit">Commit</button>' + (t.status !== "dropped" ? ' <button class="btn sm ghost" data-dismiss="' + esc(t.id) + '" title="Not worth doing: closes it, and the same finding is not proposed again">Dismiss</button>' : "") + (t.discovery ? ' <span class="chip" style="font-size:10px" title="' + esc(t.discovery.evidence) + '">' + esc(t.discovery.kind) + " from " + esc(t.discovery.source) + (t.discovery.whyNow ? " — " + esc(t.discovery.whyNow) : "") + "</span>" : "")
           : "";
         // Due, ageing and a pending close (INV-527/529): said on the row, so an overdue or
         // idle task is not one more line that looks like every other.
@@ -5858,6 +5858,8 @@ document.getElementById("tasklist").addEventListener("click", function (event) {
     refreshTasks();
     return;
   }
+  var commitId = target.getAttribute("data-commit"), dismissId = target.getAttribute("data-dismiss"); // a proposal is committed or dismissed with a click (INV-1652); a dismissed finding is not proposed again
+  if (commitId || dismissId) { event.preventDefault(); fetch(commitId ? "/api/tasks/commit" : "/api/tasks/update", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(commitId ? { id: commitId } : { id: dismissId, status: "dropped", note: "dismissed: not worth doing now" }) }).then(function () { refreshTasks(); }).catch(function () {}); return; }
   var conversation = target.getAttribute("data-openconv");
   if (conversation) {
     event.preventDefault();
@@ -5867,14 +5869,6 @@ document.getElementById("tasklist").addEventListener("click", function (event) {
 });
 
 document.getElementById("tasklist").addEventListener("change", function (event) {
-  var commitId = event.target.getAttribute && event.target.getAttribute("data-commit");
-  if (commitId) {
-    event.preventDefault();
-    fetch("/api/tasks/commit", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: commitId }) })
-      .then(function () { loadTasks(); })
-      .catch(function () {});
-    return;
-  }
   var id = event.target.getAttribute && event.target.getAttribute("data-task"), levelOf = event.target.getAttribute && event.target.getAttribute("data-level"); // a level change rides the same route (INV-1650)
   if (!id && !levelOf) return;
   fetch("/api/tasks/update", {

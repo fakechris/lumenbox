@@ -38,7 +38,7 @@
  * and a package is several files where a starter is one. They keep the offer-once rule.
  */
 
-import type { SkillEval } from "./skill-evals.ts";
+import type { SkillEval } from "./skill-evals.ts"; import { SENSE_AND_PROPOSE, SENSE_AND_PROPOSE_EVALS } from "./sense-skill.ts";
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -315,7 +315,7 @@ frontmatter above using five cron fields, for example \`schedule: "30 8 * * *"\`
 unless you add \`timezone: Asia/Shanghai\` next to it. Scheduled runs are
 announced when they finish, and a missed window is skipped, never replayed.
 `,
-  },
+  }, SENSE_AND_PROPOSE, // the sensing routine (INV-1652), in its own file: this one is at its ceiling
   {
     slug: "daily-research-digest",
     // The version shipped on 2026-09-24, which told the agent to read a host path the box
@@ -1065,7 +1065,7 @@ without quoting the sensitive part. If nothing was, add nothing.
  * case is a request that belongs to a neighbour, because the confusable neighbour is where a
  * description drawn too wide shows first.
  */
-const STARTER_EVALS: Record<string, readonly SkillEval[]> = {
+const STARTER_EVALS: Record<string, readonly SkillEval[]> = { "sense-and-propose": SENSE_AND_PROPOSE_EVALS, // INV-1652, in its own file
   "research-brief": [
     { name: "topic brief", kind: "trigger", says: "帮我调研一下固态电池过去一年的进展，给我一份带来源的简报。" },
     { name: "a table is data-brief", kind: "no-trigger", instead: "data-brief", says: "这是 /home/box/work/sales.csv，按区域看一下表现，先查数据质量，最后给建议。", files: { "/home/box/work/sales.csv": "region,month,revenue\nnorth,2026-07,120\nsouth,2026-07,95\n" } },
