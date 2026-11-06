@@ -901,7 +901,7 @@ function renderTasks(context: PromptContext): string {
     more +
     "\n\nRead current task details with Tasks (action: read, id: task id) before working. " +
     "Move them with the Tasks tool as they progress; a task in `review` is waiting on its " +
-    "reviewer, not on you. Finish what is doing before taking more."
+    "reviewer, not on you. Finish what is doing before taking more. The file a task was for — the report, deck, sheet — is marked with DeliverFile when it is finished, so the task keeps it and offers it for download."
   );
 }
 

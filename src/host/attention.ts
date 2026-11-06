@@ -23,6 +23,7 @@ import type { Task } from "./tasks.ts";
 import type { WatchedQuestion } from "./question-expiry.ts"; import { agentCaseText, questionLeanText } from "./consent-case.ts";
 import { describeStale } from "./mandate.ts";
 import { currentFlag } from "./task-flag.ts";
+import { claimedButNotDelivered } from "./task-deliverables.ts";
 import { STAGE_LABEL, stageWorldOf, type TaskStage, taskStage } from "./task-stage.ts";
 
 export interface AttentionItem {
@@ -225,7 +226,7 @@ export function attentionFor(input: AttentionInput): Attention {
         kind: "review",
         ref: task.id, stage: stages[task.id],
         title: task.title,
-        detail: `${input.nameOf(task.assigneeId ?? "somebody")} says it is done and is waiting for your word.`,
+        detail: `${input.nameOf(task.assigneeId ?? "somebody")} says it is done and is waiting for your word.${undelivered(task)}`,
         ...(task.due !== undefined ? { deadline: task.due } : {}),
         with: input.nameOf(task.assigneeId ?? ""),
       });
@@ -279,4 +280,12 @@ export function attentionFor(input: AttentionInput): Attention {
   };
   void now;
   return { stages, mine: mine.sort(byDeadline), theirs: theirs.sort(byDeadline) };
+}
+
+/** The review item's warning when the submission names files and none was marked as a deliverable (INV-1663). */
+function undelivered(task: Task): string {
+  const named = claimedButNotDelivered(task);
+  if (named.length === 0) return "";
+  const names = named.slice(0, 3).map(path => path.split("/").pop()).join(", ");
+  return ` No deliverable was marked: the submission names ${names}, but the task has no file to open.`;
 }

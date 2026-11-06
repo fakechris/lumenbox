@@ -5658,7 +5658,7 @@ function taskDetail(t) {
         : esc(t.conversation))
     : "the team room";
   return '<div style="margin:8px 0 2px 26px;padding:8px 10px;border-left:2px solid var(--border)">' +
-    (t.description ? '<div style="font-size:12px;margin-bottom:6px">' + esc(t.description) + "</div>" : "") + (window.claimAccountHtml ? window.claimAccountHtml(t) : "") + // a claimed goal's decisions and unchecked parts, above its history (INV-1574)
+    (t.description ? '<div style="font-size:12px;margin-bottom:6px">' + esc(t.description) + "</div>" : "") + (window.claimAccountHtml ? window.claimAccountHtml(t) : "") + (window.deliverablesHtml ? window.deliverablesHtml(t) : "") + // a claimed goal's decisions and unchecked parts (INV-1574), then its deliverables (INV-1663), above its history
     '<div class="dim" style="font-size:11px;margin-bottom:6px">' +
       "asked by " + esc(nameOf(t.requester) || t.requester) + " · in " + conversation +
       " · created " + esc(new Date(t.createdAt).toLocaleString()) +

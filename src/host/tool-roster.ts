@@ -46,6 +46,8 @@ export const RESIDENT_TOOLS: ReadonlySet<string> = new Set([
   // The goal loop's own verb (checklist, claim_complete): the prompt tells the agent to call it, so
   // it must not cost a lookup round trip when the moment comes.
   "Goal",
+  // A task's deliverable (INV-1663): the board prompt tells the agent to mark the file with it.
+  "DeliverFile",
   // The browser's core four; the rest of the browser_* family is deferred.
   "browser_open",
   "browser_snapshot",

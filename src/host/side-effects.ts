@@ -83,6 +83,8 @@ const DECLARED: Record<string, SideEffect> = {
   ClaimWork: { tier: "self" },
   RememberFact: { tier: "self" },
   Tasks: { tier: "self" },
+  // Copies a file off the box onto the task's record and, in a chat, into the outbox for the person who asked (INV-1663).
+  DeliverFile: { tier: "self" },
   HandBack: { tier: "self" },
   // Reading the goal or growing its checklist changes the board, which is the agent's own work.
   Goal: { tier: "self" },

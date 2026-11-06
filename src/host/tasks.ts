@@ -27,7 +27,7 @@ import { agentboxHome, envNumber } from "../config.ts";
 import { deliveredFollowUp, type FollowUp, type HandBackResult, handBack as handBackFollowUp } from "./follow-up.ts";
 import { conversationOfTask, GOAL_GATE_ACTOR, type Pursuit, taskStatusFor } from "./goal-mode.ts";
 import { appendLine, type LedgerKind } from "./jsonl.ts";
-import { applyFlag, type FlagOutcome, type TaskFlag } from "./task-flag.ts";
+import { applyFlag, type FlagOutcome, type TaskFlag } from "./task-flag.ts"; import { applyDeliverable, type TaskDeliverable } from "./task-deliverables.ts";
 import { applyRevalidation, applyWithdrawal, grantMandate, type Mandate, type MandateWorld, type RevalidationResult } from "./mandate.ts";
 import { Receipts } from "./receipts.ts";
 import { clampDescription, dueOf, type TaskContract } from "./task-fields.ts";
@@ -143,7 +143,7 @@ export interface Task {
   goal?: { area: string; commitment?: string };
   /** What the agent pursues until a gate it does not own says it is met (docs/74, INV-769); `status` follows it. Not `goal`, the person's own. */
   pursuit?: Pursuit;
-  flag?: TaskFlag; // A supervisor's raised attention (INV-1509): holds until the status moves; task-flag.ts.
+  flag?: TaskFlag; deliverables?: TaskDeliverable[]; // flag: a supervisor's raised attention (INV-1509), holds until the status moves, task-flag.ts; deliverables: the files marked as what it produced, snapshotted off the box (INV-1663), task-deliverables.ts
   /** Leave it alone until this instant: the answer to a nudge that is "not now" (INV-532). */
   snoozeUntil?: string;
   /** How often the requester has been nudged about an overdue or idle task, and when last. */
@@ -268,7 +268,7 @@ export class TaskStore {
   }
 
   constructor(
-    private readonly path: string | null = tasksPath(),
+    readonly path: string | null = tasksPath(),
     private readonly onWarn: (message: string) => void = () => {},
     /**
      * Where a judgement about a task is written down when it is made (INV-551).
@@ -937,7 +937,7 @@ export class TaskStore {
     const result = applyFlag(this.tasks.get(id), by, note, now, HISTORY_LIMIT);
     if (result.task !== undefined) { this.tasks.set(id, result.task); this.append({ kind: "task", task: result.task }); for (const listener of this.listeners) listener(result.task); }
     return result.outcome;
-  }
+  } /** Records a deliverable whose snapshot is already written (INV-1663); undefined for an unknown task. */ deliver(id: string, item: Omit<TaskDeliverable, "id">): TaskDeliverable | undefined { const result = applyDeliverable(this.tasks.get(id), item, HISTORY_LIMIT); if (result !== undefined) { this.tasks.set(id, result.task); this.append({ kind: "task", task: result.task }); for (const listener of this.listeners) listener(result.task); } return result?.item; }
 
   /** Change a pursuit: the board status follows it (docs/74 §7 R7), recorded under the gate's name — the one path a pursuit moves through. */
   setPursuit(

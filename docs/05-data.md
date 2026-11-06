@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: storage
-     updated: 2026-11-01
+     updated: 2026-11-06
 -->
 # Data
 
@@ -639,6 +639,18 @@ a `record` may not. That is only defensible because the pointer keeps the digest
 deliberately not built, so nobody assumes it: retention keyed to the work the evidence
 supported rather than to when it was read. Evidence almost always wants the former, and we
 have no link from an artefact to the work that cited it. That link is the prerequisite.
+
+### 2.7a `deliverables/<taskId>/<sha256>` — what a task produced (INV-1663)
+
+Beside `tasks.jsonl`, the copy of every file an agent marked with `DeliverFile`
+(`src/host/task-deliverables.ts`). Taken off the box when it is delivered, named by its SHA-256,
+written once and read-only, so what the task page downloads (`GET /api/tasks/deliverable`) is the
+bytes that were handed over whatever the box does next. The record — `id` (`d1`…), name, box path,
+size, digest, the agent's one-line note, who, when, the turn — rides on the task as `deliverables`,
+at most 50 per task. A delivery in an outside chat is also copied into that chat's outbox (§3.1b),
+which is how it reaches the person there. Not kept: versions or diffs between deliveries, or any
+library across tasks. Not yet pruned: a closed task that leaves the board at compaction leaves its
+snapshots behind.
 
 ### 2.8 `digest/<runKey>/package/`
 
