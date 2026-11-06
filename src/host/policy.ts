@@ -345,8 +345,8 @@ export class PolicyGate {
   /** Turns that read a secret (INV-1309) or outside content (INV-1366, per `externalTool`, set by the orchestrator). */
   readonly taint = new TurnTaint();
   externalTool: ((tool: string) => boolean) | undefined;
-  /** An agent's own ask-before settings (INV-1664), read per call from its profile; assigned like `externalTool`, the registry being built after the gate. */
-  agentPermissions: ((agentId: string) => ToolPermissions | undefined) | undefined;
+  /** An agent's own ask-before settings (INV-1664): the ones its running turn began under (INV-1669, `permissionsInEffect`); assigned like `externalTool`, the registry being built after the gate. */
+  agentPermissions: ((agentId: string, turnId: string | undefined) => ToolPermissions | undefined) | undefined;
   /** Each step's verdict, by tool_use id, for the chat's marks (INV-1664). */
   readonly verdicts = new GateVerdicts();
 
@@ -620,7 +620,7 @@ export class PolicyGate {
     // operator's and the agent's decides, so an agent's "allow" — which makes no rule — never
     // loosens what the operator asked for.
     const caller = { ...(request.principalId !== undefined ? { id: request.principalId } : {}), ...(request.principalName !== undefined ? { name: request.principalName } : {}), agentId: request.agentId, agentName: request.agentName };
-    const own = agentRulesFor({ id: request.agentId, name: request.agentName }, this.agentPermissions?.(request.agentId), request.tool);
+    const own = agentRulesFor({ id: request.agentId, name: request.agentName }, this.agentPermissions?.(request.agentId, request.turnId), request.tool);
     const rule = this.rules !== undefined ? this.rules.decide(request.tool, request.input, caller, own) : decidingRule(own, request.tool, request.input, caller);
     if (rule !== undefined) {
       this.lastRule = rule.id; this.lastRuleDecided = rule;

@@ -137,7 +137,7 @@ import type { ScopeStore } from "./scopes.ts";
 import { checkpointSummary, type DurableState } from "./durable.ts";
 import { narrowSkills, type BundleStore } from "./bundles.ts";
 import { readInstallationInstructions } from "./place.ts";
-import { agentVersionOf } from "./agent-version.ts";
+import { agentVersionOf } from "./agent-version.ts"; import { currentTaskOf } from "./autonomy-level.ts";
 import { changeNotice, readStanding, takeChanges } from "./standing.ts";
 import type { McpManager } from "./mcp.ts";
 import { TOOL_BUDGET_WARNING } from "./mcp.ts";
@@ -1579,7 +1579,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     ended = true;
     endedHow = how;
     deps.turns?.end(turnId, how, new Date(), category, keptThisTurn);
-    deps.steps?.closed(turnId);
+    deps.steps?.closed(turnId); registry.configVersions.release(turnId); // the version it held (INV-1669)
   };
 
   // The standing files (INV-777): mirrored to the box first, so what the agent can edit is what it
@@ -2170,7 +2170,7 @@ ${outcome.text}`;
 
   // Setup still belongs to the inbox. Persist the message ids before acknowledging
   // them, so startup can reconcile a crash between these two synchronous writes.
-  deps.turns?.begin({
+  const agentVersion = agentVersionOf(standing, offeredSkills); const configVersion = registry.configVersions.beginTurn({ agentId: agent.id, profile: agent.profile, turnId, conversation, standing: agentVersion.standing, task: currentTaskOf({ agent, conversation, tasks: deps.tasks })?.id }); deps.turns?.begin({ // configVersion: the version this turn is held to until it ends (INV-1669)
     id: turnId,
     agentId: agent.id,
     causedBy: inbound.map(message => message.id),
@@ -2196,7 +2196,7 @@ ${outcome.text}`;
       personal: memoryProjectionManifest(memoryRecall),
       shared: memoryProjectionManifest(sharedMemoryRecall),
     },
-    agentVersion: agentVersionOf(standing, offeredSkills),
+    agentVersion, configVersion: configVersion.n,
   });
   // If this fails, leave the begin open: recovery, not a second inbox replay, owns it.
   deps.onReady?.();

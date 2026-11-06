@@ -44,7 +44,7 @@ import type { SpendLimits } from "./spend-limits.ts"; import { OPERATOR, type Pe
 import type { TaskStore } from "./tasks.ts";
 import { fakeModel } from "./testing/fake-model.ts";
 import { runTurn, type TurnEvent } from "./turn.ts";
-import type { ToolPermissions } from "./tool-permissions.ts";
+import type { ToolPermissions } from "./tool-permissions.ts"; import { permissionsInEffect } from "../agents/config-versions.ts";
 import type { Vault } from "./vault.ts";
 
 /** One model reply, in the shape the script writes it. */
@@ -407,7 +407,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
     if (member.toolPermissions !== undefined) registry.update(created.id, { toolPermissions: member.toolPermissions });
   }
   // The agents' own ask-before settings (INV-1664), read from this episode's roster as the orchestrator reads its own.
-  if (options.policy !== undefined && options.policy.agentPermissions === undefined) options.policy.agentPermissions = agentId => registry.tryGet(agentId)?.profile.toolPermissions;
+  if (options.policy !== undefined && options.policy.agentPermissions === undefined) options.policy.agentPermissions = (agentId, turnId) => permissionsInEffect(registry, agentId, turnId); // held per turn (INV-1669)
   const front = registry.list()[0]!;
   for (const entry of options.history ?? []) registry.appendTranscript(front.id, entry);
 

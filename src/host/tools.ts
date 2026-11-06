@@ -5444,7 +5444,7 @@ export async function dispatchTool(
         agentId: context.agent.id,
         agentName: context.agent.profile.name,
         tool: target,
-        input: (input.arguments ?? {}) as Record<string, unknown>, ...(context.toolUseId !== undefined ? { callId: context.toolUseId } : {}),
+        input: (input.arguments ?? {}) as Record<string, unknown>, ...(context.toolUseId !== undefined ? { callId: context.toolUseId } : {}), ...(context.turnId !== undefined ? { turnId: context.turnId } : {}), // the turn, so its own setting holds (INV-1669)
       });
       if (inner !== undefined && !inner.allow) return { text: inner.reason, isError: true };
       try {

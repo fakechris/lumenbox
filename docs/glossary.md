@@ -61,6 +61,7 @@ renamed: `door`, `worker`, `expert`, `front` stay in the code and the specs.
 | **record** / 记录 | ledgers, transcripts, audit (docs/05) | ledger file and line | — (append-only) | Audit tab · — · `agentbox usage`, `agentbox audit export` |
 | **approval** / 确认 | policy gate, consent, side-effect tier (docs/22 §5) | the request id on the card | waiting · allowed once · always allowed · refused | approval card in the chat · reply 允许 / 一直允许 / 拒绝 · `~/.agentbox/rules` |
 | **tool permission** / 工具权限 | ToolPermissions (tool-permissions.ts) | tool name or tool group | allowed · ask me · off | Configure → tool chips · — · agent profile `toolPermissions` |
+| **configuration version** / 配置版本 | ConfigVersion (agents/config-versions.ts, INV-1669) | `vN` per agent, numbered from 1 | in effect · saved, applies from the next turn | Configure → History, the `config vN` chip beside Configure, task detail → Configuration · — · agent `config-versions.jsonl` |
 | **connector** / 连接器 | connector, OAuth credential, MCP server (docs/53) | provider id, e.g. `notion` | connected · not connected | Settings → Channels → Connectors · — · config `mcpServers` |
 | **MCP endpoint** / MCP 入口 | MCP face, side door (docs/33) | the endpoint `/mcp` and its token | token valid · revoked | — · — · `agentbox mcp` |
 | **watchdog** / 看门狗 | watchdog (docs/91) | — (one per installation) | on · off | Settings → Supervision · alerts in a chat · `agentbox watchdog` |

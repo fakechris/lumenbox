@@ -14,7 +14,7 @@
 
 import { randomBytes, randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { ContextEpochStore, type ContextMode } from "./context-epoch.ts";
+import { ContextEpochStore, type ContextMode } from "./context-epoch.ts"; import { ConfigVersions } from "./config-versions.ts";
 import {
   closeSync,
   mkdirSync,
@@ -1403,7 +1403,7 @@ export class AgentRegistry {
   }
 
   /** Parsed once and then only what was appended (INV-1564): a turn read the whole file about five times. */
-  private readonly transcripts = new TranscriptCache();
+  private readonly transcripts = new TranscriptCache(); /** Each agent's configuration versions and the switch points of its conversations and tasks (INV-1669); config-versions.ts. */ readonly configVersions = new ConfigVersions(agentId => this.dirFor(agentId));
   private readTranscriptFile(path: string): unknown[] {
     return this.transcripts.read(path);
   }
