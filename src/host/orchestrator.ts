@@ -13,6 +13,7 @@ import { BoxGenerations } from "./box-generation.ts";
 import { writeEvalCase } from "./eval-cases.ts";
 import { routineReason, routineResult } from "./run-result.ts";
 import { learningsDir } from "./learnings.ts";
+import { boxLearningsDir } from "./site-learnings.ts";
 import { replyForMessage, silenceForMessage } from "./reply.ts";
 import { contextTaskBlockers, isContextCommand } from "./context-recovery.ts";
 import { isGoalCommand } from "./goal-mode.ts";
@@ -80,7 +81,7 @@ import {
   templatesEnabled,
   toolsOf,
 } from "./template.ts";
-import { memoryDir, skillsDir } from "./box-paths.ts";
+import { memoryDir, skillsDir, standingRoot } from "./box-paths.ts";
 import { intersectTools } from "./catalog.ts";
 import { DisplayLease } from "../box/display-lease.ts";
 import { AttachedBoxProvisioner, resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
@@ -301,7 +302,7 @@ export class Orchestrator {
       out.push({
         slug: heartbeatSlug(agent.id),
         name: `${agent.profile.name}'s heartbeat`,
-        path: `${standingBoxDir(agent.id)}/HEARTBEAT.md`,
+        path: `${standingBoxDir(agent.id, standingRoot(this.boxEntryOf(agent.id)))}/HEARTBEAT.md`,
         schedule: HEARTBEAT_SCHEDULE,
         runAs: agent.id,
         boxId: this.registry.boxOf(agent.id).id,
@@ -970,7 +971,7 @@ export class Orchestrator {
     this.registry = options.registry ?? new AgentRegistry();
     this.memoryMirror = new MemoryMirror({
       registry: this.registry,
-      box: agentId => this.boxFor(agentId), memoryDir: agentId => memoryDir(this.boxEntryOf(agentId)), // the agent's box's (INV-1734)
+      box: agentId => this.boxFor(agentId), memoryDir: agentId => memoryDir(this.boxEntryOf(agentId)), standingRoot: agentId => standingRoot(this.boxEntryOf(agentId)), // the agent's box's (INV-1734, INV-1736)
       log: line => console.error(`[memory-mirror] ${line}`),
     });
     this.registry.onMemoryChanged = agentId => void this.memoryMirror.sync(agentId).catch((error: unknown) => console.error(`[memory-mirror] ${agentId}: ${error instanceof Error ? error.message : String(error)}`)); // nobody awaits it: a log line, never the process (INV-1542)
@@ -1648,7 +1649,7 @@ export class Orchestrator {
        * and told not to overwrite what it or a person changed locally.
        */
       update?: boolean;
-      /** Where this installation keeps site learnings; the template's are installed there. */
+      /** Where this installation keeps site learnings; the template's go to the target box's (INV-1728). */
       learningsDir?: string;
       /** The importing person's tool set, which the new agent may not exceed. */
       creatorTools?: readonly string[];
@@ -1682,7 +1683,7 @@ export class Orchestrator {
           `${already.profile.name} was imported from this template at v${have ?? "?"}; this is v${incoming}. Import again with update to have ${already.profile.name} take up the new version — nothing is overwritten without that.`
         );
       }
-      const learned = installLearnings(template, id, options.learningsDir ?? learningsDir());
+      const learned = installLearnings(template, id, boxLearningsDir(options.learningsDir ?? learningsDir(), targetBoxId), options.learningsDir ?? learningsDir());
       const pending = pendingOf(template, options.connected ?? [], options.bundleResolutions ?? []);
       const settled = (async (): Promise<ReconcileResult | undefined> => {
         const box = this.boxFor(already.id);
@@ -1745,7 +1746,7 @@ export class Orchestrator {
     const pending = pendingOf(template, options.connected ?? [], options.bundleResolutions ?? []);
     // The site notes come first and land host-side (INV-411 A1): the new bot's first
     // browser_open reads them with everyone else's, before it has taken a single turn.
-    const learned = installLearnings(template, id, options.learningsDir ?? learningsDir());
+    const learned = installLearnings(template, id, boxLearningsDir(options.learningsDir ?? learningsDir(), targetBoxId), options.learningsDir ?? learningsDir());
     if (learned.installed > 0 || learned.skipped > 0) log(`import ${id}: ${learned.installed} site note(s) installed, ${learned.skipped} already here`);
     if (pending.bundles.length > 0) log(`import ${id}: ${describeBundleGaps(pending.bundles).join("; ")}`);
     log(`import ${id}: created ${agent.profile.name} (${agent.id}) from "${template.profile.name}"`);

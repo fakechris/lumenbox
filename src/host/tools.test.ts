@@ -477,7 +477,7 @@ import type { BrowserRequest } from "../protocol/index.ts";
 function boxContext(box: Record<string, unknown>) {
   return {
     agent: { id: "a1", profile: { name: "Rex" } },
-    registry: { tryGet: () => undefined, list: () => [] },
+    registry: { tryGet: () => undefined, list: () => [], boxOf: () => ({ id: "box-1" }), boxById: (id: string) => (id === "box-1" ? { id, members: "everyone" } : undefined) },
     bus: {},
     box,
     displayIndex: 3,
@@ -919,11 +919,14 @@ test("a learning is kept under its host and shown the next time the site is open
     assert.doesNotMatch(first.text, /learned on shop\.test/);
 
     const kept = await dispatchTool("NoteSiteLearning", { url: "https://shop.test/anything", text: "The Pay button stays disabled until the address is verified.", worked: false }, context);
-    assert.match(kept.text, /^Outcome: ok\. Kept for shop\.test: - \d{4}-\d{2}-\d{2} ❌ The Pay button/);
+    assert.match(kept.text, /^Outcome: ok\. Kept for shop\.test, for agents in this box: - \d{4}-\d{2}-\d{2} ❌ The Pay button/);
 
     const again = await dispatchTool("browser_open", { url: "https://shop.test/cart" }, context);
     assert.match(again.text, /learned on shop\.test before \(1 note\(s\), 1 about what did not work\)/);
     assert.ok(again.text.indexOf("learned on shop.test") < again.text.indexOf('- button "Pay"'), "notes come before the outline");
+    // INV-1728: the note is the box's. An agent in another box opening the same site does not see it.
+    const elsewhere = { ...context, registry: { ...context.registry, boxOf: () => ({ id: "box-2" }), boxById: (id: string) => ({ id, members: "everyone" }) } } as unknown as typeof context;
+    assert.doesNotMatch((await dispatchTool("browser_open", { url: "https://shop.test/cart" }, elsewhere)).text, /learned on shop\.test/);
 
     const refused = await dispatchTool("NoteSiteLearning", { url: "shop.test", text: "use ghp_abcdefghijklmnopqrstuvwxyz0123456789", worked: true }, context);
     assert.match(refused.text, /^Outcome: failed — That looks like it holds a credential/);

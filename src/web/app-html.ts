@@ -4832,7 +4832,7 @@ function refreshProgress() {
  *     order answers a different one.
  *   - **Room.** A tab rather than a strip, so the list and the preview both get height.
  */
-var filesDir = "/home/box/work";
+var filesDir = "", filesRoot = ""; // the box's work directory, as /api/files says it (INV-1736)
 var filesSelected = null;
 
 function fileKind(name) {
@@ -4869,11 +4869,11 @@ function fileUrl(path, download) {
 
 function refreshFiles(dir) {
   if (dir) { filesDir = dir; filesSelected = null; }
-  $("filespath").textContent = filesDir;
-  $("filesup").style.visibility = filesDir === "/home/box/work" ? "hidden" : "";
-  return fetch("/api/files?dir=" + encodeURIComponent(filesDir))
+  return fetch("/api/files" + (filesDir ? "?dir=" + encodeURIComponent(filesDir) : ""))
     .then(function (r) { return r.json(); })
     .then(function (listing) {
+      if (listing.root) { filesRoot = listing.root; filesDir = filesDir || filesRoot; }
+      $("filespath").textContent = filesDir; $("filesup").style.visibility = filesDir === filesRoot ? "hidden" : "";
       var entries = (listing.entries || []).slice();
       // Directories first, then newest file first. Two sorts rather than one because a folder's own
       // mtime says nothing about what is in it.
@@ -4953,7 +4953,7 @@ document.getElementById("fileslist").addEventListener("click", function (event) 
 
 document.getElementById("filesup").addEventListener("click", function (event) {
   event.preventDefault();
-  refreshFiles(filesDir.replace(/\/[^/]+$/, "") || "/home/box/work");
+  refreshFiles(filesDir.replace(/\/[^/]+$/, "") || filesRoot);
 });
 document.getElementById("filesrefresh").addEventListener("click", function (event) {
   event.preventDefault();

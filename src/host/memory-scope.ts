@@ -94,7 +94,11 @@ export function scopeOf(record: MemoryRecord, tier: MemoryTier): string {
 
 /** Whether `record`, held by agent `holder` (its file's agent, or the shared writer `via`), admits `reader`. */
 export function admits(record: MemoryRecord, tier: MemoryTier, holder: string | undefined, reader: MemoryReader): boolean {
-  const scope: unknown = scopeOf(record, tier);
+  return scopeAdmits(scopeOf(record, tier), holder, reader);
+}
+
+/** Whether a scope, on whatever it is stamped (a record, a site learnings file — INV-1728), admits `reader`. */
+export function scopeAdmits(scope: unknown, holder: string | undefined, reader: MemoryReader): boolean {
   if (scope === "agent") return holder !== undefined && holder === reader.agentId;
   if (scope === "org") return true;
   if (typeof scope !== "string" || !scope.startsWith("box:")) return false;

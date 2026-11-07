@@ -441,15 +441,15 @@ export function manifestOf(template: BotTemplate, dropped: readonly string[] = [
 
 /**
  * Installs a template's learnings into this installation's own (INV-411 A1): the new
- * bot's first visit to the site reads them like any teammate's note. A line already there
- * is not appended twice, so a re-import is one set of notes, and every line says where
- * it came from.
+ * bot's first visit to the site reads them like any teammate's note. `dir` is the target
+ * box's (INV-1728); a line already there or in `historicalDir` is not appended twice, so
+ * a re-import is one set of notes, and every line says where it came from.
  */
-export function installLearnings(template: BotTemplate, templateIdValue: string, dir: string): { installed: number; skipped: number } {
+export function installLearnings(template: BotTemplate, templateIdValue: string, dir: string, historicalDir?: string): { installed: number; skipped: number } {
   let installed = 0;
   let skipped = 0;
   for (const entry of template.learnings ?? []) {
-    const existing = new Set(readLearnings(entry.host, dir, 10_000).map(line => noteTextOf(line)));
+    const existing = new Set([dir, historicalDir].flatMap(at => (at === undefined ? [] : readLearnings(entry.host, at, 10_000))).map(line => noteTextOf(line)));
     for (const line of entry.lines) {
       const text = noteTextOf(line);
       if (text === "" || existing.has(text)) {

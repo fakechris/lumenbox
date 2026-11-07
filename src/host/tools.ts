@@ -42,7 +42,7 @@ import { catalogMenu, crewTeam, intersectTools, profilesFor } from "./catalog.ts
 import { type Claims, heldElsewhere } from "./claims.ts";
 import { namesControlSurface } from "./control-surfaces.ts";
 import { deliveryInstructions, reportPath } from "./delegate-report.ts";
-import { boxPaths, memoryDir, skillsDir } from "./box-paths.ts";
+import { boxPaths, type BoxPlace, memoryDir, skillsDir, standingRoot, workDir } from "./box-paths.ts";
 import { actOnDelegateSession } from "./delegate-session-actions.ts";
 import type { DelegateSessions } from "./delegate-sessions.ts";
 import {
@@ -67,7 +67,8 @@ import { AROUND_ENTRY_CHARS, describeHistory, ENTRY_CHARS, readEpochHistory, rea
 import type { HostRunner } from "./host-runner.ts";
 import { resolveHostSecrets } from "./host-secrets.ts";
 import { sniffImage } from "./image-refusal.ts";
-import { appendLearning, hostOf, learningsDir, readLearnings, renderLearnings } from "./learnings.ts";
+import { hostOf } from "./learnings.ts";
+import { noteSiteLearning, readSiteLearnings, siteLearningsNote } from "./site-learnings.ts";
 import type { McpManager, ToolEffect } from "./mcp.ts";
 import { MCP_FACE_TOKEN_VARIABLE, type McpFace } from "./mcp-face.ts";
 import { dedupe, dedupeKey, describeFrom, memoryRef, validateRecord } from "./memory.ts"; import { recallMatches } from "./memory-relevance.ts"; import { recallable } from "./memory-scope.ts"; import { orgItemId, type OrgKnowledge } from "./org-knowledge.ts"; import { alreadyPending, forTeamTier, pendingNotice, teamReviewOn } from "./team-memory-review.ts";
@@ -187,7 +188,7 @@ export interface ToolContext {
     components?: unknown;
     data?: unknown;
     title?: string;
-    close?: boolean;
+    close?: boolean; /** The agent's box's work directory: where a FilePreview or Link may point (INV-1736). */ workDir?: string;
   }) => Promise<{ where: string } | { error: string }>;
   askUser?: (input: {
     principalId?: string;
@@ -1913,8 +1914,8 @@ export function buildTools(
     tools.push({
       name: "NoteSiteLearning",
       description:
-        "Keep something you found out about a site, for whoever opens it next — you or a " +
-        "teammate. One sentence or two: a control that only works one way, a step the site " +
+        "Keep something you found out about a site, for whoever in this box opens it next — " +
+        "you or a teammate. One sentence or two: a control that only works one way, a step the site " +
         "needs first, a thing that looked like it worked and did not. Say whether it worked: " +
         "a note about what failed saves the next visit from repeating it. Never a credential; " +
         "say where a credential lives instead. Coordinates are accepted but dated as " +
@@ -2390,7 +2391,8 @@ function truncate(text: string, max: number): string {
   );
 }
 
-const skillsOf = (context: ToolContext): string => skillsDir({ kind: context.boxKind, workDir: context.boxWorkDir }); // every skill path a tool sees is judged against the agent's box's (INV-1719)
+const boxOf = (context: ToolContext): BoxPlace => ({ kind: context.boxKind, workDir: context.boxWorkDir }); // the agent's box, as box-paths.ts takes it (INV-1736)
+const skillsOf = (context: ToolContext): string => skillsDir(boxOf(context)); // every skill path a tool sees is judged against the agent's box's (INV-1719)
 /**
  * What a setup turn's write into a skill file becomes: stamped with the template it came from,
  * and — for a routine — paused. Outside a setup turn, or outside the skills directory, the
@@ -3651,7 +3653,7 @@ export async function dispatchTool(
         agentId: context.agent.id,
         agentName: context.agent.profile.name,
         ...(context.conversation !== undefined ? { conversation: context.conversation } : {}),
-        surface,
+        surface, workDir: workDir(boxOf(context)),
         ...(input.components !== undefined ? { components: input.components } : {}),
         ...(input.data !== undefined ? { data: input.data } : {}),
         ...(typeof input.title === "string" && input.title.trim() !== "" ? { title: input.title.trim() } : {}),
@@ -3812,8 +3814,8 @@ export async function dispatchTool(
       const editContract = await skillWriteRefusal(box, path, updated, skillsOf(context)); // INV-1375: the skill's skill.yaml, if any
       if (editContract !== undefined) return { text: `Not edited: ${editContract}`, isError: true };
       // A standing file (INV-777) is capped, and its host copy is written in the same call.
-      const standingEdited = standingFileOf(path, context.agent.id);
-      const editCap = standingEdited === undefined ? undefined : capRefusal(standingEdited, updated);
+      const standingEdited = standingFileOf(path, context.agent.id, standingRoot(boxOf(context)));
+      const editCap = standingEdited === undefined ? undefined : capRefusal(standingEdited, updated, workDir(boxOf(context)));
       if (editCap !== undefined) return { text: editCap, isError: true };
       await box.writeFile(path, updated);
       if (standingEdited !== undefined) writeStandingFromAgent(context.registry.dirFor(context.agent.id), context.agent.profile.name, standingEdited, updated);
@@ -3900,8 +3902,8 @@ export async function dispatchTool(
       if (writeContract !== undefined) return { text: `Not written: ${writeContract}`, isError: true };
       // A standing file (INV-777) is capped, and its host copy — the one that counts — is written
       // in the same call, so the agent's edit is in its next prompt and never reported back to it.
-      const standingWritten = standingFileOf(path, context.agent.id);
-      const writeCap = standingWritten === undefined ? undefined : capRefusal(standingWritten, written);
+      const standingWritten = standingFileOf(path, context.agent.id, standingRoot(boxOf(context)));
+      const writeCap = standingWritten === undefined ? undefined : capRefusal(standingWritten, written, workDir(boxOf(context)));
       if (writeCap !== undefined) return { text: writeCap, isError: true };
       const result = await box.writeFile(path, written);
       if (standingWritten !== undefined) writeStandingFromAgent(context.registry.dirFor(context.agent.id), context.agent.profile.name, standingWritten, written);
@@ -3929,12 +3931,9 @@ export async function dispatchTool(
       if (host === undefined) return { text: outcomeLine("failed", "say which site, as a URL or a host name"), isError: true };
       if (typeof input.worked !== "boolean") return { text: outcomeLine("failed", "say whether it worked: worked true or false"), isError: true };
       try {
-        const line = appendLearning(
-          host,
-          { at: new Date(), worked: input.worked, text: String(input.text ?? ""), by: context.agent.profile.name },
-          context.learningsDir ?? learningsDir()
-        );
-        return { text: `${outcomeLine("ok")} Kept for ${host}: ${line}` };
+        // Kept for this box only (INV-1728); the historical installation-wide files are read, never written.
+        const line = noteSiteLearning(host, { at: new Date(), worked: input.worked, text: String(input.text ?? "") }, context);
+        return { text: `${outcomeLine("ok")} Kept for ${host}, for agents in this box: ${line}` };
       } catch (error) {
         return { text: outcomeLine("failed", error instanceof Error ? error.message : String(error)), isError: true };
       }
@@ -4203,7 +4202,7 @@ export async function dispatchTool(
         // agent reads "the Pay button is disabled until…" before it goes looking for it.
         if (name === "browser_open") {
           const host = hostOf(result.url);
-          const learned = host === undefined ? undefined : renderLearnings(host, readLearnings(host, context.learningsDir ?? learningsDir()));
+          const learned = host === undefined ? undefined : siteLearningsNote(host, context);
           if (learned !== undefined) parts.push(learned);
         }
         if (result.pages !== undefined) {
@@ -4957,7 +4956,7 @@ export async function dispatchTool(
     case "Forget": {
       const action = String(input.action ?? "");
       const conversation = context.conversation ?? MAIN_CONVERSATION;
-      const stores = { registry: context.registry, ...(context.tasks !== undefined ? { tasks: context.tasks } : {}), ...(context.box !== undefined ? { box: context.box } : {}), skills: skillsOf(context), memory: memoryDir({ kind: context.boxKind, workDir: context.boxWorkDir }), home: context.fetchedHome ?? agentboxHome() };
+      const stores = { registry: context.registry, ...(context.tasks !== undefined ? { tasks: context.tasks } : {}), ...(context.box !== undefined ? { box: context.box } : {}), skills: skillsOf(context), memory: memoryDir(boxOf(context)), home: context.fetchedHome ?? agentboxHome() };
       if (action === "plan") {
         const about = String(input.about ?? "");
         const refused = forgettable(about);
@@ -5383,7 +5382,7 @@ export async function dispatchTool(
           memoryRecords: context.registry.readMemoryRecords(context.agent.id),
           ...(context.caller?.userId !== undefined ? { createdBy: context.caller.userId } : {}),
           ...(bundleRefs.length > 0 ? { bundles: bundleRefs } : {}),
-          learningsFor: host => readLearnings(host, context.learningsDir ?? learningsDir(), 50), skillsDir: skillsOf(context),
+          learningsFor: host => { const notes = readSiteLearnings(host, context, 50); return [...notes.historical, ...notes.box]; }, skillsDir: skillsOf(context),
         }
       );
       if ("refused" in packed) return { text: packed.refused, isError: true };

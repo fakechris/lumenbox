@@ -30,7 +30,7 @@ import { definePart, partText } from "./prompt-parts.ts";
 import { renderSkills, type Skill, visibleTo } from "./skills.ts";
 import { renderStanding, type StandingSnapshot } from "./standing.ts";
 import { describeTask, type Task } from "./tasks.ts"; import { asModelSees, FIRST_RUN_CUE, inputGuide } from "./model-text.ts";
-import { isForkConversation } from "./tools.ts"; import { type BoxPlace, DOCKER_WORK, memoryDir, workDir } from "./box-paths.ts";
+import { isForkConversation } from "./tools.ts"; import { type BoxPlace, DOCKER_WORK, memoryDir, standingRoot, workDir } from "./box-paths.ts";
 
 /** Teammates listed inline before falling back to "read the agent directory". */
 export const AGENT_DIRECTORY_LIMIT = 40;
@@ -1122,7 +1122,7 @@ export const VOLATILE_SECTIONS: readonly PromptSection[] = [
   // The standing files (INV-777): the last thing that changes from turn to turn, so an edit to
   // USER.md invalidates only this and the recap; nothing above it moves by a byte.
   { name: "person", render: context => context.person ?? "" }, // the host's one record of the person (INV-1653), before the agent's own USER.md, which adds to it
-  { name: "standing", render: context => renderStanding(context.standing, context.agent.id) },
+  { name: "standing", render: context => renderStanding(context.standing, context.agent.id, standingRoot(context.box)) },
   // Last, always. See CRITICAL_RECAP: the tail is where a model reads best, and it was
   // being spent on the roster.
   { name: "critical", render: context => (context.toolless === true ? TOOLLESS_RECAP : CRITICAL_RECAP) },

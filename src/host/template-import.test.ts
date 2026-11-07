@@ -14,6 +14,7 @@ import { AgentRegistry } from "../agents/registry.ts";
 import type { BoxClient } from "../box/client.ts";
 import { Orchestrator, TemplateVersionConflict } from "./orchestrator.ts";
 import { readLearnings } from "./learnings.ts";
+import { boxLearningsDir } from "./site-learnings.ts";
 import { parseSkillFile } from "./skills.ts";
 import { SkillProvenance } from "./skill-provenance.ts";
 import { fakeModel } from "./testing/fake-model.ts";
@@ -255,14 +256,15 @@ test("the same share imported twice is one bot; a newer version is a conflict un
     await first.settled;
     assert.equal(first.existing, undefined);
     assert.equal(first.agent.profile.importedFrom?.version, 1);
-    assert.equal(readLearnings("shop.test", learningsDir).length, 1, "A1: the site note is in the receiver's store before the first turn");
+    assert.equal(readLearnings("shop.test", boxLearningsDir(learningsDir, registry.box.id)).length, 1, "A1: the site note is in the receiving box's store before the first turn");
+    assert.equal(readLearnings("shop.test", learningsDir).length, 0, "INV-1728: not in the historical installation-wide file");
 
     // Same share, same version: nothing created.
     const again = orchestrator.importTemplate(v1, { shareId: "share_abc", connected: [], learningsDir, log: () => undefined });
     assert.equal(again.existing, "same-version");
     assert.equal(again.agent.id, first.agent.id);
     assert.equal(registry.list().length, 1);
-    assert.equal(readLearnings("shop.test", learningsDir).length, 1, "and the note is not appended twice");
+    assert.equal(readLearnings("shop.test", boxLearningsDir(learningsDir, registry.box.id)).length, 1, "and the note is not appended twice");
 
     // A newer version: refused with both versions named, until update is asked for.
     const v2 = { ...v1, meta: { createdBy: "kin", version: 2 } };

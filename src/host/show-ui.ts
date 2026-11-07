@@ -18,6 +18,7 @@ import { LUMENBOX_COMPONENTS } from "./show-ui-components.ts";
 import { SHOW_UI_FUNCTIONS } from "./show-ui-functions.ts";
 import { agentboxHome, envNumber } from "../config.ts";
 import { appendLine, type LedgerKind } from "./jsonl.ts";
+import { DOCKER_WORK } from "./box-paths.ts";
 
 import { type A2uiMessage, actionText, SHOW_UI_CATALOG_ID, SHOW_UI_COMPONENTS, SHOW_UI_PROTOCOL, SHOW_UI_ROOT } from "./show-ui-catalog.ts";
 
@@ -25,9 +26,6 @@ export { type A2uiMessage, actionText, SHOW_UI_CATALOG_ID, SHOW_UI_COMPONENTS, S
 
 /** More than this is not a card; it is a page, and the page would crawl. */
 export const SHOW_UI_MAX_COMPONENTS = 80;
-
-/** Where a FilePreview may point: the box's work directory, the same bound as the Files panel. */
-export const SHOW_UI_WORK_DIR = "/home/box/work";
 
 const names = new Set(SHOW_UI_COMPONENTS);
 type ShowUiCatalog = Catalog<(typeof BASIC_COMPONENTS)[number] | (typeof LUMENBOX_COMPONENTS)[number]>;
@@ -55,6 +53,11 @@ export interface ShowUiInput {
   patch?: unknown;
   title?: string;
   close?: boolean;
+  /**
+   * Where a FilePreview or Link may point: the agent's box's work directory, `workDir(box)`, the
+   * same bound as the Files panel (INV-1736). The tool passes it; none given is the image's.
+   */
+  workDir?: string;
 }
 
 /** A surface as last drawn: enough to redraw it whole in any later process. */
@@ -83,6 +86,7 @@ export type Compiled =
  */
 export function compileSurface(input: ShowUiInput, existing: SurfaceRecord | undefined): Compiled {
   const surfaceId = input.surface;
+  const work = input.workDir ?? DOCKER_WORK;
   if (input.close === true) {
     if (existing === undefined) return { ok: false, reason: `There is no card "${surfaceId}" to close.` };
     return { ok: true, send: [{ version: "v0.9", deleteSurface: { surfaceId } }], full: [] };
@@ -119,14 +123,14 @@ export function compileSurface(input: ShowUiInput, existing: SurfaceRecord | und
     if (component.component === "FilePreview") {
       // The page's file route guards the work directory too; refusing here tells the agent why.
       const path = String(component.path ?? "");
-      if (!path.startsWith(`${SHOW_UI_WORK_DIR}/`) || path.split("/").includes("..")) {
-        return { ok: false, reason: `FilePreview ${component.id}: \`path\` is an absolute path under ${SHOW_UI_WORK_DIR}; "${path}" is not.` };
+      if (!path.startsWith(`${work}/`) || path.split("/").includes("..")) {
+        return { ok: false, reason: `FilePreview ${component.id}: \`path\` is an absolute path under ${work}; "${path}" is not.` };
       }
     }
     if (component.component === "Link") {
       const to = String(component.to ?? "");
-      const okTarget = (to.startsWith(`${SHOW_UI_WORK_DIR}/`) && !to.split("/").includes("..")) || /^t\d+$/.test(to) || /^https?:\/\/\S+$/.test(to);
-      if (!okTarget) return { ok: false, reason: `Link ${component.id}: \`to\` is a file under ${SHOW_UI_WORK_DIR}, a task id like t12, or an http(s) URL; "${to}" is none of these.` };
+      const okTarget = (to.startsWith(`${work}/`) && !to.split("/").includes("..")) || /^t\d+$/.test(to) || /^https?:\/\/\S+$/.test(to);
+      if (!okTarget) return { ok: false, reason: `Link ${component.id}: \`to\` is a file under ${work}, a task id like t12, or an http(s) URL; "${to}" is none of these.` };
     }
     const local = localFunction(component);
     if (local !== undefined) return { ok: false, reason: `Component ${component.id}: "${local}" is not a function a card may call. Available: ${SHOW_UI_FUNCTIONS.join(", ")}; actions are events (\`{"event": {"name": ...}}\`).` };
