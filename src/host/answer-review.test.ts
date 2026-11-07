@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AnswerReviewer, buildAnswerReviewPrompt, parseAnswerVerdict, recoverySuggestion, sampledForReview } from "./answer-review.ts";
+import { AnswerReviewer, buildAnswerReviewPrompt, guestAnswerReview, parseAnswerVerdict, recoverySuggestion, sampledForReview } from "./answer-review.ts";
 
 test("answer review parses typed verdicts and suggests recovery only for high-confidence failures", () => {
   const bad = parseAnswerVerdict('{"category":"NON_ANSWER","confidence":0.96,"reason":"only delegated"}')!;
@@ -13,7 +13,7 @@ test("answer review parses typed verdicts and suggests recovery only for high-co
 });
 
 test("the review prompt contains only the current request and final answer labels", () => {
-  const prompt = buildAnswerReviewPrompt({ agentName: "Nova", messageId: "m1", conversation: "c1", request: "CURRENT_REQUEST", answer: "FINAL_REPLY" });
+  const prompt = buildAnswerReviewPrompt({ source: "member", agentName: "Nova", messageId: "m1", conversation: "c1", request: "CURRENT_REQUEST", answer: "FINAL_REPLY" });
   assert.match(prompt, /CURRENT_REQUEST/);
   assert.match(prompt, /FINAL_REPLY/);
   assert.doesNotMatch(prompt, /history|memory/i);
@@ -28,7 +28,7 @@ test("sampling is stable and honours zero and full rollout", () => {
 test("an unavailable reviewer fails open as UNKNOWN and records hashes rather than answer text", async () => {
   const records: unknown[] = [];
   const reviewer = new AnswerReviewer({ ask: async () => { throw new Error("down"); }, mode: () => "shadow", record: record => records.push(record) });
-  const verdict = await reviewer.review({ agentName: "Nova", messageId: "m1", conversation: "c1", request: "secret request", answer: "secret answer" });
+  const verdict = await reviewer.review({ source: "member", agentName: "Nova", messageId: "m1", conversation: "c1", request: "secret request", answer: "secret answer" });
   assert.equal(verdict.category, "UNKNOWN");
   assert.doesNotMatch(JSON.stringify(records), /secret request|secret answer/);
   assert.match(JSON.stringify(records), /"unavailable":true/);
@@ -46,7 +46,7 @@ test("with the decision model on, the review is one choice, falls back to the mo
     log: () => {},
   });
   const reviewer = (ok: boolean) => new AnswerReviewer({ ask: async () => { modelCalls += 1; return '{"category":"PASS","confidence":0.8,"reason":"fine"}'; }, jev: on(ok) });
-  const input = { agentName: "Ada", messageId: "m1", conversation: "main", request: "what is the deploy date?", answer: "I'll look into it." };
+  const input = { source: "member" as const, agentName: "Ada", messageId: "m1", conversation: "main", request: "what is the deploy date?", answer: "I'll look into it." };
 
   const verdict = await reviewer(true).review(input);
   assert.equal(verdict.category, "NON_ANSWER");
@@ -63,12 +63,12 @@ test("with the decision model on, the review is one choice, falls back to the mo
 });
 
 test("a guest answer is judged also for PROMISE and NOT_IN_KNOWLEDGE, against the knowledge the agent may use; a member reply never is (INV-1713)", async () => {
-  const guest = { agentName: "Ada", messageId: "guest-1", conversation: "guest:feishu:oc_g", request: "Can I get my money back?", answer: "Sure, I can refund you in full today.", guest: { knowledge: "[g1] Refunds\nRefunds within 7 days of purchase, on request to a member." } };
+  const guest = guestAnswerReview({ agentName: "Ada", turnId: "guest-1", door: "feishu", chatKey: "feishu:oc_g", question: "Can I get my money back?", answer: "Sure, I can refund you in full today.", knowledge: "[g1] Refunds\nRefunds within 7 days of purchase, on request to a member." });
   const prompt = buildAnswerReviewPrompt(guest);
   assert.match(prompt, /PROMISE: Commits the organisation/);
   assert.match(prompt, /NOT_IN_KNOWLEDGE/);
   assert.match(prompt, /Refunds within 7 days/);
-  assert.doesNotMatch(buildAnswerReviewPrompt({ ...guest, guest: undefined }), /PROMISE|NOT_IN_KNOWLEDGE/);
+  assert.doesNotMatch(buildAnswerReviewPrompt({ ...guest, source: "member" }), /PROMISE|NOT_IN_KNOWLEDGE/);
   assert.equal(parseAnswerVerdict('{"category":"PROMISE","confidence":0.9,"reason":"promises a refund"}')?.category, "PROMISE");
   assert.equal(recoverySuggestion({ category: "PROMISE", confidence: 1, reason: "" }), undefined, "the member's /retry hint is not for a guest");
 

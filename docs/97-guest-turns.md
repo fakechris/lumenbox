@@ -136,6 +136,15 @@ for INV-1708; §7's note says what changed.
   (default 20, Settings → Team → Guests). Counted from `guest-turns.jsonl`, so a restart keeps
   the count.
 
+> **Note, 2026-11-07 (INV-1721).** The review of a guest answer (INV-1713) is the guest's too. The
+> caller says whose reply it is (`AnswerReviewInput.source`, `guestAnswerReview`); nothing infers it.
+> A guest answer's verdict is kept only in `guest-reviews.jsonl` — never an eval case (INV-1474),
+> never a line of `answer-review.jsonl` — and the review's model call is one more `kind: "guest"`
+> row of that guest turn (`chargeGuest`, `src/host/guest-turn.ts`): no `principal`, the same
+> `turnId`, `door` and `conversation`, noted against the agent's spend lines as that turn's wake,
+> even while a member turn of the same agent is running. It is part of the guest turn the
+> group chat's cap already counted, so it adds no turn to the cap.
+
 ## 6. Against docs/22 and docs/96
 
 | Where | Statement | Verdict | What this record says |

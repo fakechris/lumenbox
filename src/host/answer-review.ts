@@ -21,14 +21,35 @@ export interface AnswerVerdict {
   reason: string;
 }
 
-export interface AnswerReviewInput {
+interface AnswerReviewBase {
   agentName: string;
   messageId: string;
   conversation: string;
   request: string;
   answer: string;
-  /** A guest answer (INV-1713): judged also for PROMISE and NOT_IN_KNOWLEDGE, against this knowledge. */
-  guest?: { knowledge: string };
+}
+
+/**
+ * Whose reply this is, said by the caller and never inferred from what else is running (INV-1721).
+ *
+ * A member reply is judged for the five categories, kept as an eval case when it fails (INV-1474)
+ * and paid for by whoever drove the turn. A guest answer (INV-1713) is judged also for PROMISE and
+ * NOT_IN_KNOWLEDGE against `knowledge`; its verdict is kept only in the guest's own record
+ * (`guest-reviews.jsonl`), never as an eval case — that would keep words from outside the
+ * organisation long after the guest's short window is gone — and the review is a `guest` usage row
+ * of `turnId`, with no member paying, even while a member turn of the same agent is running.
+ */
+export type AnswerReviewInput = AnswerReviewBase & (
+  | { source: "member" }
+  | { source: "guest"; guest: { knowledge: string; turnId: string; door: string } }
+);
+
+/** A guest answer as the review takes it: the one place a guest turn's fields become a review's. */
+export function guestAnswerReview(input: { agentName: string; turnId: string; door: string; chatKey: string; question: string; answer: string; knowledge: string }): AnswerReviewInput {
+  return {
+    source: "guest", agentName: input.agentName, messageId: input.turnId, conversation: `guest:${input.chatKey}`, request: input.question, answer: input.answer,
+    guest: { knowledge: input.knowledge, turnId: input.turnId, door: input.door },
+  };
 }
 
 export interface AnswerReviewRecord extends AnswerVerdict {
@@ -70,7 +91,7 @@ function bounded(text: string): string {
 }
 
 export function buildAnswerReviewPrompt(input: AnswerReviewInput): string {
-  if (input.guest !== undefined) return buildGuestReviewPrompt(input, input.guest.knowledge);
+  if (input.source === "guest") return buildGuestReviewPrompt(input, input.guest.knowledge);
   return [
     "Judge whether one assistant reply directly serves the user's current request. Return JSON only.",
     "You are not continuing the conversation and may not use outside knowledge. Judge only the two labelled blocks.",
@@ -157,7 +178,7 @@ const GUEST_CRITERIA: Record<AnswerCategory, string> = {
 
 /** The same review as one choice (INV-1413): the category the decision model picks, at its probability. */
 export async function jevAnswerVerdict(ask: JevAsk, input: AnswerReviewInput): Promise<AnswerVerdict> {
-  const guest = input.guest;
+  const guest = input.source === "guest" ? input.guest : undefined;
   const result = await ask(guest === undefined ? {
     state: { request: bounded(input.request), reply: bounded(input.answer) },
     questions: {
@@ -190,8 +211,9 @@ export class AnswerReviewer {
   constructor(private readonly deps: {
     ask: (prompt: string) => Promise<string | undefined>;
     mode?: () => AnswerReviewMode;
+    /** A member reply's verdict, hashes only; a guest answer's is the guest desk's to keep (INV-1721). */
     record?: (record: AnswerReviewRecord) => void;
-    /** A reply judged not PASS, with its text, for the eval cases (INV-1474); the caller redacts and files it. */
+    /** A member reply judged not PASS, with its text, for the eval cases (INV-1474); the caller redacts and files it. Never a guest's (INV-1721). */
     keepCase?: (c: { at: string; agent: string; messageId: string; conversation?: string; request: string; answer: string } & AnswerVerdict) => void;
     now?: () => Date;
     jev?: SwitchDeps;
@@ -212,6 +234,8 @@ export class AnswerReviewer {
     catch { /* Recorded as unavailable; the person's answer still goes out. */ }
     const unavailable = verdict === undefined;
     const settled = verdict ?? { category: "UNKNOWN" as const, confidence: 0, reason: "reviewer unavailable" };
+    // A guest answer's verdict goes back to the guest desk and nowhere else (INV-1721).
+    if (input.source === "guest") return settled;
     const hash = (text: string) => createHash("sha256").update(text).digest("hex");
     this.deps.record?.({
       at: (this.deps.now?.() ?? new Date()).toISOString(),

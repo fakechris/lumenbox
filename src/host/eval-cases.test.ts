@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AnswerReviewer } from "./answer-review.ts";
+import { AnswerReviewer, guestAnswerReview } from "./answer-review.ts";
 import { evalCasePath, parseEvalCase, readEvalCases, writeEvalCase } from "./eval-cases.ts";
 
 test("a reply judged bad is kept once as a case with its labels and version, and reads back; a person's Expected survives (INV-1474)", () => {
@@ -36,14 +36,20 @@ test("a reply judged bad is kept once as a case with its labels and version, and
   }
 });
 
-test("the reviewer hands a non-PASS reply to the case keeper with its text, and a PASS or an unavailable review to nobody", async () => {
+test("the reviewer hands a non-PASS reply to the case keeper with its text, and a PASS, an unavailable review or a guest's answer to nobody", async () => {
   const kept: { category: string; messageId: string; answer: string }[] = [];
   const verdicts = ['{"category":"NON_ANSWER","confidence":0.9,"reason":"no figure"}', '{"category":"PASS","confidence":0.9,"reason":"fine"}'];
   const reviewer = new AnswerReviewer({ ask: async () => verdicts.shift(), mode: () => "shadow", keepCase: c => kept.push(c) });
-  await reviewer.review({ agentName: "Ada", messageId: "m1", conversation: "main", request: "how much?", answer: "later" });
-  await reviewer.review({ agentName: "Ada", messageId: "m2", conversation: "main", request: "hi", answer: "hello" });
+  await reviewer.review({ source: "member", agentName: "Ada", messageId: "m1", conversation: "main", request: "how much?", answer: "later" });
+  await reviewer.review({ source: "member", agentName: "Ada", messageId: "m2", conversation: "main", request: "hi", answer: "hello" });
   await new AnswerReviewer({ ask: async () => { throw new Error("down"); }, mode: () => "shadow", keepCase: c => kept.push(c) })
-    .review({ agentName: "Ada", messageId: "m3", conversation: "main", request: "x", answer: "y" });
+    .review({ source: "member", agentName: "Ada", messageId: "m3", conversation: "main", request: "x", answer: "y" });
+  // A guest's flagged answer (INV-1721): the verdict goes back to the guest desk, and no case or member record keeps it.
+  const recorded: unknown[] = [];
+  const guestVerdict = await new AnswerReviewer({ ask: async () => '{"category":"PROMISE","confidence":0.9,"reason":"promises a refund"}', mode: () => "shadow", keepCase: c => kept.push(c), record: r => recorded.push(r) })
+    .review(guestAnswerReview({ agentName: "Ada", turnId: "guest-1", door: "feishu", chatKey: "feishu:oc_g", question: "refund?", answer: "yes, today", knowledge: "" }));
+  assert.equal(guestVerdict.category, "PROMISE");
+  assert.deepEqual(recorded, []);
   assert.deepEqual(kept.map(c => `${c.messageId} ${c.category}`), ["m1 NON_ANSWER"]);
   assert.equal(kept[0]!.answer, "later", "the keeper gets the text the record only hashes");
   const dir = mkdtempSync(join(tmpdir(), "evals-"));

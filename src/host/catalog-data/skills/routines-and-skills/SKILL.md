@@ -9,8 +9,9 @@ provenance: "Written for LumenBox from a study of Grok Bot 0.63's managed skills
 
 # Routines and skills
 
-Here a routine is just a skill that starts itself. Both are a folder
-`/home/box/work/skills/<slug>/` holding `SKILL.md`: frontmatter, then the steps.
+Here a routine is just a skill that starts itself. Both are a folder `<slug>/` in the
+skills directory (the one your skill index lists every skill in) holding `SKILL.md`:
+frontmatter, then the steps.
 Write it with `write_file`, change it with `edit_file`. Those two calls are how the
 host records that you wrote it; a `bash` heredoc is attributed only by guesswork.
 

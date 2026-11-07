@@ -74,3 +74,21 @@ test("every schedule example a starter shows its reader is one parseSchedule acc
     assert.ok("schedule" in result, `${example.slug}: ${"problem" in result ? result.problem : ""}`);
   }
 });
+
+test("no shipped skill text names the skills directory or the memory folder by a box's path (INV-1723)", () => {
+  // Both directories are per box: on a host box the skills are under its own work directory
+  // (`skillsDir`, INV-1719) and `~` is the person's home. A skill that wrote "List ~/work/skills"
+  // sent an agent there; the text names them as the skill index and the memory section show them.
+  const literal = /(?:~|\/home\/box)\/work\/(?:skills|memory)\b/;
+  const texts: { where: string; text: string }[] = starterSkillsWithEvals().map(starter => ({ where: starter.slug, text: starter.content }));
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else texts.push({ where: path, text: readFileSync(path, "utf8") });
+    }
+  };
+  walk(join(catalogDataDir(), "skills"));
+  assert.ok(texts.some(({ where }) => where.endsWith(join("routines-and-skills", "SKILL.md"))), "the walk reached the hub skills");
+  for (const { where, text } of texts) assert.doesNotMatch(text, literal, where);
+});
