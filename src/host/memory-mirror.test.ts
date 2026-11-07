@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MemoryMirror } from "./memory-mirror.ts";
 import { memoryMirrorDir, renderMemoryFiles } from "./memory.ts";
-import { DOCKER_BOX_PATHS, memoryDir } from "./box-paths.ts";
+import { DOCKER_BOX_PATHS, memoryDir, standingRoot } from "./box-paths.ts";
 import type { MemoryRecord } from "./memory.ts";
 import { readStanding, standingBoxDir, standingFileOf, writeStanding } from "./standing.ts";
 
@@ -232,14 +232,16 @@ test("the read-only memory mirror is keyed by agent id: two names that slug alik
   assert.equal(commands.length, 1, "removed once per box, not on every sync");
 });
 
-test("a host box's mirror is under its own work directory, which is where its prompt points (INV-1734)", async () => {
+test("a host box's mirror and standing files are under its own work directory, which is where its prompt points (INV-1734, INV-1736)", async () => {
   // /home/box does not exist on the person's machine: a mirror written there was refused, and the
   // memory section sent the agent to files nobody could write.
   const work = mkdtempSync(join(tmpdir(), "agentbox-mirror-host-"));
   const { registry } = fakeRegistry([fact("the deploy region is us-east-1")]);
   const { files, box } = fakeBox();
-  const mirror = new MemoryMirror({ registry, box: () => box, memoryDir: () => memoryDir({ kind: "host", workDir: work }) });
+  const host = { kind: "host" as const, workDir: work };
+  const mirror = new MemoryMirror({ registry, box: () => box, memoryDir: () => memoryDir(host), standingRoot: () => standingRoot(host) });
   await mirror.sync("a1");
   assert.match(files.get(`${work}/memory/a1/profile.md`) ?? "", /us-east-1/);
-  assert.ok([...files.keys()].every(path => !path.startsWith("/home/box/work/memory/")), [...files.keys()].join(", "));
+  assert.match(files.get(`${work}/standing/a1/SOUL.md`) ?? "", /# SOUL\.md/);
+  assert.ok([...files.keys()].every(path => !path.startsWith("/home/box/work/")), [...files.keys()].join(", "));
 });

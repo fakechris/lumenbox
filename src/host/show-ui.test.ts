@@ -213,7 +213,7 @@ test("a data-only or patch call moves an existing card without resending compone
   assert.ok(!image.ok && /not in the catalog/.test(image.reason));
 });
 
-test("Chart and FilePreview are in the catalog; a FilePreview path outside the work directory is refused with the bound (INV-1280)", () => {
+test("Chart and FilePreview are in the catalog; a FilePreview path outside the work directory is refused with the bound (INV-1280, INV-1736)", () => {
   const ok = compileSurface({ surface: "r", components: [
     { id: "root", component: "Column", children: ["c", "f"] },
     { id: "c", component: "Chart", kind: "bar", title: "Latency", points: { path: "/p" }, unit: "ms" },
@@ -223,6 +223,16 @@ test("Chart and FilePreview are in the catalog; a FilePreview path outside the w
   for (const path of ["/etc/passwd", "/home/box/work/../secret", "report.md"]) {
     const bad = compileSurface({ surface: "r", components: [{ id: "root", component: "FilePreview", path }] }, undefined);
     assert.ok(!bad.ok && /under \/home\/box\/work/.test(bad.reason), `${path}: ${bad.ok ? "accepted" : bad.reason}`);
+  }
+  // A host box's work directory is its own; /home/box does not exist there, and a file in it is
+  // what the Files panel serves (INV-1736). A Link is bounded the same way.
+  const workDir = "/Users/ada/lumenbox";
+  const card = (path: string) => compileSurface({ surface: "r", workDir, components: [{ id: "root", component: "Column", children: ["f", "l"] }, { id: "f", component: "FilePreview", path }, { id: "l", component: "Link", text: "it", to: path }] }, undefined);
+  const host = card(`${workDir}/x.md`);
+  assert.ok(host.ok, host.ok ? "" : host.reason);
+  for (const path of ["/home/box/work/x.md", `${workDir}/../x.md`, "/Users/ada/other/x.md"]) {
+    const bad = card(path);
+    assert.ok(!bad.ok && bad.reason.includes(`under ${workDir};`), `${path}: ${bad.ok ? "accepted" : bad.reason}`);
   }
 });
 

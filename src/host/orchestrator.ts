@@ -81,7 +81,7 @@ import {
   templatesEnabled,
   toolsOf,
 } from "./template.ts";
-import { memoryDir, skillsDir } from "./box-paths.ts";
+import { memoryDir, skillsDir, standingRoot } from "./box-paths.ts";
 import { intersectTools } from "./catalog.ts";
 import { DisplayLease } from "../box/display-lease.ts";
 import { AttachedBoxProvisioner, resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
@@ -302,7 +302,7 @@ export class Orchestrator {
       out.push({
         slug: heartbeatSlug(agent.id),
         name: `${agent.profile.name}'s heartbeat`,
-        path: `${standingBoxDir(agent.id)}/HEARTBEAT.md`,
+        path: `${standingBoxDir(agent.id, standingRoot(this.boxEntryOf(agent.id)))}/HEARTBEAT.md`,
         schedule: HEARTBEAT_SCHEDULE,
         runAs: agent.id,
         boxId: this.registry.boxOf(agent.id).id,
@@ -969,7 +969,7 @@ export class Orchestrator {
     this.registry = options.registry ?? new AgentRegistry();
     this.memoryMirror = new MemoryMirror({
       registry: this.registry,
-      box: agentId => this.boxFor(agentId), memoryDir: agentId => memoryDir(this.boxEntryOf(agentId)), // the agent's box's (INV-1734)
+      box: agentId => this.boxFor(agentId), memoryDir: agentId => memoryDir(this.boxEntryOf(agentId)), standingRoot: agentId => standingRoot(this.boxEntryOf(agentId)), // the agent's box's (INV-1734, INV-1736)
       log: line => console.error(`[memory-mirror] ${line}`),
     });
     this.registry.onMemoryChanged = agentId => void this.memoryMirror.sync(agentId).catch((error: unknown) => console.error(`[memory-mirror] ${agentId}: ${error instanceof Error ? error.message : String(error)}`)); // nobody awaits it: a log line, never the process (INV-1542)

@@ -6,7 +6,7 @@
  * background work, and the abort has to land between tool calls.
  */
 
-import { hostBoxWrite } from "./host-box.ts";
+import { hostBoxWrite } from "./host-box.ts"; import { workDir } from "./box-paths.ts";
 import { createHash } from "node:crypto";
 import { buildInfo } from "./build-info.ts";
 import { envNumber, hostTokens } from "../config.ts";
@@ -3280,7 +3280,7 @@ ${outcome.text}`;
       const reviewWhy =
         isolated || deps.autoReview === undefined
           ? undefined
-          : (needsReview(toolUse.name, toolInput) ??
+          : (needsReview(toolUse.name, toolInput, workDir({ kind: deps.boxKind, workDir: deps.boxWorkDir })) ??
             // A host-level MCP server's tools (INV-439) are reviewed like a host command:
             // they reach the operator's own machine or their own data.
             (deps.mcp?.isHostTool(toolUse.name) === true ? "calls a host-level MCP server" : undefined) ??

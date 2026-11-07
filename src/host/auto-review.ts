@@ -1,5 +1,6 @@
 import { isComputerWrite } from "../cua/execution.ts";
 import { choiceOf, digest, type JevAsk, shadowOnly, type SwitchDeps, switched } from "./jev.ts";
+import { DOCKER_WORK } from "./box-paths.ts";
 /**
  * Auto-review: a per-call classifier for the tool calls that bind the world.
  *
@@ -46,8 +47,6 @@ export interface Verdict {
   reason: string;
 }
 
-const WORK_DIR = "/home/box/work";
-
 /**
  * Shell commands that reach outside the box or destroy: reviewed. `ls`, `cat`, a test run: not.
  * A coarse prefilter, not the classifier — it only decides whether to spend a review.
@@ -55,8 +54,11 @@ const WORK_DIR = "/home/box/work";
 const OUTBOUND_SHELL =
   /\b(curl|wget|http)\b[^|;&]*\s-(X|d|F|T|-data|-upload-file|-request)\b|\bgit\s+push\b|\bssh\b|\bscp\b|\brsync\b|\bnpm\s+publish\b|\bdocker\s+push\b|\bmail\b|\bsendmail\b|\brm\s+-rf?\s+[~/]|\bcrontab\b|\bsystemctl\b|\bkill\s+-9\b|\bpip\s+upload\b|\btwine\b|\bgh\s+(pr|release|issue)\s+(create|merge|close|delete|edit)\b/;
 
-/** The reason a call is reviewed, or undefined when it is not in the class. */
-export function needsReview(tool: string, input: Record<string, unknown>): string | undefined {
+/**
+ * The reason a call is reviewed, or undefined when it is not in the class. `work` is the agent's
+ * box's work directory, `workDir(box)` (INV-1736); the image's when not given.
+ */
+export function needsReview(tool: string, input: Record<string, unknown>, work: string = DOCKER_WORK): string | undefined {
   switch (tool) {
     case "RunOnHost":
       return "runs a command on the person's machine";
@@ -88,9 +90,10 @@ export function needsReview(tool: string, input: Record<string, unknown>): strin
     case "write_file":
     case "edit_file": {
       const path = typeof input.path === "string" ? input.path : "";
-      return path.startsWith(`${WORK_DIR}/`) || path === WORK_DIR || path.startsWith("~/work")
+      // `~/work` is the image's work volume; on a host box `~` is the person's own home (INV-1736).
+      return path.startsWith(`${work}/`) || path === work || (work === DOCKER_WORK && path.startsWith("~/work"))
         ? undefined
-        : `writes outside ${WORK_DIR}`;
+        : `writes outside ${work}`;
     }
     case "bash": {
       const command = typeof input.command === "string" ? input.command : "";

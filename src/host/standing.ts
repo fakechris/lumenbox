@@ -8,7 +8,8 @@
  * agent that learned something about this work should have a file to put it in that is not a
  * memory record it has to hope gets recalled.
  *
- * The host's copy is canonical. The box holds a read-write mirror under `/home/box/work/standing/`
+ * The host's copy is canonical. The box holds a read-write mirror under `standingRoot(box)` (the
+ * work directory's `standing/`, box-paths.ts, INV-1736)
  * so the agent can edit with `write_file` and `edit_file`; those tools write the host copy through
  * `writeStandingFromAgent` in the same call, so the two never disagree for longer than a turn.
  * A write through `bash` reaches only the box copy and is overwritten by the next sync — the same
@@ -28,6 +29,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { lineDiff } from "../web/line-diff.ts";
+import { DOCKER_BOX_PATHS, DOCKER_WORK } from "./box-paths.ts";
 
 export const STANDING_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "HEARTBEAT.md"] as const;
 export type StandingName = (typeof STANDING_FILES)[number];
@@ -38,9 +40,6 @@ export const STANDING_BYTE_CAP = 8 * 1024;
 export const STANDING_DIRNAME = "standing";
 /** The hash table beside the files: what each held when it was last injected. */
 export const STANDING_STATE_FILENAME = "standing.json";
-/** Where the box's read-write mirror of every agent's set lives. */
-export const STANDING_BOX_DIR = "/home/box/work/standing";
-
 export type StandingSnapshot = Readonly<Record<StandingName, string>>;
 
 export function isStandingName(name: string): name is StandingName {
@@ -51,15 +50,19 @@ export function standingDir(agentDir: string): string {
   return join(agentDir, STANDING_DIRNAME);
 }
 
-/** The box directory that mirrors one agent's set: keyed by the immutable id, which is unique. */
-export function standingBoxDir(agentId: string): string {
-  return `${STANDING_BOX_DIR}/${agentId}`;
+/**
+ * The box directory that mirrors one agent's set: keyed by the immutable id, which is unique.
+ * `root` is the agent's box's `standingRoot(box)` (INV-1736); the image's when not given.
+ */
+export function standingBoxDir(agentId: string, root: string = DOCKER_BOX_PATHS.standing): string {
+  return `${root}/${agentId}`;
 }
 
-/** Which standing file a box path names, for this agent, or undefined when it is not one. */
-export function standingFileOf(path: string, agentId: string): StandingName | undefined {
-  const dir = standingBoxDir(agentId);
-  const normalised = path.replace(/^~\/work\//, "/home/box/work/");
+/** Which standing file a box path names, for this agent on the box `root` is of, or undefined when it is not one. */
+export function standingFileOf(path: string, agentId: string, root?: string): StandingName | undefined {
+  const dir = standingBoxDir(agentId, root);
+  // `~/work` is the image's work volume; on a host box `~` is the person's, so it names nothing here.
+  const normalised = path.replace(/^~\/work\//, `${DOCKER_WORK}/`);
   if (!normalised.startsWith(`${dir}/`)) return undefined;
   const rest = normalised.slice(dir.length + 1);
   return isStandingName(rest) ? rest : undefined;
@@ -139,13 +142,13 @@ export function readStanding(agentDir: string, agentName: string): StandingSnaps
 }
 
 /** The refusal for a text over the cap, or undefined when it fits. */
-export function capRefusal(name: string, text: string): string | undefined {
+export function capRefusal(name: string, text: string, work: string = DOCKER_WORK): string | undefined {
   const bytes = Buffer.byteLength(text, "utf8");
   if (bytes <= STANDING_BYTE_CAP) return undefined;
   return (
     `${name} was not written: it would be ${bytes} bytes and a standing file is capped at ` +
     `${STANDING_BYTE_CAP} bytes, because it is read into every turn. Keep the short version here ` +
-    `and put the rest in a document under /home/box/work.`
+    `and put the rest in a document under ${work}.`
   );
 }
 
@@ -181,9 +184,9 @@ export function writeStandingFromAgent(agentDir: string, agentName: string, name
 }
 
 /** The files as the box mirror should hold them, host copy verbatim. */
-export function standingBoxFiles(agentDir: string, agentId: string, agentName: string): { path: string; content: string }[] {
+export function standingBoxFiles(agentDir: string, agentId: string, agentName: string, root?: string): { path: string; content: string }[] {
   const snapshot = readStanding(agentDir, agentName);
-  const dir = standingBoxDir(agentId);
+  const dir = standingBoxDir(agentId, root);
   return STANDING_FILES.map(name => ({ path: `${dir}/${name}`, content: snapshot[name] }));
 }
 
@@ -292,9 +295,9 @@ export function changeNotice(changes: readonly StandingChange[]): string | undef
 /** How much of one file the section carries. The cap is bytes; this is a second guard in chars. */
 const RENDER_CHARS = STANDING_BYTE_CAP;
 
-export function renderStanding(snapshot: StandingSnapshot | undefined, agentId: string): string {
+export function renderStanding(snapshot: StandingSnapshot | undefined, agentId: string, root?: string): string {
   if (snapshot === undefined) return "";
-  const dir = standingBoxDir(agentId);
+  const dir = standingBoxDir(agentId, root);
   const body = STANDING_FILES.map(name => {
     const text = snapshot[name].trim();
     const shown = text === "" ? "(empty)" : text.length > RENDER_CHARS ? `${text.slice(0, RENDER_CHARS)}\n(cut here)` : text;
