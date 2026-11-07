@@ -37,6 +37,9 @@ const { desktopAuth } = require("./ui-auth.cjs");
 const { badgeCount, notificationsDue } = require("./attention-signals.cjs");
 const { syncLoginItem } = require("./login-item.cjs");
 const { windowOpenAction } = require("./external-links.cjs");
+const { systemKeychain } = require("./keychain.cjs");
+const { connectionStore } = require("./organisations.cjs");
+const { organisationWindows } = require("./organisation-windows.cjs");
 const uiAuth = desktopAuth();
 
 const PORT = Number(process.env.LUMENBOX_PORT || 7777);
@@ -461,7 +464,8 @@ function createWindow() {
     // No flash of the wrong theme while the page loads.
     backgroundColor: nativeTheme.shouldUseDarkColors ? "#0a0e16" : "#f7f6f2",
     icon: path.join(REPO, "assets", "app-icon", "png", "lumenbox-256.png"),
-    webPreferences: { contextIsolation: true, nodeIntegration: false },
+    // The preload is the page's one way to the shell: its organisation connections (INV-1690).
+    webPreferences: { contextIsolation: true, nodeIntegration: false, preload: path.join(__dirname, "preload.cjs") },
   });
   mainWindow.setMenuBarVisibility(false);
   // The Manual link and any other off-origin link open in the system browser: not a bare
@@ -475,6 +479,16 @@ function createWindow() {
     mainWindow = null;
   });
   whenServerReady(() => mainWindow?.loadURL(uiAuth.bootstrapUrl(PAGE)));
+}
+
+/**
+ * Organisation connections (INV-1690, docs/95 §4): a list in the shell's own data directory and a
+ * token per connection in the keychain — nothing under ~/.agentbox, nothing started locally.
+ */
+function startOrganisations() {
+  const store = connectionStore({ file: path.join(app.getPath("userData"), "organisations.json"), keychain: systemKeychain() });
+  const openOutside = url => shell.openExternal(url).catch(err => log(`could not open ${url}: ${err.message}`));
+  organisationWindows({ store, personalOrigin: new URL(PAGE).origin, parentWindow: () => mainWindow, openOutside, log }).handle(() => mainWindow?.webContents);
 }
 
 function buildTrayMenu() {
@@ -545,6 +559,7 @@ if (!app.requestSingleInstanceLock()) {
       );
     }
     applyStartupItemSettings();
+    startOrganisations();
     startServer();
     createTray();
     createWindow();
