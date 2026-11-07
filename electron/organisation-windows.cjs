@@ -1,8 +1,9 @@
 /**
- * The Electron half of organisation connections (INV-1690): the sign-in window, the window an
- * organisation opens in, and the four calls the personal page makes through the preload bridge.
+ * The Electron half of organisation connections (INV-1690): the sign-in window, and the calls the
+ * personal page makes through the preload bridge. An organisation opens inside the main window
+ * (installation-views.cjs, INV-1691).
  *
- * Every organisation window runs in its own in-memory session partition (no `persist:` prefix),
+ * The sign-in window, like an organisation's view, runs in its own in-memory session partition (no `persist:` prefix),
  * so the organisation's cookies, cache and storage live only while the window does and nothing of
  * the organisation is written to this computer's disk. The one thing kept is the session token,
  * read from the sign-in window's cookie jar once the organisation sets it and handed to the
@@ -18,8 +19,7 @@ function ephemeralSession() {
   return electronSession.fromPartition(`org-${randomBytes(8).toString("hex")}`, { cache: false });
 }
 
-function organisationWindows({ store, personalOrigin, parentWindow, openOutside, log, show = true }) {
-  const open = new Map();
+function organisationWindows({ store, views, personalOrigin, parentWindow, openOutside, log, show = true }) {
 
   /**
    * Signs in to an organisation in a window of the app: its own sign-in page (an invite code, or
@@ -51,41 +51,29 @@ function organisationWindows({ store, personalOrigin, parentWindow, openOutside,
     const who = await readOrganisation(address.origin, token);
     const record = await store.add({ origin: address.origin, name: typeof name === "string" && name.trim() ? name.trim() : new URL(address.origin).host, identity: who.identity, person: who.name, role: who.role }, token);
     log(`organisations: joined ${record.origin} as ${record.role} (${record.id})`);
+    views.refreshCounts().catch(() => {});
     return { connection: record };
   }
 
-  /** Opens an organisation in its own window, signed in with the token from the keychain. */
+  /**
+   * Opens an organisation: since INV-1691 that is selecting it in the main window's first level
+   * (installation-views.cjs), not a window of its own.
+   */
   async function openConnection(id) {
-    const existing = open.get(id);
-    if (existing && !existing.isDestroyed()) { existing.show(); existing.focus(); return { opened: true }; }
-    const record = store.get(id);
-    const token = record ? await store.token(id) : undefined;
-    if (!record || !token) throw new JoinRefused("no-token");
-    const ses = ephemeralSession();
-    const secure = record.origin.startsWith("https:");
-    await ses.cookies.set({ url: record.origin, name: SESSION_COOKIE, value: token, path: "/", httpOnly: true, secure, sameSite: "lax" });
-    const win = new BrowserWindow({ width: 1360, height: 840, minWidth: 1120, minHeight: 720, show, title: record.name, webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: true } });
-    win.setMenuBarVisibility(false);
-    win.webContents.setWindowOpenHandler(({ url }) => windowOpenAction(url, record.origin, openOutside));
-    win.webContents.on("will-navigate", (event, url) => { if (windowOpenAction(url, record.origin, openOutside).action === "deny") event.preventDefault(); });
-    win.on("closed", () => { open.delete(id); ses.clearStorageData().catch(() => {}); });
-    open.set(id, win);
-    await win.loadURL(`${record.origin}/`);
+    await views.select(id);
     return { opened: true };
   }
 
   /** Leaves an organisation on this computer: its window closed, its token and record deleted. */
   async function disconnect(id) {
-    const win = open.get(id);
-    if (win && !win.isDestroyed()) win.destroy();
-    open.delete(id);
+    views.close(id);
     const removed = await store.remove(id);
     if (removed) log(`organisations: left ${id}`);
     return { removed };
   }
 
   /**
-   * The bridge's four calls, answered only for the personal page in the main window: an
+   * The bridge's calls — four for connections, two for the first level (INV-1691) — answered only for the personal page in the main window: an
    * organisation's page, or anything a link navigated the main window to, gets nothing.
    */
   function handle(sender) {
@@ -108,9 +96,11 @@ function organisationWindows({ store, personalOrigin, parentWindow, openOutside,
     ipcMain.handle("organisations:join", reply((address, name) => join(address, name)));
     ipcMain.handle("organisations:open", reply(id => openConnection(String(id))));
     ipcMain.handle("organisations:disconnect", reply(id => disconnect(String(id))));
+    ipcMain.handle("installations:list", reply(async () => views.list()));
+    ipcMain.handle("installations:select", reply((id, rail) => views.select(String(id), Number(rail))));
   }
 
-  return { join, openConnection, disconnect, handle, windows: open };
+  return { join, openConnection, disconnect, handle };
 }
 
 module.exports = { organisationWindows };

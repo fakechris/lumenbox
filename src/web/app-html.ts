@@ -2183,9 +2183,8 @@ $("setinvite").onclick = function () {
   })
     .then(function (r) { return r.json(); })
     .then(function (d) {
-      $("setinviteout").textContent = d.code
-        ? '{{ui.app.have-them-send-bind}} ' + d.code + '  {{ui.app.15-min-once}}'
-        : (d.error || "{{ui.app.failed}}");
+      if (d.code && window.showInviteLink) return window.showInviteLink($("setinviteout"), d); // the link the app accepts (INV-1701)
+      $("setinviteout").textContent = d.code ? '{{ui.app.have-them-send-bind}} ' + d.code + '  {{ui.app.15-min-once}}' : (d.error || "{{ui.app.failed}}");
     })
     .catch(function () { $("setinviteout").textContent = "{{ui.app.failed}}"; });
 };
@@ -7615,7 +7614,7 @@ export const LOGIN_HTML = `<!doctype html>
   #code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:2px; text-transform:uppercase; }
   button { margin-top:18px; width:100%; padding:10px; font:inherit; font-weight:500; cursor:pointer;
            border:0; border-radius:9px; background:var(--accent); color:#fff; }
-  .note { margin-top:16px; font-size:12px; color:var(--muted); }
+  .note { margin-top:16px; font-size:12px; color:var(--muted); } .doors a.door { display:block; margin-top:10px; padding:10px; text-align:center; border:1px solid var(--accent); border-radius:9px; color:var(--accent); font-weight:500; text-decoration:none; }
   .err { margin-top:14px; font-size:13px; color:#b3261e; min-height:18px; }
 </style>
 </head>
@@ -7623,7 +7622,7 @@ export const LOGIN_HTML = `<!doctype html>
 <div class="card">
   <h1>{{ui.login.sign-in-to-lumenbox}}</h1>
   <p class="sub">{{ui.login.an-admin-gives-you-a}}</p>
-  <p class="note"><a href="/bootstrap">{{ui.login.set-up-the-first-administrator}}</a> {{ui.login.on-a-new-installation}}</p>
+  <p class="note"><a href="/bootstrap">{{ui.login.set-up-the-first-administrator}}</a> {{ui.login.on-a-new-installation}}</p><!--sign-in-doors-->
   <label for="code">{{ui.login.invite-code}}</label>
   <input id="code" autocomplete="off" spellcheck="false" placeholder="4F7KQZ" autofocus>
   <label for="name">{{ui.login.your-name}}</label>
