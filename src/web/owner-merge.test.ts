@@ -6,11 +6,13 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { startWebServer } from "./server.ts";
 import { OWNER_ID } from "../host/installation.ts";
+import { MERGE_JOURNAL } from "../host/self-merge.ts";
+import { INSTALLATION_JS } from "./installation-ui.ts";
 import { SIX, SIX_IDS, writeSixIdentities } from "../host/testing/six-identities.ts";
 
 test("six identities of one person: previewed, confirmed, merged at the restart into one Owner who links the next door with their own code", async () => {
@@ -76,6 +78,46 @@ test("six identities of one person: previewed, confirmed, merged at the restart 
     const after = ((await call("/api/channels")).body.principals as { identities: string[] }[]);
     assert.equal(after.length, 1);
     assert.equal(after[0]!.identities.length, 7, "a browser linked to the Owner, nobody added");
+  } finally {
+    stop?.();
+    if (previous === undefined) delete process.env.AGENTBOX_HOME;
+    else process.env.AGENTBOX_HOME = previous;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("\"these are not all me\" keeps six people as an organisation, unchanged, and People says to use an organisation (INV-1706)", async () => {
+  const home = mkdtempSync(join(tmpdir(), "owner-decline-"));
+  const previous = process.env.AGENTBOX_HOME;
+  process.env.AGENTBOX_HOME = home;
+  let stop: (() => void) | undefined;
+  const logs: string[] = [];
+  let base = "";
+  const call = async (path: string, body?: unknown) => {
+    const response = await fetch(`${base}${path}`, { method: body === undefined ? "GET" : "POST", headers: { "content-type": "application/json", authorization: "Bearer t0k" }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+    return { status: response.status, body: (await response.json().catch(() => ({}))) as Record<string, unknown> };
+  };
+  try {
+    writeSixIdentities(home, { ledgers: false, boxes: false });
+    stop = await startWebServer({ port: 0, host: "127.0.0.1", token: "t0k", useBox: false, desktop: true, onLog: line => logs.push(line), onReady: url => { base = url; } });
+    const preview = await call("/api/installation/merge");
+    assert.deepEqual([preview.body.offered, preview.body.severalPeople], [true, false], "no answer yet: the merge is offered, no notice");
+    assert.equal((await call("/api/installation/merge", { decline: true, confirm: true, digest: preview.body.digest })).status, 400, "yes and no at once is no answer");
+    assert.equal((await call("/api/installation/merge", { decline: true, digest: "an-old-preview" })).status, 409);
+    const rosterPath = join(home, "principals.json");
+    const before = JSON.parse(readFileSync(rosterPath, "utf8")) as { principals: unknown[] };
+    const declined = await call("/api/installation/merge", { decline: true, digest: preview.body.digest });
+    assert.deepEqual([declined.status, declined.body.state], [200, "declined"]);
+    assert.ok(logs.some(line => line.includes("not all one person") && line.includes("INV-1706")));
+    const after = JSON.parse(readFileSync(rosterPath, "utf8")) as { principals: unknown[]; installation: { mode: string; declined: { by: string } } };
+    assert.deepEqual(after.principals, before.principals, "nobody moved, merged or removed");
+    assert.equal(after.installation.mode, "organisation");
+    assert.equal(after.installation.declined.by, "the operator");
+    assert.equal(existsSync(join(home, MERGE_JOURNAL)), false, "no merge pending");
+    const again = await call("/api/installation/merge");
+    assert.deepEqual([again.body.offered, again.body.reason, again.body.severalPeople], [false, "decided", true], "the notice instead of the offer");
+    assert.equal((await call("/api/channels/invite", { role: "driver" })).status, 200, "nothing restricted: an organisation still invites");
+    assert.doesNotThrow(() => new Function(INSTALLATION_JS), "the People script that offers the answer and shows the notice parses");
   } finally {
     stop?.();
     if (previous === undefined) delete process.env.AGENTBOX_HOME;

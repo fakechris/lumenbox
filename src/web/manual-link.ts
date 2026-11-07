@@ -17,3 +17,6 @@ export const PERSONAL_ONLY_PAGE = "channels";
 export function manualPage(page: string, locale: "zh" | "en"): string {
   return MANUAL_URL.replace(/README\.md$/, locale === "zh" ? `${page}.zh.md` : `${page}.md`);
 }
+
+/** The decision a desktop with several people is pointed to (INV-1706): two kinds of installation, and why people work together in an organisation. English only, as the design record is. */
+export const TWO_INSTALLATIONS_DOC = MANUAL_URL.replace(/manual\/README\.md$/, "95-two-installations.md");

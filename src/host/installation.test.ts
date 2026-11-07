@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { BootstrapAdmins } from "./bootstrap.ts";
-import { ensureOwner, openRoster, OWNER_ID, PersonalInstallationOnly } from "./installation.ts";
+import { ensureOwner, holdsSeveralPeople, openRoster, OWNER_ID, PersonalInstallationOnly } from "./installation.ts";
 import { Principals, soleAdmin } from "./principals.ts";
 
 function fixture(): { home: string; path: string; codePath: string } {
@@ -105,4 +105,17 @@ test("a personal installation never takes a second person; one converted before 
     principals.save([]);
     assert.equal(ensureOwner(path, codePath, { desktop: true }), "closed", "an organisation emptied by hand does not grow an Owner back");
   } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("several real people on a desktop only when the roster says organisation out loud, never guessed (INV-1706)", () => {
+  const two = [{ id: "feishu:ou_a", name: "Sam", role: "admin" }, { id: "feishu:ou_b", name: "Ann", role: "driver" }];
+  const declined = { mode: "organisation", declined: { at: 1, by: "Sam" } };
+  assert.equal(holdsSeveralPeople({ installation: declined, principals: two }, true), true, "\"these are not all me\" in the merge preview");
+  assert.equal(holdsSeveralPeople({ installation: { mode: "organisation", ownerId: OWNER_ID, conversion: { at: 1, by: "Sam", ownerId: OWNER_ID } }, principals: two }, true), true, "converted before INV-1689");
+  assert.equal(holdsSeveralPeople({ installation: { mode: "organisation" }, principals: two }, true), true, "an organisation written by hand");
+  assert.equal(holdsSeveralPeople({ principals: two }, true), false, "no field is no answer: the merge preview is offered instead");
+  assert.equal(holdsSeveralPeople({ installation: declined, principals: two }, false), false, "a server is an organisation by design");
+  assert.equal(holdsSeveralPeople({ installation: declined, principals: two.slice(0, 1) }, true), false, "one person is not several");
+  assert.equal(holdsSeveralPeople({ installation: { mode: "single-machine", ownerId: OWNER_ID, merged: { at: 1, from: ["feishu:ou_a", "feishu:ou_b"] } }, principals: [{ id: OWNER_ID, name: "Sam", role: "admin" }] }, true), false, "merged into the Owner");
+  assert.equal(holdsSeveralPeople(undefined, true), false, "no roster");
 });

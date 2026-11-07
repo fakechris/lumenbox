@@ -38,7 +38,7 @@ import { basename, join } from "node:path";
 import { agentboxHome, configPath } from "../config.ts";
 import { defaultAgentsRoot } from "../agents/registry.ts";
 import { inboxPath } from "../agents/inbox.ts";
-import { installationOf, OWNER_ID } from "./installation.ts";
+import { installationOf, OWNER_ID, type Installation } from "./installation.ts";
 import { OPERATOR, operatorKey } from "./person.ts";
 import { principalsPath } from "./principals.ts";
 import { turnLedgerPath } from "./resume.ts";
@@ -430,6 +430,24 @@ export function confirmMerge(paths: MergePaths, input: { digest: string; name?: 
     const journal: MergeJournal = { state: "pending", requestedAt: input.now ?? Date.now(), by: input.by, digest: input.digest, name, from: people };
     writeJournal(paths.home, journal);
     return journal;
+  });
+}
+
+/**
+ * The person's "these are not all me" (INV-1706): the roster says organisation out loud, with when
+ * and who said it, and nothing else changes — no person, no store, no permission. The preview is
+ * then no longer offered ("decided"), and People shows that several people use this computer's
+ * installation (`holdsSeveralPeople`). Refuses a roster that changed since the preview.
+ */
+export function declineMerge(paths: MergePaths, input: { digest: string; by: string; desktop: boolean; now?: number }): Installation {
+  return withRosterLock(paths.roster, () => {
+    const roster = readRoster(paths.roster);
+    const reason = notOffered(roster, paths.home, input.desktop);
+    if (reason !== undefined) throw new MergeRefused(reason, `Nothing to answer here (${reason}).`);
+    if (digestOf(roster!) !== input.digest) throw new MergeRefused("stale", "The people on this installation changed after the preview. Look again before answering.");
+    const installation: Installation = { mode: "organisation", declined: { at: input.now ?? Date.now(), by: input.by } };
+    writeAtomically(paths.roster, `${JSON.stringify({ ...roster, installation }, null, 2)}\n`);
+    return installation;
   });
 }
 
