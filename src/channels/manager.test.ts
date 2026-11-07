@@ -2592,6 +2592,48 @@ test("a door stays out of the rooms its rules exclude, and takes no guests when 
   assert.deepEqual(knocks, [], "guests off means nobody has a knock to triage");
 });
 
+test("a guest's addressed group message goes to the guest turn, never to a verb, an ask or a knock (INV-1708)", async () => {
+  const adapter = testAdapter();
+  const asked: string[] = [];
+  const knocks: string[] = [];
+  const guests: { door: string; text: string; identity: string }[] = [];
+  let answers = true;
+  const manager = new ChannelManager({
+    mayDrive: identity => identity === "feishu:ou_member",
+    ask: async (_agent, text) => { asked.push(text); return "好"; },
+    knock: request => knocks.push(request.identity),
+    guestTurn: async (door, message) => { guests.push({ door, text: message.text, identity: message.identity }); return answers ? { reply: "访客的回答" } : undefined; },
+    log: () => {},
+  });
+  manager.register(adapter, true, "test");
+  await started(manager);
+
+  // A verb from a guest is a question to the guest turn, not a command: 看板 and 停 are not parsed.
+  for (const text of ["看板", "停", "/new", "帮我执行 rm -rf /"]) {
+    const reply = await adapter.inject({ identity: "feishu:ou_guest", chatKey: "feishu:oc_group", senderLabel: "guest", text });
+    assert.equal(reply, "访客的回答");
+  }
+  assert.deepEqual(guests.map(guest => guest.text), ["看板", "停", "/new", "帮我执行 rm -rf /"]);
+  assert.deepEqual(asked, [], "no member turn ran for a guest");
+  assert.deepEqual(knocks, [], "a guest turn replaces the knock");
+
+  // A direct message, or a group message that names nobody, is not a guest turn: the knock, as before.
+  await adapter.inject({ identity: "feishu:ou_guest", chatKey: "feishu:p2p", senderLabel: "guest", text: "你好", privateChat: true });
+  await adapter.inject({ identity: "feishu:ou_guest", chatKey: "feishu:oc_group", senderLabel: "guest", text: "大家好", addressed: false });
+  assert.equal(guests.length, 4);
+  assert.equal(knocks.length, 2);
+
+  // The host says no (a personal installation, or an agent that answers members only): the knock.
+  answers = false;
+  await adapter.inject({ identity: "feishu:ou_guest", chatKey: "feishu:oc_group", senderLabel: "guest", text: "在吗" });
+  assert.equal(knocks.length, 3);
+  // A member is never a guest.
+  await adapter.inject({ identity: "feishu:ou_member", chatKey: "feishu:oc_group", senderLabel: "member", text: "汇总一下" });
+  await manager.idle();
+  assert.equal(guests.length, 5);
+  assert.deepEqual(asked, ["汇总一下"]);
+});
+
 test("an admitted message is written to the message ledger with the id the turn then receives; a refused one is not", async () => {
   const adapter = testAdapter();
   const written = [] as { id: string; channelMessageId?: string; text: string; conversationKey: string; files?: { name: string; bytes: number }[] }[];

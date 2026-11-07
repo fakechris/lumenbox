@@ -2156,7 +2156,7 @@ export class Orchestrator {
    * clear message, which `createClient` already throws. So a build failure here is
    * caught by the turn, not hidden.
    */
-  private readonly runtimeCache = new Map<string, { client: Anthropic; provider: ProviderProfile }>(); private readonly fallbackRuntimes = new FallbackRuntimes(); // and the providers a turn goes on with (INV-1578)
+  private readonly runtimeCache = new Map<string, { client: Anthropic; provider: ProviderProfile }>(); private readonly fallbackRuntimes = new FallbackRuntimes(); runtimeOf(agentId: string): { client: Anthropic; provider: ProviderProfile } { return this.runtimeForAgent(this.registry.get(agentId)); } // and the providers a turn goes on with (INV-1578); the model a guest turn runs on, the agent's own (INV-1708)
 
   private runtimeForAgent(agent: AgentRecord): { client: Anthropic; provider: ProviderProfile } {
     const provider = effectiveProviderFor(agent.profile, this.provider);

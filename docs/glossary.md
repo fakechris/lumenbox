@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: vocabulary
-     updated: 2026-11-06
+     updated: 2026-11-07
 -->
 # Glossary and controlled vocabulary
 
@@ -75,6 +75,8 @@ renamed: `door`, `worker`, `expert`, `front` stay in the code and the specs.
 | **person** / 人 | Principal, Identity | principal id; identity `<channel id>:<subject>` | viewer · driver · admin | Settings → Team → People · `bind CODE` · — |
 | **Owner** / 机主 | Principal with role `admin` on an installation whose `installation.mode` is `single-machine` (installation.ts, docs/22 §1a) | principal id `local:owner`; the ids a merge folded in are its aliases (INV-1698) | Owner (the only person; never converted) | Settings → Team → People (Owner · 机主; *See whether these are all me* on an older desktop roster) · `bind CODE` with the Owner's own code · `agentbox web --desktop` (the app passes it) |
 | **Admin** / 管理员 | Principal with role `admin` on an organisation installation (`installation.mode` absent or `organisation`) | principal id | admin | Settings → Team → People · the bootstrap code's sign-in page · — |
+| **guest** / 访客 | a sender on no roster; in an organisation an agent set to answer guests runs a guest turn for them (`runGuestTurn`, docs/97) | the sender's identity `<channel id>:<subject>` | answered · refused · over today's limit | Settings → Team → Guests (organisation only) · the group chat · — |
+| **public to guests** / 对访客公开 | the organisation's guest knowledge list (`GuestDesk`, `guests.jsonl`, docs/97 §4) | entry id | — (on the list or not) | Settings → Team → Guests · — · `POST /api/guests/knowledge` |
 | **account holder** / 账户持有人 | control-plane membership role `owner` (src/control/store.ts) | user id in the tenant | account holder · member · viewer | the control plane's admin surface · — · `scripts/control-admin.sh` |
 | **task** / 任务 | Task, the board | `tN`, e.g. `t12` | open · doing · blocked · review · done · dropped | Tasks tab · `/continue tN`, `/recover tN`, 停, 可以 · MCP `task_status` |
 | **goal** / 目标 | pursuit (goal-mode.ts); not `Task.goal`, which is a reminder of a person's aim (docs/74) | the task it lives on, `tN` | active · verifying · paused · complete · cleared | Settings → Supervision · `/goal <text>` · MCP `goal_start` |

@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: identity-and-authority
-     updated: 2026-11-06
+     updated: 2026-11-07
 -->
 # The domain model: people, doors, workers, rooms
 
@@ -220,6 +220,14 @@ and what it routes is the box's list, always.
 door reaches every agent in the box. That is not a limitation but the definition
 of "same box". A door whose people need isolated authority needs its own box, and
 build items 1–4 cannot produce one; see §7.
+
+**Guests (INV-1708, docs/97).** A sender who is on no roster is a guest. A guest is admitted to
+no box. An organisation's agent that an Admin set to answer guests runs a **guest turn** for an
+addressed group message from one: a turn on the host with no box client, no registry, no memory
+and no gate, whose tools are an allow-list of two read-only tools over the knowledge the
+organisation marked public to guests. A personal installation answers no guest, and has no
+setting that would. The tools and the data a guest must not reach are absent from the turn, not
+refused in it.
 
 ## 2a. A task's mandate: who may have it done, and under what (INV-1457)
 
