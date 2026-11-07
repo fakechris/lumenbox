@@ -15,7 +15,7 @@
 import { MAX_LEARNING_CHARS, appendLearning, hostOf, readLearnings } from "./learnings.ts";
 import { type CatalogExpert, CODE_TOOLS, DESK_TOOLS, WEB_TOOLS } from "./catalog.ts";
 import type { MemoryRecord } from "./memory.ts";
-import { scanText } from "./secret-scan.ts";
+import { scanText } from "./secret-scan.ts"; import { type BoxPlace, templatesDir } from "./box-paths.ts";
 import { SKILL_FILENAME, SKILLS_DIR, parseSkillFile, slugify } from "./skills.ts";
 
 export const TEMPLATE_FORMAT = "lumenbox-template/1";
@@ -23,8 +23,6 @@ export const TEMPLATE_FORMAT = "lumenbox-template/1";
 export const TEMPLATE_MAX_BYTES = 2 * 1024 * 1024;
 /** One helper file. Past this it is data that belongs in the work directory, not a recipe. */
 export const TEMPLATE_FILE_MAX_BYTES = 256 * 1024;
-/** Where an imported recipe is put for the new bot to read. */
-export const TEMPLATES_DIR = "/home/box/work/templates";
 /** Prefix on the cue that opens a template setup turn; `reviewInputFor` files it as untrusted. */
 export const TEMPLATE_CUE = "[template setup]";
 /** `source` on a memory record and `authored_by` on a skill the setup turn wrote. */
@@ -688,9 +686,9 @@ export function stampTemplateWrite(content: string, templateId: string): string 
 
 // ── the recipe the new bot reads ────────────────────────────────────────────────────
 
-/** Where a template's files land in the box, per importing agent. */
-export function recipeDirFor(agentName: string): string {
-  return `${TEMPLATES_DIR}/${slugify(agentName)}`;
+/** Where a template's files land in the importing agent's box, per agent: under its own work directory (INV-1737). */
+export function recipeDirFor(agentName: string, box: BoxPlace): string {
+  return `${templatesDir(box)}/${slugify(agentName)}`;
 }
 
 /**

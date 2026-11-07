@@ -116,3 +116,17 @@ test("a task in review that names a file and marked no deliverable says so on th
   await deliverFileTool(context, { path: "/home/box/work/report.md", note: "r", task_id: task.id });
   assert.doesNotMatch(card().detail, /No deliverable/);
 });
+
+test("on a host box a deliverable is a file under its own work directory, and the review card reads the submission there (INV-1737)", async () => {
+  const work = "/Users/ada/lumenbox";
+  const { tasks, task, files, context } = setup();
+  const host = { ...context, boxKind: "host", boxWorkDir: work } as ToolContext;
+  files.set("/home/box/work/report.md", Buffer.from("r"));
+  assert.match((await deliverFileTool(host, { path: "/home/box/work/report.md", note: "r" })).text, new RegExp(`must be a file under ${work}/`));
+  tasks.update(task.id, { reviewerId: "p-chris", status: "review", note: "Done", evidence: [`${work}/out/q3.md — the report`] }, AGENT);
+  const card = () => attentionFor({ principalId: "p-chris", identities: [], tasks: tasks.list(), questions: [], nameOf: id => id, workOf: () => work }).mine.find(item => item.kind === "review")!;
+  assert.match(card().detail, /the submission names q3\.md/);
+  files.set(`${work}/out/q3.md`, Buffer.from("# Q3\n"));
+  const delivered = await deliverFileTool(host, { path: `${work}/out/q3.md`, note: "r", task_id: task.id });
+  assert.equal(tasks.get(task.id)!.deliverables?.[0]?.path, `${work}/out/q3.md`, delivered.text);
+});
