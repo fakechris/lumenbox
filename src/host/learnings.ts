@@ -8,9 +8,11 @@
  * marked perishable the day it is written, because a redesign turns it into a wrong
  * click with nothing to report.
  *
- * One Markdown file per host under ~/.agentbox/learnings, appended to, never rewritten
- * by a tool. Secrets are refused at the door with the same scanner templates use: a note
- * is the kind of thing that travels (docs/29), and a credential must never travel.
+ * One Markdown file per host, appended to, never rewritten by a tool. New notes are kept per
+ * box (`site-learnings.ts`, INV-1728); the files directly under ~/.agentbox/learnings are the
+ * historical, installation-wide ones. Secrets are refused at the door with the same scanner
+ * templates use: a note is the kind of thing that travels (docs/29), and a credential must
+ * never travel.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -105,13 +107,19 @@ export function readLearnings(host: string, dir = learningsDir(), limit = LEARNI
   }
 }
 
-/** The note shown when a site with learnings is opened, or undefined when there are none. */
-export function renderLearnings(host: string, lines: readonly string[]): string | undefined {
-  if (lines.length === 0) return undefined;
-  const failures = lines.filter(line => line.includes(" ❌ ")).length;
+/**
+ * The note shown when a site with learnings is opened, or undefined when there are none.
+ * `historical` are the installation-wide notes from before notes were kept per box (INV-1728):
+ * still shown, under a label that says every box reads them.
+ */
+export function renderLearnings(host: string, lines: readonly string[], historical: readonly string[] = []): string | undefined {
+  const all = [...lines, ...historical];
+  if (all.length === 0) return undefined;
+  const failures = all.filter(line => line.includes(" ❌ ")).length;
+  const older = historical.length === 0 ? [] : ["Installation-wide, from before notes were kept per box (historical; every box reads these):", ...historical];
   return (
-    `What you or a teammate learned on ${host} before (${lines.length} note(s)${failures > 0 ? `, ${failures} about what did not work` : ""}):\n` +
-    lines.join("\n") +
+    `What you or a teammate learned on ${host} before (${all.length} note(s)${failures > 0 ? `, ${failures} about what did not work` : ""}):\n` +
+    [...lines, ...older].join("\n") +
     "\nAdd to this with NoteSiteLearning when you find out something the next visit needs."
   );
 }
