@@ -196,6 +196,7 @@ test("the prompt's sections have an order, and it is the documented one", () => 
       "wrap-up",
       "org-knowledge", // the organisation's knowledge (INV-1726), above the team's
       "shared-memory",
+      "memory-conflicts", // pairs that disagree across layers (INV-1732), after the sections their sides come from
       "team",
       // unattended renders only on a background lane (INV-780).
       "unattended",

@@ -288,6 +288,7 @@ export const UI_SECTIONS: Record<string, readonly [zh: string, en: string]> = {
   "ui.org-knowledge.readers-org": ["这个安装的每一位成员的 agent", "every member's agents, in every box of this installation"],
   "ui.org-knowledge.rejected": ["已拒绝：它不会被任何人读到，记录保留。", "Rejected: nobody will read it; the decision is on record."],
   "ui.org-knowledge.rests-on": ["依据", "Rests on"],
+  "ui.org-knowledge.replaces": ["批准后取代", "Approving it replaces"],
   "ui.org-knowledge.scope-box": ["只给这个 box", "This box only"],
   "ui.org-knowledge.scope-org": ["整个组织", "The whole organisation"],
   "ui.org-knowledge.title": ["组织知识", "Organisation knowledge"],

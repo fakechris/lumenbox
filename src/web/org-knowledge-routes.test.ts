@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { AgentRegistry } from "../agents/registry.ts";
 import { versionOf } from "../host/memory-admin.ts";
 import { OrgKnowledge } from "../host/org-knowledge.ts";
+import { propose } from "../host/org-promotion.ts";
 import { type Receipt, receiptId } from "../host/receipts.ts";
 import type { Task } from "../host/tasks.ts";
 import { orgKnowledgeRoute } from "./org-knowledge-routes.ts";
@@ -65,6 +66,10 @@ test("admin only; an Admin's promotion waits, names its readers, and a decision 
     assert.equal(live.verifiedBy, "p-admin");
     assert.equal(live.pinned, true, "the reviewer decides whether it is read on every turn");
     assert.equal(((await call("POST /api/org-knowledge/review/decide"))!.body as { code: string }).code, "org-not-pending");
+    // A proposal to replace a live item (maintenance's supersession, INV-1732) says on the review what approving it retires.
+    assert.equal(propose(ledger, { source: { kind: "memory", record: memory, holder: ada.id }, text: "quotes expire after 14 days", scope: "box:box-sales", owner: "p-ann", via: ada.id, supersedes: versionOf(live) }).ok, true);
+    const replacing = ((await call("GET /api/org-knowledge/review"))!.body as { pending: { text: string; replaces?: unknown }[] }).pending.find(item => item.text === "quotes expire after 14 days")!;
+    assert.deepEqual(replacing.replaces, { id: `org:${versionOf(live)}`, text: "quotes expire after 30 days" });
     body = { version: "x", decision: "maybe" };
     assert.equal((await call("POST /api/org-knowledge/review/decide"))!.status, 400);
   } finally {

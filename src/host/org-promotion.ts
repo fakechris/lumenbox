@@ -53,6 +53,8 @@ export interface PromotionRequest {
   via?: string;
   /** References beyond what the source already gives. */
   evidence?: readonly string[];
+  /** The version of the organisation item this one would replace once approved (maintenance's supersession, INV-1732); the review page shows it. */
+  supersedes?: string;
 }
 
 export type PromotionResult = { ok: true; item: OrgKnowledgeItem; version: string } | { ok: false; code: PromotionRefusal; why: string };
@@ -153,6 +155,7 @@ export function propose(ledger: Ledger, request: PromotionRequest, now: Date = n
     evidence,
     source: `promoted from ${sourceRef(source)}`,
     ...(request.via !== undefined ? { via: request.via } : {}),
+    ...(request.supersedes !== undefined ? { supersedes: request.supersedes } : {}),
     held: { question: ORG_REVIEW_QUESTION, confidence: 1 },
   }));
 }

@@ -199,7 +199,8 @@ export class OrgKnowledge {
   /** What stands now: not held, not retracted, not superseded, inside its validity. */
   live(): OrgKnowledgeItem[] {
     const now = this.now().getTime();
-    const superseded = new Set(this.log.map(item => item.supersedes).filter((id): id is string => id !== undefined));
+    // A held line supersedes nothing: a proposal to replace an item (a promotion, maintenance's, INV-1732) waits for a person.
+    const superseded = new Set(this.log.filter(item => item.held === undefined).map(item => item.supersedes).filter((id): id is string => id !== undefined));
     return (dedupe(this.log) as OrgKnowledgeItem[]).filter(item =>
       !superseded.has(versionOf(item))
       && (item.validFrom === undefined || !(Date.parse(item.validFrom) > now))

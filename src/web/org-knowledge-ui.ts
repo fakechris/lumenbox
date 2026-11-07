@@ -72,6 +72,7 @@ export const ORG_KNOWLEDGE_JS = `(function () {
       row.appendChild(el("div", { class: "dim", "data-readers": item.readers.kind, style: "font-size:12px" }, "{{ui.org-knowledge.will-be-read-by}} " + readersText(item.readers)));
       row.appendChild(el("div", { class: "dim", style: "font-size:12px" }, "{{ui.org-knowledge.owner}} " + (item.ownerName || item.owner || "") + (item.proposedBy ? " · {{ui.org-knowledge.proposed-by}} " + item.proposedBy : "") + " · " + (item.at || "").slice(0, 10)));
       row.appendChild(el("div", { class: "dim mono", style: "font-size:11px" }, "{{ui.org-knowledge.rests-on}} " + (item.evidence || []).join(", ")));
+      if (item.replaces) row.appendChild(el("div", { class: "dim", "data-replaces": item.replaces.id, style: "font-size:12px" }, "{{ui.org-knowledge.replaces}} " + item.replaces.id + (item.replaces.text ? ": " + item.replaces.text : "")));
       var actions = el("div", { class: "ui-row" });
       var pinLabel = el("label", { style: "font-size:12px;display:flex;gap:4px;align-items:center" });
       var pin = el("input", { type: "checkbox", "data-pin": "1", style: "height:auto" });

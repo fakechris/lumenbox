@@ -63,6 +63,8 @@ export async function orgKnowledgeRoute(route: string, deps: OrgKnowledgeRouteDe
         proposedBy: item.via === undefined ? "" : agentName(item.via),
         source: item.source ?? "",
         evidence: item.evidence ?? [],
+        // A proposal to replace an item (maintenance's supersession, INV-1732): approving it retires that item.
+        ...(item.supersedes !== undefined ? { replaces: { id: `org:${item.supersedes}`, text: deps.ledger.lines().find(line => versionOf(line) === item.supersedes)?.text ?? "" } } : {}),
       };
     }),
   });
