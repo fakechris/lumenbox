@@ -223,7 +223,7 @@ import { PersonalBoxes, type PersonalBoxDriver } from "../host/personal-boxes.ts
 import { provisionedBoxDriver } from "../box/kubernetes-box.ts";
 import { personalAllocationRefusal, personalBoxesOf, personalQuotaFor } from "../host/box-quota.ts";
 import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
-import { attentionFor, isDecision, urgencyOf } from "../host/attention.ts"; import { parseLevel } from "../host/autonomy-level.ts"; import { openTurnsOf, staleApprovals } from "../host/approval-wait.ts";
+import { attentionFor, isDecision, urgencyOf } from "../host/attention.ts"; import { docsReaderAt, involuteStateReader, ownerAttention, PACKAGE_DOCS_DIR, watchOrgEvidence } from "../host/org-knowledge-staleness.ts"; import { parseLevel } from "../host/autonomy-level.ts"; import { openTurnsOf, staleApprovals } from "../host/approval-wait.ts";
 import { stageWorldOf, taskStage } from "../host/task-stage.ts";
 import { ChangeFeed, feedForks } from "./mcp-watch.ts";
 import { InvoluteConsumer } from "../host/involute-inbox.ts";
@@ -1765,6 +1765,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // For a reply that named a deliverable instead of sending it. Confined to the work
     // directory by the box's own upload/download guard, and refused above 25MB the same
     // way the outbox is.
+    workDir: () => workRootOf(registry.defaultBox()), // the box readBoxFile reads, whose paths a reply names (INV-1737)
     readBoxFile: async path => {
       const client = orchestrator.boxClient();
       if (client === undefined) return undefined;
@@ -2359,6 +2360,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             .catch((error: unknown) => log(`involute: poll failed — ${error instanceof Error ? error.message : String(error)}`));
         }, (involuteConfig?.pollSeconds ?? 60) * 1000);
   involuteTimer?.unref();
+  // The organisation's knowledge goes stale when its evidence does (INV-1731): tasks and documents read as asked, cited Involute items read by id with the first Involute agent's credential — evidence, never a search an agent holds.
+  watchOrgEvidence(orchestrator.orgKnowledge, { task: id => orchestrator.tasks?.get(id), doc: docsReaderAt(PACKAGE_DOCS_DIR, log), ...(involuteConfig?.agents[0] !== undefined ? { inv: involuteStateReader((tool, args) => { const entry = involuteConfig.agents[0]!; const token = vault.resolve(entry.secretId, { agentId: entry.agentId, agentName: registry.tryGet(entry.agentId)?.profile.name ?? entry.handle, scopeGrants: true }); if (token === undefined) return Promise.reject(new Error("the Involute credential is not in the vault")); return involuteCall(involuteConfig.url, token, tool, args); }) } : {}) }, log);
   if (involuteConsumer !== undefined) log(`involute: answering for ${involuteConfig?.agents.map(a => `@${a.handle}`).join(", ")} every ${involuteConfig?.pollSeconds ?? 60}s`);
 
   const livenessTimer = setInterval(() => {
@@ -4941,14 +4944,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           }
           const client = orchestrator.boxClient();
           if (!client) {
-            send(res, 503, apiError("box-not-running"));
+            send(res, 503, { ...apiError("box-not-running"), root: work }); // the page's chat links need the root with or without a box (INV-1737)
             return;
           }
           try {
             const listing = await client.listDir(dir);
             send(res, 200, { ...listing, root: work }); // where the page starts and stops going up
           } catch (error) {
-            send(res, 404, { error: error instanceof Error ? error.message : String(error) });
+            send(res, 404, { error: error instanceof Error ? error.message : String(error), root: work });
           }
           return;
         }
@@ -6001,7 +6004,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             tasks: board === undefined ? [] : board.list().filter(task => caller.userId === undefined || (task.assigneeId ? mayReadAgent(task.assigneeId) : task.requester === principals.resolve(caller.userId).id)),
             questions: questions.list(),
             nameOf: id => registry.tryGet(id)?.profile.name ?? principals.list().find(person => person.id === id)?.name ?? id,
-            unanswered: involuteUnanswered,
+            unanswered: involuteUnanswered, workOf: id => workRootOf(registry.tryGet(id) !== undefined ? registry.boxOf(id) : undefined), // where a submission's files are (INV-1737)
             paused: orchestrator.bus.pausedChains(), agentIds: new Set(registry.list().map(agent => agent.id)), approvals: orchestrator.policy.pending().filter(item => caller.userId === undefined || mayReadAgent(item.agentId)), // a parked command is the commonest block (INV-1627)
             undeliverable: outbox.problems(), routinesHeld: (await orchestrator.scheduler.status()).filter(entry => entry.hold !== undefined && mayReadBox(entry.boxId ?? registry.box.id)).map(entry => ({ slug: entry.slug, name: entry.name, ...entry.hold! })), // INV-1665
             chatKeyOf: conversation => conversations.chatKeyFor(conversation), // The stage table's reads (INV-1464).
@@ -6013,6 +6016,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (me === undefined || roleAtLeast(principals.roleOf(me.id), "admin")) for (const { agentId, day } of spendLimits.pausedForSpend()) answer.mine.unshift({ kind: "spend-limit", ref: agentId, title: `${registry.tryGet(agentId)?.profile.name ?? agentId} is paused: its daily spend line was reached`, detail: `Reached on ${day}; it resumes tomorrow by itself. Resume it now or raise the line in Settings → Team → Agents.` }); // INV-1615
           if (me === undefined || roleAtLeast(principals.roleOf(me.id), "admin")) for (const rest of providerRests.list()) answer.mine.unshift({ kind: "provider-resting", ref: rest.account, title: `${rest.label} is out of usage`, detail: `Every agent on it waits until ${new Date(rest.until).toLocaleString()}; top up the plan or Retry now in Settings → Model.` }); // INV-1577
           if (me === undefined || roleAtLeast(principals.roleOf(me.id), "admin")) for (const probe of probeKeeper?.recent() ?? []) answer.mine.unshift({ kind: "boundary-probe", ref: probe.agentId, title: `${probe.agentName} reached for this machine's credentials`, detail: `${probe.count} attempt${probe.count === 1 ? "" : "s"} in the last hour, refused; the latest ${probe.detail}.${probe.paused ? ` ${probe.agentName} is paused — Settings → Team.` : ""}` }); // INV-1553
+          answer.mine.push(...ownerAttention(orchestrator.orgKnowledge.staleItems(), owner => me === undefined || (owner !== undefined && (owner === me.id || me.identities.includes(owner))))); // an organisation item its owner must look at again (INV-1731)
           if (me === undefined || roleAtLeast(principals.roleOf(me.id), "admin")) for (const item of pendingReviews(registry.readSharedMemory())) answer.mine.unshift({ kind: "team-memory", ref: item.writer, title: `${registry.tryGet(item.writer)?.profile.name ?? "An agent"} wants the team to remember something`, detail: `"${item.record.text.slice(0, 140)}" — approve or reject in Settings → Team → Team memory.` }); // INV-1581
           send(res, 200, { ...answer, mine: [...answer.mine].sort((a, b) => urgencyOf(a.kind) - urgencyOf(b.kind)).map(item => ({ ...item, decision: isDecision(item.kind), ...(board?.get(item.ref)?.level !== undefined ? { level: board!.get(item.ref)!.level } : {}) })), who: me?.name ?? "this installation" }); // decisions first and marked (INV-1647)
           return;

@@ -4,7 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildTools, dispatchTool, elementsOutline } from "./tools.ts";
+import { buildTools, dispatchTool, elementsOutline, toolsInBox } from "./tools.ts";
 
 test("edit_file changes part of a file, and refuses the two ways it could change the wrong part", async () => {
   const file = { path: "/home/box/work/app.py", content: "" };
@@ -1160,4 +1160,18 @@ test("RunOperation replays a published operation on the agent's desktop and retu
   const bad = await dispatchTool("RunOperation", { skill: "taught-x", input: {} }, context);
   assert.match(bad.text, /^Outcome: failed — "Signups" invalid_input: input week is missing\. .*re-teaching/);
   assert.equal((await dispatchTool("RunOperation", { skill: "../etc", input: {} }, context)).isError, true);
+});
+
+test("the tool list names the box's own work directory on a host box, and is the image's list untouched elsewhere (INV-1737)", () => {
+  const tools = buildTools(true);
+  const image = JSON.stringify(tools);
+  assert.ok(image.includes("detail in a file under /home/box/work and point at it"), "SetPlan, as written for the image");
+  assert.equal(toolsInBox(tools, { kind: "docker" }), tools);
+  assert.equal(toolsInBox(tools, { kind: "attached", workDir: "/elsewhere" }), tools);
+  const work = "/Users/ada/lumenbox";
+  const host = JSON.stringify(toolsInBox(tools, { kind: "host", workDir: work }));
+  assert.doesNotMatch(host, /\/home\/box\/work/);
+  assert.ok(host.includes(`detail in a file under ${work} and point at it`) && host.includes(`FilePreview (\`path\` under ${work}`), "SetPlan and ShowUI");
+  assert.ok(host.includes(`The file's absolute path, under ${work}/.`), "DeliverFile");
+  assert.equal(JSON.stringify(tools), image, "the list itself is not changed");
 });

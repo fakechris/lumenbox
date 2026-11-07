@@ -24,10 +24,11 @@ import type { WatchedQuestion } from "./question-expiry.ts"; import { agentCaseT
 import { describeStale } from "./mandate.ts";
 import { currentFlag } from "./task-flag.ts";
 import { claimedButNotDelivered } from "./task-deliverables.ts";
+import { DOCKER_WORK } from "./box-paths.ts";
 import { STAGE_LABEL, stageWorldOf, type TaskStage, taskStage } from "./task-stage.ts";
 
 export interface AttentionItem {
-  kind: "approval" | "question" | "close-proposal" | "review" | "nudged" | "waiting" | "unanswered" | "paused" | "reauthorize" | "undeliverable" | "flagged" | "box-update" | "boundary-probe" | "provider-resting" | "team-memory" | "spend-limit" | "routine-paused";
+  kind: "approval" | "question" | "close-proposal" | "review" | "nudged" | "waiting" | "unanswered" | "paused" | "reauthorize" | "undeliverable" | "flagged" | "box-update" | "boundary-probe" | "provider-resting" | "team-memory" | "spend-limit" | "routine-paused" | "org-knowledge";
   /** What to open: a task id, or the conversation a question was asked in. */
   ref: string;
   title: string;
@@ -67,6 +68,8 @@ export interface AttentionInput {
    * be a strange kind of privacy.
    */
   unanswered?: readonly { work: string; agent: string; detail: string; deadline?: string }[];
+  /** The work directory of an agent's box (`workDir`, box-paths.ts): where the files its submission names are (INV-1737). The image's when not given. */
+  workOf?: (agentId: string) => string;
   /** The agents (INV-1647): a task an agent reviews is the team's to settle, not the person's. */
   agentIds?: ReadonlySet<string>;
   /** Pending approvals, the most common block (INV-1622/1627): one item each, answered from the strip. */
@@ -98,7 +101,7 @@ const isLive = (task: Task): boolean => task.status !== "done" && task.status !=
  * something they may want to know (INV-1647). Only decisions reach the strip and the OS: a
  * channel that carries everything carries nothing.
  */
-export const DECISION_KINDS: ReadonlySet<AttentionItem["kind"]> = new Set(["approval", "question", "close-proposal", "reauthorize", "spend-limit", "paused", "routine-paused"]); // a review is the board's, folded to one line in the strip: five of them once hid the agents
+export const DECISION_KINDS: ReadonlySet<AttentionItem["kind"]> = new Set(["approval", "question", "close-proposal", "reauthorize", "spend-limit", "paused", "routine-paused", "org-knowledge"]); // org-knowledge: an item its owner must re-verify, supersede or retract (INV-1731); a review is the board's, folded to one line in the strip: five of them once hid the agents
 export const isDecision = (kind: AttentionItem["kind"]): boolean => DECISION_KINDS.has(kind);
 
 export function urgencyOf(kind: AttentionItem["kind"]): number {
@@ -226,7 +229,7 @@ export function attentionFor(input: AttentionInput): Attention {
         kind: "review",
         ref: task.id, stage: stages[task.id],
         title: task.title,
-        detail: `${input.nameOf(task.assigneeId ?? "somebody")} says it is done and is waiting for your word.${undelivered(task)}`,
+        detail: `${input.nameOf(task.assigneeId ?? "somebody")} says it is done and is waiting for your word.${undelivered(task, input.workOf?.(task.assigneeId ?? "") ?? DOCKER_WORK)}`,
         ...(task.due !== undefined ? { deadline: task.due } : {}),
         with: input.nameOf(task.assigneeId ?? ""),
       });
@@ -283,8 +286,8 @@ export function attentionFor(input: AttentionInput): Attention {
 }
 
 /** The review item's warning when the submission names files and none was marked as a deliverable (INV-1663). */
-function undelivered(task: Task): string {
-  const named = claimedButNotDelivered(task);
+function undelivered(task: Task, work: string): string {
+  const named = claimedButNotDelivered(task, work);
   if (named.length === 0) return "";
   const names = named.slice(0, 3).map(path => path.split("/").pop()).join(", ");
   return ` No deliverable was marked: the submission names ${names}, but the task has no file to open.`;

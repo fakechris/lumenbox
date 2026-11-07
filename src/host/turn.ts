@@ -124,7 +124,7 @@ import {
   PERSON_FACING_TOOLS,
   SILENCE_TOOL,
   PARALLEL_TOOL_LIMIT,
-  buildTools,
+  buildTools, toolsInBox,
   dispatchTool,
   type ToolContext,
   type ToolOutcome,
@@ -2089,7 +2089,7 @@ ${outcome.text}`;
   // The split (INV-1341): the resident built-ins ride in the list; the deferred ones wait in the
   // catalog behind the lookup pair, which a fork never gets (MCP tools are outward channels too,
   // docs/32 §2). A routine that named a deferred tool or an external one keeps the pair.
-  const roster = splitRoster(offered);
+  const roster = splitRoster(toolsInBox(offered, { kind: deps.boxKind, workDir: deps.boxWorkDir })); // as this box reads them (INV-1737)
   const deferred = isForkConversation(conversation) ? [] : roster.deferred;
   const tools: Anthropic.Tool[] = isForkConversation(conversation)
     ? roster.resident

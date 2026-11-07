@@ -30,7 +30,7 @@ import { definePart, partText } from "./prompt-parts.ts";
 import { renderSkills, type Skill, visibleTo } from "./skills.ts";
 import { renderStanding, type StandingSnapshot } from "./standing.ts";
 import { describeTask, type Task } from "./tasks.ts"; import { asModelSees, FIRST_RUN_CUE, inputGuide } from "./model-text.ts";
-import { isForkConversation } from "./tools.ts"; import { type BoxPlace, DOCKER_WORK, memoryDir, standingRoot, workDir } from "./box-paths.ts";
+import { isForkConversation } from "./tools.ts"; import { type BoxPlace, inBox, memoryDir, standingRoot, workDir } from "./box-paths.ts";
 
 /** Teammates listed inline before falling back to "read the agent directory". */
 export const AGENT_DIRECTORY_LIMIT = 40;
@@ -647,7 +647,7 @@ than guessing at what is on it. Never describe the contents of a screen — you 
 not seen one.${boxClassParagraph(context.boxAccess)}${NOT_YOURS_PARAGRAPH}`;
   }
 
-  const computer = COMPUTER_SECTION.replaceAll(DOCKER_WORK, workDir(context.box)) + boxClassParagraph(context.boxAccess) + NOT_YOURS_PARAGRAPH;
+  const computer = inBox(COMPUTER_SECTION, context.box) + boxClassParagraph(context.boxAccess) + NOT_YOURS_PARAGRAPH;
   if (!context.resolution) return computer;
 
   const { width, height } = context.resolution.api;
@@ -860,7 +860,7 @@ export const STABLE_SECTIONS: readonly PromptSection[] = [
   { name: "box", render: context => boxSection(context) },
   // The place speaks before the worker: installation, then box, then the persona below.
   { name: "place", render: context => renderPlace(context.place) },
-  { name: "profile", render: context => profileSection(context.agent) },
+  { name: "profile", render: context => inBox(profileSection(context.agent), context.box) }, // a seeded role names the image's work volume (INV-1737)
 ];
 
 /**
@@ -1117,7 +1117,7 @@ export const VOLATILE_SECTIONS: readonly PromptSection[] = [
     // Only when nobody is watching. In the volatile tier so the stable prefix is the same
     // bytes for a person's turn and a timer's: the cache is a prefix match.
     render: context =>
-      context.lane === "background" && !ablated("unattended") ? partText("unattended").replaceAll(DOCKER_WORK, workDir(context.box)) : "",
+      context.lane === "background" && !ablated("unattended") ? inBox(partText("unattended"), context.box) : "",
   },
   // The standing files (INV-777): the last thing that changes from turn to turn, so an edit to
   // USER.md invalidates only this and the recap; nothing above it moves by a byte.

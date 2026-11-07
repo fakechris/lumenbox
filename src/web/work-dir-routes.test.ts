@@ -62,6 +62,8 @@ test("the file routes refuse what is outside the default box's own work director
     }
     // Inside it, the route goes on to the box, which this test does not run.
     assert.equal((await refusal(`/api/files?dir=${encodeURIComponent(`${work}/reports`)}`)).status, 503);
+    // The page's chat links learn the root from here, box or no box (INV-1737).
+    assert.equal(((await (await fetch(`${base}/api/files`, { headers })).json()) as { root?: string }).root, work);
   } finally {
     for (const stop of stops) stop();
     if (previous.home === undefined) delete process.env.AGENTBOX_HOME;

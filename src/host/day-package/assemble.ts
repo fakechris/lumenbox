@@ -32,6 +32,7 @@ import { redactLine } from "../audit-export.ts";
 import { fetchedDir, readFrontmatter } from "../fetched.ts";
 import { resultsDir } from "../results.ts";
 import { archivedLines } from "../jsonl.ts";
+import { type BoxPlace, digestDir } from "../box-paths.ts";
 
 export const DIGEST_DIRNAME = "digest";
 /** Written last. Its absence is the only reliable sign a package is unfinished. */
@@ -671,9 +672,6 @@ export function previousDate(date: string): string {
   return `${before.getFullYear()}-${pad(before.getMonth() + 1)}-${pad(before.getDate())}`;
 }
 
-/** Where a package lives inside the box, as docs/61 §6.2 named it. */
-export const BOX_DIGEST_DIR = "/home/box/work/digest";
-
 /**
  * Puts a package where the agent that reads it can actually reach it.
  *
@@ -681,7 +679,7 @@ export const BOX_DIGEST_DIR = "/home/box/work/digest";
  * it into a digest runs **inside the box**, which cannot see that path — the same boundary
  * `results.ts` is careful about, and the one this got wrong on the first pass: the skill
  * was shipped pointing at a host directory and was therefore unrunnable. docs/61 §6.2 had
- * said `/home/box/work/digest/` all along.
+ * said `/home/box/work/digest/` all along — the image's `digestDir`; a host box has its own (INV-1737).
  *
  * Copied rather than mounted. A mount would give the box the whole evidence store,
  * including days and chats this run is not about, and the package exists precisely so that
@@ -695,9 +693,12 @@ export async function deliverPackageToBox(
     /** Optional so a test can supply only the upload; a real box needs the directories. */
     exec?: (command: string, options?: { timeoutMs?: number; actor?: string }) => Promise<unknown>;
   },
+  /** The box it is delivered to, as the registry records it: where its work directory is (box-paths.ts). */
+  place: BoxPlace,
   log: (line: string) => void = () => {}
-): Promise<{ delivered: number; failed: string[] }> {
-  const out = { delivered: 0, failed: [] as string[] };
+): Promise<{ delivered: number; failed: string[]; at: string }> {
+  const at = `${digestDir(place)}/${runKey}/package`;
+  const out = { delivered: 0, failed: [] as string[], at };
   const files: string[] = [];
   const walk = (at: string, prefix: string): void => {
     for (const name of readdirSync(at)) {
@@ -723,7 +724,7 @@ export async function deliverPackageToBox(
   const directories = [...new Set(ordered.map(relative => relative.split("/").slice(0, -1).join("/")))];
   if (box.exec !== undefined) {
     const targets = directories
-      .map(one => `'${BOX_DIGEST_DIR}/${runKey}/package${one === "" ? "" : `/${one}`}'`)
+      .map(one => `'${at}${one === "" ? "" : `/${one}`}'`)
       .join(" ");
     await box
       .exec(`mkdir -p ${targets}`, { timeoutMs: 15_000, actor: "host:day-package" })
@@ -735,7 +736,7 @@ export async function deliverPackageToBox(
   for (const relative of ordered) {
     try {
       const body = readFileSync(join(dir, relative));
-      await box.uploadFile(`${BOX_DIGEST_DIR}/${runKey}/package/${relative}`, body.toString("base64"));
+      await box.uploadFile(`${at}/${relative}`, body.toString("base64"));
       out.delivered += 1;
     } catch (error) {
       out.failed.push(relative);

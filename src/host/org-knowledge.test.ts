@@ -3,7 +3,8 @@
  *
  * What would be wrong: a restart that forgets an item or chokes on a torn line; a pinned budget
  * that grows with the ledger, or keeps the wrong items when it overflows; an item of a box the
- * reader cannot enter, a held promotion or a stale one reaching recall; a personal installation
+ * reader cannot enter, a held promotion or a stale one reaching recall, or a stale one in the
+ * prompt unmarked or ahead of a current one; a personal installation
  * that writes L1; a guest turn with a path to it; an answer with no id to cite.
  */
 
@@ -107,11 +108,11 @@ test("only admitted, recall-surfaced, verified and current items are recalled; t
 
     assert.deepEqual(ledger.recalledFor(ada.id, undefined).map(line => line.text), ["refunds are approved by finance within two days"], "another box's item, a held one, cite-only, stale and unverified are not recalled");
     const section = ledger.section(ada.id, undefined, "who approves refunds?")!;
-    assert.match(section, /Related to this conversation:\n- \[org:[0-9a-f]{12}\] refunds are approved by finance/);
-    assert.doesNotMatch(section, /playbook|pending|audit trail|CFO|hearsay|unknown scope/);
+    assert.match(section, /Related to this conversation:\n- \[org:[0-9a-f]{12}\] refunds are approved by finance[^\n]*\n- \[org:[0-9a-f]{12}\] refunds over 1,000 need the CFO .*REVIEW DUE since 2026-11-01.*check before relying on it/, "a stale item stays in the prompt, marked, after the current one (INV-1731)");
+    assert.doesNotMatch(section, /playbook|pending|audit trail|hearsay|unknown scope/);
 
     const cited = ledger.forRecall(ada.id, undefined, orgItemId(stale)).cited!;
-    assert.match(cited, /CFO.*not recalled on its own/, "a stale item stays readable by id, and says why it is not recalled");
+    assert.match(cited, /CFO.*REVIEW DUE.*not recalled on its own: stale/, "a stale item stays readable by id, and says why it is not recalled");
     assert.match(ledger.forRecall(ada.id, undefined, orgItemId(citeOnly)).cited!, /audit trail[^\n]*\nEvidence: doc:docs\/98/);
     const sales = ledger.lines().find(line => line.scope === "box:box-sales")!;
     assert.match(ledger.forRecall(ada.id, undefined, orgItemId(sales)).cited!, /No organisation item/, "an id is no way around admission");
@@ -128,7 +129,8 @@ test("only admitted, recall-surfaced, verified and current items are recalled; t
     });
     await runTurn(ada, [{ id: "m1", fromId: "user", fromName: "user", text: "who approves refunds?", priority: false, receivedAt: "" }], new AbortController().signal, { client, registry, bus, box: undefined, resolution: undefined, orgKnowledge: ledger });
     assert.match(systems[0]!, /## How we work: the organisation's knowledge[\s\S]*refunds are approved by finance/, "a member turn reads it");
-    assert.doesNotMatch(systems[0]!, /CFO|playbook/);
+    assert.doesNotMatch(systems[0]!, /playbook/);
+    assert.match(systems[0]!, /CFO[^\n]*REVIEW DUE/, "the stale item reaches the turn only with its marker");
   } finally {
     cleanup();
   }

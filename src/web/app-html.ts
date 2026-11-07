@@ -4832,7 +4832,7 @@ function refreshProgress() {
  *     order answers a different one.
  *   - **Room.** A tab rather than a strip, so the list and the preview both get height.
  */
-var filesDir = "", filesRoot = ""; // the box's work directory, as /api/files says it (INV-1736)
+var filesDir = "", filesRoot = "", filesRootAsked = false; // the box's work directory, as /api/files says it (INV-1736)
 var filesSelected = null;
 
 function fileKind(name) {
@@ -5875,12 +5875,12 @@ setInterval(function () {
  *
  * Agents already say "I wrote /home/box/work/report.md", and that was dead text — the single
  * cheapest thing that was missing. Applied after markdown rendering, and skipped inside an existing
- * anchor so a path already formatted as a link is left alone.
+ * anchor so a path already formatted as a link is left alone. The work directory is the box's, as /api/files says it (a host box's own, INV-1737): asked once, the image's until it answers.
  */
 function linkifyWorkPaths(html) {
-  return html.replace(/(^|[\s>(\[])(\/home\/box\/work\/[^\s<>)\]"']+)/g, function (all, lead, path) {
-    var clean = path.replace(/[.,;:]+$/, "");
-    var trailing = path.slice(clean.length);
+  if (!filesRoot && !filesRootAsked) { filesRootAsked = true; fetch("/api/files").then(function (r) { return r.json(); }).then(function (listing) { if (listing.root) filesRoot = listing.root; }).catch(function () {}); } var root = (filesRoot || "/home/box/work").replace(/[.*+?^$()|{}[\]\\]/g, "\\$&");
+  return html.replace(new RegExp("(^|[\\s>(\\[])(" + root + "/[^\\s<>)\\]\"']+)", "g"), function (all, lead, path) {
+    var clean = path.replace(/[.,;:]+$/, ""), trailing = path.slice(clean.length);
     return lead + '<a href="/api/file?path=' + encodeURIComponent(clean) +
       '" target="_blank" rel="noopener">' + clean + "</a>" + trailing;
   });
