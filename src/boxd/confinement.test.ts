@@ -5,6 +5,8 @@
  */
 
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -154,6 +156,52 @@ test("under the real sandbox: writes land in the rw root and temp only; outside,
     assert.equal(readFileSync(join(m.dirs.outside, "keep.txt"), "utf8"), "keep\n", "rm -rf outside the roots removed nothing");
     assert.equal(readFileSync(join(m.dirs.docs, "readme.md"), "utf8"), "docs\n");
   } finally {
+    m.dispose();
+  }
+});
+
+// A keychain client other than /usr/bin/security, which the sandbox refuses outright: what is left to stop it is the Mach rule.
+const KEYCHAIN_CLIENT = `#include <Security/Security.h>
+#include <stdio.h>
+int main(int argc, char **argv) {
+  SecKeychainRef kc = NULL; UInt32 len = 0; void *data = NULL;
+  if (SecKeychainOpen(argv[1], &kc) != 0) return 2;
+  OSStatus s = SecKeychainFindGenericPassword(kc, (UInt32)strlen(argv[2]), argv[2], 0, NULL, &len, &data, NULL);
+  if (s != 0) { printf("status %d\\n", (int)s); return 1; }
+  printf("%.*s\\n", (int)len, (char *)data);
+  return 0;
+}
+`;
+
+test("under the real sandbox on macOS: no Keychain item can be read, through the security tool or through Security.framework (INV-1711)", { skip: unavailable ?? (process.platform === "darwin" ? undefined : "the Keychain is macOS") }, async () => {
+  const m = machine();
+  // A throwaway keychain file of the test's own, never on the search list; the person's login keychain is never named.
+  const keychain = join(m.root, "inv1711.keychain-db");
+  const sh = (file: string, args: string[]) => spawnSync(file, args, { encoding: "utf8", timeout: 20_000 });
+  try {
+    assert.equal(sh("/usr/bin/security", ["create-keychain", "-p", randomBytes(12).toString("hex"), keychain]).status, 0, "the throwaway keychain is made");
+    // -A: any program may read the item, so a read that is not refused shows nothing and asks nobody.
+    assert.equal(sh("/usr/bin/security", ["add-generic-password", "-A", "-a", "box", "-s", "inv1711-fake", "-w", "FAKE-KEYCHAIN-SECRET", keychain]).status, 0);
+    assert.equal(sh("/usr/bin/security", ["find-generic-password", "-s", "inv1711-fake", "-w", keychain]).stdout.trim(), "FAKE-KEYCHAIN-SECRET", "unconfined, the item reads");
+    // Security.framework writes its module cache under the user cache directory; the box may not, which already
+    // fails a read by accident. Granting it here leaves the Keychain rule as the only thing in the way.
+    const userCache = sh("/usr/bin/getconf", ["DARWIN_USER_CACHE_DIR"]).stdout.trim();
+    const roots = new Roots([{ path: m.dirs.work, mode: "rw" }, { path: userCache, mode: "rw" }]);
+    const confine = confinementFor({ headless: true, roots: () => roots, workDir: m.dirs.work, egressPort: () => undefined, log: () => undefined, systemTmp: m.dirs.tmp, sandbox: new HostSandbox({ home: m.dirs.home, tmp: m.dirs.tmp }) })!;
+    const run = (command: string) => runShell({ command, cwd: m.dirs.work, actor: "agent:a1", env: { HOME: m.dirs.home } }, {}, undefined, confine);
+
+    const tool = await run(`/usr/bin/security find-generic-password -s inv1711-fake -w ${keychain}`);
+    assert.doesNotMatch(tool.stdout, /FAKE-KEYCHAIN-SECRET/, "the security tool reads nothing");
+    assert.match(tool.stderr, /Operation not permitted/, "because it does not start");
+
+    const client = join(m.dirs.work, "keychain-client");
+    writeFileSync(`${client}.c`, KEYCHAIN_CLIENT);
+    if (sh("/usr/bin/cc", ["-w", "-o", client, `${client}.c`, "-framework", "Security"]).status !== 0) return; // no compiler here: the tool leg stands alone
+    assert.equal(sh(client, [keychain, "inv1711-fake"]).stdout.trim(), "FAKE-KEYCHAIN-SECRET", "unconfined, the client reads the item");
+    const framework = await run(`${client} ${keychain} inv1711-fake`);
+    assert.doesNotMatch(framework.stdout, /FAKE-KEYCHAIN-SECRET/, "confined, securityd is not reachable and nothing is read");
+  } finally {
+    sh("/usr/bin/security", ["delete-keychain", keychain]);
     m.dispose();
   }
 });
