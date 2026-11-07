@@ -43,6 +43,7 @@ import { compileSurface, type SurfaceRecord } from "./show-ui.ts";
 import type { Skill } from "./skills.ts";
 import type { SpendLimits } from "./spend-limits.ts"; import type { PersonRecords } from "./person.ts";
 import type { TaskStore } from "./tasks.ts"; import { watchDependencies } from "./task-deps.ts";
+import type { OutboxDrafts } from "./outbox-drafts.ts";
 import { fakeModel } from "./testing/fake-model.ts";
 import { runTurn, type TurnEvent } from "./turn.ts";
 import type { ToolPermissions } from "./tool-permissions.ts"; import { permissionsInEffect } from "../agents/config-versions.ts";
@@ -331,6 +332,8 @@ export interface EpisodeOptions {
   pendingWork?: PendingWork;
   /** A task board for the turns (INV-769): the Tasks and Goal tools need one to act on. */
   tasks?: TaskStore;
+  /** Where an Outbox draft waits for the person (INV-1739). */
+  outbox?: OutboxDrafts;
   /**
    * The continuation loop of goal mode (INV-770), built once the bus exists so it can wake
    * through it. The episode feeds it what the orchestrator would: a turn starting, a turn
@@ -492,6 +495,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       ...(options.onEvent !== undefined ? { onEvent: options.onEvent } : {}),
       ...(options.mcp !== undefined ? { mcp: options.mcp } : {}),
       ...(options.tasks !== undefined ? { tasks: options.tasks } : {}),
+      ...(options.outbox !== undefined ? { outbox: options.outbox } : {}),
       ...(options.pendingWork !== undefined ? { pendingWork: options.pendingWork } : {}),
       ...(acpDelegates !== undefined ? { acpDelegates } : {}),
       ...(options.spendLimits !== undefined ? { spendLimits: options.spendLimits } : {}),

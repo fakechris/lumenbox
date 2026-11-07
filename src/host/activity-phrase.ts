@@ -85,6 +85,7 @@ const TEMPLATES: Record<string, Template> = {
   RememberFact: { en: "remembering a fact", zh: "记住一件事" },
   Promote: { en: "proposing something for the organisation's knowledge", zh: "提议写入组织知识" },
   CorrectOrgKnowledge: { en: "correcting the organisation's knowledge", zh: "为组织知识改错" },
+  Outbox: { en: "drafting something for you to approve", zh: "起草一条待你放行的内容" },
   Forget: { en: "forgetting a memory", zh: "忘记一条记忆" },
   ClaimWork: { en: "taking a piece of work", zh: "领取一项工作" },
   Tasks: { en: "checking the task board", zh: "查看任务板" },

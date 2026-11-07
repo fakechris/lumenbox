@@ -23,7 +23,7 @@ export const LEVEL_MEANING: Record<Level, string> = {
   1: "L1 — understand and tidy only: extract, summarise, organise; take no action",
   2: "L2 — analyse and propose: hand back a plan or recommendation; do not act on it",
   3: "L3 — do part of it: produce intermediate results inside the box for a person to finish; nothing reaches outside",
-  4: "L4 — do most of it: any step that reaches outside the box (a send, a publish, a payment, a delete) waits for the person's confirmation, then continues",
+  4: "L4 — do most of it: any step that reaches outside the box (a send, a publish, a payment, a delete) waits for the person's confirmation, then continues; a message or a post to someone else is drafted with the Outbox tool and sent once approved",
   5: "L5 — end to end: do it, verify it, deliver it",
 };
 

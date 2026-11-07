@@ -46,7 +46,7 @@ import {
   continuationNote,
   type InterruptedTurn,
   openTurnFor,
-} from "./resume.ts"; import { approvalsHolding, describeHolding, openTurnsOf } from "./approval-wait.ts";
+} from "./resume.ts"; import { approvalsHolding, describeHolding, openTurnsOf } from "./approval-wait.ts"; import { OUTBOX_FILE, OutboxDrafts } from "./outbox-drafts.ts";
 import { AgentRegistry, type AgentRecord } from "../agents/registry.ts"; import { permissionsInEffect } from "../agents/config-versions.ts";
 import type { BoxClient } from "../box/client.ts";
 import { MemoryMirror } from "./memory-mirror.ts";
@@ -317,7 +317,7 @@ export class Orchestrator {
   /** The host's one record of each person (INV-1653); every turn reads it, the judge's kept preferences feed it, Settings → Mine edits it. The name reader is wired by the server, which knows the principals. */
   readonly people = new PersonRecords(join(agentboxHome(), "people.jsonl")); personName?: (principalId: string) => string | undefined;
   /** The organisation's knowledge, L1 (INV-1726): replayed now, read by member turns, never written on a personal installation. The server replaces `mode` with the desktop-aware reading. */
-  readonly orgKnowledge = new OrgKnowledge(join(agentboxHome(), ORG_KNOWLEDGE_FILE), { mode: () => boxRegistrationModeAt(principalsPath(), false), boxes: () => this.registry }); readonly conflicts = new MemoryConflicts(join(agentboxHome(), MEMORY_CONFLICTS_FILE)); // pairs that disagree across layers (INV-1732)
+  readonly orgKnowledge = new OrgKnowledge(join(agentboxHome(), ORG_KNOWLEDGE_FILE), { mode: () => boxRegistrationModeAt(principalsPath(), false), boxes: () => this.registry }); readonly conflicts = new MemoryConflicts(join(agentboxHome(), MEMORY_CONFLICTS_FILE)); readonly outboxDrafts = new OutboxDrafts(join(agentboxHome(), OUTBOX_FILE)); // pairs that disagree across layers (INV-1732); what waits for the person before it goes out (INV-1739)
   renderPerson(principalId: string | undefined): string | undefined { return this.people.render(principalId ?? this.people.operator, principalId === undefined ? "the operator" : (this.personName?.(principalId) ?? "the person")); }
   readonly generations = new BoxGenerations(line => console.error(`[box] ${line}`)); // which incarnation of each box a slow callback belongs to (INV-1476); bumped on every (re)connect
   readonly agentFacts = new AgentFacts(new ConversationState(join(agentboxHome(), "conversation-state.jsonl")), { approvals: () => this.policy.pending(), questions: () => this.questionsOpen?.() ?? [], pausedForSpend: () => this.pausedForSpend?.() ?? [], working: id => this.bus.isActive(id) }); questionsOpen?: () => readonly { agentId: string; conversation: string; question: string; askedAt: number }[]; pausedForSpend?: () => readonly { agentId: string; day: string }[]; // the four facts a sidebar row is drawn from (INV-1625); the two readers are wired by the server
@@ -932,7 +932,7 @@ export class Orchestrator {
       // A confirmation an extension asked for is continued by its callback (INV-861).
       if (approval.harnessResumes === true) {
         // A plan's confirmation (INV-862) or an extension's pause (INV-861); each ignores the other's.
-        this.orchestrations?.settleApproval(approval.id, how);
+        this.orchestrations?.settleApproval(approval.id, how); void this.outboxDrafts.settled(approval.id, how).catch(error => console.error(`[outbox] ${error instanceof Error ? error.message : String(error)}`)); // an Outbox draft is delivered or refused (INV-1739)
         void this.effects?.settleApproval(approval.id, how).catch(error =>
           console.error(`[effects] ${error instanceof Error ? error.message : String(error)}`)
         );
@@ -1937,7 +1937,7 @@ export class Orchestrator {
       boxKind: this.boxEntryOf(agent.id).kind, boxWorkDir: this.boxEntryOf(agent.id).workDir,
       // The same cheap profile the summariser and the note-taker use: choosing memories is the least interesting work here.
       selectMemory: prompt => this.askCheaply(agent, prompt),
-      skillProvenance: this.skillProvenance, jobWatch: this.jobWatch, verifications: this.verifications, syncStanding: agentId => this.memoryMirror.sync(agentId), person: principalId => this.renderPerson(principalId), orgKnowledge: this.orgKnowledge, conflicts: this.conflicts, ...(this.spendLimits !== undefined ? { spendLimits: this.spendLimits } : {}),
+      skillProvenance: this.skillProvenance, jobWatch: this.jobWatch, verifications: this.verifications, syncStanding: agentId => this.memoryMirror.sync(agentId), person: principalId => this.renderPerson(principalId), orgKnowledge: this.orgKnowledge, conflicts: this.conflicts, outbox: this.outboxDrafts, ...(this.spendLimits !== undefined ? { spendLimits: this.spendLimits } : {}),
       ...(this.templateSetups.has(agent.id) ? { templateSetup: this.templateSetups.get(agent.id)! } : {}),
       templates: this.templates, hooks: this.hooks,
       // Same cheap profile. Shadow by default: the verdicts land in auto-review.jsonl and the web
@@ -2700,7 +2700,7 @@ export const ALL_TOOLS: readonly string[] = [
   "ReadHistory",
   "ReadKept",
   "ClaimWork",
-  "RememberFact", "Promote", "CorrectOrgKnowledge", // proposing an organisation item, always reviewed (INV-1729); correcting one (INV-1730)
+  "RememberFact", "Promote", "CorrectOrgKnowledge", "Outbox", // proposing an organisation item, always reviewed (INV-1729); correcting one (INV-1730); a draft for the person (INV-1739)
   "Forget",
   "Recall",
   "OtherThreads",

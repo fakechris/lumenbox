@@ -76,7 +76,7 @@ import { guardMemoryCandidate } from "./memory-guard.ts";
 import type { ModelRelay } from "./model-relay.ts";
 import { type OAuthGate, type OAuthProvider, oauthProvider, scrubToken, tokenHeaders } from "./oauth.ts";
 import { dingtalkWrite, feishuWrite } from "./office-write-tools.ts";
-import { runOperationTool, withOperationTool } from "./operation-tool.ts"; import { ORG_CORRECTION_TOOL, runOrgCorrectionTool, withOrgCorrectionTool } from "./org-correction-tool.ts";
+import { runOperationTool, withOperationTool } from "./operation-tool.ts"; import { ORG_CORRECTION_TOOL, runOrgCorrectionTool, withOrgCorrectionTool } from "./org-correction-tool.ts"; import { OUTBOX_TOOL, runOutboxTool, withOutboxTool } from "./outbox-tool.ts"; import type { OutboxDrafts } from "./outbox-drafts.ts";
 import { type Orchestrations, parsePlan } from "./orchestrate.ts";
 import { type CommitHow, forkTag, type PendingWork } from "./pending-work.ts";
 import type { PolicyGate } from "./policy.ts";
@@ -266,7 +266,7 @@ export interface ToolContext {
   /** Durable inbound message ids this turn derives memory from. */
   memorySources?: readonly string[];
   /** The team's task board. Absent means the Tasks tool answers that there is none. */
-  tasks?: TaskStore; verifications?: VerificationLedger; reviewersPerClaim?: number; // what reviewers found about each claim (INV-1614): shown beside a task so nobody re-checks a settled one
+  tasks?: TaskStore; outbox?: Pick<OutboxDrafts, "newId" | "record">; verifications?: VerificationLedger; reviewersPerClaim?: number; // outbox: where a draft waits for the person (INV-1739); // what reviewers found about each claim (INV-1614): shown beside a task so nobody re-checks a settled one
   /** The completion gate (INV-771), where a goal's claim_complete goes. */
   goalGate?: GoalGate;
   /** The scopes registry, so a secret granted by the caller's scope resolves. */
@@ -463,7 +463,7 @@ export const FORK_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
   "Tasks", "DeliverFile",
   "HandBack",
   "ClaimWork",
-  "RememberFact", "Promote", "CorrectOrgKnowledge",
+  "RememberFact", "Promote", "CorrectOrgKnowledge", "Outbox", // a fork works; what goes to the person is its parent's to draft (INV-1739)
   "PackTemplate",
   "Delegate",
   "Fork",
@@ -1851,7 +1851,7 @@ export function buildTools(
         required: ["action"],
       },
     }
-  ); withDeliverFileTool(tools); withPromoteTool(tools); withOrgCorrectionTool(tools); // a task's deliverables (INV-1663); proposing an organisation item (INV-1729); correcting it (INV-1730)
+  ); withDeliverFileTool(tools); withPromoteTool(tools); withOrgCorrectionTool(tools); withOutboxTool(tools); // a task's deliverables (INV-1663); proposing an organisation item (INV-1729); correcting it (INV-1730); a draft for the person to approve (INV-1739)
 
   // The door out of the box, only when an operator has built one. Not added-and-
   // withheld — absent, so a box without host execution never puts the idea in an
@@ -4064,7 +4064,7 @@ export async function dispatchTool(
       }
     }
 
-    case "DeliverFile": return deliverFileTool(context, input); case "Promote": return promoteTool(context, input); case "RunOperation": return runOperationTool(context, input); case ORG_CORRECTION_TOOL: return runOrgCorrectionTool(context, input); // INV-1663; INV-1378; INV-1730
+    case "DeliverFile": return deliverFileTool(context, input); case "Promote": return promoteTool(context, input); case "RunOperation": return runOperationTool(context, input); case ORG_CORRECTION_TOOL: return runOrgCorrectionTool(context, input); case OUTBOX_TOOL: return runOutboxTool(context, input); // INV-1663; INV-1378; INV-1730; INV-1739
     case "browser_verify_write":
       return { text: writePaths.verify(writePathKey(context.agent.id, context.conversation), String(input.mark ?? ""), (["done", "not_done", "unknown"] as const).find(v => v === input.verdict) ?? "unknown", String(input.evidence ?? "").slice(0, 300)) };
     case "browser_open":

@@ -778,7 +778,7 @@ export class PolicyGate {
    * agent, continues once it is answered (`harnessResumes`). Asking twice for the same text
    * returns the one already waiting.
    */
-  requestConfirmation(input: { agentId: string; agentName: string; description: string; action?: string }): PendingApproval {
+  requestConfirmation(input: { agentId: string; agentName: string; description: string; action?: string; why?: string; taskLevel?: 1 | 2 | 3 | 4 | 5 }): PendingApproval { // why/taskLevel: an Outbox draft's case and its task (INV-1739)
     // Its own fingerprint space: an extension's reason that happens to read like a gated call's
     // description must neither answer that call's grant nor borrow its approval.
     const fingerprint = fingerprintOf(this.subjectOf(input.agentId), `extension-confirmation\0${input.description}`);
@@ -790,7 +790,7 @@ export class PolicyGate {
       agentId: input.agentId,
       agentName: input.agentName,
       description: input.description,
-      ...(input.action !== undefined ? { action: input.action } : {}),
+      ...(input.action !== undefined ? { action: input.action } : {}), ...(input.why !== undefined ? { why: input.why } : {}), ...(input.taskLevel !== undefined ? { taskLevel: input.taskLevel } : {}),
       requestedAt: this.now().toISOString(),
       harnessResumes: true,
     };
@@ -802,7 +802,7 @@ export class PolicyGate {
       fingerprint,
       agentId: approval.agentId,
       description: approval.description,
-      ...(approval.action !== undefined ? { action: approval.action } : {}),
+      ...(approval.action !== undefined ? { action: approval.action } : {}), ...(approval.why !== undefined ? { why: approval.why } : {}), ...(approval.taskLevel !== undefined ? { taskLevel: approval.taskLevel } : {}),
       harnessResumes: true,
     });
     this.log(`waiting for a person to confirm: ${input.description}`);
