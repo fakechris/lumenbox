@@ -147,7 +147,7 @@ function validateProposal(p: TeachProposal): void {
 }
 
 /** The real box publication path, shared by the host and filesystem integration tests. */
-export async function publishTeachingSkill(box: Pick<BoxClient, "writeFile" | "uploadFile" | "readFile" | "listDir">, path: string, content: string): Promise<void> {
+export async function publishTeachingSkill(box: Pick<BoxClient, "writeFile" | "uploadFile" | "readFile" | "listDir">, path: string, content: string, skills: string = SKILLS_DIR): Promise<void> {
   if (!path.endsWith("/SKILL.md")) {
     // A helper file beside an imported skill (INV-1367): written and read back; nothing loads it alone.
     await box.writeFile(path, content);
@@ -162,7 +162,7 @@ export async function publishTeachingSkill(box: Pick<BoxClient, "writeFile" | "u
   const read = await box.readFile(path);
   if (read.truncated || read.content !== content) throw new Error("Published skill verification failed");
   // Refreshing the current box's TTL cache proves nothing about this target box.
-  const loaded = await loadSkills(box);
+  const loaded = await loadSkills(box, [], skills);
   if (!loaded.skills.some(skill => skill.path === path)) throw new Error("Published teaching skill is not loadable");
 }
 
@@ -176,7 +176,12 @@ export function publishDirOf(draft: Pick<TeachDraft, "id" | "source" | "skill">)
 export class TeachDrafts {
   private readonly publishing = new Map<string, Promise<TeachDraft>>();
   /** `history` (INV-1376) records drafts and publishes; absent, nothing is recorded. */
-  constructor(private readonly root: string, private readonly history?: SkillHistory) {}
+  constructor(
+    private readonly root: string,
+    private readonly history?: SkillHistory,
+    /** A box's skills directory, by its id: `skillsDir` of its record (INV-1719); the image's when not given. */
+    private readonly skillsDirOf: (boxId: string) => string = () => SKILLS_DIR
+  ) {}
 
   /** History is a record of the gate, not the gate: a failure to write it is logged, never fatal. */
   private recordHistory(what: string, write: (history: SkillHistory) => void): void {
@@ -270,7 +275,7 @@ export class TeachDrafts {
       // A unique destination avoids replacing an unrelated, already published recipe. Helper files
       // first and SKILL.md last, so the skill is never loadable with half its files.
       const slug = publishDirOf(draft);
-      const dir = `${SKILLS_DIR}/${slug}`;
+      const dir = `${this.skillsDirOf(draft.boxId)}/${slug}`;
       const at = new Date().toISOString();
       const record = { dir: slug, name: parseSkillFile(draft.skill!).meta.name ?? slug, files: { ...(draft.files ?? {}), "SKILL.md": draft.skill! }, actor: draft.approvedBy ?? actor, source: draft.source?.from ?? draft.eventsPath, draftId: draft.id };
       for (const [path, content] of Object.entries(draft.files ?? {})) await publish(draft.boxId, `${dir}/${path}`, content);
@@ -319,7 +324,7 @@ export class TeachDrafts {
     if (files["SKILL.md"] === undefined) throw new Error(`Version ${version} has no SKILL.md`);
     const at = new Date().toISOString();
     const record = { dir: slug, name: parseSkillFile(files["SKILL.md"]).meta.name ?? slug, files, actor, source: draft.source?.from ?? draft.eventsPath, draftId: draft.id, note: `rollback to v${version}` };
-    const dir = `${SKILLS_DIR}/${slug}`;
+    const dir = `${this.skillsDirOf(draft.boxId)}/${slug}`;
     for (const [path, content] of Object.entries(files)) if (path !== "SKILL.md") await publish(draft.boxId, `${dir}/${path}`, content);
     await publish(draft.boxId, `${dir}/CARD.md`, SkillHistory.card(record, this.history.nextVersion(slug), at));
     await publish(draft.boxId, `${dir}/SKILL.md`, files["SKILL.md"]);

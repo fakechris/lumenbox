@@ -11,20 +11,23 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { boxPaths, DOCKER_BOX_PATHS, type BoxPaths } from "./box-paths.ts";
+import { boxPaths, DOCKER_BOX_PATHS, skillsDir, type BoxPaths } from "./box-paths.ts";
 import { delegateCommand, engineMissing, installCommand, PRESETS, presetNamed, probeCommand, quoteForShell, skillsLink } from "./presets.ts";
 import { reportPath } from "./delegate-report.ts";
 import { HostSandbox } from "./host-sandbox.ts";
 import { confinementFor, stateEnvironment } from "../boxd/confinement.ts";
 import { Roots } from "../boxd/headless.ts";
 import { JobService } from "../boxd/job-service.ts";
+import { loadSkills, SKILLS_DIR } from "./skills.ts";
+import { seedStarterSkills } from "./starter-skills.ts";
+import { skillSlugOf, skillsWrittenBy } from "./skill-provenance.ts";
 
 /** Every file and directory one delegation names in the box, for each preset. */
 function everyPath(paths: BoxPaths, name: string): string[] {
   const preset = presetNamed(name)!;
   const config = preset.relayConfig?.("http://host/relay/r", "LUMENBOX_RELAY_TOKEN", "anthropic", "m", paths);
   const env = preset.relayEnv("http://host/relay/r", "tok", "m", paths);
-  const lines = [installCommand(preset, paths), delegateCommand(preset, paths, preset.run("'x'", "m")), skillsLink(preset, paths) ?? ""];
+  const lines = [installCommand(preset, paths), delegateCommand(preset, paths, preset.run("'x'", "m", undefined, paths)), skillsLink(preset, paths) ?? ""];
   const absolute = lines.flatMap(line => line.match(/(?<![\w@~-])\/[A-Za-z0-9._/@+-]+/g) ?? []);
   return [
     ...absolute,
@@ -62,6 +65,44 @@ test("a Docker box gets byte for byte what it always got: the image's homes, the
   assert.equal(presetNamed("claude")!.relayEnv("u", "t", undefined, DOCKER_BOX_PATHS).CLAUDE_CONFIG_DIR, "/home/box/.claude");
   assert.equal(DOCKER_BOX_PATHS.mcpFaces, "/home/box/work/.lumenbox/mcp");
   assert.equal(reportPath("job-1", DOCKER_BOX_PATHS), "/home/box/work/.lumenbox/reports/job-1.json");
+  // The skills directory every host-side reader and writer uses (INV-1719), and mcode's run, which links nothing here.
+  for (const box of [undefined, { kind: "docker" as const }, { kind: "attached" as const, workDir: "/somewhere/else" }, { kind: "host" as const, workDir: "/w/$(x)" }]) assert.equal(skillsDir(box), "/home/box/work/skills");
+  assert.equal(SKILLS_DIR, "/home/box/work/skills");
+  const mcode = presetNamed("mcode")!;
+  assert.equal(mcode.run("'x'", "m", undefined, DOCKER_BOX_PATHS), mcode.run("'x'", "m"));
+  assert.equal(mcode.acp!.command("m", DOCKER_BOX_PATHS), mcode.acp!.command("m"));
+});
+
+test("a host box's skills are seeded, indexed and judged in <work>/skills, never at the image's path (INV-1719)", async () => {
+  const work = "/Users/someone/agentbox-work";
+  const dir = skillsDir({ kind: "host", workDir: `${work}/` });
+  assert.equal(dir, `${work}/skills`);
+  assert.equal(dir, (boxPaths({ kind: "host", workDir: work }, "a1") as BoxPaths).skills, "the directory the engines are linked to");
+  // A box that refuses the image's path the way a host box does: anything outside the work directory.
+  const files = new Map<string, string>();
+  const outside = (path: string) => { if (!path.startsWith(`${work}/`)) throw new Error(`${path} is outside the directories this box may touch`); };
+  const box = {
+    listDir: async (path: string) => { outside(path); const names = new Set([...files.keys()].filter(file => file.startsWith(`${path}/`)).map(file => file.slice(path.length + 1).split("/")[0]!)); if (names.size === 0) throw new Error("no such directory"); return { entries: [...names].map(name => ({ name, type: files.has(`${path}/${name}`) ? "file" : "directory" })) }; },
+    readFile: async (path: string) => { outside(path); const content = files.get(path); if (content === undefined) throw new Error("no such file"); return { content }; },
+    uploadFile: async (path: string, base64: string) => { outside(path); files.set(path, Buffer.from(base64, "base64").toString("utf8")); },
+    exec: async (command: string) => { for (const path of command.match(/\/[^\s']+/g) ?? []) if (path !== "/dev/null") outside(path); return { stdout: "" }; },
+  };
+  const seeded = await seedStarterSkills(box, () => {}, dir);
+  assert.ok(seeded.seed.length > 0, "starters were seeded");
+  assert.ok([...files.keys()].every(file => file.startsWith(`${dir}/`)), "every file under <work>/skills");
+  const loaded = await loadSkills(box, [], dir);
+  assert.equal(loaded.read, true);
+  assert.equal(loaded.skills.length, seeded.seed.length + seeded.hub.length, "every seeded skill and package is in the index");
+  assert.ok(loaded.skills.every(skill => skill.path.startsWith(`${dir}/`)));
+  // A write there is a write into a skill — the contract, the control-surface check and provenance see it — and `~/work` is the person's here.
+  assert.equal(skillSlugOf(`${dir}/hello/SKILL.md`, dir), "hello");
+  assert.equal(skillSlugOf("~/work/skills/hello/SKILL.md", dir), undefined);
+  assert.equal(skillSlugOf("/home/box/work/skills/hello/SKILL.md"), "hello", "a Docker box's as it was");
+  assert.deepEqual(skillsWrittenBy(`echo x > ${dir}/hello/SKILL.md`, dir), ["hello"]);
+  // mcode reads `<data dir>/skills`: on a host box the run links the box's skills into its own data directory.
+  const paths = boxPaths({ kind: "host", workDir: work }, "a1") as BoxPaths;
+  assert.match(presetNamed("mcode")!.run("'x'", "m", undefined, paths), new RegExp(`export MINIMAX_DATA_DIR="\\$d" && ln -s ${dir} "\\$d/skills" && mcode exec `));
+  assert.match(presetNamed("mcode")!.acp!.command("m", paths), new RegExp(`ln -s ${dir} "\\$d/skills" && mcode acp$`));
 });
 
 test("on a host box every path a delegation names is in the work directory, the engine homes in the agent's state directory", () => {
@@ -154,7 +195,7 @@ test("on a host box an engine the person installed themselves is never run in th
 
 const live = new HostSandbox();
 
-test("under the real sandbox: an engine started as Delegate starts it on a host box reads its config, its MCP face and the box's skills, and writes only its state directory", { skip: live.unavailableReason() }, async () => {
+test("under the real sandbox: an engine started as Delegate starts it on a host box reads its config, its MCP face and the box's skills — the starters seeded there too — and writes only its state directory", { skip: live.unavailableReason() }, async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "box-paths-host-")));
   const home = join(root, "home");
   const work = join(root, "home", "work");
@@ -167,16 +208,34 @@ test("under the real sandbox: an engine started as Delegate starts it on a host 
     const roots = new Roots([{ path: work, mode: "rw" }]);
     // What each fake engine reads is where the real one reads (measured: claude --mcp-config and
     // CLAUDE_CONFIG_DIR/skills; opencode $OPENCODE_CONFIG and $XDG_CONFIG_HOME/opencode; pi $PI_CODING_AGENT_DIR).
+    // mcode reads its data directory's skills, which its run makes per run under /tmp (measured in 0.6.12's skill roots).
     const reads: Record<string, string> = {
-      claude: 'for a in "$@"; do case "$a" in *.json) cat "$a";; esac; done; cat "$CLAUDE_CONFIG_DIR/skills/hello/SKILL.md"; echo s > "$CLAUDE_CONFIG_DIR/state.json"',
-      opencode: 'cat "$OPENCODE_CONFIG" "$XDG_CONFIG_HOME/opencode/opencode.json" "$XDG_CONFIG_HOME/opencode/skill/hello/SKILL.md"',
-      pi: 'cat "$PI_CODING_AGENT_DIR/models.json" "$PI_CODING_AGENT_DIR/skills/hello/SKILL.md"',
+      claude: 'for a in "$@"; do case "$a" in *.json) cat "$a";; esac; done; cat "$CLAUDE_CONFIG_DIR/skills/hello/SKILL.md"; ls "$CLAUDE_CONFIG_DIR/skills/"; echo s > "$CLAUDE_CONFIG_DIR/state.json"',
+      opencode: 'cat "$OPENCODE_CONFIG" "$XDG_CONFIG_HOME/opencode/opencode.json" "$XDG_CONFIG_HOME/opencode/skill/hello/SKILL.md"; ls "$XDG_CONFIG_HOME/opencode/skill/"',
+      pi: 'cat "$PI_CODING_AGENT_DIR/models.json" "$PI_CODING_AGENT_DIR/skills/hello/SKILL.md"; ls "$PI_CODING_AGENT_DIR/skills/"',
+      mcode: 'cat "$MINIMAX_DATA_DIR/skills/hello/SKILL.md"; ls "$MINIMAX_DATA_DIR/skills/"',
     };
     // The person's own engines first on PATH, as Homebrew or ~/.local/bin are: the pinned fakes below must still be the ones run.
     const own = join(root, "own-bin");
     mkdirSync(paths.enginesBin, { recursive: true });
     mkdirSync(own, { recursive: true });
     const jobs = new JobService(join(work, ".jobs"));
+    // The starters, seeded the way the host seeds a box: its file routes (refused outside the roots) and its shell, confined.
+    const refuse = (path: string, mode: "ro" | "rw") => { const why = roots.refusal(path, mode); if (why !== undefined) throw new Error(why); };
+    const seeded = await seedStarterSkills({
+      listDir: async path => { refuse(path, "ro"); return { entries: readdirSync(path).map(name => ({ name })) }; },
+      readFile: async path => { refuse(path, "ro"); return { content: readFileSync(path, "utf8") }; },
+      uploadFile: async (path, base64) => { refuse(path, "rw"); writeFileSync(path, Buffer.from(base64, "base64")); },
+      exec: async command => {
+        const job = jobs.start({ command, cwd: work, nice: 0, scrubbedEnv: { PATH: "/usr/bin:/bin", HOME: home }, actor: "host:starter-skills", confine });
+        const ended = await jobs.wait({ job_id: job.job_id, timeout_ms: 20_000 });
+        return { stdout: readFileSync(job.log_path, "utf8"), exit_code: ended?.exit_code };
+      },
+    }, () => {}, skillsDir({ kind: "host", workDir: work }));
+    const starter = seeded.seed[0]!;
+    // mcode's run makes its profile directory with mktemp under /tmp, which a host box's sandbox leaves writable (confinement.ts SYSTEM_TMP).
+    const confineMcode = confinementFor({ headless: true, roots: () => new Roots([{ path: work, mode: "rw" }]), workDir: work, egressPort: () => undefined, log: () => {}, sandbox: new HostSandbox({ home, tmp }) })!;
+    assert.ok(existsSync(join(work, "skills", starter, "SKILL.md")), "a starter landed in <work>/skills");
     for (const [name, script] of Object.entries(reads)) {
       const preset = presetNamed(name)!;
       writeFileSync(join(paths.enginesBin, name), `#!/bin/sh\n${script}\n`);
@@ -193,13 +252,14 @@ test("under the real sandbox: an engine started as Delegate starts it on a host 
         writeFileSync(file, content);
       }
       const env = { ...preset.relayEnv("http://127.0.0.1:1/relay/r", "tok", "m", paths), ...config?.env, ...face.env, LUMENBOX_MCP_TOKEN: "t" };
-      const job = jobs.start({ command: delegateCommand(preset, paths, preset.run("'go'", "m", face.args || undefined)), cwd: work, nice: 0, env, scrubbedEnv: { PATH: `${own}:/usr/bin:/bin`, HOME: home }, actor: "agent:a1", confine });
+      const job = jobs.start({ command: delegateCommand(preset, paths, preset.run("'go'", "m", face.args || undefined, paths)), cwd: work, nice: 0, env, scrubbedEnv: { PATH: `${own}:/usr/bin:/bin`, HOME: home }, actor: "agent:a1", confine: name === "mcode" ? confineMcode : confine });
       const ended = await jobs.wait({ job_id: job.job_id, timeout_ms: 20_000 });
       const log = readFileSync(job.log_path, "utf8");
       assert.equal(ended?.exit_code, 0, `${name}: ${log}`);
       assert.match(log, /hello skill/, `${name} found the box's skills`);
-      if (name !== "pi") assert.match(log, /mcp\/r\/abc/, `${name} read its MCP face`);
-      if (config !== undefined) assert.ok(log.includes(config.content.trim().split("\n")[1]!), `${name} read its relay config`);
+      assert.ok(log.includes(starter), `${name} found the seeded starter ${starter}`);
+      if (name !== "pi" && name !== "mcode") assert.match(log, /mcp\/r\/abc/, `${name} read its MCP face`);
+      if (config !== undefined && name !== "mcode") assert.ok(log.includes(config.content.trim().split("\n")[1]!), `${name} read its relay config`); // mcode's is a note; its profile is per run
     }
     assert.ok(existsSync(join(work, ".state", "a1", "claude", "state.json")), "the engine's own state landed in the agent's directory");
     assert.deepEqual(readdirSync(home).sort(), ["work"], "and nothing in the home");

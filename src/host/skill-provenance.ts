@@ -25,22 +25,27 @@ export interface Writer {
   at: string;
 }
 
-/** The skill a path belongs to, or undefined when it is not under the skills directory. */
-export function skillSlugOf(path: string): string | undefined {
-  const normalised = path.replace(/^~\/work\//, `${"/home/box/work"}/`);
-  if (!normalised.startsWith(`${SKILLS_DIR}/`)) return undefined;
-  const slug = normalised.slice(SKILLS_DIR.length + 1).split("/")[0];
+/**
+ * The skill a path belongs to, or undefined when it is not under the skills directory — the box's,
+ * `skillsDir(box)` (INV-1719). `~/work` is the work volume only on the image: on a host box `~` is
+ * the person's own home, so it is not read as the box's.
+ */
+export function skillSlugOf(path: string, dir: string = SKILLS_DIR): string | undefined {
+  const normalised = dir === SKILLS_DIR ? path.replace(/^~\/work\//, `${"/home/box/work"}/`) : path;
+  if (!normalised.startsWith(`${dir}/`)) return undefined;
+  const slug = normalised.slice(dir.length + 1).split("/")[0];
   return slug === undefined || slug === "" ? undefined : slug;
 }
 
 const SKILL_PATH = /(?:~\/work|\/home\/box\/work)\/skills\/([A-Za-z0-9._-]+)/g;
 const WRITE_SHAPED = /(>|>>|\btee\b|\bcp\b|\bmv\b|\bsed\s+-i|\binstall\b|\brsync\b|\bln\b|\btouch\b|\bcat\s*<<|\bgit\s+(checkout|pull|clone|apply))/;
 
-/** The skills a shell command looks like it writes to. Coarse on purpose; see the module note. */
-export function skillsWrittenBy(command: string): string[] {
+/** The skills a shell command looks like it writes to, in the box whose skills are `dir`. Coarse on purpose; see the module note. */
+export function skillsWrittenBy(command: string, dir: string = SKILLS_DIR): string[] {
   if (!WRITE_SHAPED.test(command)) return [];
   const slugs = new Set<string>();
-  for (const match of command.matchAll(SKILL_PATH)) slugs.add(match[1]!);
+  const pattern = dir === SKILLS_DIR ? SKILL_PATH : new RegExp(`${dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/([A-Za-z0-9._-]+)`, "g");
+  for (const match of command.matchAll(pattern)) slugs.add(match[1]!);
   return [...slugs];
 }
 
@@ -69,15 +74,15 @@ export class SkillProvenance {
   }
 
   /** Records a tool-path write to `path`, if it is inside a skill. Returns the slug when it was. */
-  noteWrite(input: { path: string; agentId: string; agentName: string; tool: string }): string | undefined {
-    const slug = skillSlugOf(input.path);
+  noteWrite(input: { path: string; agentId: string; agentName: string; tool: string; skills?: string }): string | undefined {
+    const slug = skillSlugOf(input.path, input.skills);
     if (slug !== undefined) this.record(slug, input);
     return slug;
   }
 
   /** Records what a shell command looks like it writes. Returns the slugs it attributed. */
-  noteCommand(input: { command: string; agentId: string; agentName: string }): string[] {
-    const slugs = skillsWrittenBy(input.command);
+  noteCommand(input: { command: string; agentId: string; agentName: string; skills?: string }): string[] {
+    const slugs = skillsWrittenBy(input.command, input.skills);
     for (const slug of slugs) this.record(slug, { ...input, tool: "bash" });
     return slugs;
   }
