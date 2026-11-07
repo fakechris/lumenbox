@@ -20,6 +20,8 @@ export interface AcpOpenRequest {
   /** Name the engine's session to `session/load` it instead of `session/new`. */
   engine_session_id?: string;
   call?: string;
+  /** Who the engine works for (`agent:<id>`): on a native box, whose state directory it keeps its home in (INV-1710). */
+  actor?: string;
 }
 
 export interface AcpOpenResult {

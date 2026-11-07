@@ -130,6 +130,7 @@ export class AcpDelegates {
       env: input.env,
       ...(input.display !== undefined ? { display: input.display } : {}),
       ...(input.call !== undefined ? { call: input.call } : {}),
+      actor: `agent:${input.agentId}`,
     });
     const watch: Watch = {
       jobId,
@@ -297,7 +298,7 @@ export class AcpDelegates {
       }
       // Detached: a record from before the restart. Load it, in its own cwd, with the same command.
       try {
-        await box.acpOpen({ session_id: item.jobId, command: known.command, cwd: item.data.cwd, engine_session_id: item.data.engineSessionId, env: {} });
+        await box.acpOpen({ session_id: item.jobId, command: known.command, cwd: item.data.cwd, engine_session_id: item.data.engineSessionId, env: {}, actor: `agent:${item.agentId}` });
       } catch (error) {
         this.settle(watch, "failed", `the engine could not load its session after the restart: ${error instanceof Error ? error.message : String(error)}`);
         continue;

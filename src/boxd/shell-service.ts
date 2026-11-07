@@ -393,7 +393,7 @@ export function runShell(request: ExecRequest, pinned: Record<string, string> = 
   const script = key ? wrapForSession(command, key, request.cwd, pinned) : command;
   const startIn = key ? undefined : (request.cwd ?? process.env.HOME ?? "/home/box");
   const context = { what: "exec", ...(startIn !== undefined ? { cwd: startIn } : {}), ...(request.actor !== undefined ? { actor: request.actor } : {}) };
-  let argv: { command: string; args: string[]; wrapped?: WrappedCommand } = { command: "nice", args: ["-n", String(AGENT_NICE), "/bin/bash", "-lc", script] };
+  let argv: { command: string; args: string[]; wrapped?: WrappedCommand; env?: Record<string, string> } = { command: "nice", args: ["-n", String(AGENT_NICE), "/bin/bash", "-lc", script] };
   try {
     if (confine !== undefined) argv = confine.wrap(argv.command, argv.args, context);
   } catch (error) {
@@ -421,6 +421,8 @@ export function runShell(request: ExecRequest, pinned: Record<string, string> = 
         ...(request.display ? { DISPLAY: `:${request.display}` } : {}),
         ...request.env,
         ...pinned,
+        // The native box's state directory (INV-1710) wins: elsewhere the sandbox refuses the write.
+        ...argv.env,
       },
       stdio: ["ignore", "pipe", "pipe"],
       // New process group, so a timeout kills the whole tree rather than

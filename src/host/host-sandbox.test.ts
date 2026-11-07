@@ -56,6 +56,7 @@ test("the rules are written in words and in the profile: cwd and tmp writable, t
     assert.equal(native.args[native.args.indexOf("--chdir") + 1], realpathSync(h.home), "starts where asked");
     assert.ok(!native.args.some((arg, i) => arg === "--bind" && native.args[i + 1] === realpathSync(h.home)), "without making it writable");
     assert.ok(at("--tmpfs", realpathSync(join(h.home, ".ssh"))) > at("--bind", real), "~/.ssh is hidden, after the writable binds so it covers them");
+    assert.ok(at("--remount-ro", realpathSync(join(h.home, ".ssh"))) > at("--tmpfs", realpathSync(join(h.home, ".ssh"))), "and read-only, so a write there fails rather than vanishing");
   } finally {
     h.dispose();
   }
