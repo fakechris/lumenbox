@@ -3185,6 +3185,7 @@ test("on a host box an agent's write outside the grants and its rm -rf wait for 
     result.cleanup();
     rmSync(dir, { recursive: true, force: true });
   }
+});
 
 test("a guest in an organisation's group chat asks the agent to run commands, read members' data and write memory; the guest turn holds none of it and the host records no side effect (INV-1708, docs/97)", async () => {
   const snapshot = (dir: string): Record<string, string> => {
