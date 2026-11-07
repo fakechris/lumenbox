@@ -5,7 +5,7 @@
  * problem the starter team solves for agents. The first four show the shapes a
  * skill takes (browser, corpus, filesystem, scheduled). The rest are domain
  * procedures — code review, Chinese longform / notes / scripts, data briefs —
- * written the same way: files under /home/box/work, no invented sources. Alongside
+ * written the same way: files in the work directory, no invented sources. Alongside
  * them, skill-hub packages in catalog-data/skills/ are copied as-is (humanizer,
  * khazix-writer, diagnose, fullstack-dev, …) so experts compose standard skills
  * rather than paraphrased stubs. Anything tied to one vendor's account still
@@ -204,7 +204,7 @@ const STARTERS: readonly StarterSkill[] = [
     slug: "research-brief",
     // The description before INV-693 said what it does and not when; the live evals showed it
     // was not opened for its own requests. This is that version, which we may replace.
-    supersedes: ["9739e713"],
+    supersedes: ["9739e713", "928ba559"], // then the one writing /home/box/work, which a host box does not have (INV-1734)
     content: `---
 name: research-brief
 description: Use when someone asks you to research or look into a topic (调研, 研究一下, 查一下) and wants a written, sourced brief. Search, read primary sources, write the brief to the work directory. Not for a table or file they handed you (data-brief), nor the day's package (daily-research-digest).
@@ -219,7 +219,7 @@ Given a topic, produce a short brief a person can trust, with sources.
    queries — one phrasing finds one literature.
 2. Open the three most substantial results. Prefer primary sources over summaries
    of summaries. Note the URL of everything you actually read.
-3. Write \`/home/box/work/briefs/<topic-slug>.md\`:
+3. Write \`briefs/<topic-slug>.md\` in your work directory:
    - Three to six findings, one paragraph each, each ending with its source URL.
    - A "What I could not verify" section for anything that appeared once and nowhere else.
 4. Reply with the file path and the two most important findings in two sentences.
@@ -231,7 +231,7 @@ Do not pad. A brief that says "the sources disagree" is a finding.
     slug: "study-a-corpus",
     // The description before INV-693 said what it does and not when; the live evals showed it
     // was not opened for its own requests. This is that version, which we may replace.
-    supersedes: ["63e35309"],
+    supersedes: ["63e35309", "39dd7960"], // then the one writing /home/box/work, which a host box does not have (INV-1734)
     content: `---
 name: study-a-corpus
 description: Use when you are handed a large body of documents — a dataroom, an archive, a folder of reports (资料库, 一堆文件, 先通读) — and will be asked about it again and again. Read it once and leave notes that make every later question cheap. Not for one file or a web topic.
@@ -254,7 +254,7 @@ writing down its shape costs once. Do this before the questions start, not durin
    fields and one line on what it is. Keep the pieces large enough that a fork reads
    many documents.
 4. **Write the notes.** Combine the findings into
-   \`/home/box/work/notes/<corpus>/index.md\`: one line per document, the schema fields
+   \`notes/<corpus>/index.md\` in your work directory: one line per document, the schema fields
    first. Add \`by-<field>.md\` for the groupings worth having (by date, by category).
    Aim for the notes to be about a hundredth of what you read.
 5. **Say what the notes cover and what they flatten.** A note that hides its own
@@ -269,7 +269,7 @@ notes are a living index, not a one-time export.
     slug: "tidy-downloads",
     // The description before INV-693 said what it does and not when; the live evals showed it
     // was not opened for its own requests. This is that version, which we may replace.
-    supersedes: ["50670d80"],
+    supersedes: ["50670d80", "93e79dc8"], // then the one writing /home/box/work, which a host box does not have (INV-1734)
     content: `---
 name: tidy-downloads
 description: Use when someone asks to tidy, clean up or organise their Downloads folder (整理下载, Downloads 太乱了). Sort it into the work directory by type and month.
@@ -278,7 +278,7 @@ scope: global
 
 # Tidy downloads
 
-Move everything in \`~/Downloads\` into \`/home/box/work/files/<year>-<month>/<kind>/\`,
+Move everything in \`~/Downloads\` into \`files/<year>-<month>/<kind>/\` in your work directory,
 where kind is one of: documents, images, video, audio, archives, code, other.
 
 1. List what is there first. If it is empty, say so and stop — do not invent work.
@@ -292,7 +292,7 @@ where kind is one of: documents, images, video, audio, archives, code, other.
     // The version shipped before 2026-10-08 suggested `schedule: daily 08:30`, which
     // parseSchedule refuses (two fields, not five). A box that followed the example got a
     // skill that never ran; naming the digest lets the fix reach it unasked (INV-966).
-    supersedes: ["d5c43334"],
+    supersedes: ["d5c43334", "44ea7866"], // then the one writing /home/box/work, which a host box does not have (INV-1734)
     content: `---
 name: morning-summary
 description: Summarise yesterday's work directory changes into one morning note.
@@ -301,9 +301,9 @@ scope: global
 
 # Morning summary
 
-Write \`/home/box/work/notes/morning-<date>.md\` covering the last 24 hours:
+Write \`notes/morning-<date>.md\` in your work directory, covering the last 24 hours:
 
-1. \`find /home/box/work -newermt "24 hours ago" -type f\` — what changed.
+1. \`find\` in your work directory with \`-newermt "24 hours ago" -type f\` — what changed.
 2. For each changed report or brief, one line on what it now says.
 3. One "needs a decision" list: anything a teammate flagged, any consent that was
    refused, any task that stalled.
@@ -321,7 +321,7 @@ announced when they finish, and a missed window is skipped, never replayed.
     // The version shipped on 2026-09-24, which told the agent to read a host path the box
     // cannot see and to run a command the box does not have. Named here so a box already
     // holding it gets the fix instead of being asked whether it edited a file it did not.
-    supersedes: ["5e8ec37f"],
+    supersedes: ["5e8ec37f", "7a9d8ce3"], // then the one writing /home/box/work, which a host box does not have (INV-1734)
     content: `---
 name: daily-research-digest
 description: Read one day's package and write one synthesis across it, organised by what the day was about rather than by what arrived.
@@ -330,7 +330,7 @@ scope: global
 
 # Daily research digest
 
-A day's package is at \`/home/box/work/digest/<runKey>/package/\`. It holds every message
+A day's package is at \`digest/<runKey>/package/\` in your work directory. It holds every message
 whole, every turn, every source that was read, and every reply — assembled on the host and
 delivered here, redacted, bounded to one day. Take the newest one with a \`READY\` file beside
 it; without \`READY\` the package is still arriving and is not yours to read yet.
@@ -401,7 +401,7 @@ into the shape of a full one is worse than saying it was thin.
     slug: "weekly-retro",
     // The description before INV-693 said what it does and not when; the live evals showed it
     // was not opened for its own requests. This is that version, which we may replace.
-    supersedes: ["6200edf5"],
+    supersedes: ["6200edf5", "a52166cc"], // then the one writing /home/box/work, which a host box does not have (INV-1734)
     content: `---
 name: weekly-retro
 description: Use when someone asks for a weekly retro, review or recap of the last seven days (周报, 这周的复盘, weekly review). Write one page to the work directory. For yesterday alone, use morning-summary.
@@ -410,9 +410,9 @@ scope: global
 
 # Weekly retro
 
-Write \`/home/box/work/notes/retro-<date>.md\` covering the last seven days.
+Write \`notes/retro-<date>.md\` in your work directory, covering the last seven days.
 
-1. \`find /home/box/work -newermt "7 days ago" -type f\` — what changed.
+1. \`find\` in your work directory with \`-newermt "7 days ago" -type f\` — what changed.
 2. Three lists: shipped (files that exist and were the point), still open (named, not guessed),
    decided (a choice that will otherwise be re-litigated).
 3. One "would do differently" paragraph. If nothing would change, say so.
@@ -425,7 +425,7 @@ Do not pad with "great collaboration". Empty weeks get a short file, not a speec
     slug: "code-review",
     // The description before INV-693 said what it does and not when; the live evals showed it
     // was not opened for its own requests. This is that version, which we may replace.
-    supersedes: ["13498819"],
+    supersedes: ["13498819", "cae5649d"], // then the one writing /home/box/work, which a host box does not have (INV-1734)
     content: `---
 name: code-review
 description: Use when someone asks you to review a change, a diff, a PR or some code (review, 代码评审, 看一下这个改动) for correctness, security and tests. Write the review to a file; do not rewrite the code. Not for a request to change the code itself.
@@ -434,7 +434,7 @@ scope: global
 
 # Code review
 
-Given a path, a diff, or a repository, write \`/home/box/work/reviews/<slug>.md\`.
+Given a path, a diff, or a repository, write \`reviews/<slug>.md\` in your work directory.
 
 1. Read the change. If you cannot tell what it was supposed to do, say so and stop.
 2. Three sections, in this order:
@@ -451,7 +451,7 @@ Reply with the path and the blocker count.
     slug: "wechat-longform",
     // The description before INV-693 said what it does and not when; the live evals showed it
     // was not opened for its own requests. This is that version, which we may replace.
-    supersedes: ["bb96a447"],
+    supersedes: ["bb96a447", "0f13bada"], // then the one writing /home/box/work, which a host box does not have (INV-1734)
     content: `---
 name: wechat-longform
 description: Use when someone asks for a WeChat official-account article or any long-form article (公众号文章, 长文, 推文). Draft it to the work directory, sourced and readable aloud. Short notes are xiaohongshu-note; spoken scripts are short-video-script.
@@ -460,7 +460,7 @@ scope: global
 
 # WeChat longform
 
-Write \`/home/box/work/articles/<slug>.md\` as a piece someone will finish on their phone.
+Write \`articles/<slug>.md\` in your work directory as a piece someone will finish on their phone.
 
 1. Before drafting: who is the reader, and what should they believe at the end that they did not at the start. If that is missing, ask. One topic.
 2. Outline on the page first: hook, two to four sections, one close. Then write.
@@ -472,7 +472,7 @@ This is not a Xiaohongshu note and not a spoken script. Those are other skills.
 `,
   },
   {
-    slug: "xiaohongshu-note",
+    slug: "xiaohongshu-note", supersedes: ["32dce899"], // the version that wrote /home/box/work, which a host box does not have (INV-1734)
     content: `---
 name: xiaohongshu-note
 description: Draft Xiaohongshu notes — title, cover line, body, variants — without fake first-hand claims.
@@ -481,7 +481,7 @@ scope: global
 
 # Xiaohongshu note
 
-Write \`/home/box/work/notes/xhs-<slug>.md\`.
+Write \`notes/xhs-<slug>.md\` in your work directory.
 
 1. One note, one promise. Title under 20 Chinese characters. A cover line that can be read on a thumbnail.
 2. Body: what it is, who it is for, one concrete detail you can actually stand behind. End with one question or one next step, not a pile of hashtags pretending to be content.
@@ -495,7 +495,7 @@ Not a long article. Not a spoken script.
     slug: "short-video-script",
     // The description before INV-693 said what it does and not when; the live evals showed it
     // was not opened for its own requests. This is that version, which we may replace.
-    supersedes: ["32528bb8"],
+    supersedes: ["32528bb8", "b854e6e3"], // then the one writing /home/box/work, which a host box does not have (INV-1734)
     content: `---
 name: short-video-script
 description: Use when someone asks for a short-video or voice-over script (短视频脚本, 口播, 抖音, 视频号, Reels). Write a spoken script with a timed hook, one point and one ask. Written notes are xiaohongshu-note; articles are wechat-longform.
@@ -504,7 +504,7 @@ scope: global
 
 # Short-video script
 
-Write \`/home/box/work/scripts/<slug>.md\`.
+Write \`scripts/<slug>.md\` in your work directory.
 
 1. Platform and length first (抖音 / 视频号 / other, seconds). Different platforms forgive different openings.
 2. Structure on the page:
@@ -521,7 +521,7 @@ Not a WeChat article. Not a Xiaohongshu note.
     slug: "data-brief",
     // The description before INV-693 said what it does and not when; the live evals showed it
     // was not opened for its own requests. This is that version, which we may replace.
-    supersedes: ["d09a4b36"],
+    supersedes: ["d09a4b36", "0d52cb86"], // then the one writing /home/box/work, which a host box does not have (INV-1734)
     content: `---
 name: data-brief
 description: Use when someone hands you a table — csv, xlsx, a folder of sheets — and asks what it says (看数据, 分析这个表, 数据简报). Check data quality first, then answer with figures tied to columns, and end with actions. For a topic with no table, use research-brief.
@@ -530,7 +530,7 @@ scope: global
 
 # Data brief
 
-Given a csv, xlsx, or a folder of tables, write \`/home/box/work/briefs/<slug>.md\`.
+Given a csv, xlsx, or a folder of tables, write \`briefs/<slug>.md\` in your work directory.
 
 1. **Quality first.** Row count, empty-rate on key columns, duplicates, date range. If the file cannot answer the question, say so before computing.
 2. Then the numbers that answer the question. Every figure names a column, a filter, or a cell. An estimate is labelled 估算 and carries the basis.

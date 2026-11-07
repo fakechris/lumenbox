@@ -44,6 +44,8 @@ export interface BoxPaths {
   work: string;
   /** The box's skills directory, projected into each engine's own skills place. */
   skills: string;
+  /** Where each agent's memory is mirrored as files, `<memory>/<agent id>` (INV-1734). */
+  memory: string;
   /** Where an engine installed on demand lives, and its `bin`. */
   engines: string;
   enginesBin: string;
@@ -127,6 +129,20 @@ function hostWork(workDir: string | undefined): string | undefined {
   return work !== undefined && PLAIN_PATH.test(work) ? work : undefined;
 }
 
+/** Which box a path is for, as the registry records it; none named is the image's. */
+export type BoxPlace = { kind?: "docker" | "attached" | "host" | undefined; workDir?: string | undefined } | undefined;
+
+/**
+ * The box's work directory (INV-1734): where work that must outlive the box goes, the root of
+ * every directory below, and what the prompt names to the agent. A Docker or attached box, or no
+ * box named, has the image's `/home/box/work`. A host box has its own, the one it was started
+ * with; one whose work directory cannot be used keeps the image's, as `skillsDir` explains.
+ */
+export function workDir(box: BoxPlace): string {
+  const work = box?.kind === "host" ? hostWork(box.workDir) : undefined;
+  return work ?? DOCKER_WORK;
+}
+
 /**
  * The box's skills directory (INV-1719): where skills are seeded, indexed, written and read, on
  * every box, whoever asks — the same directory `boxPaths(...).skills` projects into the engines.
@@ -135,15 +151,20 @@ function hostWork(workDir: string | undefined): string | undefined {
  * work directory cannot be used keeps that too: the box refuses it with a sentence, where an
  * invented path would be silently empty.
  */
-export function skillsDir(box: { kind?: "docker" | "attached" | "host" | undefined; workDir?: string | undefined } | undefined): string {
-  const work = box?.kind === "host" ? hostWork(box.workDir) : undefined;
-  return work === undefined ? DOCKER_BOX_PATHS.skills : lumenboxDirs(work).skills;
+export function skillsDir(box: BoxPlace): string {
+  return lumenboxDirs(workDir(box)).skills;
 }
 
-function lumenboxDirs(work: string): Pick<BoxPaths, "work" | "skills" | "engines" | "enginesBin" | "mcpFaces" | "reports"> {
+/** The box's memory mirror (INV-1734): `memoryMirrorDir` puts each agent's files under it. */
+export function memoryDir(box: BoxPlace): string {
+  return lumenboxDirs(workDir(box)).memory;
+}
+
+function lumenboxDirs(work: string): Pick<BoxPaths, "work" | "skills" | "memory" | "engines" | "enginesBin" | "mcpFaces" | "reports"> {
   return {
     work,
     skills: `${work}/skills`,
+    memory: `${work}/memory`,
     engines: `${work}/.lumenbox/engines`,
     enginesBin: `${work}/.lumenbox/engines/bin`,
     mcpFaces: `${work}/.lumenbox/mcp`,

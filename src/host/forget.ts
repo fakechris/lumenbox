@@ -31,7 +31,8 @@ import { fetchedDir } from "./fetched.ts";
 import { resultsDir } from "./results.ts";
 import { loadSkills } from "./skills.ts";
 import { rewriteFrontmatter } from "./template.ts";
-import { MEMORY_MIRROR_DIR, renderMemoryFiles } from "./memory.ts";
+import { renderMemoryFiles } from "./memory.ts";
+import { DOCKER_BOX_PATHS } from "./box-paths.ts";
 
 export interface ForgetStores {
   registry: AgentRegistry;
@@ -39,6 +40,8 @@ export interface ForgetStores {
   box?: Pick<BoxClient, "listDir" | "readFile" | "writeFile">;
   /** That box's skills directory: `skillsDir(box)` (INV-1719); the image's when not given. */
   skills?: string;
+  /** That box's memory mirror: `memoryDir(box)` (INV-1734); the image's when not given. */
+  memory?: string;
   /** The installation home: where fetched pages, kept results and the ledgers live. */
   home: string;
 }
@@ -88,7 +91,7 @@ export async function inventory(phrase: string, stores: ForgetStores): Promise<F
   return {
     memory,
     sharedMemory,
-    memoryMirror: (await mirrorFilesMentioning(stores.box, needle)).length,
+    memoryMirror: (await mirrorFilesMentioning(stores, needle)).length,
     fetchedPages: filesMentioning(fetchedDir(stores.home), needle).length,
     keptResults: filesMentioning(resultsDir(stores.home), needle).length,
     tasks: stores.tasks?.mentioning(phrase) ?? 0,
@@ -267,7 +270,7 @@ async function skillsMentioning(
   return { routines: routinePaths.map(entry => entry.slug), skills, routinePaths };
 }
 
-async function mirrorFilesMentioning(box: ForgetStores["box"], needle: string): Promise<string[]> {
+async function mirrorFilesMentioning({ box, memory = DOCKER_BOX_PATHS.memory }: ForgetStores, needle: string): Promise<string[]> {
   if (box === undefined) return [];
   const found: string[] = [];
   const walk = async (dir: string): Promise<void> => {
@@ -278,7 +281,7 @@ async function mirrorFilesMentioning(box: ForgetStores["box"], needle: string): 
       else if ((await box.readFile(path).then(read => read.content).catch(() => "")).toLowerCase().includes(needle)) found.push(path);
     }
   };
-  await walk(MEMORY_MIRROR_DIR);
+  await walk(memory);
   return found;
 }
 
@@ -289,13 +292,13 @@ async function refreshMirrors(stores: ForgetStores, needle: string, agentIds: re
   for (const agentId of agentIds) {
     const agent = stores.registry.tryGet(agentId);
     if (agent === undefined) continue;
-    for (const file of renderMemoryFiles(agentId, agent.profile.name, stores.registry.readMemoryRecords(agentId))) {
+    for (const file of renderMemoryFiles(agentId, agent.profile.name, stores.registry.readMemoryRecords(agentId), stores.memory ?? DOCKER_BOX_PATHS.memory)) {
       await stores.box.writeFile(file.path, file.content);
       written += 1;
     }
 
   }
-  for (const stale of await mirrorFilesMentioning(stores.box, needle)) {
+  for (const stale of await mirrorFilesMentioning(stores, needle)) {
     await stores.box.writeFile(stale, "");
     written += 1;
   }

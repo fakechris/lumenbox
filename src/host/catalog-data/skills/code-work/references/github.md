@@ -29,7 +29,7 @@ Prefer one search over many list calls, and `--json` with `--jq` over parsing ta
 ## Working copy
 
 ```sh
-cd /home/box/work
+cd <your work directory>
 gh repo clone OWNER/REPO   # or git fetch in the existing clone
 cd REPO && git switch -c <branch>
 ```

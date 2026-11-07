@@ -30,7 +30,7 @@ import { definePart, partText } from "./prompt-parts.ts";
 import { renderSkills, type Skill, visibleTo } from "./skills.ts";
 import { renderStanding, type StandingSnapshot } from "./standing.ts";
 import { describeTask, type Task } from "./tasks.ts"; import { asModelSees, FIRST_RUN_CUE, inputGuide } from "./model-text.ts";
-import { isForkConversation } from "./tools.ts";
+import { isForkConversation } from "./tools.ts"; import { type BoxPlace, DOCKER_WORK, memoryDir, workDir } from "./box-paths.ts";
 
 /** Teammates listed inline before falling back to "read the agent directory". */
 export const AGENT_DIRECTORY_LIMIT = 40;
@@ -426,7 +426,7 @@ export interface PromptContext {
   transcript?: readonly unknown[];
   resolution?: ResolutionConfig;
   agentsRoot: string;
-  hasBox: boolean;
+  hasBox: boolean; /** The agent's box as the registry records it: the work directory the prompt names is `workDir(box)` (INV-1734). */ box?: BoxPlace;
   /**
    * No tool is offered this turn (a clean or recovery context). The recap is the last thing
    * the model reads, and its tool lines told a toolless model to search — which MiniMax-M3
@@ -646,7 +646,7 @@ than guessing at what is on it. Never describe the contents of a screen — you 
 not seen one.${boxClassParagraph(context.boxAccess)}${NOT_YOURS_PARAGRAPH}`;
   }
 
-  const computer = COMPUTER_SECTION + boxClassParagraph(context.boxAccess) + NOT_YOURS_PARAGRAPH;
+  const computer = COMPUTER_SECTION.replaceAll(DOCKER_WORK, workDir(context.box)) + boxClassParagraph(context.boxAccess) + NOT_YOURS_PARAGRAPH;
   if (!context.resolution) return computer;
 
   const { width, height } = context.resolution.api;
@@ -914,14 +914,14 @@ function renderTasks(context: PromptContext): string {
  * a path, and a path is not a deliverable to somebody reading a phone.
  */
 /** Where an outside chat's files live on the box: what the prompt tells the agent, and where the delivery gate looks. */
-export function chatFilesRoot(conversation: string): string {
-  return `/home/box/work/chats/${conversation}`;
+export function chatFilesRoot(conversation: string, box: BoxPlace): string {
+  return `${workDir(box)}/chats/${conversation}`;
 }
 
 function renderChatFiles(context: PromptContext): string {
   const conversation = context.conversation ?? "";
   if (conversation === "" || conversation === MAIN_CONVERSATION || !context.hasBox) return "";
-  const root = chatFilesRoot(conversation);
+  const root = chatFilesRoot(conversation, context.box);
   return (
     "## This conversation's file exchange\n\n" +
     // Stated as somewhere to write rather than as somewhere that exists. It used to
@@ -1066,7 +1066,7 @@ export const VOLATILE_SECTIONS: readonly PromptSection[] = [
         : recalled;
       return renderMemory(
         shown,
-        context.hasBox === false ? undefined : memoryMirrorDir(context.agent.id)
+        context.hasBox === false ? undefined : memoryMirrorDir(context.agent.id, memoryDir(context.box))
       );
     },
   },
@@ -1115,7 +1115,7 @@ export const VOLATILE_SECTIONS: readonly PromptSection[] = [
     // Only when nobody is watching. In the volatile tier so the stable prefix is the same
     // bytes for a person's turn and a timer's: the cache is a prefix match.
     render: context =>
-      context.lane === "background" && !ablated("unattended") ? partText("unattended") : "",
+      context.lane === "background" && !ablated("unattended") ? partText("unattended").replaceAll(DOCKER_WORK, workDir(context.box)) : "",
   },
   // The standing files (INV-777): the last thing that changes from turn to turn, so an edit to
   // USER.md invalidates only this and the recap; nothing above it moves by a byte.

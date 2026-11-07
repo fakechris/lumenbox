@@ -83,8 +83,8 @@ conversation. So the body must stand alone: name paths, sources and the bar for
 "worth telling", never "as discussed above".
 
 - With `deliver`, the final message is the result itself: the numbers, the three
-  items, the change. Phone length; longer material goes under `/home/box/work` and is
-  named by path.
+  items, the change. Phone length; longer material goes in your work directory and is
+  named by its full path.
 - Nothing new or nothing over the bar: end with `NothingToSay` and the reason. Quiet
   runs still land in the results record.
 - The same failure twice (a login expired, a source gone): report it once in a line and

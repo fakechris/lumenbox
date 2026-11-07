@@ -10,7 +10,7 @@ provenance: "Written for LumenBox from a study of Grok Bot 0.63's managed skills
 # Code work
 
 Your box is a real workstation: `git`, `node`, `python3` and passwordless `sudo` are there.
-Repository work happens in it, under `/home/box/work`, which is the directory that survives a
+Repository work happens in it, in your work directory, which is the directory that survives a
 rebuild. Other skills own narrower jobs: **code-review** writes a review without changing code,
 **diagnose** is the loop for a hard bug, **fullstack-dev** covers app architecture, and
 **engine-check** installs and tests a coding engine. Open those when the request is theirs.
@@ -19,7 +19,7 @@ rebuild. Other skills own narrower jobs: **code-review** writes a review without
 
 - **A lookup** ("what does this PR change?", "is CI green?", "what is in that config?"):
   answer it with `gh` from `bash`. No checkout needed. Commands are in `references/github.md`.
-- **A change or an investigation**: clone into `/home/box/work/<repo>` (or reuse the clone
+- **A change or an investigation**: clone into `<repo>` in your work directory (or reuse the clone
   that is already there; `git fetch` first) and work on a branch.
 
 ## 2. Do it yourself, or hand it to an engine

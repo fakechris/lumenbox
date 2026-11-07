@@ -75,11 +75,13 @@ test("every schedule example a starter shows its reader is one parseSchedule acc
   }
 });
 
-test("no shipped skill text names the skills directory or the memory folder by a box's path (INV-1723)", () => {
+test("no shipped skill text names the work directory, or anything in it, by a box's path (INV-1723, INV-1734)", () => {
   // Both directories are per box: on a host box the skills are under its own work directory
   // (`skillsDir`, INV-1719) and `~` is the person's home. A skill that wrote "List ~/work/skills"
   // sent an agent there; the text names them as the skill index and the memory section show them.
-  const literal = /(?:~|\/home\/box)\/work\/(?:skills|memory)\b/;
+  // The work directory itself is per box too (`workDir`, INV-1734): the text says "your work
+  // directory", and the prompt gives its path.
+  const literal = /(?:~|\$HOME|\$\{HOME\}|\/home\/box)\/work\b/;
   const texts: { where: string; text: string }[] = starterSkillsWithEvals().map(starter => ({ where: starter.slug, text: starter.content }));
   const walk = (dir: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {

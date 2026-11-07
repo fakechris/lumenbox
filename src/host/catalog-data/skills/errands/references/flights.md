@@ -37,7 +37,7 @@ Three to five options that differ in a way the person cares about, each with: fl
 ## Check-in and boarding passes
 
 - Use the airline's own site to check in, with the booking code and the passenger's last name. Find the reference in the itinerary, memory, or the confirmation email (a connected mail service via `connector_request`, or their webmail in the browser) before asking.
-- Save the boarding pass under `/home/box/work/`, one file per leg, named by flight and route, and give the path in your reply.
+- Save the boarding pass in your work directory, one file per leg, named by flight and route, and give the path in your reply.
 - Seat changes and upgrades offered at check-in: list them, do not buy.
 
 ## Watch for

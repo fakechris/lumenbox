@@ -238,7 +238,7 @@ import { QuestionWatch } from "../host/question-expiry.ts";
 import { compileSurface, SurfaceLedger, surfaceLedgerPath, type A2uiMessage } from "../host/show-ui.ts";
 import { appendLine } from "../host/jsonl.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
-import { firstRunCue } from "../host/prompt.ts";
+import { chatFilesRoot, firstRunCue } from "../host/prompt.ts";
 import { dockerEnvironment, readBoxToken, type DockerEnvironmentState } from "../box/docker.ts";
 import { attachedBox, tokenOf } from "../box/boxes.ts";
 import { catalogTemplate, describeTemplate, parseTemplate, resolveBundleRefs, rewriteFrontmatter, templatesEnabled, unresolvedPlaceholders } from "../host/template.ts";
@@ -1463,7 +1463,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       void orchestrator
         .boxClient()
         ?.exec(
-          `mkdir -p '${WORK_DIR}/chats/${conversation}/inbox' '${WORK_DIR}/chats/${conversation}/outbox'`,
+          `mkdir -p '${chatFilesRoot(conversation, registry.defaultBox())}/inbox' '${chatFilesRoot(conversation, registry.defaultBox())}/outbox'`, // the box boxClient() is (INV-1734)
           { actor: "host:chat-exchange" }
         )
         .catch((error: unknown) => {
@@ -1541,7 +1541,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (event.type === "interim") onInterim?.(event.text);
       };
       channelTurnListeners.add(listener);
-      const progressPath = `${WORK_DIR}/chats/${conversation}/progress.json`;
+      const progressPath = `${chatFilesRoot(conversation, registry.defaultBox())}/progress.json`;
       const progressPoll = setInterval(() => {
         const client = orchestrator.boxClient();
         if (client === undefined) return;
@@ -1737,7 +1737,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     receiveFiles: async (chatKey, files) => {
       const client = orchestrator.boxClient();
       if (client === undefined) return undefined;
-      const dir = `${WORK_DIR}/chats/${conversationIdFor(chatKey)}/inbox`;
+      const dir = `${chatFilesRoot(conversationIdFor(chatKey), registry.defaultBox())}/inbox`;
       await client.exec(`mkdir -p '${dir}'`, { actor: "host:chat-inbox" });
       let existing: Set<string>;
       try {
@@ -1779,7 +1779,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     collectOutbox: async chatKey => {
       const client = orchestrator.boxClient();
       if (client === undefined) return [];
-      const dir = `${WORK_DIR}/chats/${conversationIdFor(chatKey)}/outbox`;
+      const dir = `${chatFilesRoot(conversationIdFor(chatKey), registry.defaultBox())}/outbox`;
       let entries: { name: string; type: string; size: number }[];
       try {
         entries = (await client.listDir(dir)).entries;
@@ -1805,7 +1805,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     outboxDelivered: async (chatKey, names) => {
       const client = orchestrator.boxClient();
       if (client === undefined) return;
-      const dir = `${WORK_DIR}/chats/${conversationIdFor(chatKey)}/outbox`;
+      const dir = `${chatFilesRoot(conversationIdFor(chatKey), registry.defaultBox())}/outbox`;
       const quoted = names.map(name => `'${name.replace(/'/g, `'\\''`)}'`).join(" ");
       await client.exec(`mkdir -p '${dir}/../sent' && cd '${dir}' && mv -- ${quoted} ../sent/`, {
         actor: "host:outbox-delivered",

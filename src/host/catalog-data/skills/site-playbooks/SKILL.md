@@ -23,7 +23,7 @@ Buying, booking or ordering for someone: also open `errands`. Logins and codes: 
 6. **Site changed?** Work it out from the live page and say what differed from the reference.
 7. **Leave a note.** Call NoteSiteLearning with one or two sentences on what worked or failed (`worked` true/false): a moved control, a dead param, a wall seen from this box. No credentials, no coordinates.
 
-Work files go in `/home/box/work`.
+Work files go in your work directory.
 
 ## Sites (references/<file>.md)
 

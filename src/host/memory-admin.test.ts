@@ -14,6 +14,7 @@ import { AgentRegistry } from "../agents/registry.ts";
 import { attachedBox } from "../box/boxes.ts";
 import { MemoryAdmin, memoryView, versionOf } from "./memory-admin.ts";
 import { conversationSource, dedupe, recall, renderMemoryFiles, sourceCovers } from "./memory.ts";
+import { DOCKER_BOX_PATHS } from "./box-paths.ts";
 
 const at = (n: number) => `2026-09-${String(n).padStart(2, "0")}T00:00:00.000Z`;
 
@@ -86,7 +87,7 @@ test("withdraw and edit are appends with a version check; a stale version is ref
     assert.ok(recalled.records.some(r => /us-east-1/.test(r.text)));
     assert.ok(!recalled.records.some(r => /eu-west-1/.test(r.text)), "the withdrawn line is not recalled");
     assert.ok(!recall(registry.readSharedMemory(ada), 4_000, Date.parse(at(20))).records.some(r => /Fridays/.test(r.text)));
-    const mirror = renderMemoryFiles(ada, "Ada", registry.readMemoryRecords(ada)).map(f => f.content).join("\n");
+    const mirror = renderMemoryFiles(ada, "Ada", registry.readMemoryRecords(ada), DOCKER_BOX_PATHS.memory).map(f => f.content).join("\n");
     assert.ok(/us-east-1/.test(mirror) && !/eu-west-1/.test(mirror), "the mirror excludes the withdrawn line");
 
     const lines = readFileSync(audit, "utf8").trim().split("\n").map(l => JSON.parse(l) as Record<string, unknown>);
@@ -131,7 +132,7 @@ test("withdrawing a source disables every derivative, survives restart, and reje
       /source was withdrawn/
     );
     assert.equal(admin.sourceImpact(ada, source).own.length, 0, "a withdrawn source is idempotently absent from the live view");
-    const mirror = renderMemoryFiles(ada, "Ada", reopened.readMemoryRecords(ada)).map(file => file.content).join("\n");
+    const mirror = renderMemoryFiles(ada, "Ada", reopened.readMemoryRecords(ada), DOCKER_BOX_PATHS.memory).map(file => file.content).join("\n");
     assert.doesNotMatch(mirror, /force every answer through an audit/);
     assert.match(mirror, /unrelated correct preference/);
   } finally {

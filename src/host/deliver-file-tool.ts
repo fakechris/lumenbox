@@ -99,7 +99,7 @@ export async function deliverFileTool(context: ToolContext, input: Record<string
   let chat = "";
   const conversation = context.conversation ?? MAIN_CONVERSATION;
   if (conversation !== MAIN_CONVERSATION) {
-    const outbox = `${chatFilesRoot(conversation)}/outbox`;
+    const outbox = `${chatFilesRoot(conversation, { kind: context.boxKind, workDir: context.boxWorkDir })}/outbox`;
     if (path.startsWith(`${outbox}/`)) chat = " It is already in this chat's outbox and goes out with your reply.";
     else {
       try {

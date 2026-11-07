@@ -1056,15 +1056,15 @@ export function compactSharedShardLines(
 
 // ── the mirror in the box ─────────────────────────────────────────────────────────────
 
-/**
- * Where an agent's memory is projected as files it can read with ordinary tools.
+/*
+ * Where an agent's memory is projected as files it can read with ordinary tools: under the box's
+ * memory directory, `memoryDir(box)` (box-paths.ts, INV-1734), which every function below takes.
  *
  * The record of truth stays on the host (`memory.jsonl`, budgeted into the prompt above); this
  * is a read-only view of *all* of it in the box, because an agent asked "where are my memory
  * files" and the honest answer was "nowhere you can look". Grok Bot keeps `profile.md` and a
  * dated `log/` for the same reason; the shapes are borrowed so a person who knows one knows both.
  */
-export const MEMORY_MIRROR_DIR = "/home/box/work/memory";
 
 /**
  * An agent's name as a directory segment: lowercase, dashes, never empty. Lossy — every name with no
@@ -1085,13 +1085,13 @@ export function agentSlug(agentName: string): string {
  * the other, and either could read what the other remembered. The standing files were fixed the same
  * way first (INV-803).
  */
-export function memoryMirrorDir(agentId: string): string {
-  return `${MEMORY_MIRROR_DIR}/${agentId}`;
+export function memoryMirrorDir(agentId: string, root: string): string {
+  return `${root}/${agentId}`;
 }
 
 /** Where the slug-keyed mirror put an agent's files, so a box can be rid of them. */
-export function legacyMemoryMirrorDir(agentName: string): string {
-  return `${MEMORY_MIRROR_DIR}/${agentSlug(agentName)}`;
+export function legacyMemoryMirrorDir(agentName: string, root: string): string {
+  return `${root}/${agentSlug(agentName)}`;
 }
 
 export interface MemoryFile {
@@ -1106,8 +1106,8 @@ export interface MemoryFile {
  * Retractions are applied, not shown: the live view is what the agent knows now. The header on
  * every file says it is a mirror, because a file that looks editable and is not is a trap.
  */
-export function renderMemoryFiles(agentId: string, agentName: string, records: readonly MemoryRecord[]): MemoryFile[] {
-  const dir = memoryMirrorDir(agentId);
+export function renderMemoryFiles(agentId: string, agentName: string, records: readonly MemoryRecord[], root: string): MemoryFile[] {
+  const dir = memoryMirrorDir(agentId, root);
   const live = dedupe(records);
   const header = (what: string) =>
     [
