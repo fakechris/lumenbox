@@ -75,8 +75,7 @@ async function startInstallation(t: { after(fn: () => void): void }, label: stri
     const timer = setTimeout(() => reject(new Error(`${label} did not start:\n${out}`)), 60_000);
     const onData = (chunk: Buffer) => {
       out += String(chunk);
-      // eslint-disable-next-line no-control-regex
-      const found = /agentbox web.*? on (http:\/\/127\.0\.0\.1:\d+)/.exec(out.replace(/\x1b\[[0-9;]*m/g, ""));
+      const found = / on (http:\/\/127\.0\.0\.1:\d+)\b/.exec(out); // the ready line, "agentbox web on <url>"
       if (found) { clearTimeout(timer); resolve(found[1]!); }
     };
     child.stdout!.on("data", onData); child.stderr!.on("data", onData);
