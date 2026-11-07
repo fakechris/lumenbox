@@ -1213,7 +1213,7 @@ export class DisplayManager {
     this.resourceStates.set(index, state);
     const start = (async () => {
       try {
-        const desktop = this.resourcesRuntime.create ? await this.resourcesRuntime.create(index) : await this.start(index, owner, state.launchId);
+        const desktop = this.resourcesRuntime.create ? this.claim(await this.resourcesRuntime.create(index), owner) : await this.start(index, owner, state.launchId);
         this.desktops.set(index, desktop);
         if (!state.retained) {
           try {
@@ -1232,6 +1232,21 @@ export class DisplayManager {
     })().finally(() => this.starting.delete(index));
     this.starting.set(index, start);
     return start;
+  }
+
+  /**
+   * A desktop just made or adopted, claimed for `owner` — one made by the injected `create` (a
+   * node's own screen, INV-1707) as much as one `start-display` brought up. A desktop this daemon
+   * did not start may already be claimed: refused here rather than in assertOwner alone, so adoption
+   * cannot quietly rebind someone else's screen. An unreadable lease refuses too — it may be a live
+   * owner whose write was torn.
+   */
+  private claim(desktop: Desktop, owner: string | undefined): Desktop {
+    const conflict = ownerConflict(desktop.index, owner);
+    if (conflict !== undefined) throw new DisplayOwnershipError(`${conflict} Use your own desktop.`);
+    if (owner === undefined) return desktop;
+    rememberOwner(desktop.index, owner, this.log);
+    return { ...desktop, owner, ownerAt: Date.now() };
   }
 
   private async start(index: number, owner?: string, launchId?: string): Promise<Desktop> {
@@ -1255,24 +1270,7 @@ export class DisplayManager {
       resolution: detection.resolution,
     });
 
-    // A desktop this daemon did not start may already be claimed. Refused here rather than in
-    // assertOwner alone, so adoption cannot quietly rebind someone else's screen. An unreadable
-    // lease refuses too — it may be a live owner whose write was torn.
-    const conflict = ownerConflict(index, owner);
-    if (conflict !== undefined) {
-      throw new DisplayOwnershipError(`${conflict} Use your own desktop.`);
-    }
-    if (owner !== undefined) rememberOwner(index, owner, this.log);
-
-    const desktop: Desktop = {
-      index,
-      display,
-      executor,
-      detection,
-      owner,
-      ...(owner !== undefined ? { ownerAt: Date.now() } : {}),
-      health: new ComponentHealth(),
-    };
+    const desktop = this.claim({ index, display, executor, detection, health: new ComponentHealth() }, owner);
     this.desktops.set(index, desktop);
     this.log(
       `desktop ${index} ready at ${detection.resolutionString} ` +

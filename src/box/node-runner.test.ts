@@ -98,3 +98,30 @@ test("box connect refuses an organisation from a machine with an installation of
   assert.deepEqual(posted, [], "the daemon token never left");
   assert.equal(existsSync(join(personal, "runner")), false);
 });
+
+test("the machine's screen opens only where the node was started with --screen, and the registration says so (INV-1707)", async t => {
+  const { headlessBoxdEnv } = await import("./headless-boxd.ts");
+  const { nativeBox } = await import("./node-cli.ts");
+  const input = { bind: "127.0.0.1", port: 1, token: "t", workDir: "/w", repositories: [] };
+  assert.equal(headlessBoxdEnv({ BOXD_NATIVE_SCREEN: "1" }, input).BOXD_NATIVE_SCREEN, undefined, "an inherited value opens nothing: host up never opens a screen");
+  assert.equal(headlessBoxdEnv({}, { ...input, screen: true }).BOXD_NATIVE_SCREEN, "1");
+
+  const home = scratch(t);
+  const bundle = join(home, "boxd.cjs");
+  writeFileSync(bundle, "");
+  const envs: NodeJS.ProcessEnv[] = [];
+  const spawnImpl = ((_command: string, _args: string[], options: { env: NodeJS.ProcessEnv }) => {
+    envs.push(options.env);
+    return { stdout: { on() {} }, stderr: { on() {} }, kill() {} };
+  }) as unknown as typeof import("node:child_process").spawn;
+  const posted: Record<string, unknown>[] = [];
+  const fetchImpl = (async (_url: string, init?: RequestInit) => { if (init?.method === "POST") posted.push(JSON.parse(String(init.body)) as Record<string, unknown>); return Response.json({ state: "connected" }); }) as unknown as typeof fetch;
+  for (const screen of [true, false]) {
+    const box = nativeBox({ name: "n1-native", bundle, advertise: "127.0.0.1", port: 1, home, workDir: join(home, "work"), repositories: [], baseEnv: {}, ...(screen ? { screen: true } : {}), spawnImpl, fetchImpl, log: () => {} });
+    const runner = new NodeRunner({ control: "http://org.test", credential: "lbxn_x", version: "t", heartbeatMs: 60_000, log: () => {}, fetchImpl, boxes: [box] });
+    await runner.start();
+    await runner.stop();
+  }
+  assert.deepEqual(envs.map(env => env.BOXD_NATIVE_SCREEN), ["1", undefined]);
+  assert.deepEqual(posted.map(body => body.screen), [true, undefined]);
+});

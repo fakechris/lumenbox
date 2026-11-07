@@ -267,6 +267,7 @@ export const UI_SECTIONS: Record<string, readonly [zh: string, en: string]> = {
   "ui.nodes.revoked-note": ["已吊销：这个节点的 box 不再接受连接和新的工作。要确定已在运行的工作停止，请在那台机器上停止 LumenBox。", "Revoked: this node's boxes take no new connections or work. To be sure what was running there has stopped, stop LumenBox on that machine."],
   "ui.nodes.native-closed": ["还没有开放给成员", "not open to members yet"],
   "ui.nodes.native-open": ["已开放给成员", "open to members"],
+  "ui.nodes.screen": ["本机屏幕已开放给 computer 工具", "its own screen is open to the computer tool"],
   "ui.nodes.open-to-members": ["开放给成员", "Open to members"],
   "ui.nodes.opened": ["已开放给组织的成员。", "Open to the organisation's members."],
   "ui.org-correction.about": ["组织的知识只取代、不删除：能读到条目的人都可以把它标为未核实——它不再被 agent 主动回忆，仍可按 id 引用，负责人会收到通知；负责人或管理员可以取代或撤回它。每一步都留在历史里。", "The organisation's knowledge is superseded, never deleted: anyone who reads an item may mark it unverified — agents stop recalling it on their own, it stays citable by id, and its owner is told; its owner or an Admin may supersede or retract it. Every step stays in the history."],

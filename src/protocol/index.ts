@@ -139,11 +139,11 @@ export interface ElementInfo {
 
 /** A published observation describes its time, target and coordinate space, not authorization. */
 export interface DesktopCapabilities {
-  backend: "x11-atspi";
-  platform: "linux";
-  semantic_actions: readonly ["invoke", "set_value"];
+  backend: "x11-atspi" | "macos-cg"; // macos-cg: a node's own Mac screen (INV-1707, src/cua/macos-executor.ts)
+  platform: "linux" | "darwin";
+  semantic_actions: readonly ("invoke" | "set_value")[];
   background_semantic: false;
-  observation_refs: true;
+  observation_refs: boolean;
 }
 
 export interface DesktopObservation {
@@ -322,8 +322,8 @@ export interface ComputerResult {
   /** One entry per measured write: `click@(400,300) confirmed 8.1%`. */
   effect_detail?: string;
   success: boolean;
-  /** base64 WebP at API resolution. Empty only if capture failed. */
-  screenshot: string;
+  /** base64 WebP at API resolution (PNG where `screenshot_media_type` says so: a node's own Mac screen, INV-1707). Empty only if capture failed. */
+  screenshot: string; screenshot_media_type?: "image/png";
   /** The same frame as JPEG, when the request asked for one and the box could make it. */
   screenshot_jpeg?: string;
   cursor_position?: { x: number; y: number };

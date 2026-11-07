@@ -17,6 +17,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { BoxRecord } from "./identity.ts";
+import { DEFAULT_DISPLAY_INDEX } from "../protocol/index.ts";
 
 export type BoxKind = "docker" | "attached" | "host";
 
@@ -37,6 +38,11 @@ export interface BoxEntry {
   workDir: string;
   members: "everyone" | string[];
   createdAt: string;
+  /**
+   * A host box whose machine's own screen is open to the computer tool (INV-1707): an organisation
+   * node started with `--screen`, as its registration says. Absent everywhere else.
+   */
+  screen?: "native";
 }
 
 export const BOXES_FILENAME = "boxes.json";
@@ -75,8 +81,20 @@ function readEntries(path: string): BoxEntry[] | undefined {
       workDir: typeof entry.workDir === "string" && entry.workDir !== "" ? entry.workDir : DEFAULT_WORK_DIR,
       members: Array.isArray(entry.members) ? entry.members : "everyone",
       createdAt: typeof entry.createdAt === "string" ? entry.createdAt : new Date().toISOString(),
+      ...(entry.kind === "host" && entry.screen === "native" ? { screen: "native" as const } : {}),
     };
   });
+}
+
+/**
+ * Which desktop an agent drives on this box (INV-1707): its own on the image (`own`, the registry's
+ * per-agent index); on a host box none — or, where a node opened the machine's own screen, that one
+ * screen, desktop 1, whichever agent asks (the box lets one of them hold it at a time).
+ */
+export function desktopIndexOn(entry: Pick<BoxEntry, "kind" | "screen">, own: () => number): number | undefined {
+  if (entry.kind !== "host") return own();
+  // The daemon makes the machine's screen its default desktop (src/boxd/native-screen.ts).
+  return entry.screen === "native" ? DEFAULT_DISPLAY_INDEX : undefined;
 }
 
 /**

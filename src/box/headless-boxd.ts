@@ -8,10 +8,17 @@
 import { join } from "node:path";
 import type { Repository } from "../host/bundles.ts";
 
-/** The daemon's environment: headless, bound to `bind` only, files and commands limited to the roots. */
-export function headlessBoxdEnv(base: NodeJS.ProcessEnv, input: { bind: string; port: number; token: string; workDir: string; repositories: readonly Repository[] }): NodeJS.ProcessEnv {
+/**
+ * The daemon's environment: headless, bound to `bind` only, files and commands limited to the roots.
+ * `screen` opens the machine's own screen to the computer tool (INV-1707): an organisation node's
+ * choice only (`node run --screen`); `host up` never passes it, and a value inherited from the
+ * caller's environment is dropped, so nothing opens a screen by accident.
+ */
+export function headlessBoxdEnv(base: NodeJS.ProcessEnv, input: { bind: string; port: number; token: string; workDir: string; repositories: readonly Repository[]; screen?: boolean }): NodeJS.ProcessEnv {
+  const { BOXD_NATIVE_SCREEN: _inherited, ...rest } = base;
   return {
-    ...base,
+    ...rest,
+    ...(input.screen === true ? { BOXD_NATIVE_SCREEN: "1" } : {}),
     BOXD_HEADLESS: "1",
     BOXD_BIND: input.bind,
     BOXD_PORT: String(input.port),

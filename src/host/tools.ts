@@ -2805,7 +2805,7 @@ export async function dispatchTool(
       return {
         text: notes.join(" "), ...approvalOf(result),
         images: result.screenshot
-          ? [{ mediaType: "image/webp", data: result.screenshot }]
+          ? [{ mediaType: result.screenshot_media_type ?? "image/webp", data: result.screenshot }]
           : undefined,
         isError: outcome !== "ok",
       };
