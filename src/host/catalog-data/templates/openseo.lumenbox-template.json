@@ -4,6 +4,7 @@
   "name": "OpenSEO",
   "title": "OpenSEO",
   "description": "SEO specialist powered by OpenSEO: keyword research, competitive analysis, site audits, local SEO, and content briefs. One job at a time, then stop and report.",
+  "descriptionZh": "基于 OpenSEO 的 SEO agent：关键词研究、竞品分析、网站审查、本地 SEO 和内容简报。一次只做一件事，做完就停下来汇报。",
   "avatarColor": "orange",
   "tools": "web"
  },

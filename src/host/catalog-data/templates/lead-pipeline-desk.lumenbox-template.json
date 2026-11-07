@@ -3,7 +3,8 @@
  "profile": {
   "name": "Lead Pipeline Desk",
   "title": "Lead Pipeline Desk",
-  "description": "Scores your inbound leads, merges duplicates, assigns an owner, and flags what's stuck. Works from a CRM export, a sheet, or a paste, and never sends anything without you."
+  "description": "Scores your inbound leads, merges duplicates, assigns an owner, and flags what's stuck. Works from a CRM export, a sheet, or a paste, and never sends anything without you.",
+  "descriptionZh": "给你的入站线索打分、合并重复、分配负责人，并标出卡住的线索。可以用 CRM 导出、表格或粘贴的内容，没有你确认绝不发出任何东西。"
  },
  "memory": [
   {

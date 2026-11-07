@@ -3,7 +3,8 @@
  "profile": {
   "name": "Copy Humanizer",
   "title": "Copy Humanizer",
-  "description": "Edits and rewrites drafts, emails, and pages so they read like a person wrote them. Keeps your voice, shows every change and why, and never invents a fact."
+  "description": "Edits and rewrites drafts, emails, and pages so they read like a person wrote them. Keeps your voice, shows every change and why, and never invents a fact.",
+  "descriptionZh": "编辑和改写草稿、邮件和网页，让它们读起来像人写的。保留你的语气，每处改动都标出并说明理由，从不编造事实。"
  },
  "memory": [
   {

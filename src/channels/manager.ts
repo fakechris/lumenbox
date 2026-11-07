@@ -28,6 +28,8 @@ import { mandateNote, reauthorisationNeeded } from "./mandate-text.ts";
 import { followUpPrompt } from "../host/follow-up.ts";
 import { describePurpose, type OutboundPurpose } from "../host/outbound.ts";
 import type { OutboxSender } from "./outbox-sender.ts";
+import { CONNECTED, statusText, type ChannelStatus, type StatusLine } from "./status-line.ts";
+import type { Locale } from "../i18n/locale.ts";
 import { claimsReference, contextMode, isContextCommand, isGoalCommand, isPlainRetry, isRecoveryCommand, isRetryCommand, parseAcceptance, parseAddress, parseApprovalReply, parseBind, parseBoardRequest, parseContinuation, parseDesktopRequest, parseDigestRequest, parseHelpRequest, parseMeetingJoinRequest, parseRecoveryCommand, parseRosterRequest, parseSchedulesRequest, parseScopeRequest, parseScreenRequest, parseStopRequest, parseUpgradeApproval, renderHelp, chatCommand } from "./commands.ts";
 export { parseAcceptance, parseAddress, parseApprovalReply, parseBind, parseBoardRequest, parseDesktopRequest, parseDigestRequest, parseMeetingJoinRequest, parseRosterRequest, parseSchedulesRequest, parseScopeRequest, parseScreenRequest, parseStopRequest, parseUpgradeApproval, type ApprovalReply, type DigestRequest, type ScopeRequest } from "./commands.ts";
 import type { ApprovalReply } from "./commands.ts";
@@ -205,7 +207,7 @@ export interface ChannelAdapter {
    * at start and never revised (2026-09-13: eighteen hours of "connected" over a dead
    * socket). Absent on an adapter without a long-lived socket.
    */
-  socketStatus?(): string | undefined;
+  socketStatus?(): StatusLine | undefined;
   /** Closes the inbound socket and builds a new one, saying why. The liveness check's lever. */
   reconnect?(reason: string): void;
   /**
@@ -311,12 +313,7 @@ export interface ApprovalCardState {
 /** The stakes line every consent request carries. One sentence, always the same shape. */
 export { APPROVAL_STAKES } from "./strings.ts";
 
-export interface ChannelStatus {
-  name: string;
-  configured: boolean;
-  running: boolean;
-  detail: string;
-}
+export type { ChannelStatus } from "./status-line.ts";
 
 /**
  * What a turn gives the chat: its reply, or deliberate silence with the reason the agent gave
@@ -703,7 +700,7 @@ export function knockRefusal(identity: string): string {
 
 export class ChannelManager {
   private readonly adapters: ChannelAdapter[] = [];
-  private readonly statuses = new Map<string, ChannelStatus>();
+  private readonly statuses = new Map<string, Omit<ChannelStatus, "detail"> & { line: StatusLine | string }>(); // worded when listed (INV-1702)
   /**
    * Where each agent's last channel instruction came from, for routing notices back.
    * `chatKey` carries the thread when the instruction arrived in one, so a question or
@@ -732,8 +729,8 @@ export class ChannelManager {
 
   constructor(private readonly deps: ChannelManagerDeps) {}
 
-  register(adapter: ChannelAdapter, configured: boolean, detail: string): void {
-    this.statuses.set(adapter.name, { name: adapter.name, configured, running: false, detail });
+  register(adapter: ChannelAdapter, configured: boolean, detail: StatusLine | string): void {
+    this.statuses.set(adapter.name, { name: adapter.name, configured, running: false, line: detail });
     if (configured) this.adapters.push(adapter);
   }
 
@@ -746,7 +743,7 @@ export class ChannelManager {
    * exactly as it would have at boot. Refused when the name is already live,
    * because two adapters on one name would be two writers on one namespace.
    */
-  registerAndStart(adapter: ChannelAdapter, detail: string): boolean {
+  registerAndStart(adapter: ChannelAdapter, detail: StatusLine | string): boolean {
     if (this.adapters.some(existing => existing.name === adapter.name)) return false;
     this.register(adapter, true, detail);
     this.startAdapter(adapter);
@@ -771,12 +768,12 @@ export class ChannelManager {
     adapter
       .start(message => this.handle(adapter, message))
       .then(() => {
-        this.setStatus(adapter.name, { running: true, detail: "connected" });
+        this.setStatus(adapter.name, { running: true, line: CONNECTED });
         this.deps.log(`channel ${adapter.name}: connected`);
       })
       .catch((error: unknown) => {
         const detail = error instanceof Error ? error.message : String(error);
-        this.setStatus(adapter.name, { running: false, detail });
+        this.setStatus(adapter.name, { running: false, line: detail });
         this.deps.log(`channel ${adapter.name}: ${detail}`);
       });
   }
@@ -841,11 +838,11 @@ export class ChannelManager {
     }
   }
 
-  list(): ChannelStatus[] {
-    return [...this.statuses.values()].map(status => {
+  list(locale: Locale = "en"): ChannelStatus[] {
+    return [...this.statuses.values()].map(({ line, ...status }) => {
       const adapter = this.adapters.find(candidate => candidate.name === status.name);
       const socket = status.running ? adapter?.socketStatus?.() : undefined;
-      return socket === undefined ? status : { ...status, detail: socket };
+      return { ...status, detail: statusText(socket ?? line, locale) };
     });
   }
 
@@ -1025,7 +1022,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     });
   }
 
-  private setStatus(name: string, patch: Partial<ChannelStatus>): void {
+  private setStatus(name: string, patch: { running: boolean; line: StatusLine | string }): void {
     const current = this.statuses.get(name);
     if (current !== undefined) this.statuses.set(name, { ...current, ...patch });
   }

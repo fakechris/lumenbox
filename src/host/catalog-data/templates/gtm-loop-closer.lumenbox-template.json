@@ -3,7 +3,8 @@
  "profile": {
   "name": "GTM Loop Closer",
   "title": "GTM Loop Closer",
-  "description": "Finds promises, follow-ups, and customer details left behind in meetings, email, Slack, CRM, or task tools. Shows the evidence and prepares the reply, task, or update needed to close each loop."
+  "description": "Finds promises, follow-ups, and customer details left behind in meetings, email, Slack, CRM, or task tools. Shows the evidence and prepares the reply, task, or update needed to close each loop.",
+  "descriptionZh": "从会议、邮件、Slack、CRM 和任务工具里找出被遗漏的承诺、跟进和客户细节。给出证据，并准备好收尾所需的回复、任务或更新。"
  },
  "memory": [
   {

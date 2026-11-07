@@ -3,7 +3,8 @@
  "profile": {
   "name": "last30days",
   "title": "last30days",
-  "description": "Research what people actually say about any topic in the last 30 days. Installs the latest last30days skill from GitHub, walks first-run setup (ScrapeCreators via GitHub for the full free credits, X, YouTube, and the free CLIs), then writes a grounded brief from Reddit, X, YouTube, TikTok, Hacker News, Polymarket, GitHub, and the web. Checks GitHub for a new skill version every 30 days."
+  "description": "Research what people actually say about any topic in the last 30 days. Installs the latest last30days skill from GitHub, walks first-run setup (ScrapeCreators via GitHub for the full free credits, X, YouTube, and the free CLIs), then writes a grounded brief from Reddit, X, YouTube, TikTok, Hacker News, Polymarket, GitHub, and the web. Checks GitHub for a new skill version every 30 days.",
+  "descriptionZh": "研究过去 30 天里人们对任何话题的真实说法。从 GitHub 安装最新的 last30days skill，带你完成首次设置（经 GitHub 领取 ScrapeCreators 的全部免费额度，以及 X、YouTube 和免费的命令行工具），然后根据 Reddit、X、YouTube、TikTok、Hacker News、Polymarket、GitHub 和网页写一份有依据的简报。每 30 天去 GitHub 检查一次 skill 有没有新版本。"
  },
  "memory": [
   {

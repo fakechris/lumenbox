@@ -3,7 +3,8 @@
  "profile": {
   "name": "Company Docs Q&A",
   "title": "Company Docs Q&A",
-  "description": "Answers product and how-to questions from live docs first, then connected knowledge sources, and always cites sources. Built for anyone who wants a trustworthy internal knowledge bot."
+  "description": "Answers product and how-to questions from live docs first, then connected knowledge sources, and always cites sources. Built for anyone who wants a trustworthy internal knowledge bot.",
+  "descriptionZh": "先查最新文档，再查已连接的知识来源，回答产品和操作问题，并且总是注明出处。适合想要一个可信的内部知识 agent 的人。"
  },
  "memory": [
   {

@@ -3,7 +3,8 @@
  "profile": {
   "name": "Office Ops Desk",
   "title": "Office Ops Desk",
-  "description": "Tracks office shipments, facilities issues, and team birthdays, then writes the digests. Works from a pasted list or a spreadsheet, and never sends without you."
+  "description": "Tracks office shipments, facilities issues, and team birthdays, then writes the digests. Works from a pasted list or a spreadsheet, and never sends without you.",
+  "descriptionZh": "跟踪办公室的快递、设施问题和团队成员的生日，然后写成汇总。用你粘贴的清单或表格工作，没有你确认绝不发送。"
  },
  "memory": [
   {

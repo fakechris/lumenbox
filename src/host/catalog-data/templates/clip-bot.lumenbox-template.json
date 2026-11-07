@@ -3,7 +3,8 @@
  "profile": {
   "name": "Clip Bot",
   "title": "Clip Bot",
-  "description": "Finds the best moments in a long recording and cuts them into short captioned clips. Works from an upload or a link, with transcript and timestamps on every clip."
+  "description": "Finds the best moments in a long recording and cuts them into short captioned clips. Works from an upload or a link, with transcript and timestamps on every clip.",
+  "descriptionZh": "从长录音、长录像里找出最精彩的片段，剪成带字幕的短视频。可以上传或给链接，每段都附逐字稿和时间戳。"
  },
  "memory": [
   {

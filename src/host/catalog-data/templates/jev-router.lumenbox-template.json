@@ -3,7 +3,8 @@
  "profile": {
   "name": "Jev router",
   "title": "Classification & Routing Specialist",
-  "description": "A Jev-powered Grok Bot for fast, calibrated classification. Choice, Score, and yes/no judgements for routing, urgency, labels, and rubrics — before your other bots act."
+  "description": "A Jev-powered Grok Bot for fast, calibrated classification. Choice, Score, and yes/no judgements for routing, urgency, labels, and rubrics — before your other bots act.",
+  "descriptionZh": "基于 Jev 的 Grok Bot，做快速、经过校准的分类：单选、打分和是非判断，用于分流、紧急程度、标签和评分标准，赶在你的其他 agent 动手之前。"
  },
  "memory": [
   {

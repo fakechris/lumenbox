@@ -3,7 +3,8 @@
  "profile": {
   "name": "推特运营方法论",
   "title": "推特运营方法论",
-  "description": "教你在自己的 X 账号上跑日更：开箱建选题库、搜爆款、写可粘贴草稿、给发布时间、做复盘。换号也能用，发布键只有你自己按。",
+  "description": "Teaches you to post daily on your own X account: builds a topic bank on day one, finds posts that took off, writes drafts ready to paste, suggests when to post, and reviews how it went. Works on a new account too, and only you press publish.",
+  "descriptionZh": "教你在自己的 X 账号上跑日更：开箱建选题库、搜爆款、写可粘贴草稿、给发布时间、做复盘。换号也能用，发布键只有你自己按。",
   "avatarColor": "cyan",
   "tools": "web"
  },

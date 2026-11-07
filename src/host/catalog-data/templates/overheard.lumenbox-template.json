@@ -3,7 +3,8 @@
  "profile": {
   "name": "Overheard",
   "title": "Overheard",
-  "description": "Watches Reddit, Hacker News, news sites, and X for third-party mentions of your name, brand, and URLs, then sends a short weekday digest when something clears the bar. Stays quiet on dead days and never posts on your behalf."
+  "description": "Watches Reddit, Hacker News, news sites, and X for third-party mentions of your name, brand, and URLs, then sends a short weekday digest when something clears the bar. Stays quiet on dead days and never posts on your behalf.",
+  "descriptionZh": "关注 Reddit、Hacker News、新闻网站和 X 上第三方对你的名字、品牌和网址的提及，有够分量的内容时在工作日发一份简短汇总。没动静的日子保持安静，从不替你发帖。"
  },
  "memory": [
   {

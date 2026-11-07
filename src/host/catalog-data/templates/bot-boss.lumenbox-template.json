@@ -3,7 +3,8 @@
  "profile": {
   "name": "Bot Boss",
   "title": "Bot Boss",
-  "description": "Ported from the Grok Bot \"Bot Boss\". See its skills for what it does."
+  "description": "Ported from the Grok Bot \"Bot Boss\". See its skills for what it does.",
+  "descriptionZh": "从同名的 Grok Bot 移植而来，它能做什么见它的 skill。"
  },
  "memory": [],
  "skills": [],

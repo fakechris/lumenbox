@@ -2121,7 +2121,7 @@ test("the channel list shows the socket as the door last saw it, not the 'connec
   const lines: string[] = [];
   const socketed = Object.assign(testAdapter(), {
     name: "feishu",
-    socketStatus: () => "socket lost 7m ago; reconnecting",
+    socketStatus: () => ({ key: "channel.status.socket-lost", vars: { minutes: 7 } }),
     reconnect: (reason: string) => lines.push(`rebuilt: ${reason}`),
   });
   const manager = new ChannelManager({ mayDrive: () => true, ask: async () => "ok", log: () => {} });
@@ -2132,6 +2132,8 @@ test("the channel list shows the socket as the door last saw it, not the 'connec
   assert.equal(feishu?.running, true);
   assert.equal(feishu?.detail, "socket lost 7m ago; reconnecting");
   assert.equal(manager.list().find(s => s.name === "telegram")?.detail, "connected", "a door without a socket keeps the plain word");
+  // Worded when the list is read, in the reader's language (INV-1702).
+  assert.deepEqual(manager.list("zh").map(s => s.detail), ["7 分钟前断开，正在重连", "已连接"]);
   assert.equal(manager.reconnect("feishu", "silent for hours"), true);
   assert.equal(manager.reconnect("telegram", "silent for hours"), false, "a door that cannot rebuild says so");
   assert.deepEqual(lines, ["rebuilt: silent for hours"]);

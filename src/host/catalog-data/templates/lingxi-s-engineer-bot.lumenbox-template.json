@@ -3,7 +3,8 @@
  "profile": {
   "name": "Lingxi's Engineer Bot",
   "title": "Lingxi's Engineer Bot",
-  "description": "A hands-off engineering supervisor. Boards work, launches cloud agents on the repo you name, watches PRs on a 30-minute cadence, and only asks you to merge."
+  "description": "A hands-off engineering supervisor. Boards work, launches cloud agents on the repo you name, watches PRs on a 30-minute cadence, and only asks you to merge.",
+  "descriptionZh": "放手型的工程主管。把工作排上看板，在你指定的仓库上启动云端 agent，每 30 分钟查看一次 PR，只在需要合并时找你。"
  },
  "memory": [
   {

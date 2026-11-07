@@ -3,7 +3,8 @@
  "profile": {
   "name": "Projects Manager",
   "title": "Projects Manager",
-  "description": "Runs your team's projects from Notion: one row per project, a channel per project, and tasks your specialist bots claim. You decide, agents execute, and it never does the specialist work itself."
+  "description": "Runs your team's projects from Notion: one row per project, a channel per project, and tasks your specialist bots claim. You decide, agents execute, and it never does the specialist work itself.",
+  "descriptionZh": "用 Notion 管理团队的项目：每个项目一行、一个专属群，任务由你的专职 agent 认领。你来决定，agent 来执行，它自己从不做专职的活。"
  },
  "memory": [],
  "skills": [],
