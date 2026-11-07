@@ -29,14 +29,23 @@
  * Keychain, which is a service (securityd) rather than a file — Claude Code's login and git's
  * osxkeychain credentials live there — and on Linux the session bus that Secret Service
  * (gnome-keyring, KWallet) answers on, and the gpg-agent and keyring sockets.
+ * And it closes the Unix sockets (INV-1716): a socket is a door to a process running as the person —
+ * the ssh-agent signs with their keys without a key file being read, docker.sock is root on the
+ * machine, tmux runs whatever it is sent. Seatbelt refuses every Unix-socket connection except to
+ * sockets under the box's own writable roots (its work directory, rw repositories; never the shared
+ * temp directories, where the person's agent and tmux live); bubblewrap has no such rule, so the
+ * socket places are hidden instead (`SOCKET_HOMES_UNDER_HOME`, `SOCKET_PATHS`, the whole runtime
+ * directory, `$SSH_AUTH_SOCK`'s directory, the sockets found in /tmp), and the variables that
+ * name a socket are unset (`SOCKET_VARIABLES`).
  *
  * Known gaps, stated: a hard link made outside the rules is not covered; on Linux the deny
- * list only covers paths that exist when the command starts; Seatbelt matches the real path,
+ * list only covers paths that exist when the command starts, so a socket the person opens in /tmp
+ * after a command started is reachable by that command; Seatbelt matches the real path,
  * so every path here is resolved first (a `/var/folders` rule silently misses `/private/var`).
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -84,8 +93,16 @@ export const CREDENTIAL_READS_UNDER_HOME = [".ssh", ".gnupg", ".aws", ".config/g
 export const KEYCHAIN_SERVICES = ["com.apple.SecurityServer", "com.apple.secd", "com.apple.security.KeychainStasher", "com.apple.security.kcsharing", "com.apple.keychainsharingmessagingd"] as const;
 /** Prefixes of the same: every `com.apple.securityd.*` endpoint, SecurityAgent and its authhost. */
 export const KEYCHAIN_SERVICE_PREFIXES = ["com.apple.securityd", "com.apple.security.agent", "com.apple.security.authhost"] as const;
-/** Under the user's runtime directory on Linux: the session bus Secret Service answers on, the keyring and gpg-agent sockets. */
-export const SECRET_SOCKETS_UNDER_RUNTIME = ["bus", "keyring", "gnupg"] as const;
+/**
+ * Under the home directory: where container engines keep their sockets (Docker Desktop, OrbStack,
+ * Colima, Rancher Desktop, Lima — the last two also keep the VM's ssh key there). Hidden with the
+ * credentials (INV-1716): a docker socket is root on the machine.
+ */
+export const SOCKET_HOMES_UNDER_HOME = [".docker/run", ".orbstack/run", ".colima", ".rd", ".lima"] as const;
+/** System-wide sockets of the same kind, hidden on Linux (macOS refuses every Unix socket instead). */
+export const SOCKET_PATHS = ["/var/run/docker.sock", "/run/docker.sock", "/run/podman", "/var/run/podman"] as const;
+/** The variables that name a socket of the person's: unset in every confined start, so a tool does not even try. */
+export const SOCKET_VARIABLES = ["SSH_AUTH_SOCK", "SSH_AGENT_PID", "DOCKER_HOST", "CONTAINER_HOST", "DBUS_SESSION_BUS_ADDRESS", "GPG_AGENT_INFO"] as const;
 /**
  * Under the home directory: where the person's own coding engines keep their login and history
  * (INV-1710). A confined box runs its engines with a state directory of its own instead
@@ -97,8 +114,16 @@ export interface HostSandboxOptions {
   platform?: NodeJS.Platform;
   home?: string;
   tmp?: string;
-  /** The user's runtime directory on Linux (`/run/user/<uid>`), whose secret sockets `hideCredentials` hides; replaced in tests. */
+  /**
+   * The user's runtime directory on Linux (`/run/user/<uid>`), which `hideCredentials` hides whole: the
+   * session bus Secret Service answers on, gpg-agent's, the keyring's and systemd's sockets, rootless
+   * docker and podman, the ssh-agent a desktop session starts. Replaced in tests.
+   */
   runtimeDir?: string;
+  /** The person's ssh-agent socket (`$SSH_AUTH_SOCK` where the daemon started), whose directory `hideCredentials` hides. */
+  sshAuthSock?: string;
+  /** The shared temp directory swept for sockets on Linux (`/tmp`); replaced in tests. */
+  systemTmp?: string;
   /** Whether a tool is runnable here; replaced in tests. */
   probe?: (command: string, args: string[]) => boolean;
 }
@@ -129,6 +154,8 @@ export class HostSandbox {
   private readonly home: string;
   private readonly tmp: string;
   private readonly runtimeDir: string | undefined;
+  private readonly sshAuthSock: string | undefined;
+  private readonly systemTmp: string;
   private readonly probe: (command: string, args: string[]) => boolean;
   private checked: string | undefined | null = null;
 
@@ -137,6 +164,8 @@ export class HostSandbox {
     this.home = real(options.home ?? homedir());
     this.tmp = real(options.tmp ?? tmpdir());
     this.probe = options.probe ?? defaultProbe;
+    this.sshAuthSock = options.sshAuthSock;
+    this.systemTmp = real(options.systemTmp ?? "/tmp");
     this.runtimeDir = options.runtimeDir ?? (this.platform === "linux" && process.getuid !== undefined ? `/run/user/${process.getuid()}` : undefined);
   }
 
@@ -174,7 +203,9 @@ export class HostSandbox {
     const writable = [cwd, this.tmp, ...(rules.allowWrite ?? []).map(real)].filter((path, index, all) => all.indexOf(path) === index);
     const readOnly = (rules.readOnly ?? []).filter(path => existsSync(path)).map(real);
     const hideSecrets = rules.hideCredentials === true;
-    const hidden = hideSecrets ? this.hiddenPaths() : [];
+    // The box's own places: a socket there is one the box made. The shared temp directories are not its own.
+    const owned = writable.filter(path => path !== this.tmp && path !== this.systemTmp);
+    const hidden = hideSecrets ? this.hiddenPaths(owned) : [];
     // What is hidden is not writable either: a rw grant of a parent must not reopen it.
     const denied = [...this.deniedPaths(writable.filter(path => path !== this.tmp)), ...readOnly, ...hidden].filter((path, index, all) => all.indexOf(path) === index);
     const ports = [...new Set(rules.loopbackPorts ?? [])];
@@ -183,11 +214,14 @@ export class HostSandbox {
       `never under ${denied.map(path => path.replace(this.home, "~")).join(", ")}`,
       ...(hidden.length > 0 ? [`no reads at all under ${hidden.map(path => path.replace(this.home, "~")).join(", ")}`] : []),
       ...(hideSecrets && this.mechanism === "sandbox-exec" ? ["no Keychain: the securityd services are refused and /usr/bin/security does not run, so no stored login or password can be read"] : []),
+      ...(hideSecrets
+        ? [`no Unix sockets but the box's own${this.mechanism === "sandbox-exec" ? ` (under ${owned.join(", ") || "nothing"})` : ""}: not the person's ssh-agent, docker, tmux or session bus, and no name lookups (the egress proxy resolves names); ${SOCKET_VARIABLES.join(", ")} are unset`]
+        : []),
       ports.length > 0 ? `network only to loopback port${ports.length === 1 ? "" : "s"} ${ports.join(", ")} (the egress proxy, which applies the relay's allow list)` : "no network at all (no egress relay is configured for host processes)",
     ];
     return this.mechanism === "sandbox-exec"
-      ? { command: "/usr/bin/sandbox-exec", args: ["-p", this.seatbelt(writable, denied, ports, hidden, hideSecrets), command, ...args], env: {}, mechanism: "sandbox-exec", rules: words }
-      : { command: "bwrap", args: this.bwrap(real(rules.runIn ?? cwd), writable, denied, ports, command, args, hidden), env: {}, mechanism: "bwrap", rules: words };
+      ? { command: "/usr/bin/sandbox-exec", args: ["-p", this.seatbelt(writable, denied, ports, hidden, hideSecrets, owned), ...(hideSecrets ? ["/usr/bin/env", ...SOCKET_VARIABLES.flatMap(name => ["-u", name])] : []), command, ...args], env: {}, mechanism: "sandbox-exec", rules: words }
+      : { command: "bwrap", args: this.bwrap(real(rules.runIn ?? cwd), writable, denied, ports, command, args, hidden, hideSecrets), env: {}, mechanism: "bwrap", rules: words };
   }
 
   /**
@@ -201,16 +235,63 @@ export class HostSandbox {
     return candidates.filter(path => existsSync(path)).map(real).filter((path, index, all) => all.indexOf(path) === index);
   }
 
-  /** What `hideCredentials` hides, resolved, keeping only what exists. */
-  private hiddenPaths(): string[] {
-    const candidates = [...CREDENTIAL_READS_UNDER_HOME, ...ENGINE_HOMES_UNDER_HOME]
+  /** What `hideCredentials` hides, resolved, keeping only what exists. `owned` are the box's own places, never hidden. */
+  private hiddenPaths(owned: readonly string[]): string[] {
+    const candidates = [...CREDENTIAL_READS_UNDER_HOME, ...ENGINE_HOMES_UNDER_HOME, ...SOCKET_HOMES_UNDER_HOME]
       .map(name => join(this.home, name))
       .concat(agentboxHomes(this.home))
-      .concat(this.runtimeDir === undefined ? [] : SECRET_SOCKETS_UNDER_RUNTIME.map(name => join(this.runtimeDir!, name)));
+      .concat(this.agentSocket(owned))
+      // Seatbelt refuses every Unix socket outside `owned`; bubblewrap can only hide where they are.
+      .concat(this.mechanism === "bwrap" ? [...(this.runtimeDir === undefined ? [] : [this.runtimeDir]), ...SOCKET_PATHS, ...this.tmpSockets(owned)] : []);
     return candidates.filter(path => existsSync(path)).map(real).filter((path, index, all) => all.indexOf(path) === index);
   }
 
-  private seatbelt(writable: readonly string[], denied: readonly string[], ports: readonly number[], hidden: readonly string[] = [], hideSecrets = false): string {
+  /**
+   * The person's ssh-agent: its directory (`/tmp/ssh-XXXX`, `com.apple.launchd.*`), or the socket
+   * alone when the directory is one a box needs (the temp directory, the home, a root of its own).
+   */
+  private agentSocket(owned: readonly string[]): string[] {
+    const socket = this.sshAuthSock;
+    if (socket === undefined || socket === "" || !socket.startsWith("/")) return [];
+    const dir = real(dirname(socket));
+    const needed = ["/", this.tmp, this.systemTmp, this.home, ...owned].some(path => path === dir || path.startsWith(`${dir}/`));
+    return [needed ? socket : dir];
+  }
+
+  /**
+   * The sockets in the shared temp directories, and one level down, when the command starts: the
+   * person's tmux (`/tmp/tmux-<uid>`), an agent started by hand, X11's, a database's. Each becomes
+   * `/dev/null`. The egress bridges (`unixSocketFor`) stay, the sandbox's own way out.
+   */
+  private tmpSockets(owned: readonly string[]): string[] {
+    const isOwned = (path: string) => owned.some(root => path === root || path.startsWith(`${root}/`));
+    const entries = (dir: string) => {
+      try {
+        return readdirSync(dir).map(name => join(dir, name));
+      } catch {
+        return [];
+      }
+    };
+    const kind = (path: string) => {
+      try {
+        const stat = lstatSync(path);
+        return stat.isSocket() ? "socket" : stat.isDirectory() ? "dir" : "other";
+      } catch {
+        return "other";
+      }
+    };
+    const found: string[] = [];
+    for (const top of [...new Set([this.tmp, this.systemTmp])]) {
+      for (const path of entries(top)) {
+        if (isOwned(path)) continue;
+        if (kind(path) === "socket") found.push(path);
+        else if (kind(path) === "dir") found.push(...entries(path).filter(child => !isOwned(child) && kind(child) === "socket"));
+      }
+    }
+    return found.filter(path => !/\/agentbox-host-port-\d+\.sock$/.test(path));
+  }
+
+  private seatbelt(writable: readonly string[], denied: readonly string[], ports: readonly number[], hidden: readonly string[] = [], hideSecrets = false, owned: readonly string[] = []): string {
     // The Keychain is a service, not a file: without the Mach lookups nothing can ask securityd for an item (INV-1711).
     // The `security` binary is refused too, so the agent reads a plain "Operation not permitted"; a copy of it is stopped by the lookups.
     const keychain = [...KEYCHAIN_SERVICES.map(name => `(global-name ${sbplPath(name)})`), ...KEYCHAIN_SERVICE_PREFIXES.map(name => `(global-name-prefix ${sbplPath(name)})`)].join(" ");
@@ -225,12 +306,15 @@ export class HostSandbox {
       ...(hideSecrets ? [`(deny mach-lookup ${keychain})`, '(deny process-exec (literal "/usr/bin/security"))'] : []),
       "(deny network-outbound)",
       ...ports.map(port => `(allow network-outbound (remote ip "localhost:${port}"))`),
-      "(allow network-outbound (remote unix-socket))",
+      // A host command keeps every Unix socket; the native box only its own (INV-1716). Measured 2026-11-07: with no
+      // other socket, curl, git and node reach https through the egress proxy (127.0.0.1, no lookup), npm, python's
+      // multiprocessing and node's fork IPC run; refused are the ssh-agent, docker's socket and mDNSResponder (DNS).
+      ...(hideSecrets ? (owned.length > 0 ? [`(allow network-outbound (remote unix-socket ${owned.map(path => `(subpath ${sbplPath(path)})`).join(" ")}))`] : []) : ["(allow network-outbound (remote unix-socket))"]),
     ];
     return lines.join("");
   }
 
-  private bwrap(cwd: string, writable: readonly string[], denied: readonly string[], ports: readonly number[], command: string, args: readonly string[], hidden: readonly string[] = []): string[] {
+  private bwrap(cwd: string, writable: readonly string[], denied: readonly string[], ports: readonly number[], command: string, args: readonly string[], hidden: readonly string[] = [], hideSecrets = false): string[] {
     // No tmpfs over /tmp: the temp directory is writable because it is bound back in like every
     // other allowed path, so a write anywhere else under /tmp is refused rather than swallowed.
     const out = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"];
@@ -244,7 +328,8 @@ export class HostSandbox {
     // Inside the namespace there is only a fresh loopback. Each allowed port is bridged from a
     // Unix socket the host side listens on (host-egress.ts), so a client's 127.0.0.1:<port> lands there.
     const bridges = ports.map(port => `socat TCP-LISTEN:${port},bind=127.0.0.1,reuseaddr,fork UNIX-CONNECT:${unixSocketFor(this.tmp, port)} & `).join("");
-    out.push("--", "/bin/sh", "-c", `${bridges}exec "$0" "$@"`, command, ...args);
+    const unset = hideSecrets ? `unset ${SOCKET_VARIABLES.join(" ")}; ` : "";
+    out.push("--", "/bin/sh", "-c", `${unset}${bridges}exec "$0" "$@"`, command, ...args);
     return out;
   }
 }

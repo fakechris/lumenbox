@@ -14,7 +14,8 @@
  *     the credential and hook places are never writable;
  *   - **reads** of the credential places (`~/.ssh`, `~/.aws`, `~/.agentbox*`…) refused, because an
  *     agent living here is not asked before each command the way `RunOnHost` is;
- *   - **network** only to the box's egress proxy when a relay is configured, and none otherwise.
+ *   - **network** only to the box's egress proxy when a relay is configured, and none otherwise;
+ *     no Unix socket but the box's own, so not the person's ssh-agent, docker or tmux (INV-1716).
  *
  * The tools and engines an agent runs keep state under `$HOME` (`~/.npm`, `~/.cache`, `~/.claude`,
  * `~/.codex`), which the rules above refuse. Opening the home would hand the box the person's own
@@ -92,6 +93,8 @@ export interface ConfinementOptions {
   log: (line: string) => void;
   /** Replaced in tests: platform, home, probe. */
   sandbox?: HostSandbox;
+  /** The person's ssh-agent socket where the daemon started (`$SSH_AUTH_SOCK`): hidden from every command (INV-1716). */
+  sshAuthSock?: string;
   /** The shared temp directory (`/tmp`); replaced in tests so "outside" can be somewhere real. */
   systemTmp?: string;
 }
@@ -107,7 +110,7 @@ function real(path: string): string {
 /** The confinement for this daemon, or undefined where the box itself is the wall. */
 export function confinementFor(options: ConfinementOptions): Confine | undefined {
   if (!options.headless) return undefined;
-  const sandbox = options.sandbox ?? new HostSandbox();
+  const sandbox = options.sandbox ?? new HostSandbox(options.sshAuthSock !== undefined ? { sshAuthSock: options.sshAuthSock } : {});
   const systemTmp = real(options.systemTmp ?? SYSTEM_TMP);
   let mirror: Server | undefined;
   const rules = () => {

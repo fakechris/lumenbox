@@ -52,6 +52,13 @@ test("the rules are written in words and in the profile: cwd and tmp writable, t
     assert.match(hidden, /\(deny process-exec \(literal "\/usr\/bin\/security"\)\)/, "and the security tool does not start");
     assert.match(hidden, /\(deny file-read\* [^\n]*Library\/Keychains"\)/, "nor are the keychain files readable");
     assert.doesNotMatch(hidden, /com\.apple\.trustd/, "certificate checks still reach trustd");
+    // And no Unix socket but the box's own (INV-1716): not the person's ssh-agent, docker.sock, tmux, mDNSResponder.
+    assert.match(profile, /\(allow network-outbound \(remote unix-socket\)\)$/, "a host command, asked for each time, keeps them");
+    assert.doesNotMatch(hidden, /\(remote unix-socket\)\)/, "the native box has no blanket socket allow");
+    assert.ok(hidden.endsWith(`(allow network-outbound (remote unix-socket (subpath "${realpathSync(h.cwd)}")))`), "only sockets under its own root, after the network deny");
+    const boxArgs = sandbox.wrap("/bin/sh", ["-c", "true"], { cwd: h.cwd, hideCredentials: true }).args;
+    assert.deepEqual(boxArgs.slice(2, 5), ["/usr/bin/env", "-u", "SSH_AUTH_SOCK"], "and the variables naming a socket are unset before the command starts");
+    assert.ok(boxArgs.includes("DOCKER_HOST"));
 
     const linux = new HostSandbox({ platform: "linux", home: h.home, probe: () => true }).wrap("/bin/echo", ["hi"], { cwd: h.cwd });
     assert.equal(linux.command, "bwrap");
@@ -59,19 +66,52 @@ test("the rules are written in words and in the profile: cwd and tmp writable, t
     assert.ok(linux.args.indexOf("--ro-bind") < linux.args.indexOf("--bind"), "root read-only first, writable paths bound back in");
     assert.match(linux.rules.join("\n"), /no network at all/);
     // The native box's extra rules (INV-1700): a start directory that grants nothing, a ro path, hidden credentials.
-    // On Linux the secret stores are sockets in the runtime directory: the session bus Secret Service answers on, gpg-agent's (INV-1711).
+    // On Linux the secret stores are sockets in the runtime directory: the session bus Secret Service answers on, gpg-agent's (INV-1711);
+    // so are systemd's, rootless docker's and a desktop's ssh-agent, so the whole directory goes (INV-1716). Sockets are files, so bwrap hides them.
     const runtime = join(h.home, "..", "run");
     mkdirSync(join(runtime, "gnupg"), { recursive: true });
     writeFileSync(join(runtime, "bus"), "");
-    const native = new HostSandbox({ platform: "linux", home: h.home, runtimeDir: runtime, probe: () => true }).wrap("/bin/echo", ["hi"], { cwd: h.cwd, runIn: h.home, readOnly: [join(h.cwd, "vendor")], hideCredentials: true });
+    const fakeTmp = join(h.home, "..", "systmp");
+    mkdirSync(join(fakeTmp, "ssh-abc"), { recursive: true });
+    writeFileSync(join(fakeTmp, "ssh-abc", "agent.1"), "");
+    mkdirSync(join(h.home, ".orbstack", "run"), { recursive: true });
+    const native = new HostSandbox({ platform: "linux", home: h.home, runtimeDir: runtime, systemTmp: fakeTmp, sshAuthSock: join(fakeTmp, "ssh-abc", "agent.1"), probe: () => true }).wrap("/bin/echo", ["hi"], { cwd: h.cwd, runIn: h.home, readOnly: [join(h.cwd, "vendor")], hideCredentials: true });
     const at = (flag: string, path: string) => native.args.findIndex((arg, i) => arg === flag && native.args[i + 1] === path);
     assert.equal(native.args[native.args.indexOf("--chdir") + 1], realpathSync(h.home), "starts where asked");
     assert.ok(!native.args.some((arg, i) => arg === "--bind" && native.args[i + 1] === realpathSync(h.home)), "without making it writable");
     assert.ok(at("--tmpfs", realpathSync(join(h.home, ".ssh"))) > at("--bind", real), "~/.ssh is hidden, after the writable binds so it covers them");
     assert.ok(at("--remount-ro", realpathSync(join(h.home, ".ssh"))) > at("--tmpfs", realpathSync(join(h.home, ".ssh"))), "and read-only, so a write there fails rather than vanishing");
-    assert.ok(native.args.some((arg, i) => arg === "--ro-bind" && native.args[i + 1] === "/dev/null" && native.args[i + 2] === realpathSync(join(runtime, "bus"))), "the session bus is /dev/null: no Secret Service");
-    assert.ok(at("--tmpfs", realpathSync(join(runtime, "gnupg"))) > 0, "and gpg-agent's sockets are gone");
+    assert.ok(at("--tmpfs", realpathSync(runtime)) > at("--bind", real), "the runtime directory is gone: no session bus, no gpg-agent, no systemd");
+    assert.ok(at("--tmpfs", realpathSync(join(fakeTmp, "ssh-abc"))) > 0, "the person's ssh-agent directory is gone");
+    assert.ok(at("--tmpfs", realpathSync(join(h.home, ".orbstack", "run"))) > 0, "and a container engine's socket directory");
+    assert.match(native.args.at(native.args.indexOf("-c") + 1)!, /^unset SSH_AUTH_SOCK [^;]*DOCKER_HOST[^;]*; /, "and the variables naming them are unset");
   } finally {
+    h.dispose();
+  }
+});
+
+test("on Linux the sockets lying in the shared temp directory are hidden when a box command starts, the egress bridge is not (INV-1716)", async () => {
+  const h = home();
+  const { createServer } = await import("node:net");
+  const systemTmp = mkdtempSync(join(tmpdir(), "hs-systmp-"));
+  const servers = [join(systemTmp, "tmux-1000", "default"), join(systemTmp, ".s.PGSQL.5432"), join(systemTmp, "agentbox-host-port-8791.sock"), join(h.cwd, "own.sock")].map(path => {
+    mkdirSync(join(path, ".."), { recursive: true });
+    const server = createServer();
+    return { path, server, up: new Promise<void>(resolve => server.listen(path, resolve)) };
+  });
+  try {
+    await Promise.all(servers.map(entry => entry.up));
+    const args = new HostSandbox({ platform: "linux", home: h.home, tmp: systemTmp, systemTmp, probe: () => true }).wrap("/bin/true", [], { cwd: h.cwd, hideCredentials: true }).args;
+    const nulled = (path: string) => args.some((arg, i) => arg === "--ro-bind" && args[i + 1] === "/dev/null" && args[i + 2] === realpathSync(path));
+    assert.ok(nulled(servers[0]!.path), "the person's tmux is /dev/null");
+    assert.ok(nulled(servers[1]!.path), "so is a database's socket");
+    assert.ok(!nulled(servers[2]!.path), "the egress bridge stays: it is the sandbox's own way out");
+    assert.ok(!nulled(servers[3]!.path), "and a socket under the box's own root stays its own");
+    const host = new HostSandbox({ platform: "linux", home: h.home, tmp: systemTmp, systemTmp, probe: () => true }).wrap("/bin/true", [], { cwd: h.cwd }).args;
+    assert.ok(!host.includes("/dev/null"), "a host command, asked for each time, hides nothing");
+  } finally {
+    for (const entry of servers) entry.server.close();
+    rmSync(systemTmp, { recursive: true, force: true });
     h.dispose();
   }
 });
