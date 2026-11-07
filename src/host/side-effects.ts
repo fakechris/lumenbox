@@ -91,6 +91,8 @@ const DECLARED: Record<string, SideEffect> = {
   // Reading the goal or growing its checklist changes the board, which is the agent's own work.
   Goal: { tier: "self" },
   NoteSiteLearning: { tier: "self" },
+  // Unverify only takes trust away; retract and supersede mark their own call irreversible, so the person says yes first (INV-1730).
+  CorrectOrgKnowledge: { tier: "self" },
   SendToAgent: { tier: "self" },
   AskUser: { tier: "self" },
   AskSecret: { tier: "self" },

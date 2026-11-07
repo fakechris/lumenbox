@@ -11,7 +11,7 @@
 [English](reference-tools.md) · 中文。本页由 `scripts/docs-reference.mjs` 生成，来源：`buildTools()`（src/host/tools.ts）、src/host/side-effects.ts 里的层级、src/host/tool-roster.ts 里的名单和 src/host/catalog.ts 里的目录工具组。
 本页与来源不一致时 `npm test` 会失败；改来源，然后运行 `node scripts/docs-reference.mjs --write`。
 
-55 个工具：`buildTools` 在所有可选项都打开时给出的清单——一台 box、视觉、主机执行器、桌面、飞书文档阅读器、模板暂存、一个搜索 key，以及连接器 github、feishu、dingtalk。真实的一轮拿到的更少；**何时提供**一栏写每个工具需要什么。工具说明来自源代码，保持英文。
+56 个工具：`buildTools` 在所有可选项都打开时给出的清单——一台 box、视觉、主机执行器、桌面、飞书文档阅读器、模板暂存、一个搜索 key，以及连接器 github、feishu、dingtalk。真实的一轮拿到的更少；**何时提供**一栏写每个工具需要什么。工具说明来自源代码，保持英文。
 
 - **层级**——一次调用对外界做了什么（side-effects.ts）：`observe` 只看，`self` 留在 box 里或只涉及提出请求的人，`reach` 越出 box 行事，`credential` 触及权限。
 - **询问**——闸门是否先问人，以及确认卡片上的说法。由主机写，从不由 agent 写。
@@ -37,6 +37,7 @@
 | `ClaimWork` | Take a piece of work so a teammate does not take the same one, or hand it back when you are done with it. | self | 否 | 总是；分支里没有 | deferred | desk, web, code, team | `work`, `release` |
 | `computer` | Interact with the Linux desktop in your box: move and click the mouse, type, press keys, scroll, drag, and capture the screen. | self | 否 | 需要一台 box、视觉、桌面；分支里没有 | resident | — | `expect`, `actions` |
 | `connector_request` | Call a connected service's API as the person who authorized it: github, feishu, dingtalk. | observe, or reach by call | 否; 按调用 是: “change something in the service as the person who connected it” | 需要任一连接器 | resident | — | `connector`, `method`, `path`, `body`, `headers` |
+| `CorrectOrgKnowledge` | Correct an item of the organisation's knowledge, cited by its id (org:…). | self | 否 | 总是；分支里没有 | deferred | — | `action`, `id`, `reason`, `text`, `evidence` |
 | `CreateAgent` | Create a new agent — a new teammate — with a name and a persona. | credential | 是: “create a new agent with its own tools” | 总是；分支里没有 | deferred | team | `from`, `name`, `description`, `title`, `tags` |
 | `Delegate` | Hand a self-contained piece of work to a specialist engine installed in your box — deep work on a repository, where reading dozens of files and iterating against tests is the job itself. | self | 否 | 需要一台 box；分支里没有 | resident | code | `preset`, `prompt`, `cwd`, `tools`, `session`, `install`, `mode`, `session_id`, `steer`, `cancel`, `close` |
 | `DeliverFile` | Mark a file in your box as what a task produced — its deliverable. | self | 否 | 总是；分支里没有 | resident | — | `path`, `note`, `task_id` |

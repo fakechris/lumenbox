@@ -182,6 +182,13 @@ export const SERVER_ERRORS = {
   "err.org-personal": ["个人安装没有组织知识，也不会写入。请在组织自己的安装里提升。", "A personal installation has no organisation knowledge and never writes it. Promote it inside the organisation's own installation."],
   "err.org-not-pending": ["这条提议没有在等待审核：已经处理过了，或从未提出。", "That proposal is not waiting for review: it was decided already, or never proposed."],
   "err.org-no-readers": ["它要进入的 box 已不存在，没有人能读到。请拒绝，或为存在的 box 重新提升。", "The box it was proposed for no longer exists, so nobody could read it. Reject it, or promote it again for a box that exists."],
+  "err.org-correction-verb": ["verb 必须是 unverify、supersede 或 retract", "verb must be unverify, supersede or retract"],
+  "err.org-item-unknown": ["没有你能读到的组织条目 {id}", "There is no organisation item {id} you may read"],
+  "err.org-item-not-standing": ["{id} 已被取代、撤回或不再有效，改错只作用于仍然有效的条目", "{id} is superseded, retracted or no longer valid; a correction applies to what still stands"],
+  "err.org-correction-not-owner": ["只有 {id} 的负责人（{owner}）或管理员可以撤回或取代它；能读到它的人都可以把它标为未核实", "Only {id}'s owner ({owner}) or an Admin may retract or supersede it; anyone who reads it may mark it unverified"],
+  "err.org-correction-reason": ["请写明原因：负责人会看到它", "Say why: the owner reads it"],
+  "err.org-correction-evidence": ["取代的新条目至少需要一条依据（task:、inv:、commit:、doc: 等），管理员亲自写入时除外", "A superseding item needs at least one evidence reference (task:, inv:, commit:, doc:, …) unless an Admin writes it"],
+  "err.org-correction-text": ["新条目需要一行内容，不超过 500 字", "The new item needs one line of text, at most 500 characters"],
   // ── models and providers ─────────────────────────────────────────────────────────────────────
   "err.provider-unknown-known": ["没有 provider \"{provider}\"。可选：{known}。", "Unknown provider \"{provider}\". Known: {known}."],
   "err.provider-unknown": ["没有 provider \"{provider}\"。", "Unknown provider \"{provider}\"."],
