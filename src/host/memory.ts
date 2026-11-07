@@ -39,9 +39,10 @@ import { type SwitchDeps, switched } from "./jev.ts";
 import { jevSelect, sufficiencySwitched } from "./memory-select-jev.ts";
 import { rankRelated } from "./memory-relevance.ts";
 import type { MemoryTypes } from "./memory-types.ts";
+import type { KnowledgeFields } from "./memory-scope.ts";
 
-/** A single thing remembered. One JSON object per line, appended, never edited in place. */
-export interface MemoryRecord {
+/** A single thing remembered. One JSON object per line, appended, never edited in place. Scope, surface, owner and evidence: memory-scope.ts (docs/98 §4). */
+export interface MemoryRecord extends KnowledgeFields {
   at: string;
   kind: MemoryKind;
   text: string;

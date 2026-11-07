@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: storage
-     updated: 2026-11-06
+     updated: 2026-11-07
 -->
 # Data
 
@@ -305,6 +305,22 @@ repeated question. Automatic extraction writes only to the agent's own tier, del
 unvouched-for note propagating to four agents' prompts multiplies the cost of a bad extraction by
 four.
 
+**Who may read a shared record, and whether it is recalled** (INV-1725, docs/98 §4 and §6;
+`src/host/memory-scope.ts`). A record may carry the organisation-knowledge fields: `scope`
+(`agent` · `box:<id>` · `org`), `surface` (`recall` · `cite-only`), `owner`, `evidence[]` (typed
+references — `task:`, `deliverable:`, `receipt:`, `routine:`, `inv:`, `commit:`, `doc:`, or
+`<conversation>@<time>`), `validFrom` / `validUntil`, `supersedes` (the version of the record it
+replaces), `verifiedBy` / `verifiedAt` / `reviewBy`. One admission check runs in
+`readSharedMemory(agent, principal)`, before anything is ranked: `agent` admits the agent that
+wrote it; `box:<id>` admits the agents of that box, and only for a person who may enter it
+(`mayEnterBox`; the operator's own credential may); `org` admits every reader of the installation.
+A scope the code does not know, or a box that no longer exists, admits nobody. Then only `recall`
+records (or ones with no `surface`) reach the prompt and `Recall`; a `cite-only` record, or one
+whose surface nobody defined, is read only by its version id (`citedById`). A record written before
+the fields existed keeps the visibility it had: with a `box` it is `box:<box>`; with `audience:
+"everyone"` and no hold it is `org` (until that field is retired, docs/98 §9); with neither — older
+than INV-424 — it is `org`, as it was visible everywhere. `held` and `review` are unchanged.
+
 Rendered as its own section under a tighter budget (1,500 characters against 4,000). Smaller because
 every agent writes to this tier, so it grows N times as fast, and a generous budget here would push
 out an agent's own working knowledge. Each line carries who learned it and, when the box was told who
@@ -313,7 +329,10 @@ whoever asks next, which in a team is worse than not recording it.
 
 ### 2.2b `memory.jsonl`
 
-Append-only, one record per line: `{ at, kind, text, source?, from?, revokedSources? }`.
+Append-only, one record per line: `{ at, kind, text, source?, from?, revokedSources? }`. An agent's
+own records leave the shared tier's scope, surface, owner and evidence fields (§2.2c) absent and mean
+what they always did: `agent` scope, recalled. A record in this file that does say `surface:
+"cite-only"` is kept out of the prompt and `Recall` like a shared one.
 
 This replaced a single markdown file that was pasted whole into every system prompt. That works for a
 week and then becomes a second unbounded context — it only grows, nothing ages out, the same fact

@@ -70,7 +70,7 @@ import { sniffImage } from "./image-refusal.ts";
 import { appendLearning, hostOf, learningsDir, readLearnings, renderLearnings } from "./learnings.ts";
 import type { McpManager, ToolEffect } from "./mcp.ts";
 import { MCP_FACE_TOKEN_VARIABLE, type McpFace } from "./mcp-face.ts";
-import { dedupe, dedupeKey, describeFrom, memoryRef, validateRecord } from "./memory.ts"; import { recallMatches } from "./memory-relevance.ts"; import { alreadyPending, forTeamTier, needsReview, pendingNotice, teamReviewOn } from "./team-memory-review.ts";
+import { dedupe, dedupeKey, describeFrom, memoryRef, validateRecord } from "./memory.ts"; import { recallMatches } from "./memory-relevance.ts"; import { recallable } from "./memory-scope.ts"; import { alreadyPending, forTeamTier, needsReview, pendingNotice, teamReviewOn } from "./team-memory-review.ts";
 import { guardMemoryCandidate } from "./memory-guard.ts";
 import type { ModelRelay } from "./model-relay.ts";
 import { type OAuthGate, type OAuthProvider, oauthProvider, scrubToken, tokenHeaders } from "./oauth.ts";
@@ -4350,11 +4350,11 @@ export async function dispatchTool(
       const sharedOnly = input.shared === true;
       const own = sharedOnly
         ? []
-        : dedupe(context.registry.readMemoryRecords(context.agent.id)).map(record => ({
+        : dedupe(recallable(context.registry.readMemoryRecords(context.agent.id))).map(record => ({
             record,
             tier: "yours",
           }));
-      const team = dedupe(context.registry.readSharedMemory(context.agent.id)).map(record => ({
+      const team = dedupe(recallable(context.registry.readSharedMemory(context.agent.id, context.caller?.userId))).map(record => ({
         record,
         tier: "team",
       }));
@@ -5253,7 +5253,7 @@ export async function dispatchTool(
       // something a colleague already shared, and should not share what it already knows privately
       // without that being visible.
       const own = context.registry.readMemoryRecords(context.agent.id);
-      const team = context.registry.readSharedMemory(context.agent.id);
+      const team = context.registry.readSharedMemory(context.agent.id, context.caller?.userId);
 
       // What this fact withdraws, if anything. Written as its own record rather than by editing the
       // file: memory is an append-only log of what was believed when, and that is what makes a
