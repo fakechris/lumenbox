@@ -1488,6 +1488,14 @@ test("a scheduled push delivers the files its text names, like a reply does", as
   adapter.sentFiles.length = 0;
   await manager.pushToChat("telegram:oc_room", "晨报: 一切正常。", { kind: "notice", about: "test" });
   assert.deepEqual(adapter.sentFiles, []);
+
+  // A host box's report names its own work directory (INV-1737): that file follows, the image's path names nothing there.
+  const work = "/Users/ada/lumenbox";
+  const onHost = new ChannelManager({ mayDrive: () => true, ask: async () => "unused", collectOutbox: async () => [], readBoxFile: async path => ({ name: path.split("/").pop() ?? "f", base64: "aGk=" }), workDir: () => work, log: () => {} });
+  onHost.register(adapter, true, "test");
+  await started(onHost);
+  await onHost.pushToChat("telegram:oc_room", `长版: ${work}/research/retro.md，旧的 /home/box/work/research/old.md`, { kind: "notice", about: "test" });
+  assert.deepEqual((adapter.sentFiles as { name: string }[]).map(file => file.name), ["retro.md"]); // widened: the assertion above narrowed it to empty
 });
 
 test("a chat's files follow the conversation, and its reply follows the room", async () => {

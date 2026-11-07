@@ -1922,10 +1922,10 @@ async function main(): Promise<number> {
           const { defaultBoxConfig } = await import("./box/docker.ts");
           try {
             const box = await new DockerBoxProvisioner(defaultBoxConfig()).connect();
-            const sent = await deliverPackageToBox(dir, manifest.runKey, box, err);
+            const sent = await deliverPackageToBox(dir, manifest.runKey, box, { kind: "docker" }, err); // the Docker box connected above
             out(
               sent.failed.length === 0
-                ? `  delivered ${sent.delivered} file(s) to the box at /home/box/work/digest/${manifest.runKey}/package`
+                ? `  delivered ${sent.delivered} file(s) to the box at ${sent.at}`
                 : `  delivered ${sent.delivered} file(s) to the box; ${sent.failed.length} failed`
             );
           } catch (error) {
@@ -1963,9 +1963,9 @@ async function main(): Promise<number> {
           draft = readFileSync(join(dir, "draft.md"), "utf8");
         } catch {
           const { defaultBoxConfig } = await import("./box/docker.ts");
-          const { BOX_DIGEST_DIR } = await import("./host/day-package/assemble.ts");
+          const { digestDir } = await import("./host/box-paths.ts");
           const box = await new DockerBoxProvisioner(defaultBoxConfig()).connect();
-          const read = await box.readFile(`${BOX_DIGEST_DIR}/${runKey}/package/draft.md`);
+          const read = await box.readFile(`${digestDir({ kind: "docker" })}/${runKey}/package/draft.md`);
           draft = read.content;
         }
         // Yesterday's themes, when there was a yesterday. A delta verb without a baseline

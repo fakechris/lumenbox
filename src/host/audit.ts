@@ -126,11 +126,14 @@ export function buildAuditPrompt(input: {
  * is a real Linux and the property needed is only "did anything change between
  * two moments". The chats/ tree is excluded — the channel file exchange writes
  * there during ordinary delivery, and an audit must not be invalidated by an
- * inbox arriving.
+ * inbox arriving. `work` is the box's work directory (`workDir`, box-paths.ts): the image's
+ * `/home/box/work` on a Docker box, the one a host box was started with (INV-1737), which
+ * needs no quoting.
  */
-export const MANIFEST_COMMAND =
-  "find /home/box/work -path /home/box/work/chats -prune -o -type f -print0 2>/dev/null " +
-  "| sort -z | xargs -0 -r sha256sum 2>/dev/null";
+export function manifestCommand(work: string): string {
+  return `find ${work} -path ${work}/chats -prune -o -type f -print0 2>/dev/null ` +
+    "| sort -z | xargs -0 -r sha256sum 2>/dev/null";
+}
 
 export function parseManifest(stdout: string): Map<string, string> {
   const manifest = new Map<string, string>();

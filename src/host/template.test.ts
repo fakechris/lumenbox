@@ -24,6 +24,7 @@ import {
   manifestOf,
   installLearnings,
   reconcile,
+  recipeDirFor,
   renderRecipe,
   resolvePlaceholders,
   rewriteFrontmatter,
@@ -179,6 +180,9 @@ test("the recipe the new bot reads has its own name in place of {self}, and the 
   assert.deepEqual(pending.connectors, ["browser"]);
   assert.deepEqual(pending.fillIns.map(fillIn => fillIn.id), ["timezone", "feishu_chat", "teammate"]);
 
+  // The recipe is placed under the importing agent's own box: the image's on Docker, the box's work directory on a host box (INV-1737).
+  assert.equal(recipeDirFor("Vera", { kind: "docker" }), "/home/box/work/templates/vera");
+  assert.equal(recipeDirFor("Vera", { kind: "host", workDir: "/Users/ada/lumenbox" }), "/Users/ada/lumenbox/templates/vera");
   const cue = templateSetupCue({ template, self: "Vera", recipePath: "/home/box/work/templates/vera/recipe.md", createdBy: "chris", pending });
   assert.ok(cue.startsWith(TEMPLATE_CUE));
   assert.match(cue, /created by chris from the template "下载专家" by kin/);

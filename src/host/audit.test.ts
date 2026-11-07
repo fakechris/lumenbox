@@ -5,7 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildAuditPrompt, manifestDiff, parseManifest, settleAudit } from "./audit.ts";
+import { buildAuditPrompt, manifestCommand, manifestDiff, parseManifest, settleAudit } from "./audit.ts";
 import type { Task } from "./tasks.ts";
 
 const withAcceptance = { contract: { acceptance: "the xlsx is in the vendor's inbox, not just attached" } };
@@ -117,4 +117,13 @@ test("the manifest reads sha256sum output and the diff names every kind of chang
     "/home/box/work/new.txt",
   ]);
   assert.deepEqual(manifestDiff(before, new Map(before)), [], "no change, no diff");
+});
+
+test("the manifest is taken over the box's own work directory, its chats left out (INV-1737)", () => {
+  // A host box has no /home/box: a find there is empty, so a reviewer that edited the work would pass unseen.
+  const work = "/Users/ada/lumenbox";
+  const host = manifestCommand(work);
+  assert.ok(host.startsWith(`find ${work} -path ${work}/chats -prune `), host);
+  assert.doesNotMatch(host, /\/home\/box/);
+  assert.ok(manifestCommand("/home/box/work").startsWith("find /home/box/work -path /home/box/work/chats -prune "), "the image's, as it was");
 });

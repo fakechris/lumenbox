@@ -1765,6 +1765,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // For a reply that named a deliverable instead of sending it. Confined to the work
     // directory by the box's own upload/download guard, and refused above 25MB the same
     // way the outbox is.
+    workDir: () => workRootOf(registry.defaultBox()), // the box readBoxFile reads, whose paths a reply names (INV-1737)
     readBoxFile: async path => {
       const client = orchestrator.boxClient();
       if (client === undefined) return undefined;
@@ -4943,14 +4944,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           }
           const client = orchestrator.boxClient();
           if (!client) {
-            send(res, 503, apiError("box-not-running"));
+            send(res, 503, { ...apiError("box-not-running"), root: work }); // the page's chat links need the root with or without a box (INV-1737)
             return;
           }
           try {
             const listing = await client.listDir(dir);
             send(res, 200, { ...listing, root: work }); // where the page starts and stops going up
           } catch (error) {
-            send(res, 404, { error: error instanceof Error ? error.message : String(error) });
+            send(res, 404, { error: error instanceof Error ? error.message : String(error), root: work });
           }
           return;
         }
@@ -6002,7 +6003,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             tasks: board === undefined ? [] : board.list().filter(task => caller.userId === undefined || (task.assigneeId ? mayReadAgent(task.assigneeId) : task.requester === principals.resolve(caller.userId).id)),
             questions: questions.list(),
             nameOf: id => registry.tryGet(id)?.profile.name ?? principals.list().find(person => person.id === id)?.name ?? id,
-            unanswered: involuteUnanswered,
+            unanswered: involuteUnanswered, workOf: id => workRootOf(registry.tryGet(id) !== undefined ? registry.boxOf(id) : undefined), // where a submission's files are (INV-1737)
             paused: orchestrator.bus.pausedChains(), agentIds: new Set(registry.list().map(agent => agent.id)), approvals: orchestrator.policy.pending().filter(item => caller.userId === undefined || mayReadAgent(item.agentId)), // a parked command is the commonest block (INV-1627)
             undeliverable: outbox.problems(), routinesHeld: (await orchestrator.scheduler.status()).filter(entry => entry.hold !== undefined && mayReadBox(entry.boxId ?? registry.box.id)).map(entry => ({ slug: entry.slug, name: entry.name, ...entry.hold! })), // INV-1665
             chatKeyOf: conversation => conversations.chatKeyFor(conversation), // The stage table's reads (INV-1464).

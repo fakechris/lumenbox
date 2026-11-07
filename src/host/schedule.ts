@@ -36,7 +36,7 @@ import { describeSchedule, isDue, nextFire, type Schedule } from "./schedule-tim
 import { envNumber } from "../config.ts";
 import { webhookPrompt } from "./webhooks.ts";
 import { mkdirSync } from "node:fs";
-import { appendLine } from "./jsonl.ts";
+import { appendLine } from "./jsonl.ts"; import { DOCKER_WORK } from "./box-paths.ts";
 import type { DeliverWhen } from "./routine-resolve.ts";
 import type { RunResult } from "./run-result.ts";
 import { readRunLedger, RoutineHolds, runsOf, type RoutineHold, type RoutineReason, type RoutineRun, type RunRecord } from "./routine-runs.ts";
@@ -56,7 +56,9 @@ export function triggerPrompt(
   skillName: string,
   path: string,
   described: string,
-  deliver?: string
+  deliver?: string,
+  /** The work directory of the box it runs on (`workDir`, box-paths.ts; INV-1737). */
+  work: string = DOCKER_WORK
 ): string {
   return [
     `[scheduled] This turn was started by a timer, not by a person. ${
@@ -68,8 +70,8 @@ export function triggerPrompt(
     `You are running the **${skillName}** skill, scheduled ${described}. Read \`${path}\` and follow it.`,
     "",
     deliver === undefined
-      ? "If it produces something, write it under /home/box/work and say the path — that is how anyone sees it. If it cannot run, say why in one line rather than retrying: this will come round again."
-      : "Your final message is what the chat receives, so make it the thing itself — the brief, the summary, the numbers — not a report that a brief was written. Keep it short enough to read on a phone; put the long version under /home/box/work and name the file. If it could not run, say so in one line: this comes round again.",
+      ? `If it produces something, write it under ${work} and say the path — that is how anyone sees it. If it cannot run, say why in one line rather than retrying: this will come round again.`
+      : `Your final message is what the chat receives, so make it the thing itself — the brief, the summary, the numbers — not a report that a brief was written. Keep it short enough to read on a phone; put the long version under ${work} and name the file. If it could not run, say so in one line: this comes round again.`,
   ].join("\n");
 }
 
@@ -241,6 +243,8 @@ export interface SchedulerDeps {
    * its prompt so a retro opens with its own previous "next week" rather than a blank.
    */
   priorCommitments?: (slug: string) => string | undefined;
+  /** The work directory of an agent's box, which a run's prompt names (INV-1737); the image's when not given. */
+  workDirOf?: (agent: string) => string;
   /** Who a schedule wakes when it names nobody. */
   /** The agent a skill runs as when its file names none: the box's first, or the installation's. */
   defaultAgent: (boxId?: string) => string | undefined;
@@ -581,7 +585,7 @@ export class Scheduler {
       const prior = this.deps.priorCommitments?.(skill.slug);
       void this.launch(skill, agent, () => this.deps.run(
         agent,
-        triggerPrompt(skill.name, skill.path, describeSchedule(skill.schedule), skill.deliver) + (prior !== undefined ? `\n\n${prior}` : ""),
+        triggerPrompt(skill.name, skill.path, describeSchedule(skill.schedule), skill.deliver, this.deps.workDirOf?.(agent)) + (prior !== undefined ? `\n\n${prior}` : ""),
         skill.deliver,
         skill.slug,
         skill.allowedTools,
@@ -813,7 +817,7 @@ export class Scheduler {
     const priorByHand = this.deps.priorCommitments?.(skill.slug);
     void this.launch(skill, agent, () => this.deps.run(
       agent,
-      triggerPrompt(skill.name, skill.path, describeSchedule(skill.schedule), skill.deliver) + (priorByHand !== undefined ? `\n\n${priorByHand}` : ""),
+      triggerPrompt(skill.name, skill.path, describeSchedule(skill.schedule), skill.deliver, this.deps.workDirOf?.(agent)) + (priorByHand !== undefined ? `\n\n${priorByHand}` : ""),
       skill.deliver,
       skill.slug,
       skill.allowedTools,

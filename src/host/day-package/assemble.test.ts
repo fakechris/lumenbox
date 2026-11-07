@@ -14,7 +14,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   assembleDay,
-  BOX_DIGEST_DIR,
   dayWindow,
   deliverPackageToBox,
   describeDay,
@@ -295,16 +294,25 @@ test("a package is delivered where the reader can reach it, READY last", async (
     // The skill runs inside the box, which cannot see the host's directory. Getting this
     // wrong shipped an unrunnable skill once (INV-670 follow-up), so the delivery is
     // asserted rather than assumed.
+    // Under the box's own work directory: the image's on a Docker box, the one a host box was started with (INV-1737).
+    const work = "/Users/ada/lumenbox";
+    const hostUploaded: string[] = [], made: string[] = [];
+    const sentToHost = await deliverPackageToBox(dir, manifest.runKey, { uploadFile: async (at: string) => { hostUploaded.push(at); }, exec: async (command: string) => { made.push(command); } }, { kind: "host", workDir: work });
+    assert.equal(sentToHost.at, `${work}/digest/${manifest.runKey}/package`);
+    assert.ok(hostUploaded.length >= 4 && hostUploaded.every(at => at.startsWith(`${sentToHost.at}/`)), hostUploaded.join(", "));
+    assert.ok(made.length === 1 && !made[0]!.includes("/home/box"), made.join("; "));
+
     const uploaded: string[] = [];
-    await deliverPackageToBox(dir, manifest.runKey, {
+    const sent = await deliverPackageToBox(dir, manifest.runKey, {
       uploadFile: async (at: string) => {
         uploaded.push(at);
       },
-    });
+    }, { kind: "docker" });
 
+    assert.equal(sent.at, `/home/box/work/digest/${manifest.runKey}/package`, "the image's path, as docs/61 §6.2 named it");
     assert.ok(uploaded.length >= 4, `only ${uploaded.length} files delivered`);
     for (const at of uploaded) {
-      assert.ok(at.startsWith(`${BOX_DIGEST_DIR}/${manifest.runKey}/package/`), at);
+      assert.ok(at.startsWith(`${sent.at}/`), at);
     }
     assert.ok(uploaded.some(at => at.endsWith("/manifest.json")));
     assert.ok(uploaded.some(at => at.includes("/sources/")));
@@ -331,6 +339,7 @@ test("a delivery that fails partway says which files, and does not claim the pac
           if (at.endsWith("manifest.json")) throw new Error("box is full");
         },
       },
+      { kind: "docker" },
       line => said.push(line)
     );
     assert.deepEqual(result.failed, ["manifest.json"]);

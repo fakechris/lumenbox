@@ -167,6 +167,27 @@ export function standingRoot(box: BoxPlace): string {
   return lumenboxDirs(workDir(box)).standing;
 }
 
+/** Where an imported template's recipe is put for the new agent to read, `<templates>/<agent>` (docs/29, INV-1737). */
+export function templatesDir(box: BoxPlace): string {
+  return `${workDir(box)}/templates`;
+}
+
+/** Where a day package is delivered for the skill that reads it, `<digest>/<run key>/package` (docs/61 §6.2, INV-1737). */
+export function digestDir(box: BoxPlace): string {
+  return `${workDir(box)}/digest`;
+}
+
+/**
+ * Text written for the image's layout, as this box reads it (INV-1737): every `/home/box/work` in
+ * a tool description, a refusal or a seeded role becomes the box's own work directory. A Docker or
+ * attached box, or none named, gets the same string back, byte for byte. A host work directory
+ * needs no quoting or escaping (`hostWork`), so this is safe inside JSON and shell text alike.
+ */
+export function inBox(text: string, box: BoxPlace): string {
+  const work = workDir(box);
+  return work === DOCKER_WORK ? text : text.replaceAll(DOCKER_WORK, work);
+}
+
 function lumenboxDirs(work: string): Pick<BoxPaths, "work" | "skills" | "memory" | "standing" | "engines" | "enginesBin" | "mcpFaces" | "reports"> {
   return {
     work,
