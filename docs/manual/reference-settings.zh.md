@@ -11,7 +11,7 @@
 [English](reference-settings.md) · 中文。本页由 `scripts/docs-reference.mjs` 生成，来源：`SETTINGS_PANES`（src/web/settings-registry.ts），设置对话框按它渲染标签页。
 本页与来源不一致时 `npm test` 会失败；改来源，然后运行 `node scripts/docs-reference.mjs --write`。
 
-8 个面板。**配置**是面板在 `~/.agentbox/config.json` 里改的项；**API** 是它背后的路由。由脚本挂载的面板，在那个脚本加载后才出现。
+9 个面板。**配置**是面板在 `~/.agentbox/config.json` 里改的项；**API** 是它背后的路由。由脚本挂载的面板，在那个脚本加载后才出现。
 
 | key | 面板 | 用途 | 配置 | API | 挂载 |
 |---|---|---|---|---|---|
@@ -22,4 +22,5 @@
 | `mine` | 我的 | 属于你的东西：你的 MCP token、你的长期批准、闸门本会问你的事，以及 agent 对你的了解。 | — | `/api/mcp/tokens`, `/api/policy`, `/api/person` | 页面自带 |
 | `memory` | 记忆 | 每个 agent 记住了什么、每条记忆从哪里来，以及修改或删除它。 | — | `/api/memory` | 页面自带 |
 | `supervision` | 监督 | 看门狗：工作停滞时提醒你；监督者：你给它一个目标，它一直盯到结束。 | — | `/api/supervision` | 由脚本挂载 |
+| `machine` | 本机 | 这台机器的用途——个人的机器、个人 + 组织或组织的节点——在首次运行时选择；前两种之间靠加入或断开组织切换。只在桌面 app 里有；记录在 app 自己的数据目录，不在 ~/.agentbox。 | — | — | 由脚本挂载 |
 | `organisations` | 组织 | 这个 app 在个人安装之外连接的组织：用地址或邀请链接加入、打开、断开。每个组织也是窗口最左一栏里的一项，显示你在那里的角色和它自己的计数；打开后在这个窗口里显示组织自己的页面。只在桌面 app 里有；每个组织的令牌存在系统钥匙串里。 | — | — | 由脚本挂载 |
