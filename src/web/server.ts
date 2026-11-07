@@ -78,12 +78,12 @@ import {
 import { PreferenceStore } from "./preferences.ts";
 
 /**
- * The one directory a person may browse, and the one that survives a rebuild.
- *
+ * The one directory a person may browse, and the one that survives a rebuild: the work directory of
+ * the box the file routes talk to, `workDir(box)` (INV-1736), unless the environment names one.
  * Those being the same set is deliberate: "you can download it" and "it will still be here
  * tomorrow" are then one rule rather than two.
  */
-const WORK_DIR = process.env.AGENTBOX_WORK_DIR ?? "/home/box/work";
+const workRootOf = (box: BoxPlace): string => process.env.AGENTBOX_WORK_DIR ?? workDir(box);
 
 /**
  * The tool list from a request body: an array of known names, `null` for "all",
@@ -120,10 +120,10 @@ export const RESTART_EXIT_CODE = 75;
  * a symlink pointing out of the tree — that is checked in the daemon with `realpath`, where the
  * filesystem actually is. Both, because this one is reachable by anyone with a UI token.
  */
-function withinWork(path: string): boolean {
+function withinWork(path: string, work: string): boolean {
   if (path.includes("\0")) return false;
   const normalised = posix.normalize(path);
-  return normalised === WORK_DIR || normalised.startsWith(`${WORK_DIR}/`);
+  return normalised === work || normalised.startsWith(`${work}/`);
 }
 
 import { agentboxHome, egressRelayFromEnv, holdHostToken, isPersonalBoxQuota, trustsGatewayIdentity, loadConfig, lockedConfigEnv, reapplyConfigEnv, saveConfig, type AgentboxConfig } from "../config.ts";
@@ -243,7 +243,7 @@ import { dockerEnvironment, readBoxToken, type DockerEnvironmentState } from "..
 import { attachedBox, tokenOf } from "../box/boxes.ts";
 import { catalogTemplate, describeTemplate, parseTemplate, resolveBundleRefs, rewriteFrontmatter, templatesEnabled, unresolvedPlaceholders } from "../host/template.ts";
 import { SKILL_FILENAME, authoringHints, parseSkillFile, slugify } from "../host/skills.ts";
-import { skillsDir } from "../host/box-paths.ts";
+import { type BoxPlace, skillsDir, workDir } from "../host/box-paths.ts";
 import { catchUpFloor } from "../channels/ingress.ts";
 import { REPLAY_MAX_AGE_MS } from "../channels/feishu.ts";
 import { ActivityLog } from "./activity.ts";
@@ -2992,7 +2992,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const sideDoorStage = (task: Task) => stageWorldOf(task, { undeliverableChats: new Set(outbox.problems().map(receipt => receipt.chatKey)), questions: questions.list(), agentIds: new Set(registry.list().map(agent => agent.id)), chatKeyOf: conversation => conversations.chatKeyFor(conversation), active: taskActive });
   const changeFeed = new ChangeFeed({ stageOf: task => taskStage(task, sideDoorStage(task)) }); orchestrator.tasks?.onChange(task => changeFeed.record(task)); feedForks(changeFeed, orchestrator.pendingWork?.forks, id => orchestrator.tasks?.get(id)); // watch (INV-1508), with the forks of a task's turns (INV-1667)
   const sideDoorTools = () => mcpServerTools({
-    registry, orchestrator, principals, workDir: WORK_DIR, log, redact: text => outboundRedactor(vault.heldValues())(text), mayDrive: (agentId, principalId) => mayEnterBox(registry.boxOf(agentId), principalId) && mandateWorld().mayDrive(principalId), mayReadTask: (task, principalId) => (task.assigneeId !== undefined && registry.has(task.assigneeId) ? mayEnterBox(registry.boxOf(task.assigneeId), principalId) : task.requester === principalId), // INV-1668: a deliverable's bytes to whoever may see the task, as the web route has it
+    registry, orchestrator, principals, workDir: workRootOf(registry.defaultBox()), log, redact: text => outboundRedactor(vault.heldValues())(text), mayDrive: (agentId, principalId) => mayEnterBox(registry.boxOf(agentId), principalId) && mandateWorld().mayDrive(principalId), mayReadTask: (task, principalId) => (task.assigneeId !== undefined && registry.has(task.assigneeId) ? mayEnterBox(registry.boxOf(task.assigneeId), principalId) : task.requester === principalId), // INV-1668: a deliverable's bytes to whoever may see the task, as the web route has it
     stageWorld: sideDoorStage, changeFeed, listen: listener => { channelTurnListeners.add(listener); return () => channelTurnListeners.delete(listener); },
     notifyTask: (task, text) => { const chatKey = task.conversation === undefined ? undefined : conversations.chatKeyFor(task.conversation); if (chatKey !== undefined) void channels.pushToChat(chatKey, text, { kind: "notice", about: `supervisor flag on ${task.id}` }).catch((error: unknown) => log(`supervisor flag ${task.id}: notice not sent (${error instanceof Error ? error.message : String(error)})`)); }, // INV-1509
   });
@@ -4932,21 +4932,21 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // machine, or attaching it to the message. We have no agent on their machine, so the browser
         // is the delivery mechanism, and these two routes are it.
         if (route === "GET /api/files") {
+          const work = workRootOf(registry.defaultBox()), dir = url.searchParams.get("dir") ?? work; // the box boxClient() is (INV-1736)
+          // Confined here as well as in the daemon. Two checks rather than one because this is the
+          // one reachable by anyone holding a UI token, including a viewer.
+          if (!withinWork(dir, work)) {
+            send(res, 403, apiError("browse-outside-work", { dir: work }));
+            return;
+          }
           const client = orchestrator.boxClient();
           if (!client) {
             send(res, 503, apiError("box-not-running"));
             return;
           }
-          const dir = url.searchParams.get("dir") ?? WORK_DIR;
-          // Confined here as well as in the daemon. Two checks rather than one because this is the
-          // one reachable by anyone holding a UI token, including a viewer.
-          if (!withinWork(dir)) {
-            send(res, 403, apiError("browse-outside-work", { dir: WORK_DIR }));
-            return;
-          }
           try {
             const listing = await client.listDir(dir);
-            send(res, 200, listing);
+            send(res, 200, { ...listing, root: work }); // where the page starts and stops going up
           } catch (error) {
             send(res, 404, { error: error instanceof Error ? error.message : String(error) });
           }
@@ -4954,14 +4954,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         if (route === "GET /api/file") {
+          const path = url.searchParams.get("path") ?? "", work = workRootOf(registry.defaultBox());
+          if (!withinWork(path, work)) {
+            send(res, 403, apiError("handover-outside-work", { dir: work }));
+            return;
+          }
           const client = orchestrator.boxClient();
           if (!client) {
             send(res, 503, apiError("box-not-running"));
-            return;
-          }
-          const path = url.searchParams.get("path") ?? "";
-          if (!withinWork(path)) {
-            send(res, 403, apiError("handover-outside-work", { dir: WORK_DIR }));
             return;
           }
           try {
@@ -4991,15 +4991,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // The other direction: a person hands the agent a document. Driving is required — a viewer
           // may read what the agents made and may not add to it.
           if (refused()) return;
+          const body = await readJson(req);
+          const path = String(body.path ?? ""), work = workRootOf(registry.defaultBox());
+          if (!withinWork(path, work)) {
+            send(res, 403, apiError("upload-outside-work", { dir: work }));
+            return;
+          }
           const client = orchestrator.boxClient();
           if (!client) {
             send(res, 503, apiError("box-not-running"));
-            return;
-          }
-          const body = await readJson(req);
-          const path = String(body.path ?? "");
-          if (!withinWork(path)) {
-            send(res, 403, apiError("upload-outside-work", { dir: WORK_DIR }));
             return;
           }
           try {

@@ -25,6 +25,7 @@ import {
   takeChanges,
   writeStanding,
 } from "./standing.ts";
+import { standingRoot } from "./box-paths.ts";
 
 function scratch(): { dir: string; done: () => void } {
   const dir = mkdtempSync(join(tmpdir(), "agentbox-standing-"));
@@ -130,6 +131,14 @@ test("a box path names a standing file only under this agent's own mirror direct
   assert.equal(standingFileOf("/home/box/work/memory/ada-lovelace/profile.md", "ada-id"), undefined);
   // The id, not a slug of the name: two names outside a-z0-9 would slug to the same directory.
   assert.notEqual(standingBoxDir("zhang-id"), standingBoxDir("li-id"));
+  // A host box mirrors under its own work directory (INV-1736); the image's path and `~/work`
+  // (the person's own home there) name nothing.
+  const root = standingRoot({ kind: "host", workDir: "/Users/ada/lumenbox" });
+  assert.equal(standingBoxDir("ada-id", root), "/Users/ada/lumenbox/standing/ada-id");
+  assert.equal(standingFileOf("/Users/ada/lumenbox/standing/ada-id/USER.md", "ada-id", root), "USER.md");
+  for (const path of ["/home/box/work/standing/ada-id/USER.md", "~/work/standing/ada-id/USER.md"]) assert.equal(standingFileOf(path, "ada-id", root), undefined, path);
+  assert.equal(standingRoot({ kind: "docker" }), standingRoot(undefined));
+  assert.equal(standingBoxDir("ada-id", standingRoot({ kind: "attached", workDir: "/x" })), standingBoxDir("ada-id"));
 });
 
 test("the heartbeat runs on unchecked items only: an empty or fully checked list starts no turn", () => {

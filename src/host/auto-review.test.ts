@@ -43,6 +43,14 @@ test("the reviewed class is the calls that bind the world, not the reads", () =>
   for (const [tool, input] of notReviewed) {
     assert.equal(needsReview(tool, input), undefined, `${tool} ${JSON.stringify(input)} is not reviewed`);
   }
+  // A host box's work directory is its own (INV-1736): a write there is in it, the image's path and
+  // `~/work` (the person's own home there) are not.
+  const work = "/Users/ada/lumenbox";
+  assert.equal(needsReview("write_file", { path: `${work}/notes.md` }, work), undefined);
+  assert.equal(needsReview("edit_file", { path: work }, work), undefined);
+  for (const path of ["/home/box/work/notes.md", "~/work/a.ts", "/Users/ada/lumenbox-other/a.ts"]) {
+    assert.equal(needsReview("write_file", { path }, work), `writes outside ${work}`, path);
+  }
 });
 
 test("the prompt keeps the person's words and the agent's words under different labels", () => {

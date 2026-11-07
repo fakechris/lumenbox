@@ -732,7 +732,7 @@ test("a team's override of a built-in part is what the prompt says, and only tha
   }
 });
 
-test("the work directory the prompt names is the box's: a host box's own, the image's byte for byte elsewhere (INV-1734)", () => {
+test("the work directory the prompt names is the box's: a host box's own, the image's byte for byte elsewhere (INV-1734, INV-1736)", () => {
   // A host box is the person's machine, where /home/box does not exist: an agent told to put its
   // work, its chat files and its memory there was refused, or wrote nowhere anyone collects.
   const context = (box?: { kind: "docker" | "attached" | "host"; workDir?: string }) => ({
@@ -740,12 +740,14 @@ test("the work directory the prompt names is the box's: a host box's own, the im
     teammates: [], resolution: undefined, agentsRoot: "/tmp", hasBox: true,
     memory: [{ at: "2026-11-01T00:00:00Z", kind: "fact" as const, text: "the deploy region is us-east-1" }],
     conversation: "feishu-chat-1", lane: "background" as const, ...(box !== undefined ? { box } : {}),
+    standing: { "AGENTS.md": "", "SOUL.md": "Warm.", "USER.md": "", "HEARTBEAT.md": "" },
   });
   const image = buildSystemPromptParts(context());
   for (const box of [{ kind: "docker" as const }, { kind: "attached" as const, workDir: "/elsewhere" }]) {
     assert.deepEqual(buildSystemPromptParts(context(box)), image, box.kind);
   }
   assert.match(image.stable, /must outlive this box under `\/home\/box\/work`/);
+  assert.ok((image.stable + image.volatile).includes("your copy is under `/home/box/work/standing/a1/`"), "the image's standing mirror");
 
   const work = "/Users/ada/lumenbox";
   const host = buildSystemPromptParts(context({ kind: "host", workDir: work }));
@@ -754,4 +756,5 @@ test("the work directory the prompt names is the box's: a host box's own, the im
   assert.ok(host.volatile.includes(`${work}/chats/feishu-chat-1/outbox/`), "the chat's file exchange");
   assert.ok(host.volatile.includes(`\`${work}/memory/a1/profile.md\``), "the memory mirror");
   assert.ok(host.volatile.includes(`write under ${work}`), "the unattended conduct");
+  assert.ok((host.stable + host.volatile).includes(`your copy is under \`${work}/standing/a1/\``), "the standing files (INV-1736)");
 });

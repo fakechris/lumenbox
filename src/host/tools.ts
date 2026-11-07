@@ -42,7 +42,7 @@ import { catalogMenu, crewTeam, intersectTools, profilesFor } from "./catalog.ts
 import { type Claims, heldElsewhere } from "./claims.ts";
 import { namesControlSurface } from "./control-surfaces.ts";
 import { deliveryInstructions, reportPath } from "./delegate-report.ts";
-import { boxPaths, memoryDir, skillsDir } from "./box-paths.ts";
+import { boxPaths, type BoxPlace, memoryDir, skillsDir, standingRoot, workDir } from "./box-paths.ts";
 import { actOnDelegateSession } from "./delegate-session-actions.ts";
 import type { DelegateSessions } from "./delegate-sessions.ts";
 import {
@@ -187,7 +187,7 @@ export interface ToolContext {
     components?: unknown;
     data?: unknown;
     title?: string;
-    close?: boolean;
+    close?: boolean; /** The agent's box's work directory: where a FilePreview or Link may point (INV-1736). */ workDir?: string;
   }) => Promise<{ where: string } | { error: string }>;
   askUser?: (input: {
     principalId?: string;
@@ -2399,7 +2399,8 @@ function truncate(text: string, max: number): string {
   );
 }
 
-const skillsOf = (context: ToolContext): string => skillsDir({ kind: context.boxKind, workDir: context.boxWorkDir }); // every skill path a tool sees is judged against the agent's box's (INV-1719)
+const boxOf = (context: ToolContext): BoxPlace => ({ kind: context.boxKind, workDir: context.boxWorkDir }); // the agent's box, as box-paths.ts takes it (INV-1736)
+const skillsOf = (context: ToolContext): string => skillsDir(boxOf(context)); // every skill path a tool sees is judged against the agent's box's (INV-1719)
 /**
  * What a setup turn's write into a skill file becomes: stamped with the template it came from,
  * and — for a routine — paused. Outside a setup turn, or outside the skills directory, the
@@ -3660,7 +3661,7 @@ export async function dispatchTool(
         agentId: context.agent.id,
         agentName: context.agent.profile.name,
         ...(context.conversation !== undefined ? { conversation: context.conversation } : {}),
-        surface,
+        surface, workDir: workDir(boxOf(context)),
         ...(input.components !== undefined ? { components: input.components } : {}),
         ...(input.data !== undefined ? { data: input.data } : {}),
         ...(typeof input.title === "string" && input.title.trim() !== "" ? { title: input.title.trim() } : {}),
@@ -3821,8 +3822,8 @@ export async function dispatchTool(
       const editContract = await skillWriteRefusal(box, path, updated, skillsOf(context)); // INV-1375: the skill's skill.yaml, if any
       if (editContract !== undefined) return { text: `Not edited: ${editContract}`, isError: true };
       // A standing file (INV-777) is capped, and its host copy is written in the same call.
-      const standingEdited = standingFileOf(path, context.agent.id);
-      const editCap = standingEdited === undefined ? undefined : capRefusal(standingEdited, updated);
+      const standingEdited = standingFileOf(path, context.agent.id, standingRoot(boxOf(context)));
+      const editCap = standingEdited === undefined ? undefined : capRefusal(standingEdited, updated, workDir(boxOf(context)));
       if (editCap !== undefined) return { text: editCap, isError: true };
       await box.writeFile(path, updated);
       if (standingEdited !== undefined) writeStandingFromAgent(context.registry.dirFor(context.agent.id), context.agent.profile.name, standingEdited, updated);
@@ -3909,8 +3910,8 @@ export async function dispatchTool(
       if (writeContract !== undefined) return { text: `Not written: ${writeContract}`, isError: true };
       // A standing file (INV-777) is capped, and its host copy — the one that counts — is written
       // in the same call, so the agent's edit is in its next prompt and never reported back to it.
-      const standingWritten = standingFileOf(path, context.agent.id);
-      const writeCap = standingWritten === undefined ? undefined : capRefusal(standingWritten, written);
+      const standingWritten = standingFileOf(path, context.agent.id, standingRoot(boxOf(context)));
+      const writeCap = standingWritten === undefined ? undefined : capRefusal(standingWritten, written, workDir(boxOf(context)));
       if (writeCap !== undefined) return { text: writeCap, isError: true };
       const result = await box.writeFile(path, written);
       if (standingWritten !== undefined) writeStandingFromAgent(context.registry.dirFor(context.agent.id), context.agent.profile.name, standingWritten, written);
@@ -4965,7 +4966,7 @@ export async function dispatchTool(
     case "Forget": {
       const action = String(input.action ?? "");
       const conversation = context.conversation ?? MAIN_CONVERSATION;
-      const stores = { registry: context.registry, ...(context.tasks !== undefined ? { tasks: context.tasks } : {}), ...(context.box !== undefined ? { box: context.box } : {}), skills: skillsOf(context), memory: memoryDir({ kind: context.boxKind, workDir: context.boxWorkDir }), home: context.fetchedHome ?? agentboxHome() };
+      const stores = { registry: context.registry, ...(context.tasks !== undefined ? { tasks: context.tasks } : {}), ...(context.box !== undefined ? { box: context.box } : {}), skills: skillsOf(context), memory: memoryDir(boxOf(context)), home: context.fetchedHome ?? agentboxHome() };
       if (action === "plan") {
         const about = String(input.about ?? "");
         const refused = forgettable(about);

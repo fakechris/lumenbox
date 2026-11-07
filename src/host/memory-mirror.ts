@@ -32,6 +32,8 @@ export interface MemoryMirrorDeps {
   box: (agentId: string) => MemoryMirrorBox | undefined;
   /** That box's memory mirror, `memoryDir(box)` (INV-1734); the image's when not given. */
   memoryDir?: (agentId: string) => string;
+  /** That box's standing-file mirror, `standingRoot(box)` (INV-1736); the image's when not given. */
+  standingRoot?: (agentId: string) => string;
   log?: (line: string) => void;
 }
 
@@ -60,7 +62,7 @@ export class MemoryMirror {
     // rewritten from the host copy — the canonical one — when it differs or is gone, with one line
     // of log; the box copy is never adopted.
     const memory = renderMemoryFiles(agentId, agent.profile.name, this.deps.registry.readMemoryRecords(agentId), this.rootOf(agentId));
-    const standing = standingBoxFiles(this.deps.registry.dirFor(agentId), agentId, agent.profile.name);
+    const standing = standingBoxFiles(this.deps.registry.dirFor(agentId), agentId, agent.profile.name, this.deps.standingRoot?.(agentId));
     let written = 0;
     for (const file of [...memory, ...standing]) {
       const digest = hashOf(file.content);

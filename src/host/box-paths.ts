@@ -46,6 +46,8 @@ export interface BoxPaths {
   skills: string;
   /** Where each agent's memory is mirrored as files, `<memory>/<agent id>` (INV-1734). */
   memory: string;
+  /** Where each agent's standing files are mirrored, `<standing>/<agent id>` (INV-777, INV-1736). */
+  standing: string;
   /** Where an engine installed on demand lives, and its `bin`. */
   engines: string;
   enginesBin: string;
@@ -160,11 +162,17 @@ export function memoryDir(box: BoxPlace): string {
   return lumenboxDirs(workDir(box)).memory;
 }
 
-function lumenboxDirs(work: string): Pick<BoxPaths, "work" | "skills" | "memory" | "engines" | "enginesBin" | "mcpFaces" | "reports"> {
+/** The box's standing-file mirror (INV-1736): `standingBoxDir` puts each agent's set under it. */
+export function standingRoot(box: BoxPlace): string {
+  return lumenboxDirs(workDir(box)).standing;
+}
+
+function lumenboxDirs(work: string): Pick<BoxPaths, "work" | "skills" | "memory" | "standing" | "engines" | "enginesBin" | "mcpFaces" | "reports"> {
   return {
     work,
     skills: `${work}/skills`,
     memory: `${work}/memory`,
+    standing: `${work}/standing`,
     engines: `${work}/.lumenbox/engines`,
     enginesBin: `${work}/.lumenbox/engines/bin`,
     mcpFaces: `${work}/.lumenbox/mcp`,
