@@ -121,6 +121,33 @@ second person and never converts.
 - **Installations converted before INV-1689** carry `conversion: { at, by, ownerId }` from the
   INV-1685 route that is gone. They are organisations and stay so, unchanged; the start says it
   in one `upgrade:` line. An emptied organisation roster never grows an Owner back.
+- **One person, many doors (INV-1698).** A Feishu app issues each person an open_id of its own,
+  so one human is a different subject in every app (docs/48 §"The gap"); DingTalk and each browser
+  sign-in are more. On a personal installation every invite code is the Owner's own
+  (`principalId: local:owner`): redeemed by `bind CODE` from any door or by a browser sign-in, it
+  links that identity to the Owner, stamped with the door's incarnation (§4), and adds nobody
+  (`src/host/invite-redeem.ts`, the one redemption both surfaces use). A code made for an id nobody
+  holds any more is refused, not read as a new person.
+- **"These are all me": folding an older roster into the Owner (INV-1698, `src/host/self-merge.ts`).**
+  A desktop roster with no `installation` field and 1 to 12 people is offered a merge in
+  Settings → Team → People. The preview decides nothing: it lists each person's identities with
+  their door and when each last wrote (`messages.jsonl`) or spent (`usage.jsonl`), the facts that
+  bear on it (several people with one name; several people through one door, which gives one
+  person one id unless its app was replaced), and what would change, counted by a dry run of the
+  merge itself. Only the person's explicit yes, carrying the preview's digest of the roster, writes
+  the journal `principal-merge.json`; a roster that changed since the preview is refused. The merge
+  runs at the next start, before any store is opened: one mapping, every old id → `local:owner`,
+  applied to the MCP tokens, the watchdog's install record, task authorship (`requester`,
+  `reviewerId`, `by`, `pausedBy`), spend (`usage.jsonl`), memory provenance (`about`), notes about
+  the person (`people.jsonl`), box members, personal boxes, vault grants (`principal:<id>`),
+  rules that name a person, personal-box quotas, session epochs (a signed-out browser stays
+  signed out) and the turn and inbox ledgers. Each file is replaced atomically, the roster last
+  (`installation: { mode: "single-machine", ownerId, merged: { at, from } }`); a crash part-way is
+  resumed at the following start. The Owner keeps every identity link and every old id as an
+  `alias`, which `Principals.byId` reads and `resolve` never does: an alias finds who a stored
+  record meant, and never admits an inbound identity. Kept as written, by decision: the message,
+  ingress, receipt, audit, policy and config-history logs and transcripts, which record what
+  happened as it happened. The journal stays as the migration table and the audit record.
 
 ## 2. Doors route; boxes authorize
 

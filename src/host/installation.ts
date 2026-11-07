@@ -34,6 +34,8 @@ export interface Installation {
   createdAt?: number;
   /** The audit record of a conversion made before INV-1689 (when, and who confirmed it). Read, never written. */
   conversion?: { at: number; by: string; ownerId: string };
+  /** A personal installation made by folding an older roster's people — all one person — into the Owner (INV-1698, self-merge.ts): when, and the ids folded in. */
+  merged?: { at: number; from: string[] };
 }
 
 /** The Owner's principal id. Fixed, so an MCP token or a watchdog issued to the Owner keeps its owner across renames. */
@@ -56,7 +58,7 @@ export function installationOf(file: unknown): Installation {
   const raw = (file as { installation?: Partial<Installation> } | null)?.installation;
   if (raw === null || typeof raw !== "object") return { mode: "organisation" };
   if (raw.mode === "single-machine" && typeof raw.ownerId === "string" && raw.ownerId !== "") {
-    return { mode: "single-machine", ownerId: raw.ownerId, ...(typeof raw.createdAt === "number" ? { createdAt: raw.createdAt } : {}) };
+    return { mode: "single-machine", ownerId: raw.ownerId, ...(typeof raw.createdAt === "number" ? { createdAt: raw.createdAt } : {}), ...(raw.merged !== undefined && typeof raw.merged === "object" && raw.merged !== null ? { merged: raw.merged } : {}) };
   }
   return { ...(raw as Installation), mode: "organisation" };
 }

@@ -307,3 +307,23 @@ Nothing else changes. A roster with anyone on it, a redeemed code, or a server s
 `--desktop` keeps what it had. Verified on a temporary home: a roster holding only an armed
 bootstrap code, started with `agentbox web --no-box --desktop`, came up with the Owner, no
 `bootstrap-code` file, `/bootstrap` answering 404, and the `upgrade:` line in the log.
+
+## 9. A desktop roster that is one person several times becomes one Owner — when you say so (INV-1698)
+
+A desktop installation that let people in before INV-1685 has a roster with no `installation`
+field, and it often lists one person several times: each Feishu app gives the same person an id
+of its own, and DingTalk and a browser sign-in add more. The upgrade changes nothing by itself.
+Settings → Team → People shows *See whether these are all me* on such a roster (desktop app,
+1 to 12 people). The preview lists each entry's channel, its id and when it last wrote or spent,
+what points to one person, and what the merge would move, store by store. *Every one of these
+is me* and *Merge into the Owner and restart* write `~/.agentbox/principal-merge.json` and
+restart the server; the start that follows rewrites every store through one mapping (old id →
+`local:owner`), the roster last, and logs one `upgrade:` line with the counts. The old ids stay
+on the Owner as aliases, and the journal keeps the people as they were.
+
+Not confirming changes nothing. A roster that changed between the preview and the confirmation
+is refused; one that changed between the confirmation and the start is left as it is and the
+journal says `abandoned`. Verified on a temporary home with a de-identified six-person roster
+(`src/host/testing/six-identities.ts`): previewed, confirmed and restarted with
+`agentbox web --no-box --desktop`, it came up with one Owner holding the six identities, the
+two MCP tokens theirs, and the `upgrade:` line in the log.

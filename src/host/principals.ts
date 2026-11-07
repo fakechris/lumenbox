@@ -69,6 +69,13 @@ export interface Principal {
    * carrying a matching email is known to be this person. Email only — nothing uncertain merges.
    */
   anchors?: string[];
+  /**
+   * The ids this person had before a merge (INV-1698): several principals one person confirmed were
+   * all them, folded into one. An alias is looked up by `byId` — a record that still names the old
+   * id finds this person — and never by `resolve`, which is for channel identities: an inbound
+   * message is matched by a link with its incarnation, never by an old id.
+   */
+  aliases?: string[];
 }
 
 /**
@@ -96,6 +103,7 @@ interface StoredPrincipal {
   role: Role;
   links: IdentityLink[];
   anchors: string[];
+  aliases: string[];
 }
 
 interface PrincipalsFile {
@@ -110,6 +118,8 @@ interface PrincipalsFile {
     identities: Array<string | IdentityLink>;
     /** Verified merge anchors, e.g. `email:alice@corp.com` (docs/48). Absent on older files. */
     anchors?: string[];
+    /** Ids folded into this one by a merge (INV-1698). Absent on older files. */
+    aliases?: string[];
   }>;
 }
 
@@ -135,6 +145,8 @@ export class Principals {
   private byIdentity = new Map<string, Principal>();
   /** anchor → the principals holding it. Several means a conflict, which never auto-merges. */
   private byAnchor = new Map<string, StoredPrincipal[]>();
+  /** An old id → the person it was folded into (INV-1698). */
+  private byAlias = new Map<string, StoredPrincipal>();
   private readonly incarnationOf: (identity: string) => number;
   private readonly warn: (line: string) => void;
 
@@ -160,6 +172,7 @@ export class Principals {
     this.stored = [];
     this.byIdentity.clear();
     this.byAnchor.clear();
+    this.byAlias.clear();
     this.mode = { mode: "organisation" };
     if (!existsSync(this.path)) return;
     try {
@@ -192,8 +205,10 @@ export class Principals {
               .filter(Boolean)
           ),
         ];
-        const principal: StoredPrincipal = { id: raw.id, name: raw.name, role, links, anchors };
+        const aliases = [...new Set((Array.isArray(raw.aliases) ? raw.aliases : []).filter((a): a is string => typeof a === "string" && a !== "" && a !== raw.id))];
+        const principal: StoredPrincipal = { id: raw.id, name: raw.name, role, links, anchors, aliases };
         this.stored.push(principal);
+        for (const alias of aliases) if (!this.byAlias.has(alias)) this.byAlias.set(alias, principal);
         for (const anchor of anchors) {
           (this.byAnchor.get(anchor) ?? this.byAnchor.set(anchor, []).get(anchor)!).push(principal);
         }
@@ -218,7 +233,20 @@ export class Principals {
       role: principal.role,
       identities: principal.links.map(link => link.identity),
       ...(principal.anchors.length > 0 ? { anchors: [...principal.anchors] } : {}),
+      ...(principal.aliases.length > 0 ? { aliases: [...principal.aliases] } : {}),
     };
+  }
+
+  /**
+   * The person a stored principal id names: their own id, or an id folded into theirs by a merge
+   * (INV-1698), so a record written before the merge still finds who it was about. Undefined for
+   * an id nobody holds. Not for a channel identity — that is `resolve`.
+   */
+  byId(id: string): Principal | undefined {
+    const own = this.stored.find(principal => principal.id === id);
+    if (own !== undefined) return this.viewOf(own);
+    const merged = this.byAlias.get(id);
+    return merged === undefined ? undefined : this.viewOf(merged);
   }
 
   /** Owner or Admin: what kind of installation this roster belongs to (INV-1685). */
@@ -274,6 +302,8 @@ export class Principals {
   save(principals: Principal[]): void {
     withRosterLock(this.path, () => {
     const previous = new Map<string, number>();
+    // Aliases are the merge's record, not something the People dialog edits: a save keeps them.
+    const aliasesOf = new Map(this.stored.map(principal => [principal.id, principal.aliases]));
     for (const principal of this.stored) {
       for (const link of principal.links) {
         previous.set(`${principal.id} ${link.identity}`, link.incarnation);
@@ -287,6 +317,7 @@ export class Principals {
         name: principal.name.trim(),
         role: principal.role,
         anchors: [...new Set((principal.anchors ?? []).map(a => a.trim().toLowerCase()).filter(Boolean))],
+        aliases: [...new Set(principal.aliases ?? aliasesOf.get(principal.id) ?? [])],
         links: [...new Set(principal.identities.map(identity => identity.trim()).filter(Boolean))]
           .filter(identity => {
             if (claimed.has(identity)) {
@@ -317,6 +348,7 @@ export class Principals {
         role: principal.role,
         identities: principal.links,
         anchors: principal.anchors,
+        ...(principal.aliases.length > 0 ? { aliases: principal.aliases } : {}),
       })),
     };
     writeFileSync(temp, `${JSON.stringify(file, null, 2)}\n`, {
