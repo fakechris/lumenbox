@@ -194,6 +194,7 @@ test("the prompt's sections have an order, and it is the documented one", () => 
       "heard",
       "history",
       "wrap-up",
+      "org-knowledge", // the organisation's knowledge (INV-1726), above the team's
       "shared-memory",
       "team",
       // unattended renders only on a background lane (INV-780).

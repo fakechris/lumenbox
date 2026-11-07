@@ -36,6 +36,7 @@ activity.jsonl              recent activity for the feed
 auto-review.jsonl           one verdict per reviewed tool call (auto-review.ts; shadow or enforce)
 skill-provenance.jsonl      which agent the host saw write each skill (skill-provenance.ts)
 hooks.json                  lifecycle hooks in Claude Code's dialect (hooks.ts); read on mtime
+org-knowledge.jsonl         the organisation's knowledge, L1: one extended memory record per line (org-knowledge.ts, INV-1726)
 agents/<agentId>/
   profile.json              identity and persona
   config-versions.jsonl     every version of its configuration, and where conversations and tasks switched (INV-1669)
@@ -329,6 +330,29 @@ every agent writes to this tier, so it grows N times as fast, and a generous bud
 out an agent's own working knowledge. Each line carries who learned it and, when the box was told who
 was driving, who it is about — without the latter, a fact learned from one person reads as being about
 whoever asks next, which in a team is worse than not recording it.
+
+### 2.2d `org-knowledge.jsonl` — the organisation's knowledge (INV-1726, docs/98 §3 and §10)
+
+L1, in a ledger of its own beside the agents rather than in `shared-memory/`: that directory is
+sharded so one agent owns each file, and an L1 item's writer is a person's approval. One line per
+item, the memory record with the docs/98 §4 fields (§2.2c) and one more, `pinned`:
+
+`{ at, kind: "fact" | "note" | "retraction", text, scope: "org" | "box:<id>", surface?, owner, evidence?, validFrom?, validUntil?, supersedes?, verifiedBy?, verifiedAt?, reviewBy?, held?, review?, pinned? }`
+
+A `record` ledger (`src/host/org-knowledge.ts`): append-only and never compacted; read whole when
+the host starts, a torn last line skipped; each append one line, the torn tail closed first and
+synced before it is believed. Nothing is edited in place: a later line `supersedes` an item's
+version, a `retraction` withdraws one, an approval follows a hold. An item's id is
+`org:<version>` (the same `versionOf` as memory), and that is what an answer cites.
+
+Read only by member turns, through the admission check of §2.2c before anything is ranked; a held
+item by nobody. What enters the prompt and `Recall` is a `recall` item a person verified
+(`verifiedBy`, `verifiedAt`) whose `reviewBy` has not passed; anything else is read only by its
+id (`Recall` with `org:…`), with its state said. Pinned items take their own budget of 1,200
+characters on every turn, kept by latest review date and then latest verification, the rest
+counted ("N more"); items the turn's words touch follow, ranked by `rankRelated`, in 1,000.
+Never read by a guest turn (docs/97), an isolated turn, or a personal installation, which has
+none and whose writes are refused (`PersonalInstallationNeverWrites`, docs/98 §8).
 
 ### 2.2b `memory.jsonl`
 

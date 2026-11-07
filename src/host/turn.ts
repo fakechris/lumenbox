@@ -50,7 +50,7 @@ import {
   FIRST_TOKEN_DEADLINE_MS,
 } from "./transient.ts"; import { keyOf as fallbackKey, nextFallback, switchLine, type Runtime as FallbackRuntime } from "./provider-fallback.ts";
 import { cacheMetering, cacheReadShare, type UsageKind, type UsageLog, type UsageRecord } from "./usage.ts"; import type { SpendLimits, SpendVerdict } from "./spend-limits.ts";
-import { chooseRelevant, memoryProjectionManifest, SHARED_CHAR_BUDGET, type MemoryRecall } from "./memory.ts"; import { recallable } from "./memory-scope.ts";
+import { chooseRelevant, memoryProjectionManifest, SHARED_CHAR_BUDGET, type MemoryRecall } from "./memory.ts"; import { recallable } from "./memory-scope.ts"; import type { OrgKnowledge } from "./org-knowledge.ts";
 import { egressDeniedBlock, type NetworkEventLog } from "../egress/events.ts";
 import { needsReview, type ReviewInput, type ReviewMode, type Verdict } from "./auto-review.ts";
 import type { HookRunner } from "./hooks.ts";
@@ -562,7 +562,7 @@ export interface TurnDeps {
    * Pushes the agent's standing files to its box before the turn reads them (INV-777), so the
    * copy it may edit is the copy the prompt carries. Absent means no mirror — tests, or no box.
    */
-  syncStanding?: (agentId: string) => Promise<unknown>; person?: (principalId: string | undefined) => string | undefined; // the host's record of the person driving, rendered (INV-1653)
+  syncStanding?: (agentId: string) => Promise<unknown>; person?: (principalId: string | undefined) => string | undefined; orgKnowledge?: Pick<OrgKnowledge, "section" | "forRecall">; // the host's record of the person driving, rendered (INV-1653); the organisation's knowledge (INV-1726)
   /** The template this turn installs, when it is an imported bot's setup turn (docs/29). */
   templateSetup?: string;
   /** Where a packed template is staged; absent withholds PackTemplate. */
@@ -1597,7 +1597,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   // Admitted by scope for this turn's person, then only what may be recalled: a cite-only item is read by id, never here (INV-1725).
   const ownMemory = isolated ? [] : recallable(registry.readMemoryRecords(agent.id));
   const sharedMemory = isolated ? [] : recallable(registry.readSharedMemory(agent.id, deps.caller?.userId));
-  const memoryQuery = inbound.map(message => message.text).join(" ");
+  const memoryQuery = inbound.map(message => message.text).join(" "); const orgKnowledge = isolated ? undefined : deps.orgKnowledge?.section(agent.id, deps.caller?.userId, memoryQuery); // admitted for the person driving, before ranking (INV-1726)
   const selection = {
     query: memoryQuery,
     ask: deps.selectMemory ?? (async () => undefined),
@@ -1645,7 +1645,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
         .filter(entry => entry.id !== conversation).length,
       // One lane per turn (bus.ts), so the first message's lane is the turn's (INV-780).
       ...(inbound.length > 0 ? { lane: laneOf(inbound[0]!) } : {}),
-      ...(standing !== undefined ? { standing } : {}), ...(person !== undefined ? { person } : {}),
+      ...(standing !== undefined ? { standing } : {}), ...(person !== undefined ? { person } : {}), ...(orgKnowledge !== undefined ? { orgKnowledge } : {}),
     });
   const builtPromptParts = buildParts(memoryRecall);
   const promptParts = isolated ? {
@@ -1736,7 +1736,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
           files: deps.files,
           claims: deps.claims,
           policy: deps.policy,
-          caller: deps.caller,
+          caller: deps.caller, ...(isolated || deps.orgKnowledge === undefined ? {} : { orgKnowledge: deps.orgKnowledge }),
           ...(deps.callerName !== undefined ? { callerName: deps.callerName } : {}),
           ...(deps.callerIdentities !== undefined ? { callerIdentities: deps.callerIdentities } : {}),
           displayIndex: deps.displayIndex,
@@ -1833,7 +1833,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
             files: deps.files,
             claims: deps.claims,
             policy: deps.policy,
-            caller: deps.caller,
+            caller: deps.caller, ...(isolated || deps.orgKnowledge === undefined ? {} : { orgKnowledge: deps.orgKnowledge }),
             ...(deps.callerName !== undefined ? { callerName: deps.callerName } : {}),
             displayIndex: deps.displayIndex,
             ensureDesktop: deps.ensureDesktop,
@@ -3363,7 +3363,7 @@ ${outcome.text}`;
             files: deps.files,
             claims: deps.claims,
             policy: deps.policy,
-            caller: deps.caller,
+            caller: deps.caller, ...(isolated || deps.orgKnowledge === undefined ? {} : { orgKnowledge: deps.orgKnowledge }),
           ...(deps.callerName !== undefined ? { callerName: deps.callerName } : {}),
           ...(deps.callerIdentities !== undefined ? { callerIdentities: deps.callerIdentities } : {}),
             display: deps.display,
