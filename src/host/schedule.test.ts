@@ -550,6 +550,7 @@ test("running one by hand is the same path, and does not consume the scheduled w
       prompts.push(prompt);
     },
     defaultAgent: () => "agent-ada",
+    workDirOf: agent => (agent === "agent-ada" ? "/Users/ada/lumenbox" : "/home/box/work"), // Ada's box is a host box (INV-1737)
     now: () => clock,
     path: null,
   });
@@ -563,6 +564,7 @@ test("running one by hand is the same path, and does not consume the scheduled w
   // The window still belongs to the timer.
   await scheduler.tick();
   assert.equal(prompts.length, 2, "the scheduled run happened as though nothing had");
+  for (const prompt of prompts) assert.ok(prompt.includes("the long version under /Users/ada/lumenbox and name") && !prompt.includes("/home/box"), "both paths name the runner's own work directory");
 
   const missing = await scheduler.runNow("nope");
   assert.equal(missing.ok, false);

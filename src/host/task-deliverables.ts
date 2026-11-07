@@ -111,9 +111,9 @@ export function alreadyDelivered(task: Pick<Task, "deliverables">, name: string,
  * nothing, so the task page has nothing to open. A path comparison, not a judgement: the
  * person is told, and decides whether it matters.
  */
-export function claimedButNotDelivered(task: Pick<Task, "status" | "history" | "deliverables">): string[] {
+export function claimedButNotDelivered(task: Pick<Task, "status" | "history" | "deliverables">, work: string): string[] { // work: the assignee's box's (INV-1737)
   if (task.status !== "review" || (task.deliverables ?? []).length > 0) return [];
   const submission = [...task.history].reverse().find(change => change.status === "review");
   if (submission === undefined) return [];
-  return boxPathsNamed([submission.note ?? "", ...(submission.evidence ?? [])].join("\n"));
+  return boxPathsNamed([submission.note ?? "", ...(submission.evidence ?? [])].join("\n"), work);
 }

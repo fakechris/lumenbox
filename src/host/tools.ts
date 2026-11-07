@@ -42,7 +42,7 @@ import { catalogMenu, crewTeam, intersectTools, profilesFor } from "./catalog.ts
 import { type Claims, heldElsewhere } from "./claims.ts";
 import { namesControlSurface } from "./control-surfaces.ts";
 import { deliveryInstructions, reportPath } from "./delegate-report.ts";
-import { boxPaths, type BoxPlace, memoryDir, skillsDir, standingRoot, workDir } from "./box-paths.ts";
+import { boxPaths, type BoxPlace, DOCKER_WORK, inBox, memoryDir, skillsDir, standingRoot, workDir } from "./box-paths.ts";
 import { actOnDelegateSession } from "./delegate-session-actions.ts";
 import type { DelegateSessions } from "./delegate-sessions.ts";
 import {
@@ -2391,7 +2391,9 @@ function truncate(text: string, max: number): string {
   );
 }
 
-const boxOf = (context: ToolContext): BoxPlace => ({ kind: context.boxKind, workDir: context.boxWorkDir }); // the agent's box, as box-paths.ts takes it (INV-1736)
+export const boxOf = (context: ToolContext): BoxPlace => ({ kind: context.boxKind, workDir: context.boxWorkDir }); // the agent's box, as box-paths.ts takes it (INV-1736)
+/** The tool list as an agent on this box reads it (INV-1737): text written for the image names the box's own work directory. The image's list is returned as it is. */
+export const toolsInBox = (tools: Anthropic.Tool[], box: BoxPlace): Anthropic.Tool[] => (workDir(box) === DOCKER_WORK ? tools : tools.map(tool => JSON.parse(inBox(JSON.stringify(tool), box)) as Anthropic.Tool));
 const skillsOf = (context: ToolContext): string => skillsDir(boxOf(context)); // every skill path a tool sees is judged against the agent's box's (INV-1719)
 /**
  * What a setup turn's write into a skill file becomes: stamped with the template it came from,
@@ -4652,7 +4654,7 @@ export async function dispatchTool(
       const rejected = validatePlan(plan);
       // Returned as an error so the model reads it and can act: a refusal that does not say what
       // would be accepted produces a retry of the same thing.
-      if (rejected !== undefined) return { text: rejected.reason, isError: true };
+      if (rejected !== undefined) return { text: inBox(rejected.reason, boxOf(context)), isError: true };
       context.registry.writePlan(context.agent.id, plan, context.conversation);
       return {
         text:
@@ -4665,7 +4667,7 @@ export async function dispatchTool(
       const name = String(input.name ?? "").trim();
       const value = String(input.value ?? "");
       const rejected = validateCheckpoint(name, value);
-      if (rejected !== undefined) return { text: rejected.reason, isError: true };
+      if (rejected !== undefined) return { text: inBox(rejected.reason, boxOf(context)), isError: true };
       const partial = input.partial !== false;
       const state = context.registry.readDurableState(context.agent.id, context.conversation);
       const next = withCheckpoint(state.checkpoints, { name, value, at: new Date().toISOString(), partial });
@@ -5235,7 +5237,7 @@ export async function dispatchTool(
     case "RememberFact": {
       const fact = String(input.fact ?? "").trim();
       const rejected = validateRecord(fact) ?? guardMemoryCandidate(fact, { held: context.vault?.heldValues() ?? new Map() });
-      if (rejected !== undefined) return { text: rejected.reason, isError: true };
+      if (rejected !== undefined) return { text: inBox(rejected.reason, boxOf(context)), isError: true }; // the refusals name the image's work volume (INV-1737)
       // `audience` is retired (INV-1727, docs/98 §9 row 4): team memory is the box's, and what is true
       // for every box is promoted by a person, never marked so by the agent that wrote it. Said, not
       // ignored: an agent that asked for every box and silently got one would believe otherwise.
