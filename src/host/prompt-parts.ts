@@ -19,6 +19,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { promptOverridesDir } from "../config.ts";
+import type { Locale } from "../i18n/locale.ts";
 
 export type PartKey = "conduct" | "front" | "unattended";
 
@@ -27,6 +28,9 @@ export interface PartDefault {
   title: string;
   /** What the part is for, in a line a person reads before editing it. */
   about: string;
+  /** The title and the line in Chinese, for the page (INV-1686). The text stays as agents read it. */
+  titleZh: string;
+  aboutZh: string;
   text: string;
 }
 
@@ -102,6 +106,11 @@ export function partView(part: PartDefault, dir = overridesDir()): PartView {
 
 export function partViews(dir = overridesDir()): PartView[] {
   return parts().map(part => partView(part, dir));
+}
+
+/** A view as its reader reads it: the title and the line in their language, the text unchanged. */
+export function partIn(view: PartView, locale: Locale): PartView {
+  return locale === "zh" ? { ...view, title: view.titleZh, about: view.aboutZh } : view;
 }
 
 /**

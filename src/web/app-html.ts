@@ -7340,7 +7340,7 @@ function openShelf(preferredBox) {
           (t.routines.length ? '<div style="margin-top:4px"><b>{{ui.app.routines}}</b> ' + t.routines.map(esc).join(" · ") + "</div>" : "") +
           (t.createdBy ? '<div class="dim" style="margin-top:4px">{{ui.app.by}} ' + esc(t.createdBy) + " {{ui.app.ported-from-grok-bot}}</div>" : "");
         return shelfCard(esc(t.name) + (t.title && t.title !== t.name ? ' <span class="dim">' + esc(t.title) + "</span>" : "") + ' <span class="dim" style="font-weight:400">' + esc(badges.join(" · ")) + "</span>",
-          esc(t.description), "Stamp", 'data-stamp-template="' + esc(t.slug) + '" data-stamp-name="' + esc(t.name) + '"', preview);
+          esc(t.description), "{{ui.app.stamp}}", 'data-stamp-template="' + esc(t.slug) + '" data-stamp-name="' + esc(t.name) + '"', preview);
       }).join("");
     }
     var mine = d.mine || [];
@@ -7348,7 +7348,7 @@ function openShelf(preferredBox) {
     html += mine.length ? mine.map(function (t) {
       return shelfCard(esc(t.name) + ' <span class="dim">v' + esc(String(t.version)) + " {{ui.app.from-2}} " + esc(t.agentName) + "</span>",
         esc(t.description || t.counts || "") + (t.stamped ? " {{ui.app.stamped-2}} " + t.stamped + "×" : ""),
-        "Stamp", 'data-stamp-agent="' + esc(t.agentId) + '" data-stamp-version="' + esc(String(t.version)) + '" data-stamp-name="' + esc(t.name) + '"');
+        "{{ui.app.stamp}}", 'data-stamp-agent="' + esc(t.agentId) + '" data-stamp-version="' + esc(String(t.version)) + '" data-stamp-name="' + esc(t.name) + '"');
     }).join("") : '<div class="dim" style="font-size:12px;padding:4px">{{ui.app.none-yet-open-an-agents}}</div>';
     var imported = d.imported || [];
     if (imported.length) {
@@ -7360,7 +7360,7 @@ function openShelf(preferredBox) {
     html += '<div class="eyebrow" style="margin:10px 0 6px">{{ui.app.roles-persona-only-the-same}}</div>';
     html += (d.catalog || []).map(function (c) {
       return shelfCard(esc(c.name) + (c.title ? ' <span class="dim">' + esc(c.title) + "</span>" : "") + (c.kind === "crew" ? ' <span class="chip">{{ui.app.crew-of}} ' + c.members.length + "</span>" : ""),
-        esc(c.summary || ""), "Stamp", 'data-stamp-catalog="' + esc(c.slug) + '" data-stamp-name="' + esc(c.name) + '"');
+        esc(c.summary || ""), "{{ui.app.stamp}}", 'data-stamp-catalog="' + esc(c.slug) + '" data-stamp-name="' + esc(c.name) + '"');
     }).join("");
     $("shelfbody").innerHTML = html;
     var filter = document.getElementById("shelffilter");

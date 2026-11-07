@@ -19,6 +19,7 @@ import type { ServerResponse } from "node:http";
 import type { GateVerdict, GateVerdictKind } from "../host/gate-verdict.ts";
 import type { Task, TaskStore } from "../host/tasks.ts";
 import { type RosterEntry, toDisplayEntries } from "./transcript.ts";
+import { apiError } from "./api-error.ts";
 
 export const TASK_GATE_ROUTE = "GET /api/tasks/gate";
 
@@ -118,7 +119,7 @@ export function taskGateRoute(
   const task = deps.tasks?.get(url.searchParams.get("task") ?? "");
   // Unknown and unreadable answer alike, so the route does not say which tasks exist.
   if (task === undefined || !deps.mayReadTask(task)) {
-    deps.send(res, 404, { error: "No such task." });
+    deps.send(res, 404, apiError("task-none"));
     return true;
   }
   // Nobody assigned: no agent ran a turn on it, so there are no steps to show.

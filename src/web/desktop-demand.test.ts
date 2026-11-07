@@ -64,7 +64,7 @@ test("web startup and state reads leave 12 desktops dormant; authenticated page 
     assert.equal(starts.length, 0, "unauthenticated demand cannot start resources");
     const pending = await fetch(path, { headers });
     assert.equal(pending.status, 503);
-    assert.match(await pending.text(), /Starting desktop/);
+    assert.match(await pending.text(), /http-equiv="refresh"/, "the waiting page, which reloads itself until the desktop answers");
     let page = "";
     for (let attempt = 0; attempt < 30; attempt++) {
       const response = await fetch(path, { headers });

@@ -10,8 +10,9 @@ test("a save writes each point's variable, clears it for off, and refuses unknow
   assert.deepEqual(jevSettingsChange({ points: { memory_judge: "on", answer_review: "off" } }), {
     env: { AGENTBOX_JEV_MEMORY_JUDGE: "on", AGENTBOX_JEV_ANSWER_REVIEW: null },
   });
-  assert.match(String((jevSettingsChange({ points: { auto_review: "on" } }) as { error: string }).error), /auto_review takes off, shadow/);
-  assert.match(String((jevSettingsChange({ points: { everything: "on" } }) as { error: string }).error), /Unknown judgement point/);
+  const refused = jevSettingsChange({ points: { auto_review: "on" } }) as { code: string; error: string };
+  assert.deepEqual([refused.code, refused.error], ["jev-mode", "auto_review takes off, shadow."]);
+  assert.equal((jevSettingsChange({ points: { everything: "on" } }) as { code: string }).code, "jev-point-unknown");
   assert.deepEqual(jevSettingsChange({ key: "  ts_abc  " }), { env: { TYPESAFE_TOKEN: "ts_abc" } });
 });
 

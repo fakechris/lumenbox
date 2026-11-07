@@ -10,6 +10,7 @@
 import type { ServerResponse } from "node:http";
 import { readSnapshot } from "../host/task-deliverables.ts";
 import type { Task, TaskStore } from "../host/tasks.ts";
+import { apiError } from "./api-error.ts";
 
 export const DELIVERABLE_ROUTE = "GET /api/tasks/deliverable";
 
@@ -24,7 +25,7 @@ export function deliverableRoute(
   const task = deps.tasks?.get(url.searchParams.get("task") ?? "");
   // Unknown and unreadable answer alike, so the route does not say which tasks exist.
   if (task === undefined || !deps.mayReadTask(task) || deps.tasks?.path == null) {
-    deps.send(res, 404, { error: "No such task." });
+    deps.send(res, 404, apiError("task-none"));
     return true;
   }
   const item = (task.deliverables ?? []).find(entry => entry.id === url.searchParams.get("id"));

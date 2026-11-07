@@ -169,8 +169,8 @@ test("the endpoint refuses a wrong secret and an unknown id the same way, and ru
     // A hook the person never made: refused, with nothing that says whether it exists.
     const guessed = await fetch(`${base}/hooks/aaaaaaaaaaaa`, { method: "POST", headers: { authorization: "Bearer nope" }, body: "x" });
     assert.equal(guessed.status, 401);
-    const said = (await guessed.json()) as { error: string };
-    assert.match(said.error, /Unknown hook, or the secret is wrong/);
+    const said = (await guessed.json()) as { code: string; error: string };
+    assert.equal(said.code, "hook-refused");
 
     // One that exists, with the wrong secret: the same words, so the endpoint cannot be used to
     // enumerate what is on this machine.

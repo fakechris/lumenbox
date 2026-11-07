@@ -22,6 +22,7 @@
 
 import { randomBytes } from "node:crypto";
 import type { Grant, OAuthMeta, Vault } from "./vault.ts";
+import type { Locale } from "../i18n/locale.ts";
 
 export interface OAuthProvider {
   id: string;
@@ -42,6 +43,9 @@ export interface OAuthProvider {
   defaultScopes: string[];
   /** One line for the settings surface: where the client id and secret come from. */
   setup: string;
+  /** The title and the line in Chinese, for the page (INV-1686); a product's own menu names stay as it writes them. */
+  titleZh: string;
+  setupZh: string;
 }
 
 export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
@@ -55,6 +59,8 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
     apiHeaders: { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
     defaultScopes: ["repo", "read:org"],
     setup: "github.com/settings/developers → OAuth Apps → New → callback URL is this app's /oauth/callback. Enable expiring user tokens to get refresh tokens.",
+    titleZh: "GitHub",
+    setupZh: "github.com/settings/developers → OAuth Apps → New → 回调地址填本应用的 /oauth/callback。打开 expiring user tokens 才能拿到 refresh token。",
   },
   {
     id: "feishu",
@@ -64,6 +70,8 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
     apiBase: "https://open.feishu.cn/open-apis",
     defaultScopes: [],
     setup: "open.feishu.cn → your app → Credentials: App ID and App Secret. The tenant token is minted here and re-minted when it lapses.",
+    titleZh: "飞书",
+    setupZh: "open.feishu.cn → 你的应用 → 凭证与基础信息：App ID 和 App Secret。tenant token 由这里生成，过期后会重新生成。",
   },
   {
     // An internal (enterprise) DingTalk app, for writing documents and calendar events (INV-754).
@@ -75,6 +83,8 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
     tokenHeader: "x-acs-dingtalk-access-token",
     defaultScopes: [],
     setup: "open.dingtalk.com → your internal app → Credentials: AppKey and AppSecret; grant it the document and calendar write permissions. The token is minted here and re-minted when it lapses.",
+    titleZh: "钉钉",
+    setupZh: "open.dingtalk.com → 你的企业内部应用 → 凭证：AppKey 和 AppSecret；并给它文档和日历的写权限。token 由这里生成，过期后会重新生成。",
   },
 ];
 
@@ -132,8 +142,13 @@ export class OAuthGate {
     private readonly now: () => number = () => Date.now()
   ) {}
 
-  providers(): OAuthProvider[] {
-    return OAUTH_PROVIDERS.map(provider => ({ ...provider, defaultScopes: [...provider.defaultScopes] }));
+  /** The providers to connect, with the title and the setup line in the reader's language. */
+  providers(locale: Locale = "en"): OAuthProvider[] {
+    return OAUTH_PROVIDERS.map(provider => ({
+      ...provider,
+      ...(locale === "zh" ? { title: provider.titleZh, setup: provider.setupZh } : {}),
+      defaultScopes: [...provider.defaultScopes],
+    }));
   }
 
   /** The connections that exist, as the vault shows them: never a value. */

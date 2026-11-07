@@ -8,6 +8,7 @@
 import type { Rule } from "../host/rules.ts";
 import type { TierGateMode } from "../host/side-effects.ts";
 import { groupOf, NEVER_ASKED, orgFloor, type OrgFloor, parseToolPermissions, type ToolPermissions, TOOL_GROUPS } from "../host/tool-permissions.ts";
+import { apiError } from "./api-error.ts";
 
 /** `toolPermissions` from a create or update body: absent, cleared (`null`), a setting, or why it is not one. */
 export function readToolPermissions(body: Record<string, unknown>): ToolPermissions | null | undefined | Error {
@@ -29,7 +30,7 @@ export async function toolPermissionRoute(
   // No id is the dialog for a new agent: the groups and the floors, nothing of anyone's.
   if (agentId !== "" && deps.refused(agentId)) return { status: 0, body: null };
   const agent = agentId === "" ? { id: "", name: "" } : deps.agent(agentId);
-  if (agent === undefined) return { status: 404, body: { error: `No agent ${agentId}` } };
+  if (agent === undefined) return { status: 404, body: apiError("agent-unknown", { agent: agentId }) };
   const context = deps.floorContext();
   const groups: Record<string, string[]> = Object.fromEntries(TOOL_GROUPS.map(group => [group, [] as string[]]));
   const floors: Record<string, OrgFloor> = {};

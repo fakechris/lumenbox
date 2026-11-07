@@ -13,6 +13,7 @@ import { BoxManager, defaultBoxConfig } from "../box/docker.ts";
 import { cpuLimitOf, defaultCpusFor, engineCpus, setCpuLimit } from "../box/box-cpus.ts";
 import { boxCpusFromEnvironment, loadConfig, saveConfig, validCpus } from "../config.ts";
 import { verifyBox } from "../box/preflight.ts";
+import { apiError, type ApiError } from "./api-error.ts";
 
 export interface BoxUpdateDeps {
   /** Turns in flight now on this box's agents: turns on another box are not this update's to wait for. */
@@ -105,10 +106,10 @@ export class BoxUpdateService {
   }
 
   /** Reset: the box and its volumes made new. Only when the request names the box. */
-  reset(confirm: string): { started: boolean; error?: string } {
+  reset(confirm: string): { started: true } | ({ started: false } & ApiError) {
     const manager = this.manager();
-    if (confirm !== manager.config.containerName) return { started: false, error: `To reset, type the box's name: ${manager.config.containerName}.` };
-    if (this.running) return { started: false, error: "An update or reset is already running." };
+    if (confirm !== manager.config.containerName) return { started: false, ...apiError("reset-needs-name", { name: manager.config.containerName }) };
+    if (this.running) return { started: false, ...apiError("reset-busy") };
     this.running = true;
     this.progress = [];
     void (async () => {
@@ -146,7 +147,7 @@ export async function boxUpdateRoute(route: string, service: BoxUpdateService, d
     if (deps.refusedAdmin()) return { status: 0, body: null };
     const body = await deps.readJson();
     const started = service.start({ whenIdle: body.whenIdle !== false, backup: body.backup === true, interrupt: body.interrupt === true });
-    return started ? { status: 202, body: { started: true } } : { status: 409, body: { error: "An update is already running." } };
+    return started ? { status: 202, body: { started: true } } : { status: 409, body: apiError("update-running") };
   }
   // The box's CPU ceiling (INV-1552): what it is, what the engine has, and a change applied in place.
   if (route === "GET /api/box/limits" || route === "POST /api/box/limits") {
@@ -156,12 +157,12 @@ export async function boxUpdateRoute(route: string, service: BoxUpdateService, d
     const fromEnv = boxCpusFromEnvironment();
     let notApplied: string | undefined;
     if (route === "POST /api/box/limits") {
-      if (fromEnv !== undefined) return { status: 409, body: { error: `AGENTBOX_CPUS=${fromEnv} is set in the environment, and it wins over this setting. Unset it to choose here.` } };
+      if (fromEnv !== undefined) return { status: 409, body: apiError("cpus-from-env", { cpus: fromEnv }) };
       const raw = (await deps.readJson()).cpus;
       const cleared = raw === null || raw === "" || raw === undefined;
       const wanted = cleared ? undefined : validCpus(raw) === undefined ? Number.NaN : Number(validCpus(raw));
       if (wanted !== undefined && (!Number.isFinite(wanted) || (engine !== undefined && wanted > engine))) {
-        return { status: 400, body: { error: `Choose between 0.5 and ${engine ?? "the engine's"} cores.` } };
+        return { status: 400, body: apiError("cpus-out-of-range", { max: engine ?? "the engine's" }) };
       }
       saveConfig({ boxCpus: wanted === undefined ? null : String(wanted) });
       const apply = wanted !== undefined ? String(wanted) : engine !== undefined ? defaultCpusFor(engine) : undefined;
@@ -173,7 +174,7 @@ export async function boxUpdateRoute(route: string, service: BoxUpdateService, d
   if (route === "POST /api/box/reset") {
     if (deps.refusedAdmin()) return { status: 0, body: null };
     const answer = service.reset(String((await deps.readJson()).confirm ?? ""));
-    return answer.started ? { status: 202, body: answer } : { status: 400, body: { error: answer.error } };
+    return { status: answer.started ? 202 : 400, body: answer };
   }
   return undefined;
 }

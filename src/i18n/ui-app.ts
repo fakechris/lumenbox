@@ -517,6 +517,7 @@ export const UI_APP: Record<string, readonly [zh: string, en: string]> = {
   "ui.app.stamped": ["已从模板创建", "stamped"],
   "ui.app.stamped-2": ["· 已使用", "· stamped"],
   "ui.app.stamped-here-from-elsewhere": ["来自外部的模板", "Stamped here from elsewhere"],
+  "ui.app.stamp": ["套用", "Stamp"],
   "ui.app.stamping": ["正在创建…", "Stamping…"],
   "ui.app.standing": ["，长期有效", ", standing"],
   "ui.app.standing-until-revoked": ["，撤销前一直有效", ", standing until revoked"],

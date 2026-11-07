@@ -7,6 +7,7 @@
  * An agent's own list (its profile's `fallbackProviders`) wins over this one.
  */
 import type { UsageRecord } from "../host/usage.ts";
+import { apiError } from "./api-error.ts";
 
 export interface FallbackRouteDeps {
   refusedAdmin: () => boolean;
@@ -23,11 +24,11 @@ export async function fallbackRoute(route: string, deps: FallbackRouteDeps): Pro
   if (deps.refusedAdmin()) return { status: 0, body: null };
   if (route === "POST /api/provider/fallbacks") {
     const raw = (await deps.readJson()).names;
-    if (!Array.isArray(raw)) return { status: 400, body: { error: "names must be a list of provider presets." } };
+    if (!Array.isArray(raw)) return { status: 400, body: apiError("fallback-names") };
     const known = new Set(deps.presets().map(preset => preset.name));
     const names = raw.map(String).map(name => name.trim()).filter(Boolean);
     const unknown = names.filter(name => !known.has(name));
-    if (unknown.length > 0) return { status: 400, body: { error: `Not a provider preset: ${unknown.join(", ")}.` } };
+    if (unknown.length > 0) return { status: 400, body: apiError("fallback-unknown", { names: unknown.join(", ") }) };
     deps.save(names.slice(0, 3));
   }
   const since = (deps.now?.() ?? Date.now()) - 24 * 3_600_000;

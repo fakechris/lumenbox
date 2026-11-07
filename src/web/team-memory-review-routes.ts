@@ -3,6 +3,7 @@
 import type { AgentRegistry } from "../agents/registry.ts";
 import { saveConfig } from "../config.ts";
 import { decideReview, pendingReviews, teamReviewOn } from "../host/team-memory-review.ts";
+import { apiError } from "./api-error.ts";
 
 export async function teamMemoryReviewRoute(
   route: string,
@@ -30,18 +31,18 @@ export async function teamMemoryReviewRoute(
   if (route === "GET /api/memory/team-review") return { status: 200, body: view() };
   const body = await deps.readJson();
   if (route === "POST /api/memory/team-review/setting") {
-    if (typeof body.on !== "boolean") return { status: 400, body: { error: "on must be true or false" } };
+    if (typeof body.on !== "boolean") return { status: 400, body: apiError("memory-review-on") };
     saveConfig({ teamMemoryReview: body.on });
     deps.log(`team memory review turned ${body.on ? "on" : "off"} by ${deps.by()}`);
     return { status: 200, body: view() };
   }
   if (route === "POST /api/memory/team-review/decide") {
     const decision = body.decision === "approved" || body.decision === "rejected" ? body.decision : undefined;
-    if (decision === undefined) return { status: 400, body: { error: "decision must be approved or rejected" } };
+    if (decision === undefined) return { status: 400, body: apiError("memory-review-decision") };
     const result = decideReview(deps.registry, String(body.writer ?? ""), String(body.version ?? ""), decision, deps.by());
     if (!result.ok) return { status: 409, body: { error: result.why, ...view() } };
     deps.log(`team memory: ${deps.by()} ${decision} a write by ${String(body.writer)}`);
     return { status: 200, body: view() };
   }
-  return { status: 404, body: { error: `No route ${route}` } };
+  return { status: 404, body: apiError("route-unknown", { route }) };
 }

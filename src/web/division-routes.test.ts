@@ -54,7 +54,7 @@ test("forks are folded under the thread that started them, ride on their task, a
 
     const refused = await fetch(`${BASE}/api/prompt`, { method: "POST", headers, body: JSON.stringify({ agent: ada, conversation: "fork/main-k-1", text: "hi" }) });
     assert.equal(refused.status, 409);
-    assert.match(((await refused.json()) as { error: string }).error, /read-only/);
+    assert.equal(((await refused.json()) as { code: string }).code, "fork-read-only");
   } finally {
     stop?.();
     if (previous === undefined) delete process.env.AGENTBOX_HOME;

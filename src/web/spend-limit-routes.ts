@@ -1,6 +1,7 @@
 /** Each agent's spend lines and today's spend, read and set from the page (INV-1615): admin only, like the roster. */
 
 import type { SpendLimitConfig, SpendLimits, SpendToday } from "../host/spend-limits.ts";
+import { apiError } from "./api-error.ts";
 
 export async function spendLimitRoute(
   route: string,
@@ -16,7 +17,7 @@ export async function spendLimitRoute(
   if (deps.refusedAdmin()) return { status: 0, body: null };
   const body = await deps.readJson();
   const id = String(body.id ?? "");
-  if (!deps.agentIds().includes(id)) return { status: 404, body: { error: `No agent ${id}` } };
+  if (!deps.agentIds().includes(id)) return { status: 404, body: apiError("agent-unknown", { agent: id }) };
   // null, or an empty object, puts the agent back on the defaults; a number sets that one line.
   const asked: Partial<SpendLimitConfig> = {};
   for (const key of ["perDay", "perWake", "perDayTokens", "perWakeTokens"] as const) {

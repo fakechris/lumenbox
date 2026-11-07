@@ -31,6 +31,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { agentboxHome, envNumber } from "../config.ts";
+import type { Locale } from "../i18n/locale.ts";
+import { tr } from "../i18n/messages.ts";
 import { priceOf, type Rate, type Rates } from "./spend.ts";
 import { UsageLog, type UsageRecord } from "./usage.ts";
 
@@ -163,18 +165,25 @@ function windowOf(records: readonly ForecastRow[], rates: Rates, now: number, wi
   };
 }
 
-function amount(window: WindowForecast): string {
-  if (window.unpriced.length > 0) return `unpriced ${window.unpriced.join(", ")}`;
-  if (window.records === 0) return "empty";
+function amount(window: WindowForecast, locale: Locale): string {
+  if (window.unpriced.length > 0) return tr("quota.unpriced", locale, { models: window.unpriced.join(", ") });
+  if (window.records === 0) return tr("quota.empty", locale);
   return String(Math.round((window.money ?? 0) * 1000) / 1000);
 }
 
-/** One status line. The money is a forecast. Hold is named with the disposition, not with vendor prose. */
+/** Sentences as the language joins them: with a space in English, run together in Chinese. */
+const joined = (parts: string[], locale: Locale): string => parts.filter(part => part !== "").join(locale === "zh" ? "" : " ");
+
+/**
+ * One status line. The money is a forecast. Hold is named with the disposition, not with vendor prose.
+ * The line is English unless a reader's language is named: a hold error carries it to agents and logs.
+ */
 export function forecastOf(
   records: readonly ForecastRow[],
   priced: { rates: Rates; listPriced: string[] },
   now: number,
-  pauseAt?: number
+  pauseAt?: number,
+  locale: Locale = "en"
 ): Forecast {
   const five = windowOf(records, priced.rates, now, FIVE_HOURS_MS);
   const week = windowOf(records, priced.rates, now, WEEK_MS);
@@ -184,20 +193,17 @@ export function forecastOf(
     ((five.money !== undefined && five.money >= pauseAt) || (week.money !== undefined && week.money >= pauseAt));
   const models = new Set(records.filter(record => record.rejection === undefined && record.model !== "rejected").map(record => record.model));
   const listed = priced.listPriced.filter(model => models.has(model));
-  const listNote =
-    listed.length > 0
-      ? `${listed.join(", ")} uses the 2026-11-04 China list (1 / 4 / 0.1 per million) where the configured input was missing or below 1.`
-      : "";
-  const line = [
-    "Forecast, not a bill.",
-    `Rolling 5h ${amount(five)}${five.clearsAt !== undefined ? ` (clears ${five.clearsAt})` : ""}.`,
-    `Rolling 7d ${amount(week)}.`,
-    "The 7d figure only sees what the ledger still holds (default 48h). Both windows roll from now, which only approximates a vendor window that starts at first use.",
-    listNote,
-    hold ? "Hold: yes (quota_hold)." : pauseAt === undefined ? "Hold: no (no pause line)." : "Hold: no.",
-  ]
-    .filter(part => part !== "")
-    .join(" ");
+  const line = joined(
+    [
+      tr("quota.not-a-bill", locale),
+      tr("quota.rolling-5h", locale, { amount: amount(five, locale), clears: five.clearsAt !== undefined ? tr("quota.clears", locale, { at: five.clearsAt }) : "" }),
+      tr("quota.rolling-7d", locale, { amount: amount(week, locale) }),
+      tr("quota.week-caveat", locale),
+      listed.length > 0 ? tr("quota.list-priced", locale, { models: listed.join(", ") }) : "",
+      tr(hold ? "quota.hold-yes" : pauseAt === undefined ? "quota.hold-no-line" : "quota.hold-no", locale),
+    ],
+    locale
+  );
   return { five, week, hold, line };
 }
 
@@ -287,19 +293,19 @@ function warnLedger(error: unknown): void {
 }
 
 /** The settings line. Reads the ledger because a person asked. Names a failure instead of inventing a zero. */
-export function quotaStatusLine(now = Date.now()): string {
+export function quotaStatusLine(now = Date.now(), locale: Locale = "en"): string {
   const remains = cachedRemainsDecision();
   let line: string;
   try {
     const ledger = readLedger(now);
-    line = forecastOf(ledger.records, ratesForForecast(ledger.rates), now, pauseAtFromEnv()).line;
+    line = forecastOf(ledger.records, ratesForForecast(ledger.rates), now, pauseAtFromEnv(), locale).line;
   } catch (error) {
     warnLedger(error);
-    line = "Forecast, not a bill. The usage ledger could not be read. Hold: no.";
+    line = joined([tr("quota.not-a-bill", locale), tr("quota.ledger-unreadable", locale), tr("quota.hold-no", locale)], locale);
   }
   if (!remains.pause) return line;
-  const until = remains.untilMs !== undefined ? new Date(remains.untilMs).toISOString() : "the window resets";
-  return `${line} Remains general window holds until ${until} (quota_hold).`;
+  const until = remains.untilMs !== undefined ? new Date(remains.untilMs).toISOString() : tr("quota.window-resets", locale);
+  return joined([line, tr("quota.remains-hold", locale, { until })], locale);
 }
 
 /**

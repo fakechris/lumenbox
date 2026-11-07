@@ -11,6 +11,7 @@
  */
 
 import { activityOfInbound, type Awaiting, type ConversationFacts, type ConversationState, rowMarker } from "../host/conversation-state.ts";
+import { apiError } from "./api-error.ts";
 
 export interface AgentFactsDeps {
   /** Pending approvals, by agent. */
@@ -94,7 +95,7 @@ export async function agentFactsRoute(
   if (deps.refused()) return { status: 0, body: null };
   const body = await deps.readJson();
   const id = String(body.id ?? "");
-  if (!deps.hasAgent(id)) return { status: 404, body: { error: `No agent ${id}` } };
+  if (!deps.hasAgent(id)) return { status: 404, body: apiError("agent-unknown", { agent: id }) };
   const conversation = String(body.conversation ?? "main") || "main";
   return { status: 200, body: route === "POST /api/agents/viewed" ? state.viewed(id, conversation) : state.markUnread(id, conversation) };
 }

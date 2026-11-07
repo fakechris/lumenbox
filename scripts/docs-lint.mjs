@@ -510,7 +510,7 @@ export function lintVocabulary(root, patterns = USER_FACING_DOCS, glossaryPath =
 }
 
 /** The language bundle: the chat's words and the web UI's (INV-1684). A person reads every value. */
-export const BUNDLE = "src/i18n/{messages,ui-*}.ts";
+export const BUNDLE = "src/i18n/{messages,ui-*,server-*}.ts";
 
 /**
  * The bundle's values, checked like a user page. The files are read as text, one entry per line —
