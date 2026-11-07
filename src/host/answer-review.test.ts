@@ -61,3 +61,26 @@ test("with the decision model on, the review is one choice, falls back to the mo
   assert.equal(answerReviewPercent(on(true)), 100);
   assert.equal(answerReviewPercent({ ...on(true), mode: () => "off" }), 5);
 });
+
+test("a guest answer is judged also for PROMISE and NOT_IN_KNOWLEDGE, against the knowledge the agent may use; a member reply never is (INV-1713)", async () => {
+  const guest = { agentName: "Ada", messageId: "guest-1", conversation: "guest:feishu:oc_g", request: "Can I get my money back?", answer: "Sure, I can refund you in full today.", guest: { knowledge: "[g1] Refunds\nRefunds within 7 days of purchase, on request to a member." } };
+  const prompt = buildAnswerReviewPrompt(guest);
+  assert.match(prompt, /PROMISE: Commits the organisation/);
+  assert.match(prompt, /NOT_IN_KNOWLEDGE/);
+  assert.match(prompt, /Refunds within 7 days/);
+  assert.doesNotMatch(buildAnswerReviewPrompt({ ...guest, guest: undefined }), /PROMISE|NOT_IN_KNOWLEDGE/);
+  assert.equal(parseAnswerVerdict('{"category":"PROMISE","confidence":0.9,"reason":"promises a refund"}')?.category, "PROMISE");
+  assert.equal(recoverySuggestion({ category: "PROMISE", confidence: 1, reason: "" }), undefined, "the member's /retry hint is not for a guest");
+
+  let asked: import("./jev.ts").JevRequest | undefined;
+  const jev: import("./jev.ts").SwitchDeps = {
+    mode: () => "on",
+    client: () => async request => { asked = request; return { model: "m", ms: 1, answers: { category: { type: "choice" as const, choice: "PROMISE", confidence: 0.93, probabilities: { PROMISE: 0.93 } } } }; },
+    record: () => {},
+    log: () => {},
+  };
+  const verdict = await new AnswerReviewer({ ask: async () => undefined, jev }).review(guest);
+  assert.equal(verdict.category, "PROMISE");
+  assert.deepEqual(Object.keys((asked!.questions.category as { criteria: Record<string, string> }).criteria).sort(), ["CONTEXT_BLEED", "NON_ANSWER", "NOT_IN_KNOWLEDGE", "PASS", "PROCESS_OVER_RESULT", "PROMISE", "UNKNOWN"]);
+  assert.match(JSON.stringify(asked!.state), /Refunds within 7 days/);
+});

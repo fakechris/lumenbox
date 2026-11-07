@@ -3240,7 +3240,7 @@ test("a guest in an organisation's group chat asks the agent to run commands, re
           runtime: () => ({ client, provider: { label: "scenario", model: "m", maxTokens: 1024 } as ProviderProfile }),
           usage: { record: row => { usage.push(row); return { seq: usage.length, at: "", ...row }; } },
           spend,
-          lines: { overCap: () => "over cap", failed: () => "failed" },
+          lines: { overCap: () => "over cap", failed: () => "failed", held: () => "held" },
           log: () => {},
         }),
       });
@@ -3286,4 +3286,89 @@ test("a guest in an organisation's group chat asks the agent to run commands, re
     assert.equal(result.score.turns, 0, "no member turn ran");
     assert.deepEqual(result.score.files, ["/home/box/work/customers.csv"]);
   } finally { result.cleanup(); }
+});
+
+test("two guests take turns asking follow-ups in one group chat and each sees only their own window; a reply promising a refund is flagged red in the audit, and in a group chat that reviews before sending it is never sent (INV-1713, docs/97 §7)", async () => {
+  const asked: { last: string; messages: string }[] = [];
+  const sent: string[] = [];
+  const result = await runEpisode({
+    team: [{ name: "Ada" }], says: [],
+    script: () => { throw new Error("a member turn ran for a guest"); },
+    drive: async ({ registry, frontId }) => {
+      registry.appendMemoryRecords(frontId, [{ at: new Date().toISOString(), kind: "fact", text: "MEMBER_FACT: the support rota" }]);
+      const snapshot = (dir: string): Record<string, string> => { const out: Record<string, string> = {}; const walk = (at: string) => { for (const entry of readdirSync(at, { withFileTypes: true })) { const path = join(at, entry.name); if (entry.isDirectory()) walk(path); else out[path] = readFileSync(path, "utf8"); } }; walk(dir); return out; };
+      const agentBefore = snapshot(registry.dirFor(frontId));
+      const desk = new GuestDesk();
+      desk.setMode(frontId, "guests", "Chris");
+      desk.addKnowledge({ title: "营业时间", text: "周一到周五 9:00-18:00；周六 10:00-16:00。退款须由成员按规定办理。" }, "Chris");
+      desk.setHold("feishu", "feishu:oc_vip", true, "Chris");
+      // The model answers each guest's last line; asked for a refund it promises one, the conduct the review is for.
+      const client = fakeModel(() => { throw new Error("streamed"); }, {
+        create: ({ params }) => {
+          const last = params.messages.at(-1);
+          const text = typeof last?.content === "string" ? last.content : "";
+          asked.push({ last: text, messages: JSON.stringify(params.messages) });
+          const answer = /退款/.test(text) ? "没问题，我可以给你退款，今天就退。" : `回答：${text.split("\n").at(-1)}`;
+          return { id: "r", type: "message", role: "assistant", model: "m", content: [{ type: "text", text: answer }], stop_reason: "end_turn", stop_sequence: null, usage: { input_tokens: 50, output_tokens: 10 } } as unknown as Anthropic.Message;
+        },
+      });
+      // INV-1413's reviewer, its own model path, with the guest categories: the judge reads the prompt the host built.
+      const judged: string[] = [];
+      const reviewer = new AnswerReviewer({
+        ask: async prompt => { judged.push(prompt); return /我可以给你退款/.test(prompt.split("THE AGENT'S REPLY")[1] ?? "") ? '{"category":"PROMISE","confidence":0.96,"reason":"promises a refund on the organisation\'s behalf"}' : '{"category":"PASS","confidence":0.9,"reason":"answers from the knowledge"}'; },
+        jev: { mode: () => "off", client: () => undefined, record: () => {}, log: () => {} },
+      });
+      let receive!: (message: ChannelMessage) => Promise<string | undefined>;
+      const manager = new ChannelManager({
+        mayDrive: () => false, log: () => {},
+        ask: async () => { throw new Error("ask ran for a guest"); },
+        knock: () => { throw new Error("a guest knocked instead of being answered"); },
+        guestTurn: (door, message) => answerGuest(guestMessageOf(door, message, undefined), {
+          installationMode: () => "organisation",
+          resolveAgent: () => ({ id: frontId, name: "Ada" }),
+          desk, isPaused: () => false,
+          runtime: () => ({ client, provider: { label: "scenario", model: "m", maxTokens: 1024 } as ProviderProfile }),
+          review: input => reviewer.review({ agentName: input.agentName, messageId: input.turnId, conversation: `guest:${input.chatKey}`, request: input.question, answer: input.answer, guest: { knowledge: input.knowledge } }),
+          lines: { overCap: () => "over cap", failed: () => "failed", held: () => "已收到，稍后回复。" },
+          log: () => {},
+        }),
+      });
+      manager.register({ name: "feishu", start: async handler => { receive = handler; }, stop() {}, send: async (_to, text) => { sent.push(text); return undefined; } }, true, "test"); manager.start();
+      await new Promise(resolve => setImmediate(resolve));
+      const say = async (who: string, chatKey: string, text: string, n: number) => (await receive({ identity: `feishu:${who}`, chatKey, senderLabel: who, addressed: true, text, messageId: `m${n}` })) ?? "";
+      try {
+        // Two guests, alternating, in one group chat.
+        await say("ou_a", "feishu:oc_support", "A1 你们几点开门？", 1);
+        await say("ou_b", "feishu:oc_support", "B1 能寄到海外吗？", 2);
+        await say("ou_a", "feishu:oc_support", "A2 那周六呢？", 3);
+        await say("ou_b", "feishu:oc_support", "B2 运费多少？", 4);
+        const promised = await say("ou_a", "feishu:oc_support", "A3 我要退款", 5);
+        assert.match(promised, /我可以给你退款/, "shadow: the reply went out at once");
+        // The same reply, in a group chat that reviews before sending.
+        const heldLine = await say("ou_c", "feishu:oc_vip", "C1 我要退款", 6);
+        assert.equal(heldLine, "已收到，稍后回复。");
+        await manager.idle();
+        await new Promise(resolve => setImmediate(resolve));
+      } finally { manager.stop(); }
+
+      // Each guest saw only their own window.
+      const turnOf = (marker: string) => asked.find(request => request.last.includes(marker))!.messages;
+      assert.match(turnOf("A2"), /A1/); assert.doesNotMatch(turnOf("A2"), /B1/);
+      assert.match(turnOf("B2"), /B1/); assert.doesNotMatch(turnOf("B2"), /A1|A2/);
+      assert.match(turnOf("A3"), /A1[\s\S]*A2/); assert.doesNotMatch(turnOf("A3"), /B1|B2/);
+      assert.doesNotMatch(turnOf("C1"), /A1|B1|退款，今天/, "a guest in another group chat starts empty");
+      // The refund promise is red in the audit list, with the reviewer's own category.
+      const flagged = desk.audit({ flagged: true });
+      assert.deepEqual(flagged.map(row => [row.chatKey, row.review?.category, row.review?.status]), [["feishu:oc_vip", "PROMISE", "held"], ["feishu:oc_support", "PROMISE", "shadow"]]);
+      assert.equal(desk.audit().length, 6);
+      assert.ok(judged.every(prompt => /营业时间/.test(prompt)), "the review judged against the ticked knowledge");
+      // In the group chat that reviews first, the promise was never sent: not as the reply, not pushed.
+      assert.ok(!sent.some(text => /我可以给你退款/.test(text)));
+      assert.doesNotMatch(desk.windowFor("feishu", "feishu:oc_vip", "feishu:ou_c").map(e => e.answer).join(""), /退款/, "nor is it in the guest's window");
+      // Nothing of it reached a member's memory, transcript or anything else in the agent's directory.
+      assert.deepEqual(snapshot(registry.dirFor(frontId)), agentBefore);
+      for (const request of asked) assert.doesNotMatch(request.messages, /MEMBER_FACT/);
+    },
+  });
+  try { assert.equal(result.score.turns, 0, "no member turn ran"); } finally { result.cleanup(); }
 });

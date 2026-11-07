@@ -102,7 +102,7 @@ function host(overrides: Partial<AnswerGuestDeps> = {}) {
     desk: guestDesk,
     isPaused: () => false,
     runtime: () => ({ client: scripted([say("Hello, guest.")]), provider: PROVIDER }),
-    lines: { overCap: () => "over cap", failed: () => "failed" },
+    lines: { overCap: () => "over cap", failed: () => "failed", held: () => "held" },
     log: () => {},
     ...overrides,
   };
@@ -128,4 +128,67 @@ test("a group chat past today's guest turns hears so once, then nothing, and no 
   assert.deepEqual(await answerGuest(message("two"), deps), { reply: "over cap" });
   assert.deepEqual(await answerGuest(message("three"), deps), {});
   assert.equal(calls, 1);
+});
+
+test("a follow-up sees that guest's own short window in that group chat, and another guest's turn does not (INV-1713)", async () => {
+  const seen: FakeCall[] = [];
+  const { deps, guestDesk } = host({ runtime: () => ({ client: scripted([say("an answer")], seen), provider: PROVIDER }) });
+  const from = (identity: string, text: string) => guestMessageOf("feishu", { text, chatKey: "feishu:oc_g", identity, senderLabel: identity }, undefined);
+  await answerGuest(from("feishu:ou_a", "A_FIRST: when do you open?"), deps);
+  await answerGuest(from("feishu:ou_b", "B_FIRST: do you ship abroad?"), deps);
+  await answerGuest(from("feishu:ou_a", "A_SECOND: and on Saturday?"), deps);
+  const asked = seen.map(call => JSON.stringify(call.params.messages));
+  assert.doesNotMatch(asked[0]!, /B_FIRST/);
+  assert.doesNotMatch(asked[1]!, /A_FIRST/, "guest B's turn holds nothing of guest A's");
+  assert.match(asked[2]!, /A_FIRST[\s\S]*an answer[\s\S]*A_SECOND/, "guest A's follow-up holds A's last exchange, then the new question");
+  assert.doesNotMatch(asked[2]!, /B_FIRST/);
+  assert.match(String(seen[2]!.params.system), /this same guest's own recent questions/);
+  assert.doesNotMatch(String(seen[0]!.params.system), /recent questions/, "a first question has no history and says none");
+  assert.equal(guestDesk.windowFor("feishu", "feishu:oc_g", "feishu:ou_a").length, 2);
+});
+
+test("a guest turn reads only the knowledge collections its agent ticked (INV-1713)", async () => {
+  const seen: FakeCall[] = [];
+  const { deps, guestDesk } = host({ runtime: () => ({ client: scripted([call("SearchPublicKnowledge", { query: "price list plan" }), say("done")], seen), provider: PROVIDER }) });
+  const sales = guestDesk.addCollection("Sales", "Chris");
+  guestDesk.addKnowledge({ title: "Price list", text: "SALES_ONLY: the plan is 99 yuan a month.", collection: sales.id }, "Chris");
+  await answerGuest(message("@ada what is the price list?"), deps);
+  assert.doesNotMatch(String(seen[0]!.params.system) + JSON.stringify(seen[1]!.params.messages), /SALES_ONLY|Price list/, "Ada ticked only 组织通用");
+  guestDesk.setTicks("ada", [sales.id], "Chris");
+  seen.length = 0;
+  await answerGuest(message("@ada what is the price list?"), deps);
+  assert.match(JSON.stringify(seen[1]!.params.messages), /SALES_ONLY/);
+  assert.doesNotMatch(String(seen[0]!.params.system), /Opening hours/, "and now not 组织通用");
+});
+
+test("answer review: shadow by default — sent at once, the verdict lands after and a PROMISE is flagged; in a group chat that reviews before sending only a PASS goes out (INV-1713)", async () => {
+  const reviewed: string[] = [];
+  let verdict: { category: string; confidence: number; reason: string } | undefined | "throw" = { category: "PROMISE", confidence: 0.95, reason: "promises a refund" };
+  const held: string[] = [];
+  const { deps, guestDesk } = host({
+    runtime: () => ({ client: scripted([say("I can refund you in full.")]), provider: PROVIDER }),
+    review: async input => { reviewed.push(`${input.question}|${input.answer}|${input.knowledge}`); if (verdict === "throw") throw new Error("down"); return verdict; },
+    heldForAdmin: turn => held.push(turn.category),
+  });
+  const shadow = await answerGuest(message("@ada can I get a refund?"), deps);
+  assert.deepEqual(shadow, { reply: "I can refund you in full." }, "shadow: the guest has the answer at once");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(reviewed[0]!, /can I get a refund\?\|I can refund you in full\.\|\[g\w+\] Opening hours/, "the review is handed the question, the answer and the ticked knowledge");
+  const first = guestDesk.audit()[0]!;
+  assert.equal(first.review?.status, "shadow");
+  assert.equal(first.review?.flagged, true);
+  assert.equal(guestDesk.windowFor("feishu", "feishu:oc_g", "feishu:ou_guest").length, 1);
+
+  guestDesk.setHold("feishu", "feishu:oc_g", true, "Chris");
+  assert.deepEqual(await answerGuest(message("@ada refund please"), deps), { reply: "held" }, "held: the guest reads the held line, not the answer");
+  assert.equal(guestDesk.audit({ held: true })[0]?.review?.answer, "I can refund you in full.");
+  assert.deepEqual(held, ["PROMISE"], "the Admins are told");
+  assert.equal(guestDesk.windowFor("feishu", "feishu:oc_g", "feishu:ou_guest").length, 1, "a held answer is not in the window: the guest has not seen it");
+
+  verdict = "throw";
+  assert.deepEqual(await answerGuest(message("@ada again"), deps), { reply: "held" }, "a reviewer that fails holds too");
+  assert.equal(guestDesk.audit()[0]?.review?.category, "UNKNOWN");
+  verdict = { category: "PASS", confidence: 0.9, reason: "fine" };
+  assert.deepEqual(await answerGuest(message("@ada hours?"), deps), { reply: "I can refund you in full." });
+  assert.equal(guestDesk.audit()[0]?.review?.status, "sent");
 });

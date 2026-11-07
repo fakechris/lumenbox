@@ -108,6 +108,16 @@ export const SETTINGS_PANES: readonly SettingsPane[] = [
     mounted: "script",
   },
   {
+    key: "guests",
+    title: "Guests",
+    titleZh: "访客",
+    about: "On an organisation only: every answer an agent gave a guest in a group chat, by group chat, agent and time, with the review's verdict — answers that promise something on the organisation's behalf or say what the knowledge does not are flagged red — the answers held for an Admin to approve, and which group chats review before sending. Who answers guests and the knowledge collections are in Team.",
+    aboutZh: "只在组织里有：agent 在群里给访客的每一条回答，可按群、agent、时间查看，附审查结论——替组织许诺或说了知识里没有的内容会标红；等管理员批准的回答；以及哪些群先审后发。谁回答访客和知识集在「团队」里设置。",
+    config: [],
+    apis: ["/api/guests", "/api/guests/audit"],
+    mounted: "script",
+  },
+  {
     key: "organisations",
     title: "Organisations",
     titleZh: "组织",
