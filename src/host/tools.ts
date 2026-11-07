@@ -71,7 +71,7 @@ import { hostOf } from "./learnings.ts";
 import { noteSiteLearning, readSiteLearnings, siteLearningsNote } from "./site-learnings.ts";
 import type { McpManager, ToolEffect } from "./mcp.ts";
 import { MCP_FACE_TOKEN_VARIABLE, type McpFace } from "./mcp-face.ts";
-import { dedupe, dedupeKey, describeFrom, memoryRef, validateRecord } from "./memory.ts"; import { recallMatches } from "./memory-relevance.ts"; import { recallable } from "./memory-scope.ts"; import { alreadyPending, forTeamTier, needsReview, pendingNotice, teamReviewOn } from "./team-memory-review.ts";
+import { dedupe, dedupeKey, describeFrom, memoryRef, validateRecord } from "./memory.ts"; import { recallMatches } from "./memory-relevance.ts"; import { recallable } from "./memory-scope.ts"; import { alreadyPending, forTeamTier, pendingNotice, teamReviewOn } from "./team-memory-review.ts";
 import { guardMemoryCandidate } from "./memory-guard.ts";
 import type { ModelRelay } from "./model-relay.ts";
 import { type OAuthGate, type OAuthProvider, oauthProvider, scrubToken, tokenHeaders } from "./oauth.ts";
@@ -1693,15 +1693,6 @@ export function buildTools(
               "An earlier memory this one supersedes, quoted closely enough to recognise. Without " +
               "it the old one stays alongside the new one and both are presented to you later as " +
               "things you know.",
-          },
-          audience: {
-            type: "string",
-            enum: ["box", "everyone"],
-            description:
-              "For scope 'team': who may read it. 'box' (the default) is the agents on your box — " +
-              "memory follows the place, and another box's agents do not see it. 'everyone' " +
-              "promotes it to every box on this installation once a person approves it; say so only for something that is " +
-              "true everywhere, such as who the person is or how they like to be addressed.",
           },
         },
         required: ["fact"],
@@ -5243,6 +5234,12 @@ export async function dispatchTool(
       const fact = String(input.fact ?? "").trim();
       const rejected = validateRecord(fact) ?? guardMemoryCandidate(fact, { held: context.vault?.heldValues() ?? new Map() });
       if (rejected !== undefined) return { text: rejected.reason, isError: true };
+      // `audience` is retired (INV-1727, docs/98 §9 row 4): team memory is the box's, and what is true
+      // for every box is promoted by a person, never marked so by the agent that wrote it. Said, not
+      // ignored: an agent that asked for every box and silently got one would believe otherwise.
+      if (input.audience !== undefined) {
+        return { text: "RememberFact has no 'audience': team memory is read by the agents on your box only, and a person decides what every box knows. Write it again without 'audience'.", isError: true };
+      }
 
       // A deliberate act, stored as a `fact`: trusted, barely decaying, unlike an automatic extraction.
       const shared = String(input.scope ?? "self") === "team";
@@ -5313,15 +5310,13 @@ export async function dispatchTool(
           : context.memorySources !== undefined && context.memorySources.length > 0
             ? [...new Set(context.memorySources)].slice(-8)
             : [memoryRef(context.conversation ?? MAIN_CONVERSATION, new Date())],
-        // An explicit promotion beyond the box (INV-424). The box itself is stamped by the
-        // registry on write, from the roster, so it is not set here.
-        ...(shared && String(input.audience ?? "box") === "everyone" ? { audience: "everyone" as const } : {}),
+        // The box is stamped by the registry on write, from the roster, so it is not set here (INV-424).
       };
       const withdrawn = retracted ? " The one it replaces has been withdrawn." : "";
       if (shared) {
-        if (needsReview(record)) { // team review (INV-1581), or a write for every box (INV-1722): it waits for a person and only this agent is told
-          context.registry.appendSharedMemory(context.agent.id, forTeamTier([record]));
-          return { text: `Kept for ${record.audience === "everyone" ? "every box" : "the team"}, waiting for a person's approval: ${record.audience === "everyone" ? "agents on every box" : "teammates"} will have it once it is approved, not before. Until then it is not in anyone's memory, yours included.${retracted && teamReviewOn() ? " Withdrawing the one it replaces waits for the same approval." : withdrawn}` };
+        if (teamReviewOn()) { // team review (INV-1581): the write waits for a person and only this agent is told
+          context.registry.appendSharedMemory(context.agent.id, forTeamTier([record], true));
+          return { text: `Kept for the team, waiting for a person's approval: teammates will have it once it is approved, not before. Until then it is not in anyone's memory, yours included.${retracted ? " Withdrawing the one it replaces waits for the same approval." : ""}` };
         }
         context.registry.appendSharedMemory(context.agent.id, [record]);
         return { text: `Kept and shared. Every agent here will have it on their next turn.${withdrawn}` };

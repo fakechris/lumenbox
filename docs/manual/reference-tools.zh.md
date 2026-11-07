@@ -60,7 +60,7 @@
 | `ReadHistory` | Search or read the recorded history of a conversation — what was actually said, what was called, and what came back. | observe | 否 | 总是 | resident | desk, web, code, team | `search`, `from`, `to`, `epoch`, `around`, `agent` |
 | `ReadKept` | Read back the whole of something you already read, when the copy in this conversation was cut. | observe | 否 | 总是 | deferred | — | `call`, `from`, `to` |
 | `Recall` | Search everything you have kept, including what the memory section did not show you. | observe | 否 | 总是 | deferred | desk, web, code, team | `search`, `shared` |
-| `RememberFact` | Keep something across conversations. | self | 否 | 总是；分支里没有 | resident | desk, web, code, team | `fact`, `scope`, `replaces`, `audience` |
+| `RememberFact` | Keep something across conversations. | self | 否 | 总是；分支里没有 | resident | desk, web, code, team | `fact`, `scope`, `replaces` |
 | `RunOnHost` | Run a command on the person's own computer — the machine LumenBox runs on, outside your box. | credential | 是: “run a command on the person's own machine” | 需要主机执行器；分支里没有 | resident | — | `command`, `why`, `secrets` |
 | `RunOperation` | Run a taught operation: a skill whose folder holds operation.json replays its browser (and desktop) steps with no model, and returns its output as JSON. | reach | 是: “replay a taught browser operation” | 需要一台 box | deferred | — | `skill`, `input` |
 | `SendToAgent` | Send a message to another of your user's agents. | self | 否 | 总是；分支里没有 | resident | desk, web, code, team | `target_id`, `message`, `priority` |

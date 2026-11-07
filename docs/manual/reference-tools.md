@@ -60,7 +60,7 @@ and the source disagree. Change the source and run `node scripts/docs-reference.
 | `ReadHistory` | Search or read the recorded history of a conversation — what was actually said, what was called, and what came back. | observe | no | always | resident | desk, web, code, team | `search`, `from`, `to`, `epoch`, `around`, `agent` |
 | `ReadKept` | Read back the whole of something you already read, when the copy in this conversation was cut. | observe | no | always | deferred | — | `call`, `from`, `to` |
 | `Recall` | Search everything you have kept, including what the memory section did not show you. | observe | no | always | deferred | desk, web, code, team | `search`, `shared` |
-| `RememberFact` | Keep something across conversations. | self | no | always; not in a fork | resident | desk, web, code, team | `fact`, `scope`, `replaces`, `audience` |
+| `RememberFact` | Keep something across conversations. | self | no | always; not in a fork | resident | desk, web, code, team | `fact`, `scope`, `replaces` |
 | `RunOnHost` | Run a command on the person's own computer — the machine LumenBox runs on, outside your box. | credential | yes: “run a command on the person's own machine” | needs a host runner; not in a fork | resident | — | `command`, `why`, `secrets` |
 | `RunOperation` | Run a taught operation: a skill whose folder holds operation.json replays its browser (and desktop) steps with no model, and returns its output as JSON. | reach | yes: “replay a taught browser operation” | needs a box | deferred | — | `skill`, `input` |
 | `SendToAgent` | Send a message to another of your user's agents. | self | no | always; not in a fork | resident | desk, web, code, team | `target_id`, `message`, `priority` |

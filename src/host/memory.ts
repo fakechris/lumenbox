@@ -63,15 +63,11 @@ export interface MemoryRecord extends KnowledgeFields {
    * registry on write from the writer's box, never trusted from the tool. Memory follows
    * the place: a box's agents read their own box's shared records, not another box's.
    * Absent on records from before this existed, which stay visible everywhere — they
-   * were, and nothing is quietly withdrawn by a migration.
+   * were, and nothing is quietly withdrawn by a migration. An older record may also carry
+   * `audience: "everyone"`, an agent's own promotion to every box; that field is retired
+   * (INV-1727, docs/98 §9 row 4) and nothing reads it, so such a record is its box's.
    */
   box?: string;
-  /**
-   * Who may read a shared record beyond its box. `everyone` is an explicit promotion to
-   * the installation, said by the agent that kept it and live beyond its box only once a person
-   * approved it (INV-1722); absent means the box.
-   */
-  audience?: "everyone";
   /**
    * Where it came from: `<conversation>@<time>` of the exchange(s) it was taken from, so a
    * belief can be checked against what was actually said (R27). Absent when nobody could say
