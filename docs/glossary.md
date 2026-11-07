@@ -15,7 +15,7 @@ use the internal word; a page written for a person (README, docs/37, docs/38, an
 synonyms listed below (`scripts/docs-lint.mjs`, `lintVocabulary`). Code identifiers are not
 renamed: `door`, `worker`, `expert`, `front` stay in the code and the specs.
 
-## Three decisions
+## Five decisions
 
 1. **Channel, not door.** A person reads *channel* (渠道): Settings → Channels, "Add channel".
    The specs and the code keep *door* (docs/22 §1 already writes "Channel (door)"), because
@@ -47,6 +47,13 @@ renamed: `door`, `worker`, `expert`, `front` stay in the code and the specs.
      both.
    - An **account holder** (账户持有人) manages a tenant on the control plane (docs/08). The code
      value stays `owner` (`src/control`); only the words a person reads say account holder.
+5. **Installation and machine are two axes** (docs/96). An *installation* is who decides
+   (personal or organisation). A *machine* is where a box runs: this computer, a VM, the
+   organisation's cluster, or an organisation node. A person reads *machine* (机器), never
+   *box host* or 宿主. The first run asks a machine's use, with three answers: **personal
+   machine** (个人的机器), **personal + organisation** (个人 + 组织), **organisation node**
+   (组织的节点). A machine's own environment, used as a box, is its **native environment**
+   (原生环境).
 
 ## Concepts
 
@@ -61,6 +68,10 @@ renamed: `door`, `worker`, `expert`, `front` stay in the code and the specs.
 | **channel** / 渠道 | door, Channel record (docs/22, docs/53) | channel id, the prefix of every identity it mints, e.g. `feishu-work:ou_…` | connected · not connected · needs a restart | Settings → Channels · the chat itself · — |
 | **group chat** / 群 | chat, "room" in channel code | platform chat id, e.g. `oc_…` | group rule `addressed` · `all` | Settings → Channels group rule · the group · — |
 | **installation** / 安装 | Installation: the roster's `installation.mode` (docs/22 §1a), its kinds in docs/95 | personal: this computer; organisation: its name and address | personal (个人) · organisation (组织) | the sidebar's first level (INV-1691) · — · `agentbox web --desktop` (personal, the app passes it), `agentbox web` on a server (organisation) |
+| **machine** / 机器 | box host: where a box runs — `BoxEntry.kind` `docker`, `attached` or `host`, or a pod of a server's `AGENTBOX_BOX_BACKEND=kubernetes` (docs/96 §2) | none in today's code: `GET /api/boxes` gives each box's `kind` and, for a VM or a native environment, its endpoint address; the box name names a box, not a machine; a node's id arrives with INV-1697 | this computer (本机) · a VM · the organisation's cluster · an organisation node | Settings → Boxes · — · `agentbox box up`, `box attach`, `host up`, `box connect` |
+| **machine use** / 这台机器的用途 | the first-run choice (docs/96 §3, INV-1696) | one per machine, in this machine's configuration | personal machine (个人的机器) · personal + organisation (个人 + 组织) · organisation node (组织的节点) | the first-run wizard, Settings → This machine (本机) · — · — |
+| **organisation node** / 组织的节点 | a machine the organisation owns, running LumenBox with no personal installation; its boxes are the organisation's (docs/96 §4, INV-1697) | the node credential the organisation issued | online · offline · revoked | the organisation's Settings → Boxes · — · the first run's "organisation node" |
+| **native environment** / 原生环境 | box kind `host`: the box daemon headless on the machine itself (INV-438, `src/boxd/headless.ts`) | box name, e.g. `studio-mac` | running · stopped · unavailable | Settings → Boxes · — · `agentbox host up <name>` |
 | **person** / 人 | Principal, Identity | principal id; identity `<channel id>:<subject>` | viewer · driver · admin | Settings → Team → People · `bind CODE` · — |
 | **Owner** / 机主 | Principal with role `admin` on an installation whose `installation.mode` is `single-machine` (installation.ts, docs/22 §1a) | principal id `local:owner` | Owner (the only person; never converted) | Settings → Team → People (Owner · 机主) · — · `agentbox web --desktop` (the app passes it) |
 | **Admin** / 管理员 | Principal with role `admin` on an organisation installation (`installation.mode` absent or `organisation`) | principal id | admin | Settings → Team → People · the bootstrap code's sign-in page · — |
@@ -103,6 +114,9 @@ its spelling.
 | `机器人`, `智能体` | agent | |
 | `箱子`, `工作机` | box | |
 | `一道门`, `这道门` | 渠道 | |
+| `box host`, `box hosts` | machine | The specs keep *box host* (docs/96). |
+| `host box`, `host boxes` | native environment | The code keeps `kind: "host"`. |
+| `宿主` | 机器 | Covers 宿主机. |
 
 ## Allowed names
 
