@@ -81,10 +81,10 @@ export const SETTINGS_PANES: readonly SettingsPane[] = [
     key: "memory",
     title: "Memory",
     titleZh: "记忆",
-    about: "What each agent remembers, where each memory came from, and changing or removing it.",
-    aboutZh: "每个 agent 记住了什么、每条记忆从哪里来，以及修改或删除它。",
+    about: "What each agent remembers, where each memory came from, changing or removing it, and what is shared with every box.",
+    aboutZh: "每个 agent 记住了什么、每条记忆从哪里来、修改或删除它，以及对所有 box 共享的记忆。",
     config: [],
-    apis: ["/api/memory"],
+    apis: ["/api/memory", "/api/memory/team-review"],
     mounted: "page",
   },
   {
