@@ -2031,13 +2031,13 @@ function renderChannels() {
           '<a href="#" data-dismiss="' + esc(k.identity) + '" style="color:var(--danger);font-size:12px">{{ui.app.ignore}}</a></div>';
       }).join("");
       // Flatten to one row per identity, which is what a person edits.
-      people = []; window.installation = data.installation; // Owner or Admin (INV-1685): read by ownerBadge in installation-ui.ts
+      people = []; window.installation = data.installation; window.rosterPeople = data.principals || []; // Owner or Admin (INV-1685): read by ownerBadge and afterPeople in installation-ui.ts
       (data.principals || []).forEach(function (p) {
         (p.identities.length ? p.identities : [""]).forEach(function (identity) {
           people.push({ id: p.id, name: p.name, role: p.role, identity: identity });
         });
       });
-      renderPeople();
+      renderPeople(); if (window.afterPeople) window.afterPeople(); // the Owner's own code and "these are all me" (INV-1698)
     })
     .catch(function () {});
 }
@@ -2179,7 +2179,7 @@ $("setinvite").onclick = function () {
   (window.rosterFetch || fetch)("/api/channels/invite", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ role: $("setinvrole").value })
+    body: JSON.stringify(window.inviteBody ? window.inviteBody($("setinvrole").value) : { role: $("setinvrole").value }) // on a personal installation, a code for the Owner's own other account (INV-1698)
   })
     .then(function (r) { return r.json(); })
     .then(function (d) {

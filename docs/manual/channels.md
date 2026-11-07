@@ -65,7 +65,16 @@ credentials in `~/.agentbox/config.json`.
   adding a person by hand and syncing a directory are all refused there, with the sentence
   "This is your personal installation; it has only you. To work with others, join or create
   an organisation." People are let in on an organisation's installation, where Admins
-  (管理员) run them. A code that links your own phone still works.
+  (管理员) run them.
+- Each Feishu app gives the same person a different id, so you are a new id in every Feishu app
+  you talk to, and in DingTalk and each browser too. On a personal installation, Settings → Team
+  → *Code for another account of mine* makes a code; send `bind CODE` from the other account, or
+  sign in with it in a browser, and that account is you, the Owner. Nobody is added.
+- A desktop installation from before personal installations may list you several times, once
+  per app. Settings → Team then shows *See whether these are all me*: each entry with its
+  channel and when it last wrote, and what a merge would change. Merge only if every one is
+  you; the app restarts, and you are the Owner with every account. Nothing changes until you
+  confirm.
 - In DingTalk, an approval arrives as a card only when a card template is set up. Without one,
   you answer by typing the reply word.
 
