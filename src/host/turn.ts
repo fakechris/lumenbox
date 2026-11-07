@@ -50,7 +50,7 @@ import {
   FIRST_TOKEN_DEADLINE_MS,
 } from "./transient.ts"; import { keyOf as fallbackKey, nextFallback, switchLine, type Runtime as FallbackRuntime } from "./provider-fallback.ts";
 import { cacheMetering, cacheReadShare, type UsageKind, type UsageLog, type UsageRecord } from "./usage.ts"; import type { SpendLimits, SpendVerdict } from "./spend-limits.ts";
-import { chooseRelevant, memoryProjectionManifest, SHARED_CHAR_BUDGET, type MemoryRecall } from "./memory.ts";
+import { chooseRelevant, memoryProjectionManifest, SHARED_CHAR_BUDGET, type MemoryRecall } from "./memory.ts"; import { recallable } from "./memory-scope.ts";
 import { egressDeniedBlock, type NetworkEventLog } from "../egress/events.ts";
 import { needsReview, type ReviewInput, type ReviewMode, type Verdict } from "./auto-review.ts";
 import type { HookRunner } from "./hooks.ts";
@@ -1594,8 +1594,9 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   const standingNotice = standing === undefined ? undefined : changeNotice(takeChanges(registry.dirFor(agent.id), standing)); const person = isolated ? undefined : deps.person?.(deps.caller?.userId); // INV-1653
 
   // Both personal and shared memories pass the same relevance gate, even below budget.
-  const ownMemory = isolated ? [] : registry.readMemoryRecords(agent.id);
-  const sharedMemory = isolated ? [] : registry.readSharedMemory(agent.id);
+  // Admitted by scope for this turn's person, then only what may be recalled: a cite-only item is read by id, never here (INV-1725).
+  const ownMemory = isolated ? [] : recallable(registry.readMemoryRecords(agent.id));
+  const sharedMemory = isolated ? [] : recallable(registry.readSharedMemory(agent.id, deps.caller?.userId));
   const memoryQuery = inbound.map(message => message.text).join(" ");
   const selection = {
     query: memoryQuery,
