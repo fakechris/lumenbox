@@ -56,7 +56,7 @@ import { Orchestrator } from "../host/orchestrator.ts";
 import { describeProvider, type ProviderProfile } from "../host/provider.ts";
 import { configuredProviders, SEARCH_PROVIDERS } from "../host/web.ts";
 import type { TurnEvent } from "../host/turn.ts";
-import { APP_PAGE, LOGIN_PAGE, localeOf, localizeScript, requestLocaleOf } from "./page-locale.ts"; import { apiError, localizedBody } from "./api-error.ts"; import { bootstrapPage, desktopWaitingPage, notLinkedPage, oauthResultPage } from "./server-pages.ts";
+import { APP_PAGE, LOGIN_PAGE, localeOf, localizeScript, requestLocaleOf } from "./page-locale.ts"; import { apiError, localizedBody } from "./api-error.ts"; import { bootstrapPage, desktopWaitingPage, notLinkedPage, oauthResultPage } from "./server-pages.ts"; import { invitationLink, loginPageWithDoors, webSignInDoors } from "./sign-in.ts";
 import {
   authorize,
   callerOf,
@@ -3133,7 +3133,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (route === "GET /bootstrap") {
         try {
         if (!bootstrap.pending()) { send(res, 404, apiError("bootstrap-unavailable")); return; }
-        const doors = channelRecords.filter(record => record.type === "feishu" && channelCredentialsSet(record));
+        const doors = webSignInDoors(channelRecords, channelCredentialsSet, process.env.AGENTBOX_PUBLIC_URL);
         res.setHeader("cache-control", "no-store");
         res.setHeader("referrer-policy", "no-referrer");
         send(res, 200, bootstrapPage(doors, localeOf(req, url)), "text/html");
@@ -3153,7 +3153,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         return;
       }
       if (route === "GET /login") {
-        send(res, 200, LOGIN_PAGE(localeOf(req, url)), "text/html");
+        const locale = localeOf(req, url); // a code, or a Feishu door to the same session (INV-1701)
+        send(res, 200, loginPageWithDoors(LOGIN_PAGE(locale), webSignInDoors(channelRecords, channelCredentialsSet, process.env.AGENTBOX_PUBLIC_URL), locale), "text/html");
         return;
       }
       // The Feishu doors' sign-in, also before the gate and for the same reason as
@@ -4852,7 +4853,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             expiresAt: Date.now() + INVITE_TTL_MS,
           });
           log(`channel invite: ${code} (${role}) created`);
-          send(res, 200, { code, role, expiresAt: Date.now() + INVITE_TTL_MS });
+          send(res, 200, { code, role, expiresAt: Date.now() + INVITE_TTL_MS, ...invitationLink(process.env.AGENTBOX_PUBLIC_URL, code) }); // the link the app accepts (INV-1701)
           return;
         }
 
