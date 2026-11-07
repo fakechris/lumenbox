@@ -21,17 +21,31 @@ const { windowOpenAction } = require("./external-links.cjs");
 const { JoinRefused, SESSION_COOKIE } = require("./organisations.cjs");
 const { PERSONAL, allowedRequest, installationList, readCounts } = require("./installations.cjs");
 
-/** How often an organisation's counts are read while the app runs. */
+/**
+ * How often an organisation's counts are read while the app runs. They also feed the dock badge
+ * and the organisation notices (INV-1709), so this is how late such a notice can be: up to 20 s.
+ * Pushed counts would mean the shell holding each organisation's event stream open with its
+ * token, for every organisation, all the time the app runs — a second, long-lived token path
+ * next to the two reads the page itself makes. A person learns in 20 s what an organisation owes
+ * them; that is a lag a notice can carry, and polling keeps one way of reading an organisation.
+ */
 const COUNT_EVERY_MS = 20_000;
 
-function installationViews({ store, mainWindow, openOutside, log }) {
+/** The personal page's first-level column, in CSS pixels (installations-ui.ts), until the page measures it. */
+const RAIL_CSS_PX = 76;
+
+/**
+ * `onCounts(organisations)` hears every finished count read: the organisation entries of the
+ * first level (ids, names, numbers — installations.cjs installationList), never a token.
+ */
+function installationViews({ store, mainWindow, openOutside, log, onCounts = () => {} }) {
   /** connection id → { view, origin } for the window they were made in. */
   const views = new Map();
   const counts = new Map();
   let attachedTo = null;
   let selected = PERSONAL;
   /** The width of the page's first-level column, in CSS pixels, as the page measured it. */
-  let railWidth = 0;
+  let railWidth = RAIL_CSS_PX;
 
   function dropAll() {
     for (const { view } of views.values()) { try { view.webContents.close(); } catch {} }
@@ -107,6 +121,19 @@ function installationViews({ store, mainWindow, openOutside, log }) {
     return { selected };
   }
 
+  /**
+   * Shows an organisation the shell chose — a notice was clicked (INV-1709) — and has the page's
+   * column redraw to mark it, once the page is there to draw: a window just reopened is still loading.
+   */
+  async function show(id) {
+    const answer = await select(String(id));
+    const win = attachedTo;
+    if (!win || win.isDestroyed()) return answer;
+    const redraw = () => win.webContents.executeJavaScript("window.installRail && window.installRail.refresh()").catch(() => {});
+    if (win.webContents.isLoading()) win.webContents.once("did-finish-load", redraw); else await redraw();
+    return answer;
+  }
+
   /** Forgets one organisation's view and counts (on disconnect). */
   function close(id) {
     const entry = views.get(id);
@@ -117,6 +144,7 @@ function installationViews({ store, mainWindow, openOutside, log }) {
     }
     counts.delete(id);
     if (selected === id) { selected = PERSONAL; layout(); }
+    onCounts(organisations());
   }
 
   /** Reads every organisation's counts, one connection at a time; a failed read leaves the count unknown. */
@@ -125,6 +153,12 @@ function installationViews({ store, mainWindow, openOutside, log }) {
       const token = await store.token(record.id).catch(() => undefined);
       counts.set(record.id, token ? await readCounts(record.origin, token) : { reachable: false });
     }
+    onCounts(organisations());
+  }
+
+  /** The organisations as the first level lists them, with what was last read of each. */
+  function organisations() {
+    return installationList(store.list(), counts, selected).filter(entry => entry.kind === "organisation");
   }
 
   function list() {
@@ -139,7 +173,7 @@ function installationViews({ store, mainWindow, openOutside, log }) {
     timer.unref?.();
   }
 
-  return { select, close, list, refreshCounts, start, views, get selected() { return selected; } };
+  return { select, show, close, list, organisations, refreshCounts, start, views, get selected() { return selected; } };
 }
 
 module.exports = { installationViews };
