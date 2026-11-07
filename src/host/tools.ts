@@ -41,7 +41,8 @@ import type { BundleStore } from "./bundles.ts";
 import { catalogMenu, crewTeam, intersectTools, profilesFor } from "./catalog.ts";
 import { type Claims, heldElsewhere } from "./claims.ts";
 import { namesControlSurface } from "./control-surfaces.ts";
-import { deliveryInstructions } from "./delegate-report.ts";
+import { deliveryInstructions, reportPath } from "./delegate-report.ts";
+import { boxPaths } from "./box-paths.ts";
 import { actOnDelegateSession } from "./delegate-session-actions.ts";
 import type { DelegateSessions } from "./delegate-sessions.ts";
 import {
@@ -68,7 +69,7 @@ import { resolveHostSecrets } from "./host-secrets.ts";
 import { sniffImage } from "./image-refusal.ts";
 import { appendLearning, hostOf, learningsDir, readLearnings, renderLearnings } from "./learnings.ts";
 import type { McpManager, ToolEffect } from "./mcp.ts";
-import { MCP_FACE_DIR, MCP_FACE_TOKEN_VARIABLE, type McpFace } from "./mcp-face.ts";
+import { MCP_FACE_TOKEN_VARIABLE, type McpFace } from "./mcp-face.ts";
 import { dedupe, dedupeKey, describeFrom, memoryRef, validateRecord } from "./memory.ts"; import { recallMatches } from "./memory-relevance.ts"; import { alreadyPending, forTeamTier, pendingNotice, teamReviewOn } from "./team-memory-review.ts";
 import { guardMemoryCandidate } from "./memory-guard.ts";
 import type { ModelRelay } from "./model-relay.ts";
@@ -78,7 +79,7 @@ import { runOperationTool, withOperationTool } from "./operation-tool.ts";
 import { type Orchestrations, parsePlan } from "./orchestrate.ts";
 import { type CommitHow, forkTag, type PendingWork } from "./pending-work.ts";
 import type { PolicyGate } from "./policy.ts";
-import { delegateEnv, delegateModel, installCommand, PRESETS, presetNamed, quoteForShell, withEnginesPath } from "./presets.ts";
+import { delegateCommand, delegateEnv, delegateModel, installCommand, PRESETS, presetNamed, quoteForShell, withEnginesPath } from "./presets.ts";
 import { readOutcome, textShape, withReadOutcome } from "./read-outcome.ts";
 import { findKeptResult } from "./results.ts";
 import type { ScopeStore } from "./scopes.ts";
@@ -315,8 +316,9 @@ export interface ToolContext {
   allowedMcpTools?: readonly string[];
   /** Built-ins this turn offers only through the lookup pair (INV-1341): found and called by name, gated as themselves. */
   deferredTools?: readonly Anthropic.Tool[];
-  /** What kind of box the agent's is: an attached one cannot reach the host's loopback. */
+  /** What kind of box the agent's is (an attached one cannot reach the host's loopback), and its work directory: with the kind, where an engine's files go (box-paths.ts). */
   boxKind?: "docker" | "attached" | "host";
+  boxWorkDir?: string;
   /**
    * Reads Feishu documents with the bot's own workspace identity. Present only where
    * a Feishu app is configured; absent withholds the tool entirely, so an agent on an
@@ -3131,10 +3133,12 @@ export async function dispatchTool(
       if (sessionMode && context.acpDelegates === undefined) {
         return { text: "This installation does not keep delegate sessions; run the engine as a job.", isError: true };
       }
+      const paths = boxPaths({ kind: context.boxKind ?? "docker", ...(context.boxWorkDir !== undefined ? { workDir: context.boxWorkDir } : {}) }, context.agent.id);
+      if ("error" in paths) return { text: paths.error, isError: true };
       // Checked rather than assumed, and said as an install problem rather than as a
       // failed run: an engine that is not there produces a shell error the model would
       // otherwise try to debug.
-      const probe = await box.exec(withEnginesPath(preset.probe), { timeoutMs: 15_000 });
+      const probe = await box.exec(withEnginesPath(preset.probe, paths), { timeoutMs: 15_000 });
       if (probe.exit_code !== 0) {
         // Not there. Either the image carries it (a version named at build) or the person
         // chooses it now and it is installed on the work volume at the preset's pinned
@@ -3142,7 +3146,7 @@ export async function dispatchTool(
         // rebuild. The choice is the person's, so the tool offers rather than installs.
         if (input.install === true) {
           const installJobId = `job-${randomBytes(8).toString("hex")}`;
-          const started = await box.startJob(installCommand(preset), {
+          const started = await box.startJob(installCommand(preset, paths), {
             ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
             jobId: installJobId,
             ...callFor(context, installJobId),
@@ -3167,7 +3171,7 @@ export async function dispatchTool(
       // environment variables) wins; otherwise the host's own relay mints a route for this
       // job, unless the box is attached and cannot reach the host. An engine that cannot
       // speak the provider's wire is refused here, not after its first failed call.
-      let env = delegateEnv(preset);
+      let env = delegateEnv(preset, paths);
       let relayKey: string | undefined;
       let relayFile: { file: string; content: string } | undefined;
       let relayModel: string | undefined;
@@ -3192,8 +3196,8 @@ export async function dispatchTool(
         if ("error" in minted) return { text: minted.error, isError: true };
         relayKey = minted.route.key;
         relayModel = delegateModel() ?? context.modelRelay.model();
-        env = preset.relayEnv(minted.url, minted.route.token, relayModel);
-        const config = preset.relayConfig?.(minted.url, "LUMENBOX_RELAY_TOKEN", wire, relayModel);
+        env = preset.relayEnv(minted.url, minted.route.token, relayModel, paths);
+        const config = preset.relayConfig?.(minted.url, "LUMENBOX_RELAY_TOKEN", wire, relayModel, paths);
         if (config !== undefined) {
           relayFile = config;
           Object.assign(env, config.env);
@@ -3203,6 +3207,7 @@ export async function dispatchTool(
       // The job id is ours (docs/32 slice two): minted here, recorded in the ledger before the
       // box hears of it, and handed to boxd, which makes a repeated start idempotent.
       const jobId = `job-${randomBytes(8).toString("hex")}`;
+      const reportFile = reportPath(jobId, paths);
 
       // The session form (docs/81): the engine opened and kept by boxd, the brief recorded by
       // the session keeper with the engine's session id on it, and watched from here on. No
@@ -3220,11 +3225,11 @@ export async function dispatchTool(
               agentName: context.agent.profile.name,
               conversation: context.conversation ?? MAIN_CONVERSATION,
               engine: preset.name,
-              command: withEnginesPath(preset.acp!.command(relayModel ?? delegateModel())),
-              cwd: input.cwd ? String(input.cwd) : "/home/box/work",
+              command: delegateCommand(preset, paths, preset.acp!.command(relayModel ?? delegateModel())),
+              cwd: input.cwd ? String(input.cwd) : paths.work,
               env,
               // A session has no face yet; the report comes back as a file (INV-1261).
-              prompt: `${prompt}\n\n${deliveryInstructions("file", jobId)}`,
+              prompt: `${prompt}\n\n${deliveryInstructions("file", reportFile)}`, report: reportFile,
               ...(context.workId !== undefined ? { workId: context.workId } : {}),
               ...(context.turnId !== undefined ? { turnId: context.turnId } : {}),
               ...callFor(context, jobId),
@@ -3259,7 +3264,7 @@ export async function dispatchTool(
             // Which engine's report to read when the job ends (INV-908).
             // The engine, and where it worked: what settling needs to read its report and
             // ask git whether the code landed (INV-1258).
-            data: { engine: preset.name, ...(input.cwd ? { cwd: String(input.cwd) } : {}) },
+            data: { engine: preset.name, report: reportFile, ...(input.cwd ? { cwd: String(input.cwd) } : {}) },
           });
         } catch (error) {
           return {
@@ -3281,17 +3286,14 @@ export async function dispatchTool(
       const jobEnv: Record<string, string> = { ...env };
       // Permission prompts go to the host when the engine can route them and a face can be
       // reached; otherwise the run skips them, and says so — the box is the sandbox either way.
-      const wantsPermission =
-        preset.permissionArgs !== undefined && context.mcpFace !== undefined && context.boxKind !== "attached";
+      const wantsPermission = preset.permissionArgs !== undefined && context.mcpFace !== undefined && context.boxKind !== "attached";
       // The report's way in (INV-1261): through the face for engines with an MCP client, else a
       // file the brief names; either way the brief says how.
       const wantsSubmit = preset.report === "mcp" && context.mcpFace !== undefined && context.boxKind !== "attached";
       const reportChannel: "mcp" | "file" = wantsSubmit ? "mcp" : "file";
-      const briefed = `${prompt}\n\n${deliveryInstructions(reportChannel, jobId)}`;
+      const briefed = `${prompt}\n\n${deliveryInstructions(reportChannel, reportFile)}`;
       if (requested.length > 0 || wantsPermission || wantsSubmit) {
-        if (context.mcpFace === undefined) {
-          return { text: "This installation has no MCP face, so an engine cannot be lent tools.", isError: true };
-        }
+        if (context.mcpFace === undefined) return { text: "This installation has no MCP face, so an engine cannot be lent tools.", isError: true };
         if (context.boxKind === "attached") {
           faceNote = "MCP tools are not reachable from this box (it is attached over the network), so the engine has none.\n";
         } else {
@@ -3311,7 +3313,7 @@ export async function dispatchTool(
           }
           routeKey = minted.route.key;
           context.mcpFace.bindJob(routeKey, jobId);
-          const file = `${MCP_FACE_DIR}/${minted.route.key}.json`;
+          const file = `${paths.mcpFaces}/${minted.route.key}.json`;
           const face = preset.mcpFace(minted.url, MCP_FACE_TOKEN_VARIABLE, file);
           try {
             await box.writeFile(file, face.content);
@@ -3332,9 +3334,7 @@ export async function dispatchTool(
             (face.note !== undefined ? `Note: ${face.note}.\n` : "");
         }
       }
-      if (preset.permissionArgs !== undefined && !wantsPermission) {
-        faceNote += "No face is reachable from this box, so the engine runs with permissions skipped; the box is the sandbox.\n";
-      }
+      if (preset.permissionArgs !== undefined && !wantsPermission) faceNote += "No face is reachable from this box, so the engine runs with permissions skipped; the box is the sandbox.\n";
 
       // The engine's own thread: resumed when this conversation delegated to the same engine
       // in the same directory with the same model, fresh with a reason otherwise.
@@ -3367,7 +3367,7 @@ export async function dispatchTool(
 
       let started: Awaited<ReturnType<typeof box.startJob>>;
       try {
-        started = await box.startJob(withEnginesPath(preset.run(quoteForShell(briefed), relayModel ?? delegateModel(), extraArgs)), {
+        started = await box.startJob(delegateCommand(preset, paths, preset.run(quoteForShell(briefed), relayModel ?? delegateModel(), extraArgs)), {
           ...(input.cwd ? { cwd: String(input.cwd) } : {}),
           ...(Object.keys(jobEnv).length > 0 ? { env: jobEnv } : {}),
           ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),

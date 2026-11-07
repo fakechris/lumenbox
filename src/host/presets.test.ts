@@ -7,6 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { delegateEnv, PRESETS, presetNamed, quoteForShell } from "./presets.ts";
 import * as presetsModule from "./presets.ts";
+import { DOCKER_BOX_PATHS as docker } from "./box-paths.ts";
 
 test("a prompt survives quoting, including the character that would end it", () => {
   assert.equal(quoteForShell("make the tests pass"), "'make the tests pass'");
@@ -46,11 +47,11 @@ test("without a relay a delegated engine gets nothing, and with one it gets only
   try {
     delete process.env.AGENTBOX_RELAY_URL;
     delete process.env.AGENTBOX_RELAY_TOKEN;
-    assert.deepEqual(delegateEnv(preset), {}, "no relay, no credential — never ours instead");
+    assert.deepEqual(delegateEnv(preset, docker), {}, "no relay, no credential — never ours instead");
 
     process.env.AGENTBOX_RELAY_URL = "http://relay.local:8788";
     process.env.AGENTBOX_RELAY_TOKEN = "box-scoped-token";
-    const env = delegateEnv(preset);
+    const env = delegateEnv(preset, docker);
     assert.equal(env.LUMENBOX_RELAY_URL, "http://relay.local:8788");
     assert.equal(env.LUMENBOX_RELAY_TOKEN, "box-scoped-token");
     assert.equal(env.MINIMAX_API_KEY, undefined, "no vendor variable: a catalogue provider lit by the relay token sends it to the vendor (INV-1359)");
@@ -71,7 +72,7 @@ test("opencode is driven through its global config: the relay as a provider, the
   // Measured by the INV-1359 matrix (2026-10-26): with the token in MINIMAX_API_KEY opencode
   // routed to minimax-cn directly and died with "Unexpected server error"; the relay saw no call.
   const opencode = presetNamed("opencode")!;
-  const config = opencode.relayConfig!("http://host:7777/relay/abc/", "LUMENBOX_RELAY_TOKEN", "anthropic", "MiniMax-M3.1-Flash");
+  const config = opencode.relayConfig!("http://host:7777/relay/abc/", "LUMENBOX_RELAY_TOKEN", "anthropic", "MiniMax-M3.1-Flash", docker);
   assert.equal(config.file, "/home/box/.config/opencode/opencode.json");
   const parsed = JSON.parse(config.content) as { provider: { lumenbox: { npm: string; options: { baseURL: string; apiKey: string }; models: Record<string, unknown> } } };
   assert.equal(parsed.provider.lumenbox.npm, "@ai-sdk/anthropic");
@@ -80,25 +81,25 @@ test("opencode is driven through its global config: the relay as a provider, the
   assert.equal(parsed.provider.lumenbox.options.apiKey, "{env:LUMENBOX_RELAY_TOKEN}", "the token is a reference, never inline");
   assert.deepEqual(Object.keys(parsed.provider.lumenbox.models), ["MiniMax-M3.1-Flash"]);
   assert.ok(!config.content.includes("box-scoped"), "no secret in the file");
-  const openai = JSON.parse(opencode.relayConfig!("u", "T", "openai", "m").content) as { provider: { lumenbox: { npm: string } } };
+  const openai = JSON.parse(opencode.relayConfig!("u", "T", "openai", "m", docker).content) as { provider: { lumenbox: { npm: string } } };
   assert.equal(openai.provider.lumenbox.npm, "@ai-sdk/openai-compatible");
 });
 
 test("pi is driven through a models.json entry that names the relay, and Claude Code's runtime is its environment", () => {
   const pi = presetNamed("pi")!;
   assert.deepEqual(pi.wires, ["anthropic", "openai"]);
-  const config = pi.relayConfig!("http://host/relay/abc", "LUMENBOX_RELAY_TOKEN", "openai", "MiniMax-M3");
+  const config = pi.relayConfig!("http://host/relay/abc", "LUMENBOX_RELAY_TOKEN", "openai", "MiniMax-M3", docker);
   const parsed = JSON.parse(config.content) as { providers: { lumenbox: { baseUrl: string; api: string; apiKey: string; models: { id: string }[] } } };
   assert.equal(parsed.providers.lumenbox.baseUrl, "http://host/relay/abc");
   assert.equal(parsed.providers.lumenbox.api, "openai-completions");
   assert.equal(parsed.providers.lumenbox.apiKey, "$LUMENBOX_RELAY_TOKEN", "the token is a reference, never inline");
   assert.deepEqual(parsed.providers.lumenbox.models, [{ id: "MiniMax-M3" }]);
   assert.match(pi.run("'fix it'", "MiniMax-M3"), /pi -p --no-session --approve --mode json --model 'lumenbox\/MiniMax-M3' 'fix it'/);
-  assert.deepEqual(pi.relayEnv("http://host/relay/abc", "tok"), { LUMENBOX_RELAY_TOKEN: "tok" });
+  assert.deepEqual(pi.relayEnv("http://host/relay/abc", "tok", undefined, docker), { LUMENBOX_RELAY_TOKEN: "tok" });
 
   const claude = presetNamed("claude")!;
   assert.deepEqual(claude.wires, ["anthropic"]);
-  const env = claude.relayEnv("http://host/relay/abc", "tok", "MiniMax-M3");
+  const env = claude.relayEnv("http://host/relay/abc", "tok", "MiniMax-M3", docker);
   assert.equal(env.ANTHROPIC_BASE_URL, "http://host/relay/abc");
   assert.equal(env.ANTHROPIC_AUTH_TOKEN, "tok");
   assert.equal(env.ANTHROPIC_MODEL, "MiniMax-M3");
@@ -108,15 +109,15 @@ test("pi is driven through a models.json entry that names the relay, and Claude 
 });
 
 test("an engine chosen at use time installs pinned, on the work volume, and is found on the PATH", () => {
-  const { installCommand, withEnginesPath, ENGINES_DIR } = presetsModule;
+  const { installCommand, withEnginesPath } = presetsModule;
   const claude = presetNamed("claude")!;
-  const command = installCommand(claude);
-  assert.match(command, new RegExp(`npm install -g --prefix ${ENGINES_DIR} '@anthropic-ai/claude-code@2\\.1\\.250'`));
+  const command = installCommand(claude, docker);
+  assert.match(command, new RegExp(`npm install -g --prefix ${docker.engines} '@anthropic-ai/claude-code@2\\.1\\.250'`));
   assert.match(command, /ln -sfn \/home\/box\/work\/skills ~\/.claude\/skills/);
   assert.doesNotMatch(command, /@latest/);
   const pi = presetNamed("pi")!;
-  assert.match(installCommand(pi), /--ignore-scripts/, "pi's own install instruction");
-  assert.match(withEnginesPath("command -v claude"), /export PATH="\$PATH:\/home\/box\/work\/\.lumenbox\/engines\/bin"; command -v claude/);
+  assert.match(installCommand(pi, docker), /--ignore-scripts/, "pi's own install instruction");
+  assert.match(withEnginesPath("command -v claude", docker), /export PATH="\$PATH:\/home\/box\/work\/\.lumenbox\/engines\/bin"; command -v claude/);
   for (const preset of PRESETS) {
     assert.match(preset.install.version, /^\d+\.\d+\.\d+$/, `${preset.name} is pinned`);
   }
@@ -156,14 +157,14 @@ test("mcode runs one-shot with full permissions, its profile written per run and
   assert.match(run, /MINIMAX_DATA_DIR="\$d"/);
   assert.match(run, /goal:\\n  verification: subagent/, "a custom provider defaults to no verification; ours insists on a sub-agent");
   // The token reaches the profile from the environment at run time and is never inlined.
-  const env = mcode.relayEnv("http://host:7777/relay/abc", "tok-secret", "MiniMax-M3");
+  const env = mcode.relayEnv("http://host:7777/relay/abc", "tok-secret", "MiniMax-M3", docker);
   assert.equal(env.LUMENBOX_RELAY_TOKEN, "tok-secret");
   assert.equal(env.MCODE_DISABLE_TELEMETRY, "1");
   assert.doesNotMatch(run, /tok-secret/);
-  const config = mcode.relayConfig!("http://host:7777/relay/abc", "LUMENBOX_RELAY_TOKEN", "anthropic", "MiniMax-M3");
+  const config = mcode.relayConfig!("http://host:7777/relay/abc", "LUMENBOX_RELAY_TOKEN", "anthropic", "MiniMax-M3", docker);
   assert.doesNotMatch(config.content, /tok-secret/);
   assert.equal(config.env.LUMENBOX_RELAY_API, "anthropic-messages");
-  assert.equal(mcode.relayConfig!("u", "T", "openai", "m").env.LUMENBOX_RELAY_API, "openai-completions");
+  assert.equal(mcode.relayConfig!("u", "T", "openai", "m", docker).env.LUMENBOX_RELAY_API, "openai-completions");
   assert.deepEqual(mcode.wires, ["anthropic", "openai"]);
   // No model named: the run insists on one from the relay rather than letting mcode pick.
   assert.match(mcode.run("'x'"), /LUMENBOX_RELAY_MODEL:\?/);

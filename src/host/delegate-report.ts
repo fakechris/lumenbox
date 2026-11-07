@@ -10,11 +10,12 @@
  *
  * Two ways in: the MCP face's `delegate_submit` tool (engines with an MCP client — the
  * report is checked while the run is still on, and a bad one is sent back to be redone),
- * or a file at `reportPath(jobId)` written before the run ends (engines without one — pi,
+ * or a file at `reportPath(jobId, paths)` written before the run ends (engines without one — pi,
  * and mcode's one-shot form, which loads no MCP servers); the host reads and checks it when
  * the run settles, and a bad file is a missing report. Settling reads the report before the
  * completion event, records both when they disagree, and infers nothing.
  */
+import type { BoxPaths } from "./box-paths.ts";
 import { redactText } from "./secret-redaction.ts";
 
 export type DelegateEvidence =
@@ -29,10 +30,9 @@ export interface DelegateReport {
   verdict: "done" | "partial" | "failed";
 }
 
-/** Where an engine without an MCP client leaves its report, read when the job settles. */
-export const REPORTS_DIR = "/home/box/work/.lumenbox/reports";
-export function reportPath(jobId: string): string {
-  return `${REPORTS_DIR}/${jobId}.json`;
+/** Where an engine without an MCP client leaves its report on this box, read when the job settles; recorded with the delegation. */
+export function reportPath(jobId: string, paths: Pick<BoxPaths, "reports">): string {
+  return `${paths.reports}/${jobId}.json`;
 }
 
 const MAX_ITEMS = 32;
@@ -121,14 +121,14 @@ export function summariseReport(report: DelegateReport): string {
 }
 
 /** What the brief tells the engine about delivering the report, by the channel it has. */
-export function deliveryInstructions(channel: "mcp" | "file", jobId: string): string {
+export function deliveryInstructions(channel: "mcp" | "file", reportFile: string): string {
   const shape =
     'a JSON object {"done":[{"what":"…","evidence":{"kind":"command","command":"…","output":"…"} | {"kind":"path","path":"…"} | {"kind":"diff","summary":"…"}}],' +
     '"not_done":[{"what":"…","why":"…"}],"problems":["…"],"verdict":"done"|"partial"|"failed"}';
   const rule = "Every done item needs evidence that can be looked at — a command and its output, a file path, or a diff summary; your own statement is not evidence. verdict done only when not_done is empty.";
   return channel === "mcp"
     ? `When you finish, deliver your report by calling the MCP tool \`delegate_submit\` with ${shape}. ${rule} If the tool answers with errors, fix the report and call it again; the run is not complete until it accepts.`
-    : `When you finish, write your report to ${reportPath(jobId)} (create the directory if needed) as ${shape}. ${rule} The host reads and checks that file when you exit; a missing or malformed file counts as no report.`;
+    : `When you finish, write your report to ${reportFile} (create the directory if needed) as ${shape}. ${rule} The host reads and checks that file when you exit; a missing or malformed file counts as no report.`;
 }
 
 /**

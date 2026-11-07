@@ -611,9 +611,10 @@ export interface TurnDeps {
   acpDelegates?: AcpDelegates;
   /** Told what a compaction summary is about to replace, so memory can keep what matters. */
   onSummarised?: (agentId: string, conversation: string, entries: readonly TranscriptEntry[]) => void;
-  /** What kind of box this agent's is, for Delegate's face decision. */
   /** What kind of box the agent lives in; a host box (INV-438) has no desktop and its writes are reviewed. */
   boxKind?: "docker" | "attached" | "host";
+  /** The box's work directory: with the kind, where a delegated engine's files go (box-paths.ts). */
+  boxWorkDir?: string;
   /**
    * The ledger handle for this turn, when it is a resumption of an earlier one.
    *
@@ -3391,7 +3392,7 @@ ${outcome.text}`;
             ...(deps.modelRelay !== undefined ? { modelRelay: deps.modelRelay } : {}),
             ...(deps.delegateSessions !== undefined ? { delegateSessions: deps.delegateSessions } : {}),
             ...(deps.acpDelegates !== undefined ? { acpDelegates: deps.acpDelegates } : {}),
-            ...(deps.boxKind !== undefined ? { boxKind: deps.boxKind } : {}),
+            ...(deps.boxKind !== undefined ? { boxKind: deps.boxKind } : {}), ...(deps.boxWorkDir !== undefined ? { boxWorkDir: deps.boxWorkDir } : {}),
             allowedMcpTools: allowedMcp.map(tool => tool.name),
             deferredTools: deferred,
             ...(deps.templateSetup !== undefined ? { templateSetup: deps.templateSetup } : {}),

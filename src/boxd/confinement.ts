@@ -20,7 +20,8 @@
  * `~/.codex`), which the rules above refuse. Opening the home would hand the box the person's own
  * engine logins, so instead each agent gets a state directory of its own under the work directory
  * (`<work>/.state/<agent>`, INV-1710), and every confined start points the XDG directories, npm's
- * cache and the engines' homes there (`stateEnvironment`). The person's own engine homes are
+ * cache and the engines' homes there (`stateEnvironment`; the layout is `STATE_VARIABLES` in
+ * src/host/box-paths.ts, where the host derives a delegated engine's files from it, INV-1712). The person's own engine homes are
  * hidden like the credentials. Per agent is for order, not secrecy: agents on one box are one user.
  *
  * Fail closed: where the sandbox cannot be applied, nothing runs, and the refusal says why. A bare
@@ -33,6 +34,7 @@ import type { Server } from "node:net";
 import { join } from "node:path";
 import { HostSandbox, sandboxViolations, type WrappedCommand } from "../host/host-sandbox.ts";
 import { mirrorOnUnixSocket } from "../host/host-egress.ts";
+import { STATE_VARIABLES, stateName } from "../host/box-paths.ts";
 import type { Roots } from "./headless.ts";
 
 /** Refused before anything ran: the box answers 403, the host reads it as refused. */
@@ -40,23 +42,6 @@ export class ConfinementRefused extends Error {}
 
 /** The writable temp directory every shell script assumes, beside the user's own `$TMPDIR`. */
 const SYSTEM_TMP = "/tmp";
-
-/** Where an agent's tools and engines keep their state, relative to its state directory; variable → subdirectory. */
-export const STATE_VARIABLES = {
-  XDG_CACHE_HOME: "cache",
-  XDG_CONFIG_HOME: "config",
-  XDG_DATA_HOME: "data",
-  XDG_STATE_HOME: "state",
-  npm_config_cache: "npm",
-  CLAUDE_CONFIG_DIR: "claude",
-  CODEX_HOME: "codex",
-} as const;
-
-/** The state directory's name for who asked: `agent:a1` → `a1`; nobody named → `unlabelled`. */
-export function stateName(actor: string | undefined): string {
-  const name = (actor ?? "").replace(/^agent:/, "").replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "").slice(0, 64);
-  return name === "" ? "unlabelled" : name;
-}
 
 /** The environment that puts an agent's tool and engine state in `dir`; each subdirectory exists after this. */
 export function stateEnvironment(dir: string): Record<string, string> {

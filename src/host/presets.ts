@@ -39,6 +39,9 @@
  * delegated engine visible, interruptible and loggable exactly like any other job.
  */
 
+import { posix } from "node:path";
+import type { BoxPaths } from "./box-paths.ts";
+
 /**
  * The flag that makes each engine write its machine-readable stream, from which the host reads
  * the engine's own completion report (INV-908, engine-report.ts).
@@ -54,17 +57,30 @@ export const MACHINE_OUTPUT: Readonly<Record<"claude" | "pi" | "opencode" | "mco
 };
 
 /**
- * Where an engine installed on demand lives: on the work volume, so it survives a box
- * rebuild, under a prefix of its own so nothing else in the box depends on it. The
- * image's own layer (when a version was named at build) is found first on PATH; this is
- * the fallback the person chose at use time.
+ * A command with the on-demand engines on its PATH, ahead of nothing the image ships. They
+ * live on the work volume (`paths.engines`), so they survive a box rebuild, under a prefix of
+ * their own so nothing else in the box depends on them. The image's own layer (when a version
+ * was named at build) is found first on PATH; this is the fallback the person chose at use
+ * time. Every path a preset names comes from `boxPaths` (box-paths.ts), which knows the box's kind.
  */
-export const ENGINES_DIR = "/home/box/work/.lumenbox/engines";
-export const ENGINES_BIN = `${ENGINES_DIR}/bin`;
+export function withEnginesPath(command: string, paths: BoxPaths): string {
+  return `export PATH="$PATH:${paths.enginesBin}"; ${command}`;
+}
 
-/** A command with the on-demand engines on its PATH, ahead of nothing the image ships. */
-export function withEnginesPath(command: string): string {
-  return `export PATH="$PATH:${ENGINES_BIN}"; ${command}`;
+/** The line that projects the box's skills where this engine looks, or undefined when it looks nowhere we may write. */
+export function skillsLink(preset: Preset, paths: BoxPaths): string | undefined {
+  const mount = preset.skillsMount?.(paths);
+  if (mount === undefined) return undefined;
+  return `mkdir -p ${paths.shell(posix.dirname(mount))} && ln -sfn ${paths.skills} ${paths.shell(mount)}`;
+}
+
+/**
+ * A delegated run as the box starts it: the engines on PATH and, where the engine homes are
+ * per agent (a host box), the skills linked into this agent's home first.
+ */
+export function delegateCommand(preset: Preset, paths: BoxPaths, command: string): string {
+  const link = paths.skillsAtRun ? skillsLink(preset, paths) : undefined;
+  return withEnginesPath(link !== undefined ? `${link} && ${command}` : command, paths);
 }
 
 export interface Preset {
@@ -73,14 +89,12 @@ export interface Preset {
   /**
    * How to put it in the box when the person wants it and the image does not carry it.
    * Pinned, like the image layer: the version is the preset's, not npm's latest, so two
-   * boxes that chose the same engine run the same engine. Installed under ENGINES_DIR.
+   * boxes that chose the same engine run the same engine. Installed under `paths.engines`.
    */
   install: {
     package: string;
     version: string;
     ignoreScripts?: boolean;
-    /** Run after the install, as the box user: skills links and the like. */
-    after?: string;
   };
   /** One line, in the tool description, so a model can pick between presets. */
   summary: string;
@@ -99,12 +113,13 @@ export interface Preset {
    */
   run: (quotedPrompt: string, model?: string, extraArgs?: string) => string;
   /**
-   * Where this engine looks for reusable methods, if it does. The box's own skills
-   * directory is linked here at install.
+   * Where this engine looks for reusable methods, if it does, on this box. The box's own
+   * skills directory is linked here (`skillsLink`): at install on a Docker box, before each
+   * run where the engine homes are per agent.
    */
-  skillsMount?: string;
+  skillsMount?: (paths: BoxPaths) => string | undefined;
   /** Environment that points the engine's model traffic at our relay, and names the model where the engine reads one. */
-  relayEnv: (baseUrl: string, token: string, model?: string) => Record<string, string>;
+  relayEnv: (baseUrl: string, token: string, model: string | undefined, paths: BoxPaths) => Record<string, string>;
   /**
    * The session form (docs/81): the command that runs the engine's ACP surface on its stdio,
    * for boxd to keep alive and the host to speak to. Absent for engines without one; the
@@ -133,7 +148,8 @@ export interface Preset {
     url: string,
     tokenVar: string,
     wire: "anthropic" | "openai",
-    model: string
+    model: string,
+    paths: BoxPaths
   ) => { file: string; content: string; env: Record<string, string> };
   /**
    * The command-line fragment that routes the engine's permission prompts to the host's face
@@ -178,7 +194,6 @@ PRESETS_MUTABLE.push(...([
     install: {
       package: "opencode-ai",
       version: "1.18.25",
-      after: "mkdir -p ~/.config/opencode && ln -sfn /home/box/work/skills ~/.config/opencode/skill",
     },
     // --auto, because a headless `opencode run` auto-rejects every tool permission
     // without it — the engine "works" and does nothing. The box is the sandbox; the
@@ -189,7 +204,7 @@ PRESETS_MUTABLE.push(...([
     // AGENTBOX_RELAY_MODEL naming a catalogue provider — passes through as written.
     run: (quoted, model, extraArgs) =>
       `opencode run --auto ${MACHINE_OUTPUT.opencode}${model ? ` -m ${model.includes("/") ? model : `${OPENCODE_RELAY_PROVIDER}/${model}`}` : ""}${extraArgs ? ` ${extraArgs}` : ""} ${quoted}`,
-    skillsMount: "~/.config/opencode/skill",
+    skillsMount: paths => `${paths.homes.opencode}/skill`,
     wires: ["anthropic", "openai"],
     // Measured on 1.18.25: opencode ignores ANTHROPIC_BASE_URL/OPENAI_BASE_URL — its endpoints
     // come from a provider catalogue, overridable only in its config file. Until INV-1359's
@@ -207,8 +222,8 @@ PRESETS_MUTABLE.push(...([
     // references — opencode substitutes them anywhere in the text — so the file's content is the
     // same for every job of one model and two jobs writing it at once cannot cross their routes.
     // The SDK package follows the wire: both are bundled with opencode.
-    relayConfig: (_url, tokenVar, wire, model) => ({
-      file: "/home/box/.config/opencode/opencode.json",
+    relayConfig: (_url, tokenVar, wire, model, paths) => ({
+      file: `${paths.homes.opencode}/opencode.json`,
       content: `${JSON.stringify(
         {
           $schema: "https://opencode.ai/config.json",
@@ -259,7 +274,6 @@ PRESETS_MUTABLE.push(...([
     install: {
       package: "@anthropic-ai/claude-code",
       version: "2.1.250",
-      after: "mkdir -p ~/.claude && ln -sfn /home/box/work/skills ~/.claude/skills",
     },
     // The same headless truth as opencode's --auto, in this engine's dialect; inside
     // the box the sandbox is the container, not the prompt. Untested until a claude
@@ -269,17 +283,17 @@ PRESETS_MUTABLE.push(...([
       `${model ? ` --model ${model}` : ""}${extraArgs ? ` ${extraArgs}` : ""} ${quoted}`,
     permissionArgs: "--permission-prompt-tool mcp__lumenbox__permission",
     session: (id, resumed) => (resumed ? `--resume ${id}` : `--session-id ${id}`),
-    skillsMount: "~/.claude/skills",
+    skillsMount: paths => `${paths.homes.claude}/skills`,
     wires: ["anthropic"],
     // Claude Code's runtime is its environment: where the model is, which key, which model,
     // where its own state lives. All of it is set per run, none of it persists in the box.
-    relayEnv: (baseUrl, token, model) => ({
+    relayEnv: (baseUrl, token, model, paths) => ({
       ANTHROPIC_BASE_URL: baseUrl,
       // The bearer form: what a compatible endpoint (MiniMax's /anthropic, and the relay
       // in front of it) expects, and what Chris runs Claude Code with by hand.
       ANTHROPIC_AUTH_TOKEN: token,
       ...(model !== undefined ? { ANTHROPIC_MODEL: model } : {}),
-      CLAUDE_CONFIG_DIR: "/home/box/.claude",
+      CLAUDE_CONFIG_DIR: paths.homes.claude,
       DISABLE_AUTOUPDATER: "1",
       DISABLE_TELEMETRY: "1",
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
@@ -303,8 +317,6 @@ PRESETS_MUTABLE.push(...([
   },
 ] as Preset[]));
 
-export const PI_MODELS_FILE = "/home/box/.pi/agent/models.json";
-
 PRESETS_MUTABLE.push({
   name: "pi",
   report: "file",
@@ -314,7 +326,6 @@ PRESETS_MUTABLE.push({
     package: "@earendil-works/pi-coding-agent",
     version: "0.85.1",
     ignoreScripts: true,
-    after: "mkdir -p ~/.pi/agent && ln -sfn /home/box/work/skills ~/.pi/agent/skills",
   },
   // -p prints and exits; --no-session keeps a one-shot run out of pi's session store;
   // --approve trusts the project's own skills and extensions, since the box is the sandbox.
@@ -322,13 +333,13 @@ PRESETS_MUTABLE.push({
   // as `lumenbox/<id>`. Measured on 0.85.1 (README and docs/models.md).
   run: (quoted, model, extraArgs) =>
     `pi -p --no-session --approve ${MACHINE_OUTPUT.pi}${model ? ` --model ${quoteForShell(`lumenbox/${model}`)}` : ""}${extraArgs ? ` ${extraArgs}` : ""} ${quoted}`,
-  skillsMount: "~/.pi/agent/skills",
+  skillsMount: paths => `${paths.homes.pi}/skills`,
   wires: ["anthropic", "openai"],
   // pi reads no BASE_URL variables; its providers come from models.json (below). The token
   // still travels in the environment, which the file references as `$VAR`.
   relayEnv: (_baseUrl, token) => ({ LUMENBOX_RELAY_TOKEN: token }),
-  relayConfig: (url, _tokenVar, wire, model) => ({
-    file: PI_MODELS_FILE,
+  relayConfig: (url, _tokenVar, wire, model, paths) => ({
+    file: `${paths.homes.pi}/models.json`,
     content: `${JSON.stringify(
       {
         providers: {
@@ -403,7 +414,6 @@ PRESETS_MUTABLE.push({
   install: {
     package: "@minimax-ai/code",
     version: "0.6.12",
-    after: "mkdir -p ~/.agents && ln -sfn /home/box/work/skills ~/.agents/skills",
   },
   // `exec` is the one-shot surface: no prompts, no login for a custom provider, and an
   // interaction it would have needed fails the run instead of hanging it. `--permission full`
@@ -419,7 +429,8 @@ PRESETS_MUTABLE.push({
   // surface on its stdio for boxd to hold (docs/81). The model goes in the profile's
   // defaultModel; `mcode acp` has no --model flag.
   acp: { command: model => `${mcodeProfileShell(model, "default")} && mcode acp` },
-  skillsMount: "~/.agents/skills",
+  // mcode reads `~/.agents/skills` and no variable moves it, so where `~` is not the box's there is no mount.
+  skillsMount: paths => (paths.home !== undefined ? `${paths.homes.mcode}/skills` : undefined),
   wires: ["anthropic", "openai"],
   // mcode reads no BASE_URL or API_KEY variables at all (bash-subprocess-env.ts scrubs them from
   // what it runs). The relay travels under our own names and becomes the profile at run time;
@@ -433,8 +444,8 @@ PRESETS_MUTABLE.push({
   }),
   // The wire is decided on the host; the run writes it into the profile. The file written here
   // is a note only (the real profile is per run, see mcodeProfileShell) and names no secret.
-  relayConfig: (url, tokenVar, wire) => ({
-    file: "/home/box/.agents/mcode-relay.json",
+  relayConfig: (url, tokenVar, wire, _model, paths) => ({
+    file: `${paths.homes.mcode}/mcode-relay.json`,
     content: `${JSON.stringify(
       { note: "mcode's profile is written per run from the environment into a temporary MINIMAX_DATA_DIR; this file only records the route", url, token: `$${tokenVar}`, api: wire === "openai" ? "openai-completions" : "anthropic-messages" },
       null,
@@ -456,14 +467,15 @@ PRESETS_MUTABLE.push({
   }),
 });
 
-/** The one-line install for a preset, as `bash -lc` runs it in the box. */
-export function installCommand(preset: Preset): string {
-  const { package: pkg, version, ignoreScripts, after } = preset.install;
+/** The one-line install for a preset, as `bash -lc` runs it in the box; the skills link too where it is made once. */
+export function installCommand(preset: Preset, paths: BoxPaths): string {
+  const { package: pkg, version, ignoreScripts } = preset.install;
+  const after = paths.skillsAtRun ? undefined : skillsLink(preset, paths);
   return (
-    `mkdir -p ${ENGINES_DIR} && npm install -g --prefix ${ENGINES_DIR}${ignoreScripts ? " --ignore-scripts" : ""} ` +
+    `mkdir -p ${paths.engines} && npm install -g --prefix ${paths.engines}${ignoreScripts ? " --ignore-scripts" : ""} ` +
     `${quoteForShell(`${pkg}@${version}`)}` +
     (after !== undefined ? ` && ${after}` : "") +
-    ` && echo "installed ${preset.name} ${version} under ${ENGINES_DIR}"`
+    ` && echo "installed ${preset.name} ${version} under ${paths.engines}"`
   );
 }
 
@@ -493,11 +505,11 @@ export const RELAY_TOKEN_VARIABLE = "AGENTBOX_RELAY_TOKEN";
  */
 export const RELAY_MODEL_VARIABLE = "AGENTBOX_RELAY_MODEL";
 
-export function delegateEnv(preset: Preset): Record<string, string> {
+export function delegateEnv(preset: Preset, paths: BoxPaths): Record<string, string> {
   const baseUrl = process.env[RELAY_URL_VARIABLE];
   const token = process.env[RELAY_TOKEN_VARIABLE];
   if (baseUrl === undefined || baseUrl === "" || token === undefined || token === "") return {};
-  return preset.relayEnv(baseUrl, token);
+  return preset.relayEnv(baseUrl, token, undefined, paths);
 }
 
 /** The relay's model choice, or undefined when the operator has not named one. */

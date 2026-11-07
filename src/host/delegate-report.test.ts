@@ -4,6 +4,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { DOCKER_BOX_PATHS } from "./box-paths.ts";
 import { deliveryInstructions, judgeWithReport, reportPath, summariseReport, validateDelegateReport } from "./delegate-report.ts";
 
 const good = {
@@ -18,7 +19,7 @@ test("a report in shape is accepted, with its text redacted and bounded", () => 
   assert.ok("report" in checked);
   assert.equal(checked.report.verdict, "done");
   assert.equal(checked.report.done.length, 2);
-  assert.equal(reportPath("job-1"), "/home/box/work/.lumenbox/reports/job-1.json");
+  assert.equal(reportPath("job-1", DOCKER_BOX_PATHS), "/home/box/work/.lumenbox/reports/job-1.json");
 });
 
 test("every reason a report is refused is named, so the engine fixes them in one go", () => {
@@ -61,7 +62,7 @@ test("the report meets the event: agreement or silence from the event takes the 
 test("the summary and the brief's instructions name the channel and the rule", () => {
   const report = (validateDelegateReport(good) as { report: never }).report;
   assert.match(summariseReport(report), /^verdict done\. done: tests pass \(`npm test` → 12 passing\); wrote the migration \(db\/0007\.sql\)$/);
-  assert.match(deliveryInstructions("mcp", "job-1"), /calling the MCP tool `delegate_submit`.*call it again; the run is not complete until it accepts/);
-  assert.match(deliveryInstructions("file", "job-1"), /write your report to \/home\/box\/work\/\.lumenbox\/reports\/job-1\.json/);
-  assert.match(deliveryInstructions("file", "job-1"), /your own statement is not evidence/);
+  assert.match(deliveryInstructions("mcp", reportPath("job-1", DOCKER_BOX_PATHS)), /calling the MCP tool `delegate_submit`.*call it again; the run is not complete until it accepts/);
+  assert.match(deliveryInstructions("file", reportPath("job-1", DOCKER_BOX_PATHS)), /write your report to \/home\/box\/work\/\.lumenbox\/reports\/job-1\.json/);
+  assert.match(deliveryInstructions("file", reportPath("job-1", DOCKER_BOX_PATHS)), /your own statement is not evidence/);
 });
