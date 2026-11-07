@@ -272,6 +272,17 @@ test("Delegate with tools: the file is written before the job starts, the token 
     assert.match(attached.text, /not reachable from this box/);
     assert.equal(starts.length, 2);
     assert.equal(starts[1]!.env?.LUMENBOX_MCP_TOKEN, undefined);
+
+    // A host box (INV-1712): the face file and the skills link are in its work directory, never /home/box or the person's home.
+    const work = "/Users/p/agentbox-work";
+    const host = await dispatchTool("Delegate", { preset: "claude", prompt: "x", tools: ["a__x"] }, { ...(context as object), boxKind: "host", boxWorkDir: work } as never);
+    assert.match(host.text, /Delegated to claude/);
+    assert.match(writes[1]!.path, new RegExp(`^${work}/\\.lumenbox/mcp/[0-9a-f]{32}\\.json$`));
+    assert.ok(starts[2]!.command.includes(`ln -sfn ${work}/skills ${work}/.state/${agent.id}/claude/skills && claude -p`), starts[2]!.command);
+    assert.doesNotMatch(starts[2]!.command, /\/home\/box|~\//);
+    const unrecorded = await dispatchTool("Delegate", { preset: "claude", prompt: "x" }, { ...(context as object), boxKind: "host" } as never);
+    assert.equal(unrecorded.isError, true, "a host box with no work directory starts nothing");
+    assert.equal(starts.length, 3);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

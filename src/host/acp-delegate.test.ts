@@ -25,13 +25,15 @@ const command = `node ${ENGINE}`;
 /** The box client's ACP face, served by the real service. */
 /** What the engine "wrote" as its report file, for the keeper to read at settling (INV-1261); undefined is no file. */
 let anyReport: string | undefined;
+/** Where the session is told its report goes; the keeper must read that file and no other (INV-1712). */
+const REPORT_FILE = "/work/.lumenbox/reports/brief.json";
 const OK_REPORT = JSON.stringify({ done: [{ what: "said hello", evidence: { kind: "command", command: "echo hi", output: "hi" } }], not_done: [], problems: [], verdict: "done" });
 
 function boxOver(acp: AcpService, env: Record<string, string> = {}): AcpBox {
   const base = { nice: 0, scrubbedEnv: { PATH: process.env.PATH ?? "", ...env } as NodeJS.ProcessEnv };
   return {
     readFile: async (path: string) => {
-      if (anyReport === undefined || !path.includes("/.lumenbox/reports/")) throw new Error(`${path} does not exist`);
+      if (anyReport === undefined || path !== REPORT_FILE) throw new Error(`${path} does not exist`);
       return { path, content: anyReport, total_lines: 1, truncated: false };
     },
     acpOpen: async request => acp.open({ ...request, ...base }),
@@ -65,7 +67,7 @@ function fixture(options: { commandsNeedingConsent?: string[]; consentWaitMs?: n
     ...(options.cancelGraceMs !== undefined ? { cancelGraceMs: options.cancelGraceMs } : {}),
   });
   const start = (prompt: string, env: Record<string, string> = {}) =>
-    delegates.start({ box: boxOver(acp, env), agentId: "a1", agentName: "Ada", conversation: "main", engine: "fake", command, cwd: dir, env, prompt }, `job-${Math.random().toString(16).slice(2, 10).padEnd(8, "0")}`);
+    delegates.start({ box: boxOver(acp, env), agentId: "a1", agentName: "Ada", conversation: "main", engine: "fake", command, cwd: dir, env, prompt, report: REPORT_FILE }, `job-${Math.random().toString(16).slice(2, 10).padEnd(8, "0")}`);
   const settledNote = async (predicate: (text: string) => boolean = () => true, limitMs = 10_000) => {
     const end = Date.now() + limitMs;
     while (Date.now() < end) {

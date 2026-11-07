@@ -1932,7 +1932,7 @@ export class Orchestrator {
         // never a gate on it, and it logs its own failure.
         void this.rememberer.flush(agentId, conversationId, entries as HistoryEntry[]).catch(() => {});
       },
-      boxKind: this.boxEntryOf(agent.id).kind,
+      boxKind: this.boxEntryOf(agent.id).kind, boxWorkDir: this.boxEntryOf(agent.id).workDir,
       // The same cheap profile the summariser and the note-taker use: choosing memories is the least interesting work here.
       selectMemory: prompt => this.askCheaply(agent, prompt),
       skillProvenance: this.skillProvenance, jobWatch: this.jobWatch, verifications: this.verifications, syncStanding: agentId => this.memoryMirror.sync(agentId), person: principalId => this.renderPerson(principalId), ...(this.spendLimits !== undefined ? { spendLimits: this.spendLimits } : {}),

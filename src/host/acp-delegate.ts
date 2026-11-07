@@ -25,7 +25,7 @@ import type { BoxClient } from "../box/client.ts";
 import type { AcpEvent } from "../protocol/index.ts";
 import { judgeWithReport } from "./delegate-report.ts";
 import { awaitDelegatedConsent } from "./delegated-consent.ts";
-import { delegateEndedNote, readReportFile } from "./engine-report.ts";
+import { delegateEndedNote, readReportFile, recordedReportFile } from "./engine-report.ts";
 import type { PendingWork } from "./pending-work.ts";
 import type { PolicyGate } from "./policy.ts";
 import { describeWorktree, worktreeState } from "./worktree-state.ts";
@@ -64,6 +64,8 @@ export interface SessionData {
   cwd: string;
   /** The id of the `session/prompt` request whose response settles this brief. */
   promptRpcId: number;
+  /** Where the engine was told to leave its report (box-paths.ts); absent in a record from before it was kept. */
+  report?: string;
 }
 
 interface Watch {
@@ -74,6 +76,7 @@ interface Watch {
   box: AcpBox;
   engineSessionId: string;
   cwd: string;
+  report: string;
   /** The brief in flight, if any: its prompt's rpc id and what the engine has said so far. */
   inFlight?: { promptRpcId: number; brief: string; text: string };
   since: number;
@@ -91,6 +94,8 @@ export interface StartInput {
   cwd: string;
   env: Record<string, string>;
   prompt: string;
+  /** The report file the prompt names (box-paths.ts). */
+  report: string;
   workId?: string;
   turnId?: string;
   call?: string;
@@ -140,6 +145,7 @@ export class AcpDelegates {
       box: input.box,
       engineSessionId: opened.engine_session_id,
       cwd: input.cwd,
+      report: input.report,
       since: 0,
       stopped: false,
     };
@@ -170,7 +176,7 @@ export class AcpDelegates {
       params: { sessionId: watch.engineSessionId, prompt: [{ type: "text", text: prompt }] },
     });
     const promptRpcId = sent.rpc_id!;
-    const data: SessionData & { engine: string } = { engine: extra.engine, mode: "session", engineSessionId: watch.engineSessionId, cwd: watch.cwd, promptRpcId };
+    const data: SessionData & { engine: string } = { engine: extra.engine, mode: "session", engineSessionId: watch.engineSessionId, cwd: watch.cwd, promptRpcId, report: watch.report };
     const id = this.deps.pendingWork?.prepare({
       agentId: watch.agentId,
       kind: "delegate",
@@ -283,6 +289,7 @@ export class AcpDelegates {
         box,
         engineSessionId: item.data.engineSessionId,
         cwd: item.data.cwd,
+        report: recordedReportFile(item.data as unknown as Record<string, unknown>, item.jobId),
         since: 0,
         stopped: false,
         inFlight: { promptRpcId: item.data.promptRpcId, brief: item.brief, text: "" },
@@ -437,7 +444,7 @@ export class AcpDelegates {
     void (async () => {
       const worktree = watch.box.exec !== undefined ? await worktreeState(watch.box as Pick<BoxClient, "exec">, watch.cwd) : undefined;
       // The report comes back as a file in the session form (INV-1261); read before the event decides.
-      const delivery = watch.box.readFile !== undefined ? await readReportFile(watch.box as Pick<BoxClient, "readFile">, watch.jobId) : undefined;
+      const delivery = watch.box.readFile !== undefined ? await readReportFile(watch.box as Pick<BoxClient, "readFile">, watch.report) : undefined;
       const judged = judgeWithReport({ outcome, why }, delivery);
       const committed = this.deps.pendingWork?.commitDelegate(watch.jobId, judged.outcome, { why: judged.why, ...(worktree !== undefined ? { worktree: describeWorktree(worktree) } : {}) }) ?? true;
       if (!committed) return;
