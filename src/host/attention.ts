@@ -27,7 +27,7 @@ import { claimedButNotDelivered } from "./task-deliverables.ts";
 import { STAGE_LABEL, stageWorldOf, type TaskStage, taskStage } from "./task-stage.ts";
 
 export interface AttentionItem {
-  kind: "approval" | "question" | "close-proposal" | "review" | "nudged" | "waiting" | "unanswered" | "paused" | "reauthorize" | "undeliverable" | "flagged" | "box-update" | "boundary-probe" | "provider-resting" | "team-memory" | "spend-limit" | "routine-paused";
+  kind: "approval" | "question" | "close-proposal" | "review" | "nudged" | "waiting" | "unanswered" | "paused" | "reauthorize" | "undeliverable" | "flagged" | "box-update" | "boundary-probe" | "provider-resting" | "team-memory" | "spend-limit" | "routine-paused" | "org-knowledge";
   /** What to open: a task id, or the conversation a question was asked in. */
   ref: string;
   title: string;
@@ -98,7 +98,7 @@ const isLive = (task: Task): boolean => task.status !== "done" && task.status !=
  * something they may want to know (INV-1647). Only decisions reach the strip and the OS: a
  * channel that carries everything carries nothing.
  */
-export const DECISION_KINDS: ReadonlySet<AttentionItem["kind"]> = new Set(["approval", "question", "close-proposal", "reauthorize", "spend-limit", "paused", "routine-paused"]); // a review is the board's, folded to one line in the strip: five of them once hid the agents
+export const DECISION_KINDS: ReadonlySet<AttentionItem["kind"]> = new Set(["approval", "question", "close-proposal", "reauthorize", "spend-limit", "paused", "routine-paused", "org-knowledge"]); // org-knowledge: an item its owner must re-verify, supersede or retract (INV-1731); a review is the board's, folded to one line in the strip: five of them once hid the agents
 export const isDecision = (kind: AttentionItem["kind"]): boolean => DECISION_KINDS.has(kind);
 
 export function urgencyOf(kind: AttentionItem["kind"]): number {
