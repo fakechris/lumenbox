@@ -223,7 +223,7 @@ import { PersonalBoxes, type PersonalBoxDriver } from "../host/personal-boxes.ts
 import { provisionedBoxDriver } from "../box/kubernetes-box.ts";
 import { personalAllocationRefusal, personalBoxesOf, personalQuotaFor } from "../host/box-quota.ts";
 import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
-import { attentionFor, isDecision, urgencyOf } from "../host/attention.ts"; import { docsDirReader, involuteStateReader, ownerAttention, PACKAGE_DOCS_DIR, watchOrgEvidence } from "../host/org-knowledge-staleness.ts"; import { parseLevel } from "../host/autonomy-level.ts"; import { openTurnsOf, staleApprovals } from "../host/approval-wait.ts";
+import { attentionFor, isDecision, urgencyOf } from "../host/attention.ts"; import { docsReaderAt, involuteStateReader, ownerAttention, PACKAGE_DOCS_DIR, watchOrgEvidence } from "../host/org-knowledge-staleness.ts"; import { parseLevel } from "../host/autonomy-level.ts"; import { openTurnsOf, staleApprovals } from "../host/approval-wait.ts";
 import { stageWorldOf, taskStage } from "../host/task-stage.ts";
 import { ChangeFeed, feedForks } from "./mcp-watch.ts";
 import { InvoluteConsumer } from "../host/involute-inbox.ts";
@@ -2360,7 +2360,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }, (involuteConfig?.pollSeconds ?? 60) * 1000);
   involuteTimer?.unref();
   // The organisation's knowledge goes stale when its evidence does (INV-1731): tasks and documents read as asked, cited Involute items read by id with the first Involute agent's credential — evidence, never a search an agent holds.
-  watchOrgEvidence(orchestrator.orgKnowledge, { task: id => orchestrator.tasks?.get(id), doc: docsDirReader(PACKAGE_DOCS_DIR), ...(involuteConfig?.agents[0] !== undefined ? { inv: involuteStateReader((tool, args) => { const entry = involuteConfig.agents[0]!; const token = vault.resolve(entry.secretId, { agentId: entry.agentId, agentName: registry.tryGet(entry.agentId)?.profile.name ?? entry.handle, scopeGrants: true }); if (token === undefined) return Promise.reject(new Error("the Involute credential is not in the vault")); return involuteCall(involuteConfig.url, token, tool, args); }) } : {}) }, log);
+  watchOrgEvidence(orchestrator.orgKnowledge, { task: id => orchestrator.tasks?.get(id), doc: docsReaderAt(PACKAGE_DOCS_DIR, log), ...(involuteConfig?.agents[0] !== undefined ? { inv: involuteStateReader((tool, args) => { const entry = involuteConfig.agents[0]!; const token = vault.resolve(entry.secretId, { agentId: entry.agentId, agentName: registry.tryGet(entry.agentId)?.profile.name ?? entry.handle, scopeGrants: true }); if (token === undefined) return Promise.reject(new Error("the Involute credential is not in the vault")); return involuteCall(involuteConfig.url, token, tool, args); }) } : {}) }, log);
   if (involuteConsumer !== undefined) log(`involute: answering for ${involuteConfig?.agents.map(a => `@${a.handle}`).join(", ")} every ${involuteConfig?.pollSeconds ?? 60}s`);
 
   const livenessTimer = setInterval(() => {

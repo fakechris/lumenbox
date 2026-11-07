@@ -67,6 +67,7 @@ test("a task cited as evidence makes the item stale when it is reopened or dropp
   const verified = "2026-11-02T00:00:00.000Z";
   assert.equal(taskChange(task("doing", [["2026-10-30T00:00:00.000Z", "done"], ["2026-11-03T00:00:00.000Z", "doing"]]), verified), "reopened");
   assert.equal(taskChange(task("dropped", [["2026-11-03T00:00:00.000Z", "dropped"]]), verified), "dropped");
+  assert.equal(taskChange(task("dropped", [["2026-10-30T00:00:00.000Z", "dropped"]]), verified), undefined, "dropped before the item was verified: re-verifying clears it");
   assert.equal(taskChange(task("done", [["2026-10-30T00:00:00.000Z", "done"], ["2026-11-03T00:00:00.000Z", "doing"], ["2026-11-04T00:00:00.000Z", "done"]]), verified), undefined, "closed again: the evidence stands");
   assert.equal(taskChange(task("doing", [["2026-10-20T00:00:00.000Z", "done"], ["2026-10-25T00:00:00.000Z", "doing"]]), verified), undefined, "reopened before the item was verified: the person saw it that way");
   assert.equal(taskChange(task("doing", [["2026-10-20T00:00:00.000Z", "open"], ["2026-11-03T00:00:00.000Z", "doing"]]), verified), undefined, "never done is no change");
@@ -120,7 +121,8 @@ test("three kinds of evidence change mark the item stale, read through stand-ins
 
     const attention = ownerAttention(ledger.staleItems(), owner => owner === "p-ann");
     assert.equal(attention.length, 4, "the owner is told about each");
-    assert.ok(attention.some(entry => /stale: inv:INV-11 was canceled/.test(entry.title)));
+    const canceledRow = attention.find(entry => /stale: inv:INV-11 was canceled/.test(entry.title))!;
+    assert.match(canceledRow.detail, /supersede it with an item that cites current evidence, or retract it/, "re-verifying would not clear a canceled item, so the owner is not told to");
 
     const cited = ledger.forRecall(ada.id, undefined, orgItemId(canceled)).cited!;
     assert.match(cited, /partner API .*STALE: inv:INV-11 was canceled; check before relying on it \(not recalled on its own: stale\)/);

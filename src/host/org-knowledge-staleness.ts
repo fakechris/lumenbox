@@ -60,8 +60,11 @@ export interface EvidenceReaders {
  * done after that time. A task that was never done when the item was written is not a change.
  */
 export function taskChange(task: Pick<Task, "status" | "history">, since: string): "reopened" | "dropped" | undefined {
-  if (task.status === "dropped") return "dropped";
   const after = Date.parse(since);
+  if (task.status === "dropped") {
+    const droppedAt = task.history.findLast(change => change.status === "dropped")?.at;
+    return droppedAt !== undefined && Date.parse(droppedAt) < after ? undefined : "dropped"; // dropped before a person verified the item: they saw it that way
+  }
   let previous: TaskStatus | undefined;
   let reopened = false;
   for (const change of task.history) {
@@ -117,10 +120,11 @@ export function involuteStateReader(call: (tool: string, args: Record<string, un
     if (work === undefined || typeof work !== "object") return undefined;
     const teamId = typeof work.teamId === "string" ? work.teamId : undefined;
     let types = teamId === undefined ? undefined : stateTypes.get(teamId);
-    if (teamId !== undefined && types === undefined) {
+    const unknownState = typeof work.stateId === "string" && types !== undefined && !types.has(work.stateId); // a state the team added since
+    if (teamId !== undefined && (types === undefined || unknownState)) {
       const catalog = (await call("work_catalog", { kind: "states", team_id: teamId, first: 200 })) as { nodes?: { id?: unknown; type?: unknown }[] } | undefined;
       types = new Map((catalog?.nodes ?? []).filter(node => typeof node.id === "string" && typeof node.type === "string").map(node => [node.id as string, node.type as string]));
-      stateTypes.set(teamId, types);
+      if (types.size > 0) stateTypes.set(teamId, types); // an empty or unreadable answer is asked again next time, not believed for the process's life
     }
     const stateType = typeof work.stateId === "string" ? types?.get(work.stateId) : undefined;
     const supersededBy = typeof work.supersededById === "string" && work.supersededById !== "" ? work.supersededById : undefined;
@@ -191,7 +195,7 @@ export function ownerAttention(entries: readonly { id: string; item: Pick<Memory
     kind: "org-knowledge",
     ref: id,
     title: staleness.kind === "review-due" ? `An organisation item you own is due for review (${id})` : `An organisation item you own is stale: ${staleness.ref} was ${staleness.change} (${id})`,
-    detail: `"${item.text.slice(0, 140)}" — re-verify it, supersede it or retract it. Until then agents see it marked ${staleness.kind === "review-due" ? "review due" : "stale"}, after everything current.`,
+    detail: `"${item.text.slice(0, 140)}" — ${staleness.kind === "review-due" ? "re-verify it, supersede it or retract it" : "supersede it with an item that cites current evidence, or retract it"}. Until then agents see it marked ${staleness.kind === "review-due" ? "review due" : "stale"}, after everything current.`,
   }));
 }
 
@@ -200,6 +204,13 @@ export const EVIDENCE_SWEEP_MS = 60 * 60_000;
 
 /** The documents a `doc:` reference names: the package's own `docs/`, when it ships with one. */
 export const PACKAGE_DOCS_DIR = fileURLToPath(new URL("../../docs", import.meta.url));
+
+/** The documents directory, or undefined — said once in the log — when this build ships none: a `doc:` reference is then never checked. */
+export function docsReaderAt(dir: string, log: (line: string) => void): EvidenceReaders["doc"] {
+  if (existsSync(dir)) return docsDirReader(dir);
+  log(`org knowledge: no documents at ${dir}; a doc: reference will not make an item stale`);
+  return undefined;
+}
 
 /**
  * Wires the watch to the ledger: sets `ledger.evidence`, sweeps once now and then every
