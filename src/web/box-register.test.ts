@@ -7,7 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startWebServer } from "./server.ts";
@@ -19,6 +19,8 @@ test("connect code → register → listed with a state; replay 409; reconnect i
   const home = mkdtempSync(join(tmpdir(), "agentbox-box-register-"));
   const previous = process.env.AGENTBOX_HOME;
   process.env.AGENTBOX_HOME = home;
+  // A personal installation: an organisation takes no box by a code (INV-1697; node-enrol.test.ts).
+  writeFileSync(join(home, "principals.json"), JSON.stringify({ principals: [{ id: "local:owner", name: "Owner", role: "admin", identities: [] }], installation: { mode: "single-machine", ownerId: "local:owner" } }));
   const logs: string[] = [];
   let stop: (() => void) | undefined;
   try {

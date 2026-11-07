@@ -181,7 +181,7 @@ import { randomUUID } from "node:crypto";
 import { isLive, isTaskStatus, type Task } from "../host/tasks.ts"; import { UnknownAgentError } from "../host/task-agents.ts";
 import { connectorSatisfied } from "../host/mcp-connectors.ts";
 import { adminRecipients } from "../host/upgrade.ts";
-import { BoxUpdateService, boxUpdateRoute } from "./box-update-routes.ts"; import { personRoute } from "./person-routes.ts"; import { PERSON_JS } from "./person-ui.ts"; import { agentFactsRoute } from "./agent-facts.ts"; import { agentCaseText } from "../host/consent-case.ts"; import { ROW_ORDER_JS } from "./row-order.ts"; import { BOARD_ORDER_JS } from "./board-order.ts"; import { teamMemoryReviewRoute } from "./team-memory-review-routes.ts"; import { TEAM_MEMORY_REVIEW_JS } from "./team-memory-review-ui.ts"; import { pendingReviews } from "../host/team-memory-review.ts"; import { CLAIM_ACCOUNT_JS } from "./claim-account-ui.ts"; import { DIGEST_HOUR, heldSection, PushBudget } from "../host/push-budget.ts"; import { pushBudgetRoute } from "./push-budget-routes.ts"; import { PUSH_BUDGET_JS } from "./push-budget-ui.ts"; import { SpendLimits, todaysRows } from "../host/spend-limits.ts"; import { spendLimitRoute } from "./spend-limit-routes.ts"; import { SPEND_LIMIT_JS } from "./spend-limit-ui.ts"; import { configuredRates } from "../host/provider-fallback.ts"; import { BoxKeeper } from "./box-keeper.ts"; import { AgentPauses } from "../host/agent-pause.ts"; import { ProbeKeeper, type ProbeKind } from "../host/boundary-probe.ts"; import { agentPauseRoute } from "./agent-pause-routes.ts"; import { AGENT_PAUSE_JS } from "./agent-pause-ui.ts"; import { diagnosticsRoute } from "./diagnostics-routes.ts"; import { DIAGNOSTICS_JS } from "./diagnostics-ui.ts"; import { providerRests, quotaStatusLine } from "../host/provider-rest.ts"; import { providerRestRoute, restNotice } from "./provider-rest-routes.ts"; import { PROVIDER_REST_JS } from "./provider-rest-ui.ts"; import { fallbackRoute } from "./provider-fallback-routes.ts"; import { PROVIDER_FALLBACK_JS } from "./provider-fallback-ui.ts"; import { routineRunsRoute } from "./routine-runs-routes.ts"; import { ROUTINE_RUNS_JS } from "./routine-runs-ui.ts"; import { deliverableRoute } from "./deliverable-routes.ts"; import { DELIVERABLES_JS } from "./deliverables-ui.ts"; import { DIVISION_JS } from "./division-ui.ts"; import { taskGateRoute } from "./task-gate-routes.ts"; import { TASK_GATE_JS } from "./task-gate-ui.ts"; import { isForkChild } from "../host/pending-work.ts"; import { readToolPermissions, toolPermissionRoute } from "./tool-permission-routes.ts"; import { TOOL_PERMS_JS } from "./tool-permissions-ui.ts"; import { configVersionRoute } from "./config-version-routes.ts"; import { CONFIG_HISTORY_JS } from "./config-history-ui.ts"; import { switchesForTask } from "../agents/config-versions.ts"; import { CredentialWaits } from "../host/credential-waits.ts"; import { secretsNeededBy, taskCredentialEvent, templateCredentialEvent, templateSkillNeeds, type CredentialEvent } from "./credential-routes.ts"; import { CREDENTIALS_JS } from "./credentials-ui.ts"; import { ORGANISATIONS_JS } from "./organisations-ui.ts"; import { INSTALLATIONS_JS } from "./installations-ui.ts"; import { MACHINE_JS } from "./machine-use-ui.ts"; import { GuestDesk } from "../host/guests.ts"; import { answerGuest, guestMessageOf } from "../host/guest-turn.ts"; import { guestRoute } from "./guest-routes.ts"; import { GUEST_JS } from "./guest-ui.ts";
+import { BoxUpdateService, boxUpdateRoute } from "./box-update-routes.ts"; import { personRoute } from "./person-routes.ts"; import { PERSON_JS } from "./person-ui.ts"; import { agentFactsRoute } from "./agent-facts.ts"; import { agentCaseText } from "../host/consent-case.ts"; import { ROW_ORDER_JS } from "./row-order.ts"; import { BOARD_ORDER_JS } from "./board-order.ts"; import { teamMemoryReviewRoute } from "./team-memory-review-routes.ts"; import { TEAM_MEMORY_REVIEW_JS } from "./team-memory-review-ui.ts"; import { pendingReviews } from "../host/team-memory-review.ts"; import { CLAIM_ACCOUNT_JS } from "./claim-account-ui.ts"; import { DIGEST_HOUR, heldSection, PushBudget } from "../host/push-budget.ts"; import { pushBudgetRoute } from "./push-budget-routes.ts"; import { PUSH_BUDGET_JS } from "./push-budget-ui.ts"; import { SpendLimits, todaysRows } from "../host/spend-limits.ts"; import { spendLimitRoute } from "./spend-limit-routes.ts"; import { SPEND_LIMIT_JS } from "./spend-limit-ui.ts"; import { configuredRates } from "../host/provider-fallback.ts"; import { BoxKeeper } from "./box-keeper.ts"; import { AgentPauses } from "../host/agent-pause.ts"; import { ProbeKeeper, type ProbeKind } from "../host/boundary-probe.ts"; import { agentPauseRoute } from "./agent-pause-routes.ts"; import { AGENT_PAUSE_JS } from "./agent-pause-ui.ts"; import { diagnosticsRoute } from "./diagnostics-routes.ts"; import { DIAGNOSTICS_JS } from "./diagnostics-ui.ts"; import { providerRests, quotaStatusLine } from "../host/provider-rest.ts"; import { providerRestRoute, restNotice } from "./provider-rest-routes.ts"; import { PROVIDER_REST_JS } from "./provider-rest-ui.ts"; import { fallbackRoute } from "./provider-fallback-routes.ts"; import { PROVIDER_FALLBACK_JS } from "./provider-fallback-ui.ts"; import { routineRunsRoute } from "./routine-runs-routes.ts"; import { ROUTINE_RUNS_JS } from "./routine-runs-ui.ts"; import { deliverableRoute } from "./deliverable-routes.ts"; import { DELIVERABLES_JS } from "./deliverables-ui.ts"; import { DIVISION_JS } from "./division-ui.ts"; import { taskGateRoute } from "./task-gate-routes.ts"; import { TASK_GATE_JS } from "./task-gate-ui.ts"; import { isForkChild } from "../host/pending-work.ts"; import { readToolPermissions, toolPermissionRoute } from "./tool-permission-routes.ts"; import { TOOL_PERMS_JS } from "./tool-permissions-ui.ts"; import { configVersionRoute } from "./config-version-routes.ts"; import { CONFIG_HISTORY_JS } from "./config-history-ui.ts"; import { switchesForTask } from "../agents/config-versions.ts"; import { CredentialWaits } from "../host/credential-waits.ts"; import { secretsNeededBy, taskCredentialEvent, templateCredentialEvent, templateSkillNeeds, type CredentialEvent } from "./credential-routes.ts"; import { CREDENTIALS_JS } from "./credentials-ui.ts"; import { ORGANISATIONS_JS } from "./organisations-ui.ts"; import { INSTALLATIONS_JS } from "./installations-ui.ts"; import { MACHINE_JS } from "./machine-use-ui.ts"; import { GuestDesk } from "../host/guests.ts"; import { answerGuest, guestMessageOf } from "../host/guest-turn.ts"; import { guestRoute } from "./guest-routes.ts"; import { GUEST_JS } from "./guest-ui.ts"; import { boxRegisterRoute } from "./box-register-routes.ts"; import { nodeMembersRefusal, nodeOfBox, nodeRoute } from "./node-routes.ts"; import { NODES_JS } from "./nodes-ui.ts";
 import { hasCredential, PRESET_MODELS, providerConfigured, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { BootstrapAdmins } from "../host/bootstrap.ts"; import { openRoster, PERSONAL_ONLY_KEY, PersonalInstallationOnly, roleLabel } from "../host/installation.ts"; import { redeemInvite } from "../host/invite-redeem.ts"; import { installationRoute, mergeRoute, routeErrorReply } from "./installation-routes.ts"; import { adoptOperatorNotes, applyPendingMerge, mergePaths } from "../host/self-merge.ts"; import { operatorKey } from "../host/person.ts"; import { INSTALLATION_JS } from "./installation-ui.ts";
 import { Principals, principalsPath, roleAtLeast, soleAdmin, type Principal, type Role } from "../host/principals.ts";
@@ -2512,6 +2512,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   }
 
   // Mutable: the UI can bring the box up after this server started without one.
+  for (const id of connectCodes.revokedBoxIds()) orchestrator.revokeBox(id); // revoked stays revoked across a restart: nothing redials it (INV-1697)
   let box = await orchestrator.connectBox();
   log(box.connected ? `box: ${box.detail}` : `box: unavailable — ${box.detail}`);
 
@@ -3212,72 +3213,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         await handleWebhook(req, res, webhookMatch[1]!, url.searchParams);
         return;
       }
-      // A runner registering its boxd (INV-434). Before the UI's token gate, because the
-      // runner holds no UI credential: it holds a one-time code, or after that its own
-      // runner credential. Both are checked here; nothing else on this path is reachable.
-      if (route === "POST /api/boxes/register") {
-        const body = await readJson(req);
-        const name = String(body.name ?? "").trim();
-        const baseUrl = String(body.baseUrl ?? "").trim();
-        const token = typeof body.token === "string" ? body.token.trim() : "";
-        const version = typeof body.version === "string" ? body.version.trim() : undefined;
-        const writeToken = (boxName: string): string => {
-          const dir = join(agentboxHome(), "boxes");
-          mkdirSync(dir, { recursive: true, mode: 0o700 });
-          const tokenFile = join(dir, `${boxName}.token`);
-          writeFileSync(tokenFile, `${token}\n`, { mode: 0o600 });
-          return tokenFile;
-        };
-        if (typeof body.runner === "string" && body.runner.trim() !== "") {
-          // A reconnect: the same registration, idempotent; a new address if it moved.
-          const verdict = connectCodes.verifyRunner(body.runner);
-          if (!verdict.ok) {
-            log(`boxes: a reconnect was refused (${verdict.why})`);
-            send(res, verdict.why === "revoked" ? 403 : 401, { error: verdict.why === "revoked" ? "This box was revoked here; it will not be reconnected." : "Unknown runner credential." });
-            return;
-          }
-          const entry = registry.boxById(verdict.registration.boxId);
-          if (entry === undefined) {
-            send(res, 410, apiError("credential-box-gone"));
-            return;
-          }
-          if (baseUrl !== "" && token !== "") registry.updateBox(entry.id, { endpoint: { baseUrl, tokenFile: writeToken(entry.name) } });
-          connectCodes.seen(entry.id, version);
-          const result = await orchestrator.reconnectBox(registry.boxById(entry.id)!);
-          log(`boxes: ${entry.name} reconnected: ${result.detail}`);
-          send(res, 200, { boxId: entry.id, name: entry.name, ...result, state: connectCodes.stateOf(entry.id, result.connected) });
-          return;
-        }
-        const code = String(body.code ?? "");
-        const redeemed = connectCodes.redeem(code);
-        if (!redeemed.ok) {
-          log(`boxes: a connection code was refused (${redeemed.why})`);
-          const why = { unknown: "Unknown connection code.", expired: "That connection code has expired; mint a new one.", used: "That connection code was already used; a code is one-time.", "wrong-installation": "That code belongs to another installation." }[redeemed.why];
-          send(res, redeemed.why === "wrong-installation" ? 403 : 409, { error: why });
-          return;
-        }
-        const boxName = redeemed.name ?? name;
-        if (boxName === "" || baseUrl === "" || token === "") {
-          send(res, 400, apiError("box-registration-incomplete"));
-          return;
-        }
-        let entry: ReturnType<typeof attachedBox>;
-        try {
-          entry = attachedBox({ name: boxName, baseUrl, tokenFile: writeToken(boxName), ...(body.kind === "host" ? { kind: "host" as const } : {}) });
-        } catch (error) {
-          send(res, 400, { error: error instanceof Error ? error.message : String(error) });
-          return;
-        }
-        try {
-          const result = await orchestrator.attachBox(entry);
-          const runner = connectCodes.register({ boxId: entry.id, name: entry.name, ...(version !== undefined ? { version } : {}) });
-          log(`boxes: ${entry.name} (${entry.id}) registered with a connection code: ${result.detail}`);
-          send(res, 200, { boxId: entry.id, name: entry.name, runner, ...result, state: connectCodes.stateOf(entry.id, result.connected) });
-        } catch (error) {
-          send(res, 409, { error: error instanceof Error ? error.message : String(error) });
-        }
-        return;
-      }
+      // A machine registering its boxd (INV-434, INV-1697): before the UI's token gate, checked by its own code, runner or node credential.
+      const registering = await boxRegisterRoute(route, { readJson: () => readJson(req), connectCodes, registry, orchestrator: { attachBox: entry => orchestrator.attachBox(entry), reconnectBox: entry => orchestrator.reconnectBox(entry), isConnected: id => orchestrator.boxStatus().some(box => box.id === id && box.connected), bundles: orchestrator.bundles }, installationMode: () => principals.installation().mode, home: agentboxHome, log });
+      if (registering !== undefined) { send(res, registering.status, registering.body); return; }
       const routeMatch = ROUTE_PATH.exec(url.pathname);
       if (routeMatch !== null) {
         const key = routeMatch[1]!;
@@ -3516,7 +3454,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
         // Settings → Supervision (INV-1528): its own script and routes, like the decision model's below.
-        if (route === "GET /app/supervision.js") { res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(localizeScript(ROW_ORDER_JS + BOARD_ORDER_JS + UI_STYLE_JS + INLINE_ASK_JS + AGENT_PAUSE_JS + SUPERVISION_JS + SUPERVISION_WIZARD_JS + BOX_UPDATE_JS + DIAGNOSTICS_JS + CLAIM_ACCOUNT_JS + PUSH_BUDGET_JS + SPEND_LIMIT_JS + PROVIDER_REST_JS + TEAM_MEMORY_REVIEW_JS + PROVIDER_FALLBACK_JS + PERSON_JS + ROUTINE_RUNS_JS + DELIVERABLES_JS + TOOL_PERMS_JS + CONFIG_HISTORY_JS + CREDENTIALS_JS + DIVISION_JS + TASK_GATE_JS + INSTALLATION_JS + MACHINE_JS + ORGANISATIONS_JS + GUEST_JS + INSTALLATIONS_JS, localeOf(req, url))); return; } // + Apply update (INV-1538), askInline (INV-1540)
+        if (route === "GET /app/supervision.js") { res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(localizeScript(ROW_ORDER_JS + BOARD_ORDER_JS + UI_STYLE_JS + INLINE_ASK_JS + AGENT_PAUSE_JS + SUPERVISION_JS + SUPERVISION_WIZARD_JS + BOX_UPDATE_JS + DIAGNOSTICS_JS + CLAIM_ACCOUNT_JS + PUSH_BUDGET_JS + SPEND_LIMIT_JS + PROVIDER_REST_JS + TEAM_MEMORY_REVIEW_JS + PROVIDER_FALLBACK_JS + PERSON_JS + ROUTINE_RUNS_JS + DELIVERABLES_JS + TOOL_PERMS_JS + CONFIG_HISTORY_JS + CREDENTIALS_JS + DIVISION_JS + TASK_GATE_JS + INSTALLATION_JS + MACHINE_JS + ORGANISATIONS_JS + GUEST_JS + INSTALLATIONS_JS + NODES_JS, localeOf(req, url))); return; } // + Apply update (INV-1538), askInline (INV-1540)
         const supervised = await supervisionRoute(route, { home: agentboxHome(), configPath: configPath(), agents: () => registry.list().map(agent => agent.profile.name), readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: role => refusedRole(role), logFile: defaultSupervisionLog() });
         if (supervised !== undefined) { if (supervised.status !== 0) send(res, supervised.status, supervised.body); return; }
         // Settings → Model → Decision model (INV-1412): its own script, its own two routes.
@@ -6076,6 +6014,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
+        const nodes = await nodeRoute(route, { readJson: () => readJson(req), refusedAdmin: () => refusedRole("admin"), person: () => (caller.userId === undefined ? undefined : principals.resolve(caller.userId).id), installationMode: () => principals.installation().mode, connectCodes, box: id => registry.boxById(id), connected: id => orchestrator.boxStatus().some(box => box.id === id && box.connected), revokeBox: id => { connectCodes.revoke(id, caller.userId ?? "operator"); orchestrator.revokeBox(id); }, log }); if (nodes !== undefined) { if (nodes.status !== 0) send(res, nodes.status, nodes.body); return; } // an organisation's nodes (INV-1697)
         if (route === "GET /api/boxes") {
           await orchestrator.probeBoxes(1500);
           // Only the boxes this person is in (INV-538). A box somebody is not a member of
@@ -6095,7 +6034,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             const registration = connectCodes.registrationOf(box.id);
             return registration === undefined
               ? { ...box, ...membership }
-              : { ...box, ...membership, state: connectCodes.stateOf(box.id, box.connected), ...(registration.version !== undefined ? { version: registration.version } : {}), lastSeenAt: registration.lastSeenAt };
+              : { ...box, ...membership, ...nodeOfBox(connectCodes, box.id), state: connectCodes.stateOf(box.id, box.connected), ...(registration.version !== undefined ? { version: registration.version } : {}), lastSeenAt: registration.lastSeenAt };
           });
           send(res, 200, { boxes, own: registry.box.id });
           return;
@@ -6136,7 +6075,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // Connection codes (INV-434): minted by an admin, one-time, fifteen minutes; the list
         // shows expiry and who, never a code. Revocation cuts a registered box off.
         if (route === "POST /api/boxes/connect-codes") {
-          if (refusedRole("admin")) return;
+          if (refusedRole("admin")) return; if (principals.installation().mode === "organisation") { send(res, 409, apiError("box-code-organisation")); return; } // an organisation's boxes come from its nodes and its Admins (INV-1697)
           const body = await readJson(req);
           const minted = connectCodes.mint({ by: caller.userId ?? "operator", ...(typeof body.name === "string" && body.name.trim() !== "" ? { name: body.name.trim() } : {}) });
           log(`boxes: a connection code was minted by ${caller.userId ?? "operator"}, expires ${minted.expiresAt}`);
@@ -6171,7 +6110,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         if (route === "POST /api/boxes/attach") {
-          if (refused()) return;
+          if (refused() || (principals.installation().mode === "organisation" && refusedRole("admin"))) return; // on an organisation, an Admin's act (docs/96 §8 Q3)
           const body = await readJson(req);
           const name = String(body.name ?? "").trim();
           const baseUrl = String(body.baseUrl ?? "").trim();
@@ -6228,6 +6167,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                   ? (body.members as unknown[]).filter((id): id is string => typeof id === "string" && id.trim() !== "")
                   : undefined;
             if (members !== undefined && refusedRole("admin")) return;
+            const unconfined = members === undefined ? undefined : await nodeMembersRefusal(connectCodes, existing, members, async () => (await orchestrator.boxClientById(existing.id)?.health(3000))?.confinement); if (unconfined !== undefined) { send(res, unconfined.status, unconfined.body); return; } // INV-1697
             if (members !== undefined) {
               const allocationError = personalAllocationRefusal(personalBoxes.quotaEntries(), existing, members, loadConfig(), Array.isArray(members) && members[0] ? directoryQuotaContext(members[0]) : undefined);
               if (allocationError !== undefined) { send(res, 409, { error: allocationError }); return; }

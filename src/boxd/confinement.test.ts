@@ -44,6 +44,7 @@ test("the rules a headless box's commands run under: rw roots and temp writable,
     const confine = confinementFor({ headless: true, roots: () => m.roots, workDir: m.dirs.work, egressPort: () => 3128, log: line => lines.push(line), systemTmp: m.dirs.tmp, sandbox: new HostSandbox({ platform: "darwin", home: m.dirs.home, tmp: m.dirs.tmp, probe: () => true }) })!;
     const { command, args, wrapped } = confine.wrap("nice", ["-n", "19", "/bin/bash", "-lc", "true"], { what: "exec", cwd: m.dirs.outside, actor: "agent:a1" });
     assert.equal(command, "/usr/bin/sandbox-exec");
+    assert.deepEqual(confine.state(), { active: true });
     const profile = args[1]!;
     assert.match(profile, new RegExp(`\\(allow file-write\\* \\(subpath "${m.dirs.work}"\\)`), "the work directory is writable");
     assert.ok(!profile.includes(`(subpath "${m.dirs.outside}")`), "starting a command somewhere does not make it writable");
@@ -92,6 +93,7 @@ test("where the sandbox is unavailable nothing runs — not a command, not a job
     assert.equal(existsSync(marker), false, "nothing ran");
     assert.ok(lines.filter(line => line.startsWith("confinement: refused")).length >= 2, "each refusal is an audit line");
     assert.match(confine.describe(), /every command is refused/);
+    assert.equal(confine.state().active, false, "and the health answer says so, which keeps an organisation node's native environment closed to members (INV-1697)");
   } finally {
     m.dispose();
   }

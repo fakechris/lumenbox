@@ -22,6 +22,7 @@
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { userInfo } from "node:os";
+import { join } from "node:path";
 import { tr } from "../i18n/messages.ts";
 import { withRosterLock } from "./roster-lock.ts";
 
@@ -167,4 +168,15 @@ export function openRoster(deps: { desktop: boolean; path: string; codePath: str
     }
     if (deps.bootstrap.ensure()) deps.log("First-admin bootstrap is available at /bootstrap; retrieve the code from the local bootstrap-code file (24h, one use).");
   } catch { deps.log("First-admin bootstrap disabled: repair the local roster/bootstrap state."); }
+}
+
+/**
+ * Whether a directory holds an installation of LumenBox: the roster the first start writes
+ * (principals.json) or the settings it saves (config.json). The same test as the shell's
+ * `personalInstallationExists` (electron/machine-use.cjs, which does not load TypeScript; the two
+ * are checked to agree in node-runner.test.ts). A machine that holds one never gives a box to an
+ * organisation (docs/96 §0.3): `box connect` refuses, and a node refuses to run there (INV-1697).
+ */
+export function holdsInstallation(home: string): boolean {
+  return ["principals.json", "config.json"].some(name => existsSync(join(home, name)));
 }

@@ -235,7 +235,7 @@ async function handleHealth(): Promise<HealthResult> {
     protocol: BOXD_PROTOCOL,
     ...(!HEADLESS ? { desktop_driver: X11_DESKTOP_CAPABILITIES, desktop_contract: { version: 1 as const, snapshot_refs: true as const, final_observation: true as const, batch_progress: true as const } } : {}),
     display,
-    ...(HEADLESS ? { headless: true } : {}),
+    ...(HEADLESS ? { headless: true, confinement: confinement?.state() ?? { active: false, reason: "no confinement" } } : {}),
     ...(currentRoots().restricted ? { repositories: currentRoots().list() } : {}),
     resolution,
     refresh_rate: undefined,

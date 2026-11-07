@@ -16,7 +16,7 @@
 | key | 面板 | 用途 | 配置 | API | 挂载 |
 |---|---|---|---|---|---|
 | `model` | 模型 | 模型 provider、模型和它的 key、联网搜索 key、额度用完时的备用 provider、决策模型，以及内置的提示词。 | `provider`, `model`, `baseUrl`, `fallbackProviders`, `env` | `/api/config`, `/api/config/test`, `/api/prompt-parts`, `/api/provider/fallbacks`, `/api/provider/rests`, `/api/jev` | 页面自带 |
-| `boxes` | Box | 这台 box 和接入的每台机器、个人 box 限额、在本机执行命令、开机启动、box 镜像更新和资源诊断。 | `boxImage`, `boxCpus`, `boxes`, `personalBoxQuota`, `personBoxQuotas`, `departmentBoxQuotas`, `hostExec`, `startupItem`, `upgradeHour` | `/api/box/up`, `/api/boxes`, `/api/quotas`, `/api/directories`, `/api/box/image`, `/api/diagnostics/resources` | 页面自带 |
+| `boxes` | Box | 这台 box 和接入的每台机器、个人 box 限额、在本机执行命令、开机启动、box 镜像更新、资源诊断，以及组织的节点。 | `boxImage`, `boxCpus`, `boxes`, `personalBoxQuota`, `personBoxQuotas`, `departmentBoxQuotas`, `hostExec`, `startupItem`, `upgradeHour` | `/api/box/up`, `/api/boxes`, `/api/quotas`, `/api/directories`, `/api/box/image`, `/api/diagnostics/resources`, `/api/nodes` | 页面自带 |
 | `doors` | 渠道 | 通往这个安装的渠道、接入的连接器，以及在等着被放进来的人。 | `channelAllow` | `/api/channels`, `/api/connectors` | 页面自带 |
 | `team` | 团队 | 权限范围、密钥、人员与邀请、MCP 服务器，以及团队的各项上限：暂停的 agent、推送额度、花费上限、反复失败的例行任务、共享记忆审核。 | `mcpServers`, `teamMemoryReview` | `/api/scopes`, `/api/vault`, `/api/principals`, `/api/mcp`, `/api/extensions/reload`, `/api/agents/pauses`, `/api/agents/push-budget`, `/api/agents/spend-limits`, `/api/schedules/runs`, `/api/memory/team-review` | 页面自带 |
 | `mine` | 我的 | 属于你的东西：你的 MCP token、你的长期批准、闸门本会问你的事，以及 agent 对你的了解。 | — | `/api/mcp/tokens`, `/api/policy`, `/api/person` | 页面自带 |

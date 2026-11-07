@@ -25,6 +25,7 @@ import {
   type BoxStatus,
   defaultBoxConfig,
   loadBoxToken,
+  packageVersion,
   resolveDockerHostAddress,
   boxUiToken,
   uiToken,
@@ -54,7 +55,7 @@ import {
   resolveSummaryProvider,
 } from "./host/provider.ts";
 import type { TurnEvent } from "./host/turn.ts";
-import { decideUpgrade } from "./host/upgrade.ts"; import { HOST_BOX_INSTRUCTION, HOST_BOX_PROMISE } from "./host/host-box.ts";
+import { decideUpgrade } from "./host/upgrade.ts"; import { HOST_BOX_PROMISE, recordHostBoxBundle } from "./host/host-box.ts"; import { headlessBoxdEnv } from "./box/headless-boxd.ts";
 import { DEFAULT_DISPLAY_INDEX } from "./protocol/index.ts";
 import { startWebServer } from "./web/server.ts";
 
@@ -63,6 +64,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 function agentboxHome(): string {
   return process.env.AGENTBOX_HOME ?? join(homedir(), ".agentbox");
 }
+
+/** The built box daemon (`npm run build:boxd`), beside this file's package whether run from src/ or bundled into dist/. */
+const boxdBundle = (): string => resolve(here, "..", "docker", "box", "boxd.cjs");
 
 function boxConfig(overrides: Partial<BoxConfig> = {}): BoxConfig {
   // The token comes from defaultBoxConfig, which every caller shares.
@@ -573,63 +577,6 @@ async function cmdBoxAttach(argv: string[]): Promise<number> {
  * and in the daemon's environment (what the file service enforces). Foreground, because a
  * process on the person's own machine should be one they can see and stop.
  */
-/**
- * Registers this machine's boxd with another installation, using a one-time connection
- * code it minted (INV-434). The daemon token travels once, over the control URL; what is
- * kept here is the runner credential the reply carries, so `box connect --runner` can
- * reconnect after a move or a restart without a new code.
- */
-async function cmdBoxConnect(argv: string[]): Promise<number> {
-  const { flags } = parseArgs(argv);
-  const control = String(flags.get("--control") ?? "").replace(/\/$/, "");
-  const baseUrl = String(flags.get("--url") ?? "");
-  const tokenFile = String(flags.get("--token-file") ?? "");
-  const name = String(flags.get("--name") ?? "");
-  const code = String(flags.get("--code") ?? "");
-  const stateDir = join(agentboxHome(), "runner");
-  const stateFile = join(stateDir, `${name || "box"}.json`);
-  let runner = String(flags.get("--runner") ?? "");
-  if (runner === "" && code === "" && existsSync(stateFile)) {
-    try {
-      runner = String((JSON.parse(readFileSync(stateFile, "utf8")) as { runner?: string }).runner ?? "");
-    } catch {
-      // No saved credential: a code is needed.
-    }
-  }
-  if (control === "" || baseUrl === "" || tokenFile === "" || (code === "" && runner === "")) {
-    err("Usage: agentbox box connect --control http://host:7777 --url http://this-machine:13370 --token-file F --code lbx-… [--name N] [--kind host]\n       agentbox box connect --control … --url … --token-file F --name N   (reconnect with the saved runner credential)");
-    return 1;
-  }
-  let token: string;
-  try {
-    token = readFileSync(tokenFile, "utf8").trim();
-  } catch {
-    err(`Cannot read the daemon token at ${tokenFile}.`);
-    return 1;
-  }
-  const version = String((JSON.parse(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "..", "package.json"), "utf8")) as { version?: string }).version ?? "");
-  const body = runner !== "" ? { runner, name, baseUrl, token, version } : { code, name, baseUrl, token, version, ...(flags.get("--kind") === "host" ? { kind: "host" } : {}) };
-  let response: Response;
-  try {
-    response = await fetch(`${control}/api/boxes/register`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(30_000) });
-  } catch (error) {
-    err(`Could not reach ${control}: ${error instanceof Error ? error.message : String(error)}`);
-    return 1;
-  }
-  const reply = (await response.json().catch(() => ({}))) as { error?: string; boxId?: string; name?: string; runner?: string; connected?: boolean; detail?: string; state?: string };
-  if (!response.ok) {
-    err(`Registration refused (${response.status}): ${reply.error ?? "no reason given"}`);
-    return 1;
-  }
-  if (reply.runner !== undefined) {
-    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-    writeFileSync(stateFile, `${JSON.stringify({ control, boxId: reply.boxId, name: reply.name, runner: reply.runner }, null, 2)}\n`, { mode: 0o600 });
-  }
-  out(`${bold(reply.name ?? name)} is registered at ${control} as ${reply.boxId} — ${reply.state ?? (reply.connected ? "connected" : "offline")}: ${reply.detail ?? ""}`);
-  if (reply.runner !== undefined) out(dim(`runner credential saved to ${stateFile}; reconnect with the same command without --code`));
-  return 0;
-}
-
 async function cmdHostUp(argv: string[]): Promise<number> {
   const [name, ...flagList] = argv;
   const { flags, positional } = parseArgs(flagList);
@@ -646,7 +593,7 @@ async function cmdHostUp(argv: string[]): Promise<number> {
   }
   if (!repos.some(r => r.path === workDir)) repos.push({ path: workDir, mode: "rw" });
   const port = typeof flags.get("--port") === "string" ? Number(flags.get("--port")) : 13380;
-  const bundlePath = resolve(dirname(fileURLToPath(import.meta.url)), "..", "docker", "box", "boxd.cjs");
+  const bundlePath = boxdBundle();
   if (!existsSync(bundlePath)) {
     err(`No boxd bundle at ${bundlePath}. Run \`npm run build:boxd\` first.`);
     return 1;
@@ -672,29 +619,13 @@ async function cmdHostUp(argv: string[]): Promise<number> {
   } else {
     registry.updateBox(name, { endpoint: { baseUrl, tokenFile } });
   }
-  const bundles = new BundleStore();
-  const file = { bundles: bundles.list(), ...bundles.attachments() };
-  const bundleId = `host-${name}`;
-  file.bundles = [...file.bundles.filter(b => b.id !== bundleId), { id: bundleId, name: `Host box ${name}`, secretIds: [], repositories: repos, instructions: `You are on ${name}, the person's own machine, with no desktop. You may read and write only under: ${repos.map(r => `${r.path} (${r.mode})`).join(", ")}. ${HOST_BOX_INSTRUCTION}` }];
-  file.boxes = { ...file.boxes, [name]: [...new Set([...(file.boxes[name] ?? []), bundleId])] };
-  bundles.save(file);
+  recordHostBoxBundle(new BundleStore(), name, repos, "the person's own machine");
 
   out(`${bold("host box")} ${name}: work ${workDir}; roots ${repos.map(r => `${r.path} (${r.mode})`).join(", ")}`);
   out(dim(`Ctrl-C to stop. ${HOST_BOX_PROMISE}`));
   const child = spawn(process.execPath, [bundlePath], {
     stdio: "inherit",
-    env: {
-      ...process.env,
-      BOXD_HEADLESS: "1",
-      BOXD_BIND: "127.0.0.1",
-      BOXD_PORT: String(port),
-      BOXD_TOKEN: token,
-      AGENTBOX_WORK_DIR: workDir,
-      BOXD_JOBS_DIR: join(workDir, ".jobs"),
-      BOXD_TEACH_DIR: join(workDir, "teach-sessions"),
-      BOXD_REPOSITORIES: JSON.stringify(repos),
-      DISPLAY: "",
-    },
+    env: headlessBoxdEnv(process.env, { bind: "127.0.0.1", port, token, workDir, repositories: repos }),
   });
   return new Promise<number>(resolveExit => {
     child.on("exit", code => resolveExit(code ?? 0));
@@ -1408,6 +1339,8 @@ Box:
                             registered as box <name> with a bundle carrying the roots.
                             Foreground; Ctrl-C stops it. Needs \`npm run build:boxd\`.
   host down <name>          Forget a host box (refused while agents live in it)
+  node run --control URL --name N [--advertise HOST] [--repo P[:ro]]... [--no-docker] [--no-native]
+                            This machine as an organisation's node (INV-1697); the app runs it.
   box list                  Every box: own first, then attached, with who lives where
   box down [--rm]           Stop the box, optionally removing the container
   box logs [--tail N]       Container logs
@@ -1570,8 +1503,8 @@ async function main(): Promise<number> {
           return cmdBoxPush();
         case "up":
           return cmdBoxUp(boxArgs);
-        case "connect":
-          return cmdBoxConnect(boxArgs);
+        case "connect": // refused towards an organisation from a machine with an installation of its own (INV-1697)
+          return (await import("./box/connect-cli.ts")).cmdBoxConnect(boxArgs, { home: agentboxHome(), version: packageVersion(), out, err });
         case "status":
           return cmdBoxStatus();
         case "down":
@@ -1615,6 +1548,7 @@ async function main(): Promise<number> {
     case "supervision": return (await import("./supervision/main.ts")).cmdSupervision(rest, { uiToken: process.env.AGENTBOX_UI_TOKEN, keyFor: name => process.env[name] ?? (name === "OPENAI_API_KEY" ? process.env.OPENAI_TOKEN : undefined) }); // INV-1527: the app's watchdog + supervisor process
     case "bundle": return cmdBundle(rest); case "routines": return (await import("./host/routine-runs-cli.ts")).cmdRoutines(rest, out, err); // INV-1665
 
+    case "node": { const { AGENTBOX_NODE_CREDENTIAL: credential, ...baseEnv } = process.env; return (await import("./box/node-cli.ts")).cmdNode(rest, { credential, baseEnv, home: agentboxHome(), version: packageVersion(), boxdBundle: boxdBundle(), out, err, docker: (containerName, advertise) => { if (advertise !== "127.0.0.1") process.env.AGENTBOX_BOXD_PUBLISH_ADDRESS = advertise; const manager = new BoxManager(boxConfig({ containerName, host: advertise })); return { up: async () => ({ baseUrl: (await manager.up()).status.boxdUrl ?? "", token: manager.config.token }), down: () => manager.down() }; } }); } // an organisation's node (INV-1697); the credential never reaches a box daemon's environment
     case "host": {
       const [sub, ...hostArgs] = rest;
       if (sub === "up") return cmdHostUp(hostArgs);

@@ -67,3 +67,36 @@ test("a registration issues a runner credential; reconnects are the same box unt
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a node credential is issued once per enrolment, hashed, replaced by the next enrolment, and refused with every box of the node once the node is revoked (INV-1697)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-connect-node-"));
+  try {
+    const store = new ConnectCodeStore(join(dir, "connect.json"), "box_0123456789abcdef");
+    const first = store.enrolNode({ name: "mac-studio", by: "p-ana" });
+    assert.ok(first.ok);
+    assert.match(first.credential, /^lbxn_[A-Za-z0-9_-]{32}$/);
+    assert.ok(!readFileSync(join(dir, "connect.json"), "utf8").includes(first.credential), "stored hashed");
+    assert.equal(store.verifyNode(first.credential).ok, true);
+    assert.equal("credentialHash" in first.node, false, "a view never carries the hash");
+
+    const again = store.enrolNode({ name: "mac-studio", by: "p-ana" });
+    assert.ok(again.ok);
+    assert.equal(again.node.id, first.node.id, "the same node, enrolled again");
+    assert.deepEqual(store.verifyNode(first.credential), { ok: false, why: "unknown" }, "the credential it replaced stops working");
+
+    store.register({ boxId: "box_a", name: "mac-studio-native", nodeId: again.node.id });
+    store.register({ boxId: "box_b", name: "mac-studio-docker", nodeId: again.node.id });
+    store.register({ boxId: "box_c", name: "lab", });
+    assert.equal(store.nodeBox(again.node.id, "mac-studio-docker")?.boxId, "box_b");
+    assert.deepEqual(store.listNodes().map(node => node.boxes.map(box => box.boxId)), [["box_a", "box_b"]]);
+
+    assert.deepEqual(store.revokeNode(again.node.id, "p-ana"), ["box_a", "box_b"]);
+    assert.deepEqual(store.verifyNode(again.credential), { ok: false, why: "revoked" });
+    assert.equal(store.isRevoked("box_a") && store.isRevoked("box_b"), true, "every box on the node is cut off");
+    assert.equal(store.isRevoked("box_c"), false, "and nothing else");
+    assert.deepEqual(new ConnectCodeStore(join(dir, "connect.json"), "box_0123456789abcdef").revokedBoxIds(), ["box_a", "box_b"], "durable across a restart");
+    assert.deepEqual(store.enrolNode({ name: "mac-studio", by: "p-ana" }), { ok: false, why: "revoked" }, "a revoked node does not sign its way back under its name");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -22,7 +22,8 @@ contextBridge.exposeInMainWorld("lumenboxShell", {
   },
   machine: {
     get: () => ipcRenderer.invoke("machine:get"),
-    choose: use => ipcRenderer.invoke("machine:choose", String(use ?? "")),
+    // An organisation node also sends the organisation's address and the node's name (INV-1697).
+    choose: (use, details) => ipcRenderer.invoke("machine:choose", String(use ?? ""), details && typeof details === "object" ? { address: String(details.address ?? ""), name: String(details.name ?? "") } : undefined),
     change: use => ipcRenderer.invoke("machine:change", String(use ?? "")),
   },
 });

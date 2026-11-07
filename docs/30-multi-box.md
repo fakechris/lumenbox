@@ -165,6 +165,13 @@ named `attached`, so nothing that works today stops working.
 > since a connection code is not asked whose machine redeems it (INV-1697 enforces it; docs/96 §8).
 > An organisation's boxes run
 > on Kubernetes by default, and also on VMs it attaches and on its own organisation nodes.
+>
+> **Note, 2026-11-07 (INV-1697).** Now a check. An organisation answers a connection code with
+> 403 `box-code-organisation` and mints none; it takes boxes from its nodes (a node credential the
+> organisation issues when an Admin signs in to it on the node machine, `POST /api/nodes/enrol`) and
+> from an Admin's `box attach`. `box connect` asks `GET /api/boxes/register` first and refuses an
+> organisation from a machine that holds an installation of its own. Revoking a node revokes every
+> box it registered; revocations now survive a restart and the box watch never redials one.
 
 ## 4. Stages
 

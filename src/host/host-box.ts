@@ -14,6 +14,7 @@
  * ask for routine work; it cannot lift the sandbox.
  */
 
+import type { BundleStore, Repository } from "./bundles.ts";
 import { classifyShell } from "./shell-readonly.ts";
 
 /** Tools that change the machine they run on. */
@@ -37,3 +38,18 @@ export const HOST_BOX_PROMISE =
 /** What the agent on a host box is told, in its bundle's instructions. */
 export const HOST_BOX_INSTRUCTION =
   "Your shell runs under the OS sandbox: a write outside those directories is refused by the operating system, not by a rule you can argue with. Every write here asks the person first; say what you are about to change before you change it.";
+
+/**
+ * Records what a native-environment box may reach as the bundle attached to it (`host-<name>`):
+ * the record of truth the prompt and the audit read, beside the daemon's own copy of the roots.
+ * `whose` is the sentence about the machine: the person's own (`host up`), or an organisation's
+ * node (INV-1697).
+ */
+export function recordHostBoxBundle(bundles: BundleStore, box: string, repositories: readonly Repository[], whose: string): void {
+  const file = { bundles: bundles.list(), ...bundles.attachments() };
+  const id = `host-${box}`;
+  const roots = repositories.map(r => `${r.path} (${r.mode})`).join(", ");
+  file.bundles = [...file.bundles.filter(b => b.id !== id), { id, name: `Host box ${box}`, secretIds: [], repositories: repositories.map(r => ({ ...r })), instructions: `You are on ${box}, ${whose}, with no desktop. You may read and write only under: ${roots}. ${HOST_BOX_INSTRUCTION}` }];
+  file.boxes = { ...file.boxes, [box]: [...new Set([...(file.boxes[box] ?? []), id])] };
+  bundles.save(file);
+}

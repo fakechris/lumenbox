@@ -41,10 +41,10 @@ const { syncLoginItem } = require("./login-item.cjs");
 const { windowOpenAction } = require("./external-links.cjs");
 const { systemKeychain } = require("./keychain.cjs");
 const { connectionStore } = require("./organisations.cjs");
-const { organisationWindows } = require("./organisation-windows.cjs");
+const { organisationWindows, signInWindow } = require("./organisation-windows.cjs");
 const { installationViews } = require("./installation-views.cjs");
 const { MachineUseRefused, machineUseCalls, machineUseStore, runsPersonalInstallation, startupUse } = require("./machine-use.cjs");
-const { NodeRegistrationUnavailable, organisationNode } = require("./organisation-node.cjs");
+const { JoinRefused, NODE_KEYCHAIN_SERVICE, NodeRefused, organisationNode } = require("./organisation-node.cjs");
 /**
  * The UI credential of the personal installation, made the first time it is needed — when the
  * personal installation starts — and not when the shell loads: desktopAuth writes
@@ -577,6 +577,13 @@ function startOrganisations(onConnectionsChanged) {
  */
 function startMachineUse() {
   const store = machineUseStore({ file: path.join(app.getPath("userData"), "machine.json") });
+  node = organisationNode({
+    file: path.join(app.getPath("userData"), "node.json"),
+    keychain: systemKeychain(process.platform, NODE_KEYCHAIN_SERVICE),
+    signIn: address => signInWindow(address, { parent: mainWindow, openOutside: url => shell.openExternal(url).catch(err => log(`could not open ${url}: ${err.message}`)) }),
+    startNode: startNodeProcess,
+    log,
+  });
   let organisations = null;
   const calls = machineUseCalls({
     store,
@@ -585,7 +592,7 @@ function startMachineUse() {
       ids: () => organisations.store.list().map(c => c.id),
       disconnect: id => organisations.windows.disconnect(id),
     },
-    node: organisationNode(),
+    node,
     started: use => startUse(use),
     log,
   });
@@ -601,15 +608,37 @@ function startMachineUse() {
     if (!pages.includes(from(event))) return { error: "refused" };
     try { return await fn(...args); }
     catch (error) {
-      if (error instanceof MachineUseRefused || error instanceof NodeRegistrationUnavailable) return { error: error.code };
+      if (error instanceof MachineUseRefused || error instanceof NodeRefused || error instanceof JoinRefused) return { error: error.code };
       log(`machine use: ${error.message}`);
       return { error: "failed" };
     }
   };
   ipcMain.handle("machine:get", reply(["first-run", "personal"], () => calls.get()));
-  ipcMain.handle("machine:choose", reply(["first-run"], use => calls.choose(String(use))));
+  ipcMain.handle("machine:choose", reply(["first-run"], (use, details) => calls.choose(String(use), details && typeof details === "object" ? { address: String(details.address ?? ""), name: String(details.name ?? "") } : {})));
   ipcMain.handle("machine:change", reply(["personal"], to => calls.change(String(to))));
   return startupUse({ store, agentboxHome: agentboxHome(), connections: organisations.store.list().length });
+}
+
+/**
+ * An organisation node (INV-1697): `agentbox node run` with the node credential in its environment
+ * and a state directory of its own (userData/node) — never ~/.agentbox, which a node does not have.
+ * The address its boxes listen on comes from AGENTBOX_NODE_ADVERTISE (a network the node and the
+ * organisation's server share), loopback otherwise. Its output goes to node.log beside server.log.
+ */
+let node = null;
+let nodeChild = null;
+function startNodeProcess({ origin, name, credential, onExit }) {
+  if (nodeChild) return;
+  const home = path.join(app.getPath("userData"), "node");
+  fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+  const args = ["--experimental-transform-types", path.join(REPO, "src", "cli.ts"), "node", "run", "--control", origin, "--name", name, ...(process.env.AGENTBOX_NODE_ADVERTISE ? ["--advertise", process.env.AGENTBOX_NODE_ADVERTISE] : [])];
+  const { AGENTBOX_HOME: _personal, ...inherited } = process.env;
+  nodeChild = spawn(process.execPath, args, { cwd: REPO, env: withToolPath({ ...inherited, ELECTRON_RUN_AS_NODE: "1", AGENTBOX_HOME: home, AGENTBOX_NODE_CREDENTIAL: credential }), stdio: ["ignore", "pipe", "pipe"] });
+  const NODE_LOG = path.join(LOG_DIR, "node.log");
+  const remember = chunk => { try { fs.mkdirSync(LOG_DIR, { recursive: true }); fs.appendFileSync(NODE_LOG, String(chunk)); } catch {} };
+  nodeChild.stdout.on("data", remember);
+  nodeChild.stderr.on("data", remember);
+  nodeChild.on("exit", code => { nodeChild = null; log(`organisation node: exited (${code})`); onExit(code); loadShellPage(); });
 }
 
 /** Starts what a use runs: the personal installation, or (an organisation node) nothing local but its page. */
@@ -700,6 +729,7 @@ if (!app.requestSingleInstanceLock()) {
       startPersonal();
     } else {
       shellMode = "node";
+      node.resume().catch(err => log(`organisation node: ${err.message}`));
     }
     createWindow();
   });
@@ -712,6 +742,7 @@ if (!app.requestSingleInstanceLock()) {
     quitting = true;
     serverChild?.kill();
     supervisionChild?.kill();
+    nodeChild?.kill();
   });
 }
 
