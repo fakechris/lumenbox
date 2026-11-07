@@ -50,7 +50,7 @@
 | `HandOverDesktop` | Hand your desktop to the person for something only they can do there — a login, a captcha, a payment — with one instruction they will read on the card. | self | 否 | 需要一台 box；分支里没有 | deferred | desk, web, code, team | `instruction`, `reason` |
 | `Jobs` | The background commands you started with `bash` (background: true, or one that ran on past its window). | observe | 否 | 需要一台 box | deferred | desk, web, code, team | `action`, `job_id`, `until`, `timeout_ms` |
 | `list_dir` | List a directory in your box, with entry types and sizes. | observe | 否 | 需要一台 box | resident | desk, web, code, team | `path` |
-| `NoteSiteLearning` | Keep something you found out about a site, for whoever opens it next — you or a teammate. | self | 否 | 需要一台 box | deferred | — | `url`, `text`, `worked` |
+| `NoteSiteLearning` | Keep something you found out about a site, for whoever in this box opens it next — you or a teammate. | self | 否 | 需要一台 box | deferred | — | `url`, `text`, `worked` |
 | `NothingToSay` | End this turn on purpose with nothing delivered: the message was not for you, the routine does not apply, the fork's result changes nothing you need to say. | observe | 否 | 总是；分支里没有 | resident | — | `reason` |
 | `Orchestrate` | Run the same question over many items — one sub-agent per item, each with fresh context — and, if you give a `reduce` brief, one more that combines their answers. | self | 否 | 需要一台 box；分支里没有 | deferred | — | `brief`, `items`, `prompt`, `expect`, `reduce` |
 | `OtherThreads` | List the other conversations in this same chat, and read one. | observe | 否 | 总是；分支里没有 | deferred | desk, web, code, team | `read`, `search` |
