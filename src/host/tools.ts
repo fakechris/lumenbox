@@ -79,7 +79,7 @@ import { runOperationTool, withOperationTool } from "./operation-tool.ts";
 import { type Orchestrations, parsePlan } from "./orchestrate.ts";
 import { type CommitHow, forkTag, type PendingWork } from "./pending-work.ts";
 import type { PolicyGate } from "./policy.ts";
-import { delegateCommand, delegateEnv, delegateModel, installCommand, PRESETS, presetNamed, quoteForShell, withEnginesPath } from "./presets.ts";
+import { delegateCommand, delegateEnv, delegateModel, engineMissing, installCommand, PRESETS, presetNamed, probeCommand, quoteForShell } from "./presets.ts";
 import { readOutcome, textShape, withReadOutcome } from "./read-outcome.ts";
 import { findKeptResult } from "./results.ts";
 import type { ScopeStore } from "./scopes.ts";
@@ -3138,7 +3138,7 @@ export async function dispatchTool(
       // Checked rather than assumed, and said as an install problem rather than as a
       // failed run: an engine that is not there produces a shell error the model would
       // otherwise try to debug.
-      const probe = await box.exec(withEnginesPath(preset.probe, paths), { timeoutMs: 15_000 });
+      const probe = await box.exec(probeCommand(preset, paths), { timeoutMs: 15_000 });
       if (probe.exit_code !== 0) {
         // Not there. Either the image carries it (a version named at build) or the person
         // chooses it now and it is installed on the work volume at the preset's pinned
@@ -3158,14 +3158,7 @@ export async function dispatchTool(
               `brief. It is pinned: the same version every time, on the work volume, so a rebuilt box keeps it.`,
           };
         }
-        return {
-          text:
-            `The ${preset.name} engine is not in this box. Ask the person whether to install it ` +
-            `(${preset.install.package} ${preset.install.version}, a few minutes, kept on the work ` +
-            `volume) and if they say yes call Delegate again with \`install: true\`. Or an operator ` +
-            `bakes it into the image with a version named at build.`,
-          isError: true,
-        };
+        return { text: engineMissing(preset, paths, probe.stdout), isError: true };
       }
       // Where the engine's model traffic goes. An operator-configured relay (the two
       // environment variables) wins; otherwise the host's own relay mints a route for this

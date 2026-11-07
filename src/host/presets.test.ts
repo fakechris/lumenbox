@@ -19,7 +19,7 @@ test("a prompt survives quoting, including the character that would end it", () 
 
 test("every preset is complete, and a run carries the prompt", () => {
   for (const preset of PRESETS) {
-    assert.match(preset.probe, /command -v/, `${preset.name} says how to check it is there`);
+    assert.match(preset.program, /^[a-z]+$/, `${preset.name} names the executable its install puts under bin`);
     assert.match(preset.run("'x'"), /'x'/, `${preset.name} passes the prompt through`);
     assert.notEqual(preset.summary, "", `${preset.name} tells a model when to pick it`);
   }
