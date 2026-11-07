@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { BootstrapAdmins } from "./bootstrap.ts";
-import { convertToOrganisation, ensureOwner, OWNER_ID, OwnerConversionRequired } from "./installation.ts";
+import { ensureOwner, openRoster, OWNER_ID, PersonalInstallationOnly } from "./installation.ts";
 import { Principals, soleAdmin } from "./principals.ts";
 
 function fixture(): { home: string; path: string; codePath: string } {
@@ -74,27 +74,32 @@ test("independent desktop starts race for the Owner with exactly one created", a
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
-test("a second person needs the confirmed conversion, which makes the Owner an Admin with an audit record", () => {
+test("a personal installation never takes a second person; one converted before INV-1689 stays an organisation", () => {
   const { home, path, codePath } = fixture();
   try {
     ensureOwner(path, codePath, { desktop: true, name: "chris" });
     const principals = new Principals(path);
     const ann = { id: "feishu:ann", name: "Ann", role: "driver" as const, identities: ["feishu:ann"] };
-    assert.throws(() => principals.save([...principals.list(), ann]), OwnerConversionRequired);
-    assert.throws(() => principals.requireOrganisation(), OwnerConversionRequired);
+    assert.throws(() => principals.save([...principals.list(), ann]), (error: unknown) => error instanceof PersonalInstallationOnly && /join or create an organisation/.test(error.message));
+    assert.throws(() => principals.requireOrganisation(), PersonalInstallationOnly);
     assert.throws(() => principals.save([]), /cannot be removed/);
     assert.throws(() => principals.save([{ ...principals.list()[0]!, role: "driver" }]), /cannot be removed/);
     principals.save([{ ...principals.list()[0]!, name: "Chris" }]);
     assert.equal(new Principals(path).list()[0]!.name, "Chris", "the Owner is renamed in place");
     assert.equal(new Principals(path).installation().mode, "single-machine", "a save keeps the installation field");
+    assert.deepEqual(new Principals(path).list().map(p => p.id), [OWNER_ID], "nothing let Ann in");
 
-    assert.equal(convertToOrganisation(path, "the operator", 1234), true);
-    assert.equal(convertToOrganisation(path, "the operator"), false, "converting twice records one conversion");
+    // An installation INV-1685 converted: its file carries the conversion record, and it is an organisation as it was.
+    const conversion = { at: 1234, by: "the operator", ownerId: OWNER_ID };
+    writeFileSync(path, JSON.stringify({ installation: { mode: "organisation", ownerId: OWNER_ID, createdAt: 1, conversion }, bootstrap: { disabled: true }, principals: [{ id: OWNER_ID, name: "Chris", role: "admin", identities: [] }] }));
     principals.reload();
-    assert.deepEqual(principals.installation(), { mode: "organisation", ownerId: OWNER_ID, createdAt: principals.installation().createdAt, conversion: { at: 1234, by: "the operator", ownerId: OWNER_ID } });
+    principals.requireOrganisation();
     principals.save([...principals.list(), ann]);
     assert.deepEqual(new Principals(path).list().map(p => [p.id, p.role]), [[OWNER_ID, "admin"], ["feishu:ann", "driver"]]);
-    assert.equal(new Principals(path).installation().conversion?.at, 1234, "later saves keep the audit record");
+    assert.deepEqual(new Principals(path).installation().conversion, conversion, "later saves keep the record");
+    const logs: string[] = [];
+    openRoster({ desktop: true, path, codePath, bootstrap: { ensure: () => false }, reload: () => {}, log: line => logs.push(line) });
+    assert.equal(logs.filter(line => line.startsWith("upgrade:") && line.includes("stays an organisation")).length, 1, "one upgrade line says so");
     principals.save([ann]);
     assert.equal(ensureOwner(path, codePath, { desktop: true }), "not-empty");
     principals.save([]);

@@ -48,7 +48,7 @@ agentbox watchdog uninstall    # 停止它并撤销它的 token
 agentbox supervise --objective "<what done looks like>" --token-file <file>
 ```
 
-这些命令暂时还不在 `agentbox --help` 里。token 来自 设置 → 我的 → 你的 MCP token。在桌面端没有人登录时，这份列表属于机主；安装有了更多人之后，属于那位唯一的管理员。监督和看门狗的 token 都在这份列表里，点 撤销 就能停掉其中任何一个。在这种情况下，`agentbox watchdog install` 不需要 `--principal`。
+这些命令暂时还不在 `agentbox --help` 里。token 来自 设置 → 我的 → 你的 MCP token。在桌面端没有人登录时，这份列表属于机主。监督和看门狗的 token 都在这份列表里，点 撤销 就能停掉其中任何一个。在这种情况下，`agentbox watchdog install` 不需要 `--principal`。
 
 ## 在哪里看结果
 

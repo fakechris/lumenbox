@@ -191,7 +191,7 @@ exists, and the code is how the operator hands it over.)
 
 > **Note, 2026-11-06 (INV-1688, docs/95 §2).** *Void:* the conversion sentence above. A
 > desktop installation never lets a second person in and never converts; to work with others,
-> its Owner joins or creates an organisation. The code still converts until INV-1689 removes
+> its Owner joins or creates an organisation. INV-1689 removed
 > `POST /api/installation/convert` and its dialog. The rest of this section stands.
 
 ## 3. Edition architecture: what lives where

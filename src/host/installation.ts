@@ -1,9 +1,9 @@
 /**
  * Owner and Admin: what kind of installation this is (INV-1685, docs/22 §1a).
  *
- * The desktop app on one computer has one person, the **Owner** (机主). A server deployment, or a
- * desktop installation that has let a second person in, is an organisation with **Admins**
- * (管理员). Both hold the role `admin` — the permission is the same — and which word a person
+ * The desktop app on one computer has one person, the **Owner** (机主), and never another: a
+ * personal installation is not converted into an organisation (INV-1689, route B). An
+ * organisation is its own installation — a server deployment — with **Admins** (管理员). Both hold the role `admin` — the permission is the same — and which word a person
  * reads is decided by one field in the roster file, `installation.mode`, not by a fourth role.
  * One field per installation is what makes "Owner or Admin, never both" a property of the data:
  * there is no state in which one person is the Owner while another is an Admin.
@@ -14,34 +14,40 @@
  *   creates one; it keeps the bootstrap code that produces the first Admin.
  * - While the mode is `single-machine`, the roster holds the Owner and nobody else
  *   (`guardRoster`, called by every roster save). Adding a person is refused with
- *   `OwnerConversionRequired` until a person confirms the conversion: `convertToOrganisation`
- *   flips the mode and writes the audit record into the same file in one atomic replacement.
- *   The Owner stays, as the organisation's first Admin.
+ *   `PersonalInstallationOnly`, whose sentence says to join or create an organisation; nothing
+ *   turns the mode into `organisation`.
+ * - An installation converted before INV-1689 (`installation.conversion` present) is an
+ *   organisation and stays one; `openRoster` says so in one `upgrade:` line.
  */
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { userInfo } from "node:os";
+import { tr } from "../i18n/messages.ts";
 import { withRosterLock } from "./roster-lock.ts";
 
 export type InstallationMode = "single-machine" | "organisation";
 
 export interface Installation {
   mode: InstallationMode;
-  /** The Owner's principal id; kept after conversion, when the Owner is the first Admin. */
+  /** The Owner's principal id; kept on an installation converted before INV-1689, whose Owner became its first Admin. */
   ownerId?: string;
   createdAt?: number;
-  /** The audit record of the conversion: when, and who confirmed it. */
+  /** The audit record of a conversion made before INV-1689 (when, and who confirmed it). Read, never written. */
   conversion?: { at: number; by: string; ownerId: string };
 }
 
 /** The Owner's principal id. Fixed, so an MCP token or a watchdog issued to the Owner keeps its owner across renames. */
 export const OWNER_ID = "local:owner";
 
-/** A roster write that would add a second person to a single-machine installation. The web answers 409 and the page asks for the confirmation. */
-export class OwnerConversionRequired extends Error {
-  readonly needs = "owner-conversion";
+/** The sentence a refused add-person reads, in the bundle (zh and en). */
+export const PERSONAL_ONLY_KEY = "ui.installation.personal-only";
+
+/** A roster write, or an invite, that would add a second person to a single-machine installation. The web answers 409 with the sentence in the reader's language and the manual page. */
+export class PersonalInstallationOnly extends Error {
+  readonly needs = "organisation";
+  readonly key = PERSONAL_ONLY_KEY;
   constructor() {
-    super("This computer has one Owner. Adding a person makes it an organisation, with the Owner as its first Admin: confirm the conversion first.");
+    super(tr(PERSONAL_ONLY_KEY, "en"));
   }
 }
 
@@ -58,7 +64,7 @@ export function installationOf(file: unknown): Installation {
 /** Refuses a roster a single-machine installation cannot hold: anyone besides the Owner, or no Owner who is admin. */
 export function guardRoster(installation: Installation, people: readonly { id: string; role: string }[]): void {
   if (installation.mode !== "single-machine") return;
-  if (people.some(person => person.id !== installation.ownerId)) throw new OwnerConversionRequired();
+  if (people.some(person => person.id !== installation.ownerId)) throw new PersonalInstallationOnly();
   const owner = people.find(person => person.id === installation.ownerId);
   if (owner === undefined || owner.role !== "admin") throw new Error("The Owner cannot be removed or given another role on a single-machine installation. Rename them instead.");
 }
@@ -122,24 +128,6 @@ export function ensureOwner(path: string, codePath: string, options: { desktop: 
 }
 
 /**
- * The confirmed conversion: a single-machine installation becomes an organisation, its Owner its
- * first Admin. One atomic roster replacement carries the new mode and the audit record (when, and
- * who confirmed). False when there was nothing to convert.
- */
-export function convertToOrganisation(path: string, by: string, now = Date.now()): boolean {
-  return withRosterLock(path, () => {
-    const roster = readRoster(path);
-    const installation = installationOf(roster);
-    if (installation.mode !== "single-machine") return false;
-    writeRoster(path, {
-      ...roster,
-      installation: { mode: "organisation", ownerId: installation.ownerId, ...(installation.createdAt !== undefined ? { createdAt: installation.createdAt } : {}), conversion: { at: now, by, ownerId: installation.ownerId! } },
-    });
-    return true;
-  });
-}
-
-/**
  * The roster's first-start step, in order: the Owner when this is the desktop app's first start
  * (or its first start after an upgrade), then the bootstrap code a server keeps for its first
  * Admin — which, once the Owner exists, finds a non-empty roster and arms nothing.
@@ -147,6 +135,9 @@ export function convertToOrganisation(path: string, by: string, now = Date.now()
 export function openRoster(deps: { desktop: boolean; path: string; codePath: string; bootstrap: { ensure: () => boolean }; reload: () => void; log: (line: string) => void }): void {
   try {
     const outcome = ensureOwner(deps.path, deps.codePath, { desktop: deps.desktop });
+    if (existsSync(deps.path) && installationOf(JSON.parse(readFileSync(deps.path, "utf8"))).conversion !== undefined) {
+      deps.log("upgrade: this installation was converted from one Owner to an organisation before INV-1689; it stays an organisation, unchanged, and a personal installation is no longer converted.");
+    }
     if (outcome === "created" || outcome === "created-on-upgrade") {
       deps.reload();
       deps.log(outcome === "created"
