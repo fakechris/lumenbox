@@ -19,6 +19,7 @@
 const {
   app,
   BrowserWindow,
+  ipcMain,
   Menu,
   Notification,
   Tray,
@@ -41,7 +42,21 @@ const { systemKeychain } = require("./keychain.cjs");
 const { connectionStore } = require("./organisations.cjs");
 const { organisationWindows } = require("./organisation-windows.cjs");
 const { installationViews } = require("./installation-views.cjs");
-const uiAuth = desktopAuth();
+const { MachineUseRefused, machineUseCalls, machineUseStore, runsPersonalInstallation, startupUse } = require("./machine-use.cjs");
+const { NodeRegistrationUnavailable, organisationNode } = require("./organisation-node.cjs");
+/**
+ * The UI credential of the personal installation, made the first time it is needed — when the
+ * personal installation starts — and not when the shell loads: desktopAuth writes
+ * ~/.agentbox/ui-token, and a first run that has not chosen yet, or an organisation node, has no
+ * ~/.agentbox (INV-1696).
+ */
+let desktopAuthValue = null;
+const personalAuth = () => (desktopAuthValue ??= desktopAuth());
+const uiAuth = {
+  get token() { return personalAuth().token; },
+  get headers() { return personalAuth().headers; },
+  bootstrapUrl: base => personalAuth().bootstrapUrl(base),
+};
 
 const PORT = Number(process.env.LUMENBOX_PORT || 7777);
 const PAGE = `http://127.0.0.1:${PORT}/`;
@@ -63,9 +78,12 @@ function log(line) {
   console.log(`[shell] ${line}`);
 }
 
+function agentboxHome() {
+  return process.env.AGENTBOX_HOME || path.join(os.homedir(), ".agentbox");
+}
+
 function configFilePath() {
-  const home = process.env.AGENTBOX_HOME || path.join(os.homedir(), ".agentbox");
-  return process.env.AGENTBOX_CONFIG || path.join(home, "config.json");
+  return process.env.AGENTBOX_CONFIG || path.join(agentboxHome(), "config.json");
 }
 
 function applyStartupItemSettings() {
@@ -481,26 +499,111 @@ function createWindow() {
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
-  whenServerReady(() => mainWindow?.loadURL(uiAuth.bootstrapUrl(PAGE)));
+  loadShellPage();
+}
+
+/**
+ * What the window shows (INV-1696): the personal page once the personal installation runs; before
+ * that, the first-run page that asks what this machine is for; on an organisation node, the node's
+ * page — there is no personal server to show.
+ */
+let shellMode = "personal";
+let firstRunHtml = null;
+function loadShellPage() {
+  if (!mainWindow) return;
+  if (shellMode === "personal") { whenServerReady(() => mainWindow?.loadURL(uiAuth.bootstrapUrl(PAGE))); return; }
+  firstRunPage().then(html => mainWindow?.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}${shellMode === "node" ? "#node" : ""}`)).catch(err => {
+    log(`first-run page: ${err.message}`);
+    dialog.showErrorBox("LumenBox could not start", err.message);
+  });
+}
+
+/** The first-run page, in the system's language, rendered from the bundle by a child (the shell does not load TypeScript). */
+function firstRunPage() {
+  if (firstRunHtml) return Promise.resolve(firstRunHtml);
+  const script = path.join(REPO, "src", "web", "first-run-page.ts");
+  return new Promise((resolve, reject) => {
+    execFile(process.execPath, ["--experimental-transform-types", script, app.getPreferredSystemLanguages().join(",")], { cwd: REPO, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" }, maxBuffer: 4 * 1024 * 1024, timeout: 60_000 }, (error, stdout) => {
+      if (error) { reject(new Error(`the first-run page did not render: ${error.message}`)); return; }
+      firstRunHtml = String(stdout);
+      resolve(firstRunHtml);
+    });
+  });
 }
 
 /**
  * Organisation connections (INV-1690, docs/95 §4): a list in the shell's own data directory and a
  * token per connection in the keychain — nothing under ~/.agentbox, nothing started locally.
  */
-function startOrganisations() {
+function startOrganisations(onConnectionsChanged) {
   const store = connectionStore({ file: path.join(app.getPath("userData"), "organisations.json"), keychain: systemKeychain() });
   const openOutside = url => shell.openExternal(url).catch(err => log(`could not open ${url}: ${err.message}`));
   installations = installationViews({ store, mainWindow: () => mainWindow, openOutside, log });
-  organisationWindows({ store, views: installations, personalOrigin: new URL(PAGE).origin, parentWindow: () => mainWindow, openOutside, log }).handle(() => mainWindow?.webContents);
+  const windows = organisationWindows({ store, views: installations, personalOrigin: new URL(PAGE).origin, parentWindow: () => mainWindow, openOutside, log, onConnectionsChanged });
+  windows.handle(() => mainWindow?.webContents);
   installations.start();
+  return { store, windows };
+}
+
+/**
+ * What this machine is for (INV-1696, docs/96 §3), kept in userData/machine.json — the machine's,
+ * not under ~/.agentbox, which an organisation node does not have. Answers the bridge's three
+ * calls: `get` for the first-run page and the personal page, `choose` for the first-run page only,
+ * `change` for the personal page only.
+ */
+function startMachineUse() {
+  const store = machineUseStore({ file: path.join(app.getPath("userData"), "machine.json") });
+  let organisations = null;
+  const calls = machineUseCalls({
+    store,
+    organisations: {
+      count: () => organisations.store.list().length,
+      ids: () => organisations.store.list().map(c => c.id),
+      disconnect: id => organisations.windows.disconnect(id),
+    },
+    node: organisationNode(),
+    started: use => startUse(use),
+    log,
+  });
+  organisations = startOrganisations(() => calls.connectionsChanged());
+  const personalOrigin = new URL(PAGE).origin;
+  const from = event => {
+    if (!mainWindow || event.sender !== mainWindow.webContents) return "";
+    const url = event.senderFrame?.url ?? event.sender.getURL();
+    if (url.startsWith("data:text/html")) return "first-run";
+    try { return new URL(url).origin === personalOrigin ? "personal" : ""; } catch { return ""; }
+  };
+  const reply = (pages, fn) => async (event, ...args) => {
+    if (!pages.includes(from(event))) return { error: "refused" };
+    try { return await fn(...args); }
+    catch (error) {
+      if (error instanceof MachineUseRefused || error instanceof NodeRegistrationUnavailable) return { error: error.code };
+      log(`machine use: ${error.message}`);
+      return { error: "failed" };
+    }
+  };
+  ipcMain.handle("machine:get", reply(["first-run", "personal"], () => calls.get()));
+  ipcMain.handle("machine:choose", reply(["first-run"], use => calls.choose(String(use))));
+  ipcMain.handle("machine:change", reply(["personal"], to => calls.change(String(to))));
+  return startupUse({ store, agentboxHome: agentboxHome(), connections: organisations.store.list().length });
+}
+
+/** Starts what a use runs: the personal installation, or (an organisation node) nothing local but its page. */
+function startUse(use) {
+  if (runsPersonalInstallation(use)) {
+    shellMode = "personal";
+    startPersonal();
+  } else {
+    shellMode = "node";
+  }
+  loadShellPage();
 }
 
 function buildTrayMenu() {
   const loginSettings = app.getLoginItemSettings();
   return Menu.buildFromTemplate([
     { label: "Open LumenBox", click: () => createWindow() },
-    { label: "Open in browser", click: () => { void shell.openExternal(uiAuth.bootstrapUrl(PAGE)); } },
+    { label: "Open in browser", enabled: personalStarted, click: () => { void shell.openExternal(uiAuth.bootstrapUrl(PAGE)); } },
     // Launch-at-login is set in Settings and applied here from config.json: one writer for
     // the file (the server), one applier for the OS (this process).
     {
@@ -563,27 +666,18 @@ if (!app.requestSingleInstanceLock()) {
         )
       );
     }
-    applyStartupItemSettings();
-    startOrganisations();
-    startServer();
     createTray();
+    const start = startMachineUse();
+    if (start.wizard) {
+      // A first run: nothing is created until the person says what this machine is for (INV-1696).
+      log("first run: asking what this machine is for");
+      shellMode = "first-run";
+    } else if (runsPersonalInstallation(start.use)) {
+      startPersonal();
+    } else {
+      shellMode = "node";
+    }
     createWindow();
-    startMemoryGuard();
-    setInterval(readAgentFacts, 10_000); setTimeout(readAgentFacts, 4_000);
-    // A laptop that slept comes back with chat sockets that still claim to be connected and
-    // a Docker engine that is still waking. Ask the server to sweep the vendors now rather
-    // than at the next ten-minute tick — the box watch recovers on its own within a minute.
-    powerMonitor.on("resume", () => {
-      log("system resumed; asking the server to sweep the chat channels");
-      setTimeout(() => {
-        fetch(`http://127.0.0.1:${PORT}/api/channels/sweep`, { method: "POST", headers: uiAuth.headers }).then(response => {
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        }).catch(error => {
-          log(`sweep after resume failed: ${error.message}`);
-        });
-      }, 8_000);
-    });
-    whenServerReady(() => { watchEvents(); startSupervision(); });
   });
 
   // The window closing is not the app ending: the tray keeps the agents reachable,
@@ -595,4 +689,30 @@ if (!app.requestSingleInstanceLock()) {
     serverChild?.kill();
     supervisionChild?.kill();
   });
+}
+
+/** The personal installation: its server, its supervision, and what watches them. */
+let personalStarted = false;
+function startPersonal() {
+  if (personalStarted) return;
+  personalStarted = true;
+  updateTrayMenu();
+  applyStartupItemSettings();
+  startServer();
+  startMemoryGuard();
+  setInterval(readAgentFacts, 10_000); setTimeout(readAgentFacts, 4_000);
+  // A laptop that slept comes back with chat sockets that still claim to be connected and
+  // a Docker engine that is still waking. Ask the server to sweep the vendors now rather
+  // than at the next ten-minute tick — the box watch recovers on its own within a minute.
+  powerMonitor.on("resume", () => {
+    log("system resumed; asking the server to sweep the chat channels");
+    setTimeout(() => {
+      fetch(`http://127.0.0.1:${PORT}/api/channels/sweep`, { method: "POST", headers: uiAuth.headers }).then(response => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      }).catch(error => {
+        log(`sweep after resume failed: ${error.message}`);
+      });
+    }, 8_000);
+  });
+  whenServerReady(() => { watchEvents(); startSupervision(); });
 }

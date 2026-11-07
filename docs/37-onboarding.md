@@ -2,7 +2,7 @@
      title: Getting started, every way in
      family: guide
      status: current
-     updated: 2026-11-06
+     updated: 2026-11-07
 -->
 # 37 — Getting started, every way in
 
@@ -40,7 +40,28 @@ xattr -dr com.apple.quarantine /Applications/LumenBox.app
 Then open it normally. It shows a window on `http://127.0.0.1:7777` and sits in the menu bar;
 quitting the window keeps the box running.
 
-## 2. First run: the two things it asks for
+## 2. First run: what this machine is for, then the two things it asks for
+
+**Before anything is created, the app asks what this machine is for** (INV-1696, docs/96 §3):
+
+- **Personal machine** (个人的机器) — a personal installation and this computer's Docker box,
+  both yours alone as the Owner. What follows below.
+- **Personal + organisation** (个人 + 组织) — the same, then Settings → Organisations opens so
+  you can join an organisation that runs elsewhere (its address or an invite link). Your local
+  boxes are never offered to it.
+- **Organisation node** (组织的节点) — no personal installation; the machine becomes a node of
+  one organisation. Registering a node arrives with INV-1697; until then this choice stops at a
+  step that says so, creates nothing, and lets you go back.
+
+The answer is kept in the app's own data directory (`machine.json` in Electron's userData, e.g.
+`~/Library/Application Support/LumenBox/`), not under `~/.agentbox`: a node has no `~/.agentbox`.
+Settings → This machine (本机) shows it afterwards. There you can switch between personal machine
+and personal + organisation (joining an organisation does it too; going back disconnects every
+organisation). A personal machine and an organisation node never turn into each other: that is a
+reinstall, or another machine. An app upgraded from an earlier version is not asked: it already
+has a personal installation, so it is recorded as a personal machine, or personal + organisation
+if it had joined one.
+
 
 *The page also shows a four-step card — a box, your first agent, a channel, your first piece
 of work — which disappears when all four are done and comes back from the `?` button. Each

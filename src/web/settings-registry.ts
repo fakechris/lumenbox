@@ -98,6 +98,16 @@ export const SETTINGS_PANES: readonly SettingsPane[] = [
     mounted: "script",
   },
   {
+    key: "machine",
+    title: "This machine",
+    titleZh: "本机",
+    about: "What this machine is for — personal machine, personal + organisation, or organisation node — chosen on the first run; switch between the first two by joining or disconnecting organisations. Only in the desktop app; kept in the app's own data, not in ~/.agentbox.",
+    aboutZh: "这台机器的用途——个人的机器、个人 + 组织或组织的节点——在首次运行时选择；前两种之间靠加入或断开组织切换。只在桌面 app 里有；记录在 app 自己的数据目录，不在 ~/.agentbox。",
+    config: [],
+    apis: [],
+    mounted: "script",
+  },
+  {
     key: "organisations",
     title: "Organisations",
     titleZh: "组织",

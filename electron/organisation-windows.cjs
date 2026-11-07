@@ -19,7 +19,7 @@ function ephemeralSession() {
   return electronSession.fromPartition(`org-${randomBytes(8).toString("hex")}`, { cache: false });
 }
 
-function organisationWindows({ store, views, personalOrigin, parentWindow, openOutside, log, show = true }) {
+function organisationWindows({ store, views, personalOrigin, parentWindow, openOutside, log, show = true, onConnectionsChanged = () => {} }) {
 
   /**
    * Signs in to an organisation in a window of the app: its own sign-in page (an invite code, or
@@ -93,9 +93,11 @@ function organisationWindows({ store, views, personalOrigin, parentWindow, openO
       }
     };
     ipcMain.handle("organisations:list", reply(async () => ({ connections: store.list() })));
-    ipcMain.handle("organisations:join", reply((address, name) => join(address, name)));
+    // A join or a disconnect moves this machine between personal and personal + organisation (INV-1696).
+    const thenChanged = fn => async (...args) => { const answer = await fn(...args); onConnectionsChanged(); return answer; };
+    ipcMain.handle("organisations:join", reply(thenChanged((address, name) => join(address, name))));
     ipcMain.handle("organisations:open", reply(id => openConnection(String(id))));
-    ipcMain.handle("organisations:disconnect", reply(id => disconnect(String(id))));
+    ipcMain.handle("organisations:disconnect", reply(thenChanged(id => disconnect(String(id)))));
     ipcMain.handle("installations:list", reply(async () => views.list()));
     ipcMain.handle("installations:select", reply((id, rail) => views.select(String(id), Number(rail))));
   }
