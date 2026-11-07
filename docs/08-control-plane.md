@@ -3,11 +3,14 @@
      family: spec
      status: current
      domain: control-plane
-     updated: 2026-09-12
+     updated: 2026-11-06
 -->
 # Control plane
 
-Design for the multi-user system: many people, each with a box allocated on demand. Written
+The vendor's plane for hosting many companies: each a tenant, with a box allocated on demand.
+One company is not this: it is an organisation installation, a server whose boxes Kubernetes
+allocates one per box, with no control plane (docs/95 §6). The person who manages a tenant is
+its account holder (账户持有人); the code value is `owner`. Written
 before it is built, and marked where it cannot be verified here — there is no cluster, no second
 user and no domain in this environment, so anything about scheduling is a design claim rather
 than a measured one.
@@ -135,7 +138,9 @@ injectable `AllocationPolicy` (`src/control/policy.ts`), whose decision lands in
 the audit log. The default policy is `staticPolicy()`: 4Gi memory, 10Gi per PVC, no scheduling
 constraints. The client is a zero-dependency REST wrapper (`src/control/kube-client.ts`):
 in-cluster ServiceAccount auth, or a minimally-parsed kubeconfig (token or client-cert; exec
-plugins are refused loudly). Deployment manifests live in `deploy/kubernetes/`.
+plugins are refused loudly). Deployment manifests live in `deploy/kubernetes/`. An organisation
+installation allocates its boxes with this same allocator, one pod per box rather than per
+tenant (INV-1692, docs/95 §3); that use is the first one to be verified on a real cluster.
 
 **`static` — for development.** One box, named by URL, the `attached` provisioner promoted to the
 fleet interface. This is what lets the control plane run against a box on a laptop.

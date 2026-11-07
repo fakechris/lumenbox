@@ -50,7 +50,12 @@ And one rule about holders, which dissolves a question that misled three version
 > question any new door raises is whether its people get the *same* authority as
 > an existing box or an *isolated* one — same → a second door on that box;
 > isolated → by definition, another box with a different member set. No
-> enterprise/personal distinction exists to encode.
+> enterprise/personal distinction exists to encode **at the box**.
+
+The distinction lives one level up, at the installation (docs/95, 2026-11-06). A **personal
+installation** is its Owner's alone and never adds a second person; an **organisation
+installation** is a server with Admins, drivers and viewers. Neither becomes the other. Each has
+its own two gates, and everything in this document applies inside one installation.
 
 ## 1. The entities
 
@@ -72,10 +77,15 @@ Principal ─1..n─ Identity ─minted by─ Channel ─routes into─▶ Box �
 `defaultAgent` must name an agent whose `boxId` is the channel's `boxId` — a door
 pointing at another room's worker is a schema error, not a runtime surprise.
 
+A Principal belongs to one installation's roster. A person who is an Owner at home and a driver
+in an organisation is two Principals with nothing linking them (docs/95 §4).
+
 ## 1a. Owner and Admin: an installation-mode field, not a role (INV-1685)
 
 The desktop app on one computer has one person, the **Owner** (机主); an organisation
 installation has **Admins** (管理员). The words are the glossary's (docs/glossary.md, decision 4).
+`single-machine` is the personal installation of docs/95, and it stays one: it never adds a
+second person and never converts.
 
 - **Decision: a mode field.** The roster file (`principals.json`) carries
   `installation: { mode: "single-machine" | "organisation", ownerId, createdAt, conversion? }`.
@@ -96,7 +106,10 @@ installation has **Admins** (管理员). The words are the glossary's (docs/glos
 - **The unsigned operator is the Owner.** With nobody signed in, the desktop acts as the one
   admin (`soleAdmin`, INV-1681), which on a single-machine installation is the Owner
   (`local:owner`): MCP tokens and the watchdog's token are issued to them with no person named.
-- **The conversion.** While the mode is `single-machine`, a roster save that holds anyone but
+- **The conversion — void (docs/95 §2), still in the code until INV-1689 removes it.** What
+  follows describes the code as INV-1685 shipped it, not the design: under docs/95 every way of
+  adding a person to a `single-machine` installation is refused outright, and
+  `POST /api/installation/convert` goes. While the mode is `single-machine`, a roster save that holds anyone but
   the Owner, or drops or demotes the Owner, is refused (`guardRoster`): the web answers 409 with
   `needs: "owner-conversion"`, and so does an invite code for a new person. The page asks; on
   the person's yes it posts `POST /api/installation/convert` with `confirm: true`, which writes
@@ -252,6 +265,10 @@ a fixture and that every status × world combination lands on exactly one labell
 
 ## 4. Names are labels; ids are identity; incarnations revoke
 
+- **Installation**: every id below is scoped to one installation. Two installations share no
+  Principal, identity, box or token. The one crossing is an organisation's side door (docs/33
+  §8): a token the organisation issued to one of its own Principals, so the work runs as that
+  Principal and is recorded there (docs/95 §5).
 - **Box**: opaque `id`; agents and channels bind to it. Destroying a box retires
   the id forever — a new box under the same display name is a new id and inherits
   nothing (class, token, agents, schedules die with it). No generation counter on

@@ -42,6 +42,14 @@ token, the same bargain `box attach` strikes) — after which the same desktop
 app is the personal product *and* the enterprise admin's console. Nothing
 splits out of the app; the app learns to point.
 
+> **Note, 2026-11-06 (INV-1688, docs/95).** Two statements above no longer hold. *Void:* a
+> personal installation is not the degenerate case of the multiuser model; it is its own kind,
+> its Owner's alone, and it never adds a second person or becomes an organisation. *Revised:*
+> the app does not switch into a connect mode; it keeps the personal installation and connects
+> to any number of organisations at once, each with its own identity and token. An
+> organisation's boxes are allocated on Kubernetes rather than attached. "Enterprise ≠ control
+> plane" stands. docs/95 §7 lists every statement in this file it keeps, revises or voids.
+
 ## 1. The use case, as one company's first two weeks
 
 Measured-style acceptance on every scene, per the house rule. The company:
@@ -113,6 +121,9 @@ hour).** The admin's box console (multi-box shipped, docs/30) now edits
   both directions, so a department-wide `0` is a real ceiling and a
   per-person `1` is a real exception.
 
+*Note, 2026-11-06 (docs/95 §3):* 研发部's box is allocated on Kubernetes, not attached; personal
+boxes here are organisation boxes with one member, not personal installations.
+
 *Accept:* each box's label derives from its resolved member set; a door
 bound to the 研发部 box routes there and reaches nothing else; provisioning
 a personal box is a member-side action requiring no admin.
@@ -137,6 +148,9 @@ ceilings per person and per box bite at the relay. The admin's own seat is
 the Electron app in connect-to-server mode — same window, pointing at the
 VM. When the admin's laptop is closed, the doors, schedules, and everyone
 else's work are untouched: the server was never in the laptop.
+
+*Note, 2026-11-06 (docs/95 §4):* the admin's app connects to the organisation beside their own
+personal installation; it is not a mode the app switches into.
 
 *Accept:* U8, U9, U12 from docs/35, plus: killing the admin's shell changes
 nothing server-side; the server's restart recovers doors on the shipped
@@ -175,6 +189,11 @@ organisation whose first Admin (管理员) is the former Owner. (Multica's creat
 here the installation is brought up by an operator *before* any user
 exists, and the code is how the operator hands it over.)
 
+> **Note, 2026-11-06 (INV-1688, docs/95 §2).** *Void:* the conversion sentence above. A
+> desktop installation never lets a second person in and never converts; to work with others,
+> its Owner joins or creates an organisation. The code still converts until INV-1689 removes
+> `POST /api/installation/convert` and its dialog. The rest of this section stands.
+
 ## 3. Edition architecture: what lives where
 
 | Capability | Personal (Electron) | Enterprise (server) | Notes |
@@ -205,6 +224,13 @@ else. One machine runs one company. Scaling a company out is multi-box:
 more `box attach` rows, more box hosts — the installation stays singular,
 which is what keeps identity, roster and audit in one place.
 
+> **Note, 2026-11-06 (docs/95 §3–§4, §7).** Revised in this section: an organisation's boxes
+> (the box row, and the deployment unit's "more `box attach` rows") are allocated on
+> Kubernetes, one pod per box (INV-1692); on a personal installation other people are refused
+> by construction, not dormant; and the Electron row is several connections at once, not one
+> target. That the app is never the organisation's host stands, and is strengthened: an
+> organisation connection starts nothing on the person's computer.
+
 ## 4. The step plan, revised from docs/35 §8
 
 Stage 1 (login) is on `feat/multiuser-login`. Ahead, re-ordered around the
@@ -230,6 +256,10 @@ use case's scenes so each stage ends with a scene that works end to end:
 7. **Electron connect-to-server** (Scene 6's admin seat): target selection
    in the shell; smallest stage, deliberately last — the server must be
    real before the seat points at it.
+
+*Note, 2026-11-06 (docs/95):* stage 5's attach flow becomes Kubernetes box allocation
+(INV-1692); stage 7 becomes connecting to an organisation (INV-1690) and the sidebar's first
+level, the installation (INV-1691).
 
 ## 5. Decided by the owner, 2026-09-03
 
