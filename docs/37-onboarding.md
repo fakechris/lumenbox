@@ -50,8 +50,16 @@ quitting the window keeps the box running.
   you can join an organisation that runs elsewhere (its address or an invite link). Your local
   boxes are never offered to it.
 - **Organisation node** (组织的节点) — no personal installation; the machine becomes a node of
-  one organisation. Registering a node arrives with INV-1697; until then this choice stops at a
-  step that says so, creates nothing, and lets you go back.
+  one organisation (INV-1697). Enter the organisation's address (and a node name, the host name by
+  default), then sign in to the organisation as one of its Admins with Feishu or DingTalk — no code
+  to type. The organisation issues the node credential, which the app keeps in the keychain
+  ("LumenBox node"), and the app starts `agentbox node run` in `userData/node`: the machine's Docker
+  box (`<name>-docker`) and its native environment (`<name>-native`) register with the organisation.
+  A member who is not an Admin cannot enrol a node. The native environment joins with nobody in
+  it; an Admin opens it in Settings → Boxes → Nodes, which is refused while its shell is not
+  running inside the OS sandbox (INV-1700). The boxes listen on the address in
+  `AGENTBOX_NODE_ADVERTISE` (a network the node and the organisation share, such as a tailnet),
+  loopback otherwise. Revoking the node there stops its boxes; the app then says it was revoked.
 
 The answer is kept in the app's own data directory (`machine.json` in Electron's userData, e.g.
 `~/Library/Application Support/LumenBox/`), not under `~/.agentbox`: a node has no `~/.agentbox`.

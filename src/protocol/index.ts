@@ -536,7 +536,7 @@ export interface HealthResult {
   /** True on a box with no desktop by design — the person's own machine (INV-438). */
   headless?: boolean;
   /** The directories a restricted box may touch, when it is restricted. */
-  repositories?: { path: string; mode: "ro" | "rw" }[];
+  repositories?: { path: string; mode: "ro" | "rw" }[]; /** On a headless box: whether its commands run inside the OS sandbox now, and why not (INV-1700) — read before an organisation opens a node's native environment (INV-1697). */ confinement?: { active: boolean; reason?: string };
   /** Absent when no X server is reachable; shell and fs still work. */
   resolution?: ResolutionConfig;
   refresh_rate?: number;

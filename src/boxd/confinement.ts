@@ -91,6 +91,8 @@ export interface Confine {
   bridge(port: number): void;
   /** The rules in words, for the start-up line. */
   describe(): string;
+  /** Whether commands can run under the sandbox now, for the health answer; why not when they cannot. */
+  state(): { active: boolean; reason?: string };
 }
 
 export interface ConfinementOptions {
@@ -166,6 +168,10 @@ export function confinementFor(options: ConfinementOptions): Confine | undefined
     bridge(port) {
       if (sandbox.mechanism !== "bwrap" || mirror !== undefined) return;
       mirror = mirrorOnUnixSocket(port);
+    },
+    state() {
+      const reason = sandbox.unavailableReason();
+      return reason === undefined ? { active: true } : { active: false, reason };
     },
     describe() {
       const reason = sandbox.unavailableReason();

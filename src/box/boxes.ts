@@ -111,7 +111,7 @@ export function saveBoxes(path: string, entries: readonly BoxEntry[]): void {
 }
 
 /** A new attached box. The id is minted here; the token stays in its file. */
-export function attachedBox(input: { name: string; baseUrl: string; tokenFile: string; displayFloor?: number; workDir?: string; kind?: "attached" | "host" }): BoxEntry {
+export function attachedBox(input: { name: string; baseUrl: string; tokenFile: string; displayFloor?: number; workDir?: string; kind?: "attached" | "host"; members?: BoxEntry["members"] }): BoxEntry {
   if (!BOX_NAME.test(input.name)) throw new Error(`"${input.name}" is not a box name (letters, digits, . _ -, up to 48).`);
   let url: URL;
   try {
@@ -127,7 +127,7 @@ export function attachedBox(input: { name: string; baseUrl: string; tokenFile: s
     endpoint: { baseUrl: input.baseUrl.replace(/\/+$/, ""), tokenFile: input.tokenFile },
     displayFloor: input.displayFloor ?? 1,
     workDir: input.workDir ?? DEFAULT_WORK_DIR,
-    members: "everyone",
+    members: input.members ?? "everyone",
     createdAt: new Date().toISOString(),
   };
 }

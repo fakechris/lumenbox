@@ -118,21 +118,25 @@ function machineUseCalls({ store, organisations, node, started, log = () => {} }
   return {
     get() {
       const record = current();
-      const answer = { use: record.use, how: record.how, at: record.at, connections: organisations.count(), joinNext };
+      const answer = { use: record.use, how: record.how, at: record.at, connections: organisations.count(), joinNext, ...(record.use === ORGANISATION_NODE && node.status ? { node: node.status() } : {}) };
       joinNext = false; // once: the page opens Settings → Organisations after a first run that chose personal + organisation
       return answer;
     },
-    /** The first run's answer. Refused once a use is recorded: the first run happens once. */
-    async choose(use) {
+    /**
+     * The first run's answer. Refused once a use is recorded: the first run happens once. For an
+     * organisation node, `details` is the organisation's address and the node's name: the node
+     * registers (an Admin signs in) before anything is recorded (INV-1697).
+     */
+    async choose(use, details = {}) {
       if (store.read()) throw new MachineUseRefused("refused");
       if (!USES.includes(use)) throw new MachineUseRefused("unknown");
       if (use === ORGANISATION_NODE) {
         // Nothing is recorded until the organisation has registered the node (INV-1697).
-        if (!node.available) return { step: "node" };
-        const registered = await node.register({});
+        if (!node.available || !details || typeof details.address !== "string") return { step: "node" };
+        const registered = await node.register({ address: details.address, name: details.name });
         store.write(ORGANISATION_NODE, "first-run");
         started(ORGANISATION_NODE);
-        return { use, organisation: registered.organisation };
+        return { use, organisation: registered.organisation, ...(registered.node ? { node: registered.node } : {}) };
       }
       store.write(use, "first-run");
       joinNext = use === PERSONAL_ORGANISATION;
