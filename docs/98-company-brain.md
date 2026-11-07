@@ -8,7 +8,7 @@
 
 Status: **proposed for Chris to confirm (INV-1718, milestone INV-1714).** This record changes no
 code and no store. It inventories every place LumenBox keeps knowledge (§2, at `origin/main`
-`cb58850`), says what the organisation's knowledge is and how it relates to the stores that
+`08e3197`), says what the organisation's knowledge is and how it relates to the stores that
 exist (§3–§8), says what happens to each store (§9), answers or hands to Chris the questions the
 research left open (§10), and lists the implementation items to propose once Chris confirms
 (§11). The external study behind it is the research item INV-1717; its notes stay outside the
@@ -75,7 +75,7 @@ systems' access lists as the core, mine activity into a person profile, let a mo
 shared wiki, add a graph database, judge freshness by the calendar alone, concatenate layers
 without an order, or count anonymous votes (§12 says why for each).
 
-## 2. The inventory, at `origin/main` `cb58850`
+## 2. The inventory, at `origin/main` `08e3197`
 
 Every place LumenBox keeps something an agent or a person later relies on as knowledge. Paths
 under `~` mean the installation's home (`~/.agentbox`); "every turn" means the store is rendered
@@ -93,7 +93,7 @@ into the system prompt; "recall" means it is ranked against the turn by `rankRel
 | 7 | Site learnings | `~/learnings/<host>.md`, one file per website | any agent (`NoteSiteLearning`); a template import | any agent of any box, when it opens that site | append-only, ≤400 chars a note, last 12 shown; secrets refused | none | the whole installation | `src/host/learnings.ts:1-24`, `:40-42`, `:73`, `:95`; `src/host/tools.ts:1923`, `:3936-3945`, `:4215`; `src/host/template.ts:452-461` |
 | 8 | Installation and box instructions | `~/instructions.md`; each bundle's `instructions` on the box | the operator (an Admin, or the Owner) | every agent, every turn (≤6,000 chars) | edit in place | none | installation; box | `src/host/place.ts:1-33`; `src/host/bundles.ts:20`, `:53`; `src/host/prompt.ts:861` |
 | 9 | Operator rules | `~/rules/*.md`, one file a rule | an Admin | the policy gate before any model; reviewer reads the body | edit in place; audited by rule id | Admin-authored | installation; optional `principal:` | `src/host/rules.ts:1-25`, `:77-78` |
-| 10 | Skills | `/home/box/work/skills/<slug>/SKILL.md` in the box; host-published versions in `~/skill-history` (git), drafts in `~/skills-drafts` | any agent of the box; starter skills shipped; teaching drafts a person publishes | agents of that box: index ≤13,500 chars every turn, body on demand | edit in the box; host publishes are commits with tags, rollback republishes | teaching drafts: a person publishes; agent edits: none, authorship recorded | the box | `src/host/skills.ts:1`, `:11`, `:35`; `src/host/skill-history.ts:1-13`; `src/host/teach-drafts.ts:1`; `src/host/skill-provenance.ts:1-14`; `src/host/orchestrator.ts:414`, `:951`; `src/host/prompt.ts:1074` |
+| 10 | Skills | `/home/box/work/skills/<slug>/SKILL.md` in the box (a native environment keeps them under its own work directory); host-published versions in `~/skill-history` (git), drafts in `~/skills-drafts` | any agent of the box; starter skills shipped; teaching drafts a person publishes | agents of that box: index ≤13,500 chars every turn, body on demand | edit in the box; host publishes are commits with tags, rollback republishes | teaching drafts: a person publishes; agent edits: none, authorship recorded | the box | `src/host/skills.ts:1`, `:12-16`, `:40`; `src/host/skill-history.ts:1-13`; `src/host/teach-drafts.ts:1`; `src/host/skill-provenance.ts:1-14`; `src/host/orchestrator.ts:414`, `:951`; `src/host/prompt.ts:1074` |
 | 11 | Agent templates | `.lumenbox-template.json` (`lumenbox-template/1`), `~/templates/<agent id>`, import log `~/template-imports.jsonl` | the exporting agent, scrubbed | the importing agent writes its own skills, memories and site learnings | a template is a file; imports logged | secret prefilter; names refused | portable | `src/host/template.ts:1-12`, `:31`; `src/host/orchestrator.ts:1543`, `:1717`, `:1785` |
 | 12 | Catalog | shipped in code | maintainers | New agent → catalog | release | PR review | every installation | `src/host/catalog.ts:164`, `:260` |
 | 13 | Transcripts and compaction summaries | `agents/<id>/conversation.jsonl` and one file per conversation | the turn engine | that agent (`ReadHistory`); Audit tab; memory `from` cites them | compaction adds a summary entry; old epochs kept | none | the box | `src/agents/registry.ts:55`, `:323-326`; `src/host/compaction.ts:15`, `:139`; `src/host/tools.ts:1569` |
