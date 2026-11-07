@@ -628,6 +628,26 @@ the manifest apart from the ledgers. `AGENTBOX_FXTWITTER_BASE` and
 
 ## 3. Box state
 
+### 2.6a `learnings/` — site learnings, by box (INV-409, INV-1728)
+
+`src/host/learnings.ts`, `src/host/site-learnings.ts`. One Markdown file per website, a header and
+then one dated `- YYYY-MM-DD ✅|❌ note (author)` line per note, appended to and never rewritten by a
+tool; ≤400 characters a note, credentials refused, coordinates marked perishable.
+
+```
+learnings/
+  <host>.md                  historical, installation-wide: every agent of every box reads these
+  boxes/<box id>/<host>.md   a NoteSiteLearning note and a template's imported notes, for that box
+```
+
+A new note is kept for the writing agent's box — scope `box:<id>`, the memory record's vocabulary
+(docs/98 §4, `memory-scope.ts`) stamped on the directory, since a line has no room for a field. On
+`browser_open` an agent reads its box's notes when the turn's principal may enter the box
+(`mayEnterBox`), then the historical files under their own label; the newest 12 in all. Nothing
+moves, copies or writes into a historical file. The box directories sit under `boxes/` so the top
+level stays exactly the historical set and a box id is never read as a host. Sharing a note across
+boxes is not built (docs/98 §10 decision 6). `AGENTBOX_LEARNINGS` overrides the root.
+
 ### 2.7 `results/`
 
 Whatever a tool said, kept by whoever cut it (`src/host/results.ts`, INV-633).

@@ -67,7 +67,8 @@ import { AROUND_ENTRY_CHARS, describeHistory, ENTRY_CHARS, readEpochHistory, rea
 import type { HostRunner } from "./host-runner.ts";
 import { resolveHostSecrets } from "./host-secrets.ts";
 import { sniffImage } from "./image-refusal.ts";
-import { appendLearning, hostOf, learningsDir, readLearnings, renderLearnings } from "./learnings.ts";
+import { hostOf } from "./learnings.ts";
+import { noteSiteLearning, readSiteLearnings, siteLearningsNote } from "./site-learnings.ts";
 import type { McpManager, ToolEffect } from "./mcp.ts";
 import { MCP_FACE_TOKEN_VARIABLE, type McpFace } from "./mcp-face.ts";
 import { dedupe, dedupeKey, describeFrom, memoryRef, validateRecord } from "./memory.ts"; import { recallMatches } from "./memory-relevance.ts"; import { recallable } from "./memory-scope.ts"; import { alreadyPending, forTeamTier, pendingNotice, teamReviewOn } from "./team-memory-review.ts";
@@ -1913,8 +1914,8 @@ export function buildTools(
     tools.push({
       name: "NoteSiteLearning",
       description:
-        "Keep something you found out about a site, for whoever opens it next — you or a " +
-        "teammate. One sentence or two: a control that only works one way, a step the site " +
+        "Keep something you found out about a site, for whoever in this box opens it next — " +
+        "you or a teammate. One sentence or two: a control that only works one way, a step the site " +
         "needs first, a thing that looked like it worked and did not. Say whether it worked: " +
         "a note about what failed saves the next visit from repeating it. Never a credential; " +
         "say where a credential lives instead. Coordinates are accepted but dated as " +
@@ -3929,12 +3930,9 @@ export async function dispatchTool(
       if (host === undefined) return { text: outcomeLine("failed", "say which site, as a URL or a host name"), isError: true };
       if (typeof input.worked !== "boolean") return { text: outcomeLine("failed", "say whether it worked: worked true or false"), isError: true };
       try {
-        const line = appendLearning(
-          host,
-          { at: new Date(), worked: input.worked, text: String(input.text ?? ""), by: context.agent.profile.name },
-          context.learningsDir ?? learningsDir()
-        );
-        return { text: `${outcomeLine("ok")} Kept for ${host}: ${line}` };
+        // Kept for this box only (INV-1728); the historical installation-wide files are read, never written.
+        const line = noteSiteLearning(host, { at: new Date(), worked: input.worked, text: String(input.text ?? "") }, context);
+        return { text: `${outcomeLine("ok")} Kept for ${host}, for agents in this box: ${line}` };
       } catch (error) {
         return { text: outcomeLine("failed", error instanceof Error ? error.message : String(error)), isError: true };
       }
@@ -4203,7 +4201,7 @@ export async function dispatchTool(
         // agent reads "the Pay button is disabled until…" before it goes looking for it.
         if (name === "browser_open") {
           const host = hostOf(result.url);
-          const learned = host === undefined ? undefined : renderLearnings(host, readLearnings(host, context.learningsDir ?? learningsDir()));
+          const learned = host === undefined ? undefined : siteLearningsNote(host, context);
           if (learned !== undefined) parts.push(learned);
         }
         if (result.pages !== undefined) {
@@ -5382,7 +5380,7 @@ export async function dispatchTool(
           memoryRecords: context.registry.readMemoryRecords(context.agent.id),
           ...(context.caller?.userId !== undefined ? { createdBy: context.caller.userId } : {}),
           ...(bundleRefs.length > 0 ? { bundles: bundleRefs } : {}),
-          learningsFor: host => readLearnings(host, context.learningsDir ?? learningsDir(), 50), skillsDir: skillsOf(context),
+          learningsFor: host => { const notes = readSiteLearnings(host, context, 50); return [...notes.historical, ...notes.box]; }, skillsDir: skillsOf(context),
         }
       );
       if ("refused" in packed) return { text: packed.refused, isError: true };
