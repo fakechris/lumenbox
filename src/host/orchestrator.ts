@@ -2701,7 +2701,7 @@ export const ALL_TOOLS: readonly string[] = [
   "ReadHistory",
   "ReadKept",
   "ClaimWork",
-  "RememberFact",
+  "RememberFact", "Promote", // proposing an organisation item, always reviewed (INV-1729)
   "Forget",
   "Recall",
   "OtherThreads",

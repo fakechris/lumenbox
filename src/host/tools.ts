@@ -3,7 +3,7 @@ import { inputValueHash, parseSensitiveInput, SENSITIVE_INPUT_TTL_MS } from "../
 import { approvalOf, computerWithVision, desktopGuard, visionActionSchema, visionExpectSchema } from "./computer-vision.ts";
 import { deliveryLine } from "../cua/delivery.ts";
 import { formatExec } from "./exec-format.ts";
-import { isWaitOnly, onEndSchema, parseOnEnd } from "./job-end.ts"; import { currentTaskOf, levelOfCurrentTask, parseLevel } from "./autonomy-level.ts"; import { splitWhy, WHY_FIELD } from "./consent-case.ts"; import { describeDiscovery, DISCOVERY_FIELDS, parseDiscovery } from "./discovery.ts"; import type { JobWatch } from "./job-watch.ts"; import { deliverFileTool, withDeliverFileTool } from "./deliver-file-tool.ts";
+import { isWaitOnly, onEndSchema, parseOnEnd } from "./job-end.ts"; import { currentTaskOf, levelOfCurrentTask, parseLevel } from "./autonomy-level.ts"; import { splitWhy, WHY_FIELD } from "./consent-case.ts"; import { describeDiscovery, DISCOVERY_FIELDS, parseDiscovery } from "./discovery.ts"; import type { JobWatch } from "./job-watch.ts"; import { deliverFileTool, withDeliverFileTool } from "./deliver-file-tool.ts"; import { promoteTool, withPromoteTool } from "./promote-tool.ts";
 /**
  * Tool definitions and dispatch.
  *
@@ -133,7 +133,7 @@ export interface ToolContext {
    * Used to record who a memory is about. Absent on a box driven directly, which is the single-user
    * case and where "about whom" has one answer.
    */
-  caller?: { userId?: string }; orgKnowledge?: Pick<OrgKnowledge, "forRecall">; // the organisation's knowledge this turn may read, admitted for `caller` (INV-1726); absent in isolated and guest turns
+  caller?: { userId?: string }; orgKnowledge?: Pick<OrgKnowledge, "forRecall" | "append" | "lines">; // the organisation's knowledge this turn may read, admitted for `caller` (INV-1726), and propose into (Promote, INV-1729); absent in isolated and guest turns
   /** The person's name, for a rule written with a name rather than an id (INV-156). */
   callerName?: string;
   /** Every door identity the person driving this turn speaks from, e.g. `feishu:ou_…` (INV-754). */
@@ -463,7 +463,7 @@ export const FORK_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
   "Tasks", "DeliverFile",
   "HandBack",
   "ClaimWork",
-  "RememberFact",
+  "RememberFact", "Promote",
   "PackTemplate",
   "Delegate",
   "Fork",
@@ -1849,7 +1849,7 @@ export function buildTools(
         required: ["action"],
       },
     }
-  ); withDeliverFileTool(tools); // a task's deliverables (INV-1663)
+  ); withDeliverFileTool(tools); withPromoteTool(tools); // a task's deliverables (INV-1663); proposing an organisation item (INV-1729)
 
   // The door out of the box, only when an operator has built one. Not added-and-
   // withheld — absent, so a box without host execution never puts the idea in an
@@ -4060,7 +4060,7 @@ export async function dispatchTool(
       }
     }
 
-    case "DeliverFile": return deliverFileTool(context, input); case "RunOperation": return runOperationTool(context, input); // INV-1663; INV-1378
+    case "DeliverFile": return deliverFileTool(context, input); case "Promote": return promoteTool(context, input); case "RunOperation": return runOperationTool(context, input); // INV-1663; INV-1378
     case "browser_verify_write":
       return { text: writePaths.verify(writePathKey(context.agent.id, context.conversation), String(input.mark ?? ""), (["done", "not_done", "unknown"] as const).find(v => v === input.verdict) ?? "unknown", String(input.evidence ?? "").slice(0, 300)) };
     case "browser_open":

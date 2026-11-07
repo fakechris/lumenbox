@@ -354,6 +354,16 @@ counted ("N more"); items the turn's words touch follow, ranked by `rankRelated`
 Never read by a guest turn (docs/97), an isolated turn, or a personal installation, which has
 none and whose writes are refused (`PersonalInstallationNeverWrites`, docs/98 §8).
 
+Written only by promotion (INV-1729, `src/host/org-promotion.ts`): an agent's `Promote` or an
+Admin's promote action (Settings → Memory, the task card) appends the item **held** — `held.question`
+says it waits for organisation review — with `owner` (the member who drove the turn; an Admin's own
+promotion is that Admin's), `via` (the proposing agent), `source` (`promoted from memory:<agent>/<version>`,
+`task:<id>` or `receipt:<id>`) and at least one `evidence` reference. The decision is the next line:
+approved is the item again without the hold, with `review: { of, decision, by }`, `verifiedBy`,
+`verifiedAt` and, when the reviewer pins it, `pinned`; rejected is the item again, still held, with
+`review`. A receipt's id is a digest of its time, subject and decision (`receiptId`). Organisation
+review has no setting: it is always on.
+
 ### 2.2b `memory.jsonl`
 
 Append-only, one record per line: `{ at, kind, text, source?, from?, revokedSources? }`. An agent's

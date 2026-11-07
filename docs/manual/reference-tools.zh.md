@@ -11,7 +11,7 @@
 [English](reference-tools.md) · 中文。本页由 `scripts/docs-reference.mjs` 生成，来源：`buildTools()`（src/host/tools.ts）、src/host/side-effects.ts 里的层级、src/host/tool-roster.ts 里的名单和 src/host/catalog.ts 里的目录工具组。
 本页与来源不一致时 `npm test` 会失败；改来源，然后运行 `node scripts/docs-reference.mjs --write`。
 
-54 个工具：`buildTools` 在所有可选项都打开时给出的清单——一台 box、视觉、主机执行器、桌面、飞书文档阅读器、模板暂存、一个搜索 key，以及连接器 github、feishu、dingtalk。真实的一轮拿到的更少；**何时提供**一栏写每个工具需要什么。工具说明来自源代码，保持英文。
+55 个工具：`buildTools` 在所有可选项都打开时给出的清单——一台 box、视觉、主机执行器、桌面、飞书文档阅读器、模板暂存、一个搜索 key，以及连接器 github、feishu、dingtalk。真实的一轮拿到的更少；**何时提供**一栏写每个工具需要什么。工具说明来自源代码，保持英文。
 
 - **层级**——一次调用对外界做了什么（side-effects.ts）：`observe` 只看，`self` 留在 box 里或只涉及提出请求的人，`reach` 越出 box 行事，`credential` 触及权限。
 - **询问**——闸门是否先问人，以及确认卡片上的说法。由主机写，从不由 agent 写。
@@ -55,6 +55,7 @@
 | `Orchestrate` | Run the same question over many items — one sub-agent per item, each with fresh context — and, if you give a `reduce` brief, one more that combines their answers. | self | 否 | 需要一台 box；分支里没有 | deferred | — | `brief`, `items`, `prompt`, `expect`, `reduce` |
 | `OtherThreads` | List the other conversations in this same chat, and read one. | observe | 否 | 总是；分支里没有 | deferred | desk, web, code, team | `read`, `search` |
 | `PackTemplate` | Stage a shareable template of yourself from what you selected, after following the export-template skill. | self | 否 | 需要模板暂存；分支里没有 | deferred | — | `description`, `name`, `title`, `memory`, `skills`, `routines`, `connectors`, `getting_started` |
+| `Promote` | Propose that something you already have become part of the organisation's knowledge — what every member's agents (scope 'org') or this box's (scope 'box') may rely on. | self | 否 | 总是；分支里没有 | deferred | — | `memory`, `task_id`, `statement`, `scope`, `evidence` |
 | `read_file` | Read a file from your box. | observe | 否 | 需要一台 box | resident | desk, web, code, team | `path`, `start_line`, `end_line`, `values` |
 | `ReadFeishuDoc` | Read a Feishu/Lark document (feishu.cn/docx/… or /wiki/… link) as text, using the bot's own workspace identity. | observe | 否 | 需要飞书文档阅读器 | deferred | web | `url` |
 | `ReadHistory` | Search or read the recorded history of a conversation — what was actually said, what was called, and what came back. | observe | 否 | 总是 | resident | desk, web, code, team | `search`, `from`, `to`, `epoch`, `around`, `agent` |
