@@ -32,6 +32,9 @@ export const SERVER_WORDS: Record<string, readonly [zh: string, en: string]> = {
   "page.bootstrap.sign-in": ["用飞书登录", "Sign in with Feishu"],
   "page.bootstrap.expires": ["验证码 24 小时后过期，只能用一次。", "The code expires after 24 hours and works once."],
   "page.bootstrap.no-channel": ["请先在这个安装上配置一个飞书渠道和公网地址。", "Configure a Feishu channel and public URL on this installation first."],
+  // The sign-in page's doors (GET /login, INV-1701): one button per Feishu channel, above the invite code.
+  "page.login.with-door": ["用 {door} 登录", "Sign in with {door}"],
+  "page.login.or-code": ["或者，用管理员给你的邀请码：", "Or with an invite code from an admin:"],
   // A sign-in this installation does not know yet.
   "page.not-linked.title": ["这个飞书账号还没有链接到本安装", "This Feishu account is not linked to this installation yet"],
   "page.not-linked.your-id": ["你的 id：", "Your id: "],

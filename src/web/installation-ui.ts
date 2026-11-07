@@ -119,6 +119,30 @@ export const INSTALLATION_JS = `(function () {
       field.parentNode.insertBefore(banner, field);
     }).catch(function () {});
   };
+  // The invite as the code for a chat's bind and, when this installation has a public address, the
+  // link for a browser or the app's Join organisation (INV-1701); without one, why there is no link.
+  window.showInviteLink = function (out, invite) {
+    out.textContent = "{{ui.app.have-them-send-bind}} " + invite.code + "  {{ui.app.15-min-once}}";
+    var line = document.createElement("div");
+    line.style.cssText = "display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:4px;font-family:var(--font-sans)";
+    if (!invite.link) { line.textContent = "{{ui.installation.invite-no-link}}"; out.appendChild(line); return; }
+    var label = document.createElement("span");
+    label.textContent = "{{ui.installation.invite-link}}";
+    var link = document.createElement("span");
+    link.setAttribute("data-invite-link", "");
+    link.className = "mono"; link.style.userSelect = "all";
+    link.textContent = invite.link;
+    var copy = document.createElement("button");
+    copy.className = "btn sm";
+    copy.textContent = "{{ui.installation.invite-copy}}";
+    copy.onclick = function (event) {
+      event.preventDefault();
+      if (!navigator.clipboard) return;
+      navigator.clipboard.writeText(invite.link).then(function () { copy.textContent = "{{ui.installation.invite-copied}}"; }).catch(function () {});
+    };
+    line.appendChild(label); line.appendChild(link); line.appendChild(copy);
+    out.appendChild(line);
+  };
   window.rosterFetch = function (url, init) {
     return fetch(url, init).then(function (response) {
       if (response.status !== 409) return response;
