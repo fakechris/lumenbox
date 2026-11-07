@@ -171,7 +171,9 @@ named `attached`, so nothing that works today stops working.
 > organisation issues when an Admin signs in to it on the node machine, `POST /api/nodes/enrol`) and
 > from an Admin's `box attach`. `box connect` asks `GET /api/boxes/register` first and refuses an
 > organisation from a machine that holds an installation of its own. Revoking a node revokes every
-> box it registered; revocations now survive a restart and the box watch never redials one.
+> box it registered; revocations now survive a restart and the box watch never redials one. The
+> desktop app with a roster that has no `installation` field (the personal installation INV-1698
+> has not merged yet) still takes codes; a declined merge or an earlier conversion does not.
 
 ## 4. Stages
 

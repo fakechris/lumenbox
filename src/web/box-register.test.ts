@@ -7,10 +7,11 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startWebServer } from "./server.ts";
+import { writeSixIdentities } from "../host/testing/six-identities.ts";
 
 const PORT = 7933;
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -81,5 +82,40 @@ test("connect code → register → listed with a state; replay 409; reconnect i
     stop?.();
     process.env.AGENTBOX_HOME = previous;
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// Chris's desktop before the INV-1698 merge: six identities, no `installation` field. On the desktop
+// it is the personal installation not yet merged and keeps joining its VMs by a code; a server with
+// the same roster is an organisation and takes none (INV-1697, docs/96 §8 Q3).
+test("desktop with no installation field takes a connection code; a server with the same roster refuses it", async () => {
+  for (const desktop of [true, false]) {
+    const home = mkdtempSync(join(tmpdir(), "inv1697-six-"));
+    const previous = process.env.AGENTBOX_HOME;
+    process.env.AGENTBOX_HOME = home;
+    writeSixIdentities(home, { ledgers: false, boxes: false });
+    let stop: (() => void) | undefined;
+    try {
+      let base = "";
+      stop = await startWebServer({ port: 0, host: "127.0.0.1", token: "t0k", useBox: false, desktop, onLog: () => {}, onReady: url => { base = url; } });
+      const minted = await fetch(`${base}/api/boxes/connect-codes`, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer t0k" }, body: JSON.stringify({ name: "grok" }) });
+      const ways = (await (await fetch(`${base}/api/boxes/register`)).json()) as { installation: string };
+      if (desktop) {
+        assert.equal(minted.status, 200, "the desktop mints a code");
+        assert.equal(ways.installation, "single-machine", "and box connect is told it is personal");
+        const { code } = (await minted.json()) as { code: string };
+        const registered = await fetch(`${base}/api/boxes/register`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code, baseUrl: "http://127.0.0.1:1/", token: "daemon-token-0123456789" }) });
+        assert.equal(registered.status, 200, "and the VM joins by it");
+        assert.equal(JSON.parse(readFileSync(join(home, "principals.json"), "utf8")).installation, undefined, "nothing decided the merge for the person");
+      } else {
+        assert.equal(minted.status, 409);
+        assert.equal(((await minted.json()) as { code: string }).code, "box-code-organisation");
+        assert.equal(ways.installation, "organisation");
+      }
+    } finally {
+      stop?.();
+      process.env.AGENTBOX_HOME = previous;
+      rmSync(home, { recursive: true, force: true });
+    }
   }
 });

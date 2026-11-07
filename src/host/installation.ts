@@ -180,3 +180,24 @@ export function openRoster(deps: { desktop: boolean; path: string; codePath: str
 export function holdsInstallation(home: string): boolean {
   return ["principals.json", "config.json"].some(name => existsSync(join(home, name)));
 }
+
+/**
+ * Which installation decides how a box may join (INV-1697, docs/96 §8 Q3): a connection code is a
+ * personal installation's way in, and an organisation takes boxes only from its nodes and its
+ * Admins. On the desktop app a roster with no `installation` field is the personal installation
+ * not yet merged (INV-1698's offer, INV-1706's `holdsSeveralPeople`): it keeps taking codes, as the
+ * Owner's own VM joins by one. An explicit organisation — a declined merge, a conversion before
+ * INV-1689 — stays an organisation, and so does a server with no field.
+ */
+export function boxRegistrationMode(file: unknown, desktop: boolean): InstallationMode {
+  const raw = (file as { installation?: unknown } | null | undefined)?.installation;
+  if (desktop && (raw === null || raw === undefined || typeof raw !== "object")) return "single-machine";
+  return installationOf(file).mode;
+}
+
+/** `boxRegistrationMode` of the roster at `path`, read now (a missing or unreadable roster has no field). */
+export function boxRegistrationModeAt(path: string, desktop: boolean): InstallationMode {
+  let file: unknown;
+  try { file = JSON.parse(readFileSync(path, "utf8")); } catch { file = undefined; }
+  return boxRegistrationMode(file, desktop);
+}
