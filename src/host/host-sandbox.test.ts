@@ -44,6 +44,14 @@ test("the rules are written in words and in the profile: cwd and tmp writable, t
     assert.match(wrapped.rules.join("\n"), /writes only under .*work/);
     assert.match(wrapped.rules.join("\n"), /never under .*~\/\.ssh/);
     assert.match(wrapped.rules.join("\n"), /loopback port 8791/);
+    assert.doesNotMatch(profile, /mach-lookup|process-exec/, "a host command keeps the Keychain: hiding it is the native box's rule");
+    // The native box hides the Keychain (INV-1711): a service, so the Mach lookups are refused, not only the files.
+    mkdirSync(join(h.home, "Library", "Keychains"), { recursive: true });
+    const hidden = sandbox.wrap("/bin/sh", ["-c", "true"], { cwd: h.cwd, hideCredentials: true }).args[1]!;
+    assert.match(hidden, /\(deny mach-lookup [^)]*\(global-name "com\.apple\.SecurityServer"\)[^)]*\)?.*\(global-name-prefix "com\.apple\.securityd"\)/, "securityd and secd cannot be asked for an item");
+    assert.match(hidden, /\(deny process-exec \(literal "\/usr\/bin\/security"\)\)/, "and the security tool does not start");
+    assert.match(hidden, /\(deny file-read\* [^\n]*Library\/Keychains"\)/, "nor are the keychain files readable");
+    assert.doesNotMatch(hidden, /com\.apple\.trustd/, "certificate checks still reach trustd");
 
     const linux = new HostSandbox({ platform: "linux", home: h.home, probe: () => true }).wrap("/bin/echo", ["hi"], { cwd: h.cwd });
     assert.equal(linux.command, "bwrap");
@@ -51,12 +59,18 @@ test("the rules are written in words and in the profile: cwd and tmp writable, t
     assert.ok(linux.args.indexOf("--ro-bind") < linux.args.indexOf("--bind"), "root read-only first, writable paths bound back in");
     assert.match(linux.rules.join("\n"), /no network at all/);
     // The native box's extra rules (INV-1700): a start directory that grants nothing, a ro path, hidden credentials.
-    const native = new HostSandbox({ platform: "linux", home: h.home, probe: () => true }).wrap("/bin/echo", ["hi"], { cwd: h.cwd, runIn: h.home, readOnly: [join(h.cwd, "vendor")], hideCredentials: true });
+    // On Linux the secret stores are sockets in the runtime directory: the session bus Secret Service answers on, gpg-agent's (INV-1711).
+    const runtime = join(h.home, "..", "run");
+    mkdirSync(join(runtime, "gnupg"), { recursive: true });
+    writeFileSync(join(runtime, "bus"), "");
+    const native = new HostSandbox({ platform: "linux", home: h.home, runtimeDir: runtime, probe: () => true }).wrap("/bin/echo", ["hi"], { cwd: h.cwd, runIn: h.home, readOnly: [join(h.cwd, "vendor")], hideCredentials: true });
     const at = (flag: string, path: string) => native.args.findIndex((arg, i) => arg === flag && native.args[i + 1] === path);
     assert.equal(native.args[native.args.indexOf("--chdir") + 1], realpathSync(h.home), "starts where asked");
     assert.ok(!native.args.some((arg, i) => arg === "--bind" && native.args[i + 1] === realpathSync(h.home)), "without making it writable");
     assert.ok(at("--tmpfs", realpathSync(join(h.home, ".ssh"))) > at("--bind", real), "~/.ssh is hidden, after the writable binds so it covers them");
     assert.ok(at("--remount-ro", realpathSync(join(h.home, ".ssh"))) > at("--tmpfs", realpathSync(join(h.home, ".ssh"))), "and read-only, so a write there fails rather than vanishing");
+    assert.ok(native.args.some((arg, i) => arg === "--ro-bind" && native.args[i + 1] === "/dev/null" && native.args[i + 2] === realpathSync(join(runtime, "bus"))), "the session bus is /dev/null: no Secret Service");
+    assert.ok(at("--tmpfs", realpathSync(join(runtime, "gnupg"))) > 0, "and gpg-agent's sockets are gone");
   } finally {
     h.dispose();
   }

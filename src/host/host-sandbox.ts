@@ -25,6 +25,10 @@
  * directory a command starts in is not thereby writable (`runIn`), read-only repositories stay
  * read-only even under a writable one (`readOnly`), and the credential places are hidden from
  * reads too (`hideCredentials`) — an agent living on the machine reads without being asked.
+ * Hiding also closes the secret stores a file rule does not reach (INV-1711): on macOS the
+ * Keychain, which is a service (securityd) rather than a file — Claude Code's login and git's
+ * osxkeychain credentials live there — and on Linux the session bus that Secret Service
+ * (gnome-keyring, KWallet) answers on, and the gpg-agent and keyring sockets.
  *
  * Known gaps, stated: a hard link made outside the rules is not covered; on Linux the deny
  * list only covers paths that exist when the command starts; Seatbelt matches the real path,
@@ -68,7 +72,20 @@ export const DENY_WRITE_UNDER_HOME = [".ssh", ".gnupg", ".aws", ".config/gh", ".
 /** Under the working directory: what turns a later command into this one's. Never writable. */
 export const DENY_WRITE_UNDER_CWD = [".git/hooks", ".git/config"] as const;
 /** Under the home directory: what a confined process may not even read. Shell rc files stay readable, a login shell needs them. */
-export const CREDENTIAL_READS_UNDER_HOME = [".ssh", ".gnupg", ".aws", ".config/gh", ".kube", ".docker/config.json", ".netrc"] as const;
+export const CREDENTIAL_READS_UNDER_HOME = [".ssh", ".gnupg", ".aws", ".config/gh", ".kube", ".docker/config.json", ".netrc", "Library/Keychains", ".local/share/keyrings"] as const;
+/**
+ * The Mach services a macOS process reads the Keychain through (INV-1711). `securityd`
+ * (`com.apple.SecurityServer`) decrypts the file keychains, `secd` (`com.apple.securityd.*`) the
+ * data-protection one, SecurityAgent asks the person to unlock. Measured 2026-11-07 with a
+ * throwaway keychain: denying the file is not enough — the keychain is reached through these —
+ * and denying `com.apple.SecurityServer` alone already refuses the read. Certificate checks go to
+ * `com.apple.trustd`, which stays open: curl, Go, git and node's bundled roots still verify TLS.
+ */
+export const KEYCHAIN_SERVICES = ["com.apple.SecurityServer", "com.apple.secd", "com.apple.security.KeychainStasher", "com.apple.security.kcsharing", "com.apple.keychainsharingmessagingd"] as const;
+/** Prefixes of the same: every `com.apple.securityd.*` endpoint, SecurityAgent and its authhost. */
+export const KEYCHAIN_SERVICE_PREFIXES = ["com.apple.securityd", "com.apple.security.agent", "com.apple.security.authhost"] as const;
+/** Under the user's runtime directory on Linux: the session bus Secret Service answers on, the keyring and gpg-agent sockets. */
+export const SECRET_SOCKETS_UNDER_RUNTIME = ["bus", "keyring", "gnupg"] as const;
 /**
  * Under the home directory: where the person's own coding engines keep their login and history
  * (INV-1710). A confined box runs its engines with a state directory of its own instead
@@ -80,6 +97,8 @@ export interface HostSandboxOptions {
   platform?: NodeJS.Platform;
   home?: string;
   tmp?: string;
+  /** The user's runtime directory on Linux (`/run/user/<uid>`), whose secret sockets `hideCredentials` hides; replaced in tests. */
+  runtimeDir?: string;
   /** Whether a tool is runnable here; replaced in tests. */
   probe?: (command: string, args: string[]) => boolean;
 }
@@ -109,6 +128,7 @@ export class HostSandbox {
   private readonly platform: NodeJS.Platform;
   private readonly home: string;
   private readonly tmp: string;
+  private readonly runtimeDir: string | undefined;
   private readonly probe: (command: string, args: string[]) => boolean;
   private checked: string | undefined | null = null;
 
@@ -117,6 +137,7 @@ export class HostSandbox {
     this.home = real(options.home ?? homedir());
     this.tmp = real(options.tmp ?? tmpdir());
     this.probe = options.probe ?? defaultProbe;
+    this.runtimeDir = options.runtimeDir ?? (this.platform === "linux" && process.getuid !== undefined ? `/run/user/${process.getuid()}` : undefined);
   }
 
   get mechanism(): SandboxMechanism | undefined {
@@ -152,7 +173,8 @@ export class HostSandbox {
     const cwd = real(rules.cwd);
     const writable = [cwd, this.tmp, ...(rules.allowWrite ?? []).map(real)].filter((path, index, all) => all.indexOf(path) === index);
     const readOnly = (rules.readOnly ?? []).filter(path => existsSync(path)).map(real);
-    const hidden = rules.hideCredentials === true ? this.hiddenPaths() : [];
+    const hideSecrets = rules.hideCredentials === true;
+    const hidden = hideSecrets ? this.hiddenPaths() : [];
     // What is hidden is not writable either: a rw grant of a parent must not reopen it.
     const denied = [...this.deniedPaths(writable.filter(path => path !== this.tmp)), ...readOnly, ...hidden].filter((path, index, all) => all.indexOf(path) === index);
     const ports = [...new Set(rules.loopbackPorts ?? [])];
@@ -160,10 +182,11 @@ export class HostSandbox {
       `writes only under ${writable.join(", ")}`,
       `never under ${denied.map(path => path.replace(this.home, "~")).join(", ")}`,
       ...(hidden.length > 0 ? [`no reads at all under ${hidden.map(path => path.replace(this.home, "~")).join(", ")}`] : []),
+      ...(hideSecrets && this.mechanism === "sandbox-exec" ? ["no Keychain: the securityd services are refused and /usr/bin/security does not run, so no stored login or password can be read"] : []),
       ports.length > 0 ? `network only to loopback port${ports.length === 1 ? "" : "s"} ${ports.join(", ")} (the egress proxy, which applies the relay's allow list)` : "no network at all (no egress relay is configured for host processes)",
     ];
     return this.mechanism === "sandbox-exec"
-      ? { command: "/usr/bin/sandbox-exec", args: ["-p", this.seatbelt(writable, denied, ports, hidden), command, ...args], env: {}, mechanism: "sandbox-exec", rules: words }
+      ? { command: "/usr/bin/sandbox-exec", args: ["-p", this.seatbelt(writable, denied, ports, hidden, hideSecrets), command, ...args], env: {}, mechanism: "sandbox-exec", rules: words }
       : { command: "bwrap", args: this.bwrap(real(rules.runIn ?? cwd), writable, denied, ports, command, args, hidden), env: {}, mechanism: "bwrap", rules: words };
   }
 
@@ -180,11 +203,17 @@ export class HostSandbox {
 
   /** What `hideCredentials` hides, resolved, keeping only what exists. */
   private hiddenPaths(): string[] {
-    const candidates = [...CREDENTIAL_READS_UNDER_HOME, ...ENGINE_HOMES_UNDER_HOME].map(name => join(this.home, name)).concat(agentboxHomes(this.home));
+    const candidates = [...CREDENTIAL_READS_UNDER_HOME, ...ENGINE_HOMES_UNDER_HOME]
+      .map(name => join(this.home, name))
+      .concat(agentboxHomes(this.home))
+      .concat(this.runtimeDir === undefined ? [] : SECRET_SOCKETS_UNDER_RUNTIME.map(name => join(this.runtimeDir!, name)));
     return candidates.filter(path => existsSync(path)).map(real).filter((path, index, all) => all.indexOf(path) === index);
   }
 
-  private seatbelt(writable: readonly string[], denied: readonly string[], ports: readonly number[], hidden: readonly string[] = []): string {
+  private seatbelt(writable: readonly string[], denied: readonly string[], ports: readonly number[], hidden: readonly string[] = [], hideSecrets = false): string {
+    // The Keychain is a service, not a file: without the Mach lookups nothing can ask securityd for an item (INV-1711).
+    // The `security` binary is refused too, so the agent reads a plain "Operation not permitted"; a copy of it is stopped by the lookups.
+    const keychain = [...KEYCHAIN_SERVICES.map(name => `(global-name ${sbplPath(name)})`), ...KEYCHAIN_SERVICE_PREFIXES.map(name => `(global-name-prefix ${sbplPath(name)})`)].join(" ");
     // Later rules win in SBPL, so the denies come after the allows.
     const lines = [
       "(version 1)",
@@ -193,6 +222,7 @@ export class HostSandbox {
       `(allow file-write* ${writable.map(path => `(subpath ${sbplPath(path)})`).join(" ")} (literal "/dev/null") (regex #"^/dev/tty") (regex #"^/dev/fd/"))`,
       ...(denied.length > 0 ? [`(deny file-write* ${denied.map(path => `(subpath ${sbplPath(path)})`).join(" ")})`] : []),
       ...(hidden.length > 0 ? [`(deny file-read* ${hidden.map(path => `(subpath ${sbplPath(path)})`).join(" ")})`] : []),
+      ...(hideSecrets ? [`(deny mach-lookup ${keychain})`, '(deny process-exec (literal "/usr/bin/security"))'] : []),
       "(deny network-outbound)",
       ...ports.map(port => `(allow network-outbound (remote ip "localhost:${port}"))`),
       "(allow network-outbound (remote unix-socket))",
