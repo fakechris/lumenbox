@@ -6,6 +6,7 @@
  */
 import type { Locale } from "../i18n/locale.ts";
 import { tr } from "../i18n/messages.ts";
+import { apiError } from "./api-error.ts";
 import { PersonalInstallationOnly } from "../host/installation.ts";
 import type { Principals } from "../host/principals.ts";
 import { manualPage, PERSONAL_ONLY_PAGE } from "./manual-link.ts";
@@ -35,7 +36,7 @@ export async function mergeRoute(route: string, deps: {
   if (deps.refusedAdmin()) return { status: 0, body: undefined };
   if (route === "GET /api/installation/merge") return { status: 200, body: mergePreview(deps.paths(), { desktop: deps.desktop, doorType: deps.doorType }) };
   const body = await deps.readJson();
-  if (body.confirm !== true || typeof body.digest !== "string") return { status: 400, body: { error: "Confirm the preview: send { confirm: true, digest } from GET /api/installation/merge." } };
+  if (body.confirm !== true || typeof body.digest !== "string") return { status: 400, body: apiError("merge-confirm-needed") };
   try {
     const journal = confirmMerge(deps.paths(), { digest: body.digest, ...(typeof body.name === "string" ? { name: body.name } : {}), by: deps.by(), desktop: deps.desktop });
     deps.log(`installation: ${journal.from.length} people confirmed to be one person by ${journal.by}; they are merged into the Owner "${journal.name}" at the next start (INV-1698)`);
