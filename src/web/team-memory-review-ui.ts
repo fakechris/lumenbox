@@ -1,6 +1,6 @@
 /**
  * Settings → Team → Team memory (INV-1581): the review switch, and what waits for a person, each
- * saying who reads it once approved. Settings → Memory: what is already live on every box (INV-1722).
+ * naming the box whose agents read it once approved.
  */
 
 export const TEAM_MEMORY_REVIEW_JS = `(function () {
@@ -9,21 +9,8 @@ export const TEAM_MEMORY_REVIEW_JS = `(function () {
     return fetch(path, method === "GET" ? {} : { method: method, headers: { "content-type": "application/json" }, body: JSON.stringify(body || {}) })
       .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw Object.assign(new Error(d.error || ("HTTP " + r.status)), { data: d }); return d; }); });
   }
-  var toggle, list, note, everyone;
-  function renderEveryone(d) {
-    if (!everyone) return;
-    everyone.textContent = "";
-    var lines = d.everyone || [];
-    if (lines.length === 0) { everyone.appendChild(el("div", { class: "fieldnote" }, "{{ui.team-memory-review.nothing-is-shared-with-every-box}}")); return; }
-    lines.forEach(function (line) {
-      var row = el("div", { class: "ui-list-row", "data-everyone-memory": "1" });
-      row.appendChild(el("span", { class: "ui-grow", title: line.text }, line.writerName + " (" + line.boxName + "): " + line.text));
-      row.appendChild(el("span", { class: "dim" }, (line.at || "").slice(0, 10)));
-      everyone.appendChild(row);
-    });
-  }
+  var toggle, list, note;
   function render(d) {
-    renderEveryone(d);
     toggle.checked = !!d.on;
     list.textContent = "";
     var pending = d.pending || [];
@@ -31,7 +18,7 @@ export const TEAM_MEMORY_REVIEW_JS = `(function () {
     pending.forEach(function (item) {
       var row = el("div", { class: "ui-list-row", "data-team-review": item.writer + ":" + item.version });
       row.appendChild(el("span", { class: "ui-grow", title: item.text }, item.writerName + ": " + item.text));
-      row.appendChild(el("span", { class: "dim", "data-audience": item.audience }, item.audience === "everyone" ? "{{ui.team-memory-review.every-box}}" : item.boxName));
+      row.appendChild(el("span", { class: "dim", "data-box": item.boxName }, item.boxName));
       row.appendChild(el("span", { class: "dim" }, (item.at || "").slice(0, 10)));
       [["approved", "{{ui.team-memory-review.approve}}"], ["rejected", "{{ui.team-memory-review.reject}}"]].forEach(function (pair) {
         var b = el("button", { class: "btn", "data-decision": pair[0] }, pair[1]);
@@ -47,14 +34,6 @@ export const TEAM_MEMORY_REVIEW_JS = `(function () {
     });
   }
   function refresh() { return call("GET", "/api/memory/team-review").then(render).catch(function () {}); }
-  function mountEveryone(modal, actions) {
-    var field = el("div", { class: "field settab-off", "data-settab": "memory", id: "everyonememory" });
-    field.appendChild(el("label", {}, "{{ui.team-memory-review.memory-for-every-box}}"));
-    field.appendChild(el("div", { class: "fieldnote" }, "{{ui.team-memory-review.agents-promoted-these-to-every-box}}"));
-    everyone = el("div", { id: "everyonememorylist", class: "ui-gap" });
-    field.appendChild(everyone);
-    modal.insertBefore(field, actions);
-  }
   function mount() {
     var modal = document.querySelector("#settingswrap .modal");
     if (!modal || document.getElementById("teammemoryreview")) return false;
@@ -74,8 +53,7 @@ export const TEAM_MEMORY_REVIEW_JS = `(function () {
       call("POST", "/api/memory/team-review/setting", { on: toggle.checked }).then(function (d) { note.textContent = d.on ? "{{ui.team-memory-review.on-new-team-writes-wait}}" : "{{ui.team-memory-review.off-team-writes-are-shared}}"; render(d); }).catch(function (e) { note.textContent = e.message; refresh(); });
     };
     modal.insertBefore(field, actions);
-    mountEveryone(modal, actions);
-    document.getElementById("settabs").addEventListener("click", function (event) { var a = event.target.closest("a[data-settab]"); var tab = a && a.getAttribute("data-settab"); if (tab === "team" || tab === "memory") refresh(); });
+    document.getElementById("settabs").addEventListener("click", function (event) { var a = event.target.closest("a[data-settab]"); if (a && a.getAttribute("data-settab") === "team") refresh(); });
     return true;
   }
   var tries = 0, wait = setInterval(function () { if (mount() || ++tries > 40) clearInterval(wait); }, 250);

@@ -317,9 +317,12 @@ wrote it; `box:<id>` admits the agents of that box, and only for a person who ma
 A scope the code does not know, or a box that no longer exists, admits nobody. Then only `recall`
 records (or ones with no `surface`) reach the prompt and `Recall`; a `cite-only` record, or one
 whose surface nobody defined, is read only by its version id (`citedById`). A record written before
-the fields existed keeps the visibility it had: with a `box` it is `box:<box>`; with `audience:
-"everyone"` and no hold it is `org` (until that field is retired, docs/98 §9); with neither — older
-than INV-424 — it is `org`, as it was visible everywhere. `held` and `review` are unchanged.
+the fields existed keeps the visibility it had: with a `box` it is `box:<box>`; with no `box` —
+older than INV-424 — it is `org`, as it was visible everywhere. `held` and `review` are unchanged.
+`audience: "everyone"`, an agent's own promotion to every box, is retired (INV-1727, docs/98 §9
+row 4 and §10 question 5): `RememberFact` refuses the field, and an existing record that carries it
+is read as if it did not, so it falls back to the box its `box` stamp names — approved or not, no
+candidate list, no rewrite. What every box knows is promoted by a person, not marked by an agent.
 
 Rendered as its own section under a tighter budget (1,500 characters against 4,000). Smaller because
 every agent writes to this tier, so it grows N times as fast, and a generous budget here would push

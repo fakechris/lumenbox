@@ -66,13 +66,11 @@ test("the new fields are written and read back as given; an L3 record carries no
 test("records older than the fields keep the visibility they had", () => {
   assert.equal(scopeOf(fact("mine"), "own"), "agent", "an agent's own record is the agent's");
   assert.equal(scopeOf(fact("box", { box: "b1" }), "shared"), "box:b1", "a shared record is its box's");
-  assert.equal(scopeOf(fact("all", { box: "b1", audience: "everyone" }), "shared"), "org", "an approved promotion is every box's (INV-1722)");
-  assert.equal(
-    scopeOf(fact("held", { box: "b1", audience: "everyone", held: { question: "q", confidence: 1 } }), "shared"),
-    "box:b1",
-    "a promotion nobody approved stays in its box"
-  );
+  // `audience: "everyone"` is retired (INV-1727, docs/98 §10 question 5): not read, so the box stamp decides.
+  const everyone = (extra: Partial<MemoryRecord>) => ({ ...fact("all", extra), audience: "everyone" }) as MemoryRecord;
+  assert.equal(scopeOf(everyone({ box: "b1" }), "shared"), "box:b1", "a record an agent promoted to every box is its box's");
   assert.equal(scopeOf(fact("before boxes"), "shared"), "org", "a record from before boxes was visible everywhere, and still is");
+  assert.equal(scopeOf(everyone({}), "shared"), "org", "and so is one from before boxes that also carried audience");
   assert.equal(scopeOf(fact("given", { box: "b1", scope: "agent" }), "shared"), "agent", "a stored scope is used as given");
 });
 
