@@ -41,10 +41,10 @@ export const SETTINGS_PANES: readonly SettingsPane[] = [
     key: "boxes",
     title: "Boxes",
     titleZh: "Box",
-    about: "The box and every machine attached to it, personal-box limits, host execution, the startup item, box image updates and resource diagnostics.",
-    aboutZh: "这台 box 和接入的每台机器、个人 box 限额、在本机执行命令、开机启动、box 镜像更新和资源诊断。",
+    about: "The box and every machine attached to it, personal-box limits, host execution, the startup item, box image updates, resource diagnostics, and an organisation's nodes.",
+    aboutZh: "这台 box 和接入的每台机器、个人 box 限额、在本机执行命令、开机启动、box 镜像更新、资源诊断，以及组织的节点。",
     config: ["boxImage", "boxCpus", "boxes", "personalBoxQuota", "personBoxQuotas", "departmentBoxQuotas", "hostExec", "startupItem", "upgradeHour"],
-    apis: ["/api/box/up", "/api/boxes", "/api/quotas", "/api/directories", "/api/box/image", "/api/diagnostics/resources"],
+    apis: ["/api/box/up", "/api/boxes", "/api/quotas", "/api/directories", "/api/box/image", "/api/diagnostics/resources", "/api/nodes"],
     mounted: "page",
   },
   {

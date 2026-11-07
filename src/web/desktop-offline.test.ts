@@ -10,7 +10,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer, type AddressInfo } from "node:net";
@@ -29,6 +29,8 @@ test("a desktop on an unreachable attached box becomes the waiting page within s
   const home = mkdtempSync(join(tmpdir(), "agentbox-desktop-offline-"));
   const previous = process.env.AGENTBOX_HOME;
   process.env.AGENTBOX_HOME = home;
+  // A personal installation, whose own VM joins by a code; an organisation takes none (INV-1697).
+  writeFileSync(join(home, "principals.json"), JSON.stringify({ principals: [{ id: "local:owner", name: "Owner", role: "admin", identities: [] }], installation: { mode: "single-machine", ownerId: "local:owner" } }));
   let stop: (() => void) | undefined;
   try {
     stop = await startWebServer({ port: PORT, host: "127.0.0.1", token: "t0k", useBox: false, onLog: () => {} });

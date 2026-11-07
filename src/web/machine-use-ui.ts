@@ -7,8 +7,8 @@
  * no personal installation, so the personal server cannot be the one to ask. The shell renders it
  * with `firstRunPage` (through first-run-page.ts, a child process, since the shell does not load
  * TypeScript) and talks to it through the preload bridge (`window.lumenboxShell.machine`). The
- * organisation node choice stops at its own step until INV-1697 registers nodes
- * (electron/organisation-node.cjs).
+ * organisation node choice goes on to its own step: the organisation's address, then an Admin
+ * signs in to it and the organisation enrols the node (INV-1697, electron/organisation-node.cjs).
  *
  * The Settings pane is mounted by the bundle beside the page, only in the desktop app: in a browser
  * there is no bridge and no pane, because the use is the machine's, not the installation's.
@@ -35,6 +35,8 @@ export const FIRST_RUN_CSS = `
   button:disabled { opacity:.5; cursor:default; }
   .line { margin-top:14px; font-size:13px; color:var(--muted); min-height:18px; }
   .off { display:none; }
+  label.field { display:block; margin-top:12px; font-size:13px; color:var(--muted); }
+  label.field input { display:block; width:100%; box-sizing:border-box; margin-top:4px; padding:8px 10px; font:inherit; color:var(--text); background:transparent; border:1px solid var(--border); border-radius:8px; }
 `;
 
 export const FIRST_RUN_HTML = `<!doctype html>
@@ -58,17 +60,43 @@ export const FIRST_RUN_HTML = `<!doctype html>
 <div class="card off" id="node">
   <h1>{{ui.machine.node-title}}</h1>
   <p class="sub" id="nodepending">{{ui.machine.node-pending}}</p>
+  <div id="nodeform">
+    <label class="field">{{ui.machine.node-address}}<input id="nodeaddress" type="url" spellcheck="false" placeholder="{{ui.machine.node-address-example}}"></label>
+    <label class="field">{{ui.machine.node-name}}<input id="nodename" type="text" spellcheck="false" maxlength="40"></label>
+  </div>
   <p class="sub off" id="nodeis">{{ui.machine.node-is}}</p>
-  <div class="row"><button class="ghost" id="back" type="button">{{ui.machine.back}}</button></div>
+  <p class="sub off" id="nodeof"></p>
+  <p class="sub off" id="noderevoked">{{ui.machine.node-revoked}}</p>
+  <div class="row"><button class="ghost" id="back" type="button">{{ui.machine.back}}</button><button id="nodesignin" type="button">{{ui.machine.node-sign-in}}</button></div>
+  <div class="line" id="nodeline"></div>
 </div>
 <script>
 (function () {
   var shell = window.lumenboxShell && window.lumenboxShell.machine;
-  var WHY = { reinstall: "{{ui.machine.why-reinstall}}", unknown: "{{ui.machine.why-failed}}", refused: "{{ui.machine.why-failed}}", failed: "{{ui.machine.why-failed}}" };
+  var WHY = { reinstall: "{{ui.machine.why-reinstall}}", unknown: "{{ui.machine.why-failed}}", refused: "{{ui.machine.why-failed}}", failed: "{{ui.machine.why-failed}}",
+    "not-admin": "{{ui.machine.why-not-admin}}", cancelled: "{{ui.machine.why-cancelled}}", "no-address": "{{ui.machine.why-no-address}}", "bad-address": "{{ui.machine.why-bad-address}}", "not-https": "{{ui.machine.why-not-https}}",
+    unreachable: "{{ui.machine.why-unreachable}}", "not-lumenbox": "{{ui.machine.why-unreachable}}", "not-signed-in": "{{ui.machine.why-cancelled}}", "personal-installation": "{{ui.machine.why-personal-installation}}", "enrol-refused": "{{ui.machine.why-enrol-refused}}", "bad-name": "{{ui.machine.why-enrol-refused}}" };
   function $(id) { return document.getElementById(id); }
   function show(id) { $("choose").classList.toggle("off", id !== "choose"); $("node").classList.toggle("off", id !== "node"); }
-  if (location.hash === "#node") { show("node"); $("nodepending").classList.add("off"); $("nodeis").classList.remove("off"); $("back").classList.add("off"); return; }
-  $("back").onclick = function () { show("choose"); $("line").textContent = ""; };
+  // This machine is a node: which organisation, which node, and whether the organisation revoked it (INV-1697).
+  function nodeIs(n) {
+    show("node");
+    ["nodepending", "nodeform", "back", "nodesignin"].forEach(function (id) { $(id).classList.add("off"); });
+    $("nodeis").classList.remove("off");
+    if (n) { $("nodeof").textContent = "{{ui.machine.node-of}} " + n.organisation + " · " + n.name; $("nodeof").classList.remove("off"); $("noderevoked").classList.toggle("off", !n.revoked); }
+  }
+  if (location.hash === "#node") { nodeIs(); if (shell) shell.get().then(function (a) { if (a && a.node) nodeIs(a.node); }); return; }
+  $("back").onclick = function () { show("choose"); $("line").textContent = ""; $("nodeline").textContent = ""; };
+  $("nodesignin").onclick = function () {
+    $("nodesignin").disabled = true;
+    $("nodeline").textContent = "{{ui.machine.node-signing-in}}";
+    shell.choose("organisation-node", { address: $("nodeaddress").value, name: $("nodename").value }).then(function (a) {
+      $("nodesignin").disabled = false;
+      if (a.error) { $("nodeline").textContent = WHY[a.error] || WHY.failed; return; }
+      $("nodeline").textContent = "";
+      if (a.use === "organisation-node") nodeIs({ organisation: a.organisation.name, name: a.node ? a.node.name : "", revoked: false });
+    });
+  };
   $("go").onclick = function () {
     var picked = document.querySelector("input[name=use]:checked");
     if (!shell || !picked) { $("line").textContent = WHY.failed; return; }

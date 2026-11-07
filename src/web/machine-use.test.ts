@@ -16,7 +16,7 @@ type Record_ = { use: Use; how: string; at: string };
 type Store = { read(): Record_ | undefined; write(use: Use, how: string): Record_ };
 type Calls = {
   get(): { use: Use; how: string; connections: number; joinNext: boolean };
-  choose(use: string): Promise<{ use?: Use; step?: string }>;
+  choose(use: string, details?: { address: string; name?: string }): Promise<{ use?: Use; step?: string }>;
   change(to: string): Promise<{ use: Use }>;
   connectionsChanged(): void;
 };
@@ -27,7 +27,8 @@ const machine = load("../../electron/machine-use.cjs") as {
   checkChange(from: Use, to: string): void;
   machineUseCalls(o: { store: Store; organisations: { count(): number; ids(): string[]; disconnect(id: string): Promise<unknown> }; node: { available: boolean; register(o: object): Promise<{ organisation: object }> }; started(use: Use): void }): Calls;
 };
-const { organisationNode } = load("../../electron/organisation-node.cjs") as { organisationNode(): { available: boolean; register(o: object): Promise<{ organisation: object }> } };
+const { organisationNode } = load("../../electron/organisation-node.cjs") as { organisationNode(o: object): { available: boolean; register(o: object): Promise<{ organisation: object }> } };
+const { memoryKeychain } = load("../../electron/keychain.cjs") as { memoryKeychain(): object };
 
 /** A machine on its first start: the shell's userData and an AGENTBOX_HOME, both empty, and the app's connections. */
 function freshMachine(t: { after(fn: () => void): void }, connections: string[] = []) {
@@ -39,7 +40,9 @@ function freshMachine(t: { after(fn: () => void): void }, connections: string[] 
   const started: Use[] = [];
   const left: string[] = [];
   const organisations = { count: () => connections.length, ids: () => [...connections], disconnect: async (id: string) => { left.push(id); connections.splice(connections.indexOf(id), 1); } };
-  const calls = machine.machineUseCalls({ store, organisations, node: organisationNode(), started: use => started.push(use) });
+  // A sign-in the person closes: the node is never enrolled (the enrolment itself is node-enrol.test.ts).
+  const node = organisationNode({ file: join(userData, "node.json"), keychain: memoryKeychain(), signIn: async () => undefined, startNode: () => { throw new Error("no node is started"); } });
+  const calls = machine.machineUseCalls({ store, organisations, node, started: use => started.push(use) });
   return { root, userData, home, store, calls, started, left, connections };
 }
 
@@ -57,18 +60,19 @@ test("each first-run answer leaves its own state on the machine, kept in the she
     assert.equal(m.calls.get().joinNext, false, "once");
     await assert.rejects(m.calls.choose("personal"), (error: { code?: string }) => error.code === "refused", "the first run happens once");
   }
-  // The organisation node stops at its own step until INV-1697 registers nodes: nothing is recorded or started.
+  // The organisation node asks for the organisation first, and a sign-in that does not happen records and starts nothing (INV-1697).
   const node = freshMachine(t);
   assert.deepEqual(await node.calls.choose("organisation-node"), { step: "node" });
+  await assert.rejects(node.calls.choose("organisation-node", { address: "https://acme.example" }), (error: { code?: string }) => error.code === "cancelled");
   assert.deepEqual(node.started, []);
   assert.equal(node.store.read(), undefined, "no use recorded, so the person can go back and choose again");
   assert.deepEqual(readdirSync(node.root), [], "nothing created: no personal installation, no shell record");
   assert.deepEqual(await node.calls.choose("personal"), { use: "personal" }, "going back works");
   await assert.rejects(freshMachine(t).calls.choose("organisation"), (error: { code?: string }) => error.code === "unknown");
-  // When INV-1697 fills the interface, a registered node is recorded and started as a node.
+  // A registered node is recorded and started as a node.
   const registered = freshMachine(t);
   const filled = machine.machineUseCalls({ store: registered.store, organisations: { count: () => 0, ids: () => [], disconnect: async () => {} }, node: { available: true, register: async () => ({ organisation: { name: "Acme", origin: "https://acme.example" } }) }, started: use => registered.started.push(use) });
-  assert.equal((await filled.choose("organisation-node")).use, "organisation-node");
+  assert.equal((await filled.choose("organisation-node", { address: "https://acme.example" })).use, "organisation-node");
   assert.deepEqual(registered.started, ["organisation-node"]);
 });
 

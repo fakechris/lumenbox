@@ -1194,6 +1194,7 @@ export class Orchestrator {
 
   /** Connects (or reconnects) one attached box from its record. Never throws; the outcome is returned and logged. */
   async connectAttached(entry: BoxEntry): Promise<{ connected: boolean; detail: string }> {
+    if (this.revokedBoxes.has(entry.id)) return { connected: false, detail: `${entry.name}: revoked; a reconnect is refused` }; // the box watch never redials a revoked box
     const injected = this.options.boxClientFor?.(entry);
     if (injected !== undefined) {
       this.boxClients.set(entry.id, injected);
@@ -1201,7 +1202,7 @@ export class Orchestrator {
       this.forgetDesktopsOf(entry.id);
       return { connected: true, detail: `${entry.name}: box attached directly` };
     }
-    if (entry.kind !== "attached" || entry.endpoint === undefined) {
+    if (entry.kind === "docker" || entry.endpoint === undefined) { // an attached box or a native environment (`host`) is reached at its endpoint (INV-1697)
       return { connected: false, detail: `${entry.name}: not an attached box` };
     }
     const token = tokenOf(entry);
@@ -1262,8 +1263,7 @@ export class Orchestrator {
 
   /** A reconnect for a registered box: the same id, possibly a new address; refused when revoked. */
   async reconnectBox(entry: BoxEntry): Promise<{ connected: boolean; detail: string }> {
-    if (this.revokedBoxes.has(entry.id)) return { connected: false, detail: `${entry.name}: revoked; a reconnect is refused` };
-    return this.connectAttached(entry);
+    return this.connectAttached(entry); // refused there when revoked
   }
 
   detachBox(nameOrId: string): BoxEntry {

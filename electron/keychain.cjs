@@ -35,21 +35,27 @@ function checked(account) {
   return account;
 }
 
-/** The macOS keychain under one service name (a test passes a unique one and deletes what it made). */
-function macKeychain(service = KEYCHAIN_SERVICE) {
+/**
+ * The macOS keychain under one service name (a test passes a unique one and deletes what it made).
+ * `keychainFile`, for a rehearsal only, names a throwaway keychain file so nothing touches the
+ * person's login keychain; the app never passes it.
+ */
+function macKeychain(service = KEYCHAIN_SERVICE, keychainFile) {
   if (!/^[A-Za-z0-9 ._-]{1,80}$/.test(service)) throw new Error("keychain: a service name is letters, digits, spaces and . _ -");
+  if (keychainFile !== undefined && !/^\/[A-Za-z0-9._/-]+$/.test(keychainFile)) throw new Error("keychain: a keychain file is an absolute path of letters, digits and . _ - /");
   const quoted = `"${service}"`;
+  const inFile = keychainFile === undefined ? [] : [keychainFile];
   return {
     async set(account, secret) {
       if (typeof secret !== "string" || secret === "") throw new Error("keychain: nothing to store");
       const encoded = Buffer.from(secret, "utf8").toString("base64url");
-      await run(["-i"], `add-generic-password -U -s ${quoted} -a ${checked(account)} -w ${encoded}\n`);
+      await run(["-i"], `add-generic-password -U -s ${quoted} -a ${checked(account)} -w ${encoded}${inFile.length ? ` ${inFile[0]}` : ""}\n`);
       // Interactive mode answers 0 even when a command inside it failed: read it back.
       if ((await this.get(account)) !== secret) throw new Error("keychain: the token was not stored");
     },
     async get(account) {
       try {
-        const out = await run(["find-generic-password", "-s", service, "-a", checked(account), "-w"]);
+        const out = await run(["find-generic-password", "-s", service, "-a", checked(account), "-w", ...inFile]);
         return Buffer.from(out.trim(), "base64url").toString("utf8");
       } catch (error) {
         if (error.exitCode === NOT_FOUND) return undefined;
@@ -58,7 +64,7 @@ function macKeychain(service = KEYCHAIN_SERVICE) {
     },
     async remove(account) {
       try {
-        await run(["delete-generic-password", "-s", service, "-a", checked(account)]);
+        await run(["delete-generic-password", "-s", service, "-a", checked(account), ...inFile]);
       } catch (error) {
         if (error.exitCode !== NOT_FOUND) throw error;
       }

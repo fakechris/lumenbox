@@ -19,6 +19,34 @@ function ephemeralSession() {
   return electronSession.fromPartition(`org-${randomBytes(8).toString("hex")}`, { cache: false });
 }
 
+/**
+ * The organisation's sign-in page in a window of the app, in a fresh in-memory session, until the
+ * organisation sets the session cookie. Resolves with the session token, or undefined when the
+ * person closes the window first. Joining (below) and enrolling a node (organisation-node.cjs,
+ * INV-1697) both sign in this way; the window's storage is cleared either way.
+ */
+async function signInWindow(address, { parent, openOutside, show = true }) {
+  const ses = ephemeralSession();
+  const win = new BrowserWindow({ width: 520, height: 680, ...(parent ? { parent } : {}), modal: false, show, title: address.origin, webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  win.setMenuBarVisibility(false);
+  // A vendor's authorize page may open a window; the person's own browser takes it, not a bare child.
+  win.webContents.setWindowOpenHandler(({ url }) => windowOpenAction(url, address.origin, openOutside));
+  const token = await new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = value => { if (settled) return; settled = true; ses.cookies.removeListener("changed", onCookie); resolve(value); };
+    const onCookie = (_event, cookie, _cause, removed) => {
+      if (removed || cookie.name !== SESSION_COOKIE || !cookie.value) return;
+      ses.cookies.get({ url: address.origin, name: SESSION_COOKIE }).then(found => { const value = sessionTokenIn(found); if (value) finish(value); }).catch(() => {});
+    };
+    ses.cookies.on("changed", onCookie);
+    win.on("closed", () => finish(undefined));
+    win.loadURL(signInUrl(address)).catch(error => { if (!settled) { settled = true; reject(new JoinRefused("unreachable", error.message)); } });
+  });
+  if (!win.isDestroyed()) win.destroy();
+  await ses.clearStorageData().catch(() => {});
+  return token;
+}
+
 function organisationWindows({ store, views, personalOrigin, parentWindow, openOutside, log, show = true, onConnectionsChanged = () => {} }) {
 
   /**
@@ -29,24 +57,7 @@ function organisationWindows({ store, views, personalOrigin, parentWindow, openO
   async function join(addressInput, name) {
     const address = parseOrganisationAddress(addressInput);
     if (address.origin === personalOrigin) throw new JoinRefused("personal-installation");
-    const ses = ephemeralSession();
-    const win = new BrowserWindow({ width: 520, height: 680, parent: parentWindow(), modal: false, show, title: address.origin, webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: true } });
-    win.setMenuBarVisibility(false);
-    // A vendor's authorize page may open a window; the person's own browser takes it, not a bare child.
-    win.webContents.setWindowOpenHandler(({ url }) => windowOpenAction(url, address.origin, openOutside));
-    const token = await new Promise((resolve, reject) => {
-      let settled = false;
-      const finish = value => { if (settled) return; settled = true; ses.cookies.removeListener("changed", onCookie); resolve(value); };
-      const onCookie = (_event, cookie, _cause, removed) => {
-        if (removed || cookie.name !== SESSION_COOKIE || !cookie.value) return;
-        ses.cookies.get({ url: address.origin, name: SESSION_COOKIE }).then(found => { const value = sessionTokenIn(found); if (value) finish(value); }).catch(() => {});
-      };
-      ses.cookies.on("changed", onCookie);
-      win.on("closed", () => finish(undefined));
-      win.loadURL(signInUrl(address)).catch(error => { if (!settled) { settled = true; reject(new JoinRefused("unreachable", error.message)); } });
-    });
-    if (!win.isDestroyed()) win.destroy();
-    await ses.clearStorageData().catch(() => {});
+    const token = await signInWindow(address, { parent: parentWindow(), openOutside, show });
     if (token === undefined) return { cancelled: true };
     const who = await readOrganisation(address.origin, token);
     const record = await store.add({ origin: address.origin, name: typeof name === "string" && name.trim() ? name.trim() : new URL(address.origin).host, identity: who.identity, person: who.name, role: who.role }, token);
@@ -105,4 +116,4 @@ function organisationWindows({ store, views, personalOrigin, parentWindow, openO
   return { join, openConnection, disconnect, handle };
 }
 
-module.exports = { organisationWindows };
+module.exports = { organisationWindows, signInWindow };
