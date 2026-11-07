@@ -80,7 +80,7 @@ import {
   templatesEnabled,
   toolsOf,
 } from "./template.ts";
-import { skillsDir } from "./box-paths.ts";
+import { memoryDir, skillsDir } from "./box-paths.ts";
 import { intersectTools } from "./catalog.ts";
 import { DisplayLease } from "../box/display-lease.ts";
 import { AttachedBoxProvisioner, resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
@@ -968,7 +968,7 @@ export class Orchestrator {
     this.registry = options.registry ?? new AgentRegistry();
     this.memoryMirror = new MemoryMirror({
       registry: this.registry,
-      box: agentId => this.boxFor(agentId),
+      box: agentId => this.boxFor(agentId), memoryDir: agentId => memoryDir(this.boxEntryOf(agentId)), // the agent's box's (INV-1734)
       log: line => console.error(`[memory-mirror] ${line}`),
     });
     this.registry.onMemoryChanged = agentId => void this.memoryMirror.sync(agentId).catch((error: unknown) => console.error(`[memory-mirror] ${agentId}: ${error instanceof Error ? error.message : String(error)}`)); // nobody awaits it: a log line, never the process (INV-1542)

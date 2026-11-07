@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import type { AgentRegistry } from "../agents/registry.ts";
 import { legacyMemoryMirrorDir, renderMemoryFiles } from "./memory.ts";
 import { standingBoxFiles } from "./standing.ts";
+import { DOCKER_BOX_PATHS } from "./box-paths.ts";
 
 export interface MemoryMirrorBox {
   writeFile(path: string, content: string): Promise<unknown>;
@@ -29,6 +30,8 @@ export interface MemoryMirrorDeps {
   registry: Pick<AgentRegistry, "readMemoryRecords" | "tryGet" | "list" | "dirFor">;
   /** The agent's box now, or none: the mirror is written when there is somewhere to write it. */
   box: (agentId: string) => MemoryMirrorBox | undefined;
+  /** That box's memory mirror, `memoryDir(box)` (INV-1734); the image's when not given. */
+  memoryDir?: (agentId: string) => string;
   log?: (line: string) => void;
 }
 
@@ -56,7 +59,7 @@ export class MemoryMirror {
     // the last-write hash says nothing about them (INV-803). Each is read back every sync and
     // rewritten from the host copy — the canonical one — when it differs or is gone, with one line
     // of log; the box copy is never adopted.
-    const memory = renderMemoryFiles(agentId, agent.profile.name, this.deps.registry.readMemoryRecords(agentId));
+    const memory = renderMemoryFiles(agentId, agent.profile.name, this.deps.registry.readMemoryRecords(agentId), this.rootOf(agentId));
     const standing = standingBoxFiles(this.deps.registry.dirFor(agentId), agentId, agent.profile.name);
     let written = 0;
     for (const file of [...memory, ...standing]) {
@@ -97,6 +100,10 @@ export class MemoryMirror {
     return { written };
   }
 
+  private rootOf(agentId: string): string {
+    return this.deps.memoryDir?.(agentId) ?? DOCKER_BOX_PATHS.memory;
+  }
+
   /** The box's text for a path, or undefined when it cannot be read — missing, or a box that cannot say. */
   private async boxCopy(box: MemoryMirrorBox, path: string): Promise<string | undefined> {
     try {
@@ -132,7 +139,7 @@ export class MemoryMirror {
     const box = this.deps.box(agentId);
     const agent = agents.find(entry => entry.id === agentId);
     if (box?.exec === undefined || agent === undefined) return;
-    const dir = legacyMemoryMirrorDir(agent.profile.name);
+    const dir = legacyMemoryMirrorDir(agent.profile.name, this.rootOf(agentId));
     if (agents.some(entry => dir.endsWith(`/${entry.id}`))) return;
     const done = this.cleaned.get(box) ?? new Set<string>();
     if (done.has(dir)) return;

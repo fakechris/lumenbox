@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MemoryMirror } from "./memory-mirror.ts";
 import { memoryMirrorDir, renderMemoryFiles } from "./memory.ts";
+import { DOCKER_BOX_PATHS, memoryDir } from "./box-paths.ts";
 import type { MemoryRecord } from "./memory.ts";
 import { readStanding, standingBoxDir, standingFileOf, writeStanding } from "./standing.ts";
 
@@ -60,7 +61,7 @@ test("profile and monthly logs are rendered from the live view, with retractions
     { at: "2026-07-05T00:00:00.000Z", kind: "pitfall", text: "npx resolves an old tsc" },
     { at: "2026-07-09T00:00:00.000Z", kind: "note", text: "chris prefers short replies" },
     { at: "2026-08-01T00:00:00.000Z", kind: "episode", text: "ran the weekly retro" },
-  ]);
+  ], DOCKER_BOX_PATHS.memory);
   assert.deepEqual(
     files.map(file => file.path),
     [
@@ -224,9 +225,21 @@ test("the read-only memory mirror is keyed by agent id: two names that slug alik
   assert.doesNotMatch(zhang, /LI_SECRET/);
   assert.match(li, /LI_SECRET/);
   assert.doesNotMatch(li, /ZHANG_SECRET/);
-  assert.equal(memoryMirrorDir("id-zhang"), "/home/box/work/memory/id-zhang");
+  assert.equal(memoryMirrorDir("id-zhang", DOCKER_BOX_PATHS.memory), "/home/box/work/memory/id-zhang");
   // The legacy slug directory is removed once, with the exact path and nothing wider.
   assert.deepEqual(commands, ["rm -rf -- '/home/box/work/memory/agent'"]);
   await mirror.syncAll();
   assert.equal(commands.length, 1, "removed once per box, not on every sync");
+});
+
+test("a host box's mirror is under its own work directory, which is where its prompt points (INV-1734)", async () => {
+  // /home/box does not exist on the person's machine: a mirror written there was refused, and the
+  // memory section sent the agent to files nobody could write.
+  const work = mkdtempSync(join(tmpdir(), "agentbox-mirror-host-"));
+  const { registry } = fakeRegistry([fact("the deploy region is us-east-1")]);
+  const { files, box } = fakeBox();
+  const mirror = new MemoryMirror({ registry, box: () => box, memoryDir: () => memoryDir({ kind: "host", workDir: work }) });
+  await mirror.sync("a1");
+  assert.match(files.get(`${work}/memory/a1/profile.md`) ?? "", /us-east-1/);
+  assert.ok([...files.keys()].every(path => !path.startsWith("/home/box/work/memory/")), [...files.keys()].join(", "));
 });

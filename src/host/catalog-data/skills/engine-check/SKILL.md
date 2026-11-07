@@ -12,6 +12,7 @@ allowed-tools: Delegate,Jobs,bash,read_file,AskUser,Tasks
 You are proving that this box can hand work to a coding engine and that the four things the
 design promises actually happen. Do the steps in order, report what you saw at each one,
 and never claim a step worked because the tool said it would — read the job's output.
+Below, `<work>` is your work directory: write its full path wherever `<work>` appears.
 
 ## Before anything: where the credentials are, so you never ask for them
 
@@ -35,17 +36,17 @@ Call `Delegate` with the chosen `preset` and any short `prompt`. If the reply sa
 is not in this box, call `Delegate` again with `install: true`. That starts a job; use
 `Jobs` with `action: "wait"` on the job id it names, then read the tail of the log with
 `bash tail -20 <log_path>`. The last line should say `installed <engine> <version> under
-/home/box/work/.lumenbox/engines`. If it says anything else, stop and report the log.
+<work>/.lumenbox/engines`. If it says anything else, stop and report the log.
 
 ## 2. A real task through the relay
 
 Make a small repository to work in:
 
 ```
-mkdir -p ~/work/engine-check && cd ~/work/engine-check && git init -q && printf 'def add(a, b):\n    return a - b\n' > calc.py && printf 'from calc import add\nassert add(2, 3) == 5\n' > test_calc.py
+mkdir -p <work>/engine-check && cd <work>/engine-check && git init -q && printf 'def add(a, b):\n    return a - b\n' > calc.py && printf 'from calc import add\nassert add(2, 3) == 5\n' > test_calc.py
 ```
 
-Then `Delegate` with `cwd: "/home/box/work/engine-check"` and this brief:
+Then `Delegate` with `cwd: "<work>/engine-check"` and this brief:
 
 > The test in test_calc.py fails. Fix calc.py so it passes, run `python3 test_calc.py` to
 > confirm, and say in one line what you changed.
@@ -74,8 +75,8 @@ they should expect a consent card or a line in the app saying `[delegated engine
 — ask them to answer it, allow or refuse, and to tell you which. Then `Delegate` (same
 `cwd`) with exactly:
 
-> Using your Bash tool, run `mkdir -p /home/box/work/engine-check/scratch` and then
-> `rm -rf /home/box/work/engine-check/scratch` (the absolute path matters: the approval
+> Using your Bash tool, run `mkdir -p <work>/engine-check/scratch` and then
+> `rm -rf <work>/engine-check/scratch` (the absolute path matters: the approval
 > list matches `rm -rf /`). Do not read any files. Say whether the removal was allowed, and
 > quote any refusal message you got.
 
@@ -92,7 +93,7 @@ person saw nothing, that is the finding — say so plainly.
 
 The tool's reply should say it resumes the thread from this conversation's last delegation,
 and the engine's answer should name the calc.py fix without re-reading anything. Then
-`Delegate` with a different `cwd` (`/home/box/work`) and the same brief: the reply should
+`Delegate` with a different `cwd` (`<work>`) and the same brief: the reply should
 say it starts a fresh thread and give the reason (the working directory changed), and the
 engine should not know about calc.py.
 

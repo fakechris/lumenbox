@@ -1635,7 +1635,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       tasks: isolated ? [] : deps.tasks?.forAgent(agent.id).filter(task => registry.contextVersion(agent.id, conversation) === 0 || (task.conversation ?? MAIN_CONVERSATION) === conversation),
       resolution: deps.resolution,
       ...(deps.boxAccess !== undefined ? { boxAccess: deps.boxAccess } : {}),
-      agentsRoot: registry.root,
+      agentsRoot: registry.root, box: { kind: deps.boxKind, workDir: deps.boxWorkDir }, // the work directory it names (INV-1734)
       hasBox: !isolated && box !== undefined,
       toolless: isolated,
       vision: provider.vision,
@@ -3045,7 +3045,7 @@ ${outcome.text}`;
       // back what cannot be opened regardless, so this is the chance to fix it, not the only line of defence.
       if (finalText.trim() && deliverableNudges < MAX_DELIVERABLE_NUDGES && box !== undefined && !isolated &&
         conversation !== MAIN_CONVERSATION) {
-        const report = deliverableReport(await outboxFindings(box, chatFilesRoot(conversation)), chinese);
+        const report = deliverableReport(await outboxFindings(box, chatFilesRoot(conversation, { kind: deps.boxKind, workDir: deps.boxWorkDir })), chinese);
         if (report !== undefined) {
           deliverableNudges += 1;
           console.error(`[conduct] ${agent.profile.name}: delivery gate fired (${deliverableNudges}/${MAX_DELIVERABLE_NUDGES})`);

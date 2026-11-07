@@ -1542,7 +1542,7 @@ for (const receipt of ["changed", "partial", "legacy_failed"]) {
 test("a broken deliverable is caught before the turn ends, fixed, and only the fixed file reaches the chat (INV-692)", async () => {
   const key = "feishu:deliver-user";
   const conversation = conversationIdFor(key);
-  const outbox = `${chatFilesRoot(conversation)}/outbox`;
+  const outbox = `${chatFilesRoot(conversation, undefined)}/outbox`;
   let gateSeen = 0;
   let answered: string | undefined;
   const result = await runEpisode({

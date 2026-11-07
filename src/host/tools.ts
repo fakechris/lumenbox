@@ -42,7 +42,7 @@ import { catalogMenu, crewTeam, intersectTools, profilesFor } from "./catalog.ts
 import { type Claims, heldElsewhere } from "./claims.ts";
 import { namesControlSurface } from "./control-surfaces.ts";
 import { deliveryInstructions, reportPath } from "./delegate-report.ts";
-import { boxPaths, skillsDir } from "./box-paths.ts";
+import { boxPaths, memoryDir, skillsDir } from "./box-paths.ts";
 import { actOnDelegateSession } from "./delegate-session-actions.ts";
 import type { DelegateSessions } from "./delegate-sessions.ts";
 import {
@@ -4965,7 +4965,7 @@ export async function dispatchTool(
     case "Forget": {
       const action = String(input.action ?? "");
       const conversation = context.conversation ?? MAIN_CONVERSATION;
-      const stores = { registry: context.registry, ...(context.tasks !== undefined ? { tasks: context.tasks } : {}), ...(context.box !== undefined ? { box: context.box } : {}), skills: skillsOf(context), home: context.fetchedHome ?? agentboxHome() };
+      const stores = { registry: context.registry, ...(context.tasks !== undefined ? { tasks: context.tasks } : {}), ...(context.box !== undefined ? { box: context.box } : {}), skills: skillsOf(context), memory: memoryDir({ kind: context.boxKind, workDir: context.boxWorkDir }), home: context.fetchedHome ?? agentboxHome() };
       if (action === "plan") {
         const about = String(input.about ?? "");
         const refused = forgettable(about);

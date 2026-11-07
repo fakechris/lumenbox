@@ -59,9 +59,9 @@ Alternatives once blocked:
 School pages were not challenged in testing, so the shell works.
 
 1. `curl -fsS 'https://parser-external.geo.moveaws.com/suggest?input={name city state}&client_id=rdc-search-default&area_types=school&limit=10'` — best row with `area_type` "school" gives `slug_id`, `school_id`, address, `centroid`, `has_catchment`. Empty → retry without `area_types` → else not found.
-2. `curl -fsS https://www.realtor.com/local/schools/{slug_id} -o /home/box/work/school.html` (`slug_id` = Name-With-Dashes-{Realtor id}, e.g. `Sylvia-Mendez-Elementary-078571861`). A good page is ~250–430 KB; under 2 KB with `KPSDK` / "reference ID" is the wall — retry once, then read in the browser.
+2. In your work directory, `curl -fsS https://www.realtor.com/local/schools/{slug_id} -o school.html` (`slug_id` = Name-With-Dashes-{Realtor id}, e.g. `Sylvia-Mendez-Elementary-078571861`). A good page is ~250–430 KB; under 2 KB with `KPSDK` / "reference ID" is the wall — retry once, then read in the browser.
 3. Extract the JSON in `<script id="__NEXT_DATA__" type="application/json">`, e.g.:
-   `python3 -c 'import json,re,sys; s=open(sys.argv[1]).read(); m=re.search(r"__NEXT_DATA__\" type=\"application/json\">(.+?)</script>", s, re.S); print(json.dumps(json.loads(m.group(1))["props"]["pageProps"]["school"], indent=1))' /home/box/work/school.html`
+   `python3 -c 'import json,re,sys; s=open(sys.argv[1]).read(); m=re.search(r"__NEXT_DATA__\" type=\"application/json\">(.+?)</script>", s, re.S); print(json.dumps(json.loads(m.group(1))["props"]["pageProps"]["school"], indent=1))' school.html`
 
 Under `props.pageProps.school`: `rating` (GreatSchools 1–10; null for private), `parent_rating` (1–5) and `review_count`, `grades` (list; "PK" for pre-K — write "K-5" only if contiguous), `education_levels`, `student_count`, `student_teacher_ratio`, `district.name`, `location`, `nces_code` (12 or 8 digits), `greatschools_id`, `funding_type` (public/private/charter), `boundary` (GeoJSON MultiPolygon for public schools with catchment). Private schools: rating, ratio, district and boundary are null — that is expected. `school.assigned` is always null; `nearbySchools` is not a school list.
 

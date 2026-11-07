@@ -731,3 +731,27 @@ test("a team's override of a built-in part is what the prompt says, and only tha
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("the work directory the prompt names is the box's: a host box's own, the image's byte for byte elsewhere (INV-1734)", () => {
+  // A host box is the person's machine, where /home/box does not exist: an agent told to put its
+  // work, its chat files and its memory there was refused, or wrote nowhere anyone collects.
+  const context = (box?: { kind: "docker" | "attached" | "host"; workDir?: string }) => ({
+    agent: { id: "a1", profile: { name: "Ada", description: "", createdAt: "", updatedAt: "" } } as never,
+    teammates: [], resolution: undefined, agentsRoot: "/tmp", hasBox: true,
+    memory: [{ at: "2026-11-01T00:00:00Z", kind: "fact" as const, text: "the deploy region is us-east-1" }],
+    conversation: "feishu-chat-1", lane: "background" as const, ...(box !== undefined ? { box } : {}),
+  });
+  const image = buildSystemPromptParts(context());
+  for (const box of [{ kind: "docker" as const }, { kind: "attached" as const, workDir: "/elsewhere" }]) {
+    assert.deepEqual(buildSystemPromptParts(context(box)), image, box.kind);
+  }
+  assert.match(image.stable, /must outlive this box under `\/home\/box\/work`/);
+
+  const work = "/Users/ada/lumenbox";
+  const host = buildSystemPromptParts(context({ kind: "host", workDir: work }));
+  assert.doesNotMatch(host.stable + host.volatile, /\/home\/box\/work/);
+  assert.ok(host.stable.includes(`must outlive this box under \`${work}\``), "the computer section");
+  assert.ok(host.volatile.includes(`${work}/chats/feishu-chat-1/outbox/`), "the chat's file exchange");
+  assert.ok(host.volatile.includes(`\`${work}/memory/a1/profile.md\``), "the memory mirror");
+  assert.ok(host.volatile.includes(`write under ${work}`), "the unattended conduct");
+});

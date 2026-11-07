@@ -173,6 +173,7 @@ test("a skill may name its own past versions, which is how an old box gets a fix
 test("the daily-research-digest fix names the exact version this repository shipped broken", () => {
   // Pinned rather than described. The version of 2026-09-24 told the agent to read a host
   // path the box cannot see; the digest below is the one measured in the running box.
+  // Later fixes add their own versions beside it (INV-1734); this one stays named.
   const digest = starterSupersedes("daily-research-digest");
-  assert.deepEqual(digest, ["5e8ec37f"]);
+  assert.ok(digest?.includes("5e8ec37f"), String(digest));
 });
