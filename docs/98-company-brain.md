@@ -6,11 +6,11 @@
 -->
 # The organisation's knowledge: four layers, one item shape, written by promotion
 
-Status: **proposed for Chris to confirm (INV-1718, milestone INV-1714).** This record changes no
+Status: **decided by Chris, 2026-11-07 (INV-1718, milestone INV-1714).** This record changes no
 code and no store. It inventories every place LumenBox keeps knowledge (§2, at `origin/main`
-`08e3197`), says what the organisation's knowledge is and how it relates to the stores that
-exist (§3–§8), says what happens to each store (§9), answers or hands to Chris the questions the
-research left open (§10), and lists the implementation items to propose once Chris confirms
+`a2f9ae1`), says what the organisation's knowledge is and how it relates to the stores that
+exist (§3–§8), says what happens to each store (§9), records Chris's answers to the questions
+the research left open (§10), and lists the implementation items to propose under INV-1714
 (§11). The external study behind it is the research item INV-1717; its notes stay outside the
 repository, and only what it decided is written here.
 
@@ -31,7 +31,8 @@ repository, and only what it decided is written here.
    (`surface: cite-only`).
 5. **Nothing reaches L1 by extraction.** L1 is written only by promoting an existing item or a
    finished outcome, from a member's turn or by an Admin; the promotion waits for review, and
-   review is on by default. The agent-set `audience: "everyone"` is retired into this path.
+   review is always on. The agent-set `audience: "everyone"` is retired; a record that carried it
+   falls back to the box it was written in.
 6. **Correction appends; it never edits in place or deletes.** Any reader can unverify an L1
    item; its owner re-verifies, supersedes or retracts it. An item goes stale when its review
    date passes or when its evidence changes state.
@@ -75,7 +76,7 @@ systems' access lists as the core, mine activity into a person profile, let a mo
 shared wiki, add a graph database, judge freshness by the calendar alone, concatenate layers
 without an order, or count anonymous votes (§12 says why for each).
 
-## 2. The inventory, at `origin/main` `08e3197`
+## 2. The inventory, at `origin/main` `a2f9ae1`
 
 Every place LumenBox keeps something an agent or a person later relies on as knowledge. Paths
 under `~` mean the installation's home (`~/.agentbox`); "every turn" means the store is rendered
@@ -114,7 +115,7 @@ in the box's work volume (their work, reachable as a deliverable or by a path so
 ```
             every turn                     search / recall              written by                      gate
 L0 rules    rules/, instructions.md        —                            Admin                           Admin-authored
-L1 org      pinned "how we work" items     organisation knowledge       promotion, or an Admin          owner + review, on by default
+L1 org      pinned "how we work" items     organisation knowledge       promotion, or an Admin          owner + review, always on   
 L2 box      bundle instructions,           team memory                  agents of the box               team memory review (optional)
             skills index
 L3 agent    standing files, plan           own memory, pitfalls         the agent, extractor, harness   judge + guard
@@ -167,7 +168,7 @@ L1 and L2 items are memory records. The record is extended, not forked
 | Layer | Who writes | How | Review | Provenance required |
 |---|---|---|---|---|
 | L0 | an Admin (on a personal installation, the Owner) | the rules file, the instructions file | none: the writer is the authority | the audit line |
-| L1 | a member, in a turn inside the organisation, or an Admin | **promotion** of an existing L2/L3 item, a finished task, a research outcome, a receipt; or an Admin's own item | **on by default**, by the item's owner or an Admin; an Admin may turn it off for the installation, and the page then says so | at least one `evidence` reference; the promoter; the approver as `verifiedBy` |
+| L1 | a member, in a turn inside the organisation, or an Admin | **promotion** of an existing L2/L3 item, a finished task, a research outcome, a receipt; or an Admin's own item | **always on**, by the item's owner or an Admin; no setting turns it off | at least one `evidence` reference; the promoter; the approver as `verifiedBy` |
 | L2 | an agent of the box | `RememberFact` scope team, with `audience` removed | team memory review, optional as INV-1581 decided | `via`, `from`, `box` as today |
 | L3 | the agent, the extractor, the harness | as today | judge + guard, never a person | as today |
 | P | the person, a judged agent line, a sensing routine | as today | memory judge | `source` |
@@ -183,7 +184,7 @@ Rules:
 3. **The review shows what it widens.** A pending item shows its scope and its readers ("every
    agent of this installation", "the 4 members of box sales") before the approve button.
 4. **INV-1581 stands for L2 and is revised for L1:** L2 review stays an installation option, off
-   by default; L1 review is on by default.
+   by default; L1 review is always on, and an Admin cannot turn it off (§10 question 4).
 
 ## 6. Reading: admission, surface and the guest turn
 
@@ -199,9 +200,12 @@ Rules:
    to `cite-only` until its owner re-verifies it.
 4. **Budgets.** Pinned L1 has its own small budget beside the team budget
    (`SHARED_CHAR_BUDGET`, `src/host/memory.ts:448`). An answer built on an L1 item cites its id.
-5. **The guest turn reads only G**, unchanged (docs/97 §0 sentence 5). No L1 item is a G entry;
+5. **Involute is cited, not searched.** An item may cite `inv:INV-n`, and the host reads that
+   item's state for staleness. An agent in a member turn has no Involute search; it reaches
+   Involute only through today's @-mention path (`src/host/involute-inbox.ts:1-20`).
+6. **The guest turn reads only G**, unchanged (docs/97 §0 sentence 5). No L1 item is a G entry;
    the guest turn's import list does not grow.
-6. **Department.** A department is a box whose `members` lists its people. Until bind writes box
+7. **Department.** A department is a box whose `members` lists its people. Until bind writes box
    membership for every channel, an enumerated set degrades to `everyone` (docs/22 §2), and a
    department item's label must say so, as the box label does (docs/22 §5).
 
@@ -239,10 +243,10 @@ Rules:
 | 1 | Agent memory | keep (L3) | new fields absent; unchanged |
 | 2 | Standing files | keep (L3) | unchanged |
 | 3 | Plan and todos | keep (L3) | unchanged |
-| 4 | Team memory | keep as L2; **retire `audience: "everyone"`** | the tool loses the field; existing `everyone` records are shown to an Admin as L1 promotion candidates and stay readable as today until decided; records with no `box` stay as they are (nothing is withdrawn by a migration) |
+| 4 | Team memory | keep as L2; **retire `audience: "everyone"`** | the tool loses the field, and the read filter stops honouring it: an existing `everyone` record falls back to the box it was written in, which its `box` stamp already names. No candidate list: the records are historical (§10 question 5). Records with no `box`, older than INV-424, stay as they are |
 | 5 | Person record | keep (P) | unchanged |
 | 6 | Knowledge collections | keep (G) | unchanged |
-| 7 | Site learnings | **merge into L2** | a new note is a box-scoped item; the existing files stay readable, labelled installation-wide, until an Admin promotes or retires them |
+| 7 | Site learnings | **new notes into L2** | a new note is visible to its box by default; the existing files stay as they are; how a note is shared across boxes is left to a later study (§10 question 6) |
 | 8 | Installation / box instructions | keep (L0 / L2 pinned) | an Admin may cut a paragraph into a pinned L1 item to give it an owner and a review date |
 | 9 | Rules | keep (L0) | unchanged |
 | 10 | Skills | keep (L2) | unchanged |
@@ -252,67 +256,60 @@ Rules:
 | 18 | Involute | keep as E | an `inv:` reference; state read for staleness (§10 question 3) |
 | 19 | Design record and manual | stays out of product knowledge | an Admin may pin a manual page into L1 by reference |
 
-## 10. The research's open questions
+## 10. The open questions, as Chris decided them (2026-11-07)
 
-1. **Where L1 lives.** *Decided here, for Chris to confirm:* its own ledger, `~/org-knowledge.jsonl`,
-   beside `people.jsonl` and `guests.jsonl`, with the extended memory record as its line. Not
-   in `shared-memory/`: that directory is sharded by writing agent so that one writer owns each
-   file (`src/agents/registry.ts:105-117`), and an L1 item's writer is a person's approval, not
-   an agent. The registry keeps owning box membership; the L1 ledger asks it, it does not copy it.
+1. **Where L1 lives: its own ledger,** `~/.agentbox/org-knowledge.jsonl`, beside `people.jsonl`
+   and `guests.jsonl`, with the extended memory record as its line. Not in `shared-memory/`: that
+   directory is sharded by writing agent so that one writer owns each file
+   (`src/agents/registry.ts:105-117`), and an L1 item's writer is a person's approval, not an
+   agent. The registry keeps owning box membership; the L1 ledger asks it and does not copy it.
    docs/05 gains the file's row when it is built.
-2. **The owner when an agent writes.** *Left for Chris.* Proposed: the member who drove the turn
-   that proposed the promotion; for a caller-less turn, the creating principal of the routine
-   (docs/22 §2); an Admin may reassign. The approver is always recorded as `verifiedBy`, which
-   may be a different person. The alternatives are "always the approving Admin" or "a named
-   verifier group".
-3. **Involute as evidence.** *Partly decided, partly left.* Decided: an L1 item may cite
-   `inv:INV-n`, and the host reads that item's state to detect staleness, with the Involute
-   credential the installation already configures (`src/config.ts:173-175`). Left for Chris:
-   whether agents in member turns get to *search* Involute beyond today's @-mention path, and
-   under whose credential.
+2. **The owner of an item an agent writes is the member who drove the turn** that proposed the
+   promotion; for a routine, its creating principal (docs/22 §2). The approver is recorded as
+   `verifiedBy`, and may be a different person.
+3. **Involute is evidence, never a search.** An item may cite `inv:INV-n`, and the host reads that
+   item's state for staleness, with the Involute credential the installation already configures
+   (`src/config.ts:173-175`). Agents in member turns get no Involute search; today's @-mention
+   path is unchanged.
+4. **An Admin cannot turn L1 review off.** L2 review stays the installation option INV-1581 made.
+5. **Existing `audience: "everyone"` records are historical.** When the field is retired, each
+   falls back to the box it was written in. There is no promotion-candidate list for them.
+6. **Site learnings: new notes are visible to their box by default; existing files stay as they
+   are.** How a site learning is shared across boxes is left to a later study.
 
-New questions this record raises:
-
-4. **Turning L1 review off.** Should an Admin be able to turn L1 review off at all, or only
-   delegate it to the item's owner?
-5. **The existing `everyone` records.** Show them to an Admin as candidates (proposed), or keep
-   them readable installation-wide indefinitely?
-6. **Site learnings.** Box scope for new notes (proposed), or keep them installation-wide
-   because a website is the same website in every box?
-
-## 11. Implementation items, to propose after Chris confirms
+## 11. Implementation items, to propose under INV-1714
 
 Not proposed yet. Each would be an ISSUE under INV-1714.
 
-1. **Show the audience in team memory review** — the pending list says "every box" for an
-   `everyone` write and names the box otherwise (`src/web/team-memory-review-routes.ts`).
-2. **Extend the memory record** — `scope`, `surface`, `owner`, `evidence[]`, `validFrom` /
+1. **Extend the memory record** — `scope`, `surface`, `owner`, `evidence[]`, `validFrom` /
    `validUntil`, `supersedes`, `verifiedBy` / `verifiedAt` / `reviewBy`; L3 records unchanged; one
    admission check before `rankRelated`.
-3. **The organisation knowledge ledger** — `org-knowledge.jsonl`, its replay, a docs/05 row, and
-   the read path into the prompt with a pinned budget and citations by id.
-4. **Promotion** — a `Promote` act for agents (held) and an Admin's promote action on a memory,
-   task or receipt; review on by default; the review page shows scope and readers.
-5. **Retire `audience: "everyone"`** — the tool loses the field; existing records listed as
-   promotion candidates.
-6. **Correction verbs** — unverify, supersede, retract on L1 items, in Settings → Memory and as
+2. **The organisation knowledge ledger** — `~/.agentbox/org-knowledge.jsonl`, its replay, a docs/05
+   row, and the read path into the prompt with a pinned budget and citations by id.
+3. **Promotion** — a held `Promote` tool for agents and an Admin's promote action on a memory,
+   task or receipt; owner = the member who drove the turn (a routine: its creator), approver as
+   `verifiedBy`; review always on; the review page shows scope and readers.
+4. **Retire `audience: "everyone"`** — the tool loses the field and the read filter stops
+   honouring it, so existing records fall back to the box they were written in.
+5. **Correction verbs** — unverify, supersede, retract on L1 items, in Settings → Memory and as
    tools; `cite-only` on unverify.
-7. **Staleness** — `reviewBy` reminders to owners, and a check that marks an item stale when a
-   cited task, Involute item or document changes state.
-8. **Visible conflict** — the prompt renders disagreeing items across layers as one dated pair
+6. **Staleness** — `reviewBy` reminders to owners, and a check that marks an item stale when a
+   cited task, Involute item (by `inv:` id, read with the installation's credential) or document
+   changes state.
+7. **Visible conflict** — the prompt renders disagreeing items across layers as one dated pair
    with sources; maintenance may propose a supersession, never apply it to L1.
-9. **Site learnings by box** — `NoteSiteLearning` writes a box-scoped item; existing files
-   labelled installation-wide until an Admin decides.
-10. **A scenario** — an agent proposes a fact for the whole organisation, a second agent cannot
-    read it until an Admin approves, an unverify drops it from recall, and a guest turn never
-    sees it (`src/host/scenario.ts`).
+8. **Site learnings by box** — a new `NoteSiteLearning` note is visible to its box by default;
+   existing files untouched; sharing across boxes waits for a later study.
+9. **A scenario** — an agent proposes a fact for the whole organisation, a second agent cannot
+   read it until an Admin approves, an unverify drops it from recall, and a guest turn never
+   sees it (`src/host/scenario.ts`).
 
 ## 12. Against the existing records, and what we do not do
 
 - **docs/22** owns admission; this record adds no gate, only says that knowledge scope uses
   `mayEnterBox`. No department type is added.
 - **docs/24** is the memory decision; its tiers (own, team) are L3 and L2 here, unchanged.
-- **INV-1581** stands for L2; L1 review is on by default (§5 rule 4).
+- **INV-1581** stands for L2; L1 review is always on (§5 rule 4).
 - **docs/95, docs/96** — §8 restates their boundary for knowledge; nothing crosses it.
 - **docs/97** — the guest turn reads only G; nothing here adds a tool or a data source to it.
 
