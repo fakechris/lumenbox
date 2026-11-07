@@ -25,10 +25,11 @@ export interface McpGoalDeps {
   /** Whether this principal may drive this agent's box (the gate `/goal` asks). */
   mayDrive: (agentId: string, principalId: string) => boolean;
   nameOf: (principalId: string) => string;
+  /** The ids folded into this principal by a merge (`Principals.byId(id).aliases`, INV-1698): a goal one of them started is still this person's. */
+  aliasesOf?: (principalId: string) => readonly string[];
   log: (line: string) => void;
 }
 
-/** One conversation per goal, named from who asked and the call's key, in the alphabet a goal conversation allows. */
 /**
  * The agent a door call names: blank is "not named" (a model fills optional fields with ""), and a
  * name that is not on the team is refused with the team, so the caller does not have to guess (INV-1518).
@@ -42,8 +43,20 @@ export function agentNamed<A extends { profile: { name: string } }>(registry: { 
   }
 }
 
+/** One conversation per goal, named from who asked and the call's key, in the alphabet a goal conversation allows. */
 export function goalConversation(principalId: string, key: string): string {
   return `mcp-${createHash("sha256").update(`${principalId}\n${key}`).digest("hex").slice(0, 16)}`;
+}
+
+const goalOperation = (principalId: string, key: string) => JSON.stringify(["mcp", principalId, key, "goal"]);
+
+/**
+ * Whose name a goal under this key was made in: this principal's, or — after a merge folded the
+ * id that started it into this one (INV-1705) — the old id's, so the goal keeps its conversation
+ * and a retried key is still one goal. This principal's own when neither made one.
+ */
+function askedAs(board: { pursuitFromMessage(id: string): unknown; pursuitIn(conversation: string): unknown }, ids: readonly string[], key: string): string {
+  return ids.find(id => board.pursuitFromMessage(goalOperation(id, key)) !== undefined || board.pursuitIn(goalConversation(id, key)) !== undefined) ?? ids[0]!;
 }
 
 export function mcpGoalTools(deps: McpGoalDeps): McpServerTool[] {
@@ -75,8 +88,9 @@ export function mcpGoalTools(deps: McpGoalDeps): McpServerTool[] {
         const text = `/goal ${objective}${budget !== undefined ? ` --budget ${budget}` : ""}`;
         if (parseGoalCommand(text).kind !== "create") throw new Error("That objective reads as a /goal subcommand, not a goal. Say what done looks like.");
         const agent = agentNamed(registry, input.agent, () => registry.list()[0] ?? orchestrator.ensureDefaultAgent());
-        const conversation = goalConversation(principalId, key);
-        const operationId = JSON.stringify(["mcp", principalId, key, "goal"]);
+        const asked = askedAs(board, [principalId, ...(deps.aliasesOf?.(principalId) ?? [])], key);
+        const conversation = goalConversation(asked, key);
+        const operationId = goalOperation(asked, key);
         // The replay store answers a retry for a day; after that the board still knows the goal this key made.
         const already = board.pursuitFromMessage(operationId);
         if (already !== undefined) return `${already.id} — this key already started that goal. Ask task_status about ${already.id}.\nstatus: ${already.pursuit?.status ?? "in_progress"}`;

@@ -1,6 +1,6 @@
 /** The person's own record (INV-1653), read and edited from Settings → Mine: the caller's, or the operator's when nobody is signed in. */
 
-import { isPersonField, OPERATOR, PERSON_FIELDS, type PersonRecords } from "../host/person.ts";
+import { isPersonField, PERSON_FIELDS, type PersonRecords } from "../host/person.ts";
 import { apiError } from "./api-error.ts";
 
 export async function personRoute(
@@ -10,7 +10,7 @@ export async function personRoute(
 ): Promise<{ status: number; body: unknown } | undefined> {
   if (!route.endsWith(" /api/person") && route !== "POST /api/person/retract") return undefined;
   const who = deps.caller();
-  const principal = who?.id ?? OPERATOR;
+  const principal = who?.id ?? people.operator;
   const view = () => ({ principal, name: who?.name ?? "the operator", fields: [...PERSON_FIELDS], entries: people.live(principal), rendered: people.render(principal, who?.name ?? "the operator") ?? "" });
   if (route === "GET /api/person") return { status: 200, body: view() };
   const body = await deps.readJson();

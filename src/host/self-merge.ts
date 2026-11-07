@@ -39,6 +39,7 @@ import { agentboxHome, configPath } from "../config.ts";
 import { defaultAgentsRoot } from "../agents/registry.ts";
 import { inboxPath } from "../agents/inbox.ts";
 import { installationOf, OWNER_ID } from "./installation.ts";
+import { OPERATOR, operatorKey } from "./person.ts";
 import { principalsPath } from "./principals.ts";
 import { turnLedgerPath } from "./resume.ts";
 import { withRosterLock } from "./roster-lock.ts";
@@ -298,6 +299,11 @@ function rewritePersonalBoxes(home: string, map: ReadonlyMap<string, string>, wr
   } finally { db.close(); }
 }
 
+/** Notes about the person (`people.jsonl`): by the merge, and by `adoptOperatorNotes` on its own. */
+function rewritePersonNotes(home: string, map: ReadonlyMap<string, string>, write: boolean): number {
+  return rewriteJsonl(join(home, "people.jsonl"), ["principal", "by"], map, write);
+}
+
 /** Every store, through one mapping. `write: false` is the preview's count of the same work. */
 function rewriteStores(paths: MergePaths, map: ReadonlyMap<string, string>, names: ReadonlyMap<string, string>, write: boolean): Record<MergedStore, number> {
   const memoryFiles = [...agentDirs(paths.agents).map(dir => join(dir, "memory.jsonl")), ...filesIn(join(paths.agents, "shared-memory"), ".jsonl")];
@@ -308,7 +314,8 @@ function rewriteStores(paths: MergePaths, map: ReadonlyMap<string, string>, name
     tasks: rewriteJsonl(paths.tasks, ["requester", "reviewerId", "by", "pausedBy"], map, write, line => (line.task as { id?: string } | undefined)?.id),
     spend: rewriteJsonl(paths.usage, ["principal"], map, write),
     memory: sum(memoryFiles.map(path => rewriteJsonl(path, ["about"], map, write))),
-    "person-notes": rewriteJsonl(join(paths.home, "people.jsonl"), ["principal", "by"], map, write),
+    // The signed-out operator's placeholder is the Owner too (INV-1705): the desktop and the chats then read one record.
+    "person-notes": rewritePersonNotes(paths.home, new Map([...map, [OPERATOR, OWNER_ID]]), write),
     "box-members": sum([join(paths.agents, "boxes.json"), join(paths.agents, "box.json")].map(path => rewriteJson(path, ["members"], map, write))),
     "personal-boxes": rewritePersonalBoxes(paths.home, map, write),
     "vault-grants": rewriteJson(paths.vault, ["holder"], map, write),
@@ -477,4 +484,20 @@ export function applyPendingMerge(paths: MergePaths, log: (line: string) => void
     log(`upgrade: ${journal.from.length} people on this desktop installation were confirmed to be one person and merged into its Owner "${journal.name}" (INV-1698); records moved: ${summary}. The old ids stay as aliases; the record is ${basename(MERGE_JOURNAL)}.`);
     return done;
   });
+}
+
+/**
+ * At every start, after the roster is open: on a personal installation, notes written under the
+ * signed-out placeholder `me` before the operator was known to be the Owner move to the Owner
+ * (INV-1705) — the merge's own rewrite with the one-entry mapping `me` → Owner, so a second start
+ * finds nothing to move and says nothing. Elsewhere `me` stays the operator and nothing moves.
+ * Returns the notes moved.
+ */
+export function adoptOperatorNotes(paths: Pick<MergePaths, "home" | "roster">, log: (line: string) => void): number {
+  const roster = readRoster(paths.roster);
+  const owner = roster === undefined ? OPERATOR : operatorKey(installationOf(roster));
+  if (owner === OPERATOR) return 0;
+  const moved = rewritePersonNotes(paths.home, new Map([[OPERATOR, owner]]), true);
+  if (moved > 0) log(`upgrade: ${moved} note(s) about the person written on the desktop while signed out now belong to the Owner, who is the same person in every chat (INV-1705).`);
+  return moved;
 }

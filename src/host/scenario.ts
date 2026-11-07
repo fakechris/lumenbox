@@ -40,7 +40,7 @@ import type { ProviderProfile } from "./provider.ts";
 import { Rememberer, readsExternalContent, summariseExchange, turnReadOutside } from "./remember.ts";
 import { compileSurface, type SurfaceRecord } from "./show-ui.ts";
 import type { Skill } from "./skills.ts";
-import type { SpendLimits } from "./spend-limits.ts"; import { OPERATOR, type PersonRecords } from "./person.ts";
+import type { SpendLimits } from "./spend-limits.ts"; import type { PersonRecords } from "./person.ts";
 import type { TaskStore } from "./tasks.ts";
 import { fakeModel } from "./testing/fake-model.ts";
 import { runTurn, type TurnEvent } from "./turn.ts";
@@ -489,7 +489,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       ...(options.pendingWork !== undefined ? { pendingWork: options.pendingWork } : {}),
       ...(acpDelegates !== undefined ? { acpDelegates } : {}),
       ...(options.spendLimits !== undefined ? { spendLimits: options.spendLimits } : {}),
-      ...(options.person !== undefined ? { person: (principalId: string | undefined) => options.person!.render(principalId ?? OPERATOR, "the operator") } : {}),
+      ...(options.person !== undefined ? { person: (principalId: string | undefined) => options.person!.render(principalId ?? options.person!.operator, "the operator") } : {}),
       registry,
       bus,
       box,

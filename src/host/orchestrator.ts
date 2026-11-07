@@ -118,7 +118,7 @@ import type { PitfallSource } from "./pitfalls.ts";
 import { SkillCache } from "./skills.ts";
 import { parseSchedule, type Schedule, type Scheduled, Scheduler } from "./schedule.ts";
 import { heartbeatAgentOf, heartbeatItems, heartbeatSlug, readStanding, standingBoxDir } from "./standing.ts";
-import { UsageLog } from "./usage.ts"; import type { SpendLimits } from "./spend-limits.ts"; import { OPERATOR, PersonRecords } from "./person.ts";
+import { UsageLog } from "./usage.ts"; import type { SpendLimits } from "./spend-limits.ts"; import { PersonRecords } from "./person.ts";
 import { AcpDelegates } from "./acp-delegate.ts";
 import { worktreeState } from "./worktree-state.ts";
 import { CredentialChecks } from "./credential-waits.ts";
@@ -315,7 +315,7 @@ export class Orchestrator {
   readonly verifications = new VerificationLedger(join(agentboxHome(), "verifications.jsonl")); // what each reviewer found, by claim and evidence digest (INV-1614)
   /** The host's one record of each person (INV-1653); every turn reads it, the judge's kept preferences feed it, Settings → Mine edits it. The name reader is wired by the server, which knows the principals. */
   readonly people = new PersonRecords(join(agentboxHome(), "people.jsonl")); personName?: (principalId: string) => string | undefined;
-  renderPerson(principalId: string | undefined): string | undefined { return this.people.render(principalId ?? OPERATOR, principalId === undefined ? "the operator" : (this.personName?.(principalId) ?? "the person")); }
+  renderPerson(principalId: string | undefined): string | undefined { return this.people.render(principalId ?? this.people.operator, principalId === undefined ? "the operator" : (this.personName?.(principalId) ?? "the person")); }
   readonly generations = new BoxGenerations(line => console.error(`[box] ${line}`)); // which incarnation of each box a slow callback belongs to (INV-1476); bumped on every (re)connect
   readonly agentFacts = new AgentFacts(new ConversationState(join(agentboxHome(), "conversation-state.jsonl")), { approvals: () => this.policy.pending(), questions: () => this.questionsOpen?.() ?? [], pausedForSpend: () => this.pausedForSpend?.() ?? [], working: id => this.bus.isActive(id) }); questionsOpen?: () => readonly { agentId: string; conversation: string; question: string; askedAt: number }[]; pausedForSpend?: () => readonly { agentId: string; day: string }[]; // the four facts a sidebar row is drawn from (INV-1625); the two readers are wired by the server
   readonly jobWatch = new JobWatch({ box: () => this.boxClient(), log: line => console.error(`[jobs] ${line}`), wake: (agentId, conversation, text) => this.prompt(agentId, text, undefined, { conversation, steerable: false, lane: "background", synthetic: true, origin: "host:jobs" }).then(() => undefined), generation: agentId => this.generations.current(this.registry.boxOf(agentId).id) });

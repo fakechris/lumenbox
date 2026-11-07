@@ -17,6 +17,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { appendLine, type LedgerKind } from "./jsonl.ts";
+import type { Installation } from "./installation.ts";
 
 export const LEDGER_KIND: LedgerKind = "record";
 
@@ -46,8 +47,17 @@ type Line =
   | { kind: "entry"; principal: string; entry: PersonEntry }
   | { kind: "retract"; principal: string; id: string; at: string; by: string };
 
-/** The key a turn uses when no person is signed in: the installation's one operator. */
+/** The key a turn uses when no person is signed in, on an installation with no Owner: the installation's one operator. */
 export const OPERATOR = "me";
+
+/**
+ * Who the signed-out operator is (INV-1705, docs/22 §1a): on a personal installation, the Owner —
+ * the same person who speaks from Feishu as `local:owner` — so the desktop and the chats read one
+ * record; elsewhere the placeholder `me`.
+ */
+export function operatorKey(installation: Installation): string {
+  return installation.mode === "single-machine" && installation.ownerId !== undefined && installation.ownerId !== "" ? installation.ownerId : OPERATOR;
+}
 
 /** How many entries a field shows the model; the rest are on the record and in Settings. */
 const PER_FIELD = 6;
@@ -59,6 +69,8 @@ export function isPersonField(raw: unknown): raw is PersonField {
 export class PersonRecords {
   private readonly entries = new Map<string, PersonEntry[]>();
   private readonly retracted = new Set<string>();
+  /** The key for "nobody signed in"; `useOperator` sets it once the roster says who that is. */
+  operator: string = OPERATOR;
 
   constructor(private readonly path?: string, private readonly now: () => Date = () => new Date()) {
     if (path !== undefined && existsSync(path)) {
@@ -69,6 +81,19 @@ export class PersonRecords {
         this.apply(line);
       }
     }
+  }
+
+  /**
+   * The signed-out operator is `id` from now on (`operatorKey`). Lines already read under the
+   * placeholder are theirs too: the start rewrote the file first (`adoptOperatorNotes`), and this
+   * keeps the copy in memory the same.
+   */
+  useOperator(id: string): void {
+    this.operator = id;
+    const placeholder = this.entries.get(OPERATOR);
+    if (id === OPERATOR || placeholder === undefined) return;
+    this.entries.set(id, [...(this.entries.get(id) ?? []), ...placeholder]);
+    this.entries.delete(OPERATOR);
   }
 
   private apply(line: Line): void {
@@ -132,7 +157,7 @@ export class PersonRecords {
   absorb(records: readonly { kind: string; text: string; about?: string; types?: Record<string, number>; held?: unknown; via?: string }[], agentId: string, driver: { principal?: string; name?: string } = {}): PersonEntry[] {
     const added: PersonEntry[] = [];
     for (const record of records) {
-      const about = record.about ?? driver.principal ?? OPERATOR;
+      const about = record.about ?? driver.principal ?? this.operator;
       if (record.held !== undefined || (record.kind !== "fact" && record.kind !== "note")) continue;
       const preference = record.types?.preference ?? 0;
       const semantic = record.types?.semantic ?? 0;

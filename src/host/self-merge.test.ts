@@ -11,7 +11,8 @@ import { tmpdir } from "node:os";
 import { ensureOwner, OWNER_ID, PersonalInstallationOnly } from "./installation.ts";
 import { Principals } from "./principals.ts";
 import { redeemInvite } from "./invite-redeem.ts";
-import { applyPendingMerge, confirmMerge, MERGE_JOURNAL, MergeRefused, mergePreview, type MergeJournal } from "./self-merge.ts";
+import { adoptOperatorNotes, applyPendingMerge, confirmMerge, MERGE_JOURNAL, MergeRefused, mergePreview, type MergeJournal } from "./self-merge.ts";
+import { operatorKey, OPERATOR, PersonRecords } from "./person.ts";
 import { SIX, SIX_IDS, sixPaths, writeSixIdentities } from "./testing/six-identities.ts";
 
 function withHome(run: (home: string) => void): void {
@@ -71,7 +72,7 @@ test("the preview of six identities says where each came from and what a merge w
     assert.equal(preview.people[5]!.identities[0]!.doorType, undefined, "a browser is no configured door");
     assert.deepEqual(preview.hints, [{ kind: "same-name", name: "Sam", count: 3 }, { kind: "same-door", door: "feishu-work", count: 3 }]);
     assert.deepEqual(Object.fromEntries(preview.changes.map(change => [change.store, change.records])), {
-      "mcp-tokens": 2, watchdog: 1, tasks: 2, spend: 2, memory: 2, "person-notes": 1, "box-members": 1, "vault-grants": 1, rules: 1, "box-quotas": 2, sessions: 1, turns: 1, inbox: 1,
+      "mcp-tokens": 2, watchdog: 1, tasks: 2, spend: 2, memory: 2, "person-notes": 2, "box-members": 1, "vault-grants": 1, rules: 1, "box-quotas": 2, sessions: 1, turns: 1, inbox: 1,
     });
     assert.ok(preview.kept.includes("messages.jsonl"));
     assert.deepEqual(snapshot(home), before, "a preview writes nothing");
@@ -120,7 +121,11 @@ test("confirmed, the next start leaves one Owner with all six identities, every 
     assert.deepEqual(lines(paths.usage).map(row => row.principal), [OWNER_ID, OWNER_ID, undefined]);
     assert.equal(lines(join(home, "agents", "ada", "memory.jsonl"))[0].about, OWNER_ID);
     assert.equal(lines(join(home, "agents", "shared-memory", "ada.jsonl"))[0].about, OWNER_ID);
-    assert.equal(lines(join(home, "people.jsonl"))[0].principal, OWNER_ID);
+    assert.deepEqual(lines(join(home, "people.jsonl")).map(line => line.principal), [OWNER_ID, OWNER_ID], "the DingTalk person's note and the signed-out desktop's note are both the Owner's");
+    const people = new PersonRecords(join(home, "people.jsonl"));
+    people.useOperator(operatorKey(principals.installation()));
+    people.absorb([{ kind: "note", text: "prefers short answers", types: { preference: 0.9 } }], "ada", { principal: principals.resolve(SIX.work1).id });
+    assert.deepEqual(people.live(people.operator).map(entry => entry.text).sort(), ["prefers short answers", "replies in Chinese", "reviews in the evening"], "the desktop, signed out, reads what DingTalk and Feishu wrote: one record");
     assert.deepEqual(json(join(home, "agents", "boxes.json"))[0].members, [OWNER_ID, "someone-else"]);
     assert.deepEqual(json(paths.vault).secrets[0].grants.map((g: { holder: string }) => g.holder), [`principal:${OWNER_ID}`, "agent:ada"]);
     assert.deepEqual(json(join(home, "session-epochs.json")), { [OWNER_ID]: 2 }, "a browser signed out before stays signed out");
@@ -137,6 +142,7 @@ test("confirmed, the next start leaves one Owner with all six identities, every 
 
     const after = snapshot(home);
     assert.equal(applyPendingMerge(paths, () => {}), undefined, "nothing pending: a later start does nothing");
+    assert.equal(adoptOperatorNotes(paths, line => logs.push(line)), 0, "the merge already moved the operator's notes");
     assert.deepEqual(snapshot(home), after);
     assert.equal(mergePreview(paths, { desktop: true }).reason, "decided");
   });
@@ -170,5 +176,34 @@ test("a roster changed after the preview is refused, one changed after the confi
     writeFileSync(join(home, MERGE_JOURNAL), JSON.stringify(journal));
     assert.equal(applyPendingMerge(paths, () => {})?.state, "done");
     assert.deepEqual(snapshot(home), merged, "resuming is idempotent");
+  });
+});
+
+test("on a personal installation the signed-out operator's notes move to the Owner once, with a line; on an organisation they stay", () => {
+  withHome(home => {
+    const paths = sixPaths(home);
+    const note = (principal: string, id: string) => ({ kind: "entry", principal, entry: { id, field: "preferences", text: `note ${id}`, at: "2026-10-08T00:00:00.000Z", source: "person" } });
+    writeFileSync(join(home, "people.jsonl"), `${[note(OPERATOR, "n1"), note("feishu:ou_fake_other", "n2"), { kind: "retract", principal: OPERATOR, id: "n1", at: "2026-10-09T00:00:00.000Z", by: "operator" }].map(line => JSON.stringify(line)).join("\n")}\n`);
+    writeFileSync(paths.roster, JSON.stringify({ installation: { mode: "organisation" }, principals: [] }));
+    assert.equal(adoptOperatorNotes(paths, () => assert.fail("nothing to say")), 0, "an organisation's operator is no Owner");
+    assert.equal(operatorKey(new Principals(paths.roster, { warn: () => {} }).installation()), OPERATOR);
+
+    rmSync(paths.roster);
+    assert.equal(ensureOwner(paths.roster, join(home, "bootstrap-code"), { desktop: true, name: "Sam" }), "created");
+    const people = new PersonRecords(join(home, "people.jsonl")); // read before the start moved anything, as the orchestrator is
+    const logs: string[] = [];
+    assert.equal(adoptOperatorNotes(paths, line => logs.push(line)), 2, "the note and its retraction");
+    assert.match(logs[0]!, /^upgrade: 2 note\(s\) .* belong to the Owner/);
+    assert.deepEqual(lines(join(home, "people.jsonl")).map(line => line.principal), [OWNER_ID, "feishu:ou_fake_other", OWNER_ID]);
+    const moved = snapshot(home);
+    assert.equal(adoptOperatorNotes(paths, line => logs.push(line)), 0, "a second start finds nothing to move");
+    assert.equal(logs.length, 1, "and says nothing");
+    assert.deepEqual(snapshot(home), moved);
+
+    people.useOperator(operatorKey(new Principals(paths.roster, { warn: () => {} }).installation()));
+    assert.equal(people.operator, OWNER_ID);
+    people.add(OWNER_ID, { field: "goals", text: "ship the box", source: "person" });
+    assert.deepEqual(people.live(people.operator).map(entry => entry.text), ["ship the box"], "the retracted note stays retracted under the Owner, and what Feishu writes is the same record");
+    assert.deepEqual(new PersonRecords(join(home, "people.jsonl")).live(OWNER_ID).map(entry => entry.text), ["ship the box"], "and so it reads after a restart");
   });
 });

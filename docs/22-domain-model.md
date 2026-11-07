@@ -148,6 +148,20 @@ second person and never converts.
   record meant, and never admits an inbound identity. Kept as written, by decision: the message,
   ingress, receipt, audit, policy and config-history logs and transcripts, which record what
   happened as it happened. The journal stays as the migration table and the audit record.
+- **The signed-out operator's record is the Owner's (INV-1705).** Notes about the person
+  (`people.jsonl`, INV-1653) written with nobody signed in were keyed `me`; the same person speaking
+  from Feishu writes as `local:owner`, so one person had two records and each turn read one. On a
+  personal installation the signed-out key is the Owner (`operatorKey`, `src/host/person.ts`); an
+  organisation keeps `me`. The merge's mapping carries `me` → `local:owner` for these notes, and
+  every start on a personal installation runs the same rewrite with that one entry
+  (`adoptOperatorNotes`, after the roster is open), which moves what an Owner made before this
+  wrote under `me`, says so in one `upgrade:` line, and finds nothing the next time.
+- **A side-door goal keeps its conversation across the merge (INV-1705).** A goal started through
+  MCP is named from the caller and the call's key (`mcp-<hash(principal, key)>`); after a merge the
+  token's person is the Owner and the hash would change. `goal_start` looks for a goal under the
+  caller's id, then under each alias (`Principals.byId(...).aliases`) in turn, and uses the one it
+  finds — its conversation and its operation id — so a retried key is the same goal in the same
+  conversation, with its context. A new key is named from the Owner.
 
 ## 2. Doors route; boxes authorize
 

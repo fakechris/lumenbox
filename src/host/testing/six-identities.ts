@@ -59,7 +59,11 @@ export function writeSixIdentities(home: string, options: { ledgers?: boolean; b
   write(join(home, "usage.jsonl"), jsonl([spend(SIX.admin, "2026-10-05T09:00:00.000Z"), spend(SIX.dingtalk, "2026-10-06T09:00:00.000Z"), spend(undefined, "2026-10-06T10:00:00.000Z")]));
   write(join(home, "agents", "ada", "memory.jsonl"), jsonl([{ at: "2026-10-07T00:00:00.000Z", kind: "fact", text: "prefers short answers", source: "RememberFact", about: SIX.work3 }, { at: "2026-10-07T00:00:00.000Z", kind: "fact", text: "the team builds a box", source: "RememberFact" }]));
   write(join(home, "agents", "shared-memory", "ada.jsonl"), jsonl([{ at: "2026-10-07T00:00:00.000Z", kind: "fact", text: "works late", source: "RememberFact", about: SIX.web, box: "default" }]));
-  write(join(home, "people.jsonl"), jsonl([{ kind: "entry", principal: SIX.dingtalk, entry: { id: "p1", field: "preferences", text: "replies in Chinese", at: "2026-10-08T00:00:00.000Z", source: "person" } }]));
+  write(join(home, "people.jsonl"), jsonl([
+    { kind: "entry", principal: SIX.dingtalk, entry: { id: "p1", field: "preferences", text: "replies in Chinese", at: "2026-10-08T00:00:00.000Z", source: "person" } },
+    // Written in Settings → Mine with nobody signed in: the placeholder `me`, who is the same person (INV-1705).
+    { kind: "entry", principal: "me", entry: { id: "p2", field: "habits", text: "reviews in the evening", at: "2026-10-08T01:00:00.000Z", source: "person" } },
+  ]));
   if (options.boxes !== false) {
     write(join(home, "agents", "boxes.json"), `${JSON.stringify([{ id: "box_fake_default", name: "default", kind: "docker", displayFloor: 1, workDir: "/home/box/work", members: [SIX.admin, SIX.work1, "someone-else"], createdAt: "2026-09-20T08:00:00.000Z" }], null, 2)}\n`);
   }
