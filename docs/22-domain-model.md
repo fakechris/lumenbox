@@ -78,7 +78,8 @@ Principal ─1..n─ Identity ─minted by─ Channel ─routes into─▶ Box �
 pointing at another room's worker is a schema error, not a runtime surprise.
 
 A Principal belongs to one installation's roster. A person who is an Owner at home and a driver
-in an organisation is two Principals with nothing linking them (docs/95 §4).
+in an organisation is two Principals with nothing linking them (docs/95 §4). A box, too, belongs to
+one installation, whatever machine it runs on (docs/96 §2).
 
 ## 1a. Owner and Admin: an installation-mode field, not a role (INV-1685, INV-1689)
 

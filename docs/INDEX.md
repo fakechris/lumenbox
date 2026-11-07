@@ -99,7 +99,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [25-workbuddy](25-workbuddy.md) | Workbuddy: skills, presets, delegated engines — the hands-on program | current | 2026-11-05 |
 | [26-inbound-reliability](26-inbound-reliability.md) | Inbound reliability: what a message goes through, and what mature harnesses do | current | 2026-11-01 |
 | [29-bot-templates](29-bot-templates.md) | Bot templates: the bot packs itself, the new bot installs itself | current | 2026-11-05 |
-| [30-multi-box](30-multi-box.md) | Many boxes, one host: the multi-box mode | current | 2026-11-01 |
+| [30-multi-box](30-multi-box.md) | Many boxes, one host: the multi-box mode | current | 2026-11-06 |
 | [31-harness-review](31-harness-review.md) | The turn engine, reviewed against the incident and three references | current | 2026-09-26 |
 | [32-coordination-protocol](32-coordination-protocol.md) | Coordination as protocol, slice one: a fork ledger that survives restarts, and fenced children | current | 2026-11-06 |
 | [33-mcp-face](33-mcp-face.md) | The box gets an MCP face: a per-job route on the host, never a credential in the box | current | 2026-11-06 |
@@ -143,6 +143,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [89-thesis.zh](89-thesis.zh.md) | LumenBox 的设计：一支 agent 团队、一台台真机器、一套记录 | current | 2026-11-01 |
 | [90-outside-supervisor](90-outside-supervisor.md) | 外部监督者：一个委托人，不是一双手 | current | 2026-11-02 |
 | [95-two-installations](95-two-installations.md) | Two installations side by side: a personal one that is its Owner's alone, an organisation that is a server | current | 2026-11-06 |
+| [96-box-hosts](96-box-hosts.md) | Where a box runs is a second axis: personal machine, personal + organisation, organisation node | current | 2026-11-06 |
 
 ## handoff
 
