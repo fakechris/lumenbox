@@ -6,7 +6,7 @@
  * shell through the preload bridge (`window.lumenboxShell.organisations`, electron/preload.cjs), and
  * the personal server never sees an organisation's address, identity or token. In a browser there is
  * no bridge, and the tab is not mounted. The shell answers a refusal as a code; the words for it are
- * here, in the bundle (`ui.organisations.why-<code>`). The first-level switcher is INV-1691.
+ * here, in the bundle (`ui.organisations.why-<code>`). Open shows the organisation in this window, beside the first level (installations-ui.ts, INV-1691).
  */
 export const ORGANISATIONS_JS = `(function () {
   var shell = window.lumenboxShell && window.lumenboxShell.organisations;
@@ -29,11 +29,11 @@ export const ORGANISATIONS_JS = `(function () {
       who.appendChild(el("div", { style: "font-weight:600" }, c.name));
       who.appendChild(el("div", { class: "dim", style: "font-size:12px" }, c.origin + " · {{ui.organisations.you-are}} " + (c.person || c.identity) + " (" + (ROLE[c.role] || c.role) + ")"));
       var openBtn = el("button", { class: "btn", type: "button", "data-org-open": c.id }, "{{ui.organisations.open}}");
-      openBtn.onclick = function () { shell.open(c.id).then(function (a) { ui.line.textContent = a.error ? why(a) : ""; }); };
+      openBtn.onclick = function () { shell.open(c.id).then(function (a) { ui.line.textContent = a.error ? why(a) : ""; if (!a.error) { document.getElementById("settingswrap").style.display = "none"; if (window.installRail) window.installRail.refresh(); } }); };
       var leave = el("button", { class: "btn ghost", type: "button", "data-org-leave": c.id }, "{{ui.organisations.disconnect}}");
       leave.onclick = function () {
         if (leave.getAttribute("data-sure") !== "1") { leave.setAttribute("data-sure", "1"); leave.textContent = "{{ui.organisations.disconnect-sure}}"; return; }
-        shell.disconnect(c.id).then(function (a) { ui.line.textContent = a.error ? why(a) : "{{ui.organisations.disconnected}}"; load(); });
+        shell.disconnect(c.id).then(function (a) { ui.line.textContent = a.error ? why(a) : "{{ui.organisations.disconnected}}"; load(); if (window.installRail) window.installRail.refresh(); });
       };
       row.appendChild(who); row.appendChild(openBtn); row.appendChild(leave);
       ui.list.appendChild(row);
@@ -49,7 +49,7 @@ export const ORGANISATIONS_JS = `(function () {
       if (a.cancelled) { ui.line.textContent = "{{ui.organisations.sign-in-closed}}"; return; }
       ui.address.value = ""; ui.name.value = "";
       ui.line.textContent = "{{ui.organisations.joined}} " + a.connection.name + ".";
-      load();
+      load(); if (window.installRail) window.installRail.refresh();
     });
   }
   function mount() {
