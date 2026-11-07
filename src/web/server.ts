@@ -242,7 +242,8 @@ import { firstRunCue } from "../host/prompt.ts";
 import { dockerEnvironment, readBoxToken, type DockerEnvironmentState } from "../box/docker.ts";
 import { attachedBox, tokenOf } from "../box/boxes.ts";
 import { catalogTemplate, describeTemplate, parseTemplate, resolveBundleRefs, rewriteFrontmatter, templatesEnabled, unresolvedPlaceholders } from "../host/template.ts";
-import { SKILLS_DIR, SKILL_FILENAME, authoringHints, parseSkillFile, slugify } from "../host/skills.ts";
+import { SKILL_FILENAME, authoringHints, parseSkillFile, slugify } from "../host/skills.ts";
+import { skillsDir } from "../host/box-paths.ts";
 import { catchUpFloor } from "../channels/ingress.ts";
 import { REPLAY_MAX_AGE_MS } from "../channels/feishu.ts";
 import { ActivityLog } from "./activity.ts";
@@ -2591,7 +2592,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // under its own `.seeded` marker.
     for (const status of orchestrator.boxStatus()) {
       const client = orchestrator.boxClientById(status.id);
-      if (client) void seedStarterSkills(client, line => log(`${status.name}: ${line}`));
+      if (client) void seedStarterSkills(client, line => log(`${status.name}: ${line}`), skillsDir(registry.boxById(status.id)));
     }
     orchestrator.onTemplateStaged = staged => {
       const agentName = registry.tryGet(staged.agentId)?.profile.name ?? staged.agentId;
@@ -4047,7 +4048,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           frontmatter += `paused: true\nauthored_by: web\n---\n`;
           
           const fileContent = frontmatter + instruction + "\n";
-          const dirPath = `${SKILLS_DIR}/${slug}`;
+          const dirPath = `${skillsDir(registry.defaultBox())}/${slug}`; // orchestrator.boxClient() is the installation's own box
           
           try {
             // Refuse to overwrite an existing skill — renaming or editing is a different action.
@@ -6517,7 +6518,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (box === undefined || !/^[A-Za-z0-9._-]+$/.test(slug) || (mode !== undefined && !["off", "observe", "auto"].includes(mode))) {
             send(res, 400, apiError(box === undefined ? "no-box" : mode !== undefined ? "routine-mode" : "skill-slug-invalid")); return;
           }
-          const path = `${SKILLS_DIR}/${slug}/${SKILL_FILENAME}`;
+          const path = `${skillsDir(registry.defaultBox())}/${slug}/${SKILL_FILENAME}`; // orchestrator.boxClient() is the installation's own box
           try {
             const existing = await box.readFile(path);
             const resumed = route.endsWith("/resume"); if (resumed) orchestrator.scheduler.resume(slug, caller.userId === undefined ? "the operator" : principals.resolve(caller.userId).name ?? caller.userId); // a host pause clears with the file's (INV-1665)

@@ -159,7 +159,7 @@ export interface Preset {
    * upgrade is, measured on mcode's ACP, is docs/81 (INV-1234): a session per delegation,
    * permission questions to the policy gate, steer and cancel as the engine's own calls.
    */
-  run: (quotedPrompt: string, model?: string, extraArgs?: string) => string;
+  run: (quotedPrompt: string, model?: string, extraArgs?: string, paths?: BoxPaths) => string;
   /**
    * Where this engine looks for reusable methods, if it does, on this box. The box's own
    * skills directory is linked here (`skillsLink`): at install on a Docker box, before each
@@ -173,7 +173,7 @@ export interface Preset {
    * for boxd to keep alive and the host to speak to. Absent for engines without one; the
    * one-shot `run` stays the whole story for them.
    */
-  acp?: { command: (model?: string) => string };
+  acp?: { command: (model?: string, paths?: BoxPaths) => string };
   /**
    * The wires this engine can speak to a model over. The built-in relay forwards bytes as
    * sent, so an engine that only speaks Anthropic's API cannot be pointed at an OpenAI-wire
@@ -435,12 +435,17 @@ export const MCODE_MAX_STEPS = 200;
  * finished — and must be `subagent` here (INV-1232, verification-policy.ts). Read from
  * minimax-code 9a93560 / 0.6.12; the permission policy is on the command line below.
  */
-function mcodeProfileShell(model: string | undefined, permissionMode?: "default"): string {
+function mcodeProfileShell(model: string | undefined, permissionMode?: "default", paths?: BoxPaths): string {
   const id = model !== undefined ? quoteForShell(model) : '"${LUMENBOX_RELAY_MODEL:?mcode needs a model name}"';
   // The session form names its permission policy in the profile (there is no flag for `acp`):
   // `default` is Ask, which is what routes the question to this host. Never the engine's own
   // default, `auto`, which classifies in MiniMax's cloud (docs/81 §1).
   const mode = permissionMode !== undefined ? `permissionMode: ${permissionMode}\\n` : "";
+  // Its skills (INV-1719): mcode also reads `<data dir>/skills` (its "user-global" root, which
+  // may be a symlink; read from 0.6.12). Where `~` is not the box's (a host box), the box's skills
+  // are linked there, in the run's own directory, and leave with it; elsewhere `~/.agents/skills`
+  // is linked at install and this line is not written.
+  const skills = paths !== undefined && paths.home === undefined ? ` && ln -s ${paths.skills} "$d/skills"` : "";
   return (
     // TERM is trapped as well as EXIT: boxd ends a session with a TERM to the process group, and
     // bash runs no EXIT trap for a signal it was not told about — the profile would outlive the
@@ -448,7 +453,7 @@ function mcodeProfileShell(model: string | undefined, permissionMode?: "default"
     `d=$(mktemp -d /tmp/mcode.XXXXXX) && trap 'rm -rf "$d"' EXIT && trap 'rm -rf "$d"; exit 143' TERM INT HUP && umask 077 && m=${id} && ` +
     `printf 'custom_provider:\\n  lumenbox:\\n    api: %s\\n    options:\\n      apiKey: %s\\n      baseURL: %s\\n    models:\\n      %s: {}\\ndefaultModel: custom_provider:lumenbox/%s\\n${mode}goal:\\n  verification: subagent\\n' ` +
     `"\${LUMENBOX_RELAY_API:-anthropic-messages}" "\${LUMENBOX_RELAY_TOKEN:?mcode needs the relay token}" "\${LUMENBOX_RELAY_URL:?mcode needs the relay url}" "$m" "$m" > "$d/config.yaml" && ` +
-    `export MINIMAX_DATA_DIR="$d"`
+    `export MINIMAX_DATA_DIR="$d"${skills}`
   );
 }
 
@@ -470,14 +475,15 @@ PRESETS_MUTABLE.push({
   // sandbox; the prompt has no one to ask. `--max-steps` is the budget; the engine reports
   // `limit_exceeded` when it is reached. The model is the relay's entry, named as
   // `custom_provider:lumenbox/<id>`, and travels as a flag as well as in the profile.
-  run: (quoted, model, extraArgs) =>
-    `${mcodeProfileShell(model)} && mcode exec --config "$d/config.yaml" ${MACHINE_OUTPUT.mcode} --permission full --max-steps ${MCODE_MAX_STEPS}` +
+  run: (quoted, model, extraArgs, paths) =>
+    `${mcodeProfileShell(model, undefined, paths)} && mcode exec --config "$d/config.yaml" ${MACHINE_OUTPUT.mcode} --permission full --max-steps ${MCODE_MAX_STEPS}` +
     ` --model "custom_provider:lumenbox/$m"${extraArgs ? ` ${extraArgs}` : ""} ${quoted}`,
   // The session form: the same profile, Ask as the permission policy, and the engine's ACP
   // surface on its stdio for boxd to hold (docs/81). The model goes in the profile's
   // defaultModel; `mcode acp` has no --model flag.
-  acp: { command: model => `${mcodeProfileShell(model, "default")} && mcode acp` },
-  // mcode reads `~/.agents/skills` and no variable moves it, so where `~` is not the box's there is no mount.
+  acp: { command: (model, paths) => `${mcodeProfileShell(model, "default", paths)} && mcode acp` },
+  // mcode reads `~/.agents/skills` and no variable moves it, so where `~` is not the box's there is no
+  // mount: the run links the skills into its own data directory instead (mcodeProfileShell).
   skillsMount: paths => (paths.home !== undefined ? `${paths.homes.mcode}/skills` : undefined),
   wires: ["anthropic", "openai"],
   // mcode reads no BASE_URL or API_KEY variables at all (bash-subprocess-env.ts scrubs them from

@@ -6,7 +6,7 @@
  */
 import { commitsOf, type Operation, operationProblem, runOperation } from "./operation.ts";
 import { desktopRunner } from "./operation-desktop.ts";
-import { SKILLS_DIR } from "./skills.ts";
+import { skillsDir } from "./box-paths.ts";
 import type { ToolContext } from "./tools.ts";
 
 export function withOperationTool(tools: { name: string; input_schema: unknown }[]): void {
@@ -35,7 +35,7 @@ export async function runOperationTool(context: ToolContext, input: Record<strin
   if (!/^[A-Za-z0-9._-]{1,120}$/.test(slug)) return { text: "Outcome: refused — skill is the skill's directory name.", isError: true };
   let op: Operation;
   try {
-    op = JSON.parse((await box.readFile(`${SKILLS_DIR}/${slug}/operation.json`)).content) as Operation;
+    op = JSON.parse((await box.readFile(`${skillsDir({ kind: context.boxKind, workDir: context.boxWorkDir })}/${slug}/operation.json`)).content) as Operation;
   } catch (error) {
     return { text: `Outcome: failed — ${slug} has no readable operation.json (${error instanceof Error ? error.message : String(error)}).`, isError: true };
   }

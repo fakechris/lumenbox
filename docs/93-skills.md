@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: skills
-     updated: 2026-11-06
+     updated: 2026-11-07
 -->
 # Skills: the SKILL.md contract, where skills live, and how a skill becomes a routine
 
@@ -22,7 +22,10 @@ optionally with scripts and assets beside it. It is not a plugin, a DSL or a wor
   (`SKILLS_DIR`). That is the one place that is writable by the agent with the tools it already
   has (`write_file`, `bash`), readable and editable by a person through the files view, and
   durable across a rebuild. A helper script has to be where `bash` can run it, which rules out
-  anywhere outside the box.
+  anywhere outside the box. On a host box (the person's own machine) the work volume is the
+  box's work directory, so the skills are at `<work>/skills/<slug>/SKILL.md`: every host-side
+  reader and writer (seeding, the index, templates, the skill-file checks) asks
+  `skillsDir(box)` in `src/host/box-paths.ts`, never the literal path (INV-1719).
 - **The slug is the directory name**, and the skill's id. A directory without a readable
   `SKILL.md` is a directory, not a broken skill. Every other *file* in the directory is a
   helper, named in the index so the agent knows it is there to be run.
