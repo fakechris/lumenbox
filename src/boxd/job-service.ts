@@ -289,6 +289,8 @@ export class JobService {
           ...input.scrubbedEnv,
           ...(input.display !== undefined ? { DISPLAY: `:${input.display}` } : {}),
           ...input.env,
+          // The native box's state directory (INV-1710) wins: elsewhere the sandbox refuses the write.
+          ...confined?.env,
         },
         stdio: ["ignore", "pipe", "pipe"],
         detached: true,

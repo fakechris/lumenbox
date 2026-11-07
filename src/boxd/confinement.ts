@@ -16,13 +16,21 @@
  *     agent living here is not asked before each command the way `RunOnHost` is;
  *   - **network** only to the box's egress proxy when a relay is configured, and none otherwise.
  *
+ * The tools and engines an agent runs keep state under `$HOME` (`~/.npm`, `~/.cache`, `~/.claude`,
+ * `~/.codex`), which the rules above refuse. Opening the home would hand the box the person's own
+ * engine logins, so instead each agent gets a state directory of its own under the work directory
+ * (`<work>/.state/<agent>`, INV-1710), and every confined start points the XDG directories, npm's
+ * cache and the engines' homes there (`stateEnvironment`). The person's own engine homes are
+ * hidden like the credentials. Per agent is for order, not secrecy: agents on one box are one user.
+ *
  * Fail closed: where the sandbox cannot be applied, nothing runs, and the refusal says why. A bare
  * fall-back would be exactly the hole this closes. Every confined start and every refusal is a line
  * in the daemon's log, with who asked, which is the audit the box keeps of itself.
  */
 
-import { realpathSync } from "node:fs";
+import { mkdirSync, realpathSync } from "node:fs";
 import type { Server } from "node:net";
+import { join } from "node:path";
 import { HostSandbox, sandboxViolations, type WrappedCommand } from "../host/host-sandbox.ts";
 import { mirrorOnUnixSocket } from "../host/host-egress.ts";
 import type { Roots } from "./headless.ts";
@@ -32,6 +40,34 @@ export class ConfinementRefused extends Error {}
 
 /** The writable temp directory every shell script assumes, beside the user's own `$TMPDIR`. */
 const SYSTEM_TMP = "/tmp";
+
+/** Where an agent's tools and engines keep their state, relative to its state directory; variable → subdirectory. */
+export const STATE_VARIABLES = {
+  XDG_CACHE_HOME: "cache",
+  XDG_CONFIG_HOME: "config",
+  XDG_DATA_HOME: "data",
+  XDG_STATE_HOME: "state",
+  npm_config_cache: "npm",
+  CLAUDE_CONFIG_DIR: "claude",
+  CODEX_HOME: "codex",
+} as const;
+
+/** The state directory's name for who asked: `agent:a1` → `a1`; nobody named → `unlabelled`. */
+export function stateName(actor: string | undefined): string {
+  const name = (actor ?? "").replace(/^agent:/, "").replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "").slice(0, 64);
+  return name === "" ? "unlabelled" : name;
+}
+
+/** The environment that puts an agent's tool and engine state in `dir`; each subdirectory exists after this. */
+export function stateEnvironment(dir: string): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [variable, sub] of Object.entries(STATE_VARIABLES)) {
+    env[variable] = join(dir, sub);
+    // Codex refuses a CODEX_HOME that does not exist, so every one is made, not only the parent.
+    mkdirSync(env[variable]!, { recursive: true, mode: 0o700 });
+  }
+  return env;
+}
 
 export interface ConfineContext {
   /** The directory the command starts in; starting there makes nothing writable. */
@@ -44,7 +80,11 @@ export interface ConfineContext {
 
 export interface Confine {
   /** The command to spawn instead. Throws `ConfinementRefused` when the sandbox is unavailable. */
-  wrap(command: string, args: readonly string[], context: ConfineContext): { command: string; args: string[]; wrapped: WrappedCommand };
+  /**
+   * The command to spawn instead, and `env` to set last, over the request's own: the agent's state
+   * directory (`stateEnvironment`). Throws `ConfinementRefused` when the sandbox is unavailable.
+   */
+  wrap(command: string, args: readonly string[], context: ConfineContext): { command: string; args: string[]; wrapped: WrappedCommand; env: Record<string, string> };
   /** The block to append to a failed command's stderr when the sandbox may be why; logged as a refusal. */
   violations(wrapped: WrappedCommand, result: { exit_code: number; stderr: string }, context: ConfineContext): string | undefined;
   /** Mirror the egress proxy's port where a Linux namespace can reach it (host-egress.ts). */
@@ -58,7 +98,7 @@ export interface ConfinementOptions {
   headless: boolean;
   /** The granted directories, read on every call so a change is seen. */
   roots: () => Roots;
-  /** Where the box's own work lives (`AGENTBOX_WORK_DIR`); always writable. */
+  /** Where the box's own work lives (`AGENTBOX_WORK_DIR`); always writable, and the agents' state directories are under it. */
   workDir?: string;
   /** The box's egress proxy port, once up; the only network a confined command reaches. */
   egressPort: () => number | undefined;
@@ -98,6 +138,11 @@ export function confinementFor(options: ConfinementOptions): Confine | undefined
     };
   };
   const who = (context: ConfineContext) => `${context.what} [${context.actor ?? "unlabelled"}]`;
+  // Under the work directory, which is writable; with none, under the temp directory, which is too.
+  const stateRoot = () => join(options.workDir !== undefined && options.workDir !== "" ? options.workDir : systemTmp, ".state");
+  const widen = (context?: ConfineContext) =>
+    `Tools and engines keep their state in ${context === undefined ? join(stateRoot(), "<agent>") : join(stateRoot(), stateName(context.actor))} ($${Object.keys(STATE_VARIABLES).join(", $")}), not in the person's home, whose engine logins this box never sees. ` +
+    "The person widens the rules by granting a directory rw in the box's bundle (agentbox host up --repo)";
   return {
     wrap(command, args, context) {
       const reason = sandbox.unavailableReason();
@@ -109,11 +154,12 @@ export function confinementFor(options: ConfinementOptions): Confine | undefined
         );
       }
       const wrapped = sandbox.wrap(command, args, { ...rules(), ...(context.cwd !== undefined ? { runIn: context.cwd } : {}) });
+      const env = stateEnvironment(join(stateRoot(), stateName(context.actor)));
       options.log(`confinement: ${who(context)} under ${wrapped.mechanism}`);
-      return { command: wrapped.command, args: wrapped.args, wrapped };
+      return { command: wrapped.command, args: wrapped.args, wrapped, env };
     },
     violations(wrapped, result, context) {
-      const block = sandboxViolations(wrapped, { code: result.exit_code, stderr: result.stderr }, "The person widens them by granting the directory rw in the box's bundle (agentbox host up --repo)");
+      const block = sandboxViolations(wrapped, { code: result.exit_code, stderr: result.stderr }, widen(context));
       if (block !== undefined) options.log(`confinement: refused by the sandbox, ${who(context)} (exit ${result.exit_code}): ${result.stderr.trim().split("\n").at(-1)?.slice(0, 200) ?? ""}`);
       return block;
     },
@@ -124,7 +170,7 @@ export function confinementFor(options: ConfinementOptions): Confine | undefined
     describe() {
       const reason = sandbox.unavailableReason();
       if (reason !== undefined) return `every command is refused: the OS sandbox is unavailable (${reason})`;
-      return `commands run under ${sandbox.mechanism}: ${sandbox.wrap("/bin/true", [], rules()).rules.join("; ")}`;
+      return `commands run under ${sandbox.mechanism}: ${sandbox.wrap("/bin/true", [], rules()).rules.join("; ")}; ${widen()}`;
     },
   };
 }
