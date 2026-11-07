@@ -95,8 +95,8 @@ const PLAIN_PATH = /^\/[A-Za-z0-9._/@+-]*$/;
 /** The paths for this agent on this box, or what to do when a host box's work directory cannot be used. */
 export function boxPaths(box: { kind: "docker" | "attached" | "host"; workDir?: string }, agentId: string): BoxPaths | { error: string } {
   if (box.kind !== "host") return DOCKER_BOX_PATHS;
-  const work = box.workDir === undefined || box.workDir === "" ? undefined : posix.normalize(box.workDir).replace(/\/+$/, "");
-  if (work === undefined || !PLAIN_PATH.test(work)) {
+  const work = hostWork(box.workDir);
+  if (work === undefined) {
     return {
       error:
         `This host box's work directory (${box.workDir ?? "not recorded"}) cannot hold an engine's files: it must be an absolute path of letters, digits and . _ - / @ +. ` +
@@ -119,6 +119,25 @@ export function boxPaths(box: { kind: "docker" | "attached" | "host"; workDir?: 
     skillsAtRun: true,
     shell: path => path,
   };
+}
+
+/** A host box's work directory as its paths are built from it, or undefined when it cannot be used. */
+function hostWork(workDir: string | undefined): string | undefined {
+  const work = workDir === undefined || workDir === "" ? undefined : posix.normalize(workDir).replace(/\/+$/, "");
+  return work !== undefined && PLAIN_PATH.test(work) ? work : undefined;
+}
+
+/**
+ * The box's skills directory (INV-1719): where skills are seeded, indexed, written and read, on
+ * every box, whoever asks — the same directory `boxPaths(...).skills` projects into the engines.
+ * Not per agent: a box's skills are its own and every agent's on it. A Docker or attached box,
+ * or no box named, has the image's `/home/box/work/skills`, as it always had. A host box whose
+ * work directory cannot be used keeps that too: the box refuses it with a sentence, where an
+ * invented path would be silently empty.
+ */
+export function skillsDir(box: { kind?: "docker" | "attached" | "host" | undefined; workDir?: string | undefined } | undefined): string {
+  const work = box?.kind === "host" ? hostWork(box.workDir) : undefined;
+  return work === undefined ? DOCKER_BOX_PATHS.skills : lumenboxDirs(work).skills;
 }
 
 function lumenboxDirs(work: string): Pick<BoxPaths, "work" | "skills" | "engines" | "enginesBin" | "mcpFaces" | "reports"> {

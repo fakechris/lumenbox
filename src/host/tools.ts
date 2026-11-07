@@ -42,7 +42,7 @@ import { catalogMenu, crewTeam, intersectTools, profilesFor } from "./catalog.ts
 import { type Claims, heldElsewhere } from "./claims.ts";
 import { namesControlSurface } from "./control-surfaces.ts";
 import { deliveryInstructions, reportPath } from "./delegate-report.ts";
-import { boxPaths } from "./box-paths.ts";
+import { boxPaths, skillsDir } from "./box-paths.ts";
 import { actOnDelegateSession } from "./delegate-session-actions.ts";
 import type { DelegateSessions } from "./delegate-sessions.ts";
 import {
@@ -327,8 +327,8 @@ export interface ToolContext {
   docReader?: { read: (url: string) => Promise<{ text: string; isError?: boolean }> };
   /** Records which agent wrote into a skill, for the scheduler (skill-provenance.ts). */
   skillProvenance?: {
-    noteWrite(input: { path: string; agentId: string; agentName: string; tool: string }): string | undefined;
-    noteCommand(input: { command: string; agentId: string; agentName: string }): string[];
+    noteWrite(input: { path: string; agentId: string; agentName: string; tool: string; skills?: string }): string | undefined;
+    noteCommand(input: { command: string; agentId: string; agentName: string; skills?: string }): string[];
   };
   /**
    * The template this turn is installing, when it is an imported bot's setup turn (docs/29).
@@ -2399,7 +2399,7 @@ function truncate(text: string, max: number): string {
   );
 }
 
-
+const skillsOf = (context: ToolContext): string => skillsDir({ kind: context.boxKind, workDir: context.boxWorkDir }); // every skill path a tool sees is judged against the agent's box's (INV-1719)
 /**
  * What a setup turn's write into a skill file becomes: stamped with the template it came from,
  * and — for a routine — paused. Outside a setup turn, or outside the skills directory, the
@@ -2407,7 +2407,7 @@ function truncate(text: string, max: number): string {
  */
 function templateStamp(context: ToolContext, path: string, content: string): string {
   if (context.templateSetup === undefined) return content;
-  if (skillSlugOf(path) === undefined || !path.endsWith(`/${SKILL_FILENAME}`)) return content;
+  if (skillSlugOf(path, skillsOf(context)) === undefined || !path.endsWith(`/${SKILL_FILENAME}`)) return content;
   return stampTemplateWrite(content, context.templateSetup);
 }
 
@@ -2819,7 +2819,7 @@ export async function dispatchTool(
       context.skillProvenance?.noteCommand({
         command: String(input.command ?? ""),
         agentId: context.agent.id,
-        agentName: context.agent.profile.name,
+        agentName: context.agent.profile.name, skills: skillsOf(context),
       });
       const command = String(input.command ?? "");
       // Before the box is even required: a shell that drives the browser or the screen
@@ -3218,7 +3218,7 @@ export async function dispatchTool(
               agentName: context.agent.profile.name,
               conversation: context.conversation ?? MAIN_CONVERSATION,
               engine: preset.name,
-              command: delegateCommand(preset, paths, preset.acp!.command(relayModel ?? delegateModel())),
+              command: delegateCommand(preset, paths, preset.acp!.command(relayModel ?? delegateModel(), paths)),
               cwd: input.cwd ? String(input.cwd) : paths.work,
               env,
               // A session has no face yet; the report comes back as a file (INV-1261).
@@ -3360,7 +3360,7 @@ export async function dispatchTool(
 
       let started: Awaited<ReturnType<typeof box.startJob>>;
       try {
-        started = await box.startJob(delegateCommand(preset, paths, preset.run(quoteForShell(briefed), relayModel ?? delegateModel(), extraArgs)), {
+        started = await box.startJob(delegateCommand(preset, paths, preset.run(quoteForShell(briefed), relayModel ?? delegateModel(), extraArgs, paths)), {
           ...(input.cwd ? { cwd: String(input.cwd) } : {}),
           ...(Object.keys(jobEnv).length > 0 ? { env: jobEnv } : {}),
           ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
@@ -3809,7 +3809,7 @@ export async function dispatchTool(
       }
 
       const updated = templateStamp(context, path, existing.content.replace(oldText, newText));
-      const named = skillSlugOf(path) !== undefined ? namesControlSurface(updated) : undefined;
+      const named = skillSlugOf(path, skillsOf(context)) !== undefined ? namesControlSurface(updated) : undefined;
       if (named !== undefined) {
         return {
           text:
@@ -3818,7 +3818,7 @@ export async function dispatchTool(
           isError: true,
         };
       }
-      const editContract = await skillWriteRefusal(box, path, updated); // INV-1375: the skill's skill.yaml, if any
+      const editContract = await skillWriteRefusal(box, path, updated, skillsOf(context)); // INV-1375: the skill's skill.yaml, if any
       if (editContract !== undefined) return { text: `Not edited: ${editContract}`, isError: true };
       // A standing file (INV-777) is capped, and its host copy is written in the same call.
       const standingEdited = standingFileOf(path, context.agent.id);
@@ -3829,7 +3829,7 @@ export async function dispatchTool(
       // Recorded like any other write, so the next writer still sees a conflict rather
       // than overwriting an edit nobody else knows happened.
       context.files?.observed(context.agent.id, path, versionOf(updated));
-      context.skillProvenance?.noteWrite({ path, agentId: context.agent.id, agentName: context.agent.profile.name, tool: "edit_file" });
+      context.skillProvenance?.noteWrite({ path, agentId: context.agent.id, agentName: context.agent.profile.name, tool: "edit_file", skills: skillsOf(context) });
       const delta = updated.split("\n").length - existing.content.split("\n").length;
       return {
         text:
@@ -3893,7 +3893,7 @@ export async function dispatchTool(
         if (refusal !== undefined) return { text: refusal, isError: true };
       }
 
-      const named = skillSlugOf(path) !== undefined ? namesControlSurface(content) : undefined;
+      const named = skillSlugOf(path, skillsOf(context)) !== undefined ? namesControlSurface(content) : undefined;
       if (named !== undefined) {
         return {
           text:
@@ -3905,7 +3905,7 @@ export async function dispatchTool(
         };
       }
       const written = templateStamp(context, path, content);
-      const writeContract = await skillWriteRefusal(box, path, written); // INV-1375: the skill's skill.yaml, if any
+      const writeContract = await skillWriteRefusal(box, path, written, skillsOf(context)); // INV-1375: the skill's skill.yaml, if any
       if (writeContract !== undefined) return { text: `Not written: ${writeContract}`, isError: true };
       // A standing file (INV-777) is capped, and its host copy — the one that counts — is written
       // in the same call, so the agent's edit is in its next prompt and never reported back to it.
@@ -3917,7 +3917,7 @@ export async function dispatchTool(
       // Its own write is the newest thing it has seen, so writing twice in a row is not a conflict
       // with itself.
       context.files?.observed(context.agent.id, result.path, versionOf(written));
-      context.skillProvenance?.noteWrite({ path, agentId: context.agent.id, agentName: context.agent.profile.name, tool: "write_file" });
+      context.skillProvenance?.noteWrite({ path, agentId: context.agent.id, agentName: context.agent.profile.name, tool: "write_file", skills: skillsOf(context) });
       return { text: `Wrote ${result.bytes_written} bytes to ${result.path}.` };
     }
 
@@ -4965,7 +4965,7 @@ export async function dispatchTool(
     case "Forget": {
       const action = String(input.action ?? "");
       const conversation = context.conversation ?? MAIN_CONVERSATION;
-      const stores = { registry: context.registry, ...(context.tasks !== undefined ? { tasks: context.tasks } : {}), ...(context.box !== undefined ? { box: context.box } : {}), home: context.fetchedHome ?? agentboxHome() };
+      const stores = { registry: context.registry, ...(context.tasks !== undefined ? { tasks: context.tasks } : {}), ...(context.box !== undefined ? { box: context.box } : {}), skills: skillsOf(context), home: context.fetchedHome ?? agentboxHome() };
       if (action === "plan") {
         const about = String(input.about ?? "");
         const refused = forgettable(about);
@@ -5387,7 +5387,7 @@ export async function dispatchTool(
           memoryRecords: context.registry.readMemoryRecords(context.agent.id),
           ...(context.caller?.userId !== undefined ? { createdBy: context.caller.userId } : {}),
           ...(bundleRefs.length > 0 ? { bundles: bundleRefs } : {}),
-          learningsFor: host => readLearnings(host, context.learningsDir ?? learningsDir(), 50),
+          learningsFor: host => readLearnings(host, context.learningsDir ?? learningsDir(), 50), skillsDir: skillsOf(context),
         }
       );
       if ("refused" in packed) return { text: packed.refused, isError: true };

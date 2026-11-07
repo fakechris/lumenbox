@@ -699,8 +699,8 @@ export function recipeDirFor(agentName: string): string {
  * ask for. This, not the JSON, is what the cue points at: a model copies prose faithfully
  * and JSON with escaped newlines badly.
  */
-export function renderRecipe(template: BotTemplate, options: { self: string }): string {
-  const lines: string[] = [];
+export function renderRecipe(template: BotTemplate, options: { self: string; skills?: string }): string { // skills: the box's skillsDir (INV-1719)
+  const lines: string[] = [], skills = options.skills ?? SKILLS_DIR;
   const from = template.meta?.createdBy !== undefined ? ` by ${template.meta.createdBy}` : "";
   lines.push(`# Recipe for ${options.self} — from the template "${template.profile.name}"${from}`, "");
   lines.push("## Profile", "", template.profile.description, "");
@@ -717,24 +717,24 @@ export function renderRecipe(template: BotTemplate, options: { self: string }): 
     }
   };
   if (template.skills.length > 0) {
-    lines.push("## Skills", "", `Write each one under \`${SKILLS_DIR}/<slug>/\` exactly as given.`, "");
+    lines.push("## Skills", "", `Write each one under \`${skills}/<slug>/\` exactly as given.`, "");
     for (const entry of template.skills) {
       lines.push(`### ${entry.name} (\`${entry.slug}\`)`, "");
-      describeFiles(entry, `${SKILLS_DIR}/${entry.slug}`);
+      describeFiles(entry, `${skills}/${entry.slug}`);
     }
   }
   if (template.routines.length > 0) {
     lines.push(
       "## Routines",
       "",
-      `Write each one under \`${SKILLS_DIR}/<slug>/\` exactly as given, keeping \`paused: true\` and every \`{placeholder}\`. ` +
+      `Write each one under \`${skills}/<slug>/\` exactly as given, keeping \`paused: true\` and every \`{placeholder}\`. ` +
         "Nothing runs until the person fills the placeholders in and turns it on.",
       ""
     );
     for (const entry of template.routines) {
       lines.push(`### ${entry.name} (\`${entry.slug}\`)`, "");
       if (entry.fillIns.length > 0) lines.push(`Needs from the person: ${entry.fillIns.map(fillIn => `${fillIn.label} (\`{${fillIn.id}}\`)`).join("; ")}.`, "");
-      describeFiles(entry, `${SKILLS_DIR}/${entry.slug}`);
+      describeFiles(entry, `${skills}/${entry.slug}`);
     }
   }
   if (template.connectors.length > 0) {
@@ -785,7 +785,7 @@ export function describeBundleGaps(bundles: readonly BundleResolution[]): string
  */
 export function templateSetupCue(input: {
   template: BotTemplate;
-  self: string;
+  self: string; skills?: string; // skills: the box's skillsDir (INV-1719); the image's when not given
   recipePath: string;
   createdBy?: string;
   pending: { fillIns: TemplateFillIn[]; connectors: string[]; bundles?: BundleResolution[] };
@@ -814,7 +814,7 @@ export function templateSetupCue(input: {
   const steps: string[] = [];
   const nothingToInstall = template.skills.length === 0 && template.memory.length === 0 && template.routines.length === 0;
   if (template.skills.length > 0) {
-    steps.push(`write each skill to ${SKILLS_DIR}/<slug>/${SKILL_FILENAME} with write_file (and its helper files beside it), exactly as given`);
+    steps.push(`write each skill to ${input.skills ?? SKILLS_DIR}/<slug>/${SKILL_FILENAME} with write_file (and its helper files beside it), exactly as given`);
   }
   if (template.memory.length > 0) steps.push("save each memory with RememberFact, one per call, in the words given");
   if (template.routines.length > 0) {
@@ -950,7 +950,7 @@ export interface PackContext {
   /** The author's learnings for a host, as the file keeps them. */
   learningsFor?: (host: string) => string[];
   createdBy?: string;
-  now?: () => string;
+  now?: () => string; skillsDir?: string; // skillsDir: the author's box's (INV-1719); the image's when not given
 }
 
 /**
@@ -989,7 +989,7 @@ export async function packTemplate(
   const readSkillDir = async (slug: string): Promise<Record<string, string> | undefined> => {
     let entries: { name: string; type: string }[];
     try {
-      entries = (await source.listDir(`${SKILLS_DIR}/${slug}`)).entries;
+      entries = (await source.listDir(`${context.skillsDir ?? SKILLS_DIR}/${slug}`)).entries;
     } catch {
       return undefined;
     }
@@ -1018,7 +1018,7 @@ export async function packTemplate(
         }
       }
     };
-    await walk(`${SKILLS_DIR}/${slug}`, "", entries);
+    await walk(`${context.skillsDir ?? SKILLS_DIR}/${slug}`, "", entries);
     return files[SKILL_FILENAME] === undefined ? undefined : files;
   };
 

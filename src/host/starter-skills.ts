@@ -1192,15 +1192,15 @@ export async function seedStarterSkills(
       options?: { timeoutMs?: number; actor?: string }
     ) => Promise<unknown>;
   },
-  log: (line: string) => void
+  log: (line: string) => void, dir: string = SKILLS_DIR // dir: the box's, skillsDir(box) (INV-1719)
 ): Promise<SeedingResult> {
   const nothing: SeedingResult = { seed: [], update: [], keptLocal: [], hub: [] };
   try {
-    const listing = await box.listDir(SKILLS_DIR).catch(() => undefined);
+    const listing = await box.listDir(dir).catch(() => undefined);
     const existing = listing?.entries.map(entry => entry.name) ?? [];
     // `|| true` because an absent marker is the ordinary first-run case, not an error.
     const raw = (await box
-      .exec(`cat ${SKILLS_DIR}/${SEEDED_MARKER} 2>/dev/null || true`, {
+      .exec(`cat ${dir}/${SEEDED_MARKER} 2>/dev/null || true`, {
         timeoutMs: 15_000,
         actor: "host:starter-skills",
       })
@@ -1220,7 +1220,7 @@ export async function seedStarterSkills(
     // A starter we have not touched needs no round trip to confirm it is still itself.
     const inBox = new Map<string, string>();
     for (const slug of needsInspection(markerText, existing, starters)) {
-      const read = await box.readFile?.(`${SKILLS_DIR}/${slug}/SKILL.md`).catch(() => undefined);
+      const read = await box.readFile?.(`${dir}/${slug}/SKILL.md`).catch(() => undefined);
       if (read !== undefined) inBox.set(slug, read.content);
     }
     const plan = seedingPlan({ markerText, existing, starters, inBox });
@@ -1232,7 +1232,7 @@ export async function seedStarterSkills(
     for (const slug of plan.keptLocal) {
       log(
         `starter skill ${slug} has a newer version, and yours is edited — left alone. ` +
-          `Delete ${SKILLS_DIR}/${slug}/SKILL.md to take ours.`
+          `Delete ${dir}/${slug}/SKILL.md to take ours.`
       );
     }
     if (writing.length === 0 && hubMissing.length === 0) {
@@ -1242,18 +1242,18 @@ export async function seedStarterSkills(
     // Upload refuses a parent that does not exist — the same refusal that stops a
     // stray upload inventing directory trees — so the directories are made first,
     // deliberately, through the shell.
-    const dirs = [...new Set([...writing, ...hubMissing])].map(slug => `${SKILLS_DIR}/${slug}`).join(" ");
+    const dirs = [...new Set([...writing, ...hubMissing])].map(slug => `${dir}/${slug}`).join(" ");
     if (dirs !== "") {
       await box.exec(`mkdir -p ${dirs}`, { timeoutMs: 15_000, actor: "host:starter-skills" });
     }
     for (const skill of starters) {
       if (!writing.includes(skill.slug)) continue;
       await box.uploadFile(
-        `${SKILLS_DIR}/${skill.slug}/SKILL.md`,
+        `${dir}/${skill.slug}/SKILL.md`,
         Buffer.from(skill.content, "utf8").toString("base64")
       );
     }
-    for (const slug of hubMissing) await seedHubSkill(box, slug);
+    for (const slug of hubMissing) await seedHubSkill(box, slug, dir);
 
     // The marker records everything offered as of now, and which version: what it already
     // said, what was on disk (a pre-marker install has skills the marker never heard of,
@@ -1270,7 +1270,7 @@ export async function seedStarterSkills(
     for (const slug of writing) offered.set(slug, skillDigest(byContent.get(slug) ?? ""));
 
     await box.uploadFile(
-      `${SKILLS_DIR}/${SEEDED_MARKER}`,
+      `${dir}/${SEEDED_MARKER}`,
       Buffer.from(
         `${[...offered.entries()]
           .sort(([a], [b]) => a.localeCompare(b))
@@ -1281,7 +1281,7 @@ export async function seedStarterSkills(
     );
 
     if (plan.seed.length > 0) {
-      log(`seeded ${plan.seed.length} starter skill(s) into ${SKILLS_DIR}: ${plan.seed.join(", ")}`);
+      log(`seeded ${plan.seed.length} starter skill(s) into ${dir}: ${plan.seed.join(", ")}`);
     }
     if (hubMissing.length > 0) log(`seeded ${hubMissing.length} skill package(s): ${hubMissing.join(", ")}`);
     // Named separately from seeding, because replacing a file somebody already has is a
@@ -1307,18 +1307,18 @@ async function seedHubSkill(
       options?: { timeoutMs?: number; actor?: string }
     ) => Promise<unknown>;
   },
-  slug: string
+  slug: string, dir: string
 ): Promise<void> {
   const root = join(catalogDataDir(), "skills", slug);
   const files = listFiles(root);
-  const dirs = new Set(files.map(file => dirname(`${SKILLS_DIR}/${slug}/${file.rel}`)));
+  const dirs = new Set(files.map(file => dirname(`${dir}/${slug}/${file.rel}`)));
   await box.exec(`mkdir -p ${[...dirs].join(" ")}`, {
     timeoutMs: 15_000,
     actor: "host:starter-skills",
   });
   for (const file of files) {
     await box.uploadFile(
-      `${SKILLS_DIR}/${slug}/${file.rel}`,
+      `${dir}/${slug}/${file.rel}`,
       readFileSync(file.abs).toString("base64")
     );
   }

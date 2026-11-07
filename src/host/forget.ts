@@ -37,6 +37,8 @@ export interface ForgetStores {
   registry: AgentRegistry;
   tasks?: TaskStore;
   box?: Pick<BoxClient, "listDir" | "readFile" | "writeFile">;
+  /** That box's skills directory: `skillsDir(box)` (INV-1719); the image's when not given. */
+  skills?: string;
   /** The installation home: where fetched pages, kept results and the ledgers live. */
   home: string;
 }
@@ -82,7 +84,7 @@ export async function inventory(phrase: string, stores: ForgetStores): Promise<F
       transcripts += stores.registry.readAllContextTranscripts(agent.id, conversation).filter(entry => holds(JSON.stringify(entry))).length;
     }
   }
-  const { routines, skills } = await skillsMentioning(stores.box, needle);
+  const { routines, skills } = await skillsMentioning(stores.box, needle, stores.skills);
   return {
     memory,
     sharedMemory,
@@ -112,7 +114,7 @@ export interface ForgetOutcome {
 export async function executeForget(phrase: string, stores: ForgetStores): Promise<ForgetOutcome> {
   const needle = phrase.toLowerCase();
   // 1. The producers: a routine that would write it back is paused before anything is cleaned.
-  const { routinePaths } = await skillsMentioning(stores.box, needle);
+  const { routinePaths } = await skillsMentioning(stores.box, needle, stores.skills);
   const routinesPaused: string[] = [];
   for (const { slug, path } of routinePaths) {
     const read = await stores.box!.readFile(path);
@@ -247,10 +249,11 @@ function scrubLines(path: string, phrase: string): number {
 
 async function skillsMentioning(
   box: ForgetStores["box"],
-  needle: string
+  needle: string,
+  dir?: string
 ): Promise<{ routines: string[]; skills: string[]; routinePaths: { slug: string; path: string }[] }> {
   if (box === undefined) return { routines: [], skills: [], routinePaths: [] };
-  const loaded = await loadSkills(box as BoxClient).catch(() => ({ skills: [] as Awaited<ReturnType<typeof loadSkills>>["skills"] }));
+  const loaded = await loadSkills(box as BoxClient, [], dir).catch(() => ({ skills: [] as Awaited<ReturnType<typeof loadSkills>>["skills"] }));
   const routinePaths: { slug: string; path: string }[] = [];
   const skills: string[] = [];
   for (const skill of loaded.skills) {

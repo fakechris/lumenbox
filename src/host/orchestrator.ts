@@ -80,7 +80,7 @@ import {
   templatesEnabled,
   toolsOf,
 } from "./template.ts";
-import { SKILLS_DIR } from "./skills.ts";
+import { skillsDir } from "./box-paths.ts";
 import { intersectTools } from "./catalog.ts";
 import { DisplayLease } from "../box/display-lease.ts";
 import { AttachedBoxProvisioner, resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
@@ -411,7 +411,7 @@ export class Orchestrator {
   readonly scopes: ScopeStore | undefined;
   /** Bundles attached to boxes (INV-420). */
   readonly bundles: BundleStore;
-  readonly teachDrafts = new TeachDrafts(join(agentboxHome(), "skills-drafts"), new SkillHistory(join(agentboxHome(), "skill-history")));
+  readonly teachDrafts = new TeachDrafts(join(agentboxHome(), "skills-drafts"), new SkillHistory(join(agentboxHome(), "skill-history")), boxId => skillsDir(this.registry.boxById(boxId)));
   /** What routines committed to and whether anything holds it (INV-528). */
   readonly commitments = new CommitmentLedger(join(agentboxHome(), "commitments.jsonl"));
   /** Every routine run's result, delivered or not (INV-776). */
@@ -563,14 +563,14 @@ export class Orchestrator {
    * Cached because a prompt is built once per turn and reading them is a listing plus a read per
    * skill; four agents waking at once should not produce four scans of the same directory.
    */
-  readonly skills = new SkillCache(() => this.box, () => this.skillRoots());
+  readonly skills = new SkillCache(() => this.box, () => this.skillRoots(), undefined, undefined, () => skillsDir(this.registry.defaultBox()));
 
   /** The skills directory of one box, read at most every few seconds like the own box's. */
   skillsFor(boxId: string): SkillCache {
     if (boxId === this.registry.box.id) return this.skills;
     let cache = this.skillCaches.get(boxId);
     if (cache === undefined) {
-      cache = new SkillCache(() => this.boxClients.get(boxId), () => this.skillRoots());
+      cache = new SkillCache(() => this.boxClients.get(boxId), () => this.skillRoots(), undefined, undefined, () => skillsDir(this.registry.boxById(boxId)));
       this.skillCaches.set(boxId, cache);
     }
     return cache;
@@ -1418,7 +1418,7 @@ export class Orchestrator {
     const publish = async (boxId: string, path: string, content: string) => {
       const box = this.boxClients.get(boxId);
       if (!box) throw new Error("The teaching box is disconnected; retry when it reconnects");
-      await publishTeachingSkill(box, path, content);
+      await publishTeachingSkill(box, path, content, skillsDir(this.registry.boxById(boxId)));
     };
     return rollbackTo === undefined ? this.teachDrafts.approve(id, digest, actor, publish) : this.teachDrafts.rollback(id, rollbackTo, actor, publish);
   }
@@ -1689,7 +1689,7 @@ export class Orchestrator {
         const recipePath = `${dir}/recipe.md`;
         try {
           await box.exec(`mkdir -p ${dir}`, { timeoutMs: 15_000, actor: "host:template" });
-          await box.writeFile(recipePath, renderRecipe(template, { self: already.profile.name }));
+          await box.writeFile(recipePath, renderRecipe(template, { self: already.profile.name, skills: skillsDir(this.boxEntryOf(already.id)) }));
           await box.writeFile(`${dir}/recipe.json`, `${JSON.stringify(template, null, 2)}\n`);
         } catch (error) {
           log(`import ${id}: could not place the updated recipe: ${error instanceof Error ? error.message : String(error)}`);
@@ -1758,7 +1758,7 @@ export class Orchestrator {
       const recipePath = `${dir}/recipe.md`;
       try {
         await box.exec(`mkdir -p ${dir}`, { timeoutMs: 15_000, actor: "host:template" });
-        await box.writeFile(recipePath, renderRecipe(template, { self: agent.profile.name }));
+        await box.writeFile(recipePath, renderRecipe(template, { self: agent.profile.name, skills: skillsDir(this.boxEntryOf(agent.id)) }));
         await box.writeFile(`${dir}/recipe.json`, `${JSON.stringify(template, null, 2)}\n`);
       } catch (error) {
         log(`import ${id}: could not place the recipe in the box: ${error instanceof Error ? error.message : String(error)}`);
@@ -1766,7 +1766,7 @@ export class Orchestrator {
       }
       const cue = templateSetupCue({
         template,
-        self: agent.profile.name,
+        self: agent.profile.name, skills: skillsDir(this.boxEntryOf(agent.id)),
         recipePath,
         ...(options.caller?.userId !== undefined ? { createdBy: options.caller.userId } : {}),
         pending,
@@ -1793,7 +1793,7 @@ export class Orchestrator {
   private async reconcileTemplate(template: BotTemplate, agentId: string, id: string, box: BoxClient): Promise<ReconcileResult> {
     let skillDirs: string[] = [];
     try {
-      skillDirs = (await box.listDir(SKILLS_DIR)).entries.filter(entry => entry.type === "directory").map(entry => entry.name);
+      skillDirs = (await box.listDir(skillsDir(this.boxEntryOf(agentId)))).entries.filter(entry => entry.type === "directory").map(entry => entry.name);
     } catch {
       // No skills directory is the same as none landed.
     }
@@ -1802,7 +1802,7 @@ export class Orchestrator {
       const dir = skillDirs.find(name => name === routine.slug || name.startsWith(`${routine.slug}-`));
       if (dir === undefined) continue;
       try {
-        const read = await box.readFile(`${SKILLS_DIR}/${dir}/SKILL.md`);
+        const read = await box.readFile(`${skillsDir(this.boxEntryOf(agentId))}/${dir}/SKILL.md`);
         skillFiles.set(dir, read.content);
       } catch {
         // Unreadable counts as absent below.
@@ -1815,7 +1815,7 @@ export class Orchestrator {
     for (const dir of result.unpaused) {
       const text = skillFiles.get(dir);
       if (text === undefined) continue;
-      await box.writeFile(`${SKILLS_DIR}/${dir}/SKILL.md`, stampTemplateWrite(text, id)).catch(() => undefined);
+      await box.writeFile(`${skillsDir(this.boxEntryOf(agentId))}/${dir}/SKILL.md`, stampTemplateWrite(text, id)).catch(() => undefined);
     }
     return result;
   }

@@ -231,11 +231,13 @@ export function checkSkillDraft(
 export async function skillWriteRefusal(
   box: { readFile(path: string): Promise<{ content: string; truncated?: boolean }>; listDir(path: string): Promise<{ entries: { name: string; type: string }[] }> },
   absolutePath: string,
-  after: string
+  after: string,
+  /** The box's skills directory: `skillsDir(box)` (INV-1719). */
+  skills: string = SKILLS_DIR
 ): Promise<string | undefined> {
-  const slug = skillSlugOf(absolutePath);
+  const slug = skillSlugOf(absolutePath, skills);
   if (slug === undefined) return undefined;
-  const dir = `${SKILLS_DIR}/${slug}`;
+  const dir = `${skills}/${slug}`;
   const read = async (path: string) => {
     try {
       const file = await box.readFile(path);
@@ -244,7 +246,7 @@ export async function skillWriteRefusal(
       return undefined;
     }
   };
-  const relPath = absolutePath.replace(/^~\/work\//, "/home/box/work/").slice(dir.length + 1);
+  const relPath = (skills === SKILLS_DIR ? absolutePath.replace(/^~\/work\//, "/home/box/work/") : absolutePath).slice(dir.length + 1);
   const text = await read(`${dir}/${CONTRACT_FILE}`);
   if (text === undefined) return undefined;
   let contract: SkillContract;

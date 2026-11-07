@@ -1,14 +1,19 @@
 /** Skills: a saved prompt the agent runs, read from the box — what one is and the SKILL.md contract are docs/93. */
 
+import { posix } from "node:path";
 import { envNumber } from "../config.ts";
 import { namesControlSurface } from "./control-surfaces.ts";
 import { describeSchedule, knownTimezone, parseSchedule, type Schedule } from "./schedule.ts";
 import { parseDeliverWhen } from "./routine-resolve.ts";
 import { declaredTools } from "./side-effects.ts";
 import { engineToolNames } from "./engine-tools.ts";
+import { DOCKER_BOX_PATHS } from "./box-paths.ts";
 
-/** Where skills live inside the box: the work volume, for the reasons in docs/93 §1. */
-export const SKILLS_DIR = "/home/box/work/skills";
+/**
+ * Where skills live inside a Docker or attached box: the work volume, for the reasons in docs/93 §1.
+ * A host box's are under its own work directory; `skillsDir` (box-paths.ts) says which a box has.
+ */
+export const SKILLS_DIR = DOCKER_BOX_PATHS.skills;
 
 /** The one file that makes a directory a skill. */
 export const SKILL_FILENAME = "SKILL.md";
@@ -513,9 +518,11 @@ export function renderSkills(skills: readonly Skill[]): string {
     lines.push(line);
   }
   if (unlisted.length > 0) {
+    // The box's own directory, from where the skills were found: on a host box it is not the image's.
+    const root = posix.dirname(posix.dirname(unlisted[0]!.path));
     lines.push(
       `- (${unlisted.length} more not described here because the index is full — ` +
-        `${unlisted.map(skill => skill.slug).join(", ")}; each is at \`${SKILLS_DIR}/<slug>/${SKILL_FILENAME}\`)`
+        `${unlisted.map(skill => skill.slug).join(", ")}; each is at \`${root}/<slug>/${SKILL_FILENAME}\`)`
     );
   }
   // Framed as a step before acting, not as reference to consult "when one applies" (INV-715).
@@ -632,11 +639,13 @@ export interface SkillsLoad {
 export async function loadSkills(
   source: SkillSource,
   /** Further directories to search after the box's own, in order (R26). */
-  extraRoots: readonly string[] = []
+  extraRoots: readonly string[] = [],
+  /** The box's own skills directory: `skillsDir(box)`. */
+  dir: string = SKILLS_DIR
 ): Promise<SkillsLoad> {
   let entries: { name: string; type: string }[];
   try {
-    entries = (await source.listDir(SKILLS_DIR)).entries;
+    entries = (await source.listDir(dir)).entries;
   } catch {
     // Either the directory does not exist — the normal state of a fresh box — or the box is not
     // answering. Indistinguishable from here, so it is reported as "not read" and the caller decides.
@@ -685,9 +694,9 @@ export async function loadSkills(
       } else problems.push(result.problem);
     }
   };
-  await readRoot(SKILLS_DIR, entries);
+  await readRoot(dir, entries);
   for (const root of extraRoots) {
-    if (root === SKILLS_DIR) continue;
+    if (root === dir) continue;
     let list: { name: string; type: string }[];
     try {
       list = (await source.listDir(root)).entries;
@@ -728,7 +737,9 @@ export class SkillCache {
     /** Further roots to search after the box's own, read at each refresh (R26). */
     private readonly roots: () => readonly string[] = () => [],
     private readonly ttlMs = envNumber("AGENTBOX_SKILL_TTL_MS", 5_000),
-    private readonly now: () => number = Date.now
+    private readonly now: () => number = Date.now,
+    /** The box's own skills directory, read at each refresh: a box's record may change under it. */
+    private readonly dir: () => string = () => SKILLS_DIR
   ) {}
 
   /** What was last read. Synchronous, because prompt assembly is. */
@@ -764,7 +775,7 @@ export class SkillCache {
 
     this.inFlight = (async () => {
       try {
-        const loaded = await loadSkills(source, this.roots());
+        const loaded = await loadSkills(source, this.roots(), this.dir());
         // Only replaced when the directory was actually read. A box that is restarting must not make
         // an agent believe its skills were deleted — and since the list is in the prompt, an empty
         // one reads as "you have none" rather than "we could not check".
