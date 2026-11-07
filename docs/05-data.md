@@ -37,6 +37,7 @@ auto-review.jsonl           one verdict per reviewed tool call (auto-review.ts; 
 skill-provenance.jsonl      which agent the host saw write each skill (skill-provenance.ts)
 hooks.json                  lifecycle hooks in Claude Code's dialect (hooks.ts); read on mtime
 org-knowledge.jsonl         the organisation's knowledge, L1: one extended memory record per line (org-knowledge.ts, INV-1726)
+memory-conflicts.jsonl      pairs of items of different layers that disagree, by version (memory-conflicts.ts, INV-1732)
 agents/<agentId>/
   profile.json              identity and persona
   config-versions.jsonl     every version of its configuration, and where conversations and tasks switched (INV-1669)
@@ -353,6 +354,24 @@ characters on every turn, kept by latest review date and then latest verificatio
 counted ("N more"); items the turn's words touch follow, ranked by `rankRelated`, in 1,000.
 Never read by a guest turn (docs/97), an isolated turn, or a personal installation, which has
 none and whose writes are refused (`PersonalInstallationNeverWrites`, docs/98 §8).
+
+### 2.2e `memory-conflicts.jsonl` — items that disagree across layers (INV-1732, docs/98 §7)
+
+One line per pair of items of different layers (L1 organisation, L2 box, L3 an agent's own) that
+the memory maintenance pass said disagree, both found live when it said so:
+
+`{ at, sides: [{ layer: "org" | "box" | "agent", version, holder? }, { … }], by, reason, proposal? }`
+
+A `record` ledger (`src/host/memory-conflicts.ts`): append-only, read whole at start, a torn last
+line skipped, each append synced. It holds versions, never text: a turn shows a pair only when it
+may read both sides through their own stores' admission (§2.2c, §2.2d), so the file widens nobody's
+reading, and a pair whose side was retracted, superseded or expired is simply no longer shown. A
+pair is recorded once, in either order; a later line for the same pair only adds a `proposal`.
+`holder` names the agent of an `agent` side, the only agent that may read it. `proposal` is the
+version of a held line in `org-knowledge.jsonl` that would replace the L1 side: maintenance writes
+it held, owned by the replaced item's owner, and it supersedes nothing until a person approves it.
+The prompt renders the pairs under "These disagree", higher layer first, newest pair first, in
+1,200 characters, the rest counted.
 
 ### 2.2b `memory.jsonl`
 

@@ -485,7 +485,7 @@ export interface PromptContext {
   standing?: StandingSnapshot;
   /** The host's record of the person driving (INV-1653), already rendered; one text for every agent. */
   person?: string;
-  /** The organisation's knowledge this turn may read (INV-1726, org-knowledge.ts), already rendered: pinned items in their budget, then related ones. */ orgKnowledge?: string;
+  /** The organisation's knowledge this turn may read (INV-1726, org-knowledge.ts), already rendered: pinned items in their budget, then related ones. */ orgKnowledge?: string; /** Items of different layers that disagree, as pairs (INV-1732, memory-conflicts.ts), already rendered. */ memoryConflicts?: string;
 }
 
 /** One teammate line: name, id, and a clamped description. */
@@ -1111,6 +1111,7 @@ export const VOLATILE_SECTIONS: readonly PromptSection[] = [
         context.teammates.find(mate => mate.id === id)?.profile.name ?? id
       ),
   },
+  { name: "memory-conflicts", render: context => context.memoryConflicts ?? "" }, // after every memory section a pair's sides come from (INV-1732, docs/98 §7)
   { name: "team", render: context => teamSection(context) },
   {
     name: "unattended",

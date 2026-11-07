@@ -42,9 +42,13 @@ import {
   type MaintenancePlan,
   parseMaintenanceProposals,
   recordsOfPlan,
+  referenceForMaintenance,
   snapshotForMaintenance,
   verifyMaintenanceProposals,
 } from "./memory-maintenance.ts";
+import { type MemoryConflicts, recordAcrossLayers } from "./memory-conflicts.ts";
+import { recallable } from "./memory-scope.ts";
+import type { OrgKnowledge } from "./org-knowledge.ts";
 import { buildPitfallPrompt, type PitfallSource, parsePitfall } from "./pitfalls.ts";
 import type { ProviderProfile } from "./provider.ts";
 import { credentialIn } from "./secret-scan.ts";
@@ -202,6 +206,10 @@ export interface RememberDeps {
   onKept?: (agentId: string, kept: readonly MemoryRecord[], principal: string | undefined) => void;
   /** The decision-model switch's dependencies (INV-1412); tests replace them, production reads the environment. */
   jev?: SwitchDeps;
+  /** The organisation's knowledge (INV-1726): what maintenance reads beside the agent's own lines, and where it proposes a supersession, held (INV-1732). */
+  orgKnowledge?: Pick<OrgKnowledge, "recalledFor" | "append">;
+  /** Where maintenance records two items of different layers that disagree (INV-1732). Without it, the pass sees only the agent's own lines, as before. */
+  conflicts?: Pick<MemoryConflicts, "record">;
 }
 
 /**
@@ -623,18 +631,29 @@ export class Rememberer {
       if (!guard()) return undefined;
       const candidates = snapshotForMaintenance(this.deps.registry.readMemoryRecords(agentId));
       if (candidates.length < 2) return undefined;
-      const reply = await this.ask(agentId, buildMaintenancePrompt(candidates, now), options.principal, 2048);
+      // The box's and the organisation's items, read only, admitted for the agent and the person as a turn would read them (INV-1732).
+      const reference = this.deps.conflicts === undefined ? [] : referenceForMaintenance(candidates, {
+        box: recallable(this.deps.registry.readSharedMemory(agentId, options.principal)),
+        org: this.deps.orgKnowledge?.recalledFor(agentId, options.principal) ?? [],
+      });
+      const reply = await this.ask(agentId, buildMaintenancePrompt(candidates, now, reference), options.principal, 2048);
       const parsed = parseMaintenanceProposals(reply);
       if (!guard()) return undefined;
       // The live view is read again here, after the model answered: what the verify step
       // compares versions against is what is on disk now, not what the snapshot saw.
-      const plan = verifyMaintenanceProposals(parsed.proposals, candidates, this.deps.registry.readMemoryRecords(agentId), { now });
+      const plan = verifyMaintenanceProposals(parsed.proposals, candidates, this.deps.registry.readMemoryRecords(agentId), { now, reference, holder: agentId });
       plan.dropped.unshift(...parsed.dropped);
       for (const { proposal, why } of plan.dropped) {
         this.log(`maintenance dropped ${proposal.op ?? "a proposal"}${proposal.ids !== undefined ? ` of ${proposal.ids.join(",")}` : ""}: ${why}`);
       }
       const records = recordsOfPlan(plan);
       const summary = plan.changes.map(change => change.proposal.op).join(", ");
+      const across = plan.conflicts.length + plan.supersessions.length;
+      if (across > 0 && dryRun) this.log(`maintenance dry run: would record ${plan.conflicts.length} disagreement(s) and propose ${plan.supersessions.length} supersession(s); nothing written`);
+      else if (across > 0 && this.deps.conflicts !== undefined) {
+        const written = recordAcrossLayers(plan, { agentId, conflicts: this.deps.conflicts, ...(this.deps.orgKnowledge !== undefined ? { orgKnowledge: this.deps.orgKnowledge } : {}), now, log: line => this.log(line) });
+        this.log(`maintenance recorded ${written.pairs} disagreement(s) across layers and proposed ${written.proposals} supersession(s) for review`);
+      }
       if (records.length === 0) {
         this.log(`maintenance pass over ${candidates.length} memories found nothing to change`);
         return plan;

@@ -119,7 +119,7 @@ import type { PitfallSource } from "./pitfalls.ts";
 import { SkillCache } from "./skills.ts";
 import { parseSchedule, type Schedule, type Scheduled, Scheduler } from "./schedule.ts";
 import { heartbeatAgentOf, heartbeatItems, heartbeatSlug, readStanding, standingBoxDir } from "./standing.ts";
-import { UsageLog } from "./usage.ts"; import type { SpendLimits } from "./spend-limits.ts"; import { PersonRecords } from "./person.ts"; import { ORG_KNOWLEDGE_FILE, OrgKnowledge } from "./org-knowledge.ts"; import { boxRegistrationModeAt } from "./installation.ts"; import { principalsPath } from "./principals.ts";
+import { UsageLog } from "./usage.ts"; import type { SpendLimits } from "./spend-limits.ts"; import { PersonRecords } from "./person.ts"; import { ORG_KNOWLEDGE_FILE, OrgKnowledge } from "./org-knowledge.ts"; import { MEMORY_CONFLICTS_FILE, MemoryConflicts } from "./memory-conflicts.ts"; import { boxRegistrationModeAt } from "./installation.ts"; import { principalsPath } from "./principals.ts";
 import { AcpDelegates } from "./acp-delegate.ts";
 import { worktreeState } from "./worktree-state.ts";
 import { CredentialChecks } from "./credential-waits.ts";
@@ -317,7 +317,7 @@ export class Orchestrator {
   /** The host's one record of each person (INV-1653); every turn reads it, the judge's kept preferences feed it, Settings → Mine edits it. The name reader is wired by the server, which knows the principals. */
   readonly people = new PersonRecords(join(agentboxHome(), "people.jsonl")); personName?: (principalId: string) => string | undefined;
   /** The organisation's knowledge, L1 (INV-1726): replayed now, read by member turns, never written on a personal installation. The server replaces `mode` with the desktop-aware reading. */
-  readonly orgKnowledge = new OrgKnowledge(join(agentboxHome(), ORG_KNOWLEDGE_FILE), { mode: () => boxRegistrationModeAt(principalsPath(), false), boxes: () => this.registry });
+  readonly orgKnowledge = new OrgKnowledge(join(agentboxHome(), ORG_KNOWLEDGE_FILE), { mode: () => boxRegistrationModeAt(principalsPath(), false), boxes: () => this.registry }); readonly conflicts = new MemoryConflicts(join(agentboxHome(), MEMORY_CONFLICTS_FILE)); // pairs that disagree across layers (INV-1732)
   renderPerson(principalId: string | undefined): string | undefined { return this.people.render(principalId ?? this.people.operator, principalId === undefined ? "the operator" : (this.personName?.(principalId) ?? "the person")); }
   readonly generations = new BoxGenerations(line => console.error(`[box] ${line}`)); // which incarnation of each box a slow callback belongs to (INV-1476); bumped on every (re)connect
   readonly agentFacts = new AgentFacts(new ConversationState(join(agentboxHome(), "conversation-state.jsonl")), { approvals: () => this.policy.pending(), questions: () => this.questionsOpen?.() ?? [], pausedForSpend: () => this.pausedForSpend?.() ?? [], working: id => this.bus.isActive(id) }); questionsOpen?: () => readonly { agentId: string; conversation: string; question: string; askedAt: number }[]; pausedForSpend?: () => readonly { agentId: string; day: string }[]; // the four facts a sidebar row is drawn from (INV-1625); the two readers are wired by the server
@@ -992,7 +992,7 @@ export class Orchestrator {
       get provider() { return self.remembererRuntime.profile; },
       log: line => console.error(`[memory] ${line}`),
       usage: this.usage,
-      externalTool: tool => this.readsExternalContent(tool), heldValues: () => this.options.vault?.heldValues() ?? new Map(),
+      externalTool: tool => this.readsExternalContent(tool), heldValues: () => this.options.vault?.heldValues() ?? new Map(), orgKnowledge: this.orgKnowledge, conflicts: this.conflicts, // maintenance reads L1/L2 beside L3 and records what disagrees (INV-1732)
       onKept: (agentId, kept, principal) => { const added = this.people.absorb(kept, agentId, { ...(principal !== undefined ? { principal, name: this.personName?.(principal) } : {}) }); if (added.length > 0) console.error(`[memory] ${added.length} line(s) about the person taken from ${agentId}'s kept memories`); }, // INV-1653
     });
     this.policy.externalTool = tool => this.readsExternalContent(tool); this.policy.agentPermissions = (agentId, turnId) => permissionsInEffect(this.registry, agentId, turnId); // an agent's ask-before settings, as its running turn began under them (INV-1664, INV-1669)
@@ -1938,7 +1938,7 @@ export class Orchestrator {
       boxKind: this.boxEntryOf(agent.id).kind, boxWorkDir: this.boxEntryOf(agent.id).workDir,
       // The same cheap profile the summariser and the note-taker use: choosing memories is the least interesting work here.
       selectMemory: prompt => this.askCheaply(agent, prompt),
-      skillProvenance: this.skillProvenance, jobWatch: this.jobWatch, verifications: this.verifications, syncStanding: agentId => this.memoryMirror.sync(agentId), person: principalId => this.renderPerson(principalId), orgKnowledge: this.orgKnowledge, ...(this.spendLimits !== undefined ? { spendLimits: this.spendLimits } : {}),
+      skillProvenance: this.skillProvenance, jobWatch: this.jobWatch, verifications: this.verifications, syncStanding: agentId => this.memoryMirror.sync(agentId), person: principalId => this.renderPerson(principalId), orgKnowledge: this.orgKnowledge, conflicts: this.conflicts, ...(this.spendLimits !== undefined ? { spendLimits: this.spendLimits } : {}),
       ...(this.templateSetups.has(agent.id) ? { templateSetup: this.templateSetups.get(agent.id)! } : {}),
       templates: this.templates, hooks: this.hooks,
       // Same cheap profile. Shadow by default: the verdicts land in auto-review.jsonl and the web
