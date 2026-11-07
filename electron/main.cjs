@@ -40,6 +40,7 @@ const { windowOpenAction } = require("./external-links.cjs");
 const { systemKeychain } = require("./keychain.cjs");
 const { connectionStore } = require("./organisations.cjs");
 const { organisationWindows } = require("./organisation-windows.cjs");
+const { installationViews } = require("./installation-views.cjs");
 const uiAuth = desktopAuth();
 
 const PORT = Number(process.env.LUMENBOX_PORT || 7777);
@@ -51,6 +52,8 @@ const REPO = path.join(__dirname, "..");
 let serverChild = null;
 let mainWindow = null;
 let tray = null;
+/** The first level (INV-1691): which installation the main window shows. */
+let installations = null;
 let quitting = false;
 let crashRestarts = 0;
 /** The last lines the server wrote, for the dialog when it will not stay up. */
@@ -292,7 +295,7 @@ function notify(title, body, options = {}) {
   if (!Notification.isSupported()) return;
   const notification = new Notification({ title, body: body.slice(0, 240), silent: options.silent === true });
   // Clicking opens the window on the agent the notice was about.
-  notification.on("click", () => { createWindow(); if (options.agentId) mainWindow?.webContents.executeJavaScript(`select(${JSON.stringify(options.agentId)})`).catch(() => {}); });
+  notification.on("click", () => { createWindow(); installations?.select("personal"); if (options.agentId) mainWindow?.webContents.executeJavaScript(`select(${JSON.stringify(options.agentId)})`).catch(() => {}); });
   notification.show();
 }
 
@@ -488,7 +491,9 @@ function createWindow() {
 function startOrganisations() {
   const store = connectionStore({ file: path.join(app.getPath("userData"), "organisations.json"), keychain: systemKeychain() });
   const openOutside = url => shell.openExternal(url).catch(err => log(`could not open ${url}: ${err.message}`));
-  organisationWindows({ store, personalOrigin: new URL(PAGE).origin, parentWindow: () => mainWindow, openOutside, log }).handle(() => mainWindow?.webContents);
+  installations = installationViews({ store, mainWindow: () => mainWindow, openOutside, log });
+  organisationWindows({ store, views: installations, personalOrigin: new URL(PAGE).origin, parentWindow: () => mainWindow, openOutside, log }).handle(() => mainWindow?.webContents);
+  installations.start();
 }
 
 function buildTrayMenu() {
