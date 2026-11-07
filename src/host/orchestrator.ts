@@ -33,7 +33,7 @@ import { ModelRelay } from "./model-relay.ts";
 import { DelegateSessions } from "./delegate-sessions.ts";
 import { EXTENSIONS_SERVER, Extensions, extensionsDir } from "./extensions.ts";
 import { Effects } from "./effects.ts";
-import { Orchestrations } from "./orchestrate.ts";
+import { Orchestrations } from "./orchestrate.ts"; import { planCards } from "./plan-cards.ts"; import { watchDependencies } from "./task-deps.ts";
 import { FileVersions } from "./files.ts";
 import {
   giveUpNote,
@@ -1032,7 +1032,7 @@ export class Orchestrator {
                 .map(entry => entry.text as string)
                 .join("\n\n");
             },
-            readHandoff,
+            readHandoff, ...(this.tasks !== undefined ? { board: planCards(this.tasks) } : {}), // a plan from a turn working a task: its items are cards that task waits on (INV-1740)
             deliver: (agentId, text, conversation) =>
               this.bus.deliverSystem(agentId, text, conversation) !== undefined || this.bus.inboxless,
             resultsDir: () => process.env.AGENTBOX_ORCHESTRATIONS ?? join(agentboxHome(), "orchestrations"),
@@ -1120,7 +1120,7 @@ export class Orchestrator {
       judgeExperiment: (prompt, agentId) => this.askCheaply(this.registry.get(agentId), prompt), // the ledger's one question per continuation (INV-1475)
       log: line => console.error(`[goal] ${line}`),
     });
-    if (this.tasks !== undefined) this.tasks.onChange(task => this.goalLoop?.onTaskChanged(task));
+    if (this.tasks !== undefined) this.tasks.onChange(task => this.goalLoop?.onTaskChanged(task)); if (this.tasks !== undefined) watchDependencies(this.tasks, (task, text) => { this.bus.deliverSystem(task.assigneeId!, text, task.conversation ?? MAIN_CONVERSATION); }); // a task whose last blocker closed wakes its assignee, as a late fork result does (INV-1740)
     this.goalGate = this.tasks === undefined ? undefined : new GoalGate({
       tasks: this.tasks,
       registry: this.registry,
