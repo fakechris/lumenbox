@@ -16,6 +16,7 @@ import { readSupervisionConfig, supervisionFromBody } from "../supervision/confi
 import { newRunId } from "../supervision/main.ts";
 import { enqueue, listRuns, readStatus, requestStop, runDir } from "../supervision/queue.ts";
 import { supervisorModel, supervisorProviders } from "../supervisor/models.ts";
+import { apiError } from "./api-error.ts";
 
 export interface SupervisionRouteDeps {
   home: string;
@@ -93,8 +94,8 @@ export async function supervisionRoute(route: string, deps: SupervisionRouteDeps
     const body = await deps.readJson();
     const provider = String(body.provider ?? "");
     const key = typeof body.key === "string" ? body.key.trim() : "";
-    if (!providerNames().includes(provider) || provider === "custom") return { status: 400, body: { error: `no provider named ${provider}` } };
-    if (key === "" || /\s/.test(key)) return { status: 400, body: { error: "paste the key as one line" } };
+    if (!providerNames().includes(provider) || provider === "custom") return { status: 400, body: apiError("supervision-provider-unknown", { provider }) };
+    if (key === "" || /\s/.test(key)) return { status: 400, body: apiError("key-one-line") };
     const keyEnv = resolveProvider(provider).keyEnv;
     // The key alone: the default provider the agents use is not changed by setting up the supervisor.
     (deps.saveKey ?? ((name: string, value: string) => { saveConfig({ env: { [name]: value } }); applyConfigEnv(loadConfig()); }))(keyEnv, key);
@@ -120,9 +121,9 @@ export async function supervisionRoute(route: string, deps: SupervisionRouteDeps
     if (deps.refused("driver")) return { status: 0, body: null };
     const body = await deps.readJson();
     const objective = typeof body.objective === "string" ? body.objective.trim() : "";
-    if (objective === "") return { status: 400, body: { error: "A run needs an objective: what done looks like." } };
+    if (objective === "") return { status: 400, body: apiError("supervision-needs-objective") };
     const budget = body.budget === undefined || body.budget === "" || body.budget === null ? undefined : Number(body.budget);
-    if (budget !== undefined && (!Number.isFinite(budget) || budget <= 0)) return { status: 400, body: { error: "budget is a positive number, or empty" } };
+    if (budget !== undefined && (!Number.isFinite(budget) || budget <= 0)) return { status: 400, body: apiError("supervision-budget") };
     const agent = typeof body.agent === "string" && body.agent.trim() !== "" ? body.agent.trim() : undefined;
     const request = enqueue(deps.home, { id: newRunId(), objective: objective.slice(0, 2_000), ...(agent !== undefined ? { agent } : {}), ...(budget !== undefined ? { budget } : {}) });
     return { status: 200, body: { run: readStatus(deps.home, request.id) } };
@@ -132,7 +133,7 @@ export async function supervisionRoute(route: string, deps: SupervisionRouteDeps
     if (deps.refused("driver")) return { status: 0, body: null };
     const [, method, id, stop] = one;
     const status = readStatus(deps.home, id!);
-    if (status === undefined) return { status: 404, body: { error: `No run ${id}.` } };
+    if (status === undefined) return { status: 404, body: apiError("supervision-run-unknown", { run: id! }) };
     if (method === "POST" && stop !== undefined) {
       requestStop(deps.home, id!);
       return { status: 200, body: { stopping: true } };

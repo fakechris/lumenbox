@@ -13,6 +13,7 @@
 
 import { changesFor, configDiff, type ConfigVersion, switchesInConversation } from "../agents/config-versions.ts";
 import type { AgentRegistry } from "../agents/registry.ts";
+import { apiError } from "./api-error.ts";
 
 export async function configVersionRoute(
   route: string,
@@ -31,7 +32,7 @@ export async function configVersionRoute(
   const agentId = String(route.startsWith("POST") ? body.agent ?? "" : url.searchParams.get("agent") ?? "");
   if (deps.refused(agentId)) return { status: 0, body: null };
   const record = deps.registry.tryGet(agentId);
-  if (record === undefined) return { status: 404, body: { error: `No agent ${agentId}` } };
+  if (record === undefined) return { status: 404, body: apiError("agent-unknown", { agent: agentId }) };
   const store = deps.registry.configVersions;
 
   if (route === "GET /api/agents/config-versions") {
@@ -52,12 +53,12 @@ export async function configVersionRoute(
   if (route === "GET /api/agents/config-versions/diff") {
     const from = versionOf(url.searchParams.get("from"));
     const to = versionOf(url.searchParams.get("to"));
-    if (from === undefined || to === undefined) return { status: 404, body: { error: "No such version." } };
+    if (from === undefined || to === undefined) return { status: 404, body: apiError("version-unknown") };
     return { status: 200, body: { from: from.n, to: to.n, changes: configDiff(from.config, to.config) } };
   }
 
   const target = versionOf(body.version);
-  if (target === undefined) return { status: 404, body: { error: "No such version." } };
+  if (target === undefined) return { status: 404, body: apiError("version-unknown") };
   const before = record.profile;
   const after = deps.registry.update(agentId, changesFor(target.config)).profile;
   const made = store.saved(agentId, after, deps.by(), { before, restoredFrom: target.n });

@@ -9,6 +9,7 @@
 
 import { jevSwitch, typesafeToken } from "../config.ts";
 import type { JevMode, JevPoint } from "../host/jev.ts";
+import { apiError, type ApiError } from "./api-error.ts";
 
 /** Every point, what it does in a sentence, and which modes it allows. */
 export const JEV_POINTS: { point: JevPoint; label: string; modes: JevMode[] }[] = [
@@ -35,13 +36,13 @@ export function jevSettings(): { keyPresent: boolean; points: { point: JevPoint;
 }
 
 /** The config env change a POST /api/jev body asks for, or why it cannot be saved. */
-export function jevSettingsChange(body: Record<string, unknown>): { env: Record<string, string | null> } | { error: string } {
+export function jevSettingsChange(body: Record<string, unknown>): { env: Record<string, string | null> } | ApiError {
   const env: Record<string, string | null> = {};
   const points = (body.points ?? {}) as Record<string, unknown>;
   for (const [point, mode] of Object.entries(points)) {
     const entry = JEV_POINTS.find(candidate => candidate.point === point);
-    if (entry === undefined) return { error: `Unknown judgement point "${point}".` };
-    if (typeof mode !== "string" || !entry.modes.includes(mode as JevMode)) return { error: `${point} takes ${entry.modes.join(", ")}.` };
+    if (entry === undefined) return apiError("jev-point-unknown", { point });
+    if (typeof mode !== "string" || !entry.modes.includes(mode as JevMode)) return apiError("jev-mode", { point, modes: entry.modes.join(", ") });
     env[`AGENTBOX_JEV_${point.toUpperCase()}`] = mode === "off" ? null : mode;
   }
   if (typeof body.key === "string" && body.key.trim() !== "") env.TYPESAFE_TOKEN = body.key.trim();

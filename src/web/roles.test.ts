@@ -126,7 +126,11 @@ test("installation and organisation are an admin's; a person's own access is the
     };
     const nobody = await operator("/api/mcp/tokens", { label: "my editor" });
     assert.equal(nobody.status, 400);
-    assert.match(String(nobody.body.error), /has 0 admins/, "no admin to issue it to is said, with the count");
+    // A program reads the code; a person reads the words in their language, the count in both (INV-1686).
+    assert.equal(nobody.body.code, "token-needs-person");
+    assert.match(String(nobody.body.error), /有 0 位管理员/, "no admin to issue it to is said, with the count, in the default language");
+    const asked = await fetch(`${BASE}/api/mcp/tokens`, { method: "POST", headers: { ...ui, "accept-language": "en-US,en;q=0.9" }, body: JSON.stringify({ label: "my editor" }) });
+    assert.match(String(((await asked.json()) as { error: string }).error), /has 0 admins/, "and in English to a browser that asks for it");
     const people = (await operator("/api/channels")).body.principals as unknown[];
     assert.equal((await operator("/api/principals", { principals: [...people, { id: "chris", name: "Chris", role: "admin" }] })).status, 200);
     const issued = await operator("/api/mcp/tokens", { label: "watchdog" });

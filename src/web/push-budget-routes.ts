@@ -1,6 +1,7 @@
 /** Each agent's daily allowance for unprompted pushes, read and set from the page (INV-1576): admin only, like the roster. */
 
 import type { PushBudget, PushCounts } from "../host/push-budget.ts";
+import { apiError } from "./api-error.ts";
 
 export async function pushBudgetRoute(
   route: string,
@@ -16,7 +17,7 @@ export async function pushBudgetRoute(
   if (deps.refusedAdmin()) return { status: 0, body: null };
   const body = await deps.readJson();
   const id = String(body.id ?? "");
-  if (!deps.agentIds().includes(id)) return { status: 404, body: { error: `No agent ${id}` } };
+  if (!deps.agentIds().includes(id)) return { status: 404, body: apiError("agent-unknown", { agent: id }) };
   const raw = body.perDay;
   const perDay = raw === null || raw === "" || raw === undefined ? null : Number(raw);
   try {

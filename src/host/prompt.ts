@@ -826,7 +826,7 @@ When the shape of the information is the point — a comparison, a few options e
 line of explanation, a short form, a progress list — show it as a card with \`ShowUI\`
 rather than describing it in prose or ASCII; a plain question stays \`AskUser\`. Say in a
 line what the card is for; a press on it comes back to you as a message.`;
-definePart({ key: "conduct", title: "How a turn works", about: "Reply first, work out loud, close the loop; tone, never fabricate, asking, showing. Every rule is the prompt form of an incident.", text: CONDUCT_PROMPT });
+definePart({ key: "conduct", title: "How a turn works", titleZh: "一个回合怎么进行", aboutZh: "先回复，边做边说，做完收尾；语气、绝不编造、提问、展示。每条规则都是某次事故写成的提示词。", about: "Reply first, work out loud, close the loop; tone, never fabricate, asking, showing. Every rule is the prompt form of an incident.", text: CONDUCT_PROMPT });
 
 /** The front (docs/42 §3): short turns, heavy work to a background fork; never named to the person. A fork does not get it. */
 export const FRONT_PROMPT = `# Your turns stay short
@@ -850,7 +850,7 @@ whether the person has to be asked.
 This machinery is yours, not theirs. Never tell the person you are forking, delegating,
 dispatching or spinning anything up. "On it", "Running that now", "Still finishing the
 CSV" — you are one person doing several things at once.`;
-definePart({ key: "front", title: "Your turns stay short", about: "The agent a person talks to answers within seconds and hands heavy work to a background fork of itself.", text: FRONT_PROMPT });
+definePart({ key: "front", title: "Your turns stay short", titleZh: "回合保持简短", aboutZh: "和人对话的 agent 在几秒内回答，把繁重的工作交给它自己的后台运行。", about: "The agent a person talks to answers within seconds and hands heavy work to a background fork of itself.", text: FRONT_PROMPT });
 
 export const STABLE_SECTIONS: readonly PromptSection[] = [
   { name: "base", render: () => BASE_PROMPT }, { name: "inputs", render: () => inputGuide() }, // who is speaking, generated from the channel table (INV-1579)
@@ -1030,7 +1030,7 @@ will read your questions or stop you mid-way. That makes the rules tighter, not 
   result what you would send, create or change, and why; a person decides.
 - **If you must delete, delete recoverably.** Move aside or rename rather than remove; say where
   it went.`;
-definePart({ key: "unattended", title: "Nobody is watching this turn", about: "How a scheduled, listener or wake turn behaves with no person waiting.", text: UNATTENDED_CONDUCT });
+definePart({ key: "unattended", title: "Nobody is watching this turn", titleZh: "这个回合没人在看", aboutZh: "定时、监听或唤醒的回合在没有人等着的时候怎么做。", about: "How a scheduled, listener or wake turn behaves with no person waiting.", text: UNATTENDED_CONDUCT });
 
 export const VOLATILE_SECTIONS: readonly PromptSection[] = [
   { name: "plan", render: context => renderDurableBlocks(context.durable ?? {}) },

@@ -23,11 +23,15 @@ import { DEFAULT_LOCALE, type Locale } from "./locale.ts";
 import { UI_APP } from "./ui-app.ts";
 import { UI_PAGE } from "./ui-page.ts";
 import { UI_SECTIONS } from "./ui-sections.ts";
+import { SERVER_ERRORS } from "./server-errors.ts";
+import { SERVER_WORDS } from "./server-words.ts";
 import { SETTINGS_PANES } from "../web/settings-registry.ts";
 import { MANUAL_URL, MANUAL_URL_ZH, manualPage, PERSONAL_ONLY_PAGE } from "../web/manual-link.ts";
 
 /** The web UI's words, kept as `[zh, en]` pairs so a translator reads both on one line (INV-1684). */
 const UI_WORDS: Record<string, readonly [zh: string, en: string]> = {
+  ...SERVER_ERRORS, // the web server's refusals, `err.<code>` (INV-1686)
+  ...SERVER_WORDS, // its own pages and the usage forecast line (INV-1686)
   ...UI_PAGE,
   ...UI_APP,
   ...UI_SECTIONS,

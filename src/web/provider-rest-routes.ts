@@ -6,26 +6,30 @@
  *   plan is back (after a top-up, say). Admin only.
  */
 import type { ProviderRests } from "../host/provider-rest.ts";
+import { apiError } from "./api-error.ts";
+import type { Locale } from "../i18n/locale.ts";
 
 export interface ProviderRestDeps {
   refusedAdmin: () => boolean;
   readJson: () => Promise<Record<string, unknown>>;
   rests: ProviderRests;
   /** Window forecast, hold, and the disposition name. Omitted by callers that have not wired it. */
-  quotaLine?: () => string;
+  quotaLine?: (locale: Locale) => string;
+  /** The reader's language, for the forecast line (INV-1686). */
+  locale?: Locale;
 }
 
 export async function providerRestRoute(route: string, deps: ProviderRestDeps): Promise<{ status: number; body: unknown } | undefined> {
   if (route !== "GET /api/provider/rests" && route !== "POST /api/provider/rests/retry") return undefined;
   if (deps.refusedAdmin()) return { status: 0, body: null };
   if (route === "GET /api/provider/rests") {
-    const quota = deps.quotaLine?.();
+    const quota = deps.quotaLine?.(deps.locale ?? "en");
     return { status: 200, body: { rests: deps.rests.list(), ...(quota !== undefined && quota !== "" ? { quota } : {}) } };
   }
   const account = String((await deps.readJson()).account ?? "");
   return deps.rests.retryNow(account)
     ? { status: 200, body: { retrying: true } }
-    : { status: 404, body: { error: "That account is not resting." } };
+    : { status: 404, body: apiError("account-not-resting") };
 }
 
 /** What admins are told, once when a rest begins and once when it ends. */

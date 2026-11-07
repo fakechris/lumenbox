@@ -4,6 +4,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ALL_MCP_TOOLS } from "./scopes.ts";
+import type { Locale } from "../i18n/locale.ts";
 
 /** On disk next to this module: hub skills and expert personas. */
 export function catalogDataDir(): string {
@@ -133,6 +134,8 @@ export interface CatalogExpert {
   title: string;
   /** One line for menus and the CreateAgent tool description. */
   summary: string;
+  /** The line in Chinese, for the page (INV-1686); the tool description keeps the English. */
+  summaryZh: string;
   /** Standing identity. Re-read every turn; never a briefing. */
   description: string;
   tools: readonly string[];
@@ -145,6 +148,7 @@ export interface CatalogCrew {
   domain: CatalogDomain;
   name: string;
   summary: string;
+  summaryZh: string;
   /** Expert slugs, in the order they should be added. */
   members: readonly string[];
 }
@@ -167,6 +171,7 @@ export const CATALOG_EXPERTS: readonly CatalogExpert[] = [
     name: "设计",
     title: "组队者",
     summary: "Interviews you, proposes a small team with clear lanes, creates it on your yes, then stays quiet.",
+    summaryZh: "先问你几个问题，提出一支分工清楚的小团队，你同意后把它建好，然后安静待命。",
     description: persona("designer"),
     tools: TEAM_TOOLS,
     skills: ["grill-me", "deep-research"],
@@ -177,6 +182,7 @@ export const CATALOG_EXPERTS: readonly CatalogExpert[] = [
     name: "Lin",
     title: "工程师",
     summary: "Writes and verifies code; small changes by hand, large ones through a coding engine.",
+    summaryZh: "写代码并验证；小改动亲手做，大改动交给编码引擎。",
     description: persona("lin"),
     tools: CODE_TOOLS,
     skills: ["diagnose", "fullstack-dev", "grill-me", "code-review"],
@@ -187,6 +193,7 @@ export const CATALOG_EXPERTS: readonly CatalogExpert[] = [
     name: "Heng",
     title: "审查",
     summary: "Reviews a change for correctness and security; writes the review, does not rewrite the repo.",
+    summaryZh: "审查改动的正确性和安全性；只写审查意见，不改仓库。",
     description: persona("heng"),
     // No MCP services, like the starter team's reviewer: a service's tool may write, and a review
     // that can change what it reviews is no longer one.
@@ -199,6 +206,7 @@ export const CATALOG_EXPERTS: readonly CatalogExpert[] = [
     name: "Mo",
     title: "产品",
     summary: "Turns a vague wish into a spec someone can build; does not implement it.",
+    summaryZh: "把模糊的想法变成别人能照着做的需求说明；不负责实现。",
     description: persona("mo"),
     tools: [...DESK_TOOLS, "ReadFeishuDoc"],
     skills: ["grill-me", "market-researcher", "deep-research"],
@@ -209,6 +217,7 @@ export const CATALOG_EXPERTS: readonly CatalogExpert[] = [
     name: "Jian",
     title: "主笔",
     summary: "Long-form writing a person will finish: articles, briefs, explainers.",
+    summaryZh: "让人愿意读完的长文：文章、简报、解读。",
     description: persona("jian"),
     tools: WEB_TOOLS,
     skills: ["khazix-writer", "humanizer", "wechat-longform"],
@@ -219,6 +228,7 @@ export const CATALOG_EXPERTS: readonly CatalogExpert[] = [
     name: "He",
     title: "种草",
     summary: "Xiaohongshu-shaped notes: title, cover line, body, a few variants.",
+    summaryZh: "小红书风格的笔记：标题、封面文案、正文，再加几个变体。",
     description: persona("he"),
     tools: WEB_TOOLS,
     skills: ["xiaohongshu-note", "marketing-skills", "humanizer", "content-repurposer"],
@@ -229,6 +239,7 @@ export const CATALOG_EXPERTS: readonly CatalogExpert[] = [
     name: "Jing",
     title: "编剧",
     summary: "Spoken short-video scripts: hook, body, ask. Not footage.",
+    summaryZh: "口播短视频脚本：开头钩子、正文、行动号召。不含拍摄素材。",
     description: persona("jing"),
     tools: DESK_TOOLS,
     skills: ["short-video-script", "content-repurposer", "humanizer"],
@@ -239,6 +250,7 @@ export const CATALOG_EXPERTS: readonly CatalogExpert[] = [
     name: "Xi",
     title: "分析师",
     summary: "Turns a table into sentences a person can act on, with sources on every number.",
+    summaryZh: "把表格变成人能据此行动的句子，每个数字都注明来源。",
     description: persona("xi"),
     tools: WEB_TOOLS,
     skills: ["data-brief", "minimax-xlsx", "deep-research", "market-researcher"],
@@ -251,6 +263,7 @@ export const CATALOG_CREWS: readonly CatalogCrew[] = [
     domain: "engineering",
     name: "研发小队",
     summary: "Product specifies, engineering builds, review is a different person.",
+    summaryZh: "产品写需求，工程来实现，审查由另一个人来做。",
     members: ["mo", "lin", "heng"],
   },
   {
@@ -258,6 +271,7 @@ export const CATALOG_CREWS: readonly CatalogCrew[] = [
     domain: "media",
     name: "内容小队",
     summary: "One source, three forms: long article, Xiaohongshu note, short-video script.",
+    summaryZh: "一份素材，三种形式：长文、小红书笔记、短视频脚本。",
     members: ["jian", "he", "jing"],
   },
 ];
@@ -292,6 +306,11 @@ export const CATALOG_CONNECTORS: readonly CatalogConnector[] = [
       "GitHub, Notion or 1688. Adding a server is an operator act, not a specialist's.",
   },
 ];
+
+/** A catalog line in the reader's language (INV-1686). */
+export function summaryIn(entry: { summary: string; summaryZh: string }, locale: Locale): string {
+  return locale === "zh" ? entry.summaryZh : entry.summary;
+}
 
 export function expertNamed(slug: string): CatalogExpert | undefined {
   return CATALOG_EXPERTS.find(entry => entry.slug === slug);

@@ -140,7 +140,12 @@ Electron 壳、MCP face、webhook、模板与 bundle 的装卸、跟进 rails（
    一门语言更难读。**INV-1684 迁完**：网页的每个字都是 bundle 里的 key（`src/i18n/ui-*.ts`，
    一行一个 `[中文, English]`），模板里写 `{{ui.key}}`，服务端按语言填好再发（`web/page-locale.ts`），
    `<html lang>` 跟着走，顶栏一个按钮切语言并记进 cookie；`ui-literals.test.ts` 拦新写死的字，
-   术语检查也读 bundle。服务端自己说的话（API 报错、提示词片段说明、连接器指引）还是英文。
+   术语检查也读 bundle。**INV-1686 接上服务端自己说的话**：每个 API 报错是 `apiError(code, vars)`
+   （`web/api-error.ts`），回复里 `code` 稳定、给程序认（CLI、MCP 侧门、测试只认 code），`error`
+   的文字在发出时按请求的语言从 `src/i18n/server-errors.ts` 取；提示词片段、连接器指引、目录说明
+   带 `zh` 字段，用量预测与服务端自己的页面（首位管理员、OAuth 回来、桌面启动中）的字在
+   `server-words.ts`。`api-error.test.ts` 拦新写成散文的 `error:`。还剩英文的：模板货架上导入模板
+   自带的说明（数据，不是代码）、渠道的状态提示、来自供应商或更深模块的原样报错。
 4. **飞书里做不完的事没有清单**。哪些必须回 web？没人列过。列出来才知道要补哪几个卡片。
 5. **空状态与错误**：没有 box 时、没有 agent 时、门没连时，页面是空的而不是有指引。
 

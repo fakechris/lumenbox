@@ -56,7 +56,7 @@ import { Orchestrator } from "../host/orchestrator.ts";
 import { describeProvider, type ProviderProfile } from "../host/provider.ts";
 import { configuredProviders, SEARCH_PROVIDERS } from "../host/web.ts";
 import type { TurnEvent } from "../host/turn.ts";
-import { APP_PAGE, LOGIN_PAGE, localeOf, localizeScript } from "./page-locale.ts";
+import { APP_PAGE, LOGIN_PAGE, localeOf, localizeScript, requestLocaleOf } from "./page-locale.ts"; import { apiError, localizedBody } from "./api-error.ts"; import { bootstrapPage, desktopWaitingPage, notLinkedPage, oauthResultPage } from "./server-pages.ts";
 import {
   authorize,
   callerOf,
@@ -145,7 +145,7 @@ import { HostRunner, hostRunnerConfig } from "../host/host-runner.ts";
 import { HostSandbox } from "../host/host-sandbox.ts";
 import { outboundRedactor } from "../host/redact-outbound.ts";
 import { blockedQuestion, describePurpose, outboundVerdict } from "../host/outbound.ts";
-import { decidePart, type PartKey, partViews, strayOverrides } from "../host/prompt-parts.ts";
+import { decidePart, partIn, type PartKey, partViews, strayOverrides } from "../host/prompt-parts.ts";
 import { ownerOf } from "../host/follow-up.ts";
 import { Outbox } from "../host/outbox.ts";
 import { OutboxSender } from "../channels/outbox-sender.ts";
@@ -157,7 +157,7 @@ import {
   crewTeam,
   expertNamed,
   profilesFor,
-  shelfTemplates,
+  shelfTemplates, summaryIn,
 } from "../host/catalog.ts";
 import { rescueMessage, rescueStuck } from "../host/rescue.ts";
 import { Deliveries, deliveriesPath } from "../host/deliveries.ts";
@@ -2701,7 +2701,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     const isPage = /\/vnc\.html/.test(path);
     if (!origin) {
       if (isPage) {
-        sendDesktopWaiting(res, "The box is not available. Start it with `agentbox box up`.");
+        sendDesktopWaiting(res, tr("page.desktop.box-down", requestLocaleOf(res.req)));
         return;
       }
       res.writeHead(503, { "content-type": "text/plain" });
@@ -2793,7 +2793,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   }
 
   function sendDesktopWaiting(res: ServerResponse, reason: string): void {
-    const page = desktopWaitingPage(reason);
+    const page = desktopWaitingPage(reason, requestLocaleOf(res.req));
     res.writeHead(503, {
       "content-type": "text/html; charset=utf-8",
       "content-length": Buffer.byteLength(page),
@@ -2820,10 +2820,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     id: string,
     query: URLSearchParams
   ): Promise<void> {
-    const refuse = () => send(res, 401, { error: "Unknown hook, or the secret is wrong." });
+    const refuse = () => send(res, 401, apiError("hook-refused"));
     const record = webhooks.byId(id);
     if (req.method !== "POST" && req.method !== "PUT") {
-      send(res, 405, { error: "POST the content to this URL." });
+      send(res, 405, apiError("hook-post-only"));
       return;
     }
 
@@ -2839,7 +2839,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (body.length > MAX_BODY) { tooBig = true; break; }
     }
     if (tooBig) {
-      send(res, 413, { error: `The body may be ${MAX_BODY} bytes. Send a link or a path instead.` });
+      send(res, 413, apiError("hook-body-too-large", { max: MAX_BODY }));
       return;
     }
 
@@ -2875,7 +2875,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       log(`webhook ${id} (${record.slug}): rate limited`);
       res.setHeader("retry-after", String(allowed.retryAfterSeconds));
       send(res, 429, {
-        error: `This hook has fired too often. Try again in ${allowed.retryAfterSeconds}s.`,
+        ...apiError("hook-too-often", { seconds: allowed.retryAfterSeconds }),
       });
       return;
     }
@@ -2925,7 +2925,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   }
 
   function send(res: ServerResponse, status: number, body: unknown, type = "application/json") {
-    const payload = type === "application/json" ? JSON.stringify(body) : String(body);
+    const payload = type === "application/json" ? JSON.stringify(localizedBody(body, res.req)) : String(body); // a refusal in the asker's words (INV-1686)
     res.writeHead(status, {
       "content-type": type === "application/json" ? type : `${type}; charset=utf-8`,
       "content-length": Buffer.byteLength(payload),
@@ -3006,7 +3006,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       entry => entry.id === channelId && entry.type === "feishu"
     );
     if (record === undefined || parts.length > 3) {
-      send(res, 404, { error: `No feishu door named ${channelId}.` });
+      send(res, 404, apiError("feishu-channel-unknown", { channel: channelId }));
       return;
     }
     const base = channelEnvBase(channelId);
@@ -3015,11 +3015,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     const appSecret = process.env[`${base}_APP_SECRET`] ?? savedEnv[`${base}_APP_SECRET`];
     const publicBase = process.env.AGENTBOX_PUBLIC_URL?.replace(/\/+$/, "");
     if (typeof appId !== "string" || appId === "" || typeof appSecret !== "string" || appSecret === "") {
-      send(res, 503, { error: `set ${base}_APP_ID and ${base}_APP_SECRET first.` });
+      send(res, 503, apiError("channel-app-unset", { base }));
       return;
     }
     if (publicBase === undefined || publicBase === "") {
-      send(res, 503, { error: "set AGENTBOX_PUBLIC_URL — the redirect back has to name this installation." });
+      send(res, 503, apiError("public-url-unset"));
       return;
     }
     const lark = process.env.FEISHU_DOMAIN === "lark";
@@ -3029,7 +3029,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
     if (parts[2] === undefined) {
       if (bootstrapCode !== undefined && !bootstrap.accepts(bootstrapCode)) {
-        send(res, 400, { error: "The first-admin code is invalid, expired or already used." }); return;
+        send(res, 400, apiError("bootstrap-code-invalid")); return;
       }
       // Entry: remember where they were going, hand them to the vendor.
       for (const [key, pending] of oauthStates) {
@@ -3048,7 +3048,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       return;
     }
     if (parts[2] !== "callback") {
-      send(res, 404, { error: `Not a sign-in path: ${url.pathname}` });
+      send(res, 404, apiError("sign-in-path-unknown", { path: url.pathname }));
       return;
     }
     const code = url.searchParams.get("code");
@@ -3057,7 +3057,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     oauthStates.delete(state);
     if (code === null || pending === undefined || pending.channelId !== channelId || pending.appId !== appId || pending.incarnation !== record.incarnation ||
         Date.now() - pending.at > 10 * 60_000) {
-      send(res, 400, { error: "This sign-in expired or was not started here. Open the link again." });
+      send(res, 400, apiError("sign-in-expired"));
       return;
     }
     try {
@@ -3090,11 +3090,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       const currentDoor = channelRecords.find(entry => entry.id === channelId);
       const currentEnv = loadConfig().env ?? {};
       if (!currentDoor || currentDoor.incarnation !== pending.incarnation || (process.env[`${base}_APP_ID`] ?? currentEnv[`${base}_APP_ID`]) !== pending.appId) {
-        send(res, 409, { error: "The sign-in channel changed; start again." }); return;
+        send(res, 409, apiError("sign-in-channel-changed")); return;
       }
       if (pending.bootstrapCode !== undefined) {
         if (!bootstrap.redeem(pending.bootstrapCode, identity, info.data?.name ?? openId, currentDoor.incarnation)) {
-          send(res, 409, { error: "First-admin bootstrap is no longer available." }); return;
+          send(res, 409, apiError("bootstrap-gone")); return;
         }
         principals.reload();
         log("First administrator enrolled through authenticated sign-in.");
@@ -3104,12 +3104,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // Signed in with the vendor, unknown here: the answer is the knock path, said
         // as a page a person can act on — not a session for whoever the vendor knows.
         res.writeHead(403, { "content-type": "text/html; charset=utf-8" });
-        res.end(
-          `<!doctype html><meta charset="utf-8"><body style="font:15px/1.7 sans-serif;max-width:560px;margin:80px auto;padding:0 20px">` +
-            `<h3>这个飞书账号还没有链接到本安装</h3>` +
-            `<p>你的 id:<code>${identity.replace(/</g, "&lt;")}</code></p>` +
-            `<p>在飞书里给机器人发一条消息 —— 管理员会收到放行提示;或者向管理员要一个邀请码,在聊天里发送 <code>bind 邀请码</code>。链接完成后回到这里重新打开即可。</p></body>`
-        );
+        res.end(notLinkedPage(identity, requestLocaleOf(res.req)));
         log(`web login refused: ${identity} signed in via ${channelId} but is not linked`);
         return;
       }
@@ -3122,7 +3117,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       log(`feishu sign-in via ${channelId} failed: ${detail}`);
-      send(res, 502, { error: `Sign-in failed: ${detail}` });
+      send(res, 502, apiError("sign-in-failed", { detail }));
     }
   }
 
@@ -3144,13 +3139,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // the code is what authenticates them.
       if (route === "GET /bootstrap") {
         try {
-        if (!bootstrap.pending()) { send(res, 404, "First-admin bootstrap is unavailable."); return; }
+        if (!bootstrap.pending()) { send(res, 404, apiError("bootstrap-unavailable")); return; }
         const doors = channelRecords.filter(record => record.type === "feishu" && channelCredentialsSet(record));
-        const escapeHtml = (value: string) => value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
         res.setHeader("cache-control", "no-store");
         res.setHeader("referrer-policy", "no-referrer");
-        send(res, 200, `<!doctype html><meta charset="utf-8"><title>First administrator</title><body style="font:16px system-ui;max-width:600px;margin:80px auto;padding:20px"><h1>First administrator</h1><p>Retrieve the one-use code from the installation's local bootstrap-code file. Sign in with Feishu to become its first administrator.</p><form id="bootstrap"><label>Code <input id="code" type="password" autocomplete="off" maxlength="128" required></label><label> Channel <select id="door">${doors.map(door => `<option value="${escapeHtml(door.id)}">${escapeHtml(door.name)}</option>`).join("")}</select></label><button ${doors.length ? "" : "disabled"}>Sign in with Feishu</button></form><p id="status">${doors.length ? "The code expires after 24 hours and works once." : "Configure a Feishu channel and public URL on this installation first."}</p><script>document.getElementById('bootstrap').onsubmit=async function(event){event.preventDefault();var button=this.querySelector('button');button.disabled=true;try{var response=await fetch('/auth/'+encodeURIComponent(document.getElementById('door').value),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bootstrapCode:document.getElementById('code').value})});var data=await response.json();if(!response.ok)throw new Error(data.error);document.getElementById('code').value='';location.assign(data.url);}catch(error){document.getElementById('status').textContent=error.message;button.disabled=false;}};</script></body>`, "text/html");
-        } catch { if (!res.headersSent) send(res, 503, { error: "First-admin bootstrap is unavailable." }); }
+        send(res, 200, bootstrapPage(doors, localeOf(req, url)), "text/html");
+        } catch { if (!res.headersSent) send(res, 503, apiError("bootstrap-unavailable")); }
         return;
       }
       if (req.method === "POST" && /^\/auth\/[^/]+$/.test(url.pathname)) {
@@ -3158,11 +3152,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         try {
           body = await readJson(req);
           if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("Invalid body");
-        } catch { send(res, 400, { error: "Invalid request body." }); return; }
+        } catch { send(res, 400, apiError("body-invalid")); return; }
         const code = typeof body.bootstrapCode === "string" ? body.bootstrapCode.trim() : "";
-        if (code.length > 128) { send(res, 400, { error: "Invalid bootstrap code." }); return; }
+        if (code.length > 128) { send(res, 400, apiError("bootstrap-code-malformed")); return; }
         try { await handleFeishuAuth(url, res, code); }
-        catch { if (!res.headersSent) send(res, 503, { error: "First-admin bootstrap is unavailable." }); }
+        catch { if (!res.headersSent) send(res, 503, apiError("bootstrap-unavailable")); }
         return;
       }
       if (route === "GET /login") {
@@ -3199,7 +3193,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (relayMatch !== null) {
         const relayRoute = orchestrator.modelRelay.authenticate(relayMatch[1]!, req.headers);
         if (relayRoute === undefined) {
-          send(res, 401, { error: "This relay route is unknown, lapsed, or the credential is wrong." });
+          send(res, 401, apiError("relay-refused"));
           return;
         }
         await orchestrator.modelRelay.proxy(req, res, relayRoute, relayMatch[2] ?? "/");
@@ -3240,7 +3234,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           }
           const entry = registry.boxById(verdict.registration.boxId);
           if (entry === undefined) {
-            send(res, 410, { error: "The box this credential names is no longer registered here." });
+            send(res, 410, apiError("credential-box-gone"));
             return;
           }
           if (baseUrl !== "" && token !== "") registry.updateBox(entry.id, { endpoint: { baseUrl, tokenFile: writeToken(entry.name) } });
@@ -3260,7 +3254,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
         const boxName = redeemed.name ?? name;
         if (boxName === "" || baseUrl === "" || token === "") {
-          send(res, 400, { error: "A registration needs a name, a baseUrl and the daemon token." });
+          send(res, 400, apiError("box-registration-incomplete"));
           return;
         }
         let entry: ReturnType<typeof attachedBox>;
@@ -3414,7 +3408,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               : principals.roleOf(caller.userId);
         if (roleAtLeast(role, need)) return false;
         send(res, 403, {
-          error: `This needs the ${need} role; you are ${role}. Ask an admin.`,
+          ...apiError("role-needed", { need, role }),
         });
         return true;
       };
@@ -3448,14 +3442,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       };
       const templateTarget = (requested: unknown): string | undefined => {
         if (requested !== undefined && typeof requested !== "string") {
-          send(res, 400, { error: "boxId must be a box id." }); return;
+          send(res, 400, apiError("box-id-invalid")); return;
         }
         const id = requested ?? registry.box.id;
         if (registry.boxById(id) === undefined) {
-          send(res, 404, { error: "No such box." }); return;
+          send(res, 404, apiError("box-unknown")); return;
         }
         if (!mayReadBox(id)) {
-          send(res, 403, { error: "This box is not available to this caller." }); return;
+          send(res, 403, apiError("box-not-yours")); return;
         }
         return id;
       };
@@ -3465,7 +3459,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const requestedAgent = url.searchParams.get("agent") ?? url.searchParams.get("agentId");
           const requestedBox = url.searchParams.get("boxId");
           if ((requestedAgent && registry.has(requestedAgent) && !mayReadAgent(requestedAgent)) ||
-            (requestedBox && !mayReadBox(requestedBox))) { send(res, 403, { error: "This box is not available to this caller." }); return; }
+            (requestedBox && !mayReadBox(requestedBox))) { send(res, 403, apiError("box-not-yours")); return; }
         }
         if (route === "GET /") {
           send(res, 200, APP_PAGE(localeOf(req, url)), "text/html");
@@ -3479,17 +3473,17 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // stack, or a viewer would be served a page pointing at a stream they are refused.
           const desktop = desktopRouteOf(url.pathname, url.search, mayDrive(caller));
           if (!desktop) {
-            send(res, 404, { error: `Not a desktop path: ${url.pathname}` });
+            send(res, 404, apiError("desktop-path-unknown", { path: url.pathname }));
             return;
           }
-          if (!mayReadBox(desktop.boxId ?? registry.box.id)) { send(res, 403, { error: "This desktop is not available to this caller." }); return; }
+          if (!mayReadBox(desktop.boxId ?? registry.box.id)) { send(res, 403, apiError("desktop-not-yours")); return; }
           const page = /^\/(?:vnc|vnc-ro)\/(\d+)(?:\/(?:vnc\.html)?)?(?:\?|$)/.exec(desktop.upstream);
           if (page) {
             const agent = registry.agentsIn(desktop.boxId ?? registry.box.id)
               .find(entry => registry.displayIndexFor(entry.id) === Number(page[1]));
             if (agent && !desktopPagesReady.has(agent.id)) {
               void prepareDesktopPage(agent.id);
-              sendDesktopWaiting(res, desktopPageErrors.get(agent.id) ?? "Starting desktop…");
+              sendDesktopWaiting(res, desktopPageErrors.get(agent.id) ?? "");
               return;
             }
           }
@@ -3532,7 +3526,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (route === "POST /api/jev") {
             const change = jevSettingsChange(await readJson(req));
             if ("error" in change) {
-              send(res, 400, { error: change.error });
+              send(res, 400, change);
               return;
             }
             saveConfig({ env: change.env });
@@ -3568,7 +3562,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (url.pathname.startsWith("/assets/fonts/")) {
           const name = url.pathname.slice("/assets/fonts/".length);
           if (!/^[A-Za-z0-9-]+\.woff2$/.test(name)) {
-            send(res, 404, { error: "not a font" });
+            send(res, 404, apiError("font-unknown"));
             return;
           }
           try {
@@ -3588,7 +3582,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             });
             res.end(font);
           } catch {
-            send(res, 404, { error: `${name} is not present on this deployment` });
+            send(res, 404, apiError("font-missing", { name }));
           }
           return;
         }
@@ -3599,15 +3593,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // process, so a stray visit lands on "unknown"; the code is spent on one exchange.
         if (route === "GET /oauth/callback") {
           if (refusedRole("admin")) return;
-          const page = (title: string, text: string) =>
-            `<!doctype html><meta charset="utf-8"><title>${title}</title><body style="font-family:system-ui;padding:2rem"><h2>${title}</h2><p>${text}</p></body>`;
           try {
             const done = await oauth.complete(url.searchParams.get("state") ?? "", url.searchParams.get("code") ?? "");
             log(`connectors: ${done.provider} connected`);
-            send(res, 200, page(`Connected ${done.provider}`, "The token is in this machine's vault. You can close this tab and grant it in Settings → Connected services."), "text/html");
+            send(res, 200, oauthResultPage({ provider: done.provider }, localeOf(req, url)), "text/html");
           } catch (error) {
             const why = error instanceof Error ? error.message : String(error);
-            send(res, 400, page("Not connected", why.replace(/</g, "&lt;")), "text/html");
+            send(res, 400, oauthResultPage({ why }, localeOf(req, url)), "text/html");
           }
           return;
         }
@@ -3630,13 +3622,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const body = await readJson(req);
           const agentId = String(body.agent ?? "");
           if (!registry.has(agentId)) {
-            send(res, 404, { error: `No agent ${agentId}` });
+            send(res, 404, apiError("agent-unknown", { agent: agentId }));
             return;
           }
           const client = orchestrator.boxClient(agentId);
 
           if (!client) {
-            send(res, 503, { error: "The box is not available." });
+            send(res, 503, apiError("box-unavailable"));
             return;
           }
 
@@ -3705,7 +3697,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (taskId !== undefined) {
             const task = orchestrator.tasks?.get(taskId);
             if (task === undefined) {
-              send(res, 404, { error: `no task ${taskId}` });
+              send(res, 404, apiError("task-unknown", { task: taskId }));
               return;
             }
             const runs = [...new Set(task.history.map(change => change.run).filter(run => run !== undefined))];
@@ -3792,47 +3784,47 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (refusedRole("admin")) return; principals.requireOrganisation(); const body = await readJson(req); // a directory is an organisation's people (INV-1689)
           if (refusedRole("admin")) return;
           const credentials = directoryCredentials(String(body.channelId ?? ""));
-          if (!credentials) { send(res, 400, { error: "Choose a configured Feishu or DingTalk channel." }); return; }
+          if (!credentials) { send(res, 400, apiError("directory-channel-needed")); return; }
           try {
             await directories.sync(credentials.source, () => credentials.provider.fetchDirectory({
               clientId: credentials.clientId, clientSecret: credentials.clientSecret, fetchFn: options.directoryFetch ?? fetch,
             }), () => directoryCredentials(credentials.source.channelId)?.source);
             send(res, 200, { ok: true });
-          } catch { send(res, 503, { error: "Directory sync failed. Previous complete snapshot retained; new allocations paused. Check permissions and retry. If the tenant changed, use a new door ID and bind its identities." }); }
+          } catch { send(res, 503, apiError("directory-sync-failed")); }
           return;
         }
         if (route === "GET /api/personal-boxes/admin-cleanup" || route === "POST /api/personal-boxes/admin-cleanup") {
           principals.reload();
           const administrator = () => caller.userId === undefined || (principals.isKnown(caller.userId) && principals.roleOf(caller.userId) === "admin");
-          if (!administrator()) { send(res, 403, { error: "Administrator cleanup only." }); return; }
+          if (!administrator()) { send(res, 403, apiError("cleanup-admin-only")); return; }
           if (req.method === "POST") {
             const body = await readJson(req);
             principals.reload();
-            if (!administrator()) { send(res, 403, { error: "Administrator cleanup only." }); return; }
-            if (typeof body.id !== "string" || typeof body.deleteData !== "boolean" || Object.keys(body).some(key => !["id", "deleteData"].includes(key))) { send(res, 400, { error: "Cleanup requires id and an explicit deleteData choice." }); return; }
+            if (!administrator()) { send(res, 403, apiError("cleanup-admin-only")); return; }
+            if (typeof body.id !== "string" || typeof body.deleteData !== "boolean" || Object.keys(body).some(key => !["id", "deleteData"].includes(key))) { send(res, 400, apiError("cleanup-needs-choice")); return; }
             try { await personalBoxes.cleanup(body.id, body.deleteData); }
-            catch { send(res, 409, { error: "Cleanup could not finish. Remove resident agents or retry when Docker is available." }); return; }
+            catch { send(res, 409, apiError("cleanup-failed")); return; }
           }
           send(res, 200, { boxes: personalBoxes.cleanupList() }); return;
         }
         if (url.pathname === "/api/personal-boxes" || url.pathname.startsWith("/api/personal-boxes/")) {
           principals.reload();
           const identity = caller.userId;
-          if (!identity || !principals.isKnown(identity)) { send(res, 403, { error: "Sign in as a member to manage personal boxes." }); return; }
+          if (!identity || !principals.isKnown(identity)) { send(res, 403, apiError("personal-box-sign-in")); return; }
           const view = (owner: string) => ({ boxes: personalBoxes.list(owner),
             quota: personalQuotaFor(owner, loadConfig(), directoryQuotaContext(owner)) ?? null,
             held: personalBoxesOf(personalBoxes.quotaEntries(), owner).length });
           if (route === "GET /api/personal-boxes") { send(res, 200, view(principals.resolve(identity).id)); return; }
-          if (!["POST /api/personal-boxes/create", "POST /api/personal-boxes/retry", "POST /api/personal-boxes/remove"].includes(route)) { send(res, 404, { error: "No personal box action." }); return; }
+          if (!["POST /api/personal-boxes/create", "POST /api/personal-boxes/retry", "POST /api/personal-boxes/remove"].includes(route)) { send(res, 404, apiError("personal-box-action-unknown")); return; }
           const body = await readJson(req);
           principals.reload();
-          if (!principals.isKnown(identity) || (!route.endsWith("/remove") && !roleAtLeast(principals.roleOf(identity), "driver"))) { send(res, 403, { error: "Personal box permission revoked." }); return; }
+          if (!principals.isKnown(identity) || (!route.endsWith("/remove") && !roleAtLeast(principals.roleOf(identity), "driver"))) { send(res, 403, apiError("personal-box-revoked")); return; }
           const owner = principals.resolve(identity).id;
           const stillAuthorized = () => { principals.reload(); return principals.isKnown(identity) && principals.resolve(identity).id === owner && roleAtLeast(principals.roleOf(identity), "driver"); };
           const allowed = route.endsWith("/create") ? ["requestId"] : route.endsWith("/remove") ? ["id", "deleteData"] : ["id"];
           if (Object.keys(body).some(key => !allowed.includes(key)) ||
             (route.endsWith("/create") ? typeof body.requestId !== "string" : typeof body.id !== "string") ||
-            (route.endsWith("/remove") && typeof body.deleteData !== "boolean")) { send(res, 400, { error: "Invalid personal box parameters." }); return; }
+            (route.endsWith("/remove") && typeof body.deleteData !== "boolean")) { send(res, 400, apiError("personal-box-params")); return; }
           try {
             const record = route.endsWith("/create") ? await personalBoxes.create(owner, body.requestId as string, stillAuthorized)
               : route.endsWith("/retry") ? await personalBoxes.retry(owner, body.id as string, stillAuthorized)
@@ -3857,16 +3849,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             const body = await readJson(req);
             const valid = (value: unknown) => value === null || isPersonalBoxQuota(value);
             if (body.personalBoxQuota !== undefined && !valid(body.personalBoxQuota)) {
-              send(res, 400, { error: "personalBoxQuota must be 0–99 or null (unlimited)." }); return;
+              send(res, 400, apiError("quota-range")); return;
             }
             const overrides = body.personBoxQuotas;
             if (overrides !== undefined && (overrides === null || typeof overrides !== "object" || Array.isArray(overrides))) {
-              send(res, 400, { error: "personBoxQuotas must be an object." }); return;
+              send(res, 400, apiError("person-quotas-shape")); return;
             }
             const patch: Record<string, number | null> = Object.create(null);
             for (const [id, value] of Object.entries(overrides ?? {})) {
               if (!principals.list().some(person => person.id === id) || !valid(value)) {
-                send(res, 400, { error: "Each override must name a known principal and a quota 0–99 or null." }); return;
+                send(res, 400, apiError("person-quota-entry")); return;
               }
               patch[id] = value as number | null;
             }
@@ -3874,12 +3866,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             const departmentPatch: Record<string, number | null> = Object.create(null);
             const departmentOverrides = body.departmentBoxQuotas;
             if (departmentOverrides !== undefined && (!departmentOverrides || typeof departmentOverrides !== "object" || Array.isArray(departmentOverrides))) {
-              send(res, 400, { error: "departmentBoxQuotas must be an object." }); return;
+              send(res, 400, apiError("department-quotas-shape")); return;
             }
             const knownDepartments = new Set(directoryDepartments().map(item => item.key));
             for (const [key, value] of Object.entries(departmentOverrides ?? {})) {
               if (!valid(value) || (!knownDepartments.has(key) && !(value === null && Object.hasOwn(loadConfig().departmentBoxQuotas ?? {}, key)))) {
-                send(res, 400, { error: "Choose a department from a current complete directory and a quota 0–99 or null." }); return;
+                send(res, 400, apiError("department-quota-entry")); return;
               }
               departmentPatch[key] = value as number | null;
             }
@@ -3939,7 +3931,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (invite === undefined || invite.expiresAt < Date.now()) {
             invites.delete(code);
             send(res, 400, {
-              error: "That code is not live — codes last 15 minutes and work once.",
+              ...apiError("code-not-live"),
             });
             return;
           }
@@ -3967,7 +3959,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           }
           const name = String(body.name ?? "").trim().slice(0, 60);
           if (name === "") {
-            send(res, 400, { error: "Say who you are, so your work has a name on it." });
+            send(res, 400, apiError("say-who-you-are"));
             return;
           }
           roster.push({ id: identity, name, role: invite.role, identities: [identity] });
@@ -4046,7 +4038,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const slug = String(body.slug ?? "");
           const record = webhooks.list().find(row => row.slug === slug);
           if (record === undefined) {
-            send(res, 404, { error: `No webhook routine "${slug}".` });
+            send(res, 404, apiError("webhook-unknown", { slug }));
             return;
           }
           const rotated = webhooks.rotate(record.id);
@@ -4062,7 +4054,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const slug = String(body.slug ?? "");
           const record = webhooks.list().find(row => row.slug === slug);
           if (record === undefined) {
-            send(res, 404, { error: `No webhook routine "${slug}".` });
+            send(res, 404, apiError("webhook-unknown", { slug }));
             return;
           }
           webhooks.revokePrevious(record.id);
@@ -4077,18 +4069,18 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const name = typeof body.name === "string" ? body.name.trim() : "";
           const instruction = typeof body.body === "string" ? body.body.trim() : "";
           if (name === "") {
-            send(res, 400, { error: "Name is required." });
+            send(res, 400, apiError("routine-needs-name"));
             return;
           }
           if (instruction === "") {
-            send(res, 400, { error: "Instruction body is required." });
+            send(res, 400, apiError("routine-needs-body"));
             return;
           }
           
           const slug = slugify(name);
           const box = orchestrator.boxClient();
           if (box === undefined) {
-            send(res, 503, { error: "No box is connected." });
+            send(res, 503, apiError("no-box"));
             return;
           }
 
@@ -4097,7 +4089,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (triggerType === "schedule") {
             const schedule = typeof body.schedule === "string" ? body.schedule.trim() : "";
             if (schedule === "") {
-              send(res, 400, { error: "Schedule is required for schedule trigger." });
+              send(res, 400, apiError("routine-needs-schedule"));
               return;
             }
             triggerLines = `schedule: "${schedule.replace(/"/g, '\\"')}"`;
@@ -4106,12 +4098,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           } else if (triggerType === "message") {
             const match = typeof body.match === "string" ? body.match.trim() : "";
             if (match === "") {
-              send(res, 400, { error: "Match pattern is required for message trigger." });
+              send(res, 400, apiError("routine-needs-pattern"));
               return;
             }
             triggerLines = `trigger: message\nmatch: "${match.replace(/"/g, '\\"')}"`;
           } else {
-            send(res, 400, { error: "Invalid triggerType." });
+            send(res, 400, apiError("routine-trigger-invalid"));
             return;
           }
           
@@ -4136,7 +4128,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             // Refuse to overwrite an existing skill — renaming or editing is a different action.
             const existing = await box.readFile(`${dirPath}/${SKILL_FILENAME}`).catch(() => undefined);
             if (existing !== undefined) {
-              send(res, 409, { error: `A skill named "${slug}" already exists.` });
+              send(res, 409, apiError("skill-exists", { slug }));
               return;
             }
             await box.exec(`mkdir -p '${dirPath}'`, { timeoutMs: 5000 });
@@ -4145,7 +4137,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             log(`automation created: ${slug} (${triggerType})${caller.userId === undefined ? "" : ` by ${caller.userId}`}`);
             send(res, 200, { ok: true, slug });
           } catch (e) {
-            send(res, 500, { error: "Failed to write automation to box." });
+            send(res, 500, apiError("routine-write-failed"));
           }
           return;
         }
@@ -4166,7 +4158,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (refused()) return;
           const board = orchestrator.tasks;
           if (board === undefined) {
-            send(res, 503, { error: "No task board on this installation." });
+            send(res, 503, apiError("task-board-missing"));
             return;
           }
           const body = await readJson(req);
@@ -4178,7 +4170,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             ...(typeof body.reviewerId === "string" && body.reviewerId !== "" ? { reviewerId: body.reviewerId } : {}),
           });
           if (created === undefined) {
-            send(res, 400, { error: "A task needs a title." });
+            send(res, 400, apiError("task-needs-title"));
             return;
           }
           const waiting = credentialWaits.gate(created.id, caller.userId ?? "web"); // before it is anyone's to start (INV-1666): a credential its assignee lacks blocks it now, with a card
@@ -4198,11 +4190,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const request = pendingSecrets.get(id);
           const value = typeof body.value === "string" ? body.value : "";
           if (request === undefined) {
-            send(res, 404, { error: `No pending request for ${id}.` });
+            send(res, 404, apiError("request-not-pending", { id }));
             return;
           }
           if (value.trim() === "") {
-            send(res, 400, { error: "A value is required." });
+            send(res, 400, apiError("value-required"));
             return;
           }
           // Into the vault with a grant to the agent that asked, and nothing else changes:
@@ -4247,7 +4239,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const handover = pendingHandovers.get(agentId);
           pendingHandovers.delete(agentId);
           if (handover === undefined) {
-            send(res, 404, { error: "No desktop is handed over for that agent." });
+            send(res, 404, apiError("desktop-not-handed-over"));
             return;
           }
           orchestrator.bus.deliverSystem(
@@ -4263,13 +4255,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (refused()) return;
           const board = orchestrator.tasks;
           if (board === undefined) {
-            send(res, 503, { error: "No task board on this installation." });
+            send(res, 503, apiError("task-board-missing"));
             return;
           }
           const body = await readJson(req);
           const committed = board.commit(String(body.id ?? ""), caller.userId ?? "web");
           if (committed === undefined) {
-            send(res, 404, { error: `No task ${String(body.id ?? "")}.` });
+            send(res, 404, apiError("task-unknown", { task: String(body.id ?? "") }));
             return;
           }
           send(res, 200, { committed, task: board.get(String(body.id ?? "")) });
@@ -4280,7 +4272,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (refused()) return;
           const board = orchestrator.tasks;
           if (board === undefined) {
-            send(res, 503, { error: "No task board on this installation." });
+            send(res, 503, apiError("task-board-missing"));
             return;
           }
           const body = await readJson(req);
@@ -4307,7 +4299,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             caller.userId ?? "web"
           );
           if (updated === undefined) {
-            send(res, 404, { error: `No task ${String(body.id ?? "")}.` });
+            send(res, 404, apiError("task-unknown", { task: String(body.id ?? "") }));
             return;
           }
           send(res, 200, { task: updated.task, ...(updated.coerced ? { note: updated.coerced } : {}) });
@@ -4319,7 +4311,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (refused()) return;
           const board = orchestrator.tasks;
           if (board === undefined) {
-            send(res, 503, { error: "No task board on this installation." });
+            send(res, 503, apiError("task-board-missing"));
             return;
           }
           const body = await readJson(req);
@@ -4347,12 +4339,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "POST /api/scopes") {
           if (refusedRole("admin")) return;
           if (orchestrator.scopes === undefined) {
-            send(res, 503, { error: "No scopes on this installation." });
+            send(res, 503, apiError("scopes-missing"));
             return;
           }
           const body = await readJson(req);
           if (!Array.isArray(body.scopes)) {
-            send(res, 400, { error: "scopes must be an array" });
+            send(res, 400, apiError("scopes-array"));
             return;
           }
           const scopes = (body.scopes as Record<string, unknown>[])
@@ -4386,7 +4378,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const body = await readJson(req);
           const id = typeof body.id === "string" ? body.id.trim() : "";
           if (id === "") {
-            send(res, 400, { error: "A secret needs an id (the environment variable name)." });
+            send(res, 400, apiError("secret-needs-id"));
             return;
           }
           const grants: Grant[] = Array.isArray(body.grants)
@@ -4421,7 +4413,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // whoever the admin named, and is never returned by any route.
         if (route === "GET /api/connectors") {
           if (refusedRole("admin")) return;
-          send(res, 200, { providers: oauth.providers(), connected: oauth.connected() });
+          send(res, 200, { providers: oauth.providers(localeOf(req, url)), connected: oauth.connected() });
           return;
         }
 
@@ -4479,7 +4471,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "GET /api/memory/agent") {
           const agentId = url.searchParams.get("agent") ?? "";
           if (!registry.has(agentId)) {
-            send(res, 404, { error: `No agent ${agentId}` });
+            send(res, 404, apiError("agent-unknown", { agent: agentId }));
             return;
           }
           if (refused(agentId)) return;
@@ -4491,7 +4483,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "GET /api/standing") {
           const agentId = url.searchParams.get("agent") ?? "";
           if (!registry.has(agentId)) {
-            send(res, 404, { error: `No agent ${agentId}` });
+            send(res, 404, apiError("agent-unknown", { agent: agentId }));
             return;
           }
           if (refused(agentId)) return;
@@ -4502,13 +4494,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const body = await readJson(req);
           const agentId = String(body.agent ?? "");
           if (!registry.has(agentId)) {
-            send(res, 404, { error: `No agent ${agentId}` });
+            send(res, 404, apiError("agent-unknown", { agent: agentId }));
             return;
           }
           if (refused(agentId)) return;
           const name = String(body.name ?? "");
           if (!isStandingName(name) || typeof body.text !== "string") {
-            send(res, 400, { error: `name must be one of ${STANDING_FILES.join(", ")} and text a string` });
+            send(res, 400, apiError("standing-file-name", { names: STANDING_FILES.join(", ") }));
             return;
           }
           const agent = registry.get(agentId);
@@ -4526,7 +4518,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const body = await readJson(req);
           const agentId = String(body.agent ?? "");
           if (!registry.has(agentId)) {
-            send(res, 404, { error: `No agent ${agentId}` });
+            send(res, 404, apiError("agent-unknown", { agent: agentId }));
             return;
           }
           if (refused(agentId)) return;
@@ -4553,7 +4545,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const body = await readJson(req);
           const agentId = String(body.agent ?? "");
           if (!registry.has(agentId)) {
-            send(res, 404, { error: `No agent ${agentId}` });
+            send(res, 404, apiError("agent-unknown", { agent: agentId }));
             return;
           }
           if (refused(agentId)) return;
@@ -4563,7 +4555,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return;
           }
           if (body.action !== "withdraw") {
-            send(res, 400, { error: "action must be preview or withdraw" });
+            send(res, 400, apiError("preview-or-withdraw"));
             return;
           }
           const result = memoryAdmin.withdrawSource({
@@ -4600,7 +4592,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const body = await readJson(req);
           const owner = caller.userId ?? (String(body.principalId ?? "") || (soleAdmin(principals.list()) ?? "")); // nobody signed in: the one admin (INV-1681)
           if (owner === "") {
-            send(res, 400, { error: `A token belongs to a person: sign in, or name one — this installation has ${principals.list().filter(person => person.role === "admin").length} admins, so there is no one admin to issue it to.` });
+            send(res, 400, apiError("token-needs-person", { admins: principals.list().filter(person => person.role === "admin").length }));
             return;
           }
           const minted = mcpTokens.mint(owner, String(body.label ?? ""));
@@ -4617,7 +4609,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // A driver may only revoke their own; an admin may revoke anyone's.
           const isAdmin = roleAtLeast(caller.userId === undefined ? "admin" : principals.roleOf(caller.userId), "admin");
           if (!mcpTokens.revoke(String(body.createdAt ?? ""), entry => entry.principalId === caller.userId || isAdmin)) {
-            send(res, 404, { error: "No token of yours matches." });
+            send(res, 404, apiError("token-not-yours"));
             return;
           }
           send(res, 200, { revoked: true });
@@ -4628,7 +4620,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (refused()) return;
           const applied = await orchestrator.reloadExtensions();
           if (applied === undefined) {
-            send(res, 409, { error: "No extension layer here." });
+            send(res, 409, apiError("extensions-missing"));
             return;
           }
           send(res, 200, { ok: true, ...applied });
@@ -4655,7 +4647,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // config.json and wants it applied without dropping the Feishu socket.
           const applied = orchestrator.reloadMcp();
           if (applied === undefined) {
-            send(res, 409, { error: "MCP servers were not read from config.json here, so there is nothing to re-read." });
+            send(res, 409, apiError("mcp-not-from-config"));
             return;
           }
           send(res, 200, { ok: true, ...applied, servers: orchestrator.mcp.statuses() });
@@ -4718,7 +4710,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const id = String(body.id ?? "").trim();
           const type = String(body.type ?? "feishu");
           if (type !== "feishu" && type !== "dingtalk" && type !== "telegram" && type !== "tailmsg") {
-            send(res, 400, { error: `unknown channel type ${type}` });
+            send(res, 400, apiError("channel-type-unknown", { type }));
             return;
           }
           const defaultAgent =
@@ -4727,7 +4719,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             try {
               registry.resolve(defaultAgent);
             } catch {
-              send(res, 400, { error: `No agent named ${defaultAgent}.` });
+              send(res, 400, apiError("agent-named-unknown", { agent: defaultAgent }));
               return;
             }
           }
@@ -4736,7 +4728,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               ? (body.groupMessages as "all" | "addressed")
               : undefined;
           if (body.groupMessages !== undefined && groupMessages === undefined) {
-            send(res, 400, { error: `groupMessages must be "all" or "addressed".` });
+            send(res, 400, apiError("group-messages"));
             return;
           }
           const tailmsg = type === "tailmsg" ? parseTailmsgRecordConfig(body.tailmsg) : undefined;
@@ -4898,7 +4890,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const identity = String(body.identity ?? "");
           const knock = knocks.get(identity);
           if (knock === undefined) {
-            send(res, 404, { error: "Nobody with that id is waiting." });
+            send(res, 404, apiError("knock-unknown"));
             return;
           }
           // The CAS half of the knock: commit only if the world the knock was
@@ -4945,7 +4937,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (refusedRole("admin")) return;
           const body = await readJson(req);
           if (!Array.isArray(body.principals)) {
-            send(res, 400, { error: "principals must be an array" });
+            send(res, 400, apiError("principals-array"));
             return;
           }
           const roster: Principal[] = [];
@@ -4981,7 +4973,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const principalId = String(body.principalId ?? "").trim();
           const person = principals.list().find(entry => entry.id === principalId);
           if (person === undefined) {
-            send(res, 404, { error: `No such person: ${principalId}` });
+            send(res, 404, apiError("person-unknown", { person: principalId }));
             return;
           }
           const epoch = epochs.bump(person.id);
@@ -4996,7 +4988,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const body = await readJson(req);
           const revoked = orchestrator.policy.revokeStanding(String(body.fingerprint ?? ""));
           if (!revoked) {
-            send(res, 404, { error: "No standing approval with that fingerprint." });
+            send(res, 404, apiError("standing-approval-unknown"));
             return;
           }
           send(res, 200, { revoked: true });
@@ -5016,14 +5008,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "GET /api/files") {
           const client = orchestrator.boxClient();
           if (!client) {
-            send(res, 503, { error: "The box is not running." });
+            send(res, 503, apiError("box-not-running"));
             return;
           }
           const dir = url.searchParams.get("dir") ?? WORK_DIR;
           // Confined here as well as in the daemon. Two checks rather than one because this is the
           // one reachable by anyone holding a UI token, including a viewer.
           if (!withinWork(dir)) {
-            send(res, 403, { error: `Only ${WORK_DIR} and below can be browsed.` });
+            send(res, 403, apiError("browse-outside-work", { dir: WORK_DIR }));
             return;
           }
           try {
@@ -5038,12 +5030,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "GET /api/file") {
           const client = orchestrator.boxClient();
           if (!client) {
-            send(res, 503, { error: "The box is not running." });
+            send(res, 503, apiError("box-not-running"));
             return;
           }
           const path = url.searchParams.get("path") ?? "";
           if (!withinWork(path)) {
-            send(res, 403, { error: `Only files under ${WORK_DIR} can be handed over.` });
+            send(res, 403, apiError("handover-outside-work", { dir: WORK_DIR }));
             return;
           }
           try {
@@ -5075,13 +5067,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (refused()) return;
           const client = orchestrator.boxClient();
           if (!client) {
-            send(res, 503, { error: "The box is not running." });
+            send(res, 503, apiError("box-not-running"));
             return;
           }
           const body = await readJson(req);
           const path = String(body.path ?? "");
           if (!withinWork(path)) {
-            send(res, 403, { error: `Uploads only land under ${WORK_DIR}.` });
+            send(res, 403, apiError("upload-outside-work", { dir: WORK_DIR }));
             return;
           }
           try {
@@ -5099,7 +5091,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               domain: entry.domain,
               name: entry.name,
               title: entry.title,
-              summary: entry.summary,
+              summary: summaryIn(entry, localeOf(req, url)),
               description: entry.description,
               tools: entry.tools,
               skills: entry.skills,
@@ -5108,7 +5100,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               slug: crew.slug,
               domain: crew.domain,
               name: crew.name,
-              summary: crew.summary,
+              summary: summaryIn(crew, localeOf(req, url)),
               members: crew.members.map(slug => {
                 const row = expertNamed(slug);
                 return { slug, name: row?.name, title: row?.title };
@@ -5127,7 +5119,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const slug = String(body.slug ?? "").trim();
           const rows = profilesFor(slug);
           if (rows === undefined) {
-            send(res, 404, { error: `No catalog entry named ${slug}.` });
+            send(res, 404, apiError("catalog-unknown", { slug }));
             return;
           }
           const existing = new Set(registry.agentsIn(targetBox).map(agent => agent.profile.name));
@@ -5172,8 +5164,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             skills: t.skills, routines: t.routines, connectors: t.connectors, memoryCount: t.memoryCount,
           }));
           const catalog = [
-            ...CATALOG_EXPERTS.map(entry => ({ kind: "expert", slug: entry.slug, name: entry.name, title: entry.title, summary: entry.summary, domain: entry.domain })),
-            ...CATALOG_CREWS.map(crew => ({ kind: "crew", slug: crew.slug, name: crew.name, title: "", summary: crew.summary, domain: crew.domain, members: crew.members })),
+            ...CATALOG_EXPERTS.map(entry => ({ kind: "expert", slug: entry.slug, name: entry.name, title: entry.title, summary: summaryIn(entry, localeOf(req, url)), domain: entry.domain })),
+            ...CATALOG_CREWS.map(crew => ({ kind: "crew", slug: crew.slug, name: crew.name, title: "", summary: summaryIn(crew, localeOf(req, url)), domain: crew.domain, members: crew.members })),
           ];
           send(res, 200, { mine, imported, catalog, marketplace, boxes: orchestrator.boxStatus().filter(box => mayReadBox(box.id)) });
           return;
@@ -5197,7 +5189,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (typeof body.templateSlug === "string" && body.templateSlug !== "") {
             const entry = shelfTemplates().find(t => t.slug === body.templateSlug);
             if (entry === undefined) {
-              send(res, 404, { error: `No shelf template named ${body.templateSlug}.` });
+              send(res, 404, apiError("shelf-template-unknown", { slug: body.templateSlug }));
               return;
             }
             const parsed = parseTemplate(readFileSync(entry.path, "utf8"));
@@ -5219,7 +5211,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (typeof body.catalogSlug === "string" && body.catalogSlug !== "") {
             const rows = profilesFor(body.catalogSlug);
             if (rows === undefined) {
-              send(res, 404, { error: `No catalog entry named ${body.catalogSlug}.` });
+              send(res, 404, apiError("catalog-unknown", { slug: body.catalogSlug }));
               return;
             }
             const created: { id: string; name: string }[] = [];
@@ -5239,16 +5231,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           }
           const sourceAgent = typeof body.agentId === "string" ? registry.tryGet(body.agentId) : undefined;
           if (sourceAgent === undefined) {
-            send(res, 400, { error: "Pass catalogSlug, or agentId (and version) of a staged template." });
+            send(res, 400, apiError("stamp-needs-source"));
             return;
           }
           if (!mayReadBox(registry.boxOf(sourceAgent.id).id)) {
-            send(res, 403, { error: "This template is not available to this caller." }); return;
+            send(res, 403, apiError("template-not-yours")); return;
           }
           const versions = orchestrator.stagedTemplates(sourceAgent.id);
           const wanted = typeof body.version === "number" ? versions.find(v => v.version === body.version) : versions[versions.length - 1];
           if (wanted === undefined) {
-            send(res, 404, { error: `${sourceAgent.profile.name} has no staged template.` });
+            send(res, 404, apiError("template-not-staged", { agent: sourceAgent.profile.name }));
             return;
           }
           const parsed = parseTemplate(readFileSync(wanted.path, "utf8"));
@@ -5305,12 +5297,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (refusedRole("admin")) return;
           const body = await readJson(req);
           if (typeof body.id !== "string" || typeof body.digest !== "string" || typeof body.answer !== "string") {
-            send(res, 400, { error: "Review a teaching question and provide an answer" });
+            send(res, 400, apiError("teach-needs-answer"));
             return;
           }
           try {
             if (!mayReadBox(orchestrator.teachDrafts.get(body.id).boxId)) {
-              send(res, 403, { error: "This teaching box is not available to this caller" });
+              send(res, 403, apiError("teach-box-not-yours"));
               return;
             }
             const draft = await orchestrator.clarifyTeachingDraft(body.id, body.digest, body.answer,
@@ -5325,12 +5317,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (refusedRole("admin")) return;
           const body = await readJson(req);
           if (typeof body.id !== "string" || typeof body.digest !== "string") {
-            send(res, 400, { error: "Review a draft before choosing publish or reject" });
+            send(res, 400, apiError("teach-review-first"));
             return;
           }
           try {
             if (!mayReadBox(orchestrator.teachDrafts.get(body.id).boxId)) {
-              send(res, 403, { error: "This teaching box is not available to this caller" });
+              send(res, 403, apiError("teach-box-not-yours"));
               return;
             }
             const draft = route.endsWith("/approve")
@@ -5349,7 +5341,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           try {
             const draft = orchestrator.teachDrafts.get(String(body.id ?? ""));
             if (!mayReadBox(draft.boxId)) {
-              send(res, 403, { error: "This teaching box is not available to this caller" });
+              send(res, 403, apiError("teach-box-not-yours"));
               return;
             }
             const box = orchestrator.boxFor(draft.agentId);
@@ -5368,18 +5360,18 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (refusedRole("admin")) return;
           const body = route.startsWith("POST") ? await readJson(req) : { id: url.searchParams.get("id") ?? "" };
           if (typeof body.id !== "string" || body.id === "") {
-            send(res, 400, { error: "Name the published draft" });
+            send(res, 400, apiError("teach-name-draft"));
             return;
           }
           try {
             if (!mayReadBox(orchestrator.teachDrafts.get(body.id).boxId)) {
-              send(res, 403, { error: "This teaching box is not available to this caller" });
+              send(res, 403, apiError("teach-box-not-yours"));
               return;
             }
             if (route.startsWith("POST")) {
               const version = Number(body.version);
               if (!Number.isSafeInteger(version) || version < 1) {
-                send(res, 400, { error: "Name the version to return to" });
+                send(res, 400, apiError("teach-name-version"));
                 return;
               }
               await orchestrator.approveTeachingDraft(body.id, "", caller.userId ?? "local-operator", version);
@@ -5410,7 +5402,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "GET /api/progress") {
           const agentId = url.searchParams.get("agent") ?? "";
           if (!orchestrator.registry.has(agentId)) {
-            send(res, 404, { error: `No agent ${agentId}` });
+            send(res, 404, apiError("agent-unknown", { agent: agentId }));
             return;
           }
           // The plan and todos belong to a conversation now; the page shows whichever
@@ -5425,7 +5417,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const agentId = String(body.agent ?? "");
           if (refused(agentId)) return;
           if (!orchestrator.registry.has(agentId)) {
-            send(res, 404, { error: `No agent ${agentId}` });
+            send(res, 404, apiError("agent-unknown", { agent: agentId }));
             return;
           }
           // Recorded and effective immediately; the turn notices at its next round boundary. Not an
@@ -5451,7 +5443,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // 404 rather than an error for an unknown id: the usual cause is a second click or a page
           // left open, and neither deserves a failure.
           if (!answered) {
-            send(res, 404, { error: "That approval is not waiting for an answer." });
+            send(res, 404, apiError("approval-not-waiting"));
             return;
           }
           // The answer reaches the agent as a message, so it goes on by itself. It used to sit
@@ -5554,7 +5546,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             !providerNames().includes(providerValue.toLowerCase())
           ) {
             send(res, 400, {
-              error: `Unknown provider "${providerValue}". Known: ${providerNames().join(", ")}.`,
+              ...apiError("provider-unknown-known", { provider: providerValue, known: providerNames().join(", ") }),
             });
             return;
           }
@@ -5578,7 +5570,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             const cwd = typeof incoming.cwd === "string" ? incoming.cwd.trim() : "";
             if (enabled && cwd === "") {
               send(res, 400, {
-                error: "Turning host execution on needs a working directory for its commands.",
+                ...apiError("host-exec-needs-dir"),
               });
               return;
             }
@@ -5615,7 +5607,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             const searchKey = field(body.searchKey);
             if (chosen === "") {
               if (searchKey !== undefined) {
-                send(res, 400, { error: "Pick a search provider for the key, or clear it with none." });
+                send(res, 400, apiError("search-needs-provider"));
                 return;
               }
               for (const provider of SEARCH_PROVIDERS) envChange[provider.keyEnv] = null;
@@ -5623,7 +5615,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               const provider = SEARCH_PROVIDERS.find(candidate => candidate.name === chosen);
               if (provider === undefined) {
                 send(res, 400, {
-                  error: `Unknown search provider "${chosen}". Known: ${SEARCH_PROVIDERS.map(p => p.name).join(", ")}, or none.`,
+                  ...apiError("search-provider-unknown", { provider: chosen, known: SEARCH_PROVIDERS.map(p => p.name).join(", ") }),
                 });
                 return;
               }
@@ -5658,7 +5650,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             process.env[profile.keyEnv] !== undefined ||
             (profile.keyEnv === "ANTHROPIC_API_KEY" && process.env.ANTHROPIC_AUTH_TOKEN !== undefined);
           if (!credentialled) {
-            send(res, 400, { saved: true, applied: false, error: `Saved, but not applied: no ${profile.keyEnv} for ${profile.label}. The previous model stays in use.` });
+            send(res, 400, { saved: true, applied: false, ...apiError("model-saved-not-applied", { env: profile.keyEnv, label: profile.label }) });
             return;
           }
           const live = orchestrator.provider;
@@ -5695,12 +5687,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         const teamReview = await teamMemoryReviewRoute(route, { registry, readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator"), log }); if (teamReview !== undefined) { if (teamReview.status !== 0) send(res, teamReview.status, teamReview.body); return; } // INV-1581
         const person = await personRoute(route, orchestrator.people, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, caller: () => (caller.userId === undefined ? undefined : { id: caller.userId, name: principals.resolve(caller.userId).name ?? caller.userId }) }); if (person !== undefined) { send(res, person.status, person.body); return; } /* INV-1653 */ const factsRoute = await agentFactsRoute(route, orchestrator.agentFacts.state, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: () => refused(), hasAgent: id => registry.has(id) }); if (factsRoute !== undefined) { if (factsRoute.status !== 0) send(res, factsRoute.status, factsRoute.body); return; } /* INV-1625 */ const pauseRoute = await agentPauseRoute(route, agentPauses, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id), caller: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator") }); if (pauseRoute !== undefined) { if (pauseRoute.status !== 0) send(res, pauseRoute.status, pauseRoute.body); return; } const spendRoute = await spendLimitRoute(route, spendLimits, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id) }); if (spendRoute !== undefined) { if (spendRoute.status !== 0) send(res, spendRoute.status, spendRoute.body); return; } const permRoute = await toolPermissionRoute(route, url, { refused: id => refused(id), agent: id => { const record = registry.tryGet(id); return record === undefined ? undefined : { id, name: record.profile.name, ...(record.profile.toolPermissions !== undefined ? { toolPermissions: record.profile.toolPermissions } : {}) }; }, allTools: ALL_TOOLS, floorContext: () => orchestrator.policy.floorContext() }); if (permRoute !== undefined) { if (permRoute.status !== 0) send(res, permRoute.status, permRoute.body); return; } const versionRoute = await configVersionRoute(route, url, { registry, refused: id => refused(id), readJson: () => readJson(req) as Promise<Record<string, unknown>>, by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator"), log }); if (versionRoute !== undefined) { if (versionRoute.status !== 0) send(res, versionRoute.status, versionRoute.body); return; } const installed = installationRoute(route, { principals }); if (installed !== undefined) { send(res, installed.status, installed.body); return; } // INV-1554, INV-1615, INV-1664, INV-1669
         const diagnostics = await diagnosticsRoute(route, { refusedAdmin: () => refusedRole("admin"), agents: () => registry.list().map(agent => ({ id: agent.id, name: agent.profile.name })), activeTurns: id => orchestrator.bus.activeTurnsOf(id), queued: id => orchestrator.bus.pendingCount(id), watchedJobs: id => orchestrator.jobWatch.countFor(id), eventSubscribers: () => clients.size, box: () => orchestrator.boxClient(), home: agentboxHome() }); if (diagnostics !== undefined) { if (diagnostics.status !== 0) send(res, diagnostics.status, diagnostics.body); return; } // INV-1559
-        const rest = await providerRestRoute(route, { refusedAdmin: () => refusedRole("admin"), readJson: () => readJson(req) as Promise<Record<string, unknown>>, rests: providerRests, quotaLine: quotaStatusLine }); if (rest !== undefined) { if (rest.status !== 0) send(res, rest.status, rest.body); return; } // INV-1577
+        const rest = await providerRestRoute(route, { refusedAdmin: () => refusedRole("admin"), readJson: () => readJson(req) as Promise<Record<string, unknown>>, rests: providerRests, quotaLine: locale => quotaStatusLine(Date.now(), locale), locale: localeOf(req, url) }); if (rest !== undefined) { if (rest.status !== 0) send(res, rest.status, rest.body); return; } // INV-1577
         const fallbacks = await fallbackRoute(route, { refusedAdmin: () => refusedRole("admin"), readJson: () => readJson(req) as Promise<Record<string, unknown>>, names: () => loadConfig().fallbackProviders ?? [], save: names => { saveConfig({ fallbackProviders: names }); }, presets: () => providerNames().map(name => { const profile = resolveProvider(name); return { name, label: profile.label, model: profile.model, hasKey: hasCredential(profile) }; }), usage: () => orchestrator.usage.since(0, Number.MAX_SAFE_INTEGER) }); if (fallbacks !== undefined) { if (fallbacks.status !== 0) send(res, fallbacks.status, fallbacks.body); return; } // INV-1578
         if (route === "POST /api/box/up") {
           if (refused()) return;
           if (boxUpInFlight) {
-            send(res, 409, { error: "The box is already being started." });
+            send(res, 409, apiError("box-starting"));
             return;
           }
           if (box.connected) {
@@ -5739,7 +5731,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const body = await readJson(req);
           const name = typeof body.provider === "string" ? body.provider.toLowerCase() : "";
           if (!providerNames().includes(name)) {
-            send(res, 400, { error: `Unknown provider "${name}".` });
+            send(res, 400, apiError("provider-unknown", { provider: name }));
             return;
           }
           try {
@@ -5802,11 +5794,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (refused()) return;
           const body = await readJson(req);
           const agentId = String(body.agent ?? "");
-          if (!registry.has(agentId)) { send(res, 404, { error: "No such agent" }); return; }
+          if (!registry.has(agentId)) { send(res, 404, apiError("agent-none")); return; }
           if (refused(agentId)) return;
-          if (typeof body.pinned !== "boolean") { send(res, 400, { error: "pinned must be a boolean" }); return; }
+          if (typeof body.pinned !== "boolean") { send(res, 400, apiError("pinned-boolean")); return; }
           const client = orchestrator.boxClient(agentId);
-          if (!client) { send(res, 503, { error: "The box is not available." }); return; }
+          if (!client) { send(res, 503, apiError("box-unavailable")); return; }
           const result = await client.pinDisplay(registry.displayIndexFor(agentId), registry.boxOwnerTokenFor(agentId), body.pinned);
           send(res, 200, result);
           return;
@@ -5818,17 +5810,17 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const agentId = String(body.agent ?? "");
           const controller = body.controller === "user" ? "user" : "agent";
           if (!registry.has(agentId)) {
-            send(res, 404, { error: `No agent ${agentId}` });
+            send(res, 404, apiError("agent-unknown", { agent: agentId }));
             return;
           }
           const client = orchestrator.boxClient(agentId);
           if (!client) {
-            send(res, 503, { error: "The box is not available." });
+            send(res, 503, apiError("box-unavailable"));
             return;
           }
           try {
             if (controller === "user" && await orchestrator.ensureAgentDesktop(agentId) === undefined) {
-              send(res, 503, { error: "Could not start the desktop. Retry when the box is ready." });
+              send(res, 503, apiError("desktop-start-failed"));
               return;
             }
             const info = await client.setDisplayControl(registry.displayIndexFor(agentId), controller, undefined, { agentId });
@@ -5851,13 +5843,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const agentId = String(body.agent ?? "");
           const action = String(body.action ?? "");
           if (!registry.has(agentId)) {
-            send(res, 404, { error: `No agent ${agentId}` });
+            send(res, 404, apiError("agent-unknown", { agent: agentId }));
             return;
           }
           const client = orchestrator.boxClient(agentId);
 
           if (!client) {
-            send(res, 503, { error: "The box is not available." });
+            send(res, 503, apiError("box-unavailable"));
             return;
           }
 
@@ -5961,7 +5953,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "GET /api/transcript") {
           const id = url.searchParams.get("agent") ?? "";
           if (!registry.has(id)) {
-            send(res, 404, { error: `No agent ${id}` });
+            send(res, 404, apiError("agent-unknown", { agent: id }));
             return;
           }
           // Which thread — the team room by default, or one outside chat.
@@ -5983,7 +5975,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "GET /api/reactions") {
           const id = url.searchParams.get("agent") ?? "";
           if (!registry.has(id)) {
-            send(res, 404, { error: `No agent ${id}` });
+            send(res, 404, apiError("agent-unknown", { agent: id }));
             return;
           }
           const conversation = url.searchParams.get("conversation") ?? MAIN_CONVERSATION;
@@ -5995,19 +5987,19 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const body = await readJson(req);
           const id = String(body.agent ?? "");
           if (!registry.has(id)) {
-            send(res, 404, { error: `No agent ${id}` });
+            send(res, 404, apiError("agent-unknown", { agent: id }));
             return;
           }
           if (refused(id)) return;
           const conversation = typeof body.conversation === "string" && body.conversation !== "" ? body.conversation : MAIN_CONVERSATION;
           const index = Number(body.index);
           if (!Number.isInteger(index) || index < 0) {
-            send(res, 400, { error: "index must be a message index" });
+            send(res, 400, apiError("message-index"));
             return;
           }
           const emoji = body.emoji === null || body.emoji === "" ? null : body.emoji;
           if (emoji !== null && !isReactionEmoji(emoji)) {
-            send(res, 400, { error: "not one of the reactions this page offers" });
+            send(res, 400, apiError("reaction-unknown"));
             return;
           }
           const by = caller.userId ?? "operator";
@@ -6022,7 +6014,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "GET /api/conversations") {
           const id = url.searchParams.get("agent") ?? "";
           if (!registry.has(id)) {
-            send(res, 404, { error: `No agent ${id}` });
+            send(res, 404, apiError("agent-unknown", { agent: id }));
             return;
           }
           const sorted = registry.listConversations(id).sort((a, b) => {
@@ -6063,15 +6055,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         // The built-in prompt parts a team may override, and the decision when a default moved (INV-1465). Admin only: the words every agent reads.
-        if (route === "GET /api/prompt-parts") { if (refusedRole("admin")) return; send(res, 200, { parts: partViews(), stray: strayOverrides() }); return; }
+        if (route === "GET /api/prompt-parts") { if (refusedRole("admin")) return; send(res, 200, { parts: partViews().map(part => partIn(part, localeOf(req, url))), stray: strayOverrides() }); return; }
         if (route === "POST /api/prompt-parts") {
           if (refusedRole("admin")) return;
           const body = await readJson(req);
           const key = String(body.key ?? "") as PartKey, kind = String(body.decision ?? "");
-          if (!partViews().some(part => part.key === key) || !["edit", "keep", "default"].includes(kind)) { send(res, 400, { error: "key must name a prompt part and decision must be edit, keep or default." }); return; }
+          if (!partViews().some(part => part.key === key) || !["edit", "keep", "default"].includes(kind)) { send(res, 400, apiError("prompt-part-decision")); return; }
           const view = decidePart(key, kind === "edit" ? { kind: "edit", text: String(body.text ?? "") } : { kind: kind as "keep" | "default" });
           log(`prompt part ${key}: ${kind}${caller.userId === undefined ? "" : ` by ${caller.userId}`} → ${view.status}`);
-          send(res, 200, { part: view }); return;
+          send(res, 200, { part: partIn(view, localeOf(req, url)) }); return;
         }
         if (route === "GET /api/attention") {
           const me = caller.userId === undefined ? undefined : principals.resolve(caller.userId);
@@ -6135,7 +6127,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const tail = url.searchParams.get("tail") === "1" || url.searchParams.get("tail") === "true";
           const client = boxId ? orchestrator.boxClientById(boxId) : orchestrator.boxClient();
           if (!client) {
-            send(res, 404, { error: "No box client available" });
+            send(res, 404, apiError("box-client-missing"));
             return;
           }
           try {
@@ -6149,7 +6141,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 200, { ...result, boxId: boxId ?? registry.box.id });
           } catch (error) {
             send(res, 502, {
-              error: `Failed to query xwatchdog: ${error instanceof Error ? error.message : String(error)}`,
+              ...apiError("watchdog-query-failed", { detail: error instanceof Error ? error.message : String(error) }),
             });
           }
           return;
@@ -6176,7 +6168,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const body = await readJson(req);
           const entry = registry.listBoxes().find(candidate => candidate.id === body.box || candidate.name === body.box);
           if (entry === undefined || entry.id === registry.box.id) {
-            send(res, 404, { error: `No registered box ${String(body.box ?? "")}.` });
+            send(res, 404, apiError("box-unregistered", { box: String(body.box ?? "") }));
             return;
           }
           connectCodes.revoke(entry.id, caller.userId ?? "operator");
@@ -6239,10 +6231,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           try {
             const existing = registry.boxByName(name);
             if (existing === undefined) {
-              send(res, 404, { error: `No box named ${name}.` });
+              send(res, 404, apiError("box-named-unknown", { name }));
               return;
             }
-            if (personalBoxes.manages(existing.id)) { send(res, 409, { error: "Use personal box actions to manage this box." }); return; }
+            if (personalBoxes.manages(existing.id)) { send(res, 409, apiError("personal-box-managed")); return; }
             // Changing who a box is for is an admin's act, and only an admin's (INV-538).
             const members =
               body.members === "everyone"
@@ -6282,7 +6274,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const body = await readJson(req);
           try {
             const target = registry.boxByName(String(body.name ?? "")) ?? registry.boxById(String(body.name ?? ""));
-            if (target && personalBoxes.manages(target.id)) { send(res, 409, { error: "Use personal box removal to choose whether data is retained." }); return; }
+            if (target && personalBoxes.manages(target.id)) { send(res, 409, apiError("personal-box-remove")); return; }
             const entry = orchestrator.detachBox(String(body.name ?? ""));
             log(`detached box ${entry.name} (${entry.id})`);
             send(res, 200, { ok: true, box: entry });
@@ -6300,7 +6292,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "GET /api/catalog/template") {
           const expert = expertNamed(url.searchParams.get("slug") ?? "");
           if (expert === undefined) {
-            send(res, 404, { error: "No catalog expert by that slug." });
+            send(res, 404, apiError("catalog-agent-unknown"));
             return;
           }
           res.writeHead(200, {
@@ -6312,7 +6304,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         if (route.startsWith("POST /api/templates/") && !templatesEnabled()) {
-          send(res, 404, { error: "Template sharing is off here (AGENTBOX_TEMPLATES=0)." });
+          send(res, 404, apiError("templates-off"));
           return;
         }
 
@@ -6333,12 +6325,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const body = await readJson(req);
           const box = typeof body.box === "string" ? registry.listBoxes().find(entry => entry.id === body.box || entry.name === body.box) : undefined;
           if (box === undefined) {
-            send(res, 404, { error: `No box ${String(body.box ?? "")}` });
+            send(res, 404, apiError("box-missing", { box: String(body.box ?? "") }));
             return;
           }
           const bundleId = String(body.bundle ?? "");
           if (!orchestrator.bundles.attach(box, bundleId)) {
-            send(res, 404, { error: `No bundle ${bundleId}; a bundle is defined in bundles.json, never created from a template's name.` });
+            send(res, 404, apiError("bundle-unknown", { bundle: bundleId }));
             return;
           }
           log(`bundles: ${bundleId} attached to box ${box.name}`);
@@ -6356,7 +6348,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (raw === "" && typeof body.shareId === "string" && /^[A-Za-z0-9_-]{21}$/.test(body.shareId)) {
             const control = controlPlane();
             if (control === undefined) {
-              send(res, 400, { error: "This box is not attached to a control plane, so a share id cannot be fetched. Paste the file instead." });
+              send(res, 400, apiError("share-id-needs-control"));
               return;
             }
             const reply = await control.call(`/api/templates/${body.shareId}/document`, "GET").catch(error => ({ ok: false as const, status: 502, error: String(error instanceof Error ? error.message : error), body: {} }));
@@ -6368,7 +6360,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             shareId = body.shareId;
           }
           if (raw === "") {
-            send(res, 400, { error: "Pass the template as `template` (its JSON, or the parsed object), or a `shareId`." });
+            send(res, 400, apiError("template-input"));
             return;
           }
           const parsed = parseTemplate(raw);
@@ -6389,7 +6381,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // Fetching a shared document awaited the network; authority may have changed.
           if (refused()) return;
           if (!mayReadBox(boxId)) {
-            send(res, 403, { error: "This box is not available to this caller." }); return;
+            send(res, 403, apiError("box-not-yours")); return;
           }
           const targetBox = registry.boxById(boxId)!;
           const bundleResolutions = resolveBundleRefs(parsed.template.bundles, orchestrator.bundles.forBox(targetBox));
@@ -6437,7 +6429,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (refused(agentId)) return;
           const agent = registry.tryGet(agentId);
           if (agent === undefined) {
-            send(res, 404, { error: "No such agent." });
+            send(res, 404, apiError("agent-none"));
             return;
           }
           const staged = orchestrator.stagedTemplates(agent.id);
@@ -6455,11 +6447,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const agentId = url.searchParams.get("agent") ?? "";
           const agent = registry.tryGet(agentId);
           if (agent === undefined) {
-            send(res, 404, { error: "No such agent." });
+            send(res, 404, apiError("agent-none"));
             return;
           }
           if (!mayReadBox(registry.boxOf(agent.id).id)) {
-            send(res, 403, { error: "This template is not available to this caller." }); return;
+            send(res, 403, apiError("template-not-yours")); return;
           }
           const share = orchestrator.templateShareOf(agent.id);
           send(res, 200, {
@@ -6480,19 +6472,19 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (refused(agentId)) return;
           const control = controlPlane();
           if (control === undefined) {
-            send(res, 400, { error: "This box is not attached to a control plane, so there is nowhere to publish a link. Download the file instead." });
+            send(res, 400, apiError("publish-needs-control"));
             return;
           }
           const agent = registry.tryGet(agentId);
           if (agent === undefined) {
-            send(res, 404, { error: "No such agent." });
+            send(res, 404, apiError("agent-none"));
             return;
           }
           try {
             if (route.endsWith("/unpublish")) {
               const share = orchestrator.templateShareOf(agent.id);
               if (share === undefined) {
-                send(res, 404, { error: "Nothing is published for this agent." });
+                send(res, 404, apiError("nothing-published"));
                 return;
               }
               const reply = await control.call(`/api/templates/${share.shareId}/unpublish`, "POST", {});
@@ -6509,7 +6501,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             const versions = orchestrator.stagedTemplates(agent.id);
             const version = Number.isInteger(wanted) && wanted > 0 ? versions.find(entry => entry.version === wanted) : versions.at(-1);
             if (version === undefined) {
-              send(res, 404, { error: "No staged version to publish. Ask the agent to draft one first." });
+              send(res, 404, apiError("nothing-staged"));
               return;
             }
             const visibility = body.visibility === "tenant" ? "tenant" : "public";
@@ -6536,7 +6528,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             log(`published template ${shareId} of ${agent.profile.name} (${visibility})${share.url === undefined ? "" : ` at ${share.url}`}`);
             send(res, 200, { ok: true, share });
           } catch (error) {
-            send(res, 502, { error: `The control plane did not answer: ${error instanceof Error ? error.message : String(error)}` });
+            send(res, 502, apiError("control-plane-silent", { detail: error instanceof Error ? error.message : String(error) }));
           }
           return;
         }
@@ -6547,7 +6539,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const control = controlPlane();
           const shareId = url.searchParams.get("shareId") ?? "";
           if (control === undefined || !/^[A-Za-z0-9_-]{21}$/.test(shareId)) {
-            send(res, 400, { error: control === undefined ? "This box is not attached to a control plane." : "That is not a share id." });
+            send(res, 400, apiError(control === undefined ? "control-plane-missing" : "share-id-invalid"));
             return;
           }
           try {
@@ -6558,7 +6550,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             }
             send(res, 200, reply.body);
           } catch (error) {
-            send(res, 502, { error: `The control plane did not answer: ${error instanceof Error ? error.message : String(error)}` });
+            send(res, 502, apiError("control-plane-silent", { detail: error instanceof Error ? error.message : String(error) }));
           }
           return;
         }
@@ -6567,15 +6559,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "GET /api/templates/download") {
           const agentId = url.searchParams.get("agent") ?? "";
           const agent = registry.tryGet(agentId);
-          if (agent === undefined) { send(res, 404, { error: "No such agent." }); return; }
+          if (agent === undefined) { send(res, 404, apiError("agent-none")); return; }
           if (!mayReadBox(registry.boxOf(agent.id).id)) {
-            send(res, 403, { error: "This template is not available to this caller." }); return;
+            send(res, 403, apiError("template-not-yours")); return;
           }
           const wanted = Number(url.searchParams.get("version") ?? "");
           const versions = orchestrator.stagedTemplates(agentId);
           const version = Number.isInteger(wanted) && wanted > 0 ? versions.find(entry => entry.version === wanted) : versions.at(-1);
           if (version === undefined) {
-            send(res, 404, { error: "No staged template." });
+            send(res, 404, apiError("template-none-staged"));
             return;
           }
           const text = readFileSync(version.path, "utf8");
@@ -6596,7 +6588,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const mode = route.endsWith("/mode") ? String(body.mode ?? "") : undefined;
           const box = orchestrator.boxClient();
           if (box === undefined || !/^[A-Za-z0-9._-]+$/.test(slug) || (mode !== undefined && !["off", "observe", "auto"].includes(mode))) {
-            send(res, 400, { error: box === undefined ? "No box is connected." : mode !== undefined ? "mode must be off, observe or auto." : "That is not a skill slug." }); return;
+            send(res, 400, apiError(box === undefined ? "no-box" : mode !== undefined ? "routine-mode" : "skill-slug-invalid")); return;
           }
           const path = `${SKILLS_DIR}/${slug}/${SKILL_FILENAME}`;
           try {
@@ -6605,7 +6597,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             if (resumed) {
               const left = unresolvedPlaceholders(existing.content);
               if (left.length > 0) {
-                send(res, 409, { error: `${slug} still has placeholders to fill in: ${left.map(id => `{${id}}`).join(", ")}. Edit the file first.` });
+                send(res, 409, apiError("skill-placeholders", { slug, left: left.map(id => `{${id}}`).join(", ") }));
                 return;
               }
             }
@@ -6615,7 +6607,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             log(`${mode !== undefined ? `mode ${mode} for` : resumed ? "resumed" : "paused"} ${slug}${caller.userId === undefined ? "" : ` for ${caller.userId}`}`);
             send(res, 200, { ok: true, paused: mode === undefined ? !resumed : undefined, ...(mode !== undefined ? { mode } : {}) });
           } catch (error) {
-            send(res, 404, { error: `Could not read ${path}: ${error instanceof Error ? error.message : String(error)}` });
+            send(res, 404, apiError("skill-read-failed", { path, detail: error instanceof Error ? error.message : String(error) }));
           }
           return;
         }
@@ -6625,7 +6617,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const body = await readJson(req);
           const name = String(body.name ?? "").trim();
           if (name === "") {
-            send(res, 400, { error: "The agent needs a name." });
+            send(res, 400, apiError("agent-needs-name"));
             return;
           }
           const tools = readToolList(body.tools); const asks = readToolPermissions(body); // ask-before settings (INV-1664)
@@ -6636,10 +6628,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const tags = Array.isArray(body.tags) ? (body.tags as string[]) : undefined;
           const boxId = typeof body.boxId === "string" && body.boxId.trim() !== "" ? body.boxId.trim() : undefined;
           if (boxId !== undefined && registry.boxById(boxId) === undefined) {
-            send(res, 400, { error: `No box with id ${boxId}.` });
+            send(res, 400, apiError("box-id-unknown", { box: boxId }));
             return;
           }
-          if (!mayReadBox(boxId ?? registry.box.id)) { send(res, 403, { error: "This box is not available to this caller." }); return; }
+          if (!mayReadBox(boxId ?? registry.box.id)) { send(res, 403, apiError("box-not-yours")); return; }
           const created = registry.create({
             name,
             description: String(body.description ?? ""),
@@ -6684,17 +6676,17 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const agentId = String(body.id ?? "");
           if (refused(agentId)) return;
           if (!registry.has(agentId)) {
-            send(res, 404, { error: `No agent ${agentId}` });
+            send(res, 404, apiError("agent-unknown", { agent: agentId }));
             return;
           }
           if (orchestrator.bus.activeAgentIds().includes(agentId)) {
             send(res, 409, {
-              error: "This agent is in the middle of a turn. Stop it first, then delete.",
+              ...apiError("agent-busy"),
             });
             return;
           }
           if (registry.list().length <= 1) {
-            send(res, 400, { error: "This is the last agent; create another before deleting it." });
+            send(res, 400, apiError("agent-last"));
             return;
           }
           const archive = body.records !== "delete";
@@ -6717,7 +6709,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const agentId = String(body.id ?? "");
           if (refused(agentId)) return;
           if (!registry.has(agentId)) {
-            send(res, 404, { error: `No agent ${agentId}` });
+            send(res, 404, apiError("agent-unknown", { agent: agentId }));
             return;
           }
           const tools = readToolList(body.tools); const asks = readToolPermissions(body); const before = registry.get(agentId).profile; // ask-before settings (INV-1664); the profile before the save, version 1 when it has no history (INV-1669)
@@ -6751,23 +6743,23 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const text = String(body.text ?? "").trim();
 
           if (isContextCommand(text) || isRecoveryCommand(text) || isRetryCommand(text) || isGoalCommand(text)) {
-            send(res, 409, { error: "控制台主会话还包含团队活动，暂不支持上下文恢复命令。请在已接入的独立私聊使用；本次没有修改上下文。" });
+            send(res, 409, apiError("console-context-command"));
             return;
           }
 
           if (!registry.has(agentId)) {
-            send(res, 404, { error: `No agent ${agentId}` });
+            send(res, 404, apiError("agent-unknown", { agent: agentId }));
             return;
           }
           if (!text) {
-            send(res, 400, { error: "text is required" });
+            send(res, 400, apiError("text-required"));
             return;
           }
           // Which thread the page was viewing; defaults to the team room.
           const conversation =
             typeof body.conversation === "string" && body.conversation !== ""
               ? body.conversation
-              : MAIN_CONVERSATION; if (isForkChild(conversation)) { send(res, 409, { error: "A fork's thread is read-only: its findings go back to the conversation that started it. Write there instead." }); return; } // INV-1667
+              : MAIN_CONVERSATION; if (isForkChild(conversation)) { send(res, 409, apiError("fork-read-only")); return; } // INV-1667
 
           // A console message into a channel thread is a room message, not a whisper.
           // Without this, an operator's interjection and the agent's answer were visible
@@ -6855,7 +6847,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
-        send(res, 404, { error: `No route for ${route}` });
+        send(res, 404, apiError("route-unknown", { route }));
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         log(`error on ${route}: ${message}`);
@@ -7101,25 +7093,6 @@ export function desktopUpstreamPath(
   canDrive: boolean
 ): string | undefined {
   return desktopRouteOf(pathname, search, canDrive)?.upstream;
-}
-
-/**
- * The page a desktop iframe shows until noVNC answers: the desktop's own black, one
- * quiet line, and a reload every two seconds. Standing in for an error response from
- * boxd, so the frame never renders raw JSON or text.
- */
-export function desktopWaitingPage(reason: string): string {
-  const escaped = reason
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-  return (
-    "<!doctype html><html><head><meta charset=\"utf-8\">" +
-    "<meta http-equiv=\"refresh\" content=\"2\"><title>desktop</title>" +
-    "<style>html,body{margin:0;height:100%;background:#000;color:#8a8a8a;" +
-    "font:13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}" +
-    "body{display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;box-sizing:border-box}" +
-    "small{display:block;margin-top:8px;color:#555}</style></head>" +
-    "<body><div>Desktop is starting\u2026<small>" + escaped + "</small></div></body></html>"
-  );
 }
 
 /**

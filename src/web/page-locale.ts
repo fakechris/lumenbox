@@ -114,6 +114,11 @@ export function localeOf(req: IncomingMessage, url: URL): Locale {
   });
 }
 
+/** The language of a request whose URL is not parsed yet: a refusal or a page sent from deep in a route (INV-1686). */
+export function requestLocaleOf(req: IncomingMessage | undefined): Locale {
+  return req === undefined ? requestLocale({}) : localeOf(req, new URL(req.url ?? "/", "http://localhost"));
+}
+
 /** The language for one request: `?lang=`, then the `lumen-lang` cookie, then the browser, then the default. */
 export function requestLocale(input: { lang?: string | null; cookie?: string; acceptLanguage?: string; installationDefault?: string }): Locale {
   const cookie = new RegExp(`(?:^|;\\s*)${LANG_COOKIE}=(\\w+)`).exec(input.cookie ?? "")?.[1];

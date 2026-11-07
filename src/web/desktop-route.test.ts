@@ -11,7 +11,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { NOVNC_BASE_PORT, NOVNC_VIEW_ONLY_BASE_PORT } from "../protocol/index.ts";
 import { DisplayManager } from "../boxd/displays.ts";
-import { desktopUpstreamPath, desktopWaitingPage } from "./server.ts";
+import { desktopUpstreamPath } from "./server.ts";
+import { desktopWaitingPage } from "./server-pages.ts";
 
 test("someone who may only watch is joined to the view-only stack", () => {
   assert.equal(desktopUpstreamPath("/desktop/1/websockify", "", true), "/vnc/1/websockify");
