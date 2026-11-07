@@ -401,6 +401,9 @@ test("site learnings travel by host as dated lines, are scanned for secrets, and
     assert.match(lines[0]!, /^- 2026-09-01 ✅ the coupon field is under Order summary/);
     assert.match(lines[0]!, /template:tpl_1/, "every installed line says where it came from");
     assert.match(lines[1]!, /❌ the Apply button ignores Enter/);
+    // INV-1728: installing into a box's directory skips a line the historical installation-wide file already has.
+    const boxDir = join(dir, "boxes", "box-a");
+    assert.deepEqual(installLearnings(good.template, "tpl_1", boxDir, dir), { installed: 0, skipped: 2 });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

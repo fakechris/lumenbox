@@ -18,9 +18,9 @@
  *
  * Records written before the fields existed are mapped explicitly by `scopeOf`, so each keeps
  * the visibility it had: an own-tier record is `agent`; a shared record is its `box`; a shared
- * record an agent promoted with `audience: "everyone"` and nobody holds is `org` (INV-1722, until
- * that field is retired, docs/98 §9 row 4); a shared record from before boxes (no `box`) is `org`,
- * as it was visible everywhere.
+ * record from before boxes (no `box`, older than INV-424) is `org`, as it was visible everywhere.
+ * The one exception is the retired `audience: "everyone"` (INV-1727, docs/98 §9 row 4 and §10
+ * question 5): it is not read, so such a record falls back to the box its `box` stamp names.
  */
 
 import type { BoxEntry } from "../box/boxes.ts";
@@ -89,13 +89,16 @@ export function evidenceKind(ref: string): EvidenceKind | undefined {
 export function scopeOf(record: MemoryRecord, tier: MemoryTier): string {
   if (record.scope !== undefined) return record.scope;
   if (tier === "own") return "agent";
-  if (record.audience === "everyone" && record.held === undefined) return "org";
   return record.box !== undefined ? `box:${record.box}` : "org";
 }
 
 /** Whether `record`, held by agent `holder` (its file's agent, or the shared writer `via`), admits `reader`. */
 export function admits(record: MemoryRecord, tier: MemoryTier, holder: string | undefined, reader: MemoryReader): boolean {
-  const scope: unknown = scopeOf(record, tier);
+  return scopeAdmits(scopeOf(record, tier), holder, reader);
+}
+
+/** Whether a scope, on whatever it is stamped (a record, a site learnings file — INV-1728), admits `reader`. */
+export function scopeAdmits(scope: unknown, holder: string | undefined, reader: MemoryReader): boolean {
   if (scope === "agent") return holder !== undefined && holder === reader.agentId;
   if (scope === "org") return true;
   if (typeof scope !== "string" || !scope.startsWith("box:")) return false;

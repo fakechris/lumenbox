@@ -317,9 +317,12 @@ wrote it; `box:<id>` admits the agents of that box, and only for a person who ma
 A scope the code does not know, or a box that no longer exists, admits nobody. Then only `recall`
 records (or ones with no `surface`) reach the prompt and `Recall`; a `cite-only` record, or one
 whose surface nobody defined, is read only by its version id (`citedById`). A record written before
-the fields existed keeps the visibility it had: with a `box` it is `box:<box>`; with `audience:
-"everyone"` and no hold it is `org` (until that field is retired, docs/98 §9); with neither — older
-than INV-424 — it is `org`, as it was visible everywhere. `held` and `review` are unchanged.
+the fields existed keeps the visibility it had: with a `box` it is `box:<box>`; with no `box` —
+older than INV-424 — it is `org`, as it was visible everywhere. `held` and `review` are unchanged.
+`audience: "everyone"`, an agent's own promotion to every box, is retired (INV-1727, docs/98 §9
+row 4 and §10 question 5): `RememberFact` refuses the field, and an existing record that carries it
+is read as if it did not, so it falls back to the box its `box` stamp names — approved or not, no
+candidate list, no rewrite. What every box knows is promoted by a person, not marked by an agent.
 
 Rendered as its own section under a tighter budget (1,500 characters against 4,000). Smaller because
 every agent writes to this tier, so it grows N times as fast, and a generous budget here would push
@@ -624,6 +627,26 @@ the manifest apart from the ledgers. `AGENTBOX_FXTWITTER_BASE` and
 `AGENTBOX_X_SYNDICATION_BASE` point the X reader at a self-hosted FxEmbed or a mirror.
 
 ## 3. Box state
+
+### 2.6a `learnings/` — site learnings, by box (INV-409, INV-1728)
+
+`src/host/learnings.ts`, `src/host/site-learnings.ts`. One Markdown file per website, a header and
+then one dated `- YYYY-MM-DD ✅|❌ note (author)` line per note, appended to and never rewritten by a
+tool; ≤400 characters a note, credentials refused, coordinates marked perishable.
+
+```
+learnings/
+  <host>.md                  historical, installation-wide: every agent of every box reads these
+  boxes/<box id>/<host>.md   a NoteSiteLearning note and a template's imported notes, for that box
+```
+
+A new note is kept for the writing agent's box — scope `box:<id>`, the memory record's vocabulary
+(docs/98 §4, `memory-scope.ts`) stamped on the directory, since a line has no room for a field. On
+`browser_open` an agent reads its box's notes when the turn's principal may enter the box
+(`mayEnterBox`), then the historical files under their own label; the newest 12 in all. Nothing
+moves, copies or writes into a historical file. The box directories sit under `boxes/` so the top
+level stays exactly the historical set and a box id is never read as a host. Sharing a note across
+boxes is not built (docs/98 §10 decision 6). `AGENTBOX_LEARNINGS` overrides the root.
 
 ### 2.7 `results/`
 

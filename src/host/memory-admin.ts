@@ -33,7 +33,6 @@ export interface MemoryView {
   source?: string;
   via?: string;
   box?: string;
-  audience?: "everyone";
   from?: string[];
   status: "live" | "retracted" | "held";
   /** For a retracted line: when, and by what. */
@@ -101,7 +100,6 @@ export function memoryView(records: readonly MemoryRecord[]): MemoryView[] {
       ...(record.source !== undefined ? { source: record.source } : {}),
       ...(record.via !== undefined ? { via: record.via } : {}),
       ...(record.box !== undefined ? { box: record.box } : {}),
-      ...(record.audience !== undefined ? { audience: record.audience } : {}),
       ...(record.from !== undefined ? { from: [...record.from] } : {}),
       status: recordHasRevokedSource(record, revoked) ? "retracted" : "live",
     };
@@ -230,18 +228,17 @@ export class MemoryAdmin {
       return { ok: false, conflict: true, current: undefined, why: "that source has no live derived memory" };
     }
     const at = this.now().toISOString();
-    const tombstone = (audience?: "everyone"): MemoryRecord => ({
+    const tombstone = (): MemoryRecord => ({
       at,
       kind: "retraction",
       text: `derived memory from ${request.source}`.slice(0, 500),
       source: `web:${request.by}`,
       revokedSources: [request.source],
-      ...(audience !== undefined ? { audience } : {}),
     });
     // Tombstone both tiers even when only one has a derivative today. Otherwise a
     // delayed extractor could publish the same withdrawn source into the other tier.
     this.registry.appendMemoryRecords(request.agentId, [tombstone()]);
-    this.registry.appendSharedMemory(request.agentId, [tombstone(current.shared.some(view => view.audience === "everyone") ? "everyone" : undefined)]);
+    this.registry.appendSharedMemory(request.agentId, [tombstone()]);
     this.audit({
       at, by: request.by, agentId: request.agentId, scope: "source", action: "withdraw-source",
       source: request.source, fromVersion: request.version,

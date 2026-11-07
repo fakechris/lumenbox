@@ -50,7 +50,7 @@ and the source disagree. Change the source and run `node scripts/docs-reference.
 | `HandOverDesktop` | Hand your desktop to the person for something only they can do there — a login, a captcha, a payment — with one instruction they will read on the card. | self | no | needs a box; not in a fork | deferred | desk, web, code, team | `instruction`, `reason` |
 | `Jobs` | The background commands you started with `bash` (background: true, or one that ran on past its window). | observe | no | needs a box | deferred | desk, web, code, team | `action`, `job_id`, `until`, `timeout_ms` |
 | `list_dir` | List a directory in your box, with entry types and sizes. | observe | no | needs a box | resident | desk, web, code, team | `path` |
-| `NoteSiteLearning` | Keep something you found out about a site, for whoever opens it next — you or a teammate. | self | no | needs a box | deferred | — | `url`, `text`, `worked` |
+| `NoteSiteLearning` | Keep something you found out about a site, for whoever in this box opens it next — you or a teammate. | self | no | needs a box | deferred | — | `url`, `text`, `worked` |
 | `NothingToSay` | End this turn on purpose with nothing delivered: the message was not for you, the routine does not apply, the fork's result changes nothing you need to say. | observe | no | always; not in a fork | resident | — | `reason` |
 | `Orchestrate` | Run the same question over many items — one sub-agent per item, each with fresh context — and, if you give a `reduce` brief, one more that combines their answers. | self | no | needs a box; not in a fork | deferred | — | `brief`, `items`, `prompt`, `expect`, `reduce` |
 | `OtherThreads` | List the other conversations in this same chat, and read one. | observe | no | always; not in a fork | deferred | desk, web, code, team | `read`, `search` |
@@ -60,7 +60,7 @@ and the source disagree. Change the source and run `node scripts/docs-reference.
 | `ReadHistory` | Search or read the recorded history of a conversation — what was actually said, what was called, and what came back. | observe | no | always | resident | desk, web, code, team | `search`, `from`, `to`, `epoch`, `around`, `agent` |
 | `ReadKept` | Read back the whole of something you already read, when the copy in this conversation was cut. | observe | no | always | deferred | — | `call`, `from`, `to` |
 | `Recall` | Search everything you have kept, including what the memory section did not show you. | observe | no | always | deferred | desk, web, code, team | `search`, `shared` |
-| `RememberFact` | Keep something across conversations. | self | no | always; not in a fork | resident | desk, web, code, team | `fact`, `scope`, `replaces`, `audience` |
+| `RememberFact` | Keep something across conversations. | self | no | always; not in a fork | resident | desk, web, code, team | `fact`, `scope`, `replaces` |
 | `RunOnHost` | Run a command on the person's own computer — the machine LumenBox runs on, outside your box. | credential | yes: “run a command on the person's own machine” | needs a host runner; not in a fork | resident | — | `command`, `why`, `secrets` |
 | `RunOperation` | Run a taught operation: a skill whose folder holds operation.json replays its browser (and desktop) steps with no model, and returns its output as JSON. | reach | yes: “replay a taught browser operation” | needs a box | deferred | — | `skill`, `input` |
 | `SendToAgent` | Send a message to another of your user's agents. | self | no | always; not in a fork | resident | desk, web, code, team | `target_id`, `message`, `priority` |

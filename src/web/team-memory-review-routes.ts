@@ -1,12 +1,11 @@
 /**
  * Team memory review (INV-1581): the setting, what waits, and a person's decision. Admin only.
- * Each waiting write says who may read it once approved — every box, or the writer's box —
- * and `everyone` lists what is already live on every box, for a person to look over (INV-1722).
+ * Each waiting write names the box whose agents read it once approved: team memory is the box's
+ * (INV-1727 retired the agent-set `audience: "everyone"`, and with it the every-box list).
  */
 
 import type { AgentRegistry } from "../agents/registry.ts";
 import { saveConfig } from "../config.ts";
-import { memoryView } from "../host/memory-admin.ts";
 import { decideReview, pendingReviews, teamReviewOn } from "../host/team-memory-review.ts";
 import { apiError } from "./api-error.ts";
 
@@ -35,12 +34,8 @@ export async function teamMemoryReviewRoute(
         text: item.record.text,
         at: item.record.at,
         kind: item.record.kind,
-        audience: item.record.audience === "everyone" ? "everyone" : "box",
         boxName: boxName(item.record.box),
       })),
-      everyone: memoryView(shared)
-        .filter(line => line.status === "live" && line.audience === "everyone")
-        .map(line => ({ writerName: nameOf(line.via ?? ""), boxName: boxName(line.box), text: line.text, at: line.at })),
     };
   };
   if (route === "GET /api/memory/team-review") return { status: 200, body: view() };

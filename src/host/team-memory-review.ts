@@ -11,10 +11,8 @@
  * Pending is a team-review hold with no decision after it. The writer is told its write is
  * waiting; other agents see nothing until approval. An agent's own tier is never reviewed.
  *
- * A write an agent promotes to every box (`audience: "everyone"`, INV-1722) is held whether the
- * option is on or off: it is read by every agent on the installation, and the agent that wrote
- * it is the only one that decided so. A stopgap until the company brain's promotion by a person
- * (docs/98) replaces `audience`; a box-scoped write follows the option, as before.
+ * Team memory is the box's: an agent cannot mark a write for every box (INV-1727, docs/98 §9 row 4
+ * retired `audience: "everyone"`, and with it INV-1722's always-held path for such writes).
  */
 
 import type { AgentRegistry } from "../agents/registry.ts";
@@ -30,14 +28,9 @@ export function teamReviewOn(): boolean {
   return loadConfig().teamMemoryReview === true;
 }
 
-/** Whether this team-tier write waits for a person: always when it is for every box, else when the option is on. */
-export function needsReview(record: Pick<MemoryRecord, "audience">, on: boolean = teamReviewOn()): boolean {
-  return on || record.audience === "everyone";
-}
-
-/** What goes into the team tier: as given, or held for review when `needsReview` says so. */
+/** What goes into the team tier: as given, or held for review when the option is on. */
 export function forTeamTier(records: readonly MemoryRecord[], on: boolean = teamReviewOn()): MemoryRecord[] {
-  return records.map(record => (needsReview(record, on) ? { ...record, held: { question: TEAM_REVIEW_QUESTION, confidence: 1 } } : record));
+  return on ? records.map(record => ({ ...record, held: { question: TEAM_REVIEW_QUESTION, confidence: 1 } })) : [...records];
 }
 
 export interface PendingReview {
