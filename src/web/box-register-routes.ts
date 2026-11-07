@@ -19,7 +19,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentRegistry } from "../agents/registry.ts";
-import { attachedBox, BOX_NAME, type BoxEntry } from "../box/boxes.ts";
+import { attachedBox, BOX_NAME, type BoxEntry, tokenOf } from "../box/boxes.ts";
 import type { ConnectCodeStore } from "../box/connect-codes.ts";
 import type { BundleStore, Repository } from "../host/bundles.ts";
 import { recordHostBoxBundle } from "../host/host-box.ts";
@@ -147,7 +147,8 @@ async function registerNodeBox(
   const known = connectCodes.nodeBox(node.id, input.name);
   const entry = known === undefined ? undefined : registry.boxById(known.boxId);
   if (entry !== undefined) {
-    const moved = entry.endpoint?.baseUrl !== input.baseUrl.replace(/\/+$/, "");
+    // A new address or a new daemon token (a restarted daemon) is a reconnect; the same ones are a heartbeat.
+    const moved = entry.endpoint?.baseUrl !== input.baseUrl.replace(/\/+$/, "") || tokenOf(entry) !== input.token;
     if (moved) registry.updateBox(entry.id, { endpoint: { baseUrl: input.baseUrl, tokenFile: input.writeToken(entry.name) } });
     connectCodes.seen(entry.id, input.version);
     const result = moved || !orchestrator.isConnected(entry.id) ? await orchestrator.reconnectBox(registry.boxById(entry.id)!) : { connected: true, detail: `${entry.name}: connected` };

@@ -44,7 +44,7 @@ const { connectionStore } = require("./organisations.cjs");
 const { organisationWindows, signInWindow } = require("./organisation-windows.cjs");
 const { installationViews } = require("./installation-views.cjs");
 const { MachineUseRefused, machineUseCalls, machineUseStore, runsPersonalInstallation, startupUse } = require("./machine-use.cjs");
-const { JoinRefused, NODE_KEYCHAIN_SERVICE, NodeRefused, organisationNode } = require("./organisation-node.cjs");
+const { JoinRefused, NODE_KEYCHAIN_SERVICE, NODE_REVOKED_EXIT, NodeRefused, organisationNode } = require("./organisation-node.cjs");
 /**
  * The UI credential of the personal installation, made the first time it is needed — when the
  * personal installation starts — and not when the shell loads: desktopAuth writes
@@ -638,7 +638,14 @@ function startNodeProcess({ origin, name, credential, onExit }) {
   const remember = chunk => { try { fs.mkdirSync(LOG_DIR, { recursive: true }); fs.appendFileSync(NODE_LOG, String(chunk)); } catch {} };
   nodeChild.stdout.on("data", remember);
   nodeChild.stderr.on("data", remember);
-  nodeChild.on("exit", code => { nodeChild = null; log(`organisation node: exited (${code})`); onExit(code); loadShellPage(); });
+  nodeChild.on("exit", code => {
+    nodeChild = null;
+    log(`organisation node: exited (${code})`);
+    onExit(code);
+    loadShellPage();
+    // A node that crashed comes back, as the personal server does; a revoked one (exit 3) does not, and resume() checks the record.
+    if (!quitting && code !== NODE_REVOKED_EXIT) setTimeout(() => node.resume().catch(err => log(`organisation node: ${err.message}`)), 5_000);
+  });
 }
 
 /** Starts what a use runs: the personal installation, or (an organisation node) nothing local but its page. */

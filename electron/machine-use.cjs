@@ -136,7 +136,7 @@ function machineUseCalls({ store, organisations, node, started, log = () => {} }
         const registered = await node.register({ address: details.address, name: details.name });
         store.write(ORGANISATION_NODE, "first-run");
         started(ORGANISATION_NODE);
-        return { use, organisation: registered.organisation };
+        return { use, organisation: registered.organisation, ...(registered.node ? { node: registered.node } : {}) };
       }
       store.write(use, "first-run");
       joinNext = use === PERSONAL_ORGANISATION;

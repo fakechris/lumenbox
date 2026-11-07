@@ -42,6 +42,8 @@ export class NodeRunner {
   private timer: ReturnType<typeof setInterval> | undefined;
   private started: { box: NodeBox; endpoint: Awaited<ReturnType<NodeBox["start"]>> }[] = [];
   private ending: ((end: NodeEnd) => void) | undefined;
+  /** Set by stop(): a box that finishes starting afterwards is stopped at once, and no beat registers anything. */
+  private stopping = false;
   readonly done: Promise<NodeEnd>;
 
   constructor(private readonly options: NodeRunnerOptions) {
@@ -66,7 +68,8 @@ export class NodeRunner {
 
   /** One pass: every box registered (or re-registered); a revocation ends the node. */
   async beat(): Promise<void> {
-    for (const { box, endpoint } of this.started) {
+    for (const { box, endpoint } of [...this.started]) {
+      if (this.stopping) return;
       const answer = await this.register(box, endpoint);
       if (answer.ok) continue;
       if (answer.code === "node-revoked" || answer.code === "node-unknown") {
@@ -83,6 +86,7 @@ export class NodeRunner {
     for (const box of this.options.boxes) {
       try {
         const endpoint = await box.start();
+        if (this.stopping) { await box.stop().catch(() => {}); return; }
         this.started.push({ box, endpoint });
         this.options.log(`node: ${box.name} (${box.kind === "host" ? "native environment" : "docker"}) up at ${endpoint.baseUrl}`);
       } catch (error) {
@@ -95,11 +99,12 @@ export class NodeRunner {
       return;
     }
     await this.beat();
-    if (this.ending === undefined) return;
+    if (this.stopping) return;
     this.timer = setInterval(() => { void this.beat(); }, this.options.heartbeatMs ?? 30_000);
   }
 
   async stop(end: NodeEnd = "stopped"): Promise<void> {
+    this.stopping = true;
     if (this.timer !== undefined) clearInterval(this.timer);
     this.timer = undefined;
     const boxes = this.started;

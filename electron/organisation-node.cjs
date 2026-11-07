@@ -123,7 +123,7 @@ function organisationNode({ file, keychain, signIn, startNode, fetchImpl = fetch
       records.write(record);
       log(`organisation node: ${record.name} (${record.nodeId}) enrolled with ${record.origin} by ${who.identity}`);
       run(record, enrolled.credential);
-      return { organisation: { name: record.organisation, origin: record.origin } };
+      return { organisation: { name: record.organisation, origin: record.origin }, node: { name: record.name } };
     },
     /** At a later start: run the node again, unless it was revoked or its credential is gone. */
     async resume() {

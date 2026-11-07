@@ -24,7 +24,7 @@ import { BOXD_PROTOCOL } from "../protocol/index.ts";
 const load = createRequire(import.meta.url);
 const orgs = load("../../electron/organisations.cjs") as { sessionTokenIn(cookies: { name: string; value: string }[]): string | undefined };
 const nodes = load("../../electron/organisation-node.cjs") as {
-  organisationNode(o: object): { register(o: { address: string; name?: string }): Promise<{ organisation: { name: string; origin: string } }>; status(): { organisation: string; name: string; revoked: boolean } | undefined };
+  organisationNode(o: object): { register(o: { address: string; name?: string }): Promise<{ organisation: { name: string; origin: string }; node: { name: string } }>; status(): { organisation: string; name: string; revoked: boolean } | undefined };
 };
 const { memoryKeychain } = load("../../electron/keychain.cjs") as { memoryKeychain(): { items: Map<string, string>; set(a: string, s: string): Promise<void>; get(a: string): Promise<string | undefined>; remove(a: string): Promise<void> } };
 
@@ -96,6 +96,7 @@ test("an Admin's sign-in on the node enrols it; a member's cannot; its Docker bo
   const admin = nodeFor(ana, join(userData, "node.json"));
   const registered = await admin.node.register({ address: base, name: "mac-studio" });
   assert.equal(registered.organisation.origin, base);
+  assert.equal(registered.node.name, "mac-studio", "the page shows which node this machine became");
   assert.equal(started.length, 1, "the node process starts");
   const credential = started[0]!.credential;
   assert.match(credential, /^lbxn_/);

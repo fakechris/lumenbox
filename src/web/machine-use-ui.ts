@@ -94,7 +94,7 @@ export const FIRST_RUN_HTML = `<!doctype html>
       $("nodesignin").disabled = false;
       if (a.error) { $("nodeline").textContent = WHY[a.error] || WHY.failed; return; }
       $("nodeline").textContent = "";
-      if (a.use === "organisation-node") nodeIs({ organisation: a.organisation.name, name: "", revoked: false });
+      if (a.use === "organisation-node") nodeIs({ organisation: a.organisation.name, name: a.node ? a.node.name : "", revoked: false });
     });
   };
   $("go").onclick = function () {

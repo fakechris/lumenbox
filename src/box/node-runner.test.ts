@@ -66,6 +66,17 @@ test("an organisation that cannot be reached is not a revocation: the boxes stay
   assert.deepEqual(stopped, [], "still up");
   await runner.stop();
   assert.equal(await runner.done, "stopped");
+
+  // Stopped while a box was still starting: that box is stopped as soon as it is up, and never registered.
+  let release: () => void = () => {};
+  const stoppedLate: string[] = [];
+  const slow = new NodeRunner({ control: "http://org.test", credential: "lbxn_x", version: "t", log: () => {}, fetchImpl: (async () => { calls += 1; return Response.json({}); }) as unknown as typeof fetch, boxes: [{ name: "n2-docker", kind: "docker", start: () => new Promise(resolve => { release = () => resolve({ baseUrl: "http://127.0.0.1:1", token: "t" }); }), stop: async () => { stoppedLate.push("n2-docker"); } }] });
+  const starting = slow.start();
+  await slow.stop();
+  release();
+  await starting;
+  assert.deepEqual([stopped, stoppedLate], [["n1-docker"], ["n2-docker"]]);
+  assert.equal(calls, 2, "nothing registered after the stop");
 });
 
 test("box connect refuses an organisation from a machine with an installation of its own, and a code at any organisation, before a token is sent", async t => {
