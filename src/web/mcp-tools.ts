@@ -20,7 +20,7 @@ import type { McpServerTool } from "./mcp-server.ts";
 export interface McpToolsDeps {
   registry: AgentRegistry;
   orchestrator: Orchestrator;
-  principals: { resolve(id: string): { name: string }; list?(): readonly { id: string; name: string }[] };
+  principals: { resolve(id: string): { name: string }; list?(): readonly { id: string; name: string }[]; byId?(id: string): { aliases?: readonly string[] } | undefined };
   workDir: string;
   log: (line: string) => void;
   /** Turn events, for as long as the listener is registered: how a task learns its turn stopped itself. */
@@ -227,7 +227,7 @@ export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
         return `Saved the current desktop of ${agent.profile.name} to ${path}.`;
       },
     },
-    ...(deps.mayDrive !== undefined ? mcpGoalTools({ registry, orchestrator, mayDrive: deps.mayDrive, nameOf: id => principals.resolve(id).name, log }) : []),
+    ...(deps.mayDrive !== undefined ? mcpGoalTools({ registry, orchestrator, mayDrive: deps.mayDrive, nameOf: id => principals.resolve(id).name, aliasesOf: id => principals.byId?.(id)?.aliases ?? [], log }) : []),
     ...(deps.changeFeed !== undefined ? [watchTool(deps.changeFeed)] : []),
     ...(orchestrator.tasks !== undefined ? [raiseAttentionTool(orchestrator.tasks, principals, deps.notifyTask)] : []),
     ...(orchestrator.tasks !== undefined ? [fetchDeliverableTool(orchestrator.tasks, deps.mayReadTask ?? ((task, principalId) => task.requester === principalId))] : []),

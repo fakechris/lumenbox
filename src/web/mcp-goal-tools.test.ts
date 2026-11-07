@@ -5,9 +5,16 @@ import { test } from "node:test";
 import { TaskStore } from "../host/tasks.ts";
 import { SIDE_DOOR_CAPABILITIES } from "./mcp-contract.ts";
 import { goalConversation, mcpGoalTools } from "./mcp-goal-tools.ts";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { OWNER_ID } from "../host/installation.ts";
+import { Principals } from "../host/principals.ts";
+import { applyPendingMerge, confirmMerge, mergePreview } from "../host/self-merge.ts";
+import { SIX, sixPaths, writeSixIdentities } from "../host/testing/six-identities.ts";
 
-function setup(options: { mayDrive?: boolean } = {}) {
-  const board = new TaskStore(null);
+function setup(options: { mayDrive?: boolean; board?: TaskStore; aliasesOf?: (id: string) => readonly string[] } = {}) {
+  const board = options.board ?? new TaskStore(null);
   const prompts: { agentId: string; text: string; userId?: string; conversation?: string }[] = [];
   const agent = { id: "a1", profile: { name: "Ada" } };
   const tools = mcpGoalTools({
@@ -22,6 +29,7 @@ function setup(options: { mayDrive?: boolean } = {}) {
     } as never,
     mayDrive: () => options.mayDrive ?? true,
     nameOf: id => id,
+    ...(options.aliasesOf !== undefined ? { aliasesOf: options.aliasesOf } : {}),
     log: () => {},
   });
   const start = tools.find(tool => tool.name === "goal_start")!;
@@ -92,4 +100,34 @@ test("a blank agent is not named, and an unknown one is refused with the team (I
   assert.equal(agentNamed(registry, undefined, () => ada), ada);
   assert.equal(agentNamed(registry, " Ops ", () => ada), ops);
   assert.throws(() => agentNamed(registry, "coordinator", () => ada), /No agent named coordinator on this team\. The team: Ada, Ops\. Omit agent for the coordinator\./);
+});
+
+test("a goal started before the merge continues in its own conversation when the Owner sends its key again (INV-1705)", async () => {
+  const home = mkdtempSync(join(tmpdir(), "mcp-goal-merge-"));
+  try {
+    writeSixIdentities(home, { ledgers: false });
+    const paths = sixPaths(home);
+    const before = setup({ board: new TaskStore(paths.tasks) });
+    const id = idOf(await before.start.run({ objective: "Ship the weekly digest" }, SIX.work2, { idempotencyKey: "k1" }));
+    const conversation = before.board.get(id)!.conversation;
+    assert.equal(conversation, goalConversation(SIX.work2, "k1"));
+
+    confirmMerge(paths, { digest: mergePreview(paths, { desktop: true }).digest, by: "the operator", desktop: true });
+    applyPendingMerge(paths, () => {});
+    const principals = new Principals(paths.roster, { warn: () => {} });
+    assert.equal(principals.resolve(SIX.work2).id, OWNER_ID, "the token's person is the Owner now");
+    const after = setup({ board: new TaskStore(paths.tasks), aliasesOf: who => principals.byId(who)?.aliases ?? [] });
+    assert.equal(after.board.get(id)!.requester, OWNER_ID, "the merge moved the goal to the Owner");
+    const again = await after.start.run({ objective: "Ship the weekly digest" }, OWNER_ID, { idempotencyKey: "k1" });
+    assert.equal(idOf(again), id, "the same key is the same goal");
+    assert.equal(after.board.list().filter(task => task.pursuit !== undefined).length, 1, "not a second one");
+    assert.equal(after.prompts.length, 0, "and no second drafting turn in a new conversation");
+    const fresh = await after.start.run({ objective: "Tidy the shared drive" }, OWNER_ID, { idempotencyKey: "k2" });
+    assert.equal(after.board.get(idOf(fresh))!.conversation, goalConversation(OWNER_ID, "k2"), "a new key is named from the Owner");
+
+    const none = setup({ board: new TaskStore(paths.tasks) });
+    const unaliased = await none.start.run({ objective: "Ship the weekly digest" }, OWNER_ID, { idempotencyKey: "k1" });
+    assert.notEqual(idOf(unaliased), id, "without the aliases the old goal is not found: this is what the lookup fixes");
+    assert.notEqual(none.board.get(idOf(unaliased))!.conversation, conversation);
+  } finally { rmSync(home, { recursive: true, force: true }); }
 });

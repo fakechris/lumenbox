@@ -60,6 +60,8 @@ test("six identities of one person: previewed, confirmed, merged at the restart 
     assert.deepEqual(people[0]!.identities, [...SIX_IDS]);
     assert.deepEqual(people[0]!.aliases, [...SIX_IDS]);
     assert.equal((await call("/api/me")).body.label, "owner", "the unsigned operator is the Owner now");
+    const record = (await call("/api/person")).body as { principal: string; entries: { text: string }[] };
+    assert.deepEqual([record.principal, record.entries.map(entry => entry.text).sort()], [OWNER_ID, ["replies in Chinese", "reviews in the evening"]], "Settings → Mine, signed out, is the Owner's one record: what DingTalk wrote and what the desktop wrote as `me` (INV-1705)");
     const tokens = (await call("/api/mcp")).body.tokens as { principalId: string; mine: boolean }[];
     assert.deepEqual(tokens.map(token => [token.principalId, token.mine]), [[OWNER_ID, true], [OWNER_ID, true]], "the old tokens are the Owner's");
     assert.deepEqual((JSON.parse(readFileSync(boxesPath, "utf8")) as { members: unknown }[])[0]!.members, [OWNER_ID]);
