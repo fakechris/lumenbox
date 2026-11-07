@@ -7633,7 +7633,7 @@ export const LOGIN_HTML = `<!doctype html>
   <div class="note">{{ui.login.codes-last-15-minutes-and}}</div>
 </div>
 <script>
-var go = document.getElementById("go");
+var go = document.getElementById("go"); var invited = /^[A-Za-z0-9]{4,16}$/.test(new URLSearchParams(location.search).get("code") || "") ? new URLSearchParams(location.search).get("code") : ""; if (invited) document.getElementById("code").value = invited; // an invite link, /login?code=… (INV-1690)
 function submit() {
   var code = document.getElementById("code").value.trim();
   var name = document.getElementById("name").value.trim();

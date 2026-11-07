@@ -97,6 +97,16 @@ export const SETTINGS_PANES: readonly SettingsPane[] = [
     apis: ["/api/supervision"],
     mounted: "script",
   },
+  {
+    key: "organisations",
+    title: "Organisations",
+    titleZh: "组织",
+    about: "The organisations this app is connected to, beside the personal installation: join one by its address or an invite link, open it, disconnect. Only in the desktop app; each organisation's token is kept in the system keychain.",
+    aboutZh: "这个 app 在个人安装之外连接的组织：用地址或邀请链接加入、打开、断开。只在桌面 app 里有；每个组织的令牌存在系统钥匙串里。",
+    config: [],
+    apis: [],
+    mounted: "script",
+  },
 ];
 
 export function settingsPane(key: string): SettingsPane {
