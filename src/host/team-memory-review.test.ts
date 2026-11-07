@@ -109,10 +109,45 @@ test("on: an agent's own tier is not reviewed", async () => {
   }
 });
 
-test("forTeamTier holds only when on, and keeps the record otherwise unchanged", () => {
+test("forTeamTier holds when on, or when the write is for every box; keeps the record otherwise unchanged", () => {
   const record = { at: "2026-11-05T00:00:00.000Z", kind: "fact" as const, text: "x" };
   assert.deepEqual(forTeamTier([record], false), [record]);
   const [held] = forTeamTier([record], true);
   assert.equal(held!.text, "x");
   assert.ok(held!.held !== undefined);
+  assert.ok(forTeamTier([{ ...record, audience: "everyone" }], false)[0]!.held !== undefined, "every box waits with the option off");
+});
+
+test("off: a write for every box still waits; another box sees it only once approved; a rejection is discarded on record; a box write is shared at once (INV-1722)", async () => {
+  const w = world();
+  try {
+    const grok = w.registry.attachBox({ id: "box-grok", name: "grok", kind: "attached", displayFloor: 10, workDir: "/home/box/work", members: "everyone", createdAt: new Date().toISOString() } as never);
+    const cy = w.registry.create({ name: "Cy", boxId: grok.id });
+    const promote = (fact: string) => dispatchTool("RememberFact", { fact, scope: "team", audience: "everyone" }, { agent: w.ada, registry: w.registry, bus: new AgentBus(w.registry, async () => {}), box: undefined });
+    assert.equal(teamReviewOn(), false);
+
+    assert.match((await promote("the person is called Chris")).text, /Kept for every box, waiting for a person's approval/);
+    assert.deepEqual(w.live(cy.id), [], "not live on the other box");
+    assert.equal(w.registry.readSharedMemory(cy.id).length, 0, "not even held: the other box does not read it at all");
+    assert.deepEqual(w.live(w.bob.id), [], "not live for a box-mate either");
+    assert.doesNotMatch((await w.recall(cy, "Chris")).text, /called Chris/);
+
+    const [pending] = pendingReviews(w.registry.readSharedMemory());
+    assert.equal(pending?.record.audience, "everyone");
+    assert.equal(decideReview(w.registry, w.ada.id, pending!.version, "approved", "Chris").ok, true);
+    assert.deepEqual(w.live(cy.id), ["the person is called Chris"], "live on the other box once approved");
+    assert.match((await w.recall(cy, "Chris")).text, /called Chris/);
+
+    await promote("the person's salary is in the wiki");
+    const [second] = pendingReviews(w.registry.readSharedMemory());
+    assert.equal(decideReview(w.registry, w.ada.id, second!.version, "rejected", "Chris").ok, true);
+    assert.deepEqual(w.live(cy.id), ["the person is called Chris"], "a rejection is never live");
+    assert.equal(w.registry.readSharedMemory().find(record => record.review?.decision === "rejected")?.review?.by, "Chris", "the rejection is on record");
+
+    assert.match((await w.remember(w.ada, "the box deploys on Fridays")).text, /Kept and shared/, "a box write is unchanged");
+    assert.ok(w.live(w.bob.id).includes("the box deploys on Fridays"));
+    assert.ok(!w.live(cy.id).includes("the box deploys on Fridays"), "and stays in its box");
+  } finally {
+    w.cleanup();
+  }
 });

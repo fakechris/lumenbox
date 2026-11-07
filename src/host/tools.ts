@@ -70,7 +70,7 @@ import { sniffImage } from "./image-refusal.ts";
 import { appendLearning, hostOf, learningsDir, readLearnings, renderLearnings } from "./learnings.ts";
 import type { McpManager, ToolEffect } from "./mcp.ts";
 import { MCP_FACE_TOKEN_VARIABLE, type McpFace } from "./mcp-face.ts";
-import { dedupe, dedupeKey, describeFrom, memoryRef, validateRecord } from "./memory.ts"; import { recallMatches } from "./memory-relevance.ts"; import { alreadyPending, forTeamTier, pendingNotice, teamReviewOn } from "./team-memory-review.ts";
+import { dedupe, dedupeKey, describeFrom, memoryRef, validateRecord } from "./memory.ts"; import { recallMatches } from "./memory-relevance.ts"; import { alreadyPending, forTeamTier, needsReview, pendingNotice, teamReviewOn } from "./team-memory-review.ts";
 import { guardMemoryCandidate } from "./memory-guard.ts";
 import type { ModelRelay } from "./model-relay.ts";
 import { type OAuthGate, type OAuthProvider, oauthProvider, scrubToken, tokenHeaders } from "./oauth.ts";
@@ -1699,7 +1699,7 @@ export function buildTools(
             description:
               "For scope 'team': who may read it. 'box' (the default) is the agents on your box — " +
               "memory follows the place, and another box's agents do not see it. 'everyone' " +
-              "promotes it to every box on this installation; say so only for something that is " +
+              "promotes it to every box on this installation once a person approves it; say so only for something that is " +
               "true everywhere, such as who the person is or how they like to be addressed.",
           },
         },
@@ -5321,9 +5321,9 @@ export async function dispatchTool(
       };
       const withdrawn = retracted ? " The one it replaces has been withdrawn." : "";
       if (shared) {
-        if (teamReviewOn()) { // team review (INV-1581): the write waits for a person and only this agent is told
-          context.registry.appendSharedMemory(context.agent.id, forTeamTier([record], true));
-          return { text: `Kept for the team, waiting for a person's approval: teammates will have it once it is approved, not before. Until then it is not in anyone's memory, yours included.${retracted ? " Withdrawing the one it replaces waits for the same approval." : ""}` };
+        if (needsReview(record)) { // team review (INV-1581), or a write for every box (INV-1722): it waits for a person and only this agent is told
+          context.registry.appendSharedMemory(context.agent.id, forTeamTier([record]));
+          return { text: `Kept for ${record.audience === "everyone" ? "every box" : "the team"}, waiting for a person's approval: ${record.audience === "everyone" ? "agents on every box" : "teammates"} will have it once it is approved, not before. Until then it is not in anyone's memory, yours included.${retracted && teamReviewOn() ? " Withdrawing the one it replaces waits for the same approval." : withdrawn}` };
         }
         context.registry.appendSharedMemory(context.agent.id, [record]);
         return { text: `Kept and shared. Every agent here will have it on their next turn.${withdrawn}` };
