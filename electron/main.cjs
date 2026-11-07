@@ -27,6 +27,7 @@ const {
   nativeImage,
   nativeTheme,
   powerMonitor,
+  session,
   shell,
 } = require("electron");
 const { execFile, spawn } = require("node:child_process");
@@ -35,7 +36,7 @@ const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
 const { desktopAuth } = require("./ui-auth.cjs");
-const { badgeCount, notificationsDue } = require("./attention-signals.cjs");
+const { dockSignals, shellWordsReader } = require("./dock-signals.cjs");
 const { syncLoginItem } = require("./login-item.cjs");
 const { windowOpenAction } = require("./external-links.cjs");
 const { systemKeychain } = require("./keychain.cjs");
@@ -312,19 +313,44 @@ function windowIsVisible() {
 function notify(title, body, options = {}) {
   if (!Notification.isSupported()) return;
   const notification = new Notification({ title, body: body.slice(0, 240), silent: options.silent === true });
-  // Clicking opens the window on the agent the notice was about.
-  notification.on("click", () => { createWindow(); installations?.select("personal"); if (options.agentId) mainWindow?.webContents.executeJavaScript(`select(${JSON.stringify(options.agentId)})`).catch(() => {}); });
+  // Clicking opens the window on what the notice was about: the agent, or the organisation.
+  notification.on("click", () => (options.installationId ? showInstallation(options.installationId) : showAgent(options.agentId)));
   notification.show();
+}
+
+function showAgent(agentId) {
+  createWindow();
+  installations?.select("personal");
+  if (agentId) mainWindow?.webContents.executeJavaScript(`select(${JSON.stringify(agentId)})`).catch(() => {});
+}
+
+/** Opens the window on an organisation (INV-1709): the column marks it as the one shown. */
+function showInstallation(id) {
+  createWindow();
+  installations?.show(id).catch(error => log(`installations: could not show ${id}: ${error.message}`));
 }
 
 /**
  * The agents as the server last reported them, with their facts (INV-1625): the dock badge is
  * the unread they carry, and a change between two reports is what a notification is about
  * (INV-1626). Read every ten seconds and right after a turn ends or a consent is asked for, so
- * the badge moves with the window closed.
+ * the badge moves with the window closed. The joined organisations' counts join the same badge,
+ * and an organisation that starts owing the person something gets its own notice (INV-1709,
+ * dock-signals.cjs).
  */
-let lastAgents = [];
-const notificationsSent = new Map();
+const signals = dockSignals({
+  setBadge: count => { if (process.platform === "darwin") app.setBadgeCount(count); },
+  notify,
+  focused: () => windowIsVisible(),
+  words: shellWordsReader({
+    execPath: process.execPath,
+    repo: REPO,
+    languages: () => app.getPreferredSystemLanguages(),
+    choice: () => session.defaultSession.cookies.get({ url: PAGE, name: "lumen-lang" }).then(found => found[0]?.value, () => ""),
+  }),
+  log,
+});
+
 function readAgentFacts() {
   http.get(`${PAGE}api/state`, { headers: uiAuth.headers }, response => {
     let body = "";
@@ -332,9 +358,7 @@ function readAgentFacts() {
     response.on("end", () => {
       let agents;
       try { agents = JSON.parse(body).agents || []; } catch { return; }
-      if (process.platform === "darwin") app.setBadgeCount(badgeCount(agents));
-      for (const due of notificationsDue(lastAgents, agents, windowIsVisible(), Date.now(), notificationsSent)) notify(due.title, due.body, { silent: due.silent, agentId: due.agentId });
-      lastAgents = agents;
+      signals.agentsRead(agents);
     });
   }).on("error", () => {});
 }
@@ -538,7 +562,7 @@ function firstRunPage() {
 function startOrganisations(onConnectionsChanged) {
   const store = connectionStore({ file: path.join(app.getPath("userData"), "organisations.json"), keychain: systemKeychain() });
   const openOutside = url => shell.openExternal(url).catch(err => log(`could not open ${url}: ${err.message}`));
-  installations = installationViews({ store, mainWindow: () => mainWindow, openOutside, log });
+  installations = installationViews({ store, mainWindow: () => mainWindow, openOutside, log, onCounts: organisations => signals.organisationsRead(organisations) });
   const windows = organisationWindows({ store, views: installations, personalOrigin: new URL(PAGE).origin, parentWindow: () => mainWindow, openOutside, log, onConnectionsChanged });
   windows.handle(() => mainWindow?.webContents);
   installations.start();
