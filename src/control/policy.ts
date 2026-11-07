@@ -67,14 +67,18 @@ export interface AllocationPolicy {
  * provisioner satisfies out of the box.
  */
 export function staticPolicy(overrides: { memory?: string; storage?: string } = {}): AllocationPolicy {
+  const decision = staticDecision(overrides);
+  return { decide: () => ({ ...decision, resources: { ...decision.resources } }) };
+}
+
+/**
+ * The same decision without a tenant to decide for — what an organisation installation's per-box
+ * driver places every box with (INV-1692). One definition, so the two kinds of box are sized alike.
+ */
+export function staticDecision(overrides: { memory?: string; storage?: string } = {}): AllocationDecision {
   const memory = quantity(overrides.memory ?? "4Gi", "memory");
   const storage = quantity(overrides.storage ?? "10Gi", "storage");
-  return {
-    decide: () => ({
-      resources: { memoryRequest: memory, memoryLimit: memory },
-      storageSize: storage,
-    }),
-  };
+  return { resources: { memoryRequest: memory, memoryLimit: memory }, storageSize: storage };
 }
 
 /**

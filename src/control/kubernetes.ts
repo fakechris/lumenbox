@@ -1,8 +1,10 @@
 /**
  * One pod per tenant, in a cluster.
  *
- * The third allocator, and the one the seam in `allocator.ts` was drawn for. The resource model
- * per tenant:
+ * The third allocator, and the one the seam in `allocator.ts` was drawn for. What a box *is* in a
+ * cluster lives in `kube-box.ts`, shared with the organisation installation's per-box driver
+ * (INV-1692); this file is the per-tenant key, the store bookkeeping and the placement policy.
+ * The resource model per tenant:
  *
  *   - a **Pod** running the same box image compose runs, with `restartPolicy: Always` standing in
  *     for `--restart unless-stopped`;
@@ -11,7 +13,8 @@
  *     `reconcile` exists to correct simply does not occur here;
  *   - **three PVCs** — work, config, hostd — the same three volumes Docker carries, at the same
  *     mount paths, because the image does not know which allocator launched it and must not;
- *   - a **Secret** holding the box's tokens, injected with `envFrom`.
+ *   - a **Secret** holding the box's tokens, injected with `envFrom`;
+ *   - a **NetworkPolicy** admitting only the control plane, so no tenant's box reaches another's.
  *
  * Two things this has to do better than compose, both because `kubectl describe pod` shows the
  * whole spec to anyone with read access:
@@ -35,13 +38,13 @@
 
 import { createHash } from "node:crypto";
 import { defaultBoxImage } from "../box/docker.ts";
-import { BOXD_PORT, UI_PORT } from "../protocol/index.ts";
 import type { AllocatorKind, BoxHandle, BoxSpec, BoxTokens } from "./allocator.ts";
-import { DEFAULT_RELAY_PROVIDER, StoreBackedAllocator } from "./allocator.ts";
+import { StoreBackedAllocator } from "./allocator.ts";
 import { containerNameFor } from "./compose.ts";
-import type { KubeApi, KubePod, KubePvc, KubeSecret, KubeService } from "./kube-client.ts";
+import { KubeBoxes, type KubeBoxPlacement } from "./kube-box.ts";
+import type { KubeApi } from "./kube-client.ts";
 import { KubernetesError } from "./kube-client.ts";
-import type { AllocationDecision, AllocationPolicy } from "./policy.ts";
+import type { AllocationPolicy } from "./policy.ts";
 import { staticPolicy } from "./policy.ts";
 import type { BoxState, ControlStore } from "./store.ts";
 
@@ -80,8 +83,6 @@ export interface KubernetesAllocatorOptions {
   onOutput?: (line: string) => void;
 }
 
-const MANAGED_BY = "app.kubernetes.io/managed-by";
-const INSTANCE = "app.kubernetes.io/instance";
 /** Which tenant an object belongs to — the hash, not the name, because the name is not safe. */
 const TENANT_LABEL = "agentbox/tenant";
 
@@ -92,51 +93,12 @@ const TENANT_LABEL = "agentbox/tenant";
  */
 export const DEFAULT_NAMESPACE = "agentbox";
 
-/**
- * The three persistent volumes every box gets, with their mount paths — the same three, at the
- * same paths, that Docker gives a box, because the image must not be able to tell which allocator
- * launched it. PVC construction, the pod's volumes and volumeMounts, and destroy's loop all
- * derive from this one list: a volume added in one place and forgotten in another is either a
- * mount that never binds or data destroy leaves behind.
- */
-const VOLUMES = [
-  { name: "work", mountPath: "/home/box/work" },
-  { name: "config", mountPath: "/home/box/.config" },
-  { name: "hostd", mountPath: "/home/hostd/.agentbox" },
-] as const;
-
-/**
- * How long to wait for a deleted pod's name to free before re-creating it. Deletion is
- * asynchronous; a name still held after a minute is a wedged kubelet, not a slow one.
- */
-const POD_DELETION_WAIT_MS = 60_000;
-
-/**
- * Run independent calls in parallel without dropping rejections on the floor: `Promise.all`
- * rejects on the first failure and leaves the rest unobserved, which Node quite reasonably
- * complains about. Everything settles; the first failure is the one thrown.
- */
-async function allOrFirst(calls: readonly (() => Promise<void>)[]): Promise<void> {
-  const results = await Promise.allSettled(calls.map(call => call()));
-  const failed = results.find(result => result.status === "rejected");
-  if (failed !== undefined) throw (failed as PromiseRejectedResult).reason;
-}
-
 export class KubernetesAllocator extends StoreBackedAllocator {
   readonly kind: AllocatorKind = "kubernetes";
 
   private readonly namespace: string;
   private readonly prefix: string;
-  private resolvedDefaultImage: string | undefined;
-  /**
-   * The image an allocation uses when its spec names none — resolved when first needed, not in
-   * the constructor: reading it consults the installation's config file, which a constructor
-   * that only validates names has no business touching (INV-875).
-   */
-  private get defaultImage(): string {
-    this.resolvedDefaultImage ??= this.options.image ?? defaultBoxImage();
-    return this.resolvedDefaultImage;
-  }
+  private readonly boxes: KubeBoxes;
   private readonly policy: AllocationPolicy;
   /**
    * One allocation per tenant at a time, in-process: a promise chain the next allocate for the
@@ -150,7 +112,7 @@ export class KubernetesAllocator extends StoreBackedAllocator {
 
   constructor(
     store: ControlStore,
-    private readonly options: KubernetesAllocatorOptions
+    options: KubernetesAllocatorOptions
   ) {
     super(store);
     this.namespace = options.namespace ?? DEFAULT_NAMESPACE;
@@ -178,6 +140,31 @@ export class KubernetesAllocator extends StoreBackedAllocator {
       );
     }
     this.policy = options.policy ?? staticPolicy();
+    let resolvedDefaultImage: string | undefined;
+    this.boxes = new KubeBoxes({
+      api: options.api,
+      namespace: this.namespace,
+      // Resolved when first needed, not here: reading it consults the installation's config file,
+      // which a constructor that only validates names has no business touching (INV-875).
+      defaultImage: () => (resolvedDefaultImage ??= options.image ?? defaultBoxImage()),
+      ...(options.storageClassName !== undefined ? { storageClassName: options.storageClassName } : {}),
+      ...(options.imagePullPolicy !== undefined ? { imagePullPolicy: options.imagePullPolicy } : {}),
+      ...(options.relayUrl !== undefined ? { relayUrl: options.relayUrl } : {}),
+      ...(options.relayProvider !== undefined ? { relayProvider: options.relayProvider } : {}),
+      fixedEnv: {
+        // The gateway proxies to the box's UI, so the in-box orchestrator is not optional here the
+        // way it is for a laptop box: without it nothing listens on the UI port and every proxied
+        // request is a 502. Compose sets the same variable (box/docker.ts).
+        AGENTBOX_HOST_ENABLED: "1",
+        // The gateway's identity headers are believed only where a gateway is in front; the trust
+        // flag is the control plane's to set, never a spec's to unset (INV-1543).
+        AGENTBOX_TRUST_GATEWAY_IDENTITY: "1",
+        ...(options.controlUrl !== undefined ? { AGENTBOX_CONTROL_URL: options.controlUrl } : {}),
+      },
+      ...(options.startTimeoutMs !== undefined ? { startTimeoutMs: options.startTimeoutMs } : {}),
+      ...(options.pollIntervalMs !== undefined ? { pollIntervalMs: options.pollIntervalMs } : {}),
+      ...(options.onOutput !== undefined ? { onOutput: options.onOutput } : {}),
+    });
   }
 
   /**
@@ -189,159 +176,11 @@ export class KubernetesAllocator extends StoreBackedAllocator {
     return createHash("sha256").update(tenantId).digest("hex").slice(0, 8);
   }
 
-  private labelsFor(name: string, tenantId: string, extra?: Record<string, string>): Record<string, string> {
-    return {
-      // Policy labels first, ownership last: the Service selects its pod on INSTANCE, so a policy
-      // that could overwrite these would point the Service at nothing — or at another tenant's pod.
-      ...extra,
-      [MANAGED_BY]: "agentbox",
-      [INSTANCE]: name,
-      [TENANT_LABEL]: this.tenantLabel(tenantId),
-    };
-  }
-
-  /** Every object a tenant owns, named and labelled, before any of it is sent. */
-  private manifestsFor(
-    tenantId: string,
-    name: string,
-    spec: BoxSpec,
-    tokens: BoxTokens,
-    decision: AllocationDecision
-  ): { secret: KubeSecret; pvcs: KubePvc[]; service: KubeService; pod: KubePod } {
-    const labels = this.labelsFor(name, tenantId, decision.labels);
-
-    // The secret carries everything another tenant — or anyone with pod-read access — must not
-    // learn: the box's own two tokens, and the relay configuration when there is one, which
-    // includes the per-box relay token that stands in for the operator's provider key. The pod
-    // references it by name only.
-    const secretData: Record<string, string> = {
-      BOXD_TOKEN: tokens.box,
-      AGENTBOX_UI_TOKEN: tokens.ui,
-    };
-    if (this.options.relayUrl !== undefined && tokens.relay !== undefined) {
-      // The same four variables compose sets, for the same reason: together they make the box's
-      // provider layer take the relay as its endpoint and this token as its credential, while the
-      // capabilities still follow the named provider's model.
-      secretData.AGENTBOX_BASE_URL = this.options.relayUrl;
-      secretData.AGENTBOX_API_KEY = tokens.relay;
-      secretData.AGENTBOX_KEY_ENV = "AGENTBOX_API_KEY";
-      secretData.AGENTBOX_PROVIDER = this.options.relayProvider ?? DEFAULT_RELAY_PROVIDER;
-    }
-    const secret: KubeSecret = {
-      metadata: { name: `${name}-tokens`, labels },
-      data: Object.fromEntries(
-        Object.entries(secretData).map(([key, value]) => [key, Buffer.from(value, "utf8").toString("base64")])
-      ),
-    };
-
-    // The same three volumes Docker gives a box, at the same paths. The image's entrypoint
-    // populates the config volume on start exactly as it does under compose — the box must not be
-    // able to tell which allocator launched it.
-    const pvcs: KubePvc[] = VOLUMES.map(({ name: suffix }) => ({
-      metadata: { name: `${name}-${suffix}`, labels },
-      spec: {
-        accessModes: ["ReadWriteOnce"],
-        resources: { requests: { storage: decision.storageSize } },
-        ...(this.options.storageClassName !== undefined
-          ? { storageClassName: this.options.storageClassName }
-          : {}),
-      },
-    }));
-
-    const service: KubeService = {
-      metadata: { name, labels },
-      spec: {
-        type: "ClusterIP",
-        selector: { [INSTANCE]: name },
-        ports: [
-          { name: "boxd", port: BOXD_PORT, targetPort: BOXD_PORT },
-          { name: "ui", port: UI_PORT, targetPort: UI_PORT },
-        ],
-      },
-    };
-
-    const pod: KubePod = {
-      metadata: { name, labels },
-      spec: {
-        restartPolicy: "Always",
-        // A box runs code its agents write; the last thing it needs is a mounted ServiceAccount
-        // credential for the cluster it lives in, or service-link env vars advertising it.
-        automountServiceAccountToken: false,
-        enableServiceLinks: false,
-        ...(decision.nodeSelector !== undefined ? { nodeSelector: decision.nodeSelector } : {}),
-        ...(decision.tolerations !== undefined ? { tolerations: decision.tolerations } : {}),
-        ...(decision.priorityClassName !== undefined
-          ? { priorityClassName: decision.priorityClassName }
-          : {}),
-        containers: [
-          {
-            name: "box",
-            image: spec.image || this.defaultImage,
-            imagePullPolicy: this.options.imagePullPolicy ?? "IfNotPresent",
-            ports: [
-              { name: "boxd", containerPort: BOXD_PORT },
-              { name: "ui", containerPort: UI_PORT },
-            ],
-            // The whole credential story: by reference, never by value. `kubectl describe pod`
-            // shows this stanza as a secret name; the values are visible only to whoever may
-            // already read secrets in this namespace.
-            envFrom: [{ secretRef: { name: `${name}-tokens` } }],
-            env: [
-              // The gateway proxies to the box's UI, so the in-box orchestrator is not optional
-              // here the way it is for a laptop box: without it nothing listens on the UI port
-              // and every proxied request is a 502. Compose sets the same variable (box/docker.ts).
-              { name: "AGENTBOX_HOST_ENABLED", value: "1" },
-              // The gateway's identity headers are believed only where a gateway is in front (INV-1543).
-              { name: "AGENTBOX_TRUST_GATEWAY_IDENTITY", value: "1" },
-              ...(this.options.controlUrl !== undefined
-                ? [{ name: "AGENTBOX_CONTROL_URL", value: this.options.controlUrl }]
-                : []),
-              // The trust flag is the control plane's to set, never a spec's to unset (INV-1543).
-              ...Object.entries(spec.env ?? {}).filter(([key]) => key !== "AGENTBOX_TRUST_GATEWAY_IDENTITY").map(([key, value]) => ({ name: key, value })),
-            ],
-            resources: {
-              requests: {
-                memory: decision.resources.memoryRequest,
-                ...(decision.resources.cpuRequest !== undefined
-                  ? { cpu: decision.resources.cpuRequest }
-                  : {}),
-              },
-              limits: {
-                memory: decision.resources.memoryLimit,
-                ...(decision.resources.cpuLimit !== undefined
-                  ? { cpu: decision.resources.cpuLimit }
-                  : {}),
-              },
-            },
-            // boxd's /health is unauthenticated by design (the collector relies on the same), so a
-            // probe gives away nothing.
-            readinessProbe: {
-              httpGet: { path: "/health", port: BOXD_PORT },
-              periodSeconds: 5,
-              timeoutSeconds: 3,
-              // A box's desktop takes seconds to come up after the container starts; the default
-              // threshold of 3 would mark it NotReady during a perfectly normal boot.
-              failureThreshold: 12,
-            },
-            volumeMounts: [
-              ...VOLUMES.map(({ name: volume, mountPath }) => ({ name: volume, mountPath })),
-              { name: "shm", mountPath: "/dev/shm" },
-            ],
-          },
-        ],
-        volumes: [
-          ...VOLUMES.map(({ name: volume }) => ({
-            name: volume,
-            persistentVolumeClaim: { claimName: `${name}-${volume}` },
-          })),
-          // Docker gives a box `--shm-size 1g` because Chrome needs more than the default 64MiB
-          // of /dev/shm; Kubernetes's equivalent is a memory-backed emptyDir. Without it the
-          // browser crashes in ways that look like the page's fault.
-          { name: "shm", emptyDir: { medium: "Memory", sizeLimit: "1Gi" } },
-        ],
-      },
-    };
-    return { secret, pvcs, service, pod };
+  private async placementFor(tenantId: string, name: string, spec: BoxSpec, tokens: BoxTokens): Promise<KubeBoxPlacement> {
+    const tenant = this.store.getTenant(tenantId);
+    if (tenant === undefined) throw new Error(`no such tenant: ${tenantId}`);
+    const decision = await this.policy.decide({ tenantId, tenant, spec });
+    return { name, owner: { [TENANT_LABEL]: this.tenantLabel(tenantId) }, spec, tokens, decision };
   }
 
   protected async create(
@@ -356,7 +195,7 @@ export class KubernetesAllocator extends StoreBackedAllocator {
 
     // Policy first, before anything is rendered: the decision shapes the manifests, and if the
     // policy refuses or fails, nothing half-exists for destroy to clean up.
-    const decision = await this.policy.decide({ tenantId, tenant, spec });
+    const placement = await this.placementFor(tenantId, name, spec, tokens);
     // The decision goes in the audit because "why is this tenant's box on that node pool" is a
     // question asked later, by someone holding only the audit log.
     this.store.audit({
@@ -364,52 +203,10 @@ export class KubernetesAllocator extends StoreBackedAllocator {
       actor: `${this.kind}-allocator`,
       action: "allocate.policy",
       target: name,
-      detail: { decision },
+      detail: { decision: placement.decision },
     });
-
-    const { secret, pvcs, service, pod } = this.manifestsFor(tenantId, name, spec, tokens, decision);
-
-    // A pod already carrying this name is the previous incarnation of this tenant's box — the
-    // control plane restarted, or a row was lost. Adopting it is wrong for the same reason as
-    // compose: its baked-in tokens are not the ones just issued, so nothing would authenticate.
-    // Recreating keeps the PVCs, which is where the tenant's work actually lives. Deletion is
-    // asynchronous, so the re-apply waits for the name to free rather than meeting a 409.
-    const existing = await this.options.api.getPod(name);
-    if (existing !== undefined) {
-      this.options.onOutput?.(
-        `${name} already exists (${existing.status?.phase ?? "unknown"}); recreating it with ` +
-          `this box's tokens — volumes are kept`
-      );
-      await this.options.api.deletePod(name);
-      await this.waitPodGone(name);
-    }
-
-    // Secret first: the pod references it by name and Kubernetes starts a pod whose secret is
-    // missing only after the secret appears — but ordering it first makes the intent legible and
-    // the startup immediate. PVCs (independent of each other, so in parallel) before the pod for
-    // the same reason. Service last before the pod, so the DNS name resolves the moment the pod
-    // is Ready.
-    try {
-      await this.options.api.applySecret(secret);
-      await allOrFirst(pvcs.map(pvc => () => this.options.api.applyPvc(pvc)));
-      await this.options.api.applyService(service);
-      await this.options.api.applyPod(pod);
-      await this.waitReady(name);
-    } catch (error) {
-      // A create that fails half-way must not leave what it made: the Secret holds live tokens,
-      // and an orphaned one is a credential nobody owns. The PVCs stay on purpose — they are
-      // data, they may predate this attempt (the recreate path above), and a retried allocate
-      // applies over them cleanly.
-      await this.removeOrphans(name);
-      throw error;
-    }
-
-    return {
-      externalId: name,
-      boxdUrl: this.boxdUrlFor(name),
-      uiUrl: this.uiUrlFor(name),
-      state: "ready",
-    };
+    const placed = await this.boxes.create(placement);
+    return { externalId: name, ...placed, state: "ready" };
   }
 
   /**
@@ -455,144 +252,21 @@ export class KubernetesAllocator extends StoreBackedAllocator {
     return handle;
   }
 
-  /** The addresses never move — that is the entire reason the Service exists. */
-  private boxdUrlFor(name: string): string {
-    return `http://${name}.${this.namespace}.svc:${BOXD_PORT}`;
-  }
-
-  private uiUrlFor(name: string): string {
-    return `http://${name}.${this.namespace}.svc:${UI_PORT}`;
-  }
-
-  /**
-   * Wait for a deleted pod's name to free.
-   *
-   * DELETE returns when the object is *marked*, not when it is gone, and a pod keeps its name
-   * until the kubelet confirms the teardown — so re-creating on the strength of a returned DELETE
-   * is the 409 loop this wait exists to prevent.
-   */
-  private async waitPodGone(name: string): Promise<void> {
-    const deadline = Date.now() + POD_DELETION_WAIT_MS;
-    const interval = this.options.pollIntervalMs ?? 2_000;
-    for (;;) {
-      if ((await this.options.api.getPod(name)) === undefined) return;
-      if (Date.now() > deadline) {
-        throw new KubernetesError(
-          `pod ${name} still existed ${POD_DELETION_WAIT_MS / 1000}s after deletion — the kubelet ` +
-            `is not letting go; look at the node before retrying`
-        );
-      }
-      await new Promise(resolve => setTimeout(resolve, interval));
-    }
-  }
-
-  /**
-   * Undo a failed create: pod, service and secret go (absence tolerated — a delete after a
-   * half-finished create is a normal path), the volumes stay. Cleanup failures are reported
-   * rather than thrown: the original error is the one the caller needs, and a throw here would
-   * replace it.
-   */
-  private async removeOrphans(name: string): Promise<void> {
-    const results = await Promise.allSettled([
-      this.options.api.deletePod(name),
-      this.options.api.deleteService(name),
-      this.options.api.deleteSecret(`${name}-tokens`),
-    ]);
-    for (const result of results) {
-      if (result.status === "rejected") {
-        const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
-        this.options.onOutput?.(`${name}: cleanup after a failed create itself failed: ${reason}`);
-      }
-    }
-  }
-
-  /**
-   * Wait for the pod's Ready condition.
-   *
-   * Readiness, not Running: a container whose desktop has not come up is a pod that answers TCP
-   * and nothing else, and handing out its address would repeat the compose bug where the second
-   * box's UI refused a request the first box had answered. The timeout is generous because the
-   * wait includes the image pull.
-   */
-  private async waitReady(name: string): Promise<void> {
-    const timeoutMs = this.options.startTimeoutMs ?? 5 * 60 * 1000;
-    const deadline = Date.now() + timeoutMs;
-    const interval = this.options.pollIntervalMs ?? 2_000;
-    for (;;) {
-      const pod = await this.options.api.getPod(name);
-      if (pod === undefined) {
-        throw new KubernetesError(`pod ${name} vanished while waiting for it to become ready`);
-      }
-      if (pod.status?.phase === "Failed") {
-        throw new KubernetesError(`pod ${name} failed before it became ready`);
-      }
-      if (pod.metadata.deletionTimestamp !== undefined) {
-        // Terminating is not "not ready yet": this pod is going away and will never report Ready,
-        // so waiting out the full timeout would only delay the news.
-        throw new KubernetesError(
-          `pod ${name} was deleted while waiting for it to become ready (node drain, eviction, or ` +
-            `a hand on kubectl) — recreating it is restart's job, not this wait's`
-        );
-      }
-      const ready = pod.status?.conditions?.some(c => c.type === "Ready" && c.status === "True");
-      if (ready === true) return;
-      if (Date.now() > deadline) {
-        throw new KubernetesError(
-          `pod ${name} did not become ready within ${timeoutMs}ms ` +
-            `(phase: ${pod.status?.phase ?? "unknown"}) — the image pull is the usual suspect`
-        );
-      }
-      await new Promise(resolve => setTimeout(resolve, interval));
-    }
-  }
-
   protected async stopExternal(handle: BoxHandle): Promise<void> {
-    // Pod and Service go; PVCs and the Secret stay. Same rule as compose's stop: reversible, and
-    // the tenant's work and credentials are exactly what a later allocate must find again. The
-    // Service goes too because a Service selecting a pod that does not exist still answers DNS —
-    // a stopped box should be unreachable, not half-there.
-    await allOrFirst([
-      () => this.options.api.deletePod(handle.externalId),
-      () => this.options.api.deleteService(handle.externalId),
-    ]);
+    // Pod and Service go; PVCs and the Secret stay. A stopped box should be unreachable, not
+    // half-there — and the tenant's work and credentials are what a later allocate finds again.
+    await this.boxes.stop(handle.externalId);
   }
 
   protected async destroyExternal(handle: BoxHandle): Promise<void> {
-    const name = handle.externalId;
-    // Pod, service and secret are independent objects — parallel, with every rejection observed.
-    await allOrFirst([
-      () => this.options.api.deletePod(name),
-      () => this.options.api.deleteService(name),
-      () => this.options.api.deleteSecret(`${name}-tokens`),
-    ]);
-    // The PVCs are the tenant's work and their logged-in browser profiles. Last, and loud on
-    // failure, for the same reason as compose's volumes: a PVC left behind is picked up by the
-    // next box with this name, handing one tenant's work to their replacement.
-    const failures: string[] = [];
-    await Promise.all(
-      VOLUMES.map(({ name: suffix }) =>
-        this.options.api.deletePvc(`${name}-${suffix}`).catch((error: unknown) => {
-          failures.push(`${name}-${suffix}: ${error instanceof Error ? error.message : String(error)}`);
-        })
-      )
-    );
-    if (failures.length > 0) {
-      throw new KubernetesError(
-        `pod and service removed but persistentvolumeclaims remain, and a later box with this name ` +
-          `would inherit them: ${failures.join("; ")}`
-      );
-    }
+    await this.boxes.destroy(handle.externalId);
   }
 
   /**
-   * Recreate the pod — and only the pod — from the tokens the store already holds.
-   *
-   * The recovery for "the pod is gone but everything else survived": a node failure, an eviction,
-   * or someone's `kubectl delete pod`. The PVCs and the Service are left alone — the data and the
-   * address are fine (and unlike compose's restart, nothing re-publishes a port: the address is
-   * Service DNS and cannot move, so the store needs no correction). The Secret is re-applied
-   * because the same accident may have taken it, and the pod reads its tokens from the Secret, so
-   * no token passes through a spec here either.
+   * Recreate the pod — and only the pod — from the tokens the store already holds: the recovery
+   * for "the pod is gone but everything else survived". The image comes from the stored row — the
+   * pod must come back as the box it was. The original spec.env is not stored (same limitation as
+   * compose's restart); what the box needs to authenticate is all in the Secret.
    */
   async restart(handle: BoxHandle): Promise<void> {
     const row = this.store.getBox(handle.id);
@@ -600,83 +274,38 @@ export class KubernetesAllocator extends StoreBackedAllocator {
     if (row === undefined || tenant === undefined) {
       throw new KubernetesError(`cannot restart ${handle.externalId}: the store has lost its row`);
     }
-    const name = handle.externalId;
     this.store.setBoxState(handle.id, "starting");
-
-    // The image comes from the stored row — the pod must come back as the box it was. The
-    // original spec.env is not stored (same limitation as compose's restart); what the box needs
-    // to authenticate is all in the Secret.
-    const decision = await this.policy.decide({
-      tenantId: handle.tenantId,
-      tenant,
-      spec: { image: row.image },
-    });
-    const { secret, pod } = this.manifestsFor(handle.tenantId, name, { image: row.image }, handle.tokens, decision);
-
-    await this.options.api.applySecret(secret);
-    // A pod still holding the name is a previous incarnation: delete and wait for the name to
-    // free, exactly as create does — re-applying over a terminating pod is a 409.
-    if ((await this.options.api.getPod(name)) !== undefined) {
-      await this.options.api.deletePod(name);
-      await this.waitPodGone(name);
-    }
-    await this.options.api.applyPod(pod);
+    const placement = await this.placementFor(handle.tenantId, handle.externalId, { image: row.image }, handle.tokens);
     try {
-      await this.waitReady(name);
+      await this.boxes.restart(placement);
     } catch (error) {
-      // Same bookkeeping as compose's restart: a box that did not come back is unreachable, not
-      // starting forever — and the error still travels to whoever asked.
+      // A box that did not come back is unreachable, not starting forever — and the error still
+      // travels to whoever asked.
       this.store.setBoxState(handle.id, "unreachable");
       throw error;
     }
-
     this.store.setBoxState(handle.id, "ready");
     this.store.audit({
       tenantId: handle.tenantId,
       actor: `${this.kind}-allocator`,
       action: "restart",
-      target: name,
+      target: handle.externalId,
     });
   }
 
   protected async locate(
     handle: BoxHandle
   ): Promise<{ boxdUrl: string; uiUrl: string; running: boolean } | undefined> {
-    const name = handle.externalId;
-    // Independent lookups, in parallel — this runs on every collector sweep of every box.
-    const [service, pod] = await Promise.all([
-      this.options.api.getService(name),
-      this.options.api.getPod(name),
-    ]);
-    if (service === undefined && pod === undefined) {
-      // Stopped, or gone. The PVC answers: stop deletes pod and service but keeps the volumes, so
-      // a surviving work volume means this box is stopped and coming back — report it not-running
-      // at its stable address, exactly as compose reports an exited container. No volume means
-      // the box is genuinely gone.
-      const work = await this.options.api.getPvc(`${name}-work`);
-      if (work === undefined) return undefined;
-      return { boxdUrl: handle.boxdUrl, uiUrl: handle.uiUrl, running: false };
-    }
-    // The address is computed, never read back: Service DNS does not drift, which is the whole
-    // point of running under a scheduler. `running` is all that can change — and it means Ready,
-    // not phase Running: a container whose desktop has not come up answers TCP and nothing else.
-    return {
-      boxdUrl: this.boxdUrlFor(name),
-      uiUrl: this.uiUrlFor(name),
-      running:
-        pod?.status?.conditions?.some(c => c.type === "Ready" && c.status === "True") === true,
-    };
+    return this.boxes.locate(handle.externalId);
   }
 
   /**
    * `reconcile`, plus the one correction the base class's contract cannot express.
    *
-   * The base class looks at `running` only nowhere — it exists to correct addresses, and these
-   * addresses cannot move, so without this override a pod that lost its Ready condition keeps its
-   * `ready` row forever and the gateway routes to a box that cannot answer. A not-ready box is
-   * demoted to `starting`, the state the gateway already renders as "your box is coming". The
-   * collector's own /health probe would catch the same thing; this keeps the row honest between
-   * probes.
+   * The base class corrects addresses, and these cannot move, so without this override a pod that
+   * lost its Ready condition keeps its `ready` row forever and the gateway routes to a box that
+   * cannot answer. A not-ready box is demoted to `starting`, the state the gateway already renders
+   * as "your box is coming".
    */
   override async reconcile(handle: BoxHandle): Promise<BoxHandle | undefined> {
     const corrected = await super.reconcile(handle);

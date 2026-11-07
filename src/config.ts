@@ -982,3 +982,12 @@ export function envNumber(name: string, fallback: number): number {
   }
   return value;
 }
+
+/** A server installation's box backend (INV-1692): `kubernetes` puts each box it provisions in a pod. */
+export function boxBackendFromEnvironment(env: NodeJS.ProcessEnv = process.env) {
+  const backend = env.AGENTBOX_BOX_BACKEND?.trim() || "docker";
+  if (backend !== "docker" && backend !== "kubernetes") throw new Error(`AGENTBOX_BOX_BACKEND="${backend}": use docker or kubernetes.`);
+  const optional = (name: string) => env[name]?.trim() || undefined;
+  return { backend, namespace: optional("AGENTBOX_K8S_NAMESPACE"), storageClassName: optional("AGENTBOX_K8S_STORAGE_CLASS"),
+    memory: optional("AGENTBOX_K8S_MEMORY"), storage: optional("AGENTBOX_K8S_STORAGE"), imagePullPolicy: optional("AGENTBOX_K8S_IMAGE_PULL_POLICY") } as const;
+}
