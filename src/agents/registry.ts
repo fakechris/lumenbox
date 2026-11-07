@@ -29,7 +29,7 @@ import {
   statSync,
 } from "node:fs";
 import { appendLine } from "../host/jsonl.ts";
-import { guardMemoryCandidate } from "../host/memory-guard.ts"; import type { ToolPermissions } from "../host/tool-permissions.ts";
+import { guardMemoryCandidate } from "../host/memory-guard.ts"; import type { ToolPermissions } from "../host/tool-permissions.ts"; import { admitted } from "../host/memory-scope.ts";
 import { BOX_RECORD_FILENAME, ensureBoxRecord, type BoxRecord } from "../box/identity.ts";
 import { BOXES_FILENAME, type BoxEntry, ensureBoxes, saveBoxes } from "../box/boxes.ts";
 import { DEFAULT_CONTAINER } from "../box/docker.ts";
@@ -1247,14 +1247,13 @@ export class AgentRegistry {
    * `via` is stamped on read from the filename rather than trusted from the record, so a shard cannot
    * claim to have been written by a different agent.
    */
-  readSharedMemory(forAgentId?: string): MemoryRecord[] {
+  readSharedMemory(forAgentId?: string, principalId?: string): MemoryRecord[] {
     const all = this.readAllSharedMemory();
     if (forAgentId === undefined) return all;
-    // Memory follows the place (INV-424): a reader sees its own box's records, what was
-    // promoted to everyone once a person approved it (a held one stays in its box, INV-1722),
-    // and what predates boxes. A writer's box is stamped on write, so a record cannot claim a box it was not kept in.
-    const boxId = this.boxOf(forAgentId).id;
-    return all.filter(record => record.box === undefined || record.box === boxId || (record.audience === "everyone" && record.held === undefined));
+    // The one admission check, before anything is ranked (INV-1725, memory-scope.ts): memory follows the place
+    // (INV-424) and the person (`mayEnterBox`); older records keep the visibility they had. The box is stamped on write.
+    const reader = { agentId: forAgentId, boxId: this.boxOf(forAgentId).id, boxById: (id: string) => this.boxById(id), ...(principalId !== undefined ? { principalId } : {}) };
+    return admitted(all, "shared", reader);
   }
 
   /** Every shard, every box — for compaction and for the installation-level view. */
