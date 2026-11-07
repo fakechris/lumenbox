@@ -3440,3 +3440,67 @@ test("two guests take turns asking follow-ups in one group chat and each sees on
   });
   try { assert.equal(result.score.turns, 0, "no member turn ran"); } finally { result.cleanup(); }
 });
+
+test("an L4 task's agent drafts a message: it waits in the Outbox, goes out once approved and the agent carries on; the second is refused with a reason the agent reads next turn (INV-1739)", async () => {
+  const { PolicyGate } = await import("./policy.ts");
+  const { TaskStore } = await import("./tasks.ts");
+  const { chatTarget, OutboxDrafts } = await import("./outbox-drafts.ts");
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-outbox-scenario-"));
+  const policy = new PolicyGate({ path: join(dir, "policy.jsonl"), limits: { budgetWindowHours: 24, wakesPerWindow: 30, wakeWindowMinutes: 10, approvalRequiredTools: [], approvalRequiredCommands: [], tierGate: "off" } });
+  const tasks = new TaskStore(join(dir, "tasks.jsonl"));
+  const outbox = new OutboxDrafts(join(dir, "outbox-drafts.jsonl"));
+  const sent: { chatKey: string; text: string }[] = [];
+  let settling: Promise<unknown> = Promise.resolve();
+  policy.onApprovalSettled = (approval, how) => { settling = outbox.settled(approval.id, how); }; // the orchestrator's hook, as wired there
+  const reason = "legal has not cleared the party announcement";
+  let readReason = false;
+  const result = await runEpisode({
+    team: [{ name: "Ada" }],
+    says: [],
+    policy, tasks, outbox,
+    script: ({ messages }) => {
+      const last = JSON.stringify(messages.at(-1));
+      if (last.includes("tool_result")) return { say: last.includes("in the Outbox as") ? "Drafted; it waits in the Outbox for you." : "ok" };
+      if (last.includes("refused your message")) { readReason = last.includes(reason); return { say: "Understood: I will not announce the party until legal clears it." }; }
+      if (last.includes("approved your message")) return { call: "Outbox", input: { kind: "message", target: "here", body: "Also: the launch party is on Saturday.", why: "people are planning around it" } };
+      return { call: "Outbox", input: { kind: "message", target: "here", body: "The release moves to Friday.", why: "the team asked for the new date" } };
+    },
+    drive: async ({ bus, frontId, say }) => {
+      const task = tasks.create({ title: "Tell the team the new release date", requester: "chris", assigneeId: frontId, level: 4 })!;
+      tasks.update(task.id, { status: "doing" }, frontId);
+      outbox.connect({
+        chatFor: draft => chatTarget(draft, { canSend: () => false, chatOf: () => "feishu:oc_team" }),
+        deliver: async (draft, chatKey) => { sent.push({ chatKey, text: draft.body }); return { delivered: true }; },
+        tell: (agentId, conversation, text) => { bus.deliverSystem(agentId, text, conversation); },
+        note: (taskId, text) => { tasks.update(taskId, { note: text }, "outbox"); },
+      });
+      await say("Tell the team the release moved to Friday.");
+      assert.deepEqual(sent, [], "drafted, not sent");
+      const [first] = outbox.waiting();
+      assert.equal(first?.taskId, task.id);
+      assert.equal(first?.level, 4);
+      assert.ok(outbox.decide(first!.id, { decision: "approve" }, "Chris").ok);
+      policy.grant(first!.approvalId, "user", "once");
+      await settling; await bus.idle(); // delivered, then the agent is woken with the result and drafts the second
+      assert.deepEqual(sent, [{ chatKey: "feishu:oc_team", text: "The release moves to Friday." }]);
+      const [second] = outbox.waiting();
+      assert.equal(second?.body, "Also: the launch party is on Saturday.");
+      assert.ok(outbox.decide(second!.id, { decision: "reject", reason }, "Chris").ok);
+      policy.deny(second!.approvalId, "user", reason);
+      await settling; await bus.idle();
+    },
+  });
+  try {
+    assert.equal(sent.length, 1, "the refused draft never went");
+    assert.equal(readReason, true, "the agent's next turn read the person's reason");
+    assert.match(result.score.said.at(-1)?.text ?? "", /will not announce the party/);
+    assert.deepEqual(outbox.list().map(draft => [draft.status, draft.delivery?.delivered ?? null]), [["approved", true], ["rejected", null]]);
+    const notes = tasks.list()[0]!.history.map(change => change.note ?? "");
+    assert.ok(notes.some(note => /sent to feishu:oc_team, approved by Chris/.test(note)), "the delivery is on the task's record");
+    assert.ok(notes.some(note => note.includes(reason)), "and so is the refusal");
+    assert.deepEqual(result.score.refusals, []);
+  } finally {
+    result.cleanup();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

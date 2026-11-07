@@ -93,6 +93,8 @@ const DECLARED: Record<string, SideEffect> = {
   NoteSiteLearning: { tier: "self" },
   // Unverify only takes trust away; retract and supersede mark their own call irreversible, so the person says yes first (INV-1730).
   CorrectOrgKnowledge: { tier: "self" },
+  // Only drafts: nothing leaves until a person approves it on its own consent record (INV-1739).
+  Outbox: { tier: "self" },
   SendToAgent: { tier: "self" },
   AskUser: { tier: "self" },
   AskSecret: { tier: "self" },

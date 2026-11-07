@@ -5706,7 +5706,7 @@ function renderAttention() {
       // Only what has no task row (INV-1654): a consent, a question, a pause. Tasks carry their own mark on the board below.
       var loose = typeof looseItems === "function" ? looseItems(mine) : [];
       $("attention").style.display = loose.length ? "" : "none";
-      $("attention").innerHTML = loose.length ? '<div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:4px">' + esc(t("ui.attention.mine")) + "</div>" + loose.map(function (i) { return row(i, true); }).join("") : "";
+      $("attention").innerHTML = loose.length ? '<div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:4px">' + esc(t("ui.attention.outbox")) + "</div>" + loose.map(function (i) { return row(i, true); }).join("") : "";
     })
     .catch(function () { $("attention").style.display = "none"; $("needsme").style.display = "none"; });
 }

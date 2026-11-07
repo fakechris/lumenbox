@@ -557,7 +557,7 @@ export interface TurnDeps {
    */
   autoReview?: { mode(): ReviewMode; review(input: ReviewInput): Promise<Verdict> };
   /** Records which agent wrote into a skill. Absent means no record is kept. */
-  skillProvenance?: ToolContext["skillProvenance"]; jobWatch?: ToolContext["jobWatch"]; verifications?: ToolContext["verifications"]; // The watch on commands a turn lets go of (INV-1461); what reviewers found (INV-1614).
+  skillProvenance?: ToolContext["skillProvenance"]; jobWatch?: ToolContext["jobWatch"]; verifications?: ToolContext["verifications"]; outbox?: ToolContext["outbox"]; // The watch on commands a turn lets go of (INV-1461); what reviewers found (INV-1614).
   /**
    * Pushes the agent's standing files to its box before the turn reads them (INV-777), so the
    * copy it may edit is the copy the prompt carries. Absent means no mirror — tests, or no box.
@@ -1736,7 +1736,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
           files: deps.files,
           claims: deps.claims,
           policy: deps.policy,
-          caller: deps.caller, ...(isolated || deps.orgKnowledge === undefined ? {} : { orgKnowledge: deps.orgKnowledge }),
+          caller: deps.caller, ...(isolated || deps.orgKnowledge === undefined ? {} : { orgKnowledge: deps.orgKnowledge }), ...(isolated || deps.outbox === undefined ? {} : { outbox: deps.outbox }), // the Outbox (INV-1739)
           ...(deps.callerName !== undefined ? { callerName: deps.callerName } : {}),
           ...(deps.callerIdentities !== undefined ? { callerIdentities: deps.callerIdentities } : {}),
           displayIndex: deps.displayIndex,
@@ -1833,7 +1833,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
             files: deps.files,
             claims: deps.claims,
             policy: deps.policy,
-            caller: deps.caller, ...(isolated || deps.orgKnowledge === undefined ? {} : { orgKnowledge: deps.orgKnowledge }),
+            caller: deps.caller, ...(isolated || deps.orgKnowledge === undefined ? {} : { orgKnowledge: deps.orgKnowledge }), ...(isolated || deps.outbox === undefined ? {} : { outbox: deps.outbox }), // the Outbox (INV-1739)
             ...(deps.callerName !== undefined ? { callerName: deps.callerName } : {}),
             displayIndex: deps.displayIndex,
             ensureDesktop: deps.ensureDesktop,
@@ -3363,7 +3363,7 @@ ${outcome.text}`;
             files: deps.files,
             claims: deps.claims,
             policy: deps.policy,
-            caller: deps.caller, ...(isolated || deps.orgKnowledge === undefined ? {} : { orgKnowledge: deps.orgKnowledge }),
+            caller: deps.caller, ...(isolated || deps.orgKnowledge === undefined ? {} : { orgKnowledge: deps.orgKnowledge }), ...(isolated || deps.outbox === undefined ? {} : { outbox: deps.outbox }), // the Outbox (INV-1739)
           ...(deps.callerName !== undefined ? { callerName: deps.callerName } : {}),
           ...(deps.callerIdentities !== undefined ? { callerIdentities: deps.callerIdentities } : {}),
             display: deps.display,

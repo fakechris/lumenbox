@@ -15,6 +15,7 @@
  *   - `answer`    a reply is owed to that person, and this one consumes it
  *   - `ack`       at most one per message a person sent
  *   - `notice`    the host reporting what it did or saw; allowed, and counted
+ *   - `draft`     an agent's draft from the Outbox (INV-1739): a person approved it
  *
  * A refusal is returned with its reason — to the agent, never swallowed — and written to the
  * policy ledger, so a prompt that keeps trying to announce an unfinished draft leaves a trail.
@@ -25,7 +26,8 @@ export type OutboundPurpose =
   | { kind: "attention"; ref: string; question: string }
   | { kind: "answer"; deliveryId: string }
   | { kind: "ack"; messageId: string }
-  | { kind: "notice"; about?: string };
+  | { kind: "notice"; about?: string }
+  | { kind: "draft"; id: string };
 
 /** What the gate reads; each answers one purpose's claim. */
 export interface OutboundWorld {
@@ -35,6 +37,8 @@ export interface OutboundWorld {
   pendingQuestion: (ref: string) => string | undefined;
   /** Whether an answer is still owed under this delivery id. */
   answerOwed: (deliveryId: string) => boolean;
+  /** Whether a person approved this Outbox draft (outbox-drafts.ts); absent means no draft is. */
+  draftApproved?: (id: string) => boolean;
 }
 
 export type OutboundVerdict = { allow: true } | { allow: false; reason: string };
@@ -67,6 +71,8 @@ export function outboundVerdict(purpose: OutboundPurpose, world: OutboundWorld, 
       return { allow: true };
     case "notice":
       return { allow: true };
+    case "draft":
+      return world.draftApproved?.(purpose.id) === true ? { allow: true } : { allow: false, reason: `draft refused: ${purpose.id} is not approved by a person — it waits in the Outbox` };
   }
 }
 
@@ -78,6 +84,7 @@ export function describePurpose(purpose: OutboundPurpose): string {
     case "answer": return `answer owed as ${purpose.deliveryId}`;
     case "ack": return `ack of ${purpose.messageId}`;
     case "notice": return purpose.about === undefined ? "notice" : `notice: ${purpose.about}`;
+    case "draft": return `outbox draft ${purpose.id}`;
   }
 }
 

@@ -186,7 +186,7 @@ test("describeTask reads like a board row", () => {
   try {
     store.create({ title: "Write the brief", requester: "web", assigneeId: "a1", reviewerId: "b2" });
     const line = describeTask(store.get("t1")!, id => (id === "a1" ? "Ada" : "Bob"));
-    assert.equal(line, "t1 [open] @Ada Write the brief · review by Bob · L4 — do most of it: any step that reaches outside the box (a send, a publish, a payment, a delete) waits for the person's confirmation, then continues"); // the level rides on the row since INV-1650
+    assert.equal(line, "t1 [open] @Ada Write the brief · review by Bob · L4 — do most of it: any step that reaches outside the box (a send, a publish, a payment, a delete) waits for the person's confirmation, then continues; a message or a post to someone else is drafted with the Outbox tool and sent once approved"); // the level rides on the row since INV-1650
   } finally {
     cleanup();
   }

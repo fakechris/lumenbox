@@ -25,10 +25,11 @@ import { describeStale } from "./mandate.ts";
 import { currentFlag } from "./task-flag.ts";
 import { claimedButNotDelivered } from "./task-deliverables.ts";
 import { DOCKER_WORK } from "./box-paths.ts";
+import type { Draft } from "./outbox-drafts.ts";
 import { STAGE_LABEL, stageWorldOf, type TaskStage, taskStage } from "./task-stage.ts";
 
 export interface AttentionItem {
-  kind: "approval" | "question" | "close-proposal" | "review" | "nudged" | "waiting" | "unanswered" | "paused" | "reauthorize" | "undeliverable" | "flagged" | "box-update" | "boundary-probe" | "provider-resting" | "team-memory" | "spend-limit" | "routine-paused" | "org-knowledge";
+  kind: "approval" | "question" | "close-proposal" | "review" | "nudged" | "waiting" | "unanswered" | "paused" | "reauthorize" | "undeliverable" | "flagged" | "box-update" | "boundary-probe" | "provider-resting" | "team-memory" | "spend-limit" | "routine-paused" | "org-knowledge" | "outbox";
   /** What to open: a task id, or the conversation a question was asked in. */
   ref: string;
   title: string;
@@ -42,6 +43,8 @@ export interface AttentionItem {
   with?: string;
   /** The task's stage by the table in task-stage.ts (INV-1464), on items that are about a task. */
   stage?: TaskStage;
+  /** An Outbox draft (INV-1739), whole: the page shows the words, the target, the background and the case. */
+  draft?: Pick<Draft, "id" | "kind" | "target" | "body" | "why" | "background" | "taskId" | "level" | "agentName" | "createdAt">;
 }
 
 export interface Attention {
@@ -74,6 +77,8 @@ export interface AttentionInput {
   agentIds?: ReadonlySet<string>;
   /** Pending approvals, the most common block (INV-1622/1627): one item each, answered from the strip. */
   approvals?: readonly { id: string; agentId: string; agentName: string; description: string; action?: string; requestedAt: string; why?: string; taskLevel?: number }[];
+  /** Outbox drafts waiting for a person (INV-1739); each is listed once, as itself, never again as its consent record. */
+  outbox?: readonly Draft[];
   /** Teammate chains the bus stopped (INV-1277): shown to everyone, since no person is in them by definition. */
   paused?: readonly { fromName: string; toName: string; hops: number; at: string; fromId: string }[];
   /** Routines the host stopped (INV-1665): failing K times in a row is one reason. Everyone's, since a person must turn it back on. */
@@ -101,11 +106,11 @@ const isLive = (task: Task): boolean => task.status !== "done" && task.status !=
  * something they may want to know (INV-1647). Only decisions reach the strip and the OS: a
  * channel that carries everything carries nothing.
  */
-export const DECISION_KINDS: ReadonlySet<AttentionItem["kind"]> = new Set(["approval", "question", "close-proposal", "reauthorize", "spend-limit", "paused", "routine-paused", "org-knowledge"]); // org-knowledge: an item its owner must re-verify, supersede or retract (INV-1731); a review is the board's, folded to one line in the strip: five of them once hid the agents
+export const DECISION_KINDS: ReadonlySet<AttentionItem["kind"]> = new Set(["approval", "question", "close-proposal", "reauthorize", "spend-limit", "paused", "routine-paused", "org-knowledge", "outbox"]); // org-knowledge: an item its owner must re-verify, supersede or retract (INV-1731); a review is the board's, folded to one line in the strip: five of them once hid the agents
 export const isDecision = (kind: AttentionItem["kind"]): boolean => DECISION_KINDS.has(kind);
 
 export function urgencyOf(kind: AttentionItem["kind"]): number {
-  return kind === "approval" ? 0 : kind === "question" ? 1 : kind === "spend-limit" || kind === "paused" || kind === "routine-paused" ? 2 : 3;
+  return kind === "approval" || kind === "outbox" ? 0 : kind === "question" ? 1 : kind === "spend-limit" || kind === "paused" || kind === "routine-paused" ? 2 : 3;
 }
 
 export function attentionFor(input: AttentionInput): Attention {
@@ -115,8 +120,20 @@ export function attentionFor(input: AttentionInput): Attention {
   const isMe = (id: string | undefined): boolean =>
     input.all === true || (id !== undefined && (id === input.principalId || input.identities.includes(id)));
 
-  // A command waiting for consent: the agent is parked until a person answers, so it goes first.
+  // What an agent drafted to send, held in the Outbox (INV-1739); then a command waiting for consent. Both stop the work until a person answers, so they go first.
+  const drafted = new Set((input.outbox ?? []).map(draft => draft.approvalId));
+  for (const draft of input.outbox ?? []) {
+    mine.push({
+      kind: "outbox",
+      ref: draft.id,
+      title: `${draft.agentName || input.nameOf(draft.agentId)}: ${draft.kind} to ${draft.target}`,
+      detail: `${draft.body.replace(/\s+/g, " ").slice(0, 120)}${draft.level !== undefined ? ` · task L${draft.level}` : ""}`,
+      with: draft.agentName || input.nameOf(draft.agentId),
+      draft: { id: draft.id, kind: draft.kind, target: draft.target, body: draft.body, why: draft.why, agentName: draft.agentName, createdAt: draft.createdAt, ...(draft.background !== undefined ? { background: draft.background } : {}), ...(draft.taskId !== undefined ? { taskId: draft.taskId } : {}), ...(draft.level !== undefined ? { level: draft.level } : {}) },
+    });
+  }
   for (const approval of input.approvals ?? []) {
+    if (drafted.has(approval.id)) continue; // the draft above is this consent, with its words
     mine.push({
       kind: "approval",
       ref: approval.id,
