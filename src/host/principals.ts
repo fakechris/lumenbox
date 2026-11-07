@@ -35,7 +35,7 @@
  */
 
 import { withRosterLock } from "./roster-lock.ts";
-import { guardRoster, installationOf, OwnerConversionRequired, type Installation } from "./installation.ts";
+import { guardRoster, installationOf, PersonalInstallationOnly, type Installation } from "./installation.ts";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
@@ -226,10 +226,10 @@ export class Principals {
     return { ...this.mode };
   }
 
-  /** Throws `OwnerConversionRequired` on a single-machine installation: for an act that admits a new person without a roster save yet, such as an invite code. */
+  /** Throws `PersonalInstallationOnly` on a single-machine installation: for an act that admits a new person without a roster save yet, such as an invite code or a directory sync (INV-1689). */
   requireOrganisation(): void {
     this.reload();
-    if (this.mode.mode === "single-machine") throw new OwnerConversionRequired();
+    if (this.mode.mode === "single-machine") throw new PersonalInstallationOnly();
   }
 
   list(): Principal[] {
@@ -305,7 +305,7 @@ export class Principals {
     mkdirSync(dirname(this.path), { recursive: true });
     const temp = `${this.path}.${process.pid}.tmp`;
     const previousFile = existsSync(this.path) ? JSON.parse(readFileSync(this.path, "utf8")) as PrincipalsFile : undefined;
-    // Read under the lock, so a conversion confirmed a moment ago is the state this save is checked against.
+    // Read under the lock, so the mode this save is checked against is the file's, not this process's cache.
     guardRoster(installationOf(previousFile), cleaned);
     const bootstrap = previousFile?.bootstrap ?? (previousFile?.principals?.length ? { disabled: true } : undefined);
     const file: PrincipalsFile = {

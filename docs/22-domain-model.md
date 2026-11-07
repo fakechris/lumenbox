@@ -80,7 +80,7 @@ pointing at another room's worker is a schema error, not a runtime surprise.
 A Principal belongs to one installation's roster. A person who is an Owner at home and a driver
 in an organisation is two Principals with nothing linking them (docs/95 §4).
 
-## 1a. Owner and Admin: an installation-mode field, not a role (INV-1685)
+## 1a. Owner and Admin: an installation-mode field, not a role (INV-1685, INV-1689)
 
 The desktop app on one computer has one person, the **Owner** (机主); an organisation
 installation has **Admins** (管理员). The words are the glossary's (docs/glossary.md, decision 4).
@@ -106,16 +106,20 @@ second person and never converts.
 - **The unsigned operator is the Owner.** With nobody signed in, the desktop acts as the one
   admin (`soleAdmin`, INV-1681), which on a single-machine installation is the Owner
   (`local:owner`): MCP tokens and the watchdog's token are issued to them with no person named.
-- **The conversion — void (docs/95 §2), still in the code until INV-1689 removes it.** What
-  follows describes the code as INV-1685 shipped it, not the design: under docs/95 every way of
-  adding a person to a `single-machine` installation is refused outright, and
-  `POST /api/installation/convert` goes. While the mode is `single-machine`, a roster save that holds anyone but
-  the Owner, or drops or demotes the Owner, is refused (`guardRoster`): the web answers 409 with
-  `needs: "owner-conversion"`, and so does an invite code for a new person. The page asks; on
-  the person's yes it posts `POST /api/installation/convert` with `confirm: true`, which writes
-  `mode: "organisation"` and the audit record `conversion: { at, by, ownerId }` in one atomic
-  roster replacement. The Owner stays, as the first Admin. A conversion is not undone by
-  removing people later, and an emptied organisation roster never grows an Owner back.
+- **A personal installation never takes a second person (INV-1689, docs/95 §2).** There is no
+  conversion: a personal installation is never turned into an organisation, which is its own
+  installation. While the mode is `single-machine`, a roster save that holds anyone but the Owner, or drops or
+  demotes the Owner, is refused (`guardRoster`), and so are the acts that admit a new person
+  before any save — an invite code for a new person, letting a knock in, a directory sync
+  (`requireOrganisation`). The web answers 409 with `needs: "organisation"`, the sentence
+  `ui.installation.personal-only` in the reader's language ("This is your personal
+  installation; it has only you. To work with others, join or create an organisation.") and
+  `manual`, the channels page of the manual; the page shows the same. An old channel allow
+  list is not imported into a personal roster. A code linking the Owner's own phone is not a
+  second person and still works.
+- **Installations converted before INV-1689** carry `conversion: { at, by, ownerId }` from the
+  INV-1685 route that is gone. They are organisations and stay so, unchanged; the start says it
+  in one `upgrade:` line. An emptied organisation roster never grows an Owner back.
 
 ## 2. Doors route; boxes authorize
 

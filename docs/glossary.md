@@ -44,7 +44,7 @@ renamed: `door`, `worker`, `expert`, `front` stay in the code and the specs.
    - An **Admin** (管理员) runs an organisation installation: a server, whose first Admin redeems
      the bootstrap code. A personal installation never becomes an organisation; to work with
      others, its Owner joins or creates one. An installation shows an Owner or Admins, never
-     both. (Until INV-1689 lands, the app still offers to convert; that path is being removed.)
+     both.
    - An **account holder** (账户持有人) manages a tenant on the control plane (docs/08). The code
      value stays `owner` (`src/control`); only the words a person reads say account holder.
 
@@ -62,7 +62,7 @@ renamed: `door`, `worker`, `expert`, `front` stay in the code and the specs.
 | **group chat** / 群 | chat, "room" in channel code | platform chat id, e.g. `oc_…` | group rule `addressed` · `all` | Settings → Channels group rule · the group · — |
 | **installation** / 安装 | Installation: the roster's `installation.mode` (docs/22 §1a), its kinds in docs/95 | personal: this computer; organisation: its name and address | personal (个人) · organisation (组织) | the sidebar's first level (INV-1691) · — · `agentbox web --desktop` (personal, the app passes it), `agentbox web` on a server (organisation) |
 | **person** / 人 | Principal, Identity | principal id; identity `<channel id>:<subject>` | viewer · driver · admin | Settings → Team → People · `bind CODE` · — |
-| **Owner** / 机主 | Principal with role `admin` on an installation whose `installation.mode` is `single-machine` (installation.ts, docs/22 §1a) | principal id `local:owner` | Owner · became an Admin | Settings → Team → People (Owner · 机主) · — · `agentbox web --desktop` (the app passes it) |
+| **Owner** / 机主 | Principal with role `admin` on an installation whose `installation.mode` is `single-machine` (installation.ts, docs/22 §1a) | principal id `local:owner` | Owner (the only person; never converted) | Settings → Team → People (Owner · 机主) · — · `agentbox web --desktop` (the app passes it) |
 | **Admin** / 管理员 | Principal with role `admin` on an organisation installation (`installation.mode` absent or `organisation`) | principal id | admin | Settings → Team → People · the bootstrap code's sign-in page · — |
 | **account holder** / 账户持有人 | control-plane membership role `owner` (src/control/store.ts) | user id in the tenant | account holder · member · viewer | the control plane's admin surface · — · `scripts/control-admin.sh` |
 | **task** / 任务 | Task, the board | `tN`, e.g. `t12` | open · doing · blocked · review · done · dropped | Tasks tab · `/continue tN`, `/recover tN`, 停, 可以 · MCP `task_status` |

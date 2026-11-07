@@ -65,7 +65,7 @@ there is no entry there yet.
 | watchdog | Settings → Supervision → Watchdog | a notice in the task's chat | `agentbox watchdog` | on · off | [supervision](supervision.md) |
 | supervisor | Settings → Supervision → Start a supervised goal | — | `agentbox supervise` | queued · running | [supervision](supervision.md) |
 | MCP endpoint | Settings → Mine → Your MCP tokens | — | `agentbox mcp` | token valid · revoked | [skills](skills.md) |
-| Owner (机主) | Settings → Team → People: Owner · 机主 | — | — | Owner · became an Admin | [channels](channels.md) |
+| Owner (机主) | Settings → Team → People: Owner · 机主 | — | — | Owner, the only person | [channels](channels.md) |
 | Admin (管理员) | Settings → Team → People: role admin | `bind <code>` | — | viewer · driver · admin | [channels](channels.md) |
 
 ## Boundaries
@@ -88,10 +88,10 @@ Each line is one thing that looks like another, and where to check which one you
   run, and nothing runs. Check the Automations tab: "would have run N times".
 - **A saved configuration is not the running one:** a change applies from the agent's next
   turn. Check the chip beside Configure: `config v3 · v4 next turn`.
-- **The Owner is not an Admin:** the Owner is the one person of the desktop app on one
-  computer; Admins run an installation with more people. Letting a second person in asks
-  first, and on yes the Owner becomes the first Admin. Check Settings → Team → People: it
-  shows Owner · 机主, or roles, never both.
+- **The Owner is not an Admin:** the Owner is the one person of your personal installation,
+  the desktop app on your computer; Admins run an organisation, which is a separate
+  installation. A personal installation never lets a second person in. Check Settings → Team →
+  People: it shows Owner · 机主, or roles, never both.
 - **"Always" is not a blanket yes:** it allows that exact action, for that agent, until you
   revoke it. Check Settings → Mine → Standing approvals.
 

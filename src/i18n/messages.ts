@@ -24,7 +24,7 @@ import { UI_APP } from "./ui-app.ts";
 import { UI_PAGE } from "./ui-page.ts";
 import { UI_SECTIONS } from "./ui-sections.ts";
 import { SETTINGS_PANES } from "../web/settings-registry.ts";
-import { MANUAL_URL, MANUAL_URL_ZH } from "../web/manual-link.ts";
+import { MANUAL_URL, MANUAL_URL_ZH, manualPage, PERSONAL_ONLY_PAGE } from "../web/manual-link.ts";
 
 /** The web UI's words, kept as `[zh, en]` pairs so a translator reads both on one line (INV-1684). */
 const UI_WORDS: Record<string, readonly [zh: string, en: string]> = {
@@ -33,6 +33,7 @@ const UI_WORDS: Record<string, readonly [zh: string, en: string]> = {
   ...UI_SECTIONS,
   ...Object.fromEntries(SETTINGS_PANES.map(pane => [`ui.pane.${pane.key}`, [pane.titleZh, pane.title] as const])),
   "ui.manualUrl": [MANUAL_URL_ZH, MANUAL_URL],
+  "ui.manualUrl.personal-only": [manualPage(PERSONAL_ONLY_PAGE, "zh"), manualPage(PERSONAL_ONLY_PAGE, "en")], // INV-1689
 };
 
 const uiIn = (index: 0 | 1) => Object.fromEntries(Object.entries(UI_WORDS).map(([key, pair]) => [key, pair[index]]));

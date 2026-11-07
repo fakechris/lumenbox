@@ -1,18 +1,18 @@
 /**
  * The desktop app's first start on a temporary home (INV-1685): the Owner exists, the unsigned
- * operator is them, an MCP token and the watchdog install need no person named, and letting a
- * second person in waits for the confirmed conversion.
+ * operator is them, an MCP token and the watchdog install need no person named, and no path lets
+ * a second person in (INV-1689).
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { startWebServer } from "./server.ts";
 import { OWNER_ID } from "../host/installation.ts";
 import { installWatchdog } from "../watchdog/install.ts";
 
-test("desktop first start: one Owner, tokens and the watchdog are theirs, a second person needs the conversion", async () => {
+test("desktop first start: one Owner, tokens and the watchdog are theirs, and every add-person path is refused", async () => {
   const home = mkdtempSync(join(tmpdir(), "owner-install-"));
   const previous = process.env.AGENTBOX_HOME;
   process.env.AGENTBOX_HOME = home;
@@ -22,8 +22,8 @@ test("desktop first start: one Owner, tokens and the watchdog are theirs, a seco
     let base = "";
     stop = await startWebServer({ port: 0, host: "127.0.0.1", token: "t0k", useBox: false, desktop: true, onLog: line => logs.push(line), onReady: url => { base = url; } });
     const ui = { "content-type": "application/json", authorization: "Bearer t0k" };
-    const call = async (path: string, body?: unknown) => {
-      const response = await fetch(`${base}${path}`, { method: body === undefined ? "GET" : "POST", headers: ui, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+    const call = async (path: string, body?: unknown, lang = "en") => {
+      const response = await fetch(`${base}${path}`, { method: body === undefined ? "GET" : "POST", headers: { ...ui, "accept-language": lang }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
       return { status: response.status, body: (await response.json().catch(() => ({}))) as Record<string, unknown> };
     };
 
@@ -51,27 +51,32 @@ test("desktop first start: one Owner, tokens and the watchdog are theirs, a seco
     assert.deepEqual(channels.body.installation, { mode: "single-machine", ownerId: OWNER_ID, createdAt: (channels.body.installation as { createdAt: number }).createdAt });
     const people = channels.body.principals as unknown[];
     const ann = { id: "feishu:ann", name: "Ann", role: "driver", identities: ["feishu:ann"] };
-    const refused = await call("/api/principals", { principals: [...people, ann] });
-    assert.equal(refused.status, 409);
-    assert.equal(refused.body.needs, "owner-conversion");
-    assert.equal((await call("/api/channels/invite", { role: "driver" })).status, 409, "an invite for a new person asks too");
-    assert.equal((await call("/api/channels/invite", { role: "driver", principalId: OWNER_ID })).status, 200, "a code linking the Owner's own phone does not");
-    assert.equal((await call("/api/installation/convert", {})).status, 400, "only an explicit yes converts");
+    // The four ways a person is added: by hand, an invite code, a knock let in, a directory synced.
+    const refusals = [
+      await call("/api/principals", { principals: [...people, ann] }),
+      await call("/api/channels/invite", { role: "driver" }),
+      await call("/api/channels/approve", { identity: "feishu:ann", role: "driver" }),
+      await call("/api/directories/sync", { channelId: "feishu" }),
+    ];
+    for (const refused of refusals) {
+      assert.equal(refused.status, 409);
+      assert.equal(refused.body.needs, "organisation");
+      assert.equal(refused.body.error, "This is your personal installation; it has only you. To work with others, join or create an organisation.");
+      assert.match(String(refused.body.manual), /docs\/manual\/channels\.md$/);
+    }
+    const zh = await call("/api/principals", { principals: [...people, ann] }, "zh-CN");
+    assert.equal(zh.body.error, "这是你的个人安装，只有你一个人。要和别人协作，请加入或创建一个组织。");
+    assert.match(String(zh.body.manual), /channels\.zh\.md$/);
+    assert.equal((await call("/api/channels/invite", { role: "driver", principalId: OWNER_ID })).status, 200, "a code linking the Owner's own phone is not a second person");
+    assert.equal((await call("/api/installation/convert", { confirm: true })).status, 404, "there is no conversion");
     assert.equal((await call("/api/me")).body.label, "owner");
+    assert.equal(JSON.parse(readFileSync(join(home, "principals.json"), "utf8")).installation.mode, "single-machine");
 
-    const converted = await call("/api/installation/convert", { confirm: true });
-    assert.equal(converted.status, 200);
-    assert.equal(converted.body.converted, true);
-    assert.equal((await call("/api/principals", { principals: [...people, ann] })).status, 200);
-    assert.equal((await call("/api/me")).body.label, "admin", "the Owner is now an Admin, and nobody is both");
-    const file = JSON.parse(readFileSync(join(home, "principals.json"), "utf8")) as { installation: { mode: string; conversion: { by: string } } };
-    assert.equal(file.installation.mode, "organisation");
-    assert.equal(file.installation.conversion.by, "the operator", "the audit record says who confirmed");
-    assert.ok(logs.some(line => line.startsWith("installation converted")));
-
-    // A restart of the desktop app on this roster creates nothing.
+    // A restart of the desktop app on this roster creates nothing, and an old allow list is not imported as people.
+    writeFileSync(join(home, "config.json"), JSON.stringify({ channelAllow: ["feishu:bob"] }));
     stop(); stop = await startWebServer({ port: 0, host: "127.0.0.1", token: "t0k", useBox: false, desktop: true, onLog: line => logs.push(line), onReady: url => { base = url; } });
-    assert.equal(((await call("/api/channels")).body.principals as unknown[]).length, 2);
+    assert.equal(((await call("/api/channels")).body.principals as unknown[]).length, 1);
+    assert.ok(logs.some(line => line.startsWith("channel allow list: 1 id(s) kept in config, not imported")));
   } finally {
     stop?.();
     if (previous === undefined) delete process.env.AGENTBOX_HOME;
