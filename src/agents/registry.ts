@@ -1251,10 +1251,10 @@ export class AgentRegistry {
     const all = this.readAllSharedMemory();
     if (forAgentId === undefined) return all;
     // Memory follows the place (INV-424): a reader sees its own box's records, what was
-    // promoted to everyone, and what predates boxes on shared records. A writer's box is
-    // stamped on write, so a record cannot claim a box it was not kept in.
+    // promoted to everyone once a person approved it (a held one stays in its box, INV-1722),
+    // and what predates boxes. A writer's box is stamped on write, so a record cannot claim a box it was not kept in.
     const boxId = this.boxOf(forAgentId).id;
-    return all.filter(record => record.box === undefined || record.box === boxId || record.audience === "everyone");
+    return all.filter(record => record.box === undefined || record.box === boxId || (record.audience === "everyone" && record.held === undefined));
   }
 
   /** Every shard, every box — for compaction and for the installation-level view. */

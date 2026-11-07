@@ -11,7 +11,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -37,6 +37,7 @@ import { answerGuest, GUEST_TOOL_NAMES, guestMessageOf } from "./guest-turn.ts";
 import { GuestDesk } from "./guests.ts";
 import type { ProviderProfile } from "./provider.ts";
 import { SpendLimits } from "./spend-limits.ts";
+import { decideReview, pendingReviews } from "./team-memory-review.ts";
 import { fakeModel } from "./testing/fake-model.ts";
 import { recoverTask } from "./task-recovery.ts";
 import { TaskStore } from "./tasks.ts";
@@ -1272,6 +1273,66 @@ test("a key pasted in chat is not remembered, and the refusal does not repeat it
     assert.ok(laterSystem !== undefined && !laterSystem.includes(key), "the next call's system prompt has no key");
   } finally {
     episode.cleanup();
+  }
+});
+
+// ── 2026-11-07, an agent that promoted its own memory to every box (INV-1722) ─────────────
+//
+// What could happen: an agent marks a team memory `audience: "everyone"` and, with team review
+// off (the default), every agent on every box reads it from the next turn — the least governed
+// write on the installation. Found reading our own code for the company brain (INV-1717).
+
+test("a memory an agent promotes to every box waits for a person: another box's agent cannot recall it before approval", async () => {
+  const fact = "the person is called Chris and wants replies in English";
+  const recalled: string[] = [];
+  const prompts: string[] = [];
+  const resultOf = (messages: Anthropic.MessageParam[]): string => {
+    const last = messages[messages.length - 1];
+    const blocks = Array.isArray(last?.content) ? last.content : [];
+    return blocks.map(block => (block.type === "tool_result" ? (Array.isArray(block.content) ? block.content.map(part => ("text" in part ? part.text : "")).join("") : String(block.content ?? "")) : "")).join("");
+  };
+  const script: Script = ({ agent, round, system, messages }) => {
+    if (agent === "Ada") return round === 0 ? { call: "RememberFact", input: { fact, scope: "team", audience: "everyone" } } : { say: "noted for everyone" };
+    if (agent === "Bea") {
+      if (round % 2 === 0) { prompts.push(system); return { call: "Recall", input: { search: "Chris" } }; }
+      recalled.push(resultOf(messages));
+      return { say: "checked" };
+    }
+    return { say: "ok" };
+  };
+  let beaId = "";
+  // The installation's settings, read for the team review switch: a temporary one, left at its default (off).
+  const home = mkdtempSync(join(tmpdir(), "agentbox-everyone-review-"));
+  const previous = process.env.AGENTBOX_HOME;
+  process.env.AGENTBOX_HOME = home;
+  const episode = await runEpisode({
+    team: [{ name: "Ada" }],
+    says: [],
+    script,
+    drive: async ({ registry, bus, say }) => {
+      const grok = registry.attachBox({ id: "box-grok", name: "grok", kind: "attached", displayFloor: 10, workDir: "/home/box/work", members: "everyone", createdAt: new Date().toISOString() } as never);
+      beaId = registry.create({ name: "Bea", boxId: grok.id }).id;
+      const askBea = async () => { bus.sendFromUser(beaId, "what is the person called?"); await bus.wake(beaId); await bus.idle(); };
+      await say("remember for every box that I am Chris and want replies in English");
+      await askBea();
+      const [pending] = pendingReviews(registry.readSharedMemory());
+      assert.ok(pending !== undefined, "the promotion waits for a person");
+      assert.equal(decideReview(registry, pending.writer, pending.version, "approved", "Chris").ok, true);
+      await askBea();
+    },
+  });
+  try {
+    assert.ok(episode.score.trail.includes("Ada:RememberFact"));
+    assert.equal(recalled.length, 2, `Bea recalled twice: ${episode.score.trail.join(", ")}`);
+    assert.ok(!recalled[0]!.includes(fact), `before approval Bea recalls nothing of it: ${recalled[0]}`);
+    assert.ok(!prompts[0]!.includes(fact), "nor is it in her prompt");
+    assert.ok(recalled[1]!.includes(fact), `after approval she does: ${recalled[1]}`);
+    assert.ok(prompts[1]!.includes(fact), "and it is in her prompt");
+  } finally {
+    episode.cleanup();
+    if (previous === undefined) delete process.env.AGENTBOX_HOME;
+    else process.env.AGENTBOX_HOME = previous;
+    rmSync(home, { recursive: true, force: true });
   }
 });
 

@@ -67,7 +67,8 @@ export interface MemoryRecord {
   box?: string;
   /**
    * Who may read a shared record beyond its box. `everyone` is an explicit promotion to
-   * the installation, said by the agent that kept it; absent means the box.
+   * the installation, said by the agent that kept it and live beyond its box only once a person
+   * approved it (INV-1722); absent means the box.
    */
   audience?: "everyone";
   /**
