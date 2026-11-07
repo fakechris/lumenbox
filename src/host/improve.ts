@@ -312,7 +312,7 @@ export async function cmdImprove(argv: string[], out: (line: string) => void = l
       await orchestrator.bus.runExclusive(agentId, { conversation });
       return orchestrator.replySince(agentId, before, conversation);
     },
-    review: input => orchestrator.reviewAnswer(input),
+    review: input => orchestrator.reviewAnswer({ source: "member", ...input }),
     sessions: agentId => registry.listConversations(agentId).map(c => ({ conversation: c.id, entries: registry.readAllContextTranscripts(agentId, c.id) })),
     reportDir: join(agentboxHome(), "improve"),
     evalsDir: join(agentboxHome(), "evals"),

@@ -20,7 +20,7 @@ import { GoalLoop } from "./goal-loop.ts";
 import { GoalGate } from "./goal-gate.ts";
 import { isRecoveryCommand } from "./task-recovery.ts";
 import { isRetryCommand } from "./retry-recovery.ts";
-import { AnswerReviewer, answerReviewMode, sampledForReview, type AnswerReviewInput, type AnswerVerdict } from "./answer-review.ts";
+import { AnswerReviewer, answerReviewMode, sampledForReview, type AnswerReviewInput, type AnswerVerdict } from "./answer-review.ts"; import { chargeGuest } from "./guest-turn.ts";
 import type Anthropic from "@anthropic-ai/sdk";
 import { AgentBus, type BusEvent, type InboundMessage, type Lane } from "../agents/bus.ts";
 import { Inbox, inboxPath } from "../agents/inbox.ts";
@@ -2211,7 +2211,7 @@ export class Orchestrator {
   private async askCheaply(
     agent: AgentRecord,
     prompt: string,
-    kind: "select" | "review" = "select"
+    kind: "select" | "review" = "select", guest?: { turnId: string; door: string; conversation: string } // a guest answer's review (INV-1721): paid as that guest turn, never by the member whose turn may be running
   ): Promise<string | undefined> {
     try {
       const { client, profile } = summaryRuntimeFor(this.provider, this.client);
@@ -2220,13 +2220,10 @@ export class Orchestrator {
         max_tokens: Math.min(512, profile.maxTokens), ...effortConfig(profile, kind),
         messages: [{ role: "user", content: prompt }],
       });
-      this.usage.recordAside({
-        kind,
-        agentId: agent.id,
-        agentName: agent.profile.name,
-        provider: profile.label,
-        model: profile.model,
-        usage: response.usage,
+      const charged = guest === undefined ? undefined : chargeGuest({ usage: this.usage, ...(this.spendLimits !== undefined ? { spend: this.spendLimits } : {}) }, { agentId: agent.id, agentName: agent.profile.name, ...guest, provider: profile.label, model: profile.model, round: 0, reason: "answer review", usage: response.usage });
+      if (charged?.kind === "hit_day") void charged.enforce().catch(() => {});
+      if (guest === undefined) this.usage.recordAside({
+        kind, agentId: agent.id, agentName: agent.profile.name, provider: profile.label, model: profile.model, usage: response.usage,
         // The execution context survives the provider await; another conversation
         // cannot change who pays for this selection.
         ...(this.callerFor(agent.id)?.userId !== undefined
@@ -2335,7 +2332,7 @@ export class Orchestrator {
     catch { agent = undefined; }
     if (agent === undefined) return { category: "UNKNOWN", confidence: 0, reason: "agent unavailable" };
     return new AnswerReviewer({
-      ask: prompt => this.askCheaply(agent!, prompt, "review"),
+      ask: prompt => this.askCheaply(agent!, prompt, "review", input.source === "guest" ? { turnId: input.guest.turnId, door: input.guest.door, conversation: input.conversation } : undefined),
       mode: () => answerReviewMode(),
       record: entry => appendLine(join(agentboxHome(), "answer-review.jsonl"), JSON.stringify(redactDeep(entry))),
       keepCase: c => writeEvalCase(join(agentboxHome(), "evals"), redactDeep({ ...c, version: this.turns?.lastAgentVersion(agent!.id, input.conversation) })),
