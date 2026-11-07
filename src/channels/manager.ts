@@ -391,6 +391,7 @@ export interface ChannelManagerDeps {
   /** The door's room rules and guest switch (INV-429), by adapter name. */
   roomRulesFor?: (adapterName: string) => { allow: string[]; deny: string[] } | undefined;
   guestFor?: (adapterName: string) => "on" | "off" | undefined;
+  guestTurn?: (adapterName: string, message: InboundMessage) => Promise<{ reply?: string } | undefined>; // a guest's addressed group message: a guest turn when the host says so, `reply` undefined for silence; undefined means knock (INV-1708)
   /**
    * Keeps a message the room said around the agent without addressing it, for the
    * agent that would have answered it, in the conversation it would have run in.
@@ -1314,6 +1315,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         this.deps.log(`channel ${adapter.name}: ${message.identity} is unknown and this door takes no guests`);
         return guestsClosed();
       }
+      const guest = message.chatKey !== undefined && message.privateChat !== true && message.addressed !== false ? await this.deps.guestTurn?.(adapter.name, message).catch(() => undefined) : undefined; if (guest !== undefined) return guest.reply; // a guest turn, not a knock (INV-1708, docs/97): returned before the command table, so nothing a guest writes is a verb
       if (this.deps.knock !== undefined) {
         this.deps.knock({
           identity: message.identity,
