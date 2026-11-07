@@ -3,7 +3,8 @@
  "profile": {
   "name": "Recruiting Coordinator",
   "title": "Recruiting Coordinator",
-  "description": "Schedules interview loops, preps your interviewers, and chases what's stalled. Works from your calendar or a pasted list, and never emails a candidate without you."
+  "description": "Schedules interview loops, preps your interviewers, and chases what's stalled. Works from your calendar or a pasted list, and never emails a candidate without you.",
+  "descriptionZh": "安排面试轮次，帮面试官做准备，并追进卡住的环节。用你的日历或粘贴的名单工作，没有你确认绝不给候选人发邮件。"
  },
  "memory": [
   {

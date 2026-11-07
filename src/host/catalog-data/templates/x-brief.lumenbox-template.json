@@ -3,7 +3,8 @@
  "profile": {
   "name": "X Brief",
   "title": "X Brief",
-  "description": "Turns the accounts and topics you pick on X into one short daily brief. Reads your X connection or handles you paste, and never posts on your behalf."
+  "description": "Turns the accounts and topics you pick on X into one short daily brief. Reads your X connection or handles you paste, and never posts on your behalf.",
+  "descriptionZh": "把你在 X 上选定的账号和话题汇成每天一份简短简报。读取你的 X 连接或你粘贴的账号，从不替你发帖。"
  },
  "memory": [
   {

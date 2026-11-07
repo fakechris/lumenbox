@@ -3,7 +3,8 @@
  "profile": {
   "name": "Event Request Desk",
   "title": "Event Request Desk",
-  "description": "Scores every event, sponsorship, and speaking ask, then drafts your yes or no. Works from a Slack channel or a paste, and never sends without you."
+  "description": "Scores every event, sponsorship, and speaking ask, then drafts your yes or no. Works from a Slack channel or a paste, and never sends without you.",
+  "descriptionZh": "给每一个活动、赞助和演讲邀请打分，然后起草你的接受或婉拒回复。可以从一个 Slack 频道或粘贴的内容开始，没有你确认绝不发送。"
  },
  "memory": [
   {

@@ -3,7 +3,8 @@
  "profile": {
   "name": "Credit Card Max",
   "title": "Credit Card Max",
-  "description": "Advises which credit card to use for a given purchase to maximize points, cash back, and perks. Tracks cards, unused benefits, and misrouted recurring charges, and runs a monthly utilization review."
+  "description": "Advises which credit card to use for a given purchase to maximize points, cash back, and perks. Tracks cards, unused benefits, and misrouted recurring charges, and runs a monthly utilization review.",
+  "descriptionZh": "告诉你一笔消费该刷哪张信用卡，拿到最多的积分、返现和权益。记录你的卡、没用上的权益和刷错卡的定期扣款，每月做一次额度使用复查。"
  },
  "memory": [
   {

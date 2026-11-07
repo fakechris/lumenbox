@@ -88,7 +88,7 @@ import { skillWriteRefusal } from "./skill-contract.ts";
 import { skillSlugOf } from "./skill-provenance.ts";
 import { SKILL_FILENAME } from "./skills.ts";
 import { capRefusal, standingFileOf, writeStandingFromAgent } from "./standing.ts";
-import { clampContract, describeTask, isLive, isTaskStatus, TASK_STATUSES, type Task, type TaskStore } from "./tasks.ts"; import { citationFor, DEFAULT_REVIEWERS_PER_CLAIM, type VerificationLedger } from "./review-dispatch.ts";
+import { clampContract, describeTask, isLive, isTaskStatus, TASK_STATUSES, type Task, type TaskStore } from "./tasks.ts"; import { BlockerError, notReady, parseBlockers } from "./task-deps.ts"; import { citationFor, DEFAULT_REVIEWERS_PER_CLAIM, type VerificationLedger } from "./review-dispatch.ts";
 import {
   type BotTemplate,
   describeTemplate,
@@ -1786,6 +1786,8 @@ export function buildTools(
           goal_area: { type: "string", description: "For create: this task is a goal the person stated, in this area (health, fitness, career, learning, money…). One open goal per area: if one exists you are told its id — follow it up instead of starting again. Set due to the next check-in." },
           commitment: { type: "string", description: "For create with goal_area: what the person committed to, in their words (\"run 3 times a week\")." },
           waiting_on: { type: "string", description: "For update: who or what this is waiting for outside the box (a supplier, a deploy window, somebody on leave). It is still asked about, but never archived for not moving — waiting is not abandonment. Empty string clears it." },
+          blocked_by: { type: "array", items: { type: "string" }, description: "For create or update: the ids of the tasks this one cannot start before (\"t12\"). The whole set: update replaces it, [] clears it. A task with an unfinished blocker is listed as blocked by it, cannot be taken, and its assignee is woken when the last one closes. A cycle is refused." },
+          parent: { type: "string", description: "For create: the task this one is a part of, which then waits on it. Defaults to the task you are doing in this conversation, so splitting your task into pieces for teammates makes it wait for them; \"none\" for work that is not part of it." },
           snooze_until: { type: "string", description: "For update: leave it alone until this date or instant (YYYY-MM-DD or ISO). The answer to a nudge that is \"not now\" — the board stays quiet about it until then. Empty string looks again now." },
           reason: { type: "string", description: "For propose_close: why this task should be closed, in one sentence the requester can read. They have two days to object; their silence closes it." },
           title: { type: "string", description: "For create: one line of what is to be done." },
@@ -5042,7 +5044,7 @@ export async function dispatchTool(
           ? board.list({ status: wanted })
           : board.list().filter(task => isLive(task.status));
         if (all.length === 0) return { text: "The board is empty for that view." };
-        return { text: all.map(task => describeTask(task, nameOf) + cited(task)).join("\n") };
+        return { text: all.map(task => describeTask(task, nameOf, board) + cited(task)).join("\n") };
       }
 
       if (action === "read") {
@@ -5053,7 +5055,7 @@ export async function dispatchTool(
         if (task.assigneeId !== context.agent.id) {
           return { text: "Task details are available to its current assignee. Ask for assignment before reading them.", isError: true };
         }
-        return { text: `${describeTask(task, nameOf)}${cited(task)}\n\n${task.description ?? "No additional description."}` };
+        return { text: `${describeTask(task, nameOf, board)}${cited(task)}\n\n${task.description ?? "No additional description."}` };
       }
 
       if (action === "create") {
@@ -5076,12 +5078,15 @@ export async function dispatchTool(
           const existing = board.openGoalIn(goalArea);
           if (existing !== undefined) {
             return {
-              text: `There is already an open ${existing.goal?.area ?? goalArea} goal: ${describeTask(existing, nameOf)}. Follow that one up — ask how it is going, note progress with update, set the next due — instead of setting it up again.`,
+              text: `There is already an open ${existing.goal?.area ?? goalArea} goal: ${describeTask(existing, nameOf, board)}. Follow that one up — ask how it is going, note progress with update, set the next due — instead of setting it up again.`,
               isError: true,
             };
           }
         }
-        const created = board.create({
+        const blockedBy = parseBlockers(input.blocked_by); const parentRaw = typeof input.parent === "string" ? input.parent.trim().toLowerCase() : "";
+        const parent = parentRaw === "none" || propose || goalArea !== "" ? undefined : parentRaw !== "" ? board.get(parentRaw) : currentTaskOf(context); // a piece of the task in hand is what that task waits on (INV-1740)
+        if (parentRaw !== "" && parentRaw !== "none" && parent === undefined) return { text: `No task ${parentRaw} on the board to be part of.`, isError: true };
+        let created: Task | undefined; try { created = board.create({ ...(blockedBy !== undefined && blockedBy.length > 0 ? { blockedBy } : {}),
           ...(goalArea !== "" ? { goal: { area: goalArea, ...(typeof input.commitment === "string" ? { commitment: input.commitment } : {}) } } : {}),
           title: String(input.title ?? ""),
           ...(typeof input.description === "string" ? { description: input.description } : {}),
@@ -5092,10 +5097,11 @@ export async function dispatchTool(
           ...(contract !== undefined ? { contract } : {}),
           ...(propose ? { proposedBy: context.agent.id } : {}), ...(discovery !== undefined ? { discovery } : {}),
           ...(typeof input.due === "string" && input.due.trim() !== "" ? { due: input.due } : {}), ...(parseLevel(input.level) !== undefined ? { level: parseLevel(input.level)! } : {}), // INV-1650
-        });
+        }); } catch (error) { if (error instanceof BlockerError) return { text: error.message, isError: true }; throw error; }
         if (created === undefined) return { text: "A task needs a title.", isError: true };
         const told = tellAssignee(context, created.id, created.title, assigneeId);
-        return { text: `Created ${describeTask(created, nameOf)}.${told}` };
+        const waits = parent !== undefined && isLive(parent.status) && !(blockedBy ?? []).includes(parent.id) && board.update(parent.id, { blockedBy: [...new Set([...(parent.blockedBy ?? []), created.id])] }, context.agent.id, context.turnId) !== undefined ? ` ${parent.id} now waits on it; it stays open until its pieces are finished, and its assignee is woken then.` : "";
+        return { text: `Created ${describeTask(created, nameOf, board)}.${told}${waits}` };
       }
 
       if (action === "propose_close") {
@@ -5113,6 +5119,7 @@ export async function dispatchTool(
         if (!mayAssign(String(input.id ?? ""))) {
           return { text: "This task belongs to another agent. Ask its assignee, requester or reviewer to reassign it.", isError: true };
         }
+        const unready = board.get(String(input.id ?? "")); if (unready !== undefined && notReady(unready, board) !== undefined) return { text: notReady(unready, board)!, isError: true }; // not ready is not taken (INV-1740)
         const taken = board.update(
           String(input.id ?? ""),
           { assigneeId: context.agent.id, status: "doing" },
@@ -5122,7 +5129,7 @@ export async function dispatchTool(
         if (taken === undefined) {
           return { text: `No task ${String(input.id ?? "")} on the board.`, isError: true };
         }
-        return { text: `You are on it: ${describeTask(taken.task, nameOf)}.` };
+        return { text: `You are on it: ${describeTask(taken.task, nameOf, board)}.` };
       }
 
       if (action === "update") {
@@ -5163,10 +5170,10 @@ export async function dispatchTool(
           status === "done" && target !== undefined && target.reviewerId === context.agent.id
             ? (context.callsThisTurn ?? []).filter(line => !line.startsWith("Tasks")).slice(-12)
             : [];
-        const updated = board.update(
+        const blockedBy = parseBlockers(input.blocked_by); let updated: ReturnType<typeof board.update>; try { updated = board.update(
           String(input.id ?? ""),
           {
-            ...(isTaskStatus(status) ? { status } : {}), ...(parseLevel(input.level) !== undefined ? { level: parseLevel(input.level)! } : {}),
+            ...(isTaskStatus(status) ? { status } : {}), ...(parseLevel(input.level) !== undefined ? { level: parseLevel(input.level)! } : {}), ...(blockedBy !== undefined ? { blockedBy } : {}),
             ...(typeof input.due === "string" && input.due.trim() !== "" ? { due: input.due } : {}),
             ...(typeof input.waiting_on === "string" ? { waitingOn: input.waiting_on.trim() === "" ? null : input.waiting_on } : {}),
             ...(typeof input.snooze_until === "string" ? { snoozeUntil: input.snooze_until.trim() === "" ? null : input.snooze_until } : {}),
@@ -5184,7 +5191,7 @@ export async function dispatchTool(
           },
           context.agent.id,
           context.turnId
-        );
+        ); } catch (error) { if (error instanceof BlockerError) return { text: error.message, isError: true }; throw error; }
         if (updated === undefined) {
           return { text: `No task ${String(input.id ?? "")} on the board.`, isError: true };
         }
@@ -5194,7 +5201,7 @@ export async function dispatchTool(
             : "";
         return {
           text:
-            `${describeTask(updated.task, nameOf)}.` +
+            `${describeTask(updated.task, nameOf, board)}.` +
             (updated.coerced !== undefined ? `\n\n${updated.coerced}` : "") +
             told,
         };

@@ -3,7 +3,8 @@
  "profile": {
   "name": "Tech Demos",
   "title": "Tech Demos",
-  "description": "Weekday X-bookmark scout that picks one new library to demo, asks for approval, then plans and builds it in a sticky monorepo with a Cursor cloud agent. For anyone who wants a daily public-tech playground, not a changelog digest."
+  "description": "Weekday X-bookmark scout that picks one new library to demo, asks for approval, then plans and builds it in a sticky monorepo with a Cursor cloud agent. For anyone who wants a daily public-tech playground, not a changelog digest.",
+  "descriptionZh": "工作日浏览 X 书签的侦察员：挑一个新库做演示，先请你批准，再用 Cursor 云端 agent 在一个固定的 monorepo 里规划并搭建。适合想要每天一个公开技术试验场、而不是更新日志摘要的人。"
  },
  "memory": [
   {

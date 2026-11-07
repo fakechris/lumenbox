@@ -129,7 +129,7 @@ function withinWork(path: string, work: string): boolean {
 import { agentboxHome, egressRelayFromEnv, holdHostToken, isPersonalBoxQuota, trustsGatewayIdentity, loadConfig, lockedConfigEnv, reapplyConfigEnv, saveConfig, type AgentboxConfig } from "../config.ts";
 
 type AgentboxConfigHostExec = NonNullable<AgentboxConfig["hostExec"]>;
-import { ChannelManager } from "../channels/manager.ts";
+import { ChannelManager } from "../channels/manager.ts"; import { needsEnv, STARTING } from "../channels/status-line.ts";
 import { DingTalkChannel } from "../channels/dingtalk.ts";
 import { FeishuChannel, meetingInvitePrompt } from "../channels/feishu.ts";
 import {
@@ -157,7 +157,7 @@ import {
   crewTeam,
   expertNamed,
   profilesFor,
-  shelfTemplates, summaryIn,
+  descriptionIn, shelfTemplates, summaryIn,
 } from "../host/catalog.ts";
 import { rescueMessage, rescueStuck } from "../host/rescue.ts";
 import { Deliveries, deliveriesPath } from "../host/deliveries.ts";
@@ -181,7 +181,7 @@ import { randomUUID } from "node:crypto";
 import { isLive, isTaskStatus, type Task } from "../host/tasks.ts"; import { UnknownAgentError } from "../host/task-agents.ts";
 import { connectorSatisfied } from "../host/mcp-connectors.ts";
 import { adminRecipients } from "../host/upgrade.ts";
-import { BoxUpdateService, boxUpdateRoute } from "./box-update-routes.ts"; import { personRoute } from "./person-routes.ts"; import { PERSON_JS } from "./person-ui.ts"; import { agentFactsRoute } from "./agent-facts.ts"; import { agentCaseText } from "../host/consent-case.ts"; import { ROW_ORDER_JS } from "./row-order.ts"; import { BOARD_ORDER_JS } from "./board-order.ts"; import { teamMemoryReviewRoute } from "./team-memory-review-routes.ts"; import { TEAM_MEMORY_REVIEW_JS } from "./team-memory-review-ui.ts"; import { orgKnowledgeRoute } from "./org-knowledge-routes.ts"; import { orgCorrectionRoute } from "./org-correction-routes.ts"; import { ORG_CORRECTION_JS } from "./org-correction-ui.ts"; import { ORG_KNOWLEDGE_JS } from "./org-knowledge-ui.ts"; import { pendingReviews } from "../host/team-memory-review.ts"; import { CLAIM_ACCOUNT_JS } from "./claim-account-ui.ts"; import { DIGEST_HOUR, heldSection, PushBudget } from "../host/push-budget.ts"; import { pushBudgetRoute } from "./push-budget-routes.ts"; import { PUSH_BUDGET_JS } from "./push-budget-ui.ts"; import { SpendLimits, todaysRows } from "../host/spend-limits.ts"; import { spendLimitRoute } from "./spend-limit-routes.ts"; import { SPEND_LIMIT_JS } from "./spend-limit-ui.ts"; import { configuredRates } from "../host/provider-fallback.ts"; import { BoxKeeper } from "./box-keeper.ts"; import { AgentPauses } from "../host/agent-pause.ts"; import { ProbeKeeper, type ProbeKind } from "../host/boundary-probe.ts"; import { agentPauseRoute } from "./agent-pause-routes.ts"; import { AGENT_PAUSE_JS } from "./agent-pause-ui.ts"; import { diagnosticsRoute } from "./diagnostics-routes.ts"; import { DIAGNOSTICS_JS } from "./diagnostics-ui.ts"; import { providerRests, quotaStatusLine } from "../host/provider-rest.ts"; import { providerRestRoute, restNotice } from "./provider-rest-routes.ts"; import { PROVIDER_REST_JS } from "./provider-rest-ui.ts"; import { fallbackRoute } from "./provider-fallback-routes.ts"; import { PROVIDER_FALLBACK_JS } from "./provider-fallback-ui.ts"; import { routineRunsRoute } from "./routine-runs-routes.ts"; import { ROUTINE_RUNS_JS } from "./routine-runs-ui.ts"; import { deliverableRoute } from "./deliverable-routes.ts"; import { DELIVERABLES_JS } from "./deliverables-ui.ts"; import { DIVISION_JS } from "./division-ui.ts"; import { taskGateRoute } from "./task-gate-routes.ts"; import { TASK_GATE_JS } from "./task-gate-ui.ts"; import { isForkChild } from "../host/pending-work.ts"; import { readToolPermissions, toolPermissionRoute } from "./tool-permission-routes.ts"; import { TOOL_PERMS_JS } from "./tool-permissions-ui.ts"; import { configVersionRoute } from "./config-version-routes.ts"; import { CONFIG_HISTORY_JS } from "./config-history-ui.ts"; import { switchesForTask } from "../agents/config-versions.ts"; import { CredentialWaits } from "../host/credential-waits.ts"; import { secretsNeededBy, taskCredentialEvent, templateCredentialEvent, templateSkillNeeds, type CredentialEvent } from "./credential-routes.ts"; import { CREDENTIALS_JS } from "./credentials-ui.ts"; import { ORGANISATIONS_JS } from "./organisations-ui.ts"; import { INSTALLATIONS_JS } from "./installations-ui.ts"; import { MACHINE_JS } from "./machine-use-ui.ts"; import { GuestDesk } from "../host/guests.ts"; import { answerGuest, guestMessageOf } from "../host/guest-turn.ts"; import { guestAnswerReview } from "../host/answer-review.ts"; import { guestRoute } from "./guest-routes.ts"; import { GUEST_JS } from "./guest-ui.ts"; import { boxRegisterRoute } from "./box-register-routes.ts"; import { nodeMembersRefusal, nodeOfBox, nodeRoute } from "./node-routes.ts"; import { NODES_JS } from "./nodes-ui.ts";
+import { BoxUpdateService, boxUpdateRoute } from "./box-update-routes.ts"; import { personRoute } from "./person-routes.ts"; import { PERSON_JS } from "./person-ui.ts"; import { agentFactsRoute } from "./agent-facts.ts"; import { agentCaseText } from "../host/consent-case.ts"; import { ROW_ORDER_JS } from "./row-order.ts"; import { BOARD_ORDER_JS } from "./board-order.ts"; import { teamMemoryReviewRoute } from "./team-memory-review-routes.ts"; import { TEAM_MEMORY_REVIEW_JS } from "./team-memory-review-ui.ts"; import { orgKnowledgeRoute } from "./org-knowledge-routes.ts"; import { orgCorrectionRoute } from "./org-correction-routes.ts"; import { ORG_CORRECTION_JS } from "./org-correction-ui.ts"; import { ORG_KNOWLEDGE_JS } from "./org-knowledge-ui.ts"; import { pendingReviews } from "../host/team-memory-review.ts"; import { CLAIM_ACCOUNT_JS } from "./claim-account-ui.ts"; import { DIGEST_HOUR, heldSection, PushBudget } from "../host/push-budget.ts"; import { pushBudgetRoute } from "./push-budget-routes.ts"; import { PUSH_BUDGET_JS } from "./push-budget-ui.ts"; import { SpendLimits, todaysRows } from "../host/spend-limits.ts"; import { spendLimitRoute } from "./spend-limit-routes.ts"; import { SPEND_LIMIT_JS } from "./spend-limit-ui.ts"; import { configuredRates } from "../host/provider-fallback.ts"; import { BoxKeeper } from "./box-keeper.ts"; import { AgentPauses } from "../host/agent-pause.ts"; import { ProbeKeeper, type ProbeKind } from "../host/boundary-probe.ts"; import { agentPauseRoute } from "./agent-pause-routes.ts"; import { AGENT_PAUSE_JS } from "./agent-pause-ui.ts"; import { diagnosticsRoute } from "./diagnostics-routes.ts"; import { DIAGNOSTICS_JS } from "./diagnostics-ui.ts"; import { providerRests, quotaStatusLine } from "../host/provider-rest.ts"; import { providerRestRoute, restNotice } from "./provider-rest-routes.ts"; import { PROVIDER_REST_JS } from "./provider-rest-ui.ts"; import { fallbackRoute } from "./provider-fallback-routes.ts"; import { PROVIDER_FALLBACK_JS } from "./provider-fallback-ui.ts"; import { routineRunsRoute } from "./routine-runs-routes.ts"; import { ROUTINE_RUNS_JS } from "./routine-runs-ui.ts"; import { deliverableRoute } from "./deliverable-routes.ts"; import { DELIVERABLES_JS } from "./deliverables-ui.ts"; import { DIVISION_JS } from "./division-ui.ts"; import { taskGateRoute } from "./task-gate-routes.ts"; import { TASK_GATE_JS } from "./task-gate-ui.ts"; import { isForkChild } from "../host/pending-work.ts"; import { readToolPermissions, toolPermissionRoute } from "./tool-permission-routes.ts"; import { TOOL_PERMS_JS } from "./tool-permissions-ui.ts"; import { configVersionRoute } from "./config-version-routes.ts"; import { CONFIG_HISTORY_JS } from "./config-history-ui.ts"; import { switchesForTask } from "../agents/config-versions.ts"; import { CredentialWaits } from "../host/credential-waits.ts"; import { secretsNeededBy, taskCredentialEvent, templateCredentialEvent, templateSkillNeeds, type CredentialEvent } from "./credential-routes.ts"; import { CREDENTIALS_JS } from "./credentials-ui.ts"; import { ORGANISATIONS_JS } from "./organisations-ui.ts"; import { INSTALLATIONS_JS } from "./installations-ui.ts"; import { MACHINE_JS } from "./machine-use-ui.ts"; import { GuestDesk } from "../host/guests.ts"; import { answerGuest, guestMessageOf } from "../host/guest-turn.ts"; import { guestAnswerReview } from "../host/answer-review.ts"; import { guestRoute } from "./guest-routes.ts"; import { GUEST_JS } from "./guest-ui.ts"; import { boxRegisterRoute } from "./box-register-routes.ts"; import { nodeMembersRefusal, nodeOfBox, nodeRoute } from "./node-routes.ts"; import { NODES_JS } from "./nodes-ui.ts"; import { blockerProblem, dependencyView, parseBlockers } from "../host/task-deps.ts"; import { TASK_DEPS_JS } from "./task-deps-ui.ts";
 import { hasCredential, PRESET_MODELS, providerConfigured, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { BootstrapAdmins } from "../host/bootstrap.ts"; import { boxRegistrationModeAt, openRoster, PERSONAL_ONLY_KEY, PersonalInstallationOnly, roleLabel } from "../host/installation.ts"; import { redeemInvite } from "../host/invite-redeem.ts"; import { installationRoute, mergeRoute, routeErrorReply } from "./installation-routes.ts"; import { adoptOperatorNotes, applyPendingMerge, mergePaths } from "../host/self-merge.ts"; import { operatorKey } from "../host/person.ts"; import { INSTALLATION_JS } from "./installation-ui.ts";
 import { Principals, principalsPath, roleAtLeast, soleAdmin, type Principal, type Role } from "../host/principals.ts";
@@ -1926,13 +1926,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         continue;
       }
       if (record.type === "tailmsg") {
-        channels.register(tailmsgDoorFromRecord(record, tailmsgDoorDeps), true, "starting");
+        channels.register(tailmsgDoorFromRecord(record, tailmsgDoorDeps), true, STARTING);
       } else if (record.type === "telegram") {
         const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
         channels.register(
           new TelegramChannel(telegramToken ?? "", line => log(line)),
           telegramToken !== undefined,
-          telegramToken !== undefined ? "starting" : "set TELEGRAM_BOT_TOKEN"
+          telegramToken !== undefined ? STARTING : needsEnv("TELEGRAM_BOT_TOKEN")
         );
       } else if (record.type === "feishu") {
         // Credentials come from env names derived from the record id — one rule
@@ -1962,8 +1962,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           feishuDoor,
           feishuId !== undefined && feishuSecret !== undefined,
           feishuId !== undefined && feishuSecret !== undefined
-            ? "starting"
-            : `set ${envBase}_APP_ID and ${envBase}_APP_SECRET`
+            ? STARTING
+            : needsEnv(`${envBase}_APP_ID`, `${envBase}_APP_SECRET`)
         );
         // The same identity, reading documents: a pasted docx/wiki link becomes readable
         // the moment a Feishu app exists. R34's near half — the credential never moves.
@@ -2004,8 +2004,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           dingDoor,
           dingId !== undefined && dingSecret !== undefined,
           dingId !== undefined && dingSecret !== undefined
-            ? "starting"
-            : `set ${base}_CLIENT_ID and ${base}_CLIENT_SECRET`
+            ? STARTING
+            : needsEnv(`${base}_CLIENT_ID`, `${base}_CLIENT_SECRET`)
         );
       }
     }
@@ -3461,7 +3461,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
         // Settings → Supervision (INV-1528): its own script and routes, like the decision model's below.
-        if (route === "GET /app/supervision.js") { res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(localizeScript(ROW_ORDER_JS + BOARD_ORDER_JS + UI_STYLE_JS + INLINE_ASK_JS + AGENT_PAUSE_JS + SUPERVISION_JS + SUPERVISION_WIZARD_JS + BOX_UPDATE_JS + DIAGNOSTICS_JS + CLAIM_ACCOUNT_JS + PUSH_BUDGET_JS + SPEND_LIMIT_JS + PROVIDER_REST_JS + TEAM_MEMORY_REVIEW_JS + ORG_KNOWLEDGE_JS + ORG_CORRECTION_JS + PROVIDER_FALLBACK_JS + PERSON_JS + ROUTINE_RUNS_JS + DELIVERABLES_JS + TOOL_PERMS_JS + CONFIG_HISTORY_JS + CREDENTIALS_JS + DIVISION_JS + TASK_GATE_JS + INSTALLATION_JS + MACHINE_JS + ORGANISATIONS_JS + GUEST_JS + INSTALLATIONS_JS + NODES_JS, localeOf(req, url))); return; } // + Apply update (INV-1538), askInline (INV-1540)
+        if (route === "GET /app/supervision.js") { res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(localizeScript(ROW_ORDER_JS + BOARD_ORDER_JS + UI_STYLE_JS + INLINE_ASK_JS + AGENT_PAUSE_JS + SUPERVISION_JS + SUPERVISION_WIZARD_JS + BOX_UPDATE_JS + DIAGNOSTICS_JS + CLAIM_ACCOUNT_JS + PUSH_BUDGET_JS + SPEND_LIMIT_JS + PROVIDER_REST_JS + TEAM_MEMORY_REVIEW_JS + ORG_KNOWLEDGE_JS + ORG_CORRECTION_JS + PROVIDER_FALLBACK_JS + PERSON_JS + ROUTINE_RUNS_JS + DELIVERABLES_JS + TOOL_PERMS_JS + CONFIG_HISTORY_JS + CREDENTIALS_JS + DIVISION_JS + TASK_GATE_JS + INSTALLATION_JS + MACHINE_JS + ORGANISATIONS_JS + GUEST_JS + INSTALLATIONS_JS + NODES_JS + TASK_DEPS_JS, localeOf(req, url))); return; } // + Apply update (INV-1538), askInline (INV-1540)
         const supervised = await supervisionRoute(route, { home: agentboxHome(), configPath: configPath(), agents: () => registry.list().map(agent => agent.profile.name), readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: role => refusedRole(role), logFile: defaultSupervisionLog() });
         if (supervised !== undefined) { if (supervised.status !== 0) send(res, supervised.status, supervised.body); return; }
         // Settings → Model → Decision model (INV-1412): its own script, its own two routes.
@@ -3902,7 +3902,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         const mayReadTask = (task: Task) => caller.userId === undefined || (task.assigneeId ? mayReadAgent(task.assigneeId) : task.requester === principals.resolve(caller.userId).id); if (deliverableRoute(route, url, res, { tasks: orchestrator.tasks, mayReadTask, send })) return; if (taskGateRoute(route, url, res, { tasks: orchestrator.tasks, mayReadTask, readTranscript: (agentId, conversation) => registry.readTranscript(agentId, conversation), roster: () => registry.list().map(record => ({ id: record.id, name: record.profile.name })), verdictOf: callId => orchestrator.policy.verdicts.get(callId), send })) return; // the gate's verdicts on its steps, the chat's own join (INV-1672) // a task's deliverable, to whoever sees the task (INV-1663)
         if (route === "GET /api/tasks") {
-          send(res, 200, { tasks: orchestrator.tasks?.list().filter(mayReadTask).map(task => { const forks = orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []; return { ...task, configVersions: switchesForTask(registry, task.id), ...(forks.length > 0 ? { forks } : {}) }; }) ?? [] }); // with the agent configuration versions it ran under (INV-1669) and the division of work (INV-1667)
+          send(res, 200, { tasks: orchestrator.tasks?.list().filter(mayReadTask).map(task => { const forks = orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []; return { ...task, configVersions: switchesForTask(registry, task.id), ...(forks.length > 0 ? { forks } : {}), ...dependencyView(task, orchestrator.tasks!) }; }) ?? [] }); // and what it waits on and what waits on it (INV-1740) // with the agent configuration versions it ran under (INV-1669) and the division of work (INV-1667)
           return;
         }
 
@@ -4207,6 +4207,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           }
           const body = await readJson(req);
           const status = String(body.status ?? "");
+          const blockedBy = parseBlockers(body.blockedBy); const blockerRefusal = blockedBy === undefined ? undefined : blockerProblem(board, String(body.id ?? ""), blockedBy); // what it waits on, set by a person (INV-1740)
+          if (blockerRefusal !== undefined) { send(res, 400, apiError(blockerRefusal.code, blockerRefusal.vars)); return; }
           const updated = board.update(
             String(body.id ?? ""),
             {
@@ -4224,7 +4226,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               ...(typeof body.description === "string" ? { description: body.description } : {}),
               ...(typeof body.due === "string" ? { due: body.due.trim() === "" ? null : body.due } : {}),
               ...(typeof body.waitingOn === "string" ? { waitingOn: body.waitingOn.trim() === "" ? null : body.waitingOn } : {}),
-              ...(typeof body.snoozeUntil === "string" ? { snoozeUntil: body.snoozeUntil.trim() === "" ? null : body.snoozeUntil } : {}),
+              ...(typeof body.snoozeUntil === "string" ? { snoozeUntil: body.snoozeUntil.trim() === "" ? null : body.snoozeUntil } : {}), ...(blockedBy !== undefined ? { blockedBy } : {}),
             },
             caller.userId ?? "web"
           );
@@ -4601,7 +4603,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             if (invite.expiresAt < Date.now()) invites.delete(code);
           }
           send(res, 200, {
-            channels: channels.list(),
+            channels: channels.list(localeOf(req, url)), // each status in the reader's language (INV-1702)
             // The doors as records (docs/22 §2): what the settings dialog edits.
             // Credentials are reported as present/absent, never as values.
             records: channelRecords.map(record => ({
@@ -4757,10 +4759,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                       door.alreadyHandled = handledAlready;
                       return door;
                     })();
-              started = channels.registerAndStart(liveDoor, "starting");
+              started = channels.registerAndStart(liveDoor, STARTING);
             }
           } else if (type === "tailmsg") {
-            started = channels.registerAndStart(tailmsgDoorFromRecord(updated.find(record => record.id === id)!, tailmsgDoorDeps), "starting");
+            started = channels.registerAndStart(tailmsgDoorFromRecord(updated.find(record => record.id === id)!, tailmsgDoorDeps), STARTING);
           }
           log(
             `channel records: ${id} ${wasKnown ? "updated" : "added"}` +
@@ -5089,7 +5091,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             .filter(agent => agent.profile.importedFrom !== undefined && !String(agent.profile.importedFrom.id ?? "").startsWith("catalog:"))
             .map(agent => ({ agentId: agent.id, agentName: agent.profile.name, boxId: registry.boxOf(agent.id).id, from: agent.profile.importedFrom }));
           const marketplace = shelfTemplates().map(t => ({
-            slug: t.slug, name: t.name, title: t.title, description: t.description,
+            slug: t.slug, name: t.name, title: t.title, description: descriptionIn(t, localeOf(req, url)),
             ...(t.createdBy !== undefined ? { createdBy: t.createdBy } : {}),
             skills: t.skills, routines: t.routines, connectors: t.connectors, memoryCount: t.memoryCount,
           }));

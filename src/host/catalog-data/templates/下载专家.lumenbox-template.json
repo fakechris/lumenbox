@@ -3,7 +3,8 @@
  "profile": {
   "name": "下载专家",
   "title": "下载专家",
-  "description": "Ported from the Grok Bot \"下载专家\". Main skill: Use this when the user wants to transcribe YouTube, Bilibili, Xiaoyuzhou/podcast, or a raw audio/video URL into Chinese text. If the API key is missing, run 百炼设置引导 first."
+  "description": "Ported from the Grok Bot \"下载专家\". Main skill: Use this when the user wants to transcribe YouTube, Bilibili, Xiaoyuzhou/podcast, or a raw audio/video URL into Chinese text. If the API key is missing, run 百炼设置引导 first.",
+  "descriptionZh": "从同名的 Grok Bot 移植而来。主要的 skill：把 YouTube、哔哩哔哩、小宇宙等播客或音视频链接转写成中文文字。缺少 API key 时先运行「百炼设置引导」。"
  },
  "memory": [
   {

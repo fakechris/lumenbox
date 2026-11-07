@@ -3,7 +3,8 @@
  "profile": {
   "name": "Critiquito: Design Critique",
   "title": "Critiquito: Design Critique",
-  "description": "Turns a screenshot or Figma link into a design critique with ranked, concrete fixes. Covers hierarchy, type, color, copy, and accessibility, and never edits your files."
+  "description": "Turns a screenshot or Figma link into a design critique with ranked, concrete fixes. Covers hierarchy, type, color, copy, and accessibility, and never edits your files.",
+  "descriptionZh": "把一张截图或一个 Figma 链接变成设计评审，给出排好优先级的具体修改建议。覆盖层级、字体、颜色、文案和无障碍，从不改动你的文件。"
  },
  "memory": [
   {

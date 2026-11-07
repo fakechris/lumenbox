@@ -133,6 +133,19 @@ export interface OrchestrationDeps {
   confirmAt?: number;
   concurrency?: number;
   log?: (line: string) => void;
+  /**
+   * The task board's side of a plan (INV-1740, plan-cards.ts): when the plan is submitted from a turn
+   * working a task, its items become cards that task waits on, and each card closes with its item.
+   */
+  board?: PlanBoard;
+}
+
+/** What the board does with a plan; absent, a plan leaves no cards. */
+export interface PlanBoard {
+  /** Cards for a plan just submitted, in item order — or one card for the whole plan — or none when no task is in hand. */
+  open(input: { agentId: string; parent: string; plan: OrchestrationPlan }): string[];
+  /** Closes a card with what its item (or, for a whole-plan card, the plan) came to. */
+  settle(cardId: string, status: ItemStatus, text: string): void;
 }
 
 interface Running {
@@ -141,6 +154,8 @@ interface Running {
   parent: string;
   plan: OrchestrationPlan;
   hash: string;
+  /** The board cards of its items (one per item), or one card for the whole plan; empty when none. */
+  cards: string[];
 }
 
 export class Orchestrations {
@@ -191,7 +206,8 @@ export class Orchestrations {
   private toRunning(work: OpenFork): Running | undefined {
     const plan = work.data?.plan as OrchestrationPlan | undefined;
     if (plan === undefined || !Array.isArray(plan.items)) return undefined;
-    return { id: work.id, agentId: work.agentId, parent: work.parent, plan, hash: String(work.data?.hash ?? planHash(plan)) };
+    const cards = Array.isArray(work.data?.cards) ? (work.data.cards as unknown[]).map(String) : [];
+    return { id: work.id, agentId: work.agentId, parent: work.parent, plan, hash: String(work.data?.hash ?? planHash(plan)), cards };
   }
 
   /**
@@ -219,13 +235,14 @@ export class Orchestrations {
           action: "start a fan-out of sub-agents",
         })
       : undefined;
+    const cards = this.deps.board?.open({ agentId: input.agentId, parent: input.parent, plan: input.plan }) ?? [];
     const id = this.deps.pendingWork.prepare({
       agentId: input.agentId,
       kind: "orchestrate",
       parent: input.parent,
       child: `plan:${hash}`,
       brief: input.plan.brief,
-      data: { plan: input.plan, hash, ...(approval !== undefined ? { approvalId: approval.id } : {}) },
+      data: { plan: input.plan, hash, ...(approval !== undefined ? { approvalId: approval.id } : {}), ...(cards.length > 0 ? { cards } : {}) },
     });
     if (approval !== undefined) {
       return {
@@ -237,7 +254,7 @@ export class Orchestrations {
           `resubmit, poll, or predict it.`,
       };
     }
-    this.start({ id, agentId: input.agentId, parent: input.parent, plan: input.plan, hash });
+    this.start({ id, agentId: input.agentId, parent: input.parent, plan: input.plan, hash, cards });
     return {
       text:
         `Started ${calls} sub-agent turn(s) for "${input.plan.brief}" in the background. The result arrives ` +
@@ -258,6 +275,7 @@ export class Orchestrations {
       }
       if (this.deps.deliver(work.agentId, `[The person declined the plan "${running.plan.brief}"; nothing ran. Do not resubmit it unless they ask.]`, work.parent)) {
         this.deps.pendingWork.dropped(work.id, "refused");
+        for (const card of running.cards) this.deps.board?.settle(card, "failed", "the person declined the plan; nothing ran");
       }
     }
     return waiting.length > 0;
@@ -281,6 +299,7 @@ export class Orchestrations {
       if (waiting.has(String(work.data.approvalId))) continue;
       if (this.deps.deliver(work.agentId, `[The plan "${running.plan.brief}" was waiting for a confirmation that is gone after a restart; nothing ran. Submit it again if it is still wanted.]`, work.parent)) {
         this.deps.pendingWork.dropped(work.id, "restart");
+        for (const card of running.cards) this.deps.board?.settle(card, "failed", "its confirmation was lost in a restart; nothing ran");
         outcome.closed += 1;
       }
     }
@@ -324,6 +343,9 @@ export class Orchestrations {
         const result = await this.runOne(running, index, itemBrief(running.plan, index));
         this.keep(running, result);
         known.set(index, result);
+        // An item's card closes with it — but the last one only after the result is delivered, so the
+        // task waiting on the cards is released by the same message that tells it what they found.
+        if (running.cards.length === running.plan.items.length && known.size < running.plan.items.length) this.deps.board?.settle(running.cards[index]!, result.status, result.text);
       }
     };
     await Promise.all(Array.from({ length: Math.min(concurrency, missing.length) }, () => worker()));
@@ -351,6 +373,8 @@ export class Orchestrations {
             .join("\n\n")}`;
     if (this.deps.deliver(running.agentId, body, running.parent)) {
       this.deps.pendingWork.commit([{ id: running.id, how: counts.result, why: describeRunResult(counts) }]);
+      if (running.cards.length === running.plan.items.length) running.cards.forEach((card, index) => { const item = known.get(index); if (item !== undefined) this.deps.board?.settle(card, item.status, item.text); });
+      else for (const card of running.cards) this.deps.board?.settle(card, counts.result === "failed" ? "failed" : "done", describeRunResult(counts));
     } else {
       this.log(`plan ${running.hash}: finished, but the result could not be delivered; it stays open for the next start`);
     }

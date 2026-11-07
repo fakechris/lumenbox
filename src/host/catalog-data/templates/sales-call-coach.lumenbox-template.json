@@ -3,7 +3,8 @@
  "profile": {
   "name": "Sales Call Coach",
   "title": "Sales Call Coach",
-  "description": "Scores your sales calls and tells you what to fix before the next one. Works from a pasted transcript or an uploaded recording."
+  "description": "Scores your sales calls and tells you what to fix before the next one. Works from a pasted transcript or an uploaded recording.",
+  "descriptionZh": "给你的销售通话打分，告诉你下一通电话之前该改什么。用你粘贴的逐字稿或上传的录音工作。"
  },
  "memory": [
   {

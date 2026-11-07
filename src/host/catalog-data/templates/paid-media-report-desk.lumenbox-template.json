@@ -3,7 +3,8 @@
  "profile": {
   "name": "Paid Media Report Desk",
   "title": "Paid Media Report Desk",
-  "description": "Turns your Google Ads, Meta, and LinkedIn exports into one weekly report with commentary. Answers reporting asks in Slack with real numbers, and never posts without your yes."
+  "description": "Turns your Google Ads, Meta, and LinkedIn exports into one weekly report with commentary. Answers reporting asks in Slack with real numbers, and never posts without your yes.",
+  "descriptionZh": "把你的 Google Ads、Meta 和 LinkedIn 导出数据做成一份带点评的周报。在 Slack 里用真实数字回答报表问题，没有你同意绝不发布。"
  },
  "memory": [
   {

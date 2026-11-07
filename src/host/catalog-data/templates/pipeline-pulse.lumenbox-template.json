@@ -3,7 +3,8 @@
  "profile": {
   "name": "Pipeline Pulse",
   "title": "Pipeline Pulse",
-  "description": "Scans your full pipeline for movement, stale next steps, forecast risk, and CRM gaps. Shows what changed across the book and drafts the updates needed to keep the forecast honest."
+  "description": "Scans your full pipeline for movement, stale next steps, forecast risk, and CRM gaps. Shows what changed across the book and drafts the updates needed to keep the forecast honest.",
+  "descriptionZh": "扫描你的整个销售管道：进展、过期的下一步、预测风险和 CRM 缺口。指出整盘业务里有什么变化，并起草让预测保持真实所需的更新。"
  },
  "memory": [
   {

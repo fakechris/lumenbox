@@ -159,6 +159,13 @@ test("a deprecated synonym is reported by file and line, in the listed files and
       '  const bot = "bot";',
       "};",
     ].join("\n"));
+    // A shelf template's Chinese line is the shelf's (INV-1702); its English and its skills are the imported agent's.
+    mkdirSync(join(dir, "src", "host", "catalog-data", "templates"), { recursive: true });
+    writeFileSync(join(dir, "src", "host", "catalog-data", "templates", "x.lumenbox-template.json"), JSON.stringify({
+      format: "lumenbox-template/1",
+      profile: { name: "Haggle Bot", description: "A bot that haggles.", descriptionZh: "砍价机器人。" },
+      skills: [{ slug: "haggle", description: "the bot's own skill" }],
+    }, null, 1));
     const problems = lintVocabulary(dir, ["gui*.md"], join(root, GLOSSARY));
     assert.deepEqual(problems, [
       'docs/manual.md:6: "door" is a deprecated synonym; write "channel" (docs/glossary.md).',
@@ -166,6 +173,7 @@ test("a deprecated synonym is reported by file and line, in the listed files and
       'guide.md:9: "箱子" is a deprecated synonym; write "box" (docs/glossary.md).',
       'src/i18n/ui-page.ts:2: "机器人" is a deprecated synonym; write "agent" (docs/glossary.md).',
       'src/i18n/ui-page.ts:4: "door" is a deprecated synonym; write "channel" (docs/glossary.md).',
+      'src/host/catalog-data/templates/x.lumenbox-template.json:6: "机器人" is a deprecated synonym; write "agent" (docs/glossary.md).',
     ]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
