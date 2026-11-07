@@ -62,6 +62,8 @@ export const MACHINE_OUTPUT: Readonly<Record<"claude" | "pi" | "opencode" | "mco
  * their own so nothing else in the box depends on them. The image's own layer (when a version
  * was named at build) is found first on PATH; this is the fallback the person chose at use
  * time. Every path a preset names comes from `boxPaths` (box-paths.ts), which knows the box's kind.
+ * This is the Docker form; where only the pinned install may run, delegateCommand and probeCommand
+ * use its absolute path instead (INV-1720).
  */
 export function withEnginesPath(command: string, paths: BoxPaths): string {
   return `export PATH="$PATH:${paths.enginesBin}"; ${command}`;
@@ -80,7 +82,53 @@ export function skillsLink(preset: Preset, paths: BoxPaths): string | undefined 
  */
 export function delegateCommand(preset: Preset, paths: BoxPaths, command: string): string {
   const link = paths.skillsAtRun ? skillsLink(preset, paths) : undefined;
-  return withEnginesPath(link !== undefined ? `${link} && ${command}` : command, paths);
+  const body = link !== undefined ? `${link} && ${command}` : command;
+  const at = paths.pinnedEngine?.(preset.program);
+  if (at === undefined) return withEnginesPath(body, paths);
+  // Where only the pinned install may run (a host box, INV-1720): the install's bin goes first,
+  // and the engine's name is a function calling it by absolute path, so neither the person's
+  // PATH nor a function from their shell profile can put another engine in its place. If the
+  // pinned one went away since the probe, the run stops and says so; it never falls back.
+  return (
+    `export PATH="${paths.enginesBin}:$PATH"; ` +
+    `[ -x ${at} ] || { echo "the pinned ${preset.name} ${preset.install.version} is not installed at ${at}; an engine of the person's own is not run in its place" >&2; exit 127; }; ` +
+    `${preset.program}() { ${at} "$@"; }; ${body}`
+  );
+}
+
+/**
+ * How Delegate checks the engine is there before it starts anything; exit 0 means it is. On a
+ * Docker box anywhere on PATH: the image's layer, or the install on the work volume. Where only
+ * the pinned install may run (a host box), that file and at the preset's version, which the
+ * install's own package.json says without the engine being started. What it found otherwise is
+ * printed, for engineMissing to say.
+ */
+export function probeCommand(preset: Preset, paths: BoxPaths): string {
+  const at = paths.pinnedEngine?.(preset.program);
+  if (at === undefined) return withEnginesPath(`command -v ${preset.program}`, paths);
+  const { package: pkg, version } = preset.install;
+  const manifest = `${paths.engines}/lib/node_modules/${pkg}/package.json`;
+  return (
+    `[ -x ${at} ] || { echo "nothing at ${at}"; exit 1; }; ` +
+    `v=$(sed -n 's/^ *"version": *"\\([^"]*\\)".*/\\1/p' ${manifest} 2>/dev/null | head -n 1); ` +
+    `[ "$v" = "${version}" ] || { echo "${at} is \${v:-of no version ${manifest} names}, not ${version}"; exit 1; }; echo ${at}`
+  );
+}
+
+/** What Delegate says when the probe found no engine it may run; `found` is what the probe printed. */
+export function engineMissing(preset: Preset, paths: BoxPaths, found: string): string {
+  const { package: pkg, version } = preset.install;
+  const ask =
+    `Ask the person whether to install it (${pkg} ${version}, a few minutes, kept on the work ` +
+    `volume) and if they say yes call Delegate again with \`install: true\`.`;
+  if (paths.pinnedEngine === undefined) {
+    return `The ${preset.name} engine is not in this box. ${ask} Or an operator bakes it into the image with a version named at build.`;
+  }
+  return (
+    `The pinned ${preset.name} ${version} is not installed in this box (${found.trim() || "the probe found nothing"}). ` +
+    `A ${preset.name} the person installed themselves on this machine is not used: Delegate runs only the pinned one, ` +
+    `at ${paths.pinnedEngine(preset.program)}. ${ask}`
+  );
 }
 
 export interface Preset {
@@ -98,8 +146,8 @@ export interface Preset {
   };
   /** One line, in the tool description, so a model can pick between presets. */
   summary: string;
-  /** How to check it is installed. Non-zero means not there. */
-  probe: string;
+  /** The engine's executable, as its install names it under `bin` (probeCommand checks it is there). */
+  program: string;
   /**
    * The command, given the prompt already shell-quoted and, when the relay names one,
    * the model in this engine's own format (opencode says `provider/model`, others say
@@ -190,7 +238,7 @@ PRESETS_MUTABLE.push(...([
     name: "opencode",
     report: "mcp",
     summary: "A coding agent: reads a repository, edits files, runs tests, iterates.",
-    probe: "command -v opencode",
+    program: "opencode",
     install: {
       package: "opencode-ai",
       version: "1.18.25",
@@ -270,7 +318,7 @@ PRESETS_MUTABLE.push(...([
     name: "claude",
     report: "mcp",
     summary: "Claude Code: the same shape, for repositories it already knows well.",
-    probe: "command -v claude",
+    program: "claude",
     install: {
       package: "@anthropic-ai/claude-code",
       version: "2.1.250",
@@ -321,7 +369,7 @@ PRESETS_MUTABLE.push({
   name: "pi",
   report: "file",
   summary: "pi: a small coding agent with sessions and skills; good for scoped edits and scripts.",
-  probe: "command -v pi",
+  program: "pi",
   install: {
     package: "@earendil-works/pi-coding-agent",
     version: "0.85.1",
@@ -408,7 +456,7 @@ PRESETS_MUTABLE.push({
   name: "mcode",
   report: "file",
   summary: "MiniMax Code: MiniMax's own coding agent, tuned for the M3 family; explore / worker / verifier sub-agents, strict about finishing.",
-  probe: "command -v mcode",
+  program: "mcode",
   // Not --ignore-scripts: the engine needs better-sqlite3's native binding, which its install
   // fetches as a prebuilt. Needs Node 22.19+ in the box (0.6.x refuses older, exit 1).
   install: {

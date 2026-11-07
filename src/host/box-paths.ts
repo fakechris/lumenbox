@@ -47,6 +47,13 @@ export interface BoxPaths {
   /** Where an engine installed on demand lives, and its `bin`. */
   engines: string;
   enginesBin: string;
+  /**
+   * The pinned engine's absolute path where only the pinned install may run, or undefined where
+   * PATH decides. A Docker box resolves through PATH, the image's layer first, the install after.
+   * On a host box the PATH ahead of the install is the person's own (Homebrew, `~/.local/bin`),
+   * so an engine is run by this path and never looked up (INV-1720).
+   */
+  pinnedEngine: ((program: string) => string) | undefined;
   /** Where the MCP face config files are written (docs/33). */
   mcpFaces: string;
   /** Where an engine without an MCP client leaves its report (INV-1261). */
@@ -70,6 +77,7 @@ export interface BoxPaths {
 /** The image's layout: a Docker box's paths, and an attached box's (the same image elsewhere). */
 export const DOCKER_BOX_PATHS: BoxPaths = {
   ...lumenboxDirs(DOCKER_WORK),
+  pinnedEngine: undefined,
   home: DOCKER_HOME,
   homes: {
     opencode: `${DOCKER_HOME}/.config/opencode`,
@@ -96,8 +104,10 @@ export function boxPaths(box: { kind: "docker" | "attached" | "host"; workDir?: 
     };
   }
   const state = posix.join(work, ".state", stateName(`agent:${agentId}`));
+  const dirs = lumenboxDirs(work);
   return {
-    ...lumenboxDirs(work),
+    ...dirs,
+    pinnedEngine: program => `${dirs.enginesBin}/${program}`,
     home: undefined,
     homes: {
       opencode: posix.join(state, STATE_VARIABLES.XDG_CONFIG_HOME, "opencode"),
