@@ -149,7 +149,7 @@ export class AcpService {
     }
     // The native box's sandbox (INV-1700), before anything is written: a refused engine leaves no log.
     const shell = ["-n", String(input.nice), "/bin/bash", "-lc", input.command];
-    const confined = input.confine?.wrap("nice", shell, { what: "acp", cwd: input.cwd, actor: `acp:${input.session_id}` });
+    const confined = input.confine?.wrap("nice", shell, { what: "acp", cwd: input.cwd, actor: input.actor ?? `acp:${input.session_id}` });
     const logPath = join(this.dir, `${input.session_id}.log`);
     const log = createWriteStream(logPath, { flags: "a" });
     const child = spawn(
@@ -157,7 +157,8 @@ export class AcpService {
       confined?.args ?? shell,
       {
         cwd: input.cwd,
-        env: { ...input.scrubbedEnv, ...(input.display !== undefined ? { DISPLAY: `:${input.display}` } : {}), ...input.env },
+        // The native box's state directory (INV-1710) wins over the preset's `/home/box/...` homes.
+        env: { ...input.scrubbedEnv, ...(input.display !== undefined ? { DISPLAY: `:${input.display}` } : {}), ...input.env, ...confined?.env },
         stdio: ["pipe", "pipe", "pipe"],
         detached: true,
       }

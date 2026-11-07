@@ -49,7 +49,7 @@ export interface SandboxRules {
   runIn?: string;
   /** Never writable, even under a writable path: a repository granted read-only. */
   readOnly?: readonly string[];
-  /** Refuse reads of the credential places as well as writes (`CREDENTIAL_READS_UNDER_HOME`, `~/.agentbox*`). */
+  /** Refuse reads of the credential places and the person's engine homes as well as writes (`CREDENTIAL_READS_UNDER_HOME`, `ENGINE_HOMES_UNDER_HOME`, `~/.agentbox*`). */
   hideCredentials?: boolean;
 }
 
@@ -69,6 +69,12 @@ export const DENY_WRITE_UNDER_HOME = [".ssh", ".gnupg", ".aws", ".config/gh", ".
 export const DENY_WRITE_UNDER_CWD = [".git/hooks", ".git/config"] as const;
 /** Under the home directory: what a confined process may not even read. Shell rc files stay readable, a login shell needs them. */
 export const CREDENTIAL_READS_UNDER_HOME = [".ssh", ".gnupg", ".aws", ".config/gh", ".kube", ".docker/config.json", ".netrc"] as const;
+/**
+ * Under the home directory: where the person's own coding engines keep their login and history
+ * (INV-1710). A confined box runs its engines with a state directory of its own instead
+ * (src/boxd/confinement.ts), so these are hidden with the credentials and never writable.
+ */
+export const ENGINE_HOMES_UNDER_HOME = [".claude", ".claude.json", ".codex", ".gemini", ".config/opencode", ".local/share/opencode", ".pi"] as const;
 
 export interface HostSandboxOptions {
   platform?: NodeJS.Platform;
@@ -146,8 +152,9 @@ export class HostSandbox {
     const cwd = real(rules.cwd);
     const writable = [cwd, this.tmp, ...(rules.allowWrite ?? []).map(real)].filter((path, index, all) => all.indexOf(path) === index);
     const readOnly = (rules.readOnly ?? []).filter(path => existsSync(path)).map(real);
-    const denied = [...this.deniedPaths(writable.filter(path => path !== this.tmp)), ...readOnly].filter((path, index, all) => all.indexOf(path) === index);
     const hidden = rules.hideCredentials === true ? this.hiddenPaths() : [];
+    // What is hidden is not writable either: a rw grant of a parent must not reopen it.
+    const denied = [...this.deniedPaths(writable.filter(path => path !== this.tmp)), ...readOnly, ...hidden].filter((path, index, all) => all.indexOf(path) === index);
     const ports = [...new Set(rules.loopbackPorts ?? [])];
     const words = [
       `writes only under ${writable.join(", ")}`,
@@ -173,7 +180,7 @@ export class HostSandbox {
 
   /** What `hideCredentials` hides, resolved, keeping only what exists. */
   private hiddenPaths(): string[] {
-    const candidates = [...CREDENTIAL_READS_UNDER_HOME.map(name => join(this.home, name)), ...agentboxHomes(this.home)];
+    const candidates = [...CREDENTIAL_READS_UNDER_HOME, ...ENGINE_HOMES_UNDER_HOME].map(name => join(this.home, name)).concat(agentboxHomes(this.home));
     return candidates.filter(path => existsSync(path)).map(real).filter((path, index, all) => all.indexOf(path) === index);
   }
 
