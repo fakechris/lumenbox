@@ -1,7 +1,7 @@
 # Worked examples
 
-Each block below is a whole `SKILL.md`. Put it at
-`/home/box/work/skills/<slug>/SKILL.md` with `write_file`; the folder name is the slug.
+Each block below is a whole `SKILL.md`. Put it at `<slug>/SKILL.md` in the skills
+directory your skill index shows, with `write_file`; the folder name is the slug.
 Chat keys (`feishu:oc_…`) are placeholders: use the real key of the chat that should hear it.
 
 ## 1. Weekday morning brief (schedule)
