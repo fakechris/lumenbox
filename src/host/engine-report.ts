@@ -22,6 +22,7 @@
 import type { BoxClient } from "../box/client.ts";
 import type { OpenFork, PendingWork } from "./pending-work.ts";
 import { quoteForShell } from "./presets.ts";
+import { DOCKER_BOX_PATHS } from "./box-paths.ts";
 import { type DelegateReport, judgeWithReport, reportPath, summariseReport, validateDelegateReport } from "./delegate-report.ts";
 import { describeWorktree, worktreeDirty, worktreeState, type WorktreeState } from "./worktree-state.ts";
 
@@ -319,7 +320,7 @@ export async function settleDelegate(
   });
   // The engine's own report (INV-1261): through the face if it delivered one there, else the
   // file an engine without an MCP client writes. Read before the event decides anything.
-  const delivery = deps.report?.(job.job_id) ?? (deps.box !== undefined ? await readReportFile(deps.box, job.job_id) : undefined);
+  const delivery = deps.report?.(job.job_id) ?? (deps.box !== undefined ? await readReportFile(deps.box, recordedReportFile(open.data, job.job_id)) : undefined);
   const judged = judgeWithReport(fromEvent, delivery);
   if (report?.resumeFailed === true && report.sessionId !== undefined) {
     deps.dropSession?.(report.sessionId, report.detail ?? "the engine could not resume it");
@@ -337,10 +338,18 @@ export async function settleDelegate(
   return { open, ...judged, ...(report !== undefined ? { report } : {}), ...(worktree !== undefined ? { worktree } : {}), ...(delivery !== undefined ? { delivery } : {}) };
 }
 
+/**
+ * Where the delegation said its report goes (INV-1712: a host box's is under its own work
+ * directory); a record from before the path was kept is a Docker box's.
+ */
+export function recordedReportFile(data: Record<string, unknown> | undefined, jobId: string): string {
+  return typeof data?.report === "string" ? data.report : reportPath(jobId, DOCKER_BOX_PATHS);
+}
+
 /** The report file an engine without an MCP client leaves; unreadable or malformed is no report. */
-export async function readReportFile(box: Pick<BoxClient, "readFile">, jobId: string): Promise<DelegateReport | undefined> {
+export async function readReportFile(box: Pick<BoxClient, "readFile">, reportFile: string): Promise<DelegateReport | undefined> {
   try {
-    const file = await box.readFile(reportPath(jobId));
+    const file = await box.readFile(reportFile);
     const checked = validateDelegateReport(JSON.parse(file.content));
     return "report" in checked ? checked.report : undefined;
   } catch {

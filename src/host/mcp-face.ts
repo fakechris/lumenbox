@@ -27,8 +27,6 @@ import type { PolicyGate } from "./policy.ts";
 import type { McpServerTool } from "../web/mcp-server.ts";
 
 export const MCP_FACE_TOKEN_VARIABLE = "LUMENBOX_MCP_TOKEN";
-/** Where a route's config file lives in the box: under the work root, never inside a repository. */
-export const MCP_FACE_DIR = "/home/box/work/.lumenbox/mcp";
 export const ROUTE_PATH = /^\/mcp\/r\/([0-9a-f]{32})$/;
 
 export const LEASE_MS = 30 * 60_000;
