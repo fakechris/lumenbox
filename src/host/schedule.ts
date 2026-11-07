@@ -41,6 +41,24 @@ import type { DeliverWhen } from "./routine-resolve.ts";
 import type { RunResult } from "./run-result.ts";
 import { readRunLedger, RoutineHolds, runsOf, type RoutineHold, type RoutineReason, type RoutineRun, type RunRecord } from "./routine-runs.ts";
 import { upcomingFires } from "./schedule-time.ts";
+import { classifyFailure } from "./failure-taxonomy.ts";
+
+/**
+ * A routine run that failed on a passing cause — a rate limit, the network, a timeout — is tried
+ * again by the host, at most this many times, 1, 2 then 4 minutes apart (INV-1741). Anything else
+ * is not: a run the agent's own turn failed is the agent's to judge, and the next window comes.
+ */
+export const ROUTINE_RETRIES = 3;
+export function routineRetryDelayMs(retry: number): number {
+  return 60_000 * 2 ** Math.max(0, retry - 1);
+}
+/** Whether a failed run's reason names a cause that waiting can fix. */
+export function passingFailure(reason: string | undefined): boolean {
+  if (reason === undefined) return false;
+  if (/\((rate_limit|network|timeout)\)/.test(reason)) return true;
+  const category = classifyFailure(reason);
+  return category === "rate_limit" || category === "network" || category === "timeout";
+}
 import { dirname, join } from "node:path";
 import { agentboxHome } from "../config.ts";
 export { ONCE_GRACE_MS, describeSchedule, isDue, knownTimezone, nextFire, parseSchedule, wallClock, type Schedule } from "./schedule-time.ts";
@@ -236,6 +254,8 @@ export interface SchedulerDeps {
    * overlap rule and the failure streak. Undefined, or no check at all, runs.
    */
   precheck?: (skill: { slug: string; name: string; boxId?: string }, agent: string) => Promise<RoutineReason | undefined>;
+  /** Every run's end (INV-1741): the exception list counts a failed one and resolves on a success. */
+  finished?: (skill: { slug: string; name: string }, agent: string, result: RunResult | undefined, reason: string | undefined) => void;
   /** A routine in observe mode was triggered and did not run (INV-1458); the audit row. */
   observed?: (slug: string, would: string) => void;
   /**
@@ -285,6 +305,8 @@ export class Scheduler {
   private readonly records: RunRecord[] = [];
   /** Routines the host stopped, and the failure streaks that stop them (INV-1665). */
   readonly holds = new RoutineHolds();
+  /** Automatic retries taken by the run each slug is in (INV-1741); cleared when one does not fail on a passing cause. */
+  private readonly retries = new Map<string, number>();
 
   constructor(
     private readonly deps: SchedulerDeps,
@@ -446,7 +468,7 @@ export class Scheduler {
     skill: { slug: string; name: string },
     agent: string,
     start: () => Promise<void | { result: RunResult; reason?: string }>,
-    started: { deliver?: string; manual?: boolean } = {}
+    started: { deliver?: string; manual?: boolean; retry?: number } = {}
   ): Promise<void> {
     this.running.add(skill.slug);
     const startedAt = this.now();
@@ -455,21 +477,31 @@ export class Scheduler {
     return start()
       .then(result => { if (result) outcome = result; })
       .catch(error => {
-        // Reported and dropped. A run that failed comes round again, and retrying now would be a
-        // second unasked-for turn on top of one that just went wrong.
+        // Reported. A run that failed comes round again; only a passing cause is retried before that (below).
         const reason = error instanceof Error ? error.message : String(error);
         this.log(`${skill.name}: run failed — ${reason}`);
         outcome = { result: "failed", reason };
       })
       .finally(() => {
         this.running.delete(skill.slug);
+        const retry = outcome.result === "failed" && passingFailure(outcome.reason) ? (this.retries.get(skill.slug) ?? 0) + 1 : 0;
+        const retrying = retry > 0 && retry <= ROUTINE_RETRIES && this.holds.holdOf(skill.slug) === undefined;
+        if (retrying) this.retries.set(skill.slug, retry); else this.retries.delete(skill.slug);
         this.record(skill.slug, "finished", {
+          ...(retrying ? { retrying: retry } : {}),
           agent,
           ...(outcome.result !== undefined ? { result: outcome.result } : {}),
           ...(outcome.reason !== undefined ? { reason: outcome.reason.slice(0, 300) } : {}),
           ms: this.now().getTime() - startedAt.getTime(),
           ...(this.deps.spentSinceAgent !== undefined ? { tokens: this.deps.spentSinceAgent(startedAt.getTime(), agent) } : {}),
         });
+        try { this.deps.finished?.(skill, agent, outcome.result, outcome.reason); } catch (error) { this.log(`${skill.name}: could not note the end (${error instanceof Error ? error.message : String(error)})`); }
+        if (retrying) {
+          this.log(`${skill.name}: failed on a passing cause; retry ${retry} of ${ROUTINE_RETRIES} in ${routineRetryDelayMs(retry) / 60_000} min`);
+          const timer = setTimeout(() => { void this.runNow(skill.slug, retry).then(ran => { if (!ran.ok) { this.retries.delete(skill.slug); this.log(`${skill.name}: retry ${retry} did not start — ${ran.reason}`); } }); }, routineRetryDelayMs(retry));
+          timer.unref?.();
+          return;
+        }
         const hold = this.holds.noteFinished(skill.slug, outcome.result, outcome.reason, this.now().toISOString());
         if (hold !== undefined) {
           this.record(skill.slug, "held", { by: hold.by, code: hold.code, reason: hold.reason });
@@ -797,7 +829,8 @@ export class Scheduler {
     return { ok: true };
   }
 
-  async runNow(slug: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+  /** By hand, or (`retry`) the host's automatic retry of a run that failed on a passing cause. */
+  async runNow(slug: string, retry?: number): Promise<{ ok: true } | { ok: false; reason: string }> {
     const skills = await this.deps.due().catch(() => []);
     const skill = skills.find(candidate => candidate.slug === slug);
     if (skill === undefined) return { ok: false, reason: `No scheduled skill "${slug}".` };
@@ -810,7 +843,7 @@ export class Scheduler {
     const refused = await this.refusal(skill, agent);
     if (refused !== undefined) return { ok: false, reason: `${skill.name} did not run and is paused: ${refused.text}` };
 
-    this.log(`${skill.name}: firing now, by hand`);
+    this.log(`${skill.name}: firing now, ${retry !== undefined ? `retry ${retry}` : "by hand"}`);
     // By hand is still this routine running (INV-534): same slug, same opening with last
     // time's commitments, same reconcile afterwards. Without them "run it now" was a
     // different code path that skipped the very thing a person clicks it to test.
@@ -822,7 +855,7 @@ export class Scheduler {
       skill.slug,
       skill.allowedTools,
       skill.deliverWhen
-    ), { ...(skill.deliver !== undefined ? { deliver: skill.deliver } : {}), manual: true });
+    ), { ...(skill.deliver !== undefined ? { deliver: skill.deliver } : {}), ...(retry !== undefined ? { retry } : { manual: true }) });
     return { ok: true };
   }
 

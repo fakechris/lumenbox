@@ -31,8 +31,28 @@ export class OutboxSender {
     private readonly log: (line: string) => void,
     /** Injectable for tests; defaults to the real timer. */
     private readonly wait: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms)),
-    private readonly now: () => Date = () => new Date()
+    private readonly now: () => Date = () => new Date(),
+    /** Each try's outcome (INV-1741): the exception list counts a failure and resolves when the chat takes one. */
+    private readonly observe?: (event: "sent" | "failed" | "dropped", detail: { id: string; chatKey: string; attempts: number; error?: string }) => void
   ) {}
+
+  /**
+   * A person pressed Retry on a chat's messages (INV-1741): every pending one for the chat is tried
+   * once more, in order, whatever its count — past the limit is exactly when a person is asked.
+   */
+  async retry(chatKey: string, adapter: Sender): Promise<{ tried: number; sent: number }> {
+    const pending = this.outbox.pending().filter(receipt => receipt.chatKey === chatKey);
+    let sent = 0;
+    for (const receipt of pending) {
+      const outcome = await this.chained(chatKey, () => this.attempt(receipt.id, { adapter, chatKey, text: receipt.text }, receipt.attempts, undefined, true));
+      if (outcome.delivered) sent += 1;
+    }
+    return { tried: pending.length, sent };
+  }
+
+  private noted(event: "sent" | "failed" | "dropped", detail: { id: string; chatKey: string; attempts: number; error?: string }): void {
+    try { this.observe?.(event, detail); } catch (error) { this.log(`outbox: could not note ${detail.id} — ${error instanceof Error ? error.message : String(error)}`); }
+  }
 
   /**
    * Sends under its receipt, after the chat's earlier messages. `after` runs once the words
@@ -69,23 +89,27 @@ export class OutboxSender {
     return next;
   }
 
-  private async attempt(id: string, input: { adapter: Sender; chatKey: string; text: string }, failures: number, after?: () => Promise<void>): Promise<SendOutcome> {
+  /** `once`: a person's Retry — one try, whatever the count, and no backoff after it. */
+  private async attempt(id: string, input: { adapter: Sender; chatKey: string; text: string }, failures: number, after?: () => Promise<void>, once = false): Promise<SendOutcome> {
     for (let tried = failures; ; tried += 1) {
       try {
         await input.adapter.sendToChat(input.chatKey, input.text);
         this.outbox.sent(id);
+        this.noted("sent", { id, chatKey: input.chatKey, attempts: tried + 1 });
         try { await after?.(); } catch (error) { this.log(`outbox: ${id} sent, but its files did not follow — ${error instanceof Error ? error.message : String(error)}`); }
         return { delivered: true };
       } catch (error) {
         const why = `could not send to ${input.chatKey} — ${error instanceof Error ? error.message : String(error)}`;
         if (conversationGone(error)) {
           this.outbox.dropped(id, why);
+          this.noted("dropped", { id, chatKey: input.chatKey, attempts: tried + 1, error: why });
           this.log(`outbox: ${id} dropped; ${why}`);
           return { delivered: false, why };
         }
         this.outbox.failed(id, why);
         const next = tried + 1;
-        if (next >= OUTBOX_MAX_ATTEMPTS) {
+        this.noted("failed", { id, chatKey: input.chatKey, attempts: next, error: why });
+        if (next >= OUTBOX_MAX_ATTEMPTS || once) {
           this.log(`outbox: ${id} failed ${next} times, left pending for a person; ${why}`);
           return { delivered: false, why };
         }

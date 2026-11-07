@@ -30,6 +30,7 @@ import { AcpDelegates } from "./acp-delegate.ts";
 import type { HistoryEntry } from "./compaction.ts";
 import type { GoalGate } from "./goal-gate.ts";
 import type { GoalLoop, GoalTurnReport } from "./goal-loop.ts";
+import type { JobWatch } from "./job-watch.ts";
 import type { McpManager } from "./mcp.ts";
 import { memoryRef } from "./memory.ts";
 import type { MemoryJudge } from "./memory-judge.ts";
@@ -339,6 +340,8 @@ export interface EpisodeOptions {
    * finished, a continuation's report.
    */
   goalLoop?: (context: { bus: AgentBus; registry: AgentRegistry; tasks: TaskStore | undefined; files: Map<string, string> }) => GoalLoop;
+  /** The watch over commands a turn let go of (INV-1461), built once the bus exists so its wakes reach the agents (INV-1741). */
+  jobWatch?: (context: { bus: AgentBus; box: BoxClient }) => JobWatch;
   /** The completion gate (INV-771), built the same way. */
   goalGate?: (context: { bus: AgentBus; registry: AgentRegistry; tasks: TaskStore | undefined; files: Map<string, string> }) => GoalGate;
   /** Files the box starts with. */
@@ -469,6 +472,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
     : undefined;
   let goalLoop: GoalLoop | undefined;
   let goalGate: GoalGate | undefined;
+  let jobWatch: JobWatch | undefined;
   const bus: AgentBus = new AgentBus(registry, async (record, inbound, signal, conversation) => {
     if (goalLoop !== undefined && !goalLoop.turnStarting(record.id, conversation, inbound)) return;
     if (goalLoop === undefined && goalGate?.verifierMayRun(inbound) === false) return;
@@ -495,6 +499,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       ...(options.pendingWork !== undefined ? { pendingWork: options.pendingWork } : {}),
       ...(acpDelegates !== undefined ? { acpDelegates } : {}),
       ...(options.spendLimits !== undefined ? { spendLimits: options.spendLimits } : {}),
+      ...(jobWatch !== undefined ? { jobWatch } : {}),
       ...(options.person !== undefined ? { person: (principalId: string | undefined) => options.person!.render(principalId ?? options.person!.operator, "the operator") } : {}),
       registry,
       bus,
@@ -548,6 +553,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
   // A task whose last blocker closed wakes its assignee (INV-1740), wired as the orchestrator wires it.
   if (options.tasks !== undefined) watchDependencies(options.tasks, (task, text) => { bus.deliverSystem(task.assigneeId!, text, task.conversation ?? "main"); });
   goalLoop = options.goalLoop?.({ bus, registry, tasks: options.tasks, files });
+  jobWatch = options.jobWatch?.({ bus, box });
   goalGate = options.goalGate?.({ bus, registry, tasks: options.tasks, files });
 
   const say = async (line: string): Promise<void> => {

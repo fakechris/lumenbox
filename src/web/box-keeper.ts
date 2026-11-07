@@ -35,6 +35,8 @@ export interface KeeperDeps {
   /** To admins: chats, and the page. */
   notify: (text: string) => void;
   log: (line: string) => void;
+  /** The episode's edges (INV-1741): the exception list counts the box going down and resolves when it is back. */
+  observe?: (state: "down" | "back", detail: string) => void;
   now?: () => number;
 }
 
@@ -116,6 +118,7 @@ export class BoxKeeper {
     this.saidHeld = false;
     for (const id of this.deps.interrupt(this.deps.agentsOnBox(), "box_down")) this.stopped.add(id);
     this.deps.log(`box stopped answering: ${detail}`);
+    this.deps.observe?.("down", detail);
     this.deps.notify(`The box stopped answering (${detail}). Turns using it were stopped; LumenBox is trying to bring it back.`);
   }
 
@@ -126,6 +129,7 @@ export class BoxKeeper {
     this.starts = 0;
     this.lastStart = Number.NEGATIVE_INFINITY;
     this.deps.log(`box reachable again: ${detail}`);
+    this.deps.observe?.("back", detail);
     this.deps.notify(`The box is back (${detail}) after about ${minutes} minute${minutes === 1 ? "" : "s"}.`);
     for (const id of this.stopped) {
       this.deps.wake(id, `<host_notification source="box">The box stopped answering for about ${minutes} minute${minutes === 1 ? "" : "s"} and is running again. Your turn was stopped while it was down, so tool calls from that time failed. Check where your work stands and go on.</host_notification>`);

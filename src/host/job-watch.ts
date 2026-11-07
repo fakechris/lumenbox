@@ -57,6 +57,8 @@ export interface JobWatchDeps {
   /** The current generation of the agent's box (INV-1476); absent means generations are not tracked. */
   generation?: (agentId: string) => number;
   log: (line: string) => void;
+  /** Every end, woken for or not (INV-1741): the exception list counts a failed one and resolves on a success. */
+  ended?: (job: WatchedJob, end: JobEnd) => void;
   now?: () => number;
   capMs?: number;
   pollMs?: number;
@@ -144,6 +146,7 @@ export class JobWatch {
     const policy = job.onEnd ?? "wake_on_failure";
     const end: JobEnd = { exit_code: ended.exit_code, interrupted: ended.interrupted, killed, tail: ended.tail };
     const how = killed ? "killed at the cap" : ended.interrupted === true ? "interrupted" : `exit ${ended.exit_code}`;
+    try { this.deps.ended?.(job, end); } catch (error) { this.deps.log(`job watch ${job.jobId}: could not note the end (${error instanceof Error ? error.message : String(error)})`); }
     if (!wakesFor(policy, job.wakeWhen, end)) {
       const key = `${job.agentId}/${job.conversation}`;
       const list = this.recorded.get(key) ?? [];
