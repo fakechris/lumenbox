@@ -116,6 +116,10 @@ in `guests.jsonl` beside the other ledgers. Only an Admin adds or removes an ent
 Team → Guests or with `POST /api/guests/knowledge`; no agent tool writes it, in a member turn or a
 guest turn. One list per organisation for now (§7 question 2).
 
+*Note, 2026-11-07 (INV-1713, §7 note):* a guest turn now sees that guest's short window, and the
+single list became knowledge collections ticked per agent. The paragraphs above stand as decided
+for INV-1708; §7's note says what changed.
+
 ## 5. Records and spend
 
 - **The turn's line.** `guest-turns.jsonl`: when, the agent, the channel, the group chat, the
@@ -152,3 +156,38 @@ guest turn. One list per organisation for now (§7 question 2).
    organisation?
 3. **Answer review.** Should guest answers be sampled by the answer review (INV-1413) like member
    answers, and should an Admin see guest turns in the Audit tab?
+
+> **Note, 2026-11-07 (INV-1713).** Chris decided the three questions; this record is not
+> rewritten, and the decisions are these.
+>
+> 1. **A short window.** A guest turn sees that guest's own last questions and answers in the same
+>    group chat: the last 5 exchanges or 30 minutes, whichever ends first (`DEFAULT_GUEST_WINDOW`,
+>    `src/host/guests.ts`). An Admin can turn it off (0 exchanges) or extend it to at most 20
+>    exchanges / 24 hours (`GUEST_WINDOW_LIMIT`, Settings → Team → Guests,
+>    `POST /api/guests/window`). The window is kept per group chat and guest, in the host's memory
+>    only: it expires, a restart clears it, and it is never written to a transcript, memory or any
+>    ledger, so no member turn and no other guest's turn reads it. It holds only answers the guest
+>    actually received: a held answer enters it when an Admin approves it. `runGuestTurn` is handed
+>    the window as read-only data (`GuestTurnInput.history`); its import list is unchanged and still
+>    pinned by `guest-turn.test.ts`.
+> 2. **Knowledge collections (知识集).** The public knowledge is a set of named collections, the
+>    default one **组织通用** (`general`). An Admin adds, renames and removes collections (removing
+>    one removes its entries; the default cannot be removed) and ticks, per agent in Settings → Team
+>    → Guests, which collections it may use. A guest turn's two tools search and read only the
+>    ticked collections (`GuestDesk.viewFor`): an entry in another collection is not found and not
+>    readable by id. Migration is by reading: an entry written before collections has no
+>    `collection` field and belongs to 组织通用, and an agent nobody ticked uses 组织通用, so the old
+>    single list answers as before. The larger "organisation brain" is left to its own milestone.
+> 3. **An audit list and the answer review.** Settings → Guests (访客, organisation only) lists
+>    every guest turn by group chat, agent and time, with the review's verdict, and filters to the
+>    red flag or to answers waiting for an Admin (`GET /api/guests/audit`). Every guest answer is
+>    reviewed through INV-1413's path (`AnswerReviewer`, the decision model when it is on), not
+>    sampled, with two categories only a guest answer gets: **PROMISE** (承诺: it commits the
+>    organisation to a refund, a price, a date or anything else on its behalf) and
+>    **NOT_IN_KNOWLEDGE** (知识里没有: it states what the ticked collections do not). Any category
+>    but PASS and UNKNOWN is flagged red. By default the review is **shadow**: the answer goes out at
+>    once and the verdict lands after. A group chat set to **先审后发** (review before sending,
+>    `POST /api/guests/hold`) sends only a PASS; anything else — the reviewer's failure included —
+>    is held, the Admins are told, the guest reads "已收到，稍后回复", and an Admin approves (the
+>    answer is sent, then settled) or discards it in Settings → Guests. Reviews are lines in
+>    `guest-reviews.jsonl`. None of this adds a tool or a data source to the guest turn.
