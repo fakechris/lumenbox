@@ -29,6 +29,7 @@
  * architecture exists to avoid. Limits arrive as configuration; enforcement is local.
  */
 
+import { hostBoxWrite } from "./host-box.ts";
 import { SENSITIVE_INPUT_TTL_MS, type SensitiveInput } from "../protocol/sensitive-input.ts";
 import { classifyShell } from "./shell-readonly.ts";
 import { envNumber } from "../config.ts";
@@ -103,6 +104,8 @@ export type PolicyRequest =
        * (and the fingerprint binds) carries it, so consent is to *that* button on *that* page.
        */
       irreversible?: string; taskLevel?: 1 | 2 | 3 | 4 | 5; why?: string; // why (INV-1651): the agent's one-line case, shown as its claim, never in the fingerprint; taskLevel (INV-1650): the level of the task this call serves; outward calls ask below L5 and are refused below L3; set by dispatch from the board
+      /** The agent lives on the person's own machine (INV-438): a write there asks unless an operator's allow rule lifts it (INV-1700). Set by dispatch, never by the model. */
+      onHostBox?: true;
       /** The turn this call belongs to, for the taint rule (INV-1309): set by dispatch, never by the model. */
       turnId?: string;
       /** The model's tool_use id this check is for (INV-1664): ties the verdict to the step the chat draws. Set by dispatch. */
@@ -636,11 +639,12 @@ export class PolicyGate {
     // The tier gate is the operator's list by another name: enforcing, it asks like
     // AGENTBOX_APPROVAL_TOOLS would, and an operator's allow rule lifts it the same way.
     const tierWouldAsk = gate !== "off" && tierAsks(tier); const byLevel = request.taskLevel !== undefined ? levelAllows(request.taskLevel, tier) : "allow"; /* the task's own level (INV-1650): a refusal says where the task stops; an ask joins the card below */ if (byLevel === "deny") return { decision: { allow: false, reason: `This task is at L${request.taskLevel}: it stops before acting on the world — hand back what you have (a summary at L1, a plan at L2) and say what the next step would be.` } };
-    const configuredAsk = this.needsApproval(request) || (gate === "enforce" && tierWouldAsk) || byLevel === "ask";
+    const hostBoxAsk = request.onHostBox === true ? hostBoxWrite(request.tool, request.input) : undefined;
+    const configuredAsk = this.needsApproval(request) || (gate === "enforce" && tierWouldAsk) || byLevel === "ask" || hostBoxAsk !== undefined;
     const mustAsk = request.tool === "RunOnHost" || request.irreversible !== undefined || this.lastTaint !== undefined;
     const asks = rule?.effect === "ask" || mustAsk || (configuredAsk && rule?.effect !== "allow");
     this.lastAsks = askReasons({ ...(rule !== undefined ? { rule } : {}), hostCommand: request.tool === "RunOnHost", ...(request.irreversible !== undefined ? { irreversible: request.irreversible } : {}), tainted: this.lastTaint !== undefined,
-      approvalList: this.needsApproval({ ...request, irreversible: undefined }) && request.tool !== "RunOnHost", ...(gate === "enforce" && tierWouldAsk ? { tierEnforced: tier } : {}), ...(byLevel === "ask" && request.taskLevel !== undefined ? { levelAsks: request.taskLevel } : {}) });
+      approvalList: this.needsApproval({ ...request, irreversible: undefined }) && request.tool !== "RunOnHost", ...(gate === "enforce" && tierWouldAsk ? { tierEnforced: tier } : {}), ...(byLevel === "ask" && request.taskLevel !== undefined ? { levelAsks: request.taskLevel } : {}), ...(hostBoxAsk !== undefined ? { hostBoxWrite: hostBoxAsk } : {}) });
     if (!asks) {
       // Shadow: allowed as before, and the row says a person would have been asked.
       this.lastWouldAsk = gate === "shadow" && tierWouldAsk && rule?.effect !== "allow";

@@ -14,6 +14,8 @@ import { closeSync, mkdirSync, openSync, readdirSync, statSync, unlinkSync, writ
 import { join } from "node:path";
 import { JobLimitError } from "./job-limits.ts";
 import { killTree } from "./process-tree.ts";
+import type { Confine } from "./confinement.ts";
+import type { WrappedCommand } from "../host/host-sandbox.ts";
 import { DURABLE_RESULT_CHARS, type ExecRequest, type ExecResult, type JobStartedResult } from "../protocol/index.ts";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -372,7 +374,11 @@ function shellQuote(value: string): string {
 /** How a still-running foreground command becomes a job at `foreground_ms` (INV-1461): the job service's `adopt`. */
 export type Adopt = (input: { child: ChildProcess; command: string; head: Buffer }) => JobStartedResult;
 
-export function runShell(request: ExecRequest, pinned: Record<string, string> = {}, adopt?: Adopt): Promise<ExecResult> {
+/**
+ * `confine` is the native box's sandbox (confinement.ts, INV-1700): given, the shell is started
+ * inside it or not at all, and a failure that looks like one of its refusals says so.
+ */
+export function runShell(request: ExecRequest, pinned: Record<string, string> = {}, adopt?: Adopt, confine?: Confine): Promise<ExecResult> {
   const command = request.command?.trim();
   if (!command) {
     return Promise.reject(new Error("command must be a non-empty string"));
@@ -385,6 +391,14 @@ export function runShell(request: ExecRequest, pinned: Record<string, string> = 
 
   const key = sessionKey(request.session);
   const script = key ? wrapForSession(command, key, request.cwd, pinned) : command;
+  const startIn = key ? undefined : (request.cwd ?? process.env.HOME ?? "/home/box");
+  const context = { what: "exec", ...(startIn !== undefined ? { cwd: startIn } : {}), ...(request.actor !== undefined ? { actor: request.actor } : {}) };
+  let argv: { command: string; args: string[]; wrapped?: WrappedCommand } = { command: "nice", args: ["-n", String(AGENT_NICE), "/bin/bash", "-lc", script] };
+  try {
+    if (confine !== undefined) argv = confine.wrap(argv.command, argv.args, context);
+  } catch (error) {
+    return Promise.reject(error);
+  }
 
   return new Promise<ExecResult>(resolve => {
     // Run behind the interactive path. One box shares its CPU between two workloads with
@@ -397,9 +411,9 @@ export function runShell(request: ExecRequest, pinned: Record<string, string> = 
     // Inherited by everything the command starts, which is the point — the expensive thing
     // is usually a build, not the shell. Not a guarantee: the agent has sudo and could
     // renice itself back. It is the same accident-prevention line as the desktop tokens.
-    const child = spawn("nice", ["-n", String(AGENT_NICE), "/bin/bash", "-lc", script], {
+    const child = spawn(argv.command, argv.args, {
       // With a session the script does its own cd; without one, honour the request.
-      cwd: key ? undefined : (request.cwd ?? process.env.HOME ?? "/home/box"),
+      cwd: startIn,
       env: {
         ...withoutBoxToken(process.env),
         // A GUI launched from the shell must land on the agent's own desktop, not
@@ -493,10 +507,13 @@ export function runShell(request: ExecRequest, pinned: Record<string, string> = 
       // Closed before the strings are built, so the notice describes a complete file.
       stdout.close();
       stderr.close();
+      const said = stderr.toString("stderr");
+      const refused = confine !== undefined && argv.wrapped !== undefined ? confine.violations(argv.wrapped, { exit_code: exitCode, stderr: said }, context) : undefined;
       resolve({
         stdout: stdout.toString("stdout"),
         stderr:
-          stderr.toString("stderr") +
+          said +
+          (refused !== undefined ? `\n${refused}` : "") +
           (escaped
             ? `\n[the command was killed, but something it started left the process group and is ` +
               `still running — its output is not captured here and it was not stopped]`

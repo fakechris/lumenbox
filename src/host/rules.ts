@@ -30,7 +30,8 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { homedir } from "node:os";
+import { join, resolve, sep } from "node:path";
 import { agentboxHome } from "../config.ts";
 import { fieldValue, isRuleEffect, RULE_EFFECTS, RULE_FIELDS, ruleField, type RuleEffect, type RuleFieldTarget } from "./rules-grammar.ts";
 
@@ -46,6 +47,8 @@ export interface Rule {
   commands: string[];
   /** Hosts, exact or `*.example.com`, for tools whose input carries a URL. */
   hosts: string[];
+  /** Directories, for tools whose input carries a path (INV-1700). Absent on rules written before it. */
+  paths?: string[];
   /**
    * Whose work this rule is about, by principal id or name (INV-156).
    *
@@ -107,11 +110,16 @@ export function parseRuleFile(id: string, content: string): { rule?: Rule; probl
       tools: lists.tools ?? [],
       commands: lists.commands ?? [],
       hosts: lists.hosts ?? [],
+      paths: lists.paths ?? [],
       principals: lists.principals ?? [],
       agents: lists.agents ?? [],
       text,
     },
   };
+}
+
+function expandHome(path: string): string {
+  return path === "~" || path.startsWith("~/") ? `${homedir()}${path.slice(1)}` : path;
 }
 
 function hostMatches(host: string, patterns: readonly string[]): boolean {
@@ -149,7 +157,8 @@ export function ruleMatches(
   caller?: RuleCaller
 ): boolean {
   const agents = rule.agents ?? [];
-  if (rule.tools.length === 0 && rule.commands.length === 0 && rule.hosts.length === 0 && rule.principals.length === 0 && agents.length === 0) return false;
+  const paths = rule.paths ?? [];
+  if (rule.tools.length === 0 && rule.commands.length === 0 && rule.hosts.length === 0 && paths.length === 0 && rule.principals.length === 0 && agents.length === 0) return false;
   if (agents.length > 0) {
     // The same fail-closed shape as a principal: a rule about one agent never reaches a call nobody named.
     const calling = [caller?.agentId, caller?.agentName].filter((value): value is string => value !== undefined && value !== "").map(value => value.toLowerCase());
@@ -171,6 +180,11 @@ export function ruleMatches(
   if (rule.hosts.length > 0) {
     const host = hostOfInput(input);
     if (host === undefined || !hostMatches(host, rule.hosts)) return false;
+  }
+  if (paths.length > 0) {
+    // Resolved, so `~/proj/../.ssh` is judged where it lands; a call with no path never matches.
+    const path = typeof input.path === "string" && input.path !== "" ? resolve(expandHome(input.path)) : undefined;
+    if (path === undefined || !paths.some(dir => { const base = resolve(expandHome(dir)); return path === base || path.startsWith(base.endsWith(sep) ? base : `${base}${sep}`); })) return false;
   }
   return true;
 }

@@ -21,6 +21,7 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
+import type { Confine } from "./confinement.ts";
 import type { WriteStream } from "node:fs";
 import {
   closeSync,
@@ -251,6 +252,8 @@ export class JobService {
     onSettled?: () => void;
     /** Who asked (`agent:<id>`), for the per-agent limit and so the host can stop an agent's jobs by owner. */
     actor?: string;
+    /** The native box's sandbox (INV-1700): the job starts inside it, or is refused before anything is recorded. */
+    confine?: Confine;
   }): JobStartedResult {
     mkdirSync(this.dir, { recursive: true });
     if (input.jobId !== undefined) {
@@ -260,6 +263,10 @@ export class JobService {
         return { job_id: input.jobId, pid: existing.pid, log_path: existing.status.log_path };
       }
     }
+    const cwd = input.cwd ?? process.env.HOME ?? "/home/box";
+    const shell = ["-n", String(input.nice), "/bin/bash", "-c", '/bin/bash -lc "$1"; rc=$?; printf %s "$rc" > "$2.tmp" && mv -f "$2.tmp" "$2"; exit "$rc"', "job", input.command];
+    // Wrapped before admission, so a refused job takes no slot and leaves no log.
+    const confined = input.confine?.wrap("nice", shell, { what: "job", cwd, ...(input.actor !== undefined ? { actor: input.actor } : {}) });
     this.admit(input.actor);
     const jobId = input.jobId ?? `job-${randomUUID().slice(0, 8)}`;
     const logPath = join(this.dir, `${jobId}.log`);
@@ -274,19 +281,10 @@ export class JobService {
     // Command and paths ride as arguments, not interpolated, so quoting cannot break it.
     const rcPath = join(this.dir, `${jobId}.rc`);
     const child = spawn(
-      "nice",
-      [
-        "-n",
-        String(input.nice),
-        "/bin/bash",
-        "-c",
-        '/bin/bash -lc "$1"; rc=$?; printf %s "$rc" > "$2.tmp" && mv -f "$2.tmp" "$2"; exit "$rc"',
-        "job",
-        input.command,
-        rcPath,
-      ],
+      confined?.command ?? "nice",
+      [...(confined?.args ?? shell), rcPath],
       {
-        cwd: input.cwd ?? process.env.HOME ?? "/home/box",
+        cwd,
         env: {
           ...input.scrubbedEnv,
           ...(input.display !== undefined ? { DISPLAY: `:${input.display}` } : {}),

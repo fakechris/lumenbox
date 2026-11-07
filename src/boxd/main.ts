@@ -97,7 +97,7 @@ import { JobService } from "./job-service.ts"; import { JobLimitError, jobLimits
 import { BrowserService, StaleSnapshotError, IrreversibleActionError } from "./browser-service.ts";
 import { BrowserEndpointRegistry, EndpointConflictError } from "./browser-endpoints.ts";
 import { currentRoots, downloadFile, listDir, readFile, uploadFile, writeFile } from "./fs-service.ts";
-import { headlessRefusal } from "./headless.ts";
+import { headlessRefusal } from "./headless.ts"; import { ConfinementRefused, confinementFor } from "./confinement.ts";
 import { XWatchdogService } from "./xwatchdog-service.ts";
 import { DesktopOperations } from "./desktop-operations.ts";
 import { ComputerExecutionError, DesktopTargetError, isComputerWrite } from "../cua/execution.ts";
@@ -109,7 +109,7 @@ const startedAt = Date.now();
 const display = getDisplay();
 const token = process.env.BOXD_TOKEN ?? "";
 /** A box with no desktop by design (INV-438): nothing that needs X is started or served. */
-const HEADLESS = process.env.BOXD_HEADLESS === "1";
+const HEADLESS = process.env.BOXD_HEADLESS === "1"; /* and on it every agent process runs under the OS sandbox, or not at all (INV-1700): */ const confinement = confinementFor({ headless: HEADLESS, roots: () => currentRoots(), workDir: process.env.AGENTBOX_WORK_DIR, egressPort: () => egressProxyPort, log: line => log(line) });
 
 const displays = new DisplayManager(line => log(line));
 const desktopOperations = new DesktopOperations();
@@ -672,7 +672,7 @@ const routes: Record<string, Handler> = {
           env: { ...body.env, ...environmentForCall(body.call) },
           ...(body.display !== undefined ? { display: body.display } : {}),
           ...(body.job_id !== undefined ? { jobId: body.job_id } : {}),
-          nice: AGENT_NICE, ...(body.actor !== undefined ? { actor: body.actor } : {}),
+          nice: AGENT_NICE, ...(body.actor !== undefined ? { actor: body.actor } : {}), ...(confinement !== undefined ? { confine: confinement } : {}),
           scrubbedEnv: withoutBoxToken(process.env),
           onSettled: release,
         });
@@ -684,7 +684,7 @@ const routes: Record<string, Handler> = {
     try {
       // A command past its foreground window is adopted as a job (INV-1461); the call stays vouched for until that job ends.
       let adopted = false;
-      const result = await runShell(body, environmentForCall(body.call), input => { const job = jobs.adopt({ ...input, onSettled: release, ...(body.actor !== undefined ? { actor: body.actor } : {}) }); adopted = true; return job; });
+      const result = await runShell(body, environmentForCall(body.call), input => { const job = jobs.adopt({ ...input, onSettled: release, ...(body.actor !== undefined ? { actor: body.actor } : {}) }); adopted = true; return job; }, confinement);
       if (adopted) return result;
       release();
       return result;
@@ -712,7 +712,7 @@ const routes: Record<string, Handler> = {
         ...body,
         env: { ...body.env, ...environmentForCall(body.call) },
         nice: AGENT_NICE,
-        scrubbedEnv: withoutBoxToken(process.env),
+        scrubbedEnv: withoutBoxToken(process.env), ...(confinement !== undefined ? { confine: confinement } : {}),
       });
     } catch (error) {
       release();
@@ -1089,7 +1089,7 @@ const server = createServer((req, res) => {
       const status =
         error instanceof HttpError
           ? error.status
-          : error instanceof DisplayOwnershipError
+          : error instanceof DisplayOwnershipError || error instanceof ConfinementRefused
             ? 403
             : error instanceof UserInControlError
               ? 423
@@ -1222,7 +1222,7 @@ if (egressRelay) {
       calls,
       log: line => log(line),
     });
-    egressProxyPort = EGRESS_PROXY_PORT;
+    egressProxyPort = EGRESS_PROXY_PORT; confinement?.bridge(EGRESS_PROXY_PORT);
   } catch (error) {
     // Not fatal: a box with no egress proxy is a box that browses from its own address, which
     // is what it did before this existed.
@@ -1251,7 +1251,7 @@ server.listen(listenPort, listenHost, () => {
   // registers it again on its next call. Everything else about it — the components, the
   // supervisor — resumes then.
   if (HEADLESS) {
-    log(`headless: no desktop on this box; ${currentRoots().restricted ? `files limited to ${currentRoots().list().map(r => `${r.path} (${r.mode})`).join(", ")}` : "files unrestricted"}`);
+    log(`headless: no desktop on this box; ${currentRoots().restricted ? `files limited to ${currentRoots().list().map(r => `${r.path} (${r.mode})`).join(", ")}` : "files unrestricted"}; ${confinement?.describe() ?? "commands unconfined"}`);
     return;
   }
   if (displays.isClaimed(defaultDisplayIndex)) {

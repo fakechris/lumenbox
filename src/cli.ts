@@ -54,7 +54,7 @@ import {
   resolveSummaryProvider,
 } from "./host/provider.ts";
 import type { TurnEvent } from "./host/turn.ts";
-import { decideUpgrade } from "./host/upgrade.ts";
+import { decideUpgrade } from "./host/upgrade.ts"; import { HOST_BOX_INSTRUCTION, HOST_BOX_PROMISE } from "./host/host-box.ts";
 import { DEFAULT_DISPLAY_INDEX } from "./protocol/index.ts";
 import { startWebServer } from "./web/server.ts";
 
@@ -675,12 +675,12 @@ async function cmdHostUp(argv: string[]): Promise<number> {
   const bundles = new BundleStore();
   const file = { bundles: bundles.list(), ...bundles.attachments() };
   const bundleId = `host-${name}`;
-  file.bundles = [...file.bundles.filter(b => b.id !== bundleId), { id: bundleId, name: `Host box ${name}`, secretIds: [], repositories: repos, instructions: `You are on ${name}, the person's own machine, with no desktop. You may read and write only under: ${repos.map(r => `${r.path} (${r.mode})`).join(", ")}. Every write here is reviewed; say what you are about to change before you change it.` }];
+  file.bundles = [...file.bundles.filter(b => b.id !== bundleId), { id: bundleId, name: `Host box ${name}`, secretIds: [], repositories: repos, instructions: `You are on ${name}, the person's own machine, with no desktop. You may read and write only under: ${repos.map(r => `${r.path} (${r.mode})`).join(", ")}. ${HOST_BOX_INSTRUCTION}` }];
   file.boxes = { ...file.boxes, [name]: [...new Set([...(file.boxes[name] ?? []), bundleId])] };
   bundles.save(file);
 
   out(`${bold("host box")} ${name}: work ${workDir}; roots ${repos.map(r => `${r.path} (${r.mode})`).join(", ")}`);
-  out(dim("Ctrl-C to stop. Files outside the roots are refused by the daemon; every write is reviewed by the host."));
+  out(dim(`Ctrl-C to stop. ${HOST_BOX_PROMISE}`));
   const child = spawn(process.execPath, [bundlePath], {
     stdio: "inherit",
     env: {

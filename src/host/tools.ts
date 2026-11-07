@@ -2643,7 +2643,7 @@ export async function dispatchTool(
     input: splitWhy(input).input, ...(splitWhy(input).why !== undefined ? { why: splitWhy(input).why } : {}), // the agent's case rides beside the action, never inside it (INV-1651)
     // Whose turn this is, so a rule a person wrote about their own routine work applies from whichever door they drove it (INV-156); and the level of the task this turn is doing (INV-1650).
     ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}), ...(levelOfCurrentTask(context) !== undefined ? { taskLevel: levelOfCurrentTask(context) } : {}),
-    ...(context.callerName !== undefined ? { principalName: context.callerName } : {}),
+    ...(context.callerName !== undefined ? { principalName: context.callerName } : {}), ...(context.boxKind === "host" ? { onHostBox: true as const } : {}), // a write on the person's own machine asks (INV-1700)
     ...(context.turnId !== undefined ? { turnId: context.turnId } : {}), ...(context.toolUseId !== undefined ? { callId: context.toolUseId } : {}), // the step the verdict is drawn on (INV-1664)
   });
   if (decision !== undefined && !decision.allow) {

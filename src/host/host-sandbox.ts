@@ -20,13 +20,19 @@
  * sandbox says so and the caller refuses to run: a silent fall-back to bare would be the one
  * thing worse than not having it. No TLS termination: the relay does not do it.
  *
+ * The native-environment box (INV-438, INV-1700) runs its whole shell under the same sandbox from
+ * inside boxd (src/boxd/confinement.ts), with three more rules a host command does not need: the
+ * directory a command starts in is not thereby writable (`runIn`), read-only repositories stay
+ * read-only even under a writable one (`readOnly`), and the credential places are hidden from
+ * reads too (`hideCredentials`) — an agent living on the machine reads without being asked.
+ *
  * Known gaps, stated: a hard link made outside the rules is not covered; on Linux the deny
  * list only covers paths that exist when the command starts; Seatbelt matches the real path,
  * so every path here is resolved first (a `/var/folders` rule silently misses `/private/var`).
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -39,6 +45,12 @@ export interface SandboxRules {
   allowWrite?: readonly string[];
   /** Loopback TCP ports the child may reach. Everything else on the network is refused. */
   loopbackPorts?: readonly number[];
+  /** Where the command starts, when that is not `cwd`; starting there makes nothing writable. */
+  runIn?: string;
+  /** Never writable, even under a writable path: a repository granted read-only. */
+  readOnly?: readonly string[];
+  /** Refuse reads of the credential places as well as writes (`CREDENTIAL_READS_UNDER_HOME`, `~/.agentbox*`). */
+  hideCredentials?: boolean;
 }
 
 export interface WrappedCommand {
@@ -55,6 +67,8 @@ export interface WrappedCommand {
 export const DENY_WRITE_UNDER_HOME = [".ssh", ".gnupg", ".aws", ".config/gh", ".kube", ".docker/config.json", ".netrc", ".bashrc", ".bash_profile", ".profile", ".zshrc", ".zprofile", ".zshenv", ".gitconfig"] as const;
 /** Under the working directory: what turns a later command into this one's. Never writable. */
 export const DENY_WRITE_UNDER_CWD = [".git/hooks", ".git/config"] as const;
+/** Under the home directory: what a confined process may not even read. Shell rc files stay readable, a login shell needs them. */
+export const CREDENTIAL_READS_UNDER_HOME = [".ssh", ".gnupg", ".aws", ".config/gh", ".kube", ".docker/config.json", ".netrc"] as const;
 
 export interface HostSandboxOptions {
   platform?: NodeJS.Platform;
@@ -131,26 +145,39 @@ export class HostSandbox {
     if (reason !== undefined) throw new Error(`Not run: the host sandbox is unavailable (${reason}). Host processes do not run without it.`);
     const cwd = real(rules.cwd);
     const writable = [cwd, this.tmp, ...(rules.allowWrite ?? []).map(real)].filter((path, index, all) => all.indexOf(path) === index);
-    const denied = this.deniedPaths(cwd);
+    const readOnly = (rules.readOnly ?? []).filter(path => existsSync(path)).map(real);
+    const denied = [...this.deniedPaths(writable.filter(path => path !== this.tmp)), ...readOnly].filter((path, index, all) => all.indexOf(path) === index);
+    const hidden = rules.hideCredentials === true ? this.hiddenPaths() : [];
     const ports = [...new Set(rules.loopbackPorts ?? [])];
     const words = [
       `writes only under ${writable.join(", ")}`,
       `never under ${denied.map(path => path.replace(this.home, "~")).join(", ")}`,
+      ...(hidden.length > 0 ? [`no reads at all under ${hidden.map(path => path.replace(this.home, "~")).join(", ")}`] : []),
       ports.length > 0 ? `network only to loopback port${ports.length === 1 ? "" : "s"} ${ports.join(", ")} (the egress proxy, which applies the relay's allow list)` : "no network at all (no egress relay is configured for host processes)",
     ];
     return this.mechanism === "sandbox-exec"
-      ? { command: "/usr/bin/sandbox-exec", args: ["-p", this.seatbelt(writable, denied, ports), command, ...args], env: {}, mechanism: "sandbox-exec", rules: words }
-      : { command: "bwrap", args: this.bwrap(cwd, writable, denied, ports, command, args), env: {}, mechanism: "bwrap", rules: words };
+      ? { command: "/usr/bin/sandbox-exec", args: ["-p", this.seatbelt(writable, denied, ports, hidden), command, ...args], env: {}, mechanism: "sandbox-exec", rules: words }
+      : { command: "bwrap", args: this.bwrap(real(rules.runIn ?? cwd), writable, denied, ports, command, args, hidden), env: {}, mechanism: "bwrap", rules: words };
   }
 
-  /** The deny list, resolved, keeping only what exists: a rule for an absent path is noise, and bwrap cannot bind one. */
-  private deniedPaths(cwd: string): string[] {
+  /**
+   * The deny list, resolved, keeping only what exists: a rule for an absent path is noise, and bwrap
+   * cannot bind one. The hook and git-config denies hold under every writable root, not only the
+   * working directory: a hook planted in any repository a command may write is the same hook.
+   */
+  private deniedPaths(roots: readonly string[]): string[] {
     const under = (root: string, names: readonly string[]) => names.map(name => join(root, name));
-    const candidates = [...under(this.home, DENY_WRITE_UNDER_HOME), ...under(cwd, DENY_WRITE_UNDER_CWD), ...agentboxHomes(this.home)];
+    const candidates = [...under(this.home, DENY_WRITE_UNDER_HOME), ...roots.flatMap(root => under(root, DENY_WRITE_UNDER_CWD)), ...agentboxHomes(this.home)];
     return candidates.filter(path => existsSync(path)).map(real).filter((path, index, all) => all.indexOf(path) === index);
   }
 
-  private seatbelt(writable: readonly string[], denied: readonly string[], ports: readonly number[]): string {
+  /** What `hideCredentials` hides, resolved, keeping only what exists. */
+  private hiddenPaths(): string[] {
+    const candidates = [...CREDENTIAL_READS_UNDER_HOME.map(name => join(this.home, name)), ...agentboxHomes(this.home)];
+    return candidates.filter(path => existsSync(path)).map(real).filter((path, index, all) => all.indexOf(path) === index);
+  }
+
+  private seatbelt(writable: readonly string[], denied: readonly string[], ports: readonly number[], hidden: readonly string[] = []): string {
     // Later rules win in SBPL, so the denies come after the allows.
     const lines = [
       "(version 1)",
@@ -158,6 +185,7 @@ export class HostSandbox {
       "(deny file-write*)",
       `(allow file-write* ${writable.map(path => `(subpath ${sbplPath(path)})`).join(" ")} (literal "/dev/null") (regex #"^/dev/tty") (regex #"^/dev/fd/"))`,
       ...(denied.length > 0 ? [`(deny file-write* ${denied.map(path => `(subpath ${sbplPath(path)})`).join(" ")})`] : []),
+      ...(hidden.length > 0 ? [`(deny file-read* ${hidden.map(path => `(subpath ${sbplPath(path)})`).join(" ")})`] : []),
       "(deny network-outbound)",
       ...ports.map(port => `(allow network-outbound (remote ip "localhost:${port}"))`),
       "(allow network-outbound (remote unix-socket))",
@@ -165,13 +193,15 @@ export class HostSandbox {
     return lines.join("");
   }
 
-  private bwrap(cwd: string, writable: readonly string[], denied: readonly string[], ports: readonly number[], command: string, args: readonly string[]): string[] {
+  private bwrap(cwd: string, writable: readonly string[], denied: readonly string[], ports: readonly number[], command: string, args: readonly string[], hidden: readonly string[] = []): string[] {
     // No tmpfs over /tmp: the temp directory is writable because it is bound back in like every
     // other allowed path, so a write anywhere else under /tmp is refused rather than swallowed.
     const out = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"];
     for (const path of writable) out.push("--bind", path, path);
     // A denied path under a writable one is bound back read-only on top; order makes it win.
     for (const path of denied) out.push("--ro-bind", path, path);
+    // A hidden directory becomes an empty tmpfs, a hidden file /dev/null: last, so it covers any bind above.
+    for (const path of hidden) out.push(...(statSync(path).isDirectory() ? ["--tmpfs", path] : ["--ro-bind", "/dev/null", path]));
     out.push("--unshare-net", "--unshare-pid", "--die-with-parent", "--chdir", cwd);
     // Inside the namespace there is only a fresh loopback. Each allowed port is bridged from a
     // Unix socket the host side listens on (host-egress.ts), so a client's 127.0.0.1:<port> lands there.
@@ -201,9 +231,9 @@ function agentboxHomes(home: string): string[] {
  * (INV-1344): the rules in force, so the model reads "writes outside the working directory
  * are refused" instead of guessing at an EPERM. Nothing when the output shows no such sign.
  */
-export function sandboxViolations(wrapped: Pick<WrappedCommand, "rules" | "mechanism">, result: { code: number | null; stderr: string }): string | undefined {
+export function sandboxViolations(wrapped: Pick<WrappedCommand, "rules" | "mechanism">, result: { code: number | null; stderr: string }, widen = "An operator widens the rules in Settings (hostExec.allowWrite) or the relay's allow list"): string | undefined {
   if (result.code === 0) return undefined;
   const signs = /operation not permitted|permission denied|read-only file system|network is unreachable|could not resolve|couldn't connect|connection refused|failed to connect|EPERM|EACCES|EROFS|ENETUNREACH|EAI_AGAIN/i;
   if (!signs.test(result.stderr)) return undefined;
-  return ["<sandbox_violations>", `This command ran under the host sandbox (${wrapped.mechanism}); the error above may be one of its rules:`, ...wrapped.rules.map(rule => `- ${rule}`), "An operator widens the rules in Settings (hostExec.allowWrite) or the relay's allow list; the sandbox itself is not something a command can leave.", "</sandbox_violations>"].join("\n");
+  return ["<sandbox_violations>", `This command ran under the host sandbox (${wrapped.mechanism}); the error above may be one of its rules:`, ...wrapped.rules.map(rule => `- ${rule}`), `${widen}; the sandbox itself is not something a command can leave.`, "</sandbox_violations>"].join("\n");
 }
