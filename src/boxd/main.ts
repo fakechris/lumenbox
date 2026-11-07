@@ -109,7 +109,7 @@ const startedAt = Date.now();
 const display = getDisplay();
 const token = process.env.BOXD_TOKEN ?? "";
 /** A box with no desktop by design (INV-438): nothing that needs X is started or served. */
-const HEADLESS = process.env.BOXD_HEADLESS === "1"; /* and on it every agent process runs under the OS sandbox, or not at all (INV-1700): */ const confinement = confinementFor({ headless: HEADLESS, roots: () => currentRoots(), workDir: process.env.AGENTBOX_WORK_DIR, egressPort: () => egressProxyPort, log: line => log(line) });
+const HEADLESS = process.env.BOXD_HEADLESS === "1"; /* and on it every agent process runs under the OS sandbox, or not at all (INV-1700): */ const confinement = confinementFor({ headless: HEADLESS, roots: () => currentRoots(), workDir: process.env.AGENTBOX_WORK_DIR, ...(process.env.SSH_AUTH_SOCK !== undefined ? { sshAuthSock: process.env.SSH_AUTH_SOCK } : {}), egressPort: () => egressProxyPort, log: line => log(line) });
 
 const displays = new DisplayManager(line => log(line));
 const desktopOperations = new DesktopOperations();

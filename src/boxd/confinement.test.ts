@@ -53,7 +53,9 @@ test("the rules a headless box's commands run under: rw roots and temp writable,
     assert.match(profile, new RegExp(`\\(deny file-write\\* .*\\(subpath "${m.dirs.vendor}"\\)`), "a ro root under a rw one stays read-only");
     assert.match(profile, /\(deny file-read\* \(subpath "[^"]*\/\.ssh"\)/, "credentials are unreadable");
     assert.match(profile, /\(remote ip "localhost:3128"\)/, "network only to the egress proxy");
-    assert.deepEqual(args.slice(2), ["nice", "-n", "19", "/bin/bash", "-lc", "true"]);
+    assert.deepEqual(args.slice(-6), ["nice", "-n", "19", "/bin/bash", "-lc", "true"]);
+    assert.deepEqual(args.slice(2, 5), ["/usr/bin/env", "-u", "SSH_AUTH_SOCK"], "started without the variables that name the person's sockets (INV-1716)");
+    assert.match(profile, new RegExp(`\\(allow network-outbound \\(remote unix-socket \\(subpath "${m.dirs.work}"\\)\\)\\)$`), "and no Unix socket but under its own roots");
     assert.match(wrapped.rules.join("\n"), /no reads at all under ~\/\.ssh/);
     assert.ok(lines.some(line => line.includes("exec [agent:a1] under sandbox-exec")), "the start is a line in the box's log");
     // Tools and engines keep their state in the agent's own directory under the work directory (INV-1710), never in the person's home.
@@ -204,6 +206,63 @@ test("under the real sandbox on macOS: no Keychain item can be read, through the
     assert.doesNotMatch(framework.stdout, /FAKE-KEYCHAIN-SECRET/, "confined, securityd is not reachable and nothing is read");
   } finally {
     sh("/usr/bin/security", ["delete-keychain", keychain]);
+    m.dispose();
+  }
+});
+
+const hasSsh = ["ssh-agent", "ssh-add", "ssh-keygen"].every(tool => spawnSync("/bin/sh", ["-c", `command -v ${tool}`]).status === 0);
+
+test("under the real sandbox: the person's ssh-agent cannot be listed or signed with, a docker socket cannot be reached, the box's own socket can (INV-1716)", { skip: unavailable ?? (hasSsh ? undefined : "no OpenSSH tools here") }, async () => {
+  const m = machine();
+  const { createServer } = await import("node:net");
+  const { spawn } = await import("node:child_process");
+  // A throwaway agent and key of the test's own; the agent the test runner inherited is never named.
+  const agentDir = join(m.root, "ssh-agent");
+  mkdirSync(agentDir);
+  const socket = join(agentDir, "agent.sock");
+  const key = join(m.root, "throwaway");
+  const plain = { ...process.env, SSH_AUTH_SOCK: socket };
+  const agent = spawn("ssh-agent", ["-D", "-a", socket], { stdio: "ignore", env: plain });
+  // Stands in for /var/run/docker.sock: whoever reaches it is answered.
+  const docker = join(m.root, "docker.sock");
+  const dockerd = createServer(conn => conn.end("DOCKER-ANSWERED\n"));
+  const own = join(m.dirs.work, "own.sock");
+  const ownServer = createServer(conn => conn.end("OWN-ANSWERED\n"));
+  try {
+    await new Promise<void>(resolve => dockerd.listen(docker, resolve));
+    await new Promise<void>(resolve => ownServer.listen(own, resolve));
+    for (let i = 0; i < 50 && !existsSync(socket); i++) await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(spawnSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", "inv1716-throwaway", "-f", key]).status, 0);
+    assert.equal(spawnSync("ssh-add", [key], { env: plain }).status, 0, "the throwaway key is in the throwaway agent");
+    rmSync(key); // only the agent holds it now: a signature can come from nowhere else
+    writeFileSync(join(m.dirs.work, "msg"), "sign me\n");
+    const sign = `ssh-keygen -Y sign -f ${key}.pub -n file ${join(m.dirs.work, "msg")}`;
+    const connect = (path: string) => `node -e 'const c=require("net").connect(process.argv[1]);c.on("data",d=>process.stdout.write(d));c.on("error",e=>{console.log("REFUSED",e.code);process.exit(3)})' ${path}`;
+    // The control, unconfined: the agent lists and signs, the socket answers.
+    assert.match(spawnSync("ssh-add", ["-l"], { env: plain, encoding: "utf8" }).stdout, /inv1716-throwaway/, "unconfined, the agent lists the key");
+    assert.equal(spawnSync("/bin/sh", ["-c", sign], { env: plain }).status, 0, "and signs with it");
+    rmSync(join(m.dirs.work, "msg.sig"), { force: true });
+    // Asynchronously: the stand-in answers from this process, which a synchronous spawn would block.
+    const { promisify } = await import("node:util");
+    const { execFile } = await import("node:child_process");
+    assert.match((await promisify(execFile)("/bin/sh", ["-c", connect(docker)], { timeout: 10_000 })).stdout, /DOCKER-ANSWERED/, "and the docker socket answers");
+
+    // boxd's own environment names the agent, as it does when the person started it from a terminal.
+    const confine = confinementFor({ headless: true, roots: () => m.roots, workDir: m.dirs.work, egressPort: () => undefined, log: () => undefined, systemTmp: m.dirs.tmp, sandbox: new HostSandbox({ home: m.dirs.home, tmp: m.dirs.tmp, sshAuthSock: socket }) })!;
+    const run = (command: string) => runShell({ command, cwd: m.dirs.work, actor: "agent:a1", env: { HOME: m.dirs.home, SSH_AUTH_SOCK: socket } }, {}, undefined, confine);
+    assert.equal((await run('echo "[$SSH_AUTH_SOCK]"')).stdout.trim(), "[]", "the variable is gone even when the request set it");
+    const list = await run(`SSH_AUTH_SOCK=${socket} ssh-add -l`);
+    assert.doesNotMatch(list.stdout, /inv1716-throwaway/, "named by hand, the agent still lists nothing");
+    assert.notEqual(list.exit_code, 0);
+    const signed = await run(`SSH_AUTH_SOCK=${socket} ${sign}`);
+    assert.notEqual(signed.exit_code, 0, "and signs nothing");
+    assert.equal(existsSync(join(m.dirs.work, "msg.sig")), false, "no signature was written");
+    assert.doesNotMatch((await run(connect(docker))).stdout, /DOCKER-ANSWERED/, "the docker socket is not reachable");
+    assert.match((await run(connect(own))).stdout, /OWN-ANSWERED/, "a socket under the box's own root still is: its own servers keep working");
+  } finally {
+    agent.kill();
+    dockerd.close();
+    ownServer.close();
     m.dispose();
   }
 });
