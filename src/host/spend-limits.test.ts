@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_SPEND_LIMITS, dayOf, SpendLimits, type SpendLimitDeps, type SpendRow, todaysRows } from "./spend-limits.ts";
+import { DEFAULT_SPEND_LIMITS, dayOf, OPEN_WAKES, SpendLimits, type SpendLimitDeps, type SpendRow, todaysRows } from "./spend-limits.ts";
 
 const RATES = { m: { inputPerM: 1_000, outputPerM: 2_000, cacheReadPerM: 100, cacheWritePerM: 100 } };
 const row = (agentId: string, turnId: string, input: number, output = 0, model = "m", extra: Partial<SpendRow> = {}): SpendRow => ({ agentId, agentName: agentId, turnId, model, inputTokens: input, outputTokens: output, cacheReadTokens: 0, cacheWriteTokens: 0, ...extra });
@@ -51,6 +51,43 @@ test("at 80% of the wake line the next result carries one reminder; at the line 
   assert.equal(hit.kind, "hit_wake");
   assert.match((hit as { report: string }).report, /reached my spend line for this wake \(1\.00 of 1\.00\)[\s\S]*Settings → Team → Agents/);
   assert.equal(limits.note(row("vic", "t2", 100)).kind, "ok", "the next wake starts from zero");
+});
+
+test("a member's turn and a guest's turn of one agent, charged in between each other, each keep their own wake total and reach their own line (INV-1735)", () => {
+  const { limits } = harness();
+  limits.setLimits("vic", { perWake: 1, perDay: 100 });
+  // Member rows of 0.3, guest rows of 0.2, alternating: one current wake per agent reset each to zero every row.
+  const member = (input: number) => limits.note(row("vic", "member-turn", input));
+  const guest = (input: number) => limits.note(row("vic", "guest-turn", input));
+  assert.equal(guest(200).kind, "ok");
+  assert.equal(member(300).kind, "ok");
+  assert.equal(guest(200).kind, "ok");
+  assert.equal(member(300).kind, "ok");
+  assert.equal(guest(200).kind, "ok");
+  const memberWarn = member(300);
+  assert.equal(memberWarn.kind, "warn", "the member's wake is at 0.9, its own total");
+  assert.match((memberWarn as { text: string }).text, /this wake has spent 0\.90 of 1\.00/);
+  const guestWarn = guest(200);
+  assert.equal(guestWarn.kind, "warn", "the guest's wake warns on its own, not silenced by the member's reminder");
+  assert.match((guestWarn as { text: string }).text, /this wake has spent 0\.80 of 1\.00/);
+  const memberHit = member(300);
+  assert.equal(memberHit.kind, "hit_wake");
+  assert.match((memberHit as { report: string }).report, /\(1\.20 of 1\.00\)/);
+  assert.equal(guest(100).kind, "ok", "the member reaching its line does not end the guest's wake");
+  assert.equal(guest(100).kind, "hit_wake", "the guest's wake reaches its line at its own 1.00");
+  assert.ok(Math.abs(limits.today("vic").spent - 2.2) < 1e-9, "the day counts every row of both turns once");
+});
+
+test("the wake totals are bounded: a turn charged recently is kept, the least recently charged beyond the bound is forgotten", () => {
+  const { limits } = harness();
+  limits.setLimits("vic", { perWake: 1, perDay: 1_000 });
+  assert.equal(limits.note(row("vic", "long", 500)).kind, "ok");
+  assert.equal(limits.note(row("vic", "stale", 500)).kind, "ok");
+  for (let i = 0; i < OPEN_WAKES - 2; i++) limits.note(row("vic", `guest-${i}`, 1));
+  assert.equal(limits.note(row("vic", "long", 300)).kind, "warn", "still within the bound, the long turn keeps its 0.5");
+  for (let i = 0; i < OPEN_WAKES - 1; i++) limits.note(row("vic", `later-${i}`, 1));
+  assert.equal(limits.note(row("vic", "long", 200)).kind, "hit_wake", "a turn that keeps being charged is never the one forgotten");
+  assert.equal(limits.note(row("vic", "stale", 300)).kind, "ok", "the stale turn was forgotten and starts again from zero");
 });
 
 test("at the daily line the verdict carries the pause: the record first, then the durable pause with the reason, one admin notice; the next local day resumes it", async () => {
