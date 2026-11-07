@@ -72,17 +72,20 @@ test("the rules are written in words and in the profile: cwd and tmp writable, t
     mkdirSync(join(runtime, "gnupg"), { recursive: true });
     writeFileSync(join(runtime, "bus"), "");
     const fakeTmp = join(h.home, "..", "systmp");
-    mkdirSync(join(fakeTmp, "ssh-abc"), { recursive: true });
-    writeFileSync(join(fakeTmp, "ssh-abc", "agent.1"), "");
+    // An agent started outside /tmp (a /tmp one is behind the private /tmp already, INV-1724).
+    const agentDir = join(h.home, "..", "agents", "ssh-abc");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(fakeTmp, { recursive: true });
+    writeFileSync(join(agentDir, "agent.1"), "");
     mkdirSync(join(h.home, ".orbstack", "run"), { recursive: true });
-    const native = new HostSandbox({ platform: "linux", home: h.home, runtimeDir: runtime, systemTmp: fakeTmp, sshAuthSock: join(fakeTmp, "ssh-abc", "agent.1"), probe: () => true }).wrap("/bin/echo", ["hi"], { cwd: h.cwd, runIn: h.home, readOnly: [join(h.cwd, "vendor")], hideCredentials: true });
+    const native = new HostSandbox({ platform: "linux", home: h.home, runtimeDir: runtime, tmp: fakeTmp, systemTmp: fakeTmp, sshAuthSock: join(agentDir, "agent.1"), probe: () => true }).wrap("/bin/echo", ["hi"], { cwd: h.cwd, runIn: h.home, readOnly: [join(h.cwd, "vendor")], hideCredentials: true });
     const at = (flag: string, path: string) => native.args.findIndex((arg, i) => arg === flag && native.args[i + 1] === path);
     assert.equal(native.args[native.args.indexOf("--chdir") + 1], realpathSync(h.home), "starts where asked");
     assert.ok(!native.args.some((arg, i) => arg === "--bind" && native.args[i + 1] === realpathSync(h.home)), "without making it writable");
     assert.ok(at("--tmpfs", realpathSync(join(h.home, ".ssh"))) > at("--bind", real), "~/.ssh is hidden, after the writable binds so it covers them");
     assert.ok(at("--remount-ro", realpathSync(join(h.home, ".ssh"))) > at("--tmpfs", realpathSync(join(h.home, ".ssh"))), "and read-only, so a write there fails rather than vanishing");
     assert.ok(at("--tmpfs", realpathSync(runtime)) > at("--bind", real), "the runtime directory is gone: no session bus, no gpg-agent, no systemd");
-    assert.ok(at("--tmpfs", realpathSync(join(fakeTmp, "ssh-abc"))) > 0, "the person's ssh-agent directory is gone");
+    assert.ok(at("--tmpfs", realpathSync(agentDir)) > 0, "the person's ssh-agent directory is gone");
     assert.ok(at("--tmpfs", realpathSync(join(h.home, ".orbstack", "run"))) > 0, "and a container engine's socket directory");
     assert.match(native.args.at(native.args.indexOf("-c") + 1)!, /^unset SSH_AUTH_SOCK [^;]*DOCKER_HOST[^;]*; /, "and the variables naming them are unset");
   } finally {
@@ -90,25 +93,38 @@ test("the rules are written in words and in the profile: cwd and tmp writable, t
   }
 });
 
-test("on Linux the sockets lying in the shared temp directory are hidden when a box command starts, the egress bridge is not (INV-1716)", async () => {
+test("on Linux a box command gets a /tmp of its own: the shared one, and every socket the person opens there, is not bound in; the egress bridge is, read-only (INV-1724)", async () => {
   const h = home();
   const { createServer } = await import("node:net");
-  const systemTmp = mkdtempSync(join(tmpdir(), "hs-systmp-"));
-  const servers = [join(systemTmp, "tmux-1000", "default"), join(systemTmp, ".s.PGSQL.5432"), join(systemTmp, "agentbox-host-port-8791.sock"), join(h.cwd, "own.sock")].map(path => {
+  const systemTmp = realpathSync(mkdtempSync(join(tmpdir(), "hs-systmp-")));
+  const own = join(h.cwd, ".tmp");
+  mkdirSync(own, { recursive: true });
+  const servers = [join(systemTmp, "ssh-abc", "agent.1"), join(systemTmp, "agentbox-host-port-8791.sock")].map(path => {
     mkdirSync(join(path, ".."), { recursive: true });
     const server = createServer();
     return { path, server, up: new Promise<void>(resolve => server.listen(path, resolve)) };
   });
+  // A repository granted under the shared /tmp, with a hook place in it, stays the box's.
+  const repo = join(systemTmp, "scratch-repo");
+  mkdirSync(join(repo, ".git", "hooks"), { recursive: true });
   try {
     await Promise.all(servers.map(entry => entry.up));
-    const args = new HostSandbox({ platform: "linux", home: h.home, tmp: systemTmp, systemTmp, probe: () => true }).wrap("/bin/true", [], { cwd: h.cwd, hideCredentials: true }).args;
-    const nulled = (path: string) => args.some((arg, i) => arg === "--ro-bind" && args[i + 1] === "/dev/null" && args[i + 2] === realpathSync(path));
-    assert.ok(nulled(servers[0]!.path), "the person's tmux is /dev/null");
-    assert.ok(nulled(servers[1]!.path), "so is a database's socket");
-    assert.ok(!nulled(servers[2]!.path), "the egress bridge stays: it is the sandbox's own way out");
-    assert.ok(!nulled(servers[3]!.path), "and a socket under the box's own root stays its own");
-    const host = new HostSandbox({ platform: "linux", home: h.home, tmp: systemTmp, systemTmp, probe: () => true }).wrap("/bin/true", [], { cwd: h.cwd }).args;
-    assert.ok(!host.includes("/dev/null"), "a host command, asked for each time, hides nothing");
+    const sandbox = new HostSandbox({ platform: "linux", home: h.home, tmp: systemTmp, systemTmp, sshAuthSock: servers[0]!.path, probe: () => true });
+    const box = sandbox.wrap("/bin/true", [], { cwd: h.cwd, allowWrite: [systemTmp, repo], loopbackPorts: [8791, 8792], hideCredentials: true, privateTmp: own });
+    const at = (...triple: string[]) => box.args.findIndex((_, i) => triple.every((arg, k) => box.args[i + k] === arg));
+    assert.ok(at("--bind", realpathSync(own), systemTmp) > 0, "the box's own directory is its /tmp");
+    assert.equal(at("--bind", systemTmp, systemTmp), -1, "the shared one is never bound in, so a socket made there later is not in it");
+    const bridge = servers[1]!.path;
+    assert.ok(at("--ro-bind", bridge, bridge) > at("--bind", realpathSync(own), systemTmp), "the egress bridge is bound in on top, read-only");
+    assert.equal(box.args.filter(arg => arg.includes("agentbox-host-port-8792")).length, 1, "a bridge not listening yet is not bound (bwrap cannot bind what is not there); only socat names it");
+    assert.ok(at("--bind", repo, repo) > at("--bind", realpathSync(own), systemTmp), "a root granted under /tmp is bound after it");
+    assert.ok(at("--ro-bind", join(repo, ".git", "hooks"), join(repo, ".git", "hooks")) > 0, "with its hooks still read-only");
+    assert.ok(!box.args.some(arg => arg.startsWith(join(systemTmp, "ssh-abc"))), "nothing else under /tmp is named: the agent there is gone with it, no sweep");
+    assert.match(box.rules.join("\n"), /a \/tmp of its own/);
+    const empty = sandbox.wrap("/bin/true", [], { cwd: h.cwd, hideCredentials: true });
+    assert.ok(empty.args.some((arg, i) => arg === "--tmpfs" && empty.args[i + 1] === systemTmp), "with no directory named, /tmp is an empty one");
+    const host = sandbox.wrap("/bin/true", [], { cwd: h.cwd, privateTmp: own }).args;
+    assert.ok(host.some((arg, i) => arg === "--bind" && host[i + 1] === systemTmp && host[i + 2] === systemTmp), "a host command, asked for each time, keeps the shared /tmp");
   } finally {
     for (const entry of servers) entry.server.close();
     rmSync(systemTmp, { recursive: true, force: true });
