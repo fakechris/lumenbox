@@ -24,6 +24,7 @@
  * reading a story rather than for answering "why". A receipt has to outlive them.
  */
 
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { appendLine } from "./jsonl.ts";
 
@@ -73,6 +74,11 @@ export class Receipts {
     return this.read().filter(receipt => receipt.subject === subject).slice(-limit);
   }
 
+  /** One receipt by its id (`receiptId`), as an organisation item's evidence names it (INV-1729). */
+  byId(id: string): Receipt | undefined {
+    return this.read().find(receipt => receiptId(receipt) === id);
+  }
+
   /** The most recent receipts, newest last, for a person or a page. */
   recent(limit = 50): Receipt[] {
     return this.read().slice(-limit);
@@ -98,6 +104,11 @@ export class Receipts {
     }
     return out;
   }
+}
+
+/** A receipt's id, `receipt:<id>` in evidence: what was decided, about what, when — the line has no other key. */
+export function receiptId(receipt: Pick<Receipt, "at" | "subject" | "decision">): string {
+  return createHash("sha256").update(JSON.stringify([receipt.at, receipt.subject, receipt.decision])).digest("hex").slice(0, 12);
 }
 
 /**

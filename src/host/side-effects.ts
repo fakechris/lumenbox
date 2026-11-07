@@ -82,6 +82,8 @@ const DECLARED: Record<string, SideEffect> = {
   SetTodos: { tier: "self" },
   ClaimWork: { tier: "self" },
   RememberFact: { tier: "self" },
+  // Only proposes: the item is held until an Admin approves it, and nobody reads it before (INV-1729).
+  Promote: { tier: "self" },
   Tasks: { tier: "self" },
   // Copies a file off the box onto the task's record and, in a chat, into the outbox for the person who asked (INV-1663).
   DeliverFile: { tier: "self" },
