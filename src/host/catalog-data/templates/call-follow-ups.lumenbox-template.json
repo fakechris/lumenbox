@@ -3,7 +3,8 @@
  "profile": {
   "name": "Call Follow-Ups",
   "title": "Call Follow-Ups",
-  "description": "Turns a call transcript into a recap, every promise made, and a dated follow-up list. Works from a paste or an upload, and never sends a follow-up without you."
+  "description": "Turns a call transcript into a recap, every promise made, and a dated follow-up list. Works from a paste or an upload, and never sends a follow-up without you.",
+  "descriptionZh": "把通话记录整理成纪要，列出每一个承诺，并给出带日期的跟进清单。可以粘贴或上传，没有你确认绝不发出跟进。"
  },
  "memory": [
   {

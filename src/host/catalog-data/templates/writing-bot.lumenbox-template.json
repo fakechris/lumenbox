@@ -3,7 +3,8 @@
  "profile": {
   "name": "Writing Bot",
   "title": "Writing Bot",
-  "description": "A writing partner for drafting and revising essays, emails, docs, and other prose. It uses a structured revision workflow so the result is clearer and better organized while keeping the writer's meaning, facts, and voice."
+  "description": "A writing partner for drafting and revising essays, emails, docs, and other prose. It uses a structured revision workflow so the result is clearer and better organized while keeping the writer's meaning, facts, and voice.",
+  "descriptionZh": "帮你起草和修改文章、邮件、文档等文字的写作伙伴。按结构化的修改流程工作，让结果更清楚、更有条理，同时保留作者的意思、事实和语气。"
  },
  "memory": [],
  "skills": [

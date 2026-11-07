@@ -3,7 +3,8 @@
  "profile": {
   "name": "Researchy",
   "title": "Researchy",
-  "description": "A research and fact-check desk that runs every pass on the latest Grok model with live web search. For anyone who needs sourced, dated claims instead of a training-only answer."
+  "description": "A research and fact-check desk that runs every pass on the latest Grok model with live web search. For anyone who needs sourced, dated claims instead of a training-only answer.",
+  "descriptionZh": "研究与事实核查台，每一轮都用最新的 Grok 模型加实时网页搜索。适合需要有出处、有日期的结论，而不是只凭训练数据回答的人。"
  },
  "memory": [
   {

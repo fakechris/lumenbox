@@ -5650,7 +5650,7 @@ function taskDetail(t) {
         : esc(t.conversation))
     : "{{ui.app.the-team-room}}";
   return '<div style="margin:8px 0 2px 26px;padding:8px 10px;border-left:2px solid var(--border)">' +
-    (t.description ? '<div style="font-size:12px;margin-bottom:6px">' + esc(t.description) + "</div>" : "") + (window.claimAccountHtml ? window.claimAccountHtml(t) : "") + (window.deliverablesHtml ? window.deliverablesHtml(t) : "") + (window.orgPromoteHtml ? window.orgPromoteHtml(t) : "") + (window.configVersionsHtml ? window.configVersionsHtml(t) : "") + (window.divisionHtml ? window.divisionHtml(t) : "") + (window.taskGateHtml ? window.taskGateHtml(t) : "") + // a claimed goal's decisions and unchecked parts (INV-1574), then its deliverables (INV-1663), the configuration versions it ran under (INV-1669), its division of work (INV-1667) and the gate's verdicts on its steps (INV-1672), above its history
+    (t.description ? '<div style="font-size:12px;margin-bottom:6px">' + esc(t.description) + "</div>" : "") + (window.claimAccountHtml ? window.claimAccountHtml(t) : "") + (window.deliverablesHtml ? window.deliverablesHtml(t) : "") + (window.orgPromoteHtml ? window.orgPromoteHtml(t) : "") + (window.configVersionsHtml ? window.configVersionsHtml(t) : "") + (window.divisionHtml ? window.divisionHtml(t) : "") + (window.taskGateHtml ? window.taskGateHtml(t) : "") + (window.taskDepsHtml ? window.taskDepsHtml(t) : "") + // a claimed goal's decisions and unchecked parts (INV-1574), then its deliverables (INV-1663), the configuration versions it ran under (INV-1669), its division of work (INV-1667) and the gate's verdicts on its steps (INV-1672), above its history
     '<div class="dim" style="font-size:11px;margin-bottom:6px">' +
       "{{ui.app.asked-by}} " + esc(nameOf(t.requester) || t.requester) + " {{ui.app.in-3}} " + conversation +
       " {{ui.app.created}} " + esc(new Date(t.createdAt).toLocaleString()) +
@@ -5781,7 +5781,7 @@ function refreshTasks() {
         // one is not late, which is what a person reading a row of overdue chips needs.
         var waitingChip = live && t.waitingOn ? ' <span class="chip" style="font-size:10px" title="{{ui.app.waiting-on-somebody-outside-this}}">{{ui.app.waiting-on}} ' + esc(String(t.waitingOn).slice(0, 40)) + "</span>" : "";
         var snoozeChip = live && t.snoozeUntil && Date.parse(t.snoozeUntil) > Date.now() ? ' <span class="chip" style="font-size:10px;color:var(--muted)" title="{{ui.app.quiet-until-then}}">{{ui.app.not-until}} ' + esc(String(t.snoozeUntil).slice(0, 10)) + "</span>" : "";
-        proposed += dueChip + waitingChip + snoozeChip + agingChip + closeChip;
+        proposed += dueChip + waitingChip + snoozeChip + agingChip + closeChip + (window.taskDepsChip ? window.taskDepsChip(t) : ""); // what it waits on and what waits on it (INV-1740, task-deps-ui.ts)
         return '<div style="padding:10px 16px;border-bottom:1px solid var(--border)' +
             (open ? ";background:var(--surface)" : "") + '">' +
           '<div style="display:flex;gap:9px;align-items:baseline">' +

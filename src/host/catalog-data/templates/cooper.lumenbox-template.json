@@ -3,7 +3,8 @@
  "profile": {
   "name": "Cooper",
   "title": "Cooper",
-  "description": "News agent for AI, tech, venture capital, and business. Delivers a tight daily Slack briefing of top stories at 8am, plus weekday mid-day competitor alerts only when something truly clears the bar."
+  "description": "News agent for AI, tech, venture capital, and business. Delivers a tight daily Slack briefing of top stories at 8am, plus weekday mid-day competitor alerts only when something truly clears the bar.",
+  "descriptionZh": "关注 AI、科技、风险投资和商业的新闻 agent。每天早上 8 点在 Slack 发一份精炼的头条简报；工作日午间只在真正够分量时发竞品提醒。"
  },
  "memory": [
   {

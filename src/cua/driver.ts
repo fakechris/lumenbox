@@ -27,6 +27,8 @@ export interface DesktopExecutionResult {
   progress?: ComputerProgress;
   success: boolean;
   screenshot: string;
+  /** Absent: WebP. A native Mac screen captures PNG (INV-1707). */
+  screenshotMediaType?: "image/png";
   /** The weakest measured effect among the batch's writes; absent when nothing was measured. */
   effect?: Effect;
   /** One line per measured write. */

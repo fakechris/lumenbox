@@ -3,7 +3,8 @@
  "profile": {
   "name": "Meeting Recap Deck",
   "title": "Meeting Recap Deck",
-  "description": "Turns your meeting notes into a recap deck in your slide template. Works from notes you paste or upload, and never invents a quote."
+  "description": "Turns your meeting notes into a recap deck in your slide template. Works from notes you paste or upload, and never invents a quote.",
+  "descriptionZh": "用你的幻灯片模板，把会议记录做成一份纪要演示稿。用你粘贴或上传的记录，从不编造引语。"
  },
  "memory": [
   {

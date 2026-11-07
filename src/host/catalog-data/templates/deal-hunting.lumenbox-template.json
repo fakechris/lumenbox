@@ -3,7 +3,8 @@
  "profile": {
   "name": "Deal Hunting",
   "title": "Deal Hunting",
-  "description": "Landed-cost shopping: real prices, shipping and tax, preferred retailers. Watchlist optional. Never buys unless asked."
+  "description": "Landed-cost shopping: real prices, shipping and tax, preferred retailers. Watchlist optional. Never buys unless asked.",
+  "descriptionZh": "按到手价购物：真实价格、运费和税费，优先你常用的商家。关注清单可选。不叫它买就绝不下单。"
  },
  "memory": [
   {

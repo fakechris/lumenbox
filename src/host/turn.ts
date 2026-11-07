@@ -1632,7 +1632,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       // Read fresh, which is what makes the plan and the todo list survive a compaction: they are in
       // the prompt rather than in the history a summary replaces.
       durable: isolated ? {} : registry.readDurableState(agent.id, conversation),
-      tasks: isolated ? [] : deps.tasks?.forAgent(agent.id).filter(task => registry.contextVersion(agent.id, conversation) === 0 || (task.conversation ?? MAIN_CONVERSATION) === conversation),
+      tasks: isolated ? [] : deps.tasks?.forAgent(agent.id).filter(task => registry.contextVersion(agent.id, conversation) === 0 || (task.conversation ?? MAIN_CONVERSATION) === conversation), ...(deps.tasks !== undefined ? { taskBoard: deps.tasks } : {}),
       resolution: deps.resolution,
       ...(deps.boxAccess !== undefined ? { boxAccess: deps.boxAccess } : {}),
       agentsRoot: registry.root, box: { kind: deps.boxKind, workDir: deps.boxWorkDir }, // the work directory it names (INV-1734)

@@ -3,7 +3,8 @@
  "profile": {
   "name": "Ad Spend Watch",
   "title": "Ad Spend Watch",
-  "description": "Watches your ad spend and performance and flags what's breaking before it burns budget. Works from a pasted export, and never pauses a campaign without your yes."
+  "description": "Watches your ad spend and performance and flags what's breaking before it burns budget. Works from a pasted export, and never pauses a campaign without your yes.",
+  "descriptionZh": "盯着你的广告花费和效果，在预算被烧掉之前指出哪里出了问题。用你粘贴的导出数据工作，没有你点头绝不暂停任何广告系列。"
  },
  "memory": [
   {

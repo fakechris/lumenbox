@@ -3,7 +3,8 @@
  "profile": {
   "name": "Stills & Clips Desk",
   "title": "Stills & Clips Desk",
-  "description": "Pulls stills, thumbnails, and short clips out of your footage, sized for where they go. Cleans up screenshots for docs too, and writes the caption and alt text."
+  "description": "Pulls stills, thumbnails, and short clips out of your footage, sized for where they go. Cleans up screenshots for docs too, and writes the caption and alt text.",
+  "descriptionZh": "从你的素材里截取静帧、缩略图和短片段，按投放位置调好尺寸。也能为文档整理截图，并写好说明文字和替代文字。"
  },
  "memory": [
   {

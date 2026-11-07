@@ -1095,6 +1095,11 @@ test("on a host box a write asks by default, a look does not, and an operator's 
     assert.equal(gate.check(onHost("bash", { command: "npm test" })).allow, true, "the allowed command is lifted");
 
     assert.equal(gate.check({ kind: "tool", agentId: "agent-1", agentName: "Ada", tool: "bash", input: { command: "echo x > /home/box/work/a" } }).allow, true, "in a Docker box nothing changes");
+    // A node's own screen (INV-1707): input asks, and the card shows what it would send; a look does not.
+    const click = gate.check(onHost("computer", { actions: [{ action: "click", coordinate: [10, 20] }, { action: "type", text: "PO-42" }] }));
+    assert.ok(!click.allow && click.approval?.description.includes('"action":"click"') && click.approval.description.includes("PO-42"), "screen input asks");
+    assert.equal(gate.check(onHost("computer", { actions: [{ action: "screenshot" }, { action: "cursor_position" }] })).allow, true, "a look at the screen does not ask");
+    assert.equal(gate.check({ kind: "tool", agentId: "agent-1", agentName: "Ada", tool: "computer", input: { actions: [{ action: "click", coordinate: [1, 1] }] } }).allow, true, "a Docker box's desktop does not ask");
   } finally {
     cleanup();
   }

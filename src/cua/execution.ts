@@ -13,8 +13,10 @@ export function isComputerWrite(action: { action?: unknown } | null | undefined)
  *   disabled, as a deleted row's ref must never resolve to the row that took its place.
  * - AMBIGUOUS_TARGET — more than one control in the current tree answers to the ref's identity.
  * - UNSUPPORTED_ACTION / NATIVE_REFUSED — the native path cannot do it, and there is no fallback.
+ * - PERMISSION_DENIED — the operating system has not given the screen or the input to LumenBox (a
+ *   node's own Mac, INV-1707); only a person at the machine can grant it.
  */
-export type DesktopTargetCode = "STALE_OBSERVATION" | "STALE_REF" | "AMBIGUOUS_TARGET" | "UNSUPPORTED_ACTION" | "NATIVE_REFUSED";
+export type DesktopTargetCode = "STALE_OBSERVATION" | "STALE_REF" | "AMBIGUOUS_TARGET" | "UNSUPPORTED_ACTION" | "NATIVE_REFUSED" | "PERMISSION_DENIED";
 
 const TARGET_ADVICE: Record<DesktopTargetCode, string> = {
   STALE_OBSERVATION: "Take a new list_elements before acting",
@@ -22,6 +24,7 @@ const TARGET_ADVICE: Record<DesktopTargetCode, string> = {
   AMBIGUOUS_TARGET: "Take a new list_elements and tell the controls apart by position or name; nothing was clicked",
   UNSUPPORTED_ACTION: "Use click_element, or a coordinate click from a screenshot",
   NATIVE_REFUSED: "Look at the screen before trying again",
+  PERMISSION_DENIED: "Do work that needs no screen, and tell the person what the machine needs",
 };
 
 export class DesktopTargetError extends Error {

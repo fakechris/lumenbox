@@ -3,7 +3,8 @@
  "profile": {
   "name": "Nightly Audit Engineer",
   "title": "Nightly Audit Engineer",
-  "description": "A nightly engineering auditor that researches a whole codebase, then ships one cleanup PR per area. Defaults to 4am and asks when to run before it starts."
+  "description": "A nightly engineering auditor that researches a whole codebase, then ships one cleanup PR per area. Defaults to 4am and asks when to run before it starts.",
+  "descriptionZh": "夜间工程审查 agent：研究整个代码库，然后每个领域提交一个清理 PR。默认凌晨 4 点运行，开始前先问你什么时候跑。"
  },
  "memory": [
   {

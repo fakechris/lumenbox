@@ -3255,6 +3255,62 @@ test("on a host box an agent's write outside the grants and its rm -rf wait for 
   }
 });
 
+// INV-1707: an organisation's node opened its Mac's own screen to the computer tool. An agent there
+// asked to file an order looks at the screen, then clicks and types into the business app. What the
+// harness must hold: on a node's screen, input waits for the person and nothing reaches the screen
+// until they approve; a look runs unasked, and the model sees the Mac's PNG as PNG. (The box's own
+// gates — owner, takeover, stop, permissions — are boxd/native-screen.test.ts; this is the one in front.)
+test("on a node's own Mac screen an agent's look runs, its clicks and typing wait for the person, and nothing is sent to the screen (INV-1707)", async () => {
+  const { PolicyGate } = await import("./policy.ts");
+  const { rmSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "inv1707-screen-scenario-"));
+  const policy = new PolicyGate({
+    path: join(dir, "policy.jsonl"),
+    limits: { budgetWindowHours: 24, wakesPerWindow: 30, wakeWindowMinutes: 10, approvalRequiredTools: [], approvalRequiredCommands: [], tierGate: "off" },
+  });
+  const reached: string[] = [];
+  let imageType = "";
+  const attempts = [
+    { call: "computer", input: { actions: [{ action: "screenshot" }] } },
+    { call: "computer", input: { actions: [{ action: "click", coordinate: [300, 200] }, { action: "type", text: "PO-42" }] } },
+    { call: "computer", input: { actions: [{ action: "key", key: "cmd+s" }] } },
+  ];
+  const result = await runEpisode({
+    team: [{ name: "Nova" }],
+    says: attempts.map((_, i) => `第${i + 1}步`),
+    boxKind: "host",
+    display: 1,
+    policy,
+    box: {
+      computer: async actions => {
+        reached.push(...actions.map(action => action.action));
+        return { success: true, screenshot: "iVBORw0KGgo", screenshot_media_type: "image/png", action_count: actions.length, duration_ms: 1 };
+      },
+    },
+    script: ({ messages }) => {
+      const last = JSON.stringify(messages.at(-1));
+      if (last.includes("tool_result")) {
+        const type = /"media_type":"(image\/[a-z]+)"/.exec(last)?.[1];
+        if (type !== undefined) imageType = type;
+        return { say: "好的。" };
+      }
+      const step = Number(/第(\d)步/.exec(String(messages.filter(message => typeof message.content === "string").at(-1)?.content ?? ""))?.[1] ?? 0);
+      return attempts[step - 1];
+    },
+  });
+  try {
+    assert.deepEqual(reached, ["screenshot"], "only the look reached the screen");
+    assert.equal(imageType, "image/png", "and the model saw the Mac's capture as what it is");
+    const cards = policy.pending().map(approval => approval.description);
+    assert.equal(cards.length, 2, `the click with its typing, and the shortcut, each wait for the person: ${JSON.stringify(cards)}`);
+    assert.ok(cards.some(card => card.includes("PO-42")) && cards.some(card => card.includes("cmd+s")));
+    assert.equal(result.score.refusals.length, 2);
+  } finally {
+    result.cleanup();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a guest in an organisation's group chat asks the agent to run commands, read members' data and write memory; the guest turn holds none of it and the host records no side effect (INV-1708, docs/97)", async () => {
   const snapshot = (dir: string): Record<string, string> => {
     const out: Record<string, string> = {};

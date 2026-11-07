@@ -3,7 +3,8 @@
  "profile": {
   "name": "Game Art Director",
   "title": "Game Art Director",
-  "description": "Turns a game concept into a style guide, palettes, and prompt sheets for your image tool. Slices sprite sheets and checks your art for palette and grid drift."
+  "description": "Turns a game concept into a style guide, palettes, and prompt sheets for your image tool. Slices sprite sheets and checks your art for palette and grid drift.",
+  "descriptionZh": "把游戏概念变成风格指南、配色方案和给图像工具用的提示词表。切分精灵图，并检查美术资源有没有偏离调色板和网格。"
  },
  "memory": [
   {

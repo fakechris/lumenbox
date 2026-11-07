@@ -18,7 +18,8 @@ export interface NodeBox {
   name: string;
   /** `host` is the machine's native environment; `docker` is the same image a personal machine runs. */
   kind: "docker" | "host";
-  start(): Promise<{ baseUrl: string; token: string; workDir?: string; repositories?: Repository[] }>;
+  /** `screen`: the native environment's own screen is open to the computer tool (INV-1707). */
+  start(): Promise<{ baseUrl: string; token: string; workDir?: string; repositories?: Repository[]; screen?: true }>;
   stop(): Promise<void>;
 }
 
@@ -56,7 +57,7 @@ export class NodeRunner {
       const response = await fetchImpl(`${this.options.control.replace(/\/+$/, "")}/api/boxes/register`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ node: this.options.credential, name: box.name, kind: box.kind, baseUrl: endpoint.baseUrl, token: endpoint.token, version: this.options.version, ...(endpoint.workDir !== undefined ? { workDir: endpoint.workDir } : {}), ...(endpoint.repositories !== undefined ? { repositories: endpoint.repositories } : {}) }),
+        body: JSON.stringify({ node: this.options.credential, name: box.name, kind: box.kind, baseUrl: endpoint.baseUrl, token: endpoint.token, version: this.options.version, ...(endpoint.workDir !== undefined ? { workDir: endpoint.workDir } : {}), ...(endpoint.repositories !== undefined ? { repositories: endpoint.repositories } : {}), ...(endpoint.screen === true ? { screen: true } : {}) }),
         signal: AbortSignal.timeout(20_000),
       });
       const reply = (await response.json().catch(() => ({}))) as { code?: string; state?: string };

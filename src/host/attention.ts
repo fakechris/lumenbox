@@ -24,7 +24,7 @@ import type { WatchedQuestion } from "./question-expiry.ts"; import { agentCaseT
 import { describeStale } from "./mandate.ts";
 import { currentFlag } from "./task-flag.ts";
 import { claimedButNotDelivered } from "./task-deliverables.ts";
-import { DOCKER_WORK } from "./box-paths.ts";
+import { DOCKER_WORK } from "./box-paths.ts"; import { openBlockers } from "./task-deps.ts";
 import type { Draft } from "./outbox-drafts.ts";
 import { STAGE_LABEL, stageWorldOf, type TaskStage, taskStage } from "./task-stage.ts";
 
@@ -200,7 +200,7 @@ export function attentionFor(input: AttentionInput): Attention {
   // The stage of every live task, by the one table (INV-1464): what each item below says is
   // worded from it, and the first screen counts the person/* rows.
   const stages: Record<string, TaskStage> = {};
-  const undeliverableChats = new Set((input.undeliverable ?? []).map(receipt => receipt.chatKey));
+  const undeliverableChats = new Set((input.undeliverable ?? []).map(receipt => receipt.chatKey)); const byId = new Map(input.tasks.map(task => [task.id, task])); // byId: the blockers a waiting row names (INV-1740)
   for (const task of input.tasks) {
     if (!isLive(task)) continue;
     stages[task.id] = taskStage(task, stageWorldOf(task, { undeliverableChats, questions: input.questions, ...(input.agentIds !== undefined ? { agentIds: input.agentIds } : {}), ...(input.chatKeyOf !== undefined ? { chatKeyOf: input.chatKeyOf } : {}), ...(input.active !== undefined ? { active: input.active } : {}) }));
@@ -279,7 +279,7 @@ export function attentionFor(input: AttentionInput): Attention {
         detail:
           task.waitingOn !== undefined
             ? `waiting on ${task.waitingOn}`
-            : task.status === "blocked"
+            : openBlockers(task, byId).length > 0 ? `blocked by ${openBlockers(task, byId).join(", ")}` : task.status === "blocked"
               ? "blocked"
               : task.assigneeId === undefined
                 ? "nobody has taken it"

@@ -506,8 +506,17 @@ export function lintVocabulary(root, patterns = USER_FACING_DOCS, glossaryPath =
   }
   for (const file of [...files].sort()) problems.push(...vocabularyProblems(file, readFileSync(join(root, file), "utf8"), glossary));
   for (const file of globSync(BUNDLE, { cwd: root }).sort()) problems.push(...bundleVocabularyProblems(file, readFileSync(join(root, file), "utf8"), glossary));
+  for (const file of globSync(SHELF, { cwd: root }).sort()) problems.push(...bundleVocabularyProblems(file, shelfLinesOf(readFileSync(join(root, file), "utf8")), glossary));
   return problems;
 }
+
+/**
+ * The shelf templates' Chinese lines (INV-1702): written for the shelf, so a person reads them.
+ * The rest of a template — its English as imported, its skills, its memory — is the agent's and
+ * is not checked. Every other line is blanked so a problem keeps its line number.
+ */
+export const SHELF = "src/host/catalog-data/templates/*.lumenbox-template.json";
+const shelfLinesOf = text => text.split("\n").map(line => (/^\s*"descriptionZh": "/.test(line) ? line : "")).join("\n");
 
 /** The language bundle: the chat's words and the web UI's (INV-1684). A person reads every value. */
 export const BUNDLE = "src/i18n/{messages,ui-*,server-*}.ts";
