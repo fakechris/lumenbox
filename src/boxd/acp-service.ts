@@ -16,6 +16,7 @@
  * credential arrives per open and is not written anywhere by this file.
  */
 import { type ChildProcessByStdio, spawn } from "node:child_process";
+import type { Confine } from "./confinement.ts";
 import { createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, type WriteStream, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Readable, Writable } from "node:stream";
@@ -139,18 +140,21 @@ export class AcpService {
    * both; an engine that refuses (no credential, a cwd that does not match the persisted
    * session, an unknown id) fails the open definitely, with its own words.
    */
-  async open(input: AcpOpenRequest & { nice: number; scrubbedEnv: NodeJS.ProcessEnv }): Promise<AcpOpenResult> {
+  async open(input: AcpOpenRequest & { nice: number; scrubbedEnv: NodeJS.ProcessEnv; confine?: Confine }): Promise<AcpOpenResult> {
     mkdirSync(this.dir, { recursive: true });
     if (!JOB_ID.test(input.session_id)) throw new AcpOpenError(`session_id must match ${JOB_ID}`);
     const existing = this.sessions.get(input.session_id);
     if (existing?.child !== undefined) {
       throw new AcpOpenError(`session ${input.session_id} is already open`);
     }
+    // The native box's sandbox (INV-1700), before anything is written: a refused engine leaves no log.
+    const shell = ["-n", String(input.nice), "/bin/bash", "-lc", input.command];
+    const confined = input.confine?.wrap("nice", shell, { what: "acp", cwd: input.cwd, actor: `acp:${input.session_id}` });
     const logPath = join(this.dir, `${input.session_id}.log`);
     const log = createWriteStream(logPath, { flags: "a" });
     const child = spawn(
-      "nice",
-      ["-n", String(input.nice), "/bin/bash", "-lc", input.command],
+      confined?.command ?? "nice",
+      confined?.args ?? shell,
       {
         cwd: input.cwd,
         env: { ...input.scrubbedEnv, ...(input.display !== undefined ? { DISPLAY: `:${input.display}` } : {}), ...input.env },

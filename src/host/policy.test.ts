@@ -1069,3 +1069,33 @@ test("the agent's case rides on the pending approval beside the task's level, ou
     cleanup();
   }
 });
+
+// ── the person's own machine (INV-1700) ──────────────────────────────────────────
+// A host box's writes used to be one shadow classification nobody acted on; by default they ask.
+test("on a host box a write asks by default, a look does not, and an operator's allow rule lifts a named directory or command", () => {
+  const { cleanup, path } = fixture();
+  try {
+    const rules = rulesIn(join(path, "..", "rules"), {
+      "notes-dir": "---\neffect: allow\ntool: write_file, edit_file\npath: /Users/p/proj/notes\n---\nThe notes directory is the agent's own.\n",
+      "tests": "---\neffect: allow\ntool: bash\ncommand: npm test\n---\nRunning the tests is routine.\n",
+    });
+    const gate = new PolicyGate({ path, limits: { budgetWindowHours: 24, wakesPerWindow: 30, wakeWindowMinutes: 10, approvalRequiredTools: [], approvalRequiredCommands: [], tierGate: "off" }, rules });
+    const onHost = (tool: string, input: Record<string, unknown>): PolicyRequest => ({ kind: "tool", agentId: "agent-1", agentName: "Ada", tool, input, onHostBox: true });
+
+    const write = gate.check(onHost("bash", { command: "echo x > /Users/p/.zshrc" }));
+    assert.equal(write.allow, false, "a shell write asks");
+    assert.ok(!write.allow && write.approval !== undefined, "with an approval card, not a refusal");
+    assert.equal(gate.check(onHost("bash", { command: "rm -rf /Users/p/proj" })).allow, false, "a destructive command asks");
+    assert.equal(gate.check(onHost("write_file", { path: "/Users/p/proj/src/a.ts", content: "x" })).allow, false, "a file write asks");
+    assert.equal(gate.check(onHost("bash", { command: "git status && ls -la" })).allow, true, "a look does not ask");
+    assert.equal(gate.check(onHost("read_file", { path: "/Users/p/proj/a.ts" })).allow, true, "a read does not ask");
+
+    assert.equal(gate.check(onHost("write_file", { path: "/Users/p/proj/notes/today.md", content: "x" })).allow, true, "the allowed directory is lifted");
+    assert.equal(gate.check(onHost("write_file", { path: "/Users/p/proj/notes/../src/a.ts", content: "x" })).allow, false, "judged where the path lands");
+    assert.equal(gate.check(onHost("bash", { command: "npm test" })).allow, true, "the allowed command is lifted");
+
+    assert.equal(gate.check({ kind: "tool", agentId: "agent-1", agentName: "Ada", tool: "bash", input: { command: "echo x > /home/box/work/a" } }).allow, true, "in a Docker box nothing changes");
+  } finally {
+    cleanup();
+  }
+});

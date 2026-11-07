@@ -50,6 +50,12 @@ test("the rules are written in words and in the profile: cwd and tmp writable, t
     assert.ok(linux.args.includes("--unshare-net") && linux.args.includes("--unshare-pid"));
     assert.ok(linux.args.indexOf("--ro-bind") < linux.args.indexOf("--bind"), "root read-only first, writable paths bound back in");
     assert.match(linux.rules.join("\n"), /no network at all/);
+    // The native box's extra rules (INV-1700): a start directory that grants nothing, a ro path, hidden credentials.
+    const native = new HostSandbox({ platform: "linux", home: h.home, probe: () => true }).wrap("/bin/echo", ["hi"], { cwd: h.cwd, runIn: h.home, readOnly: [join(h.cwd, "vendor")], hideCredentials: true });
+    const at = (flag: string, path: string) => native.args.findIndex((arg, i) => arg === flag && native.args[i + 1] === path);
+    assert.equal(native.args[native.args.indexOf("--chdir") + 1], realpathSync(h.home), "starts where asked");
+    assert.ok(!native.args.some((arg, i) => arg === "--bind" && native.args[i + 1] === realpathSync(h.home)), "without making it writable");
+    assert.ok(at("--tmpfs", realpathSync(join(h.home, ".ssh"))) > at("--bind", real), "~/.ssh is hidden, after the writable binds so it covers them");
   } finally {
     h.dispose();
   }

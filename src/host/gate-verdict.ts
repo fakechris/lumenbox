@@ -45,6 +45,8 @@ export function askReasons(facts: {
   approvalList: boolean;
   tierEnforced?: string;
   levelAsks?: number;
+  /** Why a call on the person's own machine asks (INV-1700). */
+  hostBoxWrite?: string;
 }): string[] {
   const out: string[] = [];
   if (facts.rule?.effect === "ask") out.push(ruleWords(facts.rule));
@@ -56,6 +58,7 @@ export function askReasons(facts: {
     if (facts.approvalList) out.push("the installation's approval list");
     if (facts.tierEnforced !== undefined) out.push(`the side-effect gate asks for ${facts.tierEnforced} calls`);
     if (facts.levelAsks !== undefined) out.push(`the task is at L${facts.levelAsks}: outward steps are confirmed`);
+    if (facts.hostBoxWrite !== undefined) out.push(`on the person's own machine every write asks: ${facts.hostBoxWrite}`);
   }
   return out;
 }

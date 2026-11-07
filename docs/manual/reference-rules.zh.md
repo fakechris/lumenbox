@@ -22,6 +22,7 @@ One Markdown file per rule under ~/.agentbox/rules (AGENTBOX_RULES overrides the
 | `tool` | `tools` | comma-separated list | no | yes | Tool names, or * for any tool. |
 | `command` | `commands` | comma-separated list | no | yes | For bash / RunOnHost: the command must start with one of these prefixes. |
 | `host` | `hosts` | comma-separated list, case-insensitive | no | yes | For a tool whose input carries a URL (browser_open, WebFetch): the URL's host, exact or *.example.com. |
+| `path` | `paths` | comma-separated list | no | yes | For a tool whose input carries a path (write_file, edit_file): the path is this directory or under it; `~` is the home directory (INV-1700). |
 | `principal` | `principals` | comma-separated list | no | yes | Only while the turn runs for one of these people, by principal id or name (INV-156). A turn nobody is attributed to — a schedule, a webhook, a restart — never matches. |
 | `agent` | `agents` | comma-separated list | no | yes | Only for these agents' own calls, by id or name (INV-1664). A call by any other agent, or by nobody in particular, never matches. |
 | body | — | text after the frontmatter | yes | no | The standing instruction, in words a person and the reviewer can read. Required. |
@@ -50,6 +51,7 @@ effect: allow
 tool: bash, RunOnHost
 command: jira comment
 host: *.atlassian.net
+path: ~/proj
 principal: Chris
 agent: Nova
 ---

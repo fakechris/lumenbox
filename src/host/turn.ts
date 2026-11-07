@@ -6,6 +6,7 @@
  * background work, and the abort has to land between tool calls.
  */
 
+import { hostBoxWrite } from "./host-box.ts";
 import { createHash } from "node:crypto";
 import { buildInfo } from "./build-info.ts";
 import { envNumber, hostTokens } from "../config.ts";
@@ -3282,7 +3283,7 @@ ${outcome.text}`;
             // they reach the operator's own machine or their own data.
             (deps.mcp?.isHostTool(toolUse.name) === true ? "calls a host-level MCP server" : undefined) ??
             // On the person's own machine (INV-438) every write is a host action.
-            (deps.boxKind === "host" && HOST_WRITES.has(toolUse.name) ? "writes on the person's own machine" : undefined));
+            (deps.boxKind === "host" ? hostBoxWrite(toolUse.name, toolInput) : undefined));
       let blocked: Verdict | undefined;
       if (reviewWhy !== undefined && deps.autoReview !== undefined && deps.autoReview.mode() !== "off") {
         const reviewInput = reviewInputFor({
@@ -3686,9 +3687,6 @@ ${outcome.text}`;
   throw new TurnRoundLimitExceeded(note);
   }
 }
-
-/** Tools that change the machine they run on; on a host box these are reviewed (INV-438). */
-const HOST_WRITES = new Set(["bash", "write_file", "edit_file", "browser_act", "browser_upload", "browser_fill_secret"]);
 
 /** A stopped turn's report, with what was checkpointed appended so the person gets the half. */
 export function withCheckpoints(report: string, state: DurableState): string {

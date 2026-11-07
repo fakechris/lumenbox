@@ -23,7 +23,7 @@ export const EFFECT_MEANS: Record<RuleEffect, string> = {
 };
 
 /** Which `Rule` property a key fills. */
-export type RuleFieldTarget = "name" | "effect" | "tools" | "commands" | "hosts" | "principals" | "agents";
+export type RuleFieldTarget = "name" | "effect" | "tools" | "commands" | "hosts" | "paths" | "principals" | "agents";
 
 export interface RuleField {
   /** The frontmatter key, as written. */
@@ -49,6 +49,7 @@ export const RULE_FIELDS: readonly RuleField[] = [
   { key: "tool", aliases: ["tools"], target: "tools", list: true, required: false, matcher: true, means: "Tool names, or * for any tool.", example: "bash, RunOnHost" },
   { key: "command", aliases: ["commands"], target: "commands", list: true, required: false, matcher: true, means: "For bash / RunOnHost: the command must start with one of these prefixes.", example: "jira comment" },
   { key: "host", aliases: ["hosts"], target: "hosts", list: true, lowercase: true, required: false, matcher: true, means: "For a tool whose input carries a URL (browser_open, WebFetch): the URL's host, exact or *.example.com.", example: "*.atlassian.net" },
+  { key: "path", aliases: ["paths"], target: "paths", list: true, required: false, matcher: true, means: "For a tool whose input carries a path (write_file, edit_file): the path is this directory or under it; `~` is the home directory (INV-1700).", example: "~/proj" },
   { key: "principal", aliases: ["principals"], target: "principals", list: true, required: false, matcher: true, means: "Only while the turn runs for one of these people, by principal id or name (INV-156). A turn nobody is attributed to — a schedule, a webhook, a restart — never matches.", example: "Chris" },
   { key: "agent", aliases: ["agents"], target: "agents", list: true, required: false, matcher: true, means: "Only for these agents' own calls, by id or name (INV-1664). A call by any other agent, or by nobody in particular, never matches.", example: "Nova" },
 ];

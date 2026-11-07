@@ -56,8 +56,8 @@ export function startHostEgress(options: HostEgressOptions): Promise<HostEgress>
   });
 }
 
-/** A Unix socket whose every connection is piped to the loopback port: the far end of socat's bridge. */
-function mirrorOnUnixSocket(port: number, tmp: string): Server {
+/** A Unix socket whose every connection is piped to the loopback port: the far end of socat's bridge. Also the native box's (boxd/confinement.ts). */
+export function mirrorOnUnixSocket(port: number, tmp: string = tmpdir()): Server {
   const path = unixSocketFor(tmp, port);
   try {
     unlinkSync(path);

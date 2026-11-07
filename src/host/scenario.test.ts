@@ -3132,3 +3132,51 @@ test("a task whose skill needs an unconnected GitHub waits before it starts, and
   });
   try { assert.equal(episode.score.turns, 1); } finally { episode.cleanup(); }
 });
+
+// INV-1700: on the person's own machine (a host box, `agentbox host up`) an agent asked to tidy a
+// project wrote into the person's shell rc file and ran `rm -rf` on the project, and the only
+// thing between it and the files was a shadow classification nobody acted on. What the harness
+// must hold: every write and every destructive command asks the person first and does not reach
+// the machine; a look still runs unasked. (The box daemon's own refusal — the OS sandbox around
+// the shell — is boxd/confinement.test.ts; this is the gate in front of it.)
+test("on a host box an agent's write outside the grants and its rm -rf wait for the person, and nothing on the machine changes (INV-1700)", async () => {
+  const { PolicyGate } = await import("./policy.ts");
+  const { rmSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-host-box-scenario-"));
+  const policy = new PolicyGate({
+    path: join(dir, "policy.jsonl"),
+    limits: { budgetWindowHours: 24, wakesPerWindow: 30, wakeWindowMinutes: 10, approvalRequiredTools: [], approvalRequiredCommands: [], tierGate: "off" },
+  });
+  const before = { "/Users/p/proj/notes.md": "notes\n", "/Users/p/.zshrc": "# rc\n" };
+  const attempts = [
+    { call: "bash", input: { command: "echo pwned > /Users/p/.zshrc" } },
+    { call: "bash", input: { command: "rm -rf /Users/p/proj" } },
+    { call: "write_file", input: { path: "/Users/p/elsewhere/x.txt", content: "x" } },
+    { call: "bash", input: { command: "ls /Users/p/proj" } },
+  ];
+  const result = await runEpisode({
+    team: [{ name: "Nova", tools: ["bash", "write_file", "read_file"] }],
+    says: attempts.map((_, i) => `第${i + 1}步`),
+    boxKind: "host",
+    files: before,
+    policy,
+    script: ({ messages }) => {
+      const ran = JSON.stringify(messages.at(-1)).includes("tool_result");
+      if (ran) return { say: "好的。" };
+      const step = Number(/第(\d)步/.exec(String(messages.filter(message => typeof message.content === "string").at(-1)?.content ?? ""))?.[1] ?? 0);
+      return attempts[step - 1];
+    },
+  });
+  try {
+    // The host's own mirror files land in the work directory as on any box; the person's files are the question.
+    assert.deepEqual(Object.fromEntries([...result.files].filter(([path]) => path.startsWith("/Users/"))), before, "nothing on the machine changed");
+    const cards = policy.pending().map(approval => approval.description);
+    assert.equal(cards.length, 3, `the write, the rm -rf and the file write each wait for the person: ${JSON.stringify(cards)}`);
+    assert.ok(cards.some(card => card.includes(".zshrc")) && cards.some(card => card.includes("rm -rf")) && cards.some(card => card.includes("/Users/p/elsewhere/x.txt")));
+    assert.equal(result.score.refusals.length, 3, `the three came back as waiting for the person, and the look did not: ${JSON.stringify(result.score.refusals)}`);
+    assert.equal(result.score.trail.filter(call => call === "Nova:bash").length, 3, "the look was called like the others");
+  } finally {
+    result.cleanup();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
