@@ -31,7 +31,7 @@ import { applyFlag, type FlagOutcome, type TaskFlag } from "./task-flag.ts"; imp
 import { applyRevalidation, applyWithdrawal, grantMandate, type Mandate, type MandateWorld, type RevalidationResult } from "./mandate.ts";
 import { Receipts } from "./receipts.ts";
 import { clampDescription, dueOf, type TaskContract } from "./task-fields.ts";
-import { refuseUnknownAgents, type TaskAgents } from "./task-agents.ts"; import { inferLevel, LEVEL_MEANING, type Level } from "./autonomy-level.ts"; import type { Discovery } from "./discovery.ts";
+import { refuseUnknownAgents, type TaskAgents } from "./task-agents.ts"; import { dependencyLine, notReady, openBlockers, PLAN_ACTOR, refuseBlockers } from "./task-deps.ts"; import { inferLevel, LEVEL_MEANING, type Level } from "./autonomy-level.ts"; import type { Discovery } from "./discovery.ts";
 
 export { clampContract, clampDescription, DESCRIPTION_LIMIT, dueOf, type TaskContract } from "./task-fields.ts";
 
@@ -134,7 +134,7 @@ export interface Task {
    * should know it is still open — but it is never archived for not moving, because not
    * moving is what waiting looks like.
    */
-  waitingOn?: string;
+  waitingOn?: string; blockedBy?: string[]; // blockedBy: the tasks this one waits on (INV-1740), task-deps.ts — ready when none of them is live
   /**
    * Set when this task is a goal the person stated (INV-757): the area it belongs to and what
    * they committed to. The board is the one home — `due` is the next follow-up, the aging sweep
@@ -219,7 +219,7 @@ const HARNESS_ACTORS: ReadonlySet<string> = new Set([
   "restart",
   "host",
   "web",
-  "audit-guard", "review-guard", // the K-reviewer record moving a task it settled (INV-1614)
+  "audit-guard", "review-guard", PLAN_ACTOR, // the K-reviewer record moving a task it settled (INV-1614); an Orchestrate plan closing its item cards (INV-1740)
 ]);
 
 /** Kept on each task so a snapshot stays one line, not a graph. */
@@ -243,7 +243,7 @@ export class TaskStore {
    * after the store exists — and additive, because an assignable field would have the
    * second subscriber silently unseat the first.
    */
-  private readonly listeners: ((task: Task) => void)[] = [];
+  private readonly listeners: ((task: Task) => void)[] = []; private readonly created: ((task: Task) => void)[] = []; // created: told of a new task, apart from changes (INV-1740)
 
   /**
    * A person commits a proposed task: from then on it is ordinary work anyone may take.
@@ -263,9 +263,7 @@ export class TaskStore {
     return true;
   }
 
-  onChange(listener: (task: Task) => void): void {
-    this.listeners.push(listener);
-  }
+  onChange(listener: (task: Task) => void): void { this.listeners.push(listener); } onCreate(listener: (task: Task) => void): void { this.created.push(listener); }
 
   constructor(
     readonly path: string | null = tasksPath(),
@@ -320,12 +318,12 @@ export class TaskStore {
     goal?: { area: string; commitment?: string };
     pursuit?: Pursuit;
     mandate?: { source?: string; rulesHash?: string }; // What the mandate rests on (INV-1457).
-    level?: Level; discovery?: Discovery; // level: a person's own setting (INV-1650), else the rule infers one; discovery: from a sensing routine (INV-1652), always a proposal
+    blockedBy?: string[]; level?: Level; discovery?: Discovery; // blockedBy: what it waits on (INV-1740); level: a person's own setting (INV-1650), else the rule infers one; discovery: from a sensing routine (INV-1652), always a proposal
     now?: Date;
   }): Task | undefined {
     const title = input.title.replace(/\s+/g, " ").trim().slice(0, 200);
     if (title === "") return undefined;
-    refuseUnknownAgents(this.agents, input);
+    refuseUnknownAgents(this.agents, input); if (input.blockedBy !== undefined) refuseBlockers(this.tasks, undefined, input.blockedBy);
     const at = (input.now ?? new Date()).toISOString(); const inferred = inferLevel({ title, ...(input.description !== undefined ? { description: input.description } : {}), hasContract: input.contract !== undefined, isPursuit: input.pursuit !== undefined, requesterIsAgent: this.agents?.has(input.requester) ?? false }); // INV-1650
     this.counter += 1;
     const task: Task = {
@@ -341,7 +339,7 @@ export class TaskStore {
       ...(input.reviewerId !== undefined ? { reviewerId: input.reviewerId } : {}),
       ...(input.conversation !== undefined ? { conversation: input.conversation } : {}),
       ...(input.contract !== undefined ? { contract: input.contract } : {}),
-      ...(input.proposedBy !== undefined ? { proposedBy: input.proposedBy } : {}), ...(input.discovery !== undefined ? { discovery: input.discovery } : {}),
+      ...(input.proposedBy !== undefined ? { proposedBy: input.proposedBy } : {}), ...(input.discovery !== undefined ? { discovery: input.discovery } : {}), ...(input.blockedBy !== undefined && input.blockedBy.length > 0 ? { blockedBy: [...input.blockedBy] } : {}),
       mandate: grantMandate({ by: input.requester, ...(input.proposedBy !== undefined ? { proposedBy: input.proposedBy } : {}), ...input.mandate, now: input.now ?? new Date() }),
       ...(dueOf(input.due) !== undefined ? { due: dueOf(input.due)! } : {}),
       ...(input.goal !== undefined && input.goal.area.trim() !== ""
@@ -353,7 +351,7 @@ export class TaskStore {
       history: [{ at, by: input.requester, status: input.pursuit !== undefined ? taskStatusFor(input.pursuit) : "open", note: `${input.proposedBy !== undefined ? "proposed, awaiting a person's commit" : input.pursuit !== undefined ? "goal set by the person" : "created"} · L${input.level ?? inferred.level}${input.level !== undefined ? " set by the requester" : ` by rule: ${inferred.reasons.join("; ")}`}` }],
     };
     this.tasks.set(task.id, task);
-    this.append({ kind: "task", task });
+    this.append({ kind: "task", task }); for (const listener of this.created) listener(task);
     return this.get(task.id);
   }
 
@@ -474,7 +472,7 @@ export class TaskStore {
     if (task === undefined) return undefined;
     if (task.status !== "open" && task.status !== "doing") return { task };
     // A turn ending says nothing about a goal (docs/74 §7 R1): the gate does.
-    if (task.pursuit !== undefined) return { task };
+    if (task.pursuit !== undefined || openBlockers(task, this.tasks).length > 0) return { task }; // nor about a task still waiting on others (INV-1740): it stays where it is until they finish
     // Attributed to whoever the work belongs to, so the gate sees the same thing it sees
     // when that agent marks its own task done — because that is what is happening.
     const by = task.assigneeId ?? "channel";
@@ -504,7 +502,7 @@ export class TaskStore {
       /** A due date, or null to clear it. */
       due?: string | null;
       /** What it is waiting for outside this box, or null to say it no longer is. */
-      waitingOn?: string | null;
+      waitingOn?: string | null; blockedBy?: string[]; // what it waits on, the whole set (INV-1740); empty clears it
       /** Leave it alone until this date or instant, or null to look again now. */
       snoozeUntil?: string | null;
     },
@@ -514,7 +512,7 @@ export class TaskStore {
   ): { task: Task; coerced?: string } | undefined {
     const task = this.tasks.get(id);
     if (task === undefined) return undefined;
-    refuseUnknownAgents(this.agents, changes);
+    refuseUnknownAgents(this.agents, changes); if (changes.blockedBy !== undefined) refuseBlockers(this.tasks, id, changes.blockedBy);
 
     const at = now.toISOString();
     let coerced: string | undefined;
@@ -551,6 +549,7 @@ export class TaskStore {
         `${task.id} is a proposal awaiting a person's commit, so it cannot be started or finished ` +
         `yet. Ask the person to commit it (the board has a Commit button), then take it.`;
     }
+    const unready = status === "doing" && task.status !== "doing" && !HARNESS_ACTORS.has(by) ? notReady({ ...task, ...(changes.blockedBy !== undefined ? { blockedBy: changes.blockedBy } : {}) }, this.tasks) : undefined; if (unready !== undefined) { coerced = unready; status = undefined; } // ready means nothing it waits on is open (INV-1740)
 
     // The review gate. Two rules, both about who may say a thing is finished, because
     // "done is the requester's word" was prose in an audit prompt and prose is not a gate.
@@ -636,7 +635,7 @@ export class TaskStore {
       // A snooze or a waiting-on with nothing else said is still a decision about the
       // work, and the history is where a person looks to see who decided it (INV-532).
       if (changes.level !== undefined) change.note = `level L${task.level ?? "?"} → L${changes.level}, set by ${by}`; else if (changes.snoozeUntil !== undefined && changes.snoozeUntil !== null) change.note = `not now: look again after ${dueOf(changes.snoozeUntil) ?? changes.snoozeUntil}`;
-      else if (changes.waitingOn !== undefined && changes.waitingOn !== null && changes.waitingOn.trim() !== "") change.note = `waiting on ${changes.waitingOn.trim().slice(0, 120)}`;
+      else if (changes.waitingOn !== undefined && changes.waitingOn !== null && changes.waitingOn.trim() !== "") change.note = `waiting on ${changes.waitingOn.trim().slice(0, 120)}`; else if (changes.blockedBy !== undefined) change.note = changes.blockedBy.length > 0 ? `waits on ${changes.blockedBy.join(", ")}` : "waits on nothing";
     }
 
     const updated: Task = {
@@ -651,7 +650,7 @@ export class TaskStore {
       ...(changes.assigneeId !== undefined ? { assigneeId: changes.assigneeId ?? undefined } : {}),
       ...(changes.reviewerId !== undefined ? { reviewerId: changes.reviewerId ?? undefined } : {}),
       ...(changes.due !== undefined ? (changes.due === null ? { due: undefined } : dueOf(changes.due) !== undefined ? { due: dueOf(changes.due)! } : {}) : {}), ...(changes.level !== undefined ? { level: changes.level, levelBy: by } : {}), // INV-1650
-      ...(changes.waitingOn !== undefined ? (changes.waitingOn === null || changes.waitingOn.trim() === "" ? { waitingOn: undefined } : { waitingOn: changes.waitingOn.replace(/\s+/g, " ").trim().slice(0, 120) }) : {}),
+      ...(changes.waitingOn !== undefined ? (changes.waitingOn === null || changes.waitingOn.trim() === "" ? { waitingOn: undefined } : { waitingOn: changes.waitingOn.replace(/\s+/g, " ").trim().slice(0, 120) }) : {}), ...(changes.blockedBy !== undefined ? { blockedBy: changes.blockedBy.length > 0 ? [...changes.blockedBy] : undefined } : {}),
       ...(changes.snoozeUntil !== undefined ? (changes.snoozeUntil === null ? { snoozeUntil: undefined } : dueOf(changes.snoozeUntil) !== undefined ? { snoozeUntil: dueOf(changes.snoozeUntil)! } : {}) : {}),
       updatedAt: at,
       history: [...task.history, change].slice(-HISTORY_LIMIT),
@@ -693,7 +692,7 @@ export class TaskStore {
     const events: AgingEvent[] = [];
     const t = now.getTime();
     for (const task of [...this.tasks.values()]) {
-      if (!isLive(task.status) || task.proposedBy !== undefined) continue;
+      if (!isLive(task.status) || task.proposedBy !== undefined || openBlockers(task, this.tasks).length > 0) continue; // waiting on another task is not sitting still (INV-1740)
       // A pursuit has its own clocks and stops (docs/74 §3.5); the sweep is not one of them.
       if (task.pursuit !== undefined) continue;
       // Asked to come back later, and told when. Until then there is nothing to say.
@@ -1041,11 +1040,11 @@ export class TaskStore {
 }
 
 /** One task as a line a model or a person reads. */
-export function describeTask(task: Task, nameOf: (id: string) => string): string {
+export function describeTask(task: Task, nameOf: (id: string) => string, board?: { get(id: string): Task | undefined }): string { // board: to say which blockers are still open (INV-1740)
   const assignee = task.assigneeId !== undefined ? ` @${nameOf(task.assigneeId)}` : " (unassigned)";
   const reviewer = task.reviewerId !== undefined ? ` · review by ${nameOf(task.reviewerId)}` : "";
   const proposed = task.proposedBy !== undefined ? " (proposed — a person commits it before anyone starts)" : "";
   const goal = task.goal !== undefined ? ` · goal (${task.goal.area}${task.goal.commitment !== undefined ? `: ${task.goal.commitment}` : ""})` : "";
   const pursuit = task.pursuit !== undefined ? ` · pursuing (${task.pursuit.status})` : ""; const level = task.level !== undefined ? ` · ${LEVEL_MEANING[task.level]}` : "";
-  return `${task.id} [${task.status}]${assignee} ${task.title}${goal}${pursuit}${reviewer}${proposed}${level}`;
+  return `${task.id} [${task.status}]${assignee} ${task.title}${goal}${pursuit}${reviewer}${proposed}${level}${dependencyLine(task, board)}`;
 }

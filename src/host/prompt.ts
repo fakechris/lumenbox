@@ -448,7 +448,7 @@ export interface PromptContext {
    * In the prompt for the same reason the plan is: a board nobody re-reads is a board
    * nobody works from. Only this agent's — the whole board is a `Tasks list` call away.
    */
-  tasks?: readonly Task[];
+  tasks?: readonly Task[]; taskBoard?: { get(id: string): Task | undefined }; // taskBoard: to say which of a task's blockers are still open (INV-1740)
   /**
    * Which conversation this turn runs in. An outside chat's conversation carries a
    * file-exchange directory on the box, and the agent has to be told the convention
@@ -894,7 +894,7 @@ function renderTasks(context: PromptContext): string {
   if (tasks.length === 0) return "";
   const nameOf = (id: string) =>
     context.teammates.find(mate => mate.id === id)?.profile.name ?? id;
-  const rows = tasks.slice(0, 10).map(task => `- ${describeTask(task, nameOf)}`);
+  const rows = tasks.slice(0, 10).map(task => `- ${describeTask(task, nameOf, context.taskBoard)}`);
   const more = tasks.length > 10 ? `\n(and ${tasks.length - 10} more — Tasks list shows all)` : "";
   return (
     "## Your tasks on the board\n\n" +
@@ -902,7 +902,7 @@ function renderTasks(context: PromptContext): string {
     more +
     "\n\nRead current task details with Tasks (action: read, id: task id) before working. " +
     "Move them with the Tasks tool as they progress; a task in `review` is waiting on its " +
-    "reviewer, not on you. Finish what is doing before taking more. The file a task was for — the report, deck, sheet — is marked with DeliverFile when it is finished, so the task keeps it and offers it for download."
+    "reviewer, not on you. Finish what is doing before taking more; one blocked by another task waits until that one is finished, and you are woken then. The file a task was for — the report, deck, sheet — is marked with DeliverFile when it is finished, so the task keeps it and offers it for download."
   );
 }
 
