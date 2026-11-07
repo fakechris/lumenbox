@@ -116,6 +116,9 @@ export const INSTALLATION_JS = `(function () {
     if (!field) return;
     var select = document.getElementById("setinvrole");
     var button = document.getElementById("setinvite");
+    // A save re-renders People through renderChannels: a roster down to one person (or merged) drops the notice.
+    var stale = document.getElementById("severalpeople");
+    if (stale && (single() || (window.rosterPeople || []).length < 2)) stale.remove();
     if (single()) {
       if (select) select.style.display = "none";
       if (button) button.textContent = "{{ui.installation.link-my-account}}";
