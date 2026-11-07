@@ -161,7 +161,9 @@ named `attached`, so nothing that works today stops working.
 > **Note, 2026-11-06 (INV-1695, docs/96 §2, §7).** The list above omits the `host` kind
 > (INV-438): a machine's native environment, headless, on its granted directories. Each kind is a
 > *box host*, and a box belongs to the one installation whose `boxes.json` lists it. A personal
-> installation's machines never register a box with an organisation. An organisation's boxes run
+> installation's machines never register a box with an organisation: a rule today, not a check,
+> since a connection code is not asked whose machine redeems it (INV-1697 enforces it; docs/96 §8).
+> An organisation's boxes run
 > on Kubernetes by default, and also on VMs it attaches and on its own organisation nodes.
 
 ## 4. Stages

@@ -150,10 +150,17 @@ the way an attached box is. It is not `RunOnHost`, which is the orchestrator's o
 | --- | --- | --- |
 | Where it runs | The machine the orchestrator runs on (`src/host/host-runner.ts`) | The machine the box daemon runs on, headless (`src/boxd/headless.ts`) |
 | Whose | The installation that runs there: on a personal machine, the Owner's | The installation the box is attached to: on a node, the organisation's |
-| What it reaches | A configured working directory, under the OS sandbox (`src/host/host-sandbox.ts`) | The granted directories only; anything outside them is refused (`src/boxd/headless.ts`) |
-| Approval | Every command asks (`src/host/tool-permissions.ts:157`; tier `credential`, `src/host/side-effects.ts:112`) | Every write is reviewed as "writes on the person's own machine" (`src/host/turn.ts:3285`); the defaults stay conservative (INV-1697) |
+| What it reaches | A configured working directory, under the OS sandbox (`src/host/host-sandbox.ts`) | File routes: the granted directories only, and a path outside them is refused (`src/boxd/headless.ts`). The shell is not confined: `POST /exec` runs bash with no path check and no OS sandbox (`src/boxd/shell-service.ts`), so a command reaches whatever the daemon's user reaches |
+| Approval | Every command asks (`src/host/tool-permissions.ts:157`; tier `credential`, `src/host/side-effects.ts:112`) | Each write is classified as "writes on the person's own machine" (`src/host/turn.ts:3285`). In the default mode, `shadow` (`src/host/auto-review.ts:26`), the verdict is recorded and nothing is blocked. Only `AGENTBOX_AUTO_REVIEW=enforce` lets a block verdict stop the call |
 | Desktop | — | None: the desktop routes answer 409, and no display is started (`src/host/orchestrator.ts:1463`) |
 | Authority | Outside every box: an operator's decision, off by default | The box's own, by docs/22 §0: what it reaches, every agent in it reaches |
+
+Today a native environment box is therefore weaker than `RunOnHost` on two counts. Its shell
+runs outside the granted directories and outside any OS sandbox. Its writes are classified, not
+approved. On the Owner's own computer that is the Owner's risk to take. On an organisation node
+it is not acceptable. INV-1697 must confine the node's shell (the way `src/host/host-sandbox.ts`
+confines `RunOnHost`) and must make writes and irreversible actions ask by default, before a
+node's native environment is offered to anyone.
 
 Its rules are the box rules, with no exceptions:
 
@@ -184,16 +191,20 @@ and §0 sentence 3 forbids registering it with an organisation.
    that really let other people in stays an organisation, as INV-1689 left it (§8, question 1).
 2. **May an organisation attach a box?** Yes. An organisation may `box attach` a VM it runs.
    Kubernetes stays the default and preferred host (docs/95 §3). The VM is the organisation's
-   machine by §2's second rule, and so is an organisation node. A VM a member runs for
-   themselves is a personal machine, and its boxes stay personal.
+   machine by §2's second rule. It joins under the box contract of docs/30: `box attach` or a
+   connection code makes one box, and that box is revoked by itself. A VM is an organisation
+   node (§4) only if it runs the node process with a node credential; then the node's listing and
+   node-wide revocation apply. A VM a member runs for themselves is a personal machine, and its
+   boxes stay personal.
 3. **Group chats in a personal installation.** Intended, as Chris confirmed. People in a group
    chat with the Owner's agent who are not on the roster are **guests**. They are not people of
    the installation, hold no role, and can never be let in: letting a knock in is refused on a
    personal installation (docs/22 §1a; `requireOrganisation`, `src/host/principals.ts:230`).
-   What the agent does with a guest's message is the channel's guest switch and group rule
-   (INV-429). With guests off, the channel answers `guests.closed`
-   (`src/channels/manager.ts:1313`); otherwise the sender is told they are not registered. A
-   guest's message never approves anything.
+   A guest is not answered by the agent, with the guest switch (INV-429) on or off. With guests
+   off, the channel replies `guests.closed` (`src/channels/manager.ts:1313`). With guests on,
+   the sender gets the knock refusal, and on a personal installation that knock can never be let
+   in. This record changes neither. A guest's message never approves anything. Whether a guest
+   should ever get an answer is question 4 of §8.
 
 ## 7. Against docs/95, docs/30 and docs/22
 
@@ -234,3 +245,7 @@ and §0 sentence 3 forbids registering it with an organisation.
    organisation accept boxes only from a node credential or an Admin's `box attach`, and
    should the CLI refuse `box connect` to an organisation from a machine whose answer is
    "personal + organisation"? This record assumes both, for INV-1697.
+4. **Answering guests.** Today a guest in the Owner's group chat is refused, never answered
+   (§6, question 3). Is that the intended meaning of "guest", or should the Owner's agent answer
+   a guest without taking instructions from them? Answering would need a change to the
+   admission path in `src/channels/manager.ts`.

@@ -209,7 +209,8 @@ commit as this record; for docs/36, a decision record, as a dated note beside th
 
 > **Note, 2026-11-06 (INV-1695, docs/96 §6).** Chris answered all three questions. *1:* on the
 > machine that raised it, the several people were one person's identities across Feishu apps,
-> DingTalk and the web; INV-1698 merges them into the Owner. *2:* yes, an organisation may
+> DingTalk and the web; INV-1698 merges them into the Owner. A desktop that really let other
+> people in still has no move to a server; that part stays open (docs/96 §8, question 1). *2:* yes, an organisation may
 > `box attach` a VM it runs; Kubernetes stays the default. *3:* intended: people in the group who
 > are not on the roster are guests. docs/96 also adds the second axis this record left implicit:
 > which machine provides a box to which installation.
