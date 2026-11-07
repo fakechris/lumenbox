@@ -134,10 +134,11 @@ Four properties, in the order they matter:
 ## 5. Where it runs, and what it is not
 
 **One machine is the default; the control plane is optional.** A personal installation is one
-person, one installation, its first box local — the degenerate case of the multiuser model,
-needing nothing turned on. A company runs the same core as a server: doors that log people
-in, a directory, boxes with member sets, more boxes by attach ([36](36-enterprise.md) §0, §3;
-people and their identities are [22](22-domain-model.md)). The multi-tenant control plane
+person, its Owner, with its boxes on that person's computer or their own VM, needing nothing
+turned on; it never adds a second person. A company runs the same core as a server, a separate
+organisation installation: doors that log people in, a directory, boxes with member sets,
+allocated on Kubernetes. The desktop app connects to both at once ([95](95-two-installations.md);
+[36](36-enterprise.md) §1; people and their identities are [22](22-domain-model.md)). The multi-tenant control plane
 (`agentbox control up`, `src/control`) is a separate, optional layer for hosting many
 installations: it allocates boxes, authenticates people and meters use, and is never in the
 path of a turn ([08](08-control-plane.md) §1). A single company does not need it.

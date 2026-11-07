@@ -24,7 +24,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [03-architecture](03-architecture.md) | Architecture | current | 2026-09-22 |
 | [04-design](04-design.md) | Design | current | 2026-09-27 |
 | [05-data](05-data.md) | Data | current | 2026-11-06 |
-| [08-control-plane](08-control-plane.md) | Control plane | current | 2026-09-12 |
+| [08-control-plane](08-control-plane.md) | Control plane | current | 2026-11-06 |
 | [11-roadmap](11-roadmap.md) | Roadmap and backlog | current | 2026-09-28 |
 | [21-dingtalk-wire](21-dingtalk-wire.md) | The DingTalk wire | current | 2026-08-28 |
 | [22-domain-model](22-domain-model.md) | The domain model: people, doors, workers, rooms | current | 2026-11-06 |
@@ -142,6 +142,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [89-thesis](89-thesis.md) | The design of LumenBox: a team of agents, real machines, and one record | current | 2026-11-01 |
 | [89-thesis.zh](89-thesis.zh.md) | LumenBox 的设计：一支 agent 团队、一台台真机器、一套记录 | current | 2026-11-01 |
 | [90-outside-supervisor](90-outside-supervisor.md) | 外部监督者：一个委托人，不是一双手 | current | 2026-11-02 |
+| [95-two-installations](95-two-installations.md) | Two installations side by side: a personal one that is its Owner's alone, an organisation that is a server | current | 2026-11-06 |
 
 ## handoff
 

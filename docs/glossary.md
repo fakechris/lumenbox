@@ -36,14 +36,15 @@ renamed: `door`, `worker`, `expert`, `front` stay in the code and the specs.
      its turns short and hands heavy work to background runs. A person sees *the default
      agent* (who answers a message that names nobody) and *background runs*; the words
      front agent and worker are not user-facing.
-4. **Owner, Admin and account holder are three layers, one word each** (INV-1685). Each word
-   names one layer, and no layer borrows another's word.
-   - The **Owner** (机主) is the one person of the desktop app on one computer. The app's first
-     start creates them; nobody signs in to become the Owner.
-   - An **Admin** (管理员) runs an organisation installation: a server deployment, whose first
-     Admin redeems the bootstrap code, or a desktop installation that let a second person in.
-     Adding that person asks first; on yes, the Owner becomes the first Admin, and the change is
-     recorded. An installation shows an Owner or Admins, never both.
+4. **Owner, Admin and account holder are three layers, one word each** (INV-1685, docs/95).
+   Each word names one layer, and no layer borrows another's word.
+   - The **Owner** (机主) is the one person of a personal installation: the desktop app on one
+     computer. The app's first start creates them; nobody signs in to become the Owner. A
+     personal installation never adds a second person (docs/95 §2).
+   - An **Admin** (管理员) runs an organisation installation: a server, whose first Admin redeems
+     the bootstrap code. A personal installation never becomes an organisation; to work with
+     others, its Owner joins or creates one. An installation shows an Owner or Admins, never
+     both. (Until INV-1689 lands, the app still offers to convert; that path is being removed.)
    - An **account holder** (账户持有人) manages a tenant on the control plane (docs/08). The code
      value stays `owner` (`src/control`); only the words a person reads say account holder.
 
@@ -59,6 +60,7 @@ renamed: `door`, `worker`, `expert`, `front` stay in the code and the specs.
 | **template** / 模板 | AgentTemplate, `.lumenbox-template.json` | template slug | staged · imported · stamped | sidebar Templates shelf · — · `agentbox template import/share/download` |
 | **channel** / 渠道 | door, Channel record (docs/22, docs/53) | channel id, the prefix of every identity it mints, e.g. `feishu-work:ou_…` | connected · not connected · needs a restart | Settings → Channels · the chat itself · — |
 | **group chat** / 群 | chat, "room" in channel code | platform chat id, e.g. `oc_…` | group rule `addressed` · `all` | Settings → Channels group rule · the group · — |
+| **installation** / 安装 | Installation: the roster's `installation.mode` (docs/22 §1a), its kinds in docs/95 | personal: this computer; organisation: its name and address | personal (个人) · organisation (组织) | the sidebar's first level (INV-1691) · — · `agentbox web --desktop` (personal, the app passes it), `agentbox web` on a server (organisation) |
 | **person** / 人 | Principal, Identity | principal id; identity `<channel id>:<subject>` | viewer · driver · admin | Settings → Team → People · `bind CODE` · — |
 | **Owner** / 机主 | Principal with role `admin` on an installation whose `installation.mode` is `single-machine` (installation.ts, docs/22 §1a) | principal id `local:owner` | Owner · became an Admin | Settings → Team → People (Owner · 机主) · — · `agentbox web --desktop` (the app passes it) |
 | **Admin** / 管理员 | Principal with role `admin` on an organisation installation (`installation.mode` absent or `organisation`) | principal id | admin | Settings → Team → People · the bootstrap code's sign-in page · — |
