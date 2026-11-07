@@ -207,7 +207,7 @@ export interface RememberDeps {
   /** The decision-model switch's dependencies (INV-1412); tests replace them, production reads the environment. */
   jev?: SwitchDeps;
   /** The organisation's knowledge (INV-1726): what maintenance reads beside the agent's own lines, and where it proposes a supersession, held (INV-1732). */
-  orgKnowledge?: Pick<OrgKnowledge, "recalledFor" | "append">;
+  orgKnowledge?: Pick<OrgKnowledge, "recalledFor" | "append" | "lines">;
   /** Where maintenance records two items of different layers that disagree (INV-1732). Without it, the pass sees only the agent's own lines, as before. */
   conflicts?: Pick<MemoryConflicts, "record">;
 }

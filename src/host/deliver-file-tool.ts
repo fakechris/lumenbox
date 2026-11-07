@@ -13,7 +13,7 @@
 import { MAIN_CONVERSATION } from "../agents/registry.ts";
 import { outcomeLine } from "../protocol/index.ts";
 import { checkDeliverable } from "./deliverables.ts";
-import { WORK_ROOT } from "./named-files.ts";
+import { DOCKER_WORK, workDir } from "./box-paths.ts";
 import { chatFilesRoot } from "./prompt.ts";
 import { alreadyDelivered, DELIVERABLE_LIMIT_BYTES, writeSnapshot } from "./task-deliverables.ts";
 import { isLive, type Task } from "./tasks.ts";
@@ -33,7 +33,7 @@ export function withDeliverFileTool(tools: { name: string; input_schema: unknown
     input_schema: {
       type: "object",
       properties: {
-        path: { type: "string", description: `The file's absolute path, under ${WORK_ROOT}/.` },
+        path: { type: "string", description: `The file's absolute path, under ${DOCKER_WORK}/.` }, // the box's own, as the tool list is read on it (inBox)
         note: { type: "string", description: "One line on what it is, for the person who opens it." },
         task_id: { type: "string", description: "The task it belongs to, e.g. \"t12\". Omit when you have one live task." },
       },
@@ -65,7 +65,8 @@ export async function deliverFileTool(context: ToolContext, input: Record<string
   if (context.box === undefined) return refused("there is no box to take the file from");
   const path = String(input.path ?? "").trim();
   const note = String(input.note ?? "").trim();
-  if (!path.startsWith(`${WORK_ROOT}/`) || path.split("/").includes("..")) return refused(`path must be a file under ${WORK_ROOT}/`);
+  const box = { kind: context.boxKind, workDir: context.boxWorkDir }, work = workDir(box); // the agent's box's (INV-1737)
+  if (!path.startsWith(`${work}/`) || path.split("/").includes("..")) return refused(`path must be a file under ${work}/`);
   if (note === "") return refused("note says in one line what the file is");
   const task = taskFor(context, String(input.task_id ?? "").trim());
   if (typeof task === "string") return refused(task);
@@ -99,7 +100,7 @@ export async function deliverFileTool(context: ToolContext, input: Record<string
   let chat = "";
   const conversation = context.conversation ?? MAIN_CONVERSATION;
   if (conversation !== MAIN_CONVERSATION) {
-    const outbox = `${chatFilesRoot(conversation, { kind: context.boxKind, workDir: context.boxWorkDir })}/outbox`;
+    const outbox = `${chatFilesRoot(conversation, box)}/outbox`;
     if (path.startsWith(`${outbox}/`)) chat = " It is already in this chat's outbox and goes out with your reply.";
     else {
       try {

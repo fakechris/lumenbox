@@ -16,11 +16,11 @@
  *   admission, memory-scope.ts), and a pair whose item was retracted, superseded or expired simply
  *   stops being shown. There is no "resolve" verb because resolving is correcting one of the items.
  * - **Supersession is proposed, never applied, on L1.** When the pass says the agent's newer line
- *   should replace an organisation item, the result is a *held* organisation item that names the
- *   old one in `supersedes` and is owned by the old one's owner — the promotion shape docs/98 §5
- *   rule 2 gives every agent proposal. A held line is read by nobody and supersedes nothing until a
- *   person approves it (org-knowledge.ts `live`). The pass never writes a retraction or a live line
- *   into L1.
+ *   should replace an organisation item, the line is *promoted* (org-promotion.ts `propose`, the one
+ *   path into L1, docs/98 §5 rule 2) with `supersedes` naming the old item and the old item's owner
+ *   as owner. It waits in the same organisation review as every promotion, which shows what it
+ *   replaces; a held line is read by nobody and supersedes nothing until a person approves it
+ *   (org-knowledge.ts `live`). The pass never writes a retraction or a live line into L1.
  */
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
@@ -30,6 +30,7 @@ import { dedupe, type MemoryRecord } from "./memory.ts";
 import { versionOf } from "./memory-admin.ts";
 import type { MaintenancePlan } from "./memory-maintenance.ts";
 import type { OrgKnowledge, OrgKnowledgeItem } from "./org-knowledge.ts";
+import { propose, type PromotionRequest } from "./org-promotion.ts";
 
 export const LEDGER_KIND: LedgerKind = "record";
 
@@ -65,9 +66,6 @@ export interface ConflictLine {
   proposal?: string;
 }
 
-/** The question a held supersession proposal carries: it waits for the organisation item's owner. */
-export const SUPERSESSION_QUESTION = "proposed by memory maintenance to replace an organisation item; waiting for its owner to review it";
-
 /** What a reader may read now, each store already admitted for this reader: the stores' own checks, not this module's. */
 export interface ReadableKnowledge {
   agentId: string;
@@ -97,24 +95,6 @@ export function validatePair(sides: readonly ConflictSide[]): string | undefined
   if (a.layer === b.layer) return "A disagreement recorded here is across layers; two lines of one layer are corrected in that layer.";
   if ([a, b].some(side => side.layer === "agent" && (side.holder === undefined || side.holder === ""))) return "An agent's own record names the agent that holds it.";
   return undefined;
-}
-
-/** A held organisation item proposing that `record`'s text replace `replacing`, owned by the replaced item's owner. Never live until a person approves it. */
-export function supersessionProposal(record: MemoryRecord, replacing: OrgKnowledgeItem, proposedBy: string, now: Date): OrgKnowledgeItem {
-  const evidence = (record.from ?? []).filter(ref => /^[^\s@:]+@\S+$/.test(ref));
-  return {
-    at: now.toISOString(),
-    kind: record.kind === "note" ? "note" : "fact",
-    text: record.text,
-    source: `maintenance:supersede:${proposedBy}`,
-    scope: replacing.scope ?? "org",
-    owner: replacing.owner ?? "",
-    supersedes: versionOf(replacing),
-    ...(evidence.length > 0 ? { evidence } : {}),
-    ...(replacing.surface !== undefined ? { surface: replacing.surface } : {}),
-    ...(replacing.pinned !== undefined ? { pinned: replacing.pinned } : {}),
-    held: { question: SUPERSESSION_QUESTION, confidence: 1 },
-  };
 }
 
 const day = (iso: string | undefined): string => (iso === undefined ? "undated" : iso.slice(0, 10));
@@ -222,7 +202,7 @@ export class MemoryConflicts {
  */
 export function recordAcrossLayers(
   plan: Pick<MaintenancePlan, "conflicts" | "supersessions">,
-  deps: { agentId: string; conflicts: Pick<MemoryConflicts, "record">; orgKnowledge?: Pick<OrgKnowledge, "append">; now: Date; log: (line: string) => void }
+  deps: { agentId: string; conflicts: Pick<MemoryConflicts, "record">; orgKnowledge?: Pick<OrgKnowledge, "append" | "lines">; now: Date; log: (line: string) => void }
 ): { pairs: number; proposals: number } {
   const at = deps.now.toISOString();
   let pairs = 0;
@@ -233,11 +213,17 @@ export function recordAcrossLayers(
   }
   for (const found of plan.supersessions) {
     let proposal: string | undefined;
-    try {
-      const held = deps.orgKnowledge?.append(supersessionProposal(found.record, found.replacing as OrgKnowledgeItem, deps.agentId, deps.now));
-      if (held !== undefined) { proposal = versionOf(held); proposals += 1; }
-    } catch (error) {
-      deps.log(`maintenance could not propose replacing org:${versionOf(found.replacing)}: ${error instanceof Error ? error.message : String(error)}`);
+    const replacing = found.replacing as OrgKnowledgeItem;
+    if (deps.orgKnowledge !== undefined) {
+      const result = propose(deps.orgKnowledge, {
+        source: { kind: "memory", record: found.record, holder: deps.agentId },
+        scope: (replacing.scope ?? "org") as PromotionRequest["scope"],
+        owner: replacing.owner ?? "",
+        via: deps.agentId,
+        supersedes: versionOf(replacing),
+      }, deps.now);
+      if (result.ok) { proposal = result.version; proposals += 1; }
+      else deps.log(`maintenance could not propose replacing org:${versionOf(replacing)}: ${result.why}`);
     }
     const sides: [ConflictSide, ConflictSide] = [{ layer: "agent", version: versionOf(found.record), holder: deps.agentId }, { layer: "org", version: versionOf(found.replacing) }];
     deps.conflicts.record({ at, sides, by: deps.agentId, reason: found.proposal.reason, ...(proposal !== undefined ? { proposal } : {}) });

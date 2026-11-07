@@ -81,7 +81,7 @@ import {
   templatesEnabled,
   toolsOf,
 } from "./template.ts";
-import { memoryDir, skillsDir, standingRoot } from "./box-paths.ts";
+import { memoryDir, skillsDir, standingRoot, workDir } from "./box-paths.ts";
 import { intersectTools } from "./catalog.ts";
 import { DisplayLease } from "../box/display-lease.ts";
 import { AttachedBoxProvisioner, resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
@@ -101,7 +101,7 @@ import type { MandateWorld } from "./mandate.ts";
 import { BoxError } from "../box/client.ts";
 import { Receipts } from "./receipts.ts";
 import { WedgeWatch } from "./wedge.ts";
-import { buildAuditPrompt, manifestDiff, MANIFEST_COMMAND, parseManifest } from "./audit.ts"; import { DEFAULT_REVIEWERS_PER_CLAIM, evidenceDigest, REVIEW_ACTOR, reviewRound, VerificationLedger } from "./review-dispatch.ts";
+import { buildAuditPrompt, manifestDiff, manifestCommand, parseManifest } from "./audit.ts"; import { DEFAULT_REVIEWERS_PER_CLAIM, evidenceDigest, REVIEW_ACTOR, reviewRound, VerificationLedger } from "./review-dispatch.ts";
 import { ALL_MCP_TOOLS, ScopeStore } from "./scopes.ts";
 import { delegateEndedNote, settleDelegate } from "./engine-report.ts";
 import { BundleStore } from "./bundles.ts";
@@ -628,7 +628,7 @@ export class Orchestrator {
 
   readonly scheduler = new Scheduler({
     precheck: async (skill, agent) => this.credentials.forRoutine(skill, agent), // skipped and held with missing_credentials (INV-1666)
-    spentSinceAgent: (sinceMs, agentId) => this.usage.spentSinceAgent(sinceMs, agentId),
+    spentSinceAgent: (sinceMs, agentId) => this.usage.spentSinceAgent(sinceMs, agentId), workDirOf: agent => workDir(this.registry.tryGet(agent) !== undefined ? this.boxEntryOf(agent) : undefined), // the run's prompt names its box's (INV-1737)
     due: async () => {
       const everywhere = await this.skillsEverywhere();
       return [...this.heartbeats(), ...everywhere.flatMap(({ boxId, skills }) => skills
@@ -871,7 +871,7 @@ export class Orchestrator {
   private async workspaceManifest(): Promise<Map<string, string> | undefined> {
     if (this.box === undefined) return undefined;
     try {
-      const result = await this.box.exec(MANIFEST_COMMAND, {
+      const result = await this.box.exec(manifestCommand(workDir(this.registry.defaultBox())), { // the box this.box is (INV-1737)
         timeoutMs: 60_000,
         actor: "host:audit-manifest",
       });
@@ -1688,7 +1688,7 @@ export class Orchestrator {
       const settled = (async (): Promise<ReconcileResult | undefined> => {
         const box = this.boxFor(already.id);
         if (box === undefined) return undefined;
-        const dir = recipeDirFor(already.profile.name);
+        const dir = recipeDirFor(already.profile.name, this.boxEntryOf(already.id));
         const recipePath = `${dir}/recipe.md`;
         try {
           await box.exec(`mkdir -p ${dir}`, { timeoutMs: 15_000, actor: "host:template" });
@@ -1757,7 +1757,7 @@ export class Orchestrator {
         log(`import ${id}: no box, so ${agent.profile.name} cannot install its recipe; it will start blank`);
         return undefined;
       }
-      const dir = recipeDirFor(agent.profile.name);
+      const dir = recipeDirFor(agent.profile.name, this.boxEntryOf(agent.id));
       const recipePath = `${dir}/recipe.md`;
       try {
         await box.exec(`mkdir -p ${dir}`, { timeoutMs: 15_000, actor: "host:template" });
@@ -2701,7 +2701,7 @@ export const ALL_TOOLS: readonly string[] = [
   "ReadHistory",
   "ReadKept",
   "ClaimWork",
-  "RememberFact",
+  "RememberFact", "Promote", // proposing an organisation item, always reviewed (INV-1729)
   "Forget",
   "Recall",
   "OtherThreads",

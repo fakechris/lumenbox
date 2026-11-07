@@ -36,7 +36,7 @@ import type { Ingress } from "./ingress.ts";
 import type { Messages } from "./messages.ts";
 import { randomUUID } from "node:crypto";
 import { channelHealth, type ChannelHealth } from "./liveness.ts";
-import { boxPathsNamed, undelivered } from "../host/named-files.ts";
+import { boxPathsNamed, undelivered } from "../host/named-files.ts"; import { DOCKER_WORK } from "../host/box-paths.ts";
 import { checkDeliverable, isBroken } from "../host/deliverables.ts";
 import { boardText, type BoardView } from "./board-view.ts";
 import type { A2uiMessage } from "../host/show-ui-catalog.ts";
@@ -630,7 +630,7 @@ export interface ChannelManagerDeps {
    * Reads one file out of the box by absolute path, for a reply that named a deliverable
    * instead of handing it over. Undefined when there is no box to read from.
    */
-  readBoxFile?: (path: string) => Promise<{ name: string; base64: string } | undefined>;
+  readBoxFile?: (path: string) => Promise<{ name: string; base64: string } | undefined>; /** The work directory of the box it reads (`workDir`, box-paths.ts): only paths under it are offered (INV-1737); the image's when not given. */ workDir?: () => string;
   /**
    * Marks collected files delivered — moved to sent/ — after their pushes succeeded.
    * Only what was actually pushed: a file whose push failed stays in the outbox and
@@ -1226,7 +1226,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
 
       // A file the text *names* but never handed over. An agent wrote its research to a path under the work directory and said "the full version is at «path»", which is a real
       // file in the box and an unopenable string to the person reading it in a chat — they had to ask for it again. The outbox convention is in the prompt and was not followed, and whether it was is a path comparison rather than a judgement, so the harness checks rather than asks harder. Never retry an ambiguous failed send via the named-path fallback in this turn.
-      const named = undelivered(boxPathsNamed(text), files.map(file => file.name));
+      const named = undelivered(boxPathsNamed(text, this.deps.workDir?.() ?? DOCKER_WORK), files.map(file => file.name));
       for (const path of named.slice(0, 3)) {
         const file = await this.deps.readBoxFile?.(path).catch(() => undefined);
         if (file === undefined) {

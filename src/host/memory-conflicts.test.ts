@@ -18,7 +18,8 @@ import { AgentRegistry } from "../agents/registry.ts";
 import { AgentBus } from "../agents/bus.ts";
 import type { InstallationMode } from "./installation.ts";
 import { versionOf } from "./memory-admin.ts";
-import { MemoryConflicts, recordAcrossLayers, SUPERSESSION_QUESTION } from "./memory-conflicts.ts";
+import { MemoryConflicts, recordAcrossLayers } from "./memory-conflicts.ts";
+import { decide, ORG_REVIEW_QUESTION, pendingPromotions } from "./org-promotion.ts";
 import { buildMaintenancePrompt, referenceForMaintenance, snapshotForMaintenance, verifyMaintenanceProposals } from "./memory-maintenance.ts";
 import type { MemoryRecord } from "./memory.ts";
 import { OrgKnowledge, type OrgKnowledgeItem } from "./org-knowledge.ts";
@@ -156,7 +157,9 @@ test("maintenance may propose replacing an organisation item, held for its owner
 
     const proposed = org.lines()[1]!;
     assert.equal(org.lines().length, 2, "one line added, and it is a proposal");
-    assert.deepEqual(proposed.held, { question: SUPERSESSION_QUESTION, confidence: 1 });
+    assert.deepEqual(proposed.held, { question: ORG_REVIEW_QUESTION, confidence: 1 }, "it waits in the organisation review every promotion waits in");
+    assert.deepEqual(pendingPromotions(org.lines()).map(pending => pending.item.text), ["the release train leaves on Fridays now"]);
+    assert.equal(proposed.via, ada.id);
     assert.equal(proposed.supersedes, versionOf(releases));
     assert.equal(proposed.owner, "p-ann", "it goes to the replaced item's owner");
     assert.equal(proposed.verifiedBy, undefined, "nobody stands behind it yet");
@@ -168,9 +171,8 @@ test("maintenance may propose replacing an organisation item, held for its owner
     const section = conflicts.section({ agentId: ada.id, agent: registry.readMemoryRecords(ada.id), box: [], org: org.recalledFor(ada.id, undefined) })!;
     assert.match(section, /A replacement from your memory is waiting for p-ann's review; until it is approved the organisation item stands\./);
 
-    // An approval (INV-1729's path) is a later line without the hold: only then is the old item replaced.
-    const { held: _held, ...approved } = proposed;
-    org.append({ ...approved, at: "2026-11-08T00:00:00.000Z", verifiedBy: "p-ann", verifiedAt: "2026-11-08T00:00:00.000Z" });
+    // The owner approves it through the organisation review (INV-1729): only then is the old item replaced.
+    assert.equal(decide(org, versionOf(proposed), "approved", "p-ann", id => registry.boxById(id), { now: new Date("2026-11-08T00:00:00.000Z") }).ok, true);
     assert.deepEqual(org.recalledFor(ada.id, undefined).map(line => line.text), ["the release train leaves on Fridays now"]);
   } finally {
     cleanup();

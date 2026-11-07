@@ -17,9 +17,6 @@
  * alongside, and the answer still reads as the agent wrote it.
  */
 
-/** Where the box keeps an agent's work. Paths outside it are not ours to deliver. */
-export const WORK_ROOT = "/home/box/work";
-
 /**
  * Absolute box paths a reply names, in the order they appear, deduplicated.
  *
@@ -27,13 +24,18 @@ export const WORK_ROOT = "/home/box/work";
  * backtick or bracket, because a path in prose is usually fenced by one of those, and a
  * greedy match would swallow the sentence after it. Trailing punctuation is trimmed for
  * the same reason: "…at /home/box/work/x.md, below is the summary" names `x.md`.
+ *
+ * `work` is the box's work directory (`workDir`, box-paths.ts): paths outside it are not ours to
+ * deliver. The image's `/home/box/work` on a Docker box; a host box's own (INV-1737).
  */
-export function boxPathsNamed(reply: string): string[] {
+export function boxPathsNamed(reply: string, work: string): string[] {
   const found: string[] = [];
-  for (const match of reply.matchAll(/\/home\/box\/work\/[^\s`'"()<>[\]，。、）]+/g)) {
+  const root = work.replace(/[.*+?^$()|{}[\]\\]/g, "\\$&");
+  const named = new RegExp(root + "/[^\\s`'\"()<>[\\]，。、）]+", "g");
+  for (const match of reply.matchAll(named)) {
     const path = match[0].replace(/[.,;:!?]+$/, "");
-    // A bare directory is not a deliverable, and neither is the work root itself.
-    if (path === WORK_ROOT || !/\.[A-Za-z0-9]{1,8}$/.test(path)) continue;
+    // A bare directory is not a deliverable.
+    if (!/\.[A-Za-z0-9]{1,8}$/.test(path)) continue;
     if (!found.includes(path)) found.push(path);
   }
   return found;

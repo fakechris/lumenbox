@@ -124,7 +124,7 @@ import {
   PERSON_FACING_TOOLS,
   SILENCE_TOOL,
   PARALLEL_TOOL_LIMIT,
-  buildTools,
+  buildTools, toolsInBox,
   dispatchTool,
   type ToolContext,
   type ToolOutcome,
@@ -562,7 +562,7 @@ export interface TurnDeps {
    * Pushes the agent's standing files to its box before the turn reads them (INV-777), so the
    * copy it may edit is the copy the prompt carries. Absent means no mirror — tests, or no box.
    */
-  syncStanding?: (agentId: string) => Promise<unknown>; person?: (principalId: string | undefined) => string | undefined; orgKnowledge?: Pick<OrgKnowledge, "section" | "forRecall" | "recalledFor">; conflicts?: Pick<MemoryConflicts, "section">; // the host's record of the person driving, rendered (INV-1653); the organisation's knowledge (INV-1726)
+  syncStanding?: (agentId: string) => Promise<unknown>; person?: (principalId: string | undefined) => string | undefined; orgKnowledge?: Pick<OrgKnowledge, "section" | "forRecall" | "append" | "lines" | "recalledFor">; conflicts?: Pick<MemoryConflicts, "section">; // the host's record of the person driving, rendered (INV-1653); the organisation's knowledge (INV-1726)
   /** The template this turn installs, when it is an imported bot's setup turn (docs/29). */
   templateSetup?: string;
   /** Where a packed template is staged; absent withholds PackTemplate. */
@@ -2089,7 +2089,7 @@ ${outcome.text}`;
   // The split (INV-1341): the resident built-ins ride in the list; the deferred ones wait in the
   // catalog behind the lookup pair, which a fork never gets (MCP tools are outward channels too,
   // docs/32 §2). A routine that named a deferred tool or an external one keeps the pair.
-  const roster = splitRoster(offered);
+  const roster = splitRoster(toolsInBox(offered, { kind: deps.boxKind, workDir: deps.boxWorkDir })); // as this box reads them (INV-1737)
   const deferred = isForkConversation(conversation) ? [] : roster.deferred;
   const tools: Anthropic.Tool[] = isForkConversation(conversation)
     ? roster.resident

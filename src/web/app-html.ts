@@ -4832,7 +4832,7 @@ function refreshProgress() {
  *     order answers a different one.
  *   - **Room.** A tab rather than a strip, so the list and the preview both get height.
  */
-var filesDir = "", filesRoot = ""; // the box's work directory, as /api/files says it (INV-1736)
+var filesDir = "", filesRoot = "", filesRootAsked = false; // the box's work directory, as /api/files says it (INV-1736)
 var filesSelected = null;
 
 function fileKind(name) {
@@ -5650,7 +5650,7 @@ function taskDetail(t) {
         : esc(t.conversation))
     : "{{ui.app.the-team-room}}";
   return '<div style="margin:8px 0 2px 26px;padding:8px 10px;border-left:2px solid var(--border)">' +
-    (t.description ? '<div style="font-size:12px;margin-bottom:6px">' + esc(t.description) + "</div>" : "") + (window.claimAccountHtml ? window.claimAccountHtml(t) : "") + (window.deliverablesHtml ? window.deliverablesHtml(t) : "") + (window.configVersionsHtml ? window.configVersionsHtml(t) : "") + (window.divisionHtml ? window.divisionHtml(t) : "") + (window.taskGateHtml ? window.taskGateHtml(t) : "") + // a claimed goal's decisions and unchecked parts (INV-1574), then its deliverables (INV-1663), the configuration versions it ran under (INV-1669), its division of work (INV-1667) and the gate's verdicts on its steps (INV-1672), above its history
+    (t.description ? '<div style="font-size:12px;margin-bottom:6px">' + esc(t.description) + "</div>" : "") + (window.claimAccountHtml ? window.claimAccountHtml(t) : "") + (window.deliverablesHtml ? window.deliverablesHtml(t) : "") + (window.orgPromoteHtml ? window.orgPromoteHtml(t) : "") + (window.configVersionsHtml ? window.configVersionsHtml(t) : "") + (window.divisionHtml ? window.divisionHtml(t) : "") + (window.taskGateHtml ? window.taskGateHtml(t) : "") + // a claimed goal's decisions and unchecked parts (INV-1574), then its deliverables (INV-1663), the configuration versions it ran under (INV-1669), its division of work (INV-1667) and the gate's verdicts on its steps (INV-1672), above its history
     '<div class="dim" style="font-size:11px;margin-bottom:6px">' +
       "{{ui.app.asked-by}} " + esc(nameOf(t.requester) || t.requester) + " {{ui.app.in-3}} " + conversation +
       " {{ui.app.created}} " + esc(new Date(t.createdAt).toLocaleString()) +
@@ -5875,12 +5875,12 @@ setInterval(function () {
  *
  * Agents already say "I wrote /home/box/work/report.md", and that was dead text — the single
  * cheapest thing that was missing. Applied after markdown rendering, and skipped inside an existing
- * anchor so a path already formatted as a link is left alone.
+ * anchor so a path already formatted as a link is left alone. The work directory is the box's, as /api/files says it (a host box's own, INV-1737): asked once, the image's until it answers.
  */
 function linkifyWorkPaths(html) {
-  return html.replace(/(^|[\s>(\[])(\/home\/box\/work\/[^\s<>)\]"']+)/g, function (all, lead, path) {
-    var clean = path.replace(/[.,;:]+$/, "");
-    var trailing = path.slice(clean.length);
+  if (!filesRoot && !filesRootAsked) { filesRootAsked = true; fetch("/api/files").then(function (r) { return r.json(); }).then(function (listing) { if (listing.root) filesRoot = listing.root; }).catch(function () {}); } var root = (filesRoot || "/home/box/work").replace(/[.*+?^$()|{}[\]\\]/g, "\\$&");
+  return html.replace(new RegExp("(^|[\\s>(\\[])(" + root + "/[^\\s<>)\\]\"']+)", "g"), function (all, lead, path) {
+    var clean = path.replace(/[.,;:]+$/, ""), trailing = path.slice(clean.length);
     return lead + '<a href="/api/file?path=' + encodeURIComponent(clean) +
       '" target="_blank" rel="noopener">' + clean + "</a>" + trailing;
   });

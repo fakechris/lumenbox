@@ -3,7 +3,7 @@ import { inputValueHash, parseSensitiveInput, SENSITIVE_INPUT_TTL_MS } from "../
 import { approvalOf, computerWithVision, desktopGuard, visionActionSchema, visionExpectSchema } from "./computer-vision.ts";
 import { deliveryLine } from "../cua/delivery.ts";
 import { formatExec } from "./exec-format.ts";
-import { isWaitOnly, onEndSchema, parseOnEnd } from "./job-end.ts"; import { currentTaskOf, levelOfCurrentTask, parseLevel } from "./autonomy-level.ts"; import { splitWhy, WHY_FIELD } from "./consent-case.ts"; import { describeDiscovery, DISCOVERY_FIELDS, parseDiscovery } from "./discovery.ts"; import type { JobWatch } from "./job-watch.ts"; import { deliverFileTool, withDeliverFileTool } from "./deliver-file-tool.ts";
+import { isWaitOnly, onEndSchema, parseOnEnd } from "./job-end.ts"; import { currentTaskOf, levelOfCurrentTask, parseLevel } from "./autonomy-level.ts"; import { splitWhy, WHY_FIELD } from "./consent-case.ts"; import { describeDiscovery, DISCOVERY_FIELDS, parseDiscovery } from "./discovery.ts"; import type { JobWatch } from "./job-watch.ts"; import { deliverFileTool, withDeliverFileTool } from "./deliver-file-tool.ts"; import { promoteTool, withPromoteTool } from "./promote-tool.ts";
 /**
  * Tool definitions and dispatch.
  *
@@ -42,7 +42,7 @@ import { catalogMenu, crewTeam, intersectTools, profilesFor } from "./catalog.ts
 import { type Claims, heldElsewhere } from "./claims.ts";
 import { namesControlSurface } from "./control-surfaces.ts";
 import { deliveryInstructions, reportPath } from "./delegate-report.ts";
-import { boxPaths, type BoxPlace, memoryDir, skillsDir, standingRoot, workDir } from "./box-paths.ts";
+import { boxPaths, type BoxPlace, DOCKER_WORK, inBox, memoryDir, skillsDir, standingRoot, workDir } from "./box-paths.ts";
 import { actOnDelegateSession } from "./delegate-session-actions.ts";
 import type { DelegateSessions } from "./delegate-sessions.ts";
 import {
@@ -133,7 +133,7 @@ export interface ToolContext {
    * Used to record who a memory is about. Absent on a box driven directly, which is the single-user
    * case and where "about whom" has one answer.
    */
-  caller?: { userId?: string }; orgKnowledge?: Pick<OrgKnowledge, "forRecall">; // the organisation's knowledge this turn may read, admitted for `caller` (INV-1726); absent in isolated and guest turns
+  caller?: { userId?: string }; orgKnowledge?: Pick<OrgKnowledge, "forRecall" | "append" | "lines">; // the organisation's knowledge this turn may read, admitted for `caller` (INV-1726), and propose into (Promote, INV-1729); absent in isolated and guest turns
   /** The person's name, for a rule written with a name rather than an id (INV-156). */
   callerName?: string;
   /** Every door identity the person driving this turn speaks from, e.g. `feishu:ou_…` (INV-754). */
@@ -463,7 +463,7 @@ export const FORK_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
   "Tasks", "DeliverFile",
   "HandBack",
   "ClaimWork",
-  "RememberFact",
+  "RememberFact", "Promote",
   "PackTemplate",
   "Delegate",
   "Fork",
@@ -1849,7 +1849,7 @@ export function buildTools(
         required: ["action"],
       },
     }
-  ); withDeliverFileTool(tools); // a task's deliverables (INV-1663)
+  ); withDeliverFileTool(tools); withPromoteTool(tools); // a task's deliverables (INV-1663); proposing an organisation item (INV-1729)
 
   // The door out of the box, only when an operator has built one. Not added-and-
   // withheld — absent, so a box without host execution never puts the idea in an
@@ -2391,7 +2391,9 @@ function truncate(text: string, max: number): string {
   );
 }
 
-const boxOf = (context: ToolContext): BoxPlace => ({ kind: context.boxKind, workDir: context.boxWorkDir }); // the agent's box, as box-paths.ts takes it (INV-1736)
+export const boxOf = (context: ToolContext): BoxPlace => ({ kind: context.boxKind, workDir: context.boxWorkDir }); // the agent's box, as box-paths.ts takes it (INV-1736)
+/** The tool list as an agent on this box reads it (INV-1737): text written for the image names the box's own work directory. The image's list is returned as it is. */
+export const toolsInBox = (tools: Anthropic.Tool[], box: BoxPlace): Anthropic.Tool[] => (workDir(box) === DOCKER_WORK ? tools : tools.map(tool => JSON.parse(inBox(JSON.stringify(tool), box)) as Anthropic.Tool));
 const skillsOf = (context: ToolContext): string => skillsDir(boxOf(context)); // every skill path a tool sees is judged against the agent's box's (INV-1719)
 /**
  * What a setup turn's write into a skill file becomes: stamped with the template it came from,
@@ -4060,7 +4062,7 @@ export async function dispatchTool(
       }
     }
 
-    case "DeliverFile": return deliverFileTool(context, input); case "RunOperation": return runOperationTool(context, input); // INV-1663; INV-1378
+    case "DeliverFile": return deliverFileTool(context, input); case "Promote": return promoteTool(context, input); case "RunOperation": return runOperationTool(context, input); // INV-1663; INV-1378
     case "browser_verify_write":
       return { text: writePaths.verify(writePathKey(context.agent.id, context.conversation), String(input.mark ?? ""), (["done", "not_done", "unknown"] as const).find(v => v === input.verdict) ?? "unknown", String(input.evidence ?? "").slice(0, 300)) };
     case "browser_open":
@@ -4652,7 +4654,7 @@ export async function dispatchTool(
       const rejected = validatePlan(plan);
       // Returned as an error so the model reads it and can act: a refusal that does not say what
       // would be accepted produces a retry of the same thing.
-      if (rejected !== undefined) return { text: rejected.reason, isError: true };
+      if (rejected !== undefined) return { text: inBox(rejected.reason, boxOf(context)), isError: true };
       context.registry.writePlan(context.agent.id, plan, context.conversation);
       return {
         text:
@@ -4665,7 +4667,7 @@ export async function dispatchTool(
       const name = String(input.name ?? "").trim();
       const value = String(input.value ?? "");
       const rejected = validateCheckpoint(name, value);
-      if (rejected !== undefined) return { text: rejected.reason, isError: true };
+      if (rejected !== undefined) return { text: inBox(rejected.reason, boxOf(context)), isError: true };
       const partial = input.partial !== false;
       const state = context.registry.readDurableState(context.agent.id, context.conversation);
       const next = withCheckpoint(state.checkpoints, { name, value, at: new Date().toISOString(), partial });
@@ -5235,7 +5237,7 @@ export async function dispatchTool(
     case "RememberFact": {
       const fact = String(input.fact ?? "").trim();
       const rejected = validateRecord(fact) ?? guardMemoryCandidate(fact, { held: context.vault?.heldValues() ?? new Map() });
-      if (rejected !== undefined) return { text: rejected.reason, isError: true };
+      if (rejected !== undefined) return { text: inBox(rejected.reason, boxOf(context)), isError: true }; // the refusals name the image's work volume (INV-1737)
       // `audience` is retired (INV-1727, docs/98 §9 row 4): team memory is the box's, and what is true
       // for every box is promoted by a person, never marked so by the agent that wrote it. Said, not
       // ignored: an agent that asked for every box and silently got one would believe otherwise.

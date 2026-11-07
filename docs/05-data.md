@@ -355,6 +355,16 @@ counted ("N more"); items the turn's words touch follow, ranked by `rankRelated`
 Never read by a guest turn (docs/97), an isolated turn, or a personal installation, which has
 none and whose writes are refused (`PersonalInstallationNeverWrites`, docs/98 §8).
 
+Written only by promotion (INV-1729, `src/host/org-promotion.ts`): an agent's `Promote` or an
+Admin's promote action (Settings → Memory, the task card) appends the item **held** — `held.question`
+says it waits for organisation review — with `owner` (the member who drove the turn; an Admin's own
+promotion is that Admin's), `via` (the proposing agent), `source` (`promoted from memory:<agent>/<version>`,
+`task:<id>` or `receipt:<id>`) and at least one `evidence` reference. The decision is the next line:
+approved is the item again without the hold, with `review: { of, decision, by }`, `verifiedBy`,
+`verifiedAt` and, when the reviewer pins it, `pinned`; rejected is the item again, still held, with
+`review`. A receipt's id is a digest of its time, subject and decision (`receiptId`). Organisation
+review has no setting: it is always on.
+
 ### 2.2e `memory-conflicts.jsonl` — items that disagree across layers (INV-1732, docs/98 §7)
 
 One line per pair of items of different layers (L1 organisation, L2 box, L3 an agent's own) that
@@ -368,8 +378,10 @@ may read both sides through their own stores' admission (§2.2c, §2.2d), so the
 reading, and a pair whose side was retracted, superseded or expired is simply no longer shown. A
 pair is recorded once, in either order; a later line for the same pair only adds a `proposal`.
 `holder` names the agent of an `agent` side, the only agent that may read it. `proposal` is the
-version of a held line in `org-knowledge.jsonl` that would replace the L1 side: maintenance writes
-it held, owned by the replaced item's owner, and it supersedes nothing until a person approves it.
+version of a held line in `org-knowledge.jsonl` that would replace the L1 side: maintenance promotes
+the agent's line (`propose`, §2.2d) with `supersedes` naming the L1 side and that item's owner as
+owner, so it waits in the same organisation review, which shows what approving it replaces; a held
+line supersedes nothing until a person approves it.
 The prompt renders the pairs under "These disagree", higher layer first, newest pair first, in
 1,200 characters, the rest counted.
 

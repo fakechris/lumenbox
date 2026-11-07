@@ -11,7 +11,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { boxPaths, DOCKER_BOX_PATHS, skillsDir, type BoxPaths } from "./box-paths.ts";
+import { boxPaths, digestDir, DOCKER_BOX_PATHS, inBox, skillsDir, templatesDir, type BoxPaths } from "./box-paths.ts";
 import { delegateCommand, engineMissing, installCommand, PRESETS, presetNamed, probeCommand, quoteForShell, skillsLink } from "./presets.ts";
 import { reportPath } from "./delegate-report.ts";
 import { HostSandbox } from "./host-sandbox.ts";
@@ -66,7 +66,14 @@ test("a Docker box gets byte for byte what it always got: the image's homes, the
   assert.equal(DOCKER_BOX_PATHS.mcpFaces, "/home/box/work/.lumenbox/mcp");
   assert.equal(reportPath("job-1", DOCKER_BOX_PATHS), "/home/box/work/.lumenbox/reports/job-1.json");
   // The skills directory every host-side reader and writer uses (INV-1719), and mcode's run, which links nothing here.
-  for (const box of [undefined, { kind: "docker" as const }, { kind: "attached" as const, workDir: "/somewhere/else" }, { kind: "host" as const, workDir: "/w/$(x)" }]) assert.equal(skillsDir(box), "/home/box/work/skills");
+  // And the other image paths the host names (INV-1737): templates, day packages, and text written for the image, unchanged.
+  const imageText = "put it under /home/box/work and say the path; /home/box/work/x.md";
+  for (const box of [undefined, { kind: "docker" as const }, { kind: "attached" as const, workDir: "/somewhere/else" }, { kind: "host" as const, workDir: "/w/$(x)" }]) {
+    assert.equal(skillsDir(box), "/home/box/work/skills");
+    assert.equal(templatesDir(box), "/home/box/work/templates");
+    assert.equal(digestDir(box), "/home/box/work/digest");
+    assert.equal(inBox(imageText, box), imageText);
+  }
   assert.equal(SKILLS_DIR, "/home/box/work/skills");
   const mcode = presetNamed("mcode")!;
   assert.equal(mcode.run("'x'", "m", undefined, DOCKER_BOX_PATHS), mcode.run("'x'", "m"));
@@ -115,6 +122,11 @@ test("on a host box every path a delegation names is in the work directory, the 
     }
     assert.doesNotMatch(installCommand(preset, paths), /ln -sfn/, `${preset.name}: the install is no one agent's, so it links nothing`);
   }
+  // What the host itself puts in the box or names to the agent (INV-1737): under the same directory, and none of it the image's.
+  const box = { kind: "host" as const, workDir: `${work}/` };
+  assert.equal(templatesDir(box), `${work}/templates`);
+  assert.equal(digestDir(box), `${work}/digest`);
+  assert.equal(inBox("under /home/box/work, as in /home/box/work/x.md", box), `under ${work}, as in ${work}/x.md`);
   // The engine homes are where the box points the engines (STATE_VARIABLES, one table for both sides).
   const state = mkdtempSync(join(tmpdir(), "box-paths-state-"));
   try {

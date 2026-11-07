@@ -143,7 +143,7 @@ export const FilePreviewApi = {
   schema: z
     .object({
       weight: z.number().optional(),
-      /** An absolute path under /home/box/work. */
+      /** An absolute path under the box's work directory (`/home/box/work` on the image). */
       path: z.string().min(1),
       title: DynamicStringSchema.optional(),
       /** How many lines of a text file to show; default 20, 0 for the link only. */
@@ -202,7 +202,7 @@ export const CalloutApi = {
 };
 
 /**
- * A link: to a file in the box (an absolute path under /home/box/work), a task (t12), or an
+ * A link: to a file in the box (an absolute path under its work directory), a task (t12), or an
  * http(s) URL. An external URL shows its host beside the text and never opens by itself.
  */
 export const LinkApi = {

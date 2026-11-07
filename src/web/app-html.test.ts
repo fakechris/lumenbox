@@ -337,3 +337,21 @@ test("a card press always has a line to land on, and the same press again within
   const body = APP_HTML.slice(APP_HTML.indexOf("function sendSurfaceAction"), APP_HTML.indexOf("function pushItem"));
   assert.ok(body.indexOf("already sent") < body.indexOf('fetch("/api/prompt"'), "the repeat check comes before the send");
 });
+
+test("a work path in a reply becomes a link under the box's own work directory, as /api/files names it (INV-1737)", async () => {
+  // The page's linkifyWorkPaths, lifted out with the one call it makes stubbed: on a host box the
+  // agent writes `<work>/x.md`, and only the image's `/home/box/work/...` used to become a link.
+  const source = /function linkifyWorkPaths\(html\) \{[\s\S]*?\n\}/.exec(APP_HTML)?.[0];
+  assert.ok(source, "linkifyWorkPaths is on the page");
+  const work = "/Users/ada/lumen.box", asked: string[] = [];
+  const fetchStub = (url: string) => { asked.push(url); return Promise.resolve({ json: () => Promise.resolve({ root: work }) }); };
+  const linkify = new Function("fetch", `var filesRoot = "", filesRootAsked = false; ${source}; return linkifyWorkPaths;`)(fetchStub) as (html: string) => string;
+  const reply = `<p>wrote ${work}/x.md, and /home/box/work/y.md and /Users/ada/lumenXbox/z.md</p>`;
+  const before = linkify(reply);
+  assert.match(before, /<a href="\/api\/file\?path=%2Fhome%2Fbox%2Fwork%2Fy\.md"/, "the image's until the page knows the box");
+  await new Promise(resolve => setImmediate(resolve));
+  const after = linkify(reply);
+  assert.ok(after.includes(`<a href="/api/file?path=${encodeURIComponent(`${work}/x.md`)}" target="_blank" rel="noopener">${work}/x.md</a>,`), after);
+  assert.equal((after.match(/<a /g) ?? []).length, 1, "the image's path and a look-alike sibling are not this box's files");
+  assert.deepEqual(asked, ["/api/files"], "asked once");
+});
