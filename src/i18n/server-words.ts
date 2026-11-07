@@ -43,6 +43,15 @@ export const SERVER_WORDS: Record<string, readonly [zh: string, en: string]> = {
   "page.oauth.connected": ["已连接 {provider}", "Connected {provider}"],
   "page.oauth.connected-how": ["token 已存进这台机器的密钥库。可以关掉这个标签页，到 设置 → 渠道 → 连接器 里把它授权给谁。", "The token is in this machine's vault. You can close this tab and grant it in Settings → Channels → Connectors."],
   "page.oauth.not-connected": ["没有连接", "Not connected"],
+  // A channel's status on Settings → Channels (channels/status-line.ts, INV-1702). Variable names stay as typed.
+  "channel.status.starting": ["正在启动", "starting"],
+  "channel.status.connected": ["已连接", "connected"],
+  "channel.status.set-one": ["请设置 {name}", "set {name}"],
+  "channel.status.set-two": ["请设置 {first} 和 {second}", "set {first} and {second}"],
+  "channel.status.socket-ready": ["连接正常，已持续 {minutes} 分钟", "socket ready for {minutes}m"],
+  "channel.status.socket-connecting": ["正在连接（{minutes} 分钟）", "socket connecting ({minutes}m)"],
+  "channel.status.socket-lost": ["{minutes} 分钟前断开，正在重连", "socket lost {minutes}m ago; reconnecting"],
+  "channel.status.socket-lost-why": ["{minutes} 分钟前断开（{why}），正在重连", "socket lost {minutes}m ago ({why}); reconnecting"],
   // A desktop frame before noVNC answers.
   "page.desktop.title": ["桌面", "desktop"],
   "page.desktop.starting": ["桌面正在启动…", "Desktop is starting…"],

@@ -3,7 +3,8 @@
  "profile": {
   "name": "Product Idea Stress Test",
   "title": "Product Idea Stress Test",
-  "description": "Investigates a product or startup idea for founders. Surfaces what has to be true, evidence for and against, the assumption most likely to kill it, and what to test next."
+  "description": "Investigates a product or startup idea for founders. Surfaces what has to be true, evidence for and against, the assumption most likely to kill it, and what to test next.",
+  "descriptionZh": "替创始人调查一个产品或创业想法。列出必须成立的前提、正反两方面的证据、最可能让它失败的假设，以及下一步该验证什么。"
  },
  "memory": [
   {

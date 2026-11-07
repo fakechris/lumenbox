@@ -28,7 +28,7 @@ test("a refusal keeps its code and speaks the asker's language: ?lang=, then the
   assert.deepEqual(localizedBody({ error: "from a deeper module" }, request("/")), { error: "from a deeper module" }, "a body that is not an apiError passes as it is");
 });
 
-test("Settings speaks the reader's language: prompt parts, connector setup, the catalog and the usage forecast", async () => {
+test("Settings speaks the reader's language: prompt parts, connector setup, the catalog, the usage forecast, the shelf and the channels", async () => {
   const home = mkdtempSync(join(tmpdir(), "agentbox-server-words-"));
   const previous = process.env.AGENTBOX_HOME;
   process.env.AGENTBOX_HOME = home;
@@ -52,6 +52,12 @@ test("Settings speaks the reader's language: prompt parts, connector setup, the 
       const catalog = await read("/api/catalog", lang);
       assert.match(catalog.experts.find((e: { slug: string }) => e.slug === "designer").summary, summary, `${lang}: a catalog line`);
       assert.match((await read("/api/provider/rests", lang)).quota, forecast, `${lang}: the usage forecast`);
+      // The shelf's templates and each channel's status (INV-1702): a variable's name stays as typed.
+      const shelf = (await read("/api/templates/shelf", lang)).marketplace as { slug: string; description: string }[];
+      assert.match(shelf.find(t => t.slug === "ad-spend-watch")!.description, lang === "zh" ? /^盯着你的广告花费/ : /^Watches your ad spend/, `${lang}: a shelf template's line`);
+      const statuses = (await read("/api/channels", lang)).channels as { name: string; detail: string }[];
+      assert.equal(statuses.find(s => s.name === "feishu")!.detail, lang === "zh" ? "请设置 FEISHU_APP_ID 和 FEISHU_APP_SECRET" : "set FEISHU_APP_ID and FEISHU_APP_SECRET", `${lang}: a channel's status`);
+      if (lang === "zh") assert.deepEqual(shelf.filter(t => !/\p{Script=Han}/u.test(t.description)).map(t => t.slug), [], "every shelf template carries its Chinese line");
       const missing = await read("/api/agents/config-versions?agent=nobody", lang);
       assert.deepEqual([missing.code, missing.error], ["agent-unknown", lang === "zh" ? "没有 agent nobody" : "No agent nobody"], `${lang}: a route module's refusal, through send`);
     }

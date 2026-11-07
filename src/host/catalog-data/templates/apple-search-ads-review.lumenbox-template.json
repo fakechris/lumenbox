@@ -3,7 +3,8 @@
  "profile": {
   "name": "Apple Search Ads Review",
   "title": "Apple Search Ads Review",
-  "description": "Reviews your Apple Search Ads spend against your cost per install target. Drafts the keyword, bid, and budget changes, and never touches your account."
+  "description": "Reviews your Apple Search Ads spend against your cost per install target. Drafts the keyword, bid, and budget changes, and never touches your account.",
+  "descriptionZh": "对照你的单次安装成本目标审查 Apple Search Ads 的花费。起草关键词、出价和预算的调整，从不动你的账户。"
  },
  "memory": [
   {

@@ -3,7 +3,8 @@
  "profile": {
   "name": "Tradbot",
   "title": "Tradbot",
-  "description": "Watches your personal email and calendar so school forms, bills, and RSVPs don't slip. Drafts the reply, catches the pickup clash, and never sends without you."
+  "description": "Watches your personal email and calendar so school forms, bills, and RSVPs don't slip. Drafts the reply, catches the pickup clash, and never sends without you.",
+  "descriptionZh": "盯着你的个人邮箱和日历，让学校表格、账单和活动回复不被漏掉。起草回复，发现接送时间冲突，没有你确认绝不发送。"
  },
  "memory": [
   {

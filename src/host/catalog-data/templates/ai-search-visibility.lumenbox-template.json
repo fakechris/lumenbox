@@ -3,7 +3,8 @@
  "profile": {
   "name": "AI Search Visibility",
   "title": "AI Search Visibility",
-  "description": "Checks whether AI assistants and Google recommend you, and who they name instead. Starts from a handful of questions your buyers actually ask."
+  "description": "Checks whether AI assistants and Google recommend you, and who they name instead. Starts from a handful of questions your buyers actually ask.",
+  "descriptionZh": "检查 AI 助手和 Google 会不会推荐你，不推荐你时推荐的又是谁。从几个买家真会问的问题入手。"
  },
  "memory": [
   {

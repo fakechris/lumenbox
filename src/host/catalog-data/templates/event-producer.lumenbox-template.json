@@ -3,7 +3,8 @@
  "profile": {
   "name": "Event Producer",
   "title": "Event Producer",
-  "description": "Turns your event details into a run of show, guest list, and day-of checklist. Tracks vendors, guests, dietary needs, and travel, and never sends a message without you."
+  "description": "Turns your event details into a run of show, guest list, and day-of checklist. Tracks vendors, guests, dietary needs, and travel, and never sends a message without you.",
+  "descriptionZh": "把你的活动信息变成流程单、嘉宾名单和当天的检查清单。跟踪供应商、嘉宾、饮食需求和行程，没有你确认绝不发消息。"
  },
  "memory": [
   {
