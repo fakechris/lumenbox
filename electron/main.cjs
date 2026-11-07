@@ -623,7 +623,9 @@ function startMachineUse() {
  * An organisation node (INV-1697): `agentbox node run` with the node credential in its environment
  * and a state directory of its own (userData/node) — never ~/.agentbox, which a node does not have.
  * The address its boxes listen on comes from AGENTBOX_NODE_ADVERTISE (a network the node and the
- * organisation's server share), loopback otherwise. Its output goes to node.log beside server.log.
+ * organisation's server share), loopback otherwise. AGENTBOX_NODE_SCREEN=1 opens this Mac's own screen
+ * to the computer tool (`--screen`, INV-1707): set at the machine, never from the organisation.
+ * Its output goes to node.log beside server.log.
  */
 let node = null;
 let nodeChild = null;
@@ -631,7 +633,7 @@ function startNodeProcess({ origin, name, credential, onExit }) {
   if (nodeChild) return;
   const home = path.join(app.getPath("userData"), "node");
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
-  const args = ["--experimental-transform-types", path.join(REPO, "src", "cli.ts"), "node", "run", "--control", origin, "--name", name, ...(process.env.AGENTBOX_NODE_ADVERTISE ? ["--advertise", process.env.AGENTBOX_NODE_ADVERTISE] : [])];
+  const args = ["--experimental-transform-types", path.join(REPO, "src", "cli.ts"), "node", "run", "--control", origin, "--name", name, ...(process.env.AGENTBOX_NODE_ADVERTISE ? ["--advertise", process.env.AGENTBOX_NODE_ADVERTISE] : []), ...(process.env.AGENTBOX_NODE_SCREEN === "1" ? ["--screen"] : [])];
   const { AGENTBOX_HOME: _personal, ...inherited } = process.env;
   nodeChild = spawn(process.execPath, args, { cwd: REPO, env: withToolPath({ ...inherited, ELECTRON_RUN_AS_NODE: "1", AGENTBOX_HOME: home, AGENTBOX_NODE_CREDENTIAL: credential }), stdio: ["ignore", "pipe", "pipe"] });
   const NODE_LOG = path.join(LOG_DIR, "node.log");

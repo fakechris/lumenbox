@@ -62,7 +62,7 @@ async function waitForHealth(url: string, fetchImpl: typeof fetch, timeoutMs = 2
 }
 
 /** The machine's native environment as a box: the headless daemon, bound to the advertised address only. */
-export function nativeBox(input: { name: string; bundle: string; advertise: string; port: number; home: string; workDir: string; repositories: Repository[]; baseEnv: NodeJS.ProcessEnv; spawnImpl?: typeof spawn; fetchImpl?: typeof fetch; log: (line: string) => void }): NodeBox {
+export function nativeBox(input: { name: string; bundle: string; advertise: string; port: number; home: string; workDir: string; repositories: Repository[]; baseEnv: NodeJS.ProcessEnv; screen?: boolean; spawnImpl?: typeof spawn; fetchImpl?: typeof fetch; log: (line: string) => void }): NodeBox {
   let child: ChildProcess | undefined;
   return {
     name: input.name,
@@ -75,7 +75,7 @@ export function nativeBox(input: { name: string; bundle: string; advertise: stri
       const tokenFile = join(dir, `${input.name}.token`);
       if (!existsSync(tokenFile)) writeFileSync(tokenFile, `${randomBytes(24).toString("hex")}\n`, { mode: 0o600 });
       const token = readFileSync(tokenFile, "utf8").trim();
-      child = (input.spawnImpl ?? spawn)(process.execPath, [input.bundle], { stdio: ["ignore", "pipe", "pipe"], env: headlessBoxdEnv(input.baseEnv, { bind: input.advertise, port: input.port, token, workDir: input.workDir, repositories: input.repositories }) });
+      child = (input.spawnImpl ?? spawn)(process.execPath, [input.bundle], { stdio: ["ignore", "pipe", "pipe"], env: headlessBoxdEnv(input.baseEnv, { bind: input.advertise, port: input.port, token, workDir: input.workDir, repositories: input.repositories, ...(input.screen === true ? { screen: true } : {}) }) });
       const started = child;
       process.once("exit", () => started.kill("SIGTERM")); // a node that dies takes its daemon with it: nothing is left listening for an organisation
       const relay = (chunk: unknown) => { for (const line of String(chunk).split("\n")) if (line.trim() !== "") input.log(`${input.name}: ${line}`); };
@@ -83,7 +83,7 @@ export function nativeBox(input: { name: string; bundle: string; advertise: stri
       child.stderr?.on("data", relay);
       const baseUrl = `http://${input.advertise.includes(":") ? `[${input.advertise}]` : input.advertise}:${input.port}`;
       await waitForHealth(baseUrl, input.fetchImpl ?? fetch);
-      return { baseUrl, token, workDir: input.workDir, repositories: input.repositories };
+      return { baseUrl, token, workDir: input.workDir, repositories: input.repositories, ...(input.screen === true ? { screen: true as const } : {}) };
     },
     async stop() {
       child?.kill("SIGTERM");
@@ -92,14 +92,19 @@ export function nativeBox(input: { name: string; bundle: string; advertise: stri
   };
 }
 
-/** `agentbox node run --control URL --name N [--advertise HOST] [--work D] [--repo P[:ro]]... [--port N] [--no-docker] [--no-native]` */
+/**
+ * `agentbox node run --control URL --name N [--advertise HOST] [--work D] [--repo P[:ro]]... [--port N] [--no-docker] [--no-native] [--screen]`
+ *
+ * `--screen` opens the native environment's own screen to the computer tool (INV-1707, macOS only):
+ * chosen at the machine, by whoever starts the node there, never by the organisation from afar.
+ */
 export async function cmdNode(argv: string[], deps: NodeCliDeps): Promise<number> {
   const [sub, ...rest] = argv;
   if (sub !== "run") {
-    deps.err("Usage: agentbox node run --control URL --name N [--advertise HOST] [--work D] [--repo P[:ro]]... [--port N] [--no-docker] [--no-native]\n       The node credential is read from AGENTBOX_NODE_CREDENTIAL; the LumenBox app sets it after an Admin signs in.");
+    deps.err("Usage: agentbox node run --control URL --name N [--advertise HOST] [--work D] [--repo P[:ro]]... [--port N] [--no-docker] [--no-native] [--screen]\n       --screen opens this Mac's own screen to the computer tool (Screen Recording and Accessibility for the app that starts the node).\n       The node credential is read from AGENTBOX_NODE_CREDENTIAL; the LumenBox app sets it after an Admin signs in.");
     return 1;
   }
-  const { values } = parseArgs({ args: rest, options: { control: { type: "string" }, name: { type: "string" }, advertise: { type: "string" }, work: { type: "string" }, repo: { type: "string", multiple: true }, port: { type: "string" }, "no-docker": { type: "boolean" }, "no-native": { type: "boolean" } }, strict: true });
+  const { values } = parseArgs({ args: rest, options: { control: { type: "string" }, name: { type: "string" }, advertise: { type: "string" }, work: { type: "string" }, repo: { type: "string", multiple: true }, port: { type: "string" }, "no-docker": { type: "boolean" }, "no-native": { type: "boolean" }, screen: { type: "boolean" } }, strict: true });
   const control = String(values.control ?? "");
   const name = String(values.name ?? "");
   if (control === "" || name === "" || deps.credential === undefined || deps.credential === "") {
@@ -116,7 +121,7 @@ export async function cmdNode(argv: string[], deps: NodeCliDeps): Promise<number
   if (!repositories.some(repo => repo.path === workDir)) repositories.push({ path: workDir, mode: "rw" });
   const log = (line: string) => deps.out(line);
   const boxes: NodeBox[] = [];
-  if (values["no-native"] !== true) boxes.push(nativeBox({ name: `${name}-native`, bundle: deps.boxdBundle, advertise, port: values.port !== undefined ? Number(values.port) : 13390, home: deps.home, workDir, repositories, baseEnv: deps.baseEnv, ...(deps.spawnImpl !== undefined ? { spawnImpl: deps.spawnImpl } : {}), ...(deps.fetchImpl !== undefined ? { fetchImpl: deps.fetchImpl } : {}), log }));
+  if (values["no-native"] !== true) boxes.push(nativeBox({ name: `${name}-native`, bundle: deps.boxdBundle, advertise, port: values.port !== undefined ? Number(values.port) : 13390, home: deps.home, workDir, repositories, baseEnv: deps.baseEnv, ...(values.screen === true ? { screen: true } : {}), ...(deps.spawnImpl !== undefined ? { spawnImpl: deps.spawnImpl } : {}), ...(deps.fetchImpl !== undefined ? { fetchImpl: deps.fetchImpl } : {}), log }));
   if (values["no-docker"] !== true) {
     const docker = deps.docker(`lumenbox-node-${name}`, advertise);
     boxes.push({ name: `${name}-docker`, kind: "docker", start: () => docker.up(), stop: () => docker.down() });

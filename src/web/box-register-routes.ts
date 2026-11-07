@@ -142,6 +142,8 @@ async function registerNodeBox(
   }
   const node = verdict.node;
   const kind = body.kind === "host" ? ("host" as const) : ("attached" as const);
+  // The machine's own screen, open to the computer tool where the node was started with --screen (INV-1707); only a node's native environment has one.
+  const screen = kind === "host" && body.screen === true;
   if (!BOX_NAME.test(input.name) || input.baseUrl === "" || input.token === "") return { status: 400, body: apiError("box-registration-incomplete") };
   connectCodes.nodeSeen(node.id, input.version);
   const known = connectCodes.nodeBox(node.id, input.name);
@@ -150,6 +152,12 @@ async function registerNodeBox(
     // A new address or a new daemon token (a restarted daemon) is a reconnect; the same ones are a heartbeat.
     const moved = entry.endpoint?.baseUrl !== input.baseUrl.replace(/\/+$/, "") || tokenOf(entry) !== input.token;
     if (moved) registry.updateBox(entry.id, { endpoint: { baseUrl: input.baseUrl, tokenFile: input.writeToken(entry.name) } });
+    if (kind === "host" && (entry.screen === "native") !== screen) {
+      registry.updateBox(entry.id, { screen: screen ? "native" : "closed" });
+      const roots = repositoriesOf(body.repositories);
+      if (roots !== undefined) recordHostBoxBundle(orchestrator.bundles, entry.name, roots, `a machine of this organisation (node ${node.name})`, screen);
+      log(`boxes: ${entry.name} on node ${node.name}: the machine's own screen is ${screen ? "open" : "closed"} to the computer tool`);
+    }
     connectCodes.seen(entry.id, input.version);
     const result = moved || !orchestrator.isConnected(entry.id) ? await orchestrator.reconnectBox(registry.boxById(entry.id)!) : { connected: true, detail: `${entry.name}: connected` };
     return { status: 200, body: { boxId: entry.id, name: entry.name, node: node.id, ...result, state: connectCodes.stateOf(entry.id, result.connected) } };
@@ -159,16 +167,19 @@ async function registerNodeBox(
   if (repositories === undefined) return { status: 400, body: apiError("node-box-roots-invalid") };
   let created: BoxEntry;
   try {
-    created = attachedBox({
-      name: input.name, baseUrl: input.baseUrl, tokenFile: input.writeToken(input.name), kind,
-      ...(typeof body.workDir === "string" && body.workDir.startsWith("/") ? { workDir: body.workDir } : {}),
-      // The native environment is nobody's until an Admin opens it, and only once it is confined (INV-1700).
-      ...(kind === "host" ? { members: [] } : {}),
-    });
+    created = {
+      ...attachedBox({
+        name: input.name, baseUrl: input.baseUrl, tokenFile: input.writeToken(input.name), kind,
+        ...(typeof body.workDir === "string" && body.workDir.startsWith("/") ? { workDir: body.workDir } : {}),
+        // The native environment is nobody's until an Admin opens it, and only once it is confined (INV-1700).
+        ...(kind === "host" ? { members: [] } : {}),
+      }),
+      ...(screen ? { screen: "native" as const } : {}),
+    };
   } catch (error) {
     return { status: 400, body: { error: error instanceof Error ? error.message : String(error) } };
   }
-  if (kind === "host") recordHostBoxBundle(orchestrator.bundles, created.name, repositories, `a machine of this organisation (node ${node.name})`);
+  if (kind === "host") recordHostBoxBundle(orchestrator.bundles, created.name, repositories, `a machine of this organisation (node ${node.name})`, screen);
   try {
     const result = await orchestrator.attachBox(created);
     connectCodes.register({ boxId: created.id, name: created.name, nodeId: node.id, ...(input.version !== undefined ? { version: input.version } : {}) });

@@ -97,7 +97,7 @@ import { JobService } from "./job-service.ts"; import { JobLimitError, jobLimits
 import { BrowserService, StaleSnapshotError, IrreversibleActionError } from "./browser-service.ts";
 import { BrowserEndpointRegistry, EndpointConflictError } from "./browser-endpoints.ts";
 import { currentRoots, downloadFile, listDir, readFile, uploadFile, writeFile } from "./fs-service.ts";
-import { headlessRefusal } from "./headless.ts"; import { ConfinementRefused, confinementFor } from "./confinement.ts";
+import { headlessRefusal } from "./headless.ts"; import { ConfinementRefused, confinementFor } from "./confinement.ts"; import { nativeScreenFor } from "./native-screen.ts";
 import { XWatchdogService } from "./xwatchdog-service.ts";
 import { DesktopOperations } from "./desktop-operations.ts";
 import { ComputerExecutionError, DesktopTargetError, isComputerWrite } from "../cua/execution.ts";
@@ -109,9 +109,9 @@ const startedAt = Date.now();
 const display = getDisplay();
 const token = process.env.BOXD_TOKEN ?? "";
 /** A box with no desktop by design (INV-438): nothing that needs X is started or served. */
-const HEADLESS = process.env.BOXD_HEADLESS === "1"; /* and on it every agent process runs under the OS sandbox, or not at all (INV-1700): */ const confinement = confinementFor({ headless: HEADLESS, roots: () => currentRoots(), workDir: process.env.AGENTBOX_WORK_DIR, ...(process.env.SSH_AUTH_SOCK !== undefined ? { sshAuthSock: process.env.SSH_AUTH_SOCK } : {}), egressPort: () => egressProxyPort, log: line => log(line) });
+const HEADLESS = process.env.BOXD_HEADLESS === "1"; /* an organisation node may open its own screen (INV-1707): */ const nativeScreen = nativeScreenFor({ headless: HEADLESS, enabled: process.env.BOXD_NATIVE_SCREEN === "1", helper: process.env.BOXD_NATIVE_SCREEN_HELPER, log: line => log(line) }); /* and on it every agent process runs under the OS sandbox, or not at all (INV-1700): */ const confinement = confinementFor({ headless: HEADLESS, screenOpen: nativeScreen !== undefined, roots: () => currentRoots(), workDir: process.env.AGENTBOX_WORK_DIR, ...(process.env.SSH_AUTH_SOCK !== undefined ? { sshAuthSock: process.env.SSH_AUTH_SOCK } : {}), egressPort: () => egressProxyPort, log: line => log(line) });
 
-const displays = new DisplayManager(line => log(line));
+const displays = new DisplayManager(line => log(line), undefined, nativeScreen?.runtime); // the machine's own screen is desktop 1 where a node opened it
 const desktopOperations = new DesktopOperations();
 const recorder = new RecordService(line => log(line));
 const xwatchdog = new XWatchdogService();
@@ -233,7 +233,7 @@ async function handleHealth(): Promise<HealthResult> {
     version: VERSION,
     ...(imageContract() !== undefined ? { contract: imageContract()! } : {}),
     protocol: BOXD_PROTOCOL,
-    ...(!HEADLESS ? { desktop_driver: X11_DESKTOP_CAPABILITIES, desktop_contract: { version: 1 as const, snapshot_refs: true as const, final_observation: true as const, batch_progress: true as const } } : {}),
+    ...(!HEADLESS || nativeScreen !== undefined ? { desktop_driver: nativeScreen?.capabilities ?? X11_DESKTOP_CAPABILITIES, desktop_contract: { version: 1 as const, snapshot_refs: true as const, final_observation: true as const, batch_progress: true as const } } : {}),
     display,
     ...(HEADLESS ? { headless: true, confinement: confinement?.state() ?? { active: false, reason: "no confinement" } } : {}),
     ...(currentRoots().restricted ? { repositories: currentRoots().list() } : {}),
@@ -298,7 +298,7 @@ async function handleComputer(body: ComputerRequest): Promise<ComputerResult> {
       observation: result.observation,
       elements_observation_id: result.elementsObservationId,
       progress: result.progress,
-      screenshot: result.screenshot,
+      screenshot: result.screenshot, ...(result.screenshotMediaType !== undefined ? { screenshot_media_type: result.screenshotMediaType } : {}),
       ...(body.jpeg === true && result.screenshot !== "" ? { screenshot_jpeg: await webpToJpeg(result.screenshot, body.mark !== undefined ? { mark: body.mark } : {}).catch(() => undefined) } : {}),
       windows: result.windows,
       ...(result.elements !== undefined ? { elements: result.elements } : {}),
@@ -793,7 +793,7 @@ const routes: Record<string, Handler> = {
       displays.markWorkload(body.index);
       // The takeover is the demonstration (INV-405). Started after the lease, so a
       // takeover that is refused records nothing; not awaited past its start.
-      await teach.begin(body.index, body.epoch, teaching);
+      if (nativeScreen === undefined) await teach.begin(body.index, body.epoch, teaching); // a person at a node's own screen is not recorded (INV-1707)
     } else {
       displays.handBack(body.index);
       await teach.finish(body.index, "handback");
@@ -1057,7 +1057,7 @@ const server = createServer((req, res) => {
         return;
       }
 
-      const refusedHeadless = HEADLESS ? headlessRefusal(route) : undefined;
+      const refusedHeadless = HEADLESS ? headlessRefusal(route, nativeScreen !== undefined) : undefined;
       if (refusedHeadless !== undefined) {
         send(res, 409, { error: refusedHeadless });
         return;
@@ -1251,7 +1251,7 @@ server.listen(listenPort, listenHost, () => {
   // registers it again on its next call. Everything else about it — the components, the
   // supervisor — resumes then.
   if (HEADLESS) {
-    log(`headless: no desktop on this box; ${currentRoots().restricted ? `files limited to ${currentRoots().list().map(r => `${r.path} (${r.mode})`).join(", ")}` : "files unrestricted"}; ${confinement?.describe() ?? "commands unconfined"}`);
+    log(`headless: ${nativeScreen?.describe() ?? "no desktop on this box"}; ${currentRoots().restricted ? `files limited to ${currentRoots().list().map(r => `${r.path} (${r.mode})`).join(", ")}` : "files unrestricted"}; ${confinement?.describe() ?? "commands unconfined"}`);
     return;
   }
   if (displays.isClaimed(defaultDisplayIndex)) {

@@ -72,6 +72,11 @@ test("the rules a headless box's commands run under: rw roots and temp writable,
       assert.ok(denies("file-write").includes(`(subpath "${join(m.dirs.home, engine)}")`), `and not writable, even if a parent were granted rw`);
     }
     assert.equal(confine.wrap("/bin/true", [], { what: "exec", actor: "agent:../../x" }).env.XDG_STATE_HOME, join(m.dirs.work, ".state", "_.._x", "state"), "an actor cannot name its way out of the state directory");
+    // Where a node opened the machine's own screen (INV-1707), the shell cannot capture or drive it past the computer tool's gates.
+    assert.ok(!profile.includes("/usr/sbin/screencapture"), "a box whose screen is closed keeps its programs");
+    const screened = confinementFor({ headless: true, screenOpen: true, roots: () => m.roots, workDir: m.dirs.work, egressPort: () => 3128, log: () => {}, systemTmp: m.dirs.tmp, sandbox: new HostSandbox({ platform: "darwin", home: m.dirs.home, tmp: m.dirs.tmp, probe: () => true }) })!.wrap("/bin/true", [], { what: "exec" });
+    assert.match(screened.args[1]!, /\(deny process-exec \(literal "\/usr\/sbin\/screencapture"\) \(literal "\/usr\/bin\/osascript"\)/);
+    assert.match(screened.wrapped.rules.join("\n"), /these do not run: \/usr\/sbin\/screencapture, \/usr\/bin\/osascript/);
 
     const block = confine.violations(wrapped, { exit_code: 1, stderr: `bash: ${m.dirs.outside}/x: Operation not permitted` }, { what: "exec", actor: "agent:a1" });
     assert.match(block ?? "", /<sandbox_violations>[\s\S]*\.state\/a1[\s\S]*granting a directory rw/, "the agent is told which rule, where its state goes, and how it is widened");

@@ -94,7 +94,12 @@ function realOrResolved(path: string): string {
 /** The routes a desktop-less box cannot serve, and what it says instead. */
 export const DESKTOP_ROUTE = /^(GET|POST) \/(computer|browser|displays|record|recordings|clipboard|teach|xwatchdog)(\/|$)/;
 
-export function headlessRefusal(route: string): string | undefined {
+/** What a node's open screen serves (INV-1707, native-screen.ts): the computer tool, and the desktop routes a takeover uses. */
+const SCREEN_ROUTE = /^(GET|POST) \/(computer|displays)(\/|$)/;
+
+export function headlessRefusal(route: string, screen = false): string | undefined {
   if (!DESKTOP_ROUTE.test(route)) return undefined;
+  if (screen && SCREEN_ROUTE.test(route)) return undefined;
+  if (screen) return "This box's screen is the machine's own: the computer tool works on it, and nothing else that needs a desktop does. There is no browser tool, recording, clipboard or teaching here; use computer, bash and the file tools.";
   return "This box has no desktop: it is the person's own machine, running headless. Use bash and the file tools; there is no screen, no browser and no recording here.";
 }

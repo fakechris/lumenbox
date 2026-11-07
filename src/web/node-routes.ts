@@ -47,7 +47,7 @@ function nodeBoxView(registration: Registration, deps: Pick<NodeRouteDeps, "box"
   return {
     id: registration.boxId,
     name: registration.name,
-    kind: entry?.kind === "host" ? "native" : "docker",
+    kind: entry?.kind === "host" ? "native" : "docker", ...(entry?.screen === "native" ? { screen: true } : {}),
     state,
     ...(state === "revoked" ? { stateReason: "NodeRevoked" } : state === "offline" ? { stateReason: "NotAnswering" } : {}),
     members: entry?.members ?? [],

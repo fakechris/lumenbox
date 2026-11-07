@@ -111,16 +111,17 @@ test("an Admin's sign-in on the node enrols it; a member's cannot; its Docker bo
   const docker = await fakeBoxd(() => ({}));
   closers.push(native.close, docker.close);
   const stoppedBoxes: string[] = [];
-  const box = (name: string, kind: "docker" | "host", url: string): NodeBox => ({ name, kind, start: async () => ({ baseUrl: url, token: `${name}-daemon-token`, ...(kind === "host" ? { workDir: "/srv/work", repositories: [{ path: "/srv/work", mode: "rw" as const }] } : {}) }), stop: async () => { stoppedBoxes.push(name); } });
+  const box = (name: string, kind: "docker" | "host", url: string): NodeBox => ({ name, kind, start: async () => ({ baseUrl: url, token: `${name}-daemon-token`, ...(kind === "host" ? { workDir: "/srv/work", repositories: [{ path: "/srv/work", mode: "rw" as const }], screen: true as const } : {}) }), stop: async () => { stoppedBoxes.push(name); } });
   const runner = new NodeRunner({ control: base, credential, boxes: [box("mac-studio-native", "host", native.url), box("mac-studio-docker", "docker", docker.url)], version: "0.0.0-test", heartbeatMs: 60_000, log: line => logs.push(line) });
   closers.push(() => { void runner.stop(); });
   await runner.start();
 
-  const listed = (await (await as(ana)("/api/nodes")).json()) as { nodes: { id: string; name: string; lastSeenAt?: string; boxes: { name: string; kind: string; state: string; members: unknown }[] }[] };
+  const listed = (await (await as(ana)("/api/nodes")).json()) as { nodes: { id: string; name: string; lastSeenAt?: string; boxes: { name: string; kind: string; state: string; members: unknown; screen?: boolean }[] }[] };
   assert.equal(listed.nodes.length, 1);
   assert.ok(listed.nodes[0]!.lastSeenAt, "the node was heard");
   assert.deepEqual(listed.nodes[0]!.boxes.map(b => [b.name, b.kind, b.state]), [["mac-studio-native", "native", "connected"], ["mac-studio-docker", "docker", "connected"]]);
   assert.deepEqual(listed.nodes[0]!.boxes[0]!.members, [], "the native environment joins with nobody in it");
+  assert.deepEqual(listed.nodes[0]!.boxes.map(b => b.screen === true), [true, false], "the node started with --screen: its native environment's own screen is open (INV-1707)");
   const boxesOf = async (token: string) => ((await (await as(token)("/api/boxes")).json()) as { boxes: { name: string; kind: string; connected: boolean; node?: { name: string } }[] }).boxes;
   assert.deepEqual((await boxesOf(bo)).filter(b => b.node !== undefined).map(b => b.name), ["mac-studio-docker"], "a member can use the Docker box at once, not the native environment");
   const operator = ((await (await fetch(`${base}/api/boxes`, { headers: { authorization: "Bearer fixture" } })).json()) as { boxes: { name: string; kind: string }[] }).boxes;
@@ -140,6 +141,16 @@ test("an Admin's sign-in on the node enrols it; a member's cannot; its Docker bo
   // The heartbeat is the same registration again: one box each, not two.
   await runner.beat();
   assert.equal((await boxesOf(bo)).filter(b => b.node !== undefined).length, 2);
+  // The node restarted without --screen: the screen is closed in the organisation, and the agents there are told so.
+  const screenOf = async () => ((await (await as(ana)("/api/nodes")).json()) as typeof listed).nodes[0]!.boxes[0]!.screen;
+  const reRegister = (screen: boolean) => fetch(`${base}/api/boxes/register`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ node: credential, name: "mac-studio-native", kind: "host", baseUrl: native.url, token: "mac-studio-native-daemon-token", repositories: [{ path: "/srv/work", mode: "rw" }], ...(screen ? { screen: true } : {}) }) });
+  const instructions = () => (JSON.parse(readFileSync(join(home, "bundles.json"), "utf8")) as { bundles: { id: string; instructions?: string }[] }).bundles.find(b => b.id === "host-mac-studio-native")?.instructions ?? "";
+  assert.match(instructions(), /own Mac screen as your desktop/);
+  assert.equal((await reRegister(false)).status, 200);
+  assert.equal(await screenOf(), undefined);
+  assert.match(instructions(), /with no desktop/);
+  assert.equal((await reRegister(true)).status, 200);
+  assert.equal(await screenOf(), true);
 
   // The organisation takes no box by a code, and says which ways it takes before a token is sent.
   assert.deepEqual(await (await fetch(`${base}/api/boxes/register`)).json(), { installation: "organisation", takes: ["node", "runner"] });

@@ -16,9 +16,10 @@
 
 import type { BundleStore, Repository } from "./bundles.ts";
 import { classifyShell } from "./shell-readonly.ts";
+import { isComputerWrite } from "../cua/execution.ts";
 
-/** Tools that change the machine they run on. */
-export const HOST_WRITES: ReadonlySet<string> = new Set(["bash", "write_file", "edit_file", "browser_act", "browser_upload", "browser_fill_secret"]);
+/** Tools that change the machine they run on; `computer` where a node opened the machine's own screen (INV-1707). */
+export const HOST_WRITES: ReadonlySet<string> = new Set(["bash", "write_file", "edit_file", "browser_act", "browser_upload", "browser_fill_secret", "computer"]);
 
 /** Why this call writes on the person's machine and asks first, or undefined when it only looks. */
 export function hostBoxWrite(tool: string, input: Record<string, unknown>): string | undefined {
@@ -28,12 +29,29 @@ export function hostBoxWrite(tool: string, input: Record<string, unknown>): stri
     return shell.readOnly ? undefined : `a shell command on the person's own machine that is not known to only read (${shell.because})`;
   }
   if (tool === "write_file" || tool === "edit_file") return `writes ${String(input.path ?? "a file")} on the person's own machine`;
+  if (tool === "computer") {
+    // A look at the screen does not ask; a click, a key or typing does, and the card says what it would send.
+    const writes = Array.isArray(input.actions) ? (input.actions as { action?: unknown }[]).filter(action => isComputerWrite(action)) : [];
+    return writes.length === 0 ? undefined : `input on the machine's own screen: ${writes.map(describeInput).join(", ")}`;
+  }
   return "acts on the person's own machine";
+}
+
+/** One screen input as the approval card names it: what it does and where, never more than a line. */
+function describeInput(action: { action?: unknown; coordinate?: unknown; text?: unknown; key?: unknown }): string {
+  const at = Array.isArray(action.coordinate) ? ` at (${action.coordinate.join(", ")})` : "";
+  if (action.action === "type") return `type "${String(action.text ?? "").slice(0, 80)}"`;
+  if (action.action === "key") return `press ${String(action.key ?? "")}`;
+  return `${String(action.action)}${at}`;
 }
 
 /** What `agentbox host up` promises, and what the daemon and the gate do. */
 export const HOST_BOX_PROMISE =
   "Every command runs under the OS sandbox: writes only inside the rw roots, the work directory and the temp directories, credential directories unreadable, network only through the egress relay; where the sandbox is unavailable nothing runs. Files outside the roots are refused by the daemon, and every write asks you first.";
+
+/** What the agent is told where a node opened the machine's own screen (INV-1707). */
+export const HOST_BOX_SCREEN =
+  "with the machine's own Mac screen as your desktop: the computer tool sees and drives it, one agent at a time, and every click, key or text you send asks the person first. It is macOS: shortcuts use cmd, not ctrl. There is no browser tool here; drive the apps on the screen";
 
 /** What the agent on a host box is told, in its bundle's instructions. */
 export const HOST_BOX_INSTRUCTION =
@@ -45,11 +63,11 @@ export const HOST_BOX_INSTRUCTION =
  * `whose` is the sentence about the machine: the person's own (`host up`), or an organisation's
  * node (INV-1697).
  */
-export function recordHostBoxBundle(bundles: BundleStore, box: string, repositories: readonly Repository[], whose: string): void {
+export function recordHostBoxBundle(bundles: BundleStore, box: string, repositories: readonly Repository[], whose: string, screen = false): void {
   const file = { bundles: bundles.list(), ...bundles.attachments() };
   const id = `host-${box}`;
   const roots = repositories.map(r => `${r.path} (${r.mode})`).join(", ");
-  file.bundles = [...file.bundles.filter(b => b.id !== id), { id, name: `Host box ${box}`, secretIds: [], repositories: repositories.map(r => ({ ...r })), instructions: `You are on ${box}, ${whose}, with no desktop. You may read and write only under: ${roots}. ${HOST_BOX_INSTRUCTION}` }];
+  file.bundles = [...file.bundles.filter(b => b.id !== id), { id, name: `Host box ${box}`, secretIds: [], repositories: repositories.map(r => ({ ...r })), instructions: `You are on ${box}, ${whose}, ${screen ? HOST_BOX_SCREEN : "with no desktop"}. You may read and write only under: ${roots}. ${HOST_BOX_INSTRUCTION}` }];
   file.boxes = { ...file.boxes, [box]: [...new Set([...(file.boxes[box] ?? []), id])] };
   bundles.save(file);
 }
