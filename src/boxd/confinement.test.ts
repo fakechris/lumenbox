@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -105,12 +105,15 @@ test("where the sandbox is unavailable nothing runs — not a command, not a job
 
 const live = new HostSandbox();
 const unavailable = live.unavailableReason();
+// CI installs bubblewrap and socat so these run on Linux (ci.yml); there, a skip would be a green tick for nothing.
+const mustRun = process.env.CI === "true" && process.platform === "linux";
+const realSkip = mustRun ? undefined : unavailable;
 
-test("under the real sandbox: writes land in the rw root and temp only; outside, a ro root and a credential read are refused; rm -rf outside does nothing", { skip: unavailable }, async () => {
+test("under the real sandbox: writes land in the rw root and temp only; outside, a ro root and a credential read are refused; rm -rf outside does nothing", { skip: realSkip }, async () => {
   const m = machine();
   try {
     const lines: string[] = [];
-    const confine = confinementFor({ headless: true, roots: () => m.roots, workDir: m.dirs.work, egressPort: () => undefined, log: line => lines.push(line), systemTmp: m.dirs.tmp, sandbox: new HostSandbox({ home: m.dirs.home, tmp: m.dirs.tmp }) })!;
+    const confine = confinementFor({ headless: true, roots: () => m.roots, workDir: m.dirs.work, egressPort: () => undefined, log: line => lines.push(line), systemTmp: m.dirs.tmp, sandbox: new HostSandbox({ home: m.dirs.home, tmp: m.dirs.tmp, systemTmp: m.dirs.tmp }) })!;
     // HOME is the fake one too, so nothing here reads the real home's npm or engine config.
     const run = (command: string) => runShell({ command, cwd: m.dirs.work, actor: "agent:a1", env: { HOME: m.dirs.home } }, {}, undefined, confine);
 
@@ -191,7 +194,7 @@ test("under the real sandbox on macOS: no Keychain item can be read, through the
     // fails a read by accident. Granting it here leaves the Keychain rule as the only thing in the way.
     const userCache = sh("/usr/bin/getconf", ["DARWIN_USER_CACHE_DIR"]).stdout.trim();
     const roots = new Roots([{ path: m.dirs.work, mode: "rw" }, { path: userCache, mode: "rw" }]);
-    const confine = confinementFor({ headless: true, roots: () => roots, workDir: m.dirs.work, egressPort: () => undefined, log: () => undefined, systemTmp: m.dirs.tmp, sandbox: new HostSandbox({ home: m.dirs.home, tmp: m.dirs.tmp }) })!;
+    const confine = confinementFor({ headless: true, roots: () => roots, workDir: m.dirs.work, egressPort: () => undefined, log: () => undefined, systemTmp: m.dirs.tmp, sandbox: new HostSandbox({ home: m.dirs.home, tmp: m.dirs.tmp, systemTmp: m.dirs.tmp }) })!;
     const run = (command: string) => runShell({ command, cwd: m.dirs.work, actor: "agent:a1", env: { HOME: m.dirs.home } }, {}, undefined, confine);
 
     const tool = await run(`/usr/bin/security find-generic-password -s inv1711-fake -w ${keychain}`);
@@ -212,19 +215,20 @@ test("under the real sandbox on macOS: no Keychain item can be read, through the
 
 const hasSsh = ["ssh-agent", "ssh-add", "ssh-keygen"].every(tool => spawnSync("/bin/sh", ["-c", `command -v ${tool}`]).status === 0);
 
-test("under the real sandbox: the person's ssh-agent cannot be listed or signed with, a docker socket cannot be reached, the box's own socket can (INV-1716)", { skip: unavailable ?? (hasSsh ? undefined : "no OpenSSH tools here") }, async () => {
+test("under the real sandbox: the person's ssh-agent cannot be listed or signed with, a docker socket cannot be reached, the box's own socket can (INV-1716)", { skip: realSkip ?? (hasSsh ? undefined : "no OpenSSH tools here") }, async () => {
   const m = machine();
   const { createServer } = await import("node:net");
   const { spawn } = await import("node:child_process");
   // A throwaway agent and key of the test's own; the agent the test runner inherited is never named.
-  const agentDir = join(m.root, "ssh-agent");
+  // Where the person's would be, in the stand-in /tmp (`/tmp/ssh-XXXX/agent.<pid>`); short, a socket path has a length limit.
+  const agentDir = join(m.dirs.tmp, "ssh-a");
   mkdirSync(agentDir);
   const socket = join(agentDir, "agent.sock");
   const key = join(m.root, "throwaway");
   const plain = { ...process.env, SSH_AUTH_SOCK: socket };
   const agent = spawn("ssh-agent", ["-D", "-a", socket], { stdio: "ignore", env: plain });
   // Stands in for /var/run/docker.sock: whoever reaches it is answered.
-  const docker = join(m.root, "docker.sock");
+  const docker = join(m.dirs.tmp, "d.sock");
   const dockerd = createServer(conn => conn.end("DOCKER-ANSWERED\n"));
   const own = join(m.dirs.work, "own.sock");
   const ownServer = createServer(conn => conn.end("OWN-ANSWERED\n"));
@@ -248,7 +252,7 @@ test("under the real sandbox: the person's ssh-agent cannot be listed or signed 
     assert.match((await promisify(execFile)("/bin/sh", ["-c", connect(docker)], { timeout: 10_000 })).stdout, /DOCKER-ANSWERED/, "and the docker socket answers");
 
     // boxd's own environment names the agent, as it does when the person started it from a terminal.
-    const confine = confinementFor({ headless: true, roots: () => m.roots, workDir: m.dirs.work, egressPort: () => undefined, log: () => undefined, systemTmp: m.dirs.tmp, sandbox: new HostSandbox({ home: m.dirs.home, tmp: m.dirs.tmp, sshAuthSock: socket }) })!;
+    const confine = confinementFor({ headless: true, roots: () => m.roots, workDir: m.dirs.work, egressPort: () => undefined, log: () => undefined, systemTmp: m.dirs.tmp, sandbox: new HostSandbox({ home: m.dirs.home, tmp: m.dirs.tmp, systemTmp: m.dirs.tmp, sshAuthSock: socket }) })!;
     const run = (command: string) => runShell({ command, cwd: m.dirs.work, actor: "agent:a1", env: { HOME: m.dirs.home, SSH_AUTH_SOCK: socket } }, {}, undefined, confine);
     assert.equal((await run('echo "[$SSH_AUTH_SOCK]"')).stdout.trim(), "[]", "the variable is gone even when the request set it");
     const list = await run(`SSH_AUTH_SOCK=${socket} ssh-add -l`);
@@ -263,6 +267,69 @@ test("under the real sandbox: the person's ssh-agent cannot be listed or signed 
     agent.kill();
     dockerd.close();
     ownServer.close();
+    m.dispose();
+  }
+});
+
+test("under the real sandbox: a socket the person opens in /tmp after a command started is not reachable by it; the session wrapper and the egress bridge still work (INV-1724)", { skip: realSkip }, async () => {
+  const m = machine();
+  const { createServer } = await import("node:net");
+  const { promisify } = await import("node:util");
+  const { execFile } = await import("node:child_process");
+  // m.dirs.tmp stands in for /tmp: the person's tmux, an agent, a database open their sockets there whenever they like.
+  const late = [join(m.dirs.tmp, "late.sock"), join(m.dirs.tmp, "tmux-1", "default")];
+  const servers = late.map(() => createServer(conn => conn.end("PERSON-ANSWERED\n")));
+  const egress = createServer(conn => conn.end("EGRESS-ANSWERED\n"));
+  let mirror: { close(): void } | undefined;
+  try {
+    await new Promise<void>(resolve => egress.listen(0, "127.0.0.1", resolve));
+    const port = (egress.address() as { port: number }).port;
+    const confine = confinementFor({ headless: true, roots: () => m.roots, workDir: m.dirs.work, egressPort: () => port, log: () => undefined, systemTmp: m.dirs.tmp, sandbox: new HostSandbox({ home: m.dirs.home, tmp: m.dirs.tmp, systemTmp: m.dirs.tmp }) })!;
+    mirror = confine.bridge(port);
+    const run = (command: string) => runShell({ command, cwd: m.dirs.work, actor: "agent:a1", env: { HOME: m.dirs.home } }, {}, undefined, confine);
+    const client = (target: string) => `node -e 'const c=require("net").connect(${target});c.on("data",d=>process.stdout.write(d));c.on("error",e=>console.log("REFUSED",e.code))'`;
+    const connect = (path: string) => `${client("process.argv[1]")} ${path}`;
+    const started = join(m.dirs.work, "started");
+    const go = join(m.dirs.work, "go");
+    // The command is running before any of the sockets exist, which is the window a sweep at start cannot close.
+    const command = run(`touch ${started}; while [ ! -e ${go} ]; do sleep 0.1; done; ${late.map(connect).join("; ")}`);
+    for (let i = 0; i < 100 && !existsSync(started); i++) await new Promise(resolve => setTimeout(resolve, 100));
+    assert.ok(existsSync(started), "the confined command started");
+    mkdirSync(join(m.dirs.tmp, "tmux-1"));
+    await Promise.all(servers.map((server, i) => new Promise<void>(resolve => server.listen(late[i], resolve))));
+    for (const path of late) assert.match((await promisify(execFile)("/bin/sh", ["-c", connect(path)], { timeout: 10_000 })).stdout, /PERSON-ANSWERED/, `unconfined, ${path} answers`);
+    writeFileSync(go, "");
+    const result = await command;
+    assert.doesNotMatch(result.stdout, /PERSON-ANSWERED/, `confined, neither socket made after the start answers: ${result.stdout}${result.stderr}`);
+    assert.equal((result.stdout.match(/REFUSED/g) ?? []).length, 2, result.stdout + result.stderr);
+
+    if (process.platform === "linux") {
+      // The session wrapper keeps its files in the literal /tmp (boxd-session-*), so this leg uses the real one, which is
+      // the box's own here: a cd and an export still carry to the next call, and the files are in <work>/.tmp.
+      const real = confinementFor({ headless: true, roots: () => m.roots, workDir: m.dirs.work, egressPort: () => undefined, log: () => undefined, sandbox: new HostSandbox({ home: m.dirs.home, tmp: m.dirs.tmp }) })!;
+      const session = `inv1724-${randomBytes(4).toString("hex")}`;
+      const inSession = (command: string) => runShell({ command, actor: "agent:a1", env: { HOME: m.dirs.home }, session }, {}, undefined, real);
+      const first = await inSession(`mkdir -p ${m.dirs.work}/sub && cd ${m.dirs.work}/sub && export INV1724=kept`);
+      assert.equal(first.exit_code, 0, first.stderr);
+      const second = await inSession('echo "$(pwd) $INV1724"');
+      assert.equal(second.stdout.trim(), `${join(m.dirs.work, "sub")} kept`, `the session remembered: ${second.stderr}`);
+      assert.ok(readdirSync(join(m.dirs.work, ".tmp")).some(name => name.startsWith("boxd-session-")), "in the box's own /tmp");
+    }
+    // An agent's scratch file in /tmp is there for its next command, and on Linux it is in the box's own /tmp, not the shared one.
+    assert.equal((await run(`echo scratch > ${m.dirs.tmp}/scratch.txt`)).exit_code, 0);
+    assert.equal((await run(`cat ${m.dirs.tmp}/scratch.txt`)).stdout.trim(), "scratch");
+    if (process.platform === "linux") {
+      assert.equal(existsSync(join(m.dirs.tmp, "scratch.txt")), false, "the shared /tmp got nothing");
+      assert.equal(readFileSync(join(m.dirs.work, ".tmp", "scratch.txt"), "utf8"), "scratch\n", "it landed in <work>/.tmp");
+    }
+    // The egress proxy is still the way out: through socat and the bridge on Linux, straight to the port on macOS.
+    // socat starts beside the command on Linux, so the first connect may come before it listens: a few tries.
+    const out = await run(`for i in 1 2 3 4 5 6 7 8 9 10; do ${client(`${port}, "127.0.0.1"`)} > out.txt; grep -q REFUSED out.txt || break; sleep 0.2; done; cat out.txt`);
+    assert.match(out.stdout, /EGRESS-ANSWERED/, `the egress proxy answers: ${out.stdout}${out.stderr}`);
+  } finally {
+    mirror?.close();
+    egress.close();
+    for (const server of servers) server.close();
     m.dispose();
   }
 });

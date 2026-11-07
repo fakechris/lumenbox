@@ -35,17 +35,19 @@
  * sockets under the box's own writable roots (its work directory, rw repositories; never the shared
  * temp directories, where the person's agent and tmux live); bubblewrap has no such rule, so the
  * socket places are hidden instead (`SOCKET_HOMES_UNDER_HOME`, `SOCKET_PATHS`, the whole runtime
- * directory, `$SSH_AUTH_SOCK`'s directory, the sockets found in /tmp), and the variables that
- * name a socket are unset (`SOCKET_VARIABLES`).
+ * directory, `$SSH_AUTH_SOCK`'s directory), the variables that name a socket are unset
+ * (`SOCKET_VARIABLES`), and the shared temp directories are not there at all: the box gets a /tmp
+ * of its own (`privateTmp`, INV-1724), so a socket the person opens in /tmp — before the command
+ * started or after — is not in the command's /tmp. Only the egress bridges are bound in, read-only.
  *
- * Known gaps, stated: a hard link made outside the rules is not covered; on Linux the deny
- * list only covers paths that exist when the command starts, so a socket the person opens in /tmp
- * after a command started is reachable by that command; Seatbelt matches the real path,
+ * Known gaps, stated: a hard link made outside the rules is not covered; on Linux the hidden
+ * places outside /tmp are the paths that exist when the command starts (a docker socket made
+ * later at a new path is reachable); Seatbelt matches the real path,
  * so every path here is resolved first (a `/var/folders` rule silently misses `/private/var`).
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -64,6 +66,14 @@ export interface SandboxRules {
   readOnly?: readonly string[];
   /** Refuse reads of the credential places and the person's engine homes as well as writes (`CREDENTIAL_READS_UNDER_HOME`, `ENGINE_HOMES_UNDER_HOME`, `~/.agentbox*`). */
   hideCredentials?: boolean;
+  /**
+   * With `hideCredentials`, on Linux: the directory that is the command's /tmp and temp directory,
+   * kept from one command to the next (the session wrapper's files, an agent's scratch files). The
+   * shared ones are never bound in, so the person's sockets there — made before the command or
+   * after — are not reachable (INV-1724). Without it the command gets an empty /tmp of its own.
+   * macOS refuses a socket by its path instead, and ignores this.
+   */
+  privateTmp?: string;
 }
 
 export interface WrappedCommand {
@@ -122,7 +132,7 @@ export interface HostSandboxOptions {
   runtimeDir?: string;
   /** The person's ssh-agent socket (`$SSH_AUTH_SOCK` where the daemon started), whose directory `hideCredentials` hides. */
   sshAuthSock?: string;
-  /** The shared temp directory swept for sockets on Linux (`/tmp`); replaced in tests. */
+  /** The shared temp directory (`/tmp`), which a confined box on Linux does not see; replaced in tests. */
   systemTmp?: string;
   /** Whether a tool is runnable here; replaced in tests. */
   probe?: (command: string, args: string[]) => boolean;
@@ -167,6 +177,11 @@ export class HostSandbox {
     this.sshAuthSock = options.sshAuthSock;
     this.systemTmp = real(options.systemTmp ?? "/tmp");
     this.runtimeDir = options.runtimeDir ?? (this.platform === "linux" && process.getuid !== undefined ? `/run/user/${process.getuid()}` : undefined);
+  }
+
+  /** The temp directory the egress bridges listen in (`unixSocketFor`), so the far end and the sandbox agree. */
+  get tempDir(): string {
+    return this.tmp;
   }
 
   get mechanism(): SandboxMechanism | undefined {
@@ -214,6 +229,9 @@ export class HostSandbox {
       `never under ${denied.map(path => path.replace(this.home, "~")).join(", ")}`,
       ...(hidden.length > 0 ? [`no reads at all under ${hidden.map(path => path.replace(this.home, "~")).join(", ")}`] : []),
       ...(hideSecrets && this.mechanism === "sandbox-exec" ? ["no Keychain: the securityd services are refused and /usr/bin/security does not run, so no stored login or password can be read"] : []),
+      ...(hideSecrets && this.mechanism === "bwrap"
+        ? [`a /tmp of its own (${rules.privateTmp === undefined ? "empty for each command" : real(rules.privateTmp)}): the shared ${[...new Set([this.systemTmp, this.tmp])].join(" and ")} and the sockets in them, made before the command or after, are not there`]
+        : []),
       ...(hideSecrets
         ? [`no Unix sockets but the box's own${this.mechanism === "sandbox-exec" ? ` (under ${owned.join(", ") || "nothing"})` : ""}: not the person's ssh-agent, docker, tmux or session bus, and no name lookups (the egress proxy resolves names); ${SOCKET_VARIABLES.join(", ")} are unset`]
         : []),
@@ -221,7 +239,7 @@ export class HostSandbox {
     ];
     return this.mechanism === "sandbox-exec"
       ? { command: "/usr/bin/sandbox-exec", args: ["-p", this.seatbelt(writable, denied, ports, hidden, hideSecrets, owned), ...(hideSecrets ? ["/usr/bin/env", ...SOCKET_VARIABLES.flatMap(name => ["-u", name])] : []), command, ...args], env: {}, mechanism: "sandbox-exec", rules: words }
-      : { command: "bwrap", args: this.bwrap(real(rules.runIn ?? cwd), writable, denied, ports, command, args, hidden, hideSecrets), env: {}, mechanism: "bwrap", rules: words };
+      : { command: "bwrap", args: this.bwrap(real(rules.runIn ?? cwd), writable, denied, ports, command, args, hidden, hideSecrets, readOnly, rules.privateTmp === undefined ? undefined : real(rules.privateTmp)), env: {}, mechanism: "bwrap", rules: words };
   }
 
   /**
@@ -242,7 +260,7 @@ export class HostSandbox {
       .concat(agentboxHomes(this.home))
       .concat(this.agentSocket(owned))
       // Seatbelt refuses every Unix socket outside `owned`; bubblewrap can only hide where they are.
-      .concat(this.mechanism === "bwrap" ? [...(this.runtimeDir === undefined ? [] : [this.runtimeDir]), ...SOCKET_PATHS, ...this.tmpSockets(owned)] : []);
+      .concat(this.mechanism === "bwrap" ? [...(this.runtimeDir === undefined ? [] : [this.runtimeDir]), ...SOCKET_PATHS] : []);
     return candidates.filter(path => existsSync(path)).map(real).filter((path, index, all) => all.indexOf(path) === index);
   }
 
@@ -256,39 +274,6 @@ export class HostSandbox {
     const dir = real(dirname(socket));
     const needed = ["/", this.tmp, this.systemTmp, this.home, ...owned].some(path => path === dir || path.startsWith(`${dir}/`));
     return [needed ? socket : dir];
-  }
-
-  /**
-   * The sockets in the shared temp directories, and one level down, when the command starts: the
-   * person's tmux (`/tmp/tmux-<uid>`), an agent started by hand, X11's, a database's. Each becomes
-   * `/dev/null`. The egress bridges (`unixSocketFor`) stay, the sandbox's own way out.
-   */
-  private tmpSockets(owned: readonly string[]): string[] {
-    const isOwned = (path: string) => owned.some(root => path === root || path.startsWith(`${root}/`));
-    const entries = (dir: string) => {
-      try {
-        return readdirSync(dir).map(name => join(dir, name));
-      } catch {
-        return [];
-      }
-    };
-    const kind = (path: string) => {
-      try {
-        const stat = lstatSync(path);
-        return stat.isSocket() ? "socket" : stat.isDirectory() ? "dir" : "other";
-      } catch {
-        return "other";
-      }
-    };
-    const found: string[] = [];
-    for (const top of [...new Set([this.tmp, this.systemTmp])]) {
-      for (const path of entries(top)) {
-        if (isOwned(path)) continue;
-        if (kind(path) === "socket") found.push(path);
-        else if (kind(path) === "dir") found.push(...entries(path).filter(child => !isOwned(child) && kind(child) === "socket"));
-      }
-    }
-    return found.filter(path => !/\/agentbox-host-port-\d+\.sock$/.test(path));
   }
 
   private seatbelt(writable: readonly string[], denied: readonly string[], ports: readonly number[], hidden: readonly string[] = [], hideSecrets = false, owned: readonly string[] = []): string {
@@ -314,16 +299,27 @@ export class HostSandbox {
     return lines.join("");
   }
 
-  private bwrap(cwd: string, writable: readonly string[], denied: readonly string[], ports: readonly number[], command: string, args: readonly string[], hidden: readonly string[] = [], hideSecrets = false): string[] {
-    // No tmpfs over /tmp: the temp directory is writable because it is bound back in like every
-    // other allowed path, so a write anywhere else under /tmp is refused rather than swallowed.
+  private bwrap(cwd: string, writable: readonly string[], denied: readonly string[], ports: readonly number[], command: string, args: readonly string[], hidden: readonly string[] = [], hideSecrets = false, readOnly: readonly string[] = [], privateTmp?: string): string[] {
     const out = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"];
-    for (const path of writable) out.push("--bind", path, path);
+    // A host command keeps the shared temp directory, bound back writable like every other allowed path. A confined
+    // box gets its own (INV-1724): bubblewrap cannot refuse a connect(), so a socket the person opens in /tmp after
+    // the command started would be reachable; a /tmp that is not the shared one has no such socket in it, ever.
+    const shared = hideSecrets ? [...new Set([this.systemTmp, this.tmp])] : [];
+    for (const path of shared) out.push(...(privateTmp === undefined ? ["--tmpfs", path] : ["--bind", privateTmp, path]));
+    // The egress bridges (host-egress.ts listens in the shared temp directory) are the one thing bound back in, read-only:
+    // a read-only mount does not refuse a connect(), and the box cannot remove or replace its way out.
+    if (shared.length > 0) for (const port of ports) if (existsSync(unixSocketFor(this.tmp, port))) out.push("--ro-bind", unixSocketFor(this.tmp, port), unixSocketFor(this.tmp, port));
+    // Under the private /tmp only what is bound is there: a granted root under /tmp, bound after it, is; anything else is gone already.
+    const isUnder = (path: string, root: string) => path === root || path.startsWith(`${root}/`);
+    const bound = [...writable.filter(path => !shared.includes(path)), ...readOnly];
+    const there = (path: string) => !shared.some(top => isUnder(path, top)) || bound.some(root => isUnder(path, root));
+    // Roots under the shared temp directory come after it, so they are bound on top of the private one.
+    for (const path of writable) if (!shared.includes(path)) out.push("--bind", path, path);
     // A denied path under a writable one is bound back read-only on top; order makes it win.
-    for (const path of denied) out.push("--ro-bind", path, path);
+    for (const path of denied.filter(there)) out.push("--ro-bind", path, path);
     // A hidden directory becomes an empty tmpfs, a hidden file /dev/null: last, so it covers any bind above.
     // The tmpfs is remounted read-only, so a write there fails as it does on macOS instead of vanishing on exit (INV-1710).
-    for (const path of hidden) out.push(...(statSync(path).isDirectory() ? ["--tmpfs", path, "--remount-ro", path] : ["--ro-bind", "/dev/null", path]));
+    for (const path of hidden.filter(there)) out.push(...(statSync(path).isDirectory() ? ["--tmpfs", path, "--remount-ro", path] : ["--ro-bind", "/dev/null", path]));
     out.push("--unshare-net", "--unshare-pid", "--die-with-parent", "--chdir", cwd);
     // Inside the namespace there is only a fresh loopback. Each allowed port is bridged from a
     // Unix socket the host side listens on (host-egress.ts), so a client's 127.0.0.1:<port> lands there.

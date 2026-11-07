@@ -15,7 +15,10 @@
  *   - **reads** of the credential places (`~/.ssh`, `~/.aws`, `~/.agentbox*`…) refused, because an
  *     agent living here is not asked before each command the way `RunOnHost` is;
  *   - **network** only to the box's egress proxy when a relay is configured, and none otherwise;
- *     no Unix socket but the box's own, so not the person's ssh-agent, docker or tmux (INV-1716).
+ *     no Unix socket but the box's own, so not the person's ssh-agent, docker or tmux (INV-1716);
+ *   - on Linux, a private **tmp directory**, `<work>/.tmp` (INV-1724): bubblewrap cannot refuse a connect(),
+ *     so the shared /tmp, where the person's tmux and agents open sockets at any time, is not bound in.
+ *     It persists between commands, so the session wrapper's files and an agent's scratch files do.
  *
  * The tools and engines an agent runs keep state under `$HOME` (`~/.npm`, `~/.cache`, `~/.claude`,
  * `~/.codex`), which the rules above refuse. Opening the home would hand the box the person's own
@@ -31,7 +34,6 @@
  */
 
 import { mkdirSync, realpathSync } from "node:fs";
-import type { Server } from "node:net";
 import { join } from "node:path";
 import { HostSandbox, sandboxViolations, type WrappedCommand } from "../host/host-sandbox.ts";
 import { mirrorOnUnixSocket } from "../host/host-egress.ts";
@@ -73,8 +75,8 @@ export interface Confine {
   wrap(command: string, args: readonly string[], context: ConfineContext): { command: string; args: string[]; wrapped: WrappedCommand; env: Record<string, string> };
   /** The block to append to a failed command's stderr when the sandbox may be why; logged as a refusal. */
   violations(wrapped: WrappedCommand, result: { exit_code: number; stderr: string }, context: ConfineContext): string | undefined;
-  /** Mirror the egress proxy's port where a Linux namespace can reach it (host-egress.ts). */
-  bridge(port: number): void;
+  /** Mirror the egress proxy's port where a Linux namespace can reach it (host-egress.ts); the mirror, to close, or undefined where none is needed. */
+  bridge(port: number): { close(): void } | undefined;
   /** The rules in words, for the start-up line. */
   describe(): string;
   /** Whether commands can run under the sandbox now, for the health answer; why not when they cannot. */
@@ -112,7 +114,14 @@ export function confinementFor(options: ConfinementOptions): Confine | undefined
   if (!options.headless) return undefined;
   const sandbox = options.sandbox ?? new HostSandbox(options.sshAuthSock !== undefined ? { sshAuthSock: options.sshAuthSock } : {});
   const systemTmp = real(options.systemTmp ?? SYSTEM_TMP);
-  let mirror: Server | undefined;
+  let mirror: { close(): void } | undefined;
+  // The box's own /tmp on Linux, beside its state directories; with no work directory, an empty one per command.
+  const privateTmp = () => {
+    if (sandbox.mechanism !== "bwrap" || options.workDir === undefined || options.workDir === "") return {};
+    const dir = join(options.workDir, ".tmp");
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    return { privateTmp: dir };
+  };
   const rules = () => {
     const repositories = options.roots().list();
     const writable = repositories.filter(entry => entry.mode === "rw").map(entry => entry.path);
@@ -125,6 +134,7 @@ export function confinementFor(options: ConfinementOptions): Confine | undefined
       readOnly: repositories.filter(entry => entry.mode === "ro").map(entry => entry.path),
       loopbackPorts: port === undefined ? [] : [port],
       hideCredentials: true,
+      ...privateTmp(),
     };
   };
   const who = (context: ConfineContext) => `${context.what} [${context.actor ?? "unlabelled"}]`;
@@ -154,8 +164,10 @@ export function confinementFor(options: ConfinementOptions): Confine | undefined
       return block;
     },
     bridge(port) {
-      if (sandbox.mechanism !== "bwrap" || mirror !== undefined) return;
-      mirror = mirrorOnUnixSocket(port);
+      if (sandbox.mechanism !== "bwrap") return undefined;
+      // Where the sandbox binds it from: the two must name one directory.
+      mirror ??= mirrorOnUnixSocket(port, sandbox.tempDir);
+      return mirror;
     },
     state() {
       const reason = sandbox.unavailableReason();
