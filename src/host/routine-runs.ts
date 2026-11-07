@@ -43,6 +43,10 @@ export interface RunRecord {
   deliver?: string;
   /** On `started`: fired by a person's "run now" rather than its window. */
   manual?: boolean;
+  /** On `started`: the host's automatic retry n of a run that failed on a passing cause (INV-1741). */
+  retry?: number;
+  /** On a failed `finished`: retry n is coming, so this failure is not counted in the streak yet. */
+  retrying?: number;
   /** Tokens billed to that agent between start and finish, on `finished`. */
   tokens?: number;
   /** How long the run took, on `finished`. */
@@ -84,6 +88,8 @@ export interface RoutineRun {
   agent?: string;
   deliver?: string;
   manual?: boolean;
+  retry?: number;
+  retrying?: number;
   ms?: number;
   tokens?: number;
 }
@@ -108,13 +114,13 @@ export function runsOf(records: readonly RunRecord[], slug: string, options: { l
     if (record.slug !== slug) continue;
     if (record.event === "started") {
       if (open !== undefined) open.outcome = "interrupted";
-      open = { at: record.at, outcome: "running", ...pick(record, ["agent", "deliver", "manual"]) };
+      open = { at: record.at, outcome: "running", ...pick(record, ["agent", "deliver", "manual", "retry"]) };
       runs.push(open);
     } else if (record.event === "finished") {
       const run = open ?? (runs.push({ at: record.at, outcome: "done" }), runs[runs.length - 1]!);
       // A finish that says nothing about its result came from a runner that did not say; it ended, which is done.
       run.outcome = record.result ?? "done";
-      Object.assign(run, pick(record, ["agent", "ms", "tokens", "code", "reason"]));
+      Object.assign(run, pick(record, ["agent", "ms", "tokens", "code", "reason", "retrying"]));
       open = undefined;
     } else if (record.event === "skipped") {
       runs.push({ at: record.at, outcome: "skipped", code: record.code ?? "overlap_in_flight", reason: record.reason ?? "the previous run had not finished" });
@@ -137,6 +143,8 @@ function pick<K extends keyof RunRecord>(record: RunRecord, keys: readonly K[]):
  *
  * A streak counts finished runs that failed, in a row; a run that ended done or partial ends it,
  * and a skip or an observation does not touch it — neither is the routine trying and failing.
+ * A failure the host is about to retry (INV-1741) is not counted either: the window's run ends
+ * when its retries do, and only that end is one failure of K.
  * Resuming clears both the hold and the streak, so a routine a person turned back on gets K
  * fresh tries rather than being stopped again by the first failure.
  */
@@ -148,7 +156,7 @@ export class RoutineHolds {
   /** Replays one ledger line; the same rules as live, so a restart lands where the process left off. */
   replay(record: RunRecord): void {
     if (record.event === "pause-after" && record.pauseAfter !== undefined) this.pauseAfter = record.pauseAfter;
-    else if (record.event === "finished") this.noteFinished(record.slug, record.result, record.reason, record.at, false);
+    else if (record.event === "finished" && record.retrying === undefined) this.noteFinished(record.slug, record.result, record.reason, record.at, false);
     else if (record.event === "held") this.holds.set(record.slug, { at: record.at, by: record.by ?? "host", code: record.code ?? "held", reason: record.reason ?? "" });
     else if (record.event === "resumed") this.release(record.slug);
   }
@@ -209,7 +217,7 @@ export function formatRuns(slug: string, runs: readonly RoutineRun[], hold: Rout
   const lines = [`${slug}${hold !== undefined ? ` — paused by ${hold.by} ${hold.at.slice(0, 16).replace("T", " ")}: ${hold.reason}` : ""}`];
   if (runs.length === 0) lines.push("  no runs recorded");
   for (const run of runs) {
-    const extra = [run.manual === true ? "by hand" : undefined, run.agent, run.ms !== undefined ? `${Math.round(run.ms / 1000)}s` : undefined].filter(Boolean).join(", ");
+    const extra = [run.manual === true ? "by hand" : undefined, run.retry !== undefined ? `retry ${run.retry}` : undefined, run.retrying !== undefined ? "retrying" : undefined, run.agent, run.ms !== undefined ? `${Math.round(run.ms / 1000)}s` : undefined].filter(Boolean).join(", ");
     lines.push(`  ${run.at.slice(0, 19).replace("T", " ")}Z  ${run.outcome.padEnd(11)}${run.reason !== undefined ? ` ${run.reason}` : ""}${extra !== "" ? `  (${extra})` : ""}`);
   }
   lines.push(`  ${DONE_MEANS}`);

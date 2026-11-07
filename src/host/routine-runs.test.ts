@@ -3,7 +3,7 @@
  * broke at 22:00 and failed every hour until somebody read the log the next morning.
  */
 
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { attentionFor } from "./attention.ts";
 import { cmdRoutines } from "./routine-runs-cli.ts";
 import { runsOf, type RunRecord } from "./routine-runs.ts";
-import { parseSchedule, Scheduler, type Scheduled, type SchedulerDeps } from "./schedule.ts";
+import { parseSchedule, passingFailure, ROUTINE_RETRIES, routineRetryDelayMs, Scheduler, type Scheduled, type SchedulerDeps } from "./schedule.ts";
 import { upcomingFires } from "./schedule-time.ts";
 
 function scheduleOf(text: string) {
@@ -42,6 +42,45 @@ function fixture(path: string | null, outcomes: (() => Promise<void | { result: 
 }
 
 const fail = (reason: string) => async () => { throw new Error(reason); };
+
+test("a run that failed on a passing cause is retried 1, 2 then 4 minutes later, and only the window's last failure counts (INV-1741)", async () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    const rateLimited = fail("429 Too Many Requests");
+    const f = fixture(null, [rateLimited, rateLimited, rateLimited, rateLimited, fail("the API said 401")]);
+    const scheduler = f.make();
+    assert.deepEqual([1, 2, 3].map(routineRetryDelayMs), [60_000, 120_000, 240_000]);
+    assert.equal(ROUTINE_RETRIES, 3);
+    await scheduler.tick();
+    await settle();
+    for (const delay of [60_000, 120_000, 240_000]) {
+      assert.equal(scheduler.holds.streakOf("hourly"), 0, "a failure being retried is not one of K yet");
+      mock.timers.tick(delay);
+      await settle(); await settle();
+    }
+    assert.equal(f.fired.length, 4, "the window's run and three retries");
+    assert.equal(scheduler.holds.streakOf("hourly"), 1, "the retries ran out: one failure of K");
+    const runs = scheduler.runs("hourly");
+    assert.deepEqual(runs.map(run => run.retry ?? null), [3, 2, 1, null]);
+    assert.deepEqual(runs.map(run => run.retrying ?? null), [null, 3, 2, 1]);
+    mock.timers.tick(600_000);
+    await settle();
+    assert.equal(f.fired.length, 4, "no fourth retry");
+
+    // A cause waiting cannot fix is not retried at all: the agent's turn, a refused key.
+    f.advance(1);
+    await scheduler.tick();
+    await settle();
+    mock.timers.tick(600_000);
+    await settle();
+    assert.equal(f.fired.length, 5);
+    assert.equal(scheduler.holds.streakOf("hourly"), 2);
+    assert.equal(passingFailure("its turn failed (network)"), true);
+    assert.equal(passingFailure("its turn failed (tool_error)"), false);
+  } finally {
+    mock.timers.reset();
+  }
+});
 
 test("three failures in a row pause a routine with the last reason; resuming clears the count", async () => {
   const f = fixture(null, [fail("the API said 401"), async () => ({ result: "failed", reason: "its turn failed (provider)" }), fail("the API said 401 again")]);

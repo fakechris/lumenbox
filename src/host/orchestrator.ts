@@ -11,7 +11,7 @@ import { bindingsOf, CommitmentLedger, describeGaps, parseCommitments, priorComm
 import { finishRoutineRun, PendingAttachments, RoutineResultLedger, routineResolveMode, type DeliveryOutcome } from "./routine-resolve.ts";
 import { BoxGenerations } from "./box-generation.ts";
 import { writeEvalCase } from "./eval-cases.ts";
-import { routineReason, routineResult } from "./run-result.ts";
+import { routineReason, routineResult } from "./run-result.ts"; import { ExceptionLedger, noteJobEnd, noteRoutineEnd, noteTurnEnd } from "./exceptions.ts";
 import { learningsDir } from "./learnings.ts";
 import { boxLearningsDir } from "./site-learnings.ts";
 import { replyForMessage, silenceForMessage } from "./reply.ts";
@@ -321,7 +321,7 @@ export class Orchestrator {
   renderPerson(principalId: string | undefined): string | undefined { return this.people.render(principalId ?? this.people.operator, principalId === undefined ? "the operator" : (this.personName?.(principalId) ?? "the person")); }
   readonly generations = new BoxGenerations(line => console.error(`[box] ${line}`)); // which incarnation of each box a slow callback belongs to (INV-1476); bumped on every (re)connect
   readonly agentFacts = new AgentFacts(new ConversationState(join(agentboxHome(), "conversation-state.jsonl")), { approvals: () => this.policy.pending(), questions: () => this.questionsOpen?.() ?? [], pausedForSpend: () => this.pausedForSpend?.() ?? [], working: id => this.bus.isActive(id) }); questionsOpen?: () => readonly { agentId: string; conversation: string; question: string; askedAt: number }[]; pausedForSpend?: () => readonly { agentId: string; day: string }[]; // the four facts a sidebar row is drawn from (INV-1625); the two readers are wired by the server
-  readonly jobWatch = new JobWatch({ box: () => this.boxClient(), log: line => console.error(`[jobs] ${line}`), wake: (agentId, conversation, text) => this.prompt(agentId, text, undefined, { conversation, steerable: false, lane: "background", synthetic: true, origin: "host:jobs" }).then(() => undefined), generation: agentId => this.generations.current(this.registry.boxOf(agentId).id) });
+  readonly exceptions = new ExceptionLedger(join(agentboxHome(), "exceptions.jsonl"), { taskOf: (agentId, conversation) => this.tasks?.list().find(task => task.assigneeId === agentId && task.conversation === conversation && task.status !== "done" && task.status !== "dropped")?.id }); readonly jobWatch = new JobWatch({ box: () => this.boxClient(), log: line => console.error(`[jobs] ${line}`), ended: (job, end) => noteJobEnd(this.exceptions, job, end), wake: (agentId, conversation, text) => this.prompt(agentId, text, undefined, { conversation, steerable: false, lane: "background", synthetic: true, origin: "host:jobs" }).then(() => undefined), generation: agentId => this.generations.current(this.registry.boxOf(agentId).id) });
   /**
    * Agents whose current turn is installing a template, by the template's id (docs/29 §5.3).
    * Set around the setup prompt and cleared after it, never by the agent.
@@ -685,7 +685,7 @@ export class Orchestrator {
           ...(skill.allowedTools !== undefined ? { allowedTools: skill.allowedTools } : {}),
         })));
     },
-    observed: (slug, would) => this.policy.notifyObserved(slug, would), // The observe-mode audit row (INV-1458).
+    observed: (slug, would) => this.policy.notifyObserved(slug, would), finished: (skill, agent, result, reason) => noteRoutineEnd(this.exceptions, skill.slug, agent, result, reason), // The observe-mode audit row (INV-1458); every run's end on the exception list (INV-1741).
     // Through the ordinary prompt path, so the policy gate checks a scheduled turn like any other (a box over budget stops firing). Its own turn
     // always: a kickoff absorbed as steering would bury its report in an unrelated reply. A delivering run happens *in* the chat's conversation. Last time's commitments open the next run (INV-528).
     priorCommitments: slug => priorCommitmentsPrompt(this.commitments.lastFor(slug), this.tasks?.list() ?? []),
@@ -1974,11 +1974,11 @@ export class Orchestrator {
         this.options.onTurnEvent?.(event);
         this.extensions?.emit(event);
       },
-    }).catch(error => {
+    }).then(() => noteTurnEnd(this.exceptions, agent.id, conversation, inbound), error => {
       // An aborted turn is a normal outcome — a priority message superseded it,
       // and the bus will schedule the follow-up turn that handles that message.
       if (error instanceof TurnAborted) return;
-      throw error;
+      noteTurnEnd(this.exceptions, agent.id, conversation, inbound, error); throw error; // a failure on the exception list (INV-1741)
     });
   }
 

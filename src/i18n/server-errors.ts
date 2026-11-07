@@ -106,6 +106,8 @@ export const SERVER_ERRORS = {
   "err.department-quota-entry": ["请从当前完整的通讯录里选一个部门，限额为 0–99 或 null。", "Choose a department from a current complete directory and a quota 0–99 or null."],
   // ── agents ───────────────────────────────────────────────────────────────────────────────────
   "err.agent-unknown": ["没有 agent {agent}", "No agent {agent}"],
+  "err.exception-unknown": ["异常列表里没有 {id}", "No entry {id} on the exception list"],
+  "err.exception-resolved": ["{id} 已经解决或被忽略", "{id} is already resolved or dismissed"],
   "err.guests-personal": ["个人安装不回答访客，也没有这个设置。要让 agent 回答访客，请在组织里设置。", "A personal installation answers no guests and has no such setting. Set this up in an organisation."],
   "err.guests-mode-unknown": ["回答范围只能是 members 或 guests。", "Who it answers is members or guests."],
   "err.guests-cap-invalid": ["每群每日访客回合数必须是不小于 1 的整数。", "Guest turns per group chat per day must be a whole number of at least 1."],
