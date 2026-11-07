@@ -220,7 +220,7 @@ import { Directories } from "../host/directory.ts";
 import { directoryHelpers } from "../channels/directory-sources.ts";
 import { mayReadScopedEvent } from "./event-visibility.ts";
 import { PersonalBoxes, type PersonalBoxDriver } from "../host/personal-boxes.ts";
-import { PersonalDocker } from "../box/personal.ts";
+import { provisionedBoxDriver } from "../box/kubernetes-box.ts";
 import { personalAllocationRefusal, personalBoxesOf, personalQuotaFor } from "../host/box-quota.ts";
 import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
 import { attentionFor, isDecision, urgencyOf } from "../host/attention.ts"; import { parseLevel } from "../host/autonomy-level.ts"; import { openTurnsOf, staleApprovals } from "../host/approval-wait.ts";
@@ -776,8 +776,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     },
     attach: entry => { if (registry.boxById(entry.id)) registry.updateBox(entry.id, { endpoint: entry.endpoint, members: entry.members }); else registry.attachBox(entry); },
     detach: id => { orchestrator.detachBox(id); }, residents: id => registry.agentsIn(id).length,
-    driver: options.personalBoxDriver ?? new PersonalDocker(),
-  });
+    driver: options.personalBoxDriver ?? provisionedBoxDriver(options.desktop === true),
+  }); void personalBoxes.recover(line => log(line)); // a server's pods come back after it restarts (INV-1692)
 
   {
     const legacy = loadConfig().channelAllow ?? [];

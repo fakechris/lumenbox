@@ -52,9 +52,9 @@ export interface KubePod {
   spec: Record<string, unknown>;
   status?: {
     phase?: string;
-    conditions?: readonly { type: string; status: string }[];
+    conditions?: readonly { type: string; status: string; reason?: string; message?: string }[];
     /** Lets a watcher say "ErrImagePull" in seconds instead of timing out blind. */
-    containerStatuses?: readonly { state?: { waiting?: { reason?: string } } }[];
+    containerStatuses?: readonly { state?: { waiting?: { reason?: string; message?: string } } }[];
   };
 }
 
@@ -64,6 +64,12 @@ export interface KubeService {
 }
 
 export interface KubePvc {
+  metadata: KubeObjectMeta;
+  spec: Record<string, unknown>;
+}
+
+/** Who may reach a box: the per-box isolation boundary (INV-1692). */
+export interface KubeNetworkPolicy {
   metadata: KubeObjectMeta;
   spec: Record<string, unknown>;
 }
@@ -97,6 +103,8 @@ export interface KubeApi {
   deletePvc(name: string): Promise<void>;
   applySecret(secret: KubeSecret): Promise<void>;
   deleteSecret(name: string): Promise<void>;
+  applyNetworkPolicy(policy: KubeNetworkPolicy): Promise<void>;
+  deleteNetworkPolicy(name: string): Promise<void>;
 }
 
 export class KubernetesError extends Error {
@@ -409,6 +417,7 @@ const RESOURCES = {
   services: "/api/v1/namespaces/{ns}/services",
   persistentvolumeclaims: "/api/v1/namespaces/{ns}/persistentvolumeclaims",
   secrets: "/api/v1/namespaces/{ns}/secrets",
+  networkpolicies: "/apis/networking.k8s.io/v1/namespaces/{ns}/networkpolicies",
 } as const;
 
 type ResourceKind = keyof typeof RESOURCES;
@@ -422,6 +431,7 @@ const SERVER_ASSIGNED: Record<ResourceKind, readonly string[]> = {
   services: ["clusterIP", "clusterIPs", "ipFamilies", "ipFamilyPolicy"],
   persistentvolumeclaims: ["volumeName"],
   secrets: [],
+  networkpolicies: [],
 };
 
 /** How long `replacePod` waits for a deleted pod's name to free. A wedged kubelet, not a slow one. */
@@ -483,6 +493,12 @@ export class HttpKubeApi implements KubeApi {
   }
   deleteSecret(name: string): Promise<void> {
     return this.remove("secrets", name);
+  }
+  applyNetworkPolicy(policy: KubeNetworkPolicy): Promise<void> {
+    return this.apply("networkpolicies", policy.metadata.name, { ...policy, apiVersion: "networking.k8s.io/v1", kind: "NetworkPolicy" });
+  }
+  deleteNetworkPolicy(name: string): Promise<void> {
+    return this.remove("networkpolicies", name);
   }
 
   /**

@@ -14,114 +14,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { containerNameFor } from "./compose.ts";
-import type { KubeApi, KubePod, KubePvc, KubeSecret, KubeService } from "./kube-client.ts";
+import type { KubePod } from "./kube-client.ts";
 import { KubernetesAllocator } from "./kubernetes.ts";
 import type { AllocationPolicy } from "./policy.ts";
 import { staticPolicy } from "./policy.ts";
 import { SqliteControlStore } from "./store.ts";
-
-interface Call {
-  verb: "apply" | "get" | "delete";
-  kind: "pod" | "service" | "pvc" | "secret";
-  name: string;
-}
-
-/**
- * An in-memory API server: remembers which objects "exist" and records every call.
- *
- * Pods become Ready the moment they are applied — the fake is a *kind* cluster where everything
- * schedules instantly — unless `neverReady` asks it to be the other kind (the timeout path's
- * whole test) or `podFate` asks for one of the ways a pod never becomes Ready at all.
- */
-function fakeApi(
-  options: {
-    existingPods?: KubePod[];
-    neverReady?: boolean;
-    failPvcDelete?: string;
-    failApplyService?: boolean;
-    /** `vanished`: apply never lands. `failed` / `terminating`: the pod exists but cannot Ready. */
-    podFate?: "vanished" | "failed" | "terminating";
-  } = {}
-) {
-  const pods = new Map<string, KubePod>();
-  const services = new Map<string, KubeService>();
-  const pvcs = new Map<string, KubePvc>();
-  const secrets = new Map<string, KubeSecret>();
-  const calls: Call[] = [];
-
-  for (const pod of options.existingPods ?? []) pods.set(pod.metadata.name, pod);
-
-  const api: KubeApi = {
-    async applyPod(pod) {
-      calls.push({ verb: "apply", kind: "pod", name: pod.metadata.name });
-      // A pod that never lands at all: the scheduler lost it between POST and the first poll.
-      if (options.podFate === "vanished") return;
-      // A real kubelet flips the Ready condition once the probe passes; the fake does it at
-      // apply, so `waitReady` returns on its first poll.
-      pods.set(pod.metadata.name, {
-        ...pod,
-        metadata: {
-          ...pod.metadata,
-          // Terminating: someone deleted the pod underneath the readiness wait.
-          ...(options.podFate === "terminating"
-            ? { deletionTimestamp: new Date().toISOString() }
-            : {}),
-        },
-        status:
-          options.podFate === "failed"
-            ? { phase: "Failed" }
-            : options.neverReady === true || options.podFate !== undefined
-              ? { phase: "Pending" }
-              : { phase: "Running", conditions: [{ type: "Ready", status: "True" }] },
-      });
-    },
-    async getPod(name) {
-      calls.push({ verb: "get", kind: "pod", name });
-      return pods.get(name);
-    },
-    async deletePod(name) {
-      calls.push({ verb: "delete", kind: "pod", name });
-      pods.delete(name);
-    },
-    async applyService(service) {
-      calls.push({ verb: "apply", kind: "service", name: service.metadata.name });
-      if (options.failApplyService === true) throw new Error("the apiserver said no");
-      services.set(service.metadata.name, service);
-    },
-    async getService(name) {
-      calls.push({ verb: "get", kind: "service", name });
-      return services.get(name);
-    },
-    async deleteService(name) {
-      calls.push({ verb: "delete", kind: "service", name });
-      services.delete(name);
-    },
-    async applyPvc(pvc) {
-      calls.push({ verb: "apply", kind: "pvc", name: pvc.metadata.name });
-      pvcs.set(pvc.metadata.name, pvc);
-    },
-    async getPvc(name) {
-      calls.push({ verb: "get", kind: "pvc", name });
-      return pvcs.get(name);
-    },
-    async deletePvc(name) {
-      calls.push({ verb: "delete", kind: "pvc", name });
-      if (options.failPvcDelete !== undefined && name.endsWith(options.failPvcDelete)) {
-        throw new Error("pvc is still bound");
-      }
-      pvcs.delete(name);
-    },
-    async applySecret(secret) {
-      calls.push({ verb: "apply", kind: "secret", name: secret.metadata.name });
-      secrets.set(secret.metadata.name, secret);
-    },
-    async deleteSecret(name) {
-      calls.push({ verb: "delete", kind: "secret", name });
-      secrets.delete(name);
-    },
-  };
-  return { api, pods, services, pvcs, secrets, calls };
-}
+import { fakeKubeApi as fakeApi } from "./testing/fake-kube.ts";
 
 function fixture(
   options: Parameters<typeof fakeApi>[0] & {
@@ -187,10 +85,17 @@ test("a tenant gets a pod, a service, three PVCs and a secret, all named and lab
     assert.equal(podSpec.automountServiceAccountToken, false);
     assert.equal(podSpec.enableServiceLinks, false);
 
-    // Creation order: secret, PVCs, service, pod. The pod references the others by name, so they
-    // exist first — and the order is what a reader of the calls can hold the code to.
+    // Creation order: secret, PVCs, service, network policy, pod. The pod references the others
+    // by name, so they exist first; the policy precedes the pod so the box is never up and open.
     const kinds = fake.calls.filter(c => c.verb === "apply").map(c => c.kind);
-    assert.deepEqual(kinds, ["secret", "pvc", "pvc", "pvc", "service", "pod"]);
+    assert.deepEqual(kinds, ["secret", "pvc", "pvc", "pvc", "service", "networkpolicy", "pod"]);
+
+    // Ingress only from the control plane: another tenant's pod carries no such label (INV-1692).
+    assert.deepEqual(fake.policies.get(name)?.spec, {
+      podSelector: { matchLabels: { "app.kubernetes.io/instance": name } },
+      policyTypes: ["Ingress"],
+      ingress: [{ from: [{ podSelector: { matchLabels: { "agentbox/role": "control" } } }] }],
+    });
 
     // And the service selects exactly this pod, no other tenant's.
     assert.deepEqual(fake.services.get(name)?.spec.selector, { "app.kubernetes.io/instance": name });
@@ -336,6 +241,7 @@ test("stop keeps the volumes and the secret; destroy takes everything", async ()
     assert.equal(fake.pods.has(name), false);
     assert.equal(fake.services.has(name), false);
     assert.equal(fake.secrets.has(`${name}-tokens`), false);
+    assert.equal(fake.policies.has(name), false, "and the network policy");
     for (const suffix of ["work", "config", "hostd"]) {
       assert.equal(fake.pvcs.has(`${name}-${suffix}`), false, "destroy takes the volumes too");
     }

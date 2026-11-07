@@ -139,8 +139,24 @@ the audit log. The default policy is `staticPolicy()`: 4Gi memory, 10Gi per PVC,
 constraints. The client is a zero-dependency REST wrapper (`src/control/kube-client.ts`):
 in-cluster ServiceAccount auth, or a minimally-parsed kubeconfig (token or client-cert; exec
 plugins are refused loudly). Deployment manifests live in `deploy/kubernetes/`. An organisation
-installation allocates its boxes with this same allocator, one pod per box rather than per
-tenant (INV-1692, docs/95 §3); that use is the first one to be verified on a real cluster.
+installation allocates its boxes with this same code, one pod per box rather than per tenant
+(INV-1692, docs/95 §3) — the next paragraph — and that use is the first verified on a real cluster.
+
+**One box in a cluster has one home: `src/control/kube-box.ts` (INV-1692).** What a box *is* in a
+cluster — the objects above plus a per-box **NetworkPolicy** admitting ingress only from pods
+labelled `agentbox/role=control` — and how it is created, waited for (with the platform's reason
+when it does not come: `ImagePullBackOff`, `Unschedulable`, …), stopped, destroyed, restarted and
+located is `KubeBoxes`. Two callers key it: this allocator per *tenant*, and an organisation
+installation's per-*box* driver (`src/box/kubernetes-box.ts`, `AGENTBOX_BOX_BACKEND=kubernetes` on a
+server; docs/36 Scene 4), which provisions each box a member takes as its own pod, volumes, Secret
+and policy. Every pod carries a launch-config digest (`agentbox/config-digest`: image, plain env,
+resources, the Secret by name only), so a pod launched from another configuration is reported as
+drifted rather than silently kept (INV-712). The per-box path was run on a real cluster (kind,
+Kubernetes 1.37, `scripts/k8s-org-boxes.ts`): two boxes up in 18s; the control-labelled pod reached
+both, each box refused the other's token with 401 and could not reach the other at all (with the
+policy lifted the same probe answered 200); a pod deleted while the server was down came back on its
+volume with its stored token; delete left no object and no volume. The per-tenant allocator shares
+that code, but its own end-to-end run — the in-box orchestrator behind the gateway — is still owed.
 
 **`static` — for development.** One box, named by URL, the `attached` provisioner promoted to the
 fleet interface. This is what lets the control plane run against a box on a laptop.

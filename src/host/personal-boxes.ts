@@ -17,10 +17,32 @@ export interface PersonalBoxRecord {
   worker?: number;
   deleteData?: boolean;
   error?: string;
+  /** Why the box is in its state, in the platform's word (ImagePullBackOff, Unschedulable) — INV-712's state_reason. */
+  stateReason?: string;
+  stateMessage?: string;
+  stateChangedAt?: string;
+}
+/** What a driver found of a ready box after a server restart (INV-1692). */
+export interface RecoveredBox {
+  state: "running" | "restarted" | "gone" | "failed";
+  /** Launched from another configuration than the one this server would launch it with now. */
+  drifted: boolean;
+  endpoint?: string;
+  reason?: string;
 }
 export interface PersonalBoxDriver {
   start(record: PersonalBoxRecord): Promise<string>;
   remove(record: PersonalBoxRecord, deleteData: boolean): Promise<void>;
+  /** Bring a ready box back after this server restarted. Docker's restart policy needs no help, so optional. */
+  recover?(record: PersonalBoxRecord): Promise<RecoveredBox>;
+}
+/** The platform's reason when a driver gave one, else the error's kind. */
+function reasonOf(error: unknown): { stateReason: string; stateMessage: string } {
+  const reason = (error as { reason?: unknown } | undefined)?.reason;
+  return {
+    stateReason: typeof reason === "string" && reason !== "" ? reason : error instanceof Error ? error.name : "Error",
+    stateMessage: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+  };
 }
 interface Options {
   home: string;
@@ -164,7 +186,7 @@ export class PersonalBoxes {
   }
   list(
     owner: string,
-  ): Array<{ id: string; name: string; status: string; error?: string; dataRetained: boolean }> {
+  ): Array<{ id: string; name: string; status: string; error?: string; stateReason?: string; dataRetained: boolean }> {
     return this.transaction((db) =>
       this.records(db)
         .filter((row) => row.owner === owner && row.status !== "deleted")
@@ -173,6 +195,7 @@ export class PersonalBoxes {
           name: row.name,
           status: row.worker && !this.running(row) ? "interrupted" : row.status,
           error: row.error,
+          ...(row.stateReason !== undefined ? { stateReason: row.stateReason } : {}),
           dataRetained: row.status === "detached" || row.status === "failed",
         })),
     );
@@ -276,7 +299,8 @@ export class PersonalBoxes {
           Object.assign(row, current);
           delete row.worker;
         });
-      } catch {
+      } catch (error) {
+        Object.assign(row, reasonOf(error), { stateChangedAt: new Date().toISOString() });
         this.transaction((db) => {
           row.status = "deleting";
           row.deleteData = false;
@@ -288,8 +312,7 @@ export class PersonalBoxes {
           this.transaction((db) => {
             row.status = "failed";
             delete row.worker;
-            row.error =
-              "Start failed or permission changed. Retry or remove the box; retained data is preserved.";
+            row.error = `Start failed or permission changed (${row.stateReason}). Retry or remove the box; retained data is preserved.`;
             this.save(db, row);
           });
         } catch {
@@ -329,6 +352,39 @@ export class PersonalBoxes {
       return record;
     });
     return row.status === "deleted" ? row : this.finishRemoval(row);
+  }
+  /**
+   * After this server restarted: ask the driver about every ready box, one at a time and under
+   * its operation lock. A box whose objects are gone is marked failed with the reason, not
+   * detached behind anyone's back; a drifted one is reported, not rebuilt (INV-712).
+   */
+  async recover(log: (line: string) => void): Promise<void> {
+    const driver = this.options.driver;
+    if (driver.recover === undefined) return;
+    const ready = this.read((db) => this.records(db).filter((row) => row.status === "ready"));
+    for (const row of ready) {
+      if (this.running(row)) continue;
+      this.acquire(row.id);
+      try {
+        const found = await driver.recover(row);
+        log(`personal box ${row.name}: ${found.state}${found.drifted ? " (drifted: launched from another configuration)" : ""}`);
+        if (found.endpoint !== undefined) {
+          const entry = this.options.entries().find((e) => e.id === row.id);
+          if (entry && entry.endpoint?.baseUrl !== found.endpoint) this.options.attach(this.entry(row, found.endpoint));
+        }
+        if (found.state === "gone" || found.state === "failed")
+          this.transaction((db) => {
+            const current = this.own(db, row.owner, row.id);
+            Object.assign(current, { status: "failed", stateReason: found.reason ?? "Gone", stateChangedAt: new Date().toISOString(),
+              error: `The box did not come back after a restart (${found.reason ?? "Gone"}). Retry or remove the box.` });
+            this.save(db, current);
+          });
+      } catch (error) {
+        log(`personal box ${row.name}: recovery failed: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        this.release(row.id);
+      }
+    }
   }
   cleanupList(): Array<{ id: string; owner: string; name: string; status: Status }> {
     return this.transaction((db) =>

@@ -71,6 +71,8 @@ spec:
       labels:
         app.kubernetes.io/name: agentbox-control
         app.kubernetes.io/managed-by: agentbox
+        # The one label a box's NetworkPolicy admits (src/control/kube-box.ts, INV-1692).
+        agentbox/role: control
     spec:
       serviceAccountName: agentbox-control
       containers:

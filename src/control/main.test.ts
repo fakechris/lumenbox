@@ -14,55 +14,9 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import type { KubeApi, KubePod, KubePvc, KubeSecret, KubeService } from "./kube-client.ts";
 import { DEFAULT_NAMESPACE } from "./kubernetes.ts";
 import { type RunningControlPlane, startControlPlane } from "./main.ts";
-
-/** The whole KubeApi contract over four maps; pods are Ready on apply. */
-function fakeKubeApi(): KubeApi {
-  const pods = new Map<string, KubePod>();
-  const services = new Map<string, KubeService>();
-  const pvcs = new Map<string, KubePvc>();
-  const secrets = new Map<string, KubeSecret>();
-  return {
-    async applyPod(pod) {
-      pods.set(pod.metadata.name, {
-        ...pod,
-        status: { phase: "Running", conditions: [{ type: "Ready", status: "True" }] },
-      });
-    },
-    async getPod(name) {
-      return pods.get(name);
-    },
-    async deletePod(name) {
-      pods.delete(name);
-    },
-    async applyService(service) {
-      services.set(service.metadata.name, service);
-    },
-    async getService(name) {
-      return services.get(name);
-    },
-    async deleteService(name) {
-      services.delete(name);
-    },
-    async applyPvc(pvc) {
-      pvcs.set(pvc.metadata.name, pvc);
-    },
-    async getPvc(name) {
-      return pvcs.get(name);
-    },
-    async deletePvc(name) {
-      pvcs.delete(name);
-    },
-    async applySecret(secret) {
-      secrets.set(secret.metadata.name, secret);
-    },
-    async deleteSecret(name) {
-      secrets.delete(name);
-    },
-  };
-}
+import { fakeKubeApi } from "./testing/fake-kube.ts";
 
 async function withControlPlane(
   env: Record<string, string | undefined>,
@@ -83,7 +37,7 @@ async function withControlPlane(
       host: "127.0.0.1",
       allocator: "kubernetes",
       image: "agentbox/box:test",
-      kubeApi: fakeKubeApi(),
+      kubeApi: fakeKubeApi().api,
       users: "admin:pw:default",
       statePath: dir,
       sweepSeconds: 0,
