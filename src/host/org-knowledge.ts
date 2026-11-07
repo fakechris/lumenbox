@@ -16,8 +16,12 @@
  *   nobody. A guest turn never reads it: guest-turn.ts takes no store and does not import this
  *   module (docs/97 §0). An isolated turn (clean, recovering) does not read it either.
  * - **What is recalled.** Only a `recall` item that a person stands behind (`verifiedBy` and
- *   `verifiedAt`) and whose `reviewBy` has not passed. Anything else — `cite-only`, unverified,
- *   stale — is read only when cited by id (`cite`, `citedById`), with its state said (docs/98 §6.3).
+ *   `verifiedAt`) and that is not stale. Anything else — `cite-only`, unverified — is read only
+ *   when cited by id (`cite`, `citedById`), with its state said (docs/98 §6.3).
+ * - **Stale** (INV-1731, org-knowledge-staleness.ts): its `reviewBy` passed, or its evidence
+ *   changed state. A stale item leaves the Recall tool's search, but a verified one stays in the
+ *   prompt marked and after everything current, so it is the first to give way to the budget and
+ *   an agent is told not to rely on it unchecked; its owner has it on their "needs you" list.
  * - **The prompt.** Pinned "how we work" items go into every turn in a fixed budget of their own
  *   (`PINNED_CHAR_BUDGET`). Over budget, the items kept are those with the latest review date
  *   (none last), then the most recently verified; the rest are counted, "N more". Searchable items
@@ -41,6 +45,7 @@ import { dedupe, type MemoryRecord, validateRecord } from "./memory.ts";
 import { versionOf } from "./memory-admin.ts";
 import { rankRelated } from "./memory-relevance.ts";
 import { admitted, citedById, evidenceKind, recallable, type MemoryReader } from "./memory-scope.ts";
+import { describeStaleness, type EvidenceWatch, type Staleness } from "./org-knowledge-staleness.ts";
 
 export const LEDGER_KIND: LedgerKind = "record";
 
@@ -77,6 +82,8 @@ export interface OrgKnowledgeDeps {
   mode: () => InstallationMode;
   boxes: () => OrgBoxes;
   now?: () => Date;
+  /** What the items' evidence says now (INV-1731); absent, only the review date makes an item stale. */
+  evidence?: Pick<EvidenceWatch, "changeOf">;
 }
 
 const ID_PREFIX = "org:";
@@ -106,10 +113,17 @@ function readable(raw: unknown): raw is OrgKnowledgeItem {
   return item !== null && typeof item === "object" && typeof item.at === "string" && typeof item.kind === "string" && typeof item.text === "string";
 }
 
-/** Whether a person stands behind the item now: verified, and its review date not passed. */
-export function standsNow(item: OrgKnowledgeItem, now: number): boolean {
-  if (item.verifiedBy === undefined || item.verifiedBy === "" || item.verifiedAt === undefined) return false;
-  return item.reviewBy === undefined || !(Date.parse(item.reviewBy) <= now);
+/** Whether a person put their name to the item. */
+export function verified(item: OrgKnowledgeItem): boolean {
+  return item.verifiedBy !== undefined && item.verifiedBy !== "" && item.verifiedAt !== undefined;
+}
+
+/** Why the item is not to be relied on unchecked, or undefined: its evidence changed (stale), else its review date passed (review due). */
+export function stalenessOf(item: OrgKnowledgeItem, now: number, evidence?: Pick<EvidenceWatch, "changeOf">): Staleness | undefined {
+  const changed = evidence?.changeOf(item);
+  if (changed !== undefined) return changed;
+  if (item.reviewBy !== undefined && Date.parse(item.reviewBy) <= now) return { kind: "review-due", since: item.reviewBy };
+  return undefined;
 }
 
 /** The order pinned items keep their place in: the latest review date (none last), then the latest verification, then the id. */
@@ -119,19 +133,20 @@ export function pinnedOrder(a: OrgKnowledgeItem, b: OrgKnowledgeItem): number {
   return review(b) - review(a) || verified(b) - verified(a) || versionOf(a).localeCompare(versionOf(b));
 }
 
-/** One prompt line for an item: its id, its text, and who stands behind it. */
-export function renderItem(item: OrgKnowledgeItem): string {
-  const review = item.reviewBy === undefined ? "" : `, review by ${item.reviewBy.slice(0, 10)}`;
-  const verified = item.verifiedAt === undefined ? "unverified" : `verified ${item.verifiedAt.slice(0, 10)}`;
-  return `- [${orgItemId(item)}] ${item.text} — owner ${item.owner ?? "unknown"}, ${verified}${review}`;
+/** One prompt line for an item: its id, its text, who stands behind it, and — when stale — the marker (INV-1731). */
+export function renderItem(item: OrgKnowledgeItem, staleness?: Staleness): string {
+  const review = item.reviewBy === undefined || staleness?.kind === "review-due" ? "" : `, review by ${item.reviewBy.slice(0, 10)}`;
+  const stood = item.verifiedAt === undefined ? "unverified" : `verified ${item.verifiedAt.slice(0, 10)}`;
+  const marker = staleness === undefined ? "" : ` — ${describeStaleness(staleness)}; check before relying on it`;
+  return `- [${orgItemId(item)}] ${item.text} — owner ${item.owner ?? "unknown"}, ${stood}${review}${marker}`;
 }
 
 /** Fills `budget` in order, stopping at the first line that does not fit: a later item never jumps a better one. */
-function fill(items: readonly OrgKnowledgeItem[], budget: number): { lines: string[]; omitted: number } {
+function fill(items: readonly { item: OrgKnowledgeItem; staleness?: Staleness }[], budget: number): { lines: string[]; omitted: number } {
   const lines: string[] = [];
   let used = 0;
-  for (const item of items) {
-    const line = renderItem(item);
+  for (const { item, staleness } of items) {
+    const line = renderItem(item, staleness);
     if (used + line.length + 1 > budget) break;
     lines.push(line);
     used += line.length + 1;
@@ -143,9 +158,12 @@ export class OrgKnowledge {
   private readonly log: OrgKnowledgeItem[] = [];
   /** Replaced by the server, which knows whether this is the desktop app (`boxRegistrationModeAt`). */
   mode: () => InstallationMode;
+  /** Set by the server, which holds the task board, the documents and the Involute credential (INV-1731). */
+  evidence: Pick<EvidenceWatch, "changeOf"> | undefined;
 
   constructor(private readonly path: string | undefined, private readonly deps: OrgKnowledgeDeps) {
     this.mode = deps.mode;
+    this.evidence = deps.evidence;
     if (path === undefined || !existsSync(path)) return;
     for (const raw of readFileSync(path, "utf8").split("\n")) {
       if (raw.trim() === "") continue;
@@ -199,10 +217,31 @@ export class OrgKnowledge {
     return admitted(this.live(), "shared", this.reader(agentId, principalId)) as OrgKnowledgeItem[];
   }
 
-  /** What may enter recall and the prompt: admitted, `recall`, and stood behind now. */
+  /** Why this item is stale now, or undefined. */
+  staleOf(item: OrgKnowledgeItem): Staleness | undefined {
+    return stalenessOf(item, this.now().getTime(), this.evidence);
+  }
+
+  /** The admitted `recall` items a person verified, each with its staleness: what the prompt may show. */
+  private surfacedFor(agentId: string, principalId: string | undefined): { item: OrgKnowledgeItem; staleness?: Staleness }[] {
+    return (recallable(this.admittedFor(agentId, principalId)) as OrgKnowledgeItem[]).filter(verified).map(item => {
+      const staleness = this.staleOf(item);
+      return staleness === undefined ? { item } : { item, staleness };
+    });
+  }
+
+  /** What may enter recall: admitted, `recall`, verified, and not stale. */
   recalledFor(agentId: string, principalId: string | undefined): OrgKnowledgeItem[] {
-    const now = this.now().getTime();
-    return (recallable(this.admittedFor(agentId, principalId)) as OrgKnowledgeItem[]).filter(item => standsNow(item, now));
+    return this.surfacedFor(agentId, principalId).filter(entry => entry.staleness === undefined).map(entry => entry.item);
+  }
+
+  /** Every verified item that is stale now, whoever may read it: for its owner's "needs you" list (INV-1731). */
+  staleItems(): { id: string; item: OrgKnowledgeItem; staleness: Staleness }[] {
+    if (this.log.length === 0 || this.mode() === "single-machine") return [];
+    return this.live().filter(item => item.kind !== "retraction" && item.held === undefined && verified(item)).flatMap(item => {
+      const staleness = this.staleOf(item);
+      return staleness === undefined ? [] : [{ id: orgItemId(item), item, staleness }];
+    });
   }
 
   /** An item by its id (`org:<version>` or the bare version), whatever its surface, when this reader may read it; with its state. */
@@ -213,14 +252,15 @@ export class OrgKnowledge {
     return { item, recalled: this.recalledFor(agentId, principalId).some(other => versionOf(other) === version) };
   }
 
-  /** The prompt section for one turn, or undefined when there is nothing to show. */
+  /** The prompt section for one turn, or undefined when there is nothing to show. Stale items come after every current one, marked. */
   section(agentId: string, principalId: string | undefined, query: string): string | undefined {
-    const items = this.recalledFor(agentId, principalId);
-    if (items.length === 0) return undefined;
-    const pinned = fill(items.filter(item => item.pinned === true).sort(pinnedOrder), PINNED_CHAR_BUDGET);
-    const searchable = items.filter(item => item.pinned !== true);
-    const related = query.trim() === "" ? [] : rankRelated(query, searchable).map(entry => entry.record as OrgKnowledgeItem);
-    const recalled = fill(related, ORG_RECALL_BUDGET);
+    const entries = this.surfacedFor(agentId, principalId);
+    if (entries.length === 0) return undefined;
+    const freshFirst = <T extends { staleness?: Staleness }>(list: T[]): T[] => [...list.filter(entry => entry.staleness === undefined), ...list.filter(entry => entry.staleness !== undefined)];
+    const pinned = fill(freshFirst(entries.filter(entry => entry.item.pinned === true).sort((a, b) => pinnedOrder(a.item, b.item))), PINNED_CHAR_BUDGET);
+    const searchable = entries.filter(entry => entry.item.pinned !== true);
+    const related = query.trim() === "" ? [] : rankRelated(query, searchable.map(entry => entry.item)).map(entry => searchable.find(candidate => candidate.item === entry.record)!);
+    const recalled = fill(freshFirst(related), ORG_RECALL_BUDGET);
     if (pinned.lines.length === 0 && pinned.omitted === 0 && recalled.lines.length === 0) return undefined;
     const parts = [
       "## How we work: the organisation's knowledge",
@@ -237,8 +277,9 @@ export class OrgKnowledge {
     const asked = search.trim();
     if (/^org:[0-9a-f]{12}$/.test(asked)) {
       const found = this.cite(agentId, principalId, asked);
-      const state = found === undefined ? "" : found.recalled ? "" : " (not recalled on its own: cite-only, unverified or past its review date)";
-      return { cited: found === undefined ? `No organisation item ${asked} you may read.` : `${renderItem(found.item)}${state}${found.item.evidence?.length ? `\nEvidence: ${found.item.evidence.join(", ")}` : ""}`, items: [] };
+      const staleness = found === undefined ? undefined : this.staleOf(found.item);
+      const state = found === undefined || found.recalled ? "" : ` (not recalled on its own: ${staleness !== undefined ? "stale" : "cite-only or unverified"})`;
+      return { cited: found === undefined ? `No organisation item ${asked} you may read.` : `${renderItem(found.item, staleness)}${state}${found.item.evidence?.length ? `\nEvidence: ${found.item.evidence.join(", ")}` : ""}`, items: [] };
     }
     return { items: this.recalledFor(agentId, principalId) };
   }
