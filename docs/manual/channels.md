@@ -53,15 +53,19 @@ credentials in `~/.agentbox/config.json`.
 
 - Settings → Channels: each channel and whether it is connected.
 - The chat itself: in a Feishu group, the reply is a thread under your message.
-- Settings → Team: each person and their role — viewer, driver or admin. On the desktop app
-  with one person, that person is the Owner (机主). Letting a second person in asks first; on
-  yes, the Owner becomes the first Admin (管理员).
+- Settings → Team: each person and their role — viewer, driver or admin. On your personal
+  installation, the desktop app on your computer, the one person is you, the Owner (机主).
 
 ## Limits
 
 - A channel's id is chosen once; it becomes part of the name of everyone it lets in. Its
   display name and default agent can change at any time.
 - *Add channel* offers Feishu and DingTalk.
+- A personal installation has only you. Inviting a person, letting someone in who wrote,
+  adding a person by hand and syncing a directory are all refused there, with the sentence
+  "This is your personal installation; it has only you. To work with others, join or create
+  an organisation." People are let in on an organisation's installation, where Admins
+  (管理员) run them. A code that links your own phone still works.
 - In DingTalk, an approval arrives as a card only when a card template is set up. Without one,
   you answer by typing the reply word.
 

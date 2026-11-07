@@ -9,3 +9,11 @@ export const MANUAL_URL = "https://github.com/fakechris/lumenbox/blob/main/docs/
 
 /** The Chinese manual (INV-1684), beside the English one: the page links to the one in its reader's language. */
 export const MANUAL_URL_ZH = MANUAL_URL.replace(/\.md$/, ".zh.md");
+
+/** The page a personal installation's refused add-person links to (INV-1689): its Limits say the installation has only you. */
+export const PERSONAL_ONLY_PAGE = "channels";
+
+/** One manual page in the reader's language: `manualPage("channels", "zh")` is `channels.zh.md` beside the Chinese README. */
+export function manualPage(page: string, locale: "zh" | "en"): string {
+  return MANUAL_URL.replace(/README\.md$/, locale === "zh" ? `${page}.zh.md` : `${page}.md`);
+}

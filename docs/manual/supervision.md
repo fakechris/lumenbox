@@ -56,8 +56,7 @@ agentbox supervise --objective "<what done looks like>" --token-file <file>
 ```
 
 These commands are not in `agentbox --help` yet. A token comes from Settings → Mine → Your
-MCP tokens. On the desktop with nobody signed in, that list is the Owner's (机主), or the one
-Admin's once the installation has more people: the supervision and watchdog tokens are there,
+MCP tokens. On the desktop with nobody signed in, that list is the Owner's (机主): the supervision and watchdog tokens are there,
 and Revoke ends either one. `agentbox watchdog install` needs no `--principal` there.
 
 ## Where to see the result
