@@ -26,6 +26,8 @@ export interface ShelfTemplate {
   name: string;
   title: string;
   description: string;
+  /** The same line in Chinese, beside the English in the template file (INV-1702); the shelf reads it by `descriptionIn`. */
+  descriptionZh?: string;
   createdBy?: string;
   source?: string;
   skills: string[];
@@ -44,7 +46,7 @@ export function shelfTemplates(): ShelfTemplate[] {
     .flatMap(name => {
       try {
         const raw = JSON.parse(readFileSync(join(dir, name), "utf8")) as {
-          profile?: { name?: string; title?: string; description?: string };
+          profile?: { name?: string; title?: string; description?: string; descriptionZh?: string };
           skills?: { name?: string; slug?: string }[];
           routines?: { name?: string; slug?: string }[];
           connectors?: unknown[];
@@ -57,6 +59,7 @@ export function shelfTemplates(): ShelfTemplate[] {
           name: profile.name ?? name,
           title: profile.title ?? "",
           description: profile.description ?? "",
+          ...(typeof profile.descriptionZh === "string" && profile.descriptionZh.trim() !== "" ? { descriptionZh: profile.descriptionZh } : {}),
           ...(raw.meta?.createdBy !== undefined ? { createdBy: raw.meta.createdBy } : {}),
           ...(raw.meta?.grokListingId !== undefined ? { source: `grok:${raw.meta.grokListingId}` } : {}),
           skills: (raw.skills ?? []).map(skill => skill.name ?? skill.slug ?? "").filter(s => s !== ""),
@@ -69,6 +72,11 @@ export function shelfTemplates(): ShelfTemplate[] {
         return [];
       }
     });
+}
+
+/** A shelf template's line in the reader's language: English when the file carries no Chinese (INV-1702). */
+export function descriptionIn(template: { description: string; descriptionZh?: string }, locale: Locale): string {
+  return locale === "zh" && template.descriptionZh !== undefined ? template.descriptionZh : template.description;
 }
 
 /** Skill-hub packages we actually vendored. Missing SKILL.md is not a skill. */

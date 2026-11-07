@@ -6,6 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { statusText } from "./status-line.ts";
 import { FeishuChannel, SOCKET_RETRY_MS, classifySocketLine, conversationKeyFor, isAddressed, withDeadline, meetingInvitePrompt, parseMeetingInvite, looksLikeMarkdown, markdownPost, renderApprovalCard, renderCard, renderQuestionCard, renderSurfaceCard, splitChatKey, surfacePressText } from "./feishu.ts";
 import type { TaskCardState } from "./manager.ts";
 
@@ -1008,12 +1009,16 @@ test("the socket's state is kept and said; reconnect rebuilds it with the reason
   const adapter = new FeishuChannel("a", "b", line => lines.push(line));
   const internals = adapter as unknown as { noteSocket: (state: "connecting" | "ready" | "lost", why?: string) => void; reopenSocket?: (reason: string) => void; lostTimer?: NodeJS.Timeout };
   assert.equal(adapter.socketStatus(), undefined, "nothing before start");
+  // Said as a status line, worded in the reader's language when the channel list is read (INV-1702).
+  const said = (locale: "zh" | "en") => statusText(adapter.socketStatus() ?? "", locale);
   internals.noteSocket("connecting");
-  assert.match(adapter.socketStatus() ?? "", /^socket connecting/);
+  assert.match(said("en"), /^socket connecting/);
   internals.noteSocket("ready");
-  assert.match(adapter.socketStatus() ?? "", /^socket ready for 0m/);
+  assert.match(said("en"), /^socket ready for 0m/);
+  assert.equal(said("zh"), "连接正常，已持续 0 分钟");
   internals.noteSocket("lost", "pullConnectConfig failed: code=99991663");
-  assert.match(adapter.socketStatus() ?? "", /^socket lost 0m ago \(pullConnectConfig failed: code=99991663\); reconnecting/);
+  assert.match(said("en"), /^socket lost 0m ago \(pullConnectConfig failed: code=99991663\); reconnecting/);
+  assert.equal(said("zh"), "0 分钟前断开（pullConnectConfig failed: code=99991663），正在重连", "the reason stays as the SDK wrote it");
   assert.ok(internals.lostTimer !== undefined, "a lost socket starts the watchdog");
   clearTimeout(internals.lostTimer);
 

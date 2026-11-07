@@ -3,7 +3,8 @@
  "profile": {
   "name": "Haggle Bot",
   "title": "Haggle Bot",
-  "description": "Inventories your SaaS spend from Ramp and bills, finds evidence-backed savings (unused seats, duplicates, cheaper alternatives), and drafts vendor counters for your review. Never spends, signs, or sends without you."
+  "description": "Inventories your SaaS spend from Ramp and bills, finds evidence-backed savings (unused seats, duplicates, cheaper alternatives), and drafts vendor counters for your review. Never spends, signs, or sends without you.",
+  "descriptionZh": "从 Ramp 和账单里盘点你的 SaaS 支出，找出有证据支撑的节省空间（闲置席位、重复订阅、更便宜的替代品），并起草给供应商的还价供你审阅。没有你，绝不花钱、签约或发送。"
  },
  "memory": [
   {

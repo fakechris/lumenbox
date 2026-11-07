@@ -1007,13 +1007,13 @@ export class FeishuChannel implements ChannelAdapter {
   private reopenSocket: ((reason: string) => void) | undefined;
   private lostTimer: NodeJS.Timeout | undefined;
 
-  /** The socket's state in words, for the channel list; undefined before start(). */
-  socketStatus(): string | undefined {
+  /** The socket's state as a status line, for the channel list; undefined before start(). */
+  socketStatus(): import("./status-line.ts").StatusLine | undefined {
     if (this.socket === undefined) return undefined;
-    const ago = Math.round((Date.now() - this.socket.since) / 60_000);
-    if (this.socket.state === "ready") return `socket ready for ${ago}m`;
-    if (this.socket.state === "connecting") return `socket connecting (${ago}m)`;
-    return `socket lost ${ago}m ago${this.socket.why !== undefined ? ` (${this.socket.why})` : ""}; reconnecting`;
+    const minutes = Math.round((Date.now() - this.socket.since) / 60_000);
+    if (this.socket.state === "ready") return { key: "channel.status.socket-ready", vars: { minutes } };
+    if (this.socket.state === "connecting") return { key: "channel.status.socket-connecting", vars: { minutes } };
+    return this.socket.why !== undefined ? { key: "channel.status.socket-lost-why", vars: { minutes, why: this.socket.why } } : { key: "channel.status.socket-lost", vars: { minutes } };
   }
 
   /** The socket's state, for tests and the watchdog. */

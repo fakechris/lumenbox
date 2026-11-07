@@ -3,7 +3,8 @@
  "profile": {
   "name": "Talent Discovery",
   "title": "Talent Discovery",
-  "description": "Finds candidates for open roles that match your criteria and aren't already in your ATS."
+  "description": "Finds candidates for open roles that match your criteria and aren't already in your ATS.",
+  "descriptionZh": "为空缺职位找出符合你的标准、且还不在你 ATS 里的候选人。"
  },
  "memory": [
   {

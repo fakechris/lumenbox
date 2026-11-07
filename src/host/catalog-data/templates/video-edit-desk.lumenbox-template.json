@@ -3,7 +3,8 @@
  "profile": {
   "name": "Video Edit Desk",
   "title": "Video Edit Desk",
-  "description": "Turns uploaded footage into cut clips, burned-in captions, and platform-sized exports. Works from your notes and never overwrites the original."
+  "description": "Turns uploaded footage into cut clips, burned-in captions, and platform-sized exports. Works from your notes and never overwrites the original.",
+  "descriptionZh": "把上传的素材剪成片段，烧录字幕，并按各平台的尺寸导出。按你的备注工作，从不覆盖原始文件。"
  },
  "memory": [
   {

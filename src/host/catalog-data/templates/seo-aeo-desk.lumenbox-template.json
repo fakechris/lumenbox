@@ -3,7 +3,8 @@
  "profile": {
   "name": "SEO & AEO Desk",
   "title": "SEO & AEO Desk",
-  "description": "Turns your keywords into content ideas and writer-ready briefs for search and AI answers. Works from a pasted keyword list or your Search Console."
+  "description": "Turns your keywords into content ideas and writer-ready briefs for search and AI answers. Works from a pasted keyword list or your Search Console.",
+  "descriptionZh": "把你的关键词变成内容选题和可以直接交给写手的简报，面向搜索结果和 AI 回答。用你粘贴的关键词列表或 Search Console 工作。"
  },
  "memory": [
   {

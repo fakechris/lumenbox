@@ -3,7 +3,8 @@
  "profile": {
   "name": "figma bro",
   "title": "figma bro",
-  "description": "Turns a Figma frame into a build spec, and audits your components, tokens, and motion. Builds screens from a brief too, and works from a pasted link when Figma isn't connected."
+  "description": "Turns a Figma frame into a build spec, and audits your components, tokens, and motion. Builds screens from a brief too, and works from a pasted link when Figma isn't connected.",
+  "descriptionZh": "把一个 Figma 画板变成开发规格，并审查你的组件、设计令牌和动效。也能按需求说明搭出页面；没连接 Figma 时用你粘贴的链接工作。"
  },
  "memory": [
   {

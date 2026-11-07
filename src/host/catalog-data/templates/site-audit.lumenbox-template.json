@@ -3,7 +3,8 @@
  "profile": {
   "name": "Site Audit",
   "title": "Site Audit",
-  "description": "SEO + content + speed + a11y + CRO + schema audit. Scored, P0/P1/P2, evidence URLs. Monthly diff. No invented metrics."
+  "description": "SEO + content + speed + a11y + CRO + schema audit. Scored, P0/P1/P2, evidence URLs. Monthly diff. No invented metrics.",
+  "descriptionZh": "SEO + 内容 + 速度 + 无障碍 + 转化率 + 结构化数据的网站审查。打分，分 P0/P1/P2，附证据网址。每月对比变化。不编造指标。"
  },
  "memory": [
   {

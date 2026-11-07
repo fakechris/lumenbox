@@ -129,7 +129,7 @@ function withinWork(path: string, work: string): boolean {
 import { agentboxHome, egressRelayFromEnv, holdHostToken, isPersonalBoxQuota, trustsGatewayIdentity, loadConfig, lockedConfigEnv, reapplyConfigEnv, saveConfig, type AgentboxConfig } from "../config.ts";
 
 type AgentboxConfigHostExec = NonNullable<AgentboxConfig["hostExec"]>;
-import { ChannelManager } from "../channels/manager.ts";
+import { ChannelManager } from "../channels/manager.ts"; import { needsEnv, STARTING } from "../channels/status-line.ts";
 import { DingTalkChannel } from "../channels/dingtalk.ts";
 import { FeishuChannel, meetingInvitePrompt } from "../channels/feishu.ts";
 import {
@@ -157,7 +157,7 @@ import {
   crewTeam,
   expertNamed,
   profilesFor,
-  shelfTemplates, summaryIn,
+  descriptionIn, shelfTemplates, summaryIn,
 } from "../host/catalog.ts";
 import { rescueMessage, rescueStuck } from "../host/rescue.ts";
 import { Deliveries, deliveriesPath } from "../host/deliveries.ts";
@@ -1926,13 +1926,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         continue;
       }
       if (record.type === "tailmsg") {
-        channels.register(tailmsgDoorFromRecord(record, tailmsgDoorDeps), true, "starting");
+        channels.register(tailmsgDoorFromRecord(record, tailmsgDoorDeps), true, STARTING);
       } else if (record.type === "telegram") {
         const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
         channels.register(
           new TelegramChannel(telegramToken ?? "", line => log(line)),
           telegramToken !== undefined,
-          telegramToken !== undefined ? "starting" : "set TELEGRAM_BOT_TOKEN"
+          telegramToken !== undefined ? STARTING : needsEnv("TELEGRAM_BOT_TOKEN")
         );
       } else if (record.type === "feishu") {
         // Credentials come from env names derived from the record id — one rule
@@ -1962,8 +1962,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           feishuDoor,
           feishuId !== undefined && feishuSecret !== undefined,
           feishuId !== undefined && feishuSecret !== undefined
-            ? "starting"
-            : `set ${envBase}_APP_ID and ${envBase}_APP_SECRET`
+            ? STARTING
+            : needsEnv(`${envBase}_APP_ID`, `${envBase}_APP_SECRET`)
         );
         // The same identity, reading documents: a pasted docx/wiki link becomes readable
         // the moment a Feishu app exists. R34's near half — the credential never moves.
@@ -2004,8 +2004,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           dingDoor,
           dingId !== undefined && dingSecret !== undefined,
           dingId !== undefined && dingSecret !== undefined
-            ? "starting"
-            : `set ${base}_CLIENT_ID and ${base}_CLIENT_SECRET`
+            ? STARTING
+            : needsEnv(`${base}_CLIENT_ID`, `${base}_CLIENT_SECRET`)
         );
       }
     }
@@ -4601,7 +4601,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             if (invite.expiresAt < Date.now()) invites.delete(code);
           }
           send(res, 200, {
-            channels: channels.list(),
+            channels: channels.list(localeOf(req, url)), // each status in the reader's language (INV-1702)
             // The doors as records (docs/22 §2): what the settings dialog edits.
             // Credentials are reported as present/absent, never as values.
             records: channelRecords.map(record => ({
@@ -4757,10 +4757,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                       door.alreadyHandled = handledAlready;
                       return door;
                     })();
-              started = channels.registerAndStart(liveDoor, "starting");
+              started = channels.registerAndStart(liveDoor, STARTING);
             }
           } else if (type === "tailmsg") {
-            started = channels.registerAndStart(tailmsgDoorFromRecord(updated.find(record => record.id === id)!, tailmsgDoorDeps), "starting");
+            started = channels.registerAndStart(tailmsgDoorFromRecord(updated.find(record => record.id === id)!, tailmsgDoorDeps), STARTING);
           }
           log(
             `channel records: ${id} ${wasKnown ? "updated" : "added"}` +
@@ -5089,7 +5089,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             .filter(agent => agent.profile.importedFrom !== undefined && !String(agent.profile.importedFrom.id ?? "").startsWith("catalog:"))
             .map(agent => ({ agentId: agent.id, agentName: agent.profile.name, boxId: registry.boxOf(agent.id).id, from: agent.profile.importedFrom }));
           const marketplace = shelfTemplates().map(t => ({
-            slug: t.slug, name: t.name, title: t.title, description: t.description,
+            slug: t.slug, name: t.name, title: t.title, description: descriptionIn(t, localeOf(req, url)),
             ...(t.createdBy !== undefined ? { createdBy: t.createdBy } : {}),
             skills: t.skills, routines: t.routines, connectors: t.connectors, memoryCount: t.memoryCount,
           }));
