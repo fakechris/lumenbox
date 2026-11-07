@@ -107,6 +107,17 @@ export function scopeAdmits(scope: unknown, holder: string | undefined, reader: 
 }
 
 /**
+ * Whether a scope admits a person reading outside any turn — Settings → Memory (INV-1730): the same
+ * check as an agent's, asked as if from inside the box the scope names, so `org` admits everyone,
+ * `box:<id>` the people who may enter that box, and `agent` nobody (an agent's own records are read
+ * through that agent's page, not here).
+ */
+export function scopeAdmitsPerson(scope: unknown, principalId: string | undefined, boxById: MemoryReader["boxById"]): boolean {
+  const boxId = typeof scope === "string" && scope.startsWith("box:") ? scope.slice("box:".length) : "";
+  return scopeAdmits(scope, undefined, { agentId: "", boxId, boxById, ...(principalId !== undefined ? { principalId } : {}) });
+}
+
+/**
  * The one admission check, before ranking: the records of `tier` this reader may read at all.
  * An own-tier record is held by the reader (it is the reader's file); a shared one by its writer.
  */

@@ -562,7 +562,7 @@ export interface TurnDeps {
    * Pushes the agent's standing files to its box before the turn reads them (INV-777), so the
    * copy it may edit is the copy the prompt carries. Absent means no mirror — tests, or no box.
    */
-  syncStanding?: (agentId: string) => Promise<unknown>; person?: (principalId: string | undefined) => string | undefined; orgKnowledge?: Pick<OrgKnowledge, "section" | "forRecall" | "append" | "lines" | "recalledFor">; conflicts?: Pick<MemoryConflicts, "section">; // the host's record of the person driving, rendered (INV-1653); the organisation's knowledge (INV-1726)
+  syncStanding?: (agentId: string) => Promise<unknown>; person?: (principalId: string | undefined) => string | undefined; orgKnowledge?: Pick<OrgKnowledge, "section" | "forRecall" | "append" | "lines" | "recalledFor" | "unverify" | "retract" | "supersede">; conflicts?: Pick<MemoryConflicts, "section">; // the host's record of the person driving, rendered (INV-1653); the organisation's knowledge (INV-1726)
   /** The template this turn installs, when it is an imported bot's setup turn (docs/29). */
   templateSetup?: string;
   /** Where a packed template is staged; absent withholds PackTemplate. */

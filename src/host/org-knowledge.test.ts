@@ -181,3 +181,63 @@ test("a guest turn has no path to the ledger: nothing it imports, however indire
     assert.ok(![...seen].some(file => file === join(here, reachable)), `a guest turn reaches ${reachable}`);
   }
 });
+
+test("the correction verbs (INV-1730): unverify by any reader, retract and supersede by the owner or an Admin; each a new line, the chain traced both ways", async () => {
+  const { registry, path, open, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const ledger = open();
+    const told: { owner: string; id: string; reason: string }[] = [];
+    ledger.notify = (owner, notice) => told.push({ owner, id: notice.id, reason: notice.reason });
+    ledger.isAdmin = principalId => principalId === undefined || principalId === "p-admin";
+    const refunds = ledger.append(item("refunds are approved by finance within two days"));
+    const train = ledger.append(item("the release train leaves on Thursdays"));
+    const region = ledger.append(item("customer data stays in the EU region"));
+    const bus = new AgentBus(registry, async () => {});
+    const asked: Record<string, unknown>[] = [];
+    const policy = { check: (request: Record<string, unknown>) => { asked.push(request); return { allow: true }; } } as never;
+    const tool = (input: Record<string, unknown>, userId: string | undefined, withPolicy = true) =>
+      dispatchTool("CorrectOrgKnowledge", input, { agent: ada, registry, bus, box: undefined as never, orgKnowledge: ledger, caller: userId === undefined ? {} : { userId }, ...(withPolicy ? { policy } : {}) });
+    const before = readFileSync(path, "utf8");
+
+    // Unverify: any reader, through the tool, with a reason. Out of recall and the prompt; still read by id, with who and why; the owner told.
+    assert.match((await tool({ action: "unverify", id: orgItemId(refunds) }, "p-zed")).text, /refused — Say why/);
+    assert.match((await tool({ action: "unverify", id: orgItemId(refunds), reason: "finance now takes five days" }, "p-zed")).text, /Outcome: ok/);
+    assert.ok(!asked.some(request => request.irreversible !== undefined), "unverify only takes trust away: no card");
+    assert.ok(!ledger.recalledFor(ada.id, undefined).some(line => line.text.startsWith("refunds")), "an unverified item leaves recall");
+    assert.doesNotMatch(ledger.section(ada.id, undefined, "who approves refunds?") ?? "", /refunds are approved/);
+    assert.match(ledger.forRecall(ada.id, undefined, orgItemId(refunds)).cited!, /refunds are approved by finance[^\n]*unverified \(not recalled on its own[^\n]*Marked unverified by p-zed on 2026-11-07: finance now takes five days/);
+    assert.deepEqual(told, [{ owner: "p-ann", id: orgItemId(refunds), reason: "finance now takes five days" }]);
+
+    // Retract: only for the owner or an Admin, and only after the person says yes on a card.
+    assert.match((await tool({ action: "retract", id: orgItemId(region), reason: "we moved" }, "p-zed")).text, /refused — Only org:[0-9a-f]{12}'s owner \(p-ann\) or an Admin/);
+    assert.match((await tool({ action: "retract", id: orgItemId(region), reason: "we moved" }, "p-ann", false)).text, /no one here to approve it/);
+    assert.match((await tool({ action: "retract", id: orgItemId(region), reason: "we moved to two regions" }, "p-ann")).text, /Outcome: ok/);
+    assert.match(String(asked.at(-1)?.irreversible), /withdraw org:[0-9a-f]{12} from the organisation's knowledge/);
+    assert.ok(!ledger.live().some(line => line.text === region.text));
+    assert.match(ledger.forRecall(ada.id, undefined, orgItemId(region)).cited!, /retracted by p-ann on 2026-11-07: we moved to two regions/, "a retracted item is the history, read by id with what withdrew it");
+    assert.match((await tool({ action: "unverify", id: orgItemId(region), reason: "x" }, "p-zed")).text, /retracted; a correction applies to what still stands/);
+
+    // Supersede: an owner needs evidence; an Admin's word may stand alone. The chain reads both ways.
+    assert.match((await tool({ action: "supersede", id: orgItemId(train), text: "the release train leaves on Wednesdays" }, "p-ann")).text, /needs at least one evidence reference/);
+    const replaced = ledger.supersede(orgItemId(train), { principalId: "p-admin" }, "the release train leaves on Wednesdays");
+    assert.ok(replaced.ok);
+    const next = replaced.line;
+    assert.equal(next.supersedes, versionOf(train));
+    assert.equal(next.owner, "p-ann", "the owner stays accountable");
+    assert.equal(next.verifiedBy, "p-admin", "whoever superseded it stands behind the new line");
+    assert.deepEqual(ledger.recalledFor(ada.id, undefined).map(line => line.text), ["the release train leaves on Wednesdays"]);
+    assert.match(ledger.forRecall(ada.id, undefined, orgItemId(train)).cited!, new RegExp(`superseded by ${orgItemId(next)} on 2026-11-07: cite that one`));
+    assert.match(ledger.forRecall(ada.id, undefined, orgItemId(next)).cited!, new RegExp(`It supersedes ${orgItemId(train)}`));
+    const old = ledger.view().find(view => view.id === orgItemId(train))!;
+    assert.deepEqual([old.state, old.supersededBy, old.validUntil], ["superseded", orgItemId(next), NOW.toISOString()], "the old item's validUntil is the new line's time");
+    assert.match((await tool({ action: "supersede", id: orgItemId(next), text: "it leaves on Fridays", evidence: ["inv:INV-1730"] }, "p-ann")).text, /Outcome: ok\. org:[0-9a-f]{12} supersedes/);
+
+    // Nothing was edited or deleted: every earlier byte is still the file's start, and a restart reads the same.
+    assert.ok(readFileSync(path, "utf8").startsWith(before), "corrections only append");
+    assert.deepEqual(open().view().map(view => [view.id, view.state]), ledger.view().map(view => [view.id, view.state]), "the corrections replay");
+    assert.deepEqual(open().view().map(view => view.state), ["unverified", "superseded", "retracted", "superseded", "standing"]);
+  } finally {
+    cleanup();
+  }
+});

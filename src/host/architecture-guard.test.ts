@@ -66,7 +66,8 @@ test("the policy gate is asked from the few places that act, and nowhere else", 
   // web/mcp-tools.ts holds the side door's run_on_box check, moved out of server.ts unchanged (INV-1358).
   // host/operation-tool.ts asks once for a write operation's whole commit path (INV-1378).
   // host/computer-vision.ts asks for a desktop click the screen reading took for send/pay/delete (INV-1420).
-  const allowed = new Set(["cli.ts", "host/delegated-consent.ts", "host/mcp-face.ts", "host/tools.ts", "host/turn.ts", "host/orchestrator.ts", "web/server.ts", "web/mcp-tools.ts", "host/operation-tool.ts", "host/computer-vision.ts"]);
+  // host/org-correction-tool.ts asks before an agent retracts or supersedes the organisation's knowledge (INV-1730).
+  const allowed = new Set(["cli.ts", "host/delegated-consent.ts", "host/mcp-face.ts", "host/tools.ts", "host/turn.ts", "host/orchestrator.ts", "web/server.ts", "web/mcp-tools.ts", "host/operation-tool.ts", "host/computer-vision.ts", "host/org-correction-tool.ts"]);
   const offenders = sources()
     .filter(file => /\.check\(\{\s*kind:/.test(file.text) && !allowed.has(file.path))
     .map(file => file.path);

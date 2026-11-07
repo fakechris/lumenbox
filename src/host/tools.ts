@@ -76,7 +76,7 @@ import { guardMemoryCandidate } from "./memory-guard.ts";
 import type { ModelRelay } from "./model-relay.ts";
 import { type OAuthGate, type OAuthProvider, oauthProvider, scrubToken, tokenHeaders } from "./oauth.ts";
 import { dingtalkWrite, feishuWrite } from "./office-write-tools.ts";
-import { runOperationTool, withOperationTool } from "./operation-tool.ts";
+import { runOperationTool, withOperationTool } from "./operation-tool.ts"; import { ORG_CORRECTION_TOOL, runOrgCorrectionTool, withOrgCorrectionTool } from "./org-correction-tool.ts";
 import { type Orchestrations, parsePlan } from "./orchestrate.ts";
 import { type CommitHow, forkTag, type PendingWork } from "./pending-work.ts";
 import type { PolicyGate } from "./policy.ts";
@@ -133,7 +133,7 @@ export interface ToolContext {
    * Used to record who a memory is about. Absent on a box driven directly, which is the single-user
    * case and where "about whom" has one answer.
    */
-  caller?: { userId?: string }; orgKnowledge?: Pick<OrgKnowledge, "forRecall" | "append" | "lines">; // the organisation's knowledge this turn may read, admitted for `caller` (INV-1726), and propose into (Promote, INV-1729); absent in isolated and guest turns
+  caller?: { userId?: string }; orgKnowledge?: Pick<OrgKnowledge, "forRecall" | "append" | "lines" | "unverify" | "retract" | "supersede">; // the organisation's knowledge this turn may read, admitted for `caller` (INV-1726), propose into (Promote, INV-1729) and correct (INV-1730); absent in isolated and guest turns
   /** The person's name, for a rule written with a name rather than an id (INV-156). */
   callerName?: string;
   /** Every door identity the person driving this turn speaks from, e.g. `feishu:ou_…` (INV-754). */
@@ -1849,7 +1849,7 @@ export function buildTools(
         required: ["action"],
       },
     }
-  ); withDeliverFileTool(tools); withPromoteTool(tools); // a task's deliverables (INV-1663); proposing an organisation item (INV-1729)
+  ); withDeliverFileTool(tools); withPromoteTool(tools); withOrgCorrectionTool(tools); // a task's deliverables (INV-1663); proposing an organisation item (INV-1729); correcting it (INV-1730)
 
   // The door out of the box, only when an operator has built one. Not added-and-
   // withheld — absent, so a box without host execution never puts the idea in an
@@ -4062,7 +4062,7 @@ export async function dispatchTool(
       }
     }
 
-    case "DeliverFile": return deliverFileTool(context, input); case "Promote": return promoteTool(context, input); case "RunOperation": return runOperationTool(context, input); // INV-1663; INV-1378
+    case "DeliverFile": return deliverFileTool(context, input); case "Promote": return promoteTool(context, input); case "RunOperation": return runOperationTool(context, input); case ORG_CORRECTION_TOOL: return runOrgCorrectionTool(context, input); // INV-1663; INV-1378; INV-1730
     case "browser_verify_write":
       return { text: writePaths.verify(writePathKey(context.agent.id, context.conversation), String(input.mark ?? ""), (["done", "not_done", "unknown"] as const).find(v => v === input.verdict) ?? "unknown", String(input.evidence ?? "").slice(0, 300)) };
     case "browser_open":

@@ -338,7 +338,16 @@ L1, in a ledger of its own beside the agents rather than in `shared-memory/`: th
 sharded so one agent owns each file, and an L1 item's writer is a person's approval. One line per
 item, the memory record with the docs/98 §4 fields (§2.2c) and one more, `pinned`:
 
-`{ at, kind: "fact" | "note" | "retraction", text, scope: "org" | "box:<id>", surface?, owner, evidence?, validFrom?, validUntil?, supersedes?, verifiedBy?, verifiedAt?, reviewBy?, held?, review?, pinned? }`
+`{ at, kind: "fact" | "note" | "retraction", text, scope: "org" | "box:<id>", surface?, owner, evidence?, validFrom?, validUntil?, supersedes?, verifiedBy?, verifiedAt?, reviewBy?, held?, review?, pinned?, correction? }`
+
+The correction verbs (INV-1730, docs/98 §7) are lines too. A line with `correction: { verb:
+"unverify" | "retract", of: <version>, by, reason, agent? }` is not an item but a verb applied to
+the item `of` names: after an *unverify* the item is read as `cite-only` and unverified (out of
+recall and the prompt, still cited by id with who doubted it and why, and its owner told); after a
+*retract* (a `retraction` line) it no longer stands. A *supersede* is a new item whose `supersedes`
+names the old version, owned by the old item's owner and verified by whoever superseded it; the old
+item's `validUntil` is that line's `at`, derived rather than written. A held item supersedes nothing.
+Unverify is open to anyone who may read the item; retract and supersede to its owner or an Admin.
 
 A `record` ledger (`src/host/org-knowledge.ts`): append-only and never compacted; read whole when
 the host starts, a torn last line skipped; each append one line, the torn tail closed first and
