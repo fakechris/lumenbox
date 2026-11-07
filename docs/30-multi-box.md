@@ -2,7 +2,7 @@
      title: Many boxes, one host: the multi-box mode
      family: decision
      status: current
-     updated: 2026-11-01
+     updated: 2026-11-06
 -->
 # Many boxes, one host: the multi-box mode
 
@@ -157,6 +157,12 @@ rather than from the environment:
 
 `AGENTBOX_BOXD_URL` / `AGENTBOX_TOKEN` remain as a one-box shortcut that synthesises a record
 named `attached`, so nothing that works today stops working.
+
+> **Note, 2026-11-06 (INV-1695, docs/96 §2, §7).** The list above omits the `host` kind
+> (INV-438): a machine's native environment, headless, on its granted directories. Each kind is a
+> *box host*, and a box belongs to the one installation whose `boxes.json` lists it. A personal
+> installation's machines never register a box with an organisation. An organisation's boxes run
+> on Kubernetes by default, and also on VMs it attaches and on its own organisation nodes.
 
 ## 4. Stages
 

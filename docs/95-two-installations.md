@@ -206,3 +206,10 @@ commit as this record; for docs/36, a decision record, as a dated note beside th
 3. **Group chats in a personal installation.** The Owner's agent may sit in an IM group with
    other people who are not on the roster. Whether it answers them as guests is unchanged by
    this record and still governed by the channel's group rule.
+
+> **Note, 2026-11-06 (INV-1695, docs/96 §6).** Chris answered all three questions. *1:* on the
+> machine that raised it, the several people were one person's identities across Feishu apps,
+> DingTalk and the web; INV-1698 merges them into the Owner. *2:* yes, an organisation may
+> `box attach` a VM it runs; Kubernetes stays the default. *3:* intended: people in the group who
+> are not on the roster are guests. docs/96 also adds the second axis this record left implicit:
+> which machine provides a box to which installation.
