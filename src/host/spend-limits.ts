@@ -20,6 +20,12 @@
  * for one. Counted at full weight, a 90k-token context re-read each round crossed half a
  * million in six rounds and ended ordinary turns (2026-11-05, 0.3.19). Settings live in
  * one ledger beside the push budget's, so a restart keeps them.
+ *
+ * A wake is one turn, named by its `turnId`, and an agent can have several at once: a member's
+ * turn and a guest's (INV-1708), or a guest answer's review (INV-1721), record rows for the same
+ * agent in between each other. One "current wake" per agent let each reset the other to zero, so
+ * neither line could be reached (INV-1735). Each turn keeps its own total; the totals live in a
+ * map bounded by recency, so a turn that has ended is dropped once enough others have spoken.
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -43,6 +49,8 @@ export const CACHE_READ_WEIGHT = 0.1;
 
 /** Where the reminder goes out, once per line per day or per wake. */
 const WARN_AT = 0.8;
+/** How many turns' totals are kept at once, across agents; the least recently charged goes first. */
+export const OPEN_WAKES = 256;
 
 export interface SpendRow extends Priceable {
   agentId: string;
@@ -91,7 +99,7 @@ type LedgerLine =
   | { kind: "resumed"; at: string; agentId: string; day: string };
 
 interface Tally { day: string; spent: number; unpricedTokens: number; unpricedModels: Set<string>; warnedDay: boolean; pausedAt?: string }
-interface WakeTally { turnId: string; spent: number; unpricedTokens: number; unpricedModels: Set<string>; warned: boolean }
+interface WakeTally { spent: number; unpricedTokens: number; unpricedModels: Set<string>; warned: boolean }
 
 const PAUSE_BY = "LumenBox (spend limit)";
 
@@ -111,6 +119,7 @@ function tokens(count: number): string {
 export class SpendLimits {
   private readonly limits = new Map<string, Partial<SpendLimitConfig>>();
   private readonly days = new Map<string, Tally>();
+  /** Keyed by agent and turn, in order of the last row each was charged. */
   private readonly wakes = new Map<string, WakeTally>();
   private readonly pausedByUs = new Map<string, string>();
   private loadedDay: string | undefined;
@@ -161,12 +170,7 @@ export class SpendLimits {
     if (row.rejection !== undefined) return { kind: "ok" };
     const tally = this.tallyFor(row.agentId);
     const price = priceOf(row, this.deps.rates());
-    const turnId = row.turnId ?? "";
-    let wake = this.wakes.get(row.agentId);
-    if (wake === undefined || wake.turnId !== turnId) {
-      wake = { turnId, spent: 0, unpricedTokens: 0, unpricedModels: new Set(), warned: false };
-      this.wakes.set(row.agentId, wake);
-    }
+    const wake = this.wakeFor(row.agentId, row.turnId ?? "");
     this.add(tally, row, price);
     this.add(wake, row, price);
     const limits = this.limitsOf(row.agentId);
@@ -218,6 +222,19 @@ export class SpendLimits {
       this.deps.log(`${this.deps.nameOf(agentId)} resumed: a new day after the ${day} spend line`);
     }
     return resumed;
+  }
+
+  /** The running total of one turn, made most recent; the least recent beyond the bound is forgotten. */
+  private wakeFor(agentId: string, turnId: string): WakeTally {
+    const key = `${agentId}\u0000${turnId}`;
+    const wake = this.wakes.get(key) ?? { spent: 0, unpricedTokens: 0, unpricedModels: new Set<string>(), warned: false };
+    this.wakes.delete(key);
+    this.wakes.set(key, wake);
+    for (const oldest of this.wakes.keys()) {
+      if (this.wakes.size <= OPEN_WAKES) break;
+      this.wakes.delete(oldest);
+    }
+    return wake;
   }
 
   private add(into: { spent: number; unpricedTokens: number; unpricedModels: Set<string> }, row: Priceable, price: number | undefined): void {
