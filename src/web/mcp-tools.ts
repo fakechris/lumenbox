@@ -52,7 +52,7 @@ export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
       // scope all (INV-1509): every live task, for a supervisor that watches the whole board; reading any task was always allowed.
       const mine = board.list().filter(task => (input.scope === "all" || task.requester === principalId) && isLive(task.status));
       return {
-        text: mine.length === 0 ? "Nothing of yours is still open." : mine.map(task => `${describeOutcome(outcomeOf(task))}\n${describeTask(task, nameOf)}`).join("\n"),
+        text: mine.length === 0 ? "Nothing of yours is still open." : mine.map(task => `${describeOutcome(outcomeOf(task))}\n${describeTask(task, nameOf, board)}`).join("\n"),
         structured: { tasks: mine.map(recordOf) },
       };
     }
@@ -65,7 +65,7 @@ export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
       .join("\n");
     // The division of work (INV-1667): one line per fork of its turns, how it stands, and the brief.
     const forks = (orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []).map(fork => `  fork ${fork.child} ${fork.status}${fork.reason !== undefined ? ` (${fork.reason})` : ""} "${fork.brief}" last ${fork.lastAt}`);
-    return { text: `${describeOutcome(outcomeOf(task))}\n${describeTask(task, nameOf)}\n${history}${forks.length > 0 ? `\nforks:\n${forks.join("\n")}` : ""}`, structured: { tasks: [recordOf(task)] } };
+    return { text: `${describeOutcome(outcomeOf(task))}\n${describeTask(task, nameOf, board)}\n${history}${forks.length > 0 ? `\nforks:\n${forks.join("\n")}` : ""}`, structured: { tasks: [recordOf(task)] } };
   };
   return [
     {

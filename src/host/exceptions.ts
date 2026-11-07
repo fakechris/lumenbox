@@ -291,6 +291,12 @@ export interface RetryDeps {
   runRoutine: (slug: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
   /** Asks the box again, reconnecting when it does not answer. */
   reconnectBox: () => Promise<{ connected: boolean; detail: string }>;
+  /**
+   * Why a task may not be started now (task-deps.ts `notReady`), or undefined when it is ready
+   * (INV-1740). A turn or a command retried for a task still blocked would start its work, so it is
+   * refused and the entry left as it is; a delivery, a routine and the box start no task's work.
+   */
+  notReady?: (taskId: string) => string | undefined;
 }
 
 export type RetryOutcome = { ok: true; detail: string; resolved?: boolean } | { ok: false; detail: string };
@@ -300,6 +306,8 @@ export async function retryException(ledger: ExceptionLedger, id: string, by: st
   const entry = ledger.get(id);
   if (entry === undefined) return { ok: false, detail: "no such entry" };
   if (entry.resolvedAt !== undefined) return { ok: false, detail: "already resolved" };
+  const blocked = (entry.kind === "turn" || entry.kind === "job") && entry.task !== undefined ? deps.notReady?.(entry.task) : undefined;
+  if (blocked !== undefined) return { ok: false, detail: blocked };
   ledger.retried(id, by);
   const failed = (reason: string): RetryOutcome => {
     ledger.failedAgain(id, reason);

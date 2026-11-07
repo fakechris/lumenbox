@@ -42,7 +42,7 @@ import { Rememberer, readsExternalContent, summariseExchange, turnReadOutside } 
 import { compileSurface, type SurfaceRecord } from "./show-ui.ts";
 import type { Skill } from "./skills.ts";
 import type { SpendLimits } from "./spend-limits.ts"; import type { PersonRecords } from "./person.ts";
-import type { TaskStore } from "./tasks.ts";
+import type { TaskStore } from "./tasks.ts"; import { watchDependencies } from "./task-deps.ts";
 import { fakeModel } from "./testing/fake-model.ts";
 import { runTurn, type TurnEvent } from "./turn.ts";
 import type { ToolPermissions } from "./tool-permissions.ts"; import { permissionsInEffect } from "../agents/config-versions.ts";
@@ -546,6 +546,8 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
           consentPollMs: 5,
         })
       : undefined;
+  // A task whose last blocker closed wakes its assignee (INV-1740), wired as the orchestrator wires it.
+  if (options.tasks !== undefined) watchDependencies(options.tasks, (task, text) => { bus.deliverSystem(task.assigneeId!, text, task.conversation ?? "main"); });
   goalLoop = options.goalLoop?.({ bus, registry, tasks: options.tasks, files });
   jobWatch = options.jobWatch?.({ bus, box });
   goalGate = options.goalGate?.({ bus, registry, tasks: options.tasks, files });

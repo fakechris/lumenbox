@@ -32,7 +32,7 @@ import { probeOf, probeRefusal, type Probe } from "./boundary-probe.ts";
  * list — it cannot click anything — and boxd already gates a shell by desktop ownership.
  */
 const UI_AUTOMATION =
-  /\b(xdotool|wmctrl|xte|ydotool|xautomation|scrot|osascript|cliclick|pyautogui|pynput|robotjs)\b/i;
+  /\b(xdotool|wmctrl|xte|ydotool|xautomation|scrot|screencapture|osascript|cliclick|pyautogui|pynput|robotjs)\b/i;
 
 /**
  * Driving the browser directly, rather than through the browser tools.

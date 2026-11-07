@@ -33,7 +33,7 @@ import { ModelRelay } from "./model-relay.ts";
 import { DelegateSessions } from "./delegate-sessions.ts";
 import { EXTENSIONS_SERVER, Extensions, extensionsDir } from "./extensions.ts";
 import { Effects } from "./effects.ts";
-import { Orchestrations } from "./orchestrate.ts";
+import { Orchestrations } from "./orchestrate.ts"; import { planCards } from "./plan-cards.ts"; import { watchDependencies } from "./task-deps.ts";
 import { FileVersions } from "./files.ts";
 import {
   giveUpNote,
@@ -85,7 +85,7 @@ import { memoryDir, skillsDir, standingRoot, workDir } from "./box-paths.ts";
 import { intersectTools } from "./catalog.ts";
 import { DisplayLease } from "../box/display-lease.ts";
 import { AttachedBoxProvisioner, resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
-import { type BoxEntry, tokenOf } from "../box/boxes.ts";
+import { type BoxEntry, desktopIndexOn, tokenOf } from "../box/boxes.ts";
 import { classifyBox, type BoxClass } from "../box/access.ts";
 import type { ResolutionConfig, DesktopResources } from "../protocol/index.ts";
 import { runTurn, TurnAborted, type TurnDeps, type TurnEvent } from "./turn.ts";
@@ -1032,7 +1032,7 @@ export class Orchestrator {
                 .map(entry => entry.text as string)
                 .join("\n\n");
             },
-            readHandoff,
+            readHandoff, ...(this.tasks !== undefined ? { board: planCards(this.tasks) } : {}), // a plan from a turn working a task: its items are cards that task waits on (INV-1740)
             deliver: (agentId, text, conversation) =>
               this.bus.deliverSystem(agentId, text, conversation) !== undefined || this.bus.inboxless,
             resultsDir: () => process.env.AGENTBOX_ORCHESTRATIONS ?? join(agentboxHome(), "orchestrations"),
@@ -1120,7 +1120,7 @@ export class Orchestrator {
       judgeExperiment: (prompt, agentId) => this.askCheaply(this.registry.get(agentId), prompt), // the ledger's one question per continuation (INV-1475)
       log: line => console.error(`[goal] ${line}`),
     });
-    if (this.tasks !== undefined) this.tasks.onChange(task => this.goalLoop?.onTaskChanged(task));
+    if (this.tasks !== undefined) this.tasks.onChange(task => this.goalLoop?.onTaskChanged(task)); if (this.tasks !== undefined) watchDependencies(this.tasks, (task, text) => { this.bus.deliverSystem(task.assigneeId!, text, task.conversation ?? MAIN_CONVERSATION); }); // a task whose last blocker closed wakes its assignee, as a late fork result does (INV-1740)
     this.goalGate = this.tasks === undefined ? undefined : new GoalGate({
       tasks: this.tasks,
       registry: this.registry,
@@ -1462,10 +1462,10 @@ export class Orchestrator {
     if (!box) return undefined;
 
     const entry = this.registry.boxOf(agent.id);
-    // A host box has no desktop by design (INV-438): nothing to start, nothing to report.
-    if (entry.kind === "host") return undefined;
+    // A host box has no desktop by design (INV-438), unless a node opened the machine's own screen (INV-1707).
+    const index = desktopIndexOn(entry, () => this.registry.displayIndexFor(agent.id));
+    if (index === undefined) return undefined;
     const boxId = entry.id;
-    const index = this.registry.displayIndexFor(agent.id);
     const owner = this.registry.boxOwnerTokenFor(agent.id);
     const key = `${boxId}:${index}:${owner}`;
     const pending = this.startingDisplays.get(key);
@@ -1855,8 +1855,7 @@ export class Orchestrator {
     if (this.goalLoop !== undefined && !this.goalLoop.turnStarting(agent.id, conversation, inbound)) return;
 
     // Reserve identity without starting X/VNC. The first actual GUI operation starts it.
-    const displayIndex = this.registry.boxOf(agent.id).kind === "host"
-      ? undefined : this.registry.displayIndexFor(agent.id);
+    const displayIndex = desktopIndexOn(this.registry.boxOf(agent.id), () => this.registry.displayIndexFor(agent.id));
     // Started on the first turn that could use them, not at boot: a CLI question should
     // not spawn somebody's bridges as a side effect. And kicked off rather than waited
     // on — a turn that blocks until every configured server has finished booting is a

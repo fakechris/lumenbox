@@ -10,7 +10,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRegistry } from "../agents/registry.ts";
-import { BOXES_FILENAME, attachedBox, ensureBoxes, tokenOf } from "./boxes.ts";
+import { BOXES_FILENAME, attachedBox, desktopIndexOn, ensureBoxes, tokenOf } from "./boxes.ts";
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "agentbox-boxes-"));
@@ -115,4 +115,26 @@ test("a host box is an attached box with no desktop, by kind (INV-438)", () => {
   assert.equal(record.kind, "host");
   assert.equal(record.workDir, "/Users/me/agentbox-work");
   assert.equal(attachedBox({ name: "vm", baseUrl: "http://127.0.0.1:1", tokenFile: "/t" }).kind, "attached");
+  // Which desktop an agent drives (INV-1707): its own on the image; none on a host box, unless its node opened the machine's screen.
+  assert.equal(desktopIndexOn({ kind: "docker" }, () => 3), 3);
+  assert.equal(desktopIndexOn({ kind: "host" }, () => 3), undefined);
+  assert.equal(desktopIndexOn({ kind: "host", screen: "native" }, () => 3), 1, "the machine's one screen, whichever agent asks");
+  assert.equal(desktopIndexOn({ kind: "attached", screen: "native" }, () => 3), 3, "a screen is only ever a host box's");
+});
+
+test("a host box's open screen is kept in the list, and nowhere else is one read (INV-1707)", () => {
+  const f = fixture();
+  try {
+    const own = { id: "box_own", name: "local", members: "everyone" as const, createdAt: "2026-11-07T00:00:00.000Z" };
+    const entries = [
+      { id: "box_own", name: "local", kind: "docker", screen: "native", displayFloor: 1, workDir: "/home/box/work", members: "everyone", createdAt: own.createdAt },
+      { id: "box_mac", name: "mac", kind: "host", screen: "native", endpoint: { baseUrl: "http://10.0.0.2:13390", tokenFile: "/t" }, displayFloor: 1, workDir: "/w", members: [], createdAt: own.createdAt },
+    ];
+    writeFileSync(join(f.root, BOXES_FILENAME), JSON.stringify(entries));
+    const read = ensureBoxes(join(f.root, BOXES_FILENAME), own as never);
+    assert.equal(read[0]!.screen, undefined, "a Docker entry is read as it always was");
+    assert.equal(read[1]!.screen, "native");
+  } finally {
+    f.cleanup();
+  }
 });

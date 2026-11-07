@@ -39,6 +39,7 @@ import { HostSandbox, sandboxViolations, type WrappedCommand } from "../host/hos
 import { mirrorOnUnixSocket } from "../host/host-egress.ts";
 import { STATE_VARIABLES, stateName } from "../host/box-paths.ts";
 import type { Roots } from "./headless.ts";
+import { SCREEN_PROGRAMS } from "../cua/macos-executor.ts";
 
 /** Refused before anything ran: the box answers 403, the host reads it as refused. */
 export class ConfinementRefused extends Error {}
@@ -99,6 +100,11 @@ export interface ConfinementOptions {
   sshAuthSock?: string;
   /** The shared temp directory (`/tmp`); replaced in tests so "outside" can be somewhere real. */
   systemTmp?: string;
+  /**
+   * The node opened the machine's own screen (INV-1707): the programs that capture or drive it do
+   * not start in a command, so the screen is reached through the computer tool and its gates only.
+   */
+  screenOpen?: boolean;
 }
 
 function real(path: string): string {
@@ -134,6 +140,7 @@ export function confinementFor(options: ConfinementOptions): Confine | undefined
       readOnly: repositories.filter(entry => entry.mode === "ro").map(entry => entry.path),
       loopbackPorts: port === undefined ? [] : [port],
       hideCredentials: true,
+      ...(options.screenOpen === true ? { denyExec: SCREEN_PROGRAMS } : {}),
       ...privateTmp(),
     };
   };

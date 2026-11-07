@@ -38,7 +38,7 @@ export const NODES_JS = `(function () {
       n.boxes.forEach(function (b) {
         var row = el("div", { class: "ui-list-row", style: "margin-left:16px", "data-node-box": b.name, "data-state": b.state });
         row.appendChild(el("span", { class: "dot", style: "width:8px;height:8px;background:" + (b.state === "connected" ? "var(--ok, #3fb950)" : "var(--warn)") }));
-        row.appendChild(el("span", { class: "ui-grow" }, b.name + " · " + (KIND[b.kind] || b.kind) + " · " + (STATE[b.state] || b.state)));
+        row.appendChild(el("span", { class: "ui-grow" }, b.name + " · " + (KIND[b.kind] || b.kind) + (b.screen ? " · {{ui.nodes.screen}}" : "") + " · " + (STATE[b.state] || b.state)));
         if (b.kind === "native" && b.state !== "revoked") {
           var closed = Array.isArray(b.members) && b.members.length === 0;
           row.appendChild(el("span", { class: "dim" }, closed ? "{{ui.nodes.native-closed}}" : "{{ui.nodes.native-open}}"));

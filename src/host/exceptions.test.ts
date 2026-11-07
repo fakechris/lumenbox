@@ -134,6 +134,17 @@ test("Retry goes down each kind's own path and settles what it can know at once"
     assert.deepEqual(calls.slice(1), ["job ada/c1: make", "delivery dingtalk:cid", "routine digest", "box"]);
 
     assert.deepEqual(await retryException(f.ledger, id("job"), "Chris", deps), { ok: false, detail: "already resolved" });
+
+    // A task still blocked by another (INV-1740) is not started by a Retry: the turn is refused, the entry left as it was.
+    noteTurnEnd(f.ledger, "ada", "c9", [{ lane: "user" }], new Error("tool exploded"));
+    const blockedTurn = f.ledger.list().find(entry => entry.kind === "turn" && entry.conversation === "c9")!.id;
+    f.ledger.failed({ kind: "turn", agent: "ada", conversation: "c9", subject: "c9", task: "t9", reason: "tool exploded" });
+    const onTask = f.ledger.list().find(entry => entry.task === "t9")!;
+    const gated = retryDeps({ notReady: task => (task === "t9" ? "t9 is blocked by t5, which is not finished, so it has not started." : undefined) });
+    assert.deepEqual(await retryException(f.ledger, onTask.id, "Chris", gated.deps), { ok: false, detail: "t9 is blocked by t5, which is not finished, so it has not started." });
+    assert.deepEqual(gated.calls, [], "nothing was started");
+    assert.equal(f.ledger.get(onTask.id)!.attempt, 1, "a refusal is not another failure");
+    assert.equal((await retryException(f.ledger, blockedTurn, "Chris", gated.deps)).ok, true, "an entry with no blocked task retries as before");
   } finally {
     f.cleanup();
   }

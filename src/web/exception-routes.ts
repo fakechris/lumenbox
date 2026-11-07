@@ -36,7 +36,8 @@ export async function exceptionRoute(route: string, deps: ExceptionRouteDeps): P
     const entries = deps.ledger.list().filter(entry => deps.mayRead(entry.agent));
     // The newest open entry of each task, for the Retry on its card.
     const byTask: Record<string, string> = {};
-    for (const entry of entries) if (entry.task !== undefined && entry.resolvedAt === undefined && byTask[entry.task] === undefined) byTask[entry.task] = entry.id;
+    // A task still blocked (INV-1740) gets none: its card says what it waits on, and a Retry would be refused.
+    for (const entry of entries) if (entry.task !== undefined && entry.resolvedAt === undefined && byTask[entry.task] === undefined && deps.retry.notReady?.(entry.task) === undefined) byTask[entry.task] = entry.id;
     return { status: 200, body: { open: entries.filter(entry => entry.resolvedAt === undefined).length, groups: groupExceptions(entries, deps.titleOf), byTask } };
   }
   const action = /^POST \/api\/exceptions\/(retry|hand|dismiss)$/.exec(route)?.[1];
@@ -64,6 +65,7 @@ export function exceptionRetryDeps(input: {
   redeliver: (chatKey: string) => Promise<{ tried: number; sent: number }>;
   runRoutine: (slug: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
   reconnectBox: () => Promise<{ connected: boolean; detail: string }>;
+  notReady?: (taskId: string) => string | undefined;
 }): RetryDeps {
   return {
     rerunTurn: async (agentId, conversation, note) => { await input.prompt(agentId, note, conversation); },
@@ -83,6 +85,7 @@ export function exceptionRetryDeps(input: {
     redeliver: input.redeliver,
     runRoutine: input.runRoutine,
     reconnectBox: input.reconnectBox,
+    ...(input.notReady !== undefined ? { notReady: input.notReady } : {}),
   };
 }
 

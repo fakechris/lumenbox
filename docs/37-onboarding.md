@@ -60,6 +60,14 @@ quitting the window keeps the box running.
   running inside the OS sandbox (INV-1700). The boxes listen on the address in
   `AGENTBOX_NODE_ADVERTISE` (a network the node and the organisation share, such as a tailnet),
   loopback otherwise. Revoking the node there stops its boxes; the app then says it was revoked.
+  On a Mac that runs a business desktop application, the node can open the machine's own screen
+  to the `computer` tool (INV-1707): start the app with `AGENTBOX_NODE_SCREEN=1` (or run
+  `agentbox node run --screen`), and in System Settings → Privacy & Security give the app that
+  starts the node **Screen Recording** and **Accessibility**. LumenBox reads both and never asks for
+  them: until they are granted every screen action is refused with PERMISSION_DENIED and nothing is
+  sent. The screen is desktop 1 of the native environment, one agent at a time; every click, key or
+  text an agent sends there asks a person first, a takeover pauses it at the next input, and stopping
+  the node sends nothing more. Settings → Boxes → Nodes marks the box "its own screen is open".
 
 The answer is kept in the app's own data directory (`machine.json` in Electron's userData, e.g.
 `~/Library/Application Support/LumenBox/`), not under `~/.agentbox`: a node has no `~/.agentbox`.
