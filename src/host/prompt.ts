@@ -485,6 +485,7 @@ export interface PromptContext {
   standing?: StandingSnapshot;
   /** The host's record of the person driving (INV-1653), already rendered; one text for every agent. */
   person?: string;
+  /** The organisation's knowledge this turn may read (INV-1726, org-knowledge.ts), already rendered: pinned items in their budget, then related ones. */ orgKnowledge?: string;
 }
 
 /** One teammate line: name, id, and a clamped description. */
@@ -1102,6 +1103,7 @@ export const VOLATILE_SECTIONS: readonly PromptSection[] = [
   // After the background, before the roster: the closing message is written last, and it
   // is the same obligation in every lane (INV-785).
   { name: "wrap-up", render: renderWrapUp },
+  { name: "org-knowledge", render: context => context.orgKnowledge ?? "" }, // L1 above L2: about the organisation, verified L1 outranks the team's (docs/98 §7)
   {
     name: "shared-memory",
     render: context =>

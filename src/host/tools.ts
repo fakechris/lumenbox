@@ -71,7 +71,7 @@ import { hostOf } from "./learnings.ts";
 import { noteSiteLearning, readSiteLearnings, siteLearningsNote } from "./site-learnings.ts";
 import type { McpManager, ToolEffect } from "./mcp.ts";
 import { MCP_FACE_TOKEN_VARIABLE, type McpFace } from "./mcp-face.ts";
-import { dedupe, dedupeKey, describeFrom, memoryRef, validateRecord } from "./memory.ts"; import { recallMatches } from "./memory-relevance.ts"; import { recallable } from "./memory-scope.ts"; import { alreadyPending, forTeamTier, pendingNotice, teamReviewOn } from "./team-memory-review.ts";
+import { dedupe, dedupeKey, describeFrom, memoryRef, validateRecord } from "./memory.ts"; import { recallMatches } from "./memory-relevance.ts"; import { recallable } from "./memory-scope.ts"; import { orgItemId, type OrgKnowledge } from "./org-knowledge.ts"; import { alreadyPending, forTeamTier, pendingNotice, teamReviewOn } from "./team-memory-review.ts";
 import { guardMemoryCandidate } from "./memory-guard.ts";
 import type { ModelRelay } from "./model-relay.ts";
 import { type OAuthGate, type OAuthProvider, oauthProvider, scrubToken, tokenHeaders } from "./oauth.ts";
@@ -133,7 +133,7 @@ export interface ToolContext {
    * Used to record who a memory is about. Absent on a box driven directly, which is the single-user
    * case and where "about whom" has one answer.
    */
-  caller?: { userId?: string };
+  caller?: { userId?: string }; orgKnowledge?: Pick<OrgKnowledge, "forRecall">; // the organisation's knowledge this turn may read, admitted for `caller` (INV-1726); absent in isolated and guest turns
   /** The person's name, for a rule written with a name rather than an id (INV-156). */
   callerName?: string;
   /** Every door identity the person driving this turn speaks from, e.g. `feishu:ou_…` (INV-754). */
@@ -2171,7 +2171,7 @@ export function buildTools(
       "you have done, or when you are about to say you have no record of something. Records " +
       "holding every word come first, then ones related by meaning (a shared stem or a common " +
       "topic, e.g. 数据库 and database); one or two words that would have been written work best. " +
-      "Searches your own and the team's memory together; a write is visible here immediately. Your " +
+      "Searches your own, the team's and the organisation's knowledge together; a write is visible here immediately. Search for an organisation item's id (org:…) to read it whole, with its evidence. Your " +
       "own memory is also mirrored read-only in your box, when you have one, for grep (path in the memory section).",
     input_schema: {
       type: "object",
@@ -4348,7 +4348,8 @@ export async function dispatchTool(
         record,
         tier: "team",
       }));
-      const records = [...own, ...team];
+      const org = context.orgKnowledge?.forRecall(context.agent.id, context.caller?.userId, String(input.search ?? "")); if (org?.cited !== undefined) return { text: org.cited }; // an item cited by id, read whatever its surface (INV-1726)
+      const records = [...own, ...team, ...(org?.items ?? []).map(record => ({ record, tier: `organisation ${orgItemId(record)}` }))];
       // Every word first, as always; then what is related by meaning but phrased otherwise (INV-1580).
       const { exact: found, related } = recallMatches(String(input.search ?? ""), records);
       const whose = sharedOnly ? "the team has kept" : "you or the team have kept";
