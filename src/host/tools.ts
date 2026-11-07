@@ -463,7 +463,7 @@ export const FORK_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
   "Tasks", "DeliverFile",
   "HandBack",
   "ClaimWork",
-  "RememberFact", "Promote",
+  "RememberFact", "Promote", "CorrectOrgKnowledge",
   "PackTemplate",
   "Delegate",
   "Fork",
