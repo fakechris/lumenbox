@@ -208,7 +208,8 @@ export class HostSandbox {
     // A denied path under a writable one is bound back read-only on top; order makes it win.
     for (const path of denied) out.push("--ro-bind", path, path);
     // A hidden directory becomes an empty tmpfs, a hidden file /dev/null: last, so it covers any bind above.
-    for (const path of hidden) out.push(...(statSync(path).isDirectory() ? ["--tmpfs", path] : ["--ro-bind", "/dev/null", path]));
+    // The tmpfs is remounted read-only, so a write there fails as it does on macOS instead of vanishing on exit (INV-1710).
+    for (const path of hidden) out.push(...(statSync(path).isDirectory() ? ["--tmpfs", path, "--remount-ro", path] : ["--ro-bind", "/dev/null", path]));
     out.push("--unshare-net", "--unshare-pid", "--die-with-parent", "--chdir", cwd);
     // Inside the namespace there is only a fresh loopback. Each allowed port is bridged from a
     // Unix socket the host side listens on (host-egress.ts), so a client's 127.0.0.1:<port> lands there.
