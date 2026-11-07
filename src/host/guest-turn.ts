@@ -113,6 +113,28 @@ export interface GuestTurnResult {
   outcome: GuestTurnRecord["outcome"];
 }
 
+/**
+ * One model call made for a guest, on the record (docs/97 §5): a usage row of kind `guest` with no
+ * `principal` — no member pays — noted against the agent's spend lines as a wake of `turnId`. The
+ * turn's own calls and the review of its answer (INV-1721) both go through here, so the review is
+ * paid for as the guest turn it belongs to, whatever member turn of the agent is running meanwhile.
+ */
+export function chargeGuest(
+  deps: Pick<GuestTurnDeps, "usage" | "spend">,
+  call: { agentId: string; agentName: string; turnId: string; door: string; conversation: string; provider: string; model: string; round: number; reason?: string;
+    usage: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null } | undefined },
+): SpendVerdict | undefined {
+  const tokens = {
+    inputTokens: call.usage?.input_tokens ?? 0, outputTokens: call.usage?.output_tokens ?? 0,
+    cacheReadTokens: call.usage?.cache_read_input_tokens ?? 0, cacheWriteTokens: call.usage?.cache_creation_input_tokens ?? 0,
+  };
+  const row = deps.usage?.record({
+    kind: "guest", agentId: call.agentId, agentName: call.agentName, turnId: call.turnId, door: call.door, conversation: call.conversation,
+    provider: call.provider, model: call.model, round: call.round, ...(call.reason !== undefined ? { reason: call.reason } : {}), ...tokens,
+  });
+  return deps.spend?.note(row ?? { agentId: call.agentId, agentName: call.agentName, turnId: call.turnId, model: call.model, ...tokens });
+}
+
 export async function runGuestTurn(input: GuestTurnInput, deps: GuestTurnDeps): Promise<GuestTurnResult> {
   const turnId = `guest-${randomUUID()}`;
   const tools = guestTools();
@@ -142,16 +164,9 @@ export async function runGuestTurn(input: GuestTurnInput, deps: GuestTurnDeps): 
       });
       inputTokens += response.usage?.input_tokens ?? 0;
       outputTokens += response.usage?.output_tokens ?? 0;
-      const row = deps.usage?.record({
-        kind: "guest", agentId: input.agentId, agentName: input.agentName, turnId, door: input.door, conversation: `guest:${input.chatKey}`,
-        provider: deps.provider.label, model: deps.provider.model, round: rounds - 1,
-        inputTokens: response.usage?.input_tokens ?? 0, outputTokens: response.usage?.output_tokens ?? 0,
-        cacheReadTokens: response.usage?.cache_read_input_tokens ?? 0, cacheWriteTokens: response.usage?.cache_creation_input_tokens ?? 0,
-      });
-      const verdict = deps.spend?.note(row ?? {
-        agentId: input.agentId, agentName: input.agentName, turnId, model: deps.provider.model,
-        inputTokens: response.usage?.input_tokens ?? 0, outputTokens: response.usage?.output_tokens ?? 0,
-        cacheReadTokens: response.usage?.cache_read_input_tokens ?? 0, cacheWriteTokens: response.usage?.cache_creation_input_tokens ?? 0,
+      const verdict = chargeGuest(deps, {
+        agentId: input.agentId, agentName: input.agentName, turnId, door: input.door, conversation: `guest:${input.chatKey}`,
+        provider: deps.provider.label, model: deps.provider.model, round: rounds - 1, usage: response.usage,
       });
       const said = response.content.filter((block): block is Anthropic.TextBlock => block.type === "text").map(block => block.text).join("\n").trim();
       if (said !== "") reply = said;
@@ -199,6 +214,8 @@ export interface GuestReviewInput {
   agentId: string;
   agentName: string;
   turnId: string;
+  /** The channel, the `door` of the review's usage row as of the turn's (INV-1721). */
+  door: string;
   chatKey: string;
   question: string;
   answer: string;
@@ -270,7 +287,7 @@ export async function answerGuest(message: GuestMessage, deps: AnswerGuestDeps):
   const sent = () => { deps.desk.remember(message.door, message.chatKey, message.identity, message.text, result.reply); return { reply: result.reply }; };
   if (deps.review === undefined) return sent();
   const reviewing = deps.review({
-    agentId: agent.id, agentName: agent.name, turnId: result.turnId, chatKey: message.chatKey, question: message.text, answer: result.reply,
+    agentId: agent.id, agentName: agent.name, turnId: result.turnId, door: message.door, chatKey: message.chatKey, question: message.text, answer: result.reply,
     knowledge: knowledge.knowledge().map(entry => `[${entry.id}] ${entry.title}\n${entry.text}`).join("\n\n"),
   });
   if (!deps.desk.holdsIn(message.door, message.chatKey)) {

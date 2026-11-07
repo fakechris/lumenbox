@@ -993,7 +993,7 @@ Silence, "maybe", or a yes to something else is not a yes. If they narrow it ("o
     // The conversation that packs a template (docs/29 §4). Served from the host like Grok
     // Bot serves its export skill from the server, so the wording can change without a
     // client release; the tool it ends in is PackTemplate.
-    slug: "export-template", supersedes: ["7fda2cc3"], // the version that gave the memory folder by name, not by agent id (INV-1679)
+    slug: "export-template", supersedes: ["7fda2cc3", "d0a4bb72"], // gave the memory folder by name, not agent id (INV-1679); then ~/work, the person's home on a host box (INV-1723)
     content: `---
 name: export-template
 description: Create a shareable template of yourself. Use when the person wants to share, export, or make a template of this bot; ends in one PackTemplate call.
@@ -1009,11 +1009,11 @@ Read in this order, and after each one send one short conversational line with c
 names — "Just read through my routines: weekly-digest and pr-babysitter." Never paste file
 contents or a draft.
 
-- **Memories.** Recall, or ~/work/memory/<your agent id>/profile.md. Facts and pitfalls only;
-  episodes and notes are one installation's history and never travel. Do not read another
-  agent's memory.
-- **Skills.** List ~/work/skills and read the job text of each of yours. Note the folder
-  slug. A skill with scope: agent and someone else's owner is theirs, not yours.
+- **Memories.** Recall, or the profile.md your memory section points to. Facts and pitfalls
+  only; episodes and notes are one installation's history and never travel. Do not read
+  another agent's memory.
+- **Skills.** List the skills directory your skill index shows and read the job text of each
+  of yours. Note the folder slug. A skill with scope: agent and someone else's owner is theirs.
 - **Routines.** The skills with a schedule: or trigger:. Note the folder slug.
 - **Connectors.** What this conversation and the kept routines actually used: feishu,
   dingtalk, telegram, browser, mcp:<server>. Names only.

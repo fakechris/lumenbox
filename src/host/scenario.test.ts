@@ -21,7 +21,7 @@ import { conversationIdFor } from "../agents/registry.ts";
 import { type ChannelAdapter, ChannelManager, type InboundMessage as ChannelMessage } from "../channels/manager.ts";
 import { Messages } from "../channels/messages.ts";
 import { EMPTY_REPLY_NOTE } from "../channels/strings.ts";
-import { AnswerReviewer } from "./answer-review.ts";
+import { AnswerReviewer, guestAnswerReview } from "./answer-review.ts";
 import { choosePinnedEntries, type HistoryEntry } from "./compaction.ts";
 import { contextTaskBlockers, newContext } from "./context-recovery.ts";
 import { GoalGate } from "./goal-gate.ts";
@@ -3389,7 +3389,7 @@ test("two guests take turns asking follow-ups in one group chat and each sees on
           resolveAgent: () => ({ id: frontId, name: "Ada" }),
           desk, isPaused: () => false,
           runtime: () => ({ client, provider: { label: "scenario", model: "m", maxTokens: 1024 } as ProviderProfile }),
-          review: input => reviewer.review({ agentName: input.agentName, messageId: input.turnId, conversation: `guest:${input.chatKey}`, request: input.question, answer: input.answer, guest: { knowledge: input.knowledge } }),
+          review: input => reviewer.review(guestAnswerReview(input)),
           lines: { overCap: () => "over cap", failed: () => "failed", held: () => "已收到，稍后回复。" },
           log: () => {},
         }),

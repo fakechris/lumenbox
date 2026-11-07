@@ -2256,7 +2256,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         options?.skipTask !== true && options?.recoveryOperationId === undefined && review.sampled(message.id);
       if (reviewable) {
         const input = {
-          agentName: agentName ?? this.deps.defaultAgentFor?.(adapter.name) ?? "",
+          source: "member" as const, agentName: agentName ?? this.deps.defaultAgentFor?.(adapter.name) ?? "",
           messageId: message.id!,
           conversation: runningKey,
           request: message.text,
