@@ -75,6 +75,10 @@ credentials in `~/.agentbox/config.json`.
   channel and when it last wrote, and what a merge would change. Merge only if every one is
   you; the app restarts, and you are the Owner with every account. Nothing changes until you
   confirm.
+- If they are not all you, answer *These are not all me*. Nothing changes and nobody is
+  removed; Settings → Team then says that several people use the installation on this computer,
+  and that people work together in an organisation installation, which runs on a server with its
+  Admins. Moving is up to you; nothing is moved for you.
 - In DingTalk, an approval arrives as a card only when a card template is set up. Without one,
   you answer by typing the reply word.
 

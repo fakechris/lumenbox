@@ -162,6 +162,15 @@ second person and never converts.
   caller's id, then under each alias (`Principals.byId(...).aliases`) in turn, and uses the one it
   finds — its conversation and its operation id — so a retried key is the same goal in the same
   conversation, with its context. A new key is named from the Owner.
+- **"These are not all me": a desktop that holds several people (INV-1706, docs/96 §8 Q1).** The
+  same preview's other answer writes `installation: { mode: "organisation", declined: { at, by } }`
+  and nothing else: no person, store or permission changes, and the merge is no longer offered.
+  Several real people are decided only from what a person said, never guessed: the desktop app,
+  a roster whose `installation` field says organisation (that answer, a conversion before
+  INV-1689, or written by hand), and more than one person on it (`holdsSeveralPeople`,
+  `src/host/installation.ts`). Settings → Team → People then shows one line: several people use
+  this computer's installation; to work together, use an organisation installation, with the
+  manual and docs/95. There is no migration and no restriction.
 
 ## 2. Doors route; boxes authorize
 

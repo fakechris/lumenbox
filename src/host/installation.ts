@@ -36,6 +36,8 @@ export interface Installation {
   conversion?: { at: number; by: string; ownerId: string };
   /** A personal installation made by folding an older roster's people — all one person — into the Owner (INV-1698, self-merge.ts): when, and the ids folded in. */
   merged?: { at: number; from: string[] };
+  /** The person answered "these are not all me" to the merge preview (INV-1706, self-merge.ts): an organisation said out loud, with when and who said it. */
+  declined?: { at: number; by: string };
 }
 
 /** The Owner's principal id. Fixed, so an MCP token or a watchdog issued to the Owner keeps its owner across renames. */
@@ -61,6 +63,23 @@ export function installationOf(file: unknown): Installation {
     return { mode: "single-machine", ownerId: raw.ownerId, ...(typeof raw.createdAt === "number" ? { createdAt: raw.createdAt } : {}), ...(raw.merged !== undefined && typeof raw.merged === "object" && raw.merged !== null ? { merged: raw.merged } : {}) };
   }
   return { ...(raw as Installation), mode: "organisation" };
+}
+
+/**
+ * Whether a desktop installation holds several real people (INV-1706, docs/96 §8 Q1), decided
+ * only from what a person said, never guessed from names or channels: the desktop app, a roster
+ * whose `installation` field says organisation out loud — written by "these are not all me" in the
+ * merge preview (`declined`), by a conversion before INV-1689, or by hand — and more than one
+ * person on it. No field is not an answer (the merge preview is offered instead); a merged or
+ * single-person roster is not several people. It only decides a notice: nothing is migrated or
+ * refused.
+ */
+export function holdsSeveralPeople(file: unknown, desktop: boolean): boolean {
+  if (!desktop) return false;
+  const raw = (file as { installation?: unknown } | null)?.installation;
+  if (raw === null || typeof raw !== "object" || installationOf(file).mode !== "organisation") return false;
+  const people = (file as { principals?: unknown }).principals;
+  return Array.isArray(people) && people.filter(person => typeof (person as { id?: unknown } | null)?.id === "string").length > 1;
 }
 
 /** Refuses a roster a single-machine installation cannot hold: anyone besides the Owner, or no Owner who is admin. */
