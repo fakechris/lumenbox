@@ -2408,12 +2408,10 @@ ${outcome.text}`;
     const wire = `${provider.label}|${provider.baseUrl ?? ""}`;
     let estimated = calibratedTokens(wire, requestEstimate.total);
     if (round > 0 && estimated - calibratedTokens(wire, requestEstimate.floor) > policyForModel(answering.model).triggerTokens) {
-      const before = estimated;
       await refreshContext();
       if (deps.policy?.isStopped(agent.id)) return;
       requestEstimate = estimateRequestTokens({ messages, system, tools });
       estimated = calibratedTokens(wire, requestEstimate.total);
-      if (estimated < before) emit({ type: "compacted", agentId: agent.id, covers: 0, summarised: false, tokensBefore: before, tokensAfter: estimated, detail: "Rebuilt the active request from durable history and full-result references at a completed round boundary." });
     }
     // Said once per turn whether or not it is a problem: the prompt's size was invisible
     // until it was fatal, and a number nobody sees is a number nobody budgets. Grok Bot

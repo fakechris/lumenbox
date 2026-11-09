@@ -144,7 +144,7 @@ test("a queued anonymous task does not inherit the preceding human principal", a
   const f = fixture();
   try {
     await f.orch.prompt(f.agent.id, "hello", { userId: "alice" });
-    f.orch.bus.sendFromUser(f.agent.id, "hello again", { synthetic: true, steerable: false });
+    f.orch.bus.sendFromUser(f.agent.id, "hello again", { synthetic: true, steerable: false, origin: "host:jobs" });
     await f.orch.bus.runExclusive(f.agent.id);
     const rows = readFileSync(join(f.root, "usage.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
     assert.deepEqual(rows.filter(row => row.kind === "turn").map(row => row.principal), ["alice", undefined]);
