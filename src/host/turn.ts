@@ -1566,7 +1566,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
 
   let ended = false;
   let endedHow: string | undefined;
-  let stoppedBy: "turn_budget" | "rounds" | undefined; let spendWarning: string | undefined; let spendHit: Extract<SpendVerdict, { kind: "hit_wake" | "hit_day" }> | undefined; // stoppedBy: set when the turn stopped itself, so it ends "incomplete", not "done" (INV-1404); the agent's spend lines (INV-1615): a reminder due, or a line reached
+  let stoppedBy: GoalTurnReport["stopReason"]; let spendWarning: string | undefined; let spendHit: Extract<SpendVerdict, { kind: "hit_wake" | "hit_day" }> | undefined; // stoppedBy: set when the turn stopped itself, so it ends "incomplete", not "done" (INV-1404); the agent's spend lines (INV-1615): a reminder due, or a line reached
   let lastFinalText: string | undefined;
   /** The whole turn's spend, for a goal's budget (INV-772). */
   const turnUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
@@ -2287,7 +2287,7 @@ ${outcome.text}`;
         marker: goal,
         turnId,
         conversation,
-        how: endedHow ?? "failed",
+        how: endedHow ?? "failed", ...(stoppedBy !== undefined ? { stopReason: stoppedBy } : {}),
         worked: [...toolsUsedThisTurn].some(isWorkingTool),
         cost: weightedCost(turnUsage, provider.tokenWeights ?? DEFAULT_TOKEN_WEIGHTS),
         ...(lastFinalText !== undefined ? { finalText: lastFinalText } : {}),
@@ -2336,11 +2336,11 @@ ${outcome.text}`;
     const spend = budget.call();
     if (spend === "warn") budgetWarningDue = true;
     if (spend === "hit" || spendHit !== undefined) { // or the agent's spend line (INV-1615): the same hand-back
-      const report = withCheckpoints(spendHit?.report ?? budgetReport(budget, callsThisTurn, chinese), registry.readDurableState(agent.id, conversation));
+      const report = withCheckpoints(spendHit?.report ?? budgetReport(budget, callsThisTurn, chinese, goal !== undefined), registry.readDurableState(agent.id, conversation));
       registry.appendTranscript(agent.id, { role: "assistant", text: report, at: new Date().toISOString(), turnId } satisfies TranscriptEntry, conversation);
       emit({ type: "text", agentId: agent.id, agentName: agent.profile.name, delta: report });
       emit({ type: "turn_budget_hit", agentId: agent.id, calls: budget.callsUsed, limit: budget.limits.calls });
-      stoppedBy = "turn_budget";
+      stoppedBy = spendHit === undefined ? "turn_budget" : "spend_limit";
       if (spendHit?.kind === "hit_day") await spendHit.enforce(); /* the daily line: paused once the hand-back is on the record (INV-1615) */ console.error(`[turn] ${agent.profile.name}: ${spendHit !== undefined ? `spend line (${spendHit.kind})` : `turn budget hit (${budget.callsUsed} model calls)`}; handed back`);
       return;
     }

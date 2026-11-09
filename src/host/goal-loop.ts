@@ -43,6 +43,8 @@ export interface GoalTurnReport {
   turnId?: string;
   conversation?: string;
   how: string;
+  /** A bounded execution slice ending normally, distinct from an execution failure. */
+  stopReason?: "turn_budget" | "rounds" | "spend_limit";
   /** Whether any tool outside the bookkeeping set ran. */
   worked: boolean;
   /** The turn's final text, when it had one. Delivered only for a finish-only turn. */
@@ -277,7 +279,8 @@ export class GoalLoop {
       return;
     }
 
-    if (report.how !== "done" && report.how !== "silent") {
+    const budgetSlice = report.how === "incomplete" && report.stopReason === "turn_budget";
+    if (report.how !== "done" && report.how !== "silent" && !budgetSlice) {
       const failures = (pursuit.spent.errorStreak ?? 0) + 1;
       if (failures > MAX_CONTINUATION_RETRIES) {
         this.deps.tasks.setPursuit(task.id, current => ({ ...current, status: "paused", pausedReason: "error", spent: { ...current.spent, errorStreak: failures, activeMs: current.spent.activeMs + elapsed, cost: current.spent.cost + (report.cost ?? 0) } }), `paused: ${failures} continuation turns failed in a row (last: ${report.how})`);
