@@ -6,6 +6,7 @@
  * background work, and the abort has to land between tool calls.
  */
 
+import { needsFreshObservation } from "./tool-freshness.ts";
 import { reserveFailedModelSpend } from "./failed-model-spend.ts";
 import { ModelRetries } from "./model-retries.ts";
 import { watchModelStream, waitForRetry } from "./model-stream.ts";
@@ -696,6 +697,8 @@ type TurnEventBody =
       covers: number;
       /** False when summarising failed and the entries were dropped instead. */
       summarised: boolean;
+      tokensBefore?: number;
+      tokensAfter?: number;
       detail: string;
     }
   | { type: "aborted"; agentId: string }
@@ -1241,8 +1244,6 @@ export async function compactHistory(options: {
     if (estimateTokens([entry, ...active.slice(entry.covers)]) > policy.triggerTokens) {
       const bare = { ...entry };
       delete (bare as { pinned?: unknown }).pinned;
-      delete (bare as { personWords?: unknown }).personWords;
-      delete (bare as { personWordsOmitted?: unknown }).personWordsOmitted;
       if (
         entry.covers !== cut.index &&
         estimateTokens([bare, ...active.slice(entry.covers)]) > policy.triggerTokens
@@ -2226,51 +2227,7 @@ ${outcome.text}`;
         host: true,
       } satisfies TranscriptEntry, conversation);
 
-      // Reassembled from the transcript, and compacted on the way, which is what the comment above
-      // has always claimed and what the code did not do: a continuation used to push one more
-      // message onto the array the previous four hundred rounds had built. So the turn that most
-      // needs room — one still working after four hundred rounds — was the only one that never got
-      // any, and proactive compaction could not help because it had already run, once, before the
-      // first round.
-      //
-      // Everything a completed round produced is on disk by now, so re-reading loses nothing; and
-      // an orphaned call left by the round limit is paired up during assembly.
-      if (deps.hooks?.has("PreCompact")) {
-    await deps.hooks.run("PreCompact", { session_id: turnId, agent_name: agent.profile.name, trigger: "auto" });
-  }
-  history = await compactHistory({
-        history: registry.readTranscript(agent.id, conversation) as TranscriptEntry[],
-        agent,
-        registry,
-        client,
-        provider,
-        log: line => console.error(`[compaction] ${agent.profile.name}: ${line}`),
-        onCompacted: event => emit({ ...event, agentId: agent.id }),
-        conversation,
-        meter,
-      });
-      // In place: `runRounds` closes over this array.
-      messages.length = 0;
-      messages.push(...historyToMessages(history));
-
-      // Rebuild the volatile system block from disk too. The durable blocks — plan, todos — are the whole point
-      // of surviving compaction, and an agent updates them *mid-turn*: it marks a todo done in round five, and
-      // a continuation compacts that tool result away while the system block, built once at turn start, still
-      // says the todo is pending. The stable half is unchanged, so only system[1] is rewritten. Memory keeps
-      // the selection made at turn start: the selector chose against *this* request and the choice is still
-      // right for its continuation, while re-running a plain score-based recall here quietly threw that choice
-      // away (audit 2026-09-01 #6). A fact remembered mid-turn reaches the next turn, not this one — the same
-      // freeze Grok Bot applies per compaction epoch, and the reason the memory block stays byte-stable.
-      const rebuilt = buildParts(memoryRecall).volatile + forkLine;
-      if (volatileInTail) {
-        // The continuation prompt is the newest message now; the rebuilt tier rides with it.
-        const last = messages[messages.length - 1];
-        if (last !== undefined && last.role === "user" && typeof last.content === "string") {
-          last.content = `${last.content}\n\n${hostContext(rebuilt)}`;
-        }
-      } else {
-        system[1] = { type: "text", text: rebuilt, ...cache };
-      }
+      await refreshContext();
 
       rounds.length = 0; // a fresh budget means a fresh judgement about looping
     }
@@ -2300,6 +2257,27 @@ ${outcome.text}`;
     // throwing. A lease leaked here would lock every other agent out of the
     // screen for the lifetime of the process.
     deps.display?.releaseAll(agent.id);
+  }
+
+  /** Only completed rounds are rebuilt; full tool results retain their durable references. */
+  async function refreshContext(): Promise<void> {
+    if (deps.hooks?.has("PreCompact")) await deps.hooks.run("PreCompact", { session_id: turnId, agent_name: agent.profile.name, trigger: "auto" });
+    history = await compactHistory({
+      history: registry.readTranscript(agent.id, conversation) as TranscriptEntry[], agent, registry, client, provider: answering,
+      log: line => console.error(`[compaction] ${agent.profile.name}: ${line}`),
+      onCompacted: event => emit({ ...event, agentId: agent.id }), conversation, meter,
+      ...(deps.onSummarised === undefined ? {} : { onSummarised: entries => deps.onSummarised?.(agent.id, conversation, entries) }),
+    });
+    // Completed tool pairs and their full-result pointers are on disk before this boundary.
+    messages.length = 0;
+    messages.push(...historyToMessages(history));
+    const rebuilt = buildParts(memoryRecall).volatile + forkLine;
+    if (volatileInTail) {
+      const last = messages.at(-1);
+      if (last?.role === "user") last.content = typeof last.content === "string" ? `${last.content}\n\n${hostContext(rebuilt)}` : [...last.content, { type: "text", text: hostContext(rebuilt) }];
+      else messages.push({ role: "user", content: hostContext(rebuilt) });
+    } else system[1] = { type: "text", text: rebuilt, ...cache };
+    if (signal.aborted) throw new TurnAborted();
   }
 
   async function runRounds(
@@ -2428,7 +2406,15 @@ ${outcome.text}`;
     // said so. The estimate is calibrated by what this wire actually billed last time.
     let requestEstimate = estimateRequestTokens({ messages, system, tools });
     const wire = `${provider.label}|${provider.baseUrl ?? ""}`;
-    const estimated = calibratedTokens(wire, requestEstimate.total);
+    let estimated = calibratedTokens(wire, requestEstimate.total);
+    if (round > 0 && estimated - calibratedTokens(wire, requestEstimate.floor) > policyForModel(answering.model).triggerTokens) {
+      const before = estimated;
+      await refreshContext();
+      if (deps.policy?.isStopped(agent.id)) return;
+      requestEstimate = estimateRequestTokens({ messages, system, tools });
+      estimated = calibratedTokens(wire, requestEstimate.total);
+      if (estimated < before) emit({ type: "compacted", agentId: agent.id, covers: 0, summarised: false, tokensBefore: before, tokensAfter: estimated, detail: "Rebuilt the active request from durable history and full-result references at a completed round boundary." });
+    }
     // Said once per turn whether or not it is a problem: the prompt's size was invisible
     // until it was fatal, and a number nobody sees is a number nobody budgets. Grok Bot
     // treats prompt bytes as a product decision (a slim-prompt A/B, a flag that removes
@@ -3313,10 +3299,10 @@ ${outcome.text}`;
         // this turn instead of guessing at it.
         deps.steps?.pending(turnId, toolUse.id, toolUse.name);
         // An identical call past the budget's repeats is answered from the last run (INV-1354).
-        const replay = budget.replayFor(toolUse.name, toolUse.input ?? {});
+        const replay = needsFreshObservation(toolUse.name, (toolUse.input ?? {}) as Record<string, unknown>, allowedMcp) ? undefined : budget.replayFor(toolUse.name, toolUse.input ?? {});
         if (replay !== undefined) {
           const previous = (Array.isArray(replay) ? replay : []).find((part): part is Anthropic.TextBlockParam => (part as { type?: string }).type === "text");
-          outcome = { text: `${previous?.text ?? ""}\n\n${replayNote(toolUse.name, budget.repeatsOf(toolUse.name, toolUse.input ?? {}) + 1, chinese)}` };
+          outcome = { isError: true, text: `Outcome: refused — repeat limit reached; this call was not executed. Current effects are unverified; reconcile the target before further action. Historical result:\n${previous?.text ?? ""}\n\n${replayNote(toolUse.name, budget.repeatsOf(toolUse.name, toolUse.input ?? {}) + 1, chinese)}` };
         } else outcome = await dispatchTool(
           toolUse.name,
           (toolUse.input ?? {}) as Record<string, unknown>,

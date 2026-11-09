@@ -939,21 +939,17 @@ export function buildSummaryPrompt(entries: readonly HistoryEntry[]): string {
   );
 }
 
-/**
- * Clamps a summary so that it, with the tail it fronts, fits the trigger (INV-148 A4).
- *
- * The bound that was missing: a summariser that answers with pages — anchors included —
- * produced an adopted entry the next request could not carry, and the only remedy was
- * another summariser call, which could answer the same way. Truncation is the floor: a
- * clipped summary with a visible mark is worse than a good one and better than a request
- * that cannot be sent. Terminates in one step, no model involved.
- */
+/** Bound the adopted request, reserving space for verbatim constraints before narrative. */
 export function clampSummaryToBudget(entry: SummaryEntry, tail: readonly HistoryEntry[], policy: CompactionPolicy): SummaryEntry {
   const room = policy.triggerTokens - estimateTokens(tail);
-  const budgetChars = Math.max(400, Math.floor(room * CHARS_PER_TOKEN) - MESSAGE_OVERHEAD_CHARS);
-  if (entry.text.length <= budgetChars) return entry;
+  if (estimateTokens([entry]) <= room) return entry;
+  const bounded = { ...entry };
+  delete bounded.pinned; // tool exemplars yield before the person's own words
+  const overhead = estimateTokens([{ ...bounded, text: "" }]);
+  const budgetChars = Math.max(0, Math.floor((room - overhead) * CHARS_PER_TOKEN));
+  if (bounded.text.length <= budgetChars) return bounded;
   const mark = "\n[summary clipped to fit the context window — the transcript on disk holds the full history]";
-  return { ...entry, text: `${entry.text.slice(0, Math.max(0, budgetChars - mark.length))}${mark}` };
+  return { ...bounded, text: `${bounded.text.slice(0, Math.max(0, budgetChars - mark.length))}${mark.slice(0, budgetChars)}` };
 }
 
 /** How the summary enters the transcript. */

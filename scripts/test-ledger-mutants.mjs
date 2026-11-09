@@ -8,12 +8,12 @@ import { hermeticEnv } from "./test-env.mjs";
 
 const source = fileURLToPath(new URL("../", import.meta.url));
 const mutants = [
-  { name: "close-before-resume-admission", file: "src/host/orchestrator.ts", from: "this.bus.sendFromUser(agent.id, resumePrompt(turn.about, turn.at), {", to: 'this.turns?.end(turn.id, "resumed"); this.bus.sendFromUser(agent.id, resumePrompt(turn.about, turn.at), {', test: "src/host/admission-handoff.test.ts" },
-  { name: "start-steering-before-record", file: "src/agents/bus.ts", from: "record?.(taken);", to: "this.inbox?.start(taken.map(message => message.admission)); record?.(taken);", test: "src/host/admission-handoff.test.ts" },
+  { name: "close-before-resume-admission", file: "src/host/orchestrator.ts", from: "this.bus.sendFromUser(agent.id, resumePrompt(turn.about, turn.at), {", to: 'this.turns?.end(turn.id, "resumed"); this.bus.sendFromUser(agent.id, resumePrompt(turn.about, turn.at), {', test: "src/host/admission-handoff.sweep.ts" },
+  { name: "start-steering-before-record", file: "src/agents/bus.ts", from: "record?.(taken);", to: "this.inbox?.start(taken.map(message => message.admission)); record?.(taken);", test: "src/host/admission-handoff.sweep.ts" },
   { name: "dispatch-without-checkpoint", file: "src/host/resume.ts", from: 'this.append({ turnId, event: "pending", toolUseId, name, at: now.toISOString() }, true);', to: 'this.append({ turnId, event: "pending", toolUseId, name, at: now.toISOString() });', test: "src/host/ledger-faults.test.ts" },
-  { name: "start-before-custody", file: "src/agents/bus.ts", from: "if (!this.deferredStart) acknowledge();", to: "acknowledge();", test: "src/host/admission-handoff.test.ts" },
-  { name: "skip-turn-begin", file: "src/host/turn.ts", from: "deps.turns?.begin({", to: "false && deps.turns?.begin({", test: "src/host/admission-handoff.test.ts" },
-  { name: "lose-principal", file: "src/agents/bus.ts", from: "...(options.principalId !== undefined ? { principalId: options.principalId } : {}),", to: "", test: "src/host/admission-handoff.test.ts" },
+  { name: "start-before-custody", file: "src/agents/bus.ts", from: "if (!this.deferredStart) acknowledge();", to: "acknowledge();", test: "src/host/admission-handoff.sweep.ts" },
+  { name: "skip-turn-begin", file: "src/host/turn.ts", from: "deps.turns?.begin({", to: "false && deps.turns?.begin({", test: "src/host/admission-handoff.sweep.ts" },
+  { name: "lose-principal", file: "src/agents/bus.ts", from: "...(options.principalId !== undefined ? { principalId: options.principalId } : {}),", to: "", test: "src/host/admission-handoff.sweep.ts" },
   { name: "replay-unknown-effect", file: "src/host/turn.ts", from: "safeToReplay(call.name, input) || replaysToSameState(call.name, input)", to: "true", test: "src/host/resume-integration.test.ts" },
   { name: "settle-before-delivery", file: "src/host/pending-work.ts", from: "if (!admitted) continue;", to: "if (false) continue;", test: "src/host/ledger-faults.test.ts" },
 ];

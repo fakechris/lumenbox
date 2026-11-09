@@ -30,7 +30,7 @@ process.stdin.on("data", chunk => {
       reply(message.id, { protocolVersion: "2025-06-18", capabilities: {} });
     } else if (message.method === "tools/list") {
       reply(message.id, { tools: [
-        { name: "echo", description: "Says it back.", inputSchema: { type: "object", properties: { text: { type: "string" } } } },
+        { name: "echo", description: "Says it back.", annotations: { readOnlyHint: true }, inputSchema: { type: "object", properties: { text: { type: "string" } } } },
         { name: "boom", description: "Always fails." },
       ] });
     } else if (message.method === "tools/call") {
@@ -66,6 +66,7 @@ test("a server's tools arrive prefixed, and calling one round-trips", async () =
     assert.ok(manager.owns(`stub${MCP_SEPARATOR}echo`), "the prefix is how ownership is decided");
     assert.ok(!manager.owns("bash"), "our own tools are not its business");
 
+    assert.equal(manager.tools().find(tool => tool.name.endsWith("echo"))?.annotations?.readOnlyHint, true, "stdio metadata survives discovery");
     const said = await manager.call(`stub${MCP_SEPARATOR}echo`, { text: "hello" });
     assert.equal(said, "echo: hello");
 

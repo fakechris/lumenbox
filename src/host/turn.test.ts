@@ -4047,7 +4047,7 @@ test("a 15K analysis filed before a bookkeeping call is the channel's reply, not
 
 // ── the turn's own budget (INV-1354) ─────────────────────────────────────────────
 
-test("an identical read repeated past the repeats budget is replayed, not re-run, and the result says so", async () => {
+test("an identical read remains a current observation past the repeats budget", async () => {
   const { registry, cleanup } = fixture();
   try {
     const ada = registry.create({ name: "Ada" });
@@ -4055,7 +4055,7 @@ test("an identical read repeated past the repeats budget is replayed, not re-run
     const { box, calls } = stubBox();
     (box as unknown as { readFile: (path: string) => Promise<unknown> }).readFile = async (path: string) => {
       calls.push({ kind: "read", detail: path });
-      return { content: "hello from notes" };
+      return { content: `current version ${calls.filter(call => call.kind === "read").length}` };
     };
     const capture: Capture = { params: [] };
     const read = (id: string) => message([toolUseBlock("read_file", { path: "/home/box/work/notes.txt" }, id)], "tool_use");
@@ -4069,11 +4069,10 @@ test("an identical read repeated past the repeats budget is replayed, not re-run
       { client, registry, bus, box, resolution: undefined, turnBudget: { calls: 60, repeats: 2 } }
     );
     const downloads = calls.filter(call => /notes\.txt/.test(String(call.detail)));
-    assert.equal(downloads.length, 2, `the box was asked twice, not four times: ${JSON.stringify(calls.map(c => c.kind))}`);
+    assert.equal(downloads.length, 3, "every requested read is a current observation");
     const text = JSON.stringify(capture.params.at(-1)!.messages);
-    assert.match(text, /identical read_file call has now been made 3 times; it was not run again/);
-    const replayAt = text.indexOf("[This identical");
-    assert.ok(replayAt > 0 && text.lastIndexOf("hello from notes", replayAt) > 0, "the replay carries the previous result's text");
+    assert.doesNotMatch(text, /it was not run again/);
+    assert.match(text, /current version 3/);
     assert.match(JSON.stringify(registry.readTranscript(ada.id)), /done/);
   } finally {
     cleanup();

@@ -22,7 +22,7 @@ import { type ChannelAdapter, ChannelManager, type InboundMessage as ChannelMess
 import { Messages } from "../channels/messages.ts";
 import { EMPTY_REPLY_NOTE } from "../channels/strings.ts";
 import { AnswerReviewer, guestAnswerReview } from "./answer-review.ts";
-import { choosePinnedEntries, type HistoryEntry } from "./compaction.ts";
+import { choosePinnedEntries, DEFAULT_POLICY, estimateRequestTokens, type HistoryEntry } from "./compaction.ts";
 import { contextTaskBlockers, newContext } from "./context-recovery.ts";
 import { GoalGate } from "./goal-gate.ts";
 import { GoalLoop } from "./goal-loop.ts";
@@ -546,6 +546,81 @@ test("/goal sets a pursuit: the first turn drafts a checklist, the prompt carrie
   });
   try { assert.equal(result.score.turns, 2, "the drafting turn and the person's turn; no control command reached the model"); }
   finally { result.cleanup(); }
+});
+
+test("changing file progress is read fresh after repeated observations, while writes stay bounded", async () => {
+  const observations: string[] = [];
+  const episode = await runEpisode({
+    team: [{ name: "Nova", tools: ["write_file", "read_file"] }], says: ["Update and inspect four progress versions."],
+    script: ({ round, messages }) => {
+      if (round > 0 && round % 2 === 0) observations.push(JSON.stringify(messages.at(-1)?.content));
+      if (round === 8) return { say: "Four current versions inspected." };
+      return round % 2 === 0
+        ? { call: "write_file", input: { path: "/home/box/work/progress.txt", content: `version ${round / 2 + 1}`, overwrite: true } }
+        : { call: "read_file", input: { path: "/home/box/work/progress.txt" } };
+    },
+  });
+  try {
+    assert.equal(observations.length, 4);
+    observations.forEach((text, i) => { assert.match(text, new RegExp(`version ${i + 1}`), "the current state must never be replaced with a historical observation"); });
+    assert.equal(episode.files.get("/home/box/work/progress.txt"), "version 4");
+  } finally { episode.cleanup(); }
+});
+
+test("MCP read hints yield current state while undeclared repeated actions are refused", async () => {
+  for (const readOnly of [true, false]) {
+    let executed = 0;
+    const observed: string[] = [];
+    const tool = { name: "state__inspect", description: "Inspect current state.", inputSchema: { type: "object", properties: {} }, annotations: { readOnlyHint: readOnly } };
+    const mcp = { toolsFor: () => [tool], owns: (name: string) => name === tool.name, isHostTool: () => false, pollutesMemory: () => false, callDetailed: async () => ({ text: `version ${++executed}` }) };
+    const episode = await runEpisode({
+      team: [{ name: "Nova", tools: [tool.name, "SetPlan"] }], says: ["Inspect changing service state four times, reconciling actions."], mcp: mcp as never,
+      script: ({ round, messages }) => {
+        if (round > 0 && round % 2 === 1) observed.push(JSON.stringify(messages.at(-1)?.content));
+        if (round === 7) return { say: "Observations recorded; refused actions were not executed." };
+        return round % 2 === 0 ? { call: tool.name, input: {} } : { call: "SetPlan", input: { plan: `next observation ${round}` } };
+      },
+    });
+    try {
+      assert.equal(executed, readOnly ? 4 : 3);
+      if (readOnly) assert.match(observed[3]!, /version 4/);
+      else { assert.match(observed[3]!, /Outcome: refused/); assert.match(observed[3]!, /Historical result/); }
+    } finally { episode.cleanup(); }
+  }
+});
+
+test("text-heavy rounds compact before overflow and preserve the original constraint across three summaries", async () => {
+  const trigger = DEFAULT_POLICY.triggerTokens, tail = DEFAULT_POLICY.keepTailTokens;
+  const envTrigger = process.env.AGENTBOX_COMPACT_AT_TOKENS;
+  process.env.AGENTBOX_COMPACT_AT_TOKENS = "5000";
+  DEFAULT_POLICY.triggerTokens = 5000; DEFAULT_POLICY.keepTailTokens = 2000;
+  let produced = 0, executed = 0, summaries = 0, adopted = 0;
+  const answer = (params: Anthropic.MessageCreateParams, content: Anthropic.ContentBlockParam[], stop: Anthropic.Message["stop_reason"] = "end_turn") => {
+    const estimate = estimateRequestTokens({ messages: params.messages, system: typeof params.system === "string" ? [{ text: params.system }] : params.system ?? [], tools: params.tools ?? [] });
+    return { id: "context-round", type: "message", role: "assistant", model: "text-fixture", content, stop_reason: stop, stop_sequence: null, usage: { input_tokens: estimate.total, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } as Anthropic.Message;
+  };
+  const tool = { name: "sources__read", description: "Read a source snapshot.", annotations: { readOnlyHint: true }, inputSchema: { type: "object", properties: { id: { type: "integer" } } } };
+  const client = fakeModel(({ params }) => {
+    assert.match(JSON.stringify(params.messages), /KEEP_ORIGINAL_IDS/, "the person's constraint must survive every compaction");
+    const estimate = estimateRequestTokens({ messages: params.messages, system: typeof params.system === "string" ? [{ text: params.system }] : params.system ?? [], tools: params.tools ?? [] });
+    if (estimate.total - estimate.floor > 16000) throw Object.assign(new Error("maximum context length exceeded"), { status: 400 });
+    return produced < 24 ? answer(params, [{ type: "tool_use", id: `source-${produced}`, name: tool.name, input: { id: produced++ } }], "tool_use") : answer(params, [{ type: "text", text: "All 24 sources inspected." }]);
+  }, { create: ({ params }) => { summaries++; return answer(params, [{ type: "text", text: "**Threads**\n- inspect sources\n**Done**\n- completed reads remain recorded\n**State**\n- continue remaining IDs\n**Artifacts**\n- full results retained by transcript references" }]); } });
+  try {
+    const episode = await runEpisode({
+      team: [{ name: "Nova", tools: [tool.name] }], says: ["Inspect 24 sources; KEEP_ORIGINAL_IDS."], client,
+      mcp: { toolsFor: () => [tool], owns: (name: string) => name === tool.name, isHostTool: () => false, pollutesMemory: () => false, callDetailed: async (_name: string, input: { id: number }) => { executed++; return { text: `Source ${input.id}: confirmed fact. ${"evidence ".repeat(1800)}` }; } } as never,
+      onEvent: event => { if (event.type === "compacted" && event.summarised && "tokensAfter" in event) adopted++; },
+    });
+    try {
+      assert.equal(executed, 24);
+      assert.ok(summaries >= 3 && adopted >= 3, "multiple semantic summaries were adopted within one bounded turn");
+      assert.ok(JSON.stringify(episode.registry.readTranscript(episode.registry.list()[0]!.id)).includes("All 24 sources inspected."));
+    } finally { episode.cleanup(); }
+  } finally {
+    DEFAULT_POLICY.triggerTokens = trigger; DEFAULT_POLICY.keepTailTokens = tail;
+    if (envTrigger === undefined) delete process.env.AGENTBOX_COMPACT_AT_TOKENS; else process.env.AGENTBOX_COMPACT_AT_TOKENS = envTrigger;
+  }
 });
 
 test("four separated connection failures recover between productive tool rounds (INV-1779)", async () => {

@@ -96,6 +96,7 @@ export interface McpTool {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  annotations?: Record<string, unknown>;
 }
 
 export interface McpServerStatus {
@@ -236,13 +237,14 @@ class McpServer {
     this.send({ jsonrpc: "2.0", method: "notifications/initialized" });
 
     const listed = (await this.request("tools/list", {}, START_TIMEOUT_MS)) as {
-      tools?: { name?: string; description?: string; inputSchema?: Record<string, unknown> }[];
+      tools?: { name?: string; description?: string; inputSchema?: Record<string, unknown>; annotations?: Record<string, unknown> }[];
     };
     this.tools = (listed.tools ?? [])
       .filter((tool): tool is { name: string } & typeof tool => typeof tool.name === "string")
       .map(tool => ({
         name: `${this.config.name}${MCP_SEPARATOR}${tool.name}`,
         description: tool.description ?? `${tool.name}, from the ${this.config.name} server`,
+        ...(tool.annotations !== null && typeof tool.annotations === "object" && !Array.isArray(tool.annotations) ? { annotations: tool.annotations } : {}),
         inputSchema:
           tool.inputSchema !== undefined && typeof tool.inputSchema === "object"
             ? tool.inputSchema
@@ -431,13 +433,14 @@ export class RemoteMcpServer implements ToolServer {
     if (init === undefined) throw new Error("the server never answered initialize");
     await this.post({ jsonrpc: "2.0", method: "notifications/initialized" }, START_TIMEOUT_MS);
     const listed = (await this.post({ jsonrpc: "2.0", id: this.nextId++, method: "tools/list", params: {} }, START_TIMEOUT_MS)) as {
-      result?: { tools?: { name?: string; description?: string; inputSchema?: Record<string, unknown> }[] };
+      result?: { tools?: { name?: string; description?: string; inputSchema?: Record<string, unknown>; annotations?: Record<string, unknown> }[] };
     };
     this.tools = (listed?.result?.tools ?? [])
-      .filter((tool): tool is { name: string; description?: string; inputSchema?: Record<string, unknown> } => typeof tool?.name === "string")
+      .filter((tool): tool is { name: string; description?: string; inputSchema?: Record<string, unknown>; annotations?: Record<string, unknown> } => typeof tool?.name === "string")
       .map(tool => ({
         name: `${this.config.name}${MCP_SEPARATOR}${tool.name}`,
         description: tool.description ?? `${tool.name}, from the ${this.config.name} server`,
+        ...(tool.annotations !== null && typeof tool.annotations === "object" && !Array.isArray(tool.annotations) ? { annotations: tool.annotations } : {}),
         inputSchema:
           tool.inputSchema !== undefined && typeof tool.inputSchema === "object"
             ? tool.inputSchema
