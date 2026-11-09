@@ -11,6 +11,7 @@ test("failed usage stays unknown while its maximum input/cache rate and output a
   limits.setLimits("a", { perWake: 0.5, perDay: 20 });
   const held = reserveFailedModelSpend({ label: "test", model: "m", contextWindow: 200000, maxTokens: 100000 } as ProviderProfile, { agentId: "a", agentName: "A", workId: "w", turnId: "t", conversation: "main", round: 0 }, limits, { record: row => { rows.push(row); return { ...row, seq: 1, at: new Date().toISOString() }; } });
   assert.equal(held.verdict?.kind, "hit_wake");
+  assert.equal(held.goalCostBound, 650000, "Goal's bound uses the highest input/cache weight, not only fresh input");
   assert.equal(limits.today("a").reserved, 0.7, "highest input/cache rate plus maximum output");
   assert.equal(limits.today("a").spent, 0);
   assert.equal(rows[0]!.metering, "missing");

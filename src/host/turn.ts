@@ -2335,6 +2335,8 @@ ${outcome.text}`;
     }
     // The turn's own budget (INV-1354): at the ceiling the work goes back to the person as an
     // outcome, said in the conversation and as an event — not thrown, not a 401st call.
+    const pursuitBudget = goal === undefined ? undefined : deps.tasks?.get(goal.taskId)?.pursuit;
+    if (!goal?.finishOnly && pursuitBudget?.limits.budget !== undefined && pursuitBudget.spent.cost + weightedCost(turnUsage, provider.tokenWeights ?? DEFAULT_TOKEN_WEIGHTS) + recoveries.heldCost >= pursuitBudget.limits.budget) spendHit ??= { kind: "hit_wake", report: "The Goal budget, including durable reservations for unreported failed requests, is reached. Progress is saved; the goal must stop here." };
     const spend = budget.call();
     if (spend === "warn") budgetWarningDue = true;
     if (spend === "hit" || spendHit !== undefined) { // or the agent's spend line (INV-1615): the same hand-back
@@ -2548,8 +2550,7 @@ ${outcome.text}`;
       // a retried failure is still a failed call, and that is what the trace should show.
       span?.end(deadline.failure ? { "agentbox.stalled": true } : {}, error);
       if (classifyFailure(error) === "transient" || outputProduced) {
-        const held = reserveFailedModelSpend(answering, { agentId: agent.id, agentName: agent.profile.name, workId, turnId, conversation, round }, deps.spendLimits, deps.usage);
-        turnUsage.inputTokens += held.bound.inputTokens; turnUsage.outputTokens += held.bound.outputTokens;
+        const held = reserveFailedModelSpend(answering, { agentId: agent.id, agentName: agent.profile.name, workId, turnId, conversation, round }, deps.spendLimits, deps.usage, recoveries);
         if (held.verdict?.kind === "warn") spendWarning = held.verdict.text;
         else if (held.verdict !== undefined && held.verdict.kind !== "ok") spendHit ??= held.verdict;
       }

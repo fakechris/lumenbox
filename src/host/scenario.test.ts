@@ -626,7 +626,7 @@ test("a goal's explicit per-wake spend limit is not resumed as a normal call-bud
 function episodeLoop(told: string[], schedule?: (fn: () => void, ms: number) => { cancel: () => void }, options: { manifest?: boolean } = {}) {
   return ({ bus, registry, tasks, files }: { bus: AgentBus; registry: AgentRegistry; tasks: TaskStore | undefined; files: Map<string, string> }) =>
     new GoalLoop({
-      tasks: tasks!,
+      tasks: tasks!, modelRecoveryRoot: registry.root,
       agentName: id => registry.tryGet(id)?.profile.name,
       bus,
       // The scenario box's files as the workspace, when the episode wants writing to count as change.

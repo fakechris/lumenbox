@@ -18,6 +18,7 @@
  * and a fake clock. The orchestrator owns the real one and feeds it three facts — a turn
  * finished, a task changed, a turn is starting — and one report per continuation turn.
  */
+import { ModelRetries } from "./model-retries.ts";
 import type { InboundMessage } from "../agents/bus.ts";
 import type { Task, TaskStore } from "./tasks.ts";
 import { appendExperiment, continuationNotice, type Experiment, experimentPrompt, finishOnlyNotice, GOAL_BOOKKEEPING_TOOLS, parseExperiment, type GoalMarker, type PausedReason, type Pursuit, stopNotice } from "./goal-mode.ts";
@@ -55,6 +56,8 @@ export interface GoalTurnReport {
 
 export interface GoalLoopDeps {
   tasks: TaskStore;
+  /** Shared with runTurn; failed unreported requests retain their conservative cost on restart. */
+  modelRecoveryRoot?: string;
   /** Which agent pursues a task: its assignee. Absent means the loop cannot wake anyone. */
   agentName: (agentId: string) => string | undefined;
   bus: {
@@ -222,7 +225,12 @@ export class GoalLoop {
   private limitReached(pursuit: Pursuit): PausedReason | undefined {
     if (pursuit.spent.continuations >= pursuit.limits.continuations) return "continuations";
     if (pursuit.spent.activeMs >= pursuit.limits.activeMs) return "deadline";
-    if (pursuit.limits.budget !== undefined && pursuit.spent.cost >= pursuit.limits.budget) return "budget";
+    let held = 0;
+    if (pursuit.limits.budget !== undefined && this.deps.modelRecoveryRoot !== undefined) {
+      try { held = new ModelRetries(this.deps.modelRecoveryRoot, pursuit.workId).heldCost; }
+      catch { this.deps.log("goal recovery allowance could not be reconciled; holding the budget closed"); return "budget"; }
+    }
+    if (pursuit.limits.budget !== undefined && pursuit.spent.cost + held >= pursuit.limits.budget) return "budget";
     return undefined;
   }
 
@@ -239,6 +247,7 @@ export class GoalLoop {
       this.deps.log(`goal ${task.id}: continuation held, the mandate no longer holds; waiting for the person`);
       return;
     }
+    limit = this.limitReached(pursuit); // recheck durable holds and a person's changed limits at the actual wake
     const gate = this.deps.wakeGate(key.agentId);
     if (!gate.allowed) {
       this.deps.log(`goal ${task.id}: continuation held by the wake gate${gate.reason !== undefined ? ` (${gate.reason})` : ""}`);

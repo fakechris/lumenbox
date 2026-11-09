@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ModelRetries } from "./model-retries.ts";
 import { TaskStore } from "./tasks.ts";
 import { newPursuit, type GoalMarker } from "./goal-mode.ts";
 import { ANTI_SPIN_LIMIT, CONTINUATION_DELAY_MS, GoalLoop, MAX_CONTINUATION_RETRIES, RETRY_BACKOFF_MS, STALL_LIMIT, isWorkingTool, type GoalLoopDeps } from "./goal-loop.ts";
@@ -287,4 +288,18 @@ test("each continuation leaves one experiment on the ledger; two rounds repeatin
     assert.equal(h.pursuit().experiments?.length, 3);
     assert.equal(h.pursuit().spent.stallStreak, 3, "the hash streak is still counted, but with a judge it no longer pauses");
   } finally { h.cleanup(); }
+});
+
+
+test("a failed request's durable cost hold still limits Goal after restart and executor handoff", () => {
+  const dir = mkdtempSync(join(tmpdir(), "goal-recovery-cost-"));
+  const h = harness({ modelRecoveryRoot: dir });
+  try {
+    new ModelRetries(dir, "w-1").holdCost(1000);
+    h.tasks.setPursuit(h.task.id, p => ({ ...p, limits: { ...p.limits, budget: 1000 } }), "budget");
+    assert.equal(h.pursuit().spent.cost, 0, "simulates exit before turnEnded recorded measured cost");
+    h.loop.rearm(); h.fire();
+    assert.equal(h.wakes.at(-1)?.goal?.finishOnly, true);
+    assert.equal(h.wakes.at(-1)?.goal?.reason, "budget", "the durable hold cannot be refunded by a new execution");
+  } finally { h.cleanup(); rmSync(dir, { recursive: true, force: true }); }
 });
