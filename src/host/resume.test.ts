@@ -204,6 +204,7 @@ test("interrupted() carries every field a resumption has to pass on", () => {
       agentId: "ada",
       about: "in a side thread",
       workId: "w9",
+      goal: { taskId: "t-goal", workId: "w9", seq: 3, personSeq: 1 },
       conversation: "feishu:oc_1",
     });
     const [turn] = new TurnLedger(path).interrupted();
@@ -212,6 +213,7 @@ test("interrupted() carries every field a resumption has to pass on", () => {
     // and never reaches the code that resumes. A workId that did the same would make the whole
     // field a no-op that still typechecks.
     assert.equal(turn?.workId, "w9");
+    assert.deepEqual(turn?.goal, { taskId: "t-goal", workId: "w9", seq: 3, personSeq: 1 });
     assert.equal(turn?.conversation, "feishu:oc_1");
     assert.equal(turn?.agentId, "ada");
   } finally {

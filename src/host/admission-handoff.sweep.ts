@@ -9,6 +9,8 @@ import { AgentRegistry } from "../agents/registry.ts";
 import { Inbox } from "../agents/inbox.ts";
 import type { InboundMessage } from "../agents/bus.ts";
 import { Orchestrator } from "./orchestrator.ts";
+import { TaskStore } from "./tasks.ts";
+import { newPursuit } from "./goal-mode.ts";
 import { TurnLedger } from "./resume.ts";
 import { fakeModel } from "./testing/fake-model.ts";
 
@@ -18,7 +20,7 @@ function deferred() {
   return { promise, resolve };
 }
 
-function fixture(existingRoot?: string) {
+function fixture(existingRoot?: string, tasks: TaskStore | null = null) {
   const root = existingRoot ?? mkdtempSync(join(tmpdir(), "admission-handoff-"));
   const previousHome = process.env.AGENTBOX_HOME;
   process.env.AGENTBOX_HOME = root;
@@ -29,7 +31,7 @@ function fixture(existingRoot?: string) {
   const inbox = new Inbox<InboundMessage>(inboxPath);
   const orch = new Orchestrator({
     registry, useBox: false, inbox,
-    turns: new TurnLedger(turnsPath), mcp: null, hooks: null, tasks: null,
+    turns: new TurnLedger(turnsPath), mcp: null, hooks: null, tasks,
     extensions: null, pendingWork: null,
     client: fakeModel(() => ({
       id: "answer", type: "message", role: "assistant", model: "test",
@@ -171,4 +173,22 @@ test("scenario: concurrent conversations keep the principal that admitted each r
     assert.equal(turns.find(row => row.conversation === "chat/a")?.principal, "alice");
     assert.equal(turns.find(row => row.conversation === "chat/b")?.principal, "bob");
   } finally { f.cleanup(); }
+});
+
+
+test("a real startup resumption retains Goal accounting rather than becoming an ordinary turn", async () => {
+  const root = mkdtempSync(join(tmpdir(), "goal-admission-resume-"));
+  const tasks = new TaskStore(join(root, "tasks.jsonl"));
+  const f = fixture(root, tasks);
+  const task = tasks.create({ title: "bounded goal", requester: "alice", assigneeId: f.agent.id, conversation: "main", pursuit: newPursuit({ objective: "Finish the bounded task", workId: "resumed-goal-work" }) })!;
+  try {
+    new TurnLedger(f.turnsPath).begin({ id: "old-goal", agentId: f.agent.id, about: "Goal continuation", workId: "resumed-goal-work" });
+    assert.equal(f.orch.resumeInterrupted().resumed, 1);
+    await f.orch.settle();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(tasks.get(task.id)!.pursuit!.spent.cost, 18, "the resumed model's known input/output belongs to the same Goal");
+  } finally {
+    tasks.setPursuit(task.id, p => ({ ...p, status: "paused", pausedReason: "person" }), "test cleanup");
+    f.cleanup();
+  }
 });

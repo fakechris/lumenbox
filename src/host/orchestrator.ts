@@ -1121,7 +1121,7 @@ export class Orchestrator {
       log: line => console.error(`[goal] ${line}`),
     });
     if (this.tasks !== undefined) this.tasks.onChange(task => this.goalLoop?.onTaskChanged(task)); if (this.tasks !== undefined) watchDependencies(this.tasks, (task, text) => { this.bus.deliverSystem(task.assigneeId!, text, task.conversation ?? MAIN_CONVERSATION); }); // a task whose last blocker closed wakes its assignee, as a late fork result does (INV-1740)
-    this.goalGate = this.tasks === undefined ? undefined : new GoalGate({
+    this.goalGate = this.tasks === undefined ? undefined : new GoalGate({ modelRecoveryRoot: this.registry.root,
       tasks: this.tasks,
       registry: this.registry,
       bus: this.bus,
@@ -2079,10 +2079,7 @@ export class Orchestrator {
         continue;
       }
 
-      // A turn the step ledger knows is continued in place (INV-774): same turn, no new
-      // message, the open call answered honestly before the model is asked again. A turn
-      // it does not know — a transcript from before the ledger — is told about itself the
-      // older way. One parked on a person's approval waits for the answer, however long.
+      // Known checkpoints continue in place; legacy turns use a resume note. Approvals stay parked.
       const steps = this.steps?.stepsOf(turn.id);
       if (steps?.known === true) {
         const pending = new Set(this.policy.pending().map(item => item.id));
@@ -2092,12 +2089,13 @@ export class Orchestrator {
           parked += 1;
           continue;
         }
-        this.continueTurn(turn);
-        resumed += 1;
+        if (this.continueTurn(turn)) resumed += 1; else abandoned += 1;
         continue;
       }
 
-      this.bus.sendFromUser(agent.id, resumePrompt(turn.about, turn.at), {
+      const goal = this.goalLoop?.resumeGoal(turn);
+      if (goal === false) { this.turns?.end(turn.id, "goal no longer active"); abandoned++; continue; }
+      this.bus.sendFromUser(agent.id, resumePrompt(turn.about, turn.at), { ...(goal === undefined ? {} : { goal }),
         synthetic: true, // model-text: resume
         ...(turn.principalId !== undefined ? { principalId: turn.principalId } : {}),
         resumeOf: { id: turn.id, attempt: turn.cleanExit ? turn.attempt : turn.attempt + 1,
@@ -2134,8 +2132,10 @@ export class Orchestrator {
    * reopened under the same id by the turn, the wake carries no user text, and `runTurn`
    * answers the open step from the transcript before asking the model anything.
    */
-  private continueTurn(turn: InterruptedTurn, approval?: { id: string; how: "allowed" | "refused" | "gone" }): void {
-    this.bus.sendFromUser(turn.agentId, continuationNote(turn.about), {
+  private continueTurn(turn: InterruptedTurn, approval?: { id: string; how: "allowed" | "refused" | "gone" }): boolean {
+    const goal = this.goalLoop?.resumeGoal(turn);
+    if (goal === false) { this.turns?.end(turn.id, "goal no longer active"); return false; }
+    this.bus.sendFromUser(turn.agentId, continuationNote(turn.about), { ...(goal === undefined ? {} : { goal }),
       synthetic: true, // model-text: continuation
       ...(turn.principalId !== undefined ? { principalId: turn.principalId } : {}),
       ...(turn.conversation !== undefined ? { conversation: turn.conversation } : {}),
@@ -2146,6 +2146,7 @@ export class Orchestrator {
     });
     this.turns?.end(turn.id, "continued");
     void this.bus.wake(turn.agentId);
+    return true;
   }
 
   /**

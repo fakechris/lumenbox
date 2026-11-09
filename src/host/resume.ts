@@ -25,6 +25,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import type { GoalMarker } from "./goal-mode.ts";
 import type { AgentVersion } from "./agent-version.ts";
 import { appendLine, archiveSettled, type LedgerKind } from "./jsonl.ts";
 import { redactDeep } from "./secret-redaction.ts";
@@ -77,6 +78,7 @@ interface BeginRecord {
    * id synthesised for them would join their rows to nothing while looking like a grouping.
    */
   workId?: string;
+  goal?: GoalMarker;
   /** How many attempts have already been made at the original work, including this one. */
   attempt: number;
   /** What the turn was about, in one line, so an operator reading the file learns something. */
@@ -215,6 +217,7 @@ export interface InterruptedTurn {
    * exists on disk and never reaches the code that resumes.
    */
   workId?: string;
+  goal?: GoalMarker;
 }
 
 /** `FORK_PREFIX` from tools.ts, repeated here to keep this file free of the tool module. */
@@ -247,6 +250,7 @@ export class TurnLedger {
     id: string;
     resumeOf?: string;
     workId?: string;
+    goal?: GoalMarker;
     attempt?: number;
     conversation?: string;
     model?: string;
@@ -271,6 +275,7 @@ export class TurnLedger {
       at: (options.now ?? new Date()).toISOString(),
       ...(options.resumeOf !== undefined ? { resumeOf: options.resumeOf } : {}),
       ...(options.workId !== undefined ? { workId: options.workId } : {}),
+      ...(options.goal !== undefined ? { goal: options.goal } : {}),
       attempt: options.attempt ?? 1,
       about: options.about.replace(/\s+/g, " ").trim().slice(0, 200),
       ...(options.conversation !== undefined ? { conversation: options.conversation } : {}),
@@ -400,6 +405,7 @@ export class TurnLedger {
           ...(record.contextEpoch !== undefined ? { contextEpoch: record.contextEpoch } : {}),
           ...(record.contextMode !== undefined ? { contextMode: record.contextMode } : {}),
           ...(record.workId !== undefined ? { workId: record.workId } : {}),
+          ...(record.goal !== undefined ? { goal: record.goal } : {}),
         });
       } else if (record.event === "clean") {
         const turn = open.get(record.id);

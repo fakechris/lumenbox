@@ -108,13 +108,13 @@ test("an accepted claim becomes verifying and starts a verifier with read tools 
     const pursuit = h.pursuit();
     assert.equal(pursuit.status, "verifying");
     assert.equal(h.tasks.get(h.task.id)!.status, "doing");
-    assert.deepEqual({ conversation: pursuit.verifying?.conversation, attempt: pursuit.verifying?.attempt, hash: pursuit.verifying?.manifestHash }, { conversation: verifierConversation(h.task.id, 1), attempt: 1, hash: manifestHashOf(new Map([["/home/box/work/q3.md", "aaa"]])) });
+    assert.deepEqual({ conversation: pursuit.verifying?.conversation, attempt: pursuit.verifying?.attempt, hash: pursuit.verifying?.manifestHash }, { conversation: pursuit.verifying?.conversation, attempt: 1, hash: manifestHashOf(new Map([["/home/box/work/q3.md", "aaa"]])) });
     assert.deepEqual(pursuit.claim?.items.map(item => [item.id, item.evidence]), [["c1", "/home/box/work/q3.md"], ["c2", "ran it, exit 0"], ["c3", ""], ["c4", "read it twice"]]);
     assert.equal(h.wakes.length, 1);
     const wake = h.wakes[0]!;
-    assert.equal(wake.conversation, verifierConversation(h.task.id, 1), "a conversation with no history of the work");
+    assert.ok(wake.conversation?.startsWith(verifierConversation(h.task.id, 1) + "-"), "a unique conversation with no history of this claim");
     assert.deepEqual(wake.toolScope, VERIFIER_TOOLS);
-    assert.deepEqual(wake.goal?.verify, { attempt: 1, confirmedCommands: ["npm run lint"] }, "npm test was proposed, never confirmed");
+    assert.deepEqual(wake.goal?.verify, { conversation: wake.conversation, attempt: 1, confirmedCommands: ["npm run lint"] }, "npm test was proposed, never confirmed");
     assert.match(wake.text, /c2: lint passes\n {3}check: run exactly: npm run lint — proven when it exits 0/);
     assert.match(wake.text, /c3: tests pass\n {3}check: a command was proposed but the person did not confirm it/);
     assert.match(wake.text, /executor's pointer: read it twice/);
@@ -262,4 +262,30 @@ test("a repo-clean item over a tree git cannot see is unknown, and unknown refus
     h.tasks.setPursuit(h.task.id, pursuit => ({ ...pursuit, checklist: [...pursuit.checklist, { id: "c9", text: "committed", check: { kind: "repo-clean", path: "/r" } }] }), "repo-clean item");
     assert.equal((await h.gate.claim(h.task.id, "nova", EVIDENCE, ACCOUNT)).accepted, true);
   } finally { h.cleanup(); }
+});
+
+
+test("a verifier cannot settle after transfer or a person changing authority during its manifest read", async () => {
+  for (const change of ["transfer", "pause", "replace"] as const) {
+    let block = false, release!: (value: Map<string, string>) => void;
+    const h = harness({ manifest: async () => block ? new Promise(resolve => { release = resolve; }) : new Map([["/home/box/work/q3.md", "aaa"]]) });
+    try {
+      await h.gate.claim(h.task.id, "nova", EVIDENCE, ACCOUNT);
+      const original = h.wakes[0]!.goal!;
+      h.tasks.setPursuit(h.task.id, p => ({ ...p, status: "active", verifying: undefined }), "person restarted claim");
+      await h.gate.claim(h.task.id, "nova", EVIDENCE, ACCOUNT);
+      await h.gate.verifierEnded({ marker: original, how: "done", worked: true, finalText: REPORT_PASS });
+      assert.equal(h.pursuit().status, "verifying", "late prior claim report cannot settle the new claim");
+      if (change === "transfer") h.tasks.update(h.task.id, { assigneeId: "other" }, "principal-user");
+      else block = true;
+      const pending = h.gate.verifierEnded({ marker: h.wakes.at(-1)!.goal!, how: "done", worked: true, finalText: REPORT_PASS });
+      if (change !== "transfer") {
+        h.tasks.setPursuit(h.task.id, p => change === "pause" ? ({ ...p, status: "paused", pausedReason: "person" }) : ({ ...p, status: "active", workId: "replacement" }), "person changed authority");
+        release(new Map([["/home/box/work/q3.md", "aaa"]]));
+      }
+      await pending;
+      assert.equal(h.pursuit().status, change === "pause" ? "paused" : change === "replace" ? "active" : "verifying");
+      assert.equal(h.pursuit().lastVerdict, undefined);
+    } finally { h.cleanup(); }
+  }
 });

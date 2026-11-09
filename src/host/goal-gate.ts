@@ -16,9 +16,10 @@
  * process that restarts mid-verification finds it: a verdict already in that conversation's
  * transcript is applied; anything less is the interrupted case and is rejected.
  */
+import { accountedGoalCost, ModelRetries } from "./model-retries.ts";
 import type { InboundMessage } from "../agents/bus.ts";
 import type { AgentRegistry } from "../agents/registry.ts";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Task, TaskStore } from "./tasks.ts";
 import {
   type GoalMarker,
@@ -37,6 +38,7 @@ import { accountRefusal, type ClaimAccount } from "./claim-account.ts";
 
 export interface GoalGateDeps {
   tasks: TaskStore;
+  modelRecoveryRoot?: string;
   registry: Pick<AgentRegistry, "readDurableState" | "readTranscript">;
   bus: {
     sendFromUser(agentId: string, text: string, options: { conversation?: string; steerable?: boolean; lane?: "user" | "agent" | "background"; synthetic?: boolean; toolScope?: readonly string[]; goal?: GoalMarker }): number | undefined;
@@ -141,7 +143,7 @@ export class GoalGate {
       }
     }
 
-    const verifyConversation = verifierConversation(task.id, claimNo);
+    const verifyConversation = `${verifierConversation(task.id, claimNo)}-${randomUUID()}`;
     const seq = ++this.seq;
     this.deps.tasks.setPursuit(
       task.id,
@@ -149,7 +151,7 @@ export class GoalGate {
         ...current,
         status: "verifying",
         claim: { at, items, decisions: account.decisions, unchecked: account.unchecked },
-        verifying: { startedAt: at, conversation: verifyConversation, attempt: 1, ...(manifest !== undefined ? { manifestHash: manifestHashOf(manifest) } : {}) },
+        verifying: { agentId, taskConversation: task.conversation, startedAt: at, conversation: verifyConversation, attempt: 1, ...(manifest !== undefined ? { manifestHash: manifestHashOf(manifest) } : {}) },
       }),
       `claim ${claimNo}: completion claimed; verifying in ${verifyConversation}`
     );
@@ -169,7 +171,7 @@ export class GoalGate {
       workId: pursuit.workId,
       seq,
       personSeq: 0,
-      verify: { attempt: pursuit.verifying?.attempt ?? 1, confirmedCommands },
+      verify: { conversation: pursuit.verifying!.conversation, attempt: pursuit.verifying?.attempt ?? 1, confirmedCommands },
     };
     this.deps.bus.sendFromUser(agentId, verifierPrompt(task, chinese), {
       conversation: pursuit.verifying!.conversation,
@@ -188,20 +190,24 @@ export class GoalGate {
     if (marker.verify === undefined) return;
     const task = this.deps.tasks.get(marker.taskId);
     const pursuit = task?.pursuit;
-    if (task === undefined || pursuit === undefined || pursuit.status !== "verifying" || pursuit.verifying?.attempt !== marker.verify.attempt) {
+    if (task === undefined || pursuit === undefined || pursuit.workId !== marker.workId || pursuit.status !== "verifying" || pursuit.verifying?.attempt !== marker.verify.attempt || (report.conversation ?? marker.verify.conversation) !== pursuit.verifying.conversation || (pursuit.verifying.agentId !== undefined && (pursuit.verifying.agentId !== task.assigneeId || pursuit.verifying.taskConversation !== task.conversation))) {
       this.deps.log(`goal ${marker.taskId}: verifier report ignored (${pursuit?.status ?? "no goal"}, attempt ${marker.verify.attempt})`);
       return;
     }
     // The verifier's spend is the goal's spend (INV-772): ZCode left it off the books.
-    if (report.cost !== undefined && report.cost > 0) {
-      this.deps.tasks.setPursuit(task.id, current => ({ ...current, spent: { ...current.spent, cost: current.spent.cost + report.cost! } }), `verification attempt ${marker.verify.attempt} cost ${Math.round(report.cost)}`);
-    }
+    let budget: ModelRetries | undefined;
+    try { if (this.deps.modelRecoveryRoot !== undefined) budget = new ModelRetries(this.deps.modelRecoveryRoot, pursuit.workId); }
+    catch { this.deps.tasks.setPursuit(task.id, p => ({ ...p, status: "paused", pausedReason: "error", verifying: undefined }), "Goal verification cost could not be reconciled"); await this.tell(task, "The Goal is paused because its verification cost could not be reconciled."); return; }
+    const cost = accountedGoalCost(pursuit.spent.cost, report.cost ?? 0, budget);
+    if (cost > pursuit.spent.cost) this.deps.tasks.setPursuit(task.id, p => ({ ...p, spent: { ...p.spent, cost: Math.max(p.spent.cost, cost) } }), `verification attempt ${marker.verify.attempt} cost reconciled`);
     const verdict = report.how === "done" && report.finalText !== undefined ? parseGoalVerdict(report.finalText, pursuit.checklist) : undefined;
     if (verdict === undefined) {
       await this.noVerdict(task, `the verifier ${report.how === "done" ? "ended without a parsable verdict" : report.how}`, task.assigneeId!);
       return;
     }
     const manifest = await this.deps.manifest?.();
+    const current = this.deps.tasks.get(task.id);
+    if (current === undefined || current.assigneeId !== task.assigneeId || current.conversation !== task.conversation || current.pursuit?.workId !== marker.workId || current.pursuit.status !== "verifying" || current.pursuit.verifying?.attempt !== marker.verify.attempt || (report.conversation ?? marker.verify.conversation) !== pursuit.verifying.conversation || current.pursuit.verifying.startedAt !== pursuit.verifying.startedAt || current.pursuit.verifying.conversation !== pursuit.verifying.conversation) return;
     if (pursuit.verifying.manifestHash !== undefined && manifest !== undefined && manifestHashOf(manifest) !== pursuit.verifying.manifestHash) {
       this.reject(task.id, { ...verdict, passed: false, nextAction: "The workspace changed while it was being verified; claim again once the work is still." }, "verification voided: the workspace changed during it", "rejected");
       await this.tell(task, verdictNotice(this.deps.tasks.get(task.id)!, verdict, "rejected"));
@@ -278,7 +284,7 @@ export class GoalGate {
       const verdict = text === undefined ? undefined : parseGoalVerdict(text, pursuit.checklist);
       if (verdict !== undefined) {
         this.deps.log(`goal ${task.id}: verdict found in ${pursuit.verifying.conversation} after restart`);
-        await this.verifierEnded({ marker: { taskId: task.id, workId: pursuit.workId, seq: ++this.seq, personSeq: 0, verify: { attempt: pursuit.verifying.attempt, confirmedCommands: [] } }, how: "done", worked: true, finalText: text });
+        await this.verifierEnded({ marker: { taskId: task.id, workId: pursuit.workId, seq: ++this.seq, personSeq: 0, verify: { conversation: pursuit.verifying.conversation, attempt: pursuit.verifying.attempt, confirmedCommands: [] } }, how: "done", worked: true, finalText: text });
         continue;
       }
       const interrupted: GoalVerdict = { passed: false, items: pursuit.checklist.map(item => ({ id: item.id, verdict: "unverified" })), nextAction: "Verification was interrupted by a restart; claim again when the work is still.", body: "interrupted" };
@@ -292,8 +298,8 @@ export class GoalGate {
   verifierMayRun(inbound: readonly InboundMessage[]): boolean | undefined {
     const marker = inbound.find(message => message.goal?.verify !== undefined)?.goal;
     if (marker === undefined) return undefined;
-    const pursuit = this.deps.tasks.get(marker.taskId)?.pursuit;
-    return pursuit?.status === "verifying" && pursuit.verifying?.attempt === marker.verify!.attempt;
+    const task = this.deps.tasks.get(marker.taskId), pursuit = task?.pursuit;
+    return pursuit?.workId === marker.workId && pursuit.status === "verifying" && pursuit.verifying?.attempt === marker.verify!.attempt && (pursuit.verifying.agentId === undefined || (pursuit.verifying.agentId === task?.assigneeId && pursuit.verifying.taskConversation === task?.conversation));
   }
 
   private async tell(task: Task, text: string): Promise<void> {

@@ -86,7 +86,7 @@ export interface Pursuit {
    * digest of the workspace when completion was claimed — a verifier that changed the work,
    * or an executor that kept working during verification, fails the claim.
    */
-  verifying?: { startedAt: string; conversation: string; attempt: number; manifestHash?: string; turnId?: string };
+  verifying?: { agentId?: string; taskConversation?: string; startedAt: string; conversation: string; attempt: number; manifestHash?: string; turnId?: string };
   /** The executor's last claim of completion: evidence per checklist item, as pointers. */
   claim?: { at: string; items: { id: string; evidence: string }[]; decisions?: string[]; unchecked?: string[] }; // the account is INV-1574
   lastVerdict?: {
@@ -485,7 +485,7 @@ export interface GoalMarker {
   finishOnly?: true;
   reason?: PausedReason;
   /** A verification turn (INV-771): the gate's, not the loop's; bash is held to these commands. */
-  verify?: { attempt: number; confirmedCommands: string[] };
+  verify?: { conversation?: string; attempt: number; confirmedCommands: string[] };
 }
 
 /**
