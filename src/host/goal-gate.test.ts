@@ -114,7 +114,7 @@ test("an accepted claim becomes verifying and starts a verifier with read tools 
     const wake = h.wakes[0]!;
     assert.ok(wake.conversation?.startsWith(verifierConversation(h.task.id, 1) + "-"), "a unique conversation with no history of this claim");
     assert.deepEqual(wake.toolScope, VERIFIER_TOOLS);
-    assert.deepEqual(wake.goal?.verify, { attempt: 1, confirmedCommands: ["npm run lint"] }, "npm test was proposed, never confirmed");
+    assert.deepEqual(wake.goal?.verify, { conversation: wake.conversation, attempt: 1, confirmedCommands: ["npm run lint"] }, "npm test was proposed, never confirmed");
     assert.match(wake.text, /c2: lint passes\n {3}check: run exactly: npm run lint — proven when it exits 0/);
     assert.match(wake.text, /c3: tests pass\n {3}check: a command was proposed but the person did not confirm it/);
     assert.match(wake.text, /executor's pointer: read it twice/);
