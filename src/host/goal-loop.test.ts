@@ -323,3 +323,23 @@ test("resumption reconstructs only the current Goal owner and does not revive a 
     assert.equal(h.loop.resumeGoal({ ...turn, goal: marker }), false, "persisted identity cannot migrate to a replacement goal");
   } finally { h.cleanup(); }
 });
+
+
+test("queued and in-flight resumptions cannot mutate a replacement or transferred Goal", async () => {
+  for (const change of ["replace", "transfer"] as const) {
+    const h = harness();
+    try {
+      const marker = h.loop.resumeGoal({ agentId: "nova", conversation: CONV, workId: "w-1" });
+      assert.ok(marker);
+      const inbound = [{ id: "resume", fromId: "user", fromName: "user", text: "resume", synthetic: true, receivedAt: "", priority: false, goal: marker }];
+      assert.equal(h.loop.turnStarting("nova", CONV, inbound), true);
+      if (change === "replace") h.tasks.setPursuit(h.task.id, p => ({ ...p, workId: "replacement" }), "replace");
+      else h.tasks.update(h.task.id, { assigneeId: "other" }, "principal-user");
+      assert.equal(h.loop.turnStarting("nova", CONV, inbound), false, "revalidate at execution, after queuing");
+      await h.loop.turnEnded({ marker: { ...marker, finishOnly: true, reason: "budget" }, how: "done", worked: false, cost: 18 });
+      assert.equal(h.pursuit().status, "active", "old finish-only cannot pause current authority");
+      assert.equal(h.pursuit().spent.idleStreak, 0);
+      assert.equal(h.pursuit().spent.cost, change === "replace" ? 0 : 18, "charge only the same work, without changing its state");
+    } finally { h.cleanup(); }
+  }
+});

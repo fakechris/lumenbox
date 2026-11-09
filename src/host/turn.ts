@@ -2331,7 +2331,7 @@ ${outcome.text}`;
     // The turn's own budget (INV-1354): at the ceiling the work goes back to the person as an
     // outcome, said in the conversation and as an event — not thrown, not a 401st call.
     const pursuitBudget = goal === undefined ? undefined : deps.tasks?.get(goal.taskId)?.pursuit;
-    if (!goal?.finishOnly && pursuitBudget?.limits.budget !== undefined && Math.max(pursuitBudget.spent.cost + weightedCost(turnUsage, provider.tokenWeights ?? DEFAULT_TOKEN_WEIGHTS) + asideCost, recoveries.knownCost) + recoveries.heldCost >= pursuitBudget.limits.budget) spendHit ??= { kind: "hit_wake", report: "The Goal budget, including durable reservations for unreported failed requests, is reached. Progress is saved; the goal must stop here." };
+    if (!goal?.finishOnly && pursuitBudget?.limits.budget !== undefined && Math.max(recoveries.hasCostLedger ? recoveries.knownCost : pursuitBudget.spent.cost + weightedCost(turnUsage, provider.tokenWeights ?? DEFAULT_TOKEN_WEIGHTS) + asideCost, pursuitBudget.spent.cost) + recoveries.heldCost >= pursuitBudget.limits.budget) spendHit ??= { kind: "hit_wake", report: "The Goal budget, including durable reservations for unreported failed requests, is reached. Progress is saved; the goal must stop here." };
     const spend = budget.call();
     if (spend === "warn") budgetWarningDue = true;
     if (spend === "hit" || spendHit !== undefined) { // or the agent's spend line (INV-1615): the same hand-back

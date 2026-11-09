@@ -190,7 +190,7 @@ export class GoalGate {
     if (marker.verify === undefined) return;
     const task = this.deps.tasks.get(marker.taskId);
     const pursuit = task?.pursuit;
-    if (task === undefined || pursuit === undefined || pursuit.status !== "verifying" || pursuit.verifying?.attempt !== marker.verify.attempt) {
+    if (task === undefined || pursuit === undefined || pursuit.workId !== marker.workId || pursuit.status !== "verifying" || pursuit.verifying?.attempt !== marker.verify.attempt) {
       this.deps.log(`goal ${marker.taskId}: verifier report ignored (${pursuit?.status ?? "no goal"}, attempt ${marker.verify.attempt})`);
       return;
     }

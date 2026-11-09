@@ -103,7 +103,7 @@ export class GoalLoop {
   /** How many person-opened turns this conversation has seen; a wake scheduled before one is stale. */
   private readonly personSeq = new Map<string, number>();
   private readonly pending = new Map<string, Pending>();
-  private readonly running = new Map<string, { seq: number; startedAt: number }>();
+  private readonly running = new Map<string, { seq: number; startedAt: number; agentId: string; conversation: string }>();
   private seq = 0;
 
   constructor(private readonly deps: GoalLoopDeps) {}
@@ -170,18 +170,19 @@ export class GoalLoop {
     // A verification wake belongs to the gate (INV-771): it runs while the goal is verifying,
     // and the gate decides whether this attempt is still the one it wants.
     if (marker.verify !== undefined) {
-      const verifying = this.deps.tasks.get(marker.taskId)?.pursuit;
-      return verifying?.status === "verifying" && verifying.verifying?.attempt === marker.verify.attempt;
+      const task = this.deps.tasks.get(marker.taskId);
+      const verifying = task?.pursuit;
+      return task?.assigneeId === agentId && verifying?.verifying?.conversation === conversation && verifying?.workId === marker.workId && verifying?.status === "verifying" && verifying.verifying?.attempt === marker.verify.attempt;
     }
     const task = this.deps.tasks.get(marker.taskId);
-    const stillActive = task?.pursuit?.status === "active";
+    const stillActive = task?.pursuit?.status === "active" && task.pursuit.workId === marker.workId && task.assigneeId === agentId && task.conversation === conversation;
     const current = (this.personSeq.get(key) ?? 0) === marker.personSeq;
     const latest = this.pending.get(marker.taskId) === undefined && !this.running.has(marker.taskId);
     if (!stillActive || !current || !latest) {
       this.deps.log(`goal ${marker.taskId}: continuation ${marker.seq} not run (${!stillActive ? "goal no longer active" : !current ? "a person spoke first" : "superseded"})`);
       return false;
     }
-    this.running.set(marker.taskId, { seq: marker.seq, startedAt: this.now() });
+    this.running.set(marker.taskId, { seq: marker.seq, startedAt: this.now(), agentId, conversation });
     return true;
   }
 
@@ -286,16 +287,17 @@ export class GoalLoop {
   async turnEnded(report: GoalTurnReport): Promise<void> {
     const { marker } = report;
     const run = this.running.get(marker.taskId);
+    if (run !== undefined && run.seq !== marker.seq) return;
     this.running.delete(marker.taskId);
     const task = this.deps.tasks.get(marker.taskId);
     const pursuit = task?.pursuit;
-    if (task === undefined || pursuit === undefined) return;
+    if (task === undefined || pursuit === undefined || pursuit.workId !== marker.workId) return;
     const elapsed = run === undefined ? 0 : Math.max(0, this.now() - run.startedAt);
     let budget: ModelRetries | undefined;
     try { if (this.deps.modelRecoveryRoot !== undefined) budget = new ModelRetries(this.deps.modelRecoveryRoot, pursuit.workId); }
     catch { this.deps.tasks.setPursuit(task.id, p => ({ ...p, status: "paused", pausedReason: "error" }), "Goal cost could not be reconciled"); await this.tell(task, "The Goal is paused because its recorded model cost could not be reconciled. Inspect the recovery ledger before resuming."); return; }
     const cost = accountedGoalCost(pursuit.spent.cost, report.cost ?? 0, budget);
-    if (pursuit.status !== "active") {
+    if (pursuit.status !== "active" || (run !== undefined && (task.assigneeId !== run.agentId || task.conversation !== run.conversation))) {
       this.deps.tasks.setPursuit(task.id, p => ({ ...p, spent: { ...p.spent, cost: Math.max(p.spent.cost, cost), activeMs: p.spent.activeMs + elapsed } }), "executor ended after Goal ownership moved; cost only");
       return;
     }
@@ -335,6 +337,8 @@ export class GoalLoop {
     // stall is two rounds in a row repeating an old hypothesis — not an unchanged hash, which a round that tried something
     // new and failed also leaves. Without one, the hash rule stands.
     const experiment = await this.judgeExperiment(task, pursuit, report);
+    const currentTask = this.deps.tasks.get(task.id);
+    if (currentTask?.pursuit?.status !== "active" || currentTask.pursuit.workId !== marker.workId || currentTask.assigneeId !== task.assigneeId || currentTask.conversation !== task.conversation) return;
     const repeatStreak = experiment?.kind === "repeat" ? (pursuit.spent.repeatStreak ?? 0) + 1 : 0;
     const stop: PausedReason | undefined = idleStreak >= ANTI_SPIN_LIMIT ? "anti_spin" : this.deps.judgeExperiment !== undefined ? (repeatStreak >= REPEAT_LIMIT ? "repeating" : undefined) : stallStreak >= STALL_LIMIT ? "stalled" : undefined;
     this.deps.tasks.setPursuit(
