@@ -271,9 +271,14 @@ test("a verifier cannot settle after transfer or a person changing authority dur
     const h = harness({ manifest: async () => block ? new Promise(resolve => { release = resolve; }) : new Map([["/home/box/work/q3.md", "aaa"]]) });
     try {
       await h.gate.claim(h.task.id, "nova", EVIDENCE, ACCOUNT);
+      const original = h.wakes[0]!.goal!;
+      h.tasks.setPursuit(h.task.id, p => ({ ...p, status: "active", verifying: undefined }), "person restarted claim");
+      await h.gate.claim(h.task.id, "nova", EVIDENCE, ACCOUNT);
+      await h.gate.verifierEnded({ marker: original, how: "done", worked: true, finalText: REPORT_PASS });
+      assert.equal(h.pursuit().status, "verifying", "late prior claim report cannot settle the new claim");
       if (change === "transfer") h.tasks.update(h.task.id, { assigneeId: "other" }, "principal-user");
       else block = true;
-      const pending = h.gate.verifierEnded({ marker: h.wakes[0]!.goal!, how: "done", worked: true, finalText: REPORT_PASS });
+      const pending = h.gate.verifierEnded({ marker: h.wakes.at(-1)!.goal!, how: "done", worked: true, finalText: REPORT_PASS });
       if (change !== "transfer") {
         h.tasks.setPursuit(h.task.id, p => change === "pause" ? ({ ...p, status: "paused", pausedReason: "person" }) : ({ ...p, status: "active", workId: "replacement" }), "person changed authority");
         release(new Map([["/home/box/work/q3.md", "aaa"]]));

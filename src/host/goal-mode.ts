@@ -485,7 +485,7 @@ export interface GoalMarker {
   finishOnly?: true;
   reason?: PausedReason;
   /** A verification turn (INV-771): the gate's, not the loop's; bash is held to these commands. */
-  verify?: { attempt: number; confirmedCommands: string[] };
+  verify?: { conversation?: string; attempt: number; confirmedCommands: string[] };
 }
 
 /**

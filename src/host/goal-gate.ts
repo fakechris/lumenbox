@@ -171,7 +171,7 @@ export class GoalGate {
       workId: pursuit.workId,
       seq,
       personSeq: 0,
-      verify: { attempt: pursuit.verifying?.attempt ?? 1, confirmedCommands },
+      verify: { conversation: pursuit.verifying!.conversation, attempt: pursuit.verifying?.attempt ?? 1, confirmedCommands },
     };
     this.deps.bus.sendFromUser(agentId, verifierPrompt(task, chinese), {
       conversation: pursuit.verifying!.conversation,
@@ -190,7 +190,7 @@ export class GoalGate {
     if (marker.verify === undefined) return;
     const task = this.deps.tasks.get(marker.taskId);
     const pursuit = task?.pursuit;
-    if (task === undefined || pursuit === undefined || pursuit.workId !== marker.workId || pursuit.status !== "verifying" || pursuit.verifying?.attempt !== marker.verify.attempt || (pursuit.verifying.agentId !== undefined && (pursuit.verifying.agentId !== task.assigneeId || pursuit.verifying.taskConversation !== task.conversation))) {
+    if (task === undefined || pursuit === undefined || pursuit.workId !== marker.workId || pursuit.status !== "verifying" || pursuit.verifying?.attempt !== marker.verify.attempt || ((report.conversation ?? marker.verify.conversation) !== undefined && (report.conversation ?? marker.verify.conversation) !== pursuit.verifying.conversation) || (pursuit.verifying.agentId !== undefined && (pursuit.verifying.agentId !== task.assigneeId || pursuit.verifying.taskConversation !== task.conversation))) {
       this.deps.log(`goal ${marker.taskId}: verifier report ignored (${pursuit?.status ?? "no goal"}, attempt ${marker.verify.attempt})`);
       return;
     }
@@ -207,7 +207,7 @@ export class GoalGate {
     }
     const manifest = await this.deps.manifest?.();
     const current = this.deps.tasks.get(task.id);
-    if (current === undefined || current.assigneeId !== task.assigneeId || current.conversation !== task.conversation || current.pursuit?.workId !== marker.workId || current.pursuit.status !== "verifying" || current.pursuit.verifying?.attempt !== marker.verify.attempt || current.pursuit.verifying.startedAt !== pursuit.verifying.startedAt) return;
+    if (current === undefined || current.assigneeId !== task.assigneeId || current.conversation !== task.conversation || current.pursuit?.workId !== marker.workId || current.pursuit.status !== "verifying" || current.pursuit.verifying?.attempt !== marker.verify.attempt || ((report.conversation ?? marker.verify.conversation) !== undefined && (report.conversation ?? marker.verify.conversation) !== pursuit.verifying.conversation) || current.pursuit.verifying.startedAt !== pursuit.verifying.startedAt) return;
     if (pursuit.verifying.manifestHash !== undefined && manifest !== undefined && manifestHashOf(manifest) !== pursuit.verifying.manifestHash) {
       this.reject(task.id, { ...verdict, passed: false, nextAction: "The workspace changed while it was being verified; claim again once the work is still." }, "verification voided: the workspace changed during it", "rejected");
       await this.tell(task, verdictNotice(this.deps.tasks.get(task.id)!, verdict, "rejected"));
@@ -284,7 +284,7 @@ export class GoalGate {
       const verdict = text === undefined ? undefined : parseGoalVerdict(text, pursuit.checklist);
       if (verdict !== undefined) {
         this.deps.log(`goal ${task.id}: verdict found in ${pursuit.verifying.conversation} after restart`);
-        await this.verifierEnded({ marker: { taskId: task.id, workId: pursuit.workId, seq: ++this.seq, personSeq: 0, verify: { attempt: pursuit.verifying.attempt, confirmedCommands: [] } }, how: "done", worked: true, finalText: text });
+        await this.verifierEnded({ marker: { taskId: task.id, workId: pursuit.workId, seq: ++this.seq, personSeq: 0, verify: { conversation: pursuit.verifying.conversation, attempt: pursuit.verifying.attempt, confirmedCommands: [] } }, how: "done", worked: true, finalText: text });
         continue;
       }
       const interrupted: GoalVerdict = { passed: false, items: pursuit.checklist.map(item => ({ id: item.id, verdict: "unverified" })), nextAction: "Verification was interrupted by a restart; claim again when the work is still.", body: "interrupted" };
