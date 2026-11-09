@@ -6,6 +6,7 @@
  * background work, and the abort has to land between tool calls.
  */
 
+import { reserveFailedModelSpend } from "./failed-model-spend.ts";
 import { ModelRetries } from "./model-retries.ts";
 import { watchModelStream, waitForRetry } from "./model-stream.ts";
 import { hostBoxWrite } from "./host-box.ts"; import { workDir } from "./box-paths.ts";
@@ -2123,7 +2124,7 @@ ${outcome.text}`;
   // One entry per completed round, for the loop and progress judgements. Held out here rather than
   // inside runRounds so a continuation can reset it: a fresh budget deserves a fresh judgement.
   const rounds: RoundRecord[] = [];
-  const budget = new TurnBudget(deps.turnBudget); const recoveries = new ModelRetries(registry.dirFor(agent.id), workId);
+  const budget = new TurnBudget(deps.turnBudget); let recoveries: ModelRetries;
   let budgetWarningDue = false;
   // Whether the person has already been handed the model's opening line this turn (docs/31
   // layer 1a). Turn-scoped, not round-scoped: a continuation restarts the round count and
@@ -2206,6 +2207,7 @@ ${outcome.text}`;
   deps.onReady?.();
 
   try {
+    recoveries = new ModelRetries(registry.root, workId);
     // Continuations are a loop here rather than recursion inside runRounds: each pass gets a fresh
     // round budget and a fresh look at the history, and the plan and todo list carry the intent
     // across. A turn that was working steadily resumes instead of being abandoned at the limit.
@@ -2477,7 +2479,6 @@ ${outcome.text}`;
     // twice, and the watcher is told so it can drop the first.
     let outputProduced = false;
     const attemptControl = new AbortController();
-    const deadline = watchModelStream(attemptControl, signal);
 
     // One span per attempt, all of a turn's rounds in one trace (traceId is the
     // turnId). Covers both wires: OpenAIWireClient answers the same messages.stream
@@ -2506,6 +2507,9 @@ ${outcome.text}`;
       { traceId: turnId }
     );
     roundStartedAt = new Date().toISOString();
+    const deadline = watchModelStream(attemptControl, signal);
+    let response: Anthropic.Message;
+    try {
     const stream = client.messages.stream(
       {
         model: answering.model,
@@ -2533,8 +2537,6 @@ ${outcome.text}`;
       emit({ type: "text", agentId: agent.id, agentName: agent.profile.name, delta });
     });
 
-    let response: Anthropic.Message;
-    try {
       response = await stream.finalMessage();
       deadline.release();
     } catch (rawError) {
@@ -2545,12 +2547,19 @@ ${outcome.text}`;
       // The span ends failed however the round recovers — retried, shed, or given up on:
       // a retried failure is still a failed call, and that is what the trace should show.
       span?.end(deadline.failure ? { "agentbox.stalled": true } : {}, error);
+      if (classifyFailure(error) === "transient" || outputProduced) {
+        const held = reserveFailedModelSpend(answering, { agentId: agent.id, agentName: agent.profile.name, workId, turnId, conversation, round }, deps.spendLimits, deps.usage);
+        turnUsage.inputTokens += held.bound.inputTokens; turnUsage.outputTokens += held.bound.outputTokens;
+        if (held.verdict?.kind === "warn") spendWarning = held.verdict.text;
+        else if (held.verdict !== undefined && held.verdict.kind !== "ok") spendHit ??= held.verdict;
+      }
       // The outer abort is the only one that means "a person stopped this"; our own deadline abort
       // must not be mistaken for it.
       if (signal.aborted) {
         emit({ type: "aborted", agentId: agent.id });
         throw new TurnAborted();
       }
+      if (spendHit !== undefined) { round -= 1; continue; } // hand back before another paid attempt
       // The request did not fit. This is recoverable and must be recovered from: the alternative is
       // a turn that dies mid-task, which is the worst moment to find out. Shed what can be shed and
       // retry the same round — the estimate is only an estimate, so the proactive guard above will

@@ -29,7 +29,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { appendLine } from "./jsonl.ts";
+import { appendLine, appendLineDurably } from "./jsonl.ts";
 import { priceOf, type Priceable, type Rates } from "./spend.ts";
 
 export interface SpendLimitConfig {
@@ -63,6 +63,8 @@ export interface SpendRow extends Priceable {
 export interface SpendToday {
   day: string;
   spent: number;
+  /** Conservative allowance held for unreported failed calls; not invoiced spend. */
+  reserved: number;
   unpricedTokens: number;
   unpricedModels: string[];
   limits: SpendLimitConfig;
@@ -96,10 +98,11 @@ export interface SpendLimitDeps {
 type LedgerLine =
   | { kind: "limits"; at: string; agentId: string; limits: Partial<SpendLimitConfig> | null }
   | { kind: "paused"; at: string; agentId: string; day: string }
-  | { kind: "resumed"; at: string; agentId: string; day: string };
+  | { kind: "resumed"; at: string; agentId: string; day: string }
+  | { kind: "reservation"; at: string; row: SpendRow };
 
-interface Tally { day: string; spent: number; unpricedTokens: number; unpricedModels: Set<string>; warnedDay: boolean; pausedAt?: string }
-interface WakeTally { spent: number; unpricedTokens: number; unpricedModels: Set<string>; warned: boolean }
+interface Tally { day: string; spent: number; reserved: number; unpricedTokens: number; unpricedModels: Set<string>; warnedDay: boolean; pausedAt?: string }
+interface WakeTally { spent: number; reserved: number; unpricedTokens: number; unpricedModels: Set<string>; warned: boolean }
 
 const PAUSE_BY = "LumenBox (spend limit)";
 
@@ -122,6 +125,7 @@ export class SpendLimits {
   /** Keyed by agent and turn, in order of the last row each was charged. */
   private readonly wakes = new Map<string, WakeTally>();
   private readonly pausedByUs = new Map<string, string>();
+  private readonly reservations: { at: string; row: SpendRow }[] = [];
   private loadedDay: string | undefined;
 
   constructor(private readonly deps: SpendLimitDeps, private readonly path?: string) {
@@ -153,7 +157,7 @@ export class SpendLimits {
   /** Today's spend against today's lines, for the page. */
   today(agentId: string): SpendToday {
     const tally = this.tallyFor(agentId);
-    return { day: tally.day, spent: tally.spent, unpricedTokens: tally.unpricedTokens, unpricedModels: [...tally.unpricedModels].sort(), limits: this.limitsOf(agentId), ...(tally.pausedAt !== undefined ? { pausedAt: tally.pausedAt } : {}) };
+    return { day: tally.day, spent: tally.spent, reserved: tally.reserved, unpricedTokens: tally.unpricedTokens, unpricedModels: [...tally.unpricedModels].sort(), limits: this.limitsOf(agentId), ...(tally.pausedAt !== undefined ? { pausedAt: tally.pausedAt } : {}) };
   }
 
   /** The agents this module paused and has not yet resumed. */
@@ -166,17 +170,33 @@ export class SpendLimits {
    * wake, or end the wake and pause the agent (the pause is the `enforce` the caller runs after
    * its report is on the record, so the hand-back is said before the turn is cut).
    */
-  note(row: SpendRow): SpendVerdict {
+  note(row: SpendRow): SpendVerdict { return this.charge(row, false); }
+
+  /** Missing usage is not free. Hold a conservative ceiling, separately from measured billing. */
+  reserveUnreported(row: SpendRow): SpendVerdict {
+    this.tallyFor(row.agentId); // load before adding, so this reservation is charged once
+    const held = { at: this.now().toISOString(), row };
+    if (this.path !== undefined) appendLineDurably(this.path, JSON.stringify({ kind: "reservation", ...held }));
+    this.reservations.push(held);
+    return this.charge(row, true);
+  }
+
+  private reservationPrice(row: SpendRow): number | undefined {
+    const rate = this.deps.rates()[row.model];
+    return rate === undefined ? undefined : (row.inputTokens * Math.max(rate.inputPerM, rate.cacheReadPerM ?? rate.inputPerM, rate.cacheWritePerM ?? rate.inputPerM) + row.outputTokens * rate.outputPerM) / 1e6;
+  }
+
+  private charge(row: SpendRow, reservation: boolean): SpendVerdict {
     if (row.rejection !== undefined) return { kind: "ok" };
     const tally = this.tallyFor(row.agentId);
-    const price = priceOf(row, this.deps.rates());
+    const price = reservation ? this.reservationPrice(row) : priceOf(row, this.deps.rates());
     const wake = this.wakeFor(row.agentId, row.turnId ?? "");
-    this.add(tally, row, price);
-    this.add(wake, row, price);
+    this.add(tally, row, price, reservation);
+    this.add(wake, row, price, reservation);
     const limits = this.limitsOf(row.agentId);
     const name = this.deps.nameOf(row.agentId);
-    const dayHit = tally.spent >= limits.perDay || tally.unpricedTokens >= limits.perDayTokens;
-    const wakeHit = wake.spent >= limits.perWake || wake.unpricedTokens >= limits.perWakeTokens;
+    const dayHit = (tally.spent + tally.reserved) >= limits.perDay || tally.unpricedTokens >= limits.perDayTokens;
+    const wakeHit = (wake.spent + wake.reserved) >= limits.perWake || wake.unpricedTokens >= limits.perWakeTokens;
     if (dayHit && tally.pausedAt === undefined) {
       tally.pausedAt = this.now().toISOString();
       const report = this.report("day", name, tally, limits);
@@ -194,8 +214,8 @@ export class SpendLimits {
       };
     }
     if (wakeHit) return { kind: "hit_wake", report: this.report("wake", name, wake, limits) };
-    const dayWarn = !tally.warnedDay && (tally.spent >= limits.perDay * WARN_AT || tally.unpricedTokens >= limits.perDayTokens * WARN_AT);
-    const wakeWarn = !wake.warned && (wake.spent >= limits.perWake * WARN_AT || wake.unpricedTokens >= limits.perWakeTokens * WARN_AT);
+    const dayWarn = !tally.warnedDay && ((tally.spent + tally.reserved) >= limits.perDay * WARN_AT || tally.unpricedTokens >= limits.perDayTokens * WARN_AT);
+    const wakeWarn = !wake.warned && ((wake.spent + wake.reserved) >= limits.perWake * WARN_AT || wake.unpricedTokens >= limits.perWakeTokens * WARN_AT);
     if (dayWarn) tally.warnedDay = true;
     if (wakeWarn) wake.warned = true;
     if (dayWarn || wakeWarn) {
@@ -227,7 +247,7 @@ export class SpendLimits {
   /** The running total of one turn, made most recent; the least recent beyond the bound is forgotten. */
   private wakeFor(agentId: string, turnId: string): WakeTally {
     const key = `${agentId}\u0000${turnId}`;
-    const wake = this.wakes.get(key) ?? { spent: 0, unpricedTokens: 0, unpricedModels: new Set<string>(), warned: false };
+    const wake = this.wakes.get(key) ?? { spent: 0, reserved: 0, unpricedTokens: 0, unpricedModels: new Set<string>(), warned: false };
     this.wakes.delete(key);
     this.wakes.set(key, wake);
     for (const oldest of this.wakes.keys()) {
@@ -237,27 +257,27 @@ export class SpendLimits {
     return wake;
   }
 
-  private add(into: { spent: number; unpricedTokens: number; unpricedModels: Set<string> }, row: Priceable, price: number | undefined): void {
-    if (price !== undefined) into.spent += price;
+  private add(into: { spent: number; reserved: number; unpricedTokens: number; unpricedModels: Set<string> }, row: Priceable, price: number | undefined, reservation = false): void {
+    if (price !== undefined) { if (reservation) into.reserved += price; else into.spent += price; }
     else {
       into.unpricedTokens += row.inputTokens + row.outputTokens + row.cacheWriteTokens + Math.round(row.cacheReadTokens * CACHE_READ_WEIGHT);
       into.unpricedModels.add(row.model);
     }
   }
 
-  private lineText(which: "day" | "wake", of: { spent: number; unpricedTokens: number }, limits: SpendLimitConfig): string {
+  private lineText(which: "day" | "wake", of: { spent: number; reserved: number; unpricedTokens: number }, limits: SpendLimitConfig): string {
     const line = which === "day" ? limits.perDay : limits.perWake;
     const tokenLine = which === "day" ? limits.perDayTokens : limits.perWakeTokens;
-    const parts = [`${money(of.spent)} of ${money(line)}`];
+    const parts = [`${money(of.spent + of.reserved)} of ${money(line)}`];
     if (of.unpricedTokens > 0) parts.push(`${tokens(of.unpricedTokens)} of ${tokens(tokenLine)} unpriced`);
-    return parts.join(" and ");
+    return parts.join(" and ") + (of.reserved > 0 ? ` (includes ${money(of.reserved)} reserved for unreported failed calls, not measured spend)` : "");
   }
 
   private unpricedNote(of: { unpricedModels: Set<string> }): string {
     return of.unpricedModels.size === 0 ? "" : ` Unpriced model${of.unpricedModels.size === 1 ? "" : "s"} (no rate in config.json, counted in tokens): ${[...of.unpricedModels].sort().join(", ")}.`;
   }
 
-  private report(which: "day" | "wake", name: string, of: { spent: number; unpricedTokens: number; unpricedModels: Set<string> }, limits: SpendLimitConfig): string {
+  private report(which: "day" | "wake", name: string, of: { spent: number; reserved: number; unpricedTokens: number; unpricedModels: Set<string> }, limits: SpendLimitConfig): string {
     const line = this.lineText(which, of, limits);
     return which === "wake"
       ? `I have reached my spend line for this wake (${line}), so I am stopping here and handing back what I have. Say "go on" to continue; the line is in Settings → Team → Agents.${this.unpricedNote(of)}`
@@ -277,6 +297,12 @@ export class SpendLimits {
         const tally = this.blank(row.agentId, today);
         this.add(tally, row, priceOf(row, rates));
       }
+      for (const held of this.reservations) {
+        if (dayOf(new Date(held.at)) !== today) continue;
+        const tally = this.blank(held.row.agentId, today);
+        this.add(tally, held.row, this.reservationPrice(held.row), true);
+        this.add(this.wakeFor(held.row.agentId, held.row.turnId ?? ""), held.row, this.reservationPrice(held.row), true);
+      }
     }
     return this.blank(agentId, today);
   }
@@ -284,7 +310,7 @@ export class SpendLimits {
   private blank(agentId: string, day: string): Tally {
     let tally = this.days.get(agentId);
     if (tally === undefined) {
-      tally = { day, spent: 0, unpricedTokens: 0, unpricedModels: new Set(), warnedDay: false };
+      tally = { day, spent: 0, reserved: 0, unpricedTokens: 0, unpricedModels: new Set(), warnedDay: false };
       this.days.set(agentId, tally);
     }
     return tally;
@@ -303,6 +329,7 @@ export class SpendLimits {
         if (line.kind === "limits") { if (line.limits === null) this.limits.delete(line.agentId); else this.limits.set(line.agentId, line.limits); }
         else if (line.kind === "paused") this.pausedByUs.set(line.agentId, line.day);
         else if (line.kind === "resumed") this.pausedByUs.delete(line.agentId);
+        else if (line.kind === "reservation") this.reservations.push({ at: line.at, row: line.row });
       } catch {
         // A torn line is one setting lost, not a reason to run without any.
       }

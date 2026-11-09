@@ -12,6 +12,10 @@ export class ModelRetries {
   private readonly path: string;
   constructor(dir: string, workId: string, private readonly turnLimit = MAX_TURN_RETRIES, private readonly workLimit = MAX_WORK_RETRIES) {
     this.path = join(dir, "model-retries", `${createHash("sha256").update(workId).digest("hex")}.jsonl`);
+    this.refresh();
+  }
+  private refresh(): void {
+    this.work = 0;
     if (existsSync(this.path)) {
       // Malformed durable state fails closed rather than silently restoring paid attempts.
       for (const line of readFileSync(this.path, "utf8").split("\n").filter(Boolean)) {
@@ -26,6 +30,7 @@ export class ModelRetries {
   succeeded(): void { this.consecutive = 0; }
   /** Reserve before the paid retry, so process restart cannot refund it. */
   reserve(): boolean {
+    this.refresh(); // another execution of the same work may have reserved since construction
     if (this.exhausted) return false;
     mkdirSync(dirname(this.path), { recursive: true });
     appendLineDurably(this.path, JSON.stringify({ retry: this.work + 1 }));

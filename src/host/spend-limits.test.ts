@@ -197,3 +197,24 @@ test("an unpriced cache read weighs a tenth: Ada's six rounds on 2026-11-05 no l
   for (let i = 0; i < 200 && verdict !== "hit_wake"; i++) verdict = limits.note(row("ada", "t1", 2_500, 700, "MiniMax-M3.1-Flash", { cacheReadTokens: 100_000 })).kind;
   assert.equal(verdict, "hit_wake");
 });
+
+
+test("unreported failed calls hold a conservative allowance across restart without becoming measured spend", () => {
+  const dir = mkdtempSync(join(tmpdir(), "spend-reservation-")), path = join(dir, "limits.jsonl");
+  try {
+    const { limits, clock } = harness({ path });
+    limits.setLimits("vic", { perWake: 1, perDay: 2 });
+    const hit = limits.reserveUnreported(row("vic", "t1", 1000, 0, "m", { metering: "missing" }));
+    assert.equal(hit.kind, "hit_wake");
+    assert.equal(limits.today("vic").spent, 0, "a bound is not measured spend");
+    assert.equal(limits.today("vic").reserved, 1);
+    const restored = harness({ path, clock }).limits;
+    assert.equal(restored.today("vic").reserved, 1);
+    assert.equal(restored.note(row("vic", "t1", 1)).kind, "hit_wake", "same wake cannot refund a held request on restart");
+    const dayHit = restored.reserveUnreported(row("vic", "t2", 1000));
+    assert.equal(dayHit.kind, "hit_day");
+    assert.match((dayHit as { report: string }).report, /reserved.*not measured spend/);
+    clock.now = new Date(2026, 10, 5, 9);
+    assert.equal(restored.today("vic").reserved, 0);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
