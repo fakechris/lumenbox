@@ -151,7 +151,7 @@ export class GoalGate {
         ...current,
         status: "verifying",
         claim: { at, items, decisions: account.decisions, unchecked: account.unchecked },
-        verifying: { startedAt: at, conversation: verifyConversation, attempt: 1, ...(manifest !== undefined ? { manifestHash: manifestHashOf(manifest) } : {}) },
+        verifying: { agentId, taskConversation: task.conversation, startedAt: at, conversation: verifyConversation, attempt: 1, ...(manifest !== undefined ? { manifestHash: manifestHashOf(manifest) } : {}) },
       }),
       `claim ${claimNo}: completion claimed; verifying in ${verifyConversation}`
     );
@@ -190,7 +190,7 @@ export class GoalGate {
     if (marker.verify === undefined) return;
     const task = this.deps.tasks.get(marker.taskId);
     const pursuit = task?.pursuit;
-    if (task === undefined || pursuit === undefined || pursuit.workId !== marker.workId || pursuit.status !== "verifying" || pursuit.verifying?.attempt !== marker.verify.attempt) {
+    if (task === undefined || pursuit === undefined || pursuit.workId !== marker.workId || pursuit.status !== "verifying" || pursuit.verifying?.attempt !== marker.verify.attempt || (pursuit.verifying.agentId !== undefined && (pursuit.verifying.agentId !== task.assigneeId || pursuit.verifying.taskConversation !== task.conversation))) {
       this.deps.log(`goal ${marker.taskId}: verifier report ignored (${pursuit?.status ?? "no goal"}, attempt ${marker.verify.attempt})`);
       return;
     }
@@ -206,6 +206,8 @@ export class GoalGate {
       return;
     }
     const manifest = await this.deps.manifest?.();
+    const current = this.deps.tasks.get(task.id);
+    if (current?.assigneeId !== task.assigneeId || current.conversation !== task.conversation || current.pursuit?.workId !== marker.workId || current.pursuit.status !== "verifying" || current.pursuit.verifying?.attempt !== marker.verify.attempt || current.pursuit.verifying.startedAt !== pursuit.verifying.startedAt) return;
     if (pursuit.verifying.manifestHash !== undefined && manifest !== undefined && manifestHashOf(manifest) !== pursuit.verifying.manifestHash) {
       this.reject(task.id, { ...verdict, passed: false, nextAction: "The workspace changed while it was being verified; claim again once the work is still." }, "verification voided: the workspace changed during it", "rejected");
       await this.tell(task, verdictNotice(this.deps.tasks.get(task.id)!, verdict, "rejected"));
@@ -296,8 +298,8 @@ export class GoalGate {
   verifierMayRun(inbound: readonly InboundMessage[]): boolean | undefined {
     const marker = inbound.find(message => message.goal?.verify !== undefined)?.goal;
     if (marker === undefined) return undefined;
-    const pursuit = this.deps.tasks.get(marker.taskId)?.pursuit;
-    return pursuit?.status === "verifying" && pursuit.verifying?.attempt === marker.verify!.attempt;
+    const task = this.deps.tasks.get(marker.taskId), pursuit = task?.pursuit;
+    return pursuit?.workId === marker.workId && pursuit.status === "verifying" && pursuit.verifying?.attempt === marker.verify!.attempt && (pursuit.verifying.agentId === undefined || (pursuit.verifying.agentId === task?.assigneeId && pursuit.verifying.taskConversation === task?.conversation));
   }
 
   private async tell(task: Task, text: string): Promise<void> {

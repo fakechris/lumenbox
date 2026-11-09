@@ -86,7 +86,7 @@ export interface Pursuit {
    * digest of the workspace when completion was claimed — a verifier that changed the work,
    * or an executor that kept working during verification, fails the claim.
    */
-  verifying?: { startedAt: string; conversation: string; attempt: number; manifestHash?: string; turnId?: string };
+  verifying?: { agentId?: string; taskConversation?: string; startedAt: string; conversation: string; attempt: number; manifestHash?: string; turnId?: string };
   /** The executor's last claim of completion: evidence per checklist item, as pointers. */
   claim?: { at: string; items: { id: string; evidence: string }[]; decisions?: string[]; unchecked?: string[] }; // the account is INV-1574
   lastVerdict?: {

@@ -172,7 +172,7 @@ export class GoalLoop {
     if (marker.verify !== undefined) {
       const task = this.deps.tasks.get(marker.taskId);
       const verifying = task?.pursuit;
-      return task?.assigneeId === agentId && verifying?.verifying?.conversation === conversation && verifying?.workId === marker.workId && verifying?.status === "verifying" && verifying.verifying?.attempt === marker.verify.attempt;
+      return (verifying?.verifying?.agentId === undefined || verifying.verifying.agentId === agentId) && task?.assigneeId === agentId && verifying?.verifying?.conversation === conversation && verifying?.workId === marker.workId && verifying?.status === "verifying" && verifying.verifying?.attempt === marker.verify.attempt;
     }
     const task = this.deps.tasks.get(marker.taskId);
     const stillActive = task?.pursuit?.status === "active" && task.pursuit.workId === marker.workId && task.assigneeId === agentId && task.conversation === conversation;

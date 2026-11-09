@@ -263,3 +263,24 @@ test("a repo-clean item over a tree git cannot see is unknown, and unknown refus
     assert.equal((await h.gate.claim(h.task.id, "nova", EVIDENCE, ACCOUNT)).accepted, true);
   } finally { h.cleanup(); }
 });
+
+
+test("a verifier cannot settle after transfer or a person changing authority during its manifest read", async () => {
+  for (const change of ["transfer", "pause", "replace"] as const) {
+    let block = false, release!: (value: Map<string, string>) => void;
+    const h = harness({ manifest: async () => block ? new Promise(resolve => { release = resolve; }) : new Map([["/home/box/work/q3.md", "aaa"]]) });
+    try {
+      await h.gate.claim(h.task.id, "nova", EVIDENCE, ACCOUNT);
+      if (change === "transfer") h.tasks.update(h.task.id, { assigneeId: "other" }, "principal-user");
+      else block = true;
+      const pending = h.gate.verifierEnded({ marker: h.wakes[0]!.goal!, how: "done", worked: true, finalText: REPORT_PASS });
+      if (change !== "transfer") {
+        h.tasks.setPursuit(h.task.id, p => change === "pause" ? ({ ...p, status: "paused", pausedReason: "person" }) : ({ ...p, status: "active", workId: "replacement" }), "person changed authority");
+        release(new Map([["/home/box/work/q3.md", "aaa"]]));
+      }
+      await pending;
+      assert.equal(h.pursuit().status, change === "pause" ? "paused" : change === "replace" ? "active" : "verifying");
+      assert.equal(h.pursuit().lastVerdict, undefined);
+    } finally { h.cleanup(); }
+  }
+});
