@@ -2499,6 +2499,50 @@ test("nor one carried back by an MCP server nobody marked as trusted", async () 
   await assertNothingPlanted(plantedPageEpisode({ call: "web__read", input: { url: "https://offer.example.com" } }, mcp));
 });
 
+test("a browser submission whose acknowledgement is lost is reconciled before replay (INV-1778)", async () => {
+  const { createServer } = await import("node:http");
+  const { BoxClient } = await import("../box/client.ts");
+  let submissions = 0, reads = 0;
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", chunk => { body += chunk; });
+    req.on("end", () => {
+      const request = JSON.parse(body);
+      if (request.op === "act") { submissions++; res.destroy(); return; }
+      reads++;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ url: "https://forms.example/receipt", title: "Receipt", snapshot: `Operation op-1 committed: ${submissions}`, snapshot_id: "s2" }));
+    });
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address() as import("node:net").AddressInfo;
+  const client = new BoxClient({ baseUrl: `http://127.0.0.1:${address.port}`, token: "fixture" });
+  let lostResult = "";
+  const episode = await runEpisode({
+    team: [{ name: "Nova", tools: ["browser_act", "browser_snapshot"] }],
+    says: ["Submit operation op-1 once, then verify its receipt."], display: 1,
+    box: { browser: client.browser.bind(client) },
+    script: ({ round, messages }) => {
+      if (round === 0) return { call: "browser_act", input: { action: "click", ref: "submit-op-1" } };
+      if (round === 1) {
+        lostResult = JSON.stringify(messages.at(-1)?.content);
+        // The historical wording told the model to replay a write already committed.
+        if (/safe to retry/.test(lostResult)) return { call: "browser_act", input: { action: "click", ref: "submit-op-1" } };
+        return { call: "browser_snapshot", input: {} };
+      }
+      assert.match(JSON.stringify(messages.at(-1)?.content), /Operation op-1 committed: 1/);
+      return { say: "Receipt confirms operation op-1 committed once." };
+    },
+  }).finally(() => server.close());
+  try {
+    assert.match(lostResult, /Outcome: unknown/);
+    assert.match(lostResult, /outcome is unknown/);
+    assert.doesNotMatch(lostResult, /Nothing was delivered|safe to retry/);
+    assert.equal(submissions, 1);
+    assert.ok(reads >= 1, "reconcile the committed operation through the actual browser tool");
+  } finally { episode.cleanup(); }
+});
+
 // ── 2026-09-30, INV-895: a page that asks for the person's address ───────────────────
 //
 // What could happen: the person asks the agent to claim a coupon; the page says "enter your

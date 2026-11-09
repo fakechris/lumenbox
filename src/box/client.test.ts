@@ -88,14 +88,41 @@ test("each way a box call fails says which way it was, and the remedy", async ()
   }
 });
 
-test("a box that is not there is unreachable, which is the one safe-to-retry failure", async () => {
-  // A port nothing listens on, which is what a stopped box looks like.
-  const client = new BoxClient({ baseUrl: "http://127.0.0.1:9", token: "t", timeoutMs: 2000 });
-  const failure = await failureOf(
-    (client as unknown as { post: (p: string, b: unknown) => Promise<unknown> }).post("/x", {})
-  );
+test("a refused connection retains the transport failure without promising safe replay", async () => {
+  const { server, url } = await serve(() => {});
+  await new Promise<void>(resolve => server.close(() => resolve()));
+  const client = new BoxClient({ baseUrl: url, token: "t", timeoutMs: 2000 });
+  const failure = await failureOf(client.writeFile("/work/a", "once"));
   assert.equal(failure.kind, "unreachable");
-  assert.match(failure.message, /safe to retry/);
+  assert.match(failure.message, /outcome is unknown/);
+  assert.doesNotMatch(failure.message, /safe to retry/);
+  assert.ok(failure.cause instanceof Error, "retain the transport cause");
+});
+
+test("a committed request with a lost response has an unknown outcome, including a broken response body", async () => {
+  for (const headersSent of [false, true]) {
+    let commits = 0;
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        commits++;
+        if (headersSent) { res.writeHead(200); res.write('{"path":'); setImmediate(() => res.destroy()); }
+        else res.destroy();
+      });
+    });
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address() as import("node:net").AddressInfo;
+    try {
+      const client = new BoxClient({ baseUrl: `http://127.0.0.1:${address.port}`, token: "t", timeoutMs: 2000 });
+      const failure = await failureOf(client.writeFile("/work/a", "once"));
+      assert.equal(commits, 1, "the server committed, despite the failed fetch");
+      assert.equal(failure.kind, "unreachable");
+      assert.match(failure.message, /outcome is unknown/);
+      assert.match(failure.message, /check.*before.*retry/i);
+      assert.doesNotMatch(failure.message, /Nothing was delivered|safe to retry/);
+      assert.ok(failure.cause instanceof Error);
+    } finally { server.close(); }
+  }
 });
 
 test("a timeout says the operation may still be running", async () => {

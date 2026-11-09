@@ -58,8 +58,8 @@ export interface BoxClientOptions {
  *     the honest next step is to check its effect, not to redo it.
  *   - `crashed` — the box hit an internal error mid-request; the effect is unknown.
  *     Check before redoing, same as a timeout.
- *   - `unreachable` — the request never reached a box. Nothing was delivered, so a
- *     retry is safe once the box is back (`agentbox box up`).
+ *   - `unreachable` — the transport failed. It may have failed after delivery, so
+ *     the outcome is unknown; check the effect before retrying.
  *   - `protocol` — the box answered something that is not the protocol, which usually
  *     means a version skew the handshake has not caught yet.
  *
@@ -194,13 +194,18 @@ export class BoxClient {
           "timeout"
         );
       }
-      throw new BoxError(
-        `${path} could not reach the box: ` +
-          `${error instanceof Error ? error.message : String(error)}. Nothing was ` +
-          `delivered, so this is safe to retry once the box is back.`,
+      // A fetch rejection does not prove non-delivery: the box may have committed
+      // before the socket or response body broke. Even a connection error can follow
+      // a redirect, after the original endpoint already received the request.
+      const failure = new BoxError(
+        `${path} lost contact with the box: ` +
+          `${error instanceof Error ? error.message : String(error)}. The outcome is unknown — ` +
+          `check its effect or reconcile by operation ID before retrying.`,
         undefined,
         "unreachable"
       );
+      failure.cause = error;
+      throw failure;
     } finally {
       clearTimeout(timer);
     }
