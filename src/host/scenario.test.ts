@@ -548,6 +548,23 @@ test("/goal sets a pursuit: the first turn drafts a checklist, the prompt carrie
   finally { result.cleanup(); }
 });
 
+test("four separated connection failures recover between productive tool rounds (INV-1779)", async () => {
+  let failures = 0;
+  const episode = await runEpisode({
+    team: [{ name: "Nova", tools: ["write_file"] }], says: ["Write five independent artifacts, recovering transient connection failures."],
+    script: ({ round }) => {
+      if ([1, 3, 5, 7].includes(round)) { failures++; throw Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }); }
+      if (round < 9) return { call: "write_file", input: { path: `/home/box/work/recovered-${round}.txt`, content: "saved" } };
+      return { say: "Five artifacts saved." };
+    },
+  });
+  try {
+    assert.equal(failures, 4);
+    assert.equal([...episode.files.keys()].filter(path => /recovered-/.test(path)).length, 5);
+    assert.ok(episode.score.said.some(said => /Five artifacts saved/.test(said.text)));
+  } finally { episode.cleanup(); }
+});
+
 test("a productive goal crosses four default turn budgets without a person continuing it", { timeout: 15_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "goal-budget-slices-"));
   const tasks = new TaskStore(join(dir, "tasks.jsonl"));

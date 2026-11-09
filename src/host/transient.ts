@@ -150,6 +150,14 @@ export class FirstTokenStallError extends Error {
   }
 }
 
+export class StreamIdleStallError extends Error {
+  readonly isStreamIdleStall = true as const;
+  constructor(deadlineMs: number) {
+    super(`The model stream produced no new content for ${Math.round(deadlineMs / 1000)}s after its last content. The connection stalled.`);
+    this.name = "StreamIdleStallError";
+  }
+}
+
 export function isFirstTokenStall(error: unknown): boolean {
   return (
     error instanceof FirstTokenStallError ||
@@ -166,7 +174,7 @@ export function isFirstTokenStall(error: unknown): boolean {
  * being returned — see the comment inside for the bug that distinction fixes.
  */
 export function classifyFailure(error: unknown): FailureKind {
-  if (isFirstTokenStall(error)) return "transient";
+  if (isFirstTokenStall(error) || (typeof error === "object" && error !== null && (error as { isStreamIdleStall?: unknown }).isStreamIdleStall === true)) return "transient";
   if (typeof error === "object" && error !== null && (error as { providerResting?: unknown }).providerResting === true) return "usage_limit";
 
   // Every signal in the whole chain, then decided — not the first one found.
@@ -285,6 +293,12 @@ export function policyFor(kind: FailureKind): RetryPolicy | undefined {
 
 /** How long to wait before a stream that has produced nothing is given up on. */
 export const FIRST_TOKEN_DEADLINE_MS = envNumber("AGENTBOX_FIRST_TOKEN_DEADLINE_MS", 120_000);
+/** Maximum gap between real content deltas after a stream starts working. */
+export const STREAM_IDLE_DEADLINE_MS = envNumber("AGENTBOX_STREAM_IDLE_DEADLINE_MS", 120_000);
+/** Across recovered rounds too; normal turn/Goal cost and call bounds also apply. */
+export const MAX_TURN_RETRIES = envNumber("AGENTBOX_MAX_TURN_RETRIES", 12);
+/** Shared by Goal slices and resumptions carrying the same work ID. */
+export const MAX_WORK_RETRIES = envNumber("AGENTBOX_MAX_WORK_RETRIES", 120);
 
 /** The most of a server's `retry-after` to honour, so a bad header cannot stall a turn for an hour. */
 export const MAX_RETRY_AFTER_MS = 30_000;

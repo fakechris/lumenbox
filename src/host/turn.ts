@@ -6,6 +6,8 @@
  * background work, and the abort has to land between tool calls.
  */
 
+import { ModelRetries } from "./model-retries.ts";
+import { watchModelStream, waitForRetry } from "./model-stream.ts";
 import { hostBoxWrite } from "./host-box.ts"; import { workDir } from "./box-paths.ts";
 import { createHash } from "node:crypto";
 import { buildInfo } from "./build-info.ts";
@@ -46,8 +48,7 @@ import {
 } from "./progress.ts";
 import {
   decideRetry, classifyFailure,
-  FirstTokenStallError,
-  FIRST_TOKEN_DEADLINE_MS,
+
 } from "./transient.ts"; import { keyOf as fallbackKey, nextFallback, switchLine, type Runtime as FallbackRuntime } from "./provider-fallback.ts";
 import { cacheMetering, cacheReadShare, type UsageKind, type UsageLog, type UsageRecord } from "./usage.ts"; import type { SpendLimits, SpendVerdict } from "./spend-limits.ts";
 import { chooseRelevant, memoryProjectionManifest, SHARED_CHAR_BUDGET, type MemoryRecall } from "./memory.ts"; import { recallable } from "./memory-scope.ts"; import type { OrgKnowledge } from "./org-knowledge.ts"; import type { MemoryConflicts } from "./memory-conflicts.ts";
@@ -2122,7 +2123,7 @@ ${outcome.text}`;
   // One entry per completed round, for the loop and progress judgements. Held out here rather than
   // inside runRounds so a continuation can reset it: a fresh budget deserves a fresh judgement.
   const rounds: RoundRecord[] = [];
-  const budget = new TurnBudget(deps.turnBudget);
+  const budget = new TurnBudget(deps.turnBudget); const recoveries = new ModelRetries(registry.dirFor(agent.id), workId);
   let budgetWarningDue = false;
   // Whether the person has already been handed the model's opening line this turn (docs/31
   // layer 1a). Turn-scoped, not round-scoped: a continuation restarts the round count and
@@ -2305,8 +2306,7 @@ ${outcome.text}`;
   // How many times this turn has had to shed content after a rejection. Bounded, because a provider
   // that rejects everything must not become an infinite retry loop.
   let shed = 0;
-  // Transient retries across the whole turn, not per round: a connection that keeps dropping should
-  // not get four fresh attempts at every round of a four-hundred-round turn.
+  // Successful rounds reset consecutive failures; cumulative retries remain bounded as well.
   let attempts = 0;
   // The incompressible-floor warning fires once per turn, not once per round.
   let floorWarned = false;
@@ -2476,12 +2476,8 @@ ${outcome.text}`;
     // history — nothing is appended until the round completes — but it can show a partial answer
     // twice, and the watcher is told so it can drop the first.
     let outputProduced = false;
-    let firstTokenTimer: NodeJS.Timeout | undefined;
     const attemptControl = new AbortController();
-    // Two signals: the caller's abort, and our own first-token deadline. Linked so either ends the
-    // request and the classifier can still tell which happened.
-    const onOuterAbort = () => attemptControl.abort();
-    signal.addEventListener("abort", onOuterAbort, { once: true });
+    const deadline = watchModelStream(attemptControl, signal);
 
     // One span per attempt, all of a turn's rounds in one trace (traceId is the
     // turnId). Covers both wires: OpenAIWireClient answers the same messages.stream
@@ -2530,67 +2526,25 @@ ${outcome.text}`;
     );
     forceTools = undefined;
 
-    // A stream can open and then deliver nothing. That is not a slow answer — a slow answer produces
-    // tokens — and waiting on it forever is indistinguishable from a hang.
-    let stalled = false;
-    firstTokenTimer = setTimeout(() => {
-      if (!outputProduced) {
-        stalled = true;
-        attemptControl.abort();
-      }
-    }, FIRST_TOKEN_DEADLINE_MS);
-    firstTokenTimer.unref?.();
-
-    const sawProgress = () => {
-      outputProduced = true;
-      if (firstTokenTimer !== undefined) {
-        clearTimeout(firstTokenTimer);
-        firstTokenTimer = undefined;
-      }
-    };
-
-    // Any content, not just prose. The deadline used to be cleared only by a `text` event, and a
-    // round that is entirely tool calls — which is most of a computer-use turn — never produces one,
-    // nor does a long stretch of thinking. So a model working perfectly well for two minutes was
-    // aborted as stalled and retried, repeatedly, on exactly the turns that take longest.
-    //
-    // `message_start` is excluded on purpose: it is what a stream that has opened and delivered
-    // nothing still sends, so treating it as progress would disable the deadline rather than widen
-    // it. (The SDK does not surface `ping` here at all, which is why it is not in this check —
-    // adding it would not compile.)
-    stream.on("streamEvent", event => {
-      if (event.type === "message_start") return;
-      sawProgress();
-    });
-
+    const sawProgress = () => { outputProduced = true; deadline.progress(); };
+    stream.on("streamEvent", event => { deadline.event(event); outputProduced ||= deadline.produced; });
     stream.on("text", delta => {
-      sawProgress();
+      if (delta !== "") sawProgress();
       emit({ type: "text", agentId: agent.id, agentName: agent.profile.name, delta });
     });
-
-    // Both are per attempt and both used to outlive it: the listener was never removed and the timer
-    // was never cleared unless a `text` event arrived. Four hundred rounds of that is four hundred
-    // listeners on one signal — past Node's warning threshold — and as many pending timers.
-    const releaseAttempt = () => {
-      signal.removeEventListener("abort", onOuterAbort);
-      if (firstTokenTimer !== undefined) {
-        clearTimeout(firstTokenTimer);
-        firstTokenTimer = undefined;
-      }
-    };
 
     let response: Anthropic.Message;
     try {
       response = await stream.finalMessage();
-      releaseAttempt();
+      deadline.release();
     } catch (rawError) {
-      releaseAttempt();
+      deadline.release();
       // A first-token stall arrives as an abort, because that is how the request was ended. Named
       // properly here so the retry decision and the message a person reads both say what happened.
-      const error = stalled ? new FirstTokenStallError(FIRST_TOKEN_DEADLINE_MS) : rawError;
+      const error = deadline.failure ?? rawError;
       // The span ends failed however the round recovers — retried, shed, or given up on:
       // a retried failure is still a failed call, and that is what the trace should show.
-      span?.end(stalled ? { "agentbox.stalled": true } : {}, error);
+      span?.end(deadline.failure ? { "agentbox.stalled": true } : {}, error);
       // The outer abort is the only one that means "a person stopped this"; our own deadline abort
       // must not be mistaken for it.
       if (signal.aborted) {
@@ -2634,11 +2588,11 @@ ${outcome.text}`;
       // ended the turn and the work with it.
       const fallback = classifyFailure(error) === "usage_limit" ? nextFallback(deps.fallbacks ?? [], triedProviders) : undefined; if (fallback !== undefined) { triedProviders.add(fallbackKey(fallback.provider)); const line = switchLine(answering, fallback.provider); client = fallback.client; answering = fallback.provider; console.error(`[turn] ${agent.profile.name}: ${line}`); emit({ type: "retrying", agentId: agent.id, round, attempt: attempts, delayMs: 0, kind: "usage_limit", discardPartial: outputProduced, detail: line }); round -= 1; continue; } const retry = decideRetry({ // before it: the round goes on with another provider, its messages and all (INV-1578)
         error,
-        attempt: attempts + 1,
+        attempt: recoveries.attempt,
         aborted: signal.aborted,
         outputProduced,
       });
-      if (retry.retry) {
+      if (retry.retry && recoveries.reserve()) {
         attempts += 1;
         noteFailureClass(error);
         const detail =
@@ -2657,7 +2611,7 @@ ${outcome.text}`;
           discardPartial: outputProduced,
           detail,
         });
-        await new Promise(resolve => setTimeout(resolve, retry.delayMs));
+        await waitForRetry(retry.delayMs, signal);
         if (signal.aborted) {
           emit({ type: "aborted", agentId: agent.id });
           throw new TurnAborted();
@@ -2667,11 +2621,12 @@ ${outcome.text}`;
       }
 
       console.error(
-        `[turn] ${agent.profile.name}: giving up on round ${round}: ${retry.reason}`
+        `[turn] ${agent.profile.name}: giving up on round ${round}: ${recoveries.exhausted ? "cumulative retry limit reached" : retry.reason}`
       );
-      throw error;
+      throw recoveries.exhausted ? new Error("The cumulative model recovery allowance is exhausted; progress is partial.", { cause: error }) : error;
     }
 
+    recoveries.succeeded();
     // Reported and written down. The event drives the UI; the record is what a collector outside
     // the box pulls, and what a bill is eventually made of — see src/host/usage.ts.
     const usage = {
