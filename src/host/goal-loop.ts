@@ -212,12 +212,11 @@ export class GoalLoop {
       ...this.deps.busy(key.agentId, key.conversation),
     ];
     if (busy.length > 0) return;
-    const limit = this.limitReached(pursuit);
     const seq = ++this.seq;
     const personSeq = this.personSeq.get(this.convKey(key.agentId, key.conversation)) ?? 0;
     const timer = this.schedule(() => {
       this.pending.delete(task.id);
-      this.start(key, seq, personSeq, limit);
+      this.start(key, seq, personSeq);
     }, CONTINUATION_DELAY_MS);
     this.pending.set(task.id, { seq, personSeq, cancel: timer.cancel });
   }
@@ -234,7 +233,7 @@ export class GoalLoop {
     return undefined;
   }
 
-  private start(key: Key, seq: number, personSeq: number, limit: PausedReason | undefined): void {
+  private start(key: Key, seq: number, personSeq: number): void {
     const task = this.deps.tasks.get(key.taskId);
     const pursuit = task?.pursuit;
     if (task === undefined || pursuit === undefined || pursuit.status !== "active") return;
@@ -247,7 +246,7 @@ export class GoalLoop {
       this.deps.log(`goal ${task.id}: continuation held, the mandate no longer holds; waiting for the person`);
       return;
     }
-    limit = this.limitReached(pursuit); // recheck durable holds and a person's changed limits at the actual wake
+    const limit = this.limitReached(pursuit); // recheck durable holds and a person's changed limits at the actual wake
     const gate = this.deps.wakeGate(key.agentId);
     if (!gate.allowed) {
       this.deps.log(`goal ${task.id}: continuation held by the wake gate${gate.reason !== undefined ? ` (${gate.reason})` : ""}`);
@@ -303,7 +302,7 @@ export class GoalLoop {
       const key = this.keyOf(task)!;
       const seq = ++this.seq;
       const personSeq = this.personSeq.get(this.convKey(key.agentId, key.conversation)) ?? 0;
-      const timer = this.schedule(() => { this.pending.delete(task.id); this.start(key, seq, personSeq, undefined); }, delay);
+      const timer = this.schedule(() => { this.pending.delete(task.id); this.start(key, seq, personSeq); }, delay);
       this.pending.set(task.id, { seq, personSeq, cancel: timer.cancel });
       return;
     }
