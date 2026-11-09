@@ -19,7 +19,7 @@
 import { accountedGoalCost, ModelRetries } from "./model-retries.ts";
 import type { InboundMessage } from "../agents/bus.ts";
 import type { AgentRegistry } from "../agents/registry.ts";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Task, TaskStore } from "./tasks.ts";
 import {
   type GoalMarker,
@@ -143,7 +143,7 @@ export class GoalGate {
       }
     }
 
-    const verifyConversation = verifierConversation(task.id, claimNo);
+    const verifyConversation = `${verifierConversation(task.id, claimNo)}-${randomUUID()}`;
     const seq = ++this.seq;
     this.deps.tasks.setPursuit(
       task.id,
@@ -190,7 +190,7 @@ export class GoalGate {
     if (marker.verify === undefined) return;
     const task = this.deps.tasks.get(marker.taskId);
     const pursuit = task?.pursuit;
-    if (task === undefined || pursuit === undefined || pursuit.workId !== marker.workId || pursuit.status !== "verifying" || pursuit.verifying?.attempt !== marker.verify.attempt || ((report.conversation ?? marker.verify.conversation) !== undefined && (report.conversation ?? marker.verify.conversation) !== pursuit.verifying.conversation) || (pursuit.verifying.agentId !== undefined && (pursuit.verifying.agentId !== task.assigneeId || pursuit.verifying.taskConversation !== task.conversation))) {
+    if (task === undefined || pursuit === undefined || pursuit.workId !== marker.workId || pursuit.status !== "verifying" || pursuit.verifying?.attempt !== marker.verify.attempt || (report.conversation ?? marker.verify.conversation) !== pursuit.verifying.conversation || (pursuit.verifying.agentId !== undefined && (pursuit.verifying.agentId !== task.assigneeId || pursuit.verifying.taskConversation !== task.conversation))) {
       this.deps.log(`goal ${marker.taskId}: verifier report ignored (${pursuit?.status ?? "no goal"}, attempt ${marker.verify.attempt})`);
       return;
     }
@@ -207,7 +207,7 @@ export class GoalGate {
     }
     const manifest = await this.deps.manifest?.();
     const current = this.deps.tasks.get(task.id);
-    if (current === undefined || current.assigneeId !== task.assigneeId || current.conversation !== task.conversation || current.pursuit?.workId !== marker.workId || current.pursuit.status !== "verifying" || current.pursuit.verifying?.attempt !== marker.verify.attempt || ((report.conversation ?? marker.verify.conversation) !== undefined && (report.conversation ?? marker.verify.conversation) !== pursuit.verifying.conversation) || current.pursuit.verifying.startedAt !== pursuit.verifying.startedAt) return;
+    if (current === undefined || current.assigneeId !== task.assigneeId || current.conversation !== task.conversation || current.pursuit?.workId !== marker.workId || current.pursuit.status !== "verifying" || current.pursuit.verifying?.attempt !== marker.verify.attempt || (report.conversation ?? marker.verify.conversation) !== pursuit.verifying.conversation || current.pursuit.verifying.startedAt !== pursuit.verifying.startedAt) return;
     if (pursuit.verifying.manifestHash !== undefined && manifest !== undefined && manifestHashOf(manifest) !== pursuit.verifying.manifestHash) {
       this.reject(task.id, { ...verdict, passed: false, nextAction: "The workspace changed while it was being verified; claim again once the work is still." }, "verification voided: the workspace changed during it", "rejected");
       await this.tell(task, verdictNotice(this.deps.tasks.get(task.id)!, verdict, "rejected"));

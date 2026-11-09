@@ -108,11 +108,11 @@ test("an accepted claim becomes verifying and starts a verifier with read tools 
     const pursuit = h.pursuit();
     assert.equal(pursuit.status, "verifying");
     assert.equal(h.tasks.get(h.task.id)!.status, "doing");
-    assert.deepEqual({ conversation: pursuit.verifying?.conversation, attempt: pursuit.verifying?.attempt, hash: pursuit.verifying?.manifestHash }, { conversation: verifierConversation(h.task.id, 1), attempt: 1, hash: manifestHashOf(new Map([["/home/box/work/q3.md", "aaa"]])) });
+    assert.deepEqual({ conversation: pursuit.verifying?.conversation, attempt: pursuit.verifying?.attempt, hash: pursuit.verifying?.manifestHash }, { conversation: pursuit.verifying?.conversation, attempt: 1, hash: manifestHashOf(new Map([["/home/box/work/q3.md", "aaa"]])) });
     assert.deepEqual(pursuit.claim?.items.map(item => [item.id, item.evidence]), [["c1", "/home/box/work/q3.md"], ["c2", "ran it, exit 0"], ["c3", ""], ["c4", "read it twice"]]);
     assert.equal(h.wakes.length, 1);
     const wake = h.wakes[0]!;
-    assert.equal(wake.conversation, verifierConversation(h.task.id, 1), "a conversation with no history of the work");
+    assert.ok(wake.conversation?.startsWith(verifierConversation(h.task.id, 1) + "-"), "a unique conversation with no history of this claim");
     assert.deepEqual(wake.toolScope, VERIFIER_TOOLS);
     assert.deepEqual(wake.goal?.verify, { attempt: 1, confirmedCommands: ["npm run lint"] }, "npm test was proposed, never confirmed");
     assert.match(wake.text, /c2: lint passes\n {3}check: run exactly: npm run lint — proven when it exits 0/);
