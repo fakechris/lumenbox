@@ -26,7 +26,7 @@ import { choosePinnedEntries, type HistoryEntry } from "./compaction.ts";
 import { contextTaskBlockers, newContext } from "./context-recovery.ts";
 import { GoalGate } from "./goal-gate.ts";
 import { GoalLoop } from "./goal-loop.ts";
-import { goalCommand } from "./goal-mode.ts";
+import { goalCommand, newPursuit } from "./goal-mode.ts";
 import { MemoryAdmin } from "./memory-admin.ts";
 import { chatFilesRoot, parseWakePrompt } from "./prompt.ts";
 import { replyForMessage, silenceForMessage } from "./reply.ts";
@@ -546,6 +546,39 @@ test("/goal sets a pursuit: the first turn drafts a checklist, the prompt carrie
   });
   try { assert.equal(result.score.turns, 2, "the drafting turn and the person's turn; no control command reached the model"); }
   finally { result.cleanup(); }
+});
+
+test("a productive goal crosses four default turn budgets without a person continuing it", { timeout: 15_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "goal-budget-slices-"));
+  const tasks = new TaskStore(join(dir, "tasks.jsonl"));
+  const told: string[] = [];
+  let writes = 0;
+  const result = await runEpisode({
+    team: [{ name: "Nova", tools: ["write_file"] }], says: [], tasks,
+    goalLoop: episodeLoop(told, undefined, { manifest: true }), maxRounds: 400,
+    script: ({ offered }) => {
+      if (!offered.includes("write_file")) return { say: "**Threads**\n- finish all 245 artifacts\n**Done**\n- persisted files\n**State**\n- continue remaining artifacts\n**Artifacts**\n- /home/box/work" };
+      if (writes >= 245) return { say: "All 245 artifacts are written." };
+      writes++;
+      return { call: "write_file", input: { path: `/home/box/work/part-${writes}.txt`, content: `artifact ${writes}` } };
+    },
+    drive: async ({ frontId, goalLoop, files }) => {
+      const task = tasks.create({ title: "245 artifacts", requester: "person", assigneeId: frontId, conversation: "main", pursuit: newPursuit({ objective: "write all 245 artifacts", workId: "long-goal" }) })!;
+      const written = () => [...files.keys()].filter(path => /part-\d+\.txt$/.test(path)).length;
+      goalLoop!.rearm();
+      try {
+        await settled(() => written() === 245 || tasks.get(task.id)?.pursuit?.status === "paused", 10_000);
+        assert.equal(written(), 245, "budget slices must continue rather than pause as execution errors");
+        assert.ok(tasks.get(task.id)!.pursuit!.spent.continuations >= 5);
+        assert.equal(tasks.get(task.id)!.pursuit!.spent.errorStreak ?? 0, 0);
+        assert.equal(told.some(text => /连续几次续跑都失败/.test(text)), false);
+      } finally {
+        tasks.setPursuit(task.id, p => ({ ...p, status: "paused", pausedReason: "person" }), "test ends after checking all artifacts", "person");
+      }
+    },
+  });
+  try { assert.equal([...result.files.keys()].filter(path => /part-\d+\.txt$/.test(path)).length, 245); }
+  finally { result.cleanup(); rmSync(dir, { recursive: true, force: true }); }
 });
 
 // INV-770: the loop keeps a goal moving on its own, stops it when the work stops moving, and
