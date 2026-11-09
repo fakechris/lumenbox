@@ -207,7 +207,7 @@ export class GoalGate {
     }
     const manifest = await this.deps.manifest?.();
     const current = this.deps.tasks.get(task.id);
-    if (current === undefined || current.assigneeId !== task.assigneeId || current.conversation !== task.conversation || current.pursuit?.workId !== marker.workId || current.pursuit.status !== "verifying" || current.pursuit.verifying?.attempt !== marker.verify.attempt || (report.conversation ?? marker.verify.conversation) !== pursuit.verifying.conversation || current.pursuit.verifying.startedAt !== pursuit.verifying.startedAt) return;
+    if (current === undefined || current.assigneeId !== task.assigneeId || current.conversation !== task.conversation || current.pursuit?.workId !== marker.workId || current.pursuit.status !== "verifying" || current.pursuit.verifying?.attempt !== marker.verify.attempt || (report.conversation ?? marker.verify.conversation) !== pursuit.verifying.conversation || current.pursuit.verifying.startedAt !== pursuit.verifying.startedAt || current.pursuit.verifying.conversation !== pursuit.verifying.conversation) return;
     if (pursuit.verifying.manifestHash !== undefined && manifest !== undefined && manifestHashOf(manifest) !== pursuit.verifying.manifestHash) {
       this.reject(task.id, { ...verdict, passed: false, nextAction: "The workspace changed while it was being verified; claim again once the work is still." }, "verification voided: the workspace changed during it", "rejected");
       await this.tell(task, verdictNotice(this.deps.tasks.get(task.id)!, verdict, "rejected"));
