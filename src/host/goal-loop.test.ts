@@ -303,3 +303,23 @@ test("a failed request's durable cost hold still limits Goal after restart and e
     assert.equal(h.wakes.at(-1)?.goal?.reason, "budget", "the durable hold cannot be refunded by a new execution");
   } finally { h.cleanup(); rmSync(dir, { recursive: true, force: true }); }
 });
+
+
+test("resumption reconstructs only the current Goal owner and does not revive a paused or replaced pursuit", async () => {
+  const h = harness();
+  try {
+    assert.equal(h.loop.resumeGoal({ agentId: "nova", conversation: CONV }), undefined);
+    const turn = { agentId: "nova", conversation: CONV, workId: "w-1" };
+    const marker = h.loop.resumeGoal(turn);
+    assert.ok(marker);
+    assert.equal(h.loop.turnStarting("nova", CONV, [{ id: "resumed", fromId: "user", fromName: "user", text: "resume", synthetic: true, receivedAt: "", priority: false, goal: marker }]), true);
+    await h.loop.turnEnded({ marker, how: "done", worked: true, cost: 18 });
+    assert.equal(h.pursuit().spent.cost, 18);
+    assert.equal(h.loop.resumeGoal({ ...turn, agentId: "other" }), false, "a different executor cannot inherit the old resume");
+    h.tasks.setPursuit(h.task.id, p => ({ ...p, status: "paused", pausedReason: "person" }), "person paused");
+    assert.equal(h.loop.resumeGoal(turn), false);
+    assert.equal(h.loop.resumeGoal({ ...turn, agentId: "other" }), false);
+    h.tasks.setPursuit(h.task.id, p => ({ ...p, status: "active", pausedReason: undefined, workId: "replacement" }), "replacement");
+    assert.equal(h.loop.resumeGoal({ ...turn, goal: marker }), false, "persisted identity cannot migrate to a replacement goal");
+  } finally { h.cleanup(); }
+});

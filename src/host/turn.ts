@@ -1525,7 +1525,23 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   // Built once, here, because this is the only place that knows all four of the things an aside
   // has to be attributed to. Passing the ledger down instead would mean passing the agent, the
   // work and the conversation down with it, which is three more chances to pass the wrong one.
-  const meter: Meter = (kind, profile, usage) =>
+  let recoveries: ModelRetries;
+  let asideCost = 0;
+  const recoveryBudget = () => {
+    if (recoveries === undefined) {
+      recoveries = new ModelRetries(registry.root, workId);
+      if (goal !== undefined) {
+        if (deps.resumeOf !== undefined && !recoveries.hasCostLedger) console.error("[goal] legacy resumption: retaining the reported cost floor; unrecorded historical costs cannot be reconstructed");
+        recoveries.seedCost(deps.tasks?.get(goal.taskId)?.pursuit?.spent.cost ?? 0);
+      }
+    }
+    return recoveries;
+  };
+  const meter: Meter = (kind, profile, usage) => {
+    if (goal !== undefined) {
+      const cost = weightedCost({ inputTokens: usage.input_tokens, outputTokens: usage.output_tokens, cacheReadTokens: usage.cache_read_input_tokens ?? 0, cacheWriteTokens: usage.cache_creation_input_tokens ?? 0 }, profile.tokenWeights ?? DEFAULT_TOKEN_WEIGHTS);
+      recoveryBudget().recordCost(randomUUID(), cost); asideCost += cost;
+    }
     deps.usage?.recordAside({
       kind,
       agentId: agent.id,
@@ -1539,6 +1555,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       // is that person's cost, and billing it to nobody made per-principal totals read low.
       ...(deps.caller?.userId !== undefined ? { principal: deps.caller.userId } : {}),
     });
+  };
   // What this turn read and kept, gathered as it goes.
   //
   // Read off the stored results rather than plumbed out of the tools, because both kinds of
@@ -2125,7 +2142,7 @@ ${outcome.text}`;
   // One entry per completed round, for the loop and progress judgements. Held out here rather than
   // inside runRounds so a continuation can reset it: a fresh budget deserves a fresh judgement.
   const rounds: RoundRecord[] = [];
-  const budget = new TurnBudget(deps.turnBudget); let recoveries: ModelRetries;
+  const budget = new TurnBudget(deps.turnBudget);
   let budgetWarningDue = false;
   // Whether the person has already been handed the model's opening line this turn (docs/31
   // layer 1a). Turn-scoped, not round-scoped: a continuation restarts the round count and
@@ -2182,7 +2199,7 @@ ${outcome.text}`;
     causedBy: inbound.map(message => message.id),
     ...(deps.caller?.userId !== undefined ? { principalId: deps.caller.userId } : {}),
     about: inbound.map(message => message.text).join(" / "),
-    workId,
+    workId, ...(goal === undefined ? {} : { goal }),
     ...(conversation !== MAIN_CONVERSATION ? { conversation } : {}),
     ...(deps.resumeOf !== undefined
       ? { resumeOf: deps.resumeOf.id, attempt: deps.resumeOf.attempt }
@@ -2208,7 +2225,7 @@ ${outcome.text}`;
   deps.onReady?.();
 
   try {
-    recoveries = new ModelRetries(registry.root, workId);
+    recoveries = recoveryBudget();
     // Continuations are a loop here rather than recursion inside runRounds: each pass gets a fresh
     // round budget and a fresh look at the history, and the plan and todo list carry the intent
     // across. A turn that was working steadily resumes instead of being abandoned at the limit.
@@ -2249,7 +2266,7 @@ ${outcome.text}`;
         conversation,
         how: endedHow ?? "failed", ...(stoppedBy !== undefined ? { stopReason: stoppedBy } : {}),
         worked: [...toolsUsedThisTurn].some(isWorkingTool),
-        cost: weightedCost(turnUsage, provider.tokenWeights ?? DEFAULT_TOKEN_WEIGHTS),
+        cost: weightedCost(turnUsage, provider.tokenWeights ?? DEFAULT_TOKEN_WEIGHTS) + asideCost,
         ...(lastFinalText !== undefined ? { finalText: lastFinalText } : {}),
       });
     }
@@ -2314,7 +2331,7 @@ ${outcome.text}`;
     // The turn's own budget (INV-1354): at the ceiling the work goes back to the person as an
     // outcome, said in the conversation and as an event — not thrown, not a 401st call.
     const pursuitBudget = goal === undefined ? undefined : deps.tasks?.get(goal.taskId)?.pursuit;
-    if (!goal?.finishOnly && pursuitBudget?.limits.budget !== undefined && pursuitBudget.spent.cost + weightedCost(turnUsage, provider.tokenWeights ?? DEFAULT_TOKEN_WEIGHTS) + recoveries.heldCost >= pursuitBudget.limits.budget) spendHit ??= { kind: "hit_wake", report: "The Goal budget, including durable reservations for unreported failed requests, is reached. Progress is saved; the goal must stop here." };
+    if (!goal?.finishOnly && pursuitBudget?.limits.budget !== undefined && Math.max(pursuitBudget.spent.cost + weightedCost(turnUsage, provider.tokenWeights ?? DEFAULT_TOKEN_WEIGHTS) + asideCost, recoveries.knownCost) + recoveries.heldCost >= pursuitBudget.limits.budget) spendHit ??= { kind: "hit_wake", report: "The Goal budget, including durable reservations for unreported failed requests, is reached. Progress is saved; the goal must stop here." };
     const spend = budget.call();
     if (spend === "warn") budgetWarningDue = true;
     if (spend === "hit" || spendHit !== undefined) { // or the agent's spend line (INV-1615): the same hand-back
@@ -2632,6 +2649,7 @@ ${outcome.text}`;
     // A cache field the provider left out is not a zero (INV-1260): the row is marked and
     // spend.ts leaves it unpriced rather than billing a number nobody reported.
     const metering = cacheMetering(response.usage);
+    if (goal !== undefined) recoveries.recordCost(response.id + ":" + randomUUID(), weightedCost(usage, answering.tokenWeights ?? DEFAULT_TOKEN_WEIGHTS));
     emit({ type: "usage", agentId: agent.id, round, ...usage,
       ...(metering !== undefined ? { metering } : {}) });
     turnUsage.inputTokens += usage.inputTokens;
