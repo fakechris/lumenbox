@@ -1095,7 +1095,7 @@ export class Orchestrator {
       inbox,
       true
     );
-    this.goalLoop = this.tasks === undefined ? undefined : new GoalLoop({
+    this.goalLoop = this.tasks === undefined ? undefined : new GoalLoop({ modelRecoveryRoot: this.registry.root,
       tasks: this.tasks,
       agentName: id => this.registry.tryGet(id)?.profile.name,
       bus: this.bus,

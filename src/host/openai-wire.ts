@@ -295,7 +295,7 @@ interface StreamTally {
  */
 class OpenAIWireStream {
   private textHandlers: ((delta: string) => void)[] = [];
-  private eventHandlers: ((event: { type: string }) => void)[] = [];
+  private eventHandlers: ((event: { type: string; delta?: unknown; content_block?: unknown }) => void)[] = [];
   private readonly done: Promise<Anthropic.Message>;
 
   constructor(
@@ -313,7 +313,7 @@ class OpenAIWireStream {
 
   on(event: "streamEvent" | "text", handler: (payload: never) => void): this {
     if (event === "text") this.textHandlers.push(handler as (delta: string) => void);
-    else this.eventHandlers.push(handler as (event: { type: string }) => void);
+    else this.eventHandlers.push(handler as (event: { type: string; delta?: unknown; content_block?: unknown }) => void);
     return this;
   }
 
@@ -424,7 +424,7 @@ class OpenAIWireStream {
     if (!delta) return;
     if (typeof delta.content === "string" && delta.content !== "") {
       tally.text += delta.content;
-      for (const handler of this.eventHandlers) handler({ type: "content_block_delta" });
+      for (const handler of this.eventHandlers) handler({ type: "content_block_delta", delta: { type: "text_delta", text: delta.content } });
       for (const handler of this.textHandlers) handler(delta.content);
     }
     for (const fragment of delta.tool_calls ?? []) {
@@ -436,7 +436,8 @@ class OpenAIWireStream {
       tally.calls.set(index, call);
       // Progress for the first-token deadline: a round that is entirely tool calls
       // must not read as a stall.
-      for (const handler of this.eventHandlers) handler({ type: "content_block_delta" });
+      if (fragment.function?.arguments) for (const handler of this.eventHandlers) handler({ type: "content_block_delta", delta: { type: "input_json_delta", partial_json: fragment.function.arguments } });
+      else if (fragment.function?.name) for (const handler of this.eventHandlers) handler({ type: "content_block_start", content_block: { type: "tool_use", name: fragment.function.name } });
     }
   }
 }
