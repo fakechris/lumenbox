@@ -93,13 +93,16 @@ export function replayNote(tool: string, times: number, chinese: boolean): strin
 }
 
 /** What the person is told when the turn ends on its budget: an outcome, said plainly. */
-export function budgetReport(budget: TurnBudget, calls: readonly string[], chinese: boolean): string {
+export function budgetReport(budget: TurnBudget, calls: readonly string[], chinese: boolean, goal = false): string {
   const tools = new Map<string, number>();
   for (const call of calls) {
     const name = call.split(" ")[0] ?? call;
     tools.set(name, (tools.get(name) ?? 0) + 1);
   }
   const top = [...tools.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([name, n]) => `${name} ×${n}`).join(", ");
+  if (goal) return chinese
+    ? `本轮用完了 ${budget.limits.calls} 次模型调用的预算，进度已保存。目标仍在推进；任务总预算和停止条件允许时会自动续跑。`
+    : `This slice used its budget of ${budget.limits.calls} model calls; progress is saved. The goal stays active and will continue automatically within its total budget and stop conditions.`;
   return chinese
     ? `这一轮用完了 ${budget.limits.calls} 次模型调用的预算，我停下来交给你。做过的事：${calls.length} 次工具调用，主要是 ${top || "无"}。没有完成的部分需要你决定：缩小范围、换个做法，或者让我继续。`
     : `This turn used its budget of ${budget.limits.calls} model calls, so I am stopping and handing it back. What ran: ${calls.length} tool calls, mostly ${top || "none"}. What is unfinished needs your call — narrow the task, change the approach, or tell me to continue.`;

@@ -44,7 +44,7 @@ export interface GoalTurnReport {
   conversation?: string;
   how: string;
   /** A bounded execution slice ending normally, distinct from an execution failure. */
-  stopReason?: "turn_budget" | "rounds";
+  stopReason?: "turn_budget" | "rounds" | "spend_limit";
   /** Whether any tool outside the bookkeeping set ran. */
   worked: boolean;
   /** The turn's final text, when it had one. Delivered only for a finish-only turn. */

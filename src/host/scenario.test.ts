@@ -581,6 +581,29 @@ test("a productive goal crosses four default turn budgets without a person conti
   finally { result.cleanup(); rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("a goal's explicit per-wake spend limit is not resumed as a normal call-budget slice", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "goal-spend-line-"));
+  const tasks = new TaskStore(join(dir, "tasks.jsonl"));
+  const told: string[] = [];
+  let writes = 0;
+  const spend = new SpendLimits({ ledger: () => [], rates: () => ({ scenario: { inputPerM: 100_000, outputPerM: 0, cacheReadPerM: 0, cacheWritePerM: 0 } }), pause: async () => {}, resume: async () => {}, isPaused: () => false, notify: () => {}, nameOf: id => id, log: () => {} });
+  const result = await runEpisode({
+    team: [{ name: "Nova", tools: ["write_file"] }], says: [], tasks, spendLimits: spend,
+    provider: { label: "test", model: "scenario", effort: false } as never,
+    goalLoop: episodeLoop(told, undefined, { manifest: true }),
+    script: () => ({ call: "write_file", input: { path: `/home/box/work/part-${++writes}.txt`, content: "part" } }),
+    drive: async ({ frontId, goalLoop }) => {
+      spend.setLimits(frontId, { perWake: 3, perDay: 1000 });
+      const task = tasks.create({ title: "bounded spend", requester: "person", assigneeId: frontId, conversation: "main", pursuit: newPursuit({ objective: "write until complete within the explicit spend limit", workId: "spend-goal" }) })!;
+      goalLoop!.rearm();
+      await settled(() => tasks.get(task.id)?.pursuit?.status === "paused", 10_000);
+      assert.equal(tasks.get(task.id)!.pursuit!.pausedReason, "error", "an explicit spend hand-back must retain its bounded stop behavior");
+      assert.equal(writes, 9, "three bounded attempts, not thirty normal continuations");
+    },
+  });
+  result.cleanup(); rmSync(dir, { recursive: true, force: true });
+});
+
 // INV-770: the loop keeps a goal moving on its own, stops it when the work stops moving, and
 // tells the person only then; a new process picks it up from the board under the same workId.
 function episodeLoop(told: string[], schedule?: (fn: () => void, ms: number) => { cancel: () => void }, options: { manifest?: boolean } = {}) {

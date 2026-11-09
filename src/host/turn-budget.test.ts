@@ -36,4 +36,6 @@ test("the report says what ran and hands the rest back, in the person's language
   const calls = ["read_file a", "read_file b", "bash ls", "read_file c", "WebFetch x"];
   assert.match(budgetReport(budget, calls, false), /budget of 5 model calls.*5 tool calls, mostly read_file ×3, bash ×1, WebFetch ×1/);
   assert.match(budgetReport(budget, calls, true), /用完了 5 次模型调用的预算.*read_file ×3/);
+  assert.match(budgetReport(budget, calls, false, true), /continue automatically within its total budget/);
+  assert.match(budgetReport(budget, calls, true, true), /停止条件允许时会自动续跑/);
 });
