@@ -148,7 +148,7 @@ test("expandEnv leaves an unknown variable visible rather than silently empty", 
 function withRemoteMcp(): Promise<{ url: string; requests: { method?: string; session?: string }[]; close: () => void; offer: (tools: unknown[]) => void }> {
   const requests: { method?: string; session?: string }[] = [];
   let session: string | undefined;
-  let offered: unknown[] = [{ name: "search", description: "Finds things.", inputSchema: { type: "object", properties: { q: { type: "string" } } } }];
+  let offered: unknown[] = [{ name: "search", description: "Finds things.", annotations: { readOnlyHint: true }, inputSchema: { type: "object", properties: { q: { type: "string" } } } }];
   return new Promise(resolve => {
     const server: Server = createServer((request, response) => {
       let body = "";
@@ -199,6 +199,7 @@ test("a remote server lists its tools and calls one, carrying the session and th
     const tools = manager.tools();
     assert.equal(tools.length, 1);
     assert.equal(tools[0]!.name, "mcp:linear__search");
+    assert.equal(tools[0]!.annotations?.readOnlyHint, true, "HTTP metadata survives discovery");
     const answer = await manager.call("mcp:linear__search", { q: "bugs" });
     assert.equal(answer, "found: bugs");
     assert.ok(remote.requests.every(request => request.session === undefined || request.session === "sess-123"));

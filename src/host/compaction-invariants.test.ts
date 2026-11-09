@@ -182,6 +182,11 @@ test("clampSummaryToBudget leaves a fitting summary untouched and marks a clippe
   const clipped = clampSummaryToBudget(long, [user("tail")] as never, policy);
   assert.ok(clipped.text.length < 3_000);
   assert.match(clipped.text, /\[summary clipped to fit the context window/);
+  const protectedEntry = { ...long, pinned: [user("tool example ".repeat(1000))], personWords: [{ source: "e0#1", text: "KEEP_ORIGINAL_IDS", at: new Date().toISOString() }] };
+  const bounded = clampSummaryToBudget(protectedEntry as never, [user("tail")] as never, policy);
+  assert.equal(bounded.personWords?.[0]?.text, "KEEP_ORIGINAL_IDS", "verbatim constraints survive when exemplars would exceed the budget");
+  assert.ok(estimateTokens([bounded, user("tail")] as never) <= policy.triggerTokens);
+
 });
 
 test("INV-1187: what the person said survives two summaries that omitted it, verbatim, once, and reaches the next request", async () => {

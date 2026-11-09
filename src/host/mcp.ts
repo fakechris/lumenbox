@@ -96,6 +96,18 @@ export interface McpTool {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  annotations?: Record<string, unknown>;
+}
+
+type ListedTool = { name?: string; description?: string; inputSchema?: Record<string, unknown>; annotations?: Record<string, unknown> };
+/** Both transports preserve the same discovery metadata. */
+function discoveredTools(server: string, tools: readonly ListedTool[]): McpTool[] {
+  return tools.filter((tool): tool is ListedTool & { name: string } => typeof tool?.name === "string").map(tool => ({
+    name: `${server}${MCP_SEPARATOR}${tool.name}`,
+    description: tool.description ?? `${tool.name}, from the ${server} server`,
+    ...(tool.annotations !== null && typeof tool.annotations === "object" && !Array.isArray(tool.annotations) ? { annotations: tool.annotations } : {}),
+    inputSchema: tool.inputSchema !== undefined && typeof tool.inputSchema === "object" ? tool.inputSchema : { type: "object", properties: {} },
+  }));
 }
 
 export interface McpServerStatus {
@@ -236,18 +248,9 @@ class McpServer {
     this.send({ jsonrpc: "2.0", method: "notifications/initialized" });
 
     const listed = (await this.request("tools/list", {}, START_TIMEOUT_MS)) as {
-      tools?: { name?: string; description?: string; inputSchema?: Record<string, unknown> }[];
+      tools?: ListedTool[];
     };
-    this.tools = (listed.tools ?? [])
-      .filter((tool): tool is { name: string } & typeof tool => typeof tool.name === "string")
-      .map(tool => ({
-        name: `${this.config.name}${MCP_SEPARATOR}${tool.name}`,
-        description: tool.description ?? `${tool.name}, from the ${this.config.name} server`,
-        inputSchema:
-          tool.inputSchema !== undefined && typeof tool.inputSchema === "object"
-            ? tool.inputSchema
-            : { type: "object", properties: {} },
-      }));
+    this.tools = discoveredTools(this.config.name, listed.tools ?? []);
     this.detail = `${this.tools.length} tool${this.tools.length === 1 ? "" : "s"}`;
     this.log(`mcp ${this.config.name}: ${this.detail}`);
     this.onListed(this.tools);
@@ -431,18 +434,9 @@ export class RemoteMcpServer implements ToolServer {
     if (init === undefined) throw new Error("the server never answered initialize");
     await this.post({ jsonrpc: "2.0", method: "notifications/initialized" }, START_TIMEOUT_MS);
     const listed = (await this.post({ jsonrpc: "2.0", id: this.nextId++, method: "tools/list", params: {} }, START_TIMEOUT_MS)) as {
-      result?: { tools?: { name?: string; description?: string; inputSchema?: Record<string, unknown> }[] };
+      result?: { tools?: ListedTool[] };
     };
-    this.tools = (listed?.result?.tools ?? [])
-      .filter((tool): tool is { name: string; description?: string; inputSchema?: Record<string, unknown> } => typeof tool?.name === "string")
-      .map(tool => ({
-        name: `${this.config.name}${MCP_SEPARATOR}${tool.name}`,
-        description: tool.description ?? `${tool.name}, from the ${this.config.name} server`,
-        inputSchema:
-          tool.inputSchema !== undefined && typeof tool.inputSchema === "object"
-            ? tool.inputSchema
-            : { type: "object", properties: {} },
-      }));
+    this.tools = discoveredTools(this.config.name, listed?.result?.tools ?? []);
     this.detail = `${this.tools.length} tool${this.tools.length === 1 ? "" : "s"} (remote)`;
     this.log(`mcp ${this.config.name}: ${this.detail}`);
     this.onListed(this.tools);
