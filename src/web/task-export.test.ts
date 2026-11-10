@@ -9,6 +9,7 @@ import { digestOf } from "../host/task-deliverables.ts";
 import { setRedactionSource } from "../host/secret-redaction.ts";
 import { readBoundedEpochs } from "../agents/transcript-bounded.ts";
 import { TaskExecutions, ExecutionReset, type ExecutionAccess } from "./task-execution.ts";
+import { exportRedaction } from "./task-export-policy.ts";
 import { TaskExports, TASK_EXPORT_TTL } from "./task-export.ts";
 
 function fixture(count = 1) {
@@ -20,8 +21,8 @@ function fixture(count = 1) {
   const access = (): ExecutionAccess => ({ task: id => taskAllowed && id === task.id, agent: id => id === "a", box: id => boxAllowed && id === "box" });
   const scope = { id: "turn", executionId: "execution", attempt: 2, agentId: "a", boxId: "box", conversation: "chat", contextEpoch: 1, workId: "work", taskBinding: { taskId: task.id, role: "executor" as const } };
   turns.begin({ ...scope, about: "Retained inspection" });
-  function step(index: number, result = `result-${index}`, role: "executor" | "child" = "executor", ended = true) {
-    const call = { type: "tool_use", id: `c${index}`, name: "read_file", input: { path: "other-task.md", prompt: "INTERNAL-PROMPT-SEED" } };
+  function step(index: number, result = `result-${index}`, role: "executor" | "child" = "executor", ended = true, tool = "read_file") {
+    const call = { type: "tool_use", id: `c${index}`, name: tool, input: { path: "other-task.md", prompt: "INTERNAL-PROMPT-SEED" } };
     entries.push({ kind: "blocks", turnId: scope.id, executionId: scope.executionId, blocks: [call, { type: "thinking", thinking: "HIDDEN-REASONING-SEED" }] });
     const taskBinding = { taskId: task.id, role, ...(role === "child" ? { parent: { conversation: "parent", turnId: "parent-turn", workId: "parent-work", forkId: "fork" } } : {}) };
     turns.observeExecution({ ...scope, taskBinding, event: "step", phase: "start", toolUseId: call.id, tool: call.name, recordId: `start-${index}`, at: new Date(1000 + index).toISOString() });
@@ -66,24 +67,27 @@ test("2000-step export preserves the authorized snapshot and resolves each sourc
   } finally { f.cleanup(); }
 });
 
-test("task-deliverable bodies redact complete values and structured secrets before clipping", async () => {
+test("even delivered DOM and context bodies stay reference-only; task prose redacts before clipping", async () => {
   const f = fixture(0);
   try {
     const held = "SYNTHETIC-HELD-" + "x".repeat(40), seed = "UNHELD-STRUCTURED-SEED";
     setRedactionSource(() => [{ name: "fixture", value: held }]);
     const text = "v".repeat(31990) + held + " end";
     const json = JSON.stringify({ public: "approved report", token: seed, system_prompt: "SYSTEM-PROMPT-SEED", nested: { authorization: seed } });
-    f.step(0, text); f.step(1, json); f.step(2, "<html><script>BOOTSTRAP-SEED</script></html>");
-    for (const [index, value] of [text, json, "<html><script>BOOTSTRAP-SEED</script></html>"].entries()) f.tasks.deliver(f.task.id, { name: `report-${index}.txt`, path: `report-${index}.txt`, size: Buffer.byteLength(value), sha256: digestOf(Buffer.from(value)), note: "A task delivery", at: new Date().toISOString(), by: "a" });
+    const dom = '- document [ref=e1]:\n - textbox "Customer password" PRIVATE-DOM-SEED';
+    f.step(0, text); f.step(1, json); f.step(2, "<html><script>BOOTSTRAP-SEED</script></html>"); f.step(3, dom, "executor", true, "browser_snapshot");
+    for (const [index, value] of [text, json, "<html><script>BOOTSTRAP-SEED</script></html>", dom].entries()) f.tasks.deliver(f.task.id, { name: `report-${index}.txt`, path: `report-${index}.txt`, size: Buffer.byteLength(value), sha256: digestOf(Buffer.from(value)), note: "A task delivery", at: new Date().toISOString(), by: "a" });
+    f.tasks.update(f.task.id, { title: held, description: json }, "p");
+    const redaction = exportRedaction(f.home);
+    assert.ok(!String(redaction.clean(text)).includes("SYNTHETIC-HELD-"), "redaction precedes the field clipping boundary");
+    assert.deepEqual(redaction.clean(json), { public: "approved report", nested: {} });
     const descriptor = await f.exports.create(f.task.id, f.access);
     const exported = rows(f.exports.download(f.task.id, descriptor.id, "steps.jsonl", f.access));
-    assert.match(exported[0].result, /\[secret:fi/);
-    assert.ok(!exported[0].result.includes("SYNTHETIC-HELD-"), "redaction happens before the 32k boundary");
-    assert.deepEqual(JSON.parse(exported[1].result), { public: "approved report", nested: {} });
-    assert.equal(exported[2].result, null);
+    assert.ok(exported.every(row => row.result === null && row.input === null && row.resultOmitted));
+    assert.ok(exported.every(row => row.artifactId), "exact delivered bytes retain only an artifact reference, even for DOM");
     for (const file of descriptor.files) {
       const content = f.exports.download(f.task.id, descriptor.id, file.name, f.access).toString();
-      for (const value of [held, seed, "SYSTEM-PROMPT-SEED", "BOOTSTRAP-SEED"]) assert.ok(!content.includes(value));
+      for (const value of [held, seed, "SYSTEM-PROMPT-SEED", "BOOTSTRAP-SEED", "PRIVATE-DOM-SEED"]) assert.ok(!content.includes(value));
     }
     writeFileSync(join(f.home, "config.json"), JSON.stringify({ key: "NEW-SYNTHETIC-CONFIG-CREDENTIAL" }));
     assert.throws(() => f.exports.download(f.task.id, descriptor.id, "steps.jsonl", f.access), ExecutionReset, "new redaction inputs invalidate old downloads");
@@ -147,14 +151,24 @@ test("frozen export does not gain later results; expiry and physical recovery st
   } finally { f.cleanup(); }
 });
 
-test("source allocation is rejected before file reads exceed the aggregate byte or entry budget", () => {
+test("bounded source reads retain valid evidence and report byte, entry and malformed-tail gaps", () => {
   const f = fixture(0);
   try {
     const path = join(f.home, "source.jsonl"); writeFileSync(path, JSON.stringify({ kind: "text", text: "x".repeat(10000) }) + "\n");
-    assert.throws(() => readBoundedEpochs([{ epoch: 1, path }], { bytes: 100, entries: 10 }), /budget/);
+    const limited = readBoundedEpochs([{ epoch: 1, path }], { bytes: 100, entries: 10 });
+    assert.equal(limited.partial, true); assert.ok(limited.gaps!.includes("byte-limit")); assert.equal(limited[0]!.entries.length, 0);
     writeFileSync(path, '{}\n{}\n');
-    assert.throws(() => readBoundedEpochs([{ epoch: 1, path }], { bytes: 100, entries: 1 }), /budget/);
+    const prefix = readBoundedEpochs([{ epoch: 1, path }], { bytes: 100, entries: 1 });
+    assert.deepEqual(prefix[0]!.entries, [{}]); assert.ok(prefix.gaps!.includes("entry-limit"));
     assert.deepEqual(readBoundedEpochs([{ epoch: 1, path }], { bytes: 100, entries: 2 })[0]!.entries, [{}, {}]);
+    f.step(0);
+    writeFileSync(path, f.entries.map(entry => JSON.stringify(entry)).join("\n") + '\n{"crash-tail":');
+    const executions = new TaskExecutions({ namespace: "fixture", turns: f.turns, registry: { readContextTranscriptsByEpoch: () => readBoundedEpochs([{ epoch: 1, path }], { bytes: 100000, entries: 100 }) } });
+    const page = executions.open(f.task.id, f.access());
+    assert.equal(page.steps[0]!.outcome, "succeeded", "a crash tail cannot erase the 2000 prior valid observations");
+    assert.equal(page.coverage, "partial");
+    const detail = executions.detail(f.task.id, f.access(), { snapshot: page.snapshot, step: page.steps[0]!.id });
+    assert.equal(detail.result, "result-0"); assert.deepEqual(detail.sourceGaps, ["malformed-line"]);
   } finally { f.cleanup(); }
 });
 

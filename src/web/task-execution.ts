@@ -27,7 +27,7 @@ export interface ExecutionStep {
 }
 export interface ExecutionDetail extends ExecutionStep {
   input?: unknown; inputTruncated?: boolean; result?: string | null; resultTruncated?: boolean;
-  sourceExpired?: boolean; resultCoverage?: string;
+  sourceExpired?: boolean; resultCoverage?: string; sourceGaps?: string[];
   maintenance?: { kind: string; covers?: number; summarised?: boolean; delayMs?: number; retryAttempt?: number };
 }
 interface Snapshot {
@@ -125,7 +125,7 @@ export class TaskExecutions {
       const content = contentFor(catalog.values, r);
       const known = content.result !== undefined;
       const reported = pair.end?.outcome;
-      const coverage = content.call && pair.start && (pair.end ? known : !known && !ended.has(r.executionId)) ? "exact" : "partial";
+      const coverage = !catalog.partial && content.call && pair.start && (pair.end ? known : !known && !ended.has(r.executionId)) ? "exact" : "partial";
       if (coverage === "partial") partial = true;
       const view: ExecutionStep = {
         id: Buffer.from(JSON.stringify([this.deps.namespace, r.id, r.executionId, r.toolUseId])).toString("base64url"),
@@ -140,7 +140,7 @@ export class TaskExecutions {
         ...(pair.end?.gate ? { gate: pair.end.gate } : {}),
       };
       if ((filters.workId && view.workId !== filters.workId) || (filters.role && view.role !== filters.role) || (filters.outcome && view.outcome !== filters.outcome)) continue;
-      rows.push({ view, source: r, content: { call: content.call?.hash, result: content.result?.hash } });
+      rows.push({ view, source: r, sourceGaps: catalog.gaps, content: { call: content.call?.hash, result: content.result?.hash } });
     }
     for (const r of source.records) {
       if (r.event !== "maintenance" || r.taskBinding?.taskId !== taskId || !this.allowed({ taskId, agentId: r.agentId, boxId: r.boxId }, access)) continue;

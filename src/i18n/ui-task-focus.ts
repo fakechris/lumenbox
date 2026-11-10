@@ -103,7 +103,7 @@ export const UI_TASK_FOCUS: Record<string, readonly [string, string]> = {
   "ui.tf.retrying": ["等待重试", "Waiting to retry"],
   "ui.tf.export": ["导出任务记录", "Export task record"],
   "ui.tf.exporting": ["正在生成记录…", "Preparing record…"],
-  "ui.tf.exportNote": ["导出当前可读步骤、来源、任务进度和验收状态。工具正文仅包含摘要完全匹配本任务交付文件的内容，其余保留来源引用。", "Export readable steps, sources, task progress and review state. Tool bodies require an exact task-deliverable digest; other bodies retain source references."],
+  "ui.tf.exportNote": ["导出当前可读步骤、来源、任务进度和验收状态。工具输入和结果正文省略，保留稳定来源及匹配的交付文件引用。", "Export readable steps, sources, task progress and review state. Tool input and result bodies are omitted; stable source and matching task-deliverable references are retained."],
   "ui.tf.exportScope": ["步骤筛选（任务概览与进度覆盖整个可读任务）", "Step filters (overview and progress cover the whole readable task)"],
   "ui.tf.exportExpires": ["下载有效至（重启、记录变化或来源移除后需重新生成）：", "Available until (recreate after restart, record changes or source removal):"],
   "ui.tf.exportError": ["记录暂时无法导出，请确认任务仍可读取后重新生成。", "Record unavailable. Confirm you can still read the task and recreate it."],

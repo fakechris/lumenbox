@@ -47,7 +47,7 @@ import {
 } from "../host/memory.ts";
 import { envNumber } from "../config.ts";
 import { redactDeep } from "../host/secret-redaction.ts";
-import { TranscriptCache } from "./transcript-cache.ts"; import { readBoundedEpochs, type TranscriptReadBudget } from "./transcript-bounded.ts";
+import { TranscriptCache } from "./transcript-cache.ts"; import { readBoundedEpochs, type TranscriptReadBudget, type TranscriptEpochs } from "./transcript-bounded.ts";
 
 export const AGENT_NAME_MAX_LENGTH = 72;
 export const AGENT_DESCRIPTION_MAX_LENGTH = 12_000;
@@ -1397,7 +1397,7 @@ export class AgentRegistry {
    * (epoch, index within that epoch): a flat index is not stable, because a late write
    * still lands in an old epoch (INV-672) and would shift every later number by one.
    */
-  readContextTranscriptsByEpoch(agentId: string, conversation = MAIN_CONVERSATION, budget?: TranscriptReadBudget): { epoch: number; entries: unknown[] }[] {
+  readContextTranscriptsByEpoch(agentId: string, conversation = MAIN_CONVERSATION, budget?: TranscriptReadBudget): TranscriptEpochs {
     const store = this.contextStore(agentId, conversation);
     return budget ? readBoundedEpochs(store.versions().map(epoch => ({ epoch, path: store.path("transcript", epoch) })), budget) : store.versions().map(epoch => ({ epoch, entries: this.readTranscriptFile(store.path("transcript", epoch)) }));
   }

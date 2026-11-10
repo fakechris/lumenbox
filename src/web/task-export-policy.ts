@@ -7,7 +7,7 @@ import type { Task } from "../host/tasks.ts";
 import type { ExecutionAccess, ExecutionDetail } from "./task-execution.ts";
 import { sourceDigest } from "./execution-source.ts";
 
-export const EXPORT_POLICY = "task-export/1:task-deliverable-bodies-only";
+export const EXPORT_POLICY = "task-export/1:source-references-only";
 const forbidden = /^(?:.*(?:password|passwd|secret|token|cookie|authorization|apikey|privatekey).*|system|systemprompt|prompt|messages|thinking|reasoning|hiddenreasoning|bootstrap|html|dom)$/i;
 const normalize = (key: string) => key.replace(/[^a-z0-9]/gi, "");
 export function exportRedaction(home: string) {
@@ -44,18 +44,13 @@ export function exportTask(task: Task, access: ExecutionAccess) {
 }
 export type ExportTask = ReturnType<typeof exportTask>;
 
-/** A tool name is not proof that arbitrary text belongs to this task. Exact delivered bytes are. */
+/** Reference-only: even a delivered file cannot reauthorize DOM, context or prompt bodies. */
 export function exportStep(row: ExecutionDetail, task: ExportTask, redaction: ReturnType<typeof exportRedaction>) {
   const { input: _input, result, detail: _detail, gate: _gate, ...metadata } = row;
-  const artifact = result === null || result === undefined ? undefined : task.artifacts.find(item => item.sha256 === digestOf(Buffer.from(result)));
-  const allowed = !!artifact && !row.sourceExpired && !/<(?:html|script|body|head)\b|__NEXT_DATA__|__INITIAL_STATE__/i.test(result!);
-  // Inputs may contain unrelated prompts and file contents. Retain stable source references instead.
-  const cleaned = redaction.clean({ ...metadata, detail: "", input: null, result: allowed ? result : null,
-    bodyPolicy: allowed ? "exact-task-deliverable" : "source-references-only", ...(allowed ? { artifactId: artifact!.id } : {}),
+  const artifact = result == null ? undefined : task.artifacts.find(item => item.sha256 === digestOf(Buffer.from(result)));
+  return redaction.clean({ ...metadata, detail: "", input: null, result: null, bodyPolicy: "source-references-only",
+    ...(artifact ? { artifactId: artifact.id } : {}),
     gate: row.gate && { verdict: row.gate.verdict, approvalId: row.gate.approvalId },
-    inputOmitted: row.kind === "tool", resultOmitted: result != null && !allowed,
-    resultTruncated: allowed && result!.length > 32000 }) as ExecutionDetail & { bodyPolicy: string; inputOmitted: boolean; resultOmitted: boolean };
-  if (cleaned.result != null && typeof cleaned.result !== "string") cleaned.result = JSON.stringify(cleaned.result);
-  if (typeof cleaned.result === "string" && cleaned.result.length > 32000) { cleaned.result = cleaned.result.slice(0, 32000); cleaned.resultTruncated = true; }
-  return cleaned;
+    inputOmitted: row.kind === "tool", resultOmitted: result != null,
+    inputTruncated: false, resultTruncated: false }) as ExecutionDetail & { bodyPolicy: string; inputOmitted: boolean; resultOmitted: boolean };
 }

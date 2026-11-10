@@ -13,10 +13,11 @@ export interface ExecutionContent {
 
 /** Reads only the already-authorized execution's agent/conversation. No paths accepted from a client. */
 export function executionContent(registry: Pick<AgentRegistry, "readContextTranscriptsByEpoch">,
-  scope: Pick<ExecutionStepRecord, "agentId" | "conversation">, budget?: TranscriptReadBudget): { values: Map<string, ExecutionContent>; partial: boolean } {
+  scope: Pick<ExecutionStepRecord, "agentId" | "conversation">, budget?: TranscriptReadBudget): { values: Map<string, ExecutionContent>; partial: boolean; gaps?: readonly string[] } {
   const values = new Map<string, ExecutionContent>();
   try {
-    for (const { epoch, entries } of registry.readContextTranscriptsByEpoch(scope.agentId, scope.conversation, budget)) {
+    const epochs = registry.readContextTranscriptsByEpoch(scope.agentId, scope.conversation, budget);
+    for (const { epoch, entries } of epochs) {
       for (const raw of entries) {
         const entry = raw as { turnId?: string; executionId?: string; kind?: string; blocks?: Record<string, unknown>[] };
         if (!entry.turnId || !Array.isArray(entry.blocks)) continue;
@@ -49,8 +50,8 @@ export function executionContent(registry: Pick<AgentRegistry, "readContextTrans
         }
       }
     }
-    return { values, partial: false };
-  } catch { return { values, partial: true }; }
+    return { values, partial: epochs.partial === true, gaps: epochs.gaps };
+  } catch { return { values, partial: true, gaps: ["read-error"] }; }
 }
 
 export function contentFor(values: Map<string, ExecutionContent>, step: Pick<ExecutionStepRecord, "id" | "executionId" | "toolUseId">): ExecutionContent {

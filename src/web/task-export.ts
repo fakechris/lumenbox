@@ -42,15 +42,10 @@ export class TaskExports {
       const selected = structuredClone(exportTask(task, initialAccess));
       const capture = this.deps.executions.captureExport(taskId, initialAccess, filters);
       const redaction = exportRedaction(this.deps.home), safeTask = redaction.clean(selected);
-      const lines: string[] = [], markdown = ["# Task record", "", "Task metadata and progress cover the whole readable task. Execution filters apply only to steps.", "Tool bodies require an exact task-deliverable digest; other bodies are omitted with source references.", "This record does not assert user acceptance or complete historical coverage.", "", ...indent(JSON.stringify(safeTask, null, 2)), ""];
-      let encodedBytes = Buffer.byteLength(markdown.join("\n")), bodyBytes = 0, omitted = 0, truncated = 0, expired = 0, partial = capture.coverage === "partial";
+      const lines: string[] = [], markdown = ["# Task record", "", "Task metadata and progress cover the whole readable task. Execution filters apply only to steps.", "Tool inputs and results are omitted. Stable source references and exact task-deliverable references are retained.", "This record does not assert user acceptance or complete historical coverage.", "", ...indent(JSON.stringify(safeTask, null, 2)), ""];
+      let encodedBytes = Buffer.byteLength(markdown.join("\n")), omitted = 0, truncated = 0, expired = 0, partial = capture.coverage === "partial";
       await this.deps.executions.visitExport(capture, access, raw => {
         const row = exportStep(raw, selected, redaction);
-        if (row.result != null) {
-          const bytes = Buffer.byteLength(JSON.stringify(row.result));
-          if (bodyBytes + bytes > 8 * 1024 * 1024) { row.result = null; row.resultTruncated = true; }
-          else bodyBytes += bytes;
-        }
         if (row.resultOmitted || row.inputOmitted) omitted++;
         if (row.resultTruncated || row.inputTruncated) truncated++;
         if (row.sourceExpired) expired++;
@@ -58,19 +53,19 @@ export class TaskExports {
         const line = JSON.stringify(row) + "\n";
         lines.push(line);
         const before = markdown.length;
-        const { result, ...metadata } = row;
-        markdown.push(`## Step ${lines.length}`, "", ...indent(JSON.stringify(metadata)), ...(result == null ? [] : indent(result.slice(0, 512))), ...(result && result.length > 512 ? ["", "Result preview clipped at 512 characters; see steps.jsonl."] : []), "");
+        const metadata = row;
+        markdown.push(`## Step ${lines.length}`, "", ...indent(JSON.stringify(metadata)), "");
         encodedBytes += Buffer.byteLength(line) + Buffer.byteLength(markdown.slice(before).join("\n")) + 2;
         if (encodedBytes > DELIVERABLE_LIMIT_BYTES || lines.length > 50_000) throw new ExecutionReset("export capacity");
       }, signal);
       const md = Buffer.from(markdown.join("\n")), jsonl = Buffer.from(lines.join(""));
       if (md.length + jsonl.length > DELIVERABLE_LIMIT_BYTES) throw new ExecutionReset("export capacity");
       const manifest = { schema: "lumenbox-task-export/1", taskId, filters: redaction.clean(capture.filters), snapshot: capture.snapshot, highWater: capture.highWater,
-        generatedAt: new Date(this.now()).toISOString(), scope: "authorized-retained-bindings", taskMetadataScope: "whole-readable-task",
+        generatedAt: new Date(this.now()).toISOString(), taskMetadataHighWater: sourceDigest(safeTask), scope: "authorized-retained-bindings", taskMetadataScope: "whole-readable-task",
         order: "startedAt then stable source id; not a global execution order", historyCoverage: "explicit-bindings-only",
         coverage: partial || redaction.clipped || omitted > 0 ? "partial" : "exact-retained-projection", steps: lines.length,
         bodyPolicy: EXPORT_POLICY, policyOmittedSteps: omitted, truncatedSteps: truncated, expiredSteps: expired, metadataClipped: redaction.clipped,
-        limits: { sourceBytes: 32 * 1024 * 1024, sourceEntries: 20_000, sources: 16, bodyBytes: 8 * 1024 * 1024, fieldCharacters: 32000, markdownResultCharacters: 512 },
+        limits: { sourceBytes: 32 * 1024 * 1024, sourceEntries: 20_000, sources: 16, bodyBytes: 0, fieldCharacters: 32000 },
         retention: "Download cache lasts 10 minutes or until process restart, source removal, redaction or task metadata change. Recreate when unavailable.",
         files: [{ name: "task.md", size: md.length, sha256: digestOf(md) }, { name: "steps.jsonl", size: jsonl.length, sha256: digestOf(jsonl) }] };
       const files = new Map<TaskExportFilename, Buffer>([["task.md", md], ["steps.jsonl", jsonl], ["manifest.json", Buffer.from(JSON.stringify(manifest, null, 2) + "\n")]]);
