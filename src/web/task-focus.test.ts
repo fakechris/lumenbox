@@ -7,6 +7,7 @@ import { APP_PAGE } from "./page-locale.ts";
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
 function deferred() { let resolve!: (body: unknown) => void; const promise = new Promise<unknown>(done => { resolve = done; }); return { promise, resolve }; }
 class Element {
+  classList = { add: () => {}, remove: () => {}, toggle: () => {} };
   id = ""; hidden = false; isConnected = true; disabled = false; tabIndex = 0; scrollTop = 0;
   attrs = new Map<string,string>(); handlers = new Map<string,(event: unknown)=>void>();
   private html = ""; private text = "";

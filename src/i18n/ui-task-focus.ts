@@ -14,6 +14,7 @@ export const UI_TASK_FOCUS: Record<string, readonly [string, string]> = {
   "ui.tf.contract.constraints": ["约束", "Constraints"],
   "ui.tf.contract.acceptance": ["验收要求", "Acceptance criteria"],
   "ui.tf.contract.verification": ["验证方式", "Verification"],
+  "ui.tf.backSteps": ["返回步骤", "Back to steps"],
   "ui.tf.back": ["返回任务", "Back to tasks"],
   "ui.tf.title": ["任务详情", "Task detail"],
   "ui.tf.overview": ["概览", "Overview"],
