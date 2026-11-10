@@ -66,7 +66,7 @@ export class TaskExports {
         coverage: partial || redaction.clipped || omitted > 0 ? "partial" : "exact-retained-projection", steps: lines.length,
         bodyPolicy: EXPORT_POLICY, policyOmittedSteps: omitted, truncatedSteps: truncated, expiredSteps: expired, metadataClipped: redaction.clipped,
         limits: { sourceBytes: 32 * 1024 * 1024, sourceEntries: 20_000, sources: 16, bodyBytes: 0, fieldCharacters: 32000 },
-        retention: "Download cache lasts 10 minutes or until process restart, source removal, redaction or task metadata change. Recreate when unavailable.",
+        retention: "Download cache retains at most two bundles for up to 10 minutes, until process restart, source removal, redaction or task metadata change. New exports can replace older bundles. Recreate when unavailable.",
         files: [{ name: "task.md", size: md.length, sha256: digestOf(md) }, { name: "steps.jsonl", size: jsonl.length, sha256: digestOf(jsonl) }] };
       const files = new Map<TaskExportFilename, Buffer>([["task.md", md], ["steps.jsonl", jsonl], ["manifest.json", Buffer.from(JSON.stringify(manifest, null, 2) + "\n")]]);
       if ([...files.values()].reduce((n, bytes) => n + bytes.length, 0) > DELIVERABLE_LIMIT_BYTES) throw new ExecutionReset("export capacity");

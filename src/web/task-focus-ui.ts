@@ -131,7 +131,8 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     view.exporting = false; view.exportResult = null; view.exportError = false;
   }
   function exportHtml(view) {
-    var html = '<h2>' + word("export") + '</h2><p class="tf-note">' + word("exportNote") + '</p><p class="tf-note">' + word("exportScope") + ': ' + safe(JSON.stringify(view.filters)) + '</p><button class="btn sm ghost" data-tf-export' + (view.exporting ? ' disabled aria-busy="true"' : '') + '>' + word(view.exporting ? "exporting" : "export") + '</button>';
+    var scope = Object.keys(view.filters).filter(function (key) { return view.filters[key]; }).map(function (key) { return word(key) + ": " + (key === "work" ? view.filters[key].slice(0,12) : word(view.filters[key])); }).join(" · ") || word("all");
+    var html = '<h2>' + word("export") + '</h2><p class="tf-note">' + word("exportNote") + '</p><p class="tf-note">' + word("exportScope") + ': ' + safe(scope) + '</p><button class="btn sm ghost" data-tf-export' + (view.exporting ? ' disabled aria-busy="true"' : '') + '>' + word(view.exporting ? "exporting" : "export") + '</button>';
     if (view.exportError) html += '<p role="alert" class="tf-note">' + word("exportError") + '</p>';
     if (view.exportResult) {
       html += '<p class="tf-note">' + word("exportExpires") + ' ' + safe(new Date(view.exportResult.expiresAt).toLocaleTimeString()) + '</p>';
