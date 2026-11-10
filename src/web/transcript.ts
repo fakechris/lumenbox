@@ -19,6 +19,8 @@ import { type EditDiff, editDiffOf } from "./line-diff.ts";
 import type { GateVerdict } from "../host/gate-verdict.ts";
 
 export interface DisplayTool {
+  turnId?: string;
+  toolUseId?: string;
   name: string;
   /** The argument that identifies the call, e.g. the command bash ran. */
   detail: string;
@@ -180,6 +182,7 @@ export function toDisplayEntries(
 
       const calls = blocks.filter(block => block.type === "tool_use");
       const tools: DisplayTool[] = calls.map(block => ({
+        ...(typeof entry.turnId === "string" && typeof block.id === "string" ? { turnId: entry.turnId, toolUseId: block.id } : {}),
         name: String(block.name ?? "tool"),
         detail: toolDetail(String(block.name ?? ""), block.input, roster),
         ...(block.name === "AskUser" && questionOf(block.input) !== undefined
