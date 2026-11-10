@@ -810,7 +810,6 @@ ${AGENT_ROW_STYLE}
     background: var(--warn-soft); border: 1px solid var(--warn-border);
     border-radius: var(--radius-md); padding: 7px 11px; margin: 0 16px 8px;
   }
-  .paneheader a { font-size: 12px; }
   a#rec.on { color: var(--danger); }
 
   .desktopwrap { flex: none; padding: 14px 16px 10px; }
@@ -931,10 +930,10 @@ ${AGENT_ROW_STYLE}
       </div>
       <a href="#" id="searchbtn" title="{{ui.page.search-this-conversation-ctrl-f}}">{{ui.page.search}}</a>
       <a href="#" id="foldall" title="{{ui.page.fold-or-unfold-every-step}}">{{ui.page.fold-steps}}</a>
-      <span id="round" class="roundpill"></span>
+      <span class="runstate"><span id="round" class="roundpill"></span>
       <!-- Only shown while a turn is running: a stop button with nothing to stop invites a click
            that does nothing, and then the real one is not trusted. -->
-      <button id="stop" class="btn sm" style="display:none">{{ui.page.stop}}</button>
+      <button id="stop" class="btn sm" style="display:none">{{ui.page.stop}}</button></span>
     </span>
   </div>
   <!-- Ahead of the conversation on purpose. An agent waiting on consent has stopped working, and a
