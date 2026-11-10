@@ -133,11 +133,13 @@ export const TASK_FOCUS_JS = String.raw`(function () {
       var states = {open:"queued",doing:"working",blocked:"needs",review:"review",done:"ended",dropped:"dropped"};
       html += '<details class="tf-changes"><summary>' + t("ui.tc.advanced") + '</summary><p class="tf-note">' + t("ui.tc.managementNote") + '</p><div class="field"><label for="tf-task-status">' + word("taskStatus") + '</label><select id="tf-task-status" data-tf-status' + (view.actionBusy ? ' disabled' : '') + '>' + Object.keys(states).map(function (value) { return '<option value="' + value + '"' + (value === task.status ? ' selected' : '') + '>' + word(states[value]) + '</option>'; }).join("") + '</select></div>';
       if (task.level) html += '<div class="field"><label for="tf-task-level">' + t("ui.tc.executionScope") + '</label><select id="tf-task-level" data-tf-level' + (view.actionBusy ? ' disabled' : '') + '>' + [1,2,3,4,5].map(function (level) { return '<option value="' + level + '"' + (level === task.level ? ' selected' : '') + '>' + t("ui.tc.level" + level) + '</option>'; }).join('') + '</select><p class="fieldnote">' + t("ui.tc.scopeNote") + '</p></div>';
+      ["claimAccountHtml","orgPromoteHtml","taskDepsHtml"].forEach(function (fn) { if (window[fn]) html += window[fn](task); });
       html += '</details>';
     }
     if (task.contract) html += ["acceptance","verification"].filter(function (key) { return task.contract[key]; }).map(function (key) { return '<section><h2>' + t("ui.tf.contract." + key) + '</h2>' + prose(task.contract[key]) + '</section>'; }).join("");
     if (checks.length) html += '<section><h2>' + word("checklist") + '</h2>' + checks.map(function (item) { return '<p>' + safe(item.text) + (item.verdict ? ' · ' + safe(item.verdict) : '') + '</p>'; }).join("") + '</section>';
-    ["claimAccountHtml","orgPromoteHtml","divisionHtml","taskDepsHtml","configVersionsHtml"].forEach(function (fn) { if (window[fn]) html += window[fn](task); });
+    var related = ["divisionHtml","configVersionsHtml"].map(function (fn) { return window[fn] ? window[fn](task) : ""; }).join("");
+    if (related) html += '<details class="tf-changes"><summary>' + t("ui.tc.collaborationSources") + '</summary>' + related + '</details>';
     if (task.recoveries && task.recoveries.length) html += '<section><h2>' + word("attempt") + '</h2>' + task.recoveries.map(function (attempt) { return '<p>' + safe(attempt.operationId) + ' · ' + word("attempt") + ' ' + attempt.attempt + ' · ' + safe(attempt.status) + '</p>'; }).join("") + '</section>';
     return html + '<details class="tf-changes"><summary>' + word("export") + '</summary><section id="tf-export">' + exportHtml(view) + '</section></details></div>';
   }

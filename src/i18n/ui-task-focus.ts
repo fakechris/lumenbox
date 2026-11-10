@@ -127,6 +127,7 @@ export const UI_TASK_FOCUS: Record<string, readonly [string, string]> = {
   "ui.tf.board.review": ["待审阅", "Review"],
   "ui.tf.board.done": ["已完成", "Done"],
   "ui.tf.board.dropped": ["已放弃", "Dropped"],
+  "ui.tc.collaborationSources": ["协作与配置记录", "Collaboration and configuration records"],
   "ui.tc.unlinked": ["未保留会话关联的旧记录", "Older record without a linked conversation"],
   "ui.tc.memberTasks": ["{name} 的任务", "Tasks with {name}"],
   "ui.tc.team": ["全队任务", "Team tasks"],
