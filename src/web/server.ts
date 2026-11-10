@@ -8,6 +8,8 @@ import { SseReplay } from "./sse-replay.ts";
 import { taskRecord } from "./mcp-record.ts";
 import { TaskExecutions } from "./task-execution.ts";
 import { taskExecutionRoute } from "./task-execution-routes.ts";
+import { TaskExports } from "./task-export.ts";
+import { taskExportRoute } from "./task-export-routes.ts";
 /**
  * A local web UI for driving and watching the agents.
  *
@@ -3005,6 +3007,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const sideDoorStage = (task: Task) => stageWorldOf(task, { undeliverableChats: new Set(outbox.problems().map(receipt => receipt.chatKey)), questions: questions.list(), agentIds: new Set(registry.list().map(agent => agent.id)), chatKeyOf: conversation => conversations.chatKeyFor(conversation), active: taskActive });
   const taskListPages = new TaskListPages();
   const taskExecutions = new TaskExecutions({ namespace: registry.box.id, turns: orchestrator.turns ?? { executionRecords: () => ({ records: [], partial: true }) }, registry });
+  const taskExports = new TaskExports({ home: agentboxHome(), executions: taskExecutions, task: id => orchestrator.tasks?.get(id) });
   const changeFeed = new ChangeFeed({ stageOf: task => taskStage(task, sideDoorStage(task)) }); orchestrator.tasks?.onChange(task => { changeFeed.record(task); broadcast({ type: "task_changed", taskId: task.id, revision: task.updatedAt }); }); feedForks(changeFeed, orchestrator.pendingWork?.forks, id => orchestrator.tasks?.get(id)); // watch (INV-1508), with the forks of a task's turns (INV-1667)
   const stopExecutionFeed = orchestrator.turns?.onExecution((record, revision) => { const id = record.taskBinding?.taskId; const task = id ? orchestrator.tasks?.get(id) : undefined; if (task) { changeFeed.recordExecution(task, revision); broadcast({ type: "task_execution", taskId: task.id, revision }); } });
   const sideDoorTools = () => mcpServerTools({
@@ -3914,6 +3917,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         const mayReadTask = (task: Task) => caller.userId === undefined || (task.assigneeId ? mayReadAgent(task.assigneeId) : task.requester === principals.resolve(caller.userId).id); if (deliverableRoute(route, url, res, { tasks: orchestrator.tasks, mayReadTask, send })) return; if (taskGateRoute(route, url, res, { tasks: orchestrator.tasks, mayReadTask, readTranscript: (agentId, conversation) => registry.readTranscript(agentId, conversation), roster: () => registry.list().map(record => ({ id: record.id, name: record.profile.name })), verdictOf: callId => orchestrator.policy.verdicts.get(callId), send })) return; // the gate's verdicts on its steps, the chat's own join (INV-1672) // a task's deliverable, to whoever sees the task (INV-1663)
+        if (await taskExportRoute(route, url, req, res, { exports: taskExports, access: () => { principals.reload(); unavailableBoxes = undefined; agentBoxes.clear(); const allowed = admit({ authorization: req.headers.authorization, cookie: req.headers.cookie, query: url.searchParams.get("token") }).allow; return { task: id => { const task = orchestrator.tasks?.get(id); return allowed && !!task && mayReadTask(task); }, agent: id => allowed && mayReadAgent(id), box: id => allowed && mayReadBox(id) }; }, send })) return;
         if (taskCostRoute(route, url, res, { executions: taskExecutions, refused: () => refusedRole("admin"), access: { task: id => { const task = orchestrator.tasks?.get(id); return task !== undefined && mayReadTask(task); }, agent: mayReadAgent, box: mayReadBox }, records: () => orchestrator.usage.since(0, Number.MAX_SAFE_INTEGER), rates: configuredRates, compacted: () => orchestrator.usage.compacted(), send })) return;
         if (taskExecutionRoute(route, url, res, { executions: taskExecutions, access: { task: id => { const task = orchestrator.tasks?.get(id); return task !== undefined && mayReadTask(task); }, agent: mayReadAgent, box: mayReadBox }, record: id => taskRecord(orchestrator.tasks!.get(id)!, { nameOf: id => registry.tryGet(id)?.profile.name ?? id, stageWorld: sideDoorStage, progressAccess: { agent: mayReadAgent, box: mayReadBox } }), send })) return;
         const taskView = (task: Task) => { const forks = orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []; return { ...task, progress: summarizeTaskProgress(task, 128, { agent: mayReadAgent, box: mayReadBox }), needsApprovals: taskExecutions.approvals(task.id, { task: () => mayReadTask(task), agent: mayReadAgent, box: mayReadBox }, orchestrator.policy.pending()), stage: taskStage(task, sideDoorStage(task)), configVersions: switchesForTask(registry, task.id), ...(forks.length ? { forks } : {}), ...dependencyView(task, orchestrator.tasks!) }; };

@@ -25,7 +25,7 @@ class Element {
 /** Execute the actual workspace with controlled network completion order; no product state is mocked inside it. */
 function workspace() {
   const nodes = new Map<string,Element>(), storage = new Map<string,string>();
-  const itemReads: ReturnType<typeof deferred>[] = [], costReads: ReturnType<typeof deferred>[] = [];
+  const itemReads: ReturnType<typeof deferred>[] = [], costReads: ReturnType<typeof deferred>[] = [], exportReads: ReturnType<typeof deferred>[] = [];
   let root: Element;
   const document = {
     activeElement: null, visibilityState:"visible", documentElement:{dataset:{connection:"connected"}},
@@ -43,13 +43,15 @@ function workspace() {
     fetch:(path:string)=>{
       if(path==="/api/me")return Promise.resolve({ok:true,json:async()=>({role:"admin"})});
       if(path.startsWith("/api/tasks/item")){const read=deferred();itemReads.push(read);return read.promise;}
+      if(path.startsWith("/api/tasks/export?")){const read=deferred();exportReads.push(read);return read.promise;}
       if(path.startsWith("/api/tasks/execution/costs")){const read=deferred();costReads.push(read);return read.promise;}
       return Promise.resolve({ok:true,json:async()=>({snapshot:"snapshot",steps:[],from:0,to:0,total:0,activity:{groups:[]}})});
     },
   };
   runInNewContext(TASK_FOCUS_JS,scope);
   const reply=(body:unknown,status=200)=>({ok:status===200,status,json:async()=>body});
-  return {window,location,itemReads,costReads,nodes,reply,
+  return {window,location,itemReads,costReads,exportReads,nodes,reply,
+    export:()=>{const button=new Element();button.setAttribute("data-tf-export","");root!.handlers.get("click")!({target:button});},
     close:()=>{const button=new Element();button.setAttribute("data-tf-close","");root!.handlers.get("click")!({target:button});}};
 }
 
@@ -89,4 +91,19 @@ test("a Task focus neither starts nor completes a queued conversation viewed mar
   scope.window.taskFocusVisible=true;timers.shift()!();await tick();assert.equal(requests.length,0);
   runInNewContext('markViewed("a","main")',scope);assert.equal(timers.length,0);
   scope.window.taskFocusVisible=false;runInNewContext('markViewed("a","main")',scope);timers.shift()!();await tick();assert.equal(requests.length,1);
+});
+
+
+test("task export completion cannot repaint a switched task or restore a denied artifact link", async () => {
+  const ui=workspace(), task={id:"t1",title:"Task A",status:"review",history:[]};
+  ui.window.openTaskFocus("t1",false); await tick(); ui.itemReads[0]!.resolve(ui.reply({task})); await tick();
+  ui.export(); await tick(); assert.equal(ui.exportReads.length,1);
+  ui.export(); assert.equal(ui.exportReads.length,1,"one in-flight export per view");
+  ui.window.openTaskFocus("t2",false); await tick(); ui.itemReads[1]!.resolve(ui.reply({task:{...task,id:"t2",title:"Task B"}})); await tick();
+  ui.exportReads[0]!.resolve(ui.reply({id:"STALE-EXPORT-ID",expiresAt:new Date().toISOString(),files:[{name:"steps.jsonl",size:123}]})); await tick(); await tick();
+  assert.doesNotMatch(ui.nodes.get("tf-export")!.innerHTML,/STALE-EXPORT-ID/);
+  ui.export(); await tick();
+  ui.window.refreshTaskExecution(); await tick(); ui.itemReads[2]!.resolve(ui.reply({error:"denied"},404)); await tick();
+  ui.exportReads[1]!.resolve(ui.reply({id:"DENIED-EXPORT-ID",expiresAt:new Date().toISOString(),files:[{name:"steps.jsonl",size:123}]})); await tick(); await tick();
+  assert.doesNotMatch(ui.nodes.get("tf-body")!.innerHTML,/DENIED-EXPORT-ID/);
 });

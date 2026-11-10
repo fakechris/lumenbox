@@ -13,11 +13,7 @@ export function taskExecutionRoute(route: string, url: URL, res: ServerResponse,
   if (!deps.access.task(taskId)) { deps.send(res, 404, apiError("task-none")); return true; }
   try {
     const snapshot = url.searchParams.get("snapshot");
-    const role = url.searchParams.get("role"), outcome = url.searchParams.get("outcome");
-    if (role && !["executor", "child", "verifier"].includes(role)) throw new ExecutionReset("invalid role");
-    if (outcome && !["running", "succeeded", "failed", "unknown", "waiting", "refused"].includes(outcome)) throw new ExecutionReset("invalid outcome");
-    const filters: ExecutionFilters = { ...(role ? { role: role as ExecutionFilters["role"] } : {}),
-      ...(outcome ? { outcome } : {}), ...(url.searchParams.has("work") ? { workId: url.searchParams.get("work")! } : {}) };
+    const filters = executionFilters(url);
     if (route.endsWith("/step")) {
       if (!snapshot) throw new ExecutionReset("snapshot required");
       deps.send(res, 200, deps.executions.detail(taskId, deps.access, { snapshot, step: url.searchParams.get("step") ?? "" }));
@@ -36,4 +32,12 @@ export function taskExecutionRoute(route: string, url: URL, res: ServerResponse,
     deps.send(res, 409, { reset: true, ...apiError("task-execution-reset") });
   }
   return true;
+}
+
+export function executionFilters(url: URL): ExecutionFilters {
+  const role = url.searchParams.get("role"), outcome = url.searchParams.get("outcome");
+  if (role && !["executor", "child", "verifier"].includes(role)) throw new ExecutionReset("invalid role");
+  if (outcome && !["running", "succeeded", "failed", "unknown", "waiting", "refused"].includes(outcome)) throw new ExecutionReset("invalid outcome");
+  return { ...(role ? { role: role as ExecutionFilters["role"] } : {}),
+    ...(outcome ? { outcome } : {}), ...(url.searchParams.has("work") ? { workId: url.searchParams.get("work")! } : {}) };
 }

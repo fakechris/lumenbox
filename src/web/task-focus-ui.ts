@@ -6,7 +6,7 @@ html:has(#taskfocus:not([hidden])),body:has(> #taskfocus:not([hidden])){overflow
 .tf-body{flex:1;min-height:0;overflow:auto}.tf-overview{max-width:1000px;padding:var(--sp-5) var(--sp-6);line-height:1.65}.tf-overview h2{font-size:var(--fs-md);margin:0 0 var(--sp-3);font-weight:600}.tf-overview section{margin-bottom:26px}.tf-overview p{white-space:pre-wrap;margin:var(--sp-2) 0}.tf-note{font-size:var(--fs-sm);color:var(--muted);line-height:1.6}.tf-execution{height:100%;display:flex;flex-direction:column}.tf-filters{padding:var(--sp-3) var(--sp-5);border-bottom:1px solid var(--border);font-size:var(--fs-sm)}.tf-filters .field{margin:0;display:flex;gap:var(--sp-2);align-items:center}.tf-filters label{margin:0}.tf-filters select{font:inherit;font-size:var(--fs-md);background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-input);padding:var(--sp-1);max-width:180px}.tf-split{display:grid;grid-template-columns:minmax(280px,38%) minmax(0,1fr);flex:1;min-height:0}.tf-list{overflow:auto;border-right:1px solid var(--border);padding:var(--sp-2) 0}.tf-step{display:block;width:100%;border:0;background:none;text-align:left;padding:var(--sp-3) var(--sp-5);color:var(--text);cursor:pointer;border-bottom:1px solid var(--border);font:inherit;font-size:var(--fs-sm)}.tf-step:hover{background:var(--surface-hover)}.tf-step[aria-pressed=true]{background:var(--accent-soft)}.tf-step strong{display:block;font-size:var(--fs-md);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tf-step small{display:block;color:var(--muted);font-size:var(--fs-xs);margin-top:var(--sp-1)}.tf-step .tf-failed,.tf-step .tf-unknown{color:var(--danger)}.tf-group{padding:var(--sp-3) var(--sp-5) var(--sp-1);font-size:var(--fs-xs);letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}.tf-detail{overflow:auto;padding:var(--sp-5) var(--sp-6);min-width:0}.tf-detail h2{font-size:var(--fs-lg);font-weight:500;margin:0 0 var(--sp-3)}.tf-detail h3{font-size:var(--fs-sm);font-weight:600;margin:var(--sp-5) 0 var(--sp-2)}.tf-detail pre{font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--code-bg);color:var(--code-text);padding:var(--sp-3);border-radius:var(--radius-input)}.tf-detail code{overflow-wrap:anywhere}.tf-pager{padding:var(--sp-3) var(--sp-5);border-top:1px solid var(--border);font-size:var(--fs-sm);justify-content:space-between}.tf-backsteps{display:none}.tf-empty{padding:var(--sp-5);color:var(--muted);font-size:var(--fs-md)}.tf-loading{color:var(--muted)}.tf-taskpager{padding:var(--sp-3) var(--sp-4);border-bottom:1px solid var(--border);display:flex;gap:var(--sp-2);align-items:center;font-size:var(--fs-sm)}.tf-taskpager span{flex:1}
 @media(max-width:900px){#taskfocus{left:0}.tf-head{padding:var(--sp-4) var(--sp-4) var(--sp-2)}.tf-overview{padding:var(--sp-5) var(--sp-4)}.tf-split{grid-template-columns:minmax(200px,42%) minmax(0,1fr)}.tf-detail{padding:var(--sp-4)}.tf-filters{padding:var(--sp-3) var(--sp-4)}.tf-step{padding:var(--sp-3) var(--sp-3)}}
 @media(max-width:600px){.tf-split{display:flex;flex-direction:column;overflow:hidden}.tf-list{flex:1;min-height:0;max-height:none;border-right:0;border-bottom:1px solid var(--border)}.tf-detail{flex:1;min-height:0}.tf-backsteps{display:inline-block}#taskfocus.tf-detail-selected .tf-list{display:none}#taskfocus:not(.tf-detail-selected) .tf-detail{display:none}#taskfocus.tf-detail-selected .tf-filters,#taskfocus.tf-detail-selected .tf-coverage{display:none}.tf-tabs{gap:var(--sp-4)}.tf-head h1{font-size:var(--fs-xl)}.tf-status{gap:var(--sp-2)}.tf-body{overflow:hidden}.tf-overview{height:100%;overflow:auto;box-sizing:border-box}}
-.tf-coverage{padding:var(--sp-2) var(--sp-5)}
+.tf-export-file{gap:var(--sp-3);margin:var(--sp-2) 0}.tf-coverage{padding:var(--sp-2) var(--sp-5)}
 `;
 
 export const TASK_FOCUS_JS = String.raw`(function () {
@@ -43,7 +43,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
       }
       var filter = event.target.getAttribute("data-tf-filter"); if (!filter || !active) return;
       root.classList.remove("tf-detail-selected"); active.mobileDetail = false;
-      active.filters[filter] = event.target.value; active.selected = ""; active.readingAnchor = null; active.detail = null; active.detailGeneration++; if (active.detailController) active.detailController.abort(); if (by("detail")) by("detail").textContent = word("select"); active.page = null; active.rowNodes = new Map(); remember(active); loadPage(active, null, null, true);
+      cancelExport(active); active.filters[filter] = event.target.value; active.selected = ""; active.readingAnchor = null; active.detail = null; active.detailGeneration++; if (active.detailController) active.detailController.abort(); if (by("detail")) by("detail").textContent = word("select"); active.page = null; active.rowNodes = new Map(); remember(active); loadPage(active, null, null, true);
     });
     root.addEventListener("keydown", function (event) {
       var tab = event.target.getAttribute("data-tf-tab");
@@ -97,7 +97,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
   }
   function deny(view, error) {
     if (active !== view) return;
-    view.generation++; view.detailGeneration++; view.costGeneration = (view.costGeneration || 0) + 1; view.cost = null; if (view.detailController) view.detailController.abort();
+    cancelExport(view); view.generation++; view.detailGeneration++; view.costGeneration = (view.costGeneration || 0) + 1; view.cost = null; if (view.detailController) view.detailController.abort();
     view.detail = null; view.task = null; view.page = null; view.rowNodes.clear();
     by("title").textContent = error.status === 403 || error.status === 404 ? word("denied") : word("error");
     by("activity").textContent = ""; by("status").textContent = ""; by("needs").textContent = "";
@@ -113,7 +113,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
   }
   function artifacts(view) {
     var task = view.task, checks = task.pursuit && task.pursuit.checklist || [];
-    var html = '<div class="tf-overview"><section><h2>' + word("artifacts") + '</h2>' + (window.deliverablesHtml && window.deliverablesHtml(task) || '<p class="tf-note">' + word("noArtifacts") + '</p>') + '</section><section><h2>' + word("reviewer") + '</h2><p>' + safe(task.reviewerId ? nameOf(task.reviewerId) || task.reviewerId : word("noReviewer")) + '</p></section>';
+    var html = '<div class="tf-overview"><section><h2>' + word("artifacts") + '</h2>' + (window.deliverablesHtml && window.deliverablesHtml(task) || '<p class="tf-note">' + word("noArtifacts") + '</p>') + '</section><section id="tf-export">' + exportHtml(view) + '</section><section><h2>' + word("reviewer") + '</h2><p>' + safe(task.reviewerId ? nameOf(task.reviewerId) || task.reviewerId : word("noReviewer")) + '</p></section>';
     if (view.role === "admin" || view.role === "driver") {
       var states = {open:"queued",doing:"working",blocked:"needs",review:"review",done:"ended",dropped:"dropped"};
       html += '<section><div class="field"><label for="tf-task-status">' + word("taskStatus") + '</label><select id="tf-task-status" data-tf-status>' + Object.keys(states).map(function (value) { return '<option value="' + value + '"' + (value === task.status ? ' selected' : '') + '>' + word(states[value]) + '</option>'; }).join("") + '</select></div></section>';
@@ -123,6 +123,43 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     ["claimAccountHtml","orgPromoteHtml","divisionHtml","taskDepsHtml","configVersionsHtml"].forEach(function (fn) { if (window[fn]) html += window[fn](task); });
     if (task.recoveries && task.recoveries.length) html += '<section><h2>' + word("attempt") + '</h2>' + task.recoveries.map(function (attempt) { return '<p>' + safe(attempt.operationId) + ' · ' + word("attempt") + ' ' + attempt.attempt + ' · ' + safe(attempt.status) + '</p>'; }).join("") + '</section>';
     return html + '</div>';
+  }
+  function cancelExport(view) {
+    if (!view) return;
+    view.exportGeneration = (view.exportGeneration || 0) + 1;
+    if (view.exportController) view.exportController.abort();
+    view.exporting = false; view.exportResult = null; view.exportError = false;
+  }
+  function exportHtml(view) {
+    var scope = Object.keys(view.filters).filter(function (key) { return view.filters[key]; }).map(function (key) { return word(key) + ": " + (key === "work" ? view.filters[key].slice(0,12) : word(view.filters[key])); }).join(" · ") || word("all");
+    var html = '<h2>' + word("export") + '</h2><p class="tf-note">' + word("exportNote") + '</p><p class="tf-note">' + word("exportScope") + ': ' + safe(scope) + '</p><button class="btn sm ghost" data-tf-export' + (view.exporting ? ' disabled aria-busy="true"' : '') + '>' + word(view.exporting ? "exporting" : "export") + '</button>';
+    if (view.exportError) html += '<p role="alert" class="tf-note">' + word("exportError") + '</p>';
+    if (view.exportResult) {
+      html += '<p class="tf-note">' + word("exportExpires") + ' ' + safe(new Date(view.exportResult.expiresAt).toLocaleTimeString()) + '</p>';
+      html += view.exportResult.files.map(function (file) {
+        var href = '/api/tasks/export/file?' + new URLSearchParams({task:view.id,id:view.exportResult.id,file:file.name});
+        return '<div class="ui-row tf-export-file"><span class="mono">' + safe(file.name) + '</span><span class="dim">' + safe(Math.ceil(file.size / 1024)) + ' KB</span><a class="btn sm ghost" data-tf-export-file="' + safe(file.name) + '" href="' + safe(href) + '" download="' + safe(file.name) + '">' + t("ui.deliverables.download") + '</a></div>';
+      }).join("");
+    }
+    return html;
+  }
+  function paintExport(view) { if (active === view && view.tab === "artifacts" && by("export")) by("export").innerHTML = exportHtml(view); }
+  function createExport(view) {
+    if (view.exporting || !view.task) return;
+    cancelExport(view); view.exporting = true;
+    var generation = view.exportGeneration, query = {task:view.id};
+    Object.keys(view.filters).forEach(function (key) { if (view.filters[key]) query[key] = view.filters[key]; });
+    view.exportController = new AbortController(); paintExport(view);
+    fetch('/api/tasks/export?' + new URLSearchParams(query), {method:'POST',signal:view.exportController.signal}).then(function (response) {
+      return response.json().then(function (body) { if (!response.ok) throw new Error(word('exportError')); return body; });
+    }).then(function (body) {
+      if (active !== view || view.exportGeneration !== generation) return;
+      view.exportResult = body;
+    }).catch(function (error) {
+      if (active === view && view.exportGeneration === generation && error.name !== 'AbortError') view.exportError = true;
+    }).finally(function () {
+      if (active === view && view.exportGeneration === generation) { view.exporting = false; paintExport(view); }
+    });
   }
   function costs(view) {
     var pursuit = view.task.pursuit, html = '<div class="tf-overview"><section><h2>' + word("costs") + '</h2><p>' + word("noCost") + '</p></section>';
@@ -280,7 +317,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
   }
   function open(id,push) {
     ensure(); returnFocus = document.activeElement;
-    var view = viewFor(id);
+    cancelExport(active); var view = viewFor(id); cancelExport(view);
     if (!window.taskFocusVisible && typeof captureEventReading === "function") window.taskBackReading = { agent:current,conversation:currentConversation,reading:captureEventReading($("chat")) };
     view.generation++; view.detailGeneration++; if (view.detailController) view.detailController.abort(); view.task = null;
     active = view; window.taskFocusVisible = true; openTask = id; root.hidden = false; view.detail = null; view.page = null; view.activity = null; view.liveAction = null; view.record = null; view.role = null; view.cost = null; view.costGeneration = (view.costGeneration || 0) + 1;
@@ -295,7 +332,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
   }
   function close(update) {
     if (!root) return;
-    if (active) { if (by("list")) captureListReading(active); remember(active); active.detail = null; active.cost = null; active.costGeneration = (active.costGeneration || 0) + 1; if (active.detailController) active.detailController.abort(); }
+    if (active) { cancelExport(active); if (by("list")) captureListReading(active); remember(active); active.detail = null; active.cost = null; active.costGeneration = (active.costGeneration || 0) + 1; if (active.detailController) active.detailController.abort(); }
     active = null; window.taskFocusVisible = false; openTask = ""; root.hidden = true; by("body").textContent = "";
     if (window.taskConversationDirty && current) {
       window.taskConversationDirty = false; var reading = window.taskBackReading, agent = current, conversation = currentConversation;
@@ -309,6 +346,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
   function click(event) {
     if (!active) return;
     var node = event.target.closest("button"); if (!node) return;
+    if (node.hasAttribute("data-tf-export")) { createExport(active); return; }
     if (node.hasAttribute("data-tf-list")) { active.mobileDetail = false; root.classList.remove("tf-detail-selected"); paintPage(active); return; }
     if (node.hasAttribute("data-tf-close")) { close(true); return; }
     if (node.hasAttribute("data-tf-conversation")) { var task = active.task; close(true); if (task && task.assigneeId) { select(task.assigneeId,task.conversation || "main"); showTab("desktop"); } return; }
