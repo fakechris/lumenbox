@@ -96,6 +96,8 @@ export const UI_APP: Record<string, readonly [zh: string, en: string]> = {
   "ui.app.computer": ["电脑 —", "Computer —"],
   "ui.app.config-json-env": ["（config.json 的 env）·", "(the env in config.json) ·"],
   "ui.app.configure": ["配置", "Configure"],
+  "ui.app.stream-reconnecting": ["连接中断，正在自动重连…", "Connection interrupted. Reconnecting automatically…"],
+  "ui.app.stream-restored": ["连接已恢复。", "Connection restored."],
   "ui.app.connected": ["已连接 —", "Connected —"],
   "ui.app.connected-2": ["已连接。", "Connected."],
   "ui.app.connecting": ["正在连接…", "Connecting…"],

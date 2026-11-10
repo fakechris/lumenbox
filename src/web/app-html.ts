@@ -1,3 +1,4 @@
+import { EVENT_RECOVERY_JS } from "./event-recovery.ts";
 import { LIVE_TOOLS_JS } from "./live-tools.ts";
 
 /**
@@ -6356,9 +6357,9 @@ stream.onmessage = function (raw) {
 
 };
 
-stream.onerror = function () {
-  feed("event stream dropped &mdash; reload the page to reconnect", "err");
-};
+stream.onerror = function () {}; // EventSource reconnects automatically; recovery below follows its cursor.
+${EVENT_RECOVERY_JS}
+installEventRecovery(stream);
 
 // --- input ----------------------------------------------------------------
 

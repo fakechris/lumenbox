@@ -1,3 +1,4 @@
+import { SseReplay } from "./sse-replay.ts";
 import { taskRecord } from "./mcp-record.ts";
 import { TaskExecutions } from "./task-execution.ts";
 import { taskExecutionRoute } from "./task-execution-routes.ts";
@@ -391,8 +392,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const build = buildInfo();
   /** One docker bring-up at a time; a second click joins the first via the events. */
   let boxUpInFlight = false;
-  const clients = new Set<ServerResponse>();
-  const clientFilters = new WeakMap<ServerResponse, (event: OutboundEvent) => boolean>();
+  const events = new SseReplay<OutboundEvent>();
 
   /**
    * Recent activity, so the feed is not blank on arrival.
@@ -434,17 +434,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   const broadcast = (event: OutboundEvent) => {
     remember(event);
-    const payload = `data: ${JSON.stringify(event)}\n\n`;
-    for (const client of clients) {
-      // A slow or dead client must not take the server down with it.
-      try {
-        if (clientFilters.get(client)?.(event) === false) continue;
-        client.write(payload);
-      } catch {
-        client.end();
-        clients.delete(client);
-      }
-    }
+    events.publish(event);
   };
 
   // Inside a try because construction itself can refuse — the attached provisioner throws when no token is configured (v4 claims review, finding 7), and a server that cannot
@@ -5629,7 +5619,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         const orgReview = await orgKnowledgeRoute(route, { ledger: orchestrator.orgKnowledge, registry, tasks: () => orchestrator.tasks, receipts: orchestrator.receipts, readJson: () => readJson(req) as Promise<Record<string, unknown>>, params: url.searchParams, refusedAdmin: () => refusedRole("admin"), by: () => caller.userId ?? orchestrator.people.operator, nameOf: id => (principals.byId(id) ?? principals.resolve(id)).name ?? id, log }); if (orgReview !== undefined) { if (orgReview.status !== 0) send(res, orgReview.status, orgReview.body); return; } // promotion and review of the organisation's knowledge (INV-1729)
         const orgItems = await orgCorrectionRoute(route, { ledger: orchestrator.orgKnowledge, readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: () => refused(), principalId: caller.userId === undefined ? undefined : principals.resolve(caller.userId).id, nameOf: id => principals.byId(id)?.name ?? id, boxName: id => registry.listBoxes().find(box => box.id === id)?.name, log }); if (orgItems !== undefined) { if (orgItems.status !== 0) send(res, orgItems.status, orgItems.body); return; } // INV-1730
         const person = await personRoute(route, orchestrator.people, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, caller: () => (caller.userId === undefined ? undefined : { id: caller.userId, name: principals.resolve(caller.userId).name ?? caller.userId }) }); if (person !== undefined) { send(res, person.status, person.body); return; } /* INV-1653 */ const factsRoute = await agentFactsRoute(route, orchestrator.agentFacts.state, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: () => refused(), hasAgent: id => registry.has(id) }); if (factsRoute !== undefined) { if (factsRoute.status !== 0) send(res, factsRoute.status, factsRoute.body); return; } /* INV-1625 */ const pauseRoute = await agentPauseRoute(route, agentPauses, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id), caller: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator") }); if (pauseRoute !== undefined) { if (pauseRoute.status !== 0) send(res, pauseRoute.status, pauseRoute.body); return; } const byName = () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator"); const issues = await exceptionRoute(route, { ledger: orchestrator.exceptions, readJson: () => readJson(req) as Promise<Record<string, unknown>>, mayRead: id => id === undefined || mayReadAgent(id), refused: id => (id === undefined ? refusedRole("admin") : refused(id)), by: byName, titleOf: id => orchestrator.tasks?.get(id)?.title, retry: exceptionRetryDeps({ ledger: orchestrator.exceptions, prompt: (id, text, conversation) => orchestrator.prompt(id, text, undefined, { conversation, lane: "user", synthetic: true, steerable: false }), boxFor: id => orchestrator.boxFor(id), ownerOf: id => registry.boxOwnerTokenFor(id), watch: job => orchestrator.jobWatch.watch(job), by: byName, redeliver: async chatKey => { const door = channels.adapterFor(chatKey); if (door?.sendToChat === undefined) throw new Error(`no door can send to ${chatKey}`); return outboxSender.retry(chatKey, { sendToChat: (key, text) => door.sendToChat!(key, text) }); }, runRoutine: slug => orchestrator.scheduler.runNow(slug), reconnectBox: () => keeper.tick().then(state => { box = state; return state; }), notReady: id => { const task = orchestrator.tasks?.get(id); return task === undefined || orchestrator.tasks === undefined ? undefined : notReady(task, orchestrator.tasks); } }) }); if (issues !== undefined) { if (issues.status !== 0) send(res, issues.status, issues.body); return; } /* the Issues view (INV-1741) */ const spendRoute = await spendLimitRoute(route, spendLimits, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id) }); if (spendRoute !== undefined) { if (spendRoute.status !== 0) send(res, spendRoute.status, spendRoute.body); return; } const permRoute = await toolPermissionRoute(route, url, { refused: id => refused(id), agent: id => { const record = registry.tryGet(id); return record === undefined ? undefined : { id, name: record.profile.name, ...(record.profile.toolPermissions !== undefined ? { toolPermissions: record.profile.toolPermissions } : {}) }; }, allTools: ALL_TOOLS, floorContext: () => orchestrator.policy.floorContext() }); if (permRoute !== undefined) { if (permRoute.status !== 0) send(res, permRoute.status, permRoute.body); return; } const versionRoute = await configVersionRoute(route, url, { registry, refused: id => refused(id), readJson: () => readJson(req) as Promise<Record<string, unknown>>, by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator"), log }); if (versionRoute !== undefined) { if (versionRoute.status !== 0) send(res, versionRoute.status, versionRoute.body); return; } const guestsRoute = await guestRoute(route, guestDesk, { query: () => url.searchParams, send: (chatKey, text) => channels.tryPushToChat(chatKey, text, { kind: "notice", about: "a guest answer an Admin approved" }), readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id), installationMode: () => principals.installation().mode, by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator") }); if (guestsRoute !== undefined) { if (guestsRoute.status !== 0) send(res, guestsRoute.status, guestsRoute.body); return; } /* INV-1708 */ const installed = installationRoute(route, { principals }); if (installed !== undefined) { send(res, installed.status, installed.body); return; } const merging = await mergeRoute(route, { paths: mergePaths, desktop: options.desktop === true, doorType: door => channelRecords.find(record => record.id === door)?.type, refusedAdmin: () => refusedRole("admin"), readJson: () => readJson(req) as Promise<Record<string, unknown>>, by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name : "the operator"), log }); if (merging !== undefined) { if (merging.status !== 0) send(res, merging.status, merging.body); return; } // "these are all me" (INV-1698) // INV-1554, INV-1615, INV-1664, INV-1669
-        const diagnostics = await diagnosticsRoute(route, { refusedAdmin: () => refusedRole("admin"), agents: () => registry.list().map(agent => ({ id: agent.id, name: agent.profile.name })), activeTurns: id => orchestrator.bus.activeTurnsOf(id), queued: id => orchestrator.bus.pendingCount(id), watchedJobs: id => orchestrator.jobWatch.countFor(id), eventSubscribers: () => clients.size, box: () => orchestrator.boxClient(), home: agentboxHome() }); if (diagnostics !== undefined) { if (diagnostics.status !== 0) send(res, diagnostics.status, diagnostics.body); return; } // INV-1559
+        const diagnostics = await diagnosticsRoute(route, { refusedAdmin: () => refusedRole("admin"), agents: () => registry.list().map(agent => ({ id: agent.id, name: agent.profile.name })), activeTurns: id => orchestrator.bus.activeTurnsOf(id), queued: id => orchestrator.bus.pendingCount(id), watchedJobs: id => orchestrator.jobWatch.countFor(id), eventSubscribers: () => events.size, box: () => orchestrator.boxClient(), home: agentboxHome() }); if (diagnostics !== undefined) { if (diagnostics.status !== 0) send(res, diagnostics.status, diagnostics.body); return; } // INV-1559
         const rest = await providerRestRoute(route, { refusedAdmin: () => refusedRole("admin"), readJson: () => readJson(req) as Promise<Record<string, unknown>>, rests: providerRests, quotaLine: locale => quotaStatusLine(Date.now(), locale), locale: localeOf(req, url) }); if (rest !== undefined) { if (rest.status !== 0) send(res, rest.status, rest.body); return; } // INV-1577
         const fallbacks = await fallbackRoute(route, { refusedAdmin: () => refusedRole("admin"), readJson: () => readJson(req) as Promise<Record<string, unknown>>, names: () => loadConfig().fallbackProviders ?? [], save: names => { saveConfig({ fallbackProviders: names }); }, presets: () => providerNames().map(name => { const profile = resolveProvider(name); return { name, label: profile.label, model: profile.model, hasKey: hasCredential(profile) }; }), usage: () => orchestrator.usage.since(0, Number.MAX_SAFE_INTEGER) }); if (fallbacks !== undefined) { if (fallbacks.status !== 0) send(res, fallbacks.status, fallbacks.body); return; } // INV-1578
         if (route === "POST /api/box/up") {
@@ -6766,30 +6756,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         if (route === "GET /api/events") {
-          res.writeHead(200, {
-            "content-type": "text/event-stream",
-            "cache-control": "no-store",
-            connection: "keep-alive",
-          });
-          res.write(": connected\n\n");
-          clientFilters.set(res, mayReadEvent);
-          clients.add(res);
-
-          // Proxies and idle timeouts kill a silent stream; a comment keeps it open
-          // without the client having to interpret anything.
-          const keepAlive = setInterval(() => {
-            try {
-              res.write(": ping\n\n");
-            } catch {
-              clearInterval(keepAlive);
-              clients.delete(res);
-            }
-          }, 20_000);
-
-          req.on("close", () => {
-            clearInterval(keepAlive);
-            clients.delete(res);
-          });
+          events.connect(req, res, mayReadEvent);
           return;
         }
 
@@ -6997,7 +6964,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   return () => {
     personalBoxesStopping = true;
     stopExecutionFeed?.();
-    for (const client of clients) client.end();
+    events.close();
     // The backup timer, or an embedding that restarts the server in one process leaves the old one
     // firing alongside the new — two backups a tick, sharing a timestamp and a partial directory.
     backups?.stop();
