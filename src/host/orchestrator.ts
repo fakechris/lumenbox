@@ -1,3 +1,4 @@
+import { admitProgressMessage } from "./progress-admission.ts";
 /**
  * Wires the registry, the bus, the box, and the turn loop into one runtime.
  *
@@ -1093,7 +1094,7 @@ export class Orchestrator {
         if (event.type === "turn_finished") this.goalLoop?.onTurnFinished(event.agentId); // a turn ending is what lets a goal consider its next continuation (INV-770)
       },
       inbox,
-      true
+      true, (agentId, message) => admitProgressMessage(this.tasks, agentId, message)
     );
     this.goalLoop = this.tasks === undefined ? undefined : new GoalLoop({ modelRecoveryRoot: this.registry.root,
       tasks: this.tasks,

@@ -1,3 +1,4 @@
+import { admitProgressMessage } from "./progress-admission.ts";
 /**
  * Episodes, so a complaint becomes a test.
  *
@@ -538,7 +539,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
     } as never);
   }, event => {
     if (event.type === "turn_finished") goalLoop?.onTurnFinished(event.agentId);
-  });
+  }, undefined, false, (agentId, message) => admitProgressMessage(options.tasks, agentId, message));
   // Engines kept alive as sessions (docs/81): the bus delivers their notes, as the orchestrator's does.
   const acpDelegates =
     options.pendingWork !== undefined

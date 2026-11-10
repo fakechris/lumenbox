@@ -1,3 +1,4 @@
+import { TASK_PROGRESS_CLIENT_JS } from "../host/task-progress-view.ts";
 import { TASK_BOARD_JS, TASK_BOARD_STYLE } from "./task-board-ui.ts";
 import { TASK_FOCUS_JS, TASK_FOCUS_STYLE } from "./task-focus-ui.ts";
 import { EVENT_RECOVERY_JS } from "./event-recovery.ts";
@@ -5767,6 +5768,7 @@ document.addEventListener("click", function (event) {
   }
 });
 
+${TASK_PROGRESS_CLIENT_JS}
 ${TASK_FOCUS_JS}
 ${TASK_BOARD_JS}
 

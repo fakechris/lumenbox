@@ -1,3 +1,4 @@
+import { summarizeTaskProgress, type TaskProgressSummary } from "../host/task-progress.ts";
 /**
  * A task as the record has it, for a caller that reads facts rather than prose (INV-1506, docs/90 §3.1).
  *
@@ -35,6 +36,7 @@ export interface PursuitRecord {
 }
 
 export interface TaskRecord {
+  progress?: TaskProgressSummary;
   id: string;
   title: string;
   status: Task["status"];
@@ -102,6 +104,7 @@ export function taskRecord(task: Task, deps: { nameOf: (id: string) => string; s
   const forks = deps.forksOf?.(task.id) ?? [];
   const reply = lastReply(task);
   return {
+    progress: summarizeTaskProgress(task, 16),
     id: task.id,
     title: task.title,
     status: task.status,

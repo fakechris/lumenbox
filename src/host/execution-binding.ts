@@ -5,6 +5,7 @@ import type { GoalMarker } from "./goal-mode.ts";
 import type { ResumeMarker } from "./resume.ts";
 
 export interface TaskBinding {
+  progressAdmission?: import("./task-progress.ts").ProgressAdmission;
   taskId: string;
   role: "executor" | "child" | "verifier";
   /** Set by the host when it admits a fork, never parsed from the child's text. */
@@ -27,7 +28,9 @@ export function admittedTaskBinding(input: {
     for (const task of tasks.list()) if (task.sourceMessageId === message.id) candidates.push({ taskId: task.id, role: "executor" });
   }
   if (!candidates.length || new Set(candidates.map(b => b.taskId)).size !== 1) return undefined;
-  const binding = candidates[0]!;
+  const ordered = candidates.filter(binding => binding.progressAdmission).sort((a, b) => b.progressAdmission!.ordinal - a.progressAdmission!.ordinal);
+  if (ordered.length > 1 && ordered[0]!.progressAdmission!.ordinal === ordered[1]!.progressAdmission!.ordinal && ordered[0]!.progressAdmission!.id !== ordered[1]!.progressAdmission!.id) return undefined;
+  const binding = ordered[0] ?? candidates[0]!;
   const task = tasks.get(binding.taskId);
   if (!task || task.proposedBy !== undefined) return undefined;
   if (goal && task.pursuit?.workId !== goal.workId) return undefined;

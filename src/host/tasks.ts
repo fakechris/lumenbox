@@ -21,18 +21,20 @@
  * marker survives compaction so an id is never reused.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { agentboxHome, envNumber } from "../config.ts";
 import { deliveredFollowUp, type FollowUp, type HandBackResult, handBack as handBackFollowUp } from "./follow-up.ts";
 import { conversationOfTask, GOAL_GATE_ACTOR, type Pursuit, taskStatusFor } from "./goal-mode.ts";
-import { appendLine, type LedgerKind } from "./jsonl.ts";
+import { appendLine, appendLineDurably, type LedgerKind } from "./jsonl.ts";
 import { applyFlag, type FlagOutcome, type TaskFlag } from "./task-flag.ts"; import { applyDeliverable, type TaskDeliverable } from "./task-deliverables.ts"; import { applyReply } from "./task-reply.ts";
 import { applyRevalidation, applyWithdrawal, grantMandate, type Mandate, type MandateWorld, type RevalidationResult } from "./mandate.ts";
 import { Receipts } from "./receipts.ts";
 import { clampDescription, dueOf, type TaskContract } from "./task-fields.ts";
-import { refuseUnknownAgents, type TaskAgents } from "./task-agents.ts"; import { dependencyLine, notReady, openBlockers, PLAN_ACTOR, refuseBlockers } from "./task-deps.ts"; import { inferLevel, LEVEL_MEANING, type Level } from "./autonomy-level.ts"; import type { Discovery } from "./discovery.ts";
+import { refuseUnknownAgents, type TaskAgents } from "./task-agents.ts"; import { notReady, openBlockers, PLAN_ACTOR, refuseBlockers } from "./task-deps.ts"; import { inferLevel, type Level } from "./autonomy-level.ts"; import type { Discovery } from "./discovery.ts";
 
+import { alignTaskProgress, type TaskProgressState, TaskProgressReceiver } from "./task-progress.ts";
+import { checkpointTasks } from "./task-progress-storage.ts";
 export { clampContract, clampDescription, DESCRIPTION_LIMIT, dueOf, type TaskContract } from "./task-fields.ts";
 
 /** What each task is now, plus a grace period on closed ones so a person asking about something just finished still gets an answer. */
@@ -100,6 +102,7 @@ export interface TaskChange {
 }
 
 export interface Task {
+  progress?: TaskProgressState;
   id: string;
   title: string;
   description?: string;
@@ -231,6 +234,8 @@ const RETAIN_CLOSED_MS = envNumber("AGENTBOX_TASKS_RETAIN_DAYS", 30) * 24 * 3_60
 type TaskLine = { kind: "task"; task: Task } | { kind: "counter"; value: number };
 
 export class TaskStore {
+  readonly progress = new TaskProgressReceiver({ get: id => this.get(id), save: task => { this.saveTask(task, true); for (const listener of this.listeners) listener(task); } });
+  private checkpointBytes = 0;
   private readonly tasks = new Map<string, Task>();
   private counter = 0;
   private lines = 0;
@@ -257,13 +262,12 @@ export class TaskStore {
     const change: TaskChange = { at, by, note: `committed by ${by}` };
     const next: Task = { ...task, updatedAt: at, history: [...task.history, change].slice(-HISTORY_LIMIT) };
     delete next.proposedBy;
-    this.tasks.set(id, next);
-    this.append({ kind: "task", task: next });
+    this.saveTask(next);
     for (const listener of this.listeners) listener(next);
     return true;
   }
 
-  onChange(listener: (task: Task) => void): void { this.listeners.push(listener); } onCreate(listener: (task: Task) => void): void { this.created.push(listener); }
+  onChange(listener: (task: Task) => void): () => void { this.listeners.push(listener); return () => { const index = this.listeners.indexOf(listener); if (index >= 0) this.listeners.splice(index, 1); }; } onCreate(listener: (task: Task) => void): void { this.created.push(listener); }
 
   constructor(
     readonly path: string | null = tasksPath(),
@@ -278,6 +282,9 @@ export class TaskStore {
     private readonly receipts: Receipts = new Receipts(null)
   ) {
     this.replay();
+    for (const task of this.tasks.values()) if (task.pursuit && !task.progress) {
+      try { this.saveTask({ ...task }); } catch { this.onWarn("tasks: progress scope unavailable until its durable state can be saved"); }
+    }
   }
 
   list(filter: { status?: TaskStatus; assigneeId?: string } = {}): Task[] {
@@ -350,8 +357,7 @@ export class TaskStore {
       updatedAt: at,
       history: [{ at, by: input.requester, status: input.pursuit !== undefined ? taskStatusFor(input.pursuit) : "open", note: `${input.proposedBy !== undefined ? "proposed, awaiting a person's commit" : input.pursuit !== undefined ? "goal set by the person" : "created"} · L${input.level ?? inferred.level}${input.level !== undefined ? " set by the requester" : ` by rule: ${inferred.reasons.join("; ")}`}` }],
     };
-    this.tasks.set(task.id, task);
-    this.append({ kind: "task", task }); for (const listener of this.created) listener(task);
+    this.saveTask(task); for (const listener of this.created) listener(task);
     return this.get(task.id);
   }
 
@@ -360,7 +366,7 @@ export class TaskStore {
     const task = this.tasks.get(id);
     if (task === undefined) return { status: "unknown" };
     const { result, task: updated } = applyRevalidation(task, principalId, world, now);
-    if (updated !== undefined) { this.tasks.set(id, updated); this.append({ kind: "task", task: updated }); }
+    if (updated !== undefined) { this.saveTask(updated); }
     return result;
   }
 
@@ -368,9 +374,8 @@ export class TaskStore {
   withdraw(id: string, by: string, reason: string, now: Date = new Date()): Task | undefined {
     const withdrawn = applyWithdrawal(this.tasks.get(id), by, reason, now);
     if (withdrawn === undefined) return this.get(id);
-    this.tasks.set(id, withdrawn);
+    this.saveTask(withdrawn);
     if (isLive(withdrawn.status)) this.update(id, { status: "dropped", note: `stopped by ${by}: ${reason}` }, "host", undefined, now);
-    else this.append({ kind: "task", task: withdrawn });
     return this.get(id);
   }
 
@@ -378,7 +383,7 @@ export class TaskStore {
   followUpDelivered(id: string, messageId: string, now: Date = new Date()): void {
     const task = this.tasks.get(id);
     if (task === undefined) return;
-    this.tasks.set(id, { ...task, followUp: deliveredFollowUp(messageId, now) }); this.append({ kind: "task", task: this.tasks.get(id)! });
+    this.saveTask({ ...task, followUp: deliveredFollowUp(messageId, now) });
   }
 
   /** The task's agent hands its follow-up back as beyond the task, once; it is then routed as new work. */
@@ -386,7 +391,7 @@ export class TaskStore {
     const task = this.tasks.get(id);
     if (task === undefined) return "none";
     const { result, followUp } = handBackFollowUp(task.followUp, by, reason, now);
-    if (followUp !== undefined) this.update(id, { note: `handed back: ${followUp.handedBack!.reason}` }, by, undefined, now), this.tasks.set(id, { ...this.tasks.get(id)!, followUp }), this.append({ kind: "task", task: this.tasks.get(id)! });
+    if (followUp !== undefined) this.update(id, { note: `handed back: ${followUp.handedBack!.reason}` }, by, undefined, now), this.saveTask({ ...this.tasks.get(id)!, followUp });
     return result;
   }
 
@@ -410,8 +415,7 @@ export class TaskStore {
       updatedAt: recovery.at,
       history: [...task.history, change].slice(-HISTORY_LIMIT),
     };
-    this.tasks.set(id, next);
-    this.append({ kind: "task", task: next });
+    this.saveTask(next);
     for (const listener of this.listeners) listener(next);
     return recovery;
   }
@@ -436,8 +440,7 @@ export class TaskStore {
       updatedAt: at,
       history: [...task.history, { at, by, ...(status === "running" ? { status: "doing" as const } : {}), note: `recovery attempt ${current.attempt} ${status}` }].slice(-HISTORY_LIMIT),
     };
-    this.tasks.set(id, next);
-    this.append({ kind: "task", task: next });
+    this.saveTask(next);
     for (const listener of this.listeners) listener(next);
     return recovery;
   }
@@ -667,8 +670,7 @@ export class TaskStore {
       updated.pursuit = { ...updated.pursuit, status: "cleared", pausedReason: "person" };
     }
 
-    this.tasks.set(id, updated);
-    this.append({ kind: "task", task: updated });
+    this.saveTask(updated);
     if (this.lines > COMPACT_AT) this.compact(now);
     const result = { task: this.get(id)!, ...(coerced !== undefined ? { coerced } : {}) };
     for (const listener of this.listeners) listener(result.task);
@@ -766,8 +768,7 @@ export class TaskStore {
     const at = now.toISOString();
     const nudges = (task.aging?.nudges ?? 0) + 1;
     const next: Task = { ...task, aging: { nudges, lastNudgedAt: at, reason }, history: [...task.history, { at, by: AGING_ACTOR, note: `nudge ${nudges}/${TASK_NUDGES_BEFORE_ARCHIVE}: ${reason}` }].slice(-HISTORY_LIMIT) };
-    this.tasks.set(id, next);
-    this.append({ kind: "task", task: next });
+    this.saveTask(next);
     for (const listener of this.listeners) listener(next);
     return this.get(id)!;
   }
@@ -800,8 +801,7 @@ export class TaskStore {
     const decideBy = new Date(now.getTime() + CLOSE_PROPOSAL_MS).toISOString();
     const next: Task = { ...task, closeProposal: { by, at, reason: why, decideBy, saw: fingerprint(task) }, updatedAt: at, history: [...task.history, { at, by, note: `proposed to close: ${why} (closes ${decideBy} unless ${task.requester} objects)` }].slice(-HISTORY_LIMIT) };
     if (next.aging !== undefined) delete next.aging;
-    this.tasks.set(id, next);
-    this.append({ kind: "task", task: next });
+    this.saveTask(next);
     this.receipts.write({
       at,
       by,
@@ -823,8 +823,7 @@ export class TaskStore {
     const at = now.toISOString();
     const next: Task = { ...task, updatedAt: at, history: [...task.history, { at, by, note: `objected to closing${note !== undefined && note.trim() !== "" ? `: ${note.trim().slice(0, 300)}` : ""}` }].slice(-HISTORY_LIMIT) };
     delete next.closeProposal;
-    this.tasks.set(id, next);
-    this.append({ kind: "task", task: next });
+    this.saveTask(next);
     for (const listener of this.listeners) listener(next);
     return { task: this.get(id)! };
   }
@@ -843,8 +842,7 @@ export class TaskStore {
         const at = now.toISOString();
         const stale: Task = { ...task, updatedAt: at, history: [...task.history, { at, by: AGING_ACTOR, note: `close proposal dropped: ${task.id} changed after ${proposal.by} proposed it` }].slice(-HISTORY_LIMIT) };
         delete stale.closeProposal;
-        this.tasks.set(task.id, stale);
-        this.append({ kind: "task", task: stale });
+        this.saveTask(stale);
         continue;
       }
       // Silence is not the person's word on a goal (INV-768): the proposal expires, the goal
@@ -853,8 +851,7 @@ export class TaskStore {
         const at = now.toISOString();
         const kept: Task = { ...task, updatedAt: at, history: [...task.history, { at, by: AGING_ACTOR, note: `close proposal by ${proposal.by} expired: a goal closes only on ${task.requester}'s word` }].slice(-HISTORY_LIMIT) };
         delete kept.closeProposal;
-        this.tasks.set(task.id, kept);
-        this.append({ kind: "task", task: kept });
+        this.saveTask(kept);
         for (const listener of this.listeners) listener(kept);
         continue;
       }
@@ -862,8 +859,7 @@ export class TaskStore {
       if (moved === undefined) continue;
       const settled: Task = { ...moved.task };
       delete settled.closeProposal;
-      this.tasks.set(task.id, settled);
-      this.append({ kind: "task", task: settled });
+      this.saveTask(settled);
       events.push({ kind: "closed", task: this.get(task.id)!, text: `${task.id} "${task.title}" closed as ${proposal.by} proposed: ${proposal.reason}. ${task.requester} did not object in time; reopen it on the board if that was wrong.` });
       this.receipts.write({
         at: now.toISOString(),
@@ -877,15 +873,30 @@ export class TaskStore {
     return events;
   }
 
-  private append(line: TaskLine): void {
+  private saveTask(task: Task, progressWrite = false): void {
+    const previous = this.tasks.get(task.id)?.progress;
+    const progress = alignTaskProgress(task, progressWrite ? task.progress : previous ?? task.progress);
+    const next = { ...task, ...(progress ? { progress } : {}) };
+    this.append({ kind: "task", task: next }, progressWrite || previous !== progress);
+    if (progress) task.progress = progress;
+    this.tasks.set(task.id, task);
+  }
+
+  private append(line: TaskLine, durable = false): void {
     if (this.path === null) return;
     try {
       mkdirSync(dirname(this.path), { recursive: true });
-      appendLine(this.path, JSON.stringify(line));
+      const bytes = existsSync(this.path) ? statSync(this.path).size : 0;
+      if (bytes > this.checkpointBytes + 4_194_304) {
+        checkpointTasks(this.path, this.counter, this.tasks.values());
+        this.checkpointBytes = statSync(this.path).size;
+        this.lines = this.tasks.size + 1;
+      }
+      if (durable) appendLineDurably(this.path, JSON.stringify(line)); else appendLine(this.path, JSON.stringify(line));
       this.lines += 1;
     } catch (error) {
-      // Never fail a turn over bookkeeping; what is lost is one snapshot, and the
-      // in-memory state still serves this process.
+      if (durable) throw error;
+      // Ordinary bookkeeping remains best effort; progress authority must be durable.
       const detail = error instanceof Error ? error.message : String(error);
       this.onWarn(`tasks: cannot write ${this.path} (${detail})`);
     }
@@ -912,6 +923,7 @@ export class TaskStore {
         }
       }
       this.lines = lines;
+      this.checkpointBytes = statSync(this.path).size;
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       this.onWarn(`tasks: cannot read ${this.path} (${detail})`);
@@ -934,9 +946,9 @@ export class TaskStore {
   /** A supervisor raises attention on a task (INV-1509): a line, an item for a person, nothing about the work. */
   flag(id: string, by: string, note: string, now: Date = new Date()): FlagOutcome {
     const result = applyFlag(this.tasks.get(id), by, note, now, HISTORY_LIMIT);
-    if (result.task !== undefined) { this.tasks.set(id, result.task); this.append({ kind: "task", task: result.task }); for (const listener of this.listeners) listener(result.task); }
+    if (result.task !== undefined) { this.saveTask(result.task); for (const listener of this.listeners) listener(result.task); }
     return result.outcome;
-  } /** Records a deliverable whose snapshot is already written (INV-1663); undefined for an unknown task. */ deliver(id: string, item: Omit<TaskDeliverable, "id">): TaskDeliverable | undefined { const result = applyDeliverable(this.tasks.get(id), item, HISTORY_LIMIT); if (result !== undefined) { this.tasks.set(id, result.task); this.append({ kind: "task", task: result.task }); for (const listener of this.listeners) listener(result.task); } return result?.item; } /** Records an agent's final reply on a task (INV-1676); false for an unknown task or an empty reply. */ recordReply(id: string, by: string, text: string, now: Date = new Date()): boolean { const task = applyReply(this.tasks.get(id), by, text, now, HISTORY_LIMIT); if (task === undefined) return false; this.tasks.set(id, task); this.append({ kind: "task", task }); for (const listener of this.listeners) listener(task); return true; }
+  } /** Records a deliverable whose snapshot is already written (INV-1663); undefined for an unknown task. */ deliver(id: string, item: Omit<TaskDeliverable, "id">): TaskDeliverable | undefined { const result = applyDeliverable(this.tasks.get(id), item, HISTORY_LIMIT); if (result !== undefined) { this.saveTask(result.task); for (const listener of this.listeners) listener(result.task); } return result?.item; } /** Records an agent's final reply on a task (INV-1676); false for an unknown task or an empty reply. */ recordReply(id: string, by: string, text: string, now: Date = new Date()): boolean { const task = applyReply(this.tasks.get(id), by, text, now, HISTORY_LIMIT); if (task === undefined) return false; this.saveTask(task); for (const listener of this.listeners) listener(task); return true; }
 
   /** Change a pursuit: the board status follows it (docs/74 §7 R7), recorded under the gate's name — the one path a pursuit moves through. */
   setPursuit(
@@ -958,8 +970,7 @@ export class TaskStore {
       updatedAt: at,
       history: [...task.history, { at, by, ...(status !== task.status ? { status } : {}), note: note.trim().slice(0, 500) }].slice(-HISTORY_LIMIT),
     };
-    this.tasks.set(id, updated);
-    this.append({ kind: "task", task: updated });
+    this.saveTask(updated);
     for (const listener of this.listeners) listener(updated);
     return { task: this.get(id)! };
   }
@@ -989,13 +1000,14 @@ export class TaskStore {
     for (const [id, task] of this.tasks) {
       const before = JSON.stringify(task);
       if (!before.toLowerCase().includes(phrase.toLowerCase())) continue;
-      this.tasks.set(id, scrubValue(task) as Task);
+      const scrubbed = scrubValue(task) as Task;
+      this.tasks.set(id, { ...scrubbed, ...(scrubbed.progress ? { progress: alignTaskProgress(scrubbed, scrubbed.progress) } : {}) });
       changed += 1;
     }
     // Compacted whenever the file still holds the phrase, not only when a current task did: an
     // earlier snapshot of a task since renamed is exactly where old wording survives.
     const fileHolds = this.path !== null && existsSync(this.path) && readFileSync(this.path, "utf8").toLowerCase().includes(phrase.toLowerCase());
-    if (changed > 0 || fileHolds) this.compact(now);
+    if (changed > 0 || fileHolds) this.compact(now, [...this.tasks.values()].some(task => !!task.progress));
     return changed;
   }
 
@@ -1015,36 +1027,21 @@ export class TaskStore {
    * retention window. The counter marker goes first, so an id from a dropped task is
    * never reused — "t12" must mean one thing forever.
    */
-  private compact(now: Date): void {
+  private compact(now: Date, durable = false): void {
     if (this.path === null) return;
     try {
       const cutoff = now.getTime() - RETAIN_CLOSED_MS;
       for (const [id, task] of this.tasks) {
         if (!isLive(task.status) && Date.parse(task.updatedAt) < cutoff) this.tasks.delete(id);
       }
-      const kept = [
-        JSON.stringify({ kind: "counter", value: this.counter } satisfies TaskLine),
-        ...[...this.tasks.values()].map(task =>
-          JSON.stringify({ kind: "task", task } satisfies TaskLine)
-        ),
-      ];
-      const temp = `${this.path}.${process.pid}.tmp`;
-      writeFileSync(temp, `${kept.join("\n")}\n`, "utf8");
-      renameSync(temp, this.path);
-      this.lines = kept.length;
+      checkpointTasks(this.path, this.counter, this.tasks.values());
+      this.lines = this.tasks.size + 1;
+      this.checkpointBytes = statSync(this.path).size;
     } catch (error) {
+      if (durable) throw error;
       const detail = error instanceof Error ? error.message : String(error);
       this.onWarn(`tasks: cannot compact ${this.path} (${detail})`);
     }
   }
 }
-
-/** One task as a line a model or a person reads. */
-export function describeTask(task: Task, nameOf: (id: string) => string, board?: { get(id: string): Task | undefined }): string { // board: to say which blockers are still open (INV-1740)
-  const assignee = task.assigneeId !== undefined ? ` @${nameOf(task.assigneeId)}` : " (unassigned)";
-  const reviewer = task.reviewerId !== undefined ? ` · review by ${nameOf(task.reviewerId)}` : "";
-  const proposed = task.proposedBy !== undefined ? " (proposed — a person commits it before anyone starts)" : "";
-  const goal = task.goal !== undefined ? ` · goal (${task.goal.area}${task.goal.commitment !== undefined ? `: ${task.goal.commitment}` : ""})` : "";
-  const pursuit = task.pursuit !== undefined ? ` · pursuing (${task.pursuit.status})` : ""; const level = task.level !== undefined ? ` · ${LEVEL_MEANING[task.level]}` : "";
-  return `${task.id} [${task.status}]${assignee} ${task.title}${goal}${pursuit}${reviewer}${proposed}${level}${dependencyLine(task, board)}`;
-}
+export { describeTask } from "./task-description.ts";

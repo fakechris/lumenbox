@@ -192,7 +192,8 @@ export class AgentBus {
      */
     private readonly inbox: Inbox<InboundMessage> | undefined = undefined,
     /** The runner acknowledges only after its recovery ledger has taken custody. */
-    private readonly deferredStart = false
+    private readonly deferredStart = false,
+    private readonly admitMessage?: (agentId: string, message: InboundMessage) => InboundMessage
   ) {}
 
   /**
@@ -381,6 +382,7 @@ export class AgentBus {
   private enqueue(agentId: string, message: InboundMessage): number | undefined {
     // Recorded before it is queued, and before the sender is told anything. The other order would
     // acknowledge work that is not yet written down, which is the whole failure being fixed.
+    message = this.admitMessage?.(agentId, message) ?? message;
     const admission = this.inbox?.admit(agentId, message);
     const queue = this.pending.get(agentId) ?? [];
     queue.push({ ...message, admission });

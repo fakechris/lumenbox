@@ -1,3 +1,4 @@
+import { progressScope } from "./task-progress.ts";
 /**
  * The continuation loop of goal mode (docs/74 §3.3, §3.5–3.8, §7 R4–R6 and R10–R11; INV-770).
  *
@@ -195,7 +196,7 @@ export class GoalLoop {
     if (key === undefined || pursuit?.status !== "active" || pursuit.workId !== turn.workId || key.agentId !== turn.agentId || key.conversation !== (turn.conversation ?? MAIN_CONVERSATION)) return false;
     this.cancelPending(task.id);
     const reason = this.limitReached(pursuit);
-    return { taskId: task.id, workId: pursuit.workId, seq: ++this.seq, personSeq: this.personSeq.get(this.convKey(key.agentId, key.conversation)) ?? 0, ...(reason === undefined ? {} : { finishOnly: true, reason }) };
+    return { taskId: task.id, progressScope: progressScope(task), workId: pursuit.workId, seq: ++this.seq, personSeq: this.personSeq.get(this.convKey(key.agentId, key.conversation)) ?? 0, ...(reason === undefined ? {} : { finishOnly: true, reason }) };
   }
 
   /** On startup: every active pursuit is looked at again (its counters live on the board). */
@@ -267,7 +268,7 @@ export class GoalLoop {
       return;
     }
     const marker: GoalMarker = {
-      taskId: task.id,
+      taskId: task.id, progressScope: progressScope(task),
       workId: pursuit.workId,
       seq,
       personSeq,

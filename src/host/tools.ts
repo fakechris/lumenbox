@@ -1,3 +1,4 @@
+import { TASK_PROGRESS_TOOL, runTaskProgressTool } from "./task-progress-tool.ts";
 import type { ToolOutcome } from "./tool-outcome.ts";
 export type { ToolOutcome } from "./tool-outcome.ts";
 import { isComputerWrite } from "../cua/execution.ts";
@@ -113,6 +114,7 @@ function foregroundWindowMs(): number {
 }
 
 export interface ToolContext {
+  progressContext?: import("./task-progress.ts").ProgressContext;
   taskBinding?: import("./execution-binding.ts").TaskBinding;
   agent: AgentRecord;
   /** Watches the commands a turn let go of past their foreground window (INV-1461); absent means none is watched. */
@@ -522,6 +524,7 @@ export const MAX_FORKS = 12;
  * at build time, which is what keeps the classification out of the model's hands.
  */
 export const BOOKKEEPING_TOOLS: ReadonlySet<string> = new Set([
+  "TaskProgress",
   "Tasks", "DeliverFile",
   "HandBack",
   "RememberFact",
@@ -1720,6 +1723,9 @@ export function buildTools(
       input_schema: { type: "object", properties: { task_id: { type: "string" }, reason: { type: "string" } }, required: ["task_id", "reason"] },
     },
     {
+      ...TASK_PROGRESS_TOOL,
+    },
+    {
       name: "Tasks",
       description:
         "The team's task board — work as an object everyone can see, not a message that " +
@@ -2632,6 +2638,7 @@ export async function dispatchTool(
   }
 
   switch (name) {
+    case "TaskProgress": return runTaskProgressTool(input, context);
     // Reached only when the turn engine did not intercept it, which means it was not offered:
     // a forged or replayed call on a turn a person is waiting on. The engine ends the turn
     // itself when the tool was offered (turn.ts), so this is the refusal, never the success.
@@ -2922,7 +2929,7 @@ export async function dispatchTool(
         try {
           const seq = context.bus.sendFromUser(context.agent.id, brief, {
             conversation,
-            ...(context.taskBinding && context.turnId && context.workId && ids[index] ? { taskBinding: { taskId: context.taskBinding.taskId, role: "child" as const, parent: { conversation: parent, turnId: context.turnId, workId: context.workId, forkId: ids[index]! } } } : {}),
+            ...(context.taskBinding && context.turnId && context.workId && ids[index] ? { taskBinding: { taskId: context.taskBinding.taskId, role: "child" as const, ...(context.taskBinding.progressAdmission ? { progressAdmission: { ...context.taskBinding.progressAdmission, kind: "child" as const } } : {}), parent: { conversation: parent, turnId: context.turnId, workId: context.workId, forkId: ids[index]! } } } : {}),
             steerable: false, origin: "host:fork", // the parent agent's brief, not the person's words (INV-1571)
           });
           if (ids[index] !== undefined) { context.pendingWork?.admitted(ids[index]!, seq); const taskId = context.taskBinding?.taskId; context.pendingWork?.forks?.spawned({ id: ids[index]!, agentId: context.agent.id, parent, child: conversation, brief, ...(taskId !== undefined ? { taskId } : {}) }); } // what a person sees of it (INV-1667)

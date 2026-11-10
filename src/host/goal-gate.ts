@@ -1,3 +1,4 @@
+import { progressScope } from "./task-progress.ts";
 /**
  * The completion gate of goal mode (docs/74 §3.4, §7 R1/R2/R3/R12; INV-771).
  *
@@ -167,7 +168,7 @@ export class GoalGate {
       .map(item => (item.check as { command: string }).command);
     const chinese = /[一-鿿]/.test(pursuit.objective);
     const marker: GoalMarker = {
-      taskId: task.id,
+      taskId: task.id, progressScope: progressScope(task),
       workId: pursuit.workId,
       seq,
       personSeq: 0,

@@ -1,3 +1,6 @@
+import { summarizeTaskProgress } from "../host/task-progress.ts";
+import { progressLines } from "../host/task-progress-view.ts";
+import { taskProgressSurface } from "../host/task-progress-surface.ts";
 import { taskBoardRecord } from "./task-board-record.ts";
 import { taskCostRoute } from "./task-cost-routes.ts";
 import { taskListRoute, TaskListPages } from "./task-list-routes.ts";
@@ -206,7 +209,6 @@ import {
 } from "../channels/strings.ts";
 import { CardLedger } from "../channels/card-ledger.ts";
 import { type DocReader, docReaderForChat, FeishuDocReader } from "../channels/feishu-docs.ts";
-import { parseProgressFile, progressLine } from "../host/progress-file.ts";
 import { costOfTasks, spendByDay, summariseSpend, type Rates } from "../host/spend.ts";
 import type { UsageRecord } from "../host/usage.ts";
 import { TOOL_BUDGET_WARNING } from "../host/mcp.ts";
@@ -652,7 +654,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         agentName: input.agentName,
         surfaceId: input.surface,
         ...(title !== undefined ? { title } : {}),
-        messages: compiled.full,
+        messages: taskProgressSurface(compiled.full, id => {
+          const task = orchestrator.tasks?.get(id);
+          return task?.assigneeId === input.agentId && (task.conversation ?? "main") === conversation ? summarizeTaskProgress(task) : undefined;
+        }),
         ...(input.close === true ? { close: true } : {}),
       });
       return { where: where ?? "in the app" };
@@ -1540,25 +1545,20 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (event.type === "interim") onInterim?.(event.text);
       };
       channelTurnListeners.add(listener);
-      const progressPath = `${chatFilesRoot(conversation, registry.defaultBox())}/progress.json`;
+      const progressPath = `${chatFilesRoot(conversation, registry.boxOf(agent.id))}/progress.json`;
+      const showProgress = (task: Task) => {
+        if (task.id !== taskId || !summarizeTaskProgress(task)) return;
+        const line = outboundRedactor(vault.heldValues())(progressLines(summarizeTaskProgress(task), cardLocale).join("\n"));
+        if (line === batchLine) return;
+        batchLine = line; onProgress?.(line, "batch");
+      };
+      const stopProgress = orchestrator.tasks?.onChange(showProgress);
       const progressPoll = setInterval(() => {
-        const client = orchestrator.boxClient();
-        if (client === undefined) return;
-        void client
-          .readFile(progressPath)
-          .then(result => {
-            const parsed = parseProgressFile(result.content ?? "");
-            if (parsed === undefined) return;
-            const line = progressLine(parsed);
-            // Only when it moved: a card rewritten every five seconds with the same
-            // number is an update feed pretending to be progress.
-            if (line === batchLine) return;
-            batchLine = line;
-            onProgress?.(line, "batch");
-          })
-          .catch(() => {
-            // No file yet is the ordinary case for most turns.
-          });
+        const client = orchestrator.boxClient(agent.id);
+        if (!client || !taskId) return;
+        void client.readFile(progressPath).then(result => {
+          orchestrator.tasks?.progress.file(result.content ?? "", { agentId: agent.id, conversation, taskId });
+        }).catch(() => {});
       }, 5_000);
       try {
         // Not steerable: this is a task with a card and a board row of its own, and it
@@ -1575,7 +1575,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         });
         await orchestrator.settle();
       } finally {
-        clearInterval(progressPoll);
+        clearInterval(progressPoll); stopProgress?.();
         channelTurnListeners.delete(listener);
       }
       if (stuck !== undefined) {
@@ -3907,7 +3907,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         const mayReadTask = (task: Task) => caller.userId === undefined || (task.assigneeId ? mayReadAgent(task.assigneeId) : task.requester === principals.resolve(caller.userId).id); if (deliverableRoute(route, url, res, { tasks: orchestrator.tasks, mayReadTask, send })) return; if (taskGateRoute(route, url, res, { tasks: orchestrator.tasks, mayReadTask, readTranscript: (agentId, conversation) => registry.readTranscript(agentId, conversation), roster: () => registry.list().map(record => ({ id: record.id, name: record.profile.name })), verdictOf: callId => orchestrator.policy.verdicts.get(callId), send })) return; // the gate's verdicts on its steps, the chat's own join (INV-1672) // a task's deliverable, to whoever sees the task (INV-1663)
         if (taskCostRoute(route, url, res, { executions: taskExecutions, refused: () => refusedRole("admin"), access: { task: id => { const task = orchestrator.tasks?.get(id); return task !== undefined && mayReadTask(task); }, agent: mayReadAgent, box: mayReadBox }, records: () => orchestrator.usage.since(0, Number.MAX_SAFE_INTEGER), rates: configuredRates, compacted: () => orchestrator.usage.compacted(), send })) return;
         if (taskExecutionRoute(route, url, res, { executions: taskExecutions, access: { task: id => { const task = orchestrator.tasks?.get(id); return task !== undefined && mayReadTask(task); }, agent: mayReadAgent, box: mayReadBox }, record: id => taskRecord(orchestrator.tasks!.get(id)!, { nameOf: id => registry.tryGet(id)?.profile.name ?? id, stageWorld: sideDoorStage }), send })) return;
-        const taskView = (task: Task) => { const forks = orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []; return { ...task, needsApprovals: taskExecutions.approvals(task.id, { task: () => mayReadTask(task), agent: mayReadAgent, box: mayReadBox }, orchestrator.policy.pending()), stage: taskRecord(task, { nameOf: id => registry.tryGet(id)?.profile.name ?? id, stageWorld: sideDoorStage }).stage, configVersions: switchesForTask(registry, task.id), ...(forks.length ? { forks } : {}), ...dependencyView(task, orchestrator.tasks!) }; };
+        const taskView = (task: Task) => { const forks = orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []; return { ...task, progress: summarizeTaskProgress(task), needsApprovals: taskExecutions.approvals(task.id, { task: () => mayReadTask(task), agent: mayReadAgent, box: mayReadBox }, orchestrator.policy.pending()), stage: taskRecord(task, { nameOf: id => registry.tryGet(id)?.profile.name ?? id, stageWorld: sideDoorStage }).stage, configVersions: switchesForTask(registry, task.id), ...(forks.length ? { forks } : {}), ...dependencyView(task, orchestrator.tasks!) }; };
         if (taskListRoute(route, url, res, { pages: taskListPages, tasks: () => orchestrator.tasks?.list() ?? [], allowed: mayReadTask, detail: taskView, summary: task => ({ ...taskBoardRecord(task), ...dependencyView(task, orchestrator.tasks!) }), send })) return;
         if (route === "GET /api/tasks") {
           send(res, 200, { tasks: orchestrator.tasks?.list().filter(mayReadTask).map(task => { const forks = orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []; return { ...task, configVersions: switchesForTask(registry, task.id), ...(forks.length > 0 ? { forks } : {}), ...dependencyView(task, orchestrator.tasks!) }; }) ?? [] }); // and what it waits on and what waits on it (INV-1740) // with the agent configuration versions it ran under (INV-1669) and the division of work (INV-1667)

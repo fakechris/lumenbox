@@ -947,7 +947,7 @@ test("a goal is verified by a turn that never saw the work: a premature claim is
       const all = JSON.stringify(messages);
       if (/\[host verification: goal t1\]/.test(all)) {
         verifierRequests.push(all);
-        assert.deepEqual([...offered].sort(), ["ReadKept", "bash", "list_dir", "read_file"], "a verifier holds read tools and bash");
+        assert.deepEqual([...offered].sort(), ["ReadKept", "TaskProgress", "bash", "list_dir", "read_file"], "a verifier holds read tools, confirmed bash and task-bound progress metadata");
         if (!/"name":"bash"/.test(all)) return { call: "bash", input: { command: "cat /etc/passwd" } };
         const results = [...all.matchAll(/"tool_use_id":"[^"]+","content":\[\{"type":"text","text":"((?:[^"\\]|\\.)*)"/g)].map(match => match[1]!);
         bashResults.push(...results.filter(text => !bashResults.includes(text)));
