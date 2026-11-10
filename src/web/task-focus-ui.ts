@@ -189,10 +189,14 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     if (anchor) list.scrollTop += anchor.getBoundingClientRect().top - list.getBoundingClientRect().top - view.readingAnchor.offset;
     else if (view.listTop !== undefined) list.scrollTop = view.listTop;
   }
+  function detailMessage(text) {
+    var panel = by("detail"); if (!panel) return; panel.textContent = "";
+    var back = document.createElement("button"); back.className = "btn sm ghost tf-backsteps"; back.setAttribute("data-tf-list",""); back.textContent = word("backSteps"); panel.appendChild(back);
+    if (text) { var message = document.createElement("p"); message.textContent = text; panel.appendChild(message); }
+  }
   function paintDetail(view, detail) {
     if (active !== view || view.tab !== "execution" || !by("detail")) return;
-    var panel = by("detail"); panel.textContent = "";
-    var back = document.createElement("button"); back.className = "btn sm ghost tf-backsteps"; back.setAttribute("data-tf-list",""); back.textContent = word("backSteps"); panel.appendChild(back);
+    detailMessage(""); var panel = by("detail");
     var h = document.createElement("h2"); h.textContent = actionName(detail); panel.appendChild(h);
     var state = document.createElement("p"); state.className = "tf-note"; state.textContent = word(detail.role) + ' · ' + word("attempt") + ' ' + detail.attempt + ' · ' + word(detail.outcome); panel.appendChild(state);
     var note = document.createElement("p"); note.className = "tf-note"; note.textContent = word("historical") + (detail.coverage === "partial" ? " · " + word("partial") : ""); panel.appendChild(note);
@@ -215,11 +219,11 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     }).catch(function () {});
   }
   function loadDetail(view,id,quiet) {
-    view.selected = id; view.mobileDetail = true; root.classList.add("tf-detail-selected"); remember(view);
+    view.selected = id; remember(view);
     if (!view.page || view.tab !== "execution") return Promise.resolve();
     var generation = ++view.detailGeneration, snapshot = view.page.snapshot;
     if (view.detailController) view.detailController.abort(); view.detailController = new AbortController();
-    if (!quiet) by("detail").textContent = word("loading");
+    if (!quiet) detailMessage(word("loading"));
     by("list").querySelectorAll("[data-tf-step]").forEach(function (node) { node.setAttribute("aria-pressed",String(node.getAttribute("data-tf-step") === id)); });
     return get("/api/tasks/execution/step?" + new URLSearchParams({ task:view.id,snapshot:snapshot,step:id }),view.detailController.signal).then(function (detail) {
       if (active !== view || generation !== view.detailGeneration || !view.page || view.page.snapshot !== snapshot) return;
@@ -228,7 +232,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     }).catch(function (error) {
       if (error.name === "AbortError" || active !== view || generation !== view.detailGeneration) return;
       if (error.status === 403 || error.status === 404) deny(view,error);
-      else { view.detail = null; if (by("detail")) by("detail").textContent = error.status === 409 ? word("expired") : word("error"); }
+      else { view.detail = null; detailMessage(error.status === 409 ? word("expired") : word("error")); }
     });
   }
   function loadPage(view,cursor,anchor,fresh,fallback) {
@@ -286,7 +290,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     var url = new URL(location.href); url.searchParams.set("task",id); if (push !== false && url.href !== location.href) history.pushState({},"",url);
     var wantedTab = url.searchParams.get("tasktab"), wantedStep = url.searchParams.get("step");
     if (["overview","execution","artifacts","costs"].indexOf(wantedTab) >= 0) view.tab = wantedTab;
-    if (wantedStep) { if (wantedStep !== view.selected) { view.anchor = wantedStep; view.readingAnchor = null; view.listTop = 0; } view.selected = wantedStep; }
+    if (wantedStep) { if (wantedStep !== view.selected) { view.anchor = wantedStep; view.readingAnchor = null; view.listTop = 0; view.mobileDetail = true; } view.selected = wantedStep; }
     return loadItem(view).then(function () { if (active !== view || !view.task || view.openGeneration !== openGeneration) return; render(view); by("tab-" + view.tab).focus(); if (view.tab === "costs") loadCosts(view); return loadPage(view,null,view.readingAnchor && view.readingAnchor.id || view.anchor || view.selected,true); });
   }
   function close(update) {
@@ -309,7 +313,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     if (node.hasAttribute("data-tf-close")) { close(true); return; }
     if (node.hasAttribute("data-tf-conversation")) { var task = active.task; close(true); if (task && task.assigneeId) { select(task.assigneeId,task.conversation || "main"); showTab("desktop"); } return; }
     var tab = node.getAttribute("data-tf-tab"), step = node.getAttribute("data-tf-step");
-    if (tab) { changeTab(tab); return; } if (step) { loadDetail(active,step); return; }
+    if (tab) { changeTab(tab); return; } if (step) { active.mobileDetail = true; root.classList.add("tf-detail-selected"); loadDetail(active,step); return; }
     if (node.hasAttribute("data-tf-refresh")) { var view = active; window.refreshTaskExecution().then(function () { if (active === view && view.task) render(view); }); }
     if (active.page && (node.hasAttribute("data-tf-next") || node.hasAttribute("data-tf-prev"))) { active.listTop = 0; active.readingAnchor = null; active.selected = ""; root.classList.remove("tf-detail-selected"); active.detail = null; if (by("detail")) by("detail").textContent = word("select"); loadPage(active,node.hasAttribute("data-tf-next") ? active.page.nextCursor : active.page.previousCursor,null,false); }
   }
