@@ -1057,7 +1057,7 @@ export class Orchestrator {
       onEvent: event => options.onTurnEvent?.(event),
     });
     this.delegateSessions = new DelegateSessions(options.pendingWork === null ? null : undefined);
-    this.acpDelegates = new AcpDelegates({ returnFor: (a,c,id) => this.bus.workAttention?.returnTo(a,c,id), isCancelled: id => !!this.bus.workAttention?.cancelled(id),
+    this.acpDelegates = new AcpDelegates({ cancelledResource:(id,row)=>this.bus.workAttention?.cleanup(id,[row]), returnFor: (a,c,id) => this.bus.workAttention?.returnTo(a,c,id), isCancelled: id => !!this.bus.workAttention?.cancelled(id),
       ...(this.pendingWork !== undefined ? { pendingWork: this.pendingWork } : {}),
       policy: this.policy,
       deliver: (agentId, text, conversation, workId) => {

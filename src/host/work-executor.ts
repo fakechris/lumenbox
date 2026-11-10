@@ -4,13 +4,16 @@ import type {AgentBus} from "../agents/bus.ts";
 import type {WorkStamp,StopResource} from "../agents/work-attention.ts";
 import type {PendingWork} from "./pending-work.ts";
 
+const rawBoxes=new WeakMap<object,object>();
+/** Native supervision only: cleanup must remain possible after execution authority is revoked. */
+export function cleanupBox<T extends object>(box:T):T {return (rawBoxes.get(box) ?? box) as T;}
 export function workBox(box: BoxClient | undefined, work: WorkStamp | undefined, agentId: string, conversation: string, bus: AgentBus, pending?: PendingWork): BoxClient | undefined {
   if (!box || !work) return box;
   const record = (id: string): string | undefined => {
     const old=pending?.open().find(row=>row.workId===work.id && row.child===id);
     return old?.id ?? pending?.prepare({kind:"command",agentId,workId:work.id,parent:conversation,child:id,brief:"Background command owned by this work"});
   };
-  return new Proxy(box,{get(target,name){
+  const guarded=new Proxy(box,{get(target,name){
     const value=Reflect.get(target,name,target);
     if(typeof value!=="function")return value;
     return async(...args:unknown[])=>{
@@ -19,7 +22,7 @@ export function workBox(box: BoxClient | undefined, work: WorkStamp | undefined,
       if(name==="startJob") {const id=(args[1] as {jobId?:string}|undefined)?.jobId;if(id)recorded=record(id);}
       let result: unknown;
       try {result=await value.apply(target,args);}
-      catch(error){if(recorded)pending?.dropped(recorded,"unrecorded");throw error;}
+      catch(error){/* A transport rejection does not prove the known job was never created. Keep its durable cleanup identity. */throw error;}
       if(name!=="startJob" && name!=="exec")return result;
       const shape=result as {job_id?:unknown;still_running?:{job_id?:unknown}} | undefined;
       const jobId=name==="startJob"?shape?.job_id:shape?.still_running?.job_id;
@@ -39,4 +42,5 @@ export function workBox(box: BoxClient | undefined, work: WorkStamp | undefined,
       return result;
     };
   }});
+  rawBoxes.set(guarded,box);return guarded;
 }

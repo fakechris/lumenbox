@@ -105,10 +105,10 @@ export class WorkControl {
     const pending=host.pendingWork?.open().find(item=>item.id===row.id && item.workId===ended.id);
     if (!pending) return {...row,state:"unconfirmed",detail:"The execution record is no longer open; verify any external effect"};
     if (pending.kind==="delegate" || pending.kind==="command") {
-      if (pending.data?.mode==="session") {
+      if (pending.data?.mode==="session" || pending.data?.mode==="opening-session") {
         const watch=host.acpDelegates.get(pending.child);
         if (watch) await host.acpDelegates.cancel(pending.child);
-        else await host.boxFor(pending.agentId)?.acpClose({session_id:pending.child});
+        else {const box=host.boxFor(pending.agentId);if(!box)throw new Error("Computer unavailable");await box.acpClose({session_id:pending.child});const running=(await box.acpSessions()).sessions.some(session=>session.session_id===pending.child && session.running);if(!running){host.pendingWork?.dropped(pending.id,"cancelled");return confirmed;}}
         return {...row,state:"requested",detail:"Engine cancellation requested; process exit is not confirmed"};
       }
       const box=host.boxFor(pending.agentId); if (!box) throw new Error("Computer unavailable");

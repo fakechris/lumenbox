@@ -13,7 +13,7 @@ export function workControlFor(host: Orchestrator, pauses: AgentPauses, question
   }});
 }
 export async function workControlRoute(route: string, url: URL, control: WorkControl, deps: {
-  host: Orchestrator; pauses: AgentPauses; refusedAdmin:()=>boolean; by:()=>string;
+  host: Orchestrator; pauses: AgentPauses; refusedAdmin:()=>boolean; mayReadAgent:(id:string)=>boolean; by:()=>string;
   readJson:()=>Promise<Record<string,unknown>>;
 }): Promise<{status:number;body:unknown}|undefined> {
   if (!['GET /api/work-control/preview','POST /api/work-control/cancel','POST /api/work-control/pause-members'].includes(route)) return undefined;
@@ -22,6 +22,7 @@ export async function workControlRoute(route: string, url: URL, control: WorkCon
     const input = route.startsWith('GET ') ? Object.fromEntries(url.searchParams) : await deps.readJson();
     if (route==='POST /api/work-control/pause-members') {
       if(!Array.isArray(input.agents) || !input.agents.length || input.agents.length>100 || input.agents.some(id=>typeof id!=="string" || !deps.host.registry.has(id))) return {status:400,body:{error:"Choose the members to pause explicitly"}};
+      if((input.agents as string[]).some(id=>!deps.mayReadAgent(id)))return {status:403,body:{error:"Box access required for every selected member"}};
       const nativeStops:Promise<{kind:string;id:string;state:string}>[]=[];
       const result=await deps.pauses.pauseMany(input.agents as string[],deps.by(),String(input.reason??"User containment of an unlinked historical task").slice(0,500),ids=>{
         for(const route of deps.host.modelRelay.active())if(ids.includes(route.agentId))deps.host.modelRelay.revoke(route.key,"member paused");
@@ -37,7 +38,10 @@ export async function workControlRoute(route: string, url: URL, control: WorkCon
     const task=taskId?deps.host.tasks?.get(taskId):undefined;
     if(taskId&&!task) return {status:404,body:{error:"Task not found"}};
     const target: WorkTarget={agentId:task?.assigneeId??String(input.agentId??""),conversation:task?.conversation??String(input.conversation??"main"),...(taskId?{taskId}: {})};
-    if(route.startsWith('GET ')) return {status:200,body:control.preview(target)};
+    if(!deps.mayReadAgent(target.agentId))return {status:403,body:{error:"Box access required"}};
+    const preview=control.preview(target);
+    if([...preview.participants.map(row=>row.id),...preview.resources.flatMap(row=>row.agentId?[row.agentId]:[])].some(id=>!deps.mayReadAgent(id)))return {status:403,body:{error:"Box access required for every participant"}};
+    if(route.startsWith('GET ')) return {status:200,body:preview};
     const cancelled=await control.cancel(target,String(input.token??""),deps.by(),String(input.reason??"Cancelled by the user").slice(0,500));
     return {status:200,body:{cancelled,externalEffectsNeedVerification:true}};
   } catch(error) { return {status:409,body:{error:error instanceof Error?error.message:String(error)}}; }

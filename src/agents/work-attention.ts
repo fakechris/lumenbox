@@ -37,7 +37,7 @@ export class WorkAttention {
       }
       for (const row of data.records) {
         if (!row.id || !row.owner || !row.conversation || !Number.isInteger(row.epoch) || !Number.isInteger(row.generation) || !Array.isArray(row.messages) || !Array.isArray(row.peers) || !["running", "waiting", "answered", "cancelled"].includes(row.status)) throw new Error("Invalid current-work state");
-        this.current.set(keyOf(row.owner, row.conversation), { ...row, ...((row.status === "running" || row.awaiting?.some(item => item.startsWith("volatile:"))) ? { status: "waiting" as const, reason: "execution interrupted" } : {}), awaiting: (row.awaiting ?? []).filter(item => !item.startsWith("volatile:")) });
+        this.current.set(keyOf(row.owner, row.conversation), { ...row, ...((row.status !== "cancelled" && (row.status === "running" || row.awaiting?.some(item => item.startsWith("volatile:")))) ? { status: "waiting" as const, reason: "execution interrupted" } : {}), awaiting: (row.awaiting ?? []).filter(item => !item.startsWith("volatile:")) });
       }
     }
   }

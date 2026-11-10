@@ -96,9 +96,9 @@ export function hostRunnerConfig(raw: {
 }
 
 export class HostRunner {
-  private readonly active = new Map<string,{workId:string;stop:()=>void;done:Promise<void>}>();
+  private readonly active = new Map<string,{workId:string;stop:()=>Promise<boolean>}>();
   activeWork(workId:string): string[] { return [...this.active].filter(([,row])=>row.workId===workId).map(([id])=>id); }
-  async stopWorkRun(id:string,workId:string): Promise<boolean> { const row=this.active.get(id); if(!row || row.workId!==workId)return false;row.stop();await row.done;return true; }
+  async stopWorkRun(id:string,workId:string): Promise<boolean> { const row=this.active.get(id); if(!row || row.workId!==workId)return false;return row.stop(); }
   constructor(
     private readonly config: HostRunnerConfig,
     private readonly deps: HostProcessDeps = {}
@@ -161,27 +161,36 @@ export class HostRunner {
     const env = { ...process.env, ...egressEnv, ...(wrapped?.env ?? {}), ...secretEnv };
 
     return new Promise(resolve => {
-      const id=randomUUID();let stopping=false,timedOut=false,killTimer:ReturnType<typeof setTimeout>|undefined;let completed!:()=>void;
-      const done=new Promise<void>(finish=>{completed=finish;});
+      const id=randomUUID();let timedOut=false,stopping:Promise<boolean>|undefined;
       const child=spawn(wrapped?.command ?? "/bin/sh",wrapped?.args ?? ["-lc",command],{cwd,env,detached:process.platform!=="win32",stdio:["ignore","pipe","pipe"]});
-      const stop=()=>{
-        if(stopping)return;stopping=true;
-        const kill=(signal:NodeJS.Signals)=>{try{if(process.platform!=="win32" && child.pid)process.kill(-child.pid,signal);else child.kill(signal);}catch{/* already exited */}};
-        kill("SIGTERM");killTimer=setTimeout(()=>kill("SIGKILL"),250);killTimer.unref();
+      const groupAlive=()=>{if(!child.pid)return false;try{process.kill(process.platform==="win32"?child.pid:-child.pid,0);return true;}catch(error){return (error as NodeJS.ErrnoException).code!=="ESRCH";}};
+      const forget=()=>{this.active.delete(id);binding?.signal?.removeEventListener("abort",abort);};
+      const stop=():Promise<boolean>=>{
+        if(stopping)return stopping;
+        stopping=(async()=>{
+          const kill=(signal:NodeJS.Signals)=>{try{if(process.platform!=="win32" && child.pid)process.kill(-child.pid,signal);else child.kill(signal);}catch{/* absence is verified below */}};
+          if(groupAlive()){kill("SIGTERM");await new Promise(resolve=>setTimeout(resolve,250));if(groupAlive())kill("SIGKILL");}
+          for(let i=0;i<50 && groupAlive();i++)await new Promise(resolve=>setTimeout(resolve,10));
+          const confirmed=!groupAlive() && process.platform!=="win32";
+          if(confirmed)forget();else stopping=undefined;
+          return confirmed;
+        })();
+        return stopping;
       };
+      const abort=()=>{void stop();};
       const output={stdout:"",stderr:"",dropped:0,total:0};
-      const capture=(which:"stdout"|"stderr",text:string)=>{output.total+=text.length;const room=Math.max(0,this.config.maxOutputBytes-output[which].length);output[which]+=text.slice(0,room);output.dropped+=Math.max(0,text.length-room);if(output.total>this.config.maxOutputBytes+1_000_000)stop();};
+      const capture=(which:"stdout"|"stderr",text:string)=>{output.total+=text.length;const room=Math.max(0,this.config.maxOutputBytes-output[which].length);output[which]+=text.slice(0,room);output.dropped+=Math.max(0,text.length-room);if(output.total>this.config.maxOutputBytes+1_000_000)void stop();};
       child.stdout.setEncoding("utf8");child.stderr.setEncoding("utf8");
       child.stdout.on("data",text=>capture("stdout",String(text)));child.stderr.on("data",text=>capture("stderr",String(text)));
       child.on("error",error=>capture("stderr",error.message));
-      const timeout=setTimeout(()=>{timedOut=true;stop();},this.config.timeoutMs);timeout.unref();
-      child.once("close",code=>{
-        clearTimeout(timeout);if(killTimer)clearTimeout(killTimer);binding?.signal?.removeEventListener("abort",stop);this.active.delete(id);completed();release();
+      const timeout=setTimeout(()=>{timedOut=true;void stop();},this.config.timeoutMs);timeout.unref();
+      child.once("close",async code=>{
+        clearTimeout(timeout);if(stopping)await stopping;else if(!groupAlive())forget();release();
         const result:HostRunResult={stdout:output.stdout,stderr:output.stderr,code,timedOut,truncatedBytes:output.dropped};
         if(wrapped){const note=sandboxViolations(wrapped,{code,stderr:output.stderr});result.sandbox={mechanism:wrapped.mechanism,...(note?{note}: {})};}
         resolve(result);
       });
-      if(binding){this.active.set(id,{workId:binding.workId,stop,done});binding.signal?.addEventListener("abort",stop,{once:true});if(binding.signal?.aborted)stop();}
+      if(binding){this.active.set(id,{workId:binding.workId,stop});binding.signal?.addEventListener("abort",abort,{once:true});if(binding.signal?.aborted)void stop();}
     });
   }
 }

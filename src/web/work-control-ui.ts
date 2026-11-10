@@ -1,11 +1,11 @@
 /** One action for the current work; legacy containment always requires an explicit member list. */
 export const WORK_CONTROL_JS = `(function(){
-  var dialog, body, note, confirm, preview, target, selected, generation=0;
+  var dialog, body, note, confirm, preview, target, selected, labels, generation=0;
   function el(tag,text){var n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;}
   function request(path,method,data){return fetch(path,{method:method||"GET",headers:{"content-type":"application/json"},...(data?{body:JSON.stringify(data)}:{})}).then(function(r){return r.json().then(function(d){if(!r.ok)throw Error(d.error||r.status);return d;});});}
   function mount(){
     if(dialog)return;
-    dialog=el("dialog");dialog.id="work-cancel-dialog";dialog.setAttribute("aria-labelledby","work-cancel-title");dialog.addEventListener("cancel",function(){generation++;});dialog.style.cssText="width:min(560px,calc(100vw - 48px));max-height:80vh;overflow:auto;border:1px solid var(--border);border-radius:var(--radius-md);padding:24px;background:var(--surface);color:var(--text)";
+    dialog=el("dialog");dialog.id="work-cancel-dialog";dialog.setAttribute("aria-labelledby","work-cancel-title");dialog.addEventListener("cancel",function(){generation++;});dialog.style.cssText="width:min(560px,calc(100vw - 48px));max-height:80vh;overflow:auto;border:1px solid var(--border);border-radius:var(--radius-md);padding:var(--sp-5);box-sizing:border-box;background:var(--surface);color:var(--text)";
     var title=el("h2","{{ui.wc.title}}");title.id="work-cancel-title";title.style.marginTop="0";dialog.appendChild(title);body=el("div");dialog.appendChild(body);note=el("p");note.setAttribute("role","status");dialog.appendChild(note);
     var actions=el("div");actions.className="ui-row";actions.style.justifyContent="flex-end";
     var close=el("button","{{ui.wc.back}}");close.className="btn ghost";close.onclick=function(){generation++;dialog.close();};actions.appendChild(close);
@@ -20,7 +20,7 @@ export const WORK_CONTROL_JS = `(function(){
     }
     body.appendChild(el("p","{{ui.wc.members}} "+d.participants.map(function(a){return a.name;}).join(", ")));
     var counts={};d.resources.forEach(function(r){counts[r.kind]=(counts[r.kind]||0)+1;});
-    var labels={"model-route":"{{ui.wc.modelAccess}}","host-command":"{{ui.wc.hostCommand}}",command:"{{ui.wc.job}}",turn:"{{ui.wc.turn}}",message:"{{ui.wc.message}}",job:"{{ui.wc.job}}",delegate:"{{ui.wc.delegate}}",fork:"{{ui.wc.fork}}",orchestrate:"{{ui.wc.plan}}","ext-job":"{{ui.wc.extension}}",approval:"{{ui.wc.approval}}",pause:"{{ui.wc.approval}}",question:"{{ui.wc.question}}",secret:"{{ui.wc.secret}}",desktop:"{{ui.wc.desktop}}",task:"{{ui.wc.task}}",route:"{{ui.wc.toolRoute}}",reminder:"{{ui.wc.reminder}}"};
+    labels={"model-route":"{{ui.wc.modelAccess}}","host-command":"{{ui.wc.hostCommand}}",command:"{{ui.wc.job}}",turn:"{{ui.wc.turn}}",message:"{{ui.wc.message}}",job:"{{ui.wc.job}}",delegate:"{{ui.wc.delegate}}",fork:"{{ui.wc.fork}}",orchestrate:"{{ui.wc.plan}}","ext-job":"{{ui.wc.extension}}",approval:"{{ui.wc.approval}}",pause:"{{ui.wc.approval}}",question:"{{ui.wc.question}}",secret:"{{ui.wc.secret}}",desktop:"{{ui.wc.desktop}}",task:"{{ui.wc.task}}",route:"{{ui.wc.toolRoute}}",reminder:"{{ui.wc.reminder}}"};
     var list=el("ul");Object.keys(counts).forEach(function(k){list.appendChild(el("li",(labels[k]||"{{ui.wc.other}}")+" · "+counts[k]));});body.appendChild(list);body.appendChild(el("p","{{ui.wc.effectsWarning}}"));
     confirm.disabled=false;confirm.textContent=d.cancelled?"{{ui.wc.checkAgain}}":"{{ui.wc.confirm}}";
   }
@@ -31,7 +31,7 @@ export const WORK_CONTROL_JS = `(function(){
     request(preview.legacy?"/api/work-control/pause-members":"/api/work-control/cancel","POST",data).then(function(d){
       if(ticket!==generation)return;
       if(d.cancelled){var pending=d.cancelled.resources.filter(function(r){return r.state!=="confirmed";});note.textContent=pending.length?"{{ui.wc.cancelledPending}} "+pending.length:"{{ui.wc.cancelled}}";
-        if(pending.length){var list=el("ul");pending.forEach(function(r){var member=preview.participants.find(function(a){return a.id===r.agentId;});list.appendChild(el("li",(member?member.name+" · ":"")+"{{ui.wc.unconfirmed}}"));});body.appendChild(list);}
+        {var list=el("ul");d.cancelled.resources.forEach(function(r){var member=preview.participants.find(function(a){return a.id===r.agentId;});var item=el("li",(labels[r.kind]||"{{ui.wc.other}}")+" · "+(member?member.name+" · ":"")+(r.state==="confirmed"?"{{ui.wc.confirmed}}":r.state==="requested"?"{{ui.wc.requested}}":"{{ui.wc.unconfirmed}}"));var details=el("details"),summary=el("summary","{{ui.wc.diagnostics}}");details.appendChild(summary);details.appendChild(el("p",r.id+" · "+(r.detail||"")));item.appendChild(details);list.appendChild(item);});body.appendChild(list);}
       }else{var errors=d.failures.length+(d.nativeStops||[]).filter(function(r){return r.state!=="confirmed";}).length+d.results.reduce(function(n,r){return n+(r.result.errors||[]).length;},0);note.textContent="{{ui.wc.paused}} "+d.paused.length+(errors?" · {{ui.wc.unconfirmed}} "+errors:"")+" {{ui.wc.queueWarning}}";}
       if(typeof refreshProgress==="function")refreshProgress();
     }).catch(function(e){if(ticket!==generation)return;note.textContent=e.message+" {{ui.wc.refresh}}";confirm.disabled=false;});

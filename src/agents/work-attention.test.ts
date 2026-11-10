@@ -147,6 +147,7 @@ test("cancellation is durable, blocks old continuations, and leaves a colleague'
     const path=join(dir,"work.json");let focus=new WorkAttention(path);
     const root=focus.begin("Mia","main",[user("install")])!, peer=focus.link(root,"Mia","Zed")!;
     const independent=focus.begin("Zed","main",[user("other-request")])!;
+    focus.hold(root,"active-command");
     const ended=focus.cancel(root,"Chris","This task went off track");
     assert.deepEqual(ended.participants,["Mia","Zed"]);
     assert.equal(focus.valid(root,"Mia"),false);assert.equal(focus.valid(peer,"Zed"),false);
@@ -154,6 +155,7 @@ test("cancellation is durable, blocks old continuations, and leaves a colleague'
     focus=new WorkAttention(path);
     assert.equal(focus.cancelled(root.id)?.by,"Chris");
     assert.equal(focus.eligible("Mia","main",{...user("continuation"),synthetic:true,goal:{workId:root.id,taskId:"t1"} as never}),false);
+    assert.equal(focus.get("Mia","main")?.status,"cancelled","a cancelled work with volatile waits stays terminal after restart");
     assert.throws(()=>focus.existing("Mia","main",root.id),/cancelled/);
     const next=focus.begin("Mia","main",[user("new-request")])!;
     assert.notEqual(next.id,root.id);assert.equal(focus.valid(next,"Mia"),true);

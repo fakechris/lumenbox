@@ -107,7 +107,7 @@ test("a brief settles on the engine's end_turn: done, the answer in the note, th
     assert.match(note.text, /Its answer: Done\./);
     assert.match(note.text, /session stays open: continue it with Delegate session_id=/);
     const records = f.committed();
-    const prepared = records.find(r => r.event === "prepared");
+    const prepared = records.find(r => r.event === "prepared" && r.data?.mode === "session");
     assert.equal(prepared?.data?.mode, "session");
     assert.equal(prepared?.data?.engineSessionId, started.engineSessionId);
     assert.equal(prepared?.data?.cwd, f.dir);

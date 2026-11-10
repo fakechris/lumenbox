@@ -6,9 +6,8 @@
  * and wakes the agent with a host note saying how long it was paused and by whom; the messages that
  * queued meanwhile are read in that turn.
  *
- * Background jobs carry no owner the host can read back, but every one an agent has is named in its
- * own record: "Started as job-…" for one it started, "continuing as job-…" for a command that outlived
- * its foreground time (exec-format.ts) — so the tail of that record names them.
+ * Explicit box job ownership authorizes cleanup. Historical text is only a diagnostic hint:
+ * a quoted peer message cannot authorize stopping that peer's process or an unowned process.
  */
 
 import { closeSync, existsSync, fstatSync, openSync, readdirSync, readSync } from "node:fs";
@@ -88,7 +87,9 @@ export class AgentPauses {
     const box = this.deps.box();
     if (box !== undefined) {
       const named = new Set(recordsIn(this.deps.dirFor(agentId)).flatMap(path => jobsNamedIn(path)));
-      const running = (await box.jobs().catch((error: unknown) => { errors.push(`Could not list background jobs: ${error instanceof Error ? error.message : String(error)}`); this.deps.log(errors.at(-1)!); return { jobs: [] }; })).jobs.filter(job => job.running && (job.owner === `agent:${agentId}` || named.has(job.job_id)));
+      const jobs = (await box.jobs().catch((error: unknown) => { errors.push(`Could not list background jobs: ${error instanceof Error ? error.message : String(error)}`); this.deps.log(errors.at(-1)!); return { jobs: [] }; })).jobs;
+      const running=jobs.filter(job=>job.running && job.owner===`agent:${agentId}`);
+      for(const job of jobs.filter(job=>job.running && !job.owner && named.has(job.job_id))){jobsUnconfirmed.push(job.job_id);errors.push(`Ownership of ${job.job_id} is unknown; a quoted history entry cannot authorize stopping it`);}
       for (const job of running) {
         try {
           await box.killJob(job.job_id);

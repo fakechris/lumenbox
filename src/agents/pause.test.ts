@@ -93,22 +93,23 @@ test("pausing stops the turn in flight and only this agent's running background 
   const root = mkdtempSync(join(tmpdir(), "agentbox-pause-svc-"));
   try {
     const transcript = join(root, "conversation.jsonl");
-    writeFileSync(transcript, `{"text":"Started as job-aaaaaaaaaaaaaaaa (pid 1)."}\n{"text":"Started as job-bbbbbbbbbbbbbbbb (pid 2)."}\n`);
-    assert.deepEqual(jobsNamedIn(transcript), ["job-aaaaaaaaaaaaaaaa", "job-bbbbbbbbbbbbbbbb"]);
+    writeFileSync(transcript, `{"text":"Started as job-aaaaaaaaaaaaaaaa (pid 1)."}\n{"text":"Started as job-bbbbbbbbbbbbbbbb (pid 2)."}\n{"text":"Zed reported: Started as job-cccccccccccccccc"}\n`);
+    assert.deepEqual(jobsNamedIn(transcript), ["job-aaaaaaaaaaaaaaaa", "job-bbbbbbbbbbbbbbbb", "job-cccccccccccccccc"]);
     const killed: string[] = [], receipts: string[] = [], told: string[] = [], interrupted: string[][] = [];
     const pauses = new AgentPauses({
       dirFor: () => root,
       wake: () => {},
       interrupt: ids => { interrupted.push(ids); return ids; },
-      box: () => ({ jobs: async () => ({ jobs: [{ job_id: "job-aaaaaaaaaaaaaaaa", running: true }, { job_id: "job-bbbbbbbbbbbbbbbb", running: false }, { job_id: "job-cccccccccccccccc", running: true }, { job_id: "job-dddddddd", running: true, owner: "agent:bob" }] }), killJob: async id => { killed.push(id); },waitForJob:async()=>({running:false}) }),
+      box: () => ({ jobs: async () => ({ jobs: [{ job_id: "job-aaaaaaaaaaaaaaaa", running: true }, { job_id: "job-bbbbbbbbbbbbbbbb", running: false }, { job_id: "job-cccccccccccccccc", running: true, owner:"agent:zed" }, { job_id: "job-dddddddd", running: true, owner: "agent:bob" }] }), killJob: async id => { killed.push(id); },waitForJob:async()=>({running:false}) }),
       tell: async (_id, text) => { told.push(text); },
       receipt: (subject, decision) => receipts.push(`${subject} ${decision}`),
       log: () => {},
       now: () => new Date("2026-11-04T00:10:00Z"),
     });
     const done = await pauses.pause("bob", "Chris", "probing the host");
-    assert.deepEqual([done.turnStopped, done.jobsStopped], [true, ["job-aaaaaaaaaaaaaaaa", "job-dddddddd"]], "its running jobs only — named in its record or owned by it (INV-1557); not an ended one, not someone else's");
-    assert.deepEqual(killed, ["job-aaaaaaaaaaaaaaaa", "job-dddddddd"]);
+    assert.deepEqual([done.turnStopped, done.jobsStopped], [true, ["job-dddddddd"]], "explicit ownership is required; quoted history does not confer ownership");
+    assert.deepEqual(killed, ["job-dddddddd"]);
+    assert.deepEqual(done.jobsUnconfirmed,["job-aaaaaaaaaaaaaaaa"]);
     assert.equal(readPause(root)?.reason, "probing the host");
     assert.equal(await pauses.resume("bob", "Chris"), true);
     assert.equal(readPause(root), undefined);

@@ -20,6 +20,8 @@
  * Metering is not here: the engine's model traffic goes through the relay, whose rows are
  * the bill (model-relay.ts). `usage_update` from the engine is context occupancy, not tokens.
  */
+import { cleanupBox } from "./work-executor.ts";
+import type {StopResource} from "../agents/work-attention.ts";
 import { createHash } from "node:crypto";
 import type { BoxClient } from "../box/client.ts";
 import type { AcpEvent } from "../protocol/index.ts";
@@ -34,6 +36,7 @@ export type AcpBox = Pick<BoxClient, "acpOpen" | "acpSend" | "acpReply" | "acpEv
 
 export interface AcpDelegateDeps {
   returnFor?: (agentId:string,conversation:string,workId:string) => import("../agents/work-attention.ts").WorkReturn | undefined;
+  cancelledResource?: (workId:string,resource:StopResource)=>void;
   isCancelled?: (workId: string) => boolean;
   pendingWork?: PendingWork;
   policy?: PolicyGate;
@@ -131,6 +134,8 @@ export class AcpDelegates {
    */
   async start(input: StartInput, jobId: string): Promise<{ jobId: string; engineSessionId: string; logPath: string }> {
     if (input.workId && this.deps.isCancelled?.(input.workId)) throw new Error("Work cancelled");
+    // Persist the client-chosen session id before dispatch: a lost response is outcome unknown.
+    const opening=this.deps.pendingWork?.prepare({kind:"delegate",agentId:input.agentId,parent:input.conversation,child:jobId,workId:input.workId,brief:`${input.engine}: opening session`,data:{mode:"opening-session",engine:input.engine,cwd:input.cwd}});
     const opened = await input.box.acpOpen({
       session_id: jobId,
       command: input.command,
@@ -140,7 +145,17 @@ export class AcpDelegates {
       ...(input.call !== undefined ? { call: input.call } : {}),
       actor: `agent:${input.agentId}`,
     });
-    if (input.workId && this.deps.isCancelled?.(input.workId)) { await input.box.acpClose({session_id:jobId}); throw new Error("Work cancelled while the session opened"); }
+    if (input.workId && this.deps.isCancelled?.(input.workId)) {
+      const resource:StopResource={kind:"delegate",id:opening ?? jobId,agentId:input.agentId,state:"unconfirmed",detail:"Session opened after cancellation"};
+      this.deps.cancelledResource?.(input.workId,resource);
+      try{
+        const raw=cleanupBox(input.box);await raw.acpClose({session_id:jobId});
+        const running=(await raw.acpSessions()).sessions.some(row=>row.session_id===jobId && row.running);
+        this.deps.cancelledResource?.(input.workId,{...resource,state:running?"requested":"confirmed"});
+        if(!running && opening)this.deps.pendingWork?.dropped(opening,"cancelled");
+      }catch{/* retain the durable unconfirmed session for recovery */}
+      throw new Error("Work cancelled while the session opened");
+    }
     const watch: Watch = {
       jobId,
       agentId: input.agentId,
@@ -156,9 +171,10 @@ export class AcpDelegates {
     this.watches.set(jobId, watch);
     try {
       await this.brief(watch, input.prompt, { engine: input.engine, workId: input.workId, turnId: input.turnId });
+      if(opening)this.deps.pendingWork?.dropped(opening,"unrecorded");
     } catch (error) {
       this.watches.delete(jobId);
-      await input.box.acpClose({ session_id: jobId }).catch(() => undefined);
+      await cleanupBox(input.box).acpClose({ session_id: jobId }).catch(() => undefined);
       throw error;
     }
     void this.loop(watch);
@@ -230,7 +246,7 @@ export class AcpDelegates {
     const watch = this.watches.get(jobId);
     if (watch === undefined) throw new Error(`${jobId} is not an open delegate session on this host`);
     if (watch.inFlight === undefined) return false;
-    await watch.box.acpSend({ session_id: jobId, method: "session/cancel", params: { sessionId: watch.engineSessionId }, notify: true });
+    await cleanupBox(watch.box).acpSend({ session_id: jobId, method: "session/cancel", params: { sessionId: watch.engineSessionId }, notify: true });
     void this.awaitCancel(watch, "the agent cancelled the brief");
     return true;
   }
@@ -256,16 +272,16 @@ export class AcpDelegates {
     watch.stopped = true;
     this.watches.delete(watch.jobId);
     this.settle(watch, "aborted", `${why}; the engine did not confirm the cancel within ${Math.round(grace / 1000)}s, so the host closed the session`);
-    await watch.box.acpClose({ session_id: watch.jobId }).catch(() => undefined);
+    await cleanupBox(watch.box).acpClose({ session_id: watch.jobId }).catch(() => undefined);
   }
 
   /** Ends the engine; a brief still in flight is settled as aborted by the host's own hand. */
   async close(jobId: string, why = "closed by the agent"): Promise<void> {
     const watch = this.watches.get(jobId);
     if (watch === undefined) throw new Error(`${jobId} is not an open delegate session on this host`);
+    await cleanupBox(watch.box).acpClose({ session_id: jobId });
     watch.stopped = true;
     this.watches.delete(jobId);
-    await watch.box.acpClose({ session_id: jobId }).catch(() => undefined);
     if (watch.inFlight !== undefined) this.settle(watch, "aborted", `the session was ${why} before the engine answered`);
   }
 
@@ -344,7 +360,7 @@ export class AcpDelegates {
     const deadline = (this.deps.now ?? Date.now)() + timeoutMs;
     let since = 0;
     while ((this.deps.now ?? Date.now)() < deadline) {
-      const page = await watch.box.acpEvents({ session_id: watch.jobId, since, timeout_ms: 1_000 });
+      const page = await cleanupBox(watch.box).acpEvents({ session_id: watch.jobId, since, timeout_ms: 1_000 });
       for (const event of page.events) {
         since = event.seq;
         if (event.kind === "response" && event.message?.id === rpcId) return event.message;
@@ -358,7 +374,7 @@ export class AcpDelegates {
     while (!watch.stopped) {
       let page: Awaited<ReturnType<AcpBox["acpEvents"]>>;
       try {
-        page = await watch.box.acpEvents({ session_id: watch.jobId, since: watch.since, timeout_ms: this.deps.eventsTimeoutMs ?? 25_000 });
+        page = await cleanupBox(watch.box).acpEvents({ session_id: watch.jobId, since: watch.since, timeout_ms: this.deps.eventsTimeoutMs ?? 25_000 });
       } catch (error) {
         this.deps.log?.(`acp ${watch.jobId}: events unreachable (${error instanceof Error ? error.message : String(error)}); retrying`);
         await new Promise(resolve => setTimeout(resolve, 2_000));
