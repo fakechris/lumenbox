@@ -52,6 +52,10 @@ test("2000 retained steps paginate exactly once after archive/live duplication a
     const reopened = f.service();
     assert.equal(reopened.open("task-A", access).total, 2000);
     assert.throws(() => reopened.page("task-A", access, { snapshot: page.snapshot }), ExecutionReset);
+    rmSync(f.path);
+    const retained = f.service().open("task-A", access);
+    assert.equal(retained.total, 2000, "archives remain readable after loss of the live tail");
+    assert.equal(retained.coverage, "partial", "an archive cannot prove that the missing live tail was empty");
   } finally { f.cleanup(); }
 });
 

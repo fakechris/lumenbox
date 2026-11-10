@@ -343,7 +343,7 @@ export class TurnLedger {
     const records: LedgerRecord[] = [], seen = new Set<string>();
     let partial = this.executionArchives.missing();
     for (const path of [...archivePaths(this.path), this.path]) {
-      if (!existsSync(path)) { if (path === this.path && records.length === 0) partial = true; continue; }
+      if (!existsSync(path)) { if (path === this.path) partial = true; continue; }
       try {
         for (const line of readFileSync(path, "utf8").split("\n")) {
           if (!line.trim()) continue;
