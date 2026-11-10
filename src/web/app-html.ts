@@ -6125,7 +6125,7 @@ var roundLabel = "";
  * would splice itself into the team room the operator is reading. An event with no
  * conversation is the main room, matching how a pre-conversations turn is stored.
  */
-var viewedTimer = null; function markViewed(id, conversation) { if (!id || !document.hasFocus()) return; clearTimeout(viewedTimer); viewedTimer = setTimeout(function () { fetch("/api/agents/viewed", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: id, conversation: conversation }) }).then(refresh).catch(function () {}); }, 400); } window.addEventListener("focus", function () { markViewed(current, currentConversation); }); // the person looked (INV-1625): debounced, only while the window has focus
+var viewedTimer = null; function markViewed(id, conversation) { if (window.taskFocusVisible || !id || !document.hasFocus()) return; clearTimeout(viewedTimer); viewedTimer = setTimeout(function () { if (window.taskFocusVisible) return; fetch("/api/agents/viewed", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: id, conversation: conversation }) }).then(refresh).catch(function () {}); }, 400); } window.addEventListener("focus", function () { markViewed(current, currentConversation); }); // the person looked (INV-1625): debounced, only while the window has focus
 function inView(e) {
   if (window.taskFocusVisible) { if (e.agentId === current && (e.conversation || "main") === currentConversation) window.taskConversationDirty = true; return false; }
   return e.agentId === current && (e.conversation || "main") === currentConversation;
