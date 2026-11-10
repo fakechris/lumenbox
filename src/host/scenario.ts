@@ -542,6 +542,8 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
   }, event => {
     if (event.type === "turn_finished") goalLoop?.onTurnFinished(event.agentId);
   }, undefined, false, (agentId, message) => admitProgressMessage(options.tasks, agentId, message), options.workAttention ?? new WorkAttention(undefined, (id, conversation) => registry.contextVersion(id, conversation)));
+  // Explicit history fixtures represent an already-admitted interrupted work, as a real resume does.
+  if (options.history?.length) bus.workAttention!.existing(front.id, "main", "scenario-existing-work");
   // Engines kept alive as sessions (docs/81): the bus delivers their notes, as the orchestrator's does.
   const acpDelegates =
     options.pendingWork !== undefined

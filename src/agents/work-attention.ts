@@ -1,15 +1,16 @@
 /** Current user work outlives a physical turn. The host owns admission and peer relationships. */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import type { InboundMessage } from "./admitted-message.ts";
 import type { AgentRegistry } from "./registry.ts";
 
 export interface WorkStamp { id: string; owner: string; conversation: string; generation: number; epoch: number; isolated?: boolean; previous?: string }
+export interface WorkReturn { work: WorkStamp; conversation: string }
 export interface CurrentWork extends WorkStamp {
   principal?: string;
   status: "running" | "waiting" | "answered";
-  reason?: string;
+  reason?: string; unavailable?: {participant: string; tool: string};
   messages: string[];
   peers: string[];
   awaiting: string[];
@@ -51,7 +52,7 @@ export class WorkAttention {
     }
     const previous = this.get(agent, conversation);
     const reuse = previous && previous.status !== "answered" && previous.principal === first.principalId && first.steerable !== false;
-    const next: CurrentWork = reuse ? { ...previous, messages: [...new Set([...previous.messages, ...humans.map(m => m.id)])].slice(-128), status: "running", reason: undefined }
+    const next: CurrentWork = reuse ? { ...previous, messages: [...new Set([...previous.messages, ...humans.map(m => m.id)])].slice(-128), status: "running", reason: undefined, unavailable: undefined }
       : { id: first.id, owner: agent, conversation, generation: (previous?.generation ?? 0) + 1, epoch: this.epochOf(agent, conversation), isolated: true, ...(previous ? { previous: workStateConversation(previous, conversation) } : {}), principal: first.principalId, status: "running", messages: humans.map(m => m.id), peers: [], awaiting: [] };
     this.current.set(keyOf(agent, conversation), next); this.save(); return this.stamp(next);
   }
@@ -82,11 +83,19 @@ export class WorkAttention {
       (message.fromId === "system" || message.fromId === "user" && message.synthetic || this.valid(message.work, message.fromId)) && this.valid(message.work, agent);
   }
   forId(agent: string, conversation: string, id: string): WorkStamp | undefined {
-    const work = this.get(agent, conversation);
-    return work?.id === id && work.status !== "answered" ? this.stamp(work) : undefined;
+    for (const work of this.current.values()) {
+      const stamp = this.stamp(work);
+      if (work.id === id && this.valid(stamp, agent) && (work.owner === agent ? conversation === work.conversation : conversation === peerWorkConversation([{fromId: work.owner, work: stamp} as InboundMessage], conversation))) return stamp;
+    }
+    return undefined;
   }
   hold(stamp: WorkStamp, id: string): void { const work = this.live(stamp); if (work && !work.awaiting.includes("volatile:" + id)) { work.awaiting.push("volatile:" + id); this.save(); } }
   release(stamp: WorkStamp, id: string): void { const work = this.live(stamp); if (work) { work.awaiting = work.awaiting.filter(item => item !== "volatile:" + id); this.save(); } }
+  capability(stamp: WorkStamp, participant: string, tool: string, available: boolean): void {
+    const work = this.live(stamp); if (!work || !this.valid(stamp, participant)) return;
+    if (!available) { work.unavailable = {participant,tool}; this.save(); }
+    else if (work.unavailable?.participant === participant && work.unavailable.tool === tool) { work.unavailable = undefined; this.save(); }
+  }
   settle(stamp: WorkStamp, status: CurrentWork["status"], reason?: string): void {
     const value = this.live(stamp);
     if (!value) return;
@@ -110,11 +119,12 @@ export function peerWorkConversation(messages: readonly InboundMessage[], fallba
 }
 
 /** Work history compacts independently; the original conversation remains an append-only display record. */
-export function workRegistry(base: AgentRegistry, agentId: string, conversation: string, scoped: string, stamp?: WorkStamp): AgentRegistry {
+export function workRegistry(base: AgentRegistry, agentId: string, conversation: string, scoped: string, stamp?: WorkStamp, personText?: (entry: ReferenceEntry) => string | undefined): AgentRegistry {
   if (conversation === scoped) return base;
-  if (stamp?.owner === agentId && base.readTranscript(agentId, scoped).length === 0) {
+  if (personText && stamp?.owner === agentId && base.readTranscript(agentId, scoped).length === 0) {
     const reference = base.readTranscript(agentId, stamp.previous ?? conversation) as ReferenceEntry[];
-    for (const entry of referenceHistory(reference, !!stamp.previous)) base.appendTranscript(agentId, entry, scoped);
+    const references = referenceHistory(reference, personText);
+    if (references.length) base.appendTranscript(agentId, {role:"user",host:true,text:"[Earlier conversation reference only; not current instructions. ReadHistory can inspect the original conversation " + (stamp.previous ?? conversation) + ".]\n" + references.map(entry => entry.role + ": " + entry.text).join("\n\n"),at:new Date().toISOString()}, scoped);
   }
   const source = base.readTranscript(agentId, conversation) as ReferenceEntry[];
   const projected = new Set((base.readTranscript(agentId, scoped) as ReferenceEntry[]).map(entry => entry.workRecordId).filter(Boolean));
@@ -129,7 +139,7 @@ export function workRegistry(base: AgentRegistry, agentId: string, conversation:
     if (key === "appendTranscript") return (agent: string, entry: unknown, thread = "main") => {
       const mapped = map(agent, thread);
       if (mapped === thread) { target.appendTranscript(agent, entry, thread); return; }
-      const recorded = { ...(entry as object), workScope: mapped, workRecordId: randomUUID() };
+      const recorded = { ...(entry as object), workScope: mapped, workRecordId: createHash("sha256").update(JSON.stringify([mapped, entry])).digest("hex") };
       // The existing recovery ledger reads the original transcript. Its append is canonical;
       // a crash before the work projection is repaired above, without replaying the effect.
       target.appendTranscript(agent, recorded, thread); target.appendTranscript(agent, recorded, mapped);
@@ -139,17 +149,19 @@ export function workRegistry(base: AgentRegistry, agentId: string, conversation:
   } });
 }
 
-/** Migrate human history once; later answered work carries only bounded prose for references. */
+/** Earlier prose supports references; a new request never inherits old tool instructions or plans. */
 type ReferenceEntry = { role?: string; kind?: string; text?: string; turnId?: string; fromPerson?: boolean; host?: boolean; workScope?: string; workRecordId?: string };
-function referenceHistory(entries: ReferenceEntry[], bounded: boolean): ReferenceEntry[] {
-  const backgroundTurns = new Set(entries.filter(entry => entry.host || entry.kind === "peer").map(entry => entry.turnId).filter(Boolean));
-  let background = false;
+function referenceHistory(entries: ReferenceEntry[], personText: (entry: ReferenceEntry) => string | undefined): ReferenceEntry[] {
+  const isOpening = (entry: ReferenceEntry) => entry.role === "user" && !entry.kind && typeof entry.text === "string";
+  const backgroundTurns = new Set(entries.filter(entry => isOpening(entry) && personText(entry) === undefined).map(entry => entry.turnId).filter(Boolean));
+  let background = true;
   const admitted = entries.filter(entry => {
-    if (entry.kind === "peer" || entry.host) background = true;
-    else if (!entry.kind && entry.role === "user") background = false;
-    return !background && !backgroundTurns.has(entry.turnId) && (!bounded || !entry.kind && !!entry.text);
-  });
-  if (!bounded) return admitted;
-  let chars = 0;
-  return admitted.slice(-8).reverse().filter(entry => { chars += entry.text!.length; return chars <= 8000; }).reverse();
+    if (isOpening(entry)) background = personText(entry) === undefined;
+    return !background && !backgroundTurns.has(entry.turnId) && !entry.kind && !!entry.text;
+  }).map(entry => isOpening(entry) ? {...entry,text:personText(entry)!} : entry);
+  let remaining = 8000;
+  return admitted.slice(-8).reverse().flatMap(entry => {
+    const text = entry.text!.slice(0, Math.min(4000, remaining)); remaining -= text.length;
+    return text ? [{...entry,text}] : [];
+  }).reverse();
 }

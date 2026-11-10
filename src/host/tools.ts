@@ -169,7 +169,7 @@ export interface ToolContext {
     agentName: string;
     id: string;
     description: string;
-    conversation?: string;
+    conversation?: string; work?: import("../agents/work-attention.ts").WorkStamp;
   }) => string | undefined;
   /**
    * Hands the agent's desktop to the person with one instruction. The person sees the
@@ -180,7 +180,7 @@ export interface ToolContext {
     agentName: string;
     instruction: string;
     reason: "auth" | "captcha" | "payment" | "other";
-    conversation?: string;
+    conversation?: string; work?: import("../agents/work-attention.ts").WorkStamp;
   }) => string | undefined;
   /**
    * Shows the person a card the agent composed (docs/79). The host checks the
@@ -207,7 +207,7 @@ export interface ToolContext {
     fallback?: string; recommended?: string; // which answer it leans to, in its words (INV-1651)
     /** How long the question is open before the default (or a skip) is applied. */
     expiresInMinutes?: number;
-    conversation?: string;
+    conversation?: string; work?: import("../agents/work-attention.ts").WorkStamp;
   }) => Promise<string | undefined>;
   /**
    * The MCP servers whose tools are on offer this turn. Absent means none, which is
@@ -1336,7 +1336,7 @@ export function buildTools(
     {
       name: "SendToAgent",
       description:
-        "Send a message to another of your user's agents. Delivery is fire-and-forget: it " +
+        "By default, the current work awaits the result. For information that needs no result, set expect_result:false. Send a message to another of your user's agents. Delivery is fire-and-forget: it " +
         "wakes that agent and returns an acknowledgement immediately. It does NOT return " +
         "their reply, and you must not wait or poll for one in this turn — send it and move " +
         "on. Any reply arrives later as its own message that wakes you on a fresh turn. " +
@@ -1348,6 +1348,7 @@ export function buildTools(
       input_schema: {
         type: "object",
         properties: {
+          expect_result: {type:"boolean",description:"False only for informational updates that need no reply. Default true: the user work remains waiting for a related result."},
           target_id: {
             type: "string",
             description:
@@ -2608,7 +2609,7 @@ export async function dispatchTool(
   // Before the switch, so no tool added later can bypass it. A refusal comes back as a tool error:
   // the model sees why, and can stop or ask, rather than retrying into a wall.
   const decision = context.policy?.check({
-    kind: "tool",
+    kind: "tool", ...(context.work ? {returnTo:{work:context.work,conversation:context.conversation ?? MAIN_CONVERSATION}} : {}),
     agentId: context.agent.id,
     agentName: context.agent.profile.name,
     tool: name,
@@ -3607,7 +3608,7 @@ export async function dispatchTool(
         return { text: "There is nowhere to ask for a secret on this run. Say what you would need and stop.", isError: true };
       }
       const where = context.askSecret({
-        agentId: context.agent.id,
+        agentId: context.agent.id, work: context.work,
         agentName: context.agent.profile.name,
         id,
         description,
@@ -3658,7 +3659,7 @@ export async function dispatchTool(
         return { text: "There is no desktop to hand over on this run.", isError: true };
       }
       const where = context.handOver({
-        agentId: context.agent.id,
+        agentId: context.agent.id, work: context.work,
         agentName: context.agent.profile.name,
         instruction,
         reason: reason === "auth" || reason === "captcha" || reason === "payment" ? reason : "other",
@@ -3708,7 +3709,7 @@ export async function dispatchTool(
       }
       const where = await context.askUser({
         ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}),
-        agentId: context.agent.id,
+        agentId: context.agent.id, work: context.work,
         agentName: context.agent.profile.name,
         question,
         ...(options !== undefined && options.length > 0 ? { options } : {}),
@@ -4217,7 +4218,7 @@ export async function dispatchTool(
             };
           }
           const decision = context.policy.check({
-            kind: "tool",
+            kind: "tool", ...(context.work ? {returnTo:{work:context.work,conversation:context.conversation ?? MAIN_CONVERSATION}} : {}),
             agentId: context.agent.id,
             agentName: context.agent.profile.name,
             tool: name,
@@ -4622,7 +4623,7 @@ export async function dispatchTool(
         fromId: context.agent.id,
         toId: targetId,
         text: String(input.message ?? ""),
-        priority: input.priority === true, work: context.work,
+        priority: input.priority === true, work: context.work, expectResult: input.expect_result !== false,
         hops: context.chainHops ?? 0,
       });
       return { text: ack };
@@ -4906,6 +4907,7 @@ export async function dispatchTool(
       // reads exactly like a thin one.
       // Each context version apart, so an anchor is (epoch, index) and stays put (INV-1188).
       const thread = typeof input.conversation === "string" ? input.conversation : context.audit ? context.tasks?.get(context.audit.taskId)?.conversation ?? "main" : target.id === context.agent.id ? context.historyConversation ?? context.conversation : context.work?.conversation ?? context.conversation;
+      if (thread !== undefined && !/^[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(thread)) return {text: "Invalid conversation identifier; history stays within the selected agent.", isError: true};
       const parts = context.registry.readContextTranscriptsByEpoch(target.id, thread);
       const query = {
         ...(typeof input.search === "string" && input.search.trim() !== ""
@@ -5415,7 +5417,7 @@ export async function dispatchTool(
       }
       // The gate judged `UseMcpTool`; the inner tool is a separate decision, or this is a way around every rule.
       const inner = context.policy?.check({
-        kind: "tool",
+        kind: "tool", ...(context.work ? {returnTo:{work:context.work,conversation:context.conversation ?? MAIN_CONVERSATION}} : {}),
         agentId: context.agent.id,
         agentName: context.agent.profile.name,
         tool: target,

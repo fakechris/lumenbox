@@ -1104,3 +1104,21 @@ test("on a host box a write asks by default, a look does not, and an operator's 
     cleanup();
   }
 });
+
+test("once approval stays with its work while explicit session and standing grants retain their action scope", () => {
+  const {gate,restart,cleanup}=fixture({approvalRequiredCommands:["deploy"]});
+  const scoped=(id:string):PolicyRequest=>({...toolRequest("deploy staging"),returnTo:{work:{id,owner:"a1",conversation:"main",generation:1,epoch:0},conversation:"main"}} as PolicyRequest);
+  try {
+    const first=gate.check(scoped("work-a"));assert.ok(!first.allow&&first.approval);
+    assert.deepEqual(restart().pending().find(item=>item.id===first.approval!.id)!.returnTo,first.approval.returnTo,"pending native approvals retain their return path across restart");
+    assert.equal(gate.grant(first.approval.id,"user","once"),true);
+    const second=gate.check(scoped("work-b"));assert.ok(!second.allow&&second.approval,"another work cannot consume the one-off consent");
+    assert.equal(gate.grant(second.approval.id,"user","session"),true);
+    assert.equal(gate.check(scoped("work-c")).allow,true,"the explicitly chosen session scope is preserved across works");
+    const fresh=restart(), next=fresh.check(scoped("work-d"));assert.ok(!next.allow&&next.approval);
+    assert.equal(next.approval.returnTo!.work.id,"work-d");
+    assert.equal(fresh.grant(next.approval.id,"user","always"),true);
+    const restored=restart();assert.equal(restored.check(scoped("work-e")).allow,true);
+    assert.equal(restored.pending().length,0,"a standing grant does not leave its old work question pending");
+  } finally {cleanup();}
+});

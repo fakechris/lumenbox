@@ -97,7 +97,7 @@ import {
   SUMMARY_WORD_CAP,
   summaryEntry,
   clampSummaryToBudget,
-  type HistoryEntry,
+  personAuthoredText, type HistoryEntry,
   replacedRange,
   type SummaryEntry,
 } from "./compaction.ts";
@@ -1423,7 +1423,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       (inbound[0]?.goal ? bus.workAttention.existing(agent.id, conversation, inbound[0].goal.workId) : deps.resumeOf?.workId ? bus.workAttention.existing(agent.id, conversation, deps.resumeOf.workId) : undefined) : undefined;
   const historyConversation = workStateConversation(work, conversation);
   let blockedCapability: string | undefined; let confirmationPending = false;
-  const registry = workRegistry(deps.registry, agent.id, conversation, historyConversation, work);
+  const registry = workRegistry(deps.registry, agent.id, conversation, historyConversation, work, entry => personAuthoredText(entry as HistoryEntry) ?? (givesTasks(entryChannel(entry as HistoryEntry)) ? entry.text : undefined));
   const audit = admittedAudit(inbound);
   if (inbound.some(message => message.origin === "host:audit") && (!audit || !auditCurrent(audit, agent.id, conversation, deps.tasks))) return;
   const contextMode = registry.contextMode(agent.id, conversation);
@@ -1550,8 +1550,9 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     endedHow = how;
     if (work?.owner === agent.id && bus.workAttention?.valid(work, agent.id)) {
       const unfinished = registry.readDurableState(agent.id, conversation).todos?.some(item => item.status !== "done") || !!taskBinding && !["review", "done", "dropped"].includes(deps.tasks?.get(taskBinding.taskId)?.status ?? "");
-      const pendingPeers = (bus.workAttention.get(work.owner, work.conversation)?.awaiting.length ?? 0) + bus.relatedPending(agent.id, work) + (deps.pendingWork?.open().filter(item => item.agentId === agent.id && item.workId === workId && item.kind !== "reminder").length ?? 0);
-      bus.workAttention.settle(work, how !== "done" || unfinished || pendingPeers || confirmationPending ? "waiting" : "answered", blockedCapability ? "required tool unavailable: " + blockedCapability : how !== "done" ? how : confirmationPending ? "waiting for confirmation" : pendingPeers ? "waiting for related work" : unfinished ? "unfinished plan" : undefined);
+      const unavailable = bus.workAttention.get(work.owner, work.conversation)?.unavailable;
+      const pendingPeers = (bus.workAttention.get(work.owner, work.conversation)?.awaiting.length ?? 0) + bus.relatedPending(agent.id, work) + (deps.pendingWork?.open().filter(item => item.workId === workId && item.kind !== "reminder").length ?? 0);
+      bus.workAttention.settle(work, how !== "done" || unfinished || pendingPeers || confirmationPending || unavailable ? "waiting" : "answered", (blockedCapability || unavailable) ? "required tool unavailable: " + (blockedCapability ?? unavailable!.tool) : how !== "done" ? how : confirmationPending ? "waiting for confirmation" : pendingPeers ? "waiting for related work" : unfinished ? "unfinished plan" : undefined);
     }
     deps.tasks?.progress.close(progressContext);
     deps.turns?.end(turnId, how, new Date(), category, keptThisTurn);
@@ -1814,14 +1815,14 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
             displayIndex: deps.displayIndex,
             ensureDesktop: deps.ensureDesktop,
             boxOwner: deps.boxOwner,
-            tasks: deps.tasks, taskBinding, progressContext,
+            tasks: deps.tasks, taskBinding, progressContext, work, historyConversation,
             turnId,
             toolUseId: call.id,
             conversation,
             memorySources: inbound.map(message => `message:${message.id}`),
           }, emit);
           if (outcome.approval !== undefined) {
-        confirmationPending = true;
+            confirmationPending = true;
             // The gate asked a person. The same shape as a first run: the refusal is the
             // call's result, the step is marked waiting, and it is not settled below.
             deps.steps?.awaitingApproval(turnId, call.id, outcome.approval.id);
@@ -2122,8 +2123,9 @@ ${outcome.text}`;
     if (personOpened || text.trim() === "") return;
     const peers = new Set(inbound.map(message => message.fromId));
     if (peers.size !== 1) return;
-    const peer = inbound[0]!;
-    if (inbound.some(message => message.relayed === true)) return;
+    const asyncResult = work && work.owner !== agent.id && inbound.every(message => message.fromId === "system" || message.synthetic);
+    const peer = asyncResult ? {fromId: work.owner, fromName: registry.get(work.owner).profile.name} : inbound[0]!;
+    if (!asyncResult && inbound.some(message => message.relayed === true)) return;
     const peerRecord = registry.tryGet(peer.fromId);
     // A system note (a fork landing, a saved secret) is not a peer; prose after it is for the record.
     if (peerRecord === undefined) return;
@@ -3209,6 +3211,7 @@ ${outcome.text}`;
       // records the verdict; enforce mode waits for it and hands a BLOCK back to the model as the
       // tool's answer, with the reason, so the agent can ask rather than guess.
       const toolInput = (toolUse.input ?? {}) as Record<string, unknown>;
+      const offeredHere = tools.some(tool => tool.name === toolUse.name) || deferred.some(tool => tool.name === toolUse.name) || allowedMcp.some(tool => tool.name === toolUse.name && (routineScope === undefined || routineScope.has(tool.name)));
       const reviewWhy =
         isolated || deps.autoReview === undefined
           ? undefined
@@ -3219,7 +3222,7 @@ ${outcome.text}`;
             // On the person's own machine (INV-438) every write is a host action.
             (deps.boxKind === "host" ? hostBoxWrite(toolUse.name, toolInput) : undefined));
       let blocked: Verdict | undefined;
-      if (!audit && !blockedCapability && reviewWhy !== undefined && deps.autoReview !== undefined && deps.autoReview.mode() !== "off") {
+      if (!audit && !blockedCapability && offeredHere && reviewWhy !== undefined && deps.autoReview !== undefined && deps.autoReview.mode() !== "off") {
         const reviewInput = reviewInputFor({
           agentName: agent.profile.name,
           inbound,
@@ -3242,7 +3245,7 @@ ${outcome.text}`;
       // PreToolUse hooks, after auto-review: a person's own script gets the same veto, with the
       // same shape of answer to the model.
       let hookBlock: string | undefined;
-      if (!audit && !blockedCapability && !isolated && blocked === undefined && deps.hooks?.has("PreToolUse", toolUse.name)) {
+      if (!audit && !blockedCapability && offeredHere && !isolated && blocked === undefined && deps.hooks?.has("PreToolUse", toolUse.name)) {
         const hook = await deps.hooks.run("PreToolUse", {
           session_id: turnId,
           agent_name: agent.profile.name,
@@ -3253,13 +3256,14 @@ ${outcome.text}`;
       }
 
       if (signal.aborted || work && !bus.workAttention!.valid(work, agent.id)) throw new TurnAborted();
+      const requiredComputerTool = ["bash", "read_file", "write_file", "edit_file", "list_dir", "computer"].includes(toolUse.name);
       let outcome: ToolOutcome;
       if (blockedCapability) {
         outcome = { text: "Not executed: this user work is waiting for its required tool. No unrelated work may replace it.", isError: true };
       } else if (audit && (!auditCurrent(audit, agent.id, conversation, deps.tasks) || !auditToolAllowed(audit, toolUse.name, toolInput))) {
         outcome = { text: "Review refused: this audit may only read its current evidence. It cannot create probe tasks, change work, send messages or write memory.", isError: true };
-      } else if (isolated || (effectiveTools !== undefined && !tools.some(tool => tool.name === toolUse.name))) {
-        if (work && !isolated && ["bash", "read_file", "write_file", "edit_file", "list_dir", "computer"].includes(toolUse.name)) blockedCapability = toolUse.name;
+      } else if (isolated || !offeredHere) {
+        if (work && !isolated && requiredComputerTool) { blockedCapability = toolUse.name; bus.workAttention?.capability(work, agent.id, toolUse.name, false); }
         outcome = { text: isolated ? `Tools are disabled in ${contextMode} context.` : "This tool is unavailable in the current execution context.", isError: true };
       } else if (goal?.verify !== undefined && toolUse.name === "bash" && !commandIsConfirmed(goal, String((toolInput as { command?: unknown }).command ?? ""))) {
         // A verifier runs what the person confirmed and nothing else (review R3): the checklist
@@ -3350,7 +3354,10 @@ ${outcome.text}`;
           isError: true, outcome: boxErrorOutcome(error) ?? "failed",
         };
       }
+      if (work && requiredComputerTool && !outcome.isError) bus.workAttention?.capability(work, agent.id, toolUse.name, true);
+      if (!outcome.isError && ["AskUser", "AskSecret", "HandOverDesktop"].includes(toolUse.name)) confirmationPending = true;
       if (outcome.approval !== undefined) {
+        confirmationPending = true;
         deps.steps?.awaitingApproval(turnId, toolUse.id, outcome.approval.id);
         awaitingPerson.add(toolUse.id);
       }
@@ -3416,7 +3423,7 @@ ${outcome.text}`;
       }
       // PostToolUse hooks see the result; a block here is a note appended for the model, which is
       // what Claude Code does with a hook's stderr on exit 2.
-      if (!audit && !blockedCapability && deps.hooks?.has("PostToolUse", toolUse.name)) {
+      if (!audit && !blockedCapability && offeredHere && deps.hooks?.has("PostToolUse", toolUse.name)) {
         const hook = await deps.hooks.run("PostToolUse", {
           session_id: turnId,
           agent_name: agent.profile.name,

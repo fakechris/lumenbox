@@ -66,7 +66,7 @@ and the source disagree. Change the source and run `node scripts/docs-reference.
 | `RememberFact` | Keep something across conversations. | self | no | always; not in a fork | resident | desk, web, code, team | `fact`, `scope`, `replaces` |
 | `RunOnHost` | Run a command on the person's own computer — the machine LumenBox runs on, outside your box. | credential | yes: “run a command on the person's own machine” | needs a host runner; not in a fork | resident | — | `command`, `why`, `secrets` |
 | `RunOperation` | Run a taught operation: a skill whose folder holds operation.json replays its browser (and desktop) steps with no model, and returns its output as JSON. | reach | yes: “replay a taught browser operation” | needs a box | deferred | — | `skill`, `input` |
-| `SendToAgent` | Send a message to another of your user's agents. | self | no | always; not in a fork | resident | desk, web, code, team | `target_id`, `message`, `priority` |
+| `SendToAgent` | By default, the current work awaits the result. | self | no | always; not in a fork | resident | desk, web, code, team | `expect_result`, `target_id`, `message`, `priority` |
 | `SetPlan` | Write or replace your plan for the work you are doing. | self | no | always | deferred | desk, web, code, team | `plan` |
 | `SetTodos` | Set out the steps you are about to take, and keep them current as you take them. | self | no | always | resident | desk, web, code, team | `todos` |
 | `ShowUI` | Show the person a card you compose — a comparison table, a few options with a line of explanation each, a short form, a progress list — when prose would make them squint. | self | no | needs a box; not in a fork | resident | desk, web, code, team | `surface`, `components`, `data`, `patch`, `title`, `close` |

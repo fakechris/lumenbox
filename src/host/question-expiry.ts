@@ -27,7 +27,7 @@ import { appendLine } from "./jsonl.ts";
 
 export interface WatchedQuestion {
   /** Short and unique: what the ledger, the card and a late answer all name. */
-  id: string;
+  id: string; work?: import("../agents/work-attention.ts").WorkStamp;
   agentId: string;
   agentName: string;
   conversation: string;
@@ -85,7 +85,7 @@ export class QuestionWatch {
    * the ledger, because a question that vanished without a verdict is exactly the hole
    * this file exists to close.
    */
-  ask(input: { agentId: string; agentName: string; conversation: string; question: string; fallback?: string; recommended?: string; asker?: string; ttlMs?: number; now?: number }): { question: WatchedQuestion; superseded?: WatchedQuestion } {
+  ask(input: { work?: import("../agents/work-attention.ts").WorkStamp; agentId: string; agentName: string; conversation: string; question: string; fallback?: string; recommended?: string; asker?: string; ttlMs?: number; now?: number }): { question: WatchedQuestion; superseded?: WatchedQuestion } {
     const now = input.now ?? Date.now();
     const ttl = Math.min(QUESTION_TTL_MAX_MS, Math.max(QUESTION_TTL_MIN_MS, input.ttlMs ?? QUESTION_TTL_MS));
     const key = this.keyOf(input.agentId, input.conversation);
@@ -95,7 +95,7 @@ export class QuestionWatch {
       this.append({ kind: "settled", id: superseded.id, at: new Date(now).toISOString(), verdict: "superseded" });
     }
     const watched: WatchedQuestion = {
-      id: this.nextId(now),
+      id: this.nextId(now), ...(input.work ? {work:input.work} : {}),
       agentId: input.agentId,
       agentName: input.agentName,
       conversation: input.conversation,

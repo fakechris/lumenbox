@@ -134,6 +134,64 @@ test("a foreground command finishing later returns to its waiting user work whil
   episode.cleanup();
 });
 
+test("a question awaiting the user's choice retains work without requiring a todo list (INV-1797)", async () => {
+  const {WorkAttention} = await import("../agents/work-attention.ts"); const focus = new WorkAttention();
+  const episode = await runEpisode({workAttention:focus,team:[{name:"Mia"},{name:"Zed"}],says:[],
+    script:({round})=>round===0?{call:"AskUser",input:{question:"Which installation directory?"}}:{say:"Waiting for your choice."},
+    drive:async({bus,registry,frontId})=>{bus.sendFromUser(frontId,"Install the package");await bus.wake(frontId);await bus.idle();
+      assert.equal(focus.get(frontId,"main")!.status,"waiting");
+      bus.send({fromId:registry.resolve("Zed").id,toId:frontId,text:"Unrelated audit",priority:true});await bus.idle();
+      assert.equal(bus.heldCount(frontId),1);
+    }});
+  try {assert.equal(episode.score.questions,1);} finally {episode.cleanup();}
+});
+
+test("a new install work excludes tool calls and peer instructions from a mixed historical user turn (INV-1797)", async () => {
+  const episode = await runEpisode({team:[{name:"Mia"},{name:"Zed"}],says:[],
+    script:({messages})=>{assert.doesNotMatch(JSON.stringify(messages),/OLD_PROBE_TOOL|PEER_REPLACE_REQUEST/);return {say:"Your installation is the current request."};},
+    drive:async({bus,registry,frontId})=>{
+      registry.appendTranscript(frontId,{role:"user",fromPerson:true,text:"Install my earlier package",turnId:"mixed"});
+      registry.appendTranscript(frontId,{role:"assistant",kind:"blocks",blocks:[{type:"tool_use",id:"old-call",name:"Tasks",input:{action:"create",title:"OLD_PROBE_TOOL"}}],turnId:"mixed"});
+      const {buildWakePrompt}=await import("./prompt.ts");
+      registry.appendTranscript(frontId,{role:"user",text:buildWakePrompt([{id:"peer",fromId:registry.resolve("Zed").id,fromName:"Zed",text:"PEER_REPLACE_REQUEST",priority:true,receivedAt:new Date().toISOString()}]),turnId:"old-peer"});
+      registry.appendTranscript(frontId,{role:"assistant",text:"Follow the unrelated peer",turnId:"old-peer"});
+      bus.sendFromUser(frontId,"Install the new package now");await bus.wake(frontId);await bus.idle();
+    }});
+  episode.cleanup();
+});
+
+test("a collaborator's asynchronous string workId callback advances the owner's request (INV-1797)", async () => {
+  const {JobWatch}=await import("./job-watch.ts"), {WorkAttention}=await import("../agents/work-attention.ts");
+  const focus=new WorkAttention();let finishJob!:()=>void, zedRounds=0, miaRounds=0, received=false;
+  const completion=new Promise<void>(resolve=>{finishJob=resolve;});
+  const episode=await runEpisode({workAttention:focus,team:[{name:"Mia"},{name:"Zed"}],says:[],
+    box:{waitForJob:(async()=>{await completion;return {running:false,exit_code:0,log_path:"/job.log",tail:"PACKAGE_JOB_FINISHED"};}) as never},
+    jobWatch:({bus,box})=>{box.exec=(async()=>({stdout:"",stderr:"",exit_code:0,still_running:{job_id:"peer-job",pid:1,log_path:"/job.log"}})) as never;
+      return new JobWatch({box:()=>box as never,mergeMs:1,log:()=>{},started:job=>{if(job.work)focus.hold(job.work,job.jobId);},released:job=>{if(job.work)focus.release(job.work,job.jobId);},wake:async(agent,conversation,text,work)=>{bus.deliverSystem(agent,text,conversation,work?.id);}});},
+    script:({agent,messages})=>{
+      const text=JSON.stringify(messages);
+      if(agent==="Zed") {if(text.includes("PACKAGE_JOB_FINISHED"))return {say:"FINAL_PACKAGE_RECEIPT"};if(zedRounds++===0)return {call:"bash",input:{command:"build-package"}};return {say:"Waiting for the package job."};}
+      if(text.includes("FINAL_PACKAGE_RECEIPT")){received=true;return {say:"Your package is verified."};}
+      if(miaRounds++===0)return {call:"SendToAgent",input:{target_id:"Zed",message:"Build and verify the package"}};
+      return {say:"Waiting for the package verification."};
+    },
+    drive:async({bus,frontId})=>{bus.sendFromUser(frontId,"Have Zed build the package");await bus.wake(frontId);await bus.idle();
+      assert.equal(focus.get(frontId,"main")!.status,"waiting");finishJob();await settled(()=>received);await bus.idle();
+      assert.equal(focus.get(frontId,"main")!.status,"answered");
+    }});
+  episode.cleanup();
+});
+
+test("a collaborator's missing capability remains the user's blocker, not a completed request (INV-1797)", async () => {
+  const {WorkAttention}=await import("../agents/work-attention.ts"); const focus=new WorkAttention();let miaRounds=0;
+  const episode=await runEpisode({workAttention:focus,team:[{name:"Mia",tools:["SendToAgent"]},{name:"Zed",tools:["SetTodos"]}],says:[],
+    script:({agent})=>agent==="Zed"?{call:"bash",input:{command:"install-package"}}:miaRounds++===0?{call:"SendToAgent",input:{target_id:"Zed",message:"Install the package"}}:{say:"Waiting for the required computer tool."},
+    drive:async({bus,frontId})=>{bus.sendFromUser(frontId,"Have Zed install the package");await bus.wake(frontId);await bus.idle();
+      assert.equal(focus.get(frontId,"main")!.status,"waiting");assert.equal(focus.get(frontId,"main")!.unavailable!.tool,"bash");
+    }});
+  episode.cleanup();
+});
+
 test("an audit's forged write calls cannot create recursive work or replace the user's installation plan (INV-1797)", async () => {
   const tasks = new TaskStore(null); let target = "", auditorRound = 0, readTarget = false;
   const episode = await runEpisode({
@@ -1916,7 +1974,7 @@ for (const receipt of ["changed", "partial", "legacy_failed"]) {
     let writes = 0;
     let reads = 0;
     const episode = await runEpisode({
-      team: [{ name: "Nova" }], says: ["点击一次保存，然后检查当前状态。"],
+      team: [{ name: "Nova" }], says: ["点击一次保存，然后检查当前状态。"], display: 1,
       box: {
         computer: async actions => {
           if (actions.some(action => action.action === "click")) {
@@ -2126,7 +2184,8 @@ test("an email send through a connector waits for a person when the tier gate en
       describeTools: () => "google__send_email",
     };
     let toolResult = "";
-    const result = await runEpisode({
+    const {WorkAttention}=await import("../agents/work-attention.ts"); const focus = new WorkAttention();
+    const result = await runEpisode({workAttention:focus,
       team: [{ name: "Nova" }], says: ["给王总发封邮件说报价明天给他"],
       policy,
       mcp: mcp as never,
@@ -2143,6 +2202,7 @@ test("an email send through a connector waits for a person when the tier gate en
         assert.equal(pending.action, "call send_email on google, a service outside the box", "the card says what it does, in the host's words");
         assert.match(pending.description, /wang@example\.com/, "and shows the exact action");
         assert.match(toolResult, /approv/i, "the agent is told it is waiting on a person");
+        assert.equal(focus.get(result.registry.list()[0]!.id,"main")!.status,"waiting","first-run approval retains foreground work");
       } else {
         assert.equal(sent.length, 1, "shadow changes no decision");
         assert.equal(policy.tierShadow().tools[0]?.tool, "google__send_email", "but it is counted as a question a person would have been asked");

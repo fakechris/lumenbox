@@ -1,3 +1,4 @@
+import type { WorkReturn } from "../agents/work-attention.ts";
 /**
  * One place that answers "may this happen?".
  *
@@ -105,7 +106,7 @@ export type PolicyRequest =
        */
       irreversible?: string; taskLevel?: 1 | 2 | 3 | 4 | 5; why?: string; // why (INV-1651): the agent's one-line case, shown as its claim, never in the fingerprint; taskLevel (INV-1650): the level of the task this call serves; outward calls ask below L5 and are refused below L3; set by dispatch from the board
       /** The agent lives on the person's own machine (INV-438): a write there asks unless an operator's allow rule lifts it (INV-1700). Set by dispatch, never by the model. */
-      onHostBox?: true;
+      onHostBox?: true; returnTo?: WorkReturn;
       /** The turn this call belongs to, for the taint rule (INV-1309): set by dispatch, never by the model. */
       turnId?: string;
       /** The model's tool_use id this check is for (INV-1664): ties the verdict to the step the chat draws. Set by dispatch. */
@@ -127,7 +128,7 @@ export type PolicyDecision =
 
 /** An action waiting for a person. Survives a restart, because the person's answer is worth keeping. */
 export interface PendingApproval {
-  id: string;
+  id: string; returnTo?: WorkReturn; grantFingerprint?: string;
   /**
    * A hash of the exact action as it was described to the person.
    *
@@ -244,7 +245,7 @@ type PolicyEvent =
   | { at: string; kind: "reply-refused"; purpose: string; chatKey: string; reason: string } // A host push whose purpose's claim did not hold (INV-1459).
   | { at: string; kind: "observed"; slug: string; would: string } // A routine in observe mode was triggered and did not run (INV-1458).
   | { at: string; kind: "resume"; agentId: string; by: string }
-  | { at: string; kind: "approval-requested"; id: string; fingerprint: string; agentId: string; description: string; action?: string; harnessResumes?: boolean; why?: string; taskLevel?: 1 | 2 | 3 | 4 | 5 } // why/taskLevel: the card's background survives a restart (INV-1651)
+  | { at: string; kind: "approval-requested"; returnTo?: WorkReturn; grantFingerprint?: string; id: string; fingerprint: string; agentId: string; description: string; action?: string; harnessResumes?: boolean; why?: string; taskLevel?: 1 | 2 | 3 | 4 | 5 } // why/taskLevel: the card's background survives a restart (INV-1651)
   | { at: string; kind: "approval-granted"; id: string; by: string }
   | { at: string; kind: "approval-granted-session"; id: string; by: string }
   | {
@@ -688,8 +689,8 @@ export class PolicyGate {
     const reused = inputKey === undefined ? undefined : this.turnInputs.get(inputKey);
     // A process-local nonce also bounds unused/session/standing approvals: replay or expiry
     // cannot resurrect consent for the exact original field, not just for a second field.
-    const fingerprint = fingerprintOf(this.subjectOf(request.agentId), description +
-      (inputKey === undefined ? "" : `\0${inputKey}\0${reused!.nonce}`));
+    const actionFingerprint = fingerprintOf(this.subjectOf(request.agentId), description + (inputKey === undefined ? "" : `\0${inputKey}\0${reused!.nonce}`));
+    const fingerprint = request.returnTo ? fingerprintOf(this.subjectOf(request.agentId), actionFingerprint + "\0" + JSON.stringify(request.returnTo)) : actionFingerprint;
     const inputGrant = inputKey === undefined ? undefined : { key: inputKey, fingerprint };
     // Operator rules and configured per-call approvals continue to take precedence.
     if (reused?.id !== undefined && reused.fingerprint !== undefined && rule?.effect !== "ask" && !this.needsApproval({ ...request, irreversible: undefined }) &&
@@ -701,7 +702,7 @@ export class PolicyGate {
     // A standing or session grant covers this exact action without being consumed.
     // Each use still writes an approval-used row, so the audit trail says every time
     // the grant did work, not only the day it was given.
-    const standing = this.always.get(fingerprint);
+    const standing = this.always.get(actionFingerprint);
     if (standing !== undefined) {
       return {
         decision: { allow: true },
@@ -709,7 +710,7 @@ export class PolicyGate {
         consequence: { at: this.now().toISOString(), kind: "approval-used", id: standing.id },
       };
     }
-    const sessionGrant = this.session.get(fingerprint);
+    const sessionGrant = this.session.get(actionFingerprint);
     if (sessionGrant !== undefined) {
       return {
         decision: { allow: true },
@@ -744,7 +745,7 @@ export class PolicyGate {
       id: randomUUID(),
       fingerprint,
       agentId: request.agentId,
-      agentName: request.agentName,
+      agentName: request.agentName, ...(request.returnTo ? {returnTo:request.returnTo,grantFingerprint:actionFingerprint} : {}),
       description,
       ...(effect.action !== undefined ? { action: effect.action } : {}),
       requestedAt: this.now().toISOString(), ...(request.why !== undefined ? { why: request.why } : {}), ...(request.taskLevel !== undefined ? { taskLevel: request.taskLevel } : {}),
@@ -764,7 +765,7 @@ export class PolicyGate {
         kind: "approval-requested",
         id: approval.id,
         fingerprint,
-        agentId: approval.agentId,
+        agentId: approval.agentId, ...(approval.returnTo ? {returnTo:approval.returnTo,grantFingerprint:approval.grantFingerprint} : {}),
         description,
         ...(approval.action !== undefined ? { action: approval.action } : {}), ...(approval.why !== undefined ? { why: approval.why } : {}), ...(approval.taskLevel !== undefined ? { taskLevel: approval.taskLevel } : {}),
       },
@@ -904,8 +905,8 @@ export class PolicyGate {
     }
 
     if (scope === "always") {
-      this.always.set(found.fingerprint, {
-        fingerprint: found.fingerprint,
+      this.always.set(found.grantFingerprint ?? found.fingerprint, {
+        fingerprint: found.grantFingerprint ?? found.fingerprint,
         description: found.description,
         agentId: found.agentId,
         grantedAt: at,
@@ -916,7 +917,7 @@ export class PolicyGate {
         kind: "approval-granted-always",
         id,
         by,
-        fingerprint: found.fingerprint,
+        fingerprint: found.grantFingerprint ?? found.fingerprint,
         description: found.description,
         agentId: found.agentId,
       });
@@ -926,7 +927,7 @@ export class PolicyGate {
     }
 
     if (scope === "session") {
-      this.session.set(found.fingerprint, found);
+      this.session.set(found.grantFingerprint ?? found.fingerprint, found);
       this.append({ at, kind: "approval-granted-session", id, by });
       this.log(`${by} approved for this session: ${found.description}`);
       this.settled(found, "allowed");
@@ -1040,7 +1041,7 @@ export class PolicyGate {
           const approval: PendingApproval = {
             id: event.id,
             fingerprint: event.fingerprint,
-            agentId: event.agentId,
+            agentId: event.agentId, ...(event.returnTo ? {returnTo:event.returnTo,grantFingerprint:event.grantFingerprint} : {}),
             agentName: "",
             description: event.description,
             ...(event.action !== undefined ? { action: event.action } : {}), ...(event.why !== undefined ? { why: event.why } : {}), ...(event.taskLevel !== undefined ? { taskLevel: event.taskLevel } : {}),
@@ -1069,7 +1070,7 @@ export class PolicyGate {
         }
         case "approval-granted-always":
           this.verdicts.settle(event.id, "allowed");
-          this.awaiting.delete(event.fingerprint);
+          this.awaiting.delete(byId.get(event.id)?.fingerprint ?? event.fingerprint);
           this.always.set(event.fingerprint, {
             fingerprint: event.fingerprint,
             description: event.description,

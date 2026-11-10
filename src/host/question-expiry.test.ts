@@ -103,3 +103,13 @@ test("a pending question survives a restart, with its default and its clock (INV
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("expiry retains the work version that asked, rather than adopting a later user request", () => {
+  const dir=mkdtempSync(join(tmpdir(),"question-work-scope-"));
+  try {
+    const path=join(dir,"questions.jsonl"), work={id:"install",owner:"Mia",conversation:"main",generation:2,epoch:1};
+    new QuestionWatch(path).ask({agentId:"Mia",agentName:"Mia",conversation:"main",question:"Which directory?",work,now:T0});
+    const expiry=new QuestionWatch(path).sweep(()=>false,T0+QUESTION_TTL_MS+1)[0]!;
+    assert.deepEqual(expiry.question.work,work,"the host can version-check the continuation after a restart");
+  } finally {rmSync(dir,{recursive:true,force:true});}
+});

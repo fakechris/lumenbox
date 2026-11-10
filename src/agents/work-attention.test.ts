@@ -70,3 +70,30 @@ test("unfinished user work holds an older goal and drops only volatile waits on 
     assert.equal(focus.get("Mia","main")!.awaiting.length,0,"a dead in-memory watcher cannot hold the request forever");
   } finally {rmSync(dir,{recursive:true,force:true});}
 });
+
+test("a participant's host callback resolves the admitted root and its private execution conversation", async () => {
+  const {peerWorkConversation} = await import("./work-attention.ts");
+  const focus = new WorkAttention(), root = focus.begin("Mia","main",[user("install")])!;
+  const child = focus.link(root,"Mia","Zed")!;
+  const conversation = peerWorkConversation([{...user("child"),fromId:"Mia",work:child}],"main");
+  assert.equal(focus.forId("Zed",conversation,root.id)!.owner,"Mia");
+  assert.equal(focus.forId("Zed","main",root.id),undefined);
+  assert.equal(focus.forId("Stranger",conversation,root.id),undefined);
+});
+
+test("informational messages do not acquire dependencies, and mutual waits are refused", async () => {
+  const {AgentBus}=await import("./bus.ts");
+  const dir=mkdtempSync(join(tmpdir(),"attention-dependencies-"));
+  try {
+    const registry=new AgentRegistry(dir), mia=registry.create({name:"Mia"}), zed=registry.create({name:"Zed"}), focus=new WorkAttention();
+    const miaWork=focus.begin(mia.id,"main",[user("mia-work")])!, zedWork=focus.begin(zed.id,"main",[user("zed-work")])!;
+    const bus=new AgentBus(registry,async()=>{},()=>{},undefined,false,undefined,focus);
+    assert.match(bus.send({fromId:mia.id,toId:zed.id,text:"Need a result",work:miaWork}),/Held/);
+    assert.match(bus.send({fromId:zed.id,toId:mia.id,text:"Need your result first",work:zedWork}),/deadlock/);
+    assert.equal(focus.get(zed.id,"main")!.awaiting.length,0);
+    bus.send({fromId:zed.id,toId:mia.id,text:"Information only",work:zedWork,expectResult:false});
+    assert.equal(focus.get(zed.id,"main")!.awaiting.length,0);
+    assert.equal(focus.get(zed.id,"main")!.peers.length,0);
+    await bus.idle();
+  } finally {rmSync(dir,{recursive:true,force:true});}
+});

@@ -577,9 +577,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const channelTurnListeners = new Set<(event: TurnEvent) => void>();
   const idempotency = new IdempotencyStore();
   /** Secrets agents asked the person for, by id; names and descriptions only. */
-  const pendingSecrets = new Map<string, { agentId: string; agentName: string; id: string; description: string; conversation?: string; at: string }>();
+  const pendingSecrets = new Map<string, { agentId: string; agentName: string; id: string; description: string; work?: import("../agents/work-attention.ts").WorkStamp; conversation?: string; at: string }>();
   /** Desktops handed to the person, by agent. */
-  const pendingHandovers = new Map<string, { agentId: string; agentName: string; instruction: string; reason: string; conversation?: string; at: string; desktopPath?: string }>();
+  const pendingHandovers = new Map<string, { agentId: string; agentName: string; instruction: string; reason: string; work?: import("../agents/work-attention.ts").WorkStamp; conversation?: string; at: string; desktopPath?: string }>();
 
   let probeKeeper: ProbeKeeper | undefined; // set once the pauses exist; a probe before that is only broadcast (INV-1553)
   const orchestrator = new Orchestrator({
@@ -682,7 +682,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // then put to the person, under the identity it was put to — only their reply
       // answers it. A question from the page names nobody, and any voice in that
       // conversation is the one that was asked.
-      const watched = questions.ask({
+      const watched = questions.ask({ work: input.work,
         agentId: input.agentId,
         agentName: input.agentName,
         conversation: input.conversation ?? "main",
@@ -2200,7 +2200,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         conversation: question.conversation,
       });
       void orchestrator
-        .prompt(question.agentId, expiry.cue, undefined, { conversation: question.conversation, steerable: false, lane: "background", synthetic: true, origin: "host:questions" })
+        .prompt(question.agentId, expiry.cue, undefined, { conversation: question.conversation, steerable: false, lane: "background", synthetic: true, origin: "host:questions", work: question.work })
         .catch(error => log(`question: could not wake ${question.agentName} after expiry (${error instanceof Error ? error.message : String(error)})`));
     }
   }, 60_000);
@@ -4157,7 +4157,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             request.agentId,
             `[The person saved the secret ${id} securely. You never see its value; name it in RunOnHost's \`secrets\` to use it, ` +
               `or, if it is a provider key, delegated engines can use it through the relay. Confirm it by its effect, never by printing it.]`,
-            request.conversation ?? MAIN_CONVERSATION
+            request.conversation ?? MAIN_CONVERSATION, request.work
           );
           send(res, 200, { saved: true });
           return;
@@ -4172,7 +4172,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             orchestrator.bus.deliverSystem(
               request.agentId,
               `[The person dismissed your request for ${id} without saving it. Do without it, or say plainly what cannot be done.]`,
-              request.conversation ?? MAIN_CONVERSATION
+              request.conversation ?? MAIN_CONVERSATION, request.work
             );
           }
           send(res, 200, { dismissed: request !== undefined });
@@ -4197,7 +4197,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           orchestrator.bus.deliverSystem(
             agentId,
             `[The person handed the desktop back to you. Continue your task — start by taking a screenshot, because the screen changed while you were not there${typeof body.note === "string" && body.note.trim() !== "" ? `. They said: ${body.note.trim().slice(0, 300)}` : ""}.]`,
-            handover.conversation ?? MAIN_CONVERSATION
+            handover.conversation ?? MAIN_CONVERSATION, handover.work
           );
           send(res, 200, { returned: true });
           return;
@@ -5390,7 +5390,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const id = String(body.id ?? "");
           const scope =
             body.scope === "session" || body.scope === "always" ? body.scope : "once";
-          const waiting = orchestrator.policy.pending().find(item => item.id === id);
+          const waiting = orchestrator.policy.pending().find(item => item.id === id), parked = orchestrator.approvalIsParked(id);
           const answered =
             route === "POST /api/approve"
               ? orchestrator.policy.grant(id, "user", scope)
@@ -5409,11 +5409,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             broadcast({ type: "approval_settled", id, agentId: waiting.agentId, how: allowed ? "allowed" : "refused", ...(allowed ? { scope } : {}) });
             // An extension's confirmation is continued by the harness itself (INV-861): the agent
             // hears the result from there, and a "go ahead" here would send it to retry nothing.
-            if (waiting.harnessResumes !== true) orchestrator.bus.deliverSystem(
+            if (waiting.harnessResumes !== true && !parked) orchestrator.bus.deliverSystem(
               waiting.agentId,
               allowed
                 ? `[The person allowed it${scope === "once" ? " once" : scope === "session" ? " for this session" : ", standing until revoked"}: ${waiting.description}. Go ahead now.]`
-                : `[The person refused it: ${waiting.description}. Do not retry it; do without, or say what cannot be done.]`
+                : `[The person refused it: ${waiting.description}. Do not retry it; do without, or say what cannot be done.]`, waiting.returnTo?.conversation ?? MAIN_CONVERSATION, waiting.returnTo?.work
             );
           }
           send(res, 200, { id });

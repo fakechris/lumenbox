@@ -110,3 +110,18 @@ test("scenario: an admitted audit is answered in its own host context; the perso
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("a default agent stops on the first unavailable computer call and retains the user work", async () => {
+  const root = mkdtempSync(join(tmpdir(),"attention-default-tools-")), previousHome = process.env.AGENTBOX_HOME;
+  process.env.AGENTBOX_HOME = root;
+  try {
+    const registry = new AgentRegistry(join(root,"agents")), mia = registry.create({name:"Mia"});
+    let calls = 0;
+    const orch = new Orchestrator({registry,useBox:false,inbox:null,mcp:null,hooks:null,tasks:null,extensions:null,pendingWork:null,
+      client:fakeModel(()=>({id:"response",type:"message",role:"assistant",model:"test",content:calls++ < 2 ? [{type:"tool_use",id:"call-"+calls,name:"bash",input:{command:calls===1?"ls ~/Downloads":"pwd"}}] : [{type:"text",text:"Done"}],stop_reason:calls<=2?"tool_use":"end_turn",stop_sequence:null,usage:{input_tokens:10,output_tokens:5}} as never))});
+    await orch.prompt(mia.id,"Install the provided package",{userId:"chris"});
+    assert.equal(calls,1,"unoffered computer tools are bounded even without an explicit profile allowlist");
+    assert.equal(orch.bus.workAttention!.get(mia.id,"main")!.status,"waiting");
+    assert.match(JSON.stringify(registry.readTranscript(mia.id)),/tool is unavailable/);
+  } finally { if(previousHome===undefined)delete process.env.AGENTBOX_HOME;else process.env.AGENTBOX_HOME=previousHome;rmSync(root,{recursive:true,force:true}); }
+});

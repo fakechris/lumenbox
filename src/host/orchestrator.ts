@@ -2123,6 +2123,7 @@ export class Orchestrator {
   }
 
   /** Picks a parked turn back up once the person has answered the approval it waited on. */
+  approvalIsParked(id: string): boolean { return this.parked.has(id); }
   private continueParked(approvalId: string, how: "allowed" | "refused"): void {
     const turn = this.parked.get(approvalId);
     if (turn === undefined) return;

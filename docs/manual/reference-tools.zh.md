@@ -66,7 +66,7 @@
 | `RememberFact` | Keep something across conversations. | self | 否 | 总是；分支里没有 | resident | desk, web, code, team | `fact`, `scope`, `replaces` |
 | `RunOnHost` | Run a command on the person's own computer — the machine LumenBox runs on, outside your box. | credential | 是: “run a command on the person's own machine” | 需要主机执行器；分支里没有 | resident | — | `command`, `why`, `secrets` |
 | `RunOperation` | Run a taught operation: a skill whose folder holds operation.json replays its browser (and desktop) steps with no model, and returns its output as JSON. | reach | 是: “replay a taught browser operation” | 需要一台 box | deferred | — | `skill`, `input` |
-| `SendToAgent` | Send a message to another of your user's agents. | self | 否 | 总是；分支里没有 | resident | desk, web, code, team | `target_id`, `message`, `priority` |
+| `SendToAgent` | By default, the current work awaits the result. | self | 否 | 总是；分支里没有 | resident | desk, web, code, team | `expect_result`, `target_id`, `message`, `priority` |
 | `SetPlan` | Write or replace your plan for the work you are doing. | self | 否 | 总是 | deferred | desk, web, code, team | `plan` |
 | `SetTodos` | Set out the steps you are about to take, and keep them current as you take them. | self | 否 | 总是 | resident | desk, web, code, team | `todos` |
 | `ShowUI` | Show the person a card you compose — a comparison table, a few options with a line of explanation each, a short form, a progress list — when prose would make them squint. | self | 否 | 需要一台 box；分支里没有 | resident | desk, web, code, team | `surface`, `components`, `data`, `patch`, `title`, `close` |

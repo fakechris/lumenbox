@@ -199,7 +199,7 @@ export class AgentBus {
     toId: string;
     text: string;
     priority?: boolean;
-    work?: WorkStamp;
+    work?: WorkStamp; expectResult?: boolean;
     relayed?: boolean;
   /**
    * How many turns this message is from a person (INV-1277): 0 when the sending turn was
@@ -255,8 +255,11 @@ export class AgentBus {
       );
     }
 
-    const work = input.work && this.workAttention?.link(input.work, input.fromId, target.id);
-    if (input.work && !work) return "Not sent: the originating user work is no longer current or this sender was not admitted to it.";
+    const expectsResult = input.expectResult !== false;
+    const targetWork = this.workAttention?.get(target.id, MAIN_CONVERSATION);
+    if (expectsResult && targetWork && targetWork.status !== "answered" && targetWork.id !== input.work?.id && targetWork.awaiting.includes(input.fromId)) return "Not sent: that member is already waiting for your result. A return dependency would deadlock; finish or send the result without requesting another reply.";
+    const work = input.work && expectsResult ? this.workAttention?.link(input.work, input.fromId, target.id) : undefined;
+    if (input.work && (expectsResult ? !work : !this.workAttention?.valid(input.work, input.fromId))) return "Not sent: the originating user work is no longer current or this sender was not admitted to it.";
     const message: InboundMessage = {
       ...(work ? { work } : {}),
       ...(work?.owner === target.id ? { conversation: work.conversation } : {}),
@@ -266,7 +269,7 @@ export class AgentBus {
       text,
       priority,
       receivedAt: new Date().toISOString(),
-      ...(input.relayed === true ? { relayed: true } : {}),
+      ...(input.relayed === true || !expectsResult ? { relayed: true } : {}),
       ...(hops > 0 ? { hops } : {}),
     };
 
@@ -305,6 +308,8 @@ export class AgentBus {
       `if they reply, or if their turn fails — asking them to confirm receipt buys nothing this ` +
       `line has not already told you.`;
 
+    if (!expectsResult) return `${promise} This is informational; no result is awaited and no acknowledgement reply is requested.`;
+    if (this.workAttention && !this.workAttention.eligible(target.id, message.conversation ?? MAIN_CONVERSATION, message)) return `${promise} Held while their current user work is unfinished; priority does not interrupt it. Do not poll or ask for receipt.`;
     return priority
       ? `${promise} Marked priority, so it interrupts their current non-user work and wakes them now.`
       : promise;
