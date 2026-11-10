@@ -44,6 +44,178 @@ import { TaskStore } from "./tasks.ts";
 import { CredentialChecks, CredentialWaits } from "./credential-waits.ts";
 import { parseSkillFile, skillFrom } from "./skills.ts";
 import { Vault } from "./vault.ts";
+import { auditConversation } from "./audit-context.ts";
+import { evidenceDigest } from "./review-dispatch.ts";
+
+test("user installation holds attention across failure, new turns and a hundred priority peers (INV-1797)", async () => {
+  const { WorkAttention, workStateConversation } = await import("../agents/work-attention.ts");
+  const focus = new WorkAttention(); let rounds = 0; const tasks = new TaskStore(null);
+  const episode = await runEpisode({
+    workAttention: focus, team: [{ name: "Mia", tools: ["SetTodos", "Tasks"] }, { name: "Zed" }], says: [], tasks,
+    script: ({ system, messages }) => {
+      assert.doesNotMatch(system + JSON.stringify(messages), /OLD AUDIT OBJECTIVE|UNRELATED PEER/, "old work is not execution context");
+      if (rounds++ === 0) return { call: "SetTodos", input: { todos: [{ text: "Install the provided package", status: "doing" }] } };
+      if (rounds === 2) return { call: "bash", input: { command: "ls ~/Downloads" } };
+      return { call: "Tasks", input: { action: "create", title: "Unrelated probe", assignee: "Mia" } };
+    },
+    drive: async ({ registry, bus, frontId }) => {
+      registry.appendTranscript(frontId, { role: "user", host: true, text: "OLD AUDIT OBJECTIVE", at: new Date().toISOString() });
+      registry.writeTodos(frontId, [{ text: "OLD AUDIT OBJECTIVE", status: "doing" }]);
+      bus.sendFromUser(frontId, "Install the provided package", { messageId: "install-work" });
+      await bus.wake(frontId); await bus.idle();
+      const work = focus.get(frontId, "main")!;
+      assert.equal(work.status, "waiting"); assert.match(work.reason!, /bash/);
+      for (let i = 0; i < 100; i++) bus.send({ fromId: registry.resolve("Zed").id, toId: frontId, text: `UNRELATED PEER ${i}`, priority: true });
+      await bus.idle(1000);
+      assert.equal(rounds, 2, "a missing capability produces one bounded stop; held peers consume no model rounds");
+      assert.equal(bus.heldCount(frontId), 100);
+      assert.equal(tasks.list().length, 0);
+      assert.equal(registry.readDurableState(frontId, workStateConversation(work, "main")).todos?.[0]?.text, "Install the provided package");
+      assert.equal(registry.readDurableState(frontId).todos?.[0]?.text, "OLD AUDIT OBJECTIVE", "old record remains intact, but is not the current plan");
+      assert.match(JSON.stringify(registry.readTranscript(frontId)), /required bash tool is unavailable/);
+    },
+  });
+  episode.cleanup();
+});
+
+test("an admitted collaborator can return before the owner finishes without losing the result or taking over its plan (INV-1797)", async () => {
+  const { WorkAttention, workStateConversation } = await import("../agents/work-attention.ts");
+  const focus = new WorkAttention(); let ownerRounds = 0; let returned = false;
+  const episode = await runEpisode({
+    workAttention: focus, team: [{ name: "Mia" }, { name: "Zed" }], says: [],
+    script: ({ agent, messages, system }) => {
+      if (agent === "Zed") return { say: "Package verified successfully" };
+      const text = JSON.stringify(messages);
+      assert.doesNotMatch(text + system, /OLD AUDIT OBJECTIVE/);
+      if (text.includes("Package verified successfully")) { returned = true; return { say: "Your package has been verified." }; }
+      if (ownerRounds++ === 0) return { call: "SendToAgent", input: { target_id: "Zed", message: "Verify the package" } };
+      return { say: "Waiting for the package verification." };
+    },
+    drive: async ({ bus, registry, frontId }) => {
+      registry.writeTodos(frontId, [{ text: "OLD AUDIT OBJECTIVE", status: "doing" }]);
+      bus.sendFromUser(frontId, "Have Zed verify this package", { conversation: "private-chat", messageId: "verification-work" });
+      await bus.wake(frontId); await bus.idle();
+      assert.equal(returned, true, "host-stamped result returned to the original private conversation");
+      assert.equal(focus.get(frontId, "private-chat")!.status, "answered");
+      assert.equal(focus.get(frontId, "private-chat")!.awaiting.length, 0);
+      assert.equal(registry.readDurableState(frontId, workStateConversation(focus.get(frontId, "private-chat"), "private-chat")).todos?.length ?? 0, 0);
+      assert.equal(registry.readTranscript(registry.resolve("Zed").id).length, 0, "collaborator conversation cannot pollute its main user chat");
+      assert.match(JSON.stringify(registry.readTranscript(frontId, "private-chat")), /Your package has been verified/);
+    },
+  });
+  episode.cleanup();
+});
+
+test("a foreground command finishing later returns to its waiting user work while unrelated peers stay held (INV-1797)", async () => {
+  const { JobWatch } = await import("./job-watch.ts");
+  const { WorkAttention } = await import("../agents/work-attention.ts");
+  let finishJob!: () => void; const completed = new Promise<void>(resolve => { finishJob = resolve; });
+  const focus = new WorkAttention(); let calls = 0, received = false;
+  const episode = await runEpisode({
+    workAttention: focus, team: [{name:"Mia"},{name:"Zed"}], says: [],
+    box: {waitForJob: (async () => { await completed; return {running:false,exit_code:0,log_path:"/jobs/package.log",tail:"package build ready"}; }) as never},
+    jobWatch: ({bus,box}) => {
+      box.exec = (async (command: string) => ({stdout:"",stderr:"",exit_code:0,...(command === "compile-package" ? {still_running:{job_id:"package-job",pid:123,log_path:"/jobs/package.log"}} : {})})) as never;
+      return new JobWatch({box:()=>box as never, mergeMs:1, log:()=>{}, started:job=>{if(job.work)focus.hold(job.work,job.jobId);}, released:job=>{if(job.work)focus.release(job.work,job.jobId);}, wake: async (agent,conversation,text,work)=>{bus.deliverSystem(agent,text,conversation,work);}}); },
+    script: ({messages}) => {
+      if (JSON.stringify(messages).includes("package build ready")) {received = true; return {say:"The package build is verified."};}
+      if(calls++ === 0) return {call:"bash",input:{command:"compile-package"}};
+      return {say:"Waiting for the package build."};
+    },
+    drive: async ({bus,registry,frontId}) => {
+      bus.sendFromUser(frontId,"Build the package."); await bus.wake(frontId); await bus.idle();
+      assert.equal(focus.get(frontId,"main")!.status,"waiting");
+      bus.send({fromId:registry.resolve("Zed").id,toId:frontId,text:"Unrelated old audit",priority:true});
+      await bus.idle(); assert.equal(bus.heldCount(frontId),1);
+      finishJob(); await settled(()=>received); await bus.idle();
+      assert.equal(focus.get(frontId,"main")!.status,"answered");
+    },
+  });
+  episode.cleanup();
+});
+
+test("an audit's forged write calls cannot create recursive work or replace the user's installation plan (INV-1797)", async () => {
+  const tasks = new TaskStore(null); let target = "", auditorRound = 0, readTarget = false;
+  const episode = await runEpisode({
+    team: [{ name: "Mia" }, { name: "Analyst" }], says: [], tasks,
+    script: ({ opened, messages }) => {
+      readTarget ||= JSON.stringify(messages).includes("AUTHORITATIVE REPORT CONTENT");
+      if (!opened.includes("AUDIT SNAPSHOT")) return { say: "Your installation is waiting for its computer." };
+      const calls: { call: string; input: Record<string, unknown> }[] = [
+        { call: "Tasks", input: { action: "read", id: target } },
+        { call: "Tasks", input: { action: "create", title: "Recursive probe", assignee: "Mia", reviewer: "Analyst" } },
+        { call: "Tasks", input: { action: "update", id: target, status: "done" } },
+        { call: "RememberFact", input: { fact: "Unrelated audit rule for the whole team", scope: "team" } },
+        { call: "SendToAgent", input: { target_id: "Analyst", message: "Please reproduce another live probe" } },
+        { call: "write_file", input: { path: "/home/box/work/probe.txt", content: "not allowed" } },
+        { call: "SetTodos", input: { todos: [{ text: "Replace the user's installation with auditing", status: "doing" }] } },
+      ];
+      return calls[auditorRound++] ?? { say: "Status: complete\nIntegrity: clean\nContract audit: aligned\nNext action: none" };
+    },
+    drive: async ({ registry, bus }) => {
+      const frontId = registry.resolve("Mia").id;
+      const analyst = registry.resolve("Analyst").id;
+      const task = tasks.create({ title: "Review the retained report", requester: "person", assigneeId: analyst, reviewerId: frontId, description: "AUTHORITATIVE REPORT CONTENT" })!;
+      tasks.update(task.id, { status: "review" }, analyst); target = task.id;
+      registry.writeTodos(frontId, [{ text: "Install the user's package", status: "blocked" }]);
+      const audit = { taskId: task.id, digest: evidenceDigest(tasks.get(task.id)!), reviewerId: frontId };
+      bus.sendFromUser(frontId, "AUDIT SNAPSHOT", { audit, conversation: auditConversation(audit), origin: "host:audit", lane: "background", steerable: false });
+      await bus.wake(frontId); await bus.idle();
+      bus.sendFromUser(frontId, "What happened to installing my package?");
+      await bus.wake(frontId); await bus.idle();
+      assert.equal(registry.readDurableState(frontId).todos?.[0]?.text, "Install the user's package");
+      assert.equal(registry.readSharedMemory(frontId).length, 0);
+    },
+  });
+  try {
+    assert.equal(tasks.list().length, 1); assert.equal(tasks.get(target)!.status, "review");
+    assert.equal(episode.files.has("/home/box/work/probe.txt"), false);
+    assert.equal(episode.score.peerMessages, 0);
+    assert.equal(readTarget, true, "host-admitted reviewer can read this task only");
+    const auditThread = episode.registry.list().flatMap(agent => episode.registry.readTranscript(agent.id, auditConversation({taskId: target, digest: evidenceDigest(tasks.get(target)!), reviewerId: episode.registry.resolve("Mia").id})));
+    assert.equal((JSON.stringify(auditThread).match(/Review refused:/g) ?? []).length, 6, "six forged side effects receive explicit tool errors");
+    const main = episode.registry.readTranscript(episode.registry.resolve("Mia").id);
+    assert.ok(!JSON.stringify(main).includes("AUDIT SNAPSHOT"), "audit history stays outside the person's conversation");
+  } finally { episode.cleanup(); }
+});
+
+test("an audit queued against an older evidence version consumes no model turn or tool (INV-1797)", async () => {
+  const tasks = new TaskStore(null); let modelCalls = 0;
+  const episode = await runEpisode({team:[{name:"Mia"},{name:"Worker"}],says:[],tasks,
+    script:()=>{modelCalls++;return {call:"Tasks",input:{action:"create",title:"Probe",assignee:"Mia"}};},
+    drive:async({bus,registry})=>{
+      const reviewer = registry.resolve("Mia").id, worker = registry.resolve("Worker").id;
+      const task = tasks.create({title:"Check artifact",requester:"person",assigneeId:worker,reviewerId:reviewer})!;
+      tasks.update(task.id,{status:"review"},worker);
+      const audit = {taskId:task.id,digest:evidenceDigest(tasks.get(task.id)!),reviewerId:reviewer};
+      bus.sendFromUser(reviewer,"Review old evidence",{audit,conversation:auditConversation(audit),origin:"host:audit",lane:"background"});
+      tasks.update(task.id,{description:"Revised evidence after admission"},worker);
+      await bus.wake(reviewer);await bus.idle();
+    }});
+  try {assert.equal(modelCalls,0);assert.equal(tasks.list().length,1);} finally {episode.cleanup();}
+});
+
+test("an old unscoped audit cannot take over a new installation request or create live probe work (INV-1797)", async () => {
+  const tasks = new TaskStore(null);
+  const episode = await runEpisode({
+    team: [{ name: "Mia" }, { name: "Reviewer" }], says: [], tasks,
+    script: ({ opened, round }) => opened.includes("LEGACY AUDIT")
+      ? round === 0 ? { call: "Tasks", input: { action: "create", title: "Unrelated live probe", assignee: "Mia", reviewer: "Reviewer" } } : { say: "Status: complete — old audit" }
+      : { say: "The installation is blocked until its computer is available." },
+    drive: async ({ bus, frontId }) => {
+      bus.sendFromUser(frontId, "LEGACY AUDIT: reproduce the old completion gate.", { origin: "host:audit", lane: "background", steerable: false });
+      await bus.wake(frontId); await bus.idle();
+      bus.sendFromUser(frontId, "Install the package I supplied.");
+      await bus.wake(frontId); await bus.idle();
+    },
+  });
+  try {
+    assert.equal(tasks.list().length, 0, "stale audit must not generate more real work");
+    assert.equal(episode.score.trail.some(call => call.endsWith(":Tasks")), false);
+    assert.ok(episode.score.said.every(reply => !reply.text.includes("old audit")));
+    assert.match(episode.score.said.at(-1)!.text, /installation is blocked/);
+  } finally { episode.cleanup(); }
+});
 
 test("admitted task, child and late task selection stay distinct across multiple works (INV-1785)", async () => {
   const { TurnLedger } = await import("./resume.ts");
@@ -2336,7 +2508,7 @@ test("a preference said before two compactions is in the ledger with provenance 
     ]);
   let summaries = 0;
   let flushes = 0;
-  let reportContext = "";
+  let reportContext = ""; let planRecorded = false;
   const result = await runEpisode({
     team: [{ name: "Nova" }], says: [], memory: true,
     selectMemory: async () => '{"selected":[1]}',
@@ -2365,12 +2537,16 @@ test("a preference said before two compactions is in the ledger with provenance 
         reportContext = system + JSON.stringify(messages);
         return { say: "报告：全长 12 公里，气温 20 摄氏度。" };
       }
+      if (!planRecorded) { planRecorded = true; return { call: "SetTodos", input: { todos: [{text: "Continue the report", status: "doing"}] } }; }
       return { say: "继续中。" };
     },
-    drive: async ({ registry, frontId, say }) => {
+    drive: async ({ registry, bus, frontId, say }) => {
       await say("继续");
       assert.equal(summaries, 1, "the first turn compacted (over the entry trigger)");
-      for (const entry of filler(1000, 80)) registry.appendTranscript(frontId, entry);
+      const {workRegistry, workStateConversation} = await import("../agents/work-attention.ts");
+      const work = bus.workAttention!.get(frontId, "main")!;
+      const execution = workRegistry(registry, frontId, "main", workStateConversation(work, "main"), work);
+      for (const entry of filler(1000, 80)) execution.appendTranscript(frontId, entry);
       await say("再继续");
       assert.equal(summaries, 2, "and the second compacted the first summary");
       await say("给我一份报告");

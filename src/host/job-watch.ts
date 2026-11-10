@@ -1,3 +1,4 @@
+import type { WorkStamp } from "../agents/work-attention.ts";
 /**
  * The commands a turn let go of (INV-1461): a foreground command that outlived its window
  * became a job, and somebody has to notice when it ends and tell the agent.
@@ -29,6 +30,7 @@ export const MERGE_WINDOW_MS = 20_000;
 const RECORD_CAP = 40;
 
 export interface WatchedJob {
+  work?: WorkStamp;
   agentId: string;
   conversation: string;
   /** The box's generation when the watch began (INV-1476): a wake for an earlier one is dropped. */
@@ -50,10 +52,11 @@ export interface JobWatchBox {
 }
 
 export interface JobWatchDeps {
+  started?: (job: WatchedJob) => void; released?: (job: WatchedJob) => void;
   /** The box the job runs on; undefined when none is connected, which ends the watch. */
   box: () => JobWatchBox | undefined;
   /** Tells the agent, in its conversation, as a host message. */
-  wake: (agentId: string, conversation: string, text: string) => Promise<void>;
+  wake: (agentId: string, conversation: string, text: string, work?: WorkStamp) => Promise<void>;
   /** The current generation of the agent's box (INV-1476); absent means generations are not tracked. */
   generation?: (agentId: string) => number;
   log: (line: string) => void;
@@ -67,6 +70,7 @@ export interface JobWatchDeps {
 
 /** An end the agent was not woken for, kept for its next turn. */
 export interface RecordedEnd {
+  workId?: string;
   jobId: string;
   command: string;
   exit_code?: number;
@@ -104,7 +108,7 @@ export function mergedEndsNote(notes: readonly string[]): string {
 export class JobWatch {
   private readonly open = new Map<string, WatchedJob>();
   private readonly recorded = new Map<string, RecordedEnd[]>();
-  private readonly held = new Map<string, { notes: string[]; timer: ReturnType<typeof setTimeout> }>();
+  private readonly held = new Map<string, { notes: string[]; jobs: WatchedJob[]; timer: ReturnType<typeof setTimeout> }>();
 
   constructor(private readonly deps: JobWatchDeps) {}
 
@@ -113,7 +117,8 @@ export class JobWatch {
     if (this.open.has(job.jobId)) return;
     const watched: WatchedJob = { ...job, startedAt: (this.deps.now ?? Date.now)(), ...(this.deps.generation !== undefined ? { generation: this.deps.generation(job.agentId) } : {}) };
     this.open.set(job.jobId, watched);
-    void this.follow(watched).catch(error => this.deps.log(`job watch ${job.jobId}: ${error instanceof Error ? error.message : String(error)}`)).finally(() => this.open.delete(job.jobId));
+    if (watched.work && watched.onEnd === "wake") this.deps.started?.(watched);
+    void this.follow(watched).catch(error => this.deps.log(`job watch ${job.jobId}: ${error instanceof Error ? error.message : String(error)}`)).finally(() => { this.open.delete(job.jobId); this.deps.released?.(watched); });
   }
 
   /** How many of this agent's jobs are being watched, across its conversations (INV-1559 diagnostics). */
@@ -127,11 +132,12 @@ export class JobWatch {
   }
 
   /** The ends this conversation was not woken for, oldest first; taking them clears them. */
-  takeRecorded(agentId: string, conversation: string): RecordedEnd[] {
+  takeRecorded(agentId: string, conversation: string, workId?: string): RecordedEnd[] {
     const key = `${agentId}/${conversation}`;
     const ends = this.recorded.get(key) ?? [];
-    this.recorded.delete(key);
-    return ends;
+    if (!workId) { this.recorded.delete(key); return ends; }
+    this.recorded.set(key, ends.filter(end => end.workId !== workId));
+    return ends.filter(end => end.workId === workId);
   }
 
   /** The box was reconnected since the watch began: the job's end belongs to an incarnation that is gone, and the agent is not woken for it. */
@@ -150,7 +156,7 @@ export class JobWatch {
     if (!wakesFor(policy, job.wakeWhen, end)) {
       const key = `${job.agentId}/${job.conversation}`;
       const list = this.recorded.get(key) ?? [];
-      list.push({ jobId: job.jobId, command: job.command, exit_code: ended.exit_code, interrupted: ended.interrupted, killed, log_path: ended.log_path, at: (this.deps.now ?? Date.now)() });
+      list.push({ ...(job.work ? {workId: job.work.id} : {}), jobId: job.jobId, command: job.command, exit_code: ended.exit_code, interrupted: ended.interrupted, killed, log_path: ended.log_path, at: (this.deps.now ?? Date.now)() });
       this.recorded.set(key, list.slice(-RECORD_CAP));
       this.deps.log(`job watch ${job.jobId}: ended (${how}); recorded for ${job.agentId}'s next turn (on_end ${policy})`);
       return;
@@ -161,21 +167,22 @@ export class JobWatch {
 
   /** The first wake in a window starts the timer; the rest join it; one message goes when it fires. */
   private hold(job: WatchedJob, note: string): Promise<void> {
-    const key = `${job.agentId}/${job.conversation}`;
+    const key = `${job.agentId}/${job.conversation}/${job.work?.id ?? ""}/${job.work?.generation ?? 0}`;
     const window = this.deps.mergeMs ?? MERGE_WINDOW_MS;
     const already = this.held.get(key);
-    if (already !== undefined) { already.notes.push(note); return Promise.resolve(); }
+    if (already !== undefined) { already.notes.push(note); already.jobs.push(job); return Promise.resolve(); }
     return new Promise<void>(resolve => {
       const timer = setTimeout(() => {
         const batch = this.held.get(key);
         this.held.delete(key);
         if (batch === undefined) { resolve(); return; }
-        void this.deps.wake(job.agentId, job.conversation, mergedEndsNote(batch.notes))
+        for (const done of batch.jobs) this.deps.released?.(done);
+        void this.deps.wake(job.agentId, job.conversation, mergedEndsNote(batch.notes), job.work)
           .catch(error => this.deps.log(`job watch wake for ${job.agentId}: ${error instanceof Error ? error.message : String(error)}`))
           .finally(resolve);
       }, window);
       timer.unref?.();
-      this.held.set(key, { notes: [note], timer });
+      this.held.set(key, { notes: [note], jobs: [job], timer });
     });
   }
 

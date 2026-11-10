@@ -127,7 +127,7 @@ export interface OrchestrationDeps {
   /** Reads the handoff line off a child's answer (tools.ts `readHandoff`). */
   readHandoff: (text: string) => { status: "done" | "partial" | "blocked" | "unstated"; body: string; reason?: string };
   /** Queues a system note durably in the conversation; returns whether it was admitted. */
-  deliver: (agentId: string, text: string, conversation: string) => boolean;
+  deliver: (agentId: string, text: string, conversation: string, workId?: string) => boolean;
   /** Where each plan's answers are kept, one file per plan hash. Resolved when first needed. */
   resultsDir: string | (() => string);
   confirmAt?: number;
@@ -149,6 +149,7 @@ export interface PlanBoard {
 }
 
 interface Running {
+  workId?: string;
   id: string;
   agentId: string;
   parent: string;
@@ -207,14 +208,14 @@ export class Orchestrations {
     const plan = work.data?.plan as OrchestrationPlan | undefined;
     if (plan === undefined || !Array.isArray(plan.items)) return undefined;
     const cards = Array.isArray(work.data?.cards) ? (work.data.cards as unknown[]).map(String) : [];
-    return { id: work.id, agentId: work.agentId, parent: work.parent, plan, hash: String(work.data?.hash ?? planHash(plan)), cards };
+    return { workId: work.workId, id: work.id, agentId: work.agentId, parent: work.parent, plan, hash: String(work.data?.hash ?? planHash(plan)), cards };
   }
 
   /**
    * Takes a plan from a turn. Returns what the model is told, and the approval when the person has
    * to confirm first. A plan identical to one still open is not started twice.
    */
-  submit(input: { agentId: string; agentName: string; parent: string; plan: OrchestrationPlan }): { text: string; approval?: { id: string } } {
+  submit(input: { workId?: string; agentId: string; agentName: string; parent: string; plan: OrchestrationPlan }): { text: string; approval?: { id: string } } {
     const hash = planHash(input.plan);
     const calls = planCalls(input.plan);
     const already = this.open().find(work => work.agentId === input.agentId && work.data?.hash === hash);
@@ -238,7 +239,7 @@ export class Orchestrations {
     const cards = this.deps.board?.open({ agentId: input.agentId, parent: input.parent, plan: input.plan }) ?? [];
     const id = this.deps.pendingWork.prepare({
       agentId: input.agentId,
-      kind: "orchestrate",
+      kind: "orchestrate", workId: input.workId,
       parent: input.parent,
       child: `plan:${hash}`,
       brief: input.plan.brief,
@@ -254,7 +255,7 @@ export class Orchestrations {
           `resubmit, poll, or predict it.`,
       };
     }
-    this.start({ id, agentId: input.agentId, parent: input.parent, plan: input.plan, hash, cards });
+    this.start({ workId: input.workId, id, agentId: input.agentId, parent: input.parent, plan: input.plan, hash, cards });
     return {
       text:
         `Started ${calls} sub-agent turn(s) for "${input.plan.brief}" in the background. The result arrives ` +
@@ -273,7 +274,7 @@ export class Orchestrations {
         this.start(running);
         continue;
       }
-      if (this.deps.deliver(work.agentId, `[The person declined the plan "${running.plan.brief}"; nothing ran. Do not resubmit it unless they ask.]`, work.parent)) {
+      if (this.deps.deliver(work.agentId, `[The person declined the plan "${running.plan.brief}"; nothing ran. Do not resubmit it unless they ask.]`, work.parent, work.workId)) {
         this.deps.pendingWork.dropped(work.id, "refused");
         for (const card of running.cards) this.deps.board?.settle(card, "failed", "the person declined the plan; nothing ran");
       }
@@ -297,7 +298,7 @@ export class Orchestrations {
         continue;
       }
       if (waiting.has(String(work.data.approvalId))) continue;
-      if (this.deps.deliver(work.agentId, `[The plan "${running.plan.brief}" was waiting for a confirmation that is gone after a restart; nothing ran. Submit it again if it is still wanted.]`, work.parent)) {
+      if (this.deps.deliver(work.agentId, `[The plan "${running.plan.brief}" was waiting for a confirmation that is gone after a restart; nothing ran. Submit it again if it is still wanted.]`, work.parent, work.workId)) {
         this.deps.pendingWork.dropped(work.id, "restart");
         for (const card of running.cards) this.deps.board?.settle(card, "failed", "its confirmation was lost in a restart; nothing ran");
         outcome.closed += 1;
@@ -371,7 +372,7 @@ export class Orchestrations {
               return `--- item ${result.index + 1}: ${running.plan.items[result.index] ?? ""} (${result.status}) ---\n${text}`;
             })
             .join("\n\n")}`;
-    if (this.deps.deliver(running.agentId, body, running.parent)) {
+    if (this.deps.deliver(running.agentId, body, running.parent, running.workId)) {
       this.deps.pendingWork.commit([{ id: running.id, how: counts.result, why: describeRunResult(counts) }]);
       if (running.cards.length === running.plan.items.length) running.cards.forEach((card, index) => { const item = known.get(index); if (item !== undefined) this.deps.board?.settle(card, item.status, item.text); });
       else for (const card of running.cards) this.deps.board?.settle(card, counts.result === "failed" ? "failed" : "done", describeRunResult(counts));

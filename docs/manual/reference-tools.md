@@ -60,7 +60,7 @@ and the source disagree. Change the source and run `node scripts/docs-reference.
 | `Promote` | Propose that something you already have become part of the organisation's knowledge — what every member's agents (scope 'org') or this box's (scope 'box') may rely on. | self | no | always; not in a fork | deferred | — | `memory`, `task_id`, `statement`, `scope`, `evidence` |
 | `read_file` | Read a file from your box. | observe | no | needs a box | resident | desk, web, code, team | `path`, `start_line`, `end_line`, `values` |
 | `ReadFeishuDoc` | Read a Feishu/Lark document (feishu.cn/docx/… or /wiki/… link) as text, using the bot's own workspace identity. | observe | no | needs the Feishu doc reader | deferred | web | `url` |
-| `ReadHistory` | Search or read the recorded history of a conversation — what was actually said, what was called, and what came back. | observe | no | always | resident | desk, web, code, team | `search`, `from`, `to`, `epoch`, `around`, `agent` |
+| `ReadHistory` | Search or read the recorded history of a conversation — what was actually said, what was called, and what came back. | observe | no | always | resident | desk, web, code, team | `conversation`, `search`, `from`, `to`, `epoch`, `around`, `agent` |
 | `ReadKept` | Read back the whole of something you already read, when the copy in this conversation was cut. | observe | no | always | deferred | — | `call`, `from`, `to` |
 | `Recall` | Search everything you have kept, including what the memory section did not show you. | observe | no | always | deferred | desk, web, code, team | `search`, `shared` |
 | `RememberFact` | Keep something across conversations. | self | no | always; not in a fork | resident | desk, web, code, team | `fact`, `scope`, `replaces` |

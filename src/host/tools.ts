@@ -114,6 +114,8 @@ function foregroundWindowMs(): number {
 }
 
 export interface ToolContext {
+  audit?: import("./audit-context.ts").AuditContext;
+  work?: import("../agents/work-attention.ts").WorkStamp; historyConversation?: string;
   progressContext?: import("./task-progress.ts").ProgressContext;
   taskBinding?: import("./execution-binding.ts").TaskBinding;
   agent: AgentRecord;
@@ -1546,6 +1548,7 @@ export function buildTools(
       input_schema: {
         type: "object",
         properties: {
+          conversation: { type: "string", description: "An explicit earlier conversation to inspect; omitted reads this work. Use main for earlier team-room work." },
           search: {
             type: "string",
             description:
@@ -2805,7 +2808,7 @@ export async function dispatchTool(
           jobId, actor: `agent:${context.agent.id}`, // the per-agent job limit and pause-by-owner (INV-1557)
           ...callFor(context, jobId),
         });
-        if (parseOnEnd(input.on_end) !== undefined) context.jobWatch?.watch({ /* watched only when asked (INV-1613); a chosen background job is the agent's own business, so the cap does not kill it */ agentId: context.agent.id, conversation: context.conversation ?? MAIN_CONVERSATION, jobId: started.job_id, command, onEnd: parseOnEnd(input.on_end)!, ...(input.wake_when !== undefined ? { wakeWhen: String(input.wake_when) } : {}), capped: false });
+        if (parseOnEnd(input.on_end) !== undefined) context.jobWatch?.watch({ /* watched only when asked (INV-1613); a chosen background job is the agent's own business, so the cap does not kill it */ agentId: context.agent.id, conversation: context.conversation ?? MAIN_CONVERSATION, ...(input.background !== true && context.work ? { work: context.work } : {}), jobId: started.job_id, command, onEnd: parseOnEnd(input.on_end)!, ...(input.wake_when !== undefined ? { wakeWhen: String(input.wake_when) } : {}), capped: false });
         return {
           text:
             `Started as ${started.job_id} (pid ${started.pid}).\n` +
@@ -2832,7 +2835,7 @@ export async function dispatchTool(
       });
       // A command that outlived its window runs on as a job; the watch wakes this agent when it ends (INV-1461).
       const ending = { /* the policy the agent declared, or wake_on_failure; a command that only waits is recorded and the agent pointed at Jobs wait (INV-1613) */ onEnd: isWaitOnly(command) ? "record" as const : parseOnEnd(input.on_end) ?? "wake_on_failure" as const, waitOnly: isWaitOnly(command) };
-      if (result.still_running !== undefined) context.jobWatch?.watch({ agentId: context.agent.id, conversation: context.conversation ?? MAIN_CONVERSATION, jobId: result.still_running.job_id, command, onEnd: ending.onEnd, ...(input.wake_when !== undefined ? { wakeWhen: String(input.wake_when) } : {}) });
+      if (result.still_running !== undefined) context.jobWatch?.watch({ agentId: context.agent.id, conversation: context.conversation ?? MAIN_CONVERSATION, ...(input.background !== true && context.work ? { work: context.work } : {}), jobId: result.still_running.job_id, command, onEnd: context.work && !ending.waitOnly && parseOnEnd(input.on_end) === undefined ? "wake" : ending.onEnd, ...(input.wake_when !== undefined ? { wakeWhen: String(input.wake_when) } : {}) });
       return { text: formatExec(result, input.timeout_ms ? Number(input.timeout_ms) : undefined, foregroundMs, ending), outcome: result.timed_out || result.exit_code !== 0 ? "failed" : "ok" };
     }
 
@@ -2849,7 +2852,7 @@ export async function dispatchTool(
         agentId: context.agent.id,
         agentName: context.agent.profile.name,
         parent: context.conversation ?? MAIN_CONVERSATION,
-        plan: parsed.plan,
+        plan: parsed.plan, workId: context.workId,
       });
       return { text: submitted.text };
     }
@@ -2968,6 +2971,7 @@ export async function dispatchTool(
       // it lands, the same path a cut-short join already uses, so the front agent's turn ends
       // now and the person keeps getting answers.
       if (input.background === true) {
+        if (context.work) for (const child of children) context.bus.workAttention?.hold(context.work, child);
         for (const [index, run] of runs.entries()) {
           void run.then(text => {
             const tag = ids[index] !== undefined ? `${forkTag(ids[index]!)} ` : "";
@@ -2976,8 +2980,9 @@ export async function dispatchTool(
               `${tag}A fork you started has finished. Fold it into what you tell the person; ` +
                 `they never heard of the fork. If it changes nothing you need to say, call ` +
                 `${SILENCE_TOOL} with the reason.\n\n${text}`,
-              parent
+              parent, context.work
             );
+            if (context.work) context.bus.workAttention?.release(context.work, children[index]!);
             if (ids[index] !== undefined && (seq !== undefined || context.bus.inboxless)) {
               context.pendingWork?.commit([{ id: ids[index]!, how: hows[index]! === "failed" ? "failed" : "late" }]);
             }
@@ -3056,7 +3061,7 @@ export async function dispatchTool(
             `${tag}A fork you were waiting on when a new instruction arrived has finished. ` +
               `Fold it into what you already reported if it still matters; if it does not, call ` +
               `${SILENCE_TOOL} with the reason.\n\n${text}`,
-            parent
+            parent, context.work
           );
           // Admitted durably is delivered. The tag lets a restart's sweep see the note is
           // already queued if this commit line never lands.
@@ -4617,7 +4622,7 @@ export async function dispatchTool(
         fromId: context.agent.id,
         toId: targetId,
         text: String(input.message ?? ""),
-        priority: input.priority === true,
+        priority: input.priority === true, work: context.work,
         hops: context.chainHops ?? 0,
       });
       return { text: ack };
@@ -4900,7 +4905,8 @@ export async function dispatchTool(
       // is a different room it may never have been in. Silent, because a wrong history
       // reads exactly like a thin one.
       // Each context version apart, so an anchor is (epoch, index) and stays put (INV-1188).
-      const parts = context.registry.readContextTranscriptsByEpoch(target.id, context.conversation);
+      const thread = typeof input.conversation === "string" ? input.conversation : context.audit ? context.tasks?.get(context.audit.taskId)?.conversation ?? "main" : target.id === context.agent.id ? context.historyConversation ?? context.conversation : context.work?.conversation ?? context.conversation;
+      const parts = context.registry.readContextTranscriptsByEpoch(target.id, thread);
       const query = {
         ...(typeof input.search === "string" && input.search.trim() !== ""
           ? { search: input.search.trim() }
@@ -5024,7 +5030,7 @@ export async function dispatchTool(
         if (task === undefined) return { text: "No such task on the board.", isError: true };
         // Details can contain task-scoped connection credentials. Keep summaries
         // team-visible, but read the current description only for its assignee.
-        if (task.assigneeId !== context.agent.id) {
+        if (task.assigneeId !== context.agent.id && context.audit?.taskId !== task.id) {
           return { text: "Task details are available to its current assignee. Ask for assignment before reading them.", isError: true };
         }
         return { text: `${describeTask(task, nameOf, board)}${cited(task)}\n\n${task.description ?? "No additional description."}` };

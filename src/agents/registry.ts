@@ -342,7 +342,6 @@ export class AgentRegistry {
     return scope?.agentId === agentId && scope.conversation === conversation
       ? scope.mode : this.contextStore(agentId, conversation).current().mode;
   }
-
   private contextPath(agentId: string, conversation: string, kind: string): string {
     return this.contextStore(agentId, conversation).path(kind, this.contextVersion(agentId, conversation));
   }
@@ -1468,6 +1467,7 @@ export class AgentRegistry {
     try {
       const seen = new Set<string>();
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (/^(work|audit|peer)-[a-f0-9]{32}\.jsonl/.test(entry.name)) continue;
         const isEpochStore = entry.isDirectory() && entry.name.endsWith(".jsonl.epochs");
         if (isEpochStore) {
           const id = entry.name.slice(0, -".jsonl.epochs".length);

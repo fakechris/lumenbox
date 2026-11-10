@@ -82,6 +82,7 @@ type Record_ = PreparedRecord | AdmittedRecord | CommittedRecord | DroppedRecord
 
 /** A fork or a delegated job that was prepared and neither committed nor dropped. */
 export interface OpenFork {
+  workId?: string;
   id: string;
   kind: WorkKind;
   agentId: string;
@@ -104,7 +105,7 @@ export interface SweepDeps {
   endForkTurns: (how: string) => number;
   lastWordsOf: (agentId: string, conversation: string) => string | undefined;
   /** Queues a system note durably; returns whether it was admitted. */
-  deliver: (agentId: string, text: string, conversation: string) => boolean;
+  deliver: (agentId: string, text: string, conversation: string, workId?: string) => boolean;
   /** Whether a note carrying this tag already waits in the parent's inbox. */
   noteQueued: (agentId: string, conversation: string, tag: string) => boolean;
   agentExists: (agentId: string) => boolean;
@@ -253,6 +254,7 @@ export class PendingWork {
           brief: record.brief,
           at: record.at,
           admitted: false,
+          ...(record.workId !== undefined ? {workId: record.workId} : {}),
           ...(record.data !== undefined ? { data: record.data } : {}),
         });
       } else if (record.event === "admitted") {
@@ -316,7 +318,7 @@ export class PendingWork {
               `. ` +
               (status.log_path !== undefined ? `Its log is at ${status.log_path} — read_file it. ` : "") +
               `Anything it did is an attempt, not a result; nothing was re-run.`,
-            fork.parent
+            fork.parent, fork.workId
           );
           if (!admitted) continue;
         }
@@ -341,7 +343,7 @@ export class PendingWork {
               ? `Its last words: "${last.replace(/\s+/g, " ").trim().slice(0, 300)}". `
               : "It had said nothing yet. ") +
             `Anything it did is an attempt, not a result; nothing was re-run. Decide whether the piece still needs doing.`,
-          fork.parent
+          fork.parent, fork.workId
         );
         // A note that could not be admitted leaves the record open, so the next start tries
         // again — the one case where staying open is right.

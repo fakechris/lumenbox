@@ -1,0 +1,155 @@
+/** Current user work outlives a physical turn. The host owns admission and peer relationships. */
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import type { InboundMessage } from "./admitted-message.ts";
+import type { AgentRegistry } from "./registry.ts";
+
+export interface WorkStamp { id: string; owner: string; conversation: string; generation: number; epoch: number; isolated?: boolean; previous?: string }
+export interface CurrentWork extends WorkStamp {
+  principal?: string;
+  status: "running" | "waiting" | "answered";
+  reason?: string;
+  messages: string[];
+  peers: string[];
+  awaiting: string[];
+}
+export const personMessage = (message: InboundMessage): boolean => message.fromId === "user" && !message.synthetic && !message.origin && !message.resumeOf && !message.goal;
+const keyOf = (agent: string, conversation: string) => JSON.stringify([agent, conversation]);
+
+export class WorkAttention {
+  private readonly current = new Map<string, CurrentWork>();
+  constructor(private readonly path?: string, private readonly epochOf: (agent: string, conversation: string) => number = () => 0) {
+    if (path && existsSync(path)) {
+      const data = JSON.parse(readFileSync(path, "utf8")) as { schema: number; records: CurrentWork[] };
+      if (data.schema !== 1 || !Array.isArray(data.records)) throw new Error("Unsupported current-work state; restore it before continuing");
+      for (const row of data.records) {
+        if (!row.id || !row.owner || !row.conversation || !Number.isInteger(row.epoch) || !Number.isInteger(row.generation) || !Array.isArray(row.messages) || !Array.isArray(row.peers) || !["running", "waiting", "answered"].includes(row.status)) throw new Error("Invalid current-work state");
+        this.current.set(keyOf(row.owner, row.conversation), { ...row, ...((row.status === "running" || row.awaiting?.some(item => item.startsWith("volatile:"))) ? { status: "waiting" as const, reason: "execution interrupted" } : {}), awaiting: (row.awaiting ?? []).filter(item => !item.startsWith("volatile:")) });
+      }
+    }
+  }
+  get(agent: string, conversation: string): CurrentWork | undefined {
+    const value = this.current.get(keyOf(agent, conversation));
+    return value && value.epoch === this.epochOf(agent, conversation) ? structuredClone(value) : undefined;
+  }
+  private live(stamp: WorkStamp): CurrentWork | undefined {
+    const value = this.current.get(keyOf(stamp.owner, stamp.conversation));
+    return value?.id === stamp.id && value.generation === stamp.generation && value.epoch === stamp.epoch && value.status !== "answered" && value.epoch === this.epochOf(stamp.owner, stamp.conversation) ? value : undefined;
+  }
+  valid(stamp: WorkStamp, participant: string): boolean {
+    const value = this.live(stamp);
+    return !!value && (value.owner === participant || value.peers.includes(participant));
+  }
+  /** Only a drained human message can claim or amend foreground work. */
+  begin(agent: string, conversation: string, messages: readonly InboundMessage[]): WorkStamp | undefined {
+    const humans = messages.filter(personMessage), first = humans[0];
+    if (!first) {
+      const related = messages.map(m => m.work).find(stamp => stamp && this.valid(stamp, agent));
+      if (related?.owner === agent) this.settle(related, "running");
+      return related;
+    }
+    const previous = this.get(agent, conversation);
+    const reuse = previous && previous.status !== "answered" && previous.principal === first.principalId && first.steerable !== false;
+    const next: CurrentWork = reuse ? { ...previous, messages: [...new Set([...previous.messages, ...humans.map(m => m.id)])].slice(-128), status: "running", reason: undefined }
+      : { id: first.id, owner: agent, conversation, generation: (previous?.generation ?? 0) + 1, epoch: this.epochOf(agent, conversation), isolated: true, ...(previous ? { previous: workStateConversation(previous, conversation) } : {}), principal: first.principalId, status: "running", messages: humans.map(m => m.id), peers: [], awaiting: [] };
+    this.current.set(keyOf(agent, conversation), next); this.save(); return this.stamp(next);
+  }
+  /** A validated goal/resume already has a durable work identity; it is never replaced with a new UUID. */
+  existing(agent: string, conversation: string, id: string): WorkStamp {
+    const previous = this.get(agent, conversation);
+    if (previous?.id === id && previous.status !== "answered") { const stamp = this.stamp(previous); this.settle(stamp, "running"); return stamp; }
+    const next: CurrentWork = { id, owner: agent, conversation, generation: (previous?.generation ?? 0) + 1, epoch: this.epochOf(agent, conversation), isolated: false, status: "running", messages: [], peers: [], awaiting: [] };
+    this.current.set(keyOf(agent, conversation), next); this.save(); return this.stamp(next);
+  }
+  /** A sender cannot invent a root or acquire membership by writing it into its message. */
+  link(stamp: WorkStamp, from: string, to: string): WorkStamp | undefined {
+    if (!this.valid(stamp, from)) return undefined;
+    const value = this.live(stamp)!;
+    if (!value.peers.includes(to) && to !== value.owner) { value.peers.push(to); }
+    if (to !== value.owner && !value.awaiting.includes(to)) value.awaiting.push(to);
+    if (from !== value.owner) value.awaiting = value.awaiting.filter(id => id !== from);
+    this.save();
+    return this.stamp(value);
+  }
+  eligible(agent: string, conversation: string, message: InboundMessage): boolean {
+    if (message.work && (!this.valid(message.work, agent) || !this.valid(message.work, message.fromId) && message.fromId !== "system" && !(message.fromId === "user" && message.synthetic))) return false;
+    if (personMessage(message)) return true;
+    const current = this.get(agent, conversation);
+    if (message.goal || message.resumeOf) return !current || current.status === "answered" || current.id === (message.goal?.workId ?? message.resumeOf?.workId);
+    if (!current || current.status === "answered") return true;
+    return !!message.work && message.work.id === current.id && message.work.generation === current.generation &&
+      (message.fromId === "system" || message.fromId === "user" && message.synthetic || this.valid(message.work, message.fromId)) && this.valid(message.work, agent);
+  }
+  forId(agent: string, conversation: string, id: string): WorkStamp | undefined {
+    const work = this.get(agent, conversation);
+    return work?.id === id && work.status !== "answered" ? this.stamp(work) : undefined;
+  }
+  hold(stamp: WorkStamp, id: string): void { const work = this.live(stamp); if (work && !work.awaiting.includes("volatile:" + id)) { work.awaiting.push("volatile:" + id); this.save(); } }
+  release(stamp: WorkStamp, id: string): void { const work = this.live(stamp); if (work) { work.awaiting = work.awaiting.filter(item => item !== "volatile:" + id); this.save(); } }
+  settle(stamp: WorkStamp, status: CurrentWork["status"], reason?: string): void {
+    const value = this.live(stamp);
+    if (!value) return;
+    value.status = status; value.reason = reason; this.save();
+  }
+  private stamp(work: CurrentWork): WorkStamp { return { id: work.id, owner: work.owner, conversation: work.conversation, generation: work.generation, epoch: work.epoch, isolated: work.isolated, previous: work.previous }; }
+  private save(): void {
+    if (!this.path) return;
+    mkdirSync(dirname(this.path), { recursive: true }); const temporary = this.path + ".tmp";
+    writeFileSync(temporary, JSON.stringify({ schema: 1, records: [...this.current.values()] }) + "\n", { mode: 0o600 }); renameSync(temporary, this.path);
+  }
+}
+
+export function workStateConversation(stamp: WorkStamp | undefined, conversation: string): string {
+  return stamp && stamp.isolated !== false ? "work-" + createHash("sha256").update(JSON.stringify([stamp.id, stamp.epoch])).digest("hex").slice(0, 32) : conversation;
+}
+export function peerWorkConversation(messages: readonly InboundMessage[], fallback: string): string {
+  const first = messages[0], work = first?.work;
+  if (!first || messages.some(message => message.fromId === "user" || message.fromId === "system")) return fallback;
+  return "peer-" + createHash("sha256").update(JSON.stringify([work?.id ?? first.id, work?.generation ?? 0, work?.epoch ?? 0])).digest("hex").slice(0, 32);
+}
+
+/** Work history compacts independently; the original conversation remains an append-only display record. */
+export function workRegistry(base: AgentRegistry, agentId: string, conversation: string, scoped: string, stamp?: WorkStamp): AgentRegistry {
+  if (conversation === scoped) return base;
+  if (stamp?.owner === agentId && base.readTranscript(agentId, scoped).length === 0) {
+    const reference = base.readTranscript(agentId, stamp.previous ?? conversation) as ReferenceEntry[];
+    for (const entry of referenceHistory(reference, !!stamp.previous)) base.appendTranscript(agentId, entry, scoped);
+  }
+  const source = base.readTranscript(agentId, conversation) as ReferenceEntry[];
+  const projected = new Set((base.readTranscript(agentId, scoped) as ReferenceEntry[]).map(entry => entry.workRecordId).filter(Boolean));
+  for (const entry of source) if (entry.workScope === scoped && entry.workRecordId && !projected.has(entry.workRecordId)) { base.appendTranscript(agentId, entry, scoped); projected.add(entry.workRecordId); }
+  const map = (agent: string, thread = "main") => agent === agentId && thread === conversation ? scoped : thread;
+  return new Proxy(base, { get(target, key) {
+    if (key === "readTranscript") return (agent: string, thread?: string) => target.readTranscript(agent, map(agent, thread));
+    if (key === "readDurableState") return (agent: string, thread?: string) => target.readDurableState(agent, map(agent, thread));
+    if (key === "writePlan") return (agent: string, text: string, thread?: string) => target.writePlan(agent, text, map(agent, thread));
+    if (key === "writeTodos") return (agent: string, items: Parameters<AgentRegistry["writeTodos"]>[1], thread?: string) => target.writeTodos(agent, items, map(agent, thread));
+    if (key === "writeCheckpoints") return (agent: string, items: Parameters<AgentRegistry["writeCheckpoints"]>[1], thread?: string) => target.writeCheckpoints(agent, items, map(agent, thread));
+    if (key === "appendTranscript") return (agent: string, entry: unknown, thread = "main") => {
+      const mapped = map(agent, thread);
+      if (mapped === thread) { target.appendTranscript(agent, entry, thread); return; }
+      const recorded = { ...(entry as object), workScope: mapped, workRecordId: randomUUID() };
+      // The existing recovery ledger reads the original transcript. Its append is canonical;
+      // a crash before the work projection is repaired above, without replaying the effect.
+      target.appendTranscript(agent, recorded, thread); target.appendTranscript(agent, recorded, mapped);
+    };
+    const value = Reflect.get(target, key, target) as unknown;
+    return typeof value === "function" ? value.bind(target) : value;
+  } });
+}
+
+/** Migrate human history once; later answered work carries only bounded prose for references. */
+type ReferenceEntry = { role?: string; kind?: string; text?: string; turnId?: string; fromPerson?: boolean; host?: boolean; workScope?: string; workRecordId?: string };
+function referenceHistory(entries: ReferenceEntry[], bounded: boolean): ReferenceEntry[] {
+  const backgroundTurns = new Set(entries.filter(entry => entry.host || entry.kind === "peer").map(entry => entry.turnId).filter(Boolean));
+  let background = false;
+  const admitted = entries.filter(entry => {
+    if (entry.kind === "peer" || entry.host) background = true;
+    else if (!entry.kind && entry.role === "user") background = false;
+    return !background && !backgroundTurns.has(entry.turnId) && (!bounded || !entry.kind && !!entry.text);
+  });
+  if (!bounded) return admitted;
+  let chars = 0;
+  return admitted.slice(-8).reverse().filter(entry => { chars += entry.text!.length; return chars <= 8000; }).reverse();
+}

@@ -60,7 +60,7 @@
 | `Promote` | Propose that something you already have become part of the organisation's knowledge — what every member's agents (scope 'org') or this box's (scope 'box') may rely on. | self | 否 | 总是；分支里没有 | deferred | — | `memory`, `task_id`, `statement`, `scope`, `evidence` |
 | `read_file` | Read a file from your box. | observe | 否 | 需要一台 box | resident | desk, web, code, team | `path`, `start_line`, `end_line`, `values` |
 | `ReadFeishuDoc` | Read a Feishu/Lark document (feishu.cn/docx/… or /wiki/… link) as text, using the bot's own workspace identity. | observe | 否 | 需要飞书文档阅读器 | deferred | web | `url` |
-| `ReadHistory` | Search or read the recorded history of a conversation — what was actually said, what was called, and what came back. | observe | 否 | 总是 | resident | desk, web, code, team | `search`, `from`, `to`, `epoch`, `around`, `agent` |
+| `ReadHistory` | Search or read the recorded history of a conversation — what was actually said, what was called, and what came back. | observe | 否 | 总是 | resident | desk, web, code, team | `conversation`, `search`, `from`, `to`, `epoch`, `around`, `agent` |
 | `ReadKept` | Read back the whole of something you already read, when the copy in this conversation was cut. | observe | 否 | 总是 | deferred | — | `call`, `from`, `to` |
 | `Recall` | Search everything you have kept, including what the memory section did not show you. | observe | 否 | 总是 | deferred | desk, web, code, team | `search`, `shared` |
 | `RememberFact` | Keep something across conversations. | self | 否 | 总是；分支里没有 | resident | desk, web, code, team | `fact`, `scope`, `replaces` |

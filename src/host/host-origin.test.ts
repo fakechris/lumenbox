@@ -1,3 +1,6 @@
+import { TaskStore } from "./tasks.ts";
+import { auditConversation } from "./audit-context.ts";
+import { evidenceDigest } from "./review-dispatch.ts";
 /**
  * What the host writes is not the person's words (INV-1571).
  *
@@ -57,26 +60,31 @@ test("the model is told who is asking; a person's words and a text with its own 
   assert.equal(buildTurnPrompt([marked]), marked.text, "already says who wrote it");
 });
 
-test("scenario: an audit from the board drives a turn as before — answered, recorded — but as the host's, not the person's", async () => {
+test("scenario: an admitted audit is answered in its own host context; the person retains their conversation", async () => {
   const root = mkdtempSync(join(tmpdir(), "host-origin-"));
   const previousHome = process.env.AGENTBOX_HOME;
   process.env.AGENTBOX_HOME = root;
   try {
     const registry = new AgentRegistry(join(root, "agents"));
     const vic = registry.create({ name: "Vic" });
+    const tasks = new TaskStore(null);
+    const task = tasks.create({title:"Check the import",requester:"person",assigneeId:registry.create({name:"Worker"}).id,reviewerId:vic.id})!;
+    tasks.update(task.id,{status:"review"},task.assigneeId!);
+    const scope = {taskId:task.id,digest:evidenceDigest(tasks.get(task.id)!),reviewerId:vic.id};
+    const conversation = auditConversation(scope);
     const capture: ModelCapture = { params: [] };
     const orch = new Orchestrator({
-      registry, useBox: false, inbox: null, mcp: null, hooks: null, tasks: null, extensions: null, pendingWork: null,
+      registry, useBox: false, inbox: null, mcp: null, hooks: null, tasks, extensions: null, pendingWork: null,
       client: fakeModel(() => ({
         id: "r", type: "message", role: "assistant", model: "test",
         content: [{ type: "text", text: "Audited: the import works." }], stop_reason: "end_turn", stop_sequence: null,
         usage: { input_tokens: 10, output_tokens: 4 },
       } as never), { capture }),
     });
-    await orch.prompt(vic.id, audit.text, undefined, { steerable: false, lane: "background", origin: "host:audit" });
+    await orch.prompt(vic.id, audit.text, undefined, { audit: scope, conversation, steerable: false, lane: "background", origin: "host:audit" });
     await orch.prompt(vic.id, "thanks, and the summary?", { userId: "chris" });
 
-    const transcript = registry.readTranscript(vic.id) as { role: string; text?: string; host?: true; fromPerson?: true; kind?: string }[];
+    const transcript = [...registry.readTranscript(vic.id, conversation), ...registry.readTranscript(vic.id)] as { role: string; text?: string; host?: true; fromPerson?: true; kind?: string }[];
     const opened = transcript.filter(entry => entry.role === "user" && entry.kind === undefined);
     assert.equal(opened.length, 2);
     assert.equal(opened[0]!.host, true, "the audit's turn is a host entry");
@@ -84,7 +92,8 @@ test("scenario: an audit from the board drives a turn as before — answered, re
     assert.equal(opened[1]!.fromPerson, true, "the person's own message still is");
     assert.equal(opened[1]!.host, undefined);
     const replies = transcript.filter(entry => entry.role === "assistant" && entry.kind === undefined);
-    assert.equal(replies.length, 2, "both turns answered, as before");
+    assert.equal(replies.length, 2, "both requests answered in separate contexts");
+    assert.doesNotMatch(JSON.stringify(registry.readTranscript(vic.id)), /host:audit/, "the audit never enters the user history");
     const firstRequest = JSON.stringify(capture.params[0]?.messages ?? []);
     assert.match(firstRequest, /from the host \(host:audit\), not from a person/);
     // The model is told what that label means, by the guide generated from the channel table (INV-1579),

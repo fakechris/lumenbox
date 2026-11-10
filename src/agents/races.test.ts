@@ -150,7 +150,7 @@ test("R2a: priority lands mid-turn — the background turn is aborted and the me
       event => events.push(event)
     );
 
-    bus.sendFromUser(ada.id, "slow background work");
+    bus.sendFromUser(ada.id, "slow background work", { synthetic: true, lane: "background" });
     const done = bus.wake(ada.id);
     await tick(); // turn 1 parked, holding the signal
 
@@ -484,9 +484,8 @@ test("a lane held down too long goes first anyway, and only while it is held dow
   // The ordinary case: everything fresh, priority decides.
   assert.equal(chooseLane([at("background", 1), at("user", 1)], now, window), "user");
 
-  // Starvation: a stream of *fresh* questions while an audit waits. The audit wins,
-  // which is the whole point of the rule.
-  assert.equal(chooseLane([at("background", 300), at("user", 1)], now, window), "background");
+  // Background age never grants priority over a person waiting for work (INV-1797).
+  assert.equal(chooseLane([at("background", 300), at("user", 1)], now, window), "user");
 
   // Not starvation, just a backlog: when the questions are old too, they are higher
   // and they go first. Nothing is being held down — the agent is simply behind.

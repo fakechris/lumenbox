@@ -5,6 +5,10 @@ import type { ResumeMarker } from "../host/resume.ts";
 import type { Lane } from "./bus.ts";
 
 export interface InboundMessage {
+  /** Host-stamped root work. Agent tools cannot choose its identity or participants. */
+  work?: import("./work-attention.ts").WorkStamp;
+  /** Host-only review snapshot; persisted with admission, never parsed from model prose. */
+  audit?: import("../host/audit-context.ts").AuditContext;
   /** Host-only continuation lineage, persisted with the admission. */
   resumeOf?: ResumeMarker;
   /** Authenticated host identity, frozen at admission; never supplied by an agent tool. */

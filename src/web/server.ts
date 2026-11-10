@@ -1,3 +1,4 @@
+import { conversationProgress } from "./work-attention.ts";
 import { summarizeTaskProgress, type ProgressSourceAccess } from "../host/task-progress.ts";
 import { progressLines } from "../host/task-progress-view.ts";
 import { taskProgressSurface } from "../host/task-progress-surface.ts";
@@ -5361,7 +5362,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // The plan and todos belong to a conversation now; the page shows whichever
           // thread it is viewing, defaulting to the team room.
           const conversation = url.searchParams.get("conversation") ?? MAIN_CONVERSATION;
-          send(res, 200, orchestrator.registry.readDurableState(agentId, conversation));
+          if (refused(agentId)) return;
+          send(res, 200, conversationProgress(orchestrator.registry, orchestrator.bus, agentId, conversation));
           return;
         }
 

@@ -36,7 +36,7 @@ export interface AcpDelegateDeps {
   pendingWork?: PendingWork;
   policy?: PolicyGate;
   /** The note to the agent that delegated, in the conversation it delegated from. */
-  deliver: (agentId: string, text: string, conversation: string) => void;
+  deliver: (agentId: string, text: string, conversation: string, workId?: string) => void;
   log?: (line: string) => void;
   now?: () => number;
   /** How long one events poll waits in the box before answering empty. */
@@ -78,7 +78,7 @@ interface Watch {
   cwd: string;
   report: string;
   /** The brief in flight, if any: its prompt's rpc id and what the engine has said so far. */
-  inFlight?: { promptRpcId: number; brief: string; text: string };
+  inFlight?: { workId?: string; promptRpcId: number; brief: string; text: string };
   since: number;
   stopped: boolean;
 }
@@ -188,7 +188,7 @@ export class AcpDelegates {
       data: { ...data },
     });
     if (id !== undefined) this.deps.pendingWork?.admitted(id, undefined);
-    watch.inFlight = { promptRpcId, brief: `${extra.engine}: ${prompt}`, text: "" };
+    watch.inFlight = { workId: extra.workId, promptRpcId, brief: `${extra.engine}: ${prompt}`, text: "" };
   }
 
   /**
@@ -269,7 +269,7 @@ export class AcpDelegates {
    * session id in its stored cwd — the brief that was in flight is then unknown, because the
    * engine's answer to it is gone with the old process; a load the engine refuses is failed.
    */
-  async reattach(box: AcpBox, items: { agentId: string; agentName: string; conversation: string; jobId: string; brief: string; data: SessionData & { engine: string } }[]): Promise<void> {
+  async reattach(box: AcpBox, items: { workId?: string; agentId: string; agentName: string; conversation: string; jobId: string; brief: string; data: SessionData & { engine: string } }[]): Promise<void> {
     if (items.length === 0) return;
     let sessions: Awaited<ReturnType<AcpBox["acpSessions"]>>["sessions"];
     try {
@@ -292,7 +292,7 @@ export class AcpDelegates {
         report: recordedReportFile(item.data as unknown as Record<string, unknown>, item.jobId),
         since: 0,
         stopped: false,
-        inFlight: { promptRpcId: item.data.promptRpcId, brief: item.brief, text: "" },
+        inFlight: { workId: item.workId, promptRpcId: item.data.promptRpcId, brief: item.brief, text: "" },
       };
       if (known?.running === true) {
         this.watches.set(item.jobId, watch);
@@ -327,7 +327,7 @@ export class AcpDelegates {
       if (box === undefined || agentName === undefined) continue;
       await this.reattach(
         box,
-        items.map(item => ({ agentId, agentName, conversation: item.parent, jobId: item.child, brief: item.brief, data: item.data as unknown as SessionData & { engine: string } }))
+        items.map(item => ({ agentId, agentName, conversation: item.parent, jobId: item.child, brief: item.brief, workId: item.workId, data: item.data as unknown as SessionData & { engine: string } }))
       );
     }
   }
@@ -452,7 +452,7 @@ export class AcpDelegates {
       this.deps.deliver(
         watch.agentId,
         `${delegateEndedNote(watch.jobId, inFlight.brief, { ...judged, ...(worktree !== undefined ? { worktree } : {}), ...(delivery !== undefined ? { delivery } : {}) })}${answer} [The session stays open: continue it with Delegate session_id=${watch.jobId}, or close it.]`,
-        watch.conversation
+        watch.conversation, inFlight.workId
       );
     })();
   }

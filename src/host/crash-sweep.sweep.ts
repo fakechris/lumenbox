@@ -174,7 +174,7 @@ function host(root: string, point: string | undefined) {
     let results = 0;
     const append = registry.appendTranscript.bind(registry);
     (registry as unknown as { appendTranscript: typeof append }).appendTranscript = ((agentId, entry, conversation) => {
-      if ((entry as { kind?: string }).kind === "results") {
+      if (!conversation?.startsWith("work-") && (entry as { kind?: string }).kind === "results") {
         results += 1;
         at(`results:before:${results}`);
         append(agentId, entry, conversation);

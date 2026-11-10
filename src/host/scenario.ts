@@ -1,3 +1,4 @@
+import { WorkAttention } from "../agents/work-attention.ts";
 import { admitProgressMessage } from "./progress-admission.ts";
 /**
  * Episodes, so a complaint becomes a test.
@@ -303,6 +304,7 @@ function message(content: Anthropic.ContentBlock[], stop: Anthropic.Message["sto
 }
 
 export interface EpisodeOptions {
+  workAttention?: import("../agents/work-attention.ts").WorkAttention;
   /** The agents the episode starts with. The first is the one the person talks to. */
   team: { name: string; description?: string; tools?: readonly string[]; toolPermissions?: ToolPermissions }[];
   /** What the person says, in order. Each is sent to the front agent and awaited. */
@@ -539,15 +541,15 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
     } as never);
   }, event => {
     if (event.type === "turn_finished") goalLoop?.onTurnFinished(event.agentId);
-  }, undefined, false, (agentId, message) => admitProgressMessage(options.tasks, agentId, message));
+  }, undefined, false, (agentId, message) => admitProgressMessage(options.tasks, agentId, message), options.workAttention ?? new WorkAttention(undefined, (id, conversation) => registry.contextVersion(id, conversation)));
   // Engines kept alive as sessions (docs/81): the bus delivers their notes, as the orchestrator's does.
   const acpDelegates =
     options.pendingWork !== undefined
       ? new AcpDelegates({
           pendingWork: options.pendingWork,
           ...(options.policy !== undefined ? { policy: options.policy } : {}),
-          deliver: (agentId, text, conv) => {
-            bus.deliverSystem(agentId, text, conv);
+          deliver: (agentId, text, conv, workId) => {
+            bus.deliverSystem(agentId, text, conv, workId);
           },
           eventsTimeoutMs: 300,
           consentPollMs: 5,
