@@ -36,12 +36,9 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     document.body.appendChild(root);
     root.addEventListener("click", click);
     root.addEventListener("change", function (event) {
-      if (event.target.hasAttribute("data-tf-status") && active) {
-        var view = active;
-        fetch("/api/tasks/update",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({id:view.id,status:event.target.value})}).then(function (response) { return response.json().then(function (body) { if (!response.ok) throw new Error(body.error || word("error")); return body; }); }).then(function (body) {
-          if (body.note) feed(safe(body.note),"warn"); return window.refreshTaskExecution();
-        }).then(function () { if (active === view && view.task) render(view); }).catch(function (error) { if (active === view) { by("needs").textContent = error.message; loadItem(view); } });
-        return;
+      if (active && (event.target.hasAttribute("data-tf-status") || event.target.hasAttribute("data-tf-level"))) {
+        var body = event.target.hasAttribute("data-tf-level") ? {level:Number(event.target.value)} : {status:event.target.value};
+        saveTaskChange(active,body,"/api/tasks/update",body.status); return;
       }
       var filter = event.target.getAttribute("data-tf-filter"); if (!filter || !active) return;
       root.classList.remove("tf-detail-selected"); active.mobileDetail = false;
@@ -60,7 +57,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     if (views.has(id)) return views.get(id);
     var saved = {}; try { saved = JSON.parse(sessionStorage.getItem("lumen-task-view:" + id) || "{}"); } catch (error) {}
     var view = { id: id, tab: saved.tab || "overview", filters: Object.fromEntries(["role","outcome","work"].filter(function (key) { return saved.filters && typeof saved.filters[key] === "string"; }).map(function (key) { return [key,saved.filters[key]]; })), selected: saved.selected || "", anchor: saved.anchor, listTop: saved.listTop, readingAnchor: saved.readingAnchor,
-      rowNodes: new Map(), generation: 0, detailGeneration: 0, page: null, task: null, detail: null };
+      visited:!!saved.tab, rowNodes: new Map(), generation: 0, detailGeneration: 0, page: null, task: null, detail: null };
     if (["overview","execution","artifacts","costs"].indexOf(view.tab) < 0) view.tab = "overview";
     views.set(id, view); while (views.size > 8) views.delete(views.keys().next().value);
     return view;
@@ -86,7 +83,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     by("id").textContent = task.id;
     var review = task.status === "review" ? word("review") : task.status === "done" ? word("ended") : task.status === "dropped" ? word("dropped") : word("pending");
     var statuses = [["state",status(task)],["connection",word(connection())],["acceptance",review]];
-    root.querySelector("[data-tf-conversation]").disabled = !task.assigneeId;
+    root.querySelector("[data-tf-conversation]").disabled = !task.assigneeId || !task.conversation;
     by("status").innerHTML = statuses.map(function (pair) { return '<span><i></i><b>' + word(pair[0]) + '</b> ' + safe(pair[1]) + '</span>'; }).join("");
     by("activity").textContent = word("action") + ": " + actionName(latest) + (latest && (latest.endedAt || latest.startedAt) ? " · " + word("activity") + " " + new Date(latest.endedAt || latest.startedAt).toLocaleString() : "");
     var terminal = task.status === "done" || task.status === "dropped";
@@ -94,6 +91,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     by("needs").innerHTML = needs.map(function (item) { return attentionRow(item, true, true); }).join("") + (terminal ? [] : task.needsApprovals || []).map(function (item) {
       return '<div class="ui-row"><span>' + word("approval") + ': ' + safe(item.description) + '</span>' + (view.role === "admin" || view.role === "driver" ? '<button class="btn sm" data-att-approve="' + safe(item.id) + '">' + safe(t("consent.once")) + '</button><button class="btn sm ghost" data-att-deny="' + safe(item.id) + '">' + safe(t("consent.deny")) + '</button>' : '') + '</div>';
     }).join("");
+    if (view.actionMessage) by("needs").innerHTML += '<p class="tf-action-feedback" role="status">' + safe(view.actionMessage) + '</p>';
     by("new").hidden = !view.dirty;
     ["overview","execution","artifacts","costs"].forEach(function (tab) { by("tab-" + tab).setAttribute("aria-selected", String(tab === view.tab)); by("tab-" + tab).tabIndex = tab === view.tab ? 0 : -1; });
   }
@@ -120,22 +118,37 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     var task = view.task, html = '<div class="tf-overview"><section><h2>' + word("goal") + '</h2>' + prose(task.pursuit && task.pursuit.objective || task.description || task.title);
     if (task.contract) html += ["outcome","scope","constraints"].filter(function (key) { return task.contract[key]; }).map(function (key) { return '<h2>' + t("ui.tf.contract." + key) + '</h2>' + prose(task.contract[key]); }).join("");
     html += '</section><section><h2>' + word("state") + '</h2><p>' + safe(status(task)) + '</p>' + '<div id="tf-progress">' + (window.taskProgressHtml ? window.taskProgressHtml(task) : '<p class="tf-note">' + word("phaseOnly") + '</p>') + '</div></section>';
-    var reply = view.record && view.record.reply;
-    if (reply) html += '<section><h2>' + word("latestReply") + '</h2>' + prose(reply.text) + '<div class="tf-note">' + safe(reply.by) + ' · ' + safe(new Date(reply.at).toLocaleString()) + '</div></section>';
+    html += taskReport(view);
     return html + changes(task) + '<section class="tf-note">' + word("coverage") + '</section></div>';
+  }
+  function taskReport(view) {
+    var reply = view.record && view.record.reply;
+    var row = reply || (view.task.history || []).slice().reverse().find(function (entry) { return !!entry.note; });
+    if (!row) return "";
+    return '<section><h2>' + (reply ? word("latestReply") : t("ui.tc.latestTaskChange")) + '</h2>' + prose(reply ? row.text : row.note) + '<div class="tf-note">' + safe(nameOf(row.by) || row.by) + ' · ' + safe(new Date(row.at).toLocaleString()) + '</div></section>';
   }
   function artifacts(view) {
     var task = view.task, checks = task.pursuit && task.pursuit.checklist || [];
-    var html = '<div class="tf-overview"><section><h2>' + word("artifacts") + '</h2>' + (window.deliverablesHtml && window.deliverablesHtml(task) || '<p class="tf-note">' + word("noArtifacts") + '</p>') + '</section><section id="tf-export">' + exportHtml(view) + '</section><section><h2>' + word("reviewer") + '</h2><p>' + safe(task.reviewerId ? nameOf(task.reviewerId) || task.reviewerId : word("noReviewer")) + '</p></section>';
-    if (view.role === "admin" || view.role === "driver") {
+    var html = '<div class="tf-overview"><section><h2>' + word("artifacts") + '</h2>' + (window.deliverablesHtml && window.deliverablesHtml(task) || '<p class="tf-note">' + word("noArtifacts") + '</p>') + '</section>';
+    html += taskReport(view);
+    if (window.claimAccountHtml) html += window.claimAccountHtml(task);
+    var driver = view.role === "admin" || view.role === "driver";
+    var review = driver && (view.actor === "web" || view.actor === task.requester || view.actor === task.reviewerId);
+    if (task.status === "review" && review) html += '<section><h2>' + t("ui.tc.reviewDecision") + '</h2><p class="tf-note">' + t("ui.tc.reviewNote") + '</p><div class="ui-actions"><button class="btn accent" data-tf-accept' + (view.actionBusy ? ' disabled' : '') + '>' + t("ui.tc.accept") + '</button><button class="btn" data-tf-note' + (view.actionBusy ? ' disabled' : '') + '>' + t("ui.tc.recordChanges") + '</button></div></section>';
+    if (task.proposedBy && driver) html += '<section><h2>' + t("ui.tc.proposal") + '</h2><div class="ui-actions"><button class="btn" data-tf-commit>' + t("ui.app.commit") + '</button><button class="btn ghost" data-tf-dismiss>' + t("ui.app.dismiss") + '</button></div></section>';
+    if (driver) {
       var states = {open:"queued",doing:"working",blocked:"needs",review:"review",done:"ended",dropped:"dropped"};
-      html += '<section><div class="field"><label for="tf-task-status">' + word("taskStatus") + '</label><select id="tf-task-status" data-tf-status>' + Object.keys(states).map(function (value) { return '<option value="' + value + '"' + (value === task.status ? ' selected' : '') + '>' + word(states[value]) + '</option>'; }).join("") + '</select></div></section>';
+      html += '<details class="tf-changes"><summary>' + t("ui.tc.advanced") + '</summary><p class="tf-note">' + t("ui.tc.managementNote") + '</p><div class="field"><label for="tf-task-status">' + word("taskStatus") + '</label><select id="tf-task-status" data-tf-status' + (view.actionBusy ? ' disabled' : '') + '>' + Object.keys(states).map(function (value) { return '<option value="' + value + '"' + (value === task.status ? ' selected' : '') + '>' + word(states[value]) + '</option>'; }).join("") + '</select></div>';
+      if (task.level) html += '<div class="field"><label for="tf-task-level">' + t("ui.tc.executionScope") + '</label><select id="tf-task-level" data-tf-level' + (view.actionBusy ? ' disabled' : '') + '>' + [1,2,3,4,5].map(function (level) { return '<option value="' + level + '"' + (level === task.level ? ' selected' : '') + '>' + t("ui.tc.level" + level) + '</option>'; }).join('') + '</select><p class="fieldnote">' + t("ui.tc.scopeNote") + '</p></div>';
+      ["orgPromoteHtml","taskDepsHtml"].forEach(function (fn) { if (window[fn]) html += window[fn](task); });
+      html += '</details>';
     }
     if (task.contract) html += ["acceptance","verification"].filter(function (key) { return task.contract[key]; }).map(function (key) { return '<section><h2>' + t("ui.tf.contract." + key) + '</h2>' + prose(task.contract[key]) + '</section>'; }).join("");
     if (checks.length) html += '<section><h2>' + word("checklist") + '</h2>' + checks.map(function (item) { return '<p>' + safe(item.text) + (item.verdict ? ' · ' + safe(item.verdict) : '') + '</p>'; }).join("") + '</section>';
-    ["claimAccountHtml","orgPromoteHtml","divisionHtml","taskDepsHtml","configVersionsHtml"].forEach(function (fn) { if (window[fn]) html += window[fn](task); });
+    var related = ["divisionHtml","configVersionsHtml"].map(function (fn) { return window[fn] ? window[fn](task) : ""; }).join("");
+    if (related) html += '<details class="tf-changes"><summary>' + t("ui.tc.collaborationSources") + '</summary>' + related + '</details>';
     if (task.recoveries && task.recoveries.length) html += '<section><h2>' + word("attempt") + '</h2>' + task.recoveries.map(function (attempt) { return '<p>' + safe(attempt.operationId) + ' · ' + word("attempt") + ' ' + attempt.attempt + ' · ' + safe(attempt.status) + '</p>'; }).join("") + '</section>';
-    return html + '</div>';
+    return html + '<details class="tf-changes"><summary>' + word("export") + '</summary><section id="tf-export">' + exportHtml(view) + '</section></details></div>';
   }
   function cancelExport(view) {
     if (!view) return;
@@ -239,7 +252,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     if (!page.steps.length) {
       root.classList.remove("tf-detail-selected");
       var filtered = Object.keys(view.filters).some(function (key) { return !!view.filters[key]; });
-      var emptyHtml = '<div class="tf-empty"><h2>' + word(filtered ? "empty" : "noActivity") + '</h2><p>' + word(filtered ? "filterNote" : "noStepsNote") + '</p><div class="ui-row">' + (filtered ? '<button class="btn sm" data-tf-clear>' + word("clear") + '</button>' : '') + (view.task.assigneeId ? '<button class="btn sm ghost" data-tf-conversation>' + word("conversation") + '</button>' : '') + '</div>' + changes(view.task) + '</div>';
+      var emptyHtml = '<div class="tf-empty"><h2>' + word(filtered ? "empty" : "noActivity") + '</h2><p>' + word(filtered ? "filterNote" : "noStepsNote") + '</p><div class="ui-row">' + (filtered ? '<button class="btn sm" data-tf-clear>' + word("clear") + '</button>' : '') + (view.task.assigneeId && view.task.conversation ? '<button class="btn sm ghost" data-tf-conversation>' + word("conversation") + '</button>' : '') + '</div>' + changes(view.task) + '</div>';
       if (list.__emptyHtml !== emptyHtml) { list.innerHTML = emptyHtml; list.__emptyHtml = emptyHtml; }
       by("detail").textContent = "";
     }
@@ -341,15 +354,15 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     cancelExport(active); var view = viewFor(id); cancelExport(view);
     if (!window.taskFocusVisible && typeof captureEventReading === "function") window.taskBackReading = { agent:current,conversation:currentConversation,reading:captureEventReading($("chat")) };
     view.generation++; view.detailGeneration++; if (view.detailController) view.detailController.abort(); view.task = null;
-    active = view; window.taskFocusVisible = true; openTask = id; root.hidden = false; view.detail = null; view.page = null; view.activity = null; view.liveAction = null; view.record = null; view.role = null; view.cost = null; view.costGeneration = (view.costGeneration || 0) + 1;
+    active = view; window.taskFocusVisible = true; openTask = id; root.hidden = false; view.detail = null; view.page = null; view.activity = null; view.liveAction = null; view.record = null; view.role = null; view.actor = null; view.actionMessage = ""; view.actionBusy = false; view.cost = null; view.costGeneration = (view.costGeneration || 0) + 1;
     var openGeneration = view.openGeneration = (view.openGeneration || 0) + 1;
-    get("/api/me").then(function (me) { if (active !== view || view.openGeneration !== openGeneration) return; view.role = me.role || "viewer"; if (view.task) header(view); if (view.task && view.tab === "artifacts") render(view); if (view.detail && view.tab === "execution") syncApproval(view,view.detail,by("detail")); }).catch(function () {});
+    get("/api/me").then(function (me) { if (active !== view || view.openGeneration !== openGeneration) return; view.role = me.role || "viewer"; view.actor = me.identity === null ? "web" : typeof me.identity === "string" ? me.identity : null; if (view.task) header(view); if (view.task && view.tab === "artifacts") render(view); if (view.detail && view.tab === "execution") syncApproval(view,view.detail,by("detail")); }).catch(function () {});
     by("title").textContent = word("loading"); by("body").textContent = ""; by("status").textContent = ""; by("activity").textContent = ""; by("needs").textContent = "";
     var url = new URL(location.href); url.searchParams.set("task",id); if (push !== false && url.href !== location.href) history.pushState({},"",url);
     var wantedTab = url.searchParams.get("tasktab"), wantedStep = url.searchParams.get("step");
     if (["overview","execution","artifacts","costs"].indexOf(wantedTab) >= 0) view.tab = wantedTab;
     if (wantedStep) { if (wantedStep !== view.selected) { view.anchor = wantedStep; view.readingAnchor = null; view.listTop = 0; view.mobileDetail = true; } view.selected = wantedStep; }
-    return loadItem(view).then(function () { if (active !== view || !view.task || view.openGeneration !== openGeneration) return; render(view); by("tab-" + view.tab).focus(); if (view.tab === "costs") loadCosts(view); return loadPage(view,null,view.readingAnchor && view.readingAnchor.id || view.anchor || view.selected,true); });
+    return loadItem(view).then(function () { if (active !== view || !view.task || view.openGeneration !== openGeneration) return; if (!wantedTab && !view.visited && view.task.status === "review") view.tab = "artifacts"; view.visited = true; render(view); by("tab-" + view.tab).focus(); if (view.tab === "costs") loadCosts(view); return loadPage(view,null,view.readingAnchor && view.readingAnchor.id || view.anchor || view.selected,true); });
   }
   function close(update) {
     if (!root) return;
@@ -364,22 +377,38 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     refreshTasks();
     if (returnFocus && returnFocus.isConnected) returnFocus.focus();
   }
+  function saveTaskChange(view,changes,path,expected) {
+    if (active !== view || view.actionBusy) return Promise.resolve();
+    view.actionBusy = true; view.actionMessage = ""; var generation = view.openGeneration; render(view);
+    return fetch(path,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(Object.assign({id:view.id},changes))}).then(function (response) { return response.json().then(function (data) { if (!response.ok) throw new Error(data.error || word("error")); return data; }); }).then(function (data) {
+      if (active !== view || view.openGeneration !== generation) return;
+      if (data.task) view.task = data.task;
+      view.actionMessage = data.note || (expected && view.task.status !== expected ? t("ui.tc.stateNotChanged") : changes.note && !changes.status ? t("ui.tc.noteSaved") : "");
+    }).catch(function (error) { if (active === view && view.openGeneration === generation) view.actionMessage = error.message; }).finally(function () {
+      if (view.openGeneration === generation) view.actionBusy = false; if (active === view && view.openGeneration === generation) render(view);
+    });
+  }
   function click(event) {
     if (!active) return;
     var node = event.target.closest("button"); if (!node) return;
     if (node.hasAttribute("data-tf-clear") && active) {
       event.preventDefault(); cancelExport(active); active.detailGeneration++; if (active.detailController) active.detailController.abort(); root.classList.remove("tf-detail-selected"); active.filters = {}; active.selected = ""; active.detail = null; active.readingAnchor = null; active.page = null; active.rowNodes.clear(); active.mobileDetail = false; remember(active); render(active); loadPage(active,null,null,true); return;
     }
+    if (node.hasAttribute("data-tf-accept")) { saveTaskChange(active,{status:"done"},"/api/tasks/update","done"); return; }
+    if (node.hasAttribute("data-tf-commit")) { saveTaskChange(active,{},"/api/tasks/commit"); return; }
+    if (node.hasAttribute("data-tf-dismiss")) { saveTaskChange(active,{status:"dropped"},"/api/tasks/update","dropped"); return; }
+    if (node.hasAttribute("data-tf-note")) { var notedView = active, notedGeneration = active.openGeneration; askInline(node,t("ui.tc.changePrompt"),"").then(function (note) { if (active === notedView && notedView.openGeneration === notedGeneration && note && note.trim()) saveTaskChange(notedView,{note:note.trim()},"/api/tasks/update"); }); return; }
     if (node.hasAttribute("data-tf-export")) { createExport(active); return; }
     if (node.hasAttribute("data-tf-list")) { active.mobileDetail = false; root.classList.remove("tf-detail-selected"); paintPage(active); return; }
     if (node.hasAttribute("data-tf-close")) { close(true); return; }
-    if (node.hasAttribute("data-tf-conversation")) { var task = active.task; close(true); if (task && task.assigneeId) { select(task.assigneeId,task.conversation || "main"); showTab("desktop"); } return; }
+    if (node.hasAttribute("data-tf-conversation")) { var task = active.task; close(true); if (task && task.assigneeId && task.conversation) { select(task.assigneeId,task.conversation); showTab("desktop"); } return; }
     var tab = node.getAttribute("data-tf-tab"), step = node.getAttribute("data-tf-step");
     if (tab) { changeTab(tab); return; } if (step) { active.mobileDetail = true; root.classList.add("tf-detail-selected"); loadDetail(active,step); return; }
     if (node.hasAttribute("data-tf-refresh")) { var view = active; window.refreshTaskExecution().then(function () { if (active === view && view.task) render(view); }); }
     if (active.page && (node.hasAttribute("data-tf-next") || node.hasAttribute("data-tf-prev"))) { active.listTop = 0; active.readingAnchor = null; active.selected = ""; root.classList.remove("tf-detail-selected"); active.detail = null; if (by("detail")) by("detail").textContent = word("select"); loadPage(active,node.hasAttribute("data-tf-next") ? active.page.nextCursor : active.page.previousCursor,null,false); }
   }
   window.openTaskFocus = open;
+  window.closeTaskFocusForContext = function () { returnFocus = null; close(true); };
   window.addEventListener("DOMContentLoaded",function () { if (active && active.task && active.tab !== "execution") render(active); });
   window.refreshTaskExecution = function () { if (!active) return Promise.resolve(); var view = active; return loadItem(view).then(function () { if (active === view && view.task && view.tab === "costs") loadCosts(view); if (active === view && view.task) return loadPage(view,null,view.readingAnchor && view.readingAnchor.id || view.anchor || view.selected,true); }); };
   function queueHeader(view) {

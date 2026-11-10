@@ -883,6 +883,7 @@ ${AGENT_ROW_STYLE}
     <svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true"><rect x="4" y="4" width="120" height="120" rx="30" fill="#231a13"/><path d="M64 32 96 49 64 66 32 49Z" fill="#d9634a"/><path d="M32 49 64 66v32L32 81Z" fill="#d9634a" fill-opacity=".62"/><path d="M96 49 64 66v32l32-17Z" fill="#d9634a" fill-opacity=".34"/></svg>
     LumenBox
   </span>
+  <button class="btn ghost sm" id="alltasksnav">{{ui.tc.team}} <span id="alltasks-feedback" class="activity-error" role="status" aria-live="polite"></span></button>
   <span class="mid"><span id="model">&mdash;</span></span>
   <!-- A control, so it is reachable by keyboard and announced as one. It was a span that
        opened nothing; now it opens something, and a clickable span nothing can find is a
@@ -4406,6 +4407,7 @@ function select(id, conversation) {
     renderBoxBar();
   }
   currentConversation = conversation || (switching ? "main" : currentConversation);
+  if (window.taskBoardContextChanged) window.taskBoardContextChanged();
   $("title").textContent = nameOf(id);
   var selected = agentById(id);
   $("titlerole").textContent = selected
@@ -5002,6 +5004,7 @@ function showTab(which) {
   document.body.classList.toggle("task-board-visible",which === "tasks");
   $("desktopview").style.display = which === "desktop" ? "" : "none";
   $("filesview").style.display = which === "files" ? "flex" : "none";
+  document.body.classList.toggle("task-team-visible",which === "tasks" && typeof taskBoardState !== "undefined" && taskBoardState.mode === "team");
   $("tasksview").style.display = which === "tasks" ? "flex" : "none"; // INV-1654
   $("autoview").style.display = which === "auto" ? "flex" : "none";
   $("auditview").style.display = which === "audit" ? "flex" : "none";
@@ -5020,7 +5023,7 @@ function showTab(which) {
 document.getElementById("tabdesktop").addEventListener("click", function (e) { e.preventDefault(); showTab("desktop"); });
 document.getElementById("desktoptitle").addEventListener("click", function (e) { e.preventDefault(); showTab("desktop"); });
 document.getElementById("tabfiles").addEventListener("click", function (e) { e.preventDefault(); showTab("files"); });
-document.getElementById("tabtasks").addEventListener("click", function (e) { e.preventDefault(); showTab("tasks"); }); document.getElementById("inboxonly").addEventListener("click", function (e) { e.preventDefault(); window.inboxOnly = !window.inboxOnly; this.textContent = window.inboxOnly ? "{{ui.app.all}}" : "{{ui.app.inbox}}"; refreshTasks(); }); // INV-1652
+document.getElementById("tabtasks").addEventListener("click", function (e) { e.preventDefault(); window.taskBoardContextChanged(); showTab("tasks"); });
 document.getElementById("tabauto").addEventListener("click", function (e) { e.preventDefault(); showTab("auto"); });
 document.getElementById("tabaudit").addEventListener("click", function (e) { e.preventDefault(); showTab("audit"); });
 document.getElementById("audithideprobes").addEventListener("change", function () {
@@ -5690,7 +5693,7 @@ document.addEventListener("click", function (event) {
     // column. A task opens its card on the board beside this panel.
     var conversation = open.getAttribute("data-att-open");
     if (conversation) { showTab("desktop"); select(current, conversation); }
-    else if (open.getAttribute("data-att-task")) { window.openTaskFocus(open.getAttribute("data-att-task")); } else { showTab("tasks"); } // scrolled is reset so the board brings the card into view // the board is where a task opens; from the chat view that means switching to it
+    else if (open.getAttribute("data-att-task")) { window.openTaskFocus(open.getAttribute("data-att-task")); } else { window.openTeamTasks(); $("attention").open = true; } // scrolled is reset so the board brings the card into view // the board is where a task opens; from the chat view that means switching to it
   }
 });
 
@@ -5707,16 +5710,6 @@ document.getElementById("tasklist").addEventListener("click", function (event) {
     .then(function (d) { if (d.error) alert(d.error); renderTasks(); })
     .catch(function () {});
 });
-
-$("taskadd").onclick = function () {
-  var title = $("tasknew").value.trim();
-  if (!title) return;
-  fetch("/api/tasks", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ title: title, assigneeId: $("taskassign").value })
-  }).then(function (r) { return r.json(); }).then(function (d) { $("tasknew").value = ""; refreshTasks(); if (d && d.coverage && window.showTaskCoverage) window.showTaskCoverage(d); }); // a task that waits on a credential says so here (INV-1666)
-};
 
 // Opening a task, and following it to the conversation it came from. Both are links
 // rather than buttons because they are navigation: a person expects to click the id.
@@ -5737,22 +5730,6 @@ document.getElementById("tasklist").addEventListener("click", function (event) {
     select(target.getAttribute("data-agent"), conversation);
     showTab("desktop");
   }
-});
-
-document.getElementById("tasklist").addEventListener("change", function (event) {
-  var id = event.target.getAttribute && event.target.getAttribute("data-task"), levelOf = event.target.getAttribute && event.target.getAttribute("data-level"); // a level change rides the same route (INV-1650)
-  if (!id && !levelOf) return;
-  fetch("/api/tasks/update", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(levelOf ? { id: levelOf, level: Number(event.target.value) } : { id: id, status: event.target.value })
-  })
-    .then(function (r) { return r.json(); })
-    .then(function (d) {
-      // The review gate may have redirected the move; re-render shows the truth.
-      if (d.note) feed(esc(d.note), "warn");
-      refreshTasks();
-    });
 });
 
 // The board changes as agents work; refresh it while it is the visible tab.

@@ -16,7 +16,7 @@ test("activity stays bounded and a live failure remains visible while collapsed 
     appendChild(child: Element) { this.children.push(child); }
     addEventListener(name: string, handler: () => void) { this.handlers.set(name, handler.bind(this)); }
   }
-  const ids = ["feed", "activity-panel", "activity-count", "activity-unread", "activity-retention", "task-return-feedback"];
+  const ids = ["feed", "activity-panel", "activity-count", "activity-unread", "activity-retention", "task-return-feedback", "alltasks-feedback"];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element()]));
   const scope = {
     $: (id: string) => nodes[id]!, document: { createElement: () => new Element() },

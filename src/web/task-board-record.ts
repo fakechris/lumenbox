@@ -7,7 +7,7 @@ export function taskBoardRecord(task: Task, access?: ProgressSourceAccess) {
   return {
     progress: summarizeTaskProgress(task, 3, access),
     id: task.id, title: task.title, status: task.status, requester: task.requester,
-    assigneeId: task.assigneeId, reviewerId: task.reviewerId, updatedAt: task.updatedAt, createdAt: task.createdAt,
+    assigneeId: task.assigneeId, conversation: task.conversation, reviewerId: task.reviewerId, updatedAt: task.updatedAt, createdAt: task.createdAt,
     level: task.level, levelBy: task.levelBy, proposedBy: task.proposedBy,
     due: task.due, aging: task.aging, snoozeUntil: task.snoozeUntil, waitingOn: preview(task.waitingOn, 160),
     ...(task.discovery ? { discovery: { kind: task.discovery.kind, source: task.discovery.source, evidence: preview(task.discovery.evidence, 160), whyNow: preview(task.discovery.whyNow, 160) } } : {}),
