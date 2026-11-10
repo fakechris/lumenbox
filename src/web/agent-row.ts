@@ -10,6 +10,14 @@ export const AGENT_ROW_STYLE = String.raw`
   .agent.on { background: var(--accent-soft); }
   .agent.on .nm, .agent.on .ttl, .agent.on .dnum { color: var(--accent); }
   .agent > .dot { grid-column: 1; grid-row: 1; }
+  .agent > .dot.identity-1 { background: var(--c-1); }
+  .agent > .dot.identity-2 { background: var(--c-2); }
+  .agent > .dot.identity-3 { background: var(--c-3); }
+  .agent > .dot.identity-4 { background: var(--c-4); }
+  .agent > .dot.identity-5 { background: var(--c-5); }
+  .agent > .dot.identity-6 { background: var(--c-6); }
+  .agent > .dot.identity-7 { background: var(--c-7); }
+  .agent > .dot.identity-8 { background: var(--c-8); }
   .agent .cols { grid-column: 2; grid-row: 1; min-width: 0; }
   .agent .nm { font-weight: 600; font-size: var(--fs-body, 15px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .agent .ttl { color: var(--muted); font-size: var(--fs-xs, 11px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -33,7 +41,7 @@ function oneAgentRow(a, index) {
   var unread = "{{ui.app.agent-unread-count}}".replace("{count}", String(f.unreadCount));
   var desktop = "{{ui.app.agent-desktop-number}}".replace("{display}", String(a.displayIndex));
   return '<div class="agent ' + (a.id === current ? "on" : "") + (marker ? " " + marker : "") + '" data-id="' + esc(a.id) + '" title="' + esc(f.awaiting ? f.awaiting.reason : "") + '">' +
-    '<div class="dot ' + marker + '" style="background:var(--c-' + ((index % 8) + 1) + ')"></div>' +
+    '<div class="dot identity-' + ((index % 8) + 1) + ' ' + marker + '"></div>' +
     '<div class="cols"><div class="nm" title="' + esc(a.name) + '">' + esc(a.name) + '</div><div class="ttl">' + esc(line) + '</div></div>' +
     (f.unreadCount > 0 ? '<span class="cnt" title="' + esc(unread) + '" aria-label="' + esc(unread) + '">' + (f.unreadCount > 99 ? "99+" : f.unreadCount) + '</span>' : '') +
     (a.displayIndex ? '<span class="dnum" title="' + esc(desktop) + '" aria-label="' + esc(desktop) + '">d' + esc(a.displayIndex) + '</span>' : '') + '</div>';
