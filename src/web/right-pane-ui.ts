@@ -33,7 +33,10 @@ function activitySummary() {
   badge.classList.toggle("activity-error",activityErrors > 0);
 }
 $("activity-panel").addEventListener("toggle",function () {
-  if (this.open) { activityUnread = 0; activityErrors = 0; activitySummary(); }
+  if (this.open) { $("feed").scrollTop = $("feed").scrollHeight; activityUnread = 0; activityErrors = 0; activitySummary(); }
+});
+$("feed").addEventListener("scroll",function () {
+  if ($("activity-panel").open && nearBottom(this)) { activityUnread = 0; activityErrors = 0; activitySummary(); }
 });
 function feed(html, cls, at) {
   var el = $("feed"), panel = $("activity-panel"), stick = nearBottom(el);
@@ -43,7 +46,7 @@ function feed(html, cls, at) {
   var row = document.createElement("div"); row.className = "ev " + (cls || ""); row.innerHTML = stamp + html; el.appendChild(row);
   activityCount++;
   // Replayed history is not a new error. Live errors remain visible on the collapsed summary.
-  if (!panel.open && !at) { activityUnread++; if (cls === "err") activityErrors++; }
+  if ((!panel.open || !stick) && !at) { activityUnread++; if (cls === "err") activityErrors++; }
   if (el.children.length > 200) { el.firstElementChild.remove(); $("activity-retention").hidden = false; }
   activitySummary(); if (stick && panel.open) el.scrollTop = el.scrollHeight;
 }
