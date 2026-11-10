@@ -118,13 +118,19 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     var task = view.task, html = '<div class="tf-overview"><section><h2>' + word("goal") + '</h2>' + prose(task.pursuit && task.pursuit.objective || task.description || task.title);
     if (task.contract) html += ["outcome","scope","constraints"].filter(function (key) { return task.contract[key]; }).map(function (key) { return '<h2>' + t("ui.tf.contract." + key) + '</h2>' + prose(task.contract[key]); }).join("");
     html += '</section><section><h2>' + word("state") + '</h2><p>' + safe(status(task)) + '</p>' + '<div id="tf-progress">' + (window.taskProgressHtml ? window.taskProgressHtml(task) : '<p class="tf-note">' + word("phaseOnly") + '</p>') + '</div></section>';
-    var reply = view.record && view.record.reply;
-    if (reply) html += '<section><h2>' + word("latestReply") + '</h2>' + prose(reply.text) + '<div class="tf-note">' + safe(reply.by) + ' · ' + safe(new Date(reply.at).toLocaleString()) + '</div></section>';
+    html += taskReport(view);
     return html + changes(task) + '<section class="tf-note">' + word("coverage") + '</section></div>';
+  }
+  function taskReport(view) {
+    var reply = view.record && view.record.reply;
+    var row = reply || (view.task.history || []).slice().reverse().find(function (entry) { return !!entry.note; });
+    if (!row) return "";
+    return '<section><h2>' + (reply ? word("latestReply") : t("ui.tc.latestTaskChange")) + '</h2>' + prose(reply ? row.text : row.note) + '<div class="tf-note">' + safe(nameOf(row.by) || row.by) + ' · ' + safe(new Date(row.at).toLocaleString()) + '</div></section>';
   }
   function artifacts(view) {
     var task = view.task, checks = task.pursuit && task.pursuit.checklist || [];
     var html = '<div class="tf-overview"><section><h2>' + word("artifacts") + '</h2>' + (window.deliverablesHtml && window.deliverablesHtml(task) || '<p class="tf-note">' + word("noArtifacts") + '</p>') + '</section>';
+    html += taskReport(view);
     if (window.claimAccountHtml) html += window.claimAccountHtml(task);
     var driver = view.role === "admin" || view.role === "driver";
     var review = driver && (view.actor === "web" || view.actor === task.requester || view.actor === task.reviewerId);

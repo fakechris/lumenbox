@@ -115,13 +115,14 @@ test("task export completion cannot repaint a switched task or restore a denied 
 
 
 test("review is an explicit authorized action and denied or coerced results never look accepted",async()=>{
-  const task={id:"t1",title:"Review result",status:"review",requester:"owner",reviewerId:"reviewer",history:[]};
+  const task={id:"t1",title:"Review result",status:"review",requester:"owner",reviewerId:"reviewer",history:[{at:"2026-11-10",by:"owner",note:"RETAINED RESULT NOTE"}]};
   const stranger=workspace({role:"driver",identity:"stranger"});stranger.window.openTaskFocus("t1",false);await tick();stranger.itemReads[0]!.resolve(stranger.reply({task}));await tick();
   assert.doesNotMatch(stranger.nodes.get("tf-body")!.innerHTML,/data-tf-accept/);
   const unidentified=workspace({role:"admin"});unidentified.window.openTaskFocus("t1",false);await tick();unidentified.itemReads[0]!.resolve(unidentified.reply({task}));await tick();
   assert.doesNotMatch(unidentified.nodes.get("tf-body")!.innerHTML,/data-tf-accept/);
   const viewer=workspace({role:"viewer",identity:"owner"});viewer.window.openTaskFocus("t1",false);await tick();viewer.itemReads[0]!.resolve(viewer.reply({task}));await tick();
   assert.doesNotMatch(viewer.nodes.get("tf-body")!.innerHTML,/data-tf-accept|data-tf-status|data-tf-level/);
+  assert.match(viewer.nodes.get("tf-body")!.innerHTML,/RETAINED RESULT NOTE/);
   assert.match(viewer.nodes.get("tf-body")!.innerHTML,/READABLE VERIFICATION EVIDENCE/,"verification caveats remain readable without management permission");
   const owner=workspace({role:"driver",identity:"owner"});owner.window.openTaskFocus("t1",false);await tick();owner.itemReads[0]!.resolve(owner.reply({task}));await tick();
   assert.match(owner.nodes.get("tf-body")!.innerHTML,/data-tf-accept/);assert.equal(owner.mutations.length,0);
