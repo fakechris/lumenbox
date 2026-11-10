@@ -6,6 +6,8 @@ import { ACTIVITY_FEED_JS, ATTENTION_PANEL_JS } from "./right-pane-ui.ts";
 test("activity stays bounded and a live failure remains visible while collapsed or reading older entries", () => {
   class Element {
     children: Element[] = [];
+    visible = true;
+    getClientRects() { return this.visible ? [{}] : []; }
     open = false; hidden = true; scrollTop = 0; textContent = ""; className = ""; innerHTML = "";
     handlers = new Map<string, () => void>();
     classList = { toggle: () => {} };
@@ -14,7 +16,7 @@ test("activity stays bounded and a live failure remains visible while collapsed 
     appendChild(child: Element) { this.children.push(child); }
     addEventListener(name: string, handler: () => void) { this.handlers.set(name, handler.bind(this)); }
   }
-  const ids = ["feed", "activity-panel", "activity-count", "activity-unread", "activity-retention"];
+  const ids = ["feed", "activity-panel", "activity-count", "activity-unread", "activity-retention", "task-return-feedback"];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element()]));
   const scope = {
     $: (id: string) => nodes[id]!, document: { createElement: () => new Element() },
@@ -23,7 +25,7 @@ test("activity stays bounded and a live failure remains visible while collapsed 
   const feed = runInNewContext(`${ACTIVITY_FEED_JS}; feed`, scope) as (html: string, cls?: string, at?: string) => void;
   for (let n = 0; n < 230; n++) feed("Retained entry", "err", "2026-11-01T00:00:00Z");
   assert.equal(nodes.feed!.children.length, 200);
-  assert.equal(nodes["activity-retention"]!.hidden, false);
+  assert.equal(nodes["activity-retention", "task-return-feedback"]!.hidden, false);
   assert.equal(nodes["activity-unread"]!.textContent, "", "replayed errors are not new failures");
   feed("Sending failed", "err");
   assert.match(nodes["activity-unread"]!.textContent, /1 .*newErrors/);
@@ -37,6 +39,9 @@ test("activity stays bounded and a live failure remains visible while collapsed 
   nodes.feed!.scrollTop = nodes.feed!.scrollHeight;
   nodes.feed!.handlers.get("scroll")!();
   assert.equal(nodes["activity-unread"]!.textContent, "", "reading the latest entries clears the indicator");
+  nodes["activity-panel"]!.visible = false;
+  feed("Sending failed in narrow conversation mode", "err");
+  assert.match(nodes["task-return-feedback"]!.textContent, /1 .*newErrors/, "the conversation entry must surface errors even if the expanded activity pane is hidden");
 });
 
 

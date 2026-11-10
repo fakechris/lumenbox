@@ -33,24 +33,25 @@ function activitySummary() {
   var badge = $("activity-unread");
   badge.textContent = activityErrors ? activityErrors + " {{ui.tf.newErrors}}" : activityUnread ? activityUnread + " {{ui.tf.newEvents}}" : "";
   badge.classList.toggle("activity-error",activityErrors > 0);
+  $("task-return-feedback").textContent = activityErrors ? activityErrors + " {{ui.tf.newErrors}}" : "";
 }
 $("activity-panel").addEventListener("toggle",function () {
-  if (this.open) { $("feed").scrollTop = $("feed").scrollHeight; activityUnread = 0; activityErrors = 0; activitySummary(); }
+  if (this.open && this.getClientRects().length) { $("feed").scrollTop = $("feed").scrollHeight; activityUnread = 0; activityErrors = 0; activitySummary(); }
 });
 $("feed").addEventListener("scroll",function () {
-  if ($("activity-panel").open && nearBottom(this)) { activityUnread = 0; activityErrors = 0; activitySummary(); }
+  if ($("activity-panel").open && $("activity-panel").getClientRects().length && nearBottom(this)) { activityUnread = 0; activityErrors = 0; activitySummary(); }
 });
 function feed(html, cls, at) {
-  var el = $("feed"), panel = $("activity-panel"), stick = nearBottom(el);
+  var el = $("feed"), panel = $("activity-panel"), shown = panel.open && panel.getClientRects().length > 0, stick = nearBottom(el);
   if (!el.children.length && activityCount) { activityCount = 0; activityUnread = 0; activityErrors = 0; $("activity-retention").hidden = true; }
   var when = at ? new Date(at) : new Date();
   var stamp = isNaN(when.getTime()) ? "" : '<span class="t">' + ("0" + when.getHours()).slice(-2) + ":" + ("0" + when.getMinutes()).slice(-2) + "</span> ";
   var row = document.createElement("div"); row.className = "ev " + (cls || ""); row.innerHTML = stamp + html; el.appendChild(row);
   activityCount++;
   // Replayed history is not a new error. Live errors remain visible on the collapsed summary.
-  if ((!panel.open || !stick) && !at) { activityUnread++; if (cls === "err") activityErrors++; }
+  if ((!shown || !stick) && !at) { activityUnread++; if (cls === "err") activityErrors++; }
   if (el.children.length > 200) { el.firstElementChild.remove(); $("activity-retention").hidden = false; }
-  activitySummary(); if (stick && panel.open) el.scrollTop = el.scrollHeight;
+  activitySummary(); if (stick && shown) el.scrollTop = el.scrollHeight;
 }
 `;
 export const ATTENTION_PANEL_JS = String.raw`// One attention item as a line: in the panel above the board, or (onBoard) as the mark on its task's own row (INV-1654).

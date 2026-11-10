@@ -920,7 +920,7 @@ ${AGENT_ROW_STYLE}
 </div>
 
 <div class="pane" id="middle">
-  <button class="ui-link task-return" data-task-list>{{ui.tf.allTasks}}</button>
+  <button class="ui-link task-return" data-task-list>{{ui.tf.allTasks}} <span id="task-return-feedback" class="activity-error" role="status" aria-live="polite"></span></button>
   <div id="setupcard" style="display:none"></div>
   <div class="paneheader">
     <span class="lead">
