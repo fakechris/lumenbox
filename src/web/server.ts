@@ -284,7 +284,7 @@ export interface WebOptions {
 type OutboundEvent =
   | TurnEvent
   | BusEvent
-  | { type: "prompt"; agentId: string; text: string; userId?: string; conversation?: string }
+  | { type: "prompt"; agentId: string; messageId?: string; text: string; userId?: string; conversation?: string }
   | { type: "error"; message: string; agentId?: string; boxId?: string; taskId?: string }
   /** An agent asked the person something; the page shows a card with the answers as buttons. */
   | { type: "question"; agentId: string; agentName: string; question: string; options?: string[]; fallback?: string; conversation?: string }
@@ -1494,7 +1494,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (taskId !== undefined) {
         void orchestrator.retitleTask(agent.id, taskId, text).catch(() => {});
       }
-      broadcast({ type: "prompt", agentId: agent.id, text, userId: principal, conversation });
+      const promptMessageId = origin?.messageId ?? randomUUID();
+      broadcast({ type: "prompt", agentId: agent.id, messageId: promptMessageId, text, userId: principal, conversation });
       // The card's one-line answer to "what is it doing": each tool call as it starts,
       // for this agent in this conversation only. Coarse on purpose — a card is not a
       // transcript, and the transcript is where the real record already lives. The
@@ -1565,7 +1566,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           conversation,
           ...(taskId !== undefined ? { taskBinding: { taskId, role: "executor" as const } } : {}),
           steerable: false,
-          ...(origin?.messageId !== undefined ? { messageId: origin.messageId } : {}),
+          messageId: promptMessageId,
           ...(origin?.addressed === false ? { addressed: false } : {}),
         });
         await orchestrator.settle();
@@ -2935,6 +2936,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     res.writeHead(status, {
       "content-type": type === "application/json" ? type : `${type}; charset=utf-8`,
       "content-length": Buffer.byteLength(payload),
+      "x-lumen-event-cursor": events.cursor,
       // The page is regenerated on every start; a cached copy would hide changes.
       "cache-control": "no-store",
     });
@@ -6724,8 +6726,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // long turn must not hold the HTTP request open.
           // Attributed, so a transcript stops saying "the user" once there is more than one person
           // in a tenant. Carried on the event too, since that is what the feed renders.
+          const promptMessageId = randomUUID();
           broadcast({
-            type: "prompt",
+            type: "prompt", messageId: promptMessageId,
             agentId,
             text,
             conversation,
@@ -6735,7 +6738,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
           const before = registry.readTranscript(agentId, conversation).length;
           void orchestrator
-            .prompt(agentId, text, caller, { conversation })
+            .prompt(agentId, text, caller, { conversation, messageId: promptMessageId })
             .then(() => {
               // The reply belongs to the same room the interjection went to. Read back
               // from the transcript, the same way the channel path recovers an answer.

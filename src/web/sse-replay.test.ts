@@ -68,3 +68,17 @@ test("HTTP Last-Event-ID resumes exactly the missing authorized events and sends
     await restarted.close();
   } finally { events.close(); await new Promise<void>(resolve => server.close(() => resolve())); }
 });
+
+test("a backpressured response stops its ping immediately and handles asynchronous stream errors", async () => {
+  const { PassThrough } = await import("node:stream");
+  const events = new SseReplay();
+  const response = new PassThrough({ highWaterMark: 1 }) as unknown as import("node:http").ServerResponse;
+  response.writeHead = (() => response) as typeof response.writeHead;
+  events.connect({ headers: {} } as import("node:http").IncomingMessage, response, () => true);
+  assert.equal(events.size, 0);
+  assert.equal(response.writableEnded, true);
+  response.emit("error", new Error("socket closed while draining"));
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(response.destroyed, true);
+  events.close();
+});

@@ -3,8 +3,15 @@ export const LIVE_TOOLS_JS = String.raw`/* Live tool calls */
 var openCall = new Map();
 var liveReplay = null;
 var replayedText = new Map();
+var replayedMessages = new Set();
 function rememberReplayedText(entry) {
+  (entry.causedBy || []).forEach(function (id) { replayedMessages.add(id); });
   if (entry.executionId && typeof entry.textThrough === "number") replayedText.set(entry.executionId, Math.max(replayedText.get(entry.executionId) || 0, entry.textThrough));
+}
+function unseenLivePrompt(e) {
+  if (!e.messageId) return true;
+  if (replayedMessages.has(e.messageId)) return false;
+  replayedMessages.add(e.messageId); return true;
 }
 function unseenLiveText(e) {
   if (e.type !== "text" || !e.executionId || typeof e.textEnd !== "number" || typeof e.textStart !== "number") return true;

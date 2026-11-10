@@ -84,9 +84,10 @@ export function questionOf(input: unknown): { question: string; options?: string
 
 
 /** The entry's own time, when the transcript kept one. */
-function stamp(raw: unknown): { at?: string; turnId?: string; executionId?: string; textThrough?: number } {
-  const entry = raw as { at?: unknown; turnId?: unknown; executionId?: unknown; textThrough?: unknown };
-  return { ...(typeof entry.at === "string" && entry.at ? { at: entry.at } : {}),
+function stamp(raw: unknown): { at?: string; turnId?: string; executionId?: string; textThrough?: number; causedBy?: string[] } {
+  const entry = raw as { at?: unknown; turnId?: unknown; executionId?: unknown; textThrough?: unknown; causedBy?: unknown };
+  return { ...(Array.isArray(entry.causedBy) ? { causedBy: entry.causedBy.filter((id): id is string => typeof id === "string") } : {}),
+    ...(typeof entry.at === "string" && entry.at ? { at: entry.at } : {}),
     ...(typeof entry.turnId === "string" ? { turnId: entry.turnId } : {}),
     ...(typeof entry.executionId === "string" ? { executionId: entry.executionId } : {}),
     ...(typeof entry.textThrough === "number" ? { textThrough: entry.textThrough } : {}) };
@@ -106,7 +107,7 @@ export type DisplayEntry =
       aside?: true;
       /** When it was said, from the transcript; absent on entries written before it was kept. */
       at?: string;
-      turnId?: string; executionId?: string; textThrough?: number;
+      turnId?: string; executionId?: string; textThrough?: number; causedBy?: string[];
     }
   /** A turn a teammate started: the messages, without the scaffolding around them. */
   | { kind: "peer"; messages: WakeMessage[] }

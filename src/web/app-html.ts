@@ -3950,7 +3950,7 @@ var workingItem = null;   // the "on it" row shown between turn start and the fi
 var surfaces = new Map(); // cards the agent composed (docs/79), by surface id, for the thread on screen
 
 function resetThread() {
-  thread = []; openAgent = null; openWork = null; openCall.clear(); replayedText.clear(); openQuestion = null; workingItem = null; cards.clear(); surfaces.clear();
+  thread = []; openAgent = null; openWork = null; openCall.clear(); replayedText.clear(); replayedMessages.clear(); openQuestion = null; workingItem = null; cards.clear(); surfaces.clear();
   $("chat").innerHTML = "";
 }
 
@@ -4355,6 +4355,7 @@ function diffHtml(diff) {
 function drawCall(call) {
   var row = document.createElement("details");
   row.className = "tool " + (call.isError ? "err" : "");
+  if (call.turnId && call.toolUseId) row.setAttribute("data-call-key", JSON.stringify([call.turnId, call.executionId || call.attempt || 1, call.toolUseId]));
   var oneLine = String(call.detail == null ? "" : call.detail).replace(/\s+/g, " ");
   var diff = call.diff && call.diff.lines ? diffHtml(call.diff) : null;
   var summary = diff ? esc((call.diff.path || oneLine).slice(0, 120)) + ' <span class="dim">' + esc(diff.summary) + "</span>" : esc(oneLine.slice(0, 140));
@@ -4379,7 +4380,7 @@ function closeOpen() {
 
 /** One stored entry from the server, as items. Prose is prose whether or not calls followed it. */
 function replayEntry(id, entry, index, unread) {
-  if (entry.kind === "text" && entry.role === "assistant") rememberReplayedText(entry);
+  if (entry.kind === "text") rememberReplayedText(entry);
   if (entry.kind === "peer") {
     closeOpen();
     for (var p = 0; p < entry.messages.length; p++) {
@@ -6153,12 +6154,13 @@ function activityLine(e) {
 /** What happened before this page was opened. The feed used to start blank on reload. */
 function loadActivity() {
   return fetch("/api/activity")
-    .then(function (r) { return r.json(); })
+    .then(function (r) { return r.json().then(function (events) { events.eventCursor = r.headers.get("x-lumen-event-cursor"); return events; }); })
     .then(function (events) {
       for (var i = 0; i < events.length; i++) {
         var line = activityLine(events[i]);
         if (line) feed(line.html, line.cls, events[i].at);
       }
+      return events.eventCursor;
     })
     .catch(function () { /* an empty feed is not worth an error row */ });
 }
@@ -6193,11 +6195,11 @@ stream.onmessage = function (raw) {
   var e = JSON.parse(raw.data);
   if (liveReplay && (inView(e) || (e.type === "message_sent" && currentConversation === "main" && (e.fromId === current || e.toId === current)))) { liveReplay.events.push(e); return; }
   if (inView(e) && !unseenLiveText(e)) return;
-  var line = activityLine(e);
+  var line = !raw.skipFeed && activityLine(e);
   if (line) feed(line.html, line.cls);
 
   if (e.type === "prompt") {
-    if (inView(e)) { closeOpen(); pushItem({ kind: "person", text: e.text, at: new Date().toISOString() }); }
+    if (inView(e) && unseenLivePrompt(e)) { closeOpen(); pushItem({ kind: "person", text: e.text, at: new Date().toISOString() }); }
     return;
   }
 
