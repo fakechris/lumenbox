@@ -17,11 +17,11 @@ export function underOsNetworkDeny(command, args) {
   if (process.env.AGENTBOX_TEST_NO_SANDBOX === "1") return { command, args, osNet: "unavailable", why: "AGENTBOX_TEST_NO_SANDBOX=1" };
   if (process.platform === "darwin") {
     try {
-      execFileSync("sandbox-exec", ["-p", "(version 1)(allow default)(deny network-outbound)(allow network-outbound (remote ip \"localhost:*\"))(allow network-outbound (remote unix-socket))", "/usr/bin/true"], { stdio: "ignore" });
       const profile =
         "(version 1)(allow default)(deny network-outbound)" +
         '(allow network-outbound (remote ip "localhost:*"))' +
         "(allow network-outbound (remote unix-socket))";
+      execFileSync("sandbox-exec", ["-p", profile, "/usr/bin/true"], { stdio: "ignore" });
       return { command: "sandbox-exec", args: ["-p", profile, command, ...args], osNet: "denied", why: "sandbox-exec deny network-outbound, loopback allowed" };
     } catch (error) {
       return { command, args, osNet: "unavailable", why: `sandbox-exec is not usable here (${error.code ?? error.message})` };
