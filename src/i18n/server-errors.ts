@@ -14,6 +14,7 @@
  */
 
 export const SERVER_ERRORS = {
+  "err.task-export-unavailable": ["任务记录暂时不可用，请从当前任务重新生成。", "Task record unavailable. Recreate it from the current task."],
   "err.task-execution-reset": ["任务过程快照已过期或不可用，请重新加载任务概览。", "Execution snapshot unavailable; reload the task overview."],
   // ── hooks and webhooks ───────────────────────────────────────────────────────────────────────
   "err.hook-refused": ["没有这个 hook，或者密钥不对。", "Unknown hook, or the secret is wrong."],

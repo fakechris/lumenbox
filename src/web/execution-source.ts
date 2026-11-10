@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import type { AgentRegistry } from "../agents/registry.ts";
 import type { ExecutionStepRecord } from "../host/execution-records.ts";
+import type { TranscriptReadBudget } from "../agents/transcript-bounded.ts";
 import { toDisplayEntries } from "./transcript.ts";
 
 export const sourceDigest = (value: unknown): string => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -12,10 +13,10 @@ export interface ExecutionContent {
 
 /** Reads only the already-authorized execution's agent/conversation. No paths accepted from a client. */
 export function executionContent(registry: Pick<AgentRegistry, "readContextTranscriptsByEpoch">,
-  scope: Pick<ExecutionStepRecord, "agentId" | "conversation">): { values: Map<string, ExecutionContent>; partial: boolean } {
+  scope: Pick<ExecutionStepRecord, "agentId" | "conversation">, budget?: TranscriptReadBudget): { values: Map<string, ExecutionContent>; partial: boolean } {
   const values = new Map<string, ExecutionContent>();
   try {
-    for (const { epoch, entries } of registry.readContextTranscriptsByEpoch(scope.agentId, scope.conversation)) {
+    for (const { epoch, entries } of registry.readContextTranscriptsByEpoch(scope.agentId, scope.conversation, budget)) {
       for (const raw of entries) {
         const entry = raw as { turnId?: string; executionId?: string; kind?: string; blocks?: Record<string, unknown>[] };
         if (!entry.turnId || !Array.isArray(entry.blocks)) continue;

@@ -1,8 +1,11 @@
 /** Frozen, authorized read projections over the existing records (INV-1785). */
+import { executionReadBudget } from "../agents/transcript-bounded.ts";
+import { resolveExecutionDetail, type FrozenStep } from "./execution-detail.ts";
+import { setImmediate as yieldTurn } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
 import type { AgentRegistry } from "../agents/registry.ts";
 import type { TurnLedger } from "../host/resume.ts";
-import type { ExecutionStepRecord, ExecutionMaintenanceRecord } from "../host/execution-records.ts";
+import type { ExecutionStepRecord } from "../host/execution-records.ts";
 import type { TaskBinding } from "../host/execution-binding.ts";
 import { contentFor, executionContent, sourceDigest } from "./execution-source.ts";
 
@@ -27,7 +30,6 @@ export interface ExecutionDetail extends ExecutionStep {
   sourceExpired?: boolean; resultCoverage?: string;
   maintenance?: { kind: string; covers?: number; summarised?: boolean; delayMs?: number; retryAttempt?: number };
 }
-interface FrozenStep { view: ExecutionStep; source: ExecutionStepRecord | ExecutionMaintenanceRecord; content: { call?: string; result?: string } }
 interface Snapshot {
   id: string; taskId: string; filters: ExecutionFilters; highWater: string; createdAt: number;
   rows: FrozenStep[]; partial: boolean;
@@ -109,7 +111,7 @@ export class TaskExecutions {
       if (r.phase === "end") pair.end = r;
       grouped.set(key, pair);
     }
-    const catalogs = new Map<string, ReturnType<typeof executionContent>>();
+    const catalogs = new Map<string, ReturnType<typeof executionContent>>(), budget = executionReadBudget();
     const rows: FrozenStep[] = [];
     let partial = source.partial || (!begunHere && !grouped.size);
     for (const pair of grouped.values()) {
@@ -118,7 +120,7 @@ export class TaskExecutions {
       if (!selected || selected.taskId !== taskId) continue;
       const scopeKey = JSON.stringify([r.agentId, r.conversation]);
       let catalog = catalogs.get(scopeKey);
-      if (!catalog) { catalog = executionContent(this.deps.registry, r); catalogs.set(scopeKey, catalog); }
+      if (!catalog) { catalog = executionContent(this.deps.registry, r, budget); catalogs.set(scopeKey, catalog); }
       partial ||= catalog.partial;
       const content = contentFor(catalog.values, r);
       const known = content.result !== undefined;
@@ -197,18 +199,47 @@ export class TaskExecutions {
     const snapshot = this.snapshot(taskId, input.snapshot, access);
     const row = snapshot.rows.find(r => r.view.id === input.step);
     if (!row || !this.allowed(row.view, access)) throw new ExecutionReset("step unavailable");
-    if (row.source.event === "maintenance") return { ...row.view, maintenance: {
-      kind: row.source.kind, covers: row.source.covers, summarised: row.source.summarised,
-      delayMs: row.source.delayMs, retryAttempt: row.source.retryAttempt } };
-    const current = executionContent(this.deps.registry, row.source).values;
-    const call = row.content.call ? current.get("hash:" + row.content.call)?.call : undefined;
-    const result = row.content.result ? current.get("hash:" + row.content.result)?.result : undefined;
-    const text = result?.text ?? "";
-    const inputText = JSON.stringify(call?.input ?? null);
-    return { ...row.view, input: inputText.length > 32000 ? { preview: inputText.slice(0, 32000) } : call?.input ?? null,
-      inputTruncated: inputText.length > 32000, result: result ? text.slice(0, 32000) : null,
-      resultTruncated: text.length > 32000, sourceExpired: (!!row.content.call && !call) || (!!row.content.result && !result),
-      resultCoverage: result ? "stored" : row.content.result ? "expired" : "not-recorded-at-snapshot" };
+    return resolveExecutionDetail(row, executionContent(this.deps.registry, row.source, executionReadBudget()).values);
+  }
+
+  /** Private export handle: immutable row metadata/hashes, never a client-supplied source path. */
+  captureExport(taskId: string, access: ExecutionAccess, filters: ExecutionFilters = {}) {
+    const page = this.open(taskId, access, filters), snapshot = this.snapshot(taskId, page.snapshot, access);
+    const rows = snapshot.rows.filter(row => this.allowed(row.view, access));
+    if (new Set(rows.map(row => JSON.stringify([row.view.agentId, row.view.conversation]))).size > 16) throw new ExecutionReset("export source capacity");
+    return { taskId, snapshot: snapshot.id, highWater: snapshot.highWater, filters: snapshot.filters,
+      coverage: snapshot.partial ? "partial" as const : "exact" as const, rows, availableHashes: new Set<string>() };
+  }
+
+  /** One catalog per conversation, with bounded reads; never detail() once per row. */
+  async visitExport(capture: ExecutionExport, access: () => ExecutionAccess, visit: (row: ExecutionDetail) => void, signal?: AbortSignal) {
+    const catalogs = new Map<string, ReturnType<typeof executionContent>>(), budget = executionReadBudget();
+    let current = access();
+    for (let index = 0; index < capture.rows.length; index++) {
+      if (index % 64 === 0) { await yieldTurn(); signal?.throwIfAborted(); current = access(); }
+      const row = capture.rows[index]!;
+      if (!this.allowed(row.view, current)) throw new ExecutionReset("export unavailable");
+      const key = JSON.stringify([row.view.agentId, row.view.conversation]);
+      let catalog = catalogs.get(key);
+      if (!catalog) { catalog = executionContent(this.deps.registry, row.source, budget); catalogs.set(key, catalog); }
+      for (const hash of [row.content.call, row.content.result]) if (hash && catalog.values.has("hash:" + hash)) capture.availableHashes.add(hash);
+      visit(resolveExecutionDetail(row, catalog.values, Infinity));
+    }
+  }
+
+  validateExport(capture: ExecutionExport, access: ExecutionAccess): boolean {
+    if (!access.task(capture.taskId)) return false;
+    const catalogs = new Map<string, ReturnType<typeof executionContent>>(), budget = executionReadBudget();
+    for (const row of capture.rows) {
+      if (!this.allowed(row.view, access)) return false;
+      const required = [row.content.call, row.content.result].filter((hash): hash is string => !!hash && capture.availableHashes.has(hash));
+      if (!required.length) continue;
+      const key = JSON.stringify([row.view.agentId, row.view.conversation]);
+      let catalog = catalogs.get(key);
+      if (!catalog) { catalog = executionContent(this.deps.registry, row.source, budget); catalogs.set(key, catalog); }
+      if (required.some(hash => !catalog.values.has("hash:" + hash))) return false;
+    }
+    return true;
   }
 
   private snapshot(taskId: string, id: string, access: ExecutionAccess): Snapshot {
@@ -227,3 +258,5 @@ export class TaskExecutions {
     }
   }
 }
+
+export type ExecutionExport = ReturnType<TaskExecutions["captureExport"]>;
