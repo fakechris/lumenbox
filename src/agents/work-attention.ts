@@ -10,7 +10,7 @@ export interface WorkReturn { work: WorkStamp; conversation: string }
 export interface CurrentWork extends WorkStamp {
   principal?: string;
   status: "running" | "waiting" | "answered";
-  reason?: string; unavailable?: {participant: string; tool: string};
+  reason?: string; unavailable?: {participant: string; tool: string}[];
   messages: string[];
   peers: string[];
   awaiting: string[];
@@ -52,7 +52,7 @@ export class WorkAttention {
     }
     const previous = this.get(agent, conversation);
     const reuse = previous && previous.status !== "answered" && previous.principal === first.principalId && first.steerable !== false;
-    const next: CurrentWork = reuse ? { ...previous, messages: [...new Set([...previous.messages, ...humans.map(m => m.id)])].slice(-128), status: "running", reason: undefined, unavailable: undefined }
+    const next: CurrentWork = reuse ? { ...previous, messages: [...new Set([...previous.messages, ...humans.map(m => m.id)])].slice(-128), status: "running", reason: undefined }
       : { id: first.id, owner: agent, conversation, generation: (previous?.generation ?? 0) + 1, epoch: this.epochOf(agent, conversation), isolated: true, ...(previous ? { previous: workStateConversation(previous, conversation) } : {}), principal: first.principalId, status: "running", messages: humans.map(m => m.id), peers: [], awaiting: [] };
     this.current.set(keyOf(agent, conversation), next); this.save(); return this.stamp(next);
   }
@@ -64,17 +64,17 @@ export class WorkAttention {
     this.current.set(keyOf(agent, conversation), next); this.save(); return this.stamp(next);
   }
   /** A sender cannot invent a root or acquire membership by writing it into its message. */
-  link(stamp: WorkStamp, from: string, to: string): WorkStamp | undefined {
+  link(stamp: WorkStamp, from: string, to: string, expectsResult = true): WorkStamp | undefined {
     if (!this.valid(stamp, from)) return undefined;
     const value = this.live(stamp)!;
     if (!value.peers.includes(to) && to !== value.owner) { value.peers.push(to); }
-    if (to !== value.owner && !value.awaiting.includes(to)) value.awaiting.push(to);
+    if (expectsResult && to !== value.owner && !value.awaiting.includes(to)) value.awaiting.push(to);
     if (from !== value.owner) value.awaiting = value.awaiting.filter(id => id !== from);
     this.save();
     return this.stamp(value);
   }
   eligible(agent: string, conversation: string, message: InboundMessage): boolean {
-    if (message.work && (!this.valid(message.work, agent) || !this.valid(message.work, message.fromId) && message.fromId !== "system" && !(message.fromId === "user" && message.synthetic))) return false;
+    if (!message.informational && message.work && (!this.valid(message.work, agent) || !this.valid(message.work, message.fromId) && message.fromId !== "system" && !(message.fromId === "user" && message.synthetic))) return false;
     if (personMessage(message)) return true;
     const current = this.get(agent, conversation);
     if (message.goal || message.resumeOf) return !current || current.status === "answered" || current.id === (message.goal?.workId ?? message.resumeOf?.workId);
@@ -93,8 +93,9 @@ export class WorkAttention {
   release(stamp: WorkStamp, id: string): void { const work = this.live(stamp); if (work) { work.awaiting = work.awaiting.filter(item => item !== "volatile:" + id); this.save(); } }
   capability(stamp: WorkStamp, participant: string, tool: string, available: boolean): void {
     const work = this.live(stamp); if (!work || !this.valid(stamp, participant)) return;
-    if (!available) { work.unavailable = {participant,tool}; this.save(); }
-    else if (work.unavailable?.participant === participant && work.unavailable.tool === tool) { work.unavailable = undefined; this.save(); }
+    const before = work.unavailable ?? [], kept = before.filter(block => block.participant !== participant || block.tool !== tool);
+    if (!available) kept.push({participant,tool});
+    if (!available || kept.length !== before.length) { work.unavailable = kept.length ? kept : undefined; this.save(); }
   }
   settle(stamp: WorkStamp, status: CurrentWork["status"], reason?: string): void {
     const value = this.live(stamp);

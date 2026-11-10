@@ -118,9 +118,13 @@ test("a default agent stops on the first unavailable computer call and retains t
     const registry = new AgentRegistry(join(root,"agents")), mia = registry.create({name:"Mia"});
     let calls = 0;
     const orch = new Orchestrator({registry,useBox:false,inbox:null,mcp:null,hooks:null,tasks:null,extensions:null,pendingWork:null,
-      client:fakeModel(()=>({id:"response",type:"message",role:"assistant",model:"test",content:calls++ < 2 ? [{type:"tool_use",id:"call-"+calls,name:"bash",input:{command:calls===1?"ls ~/Downloads":"pwd"}}] : [{type:"text",text:"Done"}],stop_reason:calls<=2?"tool_use":"end_turn",stop_sequence:null,usage:{input_tokens:10,output_tokens:5}} as never))});
+      client:fakeModel(()=>({id:"response",type:"message",role:"assistant",model:"test",content:calls++ === 0 ? [{type:"tool_use",id:"call-"+calls,name:"bash",input:{command:calls===1?"ls ~/Downloads":"pwd"}}] : [{type:"text",text:"The computer is still unavailable."}],stop_reason:calls===1?"tool_use":"end_turn",stop_sequence:null,usage:{input_tokens:10,output_tokens:5}} as never))});
     await orch.prompt(mia.id,"Install the provided package",{userId:"chris"});
     assert.equal(calls,1,"unoffered computer tools are bounded even without an explicit profile allowlist");
+    const workId=orch.bus.workAttention!.get(mia.id,"main")!.id;
+    await orch.prompt(mia.id,"What is still blocking the installation?",{userId:"chris"});
+    assert.equal(orch.bus.workAttention!.get(mia.id,"main")!.id,workId);
+    assert.equal(calls,2,"the status answer does not probe or recover a tool");
     assert.equal(orch.bus.workAttention!.get(mia.id,"main")!.status,"waiting");
     assert.match(JSON.stringify(registry.readTranscript(mia.id)),/tool is unavailable/);
   } finally { if(previousHome===undefined)delete process.env.AGENTBOX_HOME;else process.env.AGENTBOX_HOME=previousHome;rmSync(root,{recursive:true,force:true}); }

@@ -93,7 +93,41 @@ test("informational messages do not acquire dependencies, and mutual waits are r
     assert.equal(focus.get(zed.id,"main")!.awaiting.length,0);
     bus.send({fromId:zed.id,toId:mia.id,text:"Information only",work:zedWork,expectResult:false});
     assert.equal(focus.get(zed.id,"main")!.awaiting.length,0);
-    assert.equal(focus.get(zed.id,"main")!.peers.length,0);
+    assert.equal(focus.get(zed.id,"main")!.peers.includes(mia.id),true,"causal association is retained even without a reply dependency");
     await bus.idle();
+  } finally {rmSync(dir,{recursive:true,force:true});}
+});
+
+test("a no-reply final result retains lineage and releases its sender's dependency", async () => {
+  const {AgentBus}=await import("./bus.ts");const dir=mkdtempSync(join(tmpdir(),"attention-no-reply-"));
+  try {
+    const registry=new AgentRegistry(dir), mia=registry.create({name:"Mia"}), zed=registry.create({name:"Zed"}), focus=new WorkAttention();
+    const root=focus.begin(mia.id,"main",[user("install")])!, child=focus.link(root,mia.id,zed.id)!;focus.settle(root,"waiting");
+    let consumed=0;const bus=new AgentBus(registry,async()=>{consumed++;},()=>{},undefined,false,undefined,focus);
+    bus.send({fromId:zed.id,toId:mia.id,text:"Verified final result; no acknowledgement needed",work:child,expectResult:false});await bus.idle();
+    assert.equal(consumed,1);assert.equal(bus.heldCount(mia.id),0);assert.equal(focus.get(mia.id,"main")!.awaiting.length,0);
+  } finally {rmSync(dir,{recursive:true,force:true});}
+});
+
+test("status questions preserve each participant's capability blocker until its own successful observation", () => {
+  const focus=new WorkAttention(), stamp=focus.begin("Mia","main",[user("install")])!;focus.link(stamp,"Mia","Zed");
+  focus.capability(stamp,"Mia","bash",false);focus.capability(stamp,"Zed","read_file",false);focus.settle(stamp,"waiting");
+  focus.begin("Mia","main",[{...user("status"),text:"What is blocking the installation?"}]);
+  assert.equal(focus.get("Mia","main")!.unavailable!.length,2);
+  focus.capability(stamp,"Zed","read_file",true);
+  assert.deepEqual(focus.get("Mia","main")!.unavailable,[{participant:"Mia",tool:"bash"}]);
+});
+
+test("work validity consults the durable context version even inside a captured old execution", async () => {
+  const dir=mkdtempSync(join(tmpdir(),"attention-epoch-fence-"));
+  try {
+    const registry=new AgentRegistry(dir), agent=registry.create({name:"Mia"});
+    const focus=new WorkAttention(undefined,(id,conversation)=>registry.contextStore(id,conversation).current().epoch);
+    await registry.withContext(agent.id,"private",async()=>{
+      const work=focus.begin(agent.id,"private",[user("install")])!;
+      registry.contextStore(agent.id,"private").advance("new-context",0,"normal");
+      assert.equal(registry.contextVersion(agent.id,"private"),0,"the old execution still carries its captured context");
+      assert.equal(focus.valid(work,agent.id),false,"captured context is not current authority");
+    });
   } finally {rmSync(dir,{recursive:true,force:true});}
 });

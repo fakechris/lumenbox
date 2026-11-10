@@ -34,7 +34,7 @@ const orch = new Orchestrator({
     if (point !== "steering") return crash();
     orch.bus.sendFromUser(agent.id, "STEERING_RECOVERY", { principalId: "alice", messageId: "steer-request" });
     return { id: "call", type: "message", role: "assistant", model: "test",
-      content: [{ type: "tool_use", id: "read-1", name: "read_file", input: { path: "/not-present" } }],
+      content: [{ type: "tool_use", id: "read-1", name: "Teammates", input: {} }],
       stop_reason: "tool_use", stop_sequence: null, usage: { input_tokens: 10, output_tokens: 2 },
     } as never;
   }),

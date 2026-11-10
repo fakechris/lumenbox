@@ -1550,7 +1550,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     endedHow = how;
     if (work?.owner === agent.id && bus.workAttention?.valid(work, agent.id)) {
       const unfinished = registry.readDurableState(agent.id, conversation).todos?.some(item => item.status !== "done") || !!taskBinding && !["review", "done", "dropped"].includes(deps.tasks?.get(taskBinding.taskId)?.status ?? "");
-      const unavailable = bus.workAttention.get(work.owner, work.conversation)?.unavailable;
+      const unavailable = bus.workAttention.get(work.owner, work.conversation)?.unavailable?.[0];
       const pendingPeers = (bus.workAttention.get(work.owner, work.conversation)?.awaiting.length ?? 0) + bus.relatedPending(agent.id, work) + (deps.pendingWork?.open().filter(item => item.workId === workId && item.kind !== "reminder").length ?? 0);
       bus.workAttention.settle(work, how !== "done" || unfinished || pendingPeers || confirmationPending || unavailable ? "waiting" : "answered", (blockedCapability || unavailable) ? "required tool unavailable: " + (blockedCapability ?? unavailable!.tool) : how !== "done" ? how : confirmationPending ? "waiting for confirmation" : pendingPeers ? "waiting for related work" : unfinished ? "unfinished plan" : undefined);
     }
@@ -3262,7 +3262,7 @@ ${outcome.text}`;
         outcome = { text: "Not executed: this user work is waiting for its required tool. No unrelated work may replace it.", isError: true };
       } else if (audit && (!auditCurrent(audit, agent.id, conversation, deps.tasks) || !auditToolAllowed(audit, toolUse.name, toolInput))) {
         outcome = { text: "Review refused: this audit may only read its current evidence. It cannot create probe tasks, change work, send messages or write memory.", isError: true };
-      } else if (isolated || !offeredHere) {
+      } else if (isolated || ((effectiveTools !== undefined || !!work && (requiredComputerTool || PERSON_FACING_TOOLS.has(toolUse.name))) && !offeredHere)) {
         if (work && !isolated && requiredComputerTool) { blockedCapability = toolUse.name; bus.workAttention?.capability(work, agent.id, toolUse.name, false); }
         outcome = { text: isolated ? `Tools are disabled in ${contextMode} context.` : "This tool is unavailable in the current execution context.", isError: true };
       } else if (goal?.verify !== undefined && toolUse.name === "bash" && !commandIsConfirmed(goal, String((toolInput as { command?: unknown }).command ?? ""))) {

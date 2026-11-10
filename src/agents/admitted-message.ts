@@ -6,7 +6,7 @@ import type { Lane } from "./bus.ts";
 
 export interface InboundMessage {
   /** Host-stamped root work. Agent tools cannot choose its identity or participants. */
-  work?: import("./work-attention.ts").WorkStamp;
+  work?: import("./work-attention.ts").WorkStamp; informational?: true;
   /** Host-only review snapshot; persisted with admission, never parsed from model prose. */
   audit?: import("../host/audit-context.ts").AuditContext;
   /** Host-only continuation lineage, persisted with the admission. */

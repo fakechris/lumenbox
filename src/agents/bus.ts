@@ -258,10 +258,10 @@ export class AgentBus {
     const expectsResult = input.expectResult !== false;
     const targetWork = this.workAttention?.get(target.id, MAIN_CONVERSATION);
     if (expectsResult && targetWork && targetWork.status !== "answered" && targetWork.id !== input.work?.id && targetWork.awaiting.includes(input.fromId)) return "Not sent: that member is already waiting for your result. A return dependency would deadlock; finish or send the result without requesting another reply.";
-    const work = input.work && expectsResult ? this.workAttention?.link(input.work, input.fromId, target.id) : undefined;
-    if (input.work && (expectsResult ? !work : !this.workAttention?.valid(input.work, input.fromId))) return "Not sent: the originating user work is no longer current or this sender was not admitted to it.";
+    const work = input.work ? this.workAttention?.link(input.work, input.fromId, target.id, expectsResult) : undefined;
+    if (input.work && !work) return "Not sent: the originating user work is no longer current or this sender was not admitted to it.";
     const message: InboundMessage = {
-      ...(work ? { work } : {}),
+      ...(work ? { work } : {}), ...(!expectsResult ? {informational: true as const} : {}),
       ...(work?.owner === target.id ? { conversation: work.conversation } : {}),
       id: randomUUID(),
       fromId: input.fromId,
@@ -308,8 +308,8 @@ export class AgentBus {
       `if they reply, or if their turn fails — asking them to confirm receipt buys nothing this ` +
       `line has not already told you.`;
 
-    if (!expectsResult) return `${promise} This is informational; no result is awaited and no acknowledgement reply is requested.`;
     if (this.workAttention && !this.workAttention.eligible(target.id, message.conversation ?? MAIN_CONVERSATION, message)) return `${promise} Held while their current user work is unfinished; priority does not interrupt it. Do not poll or ask for receipt.`;
+    if (!expectsResult) return `${promise} This is informational; no result is awaited and no acknowledgement reply is requested.`;
     return priority
       ? `${promise} Marked priority, so it interrupts their current non-user work and wakes them now.`
       : promise;
@@ -658,7 +658,7 @@ export class AgentBus {
     if (!this.workAttention) return;
     const queue = this.pending.get(agentId) ?? [];
     const kept = queue.filter(message => {
-      if (!message.work || this.workAttention!.valid(message.work, agentId)) return true;
+      if (message.informational || !message.work || this.workAttention!.valid(message.work, agentId)) return true;
       this.inbox?.drop(message.admission); return false;
     });
     if (kept.length === 0) this.pending.delete(agentId); else this.pending.set(agentId, kept);
@@ -766,7 +766,7 @@ export class AgentBus {
         // while this call waited on the chain. Burning a model call on an empty
         // prompt would answer a question nobody is still asking.
         if (inbound.length === 0) return;
-        if (this.workAttention && inbound[0]?.work?.owner !== agentId) executionConversation = peerWorkConversation(inbound, conversation);
+        if (this.workAttention && (inbound[0]?.work?.owner !== agentId || !this.workAttention.valid(inbound[0].work, agentId))) executionConversation = peerWorkConversation(inbound, conversation);
         this.active.get(key)!.principalId = inbound[0]?.principalId; this.active.get(key)!.userDriven = inbound.some(personMessage);
         let acknowledged = false;
         const acknowledge = () => {

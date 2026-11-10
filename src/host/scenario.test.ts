@@ -187,7 +187,7 @@ test("a collaborator's missing capability remains the user's blocker, not a comp
   const episode=await runEpisode({workAttention:focus,team:[{name:"Mia",tools:["SendToAgent"]},{name:"Zed",tools:["SetTodos"]}],says:[],
     script:({agent})=>agent==="Zed"?{call:"bash",input:{command:"install-package"}}:miaRounds++===0?{call:"SendToAgent",input:{target_id:"Zed",message:"Install the package"}}:{say:"Waiting for the required computer tool."},
     drive:async({bus,frontId})=>{bus.sendFromUser(frontId,"Have Zed install the package");await bus.wake(frontId);await bus.idle();
-      assert.equal(focus.get(frontId,"main")!.status,"waiting");assert.equal(focus.get(frontId,"main")!.unavailable!.tool,"bash");
+      assert.equal(focus.get(frontId,"main")!.status,"waiting");assert.equal(focus.get(frontId,"main")!.unavailable![0]!.tool,"bash");
     }});
   episode.cleanup();
 });
