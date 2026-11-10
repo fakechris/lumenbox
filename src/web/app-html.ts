@@ -1,3 +1,4 @@
+import { AGENT_ROW_STYLE, AGENT_ROW_JS } from "./agent-row.ts";
 import { TASK_PROGRESS_CLIENT_JS } from "../host/task-progress-view.ts";
 import { TASK_BOARD_JS, TASK_BOARD_STYLE } from "./task-board-ui.ts";
 import { TASK_FOCUS_JS, TASK_FOCUS_STYLE } from "./task-focus-ui.ts";
@@ -55,6 +56,7 @@ var MSG = {{@messages}}, MSG_LOCALE = "{{@locale}}";
 <style>
 ${TASK_FOCUS_STYLE}
 ${TASK_BOARD_STYLE}
+${AGENT_ROW_STYLE}
   /* ── Lumen tokens ─────────────────────────────────────────────────────────── */
   @font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 400; font-display: swap;
     src: url("/assets/fonts/IBMPlexSans-Regular.woff2") format("woff2"); }
@@ -288,34 +290,19 @@ ${TASK_BOARD_STYLE}
   .btn.sm { padding: 4px 12px; font-size: 12px; }
 
   /* ── sidebar: who is working ──────────────────────────────────────────────── */
-  .agent {
-    margin: 0 8px 2px; padding: 9px 10px; cursor: pointer; border-radius: var(--radius-input);
-    display: flex; gap: 10px; align-items: center;
-    transition: background var(--dur) var(--ease);
-  }
-  .agent:hover { background: var(--surface-hover); }
-  .agent.on { background: var(--accent-soft); }
   /* A team heading. Quiet: it is scaffolding for finding an agent, not a thing to look at. */
   .teamhead {
     display: flex; align-items: baseline; gap: 6px; padding: 10px 14px 3px;
     font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
   }
   .teamhead .count { text-transform: none; letter-spacing: 0; opacity: 0.7; }
-  .agent.on .nm, .agent.on .ttl, .agent.on .dnum { color: var(--accent); }
   /* The dot beside an agent carries its identity color (--c-1…8, stable by roster
      position); state is the word next to it, and the pulse while a turn runs. */
   .dot { width: 7px; height: 7px; border-radius: var(--radius-pill); background: var(--muted); flex: none; }
   .dot.busy { animation: pulse 1.2s infinite; }
   .dot.ok { background: var(--success); }
-  .dot.bad { background: var(--danger); } .dot.unread { box-shadow: 0 0 0 2px var(--accent); } .dot.blocked { background: var(--warn) !important; box-shadow: 0 0 0 2px var(--warn); } .agent.blocked .ttl { color: var(--warn); } .agent .cnt { flex: none; min-width: 18px; padding: 0 5px; border-radius: var(--radius-pill); background: var(--accent); color: #fff; font-size: 10.5px; line-height: 18px; text-align: center; }
+  .dot.bad { background: var(--danger); } .dot.unread { box-shadow: 0 0 0 2px var(--accent); } .dot.blocked { background: var(--warn) !important; box-shadow: 0 0 0 2px var(--warn); }
   @keyframes pulse { 50% { opacity: 0.3; } }
-  .agent .cols { flex: 1; min-width: 0; }
-  .agent .nm { font-weight: 600; font-size: 0.92rem; }
-  .agent .ttl {
-    color: var(--muted); font-size: 11px;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  .agent .dnum { font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
   #sidefoot {
     flex: none; margin-top: auto; padding: 10px 16px 12px; border-top: 1px solid var(--border);
     display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted);
@@ -3016,15 +3003,7 @@ function applyPreferences(prefs) {
   renderAgents();
 }
 
-function oneAgentRow(a, index) {
-  // The marker order a person needs (INV-1625): waiting on them, then unread, then working; the line under the name says what it waits for.
-  var f = a.facts || {}, marker = f.awaiting ? "blocked" : f.unreadCount > 0 ? "unread" : busy.has(a.id) ? "busy" : "";
-  var line = f.awaiting ? "{{ui.app.waiting-for-you}} " + f.awaiting.reason : busy.has(a.id) ? "{{ui.app.running}}" : String(a.title || a.description || "{{ui.app.idle}}").slice(0, 40);
-  return '<div class="agent ' + (a.id === current ? "on" : "") + (marker ? " " + marker : "") + '" data-id="' + esc(a.id) + '" title="' + esc(f.awaiting ? f.awaiting.reason : "") + '">' +
-    '<div class="dot ' + marker + '" style="background:var(--c-' + ((index % 8) + 1) + ')"></div>' +
-    '<div class="cols"><div class="nm">' + esc(a.name) + "</div>" + '<div class="ttl">' + esc(line) + "</div></div>" +
-    (f.unreadCount > 0 ? '<span class="cnt">' + f.unreadCount + "</span>" : "") + (a.displayIndex ? '<span class="dnum">d' + esc(a.displayIndex) + "</span>" : "") + "</div>";
-}
+${AGENT_ROW_JS}
 
 /**
  * The list, grouped into teams.
