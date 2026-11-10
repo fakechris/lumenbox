@@ -1,5 +1,6 @@
 import { AGENT_ROW_STYLE, AGENT_ROW_JS } from "./agent-row.ts";
 import { TASK_PROGRESS_CLIENT_JS } from "../host/task-progress-view.ts";
+import { ATTENTION_PANEL_JS, RIGHT_PANE_STYLE, TASKS_PANEL_HTML, ACTIVITY_PANEL_HTML, ACTIVITY_FEED_JS } from "./right-pane-ui.ts";
 import { TASK_BOARD_JS, TASK_BOARD_STYLE } from "./task-board-ui.ts";
 import { TASK_FOCUS_JS, TASK_FOCUS_STYLE } from "./task-focus-ui.ts";
 import { EVENT_RECOVERY_JS } from "./event-recovery.ts";
@@ -56,6 +57,7 @@ var MSG = {{@messages}}, MSG_LOCALE = "{{@locale}}";
 <style>
 ${TASK_FOCUS_STYLE}
 ${TASK_BOARD_STYLE}
+${RIGHT_PANE_STYLE}
 ${AGENT_ROW_STYLE}
   /* ── Lumen tokens ─────────────────────────────────────────────────────────── */
   @font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 400; font-display: swap;
@@ -848,12 +850,6 @@ ${AGENT_ROW_STYLE}
   #clipbar input:focus { outline: 0; border-color: var(--accent); }
   .bar.note { line-height: 1.6; padding-bottom: 10px; }
 
-  .activityhead { border-top: 1px solid var(--border); padding-top: 12px; }
-  .feed { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 0 8px; }
-  .feed.yields { flex: 0 0 auto; max-height: 18vh; } /* on the Tasks tab the board has the column (INV-1654); the feed stays a strip */
-  /* Waiting items can outnumber the visible board. Keep them scrollable inside
-     Tasks so neither the board nor the Activity feed is painted over. */
-  #attention { flex: none; max-height: 60%; overflow-y: auto; }
   .ev {
     padding: 4px 16px; font-size: 12px; line-height: 1.55; color: var(--muted);
     border-top: 1px solid var(--border);
@@ -1052,16 +1048,7 @@ ${AGENT_ROW_STYLE}
   </div>
   <!-- The task board: work as an object the whole team sees. Rows grouped by status;
        creating and moving needs the driver role, same as prompting. -->
-  <div id="tasksview" style="display:none;flex:1;min-height:0;flex-direction:column">
-    <div class="bar" style="display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--border)">
-      <input id="tasknew" placeholder="{{ui.page.new-task-title}}" spellcheck="false" style="flex:1;min-width:0;padding:4px 9px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:13px">
-      <select id="taskassign" style="height:28px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font-size:12px"></select>
-      <button class="btn sm" id="taskadd">{{ui.page.add}}</button> <a href="#" id="inboxonly" class="dim" style="font-size:11px;white-space:nowrap" title="{{ui.page.only-what-the-agents-found}}">{{ui.page.inbox}}</a>
-    </div>
-    <!-- What needs me, before what the board has (INV-543): two lists and their clocks. -->
-    <div id="attention" title="{{ui.page.what-waits-on-a-person}}" style="display:none;border-bottom:1px solid var(--border);padding:10px 16px"></div>
-    <div class="scroll" id="tasklist" title="{{ui.page.the-board-what-waits-on}}"></div>
-  </div>
+  ${TASKS_PANEL_HTML}
   <!-- What runs without anyone asking. The page a person checks when they want to know
        whether the 06:30 brief is actually armed, when it last fired, and where it
        reports — the three things a cron expression in a file cannot tell them. -->
@@ -1151,8 +1138,7 @@ ${AGENT_ROW_STYLE}
     </div>
     <div class="scroll hide-probes" id="auditlist"></div>
   </div>
-  <div class="eyebrow-row activityhead"><span class="eyebrow">{{ui.page.activity-all-agents}}</span></div>
-  <div class="feed" id="feed"></div>
+  ${ACTIVITY_PANEL_HTML}
 </div>
 
 </div>
@@ -1352,13 +1338,13 @@ var md = window.markdownit ? window.markdownit(${JSON.stringify(MARKDOWN_OPTIONS
   }
 })();
 
-function renderMarkdown(text) {
+function renderMarkdown(text, options) {
   var value = String(text == null ? "" : text);
   // If the library did not load, show escaped text rather than nothing. A feed showing raw Markdown is poor; a blank one is useless.
-  if (!md) return linkifyWorkPaths("<p>" + esc(value).replace(/\n/g, "<br>") + "</p>");
+  var html = md ? md.render(value) : "<p>" + esc(value).replace(/\n/g, "<br>") + "</p>";
   // After rendering, not before: markdown-it escapes and structures first, so this is operating on
   // known-safe HTML and cannot be used to inject anything. html:false remains the boundary.
-  return linkifyWorkPaths(md.render(value));
+  return options && options.workPaths === false ? html : linkifyWorkPaths(html);
 }
 
 function $(id) { return document.getElementById(id); }
@@ -2900,20 +2886,7 @@ function colorOfName(name) {
  * The clock is there because this history outlives the process: without it, a line from
  * last night's run reads as if it just happened.
  */
-function feed(html, cls, at) {
-  var el = $("feed");
-  var stick = nearBottom(el);
-  var when = at ? new Date(at) : new Date();
-  var stamp = isNaN(when.getTime())
-    ? ""
-    : '<span class="t">' + ("0" + when.getHours()).slice(-2) + ":" +
-        ("0" + when.getMinutes()).slice(-2) + "</span> ";
-  var row = document.createElement("div");
-  row.className = "ev " + (cls || "");
-  row.innerHTML = stamp + html;
-  el.appendChild(row);
-  if (stick) el.scrollTop = el.scrollHeight;
-}
+${ACTIVITY_FEED_JS}
 
 /** The box an agent lives in, as a small label with the connection dot. */
 function boxHeaderHtml(box, index) {
@@ -5024,9 +4997,10 @@ filesView.addEventListener("drop", function (event) {
 
 /** Which of the four views the right-hand pane is showing. */
 function showTab(which) {
+  document.body.classList.toggle("task-board-visible",which === "tasks");
   $("desktopview").style.display = which === "desktop" ? "" : "none";
   $("filesview").style.display = which === "files" ? "flex" : "none";
-  $("tasksview").style.display = which === "tasks" ? "flex" : "none"; $("feed").classList.toggle("yields", which === "tasks"); // INV-1654
+  $("tasksview").style.display = which === "tasks" ? "flex" : "none"; // INV-1654
   $("autoview").style.display = which === "auto" ? "flex" : "none";
   $("auditview").style.display = which === "audit" ? "flex" : "none";
   $("tabdesktop").className = "tab" + (which === "desktop" ? " on" : "");
@@ -5687,43 +5661,14 @@ function whenOf(iso) {
   return t(past ? "ui.when.ago" : "ui.when.in", { t: text });
 }
 
-// One attention item as a line: in the panel above the board, or (onBoard) as the mark on its task's own row (INV-1654).
-function attentionRow(item, owed, onBoard) {
-  var act =
-    item.kind === "approval" ? '<button class="btn sm" data-att-approve="' + esc(item.ref) + '">' + esc(t("consent.once")) + '</button><button class="btn sm ghost" data-att-deny="' + esc(item.ref) + '">' + esc(t("consent.deny")) + "</button>" :
-    item.kind === "close-proposal" ? '<button class="btn sm ghost" data-att-keep="' + esc(item.ref) + '">' + esc(t("ui.attention.keepOpen")) + "</button>" :
-    item.kind === "nudged" ? '<button class="btn sm ghost" data-att-drop="' + esc(item.ref) + '">' + esc(t("ui.attention.close")) + '</button><button class="btn sm ghost" data-att-snooze="' + esc(item.ref) + '">' + esc(t("ui.attention.notNow")) + "</button>" :
-    item.kind === "question" && !/^t\d+$/.test(item.ref) ? '<button class="btn sm ghost" data-att-open="' + esc(item.ref) + '">' + esc(t("ui.attention.answer")) + "</button>" :
-    item.kind === "paused" ? '<button class="btn sm ghost" data-att-open="' + esc(item.ref) + '">' + esc(t("ui.attention.open")) + "</button>" : item.kind === "routine-paused" ? '<button class="btn sm" data-routine-resume="' + esc(item.ref) + '">{{ui.app.resume}}</button>' : item.kind === "exception" ? '<button class="btn sm" data-exc-retry="' + esc(item.ref) + '">{{ui.exceptions.retry}}</button><button class="btn sm ghost" data-exc-dismiss="' + esc(item.ref) + '">{{ui.exceptions.dismiss}}</button>' : // routine-runs-ui.ts (INV-1665), exceptions-ui.ts (INV-1741)
-    onBoard ? "" : '<button class="btn sm ghost" data-att-task="' + esc(item.ref) + '">' + esc(t("ui.attention.open")) + "</button>";
-  return '<div style="display:flex;gap:8px;align-items:baseline;padding:3px 0;font-size:12.5px' + (onBoard ? ";color:" + (owed ? "var(--warn)" : "var(--muted)") : "") + '" title="' + esc(item.title + " — " + item.detail) + '"><span class="dim mono" style="font-size:11px;min-width:58px">' + esc(item.deadline ? whenOf(item.deadline) : "") + "</span>" +
-    '<span style="flex:1">' + (onBoard ? (owed ? "{{ui.app.needs-you}} " : "waiting: ") : (item.level ? '<span class="chip" style="font-size:10px" title="{{ui.app.the-tasks-autonomy-level}}">L' + item.level + "</span> " : "") + esc(item.title) + " ") + '<span class="dim">' + esc(item.detail) + (item.stage && !onBoard ? " · " + esc(item.stage) : "") + "</span></span>" + (owed ? act : "") + "</div>"; // on the board the row is the task's own (INV-1654): its mark says what is owed, the card below is already open
-}
-function renderAttention() {
-  return fetch("/api/attention")
-    .then(function (r) { return r.json(); })
-    .then(function (data) {
-      var mine = data.mine || [];
-      var theirs = data.theirs || []; window.lastAttention = data; var row = attentionRow; // the board merges these onto its rows (INV-1654)
-      // The first screen (INV-1464) is the agents'. Above them there is at most one line (2026-11-06 rule): how many decisions wait,
-      // how many reviews, and a way to open them on the board. Never rows here — twice a list in this column hid every agent.
-      var needs = mine.filter(function (i) { return i.decision === true; }), reviews = mine.filter(function (i) { return !!i.stage && i.stage.indexOf("person/") === 0; }).length;
-      $("needsme").style.display = needs.length || reviews ? "" : "none";
-      $("needsme").innerHTML = '<a href="#" data-att-board="1" style="display:flex;gap:8px;align-items:baseline;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-decoration:none"><span style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--warn)">' + esc(t("ui.attention.needsMe")) + "</span>" +
-        (needs.length ? "<span>" + needs.length + " {{ui.app.decision}}" + (needs.length === 1 ? "" : "{{ui.plural.s}}") + "</span>" : "") + (reviews ? '<span class="dim">' + reviews + " {{ui.app.review}}" + (reviews === 1 ? "" : "{{ui.plural.s}}") + "</span>" : "") + '<span class="dim">' + esc(t("ui.attention.open")) + " ›</span></a>";
-      // Only what has no task row (INV-1654): a consent, a question, a pause. Tasks carry their own mark on the board below.
-      var loose = typeof looseItems === "function" ? looseItems(mine) : [];
-      $("attention").style.display = loose.length ? "" : "none";
-      $("attention").innerHTML = loose.length ? '<div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:4px">' + esc(t("ui.attention.outbox")) + "</div>" + loose.map(function (i) { return row(i, true); }).join("") : "";
-    })
-    .catch(function () { $("attention").style.display = "none"; $("needsme").style.display = "none"; });
-}
+${ATTENTION_PANEL_JS}
 
 // The actions, each one an existing route: keeping a task open, closing it, asking to be
 // left alone until a date, or opening the thread a question was asked in.
 document.addEventListener("click", function (event) {
   var target = event.target && event.target.closest ? event.target : null;
   if (!target) return;
+  if (target.closest("[data-att-box-settings]")) { event.preventDefault(); openSettings("boxes"); return; }
   var keep = target.closest("[data-att-keep]"), drop = target.closest("[data-att-drop]"), snooze = target.closest("[data-att-snooze]");
   var open = target.closest("[data-att-open]") || target.closest("[data-att-task]") || target.closest("[data-att-board]"), consent = target.closest("[data-att-approve]") || target.closest("[data-att-deny]"); // consent is answered from the strip (INV-1627)
   if (!keep && !drop && !snooze && !open && !consent) return;

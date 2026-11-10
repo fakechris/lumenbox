@@ -39,7 +39,7 @@ function workspace() {
     sessionStorage:{getItem:(key:string)=>storage.get(key)??null,setItem:(key:string,value:string)=>storage.set(key,value)},
     history:{replaceState:(_:unknown,_title:string,url:URL)=>{location.href=String(url);},pushState:(_:unknown,_title:string,url:URL)=>{location.href=String(url);}},
     openTask:"t1",current:"a",currentConversation:"main",t:(key:string)=>key,esc:(text:unknown)=>String(text),nameOf:(id:string)=>id,
-    attentionRow:()=>"",refreshTasks:()=>Promise.resolve(),refresh:()=>Promise.resolve(),toolDetail:()=>"",feed:()=>{},showTab:()=>{},select:()=>Promise.resolve(),
+    renderMarkdown:(text:string)=>"<p>"+text+"</p>",attentionRow:()=>"",refreshTasks:()=>Promise.resolve(),refresh:()=>Promise.resolve(),toolDetail:()=>"",feed:()=>{},showTab:()=>{},select:()=>Promise.resolve(),
     fetch:(path:string)=>{
       if(path==="/api/me")return Promise.resolve({ok:true,json:async()=>({role:"admin"})});
       if(path.startsWith("/api/tasks/item")){const read=deferred();itemReads.push(read);return read.promise;}
