@@ -6,6 +6,8 @@
  */
 
 export const UI_APP: Record<string, readonly [zh: string, en: string]> = {
+  "ui.app.agent-unread-count": ["未读：{count}", "Unread: {count}"],
+  "ui.app.agent-desktop-number": ["虚拟桌面 {display}", "Virtual desktop {display}"],
   "ui.app.live-result-unavailable": ["旧事件缺少调用身份；回合结束后重新打开历史查看结果。", "This older event has no call identity; reopen history after the turn ends to read its result."],
   "ui.app.1-call": ["1 次调用", "1 call"],
   "ui.app.1-match": ["1 处匹配", "1 match"],
