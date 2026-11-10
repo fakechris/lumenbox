@@ -29,7 +29,7 @@ export const RESIDENT_TOOLS: ReadonlySet<string> = new Set([
   "write_file",
   "list_dir",
   "computer",
-  "Tasks",
+  "Tasks", "TaskProgress",
   "ShowUI",
   "SendToAgent",
   "SetTodos",

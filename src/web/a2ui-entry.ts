@@ -14,11 +14,12 @@ import { injectBasicCatalogStyles } from "@a2ui/web_core/v0_9/basic_catalog";
 import { registerUniversalElement } from "@a2ui/web_core/universal";
 import { SHOW_UI_BASIC_COMPONENTS, SHOW_UI_CATALOG_ID, SHOW_UI_PROTOCOL } from "../host/show-ui-catalog.ts";
 import { SHOW_UI_FUNCTIONS } from "../host/show-ui-functions.ts";
-import { ApproveApi, BadgeApi, CalloutApi, ChartApi, CodeApi, FilePreviewApi, KeyValueApi, LinkApi, MarkdownApi, ProgressApi, StatApi, TableApi } from "../host/show-ui-components.ts";
+import { ApproveApi, BadgeApi, CalloutApi, ChartApi, CodeApi, FilePreviewApi, KeyValueApi, LinkApi, MarkdownApi, ProgressApi, TaskProgressApi, StatApi, TableApi } from "../host/show-ui-components.ts";
 import { LumenboxBadgeElement, LumenboxCalloutElement, LumenboxKeyValueElement, LumenboxLinkElement, LumenboxStatElement } from "./a2ui-bits.ts";
 import { LumenboxChartElement } from "./a2ui-chart.ts";
 import { LumenboxFilePreviewElement } from "./a2ui-file.ts";
 import { LumenboxTableElement } from "./a2ui-table.ts";
+import { LumenboxTaskProgressElement } from "./a2ui-task-progress.ts";
 import { LumenboxProgressElement } from "./a2ui-progress.ts";
 import { LumenboxCodeElement, LumenboxMarkdownElement } from "./a2ui-markdown.ts";
 import { LumenboxApproveElement } from "./a2ui-approve.ts";
@@ -28,6 +29,7 @@ const names = new Set(SHOW_UI_BASIC_COMPONENTS);
 // the element that draws it, registered once.
 const lumenbox = [
   { ...TableApi, tagName: LumenboxTableElement.tagName, element: LumenboxTableElement },
+  { ...TaskProgressApi, tagName: LumenboxTaskProgressElement.tagName, element: LumenboxTaskProgressElement },
   { ...ProgressApi, tagName: LumenboxProgressElement.tagName, element: LumenboxProgressElement },
   { ...MarkdownApi, tagName: LumenboxMarkdownElement.tagName, element: LumenboxMarkdownElement },
   { ...CodeApi, tagName: LumenboxCodeElement.tagName, element: LumenboxCodeElement },

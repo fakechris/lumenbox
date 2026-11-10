@@ -106,7 +106,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
   function overview(view) {
     var task = view.task, html = '<div class="tf-overview"><section><h2>' + word("goal") + '</h2><p>' + safe(task.pursuit && task.pursuit.objective || task.description || task.title) + '</p>';
     if (task.contract) html += ["outcome","scope","constraints"].filter(function (key) { return task.contract[key]; }).map(function (key) { return '<h2>' + t("ui.tf.contract." + key) + '</h2><p>' + safe(task.contract[key]) + '</p>'; }).join("");
-    html += '</section><section><h2>' + word("state") + '</h2><p>' + safe(status(task)) + '</p>' + (window.taskProgressHtml ? window.taskProgressHtml(task) : '<p class="tf-note">' + word("phaseOnly") + '</p>') + '</section>';
+    html += '</section><section><h2>' + word("state") + '</h2><p>' + safe(status(task)) + '</p>' + '<div id="tf-progress">' + (window.taskProgressHtml ? window.taskProgressHtml(task) : '<p class="tf-note">' + word("phaseOnly") + '</p>') + '</div></section>';
     var reply = view.record && view.record.reply;
     if (reply) html += '<section><h2>' + word("latestReply") + '</h2><p>' + safe(reply.text) + '</p><div class="tf-note">' + safe(reply.by) + ' · ' + safe(new Date(reply.at).toLocaleString()) + '</div></section>';
     return html + '<section class="tf-note">' + word("coverage") + '</section></div>';
@@ -257,7 +257,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
   }
   function loadItem(view) {
     var generation = view.itemGeneration = (view.itemGeneration || 0) + 1;
-    return get("/api/tasks/item?task=" + encodeURIComponent(view.id)).then(function (data) { if (active !== view || view.itemGeneration !== generation) return; view.task = data.task; header(view); }).catch(function (error) { if (active === view && view.itemGeneration === generation) deny(view,error); });
+    return get("/api/tasks/item?task=" + encodeURIComponent(view.id)).then(function (data) { if (active !== view || view.itemGeneration !== generation) return; view.task = data.task; header(view); if (view.tab === "overview" && by("progress") && window.taskProgressHtml) { var html = window.taskProgressHtml(view.task); if (by("progress").innerHTML !== html) by("progress").innerHTML = html; } }).catch(function (error) { if (active === view && view.itemGeneration === generation) deny(view,error); });
   }
   function loadCosts(view) {
     var generation = view.costGeneration = (view.costGeneration || 0) + 1;
@@ -325,6 +325,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     requestAnimationFrame(function () { view.headerQueued = false; if (active === view) header(view); });
   }
   window.taskFocusEvent = function (event) {
+    if (event.type === "task_changed") window.dispatchEvent(new CustomEvent("lumen-task-progress",{detail:{taskId:event.taskId}}));
     if (active && event.type === "approval_settled" && active.task && (active.task.needsApprovals || []).some(function (item) { return item.id === event.id; })) {
       var settledView = active; loadItem(settledView); if (settledView.detail) syncApproval(settledView,settledView.detail,by("detail")); return;
     }

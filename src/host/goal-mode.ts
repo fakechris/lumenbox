@@ -477,6 +477,7 @@ export function goalCommand(deps: GoalCommandDeps, input: GoalCommandInput): Goa
  * wake that still applies from one a person's message overtook while it waited in the queue.
  */
 export interface GoalMarker {
+  progressScope?: import("./task-progress.ts").ProgressScope;
   taskId: string;
   workId: string;
   seq: number;
@@ -494,7 +495,7 @@ export interface GoalMarker {
  * counter at zero).
  */
 export const GOAL_BOOKKEEPING_TOOLS: ReadonlySet<string> = new Set([
-  "Tasks", "RememberFact", "SetTodos", "SetPlan", "ClaimWork", "Goal", "Checkpoint", "Recall",
+  "Tasks", "TaskProgress", "RememberFact", "SetTodos", "SetPlan", "ClaimWork", "Goal", "Checkpoint", "Recall",
   "ReadHistory", "ReadKept", "OtherThreads", "Teammates", "NothingToSay",
 ]);
 
@@ -577,7 +578,7 @@ export function stopNotice(task: Pick<Task, "id" | "pursuit">, reason: PausedRea
 }
 
 /** Tools a verifier may hold: it reads and it runs what the person confirmed, nothing else. */
-export const VERIFIER_TOOLS: readonly string[] = ["read_file", "list_dir", "bash", "ReadKept"];
+export const VERIFIER_TOOLS: readonly string[] = ["read_file", "list_dir", "bash", "ReadKept", "TaskProgress"];
 
 /** Rejections in a row before the disagreement goes to the person. */
 export const MAX_VERIFY_REJECTIONS = 3;

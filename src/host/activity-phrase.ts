@@ -88,6 +88,7 @@ const TEMPLATES: Record<string, Template> = {
   Outbox: { en: "drafting something for you to approve", zh: "起草一条待你放行的内容" },
   Forget: { en: "forgetting a memory", zh: "忘记一条记忆" },
   ClaimWork: { en: "taking a piece of work", zh: "领取一项工作" },
+  TaskProgress: { en: "recording task progress", zh: "记录任务进度" },
   Tasks: { en: "checking the task board", zh: "查看任务板" },
   DeliverFile: { en: "handing over a finished file", zh: "交付文件" },
   HandBack: { en: "handing a follow-up back", zh: "退回跟进消息" },

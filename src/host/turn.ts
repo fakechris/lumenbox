@@ -1,3 +1,4 @@
+import { progressContext as openProgressContext, selectedProgressBinding } from "./progress-admission.ts";
 import { admittedTaskBinding, takenTaskBinding, hasAdmittedTask } from "./execution-binding.ts";
 import { observeExecution, observedReplay } from "./execution-observer.ts";
 /**
@@ -1453,10 +1454,12 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   // as three unrelated short turns. A goal continuation inherits the pursuit's id the same way a resumption
   // inherits its work's (INV-770): every turn of one objective is one piece of work in the ledgers.
   const goal = inbound.find(message => message.goal !== undefined)?.goal;
-  const workId = deps.resumeOf?.workId ?? goal?.workId ?? randomUUID();
-  const executionId = randomUUID(), attempt = deps.resumeOf?.attempt ?? 1;
   let taskBinding = admittedTaskBinding({ agentId: agent.id, conversation, inbound, tasks: deps.tasks, goal, resume: deps.resumeOf });
+  const workId = deps.resumeOf?.workId ?? goal?.workId ?? (taskBinding?.role === "executor" ? taskBinding.progressAdmission?.rootWorkId : undefined) ?? randomUUID();
+  const executionId = randomUUID(), attempt = deps.resumeOf?.attempt ?? 1;
   if (deps.tasks && !taskBinding && hasAdmittedTask({ inbound, tasks: deps.tasks, goal, resume: deps.resumeOf })) throw new Error("The admitted task binding is no longer valid; no task tool was dispatched.");
+  const progressAccess = { agent: (id: string) => registry.has(id) && registry.boxOf(id).id === registry.boxOf(agent.id).id, box: (id: string) => id === registry.boxOf(agent.id).id };
+  let progressContext = openProgressContext(deps.tasks, taskBinding, { agentId: agent.id, conversation, turnId, executionId, boxId: registry.boxOf(agent.id).id, workId, access: progressAccess, resuming: !!deps.resumeOf });
   // Built once, here, because this is the only place that knows all four of the things an aside
   // has to be attributed to. Passing the ledger down instead would mean passing the agent, the
   // work and the conversation down with it, which is three more chances to pass the wrong one.
@@ -1535,6 +1538,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     if (ended) return;
     ended = true;
     endedHow = how;
+    deps.tasks?.progress.close(progressContext);
     deps.turns?.end(turnId, how, new Date(), category, keptThisTurn);
     deps.steps?.closed(turnId); registry.configVersions.release(turnId); // the version it held (INV-1669)
   };
@@ -1697,7 +1701,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
           displayIndex: deps.displayIndex,
           ensureDesktop: deps.ensureDesktop,
           boxOwner: deps.boxOwner,
-          tasks: deps.tasks, taskBinding,
+          tasks: deps.tasks, taskBinding, progressContext,
           turnId,
           toolUseId: call.id,
           conversation,
@@ -1794,7 +1798,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
             displayIndex: deps.displayIndex,
             ensureDesktop: deps.ensureDesktop,
             boxOwner: deps.boxOwner,
-            tasks: deps.tasks, taskBinding,
+            tasks: deps.tasks, taskBinding, progressContext,
             turnId,
             toolUseId: call.id,
             conversation,
@@ -2036,6 +2040,7 @@ ${outcome.text}`;
     // it needs decided goes back to the sender instead. The test is the whole conversation, not this turn: the
     // front agent woken by a worker's report is still the person's counterpart, and it is the one that has to
     // be able to ask.
+    .filter(tool => tool.name !== "TaskProgress" || deps.tasks !== undefined)
     .filter(tool => !(!personIsHere && PERSON_FACING_TOOLS.has(tool.name)))
     // Deliberate silence is for turns nobody is waiting on (INV-775): withheld, not refused,
     // wherever a person opened the turn and is reading for the answer.
@@ -3163,6 +3168,8 @@ ${outcome.text}`;
     const runOne = async (
       toolUse: Anthropic.ToolUseBlock
     ): Promise<{ block: Anthropic.ToolResultBlockParam; recordAs?: string; commit?: { id: string; how: import("./pending-work.ts").CommitHow }[] }> => {
+      const takeArgs = toolUse.input as { action?: unknown; id?: unknown };
+      const progressBefore = toolUse.name === "Tasks" && takeArgs?.action === "take" && typeof takeArgs.id === "string" ? deps.tasks?.get(takeArgs.id) : undefined;
       let callBinding = taskBinding;
       emit({
         type: "tool_start",
@@ -3281,7 +3288,7 @@ ${outcome.text}`;
             hostRunner: isForkConversation(conversation) ? undefined : deps.hostRunner,
             vault: deps.vault,
             oauth: isForkConversation(conversation) ? undefined : deps.oauth,
-            tasks: deps.tasks, taskBinding: callBinding,
+            tasks: deps.tasks, taskBinding: callBinding, progressContext,
             ...(deps.goalGate !== undefined ? { goalGate: deps.goalGate } : {}),
             scopes: deps.scopes,
             mcp: isForkConversation(conversation) ? undefined : deps.mcp,
@@ -3339,8 +3346,12 @@ ${outcome.text}`;
         }
       }
 
-      const selected = takenTaskBinding({ tool: toolUse.name, args: toolUse.input, isError: outcome.isError, agentId: agent.id, tasks: deps.tasks });
+      let selected = takenTaskBinding({ tool: toolUse.name, args: toolUse.input, isError: outcome.isError, agentId: agent.id, tasks: deps.tasks });
       if (selected) {
+        const wasCurrent = deps.tasks?.progress.valid(progressContext);
+        deps.tasks?.progress.close(progressContext);
+        selected = selectedProgressBinding(deps.tasks, selected, { workId, before: progressBefore, allowed: !!wasCurrent || (!deps.resumeOf && !taskBinding?.progressAdmission && inbound.some(message => message.fromId === "user" && !message.synthetic && !message.resumeOf)), admittedAt: wasCurrent ? new Date().toISOString() : inbound.map(message => message.receivedAt).sort()[0] ?? "" });
+        progressContext = openProgressContext(deps.tasks, selected, { agentId: agent.id, conversation, turnId, executionId, boxId: registry.boxOf(agent.id).id, workId, access: progressAccess });
         selected.selection = { turnId, toolUseId: toolUse.id };
         deps.turns?.selectExecution({ event: "selection", id: turnId, recordId: randomUUID(), executionId, attempt, taskBinding: selected, toolUseId: toolUse.id, at: new Date().toISOString() });
         taskBinding = selected; callBinding = selected;

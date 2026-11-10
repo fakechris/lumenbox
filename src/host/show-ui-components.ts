@@ -65,6 +65,12 @@ export const ProgressApi = {
     .strict(),
 };
 
+/** TaskStore-backed progress. Numeric props are deliberately absent. */
+export const TaskProgressApi = {
+  name: "TaskProgress",
+  schema: z.object({ weight: z.number().optional(), taskId: z.string().min(1).max(80) }).strict(),
+};
+
 /** Markdown prose (markdown-it, html off): headings, lists, links, inline code. */
 export const MarkdownApi = {
   name: "Markdown",
@@ -217,4 +223,4 @@ export const LinkApi = {
 };
 
 /** Every lumenbox component, in the order they were added. */
-export const LUMENBOX_COMPONENTS = [TableApi, ProgressApi, MarkdownApi, CodeApi, ApproveApi, ChartApi, FilePreviewApi, BadgeApi, KeyValueApi, StatApi, CalloutApi, LinkApi] as const;
+export const LUMENBOX_COMPONENTS = [TableApi, ProgressApi, TaskProgressApi, MarkdownApi, CodeApi, ApproveApi, ChartApi, FilePreviewApi, BadgeApi, KeyValueApi, StatApi, CalloutApi, LinkApi] as const;
