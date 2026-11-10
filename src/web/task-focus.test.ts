@@ -35,7 +35,7 @@ function workspace(me: {role:string;identity?:string|null} = {role:"admin",ident
     getElementById:(id:string)=>{if(!nodes.has(id)){const node=new Element();node.id=id;nodes.set(id,node);}return nodes.get(id)!;},
   };
   const location = { href:"http://fixture/?task=t1&tasktab=artifacts" };
-  const window = { addEventListener:()=>{}, deliverablesHtml:(task:{deliverables?:{name:string}[]})=>task.deliverables?.[0]?.name ?? "" } as Record<string,any>;
+  const window = { addEventListener:()=>{}, claimAccountHtml:()=>"READABLE VERIFICATION EVIDENCE", deliverablesHtml:(task:{deliverables?:{name:string}[]})=>task.deliverables?.[0]?.name ?? "" } as Record<string,any>;
   const scope = { window,document,location,URL,URLSearchParams,AbortController,Map,Set,Promise,Date,
     setInterval:()=>0, setTimeout:()=>0, clearTimeout:()=>{}, requestAnimationFrame:(fn:()=>void)=>fn(),
     sessionStorage:{getItem:(key:string)=>storage.get(key)??null,setItem:(key:string,value:string)=>storage.set(key,value)},
@@ -122,6 +122,7 @@ test("review is an explicit authorized action and denied or coerced results neve
   assert.doesNotMatch(unidentified.nodes.get("tf-body")!.innerHTML,/data-tf-accept/);
   const viewer=workspace({role:"viewer",identity:"owner"});viewer.window.openTaskFocus("t1",false);await tick();viewer.itemReads[0]!.resolve(viewer.reply({task}));await tick();
   assert.doesNotMatch(viewer.nodes.get("tf-body")!.innerHTML,/data-tf-accept|data-tf-status|data-tf-level/);
+  assert.match(viewer.nodes.get("tf-body")!.innerHTML,/READABLE VERIFICATION EVIDENCE/,"verification caveats remain readable without management permission");
   const owner=workspace({role:"driver",identity:"owner"});owner.window.openTaskFocus("t1",false);await tick();owner.itemReads[0]!.resolve(owner.reply({task}));await tick();
   assert.match(owner.nodes.get("tf-body")!.innerHTML,/data-tf-accept/);assert.equal(owner.mutations.length,0);
   owner.accept();assert.equal(owner.mutations[0]!.body.status,"done");owner.mutations[0]!.read.resolve(owner.reply({error:"Review permission changed"},403));await tick();await tick();

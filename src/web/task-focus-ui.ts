@@ -125,6 +125,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
   function artifacts(view) {
     var task = view.task, checks = task.pursuit && task.pursuit.checklist || [];
     var html = '<div class="tf-overview"><section><h2>' + word("artifacts") + '</h2>' + (window.deliverablesHtml && window.deliverablesHtml(task) || '<p class="tf-note">' + word("noArtifacts") + '</p>') + '</section>';
+    if (window.claimAccountHtml) html += window.claimAccountHtml(task);
     var driver = view.role === "admin" || view.role === "driver";
     var review = driver && (view.actor === "web" || view.actor === task.requester || view.actor === task.reviewerId);
     if (task.status === "review" && review) html += '<section><h2>' + t("ui.tc.reviewDecision") + '</h2><p class="tf-note">' + t("ui.tc.reviewNote") + '</p><div class="ui-actions"><button class="btn accent" data-tf-accept' + (view.actionBusy ? ' disabled' : '') + '>' + t("ui.tc.accept") + '</button><button class="btn" data-tf-note' + (view.actionBusy ? ' disabled' : '') + '>' + t("ui.tc.recordChanges") + '</button></div></section>';
@@ -133,7 +134,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
       var states = {open:"queued",doing:"working",blocked:"needs",review:"review",done:"ended",dropped:"dropped"};
       html += '<details class="tf-changes"><summary>' + t("ui.tc.advanced") + '</summary><p class="tf-note">' + t("ui.tc.managementNote") + '</p><div class="field"><label for="tf-task-status">' + word("taskStatus") + '</label><select id="tf-task-status" data-tf-status' + (view.actionBusy ? ' disabled' : '') + '>' + Object.keys(states).map(function (value) { return '<option value="' + value + '"' + (value === task.status ? ' selected' : '') + '>' + word(states[value]) + '</option>'; }).join("") + '</select></div>';
       if (task.level) html += '<div class="field"><label for="tf-task-level">' + t("ui.tc.executionScope") + '</label><select id="tf-task-level" data-tf-level' + (view.actionBusy ? ' disabled' : '') + '>' + [1,2,3,4,5].map(function (level) { return '<option value="' + level + '"' + (level === task.level ? ' selected' : '') + '>' + t("ui.tc.level" + level) + '</option>'; }).join('') + '</select><p class="fieldnote">' + t("ui.tc.scopeNote") + '</p></div>';
-      ["claimAccountHtml","orgPromoteHtml","taskDepsHtml"].forEach(function (fn) { if (window[fn]) html += window[fn](task); });
+      ["orgPromoteHtml","taskDepsHtml"].forEach(function (fn) { if (window[fn]) html += window[fn](task); });
       html += '</details>';
     }
     if (task.contract) html += ["acceptance","verification"].filter(function (key) { return task.contract[key]; }).map(function (key) { return '<section><h2>' + t("ui.tf.contract." + key) + '</h2>' + prose(task.contract[key]) + '</section>'; }).join("");
