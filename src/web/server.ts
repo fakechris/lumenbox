@@ -5229,7 +5229,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // tool is withheld entirely and web questions degrade to the box's browser —
           // a state the card names rather than leaves to be discovered mid-task.
           const search = configuredProviders().length > 0;
-          send(res, 200, { key, box: boxes.some(box => box.connected), agentTurn, door, review, search });
+          send(res, 200, { installationId: registry.box.id, established: agentTurn && review, key, box: boxes.some(box => box.connected), agentTurn, door, review, search });
           return;
         }
 

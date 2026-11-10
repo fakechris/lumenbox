@@ -1,3 +1,5 @@
+import { SETUP_GUIDE_JS, SETUP_GUIDE_STYLE } from "./setup-guide.ts";
+import { PANE_HEADER_STYLE } from "./pane-header.ts";
 import { AGENT_ROW_STYLE, AGENT_ROW_JS } from "./agent-row.ts";
 import { TASK_PROGRESS_CLIENT_JS } from "../host/task-progress-view.ts";
 import { ATTENTION_PANEL_JS, RIGHT_PANE_STYLE, TASKS_PANEL_HTML, ACTIVITY_PANEL_HTML, ACTIVITY_FEED_JS } from "./right-pane-ui.ts";
@@ -315,26 +317,8 @@ ${AGENT_ROW_STYLE}
   #buildinfo { font-family: var(--font-mono); font-size: 11px; }
 
   /* ── pane headers ─────────────────────────────────────────────────────────── */
-  .paneheader {
-    flex: none; height: 52px; border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 18px;
-  }
-  .paneheader .lead { display: flex; align-items: center; gap: 5px; min-width: 0; }
-  /* Tabs and actions take the first row; the desktop identity and box class get
-     their own row rather than shrinking the shared-box warning to a sliver. */
-  #rightpane .paneheader { height: auto; min-height: 52px; flex-wrap: wrap; padding: 6px 18px; gap: 4px 10px; }
-  #rightpane .paneheader .lead { flex: 1 1 250px; flex-wrap: wrap; gap: 2px; }
-  #rightpane .paneheader .headactions { margin-left: auto; }
-  .desktopcontext { display: flex; align-items: center; gap: 8px; flex: 1 0 100%; min-width: 0; }
-  .desktopcontext:has(#desktoptitle:empty):has(#boxclass[style*="display: none"]) { display: none; }
-  #title { font-weight: 600; font-size: 1rem; }
-  .roundpill {
-    display: flex; align-items: center; gap: 7px; font-family: var(--font-mono); font-size: 12px;
-    color: var(--accent); background: var(--accent-soft); padding: 4px 10px; border-radius: var(--radius-pill);
-    white-space: nowrap;
-  }
-  .roundpill:empty { display: none; }
-  .headactions { display: flex; align-items: center; gap: 10px; flex: none; }
+  ${PANE_HEADER_STYLE}
+  ${SETUP_GUIDE_STYLE}
 
   /* ── consent, before the conversation: an agent waiting on a person has stopped
         working, and scrolling to find that out is the interface keeping them waiting. */
@@ -826,7 +810,6 @@ ${AGENT_ROW_STYLE}
     background: var(--warn-soft); border: 1px solid var(--warn-border);
     border-radius: var(--radius-md); padding: 7px 11px; margin: 0 16px 8px;
   }
-  .paneheader a { font-size: 12px; }
   a#rec.on { color: var(--danger); }
 
   .desktopwrap { flex: none; padding: 14px 16px 10px; }
@@ -926,19 +909,19 @@ ${AGENT_ROW_STYLE}
   <div class="paneheader">
     <span class="lead">
       <span id="title">&mdash;</span>
-      <span id="titlerole" class="dim" style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span>
-      <span id="convwrap" style="position:relative;flex:none">
-        <a href="#" id="convbtn" class="btn sm" style="display:none;text-decoration:none;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></a>
+      <span id="titlerole" class="dim"></span>
+      <span id="convwrap">
+        <a href="#" id="convbtn" class="btn sm" style="display:none"></a>
         <div id="convpanel" style="display:none">
           <input id="convfilter" placeholder="{{ui.page.filter-threads}}" autocomplete="off">
           <div id="convlist"></div>
           <a href="#" id="convmore" class="row dim" style="display:none">{{ui.page.load-more}}</a>
         </div>
       </span>
-      <a href="#" id="agentcfg" style="font-size:12px;flex:none">{{ui.page.configure}}</a>
-      <a href="#" id="agentdel" style="font-size:12px;flex:none;color:var(--danger)" title="{{ui.page.delete-this-agent-asks-first}}">{{ui.page.delete}}</a>
+      <a href="#" id="agentcfg">{{ui.page.configure}}</a>
+      <a href="#" id="agentdel" title="{{ui.page.delete-this-agent-asks-first}}">{{ui.page.delete}}</a>
     </span>
-    <span class="headactions" style="position:relative">
+    <span class="headactions">
       <a href="#" id="sharebtn" title="{{ui.page.copy-or-download-this-thread}}">{{ui.page.share}}</a>
       <div id="sharemenu">
         <a href="#" data-share="md">{{ui.page.copy-as-markdown}}</a>
@@ -947,10 +930,10 @@ ${AGENT_ROW_STYLE}
       </div>
       <a href="#" id="searchbtn" title="{{ui.page.search-this-conversation-ctrl-f}}">{{ui.page.search}}</a>
       <a href="#" id="foldall" title="{{ui.page.fold-or-unfold-every-step}}">{{ui.page.fold-steps}}</a>
-      <span id="round" class="roundpill"></span>
+      <span class="runstate"><span id="round" class="roundpill"></span>
       <!-- Only shown while a turn is running: a stop button with nothing to stop invites a click
            that does nothing, and then the real one is not trusted. -->
-      <button id="stop" class="btn sm" style="display:none">{{ui.page.stop}}</button>
+      <button id="stop" class="btn sm" style="display:none">{{ui.page.stop}}</button></span>
     </span>
   </div>
   <!-- Ahead of the conversation on purpose. An agent waiting on consent has stopped working, and a
@@ -4567,7 +4550,7 @@ function refreshConversations(id) {
 // re-renders while the panel is open.
 setInterval(function () { if (current) refreshConversations(current); }, 5000);
 
-var taskConversationLink = document.createElement("button"); taskConversationLink.className = "btn sm ghost"; taskConversationLink.textContent = "{{ui.tf.taskContext}}"; taskConversationLink.onclick = function () { return window.openTasksForConversation(); }; $("foldall").before(taskConversationLink);
+var taskConversationLink = document.createElement("button"); taskConversationLink.className = "btn sm ghost"; taskConversationLink.setAttribute("data-conversation-tasks", ""); taskConversationLink.textContent = "{{ui.tf.taskContext}}"; taskConversationLink.onclick = function () { return window.openTasksForConversation(); }; $("foldall").before(taskConversationLink);
 $("foldall").onclick = function (event) {
   event.preventDefault();
   folded = !folded;
@@ -7261,64 +7244,7 @@ $("shelfbody").onclick = function (event) {
     .catch(function (err) { $("shelfstatus").textContent = String(err.message || err); btn.disabled = false; });
 };
 
-/** Four steps, shown until all four are done; each names the object it introduces. */
-var guideForced = false;
-function refreshSetup() {
-  return fetch("/api/setup").then(function (r) { return r.json(); }).then(function (s) {
-    var card = $("setupcard");
-    if (!card) return;
-    // Each step also names the command that does the same thing (INV-542): an
-    // installation run on a server has no window to click in, and the person setting it
-    // up over ssh was reading a page that assumed a mouse.
-    // The key goes first (INV-857), because the welcome note promises it as one of two
-    // things and every later step is dead without it: an agent with no key cannot say
-    // its first word, and the failure surfaced pages away from the cause.
-    // The optional steps carry a skip: a card that cannot be dismissed without
-    // configuring something its own label calls optional is a nag, not a guide.
-    var searchSkipped = false;
-    var doorSkipped = false;
-    try {
-      searchSkipped = localStorage.getItem("lumen-skip-search") === "1";
-      doorSkipped = localStorage.getItem("lumen-skip-door") === "1";
-    } catch (error) {}
-    var steps = [
-      { done: s.key, head: t("ui.setup.key"), sub: t("ui.setup.keyWhy"), act: t("ui.setup.keyAct"), cli: "{{ui.app.settings-model}}", go: function () { openSettings("model"); } },
-      { done: s.box, head: t("ui.setup.box"), sub: t("ui.setup.boxWhy"), act: t("ui.setup.boxAct"), cli: "agentbox box up", go: function () { openSettings("boxes"); } },
-      { done: s.agentTurn, head: t("ui.setup.agent"), sub: t("ui.setup.agentWhy"), act: t("ui.setup.agentAct"), cli: "agentbox agent new <name>", go: openShelf },
-      { done: s.search || searchSkipped, skip: "search", head: t("ui.setup.search"), sub: t("ui.setup.searchWhy"), act: t("ui.setup.searchAct"), cli: "{{ui.app.settings-model}}", go: function () { openSettings("model"); } },
-      { done: s.door || doorSkipped, skip: "door", head: t("ui.setup.door"), sub: t("ui.setup.doorWhy"), act: t("ui.setup.doorAct"), cli: "{{ui.app.settings-channels-no-cli-yet}}", go: function () { openSettings("doors"); } },
-      { done: s.review, head: t("ui.setup.work"), sub: t("ui.setup.workWhy"), act: t("ui.setup.workAct"), cli: "{{ui.app.agentbox-chat}} <name> \"…\"", go: function () { var tab = $("tabtasks"); if (tab) tab.click(); } }
-    ];
-    if (steps.every(function (x) { return x.done; }) && !guideForced) { card.style.display = "none"; return; }
-    card.style.display = "";
-    card.innerHTML = '<div style="margin:10px 16px 0;padding:10px 14px;border:1px solid var(--border-strong);border-radius:var(--radius-card);background:var(--surface)">' +
-      '<div class="eyebrow" style="margin-bottom:6px;display:flex;justify-content:space-between"><span>' + esc(t("ui.setup.title")) + '</span><a href="#" data-setup-close="1" style="text-transform:none;letter-spacing:0">' + esc(t("ui.setup.close")) + "</a></div>" +
-      steps.map(function (x, i) {
-        return '<div style="display:flex;gap:10px;align-items:center;padding:4px 0;font-size:12px">' +
-          '<span style="width:16px;color:' + (x.done ? "var(--ok, #3fb950)" : "var(--muted)") + '">' + (x.done ? "✓" : String(i + 1)) + "</span>" +
-          '<div style="flex:1"><b>' + esc(x.head) + "</b> <span class=\"dim\">" + esc(x.sub) + "</span>" +
-            (x.cli ? ' <code class="mono dim" style="font-size:11px">' + esc(x.cli) + "</code>" : "") + "</div>" +
-          (x.skip && !x.done ? '<a href="#" data-setup-skip="' + esc(x.skip) + '" class="dim" style="font-size:11px;text-transform:none;letter-spacing:0">' + esc(t("ui.setup.skip")) + "</a>" : "") +
-          '<button class="btn sm' + (x.done ? " ghost" : "") + '" data-setup="' + i + '">' + esc(x.act) + "</button>" +
-        "</div>";
-      }).join("") + "</div>";
-    card.onclick = function (event) {
-      var sk = event.target.closest("a[data-setup-skip]");
-      if (sk) {
-        event.preventDefault();
-        try { localStorage.setItem("lumen-skip-" + sk.getAttribute("data-setup-skip"), "1"); } catch (error) {}
-        refreshSetup();
-        return;
-      }
-      var b = event.target.closest("button[data-setup]");
-      if (b) { event.preventDefault(); steps[Number(b.getAttribute("data-setup"))].go(); return; }
-      if (event.target.closest("a[data-setup-close]")) { event.preventDefault(); guideForced = false; card.style.display = "none"; }
-    };
-  }).catch(function () {});
-}
-refreshSetup();
-setInterval(refreshSetup, 30000);
-$("guidebtn").onclick = function () { guideForced = true; refreshSetup(); };
+${SETUP_GUIDE_JS}
 
 $("agentdel").onclick = function (event) {
   event.preventDefault();
