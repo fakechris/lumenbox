@@ -54,6 +54,7 @@ function createEventRecovery(options) {
       var next = cursor(raw);
       if (!next) return;
       if (epoch && epoch !== next.epoch) { reset(next); return; }
+      if (!epoch) commitRead = true; // Joining an already-streaming answer may precede its durable transcript append.
       epoch = next.epoch; seq = Math.max(seq, next.seq);
     },
     opened: function () { disconnected = false; state(loading ? "syncing" : "connected"); },
@@ -104,10 +105,13 @@ function rebuildEventViews() {
   });
 }
 
+function recoveryCommitFor(event, agent, conversation) {
+  return event.agentId === agent && (event.conversation || "main") === conversation && (event.type === "tool_start" || event.type === "turn_finished");
+}
 function installEventRecovery(stream) {
   var wasDisconnected = false;
   var recovery = createEventRecovery({ apply: stream.onmessage, rebuild: rebuildEventViews,
-    commitEvent: function (event) { return event.agentId === current && (event.type === "tool_start" || event.type === "turn_finished"); },
+    commitEvent: function (event) { return recoveryCommitFor(event, current, currentConversation); },
     connection: function (state) {
       document.documentElement.dataset.connection = state;
       window.dispatchEvent(new CustomEvent("lumen-connection", { detail: state }));
