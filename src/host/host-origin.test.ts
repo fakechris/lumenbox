@@ -148,3 +148,22 @@ test("a progress question retains an active goal; a genuine goal pause releases 
     assert.equal(orch.bus.workAttention!.get(mia.id,"main")!.status,"answered","paused goals retain their board record but release execution custody");
   } finally { if(previousHome===undefined)delete process.env.AGENTBOX_HOME;else process.env.AGENTBOX_HOME=previousHome;rmSync(root,{recursive:true,force:true}); }
 });
+
+
+test("submitting the current task during a tool round preserves the final user report", async () => {
+  const root = mkdtempSync(join(tmpdir(),"attention-final-report-")), previousHome=process.env.AGENTBOX_HOME;
+  process.env.AGENTBOX_HOME=root;
+  try {
+    const registry=new AgentRegistry(join(root,"agents")), mia=registry.create({name:"Mia"}), tasks=new TaskStore(null);
+    const task=tasks.create({title:"Install the package",requester:"chris",assigneeId:mia.id,contract:{acceptance:"The installation was checked"}})!;
+    let calls=0;
+    const orch=new Orchestrator({registry,useBox:false,inbox:null,mcp:null,hooks:null,tasks,extensions:null,pendingWork:null,
+      client:fakeModel(()=>({id:"response",type:"message",role:"assistant",model:"test",content:calls++===0?[{type:"tool_use",id:"submit",name:"Tasks",input:{action:"update",id:task.id,status:"review"}}]:[{type:"text",text:"The installation was checked and submitted for review."}],stop_reason:calls===1?"tool_use":"end_turn",stop_sequence:null,usage:{input_tokens:10,output_tokens:5}} as never))});
+    orch.bus.workAttention!.existing(mia.id,"main","task-install",task.id);
+    await orch.prompt(mia.id,"Finish and report the installation",{userId:"chris"});
+    assert.equal(calls,2,"submission must not invalidate its own final response");
+    assert.match(JSON.stringify(registry.readTranscript(mia.id)),/The installation was checked and submitted for review/);
+    assert.equal(tasks.get(task.id)!.status,"review");
+    assert.equal(orch.bus.workAttention!.get(mia.id,"main")!.status,"answered");
+  } finally {if(previousHome===undefined)delete process.env.AGENTBOX_HOME;else process.env.AGENTBOX_HOME=previousHome;rmSync(root,{recursive:true,force:true});}
+});
