@@ -108,3 +108,24 @@ test("legacy events cannot guess their result into an identified call", () => {
   event({ type: "tool_end", agentId: "a", turnId: "t", toolUseId: "c", summary: "identified result" });
   assert.equal(scope.thread[0]!.calls[0]!.result, "identified result");
 });
+
+test("snapshot text watermarks remove overlapping deltas, while identical prose in another invocation survives", () => {
+  const view = page(); view.begin();
+  view.event({ type: "text", agentId: "a", executionId: "first", textStart: 0, textEnd: 12, delta: "Final answer" });
+  view.replay([{ kind: "text", role: "assistant", executionId: "first", textThrough: 12, text: "Final answer" }]);
+  view.finish();
+  assert.equal(view.scope.thread.length, 1);
+  view.event({ type: "text", agentId: "a", executionId: "second", textStart: 0, textEnd: 12, delta: "Final answer" });
+  // A completed replay row and a later invocation are separate messages, even with identical words.
+  assert.equal(view.scope.thread.length, 2);
+});
+
+test("in-place recovery may reuse a logical call, but its invocation result remains separate", () => {
+  const { scope, event } = page();
+  const call = { agentId: "a", turnId: "same-turn", toolUseId: "same-call", tool: "read_file" };
+  event({ ...call, executionId: "first", type: "tool_start", input: {} });
+  event({ ...call, executionId: "first", type: "tool_end", summary: "unknown before restart" });
+  event({ ...call, executionId: "resumed", type: "tool_start", input: {} });
+  event({ ...call, executionId: "resumed", type: "tool_end", summary: "read back confirmed" });
+  assert.deepEqual(Array.from(scope.thread[0]!.calls, c => c.result), ["unknown before restart", "read back confirmed"]);
+});

@@ -2,8 +2,20 @@
 export const LIVE_TOOLS_JS = String.raw`/* Live tool calls */
 var openCall = new Map();
 var liveReplay = null;
+var replayedText = new Map();
+function rememberReplayedText(entry) {
+  if (entry.executionId && typeof entry.textThrough === "number") replayedText.set(entry.executionId, Math.max(replayedText.get(entry.executionId) || 0, entry.textThrough));
+}
+function unseenLiveText(e) {
+  if (e.type !== "text" || !e.executionId || typeof e.textEnd !== "number" || typeof e.textStart !== "number") return true;
+  var through = replayedText.get(e.executionId) || 0;
+  if (e.textEnd <= through) return false;
+  if (e.textStart < through) e.delta = e.delta.slice(through - e.textStart);
+  replayedText.set(e.executionId, e.textEnd);
+  return true;
+}
 function liveCallKey(e) {
-  return e.turnId && e.toolUseId ? JSON.stringify([e.agentId, e.conversation || "main", e.turnId, e.toolUseId]) : null;
+  return e.turnId && e.toolUseId ? JSON.stringify([e.agentId, e.conversation || "main", e.turnId, e.toolUseId, e.executionId || e.turnAttempt || e.attempt || 1]) : null;
 }
 function rememberLiveCall(e, work, call) {
   var key = liveCallKey(e);
@@ -27,7 +39,7 @@ function handleLiveTool(e) {
     if (pending) return true;
     if (openAgent) { openAgent.streaming = false; openAgent.queued = false; redrawItem(openAgent); openAgent = null; }
     if (!openWork) openWork = pushItem({ kind: "work", calls: [], startAt: new Date().toISOString(), done: false });
-    var call = { name: e.tool, detail: toolDetail(e.tool, e.input), result: key ? undefined : "{{ui.app.live-result-unavailable}}", isError: false, diff: e.diff || null, turnId: e.turnId, toolUseId: e.toolUseId };
+    var call = { name: e.tool, detail: toolDetail(e.tool, e.input), result: key ? undefined : "{{ui.app.live-result-unavailable}}", isError: false, diff: e.diff || null, turnId: e.turnId, toolUseId: e.toolUseId, executionId: e.executionId, attempt: e.turnAttempt || e.attempt };
     openWork.calls.push(call);
     rememberLiveCall(e, openWork, call);
     redrawItem(openWork);

@@ -3949,7 +3949,7 @@ var workingItem = null;   // the "on it" row shown between turn start and the fi
 var surfaces = new Map(); // cards the agent composed (docs/79), by surface id, for the thread on screen
 
 function resetThread() {
-  thread = []; openAgent = null; openWork = null; openCall.clear(); openQuestion = null; workingItem = null; cards.clear(); surfaces.clear();
+  thread = []; openAgent = null; openWork = null; openCall.clear(); replayedText.clear(); openQuestion = null; workingItem = null; cards.clear(); surfaces.clear();
   $("chat").innerHTML = "";
 }
 
@@ -4378,6 +4378,7 @@ function closeOpen() {
 
 /** One stored entry from the server, as items. Prose is prose whether or not calls followed it. */
 function replayEntry(id, entry, index, unread) {
+  if (entry.kind === "text" && entry.role === "assistant") rememberReplayedText(entry);
   if (entry.kind === "peer") {
     closeOpen();
     for (var p = 0; p < entry.messages.length; p++) {
@@ -4400,9 +4401,9 @@ function replayEntry(id, entry, index, unread) {
     var drawn = [];
     for (var t = 0; t < entry.tools.length; t++) {
       var c = entry.tools[t];
-      var call = { name: c.name, detail: c.detail, result: c.result, isError: c.isError, gate: c.gate, diff: c.diff, turnId: c.turnId, toolUseId: c.toolUseId };
+      var call = { name: c.name, detail: c.detail, result: c.result, isError: c.isError, gate: c.gate, diff: c.diff, turnId: c.turnId, toolUseId: c.toolUseId, executionId: c.executionId, attempt: c.attempt };
       openWork.calls.push(call);
-      rememberLiveCall({ agentId: id, conversation: currentConversation, turnId: c.turnId, toolUseId: c.toolUseId }, openWork, call);
+      rememberLiveCall({ agentId: id, conversation: currentConversation, turnId: c.turnId, toolUseId: c.toolUseId, executionId: c.executionId, attempt: c.attempt }, openWork, call);
       if (c.question) asked = c.question;
       // A refused ShowUI drew nothing then, so it draws nothing now.
       if (c.surface && !c.isError) drawn.push(c.surface);
@@ -6190,6 +6191,7 @@ ${LIVE_TOOLS_JS}
 stream.onmessage = function (raw) {
   var e = JSON.parse(raw.data);
   if (liveReplay && (inView(e) || (e.type === "message_sent" && currentConversation === "main" && (e.fromId === current || e.toId === current)))) { liveReplay.events.push(e); return; }
+  if (inView(e) && !unseenLiveText(e)) return;
   var line = activityLine(e);
   if (line) feed(line.html, line.cls);
 

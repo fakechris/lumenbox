@@ -98,7 +98,7 @@ export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
         // The turn's own stop (INV-1354 budget, the loop detector) is written on the task before
         // it closes, so task_status can say `incomplete (turn_budget)` rather than `done`.
         const stop = task === undefined ? () => {} : deps.listen(event => {
-          if (event.agentId !== agent.id || (event.conversation !== undefined && event.conversation !== "main")) return;
+          if (event.agentId !== agent.id || event.taskId !== task.id || (event.conversation !== undefined && event.conversation !== "main")) return;
           if (event.type === "turn_budget_hit") orchestrator.tasks?.update(task.id, { status: "review", note: `incomplete (turn_budget): ${event.calls} model calls, handed back` }, agent.id);
           if (event.type === "stuck") orchestrator.tasks?.update(task.id, { status: "review", note: `incomplete (rounds): ${event.reason.split("\n")[0]?.slice(0, 160) ?? "stopped"}` }, agent.id);
         });
@@ -109,7 +109,7 @@ export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
         // The reply is read by the message's own id, so a turn queued beside it is never taken for its answer.
         const messageId = randomUUID();
         void orchestrator
-          .prompt(agent.id, brief, { userId: principalId }, { lane: "agent", messageId })
+          .prompt(agent.id, brief, { userId: principalId }, { lane: "agent", messageId, ...(task ? { taskBinding: { taskId: task.id, role: "executor" as const } } : {}) })
           .then(() => {
             if (task === undefined) return;
             const said = orchestrator.replyForMessage(agent.id, messageId);

@@ -1,5 +1,6 @@
+import type { TaskBinding } from "./execution-binding.ts";
 /** Events sent to task observers and the live conversation. Optional identity reads older producers. */
-export type TurnEvent = TurnEventBody & { conversation?: string; turnId?: string };
+export type TurnEvent = TurnEventBody & { conversation?: string; turnId?: string; executionId?: string; turnAttempt?: number; workId?: string; taskId?: string; taskBinding?: TaskBinding; textStart?: number; textEnd?: number };
 
 export type TurnEventBody =
   | { type: "text"; agentId: string; agentName: string; delta: string }
@@ -21,6 +22,7 @@ export type TurnEventBody =
       summary: string;
       toolUseId?: string;
       isError?: boolean;
+      executionOutcome?: import("../protocol/index.ts").Outcome | "waiting";
       /**
        * base64 WebP, when the tool returned one. Carried so a watching UI can
        * show what the agent actually saw, which is the difference between

@@ -1,3 +1,5 @@
+import { admittedTaskBinding, takenTaskBinding, hasAdmittedTask } from "./execution-binding.ts";
+import { observeExecution, observedReplay } from "./execution-observer.ts";
 /**
  * The agent turn loop.
  *
@@ -130,7 +132,7 @@ import {
   SILENCE_TOOL,
   PARALLEL_TOOL_LIMIT,
   buildTools, toolsInBox,
-  dispatchTool,
+  dispatchTool, boxErrorOutcome,
   type ToolContext,
   type ToolOutcome,
   describeCall,
@@ -143,7 +145,7 @@ import type { ScopeStore } from "./scopes.ts";
 import { checkpointSummary, type DurableState } from "./durable.ts";
 import { narrowSkills, type BundleStore } from "./bundles.ts";
 import { readInstallationInstructions } from "./place.ts";
-import { agentVersionOf } from "./agent-version.ts"; import { currentTaskOf } from "./autonomy-level.ts";
+import { agentVersionOf } from "./agent-version.ts";
 import { changeNotice, readStanding, takeChanges } from "./standing.ts";
 import type { McpManager } from "./mcp.ts";
 import { TOOL_BUDGET_WARNING } from "./mcp.ts";
@@ -713,6 +715,9 @@ export type TranscriptEntry =
        * the compaction summary, which belongs to no one turn.
        */
       turnId?: string;
+      executionId?: string;
+      attempt?: number;
+      textThrough?: number;
       /**
        * Written by the host, not said by the model (INV-775): the note a turn leaves when the
        * model produced no text. In the record so a reader sees what happened; excluded from
@@ -727,6 +732,9 @@ export type TranscriptEntry =
       blocks: Anthropic.ContentBlockParam[];
       at: string;
       turnId?: string;
+      executionId?: string;
+      attempt?: number;
+      textThrough?: number;
       /** The turn ended in deliberate silence — `NothingToSay` was called — and why (INV-775). */
       silent?: { reason: string };
     }
@@ -737,6 +745,9 @@ export type TranscriptEntry =
       blocks: Anthropic.ToolResultBlockParam[];
       at: string;
       turnId?: string;
+      executionId?: string;
+      attempt?: number;
+      textThrough?: number;
     }
   /** Stands in for the entries before it when the history outgrew the context window. */
   | {
@@ -1414,7 +1425,12 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   // Held values never leave on the stream (INV-1360): the words a person reads are scrubbed here,
   // at the one door every text and interim event goes through; the record keeps `recordAs`.
   const hostHeld = hostTokens(), redactHost = outboundRedactor(hostHeld), redactOut = outboundRedactor([...(deps.vault?.heldValues() ?? []), ...hostHeld]); // this machine's web token leaves tool results too (INV-1543)
-  const emit: typeof baseEmit = event => baseEmit(redactEvent({ ...event, conversation, turnId }, redactOut));
+  let textThrough = 0;
+  const emit: typeof baseEmit = event => {
+    event = redactEvent(event, redactOut);
+    if (event.type === "text") { const textStart = textThrough; textThrough += event.delta.length; event = { ...event, textStart, textEnd: textThrough }; }
+    baseEmit(observeExecution(event, { turnId, executionId, attempt, workId, agentId: agent.id, boxId: registry.boxOf(agent.id).id, conversation, contextEpoch: registry.contextVersion(agent.id, conversation), taskBinding }, deps.turns));
+  };
   const provider = deps.provider ?? FULL_CLAUDE; let answering = provider; const triedProviders = new Set([fallbackKey(provider)]); // who answers this turn: the agent's provider until it is out of usage (INV-1578)
 
   // Recorded before anything else, so a process that dies at any point after this leaves a begin
@@ -1438,6 +1454,9 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   // inherits its work's (INV-770): every turn of one objective is one piece of work in the ledgers.
   const goal = inbound.find(message => message.goal !== undefined)?.goal;
   const workId = deps.resumeOf?.workId ?? goal?.workId ?? randomUUID();
+  const executionId = randomUUID(), attempt = deps.resumeOf?.attempt ?? 1;
+  let taskBinding = admittedTaskBinding({ agentId: agent.id, conversation, inbound, tasks: deps.tasks, goal, resume: deps.resumeOf });
+  if (deps.tasks && !taskBinding && hasAdmittedTask({ inbound, tasks: deps.tasks, goal, resume: deps.resumeOf })) throw new Error("The admitted task binding is no longer valid; no task tool was dispatched.");
   // Built once, here, because this is the only place that knows all four of the things an aside
   // has to be attributed to. Passing the ledger down instead would mean passing the agent, the
   // work and the conversation down with it, which is three more chances to pass the wrong one.
@@ -1664,7 +1683,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
         if (!safeToReplay(call.name, input)) continue;
         // Through the current policy gate, like any call (INV-798): the transcript records
         // that the call was asked for, not that it was authorised.
-        const outcome = await dispatchTool(call.name, input, {
+        const outcome = await observedReplay(call.name, input, {
           agent,
           registry,
           bus,
@@ -1678,12 +1697,12 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
           displayIndex: deps.displayIndex,
           ensureDesktop: deps.ensureDesktop,
           boxOwner: deps.boxOwner,
-          tasks: deps.tasks,
+          tasks: deps.tasks, taskBinding,
           turnId,
           toolUseId: call.id,
           conversation,
           memorySources: inbound.map(message => `message:${message.id}`),
-        });
+        }, emit);
         replayed.push({
           type: "tool_result",
           tool_use_id: call.id,
@@ -1706,7 +1725,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
           kind: "results",
           blocks: replayed.map(block => redactResult(block, redactHost)), // a resumed result is a result (INV-1543)
           at: new Date().toISOString(),
-          turnId,
+          turnId, executionId, attempt, textThrough,
         } satisfies TranscriptEntry;
         registry.appendTranscript(agent.id, entry, conversation);
         history = [...history, entry];
@@ -1761,7 +1780,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
           answeredHere.add(call.id);
         } else if (safeToReplay(call.name, input) || replaysToSameState(call.name, input)) {
           answeredHere.add(call.id);
-          const outcome = await dispatchTool(call.name, input, {
+          const outcome = await observedReplay(call.name, input, {
             agent,
             registry,
             bus,
@@ -1774,12 +1793,12 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
             displayIndex: deps.displayIndex,
             ensureDesktop: deps.ensureDesktop,
             boxOwner: deps.boxOwner,
-            tasks: deps.tasks,
+            tasks: deps.tasks, taskBinding,
             turnId,
             toolUseId: call.id,
             conversation,
             memorySources: inbound.map(message => `message:${message.id}`),
-          });
+          }, emit);
           if (outcome.approval !== undefined) {
             // The gate asked a person. The same shape as a first run: the refusal is the
             // call's result, the step is marked waiting, and it is not settled below.
@@ -1810,7 +1829,7 @@ ${outcome.text}`;
           kind: "results",
           blocks: answered.map(block => redactResult(block, redactHost)), // a resumed result is a result (INV-1543)
           at: new Date().toISOString(),
-          turnId,
+          turnId, executionId, attempt, textThrough,
         } satisfies TranscriptEntry;
         registry.appendTranscript(agent.id, entry, conversation);
         history = [...history, entry];
@@ -1828,7 +1847,7 @@ ${outcome.text}`;
         role: "user",
         text: `[host] ${told.join("\n")}`,
         at: new Date().toISOString(),
-        turnId,
+        turnId, executionId, attempt, textThrough,
       } satisfies TranscriptEntry;
       registry.appendTranscript(agent.id, entry, conversation);
       history = [...history, entry];
@@ -2109,8 +2128,8 @@ ${outcome.text}`;
 
   // Setup still belongs to the inbox. Persist the message ids before acknowledging
   // them, so startup can reconcile a crash between these two synchronous writes.
-  if (isForkConversation(conversation)) deps.pendingWork?.forks?.started(agent.id, conversation); /* a fork's first turn is a step of its chain (INV-1667) */ const agentVersion = agentVersionOf(standing, offeredSkills); const configVersion = registry.configVersions.beginTurn({ agentId: agent.id, profile: agent.profile, turnId, conversation, standing: agentVersion.standing, task: currentTaskOf({ agent, conversation, tasks: deps.tasks })?.id }); deps.turns?.begin({ // configVersion: the version this turn is held to until it ends (INV-1669)
-    id: turnId,
+  if (isForkConversation(conversation)) deps.pendingWork?.forks?.started(agent.id, conversation); /* a fork's first turn is a step of its chain (INV-1667) */ const agentVersion = agentVersionOf(standing, offeredSkills); const configVersion = registry.configVersions.beginTurn({ agentId: agent.id, profile: agent.profile, turnId, conversation, standing: agentVersion.standing, task: taskBinding?.taskId }); deps.turns?.begin({ // configVersion: the version this turn is held to until it ends (INV-1669)
+    id: turnId, executionId, boxId: registry.boxOf(agent.id).id, ...(taskBinding ? { taskBinding } : {}),
     agentId: agent.id,
     causedBy: inbound.map(message => message.id),
     ...(deps.caller?.userId !== undefined ? { principalId: deps.caller.userId } : {}),
@@ -2154,7 +2173,7 @@ ${outcome.text}`;
         role: "user",
         text: outcome.continueWith,
         at: new Date().toISOString(),
-        turnId,
+        turnId, executionId, attempt, textThrough,
         // The host's words, not the person's: compaction must never pin this as the ask
         // in place of what opened the work (INV-766).
         host: true,
@@ -2252,7 +2271,7 @@ ${outcome.text}`;
     if (spend === "warn") budgetWarningDue = true;
     if (spend === "hit" || spendHit !== undefined) { // or the agent's spend line (INV-1615): the same hand-back
       const report = withCheckpoints(spendHit?.report ?? budgetReport(budget, callsThisTurn, chinese, goal !== undefined), registry.readDurableState(agent.id, conversation));
-      registry.appendTranscript(agent.id, { role: "assistant", text: report, at: new Date().toISOString(), turnId } satisfies TranscriptEntry, conversation);
+      registry.appendTranscript(agent.id, { role: "assistant", text: report, at: new Date().toISOString(), turnId, executionId, attempt, textThrough } satisfies TranscriptEntry, conversation);
       emit({ type: "text", agentId: agent.id, agentName: agent.profile.name, delta: report });
       emit({ type: "turn_budget_hit", agentId: agent.id, calls: budget.callsUsed, limit: budget.limits.calls });
       stoppedBy = spendHit === undefined ? "turn_budget" : "spend_limit";
@@ -2285,7 +2304,7 @@ ${outcome.text}`;
         role: "user", text: buildTurnPrompt(messages), at: new Date().toISOString(),
         causedBy: messages.map(message => message.id),
         ...(messages.some(message => message.fromId === "user" && message.synthetic !== true) ? { fromPerson: true as const } : {}),
-        turnId,
+        turnId, executionId, attempt, textThrough,
       } satisfies TranscriptEntry, conversation);
     });
     if (steered.length > 0) {
@@ -2314,7 +2333,7 @@ ${outcome.text}`;
         role: "assistant",
         text: permitted.reason,
         at: new Date().toISOString(),
-        turnId,
+        turnId, executionId, attempt, textThrough,
       } satisfies TranscriptEntry, conversation);
       emit({
         type: "text",
@@ -2707,7 +2726,7 @@ ${outcome.text}`;
         role: "assistant",
         text: note,
         at: new Date().toISOString(),
-        turnId,
+        turnId, executionId, attempt, textThrough,
       } satisfies TranscriptEntry, conversation);
       emit({ type: "text", agentId: agent.id, agentName: agent.profile.name, delta: note });
       return;
@@ -2826,7 +2845,7 @@ ${outcome.text}`;
           (block): block is Anthropic.TextBlock | Anthropic.ToolUseBlock => block.type === "text" || block.type === "tool_use"
         ),
         at,
-        turnId,
+        turnId, executionId, attempt, textThrough,
         silent: { reason },
       } satisfies TranscriptEntry, conversation);
       registry.appendTranscript(agent.id, {
@@ -2838,7 +2857,7 @@ ${outcome.text}`;
           content: use.id === silence.id ? `Silence recorded: ${reason}` : `Not run: the turn ended with ${SILENCE_TOOL}.`,
         })),
         at: new Date().toISOString(),
-        turnId,
+        turnId, executionId, attempt, textThrough,
       } satisfies TranscriptEntry, conversation);
       emit({ type: "tool_start", agentId: agent.id, agentName: agent.profile.name, tool: SILENCE_TOOL, input: silence.input, toolUseId: silence.id });
       emit({ type: "tool_end", agentId: agent.id, agentName: agent.profile.name, tool: SILENCE_TOOL, toolUseId: silence.id, summary: `Silence recorded: ${reason}` });
@@ -2876,7 +2895,7 @@ ${outcome.text}`;
           kind: "blocks",
           blocks: response.content.filter((block): block is Anthropic.TextBlock => block.type === "text"),
           at: new Date().toISOString(),
-          turnId,
+          turnId, executionId, attempt, textThrough,
         } satisfies TranscriptEntry, conversation);
         messages.push({ role: "user", content: nudgeFor(reason, chinese, finalText) });
         // A verdict or an offer is answered with a demand for a tool call, which is what the
@@ -2910,7 +2929,7 @@ ${outcome.text}`;
             kind: "blocks",
             blocks: response.content.filter((block): block is Anthropic.TextBlock => block.type === "text"),
             at: new Date().toISOString(),
-            turnId,
+            turnId, executionId, attempt, textThrough,
           } satisfies TranscriptEntry, conversation);
           messages.push({
             role: "user",
@@ -2938,7 +2957,7 @@ ${outcome.text}`;
             kind: "blocks",
             blocks: response.content.filter((block): block is Anthropic.TextBlock => block.type === "text"),
             at: new Date().toISOString(),
-            turnId,
+            turnId, executionId, attempt, textThrough,
           } satisfies TranscriptEntry, conversation);
           messages.push({ role: "user", content: report });
           finishing = false;
@@ -2961,7 +2980,7 @@ ${outcome.text}`;
             kind: "blocks",
             blocks: response.content.filter((block): block is Anthropic.TextBlock => block.type === "text"),
             at: new Date().toISOString(),
-            turnId,
+            turnId, executionId, attempt, textThrough,
           } satisfies TranscriptEntry, conversation);
           const note = newerMessageNote(newer.map(message => message.text), chinese);
           registry.appendTranscript(agent.id, { role: "user", text: note, at: new Date().toISOString(), turnId, host: true } satisfies TranscriptEntry, conversation);
@@ -2996,14 +3015,14 @@ ${outcome.text}`;
             kind: "blocks",
             blocks: [{ type: "text", text: finalText }],
             at: new Date().toISOString(),
-            turnId,
+            turnId, executionId, attempt, textThrough,
             silent: { reason: "goal continuation: kept on the record, not delivered" },
           } satisfies TranscriptEntry, conversation);
         } else registry.appendTranscript(agent.id, {
           role: "assistant",
           text: finalText,
           at: new Date().toISOString(),
-          turnId,
+          turnId, executionId, attempt, textThrough,
         } satisfies TranscriptEntry, conversation);
         // A Stop hook may send the model back once: its reason becomes the next user message,
         // and `stop_hook_active` tells the hook it already did so, which is how a hook avoids
@@ -3047,7 +3066,7 @@ ${outcome.text}`;
         role: "assistant",
         text: silent,
         at: new Date().toISOString(),
-        turnId,
+        turnId, executionId, attempt, textThrough,
         host: true,
       } satisfies TranscriptEntry, conversation);
       deps.usage?.noteAnomaly({
@@ -3091,7 +3110,7 @@ ${outcome.text}`;
         // Stamped with the turn (INV-1264): the channel reply is selected by turn id, and an
         // unstamped answer was the one entry it skipped — a 15K analysis filed here was never
         // delivered, and the person saw only the closing line.
-        : { role: "assistant", text: roundText, at: new Date().toISOString(), turnId } satisfies TranscriptEntry, conversation);
+        : { role: "assistant", text: roundText, at: new Date().toISOString(), turnId, executionId, attempt, textThrough } satisfies TranscriptEntry, conversation);
     }
 
     // The opening line reaches the person while the tools run (docs/31 layer 1a). Grok Bot needs a SendToUser
@@ -3128,7 +3147,7 @@ ${outcome.text}`;
           (block.type === "text" && !filedAnswer) || block.type === "tool_use"
       ),
       at: requestedAt,
-      turnId,
+      turnId, executionId, attempt, textThrough,
     } satisfies TranscriptEntry, conversation);
     const results: Anthropic.ToolResultBlockParam[] = [];
     /** Tool-use ids whose stored text differs from what the model was shown. */
@@ -3142,11 +3161,12 @@ ${outcome.text}`;
     const runOne = async (
       toolUse: Anthropic.ToolUseBlock
     ): Promise<{ block: Anthropic.ToolResultBlockParam; recordAs?: string; commit?: { id: string; how: import("./pending-work.ts").CommitHow }[] }> => {
+      let callBinding = taskBinding;
       emit({
         type: "tool_start",
         agentId: agent.id,
         agentName: agent.profile.name,
-        tool: toolUse.name, toolUseId: toolUse.id,
+        tool: toolUse.name, toolUseId: toolUse.id, taskBinding: callBinding,
         input: toolUse.input,
       });
       toolsUsedThisTurn.add(toolUse.name);
@@ -3259,7 +3279,7 @@ ${outcome.text}`;
             hostRunner: isForkConversation(conversation) ? undefined : deps.hostRunner,
             vault: deps.vault,
             oauth: isForkConversation(conversation) ? undefined : deps.oauth,
-            tasks: deps.tasks,
+            tasks: deps.tasks, taskBinding: callBinding,
             ...(deps.goalGate !== undefined ? { goalGate: deps.goalGate } : {}),
             scopes: deps.scopes,
             mcp: isForkConversation(conversation) ? undefined : deps.mcp,
@@ -3293,7 +3313,7 @@ ${outcome.text}`;
       } catch (error) {
         outcome = {
           text: error instanceof Error ? error.message : String(error),
-          isError: true,
+          isError: true, outcome: boxErrorOutcome(error) ?? "failed",
         };
       }
       if (outcome.approval !== undefined) {
@@ -3317,12 +3337,19 @@ ${outcome.text}`;
         }
       }
 
+      const selected = takenTaskBinding({ tool: toolUse.name, args: toolUse.input, isError: outcome.isError, agentId: agent.id, tasks: deps.tasks });
+      if (selected) {
+        selected.selection = { turnId, toolUseId: toolUse.id };
+        deps.turns?.selectExecution({ event: "selection", id: turnId, recordId: randomUUID(), executionId, attempt, taskBinding: selected, toolUseId: toolUse.id, at: new Date().toISOString() });
+        taskBinding = selected; callBinding = selected;
+      }
+
       emit({
         type: "tool_end",
         agentId: agent.id,
         agentName: agent.profile.name,
-        tool: toolUse.name, toolUseId: toolUse.id,
-        isError: outcome.isError === true, summary: outcome.text.split("\n")[0]?.slice(0, 200) ?? "",
+        tool: toolUse.name, toolUseId: toolUse.id, taskBinding: callBinding,
+        executionOutcome: outcome.approval ? "waiting" : outcome.outcome ?? (outcome.isError ? "failed" : "ok"), isError: outcome.isError === true, summary: outcome.text.split("\n")[0]?.slice(0, 200) ?? "",
         screenshot: outcome.images?.[0]?.data, ...(deps.policy?.verdicts.get(toolUse.id) !== undefined ? { gate: deps.policy.verdicts.get(toolUse.id)! } : {}),
       });
 
@@ -3433,7 +3460,7 @@ ${outcome.text}`;
       kind: "results",
       blocks: storedResults,
       at: new Date().toISOString(),
-      turnId,
+      turnId, executionId, attempt, textThrough,
     } satisfies TranscriptEntry, conversation);
     // Settled only now, with the results on disk: a crash before this line leaves the
     // calls open, and open means "the result may be missing", which is exactly the case.

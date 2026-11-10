@@ -21,6 +21,7 @@
 
 import type { ForkChild, ForkEvent, ForkEvents } from "../host/fork-events.ts";
 import type { Task } from "../host/tasks.ts";
+import { randomUUID } from "node:crypto";
 
 export const FEED_CAPACITY = 2000;
 export const WAIT_MAX_SECONDS = 30;
@@ -33,6 +34,8 @@ export interface WatchEvent {
   status: string;
   stage?: string;
   pursuit?: { status: string; pausedReason?: string };
+  /** A record watermark changed; reread the authorized task, not tool bodies through this door. */
+  execution?: { revision: string };
   /** Present when the event is a fork of the task's turn moving, not the task itself. */
   fork?: { event: ForkEvent["event"]; id: string; child: string; brief: string; status: ForkChild["status"]; detail?: string };
 }
@@ -51,6 +54,7 @@ interface Waiter {
 }
 
 export class ChangeFeed {
+  private readonly epoch = randomUUID();
   private readonly events: WatchEvent[] = [];
   private readonly last = new Map<string, string>();
   private seq = 0;
@@ -90,6 +94,11 @@ export class ChangeFeed {
     });
   }
 
+  recordExecution(task: Task, revision: string): void {
+    this.push({ seq: ++this.seq, at: (this.options.now?.() ?? new Date()).toISOString(), taskId: task.id,
+      requester: task.requester, status: task.status, execution: { revision } });
+  }
+
   private push(event: WatchEvent): void {
     this.events.push(event);
     if (this.events.length > (this.options.capacity ?? FEED_CAPACITY)) this.events.shift();
@@ -98,9 +107,12 @@ export class ChangeFeed {
 
   /** What came after `since`, for this filter, now. No `since`: nothing yet, and the cursor to start from. */
   since(since: string | undefined, matches: (event: WatchEvent) => boolean): WatchResult {
-    const cursor = String(this.seq);
+    const cursor = this.epoch + ":" + this.seq;
     if (since === undefined || since === "") return { events: [], cursor, reset: false };
-    const from = Number(since);
+    const split = since.lastIndexOf(":");
+    // Old numeric cursors reset once; an old process's equal sequence is never trusted in a new epoch.
+    if (split < 0 || since.slice(0, split) !== this.epoch) return { events: [], cursor, reset: true };
+    const from = Number(since.slice(split + 1));
     if (!Number.isInteger(from) || from < 0 || from > this.seq) return { events: [], cursor, reset: true };
     const oldest = this.events[0]?.seq ?? this.seq + 1;
     const reset = from + 1 < oldest && from < this.seq;

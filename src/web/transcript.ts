@@ -20,6 +20,8 @@ import type { GateVerdict } from "../host/gate-verdict.ts";
 
 export interface DisplayTool {
   turnId?: string;
+  executionId?: string;
+  attempt?: number;
   toolUseId?: string;
   name: string;
   /** The argument that identifies the call, e.g. the command bash ran. */
@@ -82,9 +84,12 @@ export function questionOf(input: unknown): { question: string; options?: string
 
 
 /** The entry's own time, when the transcript kept one. */
-function stamp(raw: unknown): { at?: string } {
-  const at = (raw as { at?: unknown }).at;
-  return typeof at === "string" && at !== "" ? { at } : {};
+function stamp(raw: unknown): { at?: string; turnId?: string; executionId?: string; textThrough?: number } {
+  const entry = raw as { at?: unknown; turnId?: unknown; executionId?: unknown; textThrough?: unknown };
+  return { ...(typeof entry.at === "string" && entry.at ? { at: entry.at } : {}),
+    ...(typeof entry.turnId === "string" ? { turnId: entry.turnId } : {}),
+    ...(typeof entry.executionId === "string" ? { executionId: entry.executionId } : {}),
+    ...(typeof entry.textThrough === "number" ? { textThrough: entry.textThrough } : {}) };
 }
 
 export type DisplayEntry =
@@ -101,6 +106,7 @@ export type DisplayEntry =
       aside?: true;
       /** When it was said, from the transcript; absent on entries written before it was kept. */
       at?: string;
+      turnId?: string; executionId?: string; textThrough?: number;
     }
   /** A turn a teammate started: the messages, without the scaffolding around them. */
   | { kind: "peer"; messages: WakeMessage[] }
@@ -182,7 +188,7 @@ export function toDisplayEntries(
 
       const calls = blocks.filter(block => block.type === "tool_use");
       const tools: DisplayTool[] = calls.map(block => ({
-        ...(typeof entry.turnId === "string" && typeof block.id === "string" ? { turnId: entry.turnId, toolUseId: block.id } : {}),
+        ...(typeof entry.turnId === "string" && typeof block.id === "string" ? { turnId: entry.turnId, toolUseId: block.id, ...(typeof entry.executionId === "string" ? { executionId: entry.executionId } : {}), ...(typeof entry.attempt === "number" ? { attempt: entry.attempt } : {}) } : {}),
         name: String(block.name ?? "tool"),
         detail: toolDetail(String(block.name ?? ""), block.input, roster),
         ...(block.name === "AskUser" && questionOf(block.input) !== undefined
