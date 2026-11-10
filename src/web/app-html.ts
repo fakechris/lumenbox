@@ -1,3 +1,5 @@
+import { LIVE_TOOLS_JS } from "./live-tools.ts";
+
 /**
  * The web UI, as a single inlined document.
  *
@@ -3940,7 +3942,6 @@ function desktopOfflineDoc(boxName) {
 var thread = [];          // items in order, for the thread on screen
 var openAgent = null;     // the agent item still streaming, if any
 var openWork = null;      // the work item still collecting calls, if any
-var openCall = new Map(); // agentId → the call awaiting its result
 var openQuestion = null;  // the question item still waiting for an answer, if any
 var cards = new Map();    // approval / secret / computer cards on screen, by key
 var workingItem = null;   // the "on it" row shown between turn start and the first word
@@ -4399,7 +4400,9 @@ function replayEntry(id, entry, index, unread) {
     var drawn = [];
     for (var t = 0; t < entry.tools.length; t++) {
       var c = entry.tools[t];
-      openWork.calls.push({ name: c.name, detail: c.detail, result: c.result, isError: c.isError, gate: c.gate });
+      var call = { name: c.name, detail: c.detail, result: c.result, isError: c.isError, gate: c.gate, diff: c.diff, turnId: c.turnId, toolUseId: c.toolUseId };
+      openWork.calls.push(call);
+      rememberLiveCall({ agentId: id, conversation: currentConversation, turnId: c.turnId, toolUseId: c.toolUseId }, openWork, call);
       if (c.question) asked = c.question;
       // A refused ShowUI drew nothing then, so it draws nothing now.
       if (c.surface && !c.isError) drawn.push(c.surface);
@@ -4446,12 +4449,14 @@ function select(id, conversation) {
   if (switching) refreshConversations(id);
   updateComposerTarget();
   resetThread();
+  var replay = beginLiveReplay(), selectedConversation = currentConversation;
   live.delete(id); markViewed(id, currentConversation); if (window.configVersionChip) window.configVersionChip(id, currentConversation); // the configuration version this conversation runs on (INV-1669)
 
   return fetch("/api/transcript?agent=" + encodeURIComponent(id) +
       "&conversation=" + encodeURIComponent(currentConversation))
     .then(function (r) { return r.json(); })
     .then(function (entries) {
+      if (liveReplay !== replay || current !== id || currentConversation !== selectedConversation) return;
       var seenKey = "lumen-seen:" + id + ":" + currentConversation;
       var lastSeen = -1;
       try { lastSeen = Number(localStorage.getItem(seenKey) || "-1"); } catch (error) {}
@@ -4465,6 +4470,7 @@ function select(id, conversation) {
         replayEntry(id, e, i + base, lastSeen >= 0 && i + base > lastSeen);
       }
       closeOpen();
+      finishLiveReplay(replay);
       seenStoreKey = seenKey;
       seenIndex = lastSeen;
       watchUnread();
@@ -4480,7 +4486,7 @@ function select(id, conversation) {
       $("chat").scrollTop = $("chat").scrollHeight;
       landMessageFromUrl();
       return loadTemplateCardInChat(id);
-    });
+    }).catch(function (error) { finishLiveReplay(replay); throw error; });
 }
 
 /* ── the thread panel ─────────────────────────────────────────────────────────
@@ -6179,8 +6185,11 @@ function inView(e) {
   return e.agentId === current && (e.conversation || "main") === currentConversation;
 }
 
+${LIVE_TOOLS_JS}
+
 stream.onmessage = function (raw) {
   var e = JSON.parse(raw.data);
+  if (liveReplay && (inView(e) || (e.type === "message_sent" && currentConversation === "main" && (e.fromId === current || e.toId === current)))) { liveReplay.events.push(e); return; }
   var line = activityLine(e);
   if (line) feed(line.html, line.cls);
 
@@ -6217,26 +6226,7 @@ stream.onmessage = function (raw) {
     return;
   }
 
-  if (e.type === "tool_start") {
-    if (!inView(e)) return;
-    if (openAgent) { openAgent.streaming = false; openAgent.queued = false; redrawItem(openAgent); openAgent = null; }
-    if (!openWork) openWork = pushItem({ kind: "work", calls: [], startAt: new Date().toISOString(), done: false });
-    var call = { name: e.tool, detail: toolDetail(e.tool, e.input), result: "", isError: false, diff: e.diff || null };
-    openWork.calls.push(call);
-    redrawItem(openWork);
-    openCall.set(e.agentId, { work: openWork, call: call });
-    return;
-  }
-
-  if (e.type === "tool_end") {
-    var pending = openCall.get(e.agentId);
-    openCall.delete(e.agentId);
-    if (!inView(e) || !pending) return;
-    pending.call.result = e.summary || ""; pending.call.gate = e.gate || null; // the gate's verdict (INV-1664)
-    if (e.screenshot) pending.call.shot = e.screenshot;
-    redrawItem(pending.work);
-    return;
-  }
+  if (handleLiveTool(e)) return;
 
   if (e.type === "message_sent") {
     // Teammates talk in the team room, never inside someone's outside chat, so these

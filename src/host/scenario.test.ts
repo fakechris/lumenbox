@@ -45,6 +45,43 @@ import { CredentialChecks, CredentialWaits } from "./credential-waits.ts";
 import { parseSkillFile, skillFrom } from "./skills.ts";
 import { Vault } from "./vault.ts";
 
+test("a parent and its fork expose distinct call identities that survive transcript replay (INV-1784)", async () => {
+  const { toDisplayEntries } = await import("../web/transcript.ts");
+  const events: import("./turn.ts").TurnEvent[] = [];
+  let mainRound = 0, childRead = false;
+  const episode = await runEpisode({
+    team: [{ name: "Nova" }], says: ["Read notes and ask a child to check them too."],
+    files: { "/home/box/work/notes.md": "verified notes" },
+    onEvent: event => { if (event.type === "tool_start" || event.type === "tool_end") events.push(event); },
+    script: ({ system }) => {
+      if (/You are a fork/.test(system)) {
+        if (!childRead) { childRead = true; return { call: "read_file", input: { path: "/home/box/work/notes.md" } }; }
+        return { say: 'Checked the notes. HANDOFF: {"status":"done"}' };
+      }
+      const round = mainRound++;
+      if (round === 0) return { call: "Fork", input: { briefs: ["Check notes.md"], background: true } };
+      if (round === 1) return { call: "read_file", input: { path: "/home/box/work/notes.md" } };
+      return { say: "Read the notes and received the check." };
+    },
+  });
+  try {
+    const starts = events.filter(e => e.type === "tool_start");
+    const ends = events.filter(e => e.type === "tool_end");
+    assert.ok(starts.length >= 3);
+    assert.ok(new Set(starts.map(e => e.conversation)).size >= 2, "real main and child conversations executed");
+    const key = (e: import("./turn.ts").TurnEvent) => JSON.stringify([e.agentId, e.conversation, e.turnId, "toolUseId" in e ? e.toolUseId : undefined]);
+    assert.equal(new Set(starts.map(key)).size, starts.length);
+    assert.deepEqual(ends.map(key).sort(), starts.map(key).sort(), "each actual call has exactly one identified result");
+    for (const start of starts) {
+      assert.ok(start.turnId && start.toolUseId, "host emits existing stable identities");
+      const display = toDisplayEntries(episode.registry.readTranscript(start.agentId, start.conversation), []);
+      const calls = display.flatMap(e => e.kind === "tools" ? e.tools : []);
+      const stored = calls.find(c => c.turnId === start.turnId && c.toolUseId === start.toolUseId);
+      assert.ok(stored && stored.result !== undefined, "reload retains the same call and result");
+    }
+  } finally { episode.cleanup(); }
+});
+
 test("two people in one conversation receive separate turns rather than sharing one principal's execution", async () => {
   const opened: string[] = [];
   const episode = await runEpisode({
