@@ -3,10 +3,12 @@ export const TASK_FOCUS_STYLE = String.raw`
 html:has(#taskfocus:not([hidden])),body:has(> #taskfocus:not([hidden])){overflow:hidden}body:has(> #taskfocus:not([hidden])) #chat{content-visibility:hidden}#taskfocus[hidden]{display:none}#taskfocus{position:fixed;inset:40px 0 0 224px;z-index:25;background:var(--bg);display:flex;flex-direction:column;min-width:0}
 .tf-head{padding:var(--sp-5) var(--sp-6) var(--sp-3);border-bottom:1px solid var(--border);background:var(--surface)}.tf-top,.tf-status,.tf-pager,.tf-filters{gap:var(--sp-3)}.tf-top{justify-content:space-between}.tf-head h1{font-size:var(--fs-xl);line-height:1.25;font-weight:500;margin:var(--sp-4) 0 var(--sp-3);max-width:1000px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.tf-status{font-size:var(--fs-sm)}.tf-status b{font-weight:500}.tf-status span{display:inline-flex;gap:var(--sp-2);align-items:center}.tf-status i{width:var(--sp-1);height:var(--sp-1);border-radius:var(--radius-pill);background:var(--accent)}.tf-activity{font-size:var(--fs-sm);line-height:1.7;margin-top:var(--sp-3);color:var(--text-soft)}.tf-needs{padding:var(--sp-3) 0;color:var(--warn)}
 .tf-tabs{display:flex;gap:var(--sp-5);margin-top:var(--sp-4)}.tf-tabs button{background:none;border:0;border-bottom:2px solid transparent;padding:var(--sp-2) 0;font:inherit;font-size:var(--fs-md);color:var(--muted);cursor:pointer}.tf-tabs button[aria-selected=true]{color:var(--text);border-color:var(--accent)}.tf-tabs button:focus-visible,.tf-step:focus-visible{outline:2px solid var(--accent);outline-offset:var(--sp-1)}
-.tf-body{flex:1;min-height:0;overflow:auto}.tf-overview{max-width:1000px;padding:var(--sp-5) var(--sp-6);line-height:1.65}.tf-overview h2{font-size:var(--fs-md);margin:0 0 var(--sp-3);font-weight:600}.tf-overview section{margin-bottom:26px}.tf-overview p{white-space:pre-wrap;margin:var(--sp-2) 0}.tf-note{font-size:var(--fs-sm);color:var(--muted);line-height:1.6}.tf-execution{height:100%;display:flex;flex-direction:column}.tf-filters{padding:var(--sp-3) var(--sp-5);border-bottom:1px solid var(--border);font-size:var(--fs-sm)}.tf-filters .field{margin:0;display:flex;gap:var(--sp-2);align-items:center}.tf-filters label{margin:0}.tf-filters select{font:inherit;font-size:var(--fs-md);background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-input);padding:var(--sp-1);max-width:180px}.tf-split{display:grid;grid-template-columns:minmax(280px,38%) minmax(0,1fr);flex:1;min-height:0}.tf-list{overflow:auto;border-right:1px solid var(--border);padding:var(--sp-2) 0}.tf-step{display:block;width:100%;border:0;background:none;text-align:left;padding:var(--sp-3) var(--sp-5);color:var(--text);cursor:pointer;border-bottom:1px solid var(--border);font:inherit;font-size:var(--fs-sm)}.tf-step:hover{background:var(--surface-hover)}.tf-step[aria-pressed=true]{background:var(--accent-soft)}.tf-step strong{display:block;font-size:var(--fs-md);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tf-step small{display:block;color:var(--muted);font-size:var(--fs-xs);margin-top:var(--sp-1)}.tf-step .tf-failed,.tf-step .tf-unknown{color:var(--danger)}.tf-group{padding:var(--sp-3) var(--sp-5) var(--sp-1);font-size:var(--fs-xs);letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}.tf-detail{overflow:auto;padding:var(--sp-5) var(--sp-6);min-width:0}.tf-detail h2{font-size:var(--fs-lg);font-weight:500;margin:0 0 var(--sp-3)}.tf-detail h3{font-size:var(--fs-sm);font-weight:600;margin:var(--sp-5) 0 var(--sp-2)}.tf-detail pre{font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--code-bg);color:var(--code-text);padding:var(--sp-3);border-radius:var(--radius-input)}.tf-detail code{overflow-wrap:anywhere}.tf-pager{padding:var(--sp-3) var(--sp-5);border-top:1px solid var(--border);font-size:var(--fs-sm);justify-content:space-between}.tf-backsteps{display:none}.tf-empty{padding:var(--sp-5);color:var(--muted);font-size:var(--fs-md)}.tf-loading{color:var(--muted)}.tf-taskpager{padding:var(--sp-3) var(--sp-4);border-bottom:1px solid var(--border);display:flex;gap:var(--sp-2);align-items:center;font-size:var(--fs-sm)}.tf-taskpager span{flex:1}
+.tf-body{flex:1;min-height:0;overflow:auto}.tf-overview{max-width:1000px;padding:var(--sp-5) var(--sp-6);line-height:1.65}.tf-overview h2{font-size:var(--fs-md);margin:0 0 var(--sp-3);font-weight:600}.tf-overview section{margin-bottom:var(--sp-6)}.tf-overview p{margin:var(--sp-2) 0}.tf-note{font-size:var(--fs-sm);color:var(--muted);line-height:1.6}.tf-execution{height:100%;display:flex;flex-direction:column}.tf-filters{padding:var(--sp-3) var(--sp-5);border-bottom:1px solid var(--border);font-size:var(--fs-sm)}.tf-filters .field{margin:0;display:flex;gap:var(--sp-2);align-items:center}.tf-filters label{margin:0}.tf-filters select{font:inherit;font-size:var(--fs-md);background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-input);padding:var(--sp-1);max-width:180px}.tf-split{display:grid;grid-template-columns:minmax(280px,38%) minmax(0,1fr);flex:1;min-height:0}.tf-list{overflow:auto;border-right:1px solid var(--border);padding:var(--sp-2) 0}.tf-step{display:block;width:100%;border:0;background:none;text-align:left;padding:var(--sp-3) var(--sp-5);color:var(--text);cursor:pointer;border-bottom:1px solid var(--border);font:inherit;font-size:var(--fs-sm)}.tf-step:hover{background:var(--surface-hover)}.tf-step[aria-pressed=true]{background:var(--accent-soft)}.tf-step strong{display:block;font-size:var(--fs-md);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tf-step small{display:block;color:var(--muted);font-size:var(--fs-xs);margin-top:var(--sp-1)}.tf-step .tf-failed,.tf-step .tf-unknown{color:var(--danger)}.tf-group{padding:var(--sp-3) var(--sp-5) var(--sp-1);font-size:var(--fs-xs);letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}.tf-detail{overflow:auto;padding:var(--sp-5) var(--sp-6);min-width:0}.tf-detail h2{font-size:var(--fs-lg);font-weight:500;margin:0 0 var(--sp-3)}.tf-detail h3{font-size:var(--fs-sm);font-weight:600;margin:var(--sp-5) 0 var(--sp-2)}.tf-detail pre{font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--code-bg);color:var(--code-text);padding:var(--sp-3);border-radius:var(--radius-input)}.tf-detail code{overflow-wrap:anywhere}.tf-pager{padding:var(--sp-3) var(--sp-5);border-top:1px solid var(--border);font-size:var(--fs-sm);justify-content:space-between}.tf-backsteps{display:none}.tf-empty{padding:var(--sp-5);color:var(--muted);font-size:var(--fs-md)}.tf-loading{color:var(--muted)}.tf-taskpager{padding:var(--sp-3) var(--sp-4);border-bottom:1px solid var(--border);display:flex;gap:var(--sp-2);align-items:center;font-size:var(--fs-sm)}.tf-taskpager span{flex:1}
 @media(max-width:900px){#taskfocus{left:0}.tf-head{padding:var(--sp-4) var(--sp-4) var(--sp-2)}.tf-overview{padding:var(--sp-5) var(--sp-4)}.tf-split{grid-template-columns:minmax(200px,42%) minmax(0,1fr)}.tf-detail{padding:var(--sp-4)}.tf-filters{padding:var(--sp-3) var(--sp-4)}.tf-step{padding:var(--sp-3) var(--sp-3)}}
 @media(max-width:600px){.tf-split{display:flex;flex-direction:column;overflow:hidden}.tf-list{flex:1;min-height:0;max-height:none;border-right:0;border-bottom:1px solid var(--border)}.tf-detail{flex:1;min-height:0}.tf-backsteps{display:inline-block}#taskfocus.tf-detail-selected .tf-list{display:none}#taskfocus:not(.tf-detail-selected) .tf-detail{display:none}#taskfocus.tf-detail-selected .tf-filters,#taskfocus.tf-detail-selected .tf-coverage{display:none}.tf-tabs{gap:var(--sp-4)}.tf-head h1{font-size:var(--fs-xl)}.tf-status{gap:var(--sp-2)}.tf-body{overflow:hidden}.tf-overview{height:100%;overflow:auto;box-sizing:border-box}}
 .tf-export-file{gap:var(--sp-3);margin:var(--sp-2) 0}.tf-coverage{padding:var(--sp-2) var(--sp-5)}
+.tf-prose{font-size:var(--fs-body);line-height:1.75;overflow-wrap:anywhere;min-width:0}.tf-prose>:first-child{margin-top:0}.tf-prose>:last-child{margin-bottom:0}.tf-prose h1,.tf-prose h2,.tf-prose h3,.tf-prose h4,.tf-prose h5,.tf-prose h6{margin:var(--sp-5) 0 var(--sp-2);line-height:1.4;font-weight:600;font-size:var(--fs-lg)}.tf-prose h1{font-size:var(--fs-xl)}.tf-prose h3,.tf-prose h4,.tf-prose h5,.tf-prose h6{font-size:var(--fs-body)}.tf-prose p{margin:var(--sp-2) 0}.tf-prose ul,.tf-prose ol{padding-left:var(--sp-5);margin:var(--sp-2) 0}.tf-prose li{margin:var(--sp-1) 0}.tf-prose a{color:var(--accent-2)}.tf-prose code{font-family:var(--font-mono);font-size:var(--fs-md);background:var(--code-bg);color:var(--code-text);padding:var(--sp-1);border-radius:var(--radius-input)}.tf-prose pre{max-width:100%;box-sizing:border-box;overflow:auto;padding:var(--sp-4);background:var(--code-bg);border-radius:var(--radius-md)}.tf-prose pre code{padding:0;white-space:pre}.tf-prose blockquote{margin:var(--sp-3) 0;padding-left:var(--sp-4);border-left:2px solid var(--border-strong);color:var(--text-soft)}.tf-prose table{display:block;max-width:100%;overflow:auto;border-collapse:collapse;font-size:var(--fs-md);margin:var(--sp-3) 0}.tf-prose th,.tf-prose td{border:1px solid var(--border);padding:var(--sp-2);text-align:left;vertical-align:top}.tf-prose th{background:var(--surface-2)}.tf-prose img{max-width:100%;height:auto}.tf-prose hr{border:0;border-top:1px solid var(--border);margin:var(--sp-4) 0}.tf-changes{margin:var(--sp-5) 0;font-size:var(--fs-md);color:var(--text)}.tf-changes>summary{cursor:pointer;padding:var(--sp-2) 0}.tf-changes>ol{padding-left:var(--sp-5)}.tf-changes>ol>li{padding:var(--sp-3) 0;border-top:1px solid var(--border)}.tf-no-steps{display:block;overflow:auto}.tf-no-steps .tf-list{border:0;overflow:visible}.tf-no-steps .tf-detail{display:none}.tf-empty h2{font-size:var(--fs-lg);color:var(--text);font-weight:500}.tf-empty p{line-height:1.7;max-width:720px}.tf-needs:empty{display:none}.tf-activity{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tf-top,.tf-tabs{flex-shrink:0}.tf-tabs{overflow-x:auto}.tf-tabs button{white-space:nowrap}.tf-status span{flex-wrap:wrap}.tf-group{overflow-wrap:anywhere}
+
 `;
 
 export const TASK_FOCUS_JS = String.raw`(function () {
@@ -80,7 +82,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
   function header(view) {
     if (active !== view || !view.task) return;
     var task = view.task, activity = view.activity || {}, latest = view.liveAction || activity.current || activity.latest;
-    by("title").textContent = task.pursuit && task.pursuit.objective || task.title; by("title").title = by("title").textContent;
+    by("title").textContent = task.title; by("title").title = by("title").textContent;
     by("id").textContent = task.id;
     var review = task.status === "review" ? word("review") : task.status === "done" ? word("ended") : task.status === "dropped" ? word("dropped") : word("pending");
     var statuses = [["state",status(task)],["connection",word(connection())],["acceptance",review]];
@@ -103,13 +105,24 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     by("activity").textContent = ""; by("status").textContent = ""; by("needs").textContent = "";
     by("body").innerHTML = '<div class="tf-empty"><button class="btn sm" data-tf-refresh>' + word("refresh") + '</button></div>';
   }
+  function prose(text) {
+    var value = String(text == null ? "" : text), clipped = value.length > 32000;
+    return '<div class="tf-prose">' + renderMarkdown(value.slice(0,32000),{workPaths:false}) + '</div>' + (clipped ? '<p class="tf-note">' + word("truncated") + '</p>' : '');
+  }
+  function changes(task) {
+    var rows = task.history || [];
+    if (!rows.length) return '';
+    return '<details class="tf-changes"><summary>' + word("changes") + ' · ' + rows.length + '</summary><p class="tf-note">' + word("changesNote") + '</p><ol>' + rows.slice().reverse().map(function (row) {
+      return '<li><div class="tf-note">' + safe(new Date(row.at).toLocaleString()) + ' · ' + safe(nameOf(row.by) || row.by) + (row.status ? ' · ' + safe(t("ui.tf.board." + row.status)) : '') + '</div>' + prose(row.note) + '</li>';
+    }).join('') + '</ol></details>';
+  }
   function overview(view) {
-    var task = view.task, html = '<div class="tf-overview"><section><h2>' + word("goal") + '</h2><p>' + safe(task.pursuit && task.pursuit.objective || task.description || task.title) + '</p>';
-    if (task.contract) html += ["outcome","scope","constraints"].filter(function (key) { return task.contract[key]; }).map(function (key) { return '<h2>' + t("ui.tf.contract." + key) + '</h2><p>' + safe(task.contract[key]) + '</p>'; }).join("");
+    var task = view.task, html = '<div class="tf-overview"><section><h2>' + word("goal") + '</h2>' + prose(task.pursuit && task.pursuit.objective || task.description || task.title);
+    if (task.contract) html += ["outcome","scope","constraints"].filter(function (key) { return task.contract[key]; }).map(function (key) { return '<h2>' + t("ui.tf.contract." + key) + '</h2>' + prose(task.contract[key]); }).join("");
     html += '</section><section><h2>' + word("state") + '</h2><p>' + safe(status(task)) + '</p>' + '<div id="tf-progress">' + (window.taskProgressHtml ? window.taskProgressHtml(task) : '<p class="tf-note">' + word("phaseOnly") + '</p>') + '</div></section>';
     var reply = view.record && view.record.reply;
-    if (reply) html += '<section><h2>' + word("latestReply") + '</h2><p>' + safe(reply.text) + '</p><div class="tf-note">' + safe(reply.by) + ' · ' + safe(new Date(reply.at).toLocaleString()) + '</div></section>';
-    return html + '<section class="tf-note">' + word("coverage") + '</section></div>';
+    if (reply) html += '<section><h2>' + word("latestReply") + '</h2>' + prose(reply.text) + '<div class="tf-note">' + safe(reply.by) + ' · ' + safe(new Date(reply.at).toLocaleString()) + '</div></section>';
+    return html + changes(task) + '<section class="tf-note">' + word("coverage") + '</section></div>';
   }
   function artifacts(view) {
     var task = view.task, checks = task.pursuit && task.pursuit.checklist || [];
@@ -118,7 +131,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
       var states = {open:"queued",doing:"working",blocked:"needs",review:"review",done:"ended",dropped:"dropped"};
       html += '<section><div class="field"><label for="tf-task-status">' + word("taskStatus") + '</label><select id="tf-task-status" data-tf-status>' + Object.keys(states).map(function (value) { return '<option value="' + value + '"' + (value === task.status ? ' selected' : '') + '>' + word(states[value]) + '</option>'; }).join("") + '</select></div></section>';
     }
-    if (task.contract) html += ["acceptance","verification"].filter(function (key) { return task.contract[key]; }).map(function (key) { return '<section><h2>' + t("ui.tf.contract." + key) + '</h2><p>' + safe(task.contract[key]) + '</p></section>'; }).join("");
+    if (task.contract) html += ["acceptance","verification"].filter(function (key) { return task.contract[key]; }).map(function (key) { return '<section><h2>' + t("ui.tf.contract." + key) + '</h2>' + prose(task.contract[key]) + '</section>'; }).join("");
     if (checks.length) html += '<section><h2>' + word("checklist") + '</h2>' + checks.map(function (item) { return '<p>' + safe(item.text) + (item.verdict ? ' · ' + safe(item.verdict) : '') + '</p>'; }).join("") + '</section>';
     ["claimAccountHtml","orgPromoteHtml","divisionHtml","taskDepsHtml","configVersionsHtml"].forEach(function (fn) { if (window[fn]) html += window[fn](task); });
     if (task.recoveries && task.recoveries.length) html += '<section><h2>' + word("attempt") + '</h2>' + task.recoveries.map(function (attempt) { return '<p>' + safe(attempt.operationId) + ' · ' + word("attempt") + ' ' + attempt.attempt + ' · ' + safe(attempt.status) + '</p>'; }).join("") + '</section>';
@@ -188,10 +201,10 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     if (active !== view || !view.task) return;
     header(view); by("body").setAttribute("aria-labelledby","tf-tab-" + view.tab);
     if (view.tab !== "execution") { by("body").innerHTML = view.tab === "artifacts" ? artifacts(view) : view.tab === "costs" ? costs(view) : overview(view); return; }
-    by("body").innerHTML = '<div class="tf-execution"><div class="ui-row tf-filters">' + filters(view) + '</div><div class="tf-note tf-coverage" id="tf-coverage"></div><div class="tf-split"><div id="tf-list" class="tf-list" aria-label="' + word("execution") + '"></div><article id="tf-detail" class="tf-detail"></article></div><div class="ui-row tf-pager"><button class="btn sm ghost" data-tf-prev>' + word("previous") + '</button><span id="tf-range"></span><button class="btn sm ghost" data-tf-next>' + word("next") + '</button></div></div>';
+    by("body").innerHTML = '<div class="tf-execution"><div class="ui-row tf-filters">' + filters(view) + '</div><div class="tf-note tf-coverage" id="tf-coverage"></div><div class="tf-split" id="tf-split"><div id="tf-list" class="tf-list" aria-label="' + word("execution") + '"></div><article id="tf-detail" class="tf-detail"></article></div><div class="ui-row tf-pager"><button class="btn sm ghost" data-tf-prev>' + word("previous") + '</button><span id="tf-range"></span><button class="btn sm ghost" data-tf-next>' + word("next") + '</button></div></div>';
     root.classList.toggle("tf-detail-selected",!!view.selected && view.mobileDetail !== false);
     paintPage(view);
-    if (view.selected) loadDetail(view, view.selected); else by("detail").textContent = word("select");
+    if (view.selected) loadDetail(view, view.selected); else if (!view.page || view.page.steps.length) by("detail").textContent = word("select");
   }
   function captureListReading(view) {
     var list = by("list"); if (!list || !view.page) return;
@@ -208,7 +221,8 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     by("range").textContent = page.from + '–' + page.to + ' / ' + page.total;
     root.querySelector("[data-tf-prev]").disabled = !page.previousCursor; root.querySelector("[data-tf-next]").disabled = !page.nextCursor;
     var retained = new Set(), lastGroup = "";
-    list.querySelectorAll(".tf-group,.tf-empty").forEach(function (node) { node.remove(); });
+    list.querySelectorAll(page.steps.length ? ".tf-group,.tf-empty" : ".tf-group").forEach(function (node) { node.remove(); });
+    if (page.steps.length) list.__emptyHtml = null;
     page.steps.forEach(function (step) {
       retained.add(step.id);
       var group = step.role + ' · ' + step.workId + ' · ' + step.conversation + ' · ' + step.attempt;
@@ -221,7 +235,14 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     });
     list.querySelectorAll("[data-tf-step]").forEach(function (node) { if (view.rowNodes.get(node.getAttribute("data-tf-step")) !== node) node.remove(); });
     view.rowNodes.forEach(function (node,id) { if (!retained.has(id)) { node.remove(); view.rowNodes.delete(id); } });
-    if (!page.steps.length) list.innerHTML = '<div class="tf-empty">' + word("empty") + '</div>';
+    by("split").classList.toggle("tf-no-steps",!page.steps.length);
+    if (!page.steps.length) {
+      root.classList.remove("tf-detail-selected");
+      var filtered = Object.keys(view.filters).some(function (key) { return !!view.filters[key]; });
+      var emptyHtml = '<div class="tf-empty"><h2>' + word(filtered ? "empty" : "noActivity") + '</h2><p>' + word(filtered ? "filterNote" : "noStepsNote") + '</p><div class="ui-row">' + (filtered ? '<button class="btn sm" data-tf-clear>' + word("clear") + '</button>' : '') + (view.task.assigneeId ? '<button class="btn sm ghost" data-tf-conversation>' + word("conversation") + '</button>' : '') + '</div>' + changes(view.task) + '</div>';
+      if (list.__emptyHtml !== emptyHtml) { list.innerHTML = emptyHtml; list.__emptyHtml = emptyHtml; }
+      by("detail").textContent = "";
+    }
     var anchor = view.readingAnchor && view.rowNodes.get(view.readingAnchor.id);
     if (anchor) list.scrollTop += anchor.getBoundingClientRect().top - list.getBoundingClientRect().top - view.readingAnchor.offset;
     else if (view.listTop !== undefined) list.scrollTop = view.listTop;
@@ -346,6 +367,9 @@ export const TASK_FOCUS_JS = String.raw`(function () {
   function click(event) {
     if (!active) return;
     var node = event.target.closest("button"); if (!node) return;
+    if (node.hasAttribute("data-tf-clear") && active) {
+      event.preventDefault(); cancelExport(active); active.detailGeneration++; if (active.detailController) active.detailController.abort(); root.classList.remove("tf-detail-selected"); active.filters = {}; active.selected = ""; active.detail = null; active.readingAnchor = null; active.page = null; active.rowNodes.clear(); active.mobileDetail = false; remember(active); render(active); loadPage(active,null,null,true); return;
+    }
     if (node.hasAttribute("data-tf-export")) { createExport(active); return; }
     if (node.hasAttribute("data-tf-list")) { active.mobileDetail = false; root.classList.remove("tf-detail-selected"); paintPage(active); return; }
     if (node.hasAttribute("data-tf-close")) { close(true); return; }

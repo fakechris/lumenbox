@@ -13,6 +13,8 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import markdownit from "markdown-it";
 import { a2uiPath, MARKDOWN_OPTIONS, vendorPath } from "./markdown.ts";
+import { APP_PAGE } from "./page-locale.ts";
+import { runInNewContext } from "node:vm";
 
 const md = markdownit(MARKDOWN_OPTIONS);
 
@@ -30,6 +32,27 @@ test("links that could execute are not linked", () => {
 
   const safe = md.render("[docs](https://example.com/a?b=1)");
   assert.ok(safe.includes('href="https://example.com/a?b=1"'), safe);
+});
+
+test("task prose uses the shared safe renderer without opening paths in the selected agent's box", () => {
+  const page = APP_PAGE("en");
+  const source = /function renderMarkdown\(text, options\) \{[\s\S]*?\n\}/.exec(page)?.[0];
+  assert.ok(source);
+  const scope = {
+    md: md as typeof md | null,
+    esc: (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"),
+    linkifyWorkPaths: () => "SELECTED AGENT PATH",
+  };
+  const render = runInNewContext(`${source}; renderMarkdown`, scope) as (text: string, options?: { workPaths: boolean }) => string;
+  const input = "## Request\n\n**Verify** `research/report.md`\n\n<img src=x onerror=alert(1)>\n\n[unsafe](javascript:alert(1))";
+  const html = render(input, { workPaths: false });
+  assert.match(html, /<h2>Request<\/h2>/);
+  assert.match(html, /<strong>Verify<\/strong>/);
+  assert.doesNotMatch(html, /<img|href="javascript:|SELECTED AGENT/);
+  assert.equal(render(input), "SELECTED AGENT PATH", "chat retains its existing path behavior");
+  scope.md = null;
+  assert.match(render(input, { workPaths: false }), /&lt;img/);
+  assert.doesNotMatch(render(input, { workPaths: false }), /SELECTED AGENT/);
 });
 
 test("tables render as tables", () => {
