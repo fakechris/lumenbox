@@ -80,8 +80,9 @@ function readTaskBoard(state,force,other) {
     if (!state.refreshIds || full) { state.ids = data.tasks.map(function (task) { return task.id; }); state.next = data.nextCursor; }
     else { state.ids = state.ids.filter(function (id) { return data.tasks.some(function (task) { return task.id === id; }); }); if (!state.stack.length && JSON.stringify(data.head) !== JSON.stringify(state.ids)) state.dirty = true; }
     state.total = data.total; state.refreshIds = true; $("taskboard-error").hidden = true; paintTaskBoard(data.tasks,state,other);
-  }).catch(function () {
+  }).catch(function (error) {
     if (generation !== state.generation || key !== boardKey()) return;
+    if ([401,403,404].indexOf(error.status) >= 0) { resetBoardPage(taskBoardState,"tasklist"); resetBoardPage(taskOtherState,"taskotherlist"); $("taskothers").open = false; }
     state.dirty = true; $("taskboard-error").hidden = false; taskBoardPager(state,other);
   }).finally(function () { if (state.loading === reading) state.loading = null; });
   state.loading = reading; return reading;

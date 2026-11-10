@@ -25,6 +25,7 @@ class Element {
 /** Execute the actual workspace with controlled network completion order; no product state is mocked inside it. */
 function workspace(me: {role:string;identity?:string|null} = {role:"admin",identity:null}) {
   const nodes = new Map<string,Element>(), storage = new Map<string,string>();
+  const notes: ReturnType<typeof deferred>[] = [];
   const mutations: {body:Record<string,unknown>;read:ReturnType<typeof deferred>}[] = [];
   const itemReads: ReturnType<typeof deferred>[] = [], costReads: ReturnType<typeof deferred>[] = [], exportReads: ReturnType<typeof deferred>[] = [];
   let root: Element;
@@ -40,7 +41,7 @@ function workspace(me: {role:string;identity?:string|null} = {role:"admin",ident
     sessionStorage:{getItem:(key:string)=>storage.get(key)??null,setItem:(key:string,value:string)=>storage.set(key,value)},
     history:{replaceState:(_:unknown,_title:string,url:URL)=>{location.href=String(url);},pushState:(_:unknown,_title:string,url:URL)=>{location.href=String(url);}},
     openTask:"t1",current:"a",currentConversation:"main",t:(key:string)=>key,esc:(text:unknown)=>String(text),nameOf:(id:string)=>id,
-    renderMarkdown:(text:string)=>"<p>"+text+"</p>",attentionRow:()=>"",refreshTasks:()=>Promise.resolve(),refresh:()=>Promise.resolve(),toolDetail:()=>"",feed:()=>{},showTab:()=>{},select:()=>Promise.resolve(),
+    askInline:()=>{const read=deferred();notes.push(read);return read.promise;},renderMarkdown:(text:string)=>"<p>"+text+"</p>",attentionRow:()=>"",refreshTasks:()=>Promise.resolve(),refresh:()=>Promise.resolve(),toolDetail:()=>"",feed:()=>{},showTab:()=>{},select:()=>Promise.resolve(),
     fetch:(path:string,options?:{body?:string})=>{
       if(path==="/api/tasks/update"){const read=deferred();mutations.push({body:JSON.parse(options?.body??"{}"),read});return read.promise;}
       if(path==="/api/me")return Promise.resolve({ok:true,json:async()=>me});
@@ -52,7 +53,8 @@ function workspace(me: {role:string;identity?:string|null} = {role:"admin",ident
   };
   runInNewContext(TASK_FOCUS_JS,scope);
   const reply=(body:unknown,status=200)=>({ok:status===200,status,json:async()=>body});
-  return {window,location,mutations,itemReads,costReads,exportReads,nodes,reply,
+  return {window,location,notes,mutations,itemReads,costReads,exportReads,nodes,reply,
+    note:()=>{const button=new Element();button.setAttribute("data-tf-note","");root!.handlers.get("click")!({target:button});},
     accept:()=>{const button=new Element();button.setAttribute("data-tf-accept","");root!.handlers.get("click")!({target:button});},
     export:()=>{const button=new Element();button.setAttribute("data-tf-export","");root!.handlers.get("click")!({target:button});},
     close:()=>{const button=new Element();button.setAttribute("data-tf-close","");root!.handlers.get("click")!({target:button});}};
@@ -126,4 +128,10 @@ test("review is an explicit authorized action and denied or coerced results neve
   assert.match(owner.nodes.get("tf-needs")!.innerHTML,/Review permission changed/);
   owner.accept();owner.mutations[1]!.read.resolve(owner.reply({task,note:"Still awaiting independent review"}));await tick();await tick();
   assert.match(owner.nodes.get("tf-needs")!.innerHTML,/Still awaiting independent review/);assert.match(owner.nodes.get("tf-body")!.innerHTML,/data-tf-accept/);
+  owner.note();owner.close();owner.window.openTaskFocus("t1",false);await tick();owner.itemReads[1]!.resolve(owner.reply({task}));await tick();
+  owner.notes[0]!.resolve("Stale requested changes");await tick();assert.equal(owner.mutations.length,2,"a note prompt from an older opening cannot mutate a reopened task");
+  owner.accept();owner.close();owner.window.openTaskFocus("t1",false);await tick();owner.itemReads[2]!.resolve(owner.reply({task}));await tick();owner.accept();
+  owner.mutations[2]!.read.resolve(owner.reply({task:{...task,status:"done"}}));await tick();await tick();
+  assert.match(owner.nodes.get("tf-body")!.innerHTML,/data-tf-accept disabled/,"an older finalizer cannot unlock a newer pending action");
+  owner.mutations[3]!.read.resolve(owner.reply({task}));await tick();await tick();
 });

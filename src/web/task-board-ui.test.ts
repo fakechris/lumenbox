@@ -43,4 +43,8 @@ test("task reading follows agent and conversation, fences late responses, and on
   const decision=runInNewContext('taskBoardMarkup({id:"pending",title:"A decision",status:"doing",updatedAt:"2026-11-10",closeProposal:{}})',scope);
   assert.match(decision,/Approve closure or keep this task open/);assert.match(decision,/ui.tc.unlinked/);
   scope.window.openTeamTasks();await tick();assert.equal(reads[3]!.query.get("agent"),null);assert.equal(reads[3]!.query.get("conversation"),null);
+  reads[3]!.resolve(answer("TEAM PRIVATE"));await tick();
+  runInNewContext("refreshTasks()",scope);await tick();reads[4]!.resolve({ok:false,status:403,json:async()=>({error:"Access revoked"})});await tick();
+  assert.equal(node("tasklist").children.length,0,"a denied refresh must clear previously readable rows");
+  assert.equal(runInNewContext("taskOtherState.nodes.size",scope),0);
 });
