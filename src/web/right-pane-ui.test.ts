@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { runInNewContext } from "node:vm";
-import { ACTIVITY_FEED_JS } from "./right-pane-ui.ts";
+import { ACTIVITY_FEED_JS, ATTENTION_PANEL_JS } from "./right-pane-ui.ts";
 
 test("activity stays bounded and a live failure remains visible while collapsed or reading older entries", () => {
   class Element {
@@ -37,4 +37,32 @@ test("activity stays bounded and a live failure remains visible while collapsed 
   nodes.feed!.scrollTop = nodes.feed!.scrollHeight;
   nodes.feed!.handlers.get("scroll")!();
   assert.equal(nodes["activity-unread"]!.textContent, "", "reading the latest entries clears the indicator");
+});
+
+
+test("a late attention response cannot restore stale actions after a newer failure, or hide a newer success", async () => {
+  const nodes = new Map<string, { style: {display: string}; hidden: boolean; textContent: string; innerHTML: string; disabled: boolean; firstElementChild: null }>();
+  const node = (id: string) => {
+    if (!nodes.has(id)) nodes.set(id, { style: {display:""}, hidden:true, textContent:"", innerHTML:"", disabled:false, firstElementChild:null });
+    return nodes.get(id)!;
+  };
+  const reads: ((response: unknown) => void)[] = [];
+  const scope = {
+    $:node, window:{}, t:(key:string)=>key, esc:(text:unknown)=>String(text),
+    looseItems:()=>[], document:{addEventListener:()=>{},querySelector:node},
+    fetch:()=>new Promise(resolve=>reads.push(resolve)),
+  };
+  const render = runInNewContext(`${ATTENTION_PANEL_JS}; renderAttention`,scope) as () => Promise<void>;
+  const ok = (title: string) => ({ok:true,json:async()=>({mine:[{title,decision:true}]})});
+  const old = render(), latest = render();
+  reads[1]!({ok:false}); await latest;
+  reads[0]!(ok("STALE PRIVATE ACTION")); await old;
+  assert.equal(node("attention-error").hidden,false);
+  assert.equal(node("attention-count").textContent,"?");
+  assert.doesNotMatch(node("needsme").innerHTML,/STALE/);
+  const earlier = render(), retry = render();
+  reads[3]!(ok("Current readable action")); await retry;
+  reads[2]!({ok:false}); await earlier;
+  assert.equal(node("attention-error").hidden,true);
+  assert.equal(node("attention-count").textContent,"0");
 });

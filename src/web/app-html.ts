@@ -920,6 +920,7 @@ ${AGENT_ROW_STYLE}
 </div>
 
 <div class="pane" id="middle">
+  <button class="ui-link task-return" data-task-list>{{ui.tf.allTasks}}</button>
   <div id="setupcard" style="display:none"></div>
   <div class="paneheader">
     <span class="lead">
@@ -4997,6 +4998,7 @@ filesView.addEventListener("drop", function (event) {
 
 /** Which of the four views the right-hand pane is showing. */
 function showTab(which) {
+  document.body.classList.toggle("task-chat-visible",which === "desktop" && (document.body.classList.contains("task-board-visible") || document.body.classList.contains("task-chat-visible")));
   document.body.classList.toggle("task-board-visible",which === "tasks");
   $("desktopview").style.display = which === "desktop" ? "" : "none";
   $("filesview").style.display = which === "files" ? "flex" : "none";
