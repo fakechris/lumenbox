@@ -10,8 +10,8 @@ class Element {
   classList={toggle:()=>{}};
   set textContent(_value:string){this.children=[];} get textContent(){return "";}
   set innerHTML(value:string){this.html=value;} get innerHTML(){return this.html;}
-  get firstElementChild(){return this.children[0]??null;}
-  get nextElementSibling(){const list=this.parent?.children??[];return list[list.indexOf(this)+1]??null;}
+  get firstElementChild():Element|null{return this.children[0]??null;}
+  get nextElementSibling():Element|null{const list=this.parent?.children??[];return list[list.indexOf(this)+1]??null;}
   setAttribute(key:string,value:string){this.attrs.set(key,value);}
   contains(){return false;} before(){} querySelector(){return new Element();} querySelectorAll(){return [];}
   appendChild(child:Element){this.insertBefore(child,null);}
@@ -39,5 +39,8 @@ test("task reading follows agent and conversation, fences late responses, and on
   node("taskothers").open=true;node("taskothers").handlers.get("toggle")!();await tick();
   assert.equal(reads[2]!.query.get("other"),"1");assert.equal(reads[2]!.query.get("agent"),"b");assert.equal(reads[2]!.query.get("conversation"),"second");
   reads[2]!.resolve(answer("B OTHER"));await tick();assert.match(node("taskotherlist").children[0]!.innerHTML,/B OTHER/);
+  scope.window.lastAttention.mine=[{ref:"pending",kind:"close-proposal",detail:"Approve closure or keep this task open",deadline:"2026-11-11"}];
+  const decision=runInNewContext('taskBoardMarkup({id:"pending",title:"A decision",status:"doing",updatedAt:"2026-11-10",closeProposal:{}})',scope);
+  assert.match(decision,/Approve closure or keep this task open/);assert.match(decision,/ui.tc.unlinked/);
   scope.window.openTeamTasks();await tick();assert.equal(reads[3]!.query.get("agent"),null);assert.equal(reads[3]!.query.get("conversation"),null);
 });

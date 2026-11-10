@@ -40,7 +40,7 @@ export function taskListRoute(route: string, url: URL, res: ServerResponse, deps
 }): boolean {
   if (route !== "GET /api/tasks/list" && route !== "GET /api/tasks/item") return false;
   const other = url.searchParams.get("other") === "1";
-  const available = deps.tasks().filter(deps.allowed).filter(task => !url.searchParams.has("agent") || task.assigneeId === url.searchParams.get("agent")).filter(task => !url.searchParams.has("conversation") || ((task.conversation ?? "main") === url.searchParams.get("conversation")) !== other);
+  const available = deps.tasks().filter(deps.allowed).filter(task => !url.searchParams.has("agent") || task.assigneeId === url.searchParams.get("agent")).filter(task => !url.searchParams.has("conversation") || (task.conversation === url.searchParams.get("conversation")) !== other);
   if (route.endsWith("/item")) {
     const task = available.find(task => task.id === url.searchParams.get("task"));
     deps.send(res, task ? 200 : 404, task ? { task: deps.detail(task) } : apiError("task-none")); return true;

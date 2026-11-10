@@ -29,9 +29,12 @@ test("1600-task board reads bounded pages across updates, scopes and authorizati
     assert.equal(new Set(ids).size,1600);assert.equal(ids.length,1600);
     assert.equal((await read("/api/tasks/item?task=t1")).body.task!.id,"t1");
     assert.equal((await read("/api/tasks/list?agent=a&conversation=chat")).body.total,800);
+    const unlinked=tasks.create({title:"Older unlinked task",requester:"p",assigneeId:"a"})!;
+    assert.equal((await read("/api/tasks/list?agent=a&conversation=main")).body.total,0,"missing association is not main");
     const other = await read("/api/tasks/list?agent=a&conversation=chat&other=1");
-    assert.equal(other.body.total,800);
-    assert.ok(other.body.tasks.every(task=>tasks.get(task.id)!.conversation==="other"),"other-conversation pages cannot include the active conversation");
+    assert.equal(other.body.total,801);
+    assert.ok(other.body.tasks.some(task=>task.id===unlinked.id),"unlinked work is discoverable among other records");
+    assert.ok(other.body.tasks.every(task=>tasks.get(task.id)!.conversation!=="chat"),"other-conversation pages cannot include the active conversation");
     assert.equal((await read("/api/tasks/list?agent=a&conversation=chat&cursor="+encodeURIComponent(other.body.nextCursor!))).status,409,"opposite conversation scopes cannot reuse cursors");
     assert.equal((await read("/api/tasks/list?cursor="+encodeURIComponent(first.body.nextCursor!))).status,409,"query changes cannot reuse a cursor");
     allowed=false;

@@ -8,8 +8,11 @@ export const TASK_BOARD_JS = String.raw`
 function taskBoardMarkup(task) {
   var state = t("ui.tf.board." + task.status), progress = task.progress && window.taskProgressHtml ? progressLines(task.progress,MSG_LOCALE)[0] : "";
   var meta = taskBoardState.mode === "team" ? esc(task.assigneeId ? nameOf(task.assigneeId) : t("ui.app.unassigned")) + ' · ' : '';
+  var live = task.status !== "done" && task.status !== "dropped";
+  var decision = live && (window.lastAttention && window.lastAttention.mine || []).find(function (item) { return item.ref === task.id && (item.kind !== "review" || task.status === "review") && (item.kind !== "close-proposal" || task.closeProposal); });
+  var owed = decision ? decision.detail + (decision.deadline ? ' · ' + new Date(decision.deadline).toLocaleString() : '') : "";
   var hint = task.proposedBy ? t("ui.tc.proposal") : task.waitingOn || (task.status === "review" ? t("ui.tc.awaitReview") : progress ? "" : t("ui.tc.readDetail"));
-  return '<article class="task-row"><div class="task-reading-status task-status-' + esc(task.status) + '">' + esc(task.proposedBy ? t("ui.app.proposed") : state) + '</div><a href="#" class="task-title" data-open="' + esc(task.id) + '">' + esc(task.title) + '</a>' + (progress ? '<p class="task-meta">' + esc(progress) + '</p>' : '') + (hint ? '<p class="dim task-meta task-preview">' + esc(hint) + '</p>' : '') + '<div class="task-card-footer">' + meta + esc(new Date(task.updatedAt).toLocaleString()) + '</div><a href="#" class="task-reading-action" data-open="' + esc(task.id) + '">' + esc(t(task.status === "review" ? "ui.tc.viewResult" : "ui.tc.viewTask")) + ' →</a></article>';
+  return '<article class="task-row"><div class="task-reading-status task-status-' + esc(task.status) + '">' + esc(task.proposedBy ? t("ui.app.proposed") : state) + '</div><a href="#" class="task-title" data-open="' + esc(task.id) + '">' + esc(task.title) + '</a>' + (progress ? '<p class="task-meta">' + esc(progress) + '</p>' : '') + (hint ? '<p class="dim task-meta task-preview">' + esc(hint) + '</p>' : '') + (owed ? '<p class="task-meta task-warn task-preview">' + esc(t("ui.app.needs-you")) + ' ' + esc(owed) + '</p>' : '') + '<div class="task-card-footer">' + (task.conversation ? '' : esc(t("ui.tc.unlinked")) + ' · ') + meta + esc(new Date(task.updatedAt).toLocaleString()) + '</div><a href="#" class="task-reading-action" data-open="' + esc(task.id) + '">' + esc(t(task.status === "review" ? "ui.tc.viewResult" : "ui.tc.viewTask")) + ' →</a></article>';
 }
 function newBoardPage() { return {ids:[],nodes:new Map(),cursor:null,next:null,stack:[],query:"",loading:null,generation:0,total:0,dirty:false,refreshIds:false}; }
 var taskBoardState = Object.assign(newBoardPage(),{mode:"context",context:""}), taskOtherState = newBoardPage();
@@ -20,7 +23,7 @@ function resetBoardPage(state,list) {
 }
 function taskScopeHeader() {
   var team = taskBoardState.mode === "team", member = current ? nameOf(current) : "";
-  $("taskscope-title").textContent = team ? t("ui.tc.team") : t("ui.tc.memberTasks",{name:member});
+  $("taskscope-title").textContent = team ? t("ui.tc.team") : current ? t("ui.tc.memberTasks",{name:member}) : t("ui.page.tasks");
   var conv = typeof conversationLabel === "function" ? conversationLabel((typeof convLoaded !== "undefined" ? convLoaded : []).find(function (c) { return c.id === currentConversation; }) || {id:currentConversation || "main"}) : currentConversation || "main";
   $("taskscope-note").textContent = team ? t("ui.tc.teamNote") : current ? t("ui.tc.conversation",{name:conv}) : t("ui.tc.chooseMember");
   $("taskscope-back").hidden = !team || !current; $("taskothers").hidden = team || !current;

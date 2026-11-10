@@ -83,7 +83,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     by("id").textContent = task.id;
     var review = task.status === "review" ? word("review") : task.status === "done" ? word("ended") : task.status === "dropped" ? word("dropped") : word("pending");
     var statuses = [["state",status(task)],["connection",word(connection())],["acceptance",review]];
-    root.querySelector("[data-tf-conversation]").disabled = !task.assigneeId;
+    root.querySelector("[data-tf-conversation]").disabled = !task.assigneeId || !task.conversation;
     by("status").innerHTML = statuses.map(function (pair) { return '<span><i></i><b>' + word(pair[0]) + '</b> ' + safe(pair[1]) + '</span>'; }).join("");
     by("activity").textContent = word("action") + ": " + actionName(latest) + (latest && (latest.endedAt || latest.startedAt) ? " · " + word("activity") + " " + new Date(latest.endedAt || latest.startedAt).toLocaleString() : "");
     var terminal = task.status === "done" || task.status === "dropped";
@@ -243,7 +243,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     if (!page.steps.length) {
       root.classList.remove("tf-detail-selected");
       var filtered = Object.keys(view.filters).some(function (key) { return !!view.filters[key]; });
-      var emptyHtml = '<div class="tf-empty"><h2>' + word(filtered ? "empty" : "noActivity") + '</h2><p>' + word(filtered ? "filterNote" : "noStepsNote") + '</p><div class="ui-row">' + (filtered ? '<button class="btn sm" data-tf-clear>' + word("clear") + '</button>' : '') + (view.task.assigneeId ? '<button class="btn sm ghost" data-tf-conversation>' + word("conversation") + '</button>' : '') + '</div>' + changes(view.task) + '</div>';
+      var emptyHtml = '<div class="tf-empty"><h2>' + word(filtered ? "empty" : "noActivity") + '</h2><p>' + word(filtered ? "filterNote" : "noStepsNote") + '</p><div class="ui-row">' + (filtered ? '<button class="btn sm" data-tf-clear>' + word("clear") + '</button>' : '') + (view.task.assigneeId && view.task.conversation ? '<button class="btn sm ghost" data-tf-conversation>' + word("conversation") + '</button>' : '') + '</div>' + changes(view.task) + '</div>';
       if (list.__emptyHtml !== emptyHtml) { list.innerHTML = emptyHtml; list.__emptyHtml = emptyHtml; }
       by("detail").textContent = "";
     }
@@ -345,7 +345,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     cancelExport(active); var view = viewFor(id); cancelExport(view);
     if (!window.taskFocusVisible && typeof captureEventReading === "function") window.taskBackReading = { agent:current,conversation:currentConversation,reading:captureEventReading($("chat")) };
     view.generation++; view.detailGeneration++; if (view.detailController) view.detailController.abort(); view.task = null;
-    active = view; window.taskFocusVisible = true; openTask = id; root.hidden = false; view.detail = null; view.page = null; view.activity = null; view.liveAction = null; view.record = null; view.role = null; view.actor = null; view.actionMessage = ""; view.cost = null; view.costGeneration = (view.costGeneration || 0) + 1;
+    active = view; window.taskFocusVisible = true; openTask = id; root.hidden = false; view.detail = null; view.page = null; view.activity = null; view.liveAction = null; view.record = null; view.role = null; view.actor = null; view.actionMessage = ""; view.actionBusy = false; view.cost = null; view.costGeneration = (view.costGeneration || 0) + 1;
     var openGeneration = view.openGeneration = (view.openGeneration || 0) + 1;
     get("/api/me").then(function (me) { if (active !== view || view.openGeneration !== openGeneration) return; view.role = me.role || "viewer"; view.actor = me.identity === null ? "web" : typeof me.identity === "string" ? me.identity : null; if (view.task) header(view); if (view.task && view.tab === "artifacts") render(view); if (view.detail && view.tab === "execution") syncApproval(view,view.detail,by("detail")); }).catch(function () {});
     by("title").textContent = word("loading"); by("body").textContent = ""; by("status").textContent = ""; by("activity").textContent = ""; by("needs").textContent = "";
@@ -376,7 +376,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
       if (data.task) view.task = data.task;
       view.actionMessage = data.note || (expected && view.task.status !== expected ? t("ui.tc.stateNotChanged") : changes.note && !changes.status ? t("ui.tc.noteSaved") : "");
     }).catch(function (error) { if (active === view && view.openGeneration === generation) view.actionMessage = error.message; }).finally(function () {
-      view.actionBusy = false; if (active === view && view.openGeneration === generation) render(view);
+      if (view.openGeneration === generation) view.actionBusy = false; if (active === view && view.openGeneration === generation) render(view);
     });
   }
   function click(event) {
@@ -388,11 +388,11 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     if (node.hasAttribute("data-tf-accept")) { saveTaskChange(active,{status:"done"},"/api/tasks/update","done"); return; }
     if (node.hasAttribute("data-tf-commit")) { saveTaskChange(active,{},"/api/tasks/commit"); return; }
     if (node.hasAttribute("data-tf-dismiss")) { saveTaskChange(active,{status:"dropped"},"/api/tasks/update","dropped"); return; }
-    if (node.hasAttribute("data-tf-note")) { var notedView = active; askInline(node,t("ui.tc.changePrompt"),"").then(function (note) { if (active === notedView && note && note.trim()) saveTaskChange(notedView,{note:note.trim()},"/api/tasks/update"); }); return; }
+    if (node.hasAttribute("data-tf-note")) { var notedView = active, notedGeneration = active.openGeneration; askInline(node,t("ui.tc.changePrompt"),"").then(function (note) { if (active === notedView && notedView.openGeneration === notedGeneration && note && note.trim()) saveTaskChange(notedView,{note:note.trim()},"/api/tasks/update"); }); return; }
     if (node.hasAttribute("data-tf-export")) { createExport(active); return; }
     if (node.hasAttribute("data-tf-list")) { active.mobileDetail = false; root.classList.remove("tf-detail-selected"); paintPage(active); return; }
     if (node.hasAttribute("data-tf-close")) { close(true); return; }
-    if (node.hasAttribute("data-tf-conversation")) { var task = active.task; close(true); if (task && task.assigneeId) { select(task.assigneeId,task.conversation || "main"); showTab("desktop"); } return; }
+    if (node.hasAttribute("data-tf-conversation")) { var task = active.task; close(true); if (task && task.assigneeId && task.conversation) { select(task.assigneeId,task.conversation); showTab("desktop"); } return; }
     var tab = node.getAttribute("data-tf-tab"), step = node.getAttribute("data-tf-step");
     if (tab) { changeTab(tab); return; } if (step) { active.mobileDetail = true; root.classList.add("tf-detail-selected"); loadDetail(active,step); return; }
     if (node.hasAttribute("data-tf-refresh")) { var view = active; window.refreshTaskExecution().then(function () { if (active === view && view.task) render(view); }); }

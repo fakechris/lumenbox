@@ -116,6 +116,8 @@ test("review is an explicit authorized action and denied or coerced results neve
   const task={id:"t1",title:"Review result",status:"review",requester:"owner",reviewerId:"reviewer",history:[]};
   const stranger=workspace({role:"driver",identity:"stranger"});stranger.window.openTaskFocus("t1",false);await tick();stranger.itemReads[0]!.resolve(stranger.reply({task}));await tick();
   assert.doesNotMatch(stranger.nodes.get("tf-body")!.innerHTML,/data-tf-accept/);
+  const unidentified=workspace({role:"admin"});unidentified.window.openTaskFocus("t1",false);await tick();unidentified.itemReads[0]!.resolve(unidentified.reply({task}));await tick();
+  assert.doesNotMatch(unidentified.nodes.get("tf-body")!.innerHTML,/data-tf-accept/);
   const viewer=workspace({role:"viewer",identity:"owner"});viewer.window.openTaskFocus("t1",false);await tick();viewer.itemReads[0]!.resolve(viewer.reply({task}));await tick();
   assert.doesNotMatch(viewer.nodes.get("tf-body")!.innerHTML,/data-tf-accept|data-tf-status|data-tf-level/);
   const owner=workspace({role:"driver",identity:"owner"});owner.window.openTaskFocus("t1",false);await tick();owner.itemReads[0]!.resolve(owner.reply({task}));await tick();
