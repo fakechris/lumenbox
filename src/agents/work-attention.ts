@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import type { InboundMessage } from "./admitted-message.ts";
 import type { AgentRegistry } from "./registry.ts";
 
-export interface WorkStamp { id: string; owner: string; conversation: string; generation: number; epoch: number; isolated?: boolean; previous?: string }
+export interface WorkStamp { id: string; owner: string; conversation: string; generation: number; epoch: number; isolated?: boolean; previous?: string; taskId?: string }
 export interface WorkReturn { work: WorkStamp; conversation: string }
 export interface CurrentWork extends WorkStamp {
   principal?: string;
@@ -51,16 +51,16 @@ export class WorkAttention {
       return related;
     }
     const previous = this.get(agent, conversation);
-    const reuse = previous && previous.status !== "answered" && previous.principal === first.principalId && first.steerable !== false;
-    const next: CurrentWork = reuse ? { ...previous, messages: [...new Set([...previous.messages, ...humans.map(m => m.id)])].slice(-128), status: "running", reason: undefined }
-      : { id: first.id, owner: agent, conversation, generation: (previous?.generation ?? 0) + 1, epoch: this.epochOf(agent, conversation), isolated: true, ...(previous ? { previous: workStateConversation(previous, conversation) } : {}), principal: first.principalId, status: "running", messages: humans.map(m => m.id), peers: [], awaiting: [] };
+    const reuse = previous && previous.status !== "answered" && (previous.principal === undefined || previous.principal === first.principalId) && first.steerable !== false;
+    const next: CurrentWork = reuse ? { ...previous, principal: first.principalId ?? previous.principal, messages: [...new Set([...previous.messages, ...humans.map(m => m.id)])].slice(-128), status: "running", reason: undefined }
+      : { id: first.id, owner: agent, conversation, generation: (previous?.generation ?? 0) + 1, epoch: this.epochOf(agent, conversation), isolated: true, taskId: first.taskBinding?.taskId, ...(previous ? { previous: workStateConversation(previous, conversation) } : {}), principal: first.principalId, status: "running", messages: humans.map(m => m.id), peers: [], awaiting: [] };
     this.current.set(keyOf(agent, conversation), next); this.save(); return this.stamp(next);
   }
   /** A validated goal/resume already has a durable work identity; it is never replaced with a new UUID. */
-  existing(agent: string, conversation: string, id: string): WorkStamp {
+  existing(agent: string, conversation: string, id: string, taskId?: string): WorkStamp {
     const previous = this.get(agent, conversation);
-    if (previous?.id === id && previous.status !== "answered") { const stamp = this.stamp(previous); this.settle(stamp, "running"); return stamp; }
-    const next: CurrentWork = { id, owner: agent, conversation, generation: (previous?.generation ?? 0) + 1, epoch: this.epochOf(agent, conversation), isolated: false, status: "running", messages: [], peers: [], awaiting: [] };
+    if (previous?.id === id && previous.status !== "answered") { if (taskId) { previous.taskId = taskId; this.current.get(keyOf(agent, conversation))!.taskId = taskId; } const stamp = this.stamp(previous); this.settle(stamp, "running"); return stamp; }
+    const next: CurrentWork = { id, owner: agent, conversation, generation: (previous?.generation ?? 0) + 1, epoch: this.epochOf(agent, conversation), isolated: false, principal: previous?.principal, taskId, status: "running", messages: [], peers: [], awaiting: [] };
     this.current.set(keyOf(agent, conversation), next); this.save(); return this.stamp(next);
   }
   /** A sender cannot invent a root or acquire membership by writing it into its message. */
@@ -77,7 +77,7 @@ export class WorkAttention {
     if (!message.informational && message.work && (!this.valid(message.work, agent) || !this.valid(message.work, message.fromId) && message.fromId !== "system" && !(message.fromId === "user" && message.synthetic))) return false;
     if (personMessage(message)) return true;
     const current = this.get(agent, conversation);
-    if (message.goal || message.resumeOf) return !current || current.status === "answered" || current.id === (message.goal?.workId ?? message.resumeOf?.workId);
+    if (message.goal || message.resumeOf) return !current || current.status === "answered" || current.id === (message.goal?.workId ?? message.resumeOf?.workId) || !!message.goal && current.taskId !== undefined && current.taskId === message.goal.taskId;
     if (!current || current.status === "answered") return true;
     return !!message.work && message.work.id === current.id && message.work.generation === current.generation &&
       (message.fromId === "system" || message.fromId === "user" && message.synthetic || this.valid(message.work, message.fromId)) && this.valid(message.work, agent);
@@ -102,7 +102,7 @@ export class WorkAttention {
     if (!value) return;
     value.status = status; value.reason = reason; this.save();
   }
-  private stamp(work: CurrentWork): WorkStamp { return { id: work.id, owner: work.owner, conversation: work.conversation, generation: work.generation, epoch: work.epoch, isolated: work.isolated, previous: work.previous }; }
+  private stamp(work: CurrentWork): WorkStamp { return { id: work.id, owner: work.owner, conversation: work.conversation, generation: work.generation, epoch: work.epoch, isolated: work.isolated, previous: work.previous, taskId: work.taskId }; }
   private save(): void {
     if (!this.path) return;
     mkdirSync(dirname(this.path), { recursive: true }); const temporary = this.path + ".tmp";

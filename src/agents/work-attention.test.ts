@@ -131,3 +131,12 @@ test("work validity consults the durable context version even inside a captured 
     });
   } finally {rmSync(dir,{recursive:true,force:true});}
 });
+
+
+test("an approved goal may continue its admitted task, while an unrelated goal remains held", () => {
+  const focus = new WorkAttention();
+  const root = focus.begin("Mia","main",[{...user("draft-request"),taskBinding:{taskId:"t1"} as never}])!;
+  focus.settle(root,"waiting");
+  assert.equal(focus.eligible("Mia","main",{...user("goal"),synthetic:true,goal:{workId:"approved-work",taskId:"t1"} as never}),true);
+  assert.equal(focus.eligible("Mia","main",{...user("other-goal"),synthetic:true,goal:{workId:"other-work",taskId:"t2"} as never}),false);
+});

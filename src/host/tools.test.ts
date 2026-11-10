@@ -1187,5 +1187,5 @@ test("the tool list names the box's own work directory on a host box, and is the
 test("a failed desktop preflight reports an unavailable capability without dispatching the browser action", async () => {
   let dispatched=false;
   const result=await dispatchTool("browser_snapshot",{}, {agent:{id:"a",profile:{name:"Mia"}},registry:{list:()=>[]},ensureDesktop:async()=>{throw new Error("Desktop disconnected");},box:{browser:async()=>{dispatched=true;}}} as never);
-  assert.equal(result.unavailable,true);assert.equal(result.isError,true);assert.equal(dispatched,false);
+  assert.equal(result.unavailable,"browser_snapshot");assert.equal(result.isError,true);assert.equal(dispatched,false);
 });

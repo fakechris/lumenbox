@@ -1,3 +1,4 @@
+import { executionTarget } from "./tool-roster.ts";
 import { TASK_PROGRESS_TOOL, runTaskProgressTool } from "./task-progress-tool.ts";
 import type { ToolOutcome } from "./tool-outcome.ts";
 export type { ToolOutcome } from "./tool-outcome.ts";
@@ -2638,7 +2639,7 @@ export async function dispatchTool(
 
   if (DESKTOP_TOOLS.has(name)) {
     try { await context.ensureDesktop?.(); }
-    catch (error) { return { text: error instanceof Error ? error.message : String(error), isError: true, unavailable: true }; }
+    catch (error) { return { text: error instanceof Error ? error.message : String(error), isError: true, unavailable: name }; }
   }
 
   switch (name) {
@@ -3467,7 +3468,7 @@ export async function dispatchTool(
       // "enabled" can change under a prompt built a moment earlier.
       if (context.hostRunner === undefined || !context.hostRunner.enabled) {
         return {
-          text: HOST_EXECUTION_UNAVAILABLE, unavailable: true,
+          text: HOST_EXECUTION_UNAVAILABLE, unavailable: name,
           isError: true,
         };
       }
@@ -5399,7 +5400,7 @@ export async function dispatchTool(
     }
 
     case "UseMcpTool": {
-      const target = String(input.tool ?? "");
+      const target = executionTarget(name, input);
       // A deferred built-in (INV-1341): dispatched by its own name, so the gate, the tier and the
       // record all see the tool itself, not the pair.
       if (context.deferredTools?.some(tool => tool.name === target) === true) {

@@ -5,7 +5,7 @@ import type { ToolEffect } from "./mcp.ts";
 export interface ToolOutcome {
   text: string;
   /** Structured execution outcome, separate from business verification. */
-  outcome?: Outcome; unavailable?: true; // host preflight failed before dispatch; never inferred from an uncertain write
+  outcome?: Outcome; unavailable?: string; // host preflight failed before dispatch; never inferred from an uncertain write
   /**
    * Fork ledger ids to commit once this result is durably in the parent's transcript
    * (docs/32 §1). Written by the turn engine after the results entry is appended — the tool

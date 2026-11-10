@@ -1,3 +1,5 @@
+import { taskHoldsAttention } from "./task-attention.ts";
+import { executionTarget } from "./tool-roster.ts";
 import { needsComputer } from "./tool-capabilities.ts";
 import { workRegistry, workStateConversation } from "../agents/work-attention.ts";
 import { progressContext as openProgressContext, selectedProgressBinding } from "./progress-admission.ts";
@@ -1421,7 +1423,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   const conversation = deps.conversation ?? MAIN_CONVERSATION;
   const work = !inbound.some(message => message.origin === "host:audit") && bus.workAttention
     ? inbound.map(message => message.work).find(stamp => stamp && bus.workAttention!.valid(stamp, agent.id)) ??
-      (inbound[0]?.goal ? bus.workAttention.existing(agent.id, conversation, inbound[0].goal.workId) : deps.resumeOf?.workId ? bus.workAttention.existing(agent.id, conversation, deps.resumeOf.workId) : undefined) : undefined;
+      (inbound[0]?.goal ? bus.workAttention.existing(agent.id, conversation, inbound[0].goal.workId, inbound[0].goal.taskId) : deps.resumeOf?.workId ? bus.workAttention.existing(agent.id, conversation, deps.resumeOf.workId) : undefined) : undefined;
   const historyConversation = workStateConversation(work, conversation);
   let blockedCapability: string | undefined; let confirmationPending = false;
   const registry = workRegistry(deps.registry, agent.id, conversation, historyConversation, work, entry => personAuthoredText(entry as HistoryEntry) ?? (givesTasks(entryChannel(entry as HistoryEntry)) ? entry.text : undefined));
@@ -1550,7 +1552,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     ended = true;
     endedHow = how;
     if (work?.owner === agent.id && bus.workAttention?.valid(work, agent.id)) {
-      const unfinished = registry.readDurableState(agent.id, conversation).todos?.some(item => item.status !== "done") || !!taskBinding && !["review", "done", "dropped"].includes(deps.tasks?.get(taskBinding.taskId)?.status ?? "");
+      const unfinished = registry.readDurableState(agent.id, conversation).todos?.some(item => item.status !== "done") || taskHoldsAttention(deps.tasks?.get(taskBinding?.taskId ?? work.taskId ?? ""), conversation);
       const unavailable = bus.workAttention.get(work.owner, work.conversation)?.unavailable?.[0];
       const pendingPeers = (bus.workAttention.get(work.owner, work.conversation)?.awaiting.length ?? 0) + bus.relatedPending(agent.id, work) + (deps.pendingWork?.open().filter(item => item.workId === workId && item.kind !== "reminder").length ?? 0);
       bus.workAttention.settle(work, how !== "done" || unfinished || pendingPeers || confirmationPending || unavailable ? "waiting" : "answered", (blockedCapability || unavailable) ? "required tool unavailable: " + (blockedCapability ?? unavailable!.tool) : how !== "done" ? how : confirmationPending ? "waiting for confirmation" : pendingPeers ? "waiting for related work" : unfinished ? "unfinished plan" : undefined);
@@ -3212,7 +3214,11 @@ ${outcome.text}`;
       // records the verdict; enforce mode waits for it and hands a BLOCK back to the model as the
       // tool's answer, with the reason, so the agent can ask rather than guess.
       const toolInput = (toolUse.input ?? {}) as Record<string, unknown>;
+      const calledTool = executionTarget(toolUse.name, toolInput);
+      const offeredCapability = tools.some(tool => tool.name === calledTool) || deferred.some(tool => tool.name === calledTool);
+      const requiredComputerTool = needsComputer(calledTool);
       const offeredHere = tools.some(tool => tool.name === toolUse.name) || deferred.some(tool => tool.name === toolUse.name) || allowedMcp.some(tool => tool.name === toolUse.name && (routineScope === undefined || routineScope.has(tool.name)));
+      const canDispatch = offeredHere && (!work || !requiredComputerTool || offeredCapability);
       const reviewWhy =
         isolated || deps.autoReview === undefined
           ? undefined
@@ -3223,7 +3229,7 @@ ${outcome.text}`;
             // On the person's own machine (INV-438) every write is a host action.
             (deps.boxKind === "host" ? hostBoxWrite(toolUse.name, toolInput) : undefined));
       let blocked: Verdict | undefined;
-      if (!audit && !blockedCapability && offeredHere && reviewWhy !== undefined && deps.autoReview !== undefined && deps.autoReview.mode() !== "off") {
+      if (!audit && !blockedCapability && canDispatch && reviewWhy !== undefined && deps.autoReview !== undefined && deps.autoReview.mode() !== "off") {
         const reviewInput = reviewInputFor({
           agentName: agent.profile.name,
           inbound,
@@ -3246,7 +3252,7 @@ ${outcome.text}`;
       // PreToolUse hooks, after auto-review: a person's own script gets the same veto, with the
       // same shape of answer to the model.
       let hookBlock: string | undefined;
-      if (!audit && !blockedCapability && offeredHere && !isolated && blocked === undefined && deps.hooks?.has("PreToolUse", toolUse.name)) {
+      if (!audit && !blockedCapability && canDispatch && !isolated && blocked === undefined && deps.hooks?.has("PreToolUse", toolUse.name)) {
         const hook = await deps.hooks.run("PreToolUse", {
           session_id: turnId,
           agent_name: agent.profile.name,
@@ -3257,15 +3263,14 @@ ${outcome.text}`;
       }
 
       if (signal.aborted || work && !bus.workAttention!.valid(work, agent.id)) throw new TurnAborted();
-      const requiredComputerTool = needsComputer(toolUse.name);
       let outcome: ToolOutcome;
       if (blockedCapability) {
         outcome = { text: "Not executed: this user work is waiting for its required tool. No unrelated work may replace it.", isError: true };
       } else if (audit && (!auditCurrent(audit, agent.id, conversation, deps.tasks) || !auditToolAllowed(audit, toolUse.name, toolInput))) {
         outcome = { text: "Review refused: this audit may only read its current evidence. It cannot create probe tasks, change work, send messages or write memory.", isError: true };
-      } else if (isolated || ((effectiveTools !== undefined || !!work && (requiredComputerTool || PERSON_FACING_TOOLS.has(toolUse.name))) && !offeredHere)) {
-        if (work && !isolated && requiredComputerTool) { blockedCapability = toolUse.name; bus.workAttention?.capability(work, agent.id, toolUse.name, false); }
-        outcome = { text: isolated ? `Tools are disabled in ${contextMode} context.` : toolUse.name === "RunOnHost" && !deps.hostRunner?.enabled ? HOST_EXECUTION_UNAVAILABLE : "This tool is unavailable in the current execution context.", isError: true };
+      } else if (isolated || ((effectiveTools !== undefined || !!work && PERSON_FACING_TOOLS.has(toolUse.name)) && !offeredHere || !!work && requiredComputerTool && !offeredCapability)) {
+        if (work && !isolated && requiredComputerTool) { blockedCapability = calledTool; bus.workAttention?.capability(work, agent.id, calledTool, false); }
+        outcome = { text: isolated ? `Tools are disabled in ${contextMode} context.` : calledTool === "RunOnHost" && !deps.hostRunner?.enabled ? HOST_EXECUTION_UNAVAILABLE : "This tool is unavailable in the current execution context.", isError: true };
       } else if (goal?.verify !== undefined && toolUse.name === "bash" && !commandIsConfirmed(goal, String((toolInput as { command?: unknown }).command ?? ""))) {
         // A verifier runs what the person confirmed and nothing else (review R3): the checklist
         // was written by a model, and a model-written command is a proposal until a person says.
@@ -3355,8 +3360,8 @@ ${outcome.text}`;
           isError: true, outcome: boxErrorOutcome(error) ?? "failed",
         };
       }
-      if (work && outcome.unavailable) { blockedCapability = toolUse.name; bus.workAttention?.capability(work, agent.id, toolUse.name, false); }
-      if (work && requiredComputerTool && !outcome.isError) bus.workAttention?.capability(work, agent.id, toolUse.name, true);
+      if (work && outcome.unavailable) { blockedCapability = outcome.unavailable; bus.workAttention?.capability(work, agent.id, outcome.unavailable, false); }
+      if (work && requiredComputerTool && !outcome.isError) bus.workAttention?.capability(work, agent.id, calledTool, true);
       if (!outcome.isError && ["AskUser", "AskSecret", "HandOverDesktop"].includes(toolUse.name)) confirmationPending = true;
       if (outcome.approval !== undefined) {
         confirmationPending = true;
@@ -3425,7 +3430,7 @@ ${outcome.text}`;
       }
       // PostToolUse hooks see the result; a block here is a note appended for the model, which is
       // what Claude Code does with a hook's stderr on exit 2.
-      if (!audit && !blockedCapability && offeredHere && deps.hooks?.has("PostToolUse", toolUse.name)) {
+      if (!audit && !blockedCapability && canDispatch && deps.hooks?.has("PostToolUse", toolUse.name)) {
         const hook = await deps.hooks.run("PostToolUse", {
           session_id: turnId,
           agent_name: agent.profile.name,

@@ -1,3 +1,4 @@
+import { taskAttentionChanged } from "./task-attention.ts";
 import { WorkAttention, workStateConversation } from "../agents/work-attention.ts";
 import { randomUUID } from "node:crypto";
 import { auditConversation, auditCurrent } from "./audit-context.ts";
@@ -1123,7 +1124,7 @@ export class Orchestrator {
       judgeExperiment: (prompt, agentId) => this.askCheaply(this.registry.get(agentId), prompt), // the ledger's one question per continuation (INV-1475)
       log: line => console.error(`[goal] ${line}`),
     });
-    if (this.tasks !== undefined) this.tasks.onChange(task => this.goalLoop?.onTaskChanged(task)); if (this.tasks !== undefined) watchDependencies(this.tasks, (task, text) => { this.bus.deliverSystem(task.assigneeId!, text, task.conversation ?? MAIN_CONVERSATION); }); // a task whose last blocker closed wakes its assignee, as a late fork result does (INV-1740)
+    if (this.tasks !== undefined) this.tasks.onChange(task => { this.goalLoop?.onTaskChanged(task); taskAttentionChanged(this.bus, task); }); if (this.tasks !== undefined) watchDependencies(this.tasks, (task, text) => { this.bus.deliverSystem(task.assigneeId!, text, task.conversation ?? MAIN_CONVERSATION); }); // a task whose last blocker closed wakes its assignee, as a late fork result does (INV-1740)
     this.goalGate = this.tasks === undefined ? undefined : new GoalGate({ modelRecoveryRoot: this.registry.root,
       tasks: this.tasks,
       registry: this.registry,
