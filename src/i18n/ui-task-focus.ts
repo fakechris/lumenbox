@@ -21,6 +21,7 @@ export const UI_TASK_FOCUS: Record<string, readonly [string, string]> = {
   "ui.tf.artifacts": ["产物与验收", "Artifacts and review"],
   "ui.tf.costs": ["费用", "Costs"],
   "ui.tf.goal": ["目标", "Objective"],
+  "ui.tf.taskStatus": ["任务状态", "Task status"],
   "ui.tf.state": ["执行", "Execution"],
   "ui.tf.connection": ["连接", "Connection"],
   "ui.tf.acceptance": ["验收", "Review"],

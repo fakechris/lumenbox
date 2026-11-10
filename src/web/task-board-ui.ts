@@ -23,7 +23,7 @@ export const TASK_BOARD_JS = String.raw`function taskBoardMarkup(t, mark) {
 var taskBoardState = { ids: [], nodes: new Map(), cursor: null, next: null, stack: [], query: "", inbox: false, scope: null, loading: null, dirty: false, total: 0 };
 function taskBoardPager() {
   var pager = document.getElementById("taskpager");
-  if (!pager) { pager = document.createElement("div"); pager.id = "taskpager"; pager.className = "tf-taskpager"; $("tasklist").before(pager); }
+  if (!pager) { pager = document.createElement("div"); pager.id = "taskpager"; pager.className = "ui-row tf-taskpager"; $("tasklist").before(pager); }
   pager.innerHTML = '<button class="btn sm ghost" data-board-prev>{{ui.tf.previous}}</button><span>' + (taskBoardState.scope ? '{{ui.tf.taskContext}} · ' : '') + taskBoardState.ids.length + ' / ' + taskBoardState.total + '</span><button class="btn sm ghost" data-board-next>{{ui.tf.next}}</button>' + (taskBoardState.dirty ? '<button class="btn sm ghost" data-board-refresh>{{ui.tf.newTasks}}</button>' : '') + (taskBoardState.scope ? '<button class="btn sm ghost" data-board-clear>{{ui.tf.clear}}</button>' : '');
   pager.querySelector("[data-board-prev]").disabled = !taskBoardState.stack.length; pager.querySelector("[data-board-next]").disabled = !taskBoardState.next;
 }
