@@ -4456,6 +4456,7 @@ function select(id, conversation) {
   if (switching) refreshConversations(id);
   updateComposerTarget();
   resetThread();
+  if (window.taskFocusVisible) { window.taskConversationDirty = true; return Promise.resolve(); }
   var replay = beginLiveReplay(), selectedConversation = currentConversation;
   live.delete(id); markViewed(id, currentConversation); if (window.configVersionChip) window.configVersionChip(id, currentConversation); // the configuration version this conversation runs on (INV-1669)
 
@@ -6125,6 +6126,7 @@ var roundLabel = "";
  */
 var viewedTimer = null; function markViewed(id, conversation) { if (!id || !document.hasFocus()) return; clearTimeout(viewedTimer); viewedTimer = setTimeout(function () { fetch("/api/agents/viewed", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: id, conversation: conversation }) }).then(refresh).catch(function () {}); }, 400); } window.addEventListener("focus", function () { markViewed(current, currentConversation); }); // the person looked (INV-1625): debounced, only while the window has focus
 function inView(e) {
+  if (window.taskFocusVisible) { if (e.agentId === current && (e.conversation || "main") === currentConversation) window.taskConversationDirty = true; return false; }
   return e.agentId === current && (e.conversation || "main") === currentConversation;
 }
 
@@ -6136,7 +6138,7 @@ stream.onmessage = function (raw) {
   if (liveReplay && (inView(e) || (e.type === "message_sent" && currentConversation === "main" && (e.fromId === current || e.toId === current)))) { liveReplay.events.push(e); return; }
   if (inView(e) && !unseenLiveText(e)) return;
   var line = !raw.skipFeed && activityLine(e);
-  if (line) feed(line.html, line.cls);
+  if (line && !window.taskFocusVisible) feed(line.html, line.cls);
 
   if (e.type === "prompt") {
     if (inView(e) && unseenLivePrompt(e)) { closeOpen(); pushItem({ kind: "person", text: e.text, at: new Date().toISOString() }); }
