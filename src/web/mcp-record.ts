@@ -1,4 +1,4 @@
-import { summarizeTaskProgress, type TaskProgressSummary } from "../host/task-progress.ts";
+import { summarizeTaskProgress, type TaskProgressSummary, type ProgressSourceAccess } from "../host/task-progress.ts";
 /**
  * A task as the record has it, for a caller that reads facts rather than prose (INV-1506, docs/90 §3.1).
  *
@@ -96,7 +96,7 @@ function mandateRecord(task: Task): TaskRecord["mandate"] {
   return { by: mandate.by, strength: mandate.strength, state, ...(state === "stale" ? { staleReasons: [...mandate.stale!.reasons] } : {}) };
 }
 
-export function taskRecord(task: Task, deps: { nameOf: (id: string) => string; stageWorld?: (task: Task) => StageWorld; forksOf?: (taskId: string) => readonly ForkChild[] }): TaskRecord {
+export function taskRecord(task: Task, deps: { progressAccess?: ProgressSourceAccess; nameOf: (id: string) => string; stageWorld?: (task: Task) => StageWorld; forksOf?: (taskId: string) => readonly ForkChild[] }): TaskRecord {
   const ended = task.status === "done" || task.status === "dropped";
   const stage = deps.stageWorld !== undefined ? taskStage(task, deps.stageWorld(task)) : ended ? "ended" : undefined;
   const mandate = mandateRecord(task);
@@ -104,7 +104,7 @@ export function taskRecord(task: Task, deps: { nameOf: (id: string) => string; s
   const forks = deps.forksOf?.(task.id) ?? [];
   const reply = lastReply(task);
   return {
-    progress: summarizeTaskProgress(task, 16),
+    progress: summarizeTaskProgress(task, 16, deps.progressAccess),
     id: task.id,
     title: task.title,
     status: task.status,

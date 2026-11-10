@@ -1,6 +1,6 @@
 /// <reference lib="dom" />
 /** Canonical task progress; props choose a task, never supply progress numbers. Offscreen cards do no polling. */
-import { html, nothing } from "lit";
+import { html, nothing, type PropertyValues } from "lit";
 import { A2uiLitElement } from "@a2ui/web_core/universal";
 import { TaskProgressApi } from "../host/show-ui-components.ts";
 import { progressLines } from "../host/task-progress-view.ts";
@@ -42,7 +42,8 @@ export class LumenboxTaskProgressElement extends A2uiLitElement<typeof TaskProgr
     window.removeEventListener("lumen-connection", this.changed);
     this.taskId = ""; this.progress = undefined; this.visible = false;
   }
-  protected override updated() {
+  override willUpdate(changed: PropertyValues) {
+    super.willUpdate(changed);
     const id = String(this.controller?.props.taskId ?? "");
     if (id !== this.taskId) { this.taskId = id; this.progress = undefined; this.generation++; this.controllerRequest?.abort(); if (this.visible) void this.read(); }
   }
@@ -60,6 +61,6 @@ export class LumenboxTaskProgressElement extends A2uiLitElement<typeof TaskProgr
   }
   override render() {
     if (!this.controller?.props.taskId) return nothing;
-    return html`<div class="lb-progress">${progressLines(this.progress, document.documentElement.lang === "en" ? "en" : "zh").map(line => html`<p class="dim">${line}</p>`)}</div>`;
+    return html`<div class="lb-progress">${progressLines(this.progress, document.documentElement.lang === "en" ? "en" : "zh", id => (globalThis as unknown as { nameOf?: (id: string) => string }).nameOf?.(id) ?? id).map((line, index) => html`<p class=${this.progress && index < this.progress.sources.length * 2 && index % 2 === 0 ? "" : "dim"}>${line}</p>`)}</div>`;
   }
 }

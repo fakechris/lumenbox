@@ -1,4 +1,4 @@
-import { summarizeTaskProgress } from "../host/task-progress.ts";
+import { summarizeTaskProgress, type ProgressSourceAccess } from "../host/task-progress.ts";
 import { progressLines } from "../host/task-progress-view.ts";
 import { taskProgressSurface } from "../host/task-progress-surface.ts";
 import { taskBoardRecord } from "./task-board-record.ts";
@@ -656,7 +656,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         ...(title !== undefined ? { title } : {}),
         messages: taskProgressSurface(compiled.full, id => {
           const task = orchestrator.tasks?.get(id);
-          return task?.assigneeId === input.agentId && (task.conversation ?? "main") === conversation ? summarizeTaskProgress(task) : undefined;
+          return task?.assigneeId === input.agentId && (task.conversation ?? "main") === conversation ? summarizeTaskProgress(task, 128, progressAccessForPrincipal(input.principalId ?? task.requester)) : undefined;
         }),
         ...(input.close === true ? { close: true } : {}),
       });
@@ -1548,7 +1548,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       const progressPath = `${chatFilesRoot(conversation, registry.boxOf(agent.id))}/progress.json`;
       const showProgress = (task: Task) => {
         if (task.id !== taskId || !summarizeTaskProgress(task)) return;
-        const line = outboundRedactor(vault.heldValues())(progressLines(summarizeTaskProgress(task), cardLocale).join("\n"));
+        const line = outboundRedactor(vault.heldValues())(progressLines(summarizeTaskProgress(task, 128, progressAccessForPrincipal(principal)), cardLocale).join("\n"));
         if (line === batchLine) return;
         batchLine = line; onProgress?.(line, "batch");
       };
@@ -1557,7 +1557,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         const client = orchestrator.boxClient(agent.id);
         if (!client || !taskId) return;
         void client.readFile(progressPath).then(result => {
-          orchestrator.tasks?.progress.file(result.content ?? "", { agentId: agent.id, conversation, taskId });
+          orchestrator.tasks?.progress.file(result.content ?? "", { agentId: agent.id, boxId: registry.boxOf(agent.id).id, conversation, taskId });
         }).catch(() => {});
       }, 5_000);
       try {
@@ -2993,6 +2993,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   };
 
   // The outside door (docs/90 §2): a computer and a team, never our memory, files or settings; every call goes through a person's objects (INV-1358).
+  function progressAccessForPrincipal(principalId: string): ProgressSourceAccess {
+    const unavailable = personalBoxes.unavailable();
+    const box = (id: string) => {
+      const entry = registry.boxById(id);
+      return !!entry && !unavailable.has(id) && (entry.members === "everyone" || (principals.isKnown(principalId) && mayEnterBox(entry, principals.resolve(principalId).id)));
+    };
+    return { box, agent: id => registry.has(id) && box(registry.boxOf(id).id) };
+  }
   const taskActive = (task: { assigneeId?: string; conversation?: string }) => task.assigneeId !== undefined && task.conversation !== undefined && (orchestrator.bus.isActive(task.assigneeId, task.conversation) || orchestrator.jobWatch.openJobs(task.assigneeId, task.conversation).length > 0);
   const sideDoorStage = (task: Task) => stageWorldOf(task, { undeliverableChats: new Set(outbox.problems().map(receipt => receipt.chatKey)), questions: questions.list(), agentIds: new Set(registry.list().map(agent => agent.id)), chatKeyOf: conversation => conversations.chatKeyFor(conversation), active: taskActive });
   const taskListPages = new TaskListPages();
@@ -3000,6 +3008,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const changeFeed = new ChangeFeed({ stageOf: task => taskStage(task, sideDoorStage(task)) }); orchestrator.tasks?.onChange(task => { changeFeed.record(task); broadcast({ type: "task_changed", taskId: task.id, revision: task.updatedAt }); }); feedForks(changeFeed, orchestrator.pendingWork?.forks, id => orchestrator.tasks?.get(id)); // watch (INV-1508), with the forks of a task's turns (INV-1667)
   const stopExecutionFeed = orchestrator.turns?.onExecution((record, revision) => { const id = record.taskBinding?.taskId; const task = id ? orchestrator.tasks?.get(id) : undefined; if (task) { changeFeed.recordExecution(task, revision); broadcast({ type: "task_execution", taskId: task.id, revision }); } });
   const sideDoorTools = () => mcpServerTools({
+    progressAccess: progressAccessForPrincipal,
     registry, orchestrator, principals, workDir: workRootOf(registry.defaultBox()), log, redact: text => outboundRedactor(vault.heldValues())(text), mayDrive: (agentId, principalId) => mayEnterBox(registry.boxOf(agentId), principalId) && mandateWorld().mayDrive(principalId), mayReadTask: (task, principalId) => (task.assigneeId !== undefined && registry.has(task.assigneeId) ? mayEnterBox(registry.boxOf(task.assigneeId), principalId) : task.requester === principalId), // INV-1668: a deliverable's bytes to whoever may see the task, as the web route has it
     stageWorld: sideDoorStage, changeFeed, listen: listener => { channelTurnListeners.add(listener); return () => channelTurnListeners.delete(listener); },
     notifyTask: (task, text) => { const chatKey = task.conversation === undefined ? undefined : conversations.chatKeyFor(task.conversation); if (chatKey !== undefined) void channels.pushToChat(chatKey, text, { kind: "notice", about: `supervisor flag on ${task.id}` }).catch((error: unknown) => log(`supervisor flag ${task.id}: notice not sent (${error instanceof Error ? error.message : String(error)})`)); }, // INV-1509
@@ -3906,11 +3915,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         const mayReadTask = (task: Task) => caller.userId === undefined || (task.assigneeId ? mayReadAgent(task.assigneeId) : task.requester === principals.resolve(caller.userId).id); if (deliverableRoute(route, url, res, { tasks: orchestrator.tasks, mayReadTask, send })) return; if (taskGateRoute(route, url, res, { tasks: orchestrator.tasks, mayReadTask, readTranscript: (agentId, conversation) => registry.readTranscript(agentId, conversation), roster: () => registry.list().map(record => ({ id: record.id, name: record.profile.name })), verdictOf: callId => orchestrator.policy.verdicts.get(callId), send })) return; // the gate's verdicts on its steps, the chat's own join (INV-1672) // a task's deliverable, to whoever sees the task (INV-1663)
         if (taskCostRoute(route, url, res, { executions: taskExecutions, refused: () => refusedRole("admin"), access: { task: id => { const task = orchestrator.tasks?.get(id); return task !== undefined && mayReadTask(task); }, agent: mayReadAgent, box: mayReadBox }, records: () => orchestrator.usage.since(0, Number.MAX_SAFE_INTEGER), rates: configuredRates, compacted: () => orchestrator.usage.compacted(), send })) return;
-        if (taskExecutionRoute(route, url, res, { executions: taskExecutions, access: { task: id => { const task = orchestrator.tasks?.get(id); return task !== undefined && mayReadTask(task); }, agent: mayReadAgent, box: mayReadBox }, record: id => taskRecord(orchestrator.tasks!.get(id)!, { nameOf: id => registry.tryGet(id)?.profile.name ?? id, stageWorld: sideDoorStage }), send })) return;
-        const taskView = (task: Task) => { const forks = orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []; return { ...task, progress: summarizeTaskProgress(task), needsApprovals: taskExecutions.approvals(task.id, { task: () => mayReadTask(task), agent: mayReadAgent, box: mayReadBox }, orchestrator.policy.pending()), stage: taskRecord(task, { nameOf: id => registry.tryGet(id)?.profile.name ?? id, stageWorld: sideDoorStage }).stage, configVersions: switchesForTask(registry, task.id), ...(forks.length ? { forks } : {}), ...dependencyView(task, orchestrator.tasks!) }; };
-        if (taskListRoute(route, url, res, { pages: taskListPages, tasks: () => orchestrator.tasks?.list() ?? [], allowed: mayReadTask, detail: taskView, summary: task => ({ ...taskBoardRecord(task), ...dependencyView(task, orchestrator.tasks!) }), send })) return;
+        if (taskExecutionRoute(route, url, res, { executions: taskExecutions, access: { task: id => { const task = orchestrator.tasks?.get(id); return task !== undefined && mayReadTask(task); }, agent: mayReadAgent, box: mayReadBox }, record: id => taskRecord(orchestrator.tasks!.get(id)!, { nameOf: id => registry.tryGet(id)?.profile.name ?? id, stageWorld: sideDoorStage, progressAccess: { agent: mayReadAgent, box: mayReadBox } }), send })) return;
+        const taskView = (task: Task) => { const forks = orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []; return { ...task, progress: summarizeTaskProgress(task, 128, { agent: mayReadAgent, box: mayReadBox }), needsApprovals: taskExecutions.approvals(task.id, { task: () => mayReadTask(task), agent: mayReadAgent, box: mayReadBox }, orchestrator.policy.pending()), stage: taskStage(task, sideDoorStage(task)), configVersions: switchesForTask(registry, task.id), ...(forks.length ? { forks } : {}), ...dependencyView(task, orchestrator.tasks!) }; };
+        if (taskListRoute(route, url, res, { pages: taskListPages, tasks: () => orchestrator.tasks?.list() ?? [], allowed: mayReadTask, detail: taskView, summary: task => ({ ...taskBoardRecord(task, { agent: mayReadAgent, box: mayReadBox }), ...dependencyView(task, orchestrator.tasks!) }), send })) return;
         if (route === "GET /api/tasks") {
-          send(res, 200, { tasks: orchestrator.tasks?.list().filter(mayReadTask).map(task => { const forks = orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []; return { ...task, configVersions: switchesForTask(registry, task.id), ...(forks.length > 0 ? { forks } : {}), ...dependencyView(task, orchestrator.tasks!) }; }) ?? [] }); // and what it waits on and what waits on it (INV-1740) // with the agent configuration versions it ran under (INV-1669) and the division of work (INV-1667)
+          send(res, 200, { tasks: orchestrator.tasks?.list().filter(mayReadTask).map(taskView) ?? [] });
           return;
         }
 
@@ -4112,7 +4121,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return;
           }
           const waiting = credentialWaits.gate(created.id, caller.userId ?? "web"); // before it is anyone's to start (INV-1666): a credential its assignee lacks blocks it now, with a card
-          send(res, 200, { task: board.get(created.id) ?? created, ...(waiting !== undefined ? { coverage: waiting.coverage } : {}) });
+          send(res, 200, { task: taskView(board.get(created.id) ?? created), ...(waiting !== undefined ? { coverage: waiting.coverage } : {}) });
           return;
         }
 
@@ -4202,7 +4211,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 404, apiError("task-unknown", { task: String(body.id ?? "") }));
             return;
           }
-          send(res, 200, { committed, task: board.get(String(body.id ?? "")) });
+          send(res, 200, { committed, task: board.get(String(body.id ?? "")) ? taskView(board.get(String(body.id ?? ""))!) : undefined });
           return;
         }
 
@@ -4242,7 +4251,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 404, apiError("task-unknown", { task: String(body.id ?? "") }));
             return;
           }
-          send(res, 200, { task: updated.task, ...(updated.coerced ? { note: updated.coerced } : {}) });
+          send(res, 200, { task: taskView(updated.task), ...(updated.coerced ? { note: updated.coerced } : {}) });
           return;
         }
         // A close proposal (INV-529) and its objection: the assignee's way of not waiting
@@ -4264,7 +4273,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 409, { error: result.refused });
             return;
           }
-          send(res, 200, { task: result.task });
+          send(res, 200, { task: result.task ? taskView(result.task) : undefined });
           return;
         }
 

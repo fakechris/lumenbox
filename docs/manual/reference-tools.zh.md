@@ -11,7 +11,7 @@
 [English](reference-tools.md) · 中文。本页由 `scripts/docs-reference.mjs` 生成，来源：`buildTools()`（src/host/tools.ts）、src/host/side-effects.ts 里的层级、src/host/tool-roster.ts 里的名单和 src/host/catalog.ts 里的目录工具组。
 本页与来源不一致时 `npm test` 会失败；改来源，然后运行 `node scripts/docs-reference.mjs --write`。
 
-57 个工具：`buildTools` 在所有可选项都打开时给出的清单——一台 box、视觉、主机执行器、桌面、飞书文档阅读器、模板暂存、一个搜索 key，以及连接器 github、feishu、dingtalk。真实的一轮拿到的更少；**何时提供**一栏写每个工具需要什么。工具说明来自源代码，保持英文。
+58 个工具：`buildTools` 在所有可选项都打开时给出的清单——一台 box、视觉、主机执行器、桌面、飞书文档阅读器、模板暂存、一个搜索 key，以及连接器 github、feishu、dingtalk。真实的一轮拿到的更少；**何时提供**一栏写每个工具需要什么。工具说明来自源代码，保持英文。
 
 - **层级**——一次调用对外界做了什么（side-effects.ts）：`observe` 只看，`self` 留在 box 里或只涉及提出请求的人，`reach` 越出 box 行事，`credential` 触及权限。
 - **询问**——闸门是否先问人，以及确认卡片上的说法。由主机写，从不由 agent 写。
@@ -70,6 +70,7 @@
 | `SetPlan` | Write or replace your plan for the work you are doing. | self | 否 | 总是 | deferred | desk, web, code, team | `plan` |
 | `SetTodos` | Set out the steps you are about to take, and keep them current as you take them. | self | 否 | 总是 | resident | desk, web, code, team | `todos` |
 | `ShowUI` | Show the person a card you compose — a comparison table, a few options with a line of explanation each, a short form, a progress list — when prose would make them squint. | self | 否 | 需要一台 box；分支里没有 | resident | desk, web, code, team | `surface`, `components`, `data`, `patch`, `title`, `close` |
+| `TaskProgress` | Read/report business-object progress for this admitted task. | self | 否 | 总是 | resident | — | `action`, `stage`, `unit`, `total`, `expectedRevision`, `sourceSequence`, `reportId`, `observedAt`, `counts`, `objects`, `checks`, `sourceId`, `cursor` |
 | `Tasks` | The team's task board — work as an object everyone can see, not a message that scrolls away. | self | 否 | 总是；分支里没有 | resident | desk, web, code, team | `action`, `id`, `due`, `goal_area`, `commitment`, `waiting_on`, `blocked_by`, `parent`, `snooze_until`, `reason`, `title`, `description`, `status`, `note`, `level`, `discovery_kind`, `source`, `evidence`, `why_now`, `propose`, `outcome`, `scope`, `constraints`, `acceptance`, `verification`, `options`, `assignee`, `reviewer`, `list_status` |
 | `Teammates` | Who you can message: your teammates in this box, by name, from the host's own roster. | observe | 否 | 总是 | deferred | desk, web, code, team | — |
 | `UpdateAgent` | Edit another agent's name, description, role label, or teams. | credential | 是: “change an agent's tools or instructions” | 总是；分支里没有 | deferred | team | `agent_id`, `name`, `description`, `title`, `tags` |

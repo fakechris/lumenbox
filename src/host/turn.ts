@@ -1458,7 +1458,8 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   const workId = deps.resumeOf?.workId ?? goal?.workId ?? (taskBinding?.role === "executor" ? taskBinding.progressAdmission?.rootWorkId : undefined) ?? randomUUID();
   const executionId = randomUUID(), attempt = deps.resumeOf?.attempt ?? 1;
   if (deps.tasks && !taskBinding && hasAdmittedTask({ inbound, tasks: deps.tasks, goal, resume: deps.resumeOf })) throw new Error("The admitted task binding is no longer valid; no task tool was dispatched.");
-  let progressContext = openProgressContext(deps.tasks, taskBinding, { agentId: agent.id, conversation, turnId, executionId, boxId: registry.boxOf(agent.id).id, workId, resuming: !!deps.resumeOf });
+  const progressAccess = { agent: (id: string) => registry.has(id) && registry.boxOf(id).id === registry.boxOf(agent.id).id, box: (id: string) => id === registry.boxOf(agent.id).id };
+  let progressContext = openProgressContext(deps.tasks, taskBinding, { agentId: agent.id, conversation, turnId, executionId, boxId: registry.boxOf(agent.id).id, workId, access: progressAccess, resuming: !!deps.resumeOf });
   // Built once, here, because this is the only place that knows all four of the things an aside
   // has to be attributed to. Passing the ledger down instead would mean passing the agent, the
   // work and the conversation down with it, which is three more chances to pass the wrong one.
@@ -3167,6 +3168,8 @@ ${outcome.text}`;
     const runOne = async (
       toolUse: Anthropic.ToolUseBlock
     ): Promise<{ block: Anthropic.ToolResultBlockParam; recordAs?: string; commit?: { id: string; how: import("./pending-work.ts").CommitHow }[] }> => {
+      const takeArgs = toolUse.input as { action?: unknown; id?: unknown };
+      const progressBefore = toolUse.name === "Tasks" && takeArgs?.action === "take" && typeof takeArgs.id === "string" ? deps.tasks?.get(takeArgs.id) : undefined;
       let callBinding = taskBinding;
       emit({
         type: "tool_start",
@@ -3347,8 +3350,8 @@ ${outcome.text}`;
       if (selected) {
         const wasCurrent = deps.tasks?.progress.valid(progressContext);
         deps.tasks?.progress.close(progressContext);
-        selected = selectedProgressBinding(deps.tasks, selected, { workId, admittedAt: wasCurrent ? new Date().toISOString() : inbound.map(message => message.receivedAt).sort()[0] ?? "" });
-        progressContext = openProgressContext(deps.tasks, selected, { agentId: agent.id, conversation, turnId, executionId, boxId: registry.boxOf(agent.id).id, workId });
+        selected = selectedProgressBinding(deps.tasks, selected, { workId, before: progressBefore, allowed: !!wasCurrent || (!deps.resumeOf && !taskBinding?.progressAdmission && inbound.some(message => message.fromId === "user" && !message.synthetic && !message.resumeOf)), admittedAt: wasCurrent ? new Date().toISOString() : inbound.map(message => message.receivedAt).sort()[0] ?? "" });
+        progressContext = openProgressContext(deps.tasks, selected, { agentId: agent.id, conversation, turnId, executionId, boxId: registry.boxOf(agent.id).id, workId, access: progressAccess });
         selected.selection = { turnId, toolUseId: toolUse.id };
         deps.turns?.selectExecution({ event: "selection", id: turnId, recordId: randomUUID(), executionId, attempt, taskBinding: selected, toolUseId: toolUse.id, at: new Date().toISOString() });
         taskBinding = selected; callBinding = selected;

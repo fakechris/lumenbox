@@ -10,7 +10,7 @@ export const TASK_PROGRESS_TOOL: Anthropic.Tool = {
     unit: { type: "string" }, total: { type: ["integer", "null"] },
     expectedRevision: { type: "integer" }, sourceSequence: { type: "integer" }, reportId: { type: "string" }, observedAt: { type: "string" },
     counts: { type: "object", properties: Object.fromEntries(["processed", "succeeded", "failed", "skipped", "unknown"].map(key => [key, { type: "integer", minimum: 0 }])), required: ["processed", "succeeded", "failed", "skipped", "unknown"] },
-    objects: { type: "array", maxItems: 1000, items: { type: "object", properties: { id: { type: "string" }, state: { type: "string", enum: ["succeeded", "failed", "skipped", "unknown"] }, version: { type: "string" } }, required: ["id", "state", "version"] } },
+    objects: { type: "array", maxItems: 1000, items: { type: "object", properties: { id: { type: "string" }, state: { type: "string", enum: ["succeeded", "failed", "skipped", "unknown"] }, version: { type: "string" }, artifactVersion: { type: "string", description: "Preserve this field when round-tripping canonical objects; version is host-derived in objects responses." } }, required: ["id", "state", "version"] } },
     checks: { type: "array", maxItems: 1000, items: { type: "object", properties: { sourceId: { type: "string" }, id: { type: "string" }, version: { type: "string" } }, required: ["sourceId", "id", "version"] } },
     sourceId: { type: "string" }, cursor: { type: "string" },
   }, required: ["action"] },
@@ -19,7 +19,7 @@ export function runTaskProgressTool(input: Record<string, unknown>, context: Too
   const receiver = context.tasks?.progress, execution = context.progressContext;
   if (!receiver || !execution) return { text: "No current admitted progress execution. Activity and task stage remain available; no completion percentage was inferred.", isError: true };
   try {
-    const result = input.action === "report" ? receiver.receive(execution, { ...input, observedAt: input.observedAt ?? new Date().toISOString() }, `tool:${context.turnId}:${context.toolUseId}`)
+    const result = input.action === "report" ? receiver.receive(execution, input, `tool:${context.turnId}:${context.toolUseId}`)
       : input.action === "sources" ? receiver.sources(execution, typeof input.cursor === "string" ? input.cursor : undefined)
       : input.action === "objects" ? receiver.objects(execution, String(input.sourceId ?? ""), typeof input.cursor === "string" ? input.cursor : undefined)
       : input.action === "read" ? receiver.info(execution, typeof input.stage === "string" ? input.stage : undefined) : undefined;

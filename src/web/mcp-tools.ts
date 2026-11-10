@@ -1,3 +1,4 @@
+import type { ProgressSourceAccess } from "../host/task-progress.ts";
 /**
  * The person's side door, as tools (docs/14, INV-1358): what an outside MCP client — another
  * agent, a script — may ask this installation to do. Moved out of server.ts so the contract
@@ -18,6 +19,7 @@ import { type ChangeFeed, describeWatch, WAIT_MAX_SECONDS } from "./mcp-watch.ts
 import type { McpServerTool } from "./mcp-server.ts";
 
 export interface McpToolsDeps {
+  progressAccess?: (principalId: string) => ProgressSourceAccess;
   registry: AgentRegistry;
   orchestrator: Orchestrator;
   principals: { resolve(id: string): { name: string }; list?(): readonly { id: string; name: string }[]; byId?(id: string): { aliases?: readonly string[] } | undefined };
@@ -42,7 +44,7 @@ export interface McpToolsDeps {
 export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
   const { registry, orchestrator, principals, workDir, log } = deps;
   const nameOf = (id: string) => registry.tryGet(id)?.profile.name ?? id;
-  const recordOf = (task: Task) => taskRecord(task, { nameOf, forksOf: id => orchestrator.pendingWork?.forks?.ofTask(id) ?? [], ...(deps.stageWorld !== undefined ? { stageWorld: deps.stageWorld } : {}) });
+  const recordOf = (task: Task, principalId: string) => taskRecord(task, { progressAccess: deps.progressAccess?.(principalId) ?? { agent: () => false, box: () => false }, nameOf, forksOf: id => orchestrator.pendingWork?.forks?.ofTask(id) ?? [], ...(deps.stageWorld !== undefined ? { stageWorld: deps.stageWorld } : {}) });
   /** task_status, once: the text it always said, and the same tasks as the record has them (INV-1506). */
   const statusOf = (input: Record<string, unknown>, principalId: string): { text: string; structured: Record<string, unknown> } => {
     const board = orchestrator.tasks;
@@ -53,7 +55,7 @@ export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
       const mine = board.list().filter(task => (input.scope === "all" || task.requester === principalId) && isLive(task.status));
       return {
         text: mine.length === 0 ? "Nothing of yours is still open." : mine.map(task => `${describeOutcome(outcomeOf(task))}\n${describeTask(task, nameOf, board)}`).join("\n"),
-        structured: { tasks: mine.map(recordOf) },
+        structured: { tasks: mine.map(task => recordOf(task, principalId)) },
       };
     }
     const task = board.get(id);
@@ -65,7 +67,7 @@ export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
       .join("\n");
     // The division of work (INV-1667): one line per fork of its turns, how it stands, and the brief.
     const forks = (orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []).map(fork => `  fork ${fork.child} ${fork.status}${fork.reason !== undefined ? ` (${fork.reason})` : ""} "${fork.brief}" last ${fork.lastAt}`);
-    return { text: `${describeOutcome(outcomeOf(task))}\n${describeTask(task, nameOf, board)}\n${history}${forks.length > 0 ? `\nforks:\n${forks.join("\n")}` : ""}`, structured: { tasks: [recordOf(task)] } };
+    return { text: `${describeOutcome(outcomeOf(task))}\n${describeTask(task, nameOf, board)}\n${history}${forks.length > 0 ? `\nforks:\n${forks.join("\n")}` : ""}`, structured: { tasks: [recordOf(task, principalId)] } };
   };
   return [
     {

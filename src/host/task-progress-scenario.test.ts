@@ -70,3 +70,26 @@ test("real task turns keep 70 objects, 3 failures and only 8 independently check
     assert.equal(card.lines[0]!.includes("100%"), false, "an agent's numeric prop cannot replace canonical task progress");
   } finally { episode.cleanup(); }
 });
+
+test("a delayed resume cannot recover progress authority by taking its Goal again", async () => {
+  const tasks = new TaskStore(null);
+  let taskId = "", round = 0;
+  const episode = await runEpisode({
+    team: [{ name: "Nova", tools: ["Tasks", "TaskProgress"] }], says: [], tasks,
+    script: () => round++ === 0 ? { call: "Tasks", input: { action: "take", id: taskId } } : round === 2 ? { call: "TaskProgress", input: { action: "read" } } : { say: "The old callback has no progress authority." },
+    drive: async ({ bus, frontId }) => {
+      const task = tasks.create({ title: "Resume collection work", requester: "p", assigneeId: frontId, conversation: "main", pursuit: newPursuit({ objective: "Inspect objects", workId: "goal-work" }) })!;
+      taskId = task.id;
+      const admission = tasks.progress.reserve(task.id, "goal-work", "continuation")!;
+      const binding = { taskId, role: "executor" as const, progressAdmission: admission };
+      tasks.setPursuit(taskId, pursuit => ({ ...pursuit, status: "paused", pausedReason: "person" }), "pause");
+      tasks.setPursuit(taskId, pursuit => ({ ...pursuit, status: "active", pausedReason: undefined }), "resume");
+      bus.sendFromUser(frontId, "A delayed automatic resume", { taskBinding: binding, resumeOf: { id: "old-turn", attempt: 2, workId: "goal-work", taskBinding: binding }, synthetic: true, origin: "host:recovery" });
+      await bus.wake(frontId); await bus.idle();
+    },
+  });
+  try {
+    assert.ok(episode.score.refusals.some(line => line.includes("No current admitted progress execution")));
+    assert.equal(summarizeTaskProgress(tasks.get(taskId)!), undefined);
+  } finally { episode.cleanup(); }
+});
