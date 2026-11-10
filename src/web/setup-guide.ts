@@ -1,10 +1,11 @@
 /** First-use guide. Used installations do not become new when a box disconnects. */
 export const SETUP_GUIDE_STYLE = String.raw`
-.setup-guide { margin:12px 16px 0; padding:12px; border:1px solid var(--border-strong); border-radius:var(--radius-card); background:var(--surface); }
-.setup-guide-head { margin-bottom:8px; display:flex; flex-wrap:wrap; justify-content:space-between; gap:8px; }
+.setup-guide { margin:var(--sp-3) var(--sp-4) 0; padding:var(--sp-3); border:1px solid var(--border-strong); border-radius:var(--radius-card); background:var(--surface); }
+.setup-guide-head { margin-bottom:var(--sp-2); display:flex; flex-wrap:wrap; justify-content:space-between; gap:var(--sp-2); }
 .setup-guide-head a { text-transform:none; letter-spacing:0; }
-.setup-guide-step { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:4px 0; font-size:12px; }
-.setup-guide-mark { width:16px; flex:none; }
+.setup-guide-step { display:flex; flex-wrap:wrap; gap:var(--sp-2); align-items:center; padding:var(--sp-1) 0; font-size:var(--fs-sm); }
+.setup-guide-mark { width:var(--sp-4); flex:none; color:var(--muted); }
+.setup-guide-mark.is-done { color:var(--success); }
 .setup-guide-copy { flex:1 1 12rem; min-width:0; overflow-wrap:anywhere; }
 .setup-guide-step .btn { margin-left:auto; max-width:100%; white-space:normal; }
 `;
@@ -48,7 +49,7 @@ function refreshSetup() {
       '<div class="eyebrow setup-guide-head"><span>' + esc(t("ui.setup.title")) + '</span><a href="#" data-setup-close="1">' + esc(t("ui.setup.close")) + "</a></div>" +
       steps.map(function (x, i) {
         return '<div class="setup-guide-step">' +
-          '<span class="setup-guide-mark" style="color:' + (x.done ? "var(--success)" : "var(--muted)") + '">' + (x.done ? "✓" : String(i + 1)) + "</span>" +
+          '<span class="setup-guide-mark' + (x.done ? " is-done" : "") + '">' + (x.done ? "✓" : String(i + 1)) + "</span>" +
           '<div class="setup-guide-copy"><b>' + esc(x.head) + "</b> <span class=\"dim\">" + esc(x.sub) + "</span>" +
             (x.cli ? ' <code class="mono dim ui-tiny">' + esc(x.cli) + "</code>" : "") + "</div>" +
           (x.skip && !x.done ? '<a href="#" data-setup-skip="' + esc(x.skip) + '" class="dim ui-tiny">' + esc(t("ui.setup.skip")) + "</a>" : "") +
