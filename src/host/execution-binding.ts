@@ -30,6 +30,7 @@ export function admittedTaskBinding(input: {
   const binding = candidates[0]!;
   const task = tasks.get(binding.taskId);
   if (!task || task.proposedBy !== undefined) return undefined;
+  if (goal && task.pursuit?.workId !== goal.workId) return undefined;
   if (binding.role === "verifier") {
     const verifying = task.pursuit?.verifying;
     return goal?.verify && goal.taskId === task.id && task.pursuit?.workId === goal.workId &&

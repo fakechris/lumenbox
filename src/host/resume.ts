@@ -236,6 +236,7 @@ export class TurnLedger {
   private lines = 0;
   private readonly executionArchives: ExecutionArchives;
   private readonly executionListeners = new Set<(record: ExecutionStepRecord | ExecutionSelectionRecord | ExecutionMaintenanceRecord) => void>();
+  private readonly pendingExecution = new Map<string, Map<string, ExecutionStepRecord | ExecutionSelectionRecord | ExecutionMaintenanceRecord>>();
 
   /**
    * `null` means keep no ledger; omitted means the default path.
@@ -324,7 +325,16 @@ export class TurnLedger {
     this.executionListeners.add(listener); return () => this.executionListeners.delete(listener);
   }
   private executionChanged(record: ExecutionStepRecord | ExecutionSelectionRecord | ExecutionMaintenanceRecord): void {
+    if (record.taskBinding) {
+      const tasks = this.pendingExecution.get(record.id) ?? new Map();
+      tasks.set(record.taskBinding.taskId, record); this.pendingExecution.set(record.id, tasks);
+    }
     for (const listener of this.executionListeners) { try { listener(record); } catch { /* notification never redoes an effect */ } }
+  }
+
+  /** Re-publish invalidation after transcript results land, including recovery appends. No second result record. */
+  executionCommitted(id: string): void {
+    for (const record of this.pendingExecution.get(id)?.values() ?? []) this.executionChanged(record);
   }
 
   /** Explicit history reader: monthly archives and live records, with copied archive/live rows deduplicated. */
@@ -384,6 +394,7 @@ export class TurnLedger {
       ...(category !== undefined ? { category } : {}),
       ...(evidence !== undefined && evidence.length > 0 ? { evidence: [...evidence] } : {}),
     });
+    this.executionCommitted(id); this.pendingExecution.delete(id);
     if (this.lines > COMPACT_AT && this.interrupted().length === 0) this.compact();
   }
 

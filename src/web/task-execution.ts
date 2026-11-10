@@ -53,7 +53,11 @@ export class TaskExecutions {
     const grouped = new Map<string, { start?: ExecutionStepRecord; end?: ExecutionStepRecord }>();
     const ended = new Set<string>(), active = new Map<string, string>();
     for (const r of source.records) {
-      if (r.event === "begin" && r.executionId) active.set(r.id, r.executionId);
+      if (r.event === "begin" && r.executionId) {
+        const previous = active.get(r.id);
+        if (previous && previous !== r.executionId) ended.add(previous);
+        active.set(r.id, r.executionId);
+      }
       else if (r.event === "end" && active.has(r.id)) ended.add(active.get(r.id)!);
     }
     const begunHere = source.records.some(r => r.event === "begin" && r.taskBinding?.taskId === taskId);
@@ -85,7 +89,7 @@ export class TaskExecutions {
       const content = contentFor(catalog.values, r);
       const known = content.result !== undefined;
       const reported = pair.end?.outcome;
-      const coverage = content.call && pair.start && (!pair.end || known) ? "exact" : "partial";
+      const coverage = content.call && pair.start && (pair.end ? known : !known && !ended.has(r.executionId)) ? "exact" : "partial";
       if (coverage === "partial") partial = true;
       const view: ExecutionStep = {
         id: Buffer.from(JSON.stringify([this.deps.namespace, r.id, r.executionId, r.toolUseId])).toString("base64url"),
@@ -94,7 +98,7 @@ export class TaskExecutions {
         conversation: r.conversation, contextEpoch: r.contextEpoch,
         role: selected.role, ...(selected.parent ? { parent: selected.parent } : {}),
         name: content.call?.name ?? r.tool, detail: (content.call?.detail ?? "").split("\n")[0]!.slice(0, 160),
-        outcome: reported === "unknown" || reported === "waiting" || reported === "refused" ? reported : known ? (reported === "failed" || content.result!.isError ? "failed" : "succeeded") : pair.end || ended.has(r.executionId) ? "unknown" : "running",
+        outcome: reported === "unknown" || reported === "waiting" || reported === "refused" ? reported : known ? (!pair.end ? "unknown" : reported === "failed" || content.result!.isError ? "failed" : "succeeded") : pair.end || ended.has(r.executionId) ? "unknown" : "running",
         ...(pair.start ? { startedAt: pair.start.at } : {}), ...(pair.end ? { endedAt: pair.end.at } : {}),
         sourceRefs: [pair.start?.recordId, pair.end?.recordId, content.call?.hash, content.result?.hash].filter((v): v is string => !!v), coverage,
         ...(pair.end?.gate ? { gate: pair.end.gate } : {}),

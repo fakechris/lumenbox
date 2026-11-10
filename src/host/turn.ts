@@ -1728,6 +1728,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
           turnId, executionId, attempt, textThrough,
         } satisfies TranscriptEntry;
         registry.appendTranscript(agent.id, entry, conversation);
+        deps.turns?.executionCommitted(turnId);
         history = [...history, entry];
       }
     }
@@ -1832,6 +1833,7 @@ ${outcome.text}`;
           turnId, executionId, attempt, textThrough,
         } satisfies TranscriptEntry;
         registry.appendTranscript(agent.id, entry, conversation);
+        deps.turns?.executionCommitted(turnId);
         history = [...history, entry];
       }
     }
@@ -3462,6 +3464,7 @@ ${outcome.text}`;
       at: new Date().toISOString(),
       turnId, executionId, attempt, textThrough,
     } satisfies TranscriptEntry, conversation);
+    deps.turns?.executionCommitted(turnId);
     // Settled only now, with the results on disk: a crash before this line leaves the
     // calls open, and open means "the result may be missing", which is exactly the case.
     // A call waiting on a person is not settled by its refusal being on disk: the

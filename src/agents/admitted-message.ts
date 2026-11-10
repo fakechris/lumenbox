@@ -101,4 +101,3 @@ export interface InboundMessage {
   goal?: GoalMarker;
   taskBinding?: TaskBinding;
 }
-

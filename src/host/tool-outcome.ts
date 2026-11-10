@@ -43,4 +43,3 @@ export interface ToolOutcome {
   effects?: ToolEffect[];
   effectsFrom?: string;
 }
-

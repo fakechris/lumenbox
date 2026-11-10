@@ -42,3 +42,26 @@ test("a selection boundary survives restart and in-place attempts keep their own
     assert.deepEqual(begins.map(b => b.executionId), ["first", "second"]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("Goal continuation and verifier attribution require the registered work and verification conversation", async () => {
+  const { newPursuit } = await import("./goal-mode.ts");
+  const dir = mkdtempSync(join(tmpdir(), "execution-goal-binding-"));
+  try {
+    const tasks = new TaskStore(join(dir, "tasks.jsonl"));
+    const task = tasks.create({ title: "Goal", requester: "p", assigneeId: "a", conversation: "chat",
+      pursuit: newPursuit({ objective: "check objects", workId: "work", chatKey: "chat" }) })!;
+    const goal = { taskId: task.id, workId: "work", seq: 2, personSeq: 1 };
+    const context = { agentId: "a", conversation: "chat", inbound: [], tasks, goal };
+    assert.equal(admittedTaskBinding(context)?.taskId, task.id);
+    assert.equal(admittedTaskBinding({ ...context, goal: { ...goal, workId: "stale" } }), undefined);
+    tasks.setPursuit(task.id, p => ({ ...p, status: "verifying", verifying: {
+      startedAt: new Date().toISOString(), conversation: "verify/one", agentId: "reviewer", attempt: 2,
+    } }), "verification admission");
+    const verification = { ...context, agentId: "reviewer", conversation: "verify/one",
+      goal: { ...goal, verify: { attempt: 2, confirmedCommands: [] } } };
+    assert.equal(admittedTaskBinding(verification)?.role, "verifier");
+    assert.equal(admittedTaskBinding({ ...verification, conversation: "chat" }), undefined);
+    assert.equal(admittedTaskBinding({ ...verification, agentId: "stranger" }), undefined);
+    assert.equal(admittedTaskBinding({ ...verification, goal: { ...verification.goal, workId: "stale" } }), undefined);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

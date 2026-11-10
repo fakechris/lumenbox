@@ -91,13 +91,34 @@ test("task, agent and historical box authorization intersect on every page and d
 test("same turn/call in another invocation remains a distinct attempt and never steals a result", () => {
   const f = fixture();
   try {
-    f.turns.end("turn", "continued");
+    f.start(1); // The process dies here: no end record for the original invocation.
     f.turns.begin({ ...f.scope, executionId: "resumed", attempt: 2, about: "resume" });
-    f.turns.observeExecution({ ...f.scope, executionId: "resumed", attempt: 2, event: "step", recordId: "resumed-start", phase: "start", toolUseId: "c0", tool: "read_file", at: new Date(10_000).toISOString() });
+    f.turns.observeExecution({ ...f.scope, executionId: "resumed", attempt: 2, event: "step", recordId: "resumed-start", phase: "start", toolUseId: "c1", tool: "read_file", at: new Date(10_000).toISOString() });
     const page = f.service().open("task-A", access);
-    assert.equal(page.total, 2);
-    assert.deepEqual(page.steps.map(s => s.outcome), ["succeeded", "running"]);
-    assert.notEqual(page.steps[0]!.id, page.steps[1]!.id);
+    assert.equal(page.total, 3);
+    assert.deepEqual(page.steps.map(s => s.outcome), ["succeeded", "unknown", "running"]);
+    assert.notEqual(page.steps[1]!.id, page.steps[2]!.id);
+  } finally { f.cleanup(); }
+});
+
+test("an early end notification is followed by invalidation after durable transcript results", () => {
+  const f = fixture(0);
+  try {
+    const executions = f.service();
+    const snapshots: ReturnType<TaskExecutions["open"]>[] = [];
+    const stop = f.turns.onExecution(record => {
+      if (record.event === "step" && record.phase === "end") snapshots.push(executions.open("task-A", access));
+    });
+    f.start(0);
+    f.turns.observeExecution({ ...f.scope, event: "step", recordId: "end", phase: "end", toolUseId: "c0", tool: "read_file", at: new Date().toISOString() });
+    assert.equal(snapshots.at(-1)!.steps[0]!.outcome, "unknown");
+    f.entries.push({ role: "user", kind: "results", turnId: "turn", executionId: "invocation",
+      blocks: [{ type: "tool_result", tool_use_id: "c0", content: "durable result" }] });
+    f.turns.executionCommitted("turn");
+    assert.equal(snapshots.at(-1)!.steps[0]!.outcome, "succeeded");
+    assert.equal(executions.detail("task-A", access, { snapshot: snapshots.at(-1)!.snapshot, step: snapshots.at(-1)!.steps[0]!.id }).result, "durable result");
+    assert.equal(snapshots[0]!.steps[0]!.outcome, "unknown", "the old high-water remains frozen");
+    stop();
   } finally { f.cleanup(); }
 });
 
@@ -110,6 +131,19 @@ test("missing or corrupt sources are partial and an ended call without a durable
     assert.equal(page.coverage, "partial");
     assert.equal(page.steps[0]!.outcome, "unknown");
     assert.equal(service.detail("task-A", access, { snapshot: page.snapshot, step: page.steps[0]!.id }).resultCoverage, "not-recorded-at-snapshot");
+  } finally { f.cleanup(); }
+});
+
+test("a durable result without the optional typed end observation cannot imply success", () => {
+  const f = fixture(0);
+  try {
+    f.start(0);
+    f.entries.push({ role: "user", kind: "results", turnId: "turn", executionId: "invocation",
+      blocks: [{ type: "tool_result", tool_use_id: "c0", content: "Exit code: 1", is_error: false }] });
+    const page = f.service().open("task-A", access);
+    assert.equal(page.steps[0]!.outcome, "unknown");
+    assert.equal(page.steps[0]!.coverage, "partial");
+    assert.equal(page.coverage, "partial");
   } finally { f.cleanup(); }
 });
 
