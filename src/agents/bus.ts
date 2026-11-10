@@ -758,7 +758,7 @@ export class AgentBus {
           acknowledged = true;
         };
         if (!this.deferredStart) acknowledge();
-        this.onEvent({ type: "turn_started", agentId, inboundCount: inbound.length });
+        this.onEvent({ type: "turn_started", agentId, conversation, inboundCount: inbound.length });
         started = true;
         await this.runTurn(agent, inbound, controller.signal, conversation, acknowledge);
         // A rejected goal wake may return without opening a turn. It is consumed too.
@@ -775,7 +775,7 @@ export class AgentBus {
         }
         // After the active flag is cleared, not before (INV-770): "finished" is read by the goal
         // loop as "this conversation is free", and it used to fire while the turn still held it.
-        if (started) this.onEvent({ type: "turn_finished", agentId });
+        if (started) this.onEvent({ type: "turn_finished", agentId, conversation });
       }
     })();
 
@@ -888,8 +888,8 @@ export type BusEvent =
       priority: boolean;
       text: string;
     }
-  | { type: "turn_started"; agentId: string; inboundCount: number }
-  | { type: "turn_finished"; agentId: string }
+  | { type: "turn_started"; agentId: string; conversation?: string; inboundCount: number }
+  | { type: "turn_finished"; agentId: string; conversation?: string }
   | {
       type: "turn_failed";
       agentId: string;

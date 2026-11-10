@@ -129,3 +129,11 @@ test("in-place recovery may reuse a logical call, but its invocation result rema
   event({ ...call, executionId: "resumed", type: "tool_end", summary: "read back confirmed" });
   assert.deepEqual(Array.from(scope.thread[0]!.calls, c => c.result), ["unknown before restart", "read back confirmed"]);
 });
+
+test("reset replay deduplicates admitted prompts by message id, while a new identical prompt remains visible", () => {
+  const p = page();
+  p.replay([{ kind: "text", role: "user", text: "Check this", causedBy: ["admission-one"] }]);
+  p.event({ type: "prompt", agentId: "a", messageId: "admission-one", text: "Check this" });
+  p.event({ type: "prompt", agentId: "a", messageId: "admission-two", text: "Check this" });
+  assert.equal(p.scope.thread.filter(item => item.kind === "person").length, 2);
+});
