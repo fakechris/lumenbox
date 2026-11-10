@@ -5,11 +5,12 @@ import { APP_PAGE } from "./page-locale.ts";
 import { toDisplayEntries } from "./transcript.ts";
 
 /** Execute the page's actual event handler; observe the same work rows the renderer receives. */
-function page() {
+function page(batchDrawing = false) {
   const html = APP_PAGE("en");
   const handler = html.slice(html.indexOf("stream.onmessage = function"), html.indexOf("stream.onerror"));
   const helpers = /\/\* Live tool calls \*\/([\s\S]+?)\/\* End live tool calls \*\//.exec(html)?.[1] ?? "";
   const scope = {
+    window: {},
     stream: {} as { onmessage: (raw: { data: string }) => void },
     current: "a", currentConversation: "main", openAgent: null, openWork: null,
     openCall: new Map(), thread: [] as { kind: string; done?: boolean; calls: { result: string; isError?: boolean }[] }[],
@@ -19,10 +20,14 @@ function page() {
     $: () => ({ style: {} }), busy: new Set(), live: new Map(),
     closeOpen: () => { if (scope.openWork) (scope.openWork as { done: boolean }).done = true; },
     dropWorking: () => {}, renderAgents: () => {}, refresh: () => {},
-    redrawItem: () => {}, pushItem: (item: never) => { scope.thread.push(item); return item; },
+    redrawItem: () => {}, nearBottom: () => false,
+    draws: [] as number[],
+    drawItem: (item: { calls?: unknown[] }) => { scope.draws.push(item.calls?.length ?? 0); return { isConnected: true, replaceWith: () => {} }; },
+    pushItem: (item: never) => { Object.assign(item, { node: { isConnected: true, replaceWith: () => {} } }); scope.thread.push(item); return item; },
   };
   const replay = html.slice(html.indexOf("function replayEntry("), html.indexOf("function agentById("));
-  runInNewContext(helpers + replay + handler, scope);
+  const rendering = batchDrawing ? html.slice(html.indexOf("var historyDraws = null;"), html.indexOf("function whoLine(")) : "";
+  runInNewContext(rendering + helpers + replay + handler, scope);
   return { scope, event: (event: object) => scope.stream.onmessage({ data: JSON.stringify(event) }),
     begin: () => runInNewContext("beginLiveReplay()", scope),
     replay: (entries: unknown[]) => { for (const entry of entries) runInNewContext("replayEntry(current, " + JSON.stringify(entry) + ", 0, false)", scope); },
@@ -136,4 +141,19 @@ test("reset replay deduplicates admitted prompts by message id, while a new iden
   p.event({ type: "prompt", agentId: "a", messageId: "admission-one", text: "Check this" });
   p.event({ type: "prompt", agentId: "a", messageId: "admission-two", text: "Check this" });
   assert.equal(p.scope.thread.filter(item => item.kind === "person").length, 2);
+});
+
+
+test("a 2000-call history is drawn once per work group and live updates still draw immediately", () => {
+  const view = page(true), scope = view.scope;
+  runInNewContext(`batchHistoryDraw(function () {
+    for (var i = 0; i < 2000; i++) replayEntry(current,{kind:"tools",tools:[{name:"read_file",result:i===1999?undefined:"retained "+i,toolUseId:"call-"+i,turnId:"turn"}]},i,false);
+  })`, scope);
+  assert.equal(scope.thread[0]!.calls.length, 2000);
+  assert.deepEqual(scope.draws, [2000], "replaying calls must not repeatedly rebuild all earlier call nodes");
+  view.event({ type: "tool_end", agentId: "a", conversation: "main", turnId: "turn", toolUseId: "call-1999", summary: "final result" });
+  assert.equal(scope.thread[0]!.calls[1999]!.result, "final result");
+  assert.deepEqual(scope.draws, [2000, 2000], "the draw batch ends before the live stream resumes");
+  assert.throws(() => runInNewContext('batchHistoryDraw(function(){redrawItem(thread[0]);throw new Error("partial replay")})', scope));
+  assert.equal(scope.draws.length, 3, "a failed replay still restores normal drawing and flushes retained work");
 });

@@ -25,10 +25,11 @@ export function taskExecutionRoute(route: string, url: URL, res: ServerResponse,
       deps.send(res, 200, deps.executions.page(taskId, deps.access, { snapshot,
         ...(url.searchParams.has("role") || url.searchParams.has("outcome") || url.searchParams.has("work") ? { filters } : {}),
         ...(url.searchParams.has("cursor") ? { cursor: url.searchParams.get("cursor")! } : {}),
+        ...(url.searchParams.has("anchor") ? { anchor: url.searchParams.get("anchor")! } : {}),
         ...(url.searchParams.has("limit") ? { limit: Number(url.searchParams.get("limit")) } : {}) }));
     } else {
       if (url.searchParams.has("cursor")) throw new ExecutionReset("snapshot required");
-      deps.send(res, 200, { ...deps.executions.open(taskId, deps.access, filters), ...(deps.record ? { task: deps.record(taskId) } : {}) });
+      deps.send(res, 200, { ...deps.executions.open(taskId, deps.access, filters, url.searchParams.get("anchor") ?? undefined), ...(deps.record ? { task: deps.record(taskId) } : {}) });
     }
   } catch (error) {
     if (!(error instanceof ExecutionReset)) throw error;

@@ -1,3 +1,4 @@
+import { UI_TASK_FOCUS } from "./ui-task-focus.ts";
 /**
  * One bundle for everything a person reads from this installation (INV-544).
  *
@@ -36,6 +37,7 @@ const UI_WORDS: Record<string, readonly [zh: string, en: string]> = {
   ...SHELL_WORDS, // the desktop shell's own notices (INV-1709)
   ...UI_PAGE,
   ...UI_APP,
+  ...UI_TASK_FOCUS,
   ...UI_SECTIONS,
   ...Object.fromEntries(SETTINGS_PANES.map(pane => [`ui.pane.${pane.key}`, [pane.titleZh, pane.title] as const])),
   "ui.manualUrl": [MANUAL_URL_ZH, MANUAL_URL],

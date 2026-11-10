@@ -49,6 +49,12 @@ test("2000 retained steps paginate exactly once after archive/live duplication a
     }
     assert.equal(ids.length, 2000);
     assert.equal(new Set(ids).size, 2000);
+    const anchored = service.page("task-A", access, { snapshot: page.snapshot, anchor: ids[1450] });
+    assert.equal(anchored.steps[0]!.id, ids[1450]);
+    assert.equal(anchored.steps.length, 100);
+    const preceding = service.page("task-A", access, { snapshot: page.snapshot, cursor: anchored.previousCursor! });
+    assert.equal(preceding.steps.at(-1)!.id, ids[1449]);
+    assert.equal(anchored.activity.latest!.toolUseId, "c1999");
     const reopened = f.service();
     assert.equal(reopened.open("task-A", access).total, 2000);
     assert.throws(() => reopened.page("task-A", access, { snapshot: page.snapshot }), ExecutionReset);
@@ -238,4 +244,34 @@ test("HTTP execution endpoints freeze paging and recheck access before returning
     await new Promise<void>(resolve => server.close(() => resolve()));
     f.cleanup();
   }
+});
+
+test("cost scope uses retained explicit turns and excludes shared or unreadable scopes", () => {
+  const f = fixture();
+  try {
+    const scope = f.service().costScope("task-A", access);
+    assert.deepEqual([...scope.turns.keys()], ["turn"]);
+    assert.equal(scope.turns.get("turn")!.has("agent"), true);
+    f.turns.observeExecution({ ...f.scope, event: "step", recordId: "another-task", phase: "start", toolUseId: "take", tool: "Tasks",
+      taskBinding: { taskId: "task-B", role: "executor" }, at: new Date().toISOString() });
+    const shared = f.service().costScope("task-A", access);
+    assert.equal(shared.turns.size, 0, "whole-turn usage cannot be assigned wholly to A after a task switch");
+    assert.equal(shared.partial, true);
+    f.turns.begin({ ...f.scope, id: "hidden-turn", agentId: "hidden", executionId: "hidden-execution", about: "not readable" });
+    assert.equal(f.service().costScope("task-A", access).turns.has("hidden-turn"), false);
+  } finally { f.cleanup(); }
+});
+
+test("current task approval hints join the recorded call and current pending ledger, with historical box access", () => {
+  const f = fixture();
+  try {
+    f.turns.observeExecution({ ...f.scope, event: "step", recordId: "waiting-A", phase: "end", toolUseId: "c0", tool: "read_file", at: new Date().toISOString(),
+      gate: { verdict: "waiting", basis: "requires confirmation", approvalId: "approval-A" } });
+    f.turns.observeExecution({ ...f.scope, taskBinding: { taskId: "task-B", role: "executor" }, event: "step", recordId: "waiting-B", phase: "end", toolUseId: "other", tool: "read_file", at: new Date().toISOString(),
+      gate: { verdict: "waiting", basis: "another task", approvalId: "approval-B" } });
+    const pending = [{ id: "approval-A", agentId: "agent", description: "confirm A" }, { id: "approval-B", agentId: "agent", description: "confirm B" }];
+    assert.deepEqual(f.service().approvals("task-A", access, pending), [{ id: "approval-A", description: "confirm A" }]);
+    assert.deepEqual(f.service().approvals("task-A", access, []), [], "a historical waiting verdict is not a current need");
+    assert.deepEqual(f.service().approvals("task-A", { ...access, box: () => false }, pending), []);
+  } finally { f.cleanup(); }
 });

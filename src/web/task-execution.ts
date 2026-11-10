@@ -46,8 +46,40 @@ export class TaskExecutions {
     return access.task(step.taskId) && access.agent(step.agentId) && access.box(step.boxId);
   }
 
+  /** Whole-turn costs only when every retained scope of that logical turn is attributable and readable. */
+  costScope(taskId: string, access: ExecutionAccess) {
+    if (!access.task(taskId)) throw new ExecutionReset("task unavailable");
+    const source = this.deps.turns.executionRecords();
+    const observations = source.records.flatMap(record => record.event === "begin" || record.event === "step" || record.event === "maintenance" ? [record] : []);
+    const turns = new Map<string, Set<string>>();
+    let partial = source.partial;
+    for (const record of observations) {
+      if (record.taskBinding?.taskId !== taskId) continue;
+      if (!record.boxId || !this.allowed({ taskId, agentId: record.agentId, boxId: record.boxId }, access)) { partial = true; continue; }
+      const agents = turns.get(record.id) ?? new Set(); agents.add(record.agentId); turns.set(record.id, agents);
+    }
+    for (const record of observations) {
+      if (!turns.has(record.id)) continue;
+      if (record.taskBinding?.taskId !== taskId || !record.boxId || !access.agent(record.agentId) || !access.box(record.boxId)) { turns.delete(record.id); partial = true; }
+    }
+    return { turns, partial, scope: "explicit-retained-unshared-turns" as const };
+  }
+
+  /** Join live approvals only through their recorded call binding, never the currently doing task. */
+  approvals<T extends { id: string; agentId: string; description: string }>(taskId: string, access: ExecutionAccess, pending: readonly T[]) {
+    if (!pending.length || !access.task(taskId)) return [];
+    const ids = new Map(pending.map(item => [item.id, item]));
+    const matched = new Set<string>();
+    for (const record of this.deps.turns.executionRecords().records) {
+      if (record.event !== "step" || !record.agentId || !record.boxId || record.taskBinding?.taskId !== taskId || !this.allowed({ taskId, agentId: record.agentId, boxId: record.boxId }, access)) continue;
+      const id = record.gate?.approvalId, item = id ? ids.get(id) : undefined;
+      if (item && item.agentId === record.agentId) matched.add(item.id);
+    }
+    return pending.filter(item => matched.has(item.id)).map(item => ({ id: item.id, description: item.description }));
+  }
+
   /** Snapshot rows are immutable metadata and source hashes, never copies of all result bodies. */
-  open(taskId: string, access: ExecutionAccess, filters: ExecutionFilters = {}) {
+  open(taskId: string, access: ExecutionAccess, filters: ExecutionFilters = {}, anchor?: string) {
     if (!access.task(taskId)) throw new ExecutionReset("task unavailable");
     const source = this.deps.turns.executionRecords();
     const grouped = new Map<string, { start?: ExecutionStepRecord; end?: ExecutionStepRecord }>();
@@ -126,29 +158,38 @@ export class TaskExecutions {
     this.snapshots.set(snapshot.id, snapshot);
     this.prune();
     if (!this.snapshots.has(snapshot.id)) throw new ExecutionReset("snapshot exceeds metadata capacity");
-    return this.page(taskId, access, { snapshot: snapshot.id, limit: 100 });
+    return this.page(taskId, access, { snapshot: snapshot.id, limit: 100, ...(anchor ? { anchor } : {}) });
   }
 
-  page(taskId: string, access: ExecutionAccess, input: { snapshot: string; cursor?: string; limit?: number; filters?: ExecutionFilters }) {
+  page(taskId: string, access: ExecutionAccess, input: { snapshot: string; cursor?: string; anchor?: string; limit?: number; filters?: ExecutionFilters }) {
     const snapshot = this.snapshot(taskId, input.snapshot, access);
     if (input.filters && ["workId", "role", "outcome"].some(k => input.filters![k as keyof ExecutionFilters] !== snapshot.filters[k as keyof ExecutionFilters])) throw new ExecutionReset("filters changed");
     const rows = snapshot.rows.filter(r => this.allowed(r.view, access));
-    let offset = 0;
-    if (input.cursor) {
-      let cursor: { snapshot?: string; after?: string };
-      try { cursor = JSON.parse(Buffer.from(input.cursor, "base64url").toString("utf8")); } catch { throw new ExecutionReset("invalid cursor"); }
-      if (cursor.snapshot !== snapshot.id || !cursor.after) throw new ExecutionReset("cursor scope changed");
-      const found = rows.findIndex(r => r.view.id === cursor.after);
-      if (found < 0) throw new ExecutionReset("cursor item unavailable");
-      offset = found + 1;
-    }
     const limit = Math.min(200, Math.max(1, Math.trunc(input.limit ?? 100)));
     if (!Number.isFinite(limit)) throw new ExecutionReset("invalid page limit");
+    let offset = 0;
+    if (input.anchor) {
+      if (input.cursor) throw new ExecutionReset("conflicting page position");
+      offset = rows.findIndex(row => row.view.id === input.anchor);
+      if (offset < 0) throw new ExecutionReset("anchor unavailable");
+    }
+    if (input.cursor) {
+      let cursor: { snapshot?: string; after?: string; before?: string };
+      try { cursor = JSON.parse(Buffer.from(input.cursor, "base64url").toString("utf8")); } catch { throw new ExecutionReset("invalid cursor"); }
+      if (cursor.snapshot !== snapshot.id || (!cursor.after && !cursor.before) || (cursor.after && cursor.before)) throw new ExecutionReset("cursor scope changed");
+      const found = rows.findIndex(r => r.view.id === (cursor.after ?? cursor.before));
+      if (found < 0) throw new ExecutionReset("cursor item unavailable");
+      offset = cursor.before ? Math.max(0, found - limit) : found + 1;
+    }
     const page = rows.slice(offset, offset + limit);
     const last = page.at(-1);
     return { schema: 1, snapshot: snapshot.id, highWater: snapshot.highWater, taskId,
       scope: "authorized-retained-bindings" as const, historyCoverage: "explicit-bindings-only" as const, filters: snapshot.filters, coverage: snapshot.partial ? "partial" as const : "exact" as const,
       total: rows.length, steps: page.map(r => r.view),
+      from: offset + (page.length ? 1 : 0), to: offset + page.length,
+      activity: { latest: rows.at(-1)?.view ?? null, current: rows.findLast(row => row.view.outcome === "running")?.view ?? null,
+        groups: [...new Map(rows.map(row => [JSON.stringify([row.view.workId, row.view.role, row.view.conversation, row.view.executionId]), { workId: row.view.workId, role: row.view.role, conversation: row.view.conversation, attempt: row.view.attempt }])).values()].slice(0, 200) },
+      previousCursor: offset > 0 && page[0] ? Buffer.from(JSON.stringify({ snapshot: snapshot.id, before: page[0].view.id })).toString("base64url") : null,
       nextCursor: offset + page.length < rows.length && last ? Buffer.from(JSON.stringify({ snapshot: snapshot.id, after: last.view.id })).toString("base64url") : null };
   }
 
