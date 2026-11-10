@@ -448,6 +448,8 @@ export const FORK_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
 
 /** Whether a conversation name is a fork child's. */
 /** The tools that reach the person. Withheld on a turn teammates opened (docs/42 §2). */
+export const DESKTOP_TOOLS = new Set(["computer", "browser_open", "browser_snapshot", "browser_read", "browser_act", "browser_scroll", "browser_wait_for", "browser_pages", "browser_upload", "browser_fill_secret", "RunOperation", "HandOverDesktop"]);
+export const HOST_EXECUTION_UNAVAILABLE = "Host execution is not available on this box.";
 export const PERSON_FACING_TOOLS: ReadonlySet<string> = new Set(["AskUser", "AskSecret", "HandOverDesktop", "ShowUI"]);
 
 export function isForkConversation(conversation: string | undefined): boolean {
@@ -2634,11 +2636,9 @@ export async function dispatchTool(
     };
   }
 
-  if (name === "computer" || ["browser_open", "browser_snapshot", "browser_read", "browser_act",
-    "browser_scroll", "browser_wait_for", "browser_pages", "browser_upload", "browser_fill_secret", "RunOperation",
-    "HandOverDesktop"].includes(name)) {
+  if (DESKTOP_TOOLS.has(name)) {
     try { await context.ensureDesktop?.(); }
-    catch (error) { return { text: error instanceof Error ? error.message : String(error), isError: true }; }
+    catch (error) { return { text: error instanceof Error ? error.message : String(error), isError: true, unavailable: true }; }
   }
 
   switch (name) {
@@ -3467,7 +3467,7 @@ export async function dispatchTool(
       // "enabled" can change under a prompt built a moment earlier.
       if (context.hostRunner === undefined || !context.hostRunner.enabled) {
         return {
-          text: "Host execution is not available on this box.",
+          text: HOST_EXECUTION_UNAVAILABLE, unavailable: true,
           isError: true,
         };
       }

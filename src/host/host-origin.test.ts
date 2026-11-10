@@ -111,14 +111,14 @@ test("scenario: an admitted audit is answered in its own host context; the perso
   }
 });
 
-test("a default agent stops on the first unavailable computer call and retains the user work", async () => {
+for (const requiredTool of ["bash", "browser_snapshot", "RunOnHost"]) test("a default agent retains blocked user work: " + requiredTool, async () => {
   const root = mkdtempSync(join(tmpdir(),"attention-default-tools-")), previousHome = process.env.AGENTBOX_HOME;
   process.env.AGENTBOX_HOME = root;
   try {
     const registry = new AgentRegistry(join(root,"agents")), mia = registry.create({name:"Mia"});
     let calls = 0;
     const orch = new Orchestrator({registry,useBox:false,inbox:null,mcp:null,hooks:null,tasks:null,extensions:null,pendingWork:null,
-      client:fakeModel(()=>({id:"response",type:"message",role:"assistant",model:"test",content:calls++ === 0 ? [{type:"tool_use",id:"call-"+calls,name:"bash",input:{command:calls===1?"ls ~/Downloads":"pwd"}}] : [{type:"text",text:"The computer is still unavailable."}],stop_reason:calls===1?"tool_use":"end_turn",stop_sequence:null,usage:{input_tokens:10,output_tokens:5}} as never))});
+      client:fakeModel(()=>({id:"response",type:"message",role:"assistant",model:"test",content:calls++ === 0 ? [{type:"tool_use",id:"call-"+calls,name:requiredTool,input:{command:calls===1?"ls ~/Downloads":"pwd"}}] : [{type:"text",text:"The computer is still unavailable."}],stop_reason:calls===1?"tool_use":"end_turn",stop_sequence:null,usage:{input_tokens:10,output_tokens:5}} as never))});
     await orch.prompt(mia.id,"Install the provided package",{userId:"chris"});
     assert.equal(calls,1,"unoffered computer tools are bounded even without an explicit profile allowlist");
     const workId=orch.bus.workAttention!.get(mia.id,"main")!.id;
@@ -126,6 +126,6 @@ test("a default agent stops on the first unavailable computer call and retains t
     assert.equal(orch.bus.workAttention!.get(mia.id,"main")!.id,workId);
     assert.equal(calls,2,"the status answer does not probe or recover a tool");
     assert.equal(orch.bus.workAttention!.get(mia.id,"main")!.status,"waiting");
-    assert.match(JSON.stringify(registry.readTranscript(mia.id)),/tool is unavailable/);
+    assert.match(JSON.stringify(registry.readTranscript(mia.id)),/unavailable|not available/);
   } finally { if(previousHome===undefined)delete process.env.AGENTBOX_HOME;else process.env.AGENTBOX_HOME=previousHome;rmSync(root,{recursive:true,force:true}); }
 });

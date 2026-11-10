@@ -194,7 +194,13 @@ export const WORKFLOWS: readonly Workflow[] = [
       // The host's own mirrors (memory, and the standing files of INV-777) are written into the box
       // before a turn; they are the harness's doing, not the agent's, so they are not a side effect.
       "no side effect happened": { stage: "capability-binding", ok: r => !r.score.trail.some(step => /write_file|bash/.test(step)) && [...r.files.keys()].every(path => path.startsWith(`${DOCKER_BOX_PATHS.memory}/`) || path.startsWith(`${DOCKER_BOX_PATHS.standing}/`)) },
-      "the person is told what was refused and why": { stage: "verification", ok: (r, i) => said(r, `deploy ${i.param}`) && said(r, "refused") },
+      "the person is told what was refused and why": { stage: "verification", ok: (r, i) => {
+        // A host-bounded capability failure has no second model response: verify the actual
+        // delivered record and its request identity, rather than requiring a scripted line.
+        const entries = r.registry.readTranscript(r.registry.list()[0]!.id) as {role?:string;kind?:string;text?:string;turnId?:string}[];
+        const turns = new Set(entries.filter(entry => entry.role === "user" && entry.text === i.ask).map(entry => entry.turnId));
+        return entries.some(entry => entry.role === "assistant" && !entry.kind && turns.has(entry.turnId) && /RunOnHost|deploy/.test(entry.text ?? "") && /unavailable|refused|not available/.test(entry.text ?? ""));
+      } },
     },
   },
 ];

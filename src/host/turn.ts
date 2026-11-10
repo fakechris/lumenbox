@@ -1,3 +1,4 @@
+import { needsComputer } from "./tool-capabilities.ts";
 import { workRegistry, workStateConversation } from "../agents/work-attention.ts";
 import { progressContext as openProgressContext, selectedProgressBinding } from "./progress-admission.ts";
 import { admittedTaskBinding, takenTaskBinding, hasAdmittedTask } from "./execution-binding.ts";
@@ -134,7 +135,7 @@ import {
   PERSON_FACING_TOOLS,
   SILENCE_TOOL,
   PARALLEL_TOOL_LIMIT,
-  buildTools, toolsInBox,
+  buildTools, toolsInBox, HOST_EXECUTION_UNAVAILABLE,
   dispatchTool, boxErrorOutcome,
   type ToolContext,
   type ToolOutcome,
@@ -3256,7 +3257,7 @@ ${outcome.text}`;
       }
 
       if (signal.aborted || work && !bus.workAttention!.valid(work, agent.id)) throw new TurnAborted();
-      const requiredComputerTool = ["bash", "read_file", "write_file", "edit_file", "list_dir", "computer"].includes(toolUse.name);
+      const requiredComputerTool = needsComputer(toolUse.name);
       let outcome: ToolOutcome;
       if (blockedCapability) {
         outcome = { text: "Not executed: this user work is waiting for its required tool. No unrelated work may replace it.", isError: true };
@@ -3264,7 +3265,7 @@ ${outcome.text}`;
         outcome = { text: "Review refused: this audit may only read its current evidence. It cannot create probe tasks, change work, send messages or write memory.", isError: true };
       } else if (isolated || ((effectiveTools !== undefined || !!work && (requiredComputerTool || PERSON_FACING_TOOLS.has(toolUse.name))) && !offeredHere)) {
         if (work && !isolated && requiredComputerTool) { blockedCapability = toolUse.name; bus.workAttention?.capability(work, agent.id, toolUse.name, false); }
-        outcome = { text: isolated ? `Tools are disabled in ${contextMode} context.` : "This tool is unavailable in the current execution context.", isError: true };
+        outcome = { text: isolated ? `Tools are disabled in ${contextMode} context.` : toolUse.name === "RunOnHost" && !deps.hostRunner?.enabled ? HOST_EXECUTION_UNAVAILABLE : "This tool is unavailable in the current execution context.", isError: true };
       } else if (goal?.verify !== undefined && toolUse.name === "bash" && !commandIsConfirmed(goal, String((toolInput as { command?: unknown }).command ?? ""))) {
         // A verifier runs what the person confirmed and nothing else (review R3): the checklist
         // was written by a model, and a model-written command is a proposal until a person says.
@@ -3354,6 +3355,7 @@ ${outcome.text}`;
           isError: true, outcome: boxErrorOutcome(error) ?? "failed",
         };
       }
+      if (work && outcome.unavailable) { blockedCapability = toolUse.name; bus.workAttention?.capability(work, agent.id, toolUse.name, false); }
       if (work && requiredComputerTool && !outcome.isError) bus.workAttention?.capability(work, agent.id, toolUse.name, true);
       if (!outcome.isError && ["AskUser", "AskSecret", "HandOverDesktop"].includes(toolUse.name)) confirmationPending = true;
       if (outcome.approval !== undefined) {
