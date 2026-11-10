@@ -4118,7 +4118,17 @@ function pushItem(item) {
   return item;
 }
 
+var historyDraws = null;
+function batchHistoryDraw(render) {
+  var previous = historyDraws; historyDraws = new Set();
+  try { render(); } finally {
+    var queued = historyDraws; historyDraws = previous;
+    queued.forEach(function (item) { redrawItem(item); });
+  }
+}
+
 function redrawItem(item) {
+  if (historyDraws) { historyDraws.add(item); return; }
   if (!item.node || !item.node.isConnected) return;
   var el = $("chat");
   var stick = nearBottom(el);
@@ -4471,6 +4481,7 @@ function select(id, conversation) {
       try { lastSeen = Number(localStorage.getItem(seenKey) || "-1"); } catch (error) {}
       var lastDay = "", newShown = false;
       var base = entries.length && entries[0].skipped ? entries[0].skipped - 1 : 0; // the server sent the newest part (INV-1624): indices stay the whole thread's, for unread and reactions
+      batchHistoryDraw(function () {
       for (var i = 0; i < entries.length; i++) {
         var e = entries[i];
         var day = e.at ? dayLabel(e.at) : "";
@@ -4479,6 +4490,7 @@ function select(id, conversation) {
         replayEntry(id, e, i + base, lastSeen >= 0 && i + base > lastSeen);
       }
       closeOpen();
+      });
       finishLiveReplay(replay);
       seenStoreKey = seenKey;
       seenIndex = lastSeen;
