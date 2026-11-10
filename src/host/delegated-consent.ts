@@ -13,6 +13,7 @@ import { mapEngineTool, PERMISSION_POLL_MS, PERMISSION_WAIT_MS } from "./mcp-fac
 import type { PolicyGate } from "./policy.ts";
 
 export interface DelegatedConsentRequest {
+  returnTo?: import("../agents/work-attention.ts").WorkReturn;
   agentId: string;
   agentName: string;
   jobId?: string;
@@ -22,6 +23,7 @@ export interface DelegatedConsentRequest {
 }
 
 export interface DelegatedConsentOptions {
+  cancelled?: () => boolean;
   now?: () => number;
   pollMs?: number;
   waitMs?: number;
@@ -39,12 +41,13 @@ export async function awaitDelegatedConsent(
   request: DelegatedConsentRequest,
   options: DelegatedConsentOptions = {}
 ): Promise<DelegatedConsent> {
+  if (options.cancelled?.()) return {allow:false,reason:"Work cancelled"};
   if (policy === undefined) return { allow: true };
   const tool = mapEngineTool(request.engineTool, request.input);
   const now = options.now ?? (() => Date.now());
   const ask = () =>
     policy.check({
-      kind: "tool",
+      kind: "tool", ...(request.returnTo ? {returnTo:request.returnTo} : {}),
       agentId: request.agentId,
       agentName: request.agentName,
       tool,
@@ -59,6 +62,7 @@ export async function awaitDelegatedConsent(
   options.log?.(`${request.jobId ?? request.agentName}: waiting for a person on ${request.engineTool} (${waitingFor})`);
   while (now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, options.pollMs ?? PERMISSION_POLL_MS));
+    if (options.cancelled?.()) { policy.deny(waitingFor, options.by ?? "work-control", "Work cancelled"); return {allow:false,reason:"Work cancelled"}; }
     if (policy.pending().some(pending => pending.id === waitingFor)) continue;
     // Answered one way or the other: a grant makes the re-check pass and consumes it; a
     // refusal makes the re-check open a *new* request, which is the tell, and is withdrawn.

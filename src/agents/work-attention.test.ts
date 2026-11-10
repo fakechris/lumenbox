@@ -140,3 +140,23 @@ test("an approved goal may continue its admitted task, while an unrelated goal r
   assert.equal(focus.eligible("Mia","main",{...user("goal"),synthetic:true,goal:{workId:"approved-work",taskId:"t1"} as never}),true);
   assert.equal(focus.eligible("Mia","main",{...user("other-goal"),synthetic:true,goal:{workId:"other-work",taskId:"t2"} as never}),false);
 });
+
+test("cancellation is durable, blocks old continuations, and leaves a colleague's other work alone", async () => {
+  const dir=mkdtempSync(join(tmpdir(),"work-cancel-"));
+  try {
+    const path=join(dir,"work.json");let focus=new WorkAttention(path);
+    const root=focus.begin("Mia","main",[user("install")])!, peer=focus.link(root,"Mia","Zed")!;
+    const independent=focus.begin("Zed","main",[user("other-request")])!;
+    const ended=focus.cancel(root,"Chris","This task went off track");
+    assert.deepEqual(ended.participants,["Mia","Zed"]);
+    assert.equal(focus.valid(root,"Mia"),false);assert.equal(focus.valid(peer,"Zed"),false);
+    assert.equal(focus.valid(independent,"Zed"),true);
+    focus=new WorkAttention(path);
+    assert.equal(focus.cancelled(root.id)?.by,"Chris");
+    assert.equal(focus.eligible("Mia","main",{...user("continuation"),synthetic:true,goal:{workId:root.id,taskId:"t1"} as never}),false);
+    assert.throws(()=>focus.existing("Mia","main",root.id),/cancelled/);
+    const next=focus.begin("Mia","main",[user("new-request")])!;
+    assert.notEqual(next.id,root.id);assert.equal(focus.valid(next,"Mia"),true);
+    assert.equal(focus.cancel(root,"Chris","repeated").at,ended.at,"retries preserve the original cancellation");
+  } finally {rmSync(dir,{recursive:true,force:true});}
+});

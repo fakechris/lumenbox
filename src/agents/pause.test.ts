@@ -100,7 +100,7 @@ test("pausing stops the turn in flight and only this agent's running background 
       dirFor: () => root,
       wake: () => {},
       interrupt: ids => { interrupted.push(ids); return ids; },
-      box: () => ({ jobs: async () => ({ jobs: [{ job_id: "job-aaaaaaaaaaaaaaaa", running: true }, { job_id: "job-bbbbbbbbbbbbbbbb", running: false }, { job_id: "job-cccccccccccccccc", running: true }, { job_id: "job-dddddddd", running: true, owner: "agent:bob" }] }), killJob: async id => { killed.push(id); } }),
+      box: () => ({ jobs: async () => ({ jobs: [{ job_id: "job-aaaaaaaaaaaaaaaa", running: true }, { job_id: "job-bbbbbbbbbbbbbbbb", running: false }, { job_id: "job-cccccccccccccccc", running: true }, { job_id: "job-dddddddd", running: true, owner: "agent:bob" }] }), killJob: async id => { killed.push(id); },waitForJob:async()=>({running:false}) }),
       tell: async (_id, text) => { told.push(text); },
       receipt: (subject, decision) => receipts.push(`${subject} ${decision}`),
       log: () => {},
@@ -130,4 +130,19 @@ test("a command that outlived its foreground time and went on as a job is one of
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("a selected group is durably paused before any async cleanup, preserving an existing pause and reporting unknown jobs", async () => {
+  const root=mkdtempSync(join(tmpdir(),"pause-group-"));
+  try {
+    const registry=new AgentRegistry(root), a=registry.create({name:"A"}), b=registry.create({name:"B"}), c=registry.create({name:"C"});
+    writePause(registry.dirFor(b.id),{by:"Another operator",at:"2026-11-01T00:00:00Z",reason:"existing hold"});
+    let checks=0;
+    const pauses=new AgentPauses({dirFor:id=>registry.dirFor(id),interrupt:()=>[],wake:()=>{},tell:async()=>{},log:()=>{},receipt:()=>{},
+      box:()=>({jobs:async()=>{checks++;assert.ok(readPause(registry.dirFor(a.id)));assert.ok(readPause(registry.dirFor(b.id)));assert.equal(readPause(registry.dirFor(c.id)),undefined);throw new Error("computer offline");},killJob:async()=>{throw Error("must not guess a job");}})});
+    const result=await pauses.pauseMany([a.id,b.id],"Chris","Contain old work");
+    assert.equal(checks,2);assert.equal(result.paused.length,2);assert.equal(result.failures.length,0);
+    assert.ok(result.results.every(row=>row.result.errors?.some(error=>error.includes("computer offline"))));
+    assert.equal(readPause(registry.dirFor(b.id))!.by,"Another operator");
+  } finally {rmSync(root,{recursive:true,force:true});}
 });

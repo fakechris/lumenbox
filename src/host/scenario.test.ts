@@ -4077,3 +4077,30 @@ test("an L4 task's agent drafts a message: it waits in the Outbox, goes out once
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("cancelling a multi-agent installation prevents job, fork and late callbacks from reviving it while another task still runs (INV-1798)", async()=>{
+  const {WorkAttention}=await import("../agents/work-attention.ts"), {JobWatch}=await import("./job-watch.ts");
+  const focus=new WorkAttention();let finish!:()=>void,watch!:import("./job-watch.ts").JobWatch,mi=0,zi=0,afterCancel=0,cancelled=false;
+  const done=new Promise<void>(resolve=>{finish=resolve;});
+  const episode=await runEpisode({team:[{name:"Mia"},{name:"Zed"}],workAttention:focus,says:[],
+    box:{exec:(async()=>({stdout:"",stderr:"",exit_code:0,still_running:{job_id:"job-cancel-test",pid:1,log_path:"/job.log"}})) as never,
+      waitForJob:(async()=>{await done;return {running:false,exit_code:137,log_path:"/job.log",tail:"LATE_CANCELLED_PACKAGE_RESULT"};}) as never,killJob:(async()=>{finish();return {};}) as never},
+    jobWatch:({bus,box})=>{box.exec=(async()=>({stdout:"",stderr:"",exit_code:0,still_running:{job_id:"job-cancel-test",pid:1,log_path:"/job.log"}})) as never;watch=new JobWatch({box:()=>box as never,isCancelled:id=>!!focus.cancelled(id),started:job=>{if(job.work)focus.hold(job.work,job.jobId);},released:job=>{if(job.work)focus.release(job.work,job.jobId);},log:()=>{},mergeMs:1,wake:async(id,conversation,text,work)=>{bus.deliverSystem(id,text,conversation,work);}});return watch;},
+    script:({agent,messages})=>{
+      const text=JSON.stringify(messages);
+      if(cancelled){afterCancel++;assert.match(text,/NEW_UNRELATED_REQUEST/);assert.doesNotMatch(text,/LATE_CANCELLED_PACKAGE_RESULT/);return {say:"The unrelated task can continue."};}
+      if(agent==="Mia" && mi++===0)return {call:"SendToAgent",input:{target_id:"Zed",message:"Build this installation package"}};
+      if(agent==="Zed" && zi++===0)return {call:"bash",input:{command:"build-package"}};
+      return {say:"Waiting for package verification."};
+    },drive:async({bus,registry,frontId,say})=>{
+      await say("Install the package and verify it");const root=focus.get(frontId,"main")!;assert.equal(root.status,"waiting");
+      const zed=registry.resolve("Zed").id;assert.equal(watch.workJobs(root.id).length,1);
+      focus.cancel(root,"Chris","This installation went off track");bus.interruptWork(root.id);cancelled=true;
+      await watch.stopWorkJob("job-cancel-test",root.id);
+      bus.deliverSystem(frontId,"LATE_CANCELLED_PACKAGE_RESULT","main",root.id);
+      bus.sendFromUser(frontId,"old installation replay",{messageId:root.id});
+      await bus.idle();assert.equal(afterCancel,0);assert.equal(bus.pendingCount(frontId),0);
+      bus.sendFromUser(zed,"NEW_UNRELATED_REQUEST",{steerable:false});await bus.wake(zed);await bus.idle();assert.equal(afterCancel,1);
+    }});
+  episode.cleanup();
+});

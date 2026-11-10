@@ -1,4 +1,4 @@
-import { taskAttentionChanged } from "./task-attention.ts";
+import { taskAttentionChanged, taskWorkId } from "./task-attention.ts";
 import { WorkAttention } from "../agents/work-attention.ts";
 import { admitProgressMessage } from "./progress-admission.ts";
 /**
@@ -559,7 +559,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
         })
       : undefined;
   // A task whose last blocker closed wakes its assignee (INV-1740), wired as the orchestrator wires it.
-  if (options.tasks !== undefined) watchDependencies(options.tasks, (task, text) => { bus.deliverSystem(task.assigneeId!, text, task.conversation ?? "main"); });
+  if (options.tasks !== undefined) watchDependencies(options.tasks, (task, text) => { bus.deliverSystem(task.assigneeId!, text, task.conversation ?? "main", taskWorkId(task,bus)); });
   goalLoop = options.goalLoop?.({ bus, registry, tasks: options.tasks, files });
   options.tasks?.onChange(task => taskAttentionChanged(bus, task));
   jobWatch = options.jobWatch?.({ bus, box });

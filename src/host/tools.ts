@@ -115,6 +115,7 @@ function foregroundWindowMs(): number {
 }
 
 export interface ToolContext {
+  signal?: AbortSignal;
   audit?: import("./audit-context.ts").AuditContext;
   work?: import("../agents/work-attention.ts").WorkStamp; historyConversation?: string;
   progressContext?: import("./task-progress.ts").ProgressContext;
@@ -2810,7 +2811,7 @@ export async function dispatchTool(
           jobId, actor: `agent:${context.agent.id}`, // the per-agent job limit and pause-by-owner (INV-1557)
           ...callFor(context, jobId),
         });
-        if (parseOnEnd(input.on_end) !== undefined) context.jobWatch?.watch({ /* watched only when asked (INV-1613); a chosen background job is the agent's own business, so the cap does not kill it */ agentId: context.agent.id, conversation: context.conversation ?? MAIN_CONVERSATION, ...(input.background !== true && context.work ? { work: context.work } : {}), jobId: started.job_id, command, onEnd: parseOnEnd(input.on_end)!, ...(input.wake_when !== undefined ? { wakeWhen: String(input.wake_when) } : {}), capped: false });
+        context.jobWatch?.watch({ /* watched only when asked (INV-1613); a chosen background job is the agent's own business, so the cap does not kill it */ agentId: context.agent.id, conversation: context.conversation ?? MAIN_CONVERSATION, ...(context.work ? { work: context.work } : {}), jobId: started.job_id, command, onEnd: parseOnEnd(input.on_end) ?? "record", ...(input.wake_when !== undefined ? { wakeWhen: String(input.wake_when) } : {}), capped: false });
         return {
           text:
             `Started as ${started.job_id} (pid ${started.pid}).\n` +
@@ -2837,7 +2838,7 @@ export async function dispatchTool(
       });
       // A command that outlived its window runs on as a job; the watch wakes this agent when it ends (INV-1461).
       const ending = { /* the policy the agent declared, or wake_on_failure; a command that only waits is recorded and the agent pointed at Jobs wait (INV-1613) */ onEnd: isWaitOnly(command) ? "record" as const : parseOnEnd(input.on_end) ?? "wake_on_failure" as const, waitOnly: isWaitOnly(command) };
-      if (result.still_running !== undefined) context.jobWatch?.watch({ agentId: context.agent.id, conversation: context.conversation ?? MAIN_CONVERSATION, ...(input.background !== true && context.work ? { work: context.work } : {}), jobId: result.still_running.job_id, command, onEnd: context.work && !ending.waitOnly && parseOnEnd(input.on_end) === undefined ? "wake" : ending.onEnd, ...(input.wake_when !== undefined ? { wakeWhen: String(input.wake_when) } : {}) });
+      if (result.still_running !== undefined) context.jobWatch?.watch({ agentId: context.agent.id, conversation: context.conversation ?? MAIN_CONVERSATION, ...(context.work ? { work: context.work } : {}), jobId: result.still_running.job_id, command, onEnd: context.work && !ending.waitOnly && parseOnEnd(input.on_end) === undefined ? "wake" : ending.onEnd, ...(input.wake_when !== undefined ? { wakeWhen: String(input.wake_when) } : {}) });
       return { text: formatExec(result, input.timeout_ms ? Number(input.timeout_ms) : undefined, foregroundMs, ending), outcome: result.timed_out || result.exit_code !== 0 ? "failed" : "ok" };
     }
 
@@ -2933,7 +2934,7 @@ export async function dispatchTool(
         let result: string;
         try {
           const seq = context.bus.sendFromUser(context.agent.id, brief, {
-            conversation,
+            conversation, ...(context.work ? { work: context.work } : {}),
             ...(context.taskBinding && context.turnId && context.workId && ids[index] ? { taskBinding: { taskId: context.taskBinding.taskId, role: "child" as const, ...(context.taskBinding.progressAdmission ? { progressAdmission: { ...context.taskBinding.progressAdmission, kind: "child" as const } } : {}), parent: { conversation: parent, turnId: context.turnId, workId: context.workId, forkId: ids[index]! } } } : {}),
             steerable: false, origin: "host:fork", // the parent agent's brief, not the person's words (INV-1571)
           });
@@ -3305,8 +3306,7 @@ export async function dispatchTool(
       }
       if (preset.permissionArgs !== undefined && !wantsPermission) faceNote += "No face is reachable from this box, so the engine runs with permissions skipped; the box is the sandbox.\n";
 
-      // The engine's own thread: resumed when this conversation delegated to the same engine
-      // in the same directory with the same model, fresh with a reason otherwise.
+      // Resume only the same engine, directory and model in this conversation.
       let sessionNote = "";
       if (preset.session !== undefined && input.session !== false && context.delegateSessions !== undefined) {
         const capsule = context.delegateSessions.open({
@@ -3490,7 +3490,7 @@ export async function dispatchTool(
       if (granted.length > 0) context.policy?.taint.mark(context.turnId ?? "", "vault");
 
       try {
-        const result = await context.hostRunner.run(command, secrets.env, callFor(context).call).finally(() => { erased = secrets.finish().erased; });
+        const result = await context.hostRunner.run(command, secrets.env, callFor(context).call, context.work ? {workId:context.work.id,signal:context.signal} : undefined).finally(() => { erased = secrets.finish().erased; });
         const parts = [
           result.stdout.trim() !== "" ? result.stdout : "(no stdout)",
           result.stderr.trim() !== "" ? `stderr:\n${result.stderr}` : "",

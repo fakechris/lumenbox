@@ -114,16 +114,18 @@ export function reduceBrief(plan: OrchestrationPlan, results: readonly ItemResul
 }
 
 export interface OrchestrationDeps {
+  returnFor?: (agentId:string,conversation:string,workId:string) => import("../agents/work-attention.ts").WorkReturn | undefined;
+  isCancelled?: (workId: string) => boolean;
   pendingWork: PendingWork;
   policy: {
-    requestConfirmation(input: { agentId: string; agentName: string; description: string; action?: string }): PendingApproval;
+    requestConfirmation(input: { returnTo?: import("../agents/work-attention.ts").WorkReturn; agentId: string; agentName: string; description: string; action?: string }): PendingApproval;
     pending(): PendingApproval[];
   };
   /**
    * Runs one sub-agent turn in a fork conversation of the agent and returns its final message,
    * handoff line included. Throws when the turn could not run.
    */
-  runChild: (agentId: string, conversation: string, brief: string) => Promise<string>;
+  runChild: (agentId: string, conversation: string, brief: string, workId?: string, parent?: string) => Promise<string>;
   /** Reads the handoff line off a child's answer (tools.ts `readHandoff`). */
   readHandoff: (text: string) => { status: "done" | "partial" | "blocked" | "unstated"; body: string; reason?: string };
   /** Queues a system note durably in the conversation; returns whether it was admitted. */
@@ -216,6 +218,7 @@ export class Orchestrations {
    * to confirm first. A plan identical to one still open is not started twice.
    */
   submit(input: { workId?: string; agentId: string; agentName: string; parent: string; plan: OrchestrationPlan }): { text: string; approval?: { id: string } } {
+    if (input.workId && this.deps.isCancelled?.(input.workId)) return {text:"Work cancelled; no plan was started."};
     const hash = planHash(input.plan);
     const calls = planCalls(input.plan);
     const already = this.open().find(work => work.agentId === input.agentId && work.data?.hash === hash);
@@ -231,7 +234,7 @@ export class Orchestrations {
     const approval = needsConfirm
       ? this.deps.policy.requestConfirmation({
           agentId: input.agentId,
-          agentName: input.agentName,
+          agentName: input.agentName, ...(input.workId ? {returnTo:this.deps.returnFor?.(input.agentId,input.parent,input.workId)} : {}),
           description: `Run ${calls} sub-agent turns for "${input.plan.brief}" (${input.plan.items.length} items${input.plan.reduce !== undefined ? " and a summary" : ""}).`,
           action: "start a fan-out of sub-agents",
         })
@@ -313,7 +316,7 @@ export class Orchestrations {
   }
 
   private start(running: Running, markAdmitted = true): void {
-    if (this.active.has(running.id)) return;
+    if (this.active.has(running.id) || running.workId && this.deps.isCancelled?.(running.workId)) return;
     if (markAdmitted) this.deps.pendingWork.admitted(running.id, undefined);
     const run = this.run(running)
       .catch(error => this.log(`plan ${running.hash}: ${error instanceof Error ? error.message : String(error)}`))
@@ -324,7 +327,7 @@ export class Orchestrations {
   private async runOne(running: Running, index: number, brief: string): Promise<ItemResult> {
     const conversation = `fork/${running.parent}-plan-${running.hash.slice(0, 8)}-${index < 0 ? "reduce" : index + 1}-${Date.now().toString(36)}`;
     try {
-      const said = await this.deps.runChild(running.agentId, conversation, brief);
+      const said = await this.deps.runChild(running.agentId, conversation, brief, running.workId, running.parent);
       const handoff = this.deps.readHandoff(said);
       const text = handoff.body.trim() === "" ? "(said nothing)" : handoff.body.trim();
       return { index, status: handoff.status, text: handoff.reason !== undefined && handoff.status !== "done" ? `${text}\n(${handoff.reason})` : text };
@@ -340,8 +343,10 @@ export class Orchestrations {
     let next = 0;
     const worker = async (): Promise<void> => {
       while (next < missing.length) {
+        if (running.workId && this.deps.isCancelled?.(running.workId)) return;
         const index = missing[next++]!;
         const result = await this.runOne(running, index, itemBrief(running.plan, index));
+        if (running.workId && this.deps.isCancelled?.(running.workId)) return;
         this.keep(running, result);
         known.set(index, result);
         // An item's card closes with it — but the last one only after the result is delivered, so the
@@ -351,6 +356,7 @@ export class Orchestrations {
     };
     await Promise.all(Array.from({ length: Math.min(concurrency, missing.length) }, () => worker()));
 
+    if (running.workId && this.deps.isCancelled?.(running.workId)) return;
     const items = running.plan.items.map((_, index) => known.get(index)!).filter(result => result !== undefined);
     let summary: ItemResult | undefined;
     if (running.plan.reduce !== undefined) {

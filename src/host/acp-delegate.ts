@@ -33,6 +33,8 @@ import { describeWorktree, worktreeState } from "./worktree-state.ts";
 export type AcpBox = Pick<BoxClient, "acpOpen" | "acpSend" | "acpReply" | "acpEvents" | "acpClose" | "acpSessions"> & Partial<Pick<BoxClient, "exec" | "readFile">>;
 
 export interface AcpDelegateDeps {
+  returnFor?: (agentId:string,conversation:string,workId:string) => import("../agents/work-attention.ts").WorkReturn | undefined;
+  isCancelled?: (workId: string) => boolean;
   pendingWork?: PendingWork;
   policy?: PolicyGate;
   /** The note to the agent that delegated, in the conversation it delegated from. */
@@ -128,6 +130,7 @@ export class AcpDelegates {
    * be written closes the session again, because a brief nobody can settle must not run.
    */
   async start(input: StartInput, jobId: string): Promise<{ jobId: string; engineSessionId: string; logPath: string }> {
+    if (input.workId && this.deps.isCancelled?.(input.workId)) throw new Error("Work cancelled");
     const opened = await input.box.acpOpen({
       session_id: jobId,
       command: input.command,
@@ -137,6 +140,7 @@ export class AcpDelegates {
       ...(input.call !== undefined ? { call: input.call } : {}),
       actor: `agent:${input.agentId}`,
     });
+    if (input.workId && this.deps.isCancelled?.(input.workId)) { await input.box.acpClose({session_id:jobId}); throw new Error("Work cancelled while the session opened"); }
     const watch: Watch = {
       jobId,
       agentId: input.agentId,
@@ -170,6 +174,7 @@ export class AcpDelegates {
   }
 
   private async brief(watch: Watch, prompt: string, extra: { engine: string; workId?: string; turnId?: string }): Promise<void> {
+    if (extra.workId && this.deps.isCancelled?.(extra.workId)) throw new Error("Work cancelled");
     const sent = await watch.box.acpSend({
       session_id: watch.jobId,
       method: "session/prompt",
@@ -189,6 +194,7 @@ export class AcpDelegates {
     });
     if (id !== undefined) this.deps.pendingWork?.admitted(id, undefined);
     watch.inFlight = { workId: extra.workId, promptRpcId, brief: `${extra.engine}: ${prompt}`, text: "" };
+    if (extra.workId && this.deps.isCancelled?.(extra.workId)) await this.cancel(watch.jobId);
   }
 
   /**
@@ -279,6 +285,7 @@ export class AcpDelegates {
       return;
     }
     for (const item of items) {
+      if (item.workId && this.deps.isCancelled?.(item.workId)) { await box.acpClose({session_id:item.jobId}).catch(() => undefined); continue; }
       if (this.watches.has(item.jobId)) continue;
       const known = sessions.find(s => s.session_id === item.jobId);
       const watch: Watch = {
@@ -409,6 +416,7 @@ export class AcpDelegates {
   /** The engine asked something. Only a permission question is answered; anything else is refused by name. */
   private async engineAsks(watch: Watch, message: Record<string, unknown>): Promise<void> {
     const rpcId = message.id as number | string;
+    if (watch.inFlight?.workId && this.deps.isCancelled?.(watch.inFlight.workId)) { await watch.box.acpReply({session_id:watch.jobId,rpc_id:rpcId,error:{code:-32000,message:"Work cancelled"}}); return; }
     if (message.method !== "session/request_permission") {
       await watch.box.acpReply({ session_id: watch.jobId, rpc_id: rpcId, error: { code: -32601, message: `${String(message.method)} is not something this host answers` } }).catch(() => undefined);
       return;
@@ -420,12 +428,12 @@ export class AcpDelegates {
     const deny = params.options?.find(o => o.kind === "reject_once")?.optionId ?? "deny";
     const consent = await awaitDelegatedConsent(
       this.deps.policy,
-      { agentId: watch.agentId, agentName: watch.agentName, jobId: watch.jobId, engineTool, input },
-      { now: this.deps.now, pollMs: this.deps.consentPollMs, waitMs: this.deps.consentWaitMs, log: this.deps.log, by: "acp-delegate" }
+      { agentId: watch.agentId, agentName: watch.agentName, jobId: watch.jobId, engineTool, input, ...(watch.inFlight?.workId ? {returnTo:this.deps.returnFor?.(watch.agentId,watch.conversation,watch.inFlight.workId)} : {}) },
+      { cancelled: () => !!watch.inFlight?.workId && !!this.deps.isCancelled?.(watch.inFlight.workId), now: this.deps.now, pollMs: this.deps.consentPollMs, waitMs: this.deps.consentWaitMs, log: this.deps.log, by: "acp-delegate" }
     );
     if (watch.stopped) return;
     // Never allow-always: a grant that lives inside the engine is one the gate never sees again.
-    const optionId = consent.allow ? allowOnce : deny;
+    const optionId = consent.allow && !(watch.inFlight?.workId && this.deps.isCancelled?.(watch.inFlight.workId)) ? allowOnce : deny;
     await watch.box.acpReply({ session_id: watch.jobId, rpc_id: rpcId, result: { outcome: { outcome: "selected", optionId } } }).catch(() => undefined);
     if (!consent.allow && consent.timedOut === true) {
       // The engine would hold the turn open for ever on a question nobody answered (measured);

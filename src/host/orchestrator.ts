@@ -1,4 +1,4 @@
-import { taskAttentionChanged } from "./task-attention.ts";
+import { taskAttentionChanged, taskWorkId } from "./task-attention.ts";
 import { WorkAttention, workStateConversation } from "../agents/work-attention.ts";
 import { randomUUID } from "node:crypto";
 import { auditConversation, auditCurrent } from "./audit-context.ts";
@@ -326,7 +326,7 @@ export class Orchestrator {
   renderPerson(principalId: string | undefined): string | undefined { return this.people.render(principalId ?? this.people.operator, principalId === undefined ? "the operator" : (this.personName?.(principalId) ?? "the person")); }
   readonly generations = new BoxGenerations(line => console.error(`[box] ${line}`)); // which incarnation of each box a slow callback belongs to (INV-1476); bumped on every (re)connect
   readonly agentFacts = new AgentFacts(new ConversationState(join(agentboxHome(), "conversation-state.jsonl")), { approvals: () => this.policy.pending(), questions: () => this.questionsOpen?.() ?? [], pausedForSpend: () => this.pausedForSpend?.() ?? [], working: id => this.bus.isActive(id) }); questionsOpen?: () => readonly { agentId: string; conversation: string; question: string; askedAt: number }[]; pausedForSpend?: () => readonly { agentId: string; day: string }[]; // the four facts a sidebar row is drawn from (INV-1625); the two readers are wired by the server
-  readonly exceptions = new ExceptionLedger(join(agentboxHome(), "exceptions.jsonl"), { taskOf: (agentId, conversation) => this.tasks?.list().find(task => task.assigneeId === agentId && task.conversation === conversation && task.status !== "done" && task.status !== "dropped")?.id }); readonly jobWatch = new JobWatch({ started: job => { if (job.work) this.bus.workAttention?.hold(job.work, job.jobId); }, released: job => { if (job.work) this.bus.workAttention?.release(job.work, job.jobId); }, box: () => this.boxClient(), log: line => console.error(`[jobs] ${line}`), ended: (job, end) => noteJobEnd(this.exceptions, job, end), wake: (agentId, conversation, text, work) => this.prompt(agentId, text, undefined, { conversation, work, steerable: false, lane: "background", synthetic: true, origin: "host:jobs" }).then(() => undefined), generation: agentId => this.generations.current(this.registry.boxOf(agentId).id) });
+  readonly exceptions = new ExceptionLedger(join(agentboxHome(), "exceptions.jsonl"), { taskOf: (agentId, conversation) => this.tasks?.list().find(task => task.assigneeId === agentId && task.conversation === conversation && task.status !== "done" && task.status !== "dropped")?.id }); readonly jobWatch = new JobWatch({ observed: (job,end) => { if (end.exit_code !== undefined || end.interrupted) this.pendingWork?.commit((this.pendingWork?.open() ?? []).filter(row => row.kind === "command" && row.child === job.jobId && row.workId === job.work?.id).map(row => ({id:row.id,how:"unknown" as const,why:"Process exit observed; business result not verified"}))); }, isCancelled: id => !!this.bus.workAttention?.cancelled(id), started: job => { if (job.work) this.bus.workAttention?.hold(job.work, job.jobId); }, released: job => { if (job.work) this.bus.workAttention?.release(job.work, job.jobId); }, box: () => this.boxClient(), log: line => console.error(`[jobs] ${line}`), ended: (job, end) => noteJobEnd(this.exceptions, job, end), wake: (agentId, conversation, text, work) => this.prompt(agentId, text, undefined, { conversation, work, steerable: false, lane: "background", synthetic: true, origin: "host:jobs" }).then(() => undefined), generation: agentId => this.generations.current(this.registry.boxOf(agentId).id) });
   /**
    * Agents whose current turn is installing a template, by the template's id (docs/29 §5.3).
    * Set around the setup prompt and cleared after it, never by the agent.
@@ -1009,7 +1009,7 @@ export class Orchestrator {
     this.effects =
       this.pendingWork === undefined
         ? undefined
-        : new Effects({
+        : new Effects({ returnFor: (a,c,id) => this.bus.workAttention?.returnTo(a,c,id), isCancelled: id => !!this.bus.workAttention?.cancelled(id),
             pendingWork: this.pendingWork,
             policy: this.policy,
             mcp: () => this.mcp,
@@ -1023,13 +1023,14 @@ export class Orchestrator {
     this.orchestrations =
       this.pendingWork === undefined
         ? undefined
-        : new Orchestrations({
+        : new Orchestrations({ returnFor: (a,c,id) => this.bus.workAttention?.returnTo(a,c,id), isCancelled: id => !!this.bus.workAttention?.cancelled(id),
             pendingWork: this.pendingWork,
             policy: this.policy,
-            // The same run a Fork child gets: its own conversation of the agent, serialised by
-            // the bus, answered in its transcript.
-            runChild: async (agentId, conversation, brief) => {
-              this.bus.sendFromUser(agentId, brief, { conversation, steerable: false, origin: "host:orchestrate" });
+            // Fork children retain their admitted work while keeping separate histories.
+            runChild: async (agentId, conversation, brief, workId, parent) => {
+              const work = workId ? this.bus.workAttention?.forId(agentId, parent ?? "main", workId) : undefined;
+              if (workId && !work) throw new Error("Plan work is cancelled or no longer admitted");
+              this.bus.sendFromUser(agentId, brief, { conversation, ...(work ? {work} : {}), steerable: false, origin: "host:orchestrate" });
               await this.bus.runExclusive(agentId, { conversation });
               return (this.registry.readTranscript(agentId, conversation) as { role?: string; kind?: string; text?: string }[])
                 .filter(entry => entry.role === "assistant" && entry.kind === undefined && typeof entry.text === "string")
@@ -1043,7 +1044,7 @@ export class Orchestrator {
             log: line => console.error(`[orchestrate] ${line}`),
           });
     // After the hooks: the face runs them around every delegated call.
-    this.mcpFace = new McpFace({
+    this.mcpFace = new McpFace({ returnFor: (a,c,id) => this.bus.workAttention?.returnTo(a,c,id), isCancelled: id => !!this.bus.workAttention?.cancelled(id),
       mcp: () => this.mcp,
       policy: this.policy,
       ...(this.hooks !== undefined ? { hooks: this.hooks } : {}),
@@ -1056,7 +1057,7 @@ export class Orchestrator {
       onEvent: event => options.onTurnEvent?.(event),
     });
     this.delegateSessions = new DelegateSessions(options.pendingWork === null ? null : undefined);
-    this.acpDelegates = new AcpDelegates({
+    this.acpDelegates = new AcpDelegates({ returnFor: (a,c,id) => this.bus.workAttention?.returnTo(a,c,id), isCancelled: id => !!this.bus.workAttention?.cancelled(id),
       ...(this.pendingWork !== undefined ? { pendingWork: this.pendingWork } : {}),
       policy: this.policy,
       deliver: (agentId, text, conversation, workId) => {
@@ -1064,7 +1065,7 @@ export class Orchestrator {
       },
       log: line => console.error(`[acp] ${line}`),
     });
-    this.modelRelay = new ModelRelay({
+    this.modelRelay = new ModelRelay({ isCancelled: id => !!this.bus.workAttention?.cancelled(id),
       provider: () => this.provider,
       key: profile => {
         const key = process.env[profile.keyEnv];
@@ -1124,7 +1125,7 @@ export class Orchestrator {
       judgeExperiment: (prompt, agentId) => this.askCheaply(this.registry.get(agentId), prompt), // the ledger's one question per continuation (INV-1475)
       log: line => console.error(`[goal] ${line}`),
     });
-    if (this.tasks !== undefined) this.tasks.onChange(task => { this.goalLoop?.onTaskChanged(task); taskAttentionChanged(this.bus, task); }); if (this.tasks !== undefined) watchDependencies(this.tasks, (task, text) => { this.bus.deliverSystem(task.assigneeId!, text, task.conversation ?? MAIN_CONVERSATION); }); // a task whose last blocker closed wakes its assignee, as a late fork result does (INV-1740)
+    if (this.tasks !== undefined) this.tasks.onChange(task => { this.goalLoop?.onTaskChanged(task); taskAttentionChanged(this.bus, task); }); if (this.tasks !== undefined) watchDependencies(this.tasks, (task, text) => { this.bus.deliverSystem(task.assigneeId!, text, task.conversation ?? MAIN_CONVERSATION, taskWorkId(task,this.bus)); }); // a task whose last blocker closed wakes its assignee, as a late fork result does (INV-1740)
     this.goalGate = this.tasks === undefined ? undefined : new GoalGate({ modelRecoveryRoot: this.registry.root,
       tasks: this.tasks,
       registry: this.registry,
@@ -2050,6 +2051,7 @@ export class Orchestrator {
     let parked = 0;
 
     for (const turn of outstanding) {
+      if (turn.workId && this.bus.workAttention?.cancelled(turn.workId)) { this.turns?.end(turn.id, "work-cancelled"); abandoned++; continue; }
       // Inbox replay already queued this durable continuation after a second crash.
       if (this.bus.hasPendingResume(turn.id)) continue;
       const agent = this.registry.tryGet(turn.agentId);
@@ -2068,10 +2070,7 @@ export class Orchestrator {
       }
 
       if (!turn.cleanExit && turn.attempt >= MAX_RESUMES) {
-        // A turn that ends the process will end it again. Reported into the conversation rather
-        // than retried: a crash loop that restarts itself is worse than a task that stopped, and
-        // the person reading this is the one who can do something about it. A clean exit is
-        // exempt: the operator ending the process is not the turn's doing, however many times.
+        // Repeated crashes stop; clean operator shutdowns do not consume the retry ceiling.
         this.turns?.end(turn.id, "given-up");
         this.steps?.closed(turn.id);
         this.registry.appendTranscript(agent.id, {

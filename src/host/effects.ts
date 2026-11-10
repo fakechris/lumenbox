@@ -68,9 +68,11 @@ export function parseEffects(raw: unknown): { effects: ToolEffect[]; problems: s
 }
 
 export interface EffectsDeps {
+  returnFor?: (agentId:string,conversation:string,workId:string) => import("../agents/work-attention.ts").WorkReturn | undefined;
+  isCancelled?: (workId: string) => boolean;
   pendingWork: PendingWork;
   policy: {
-    requestConfirmation(input: { agentId: string; agentName: string; description: string; action?: string }): PendingApproval;
+    requestConfirmation(input: { returnTo?: import("../agents/work-attention.ts").WorkReturn; agentId: string; agentName: string; description: string; action?: string }): PendingApproval;
     pending(): PendingApproval[];
   };
   mcp: () => McpManager | undefined;
@@ -115,6 +117,7 @@ export class Effects {
    */
   apply(input: { agentId: string; agentName: string; conversation: string; workId?: string; tool: string; effects: readonly ToolEffect[] }): Applied {
     const applied: Applied = { notes: [] };
+    if (input.workId && this.deps.isCancelled?.(input.workId)) return { notes: ["Work cancelled; no follow-up effects were admitted."] };
     for (const effect of input.effects) {
       switch (effect.type) {
         case "pause_turn": {
@@ -130,7 +133,7 @@ export class Effects {
           }
           const approval = this.deps.policy.requestConfirmation({
             agentId: input.agentId,
-            agentName: input.agentName,
+            agentName: input.agentName, ...(input.workId ? {returnTo:this.deps.returnFor?.(input.agentId,input.conversation,input.workId)} : {}),
             description: effect.reason,
             action: `continue ${input.tool} once you answer`,
           });
@@ -191,7 +194,7 @@ export class Effects {
   }
 
   private openOf(kind: OpenFork["kind"]): OpenFork[] {
-    return this.deps.pendingWork.open().filter(work => work.kind === kind);
+    return this.deps.pendingWork.open().filter(work => work.kind === kind && !(work.workId && this.deps.isCancelled?.(work.workId)));
   }
 
   /**

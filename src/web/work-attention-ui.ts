@@ -38,7 +38,7 @@ $("communications").addEventListener("toggle", renderCommunications);
 function showCurrentWork(attention) {
   var node = $("currentwork"); node.hidden = !attention || attention.status === "answered";
   if (node.hidden) { node.textContent = ""; return; }
-  var label = attention.status === "waiting" ? "{{ui.work.waiting}}" : "{{ui.work.running}}";
+  var label = attention.status === "cancelled" ? "{{ui.work.cancelled}}" : attention.status === "waiting" ? "{{ui.work.waiting}}" : "{{ui.work.running}}";
   var reasons = {"waiting for confirmation":"{{ui.work.confirmationPending}}","unfinished plan":"{{ui.work.planPending}}", "waiting for related work":"{{ui.work.collaborationPending}}", "execution interrupted":"{{ui.work.interrupted}}", "failed":"{{ui.work.failed}}", "aborted":"{{ui.work.interrupted}}", "incomplete":"{{ui.work.incomplete}}"};
   var reason = attention.reason && attention.reason.indexOf("required tool unavailable:") === 0 ? "{{ui.work.toolMissing}}" : reasons[attention.reason] || attention.reason;
   node.textContent = label + (reason ? " · " + reason : "") + (attention.held ? " · {{ui.work.held}} " + attention.held : "");

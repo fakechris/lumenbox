@@ -10,3 +10,9 @@ export function taskAttentionChanged(bus: AgentBus, task: Task): void {
   if (work?.taskId !== task.id) return;
   bus.workAttention!.settle(work, "answered"); void bus.wake(task.assigneeId);
 }
+
+/** A task wake keeps its admitted work identity, including a cancelled one. */
+export function taskWorkId(task: Task, bus: AgentBus): string | undefined {
+  const focus=task.assigneeId?bus.workAttention?.get(task.assigneeId,task.conversation ?? "main"):undefined;
+  return task.progress?.active?.workId ?? task.pursuit?.workId ?? (focus?.taskId===task.id?focus.id:undefined);
+}

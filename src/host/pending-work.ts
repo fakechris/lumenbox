@@ -44,7 +44,7 @@ export interface CommitNote {
   /** The repository's state after the run, in words (INV-1258). */
   worktree?: string;
 }
-export type DropWhy = "restart" | "unrecorded" | "refused";
+export type DropWhy = "restart" | "unrecorded" | "refused" | "cancelled";
 
 /**
  * `fork` and `delegate` are the fork ledger's own (docs/32). `pause`, `ext-job` and `reminder`
@@ -52,7 +52,7 @@ export type DropWhy = "restart" | "unrecorded" | "refused";
  * written before they are acknowledged, settled when delivered — and recovered by effects.ts,
  * not by the fork sweep. `orchestrate` is a fan-out plan (INV-862), recovered by orchestrate.ts.
  */
-export type WorkKind = "fork" | "delegate" | "pause" | "ext-job" | "reminder" | "orchestrate";
+export type WorkKind = "fork" | "delegate" | "pause" | "ext-job" | "reminder" | "orchestrate" | "command";
 
 /** Whether a kind belongs to the fork ledger proper, which the startup sweep settles. */
 export function isForkLedgerKind(kind: WorkKind): boolean {

@@ -169,3 +169,21 @@ test("usage is read off either wire, streamed or not", () => {
   const anthropic = countUsage(JSON.stringify({ usage: { input_tokens: 7, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }));
   assert.deepEqual(anthropic, { inputTokens: 7, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 });
 });
+
+test("revoking cancelled work aborts its in-flight model transport and refuses new calls without revoking another route", async()=>{
+  const {Readable}=await import("node:stream");let fetches=0,aborted=false,started!:()=>void;
+  const ready=new Promise<void>(resolve=>{started=resolve;});
+  const relay=new ModelRelay({provider:()=>PROFILE,key:()=>"synthetic-test-key",fetch:(async(_url,init)=>{
+    fetches++;started();return new Promise((_resolve,reject)=>{init!.signal!.addEventListener("abort",()=>{aborted=true;reject(new Error("cancelled"));},{once:true});});
+  }) as typeof fetch});
+  relay.baseUrl="http://127.0.0.1:1";
+  const first=relay.mint({agentId:"a",agentName:"A",conversation:"main",workId:"cancel-me",preset:"test"}),second=relay.mint({agentId:"a",agentName:"A",conversation:"other",workId:"keep-me",preset:"test"});
+  assert.ok("route" in first && "route" in second);
+  const request=()=>Object.assign(Readable.from([Buffer.from('{"messages":[]}')]),{method:"POST",headers:{}}) as IncomingMessage;
+  const response=()=>({writeHead:()=>{},end:()=>{}}) as unknown as ServerResponse;
+  const running=relay.proxy(request(),response(),first.route,"/v1/messages");await ready;
+  relay.revoke(first.route.key,"work cancelled");await running;
+  assert.equal(aborted,true);await relay.proxy(request(),response(),first.route,"/v1/messages");assert.equal(fetches,1);
+  assert.equal(relay.authenticate(first.route.key,{authorization:`Bearer ${first.route.token}`}),undefined);
+  assert.ok(relay.authenticate(second.route.key,{authorization:`Bearer ${second.route.token}`}));
+});

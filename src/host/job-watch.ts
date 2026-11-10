@@ -1,4 +1,4 @@
-import type { WorkStamp } from "../agents/work-attention.ts";
+import type { WorkStamp, StopResource } from "../agents/work-attention.ts";
 /**
  * The commands a turn let go of (INV-1461): a foreground command that outlived its window
  * became a job, and somebody has to notice when it ends and tell the agent.
@@ -52,6 +52,8 @@ export interface JobWatchBox {
 }
 
 export interface JobWatchDeps {
+  observed?: (job:WatchedJob,end:JobEnd) => void;
+  isCancelled?: (workId: string) => boolean;
   started?: (job: WatchedJob) => void; released?: (job: WatchedJob) => void;
   /** The box the job runs on; undefined when none is connected, which ends the watch. */
   box: () => JobWatchBox | undefined;
@@ -130,6 +132,15 @@ export class JobWatch {
   openJobs(agentId: string, conversation: string): WatchedJob[] {
     return [...this.open.values()].filter(job => job.agentId === agentId && job.conversation === conversation);
   }
+  workJobs(workId: string): WatchedJob[] { return [...this.open.values()].filter(job => job.work?.id === workId); }
+  async stopWorkJob(jobId: string, workId: string): Promise<StopResource> {
+    const job = this.open.get(jobId), resource: StopResource = {kind:"job",id:jobId,state:"unconfirmed"};
+    if (!job || job.work?.id !== workId) return {...resource, detail:"Job is no longer watched; its external state needs verification"};
+    const box = this.deps.box(); if (!box) return {...resource, detail:"Computer unavailable"};
+    await box.killJob(jobId);
+    const status = await box.waitForJob({job_id:jobId,timeout_ms:100});
+    return {...resource,agentId:job.agentId,state:status.running ? "requested" : "confirmed", detail:status.running ? "Stop requested; process exit has not been observed" : "Process exit observed"};
+  }
 
   /** The ends this conversation was not woken for, oldest first; taking them clears them. */
   takeRecorded(agentId: string, conversation: string, workId?: string): RecordedEnd[] {
@@ -149,6 +160,9 @@ export class JobWatch {
 
   /** The end is judged under the job's policy: a wake joins the held window, anything else goes on the record. */
   private async settle(job: WatchedJob, ended: Ended, killed: boolean): Promise<void> {
+    const observation: JobEnd = {exit_code:ended.exit_code,interrupted:ended.interrupted,killed,tail:ended.tail};
+    this.deps.observed?.(job,observation);
+    if (job.work && this.deps.isCancelled?.(job.work.id)) return;
     const policy = job.onEnd ?? "wake_on_failure";
     const end: JobEnd = { exit_code: ended.exit_code, interrupted: ended.interrupted, killed, tail: ended.tail };
     const how = killed ? "killed at the cap" : ended.interrupted === true ? "interrupted" : `exit ${ended.exit_code}`;
@@ -190,6 +204,7 @@ export class JobWatch {
     const cap = this.deps.capMs ?? JOB_WATCH_CAP_MS;
     const now = this.deps.now ?? Date.now;
     for (;;) {
+      if (job.work && this.deps.isCancelled?.(job.work.id)) { await this.stopWorkJob(job.jobId, job.work.id); return; }
       const box = this.deps.box();
       if (box === undefined) { this.deps.log(`job watch ${job.jobId}: no box; the agent can ask Jobs about it`); return; }
       const elapsed = now() - job.startedAt;

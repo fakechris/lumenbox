@@ -151,3 +151,15 @@ test("under the live sandbox a command writes in cwd, is refused outside it with
     rmSync(outside, { recursive: true, force: true });
   }
 });
+
+test("cancelling one host command terminates its process group without ending another work's command", async()=>{
+  const dir=mkdtempSync(join(tmpdir(),"hostrun-cancel-"));
+  try {
+    const runner=new HostRunner(hostRunnerConfig({enabled:true,cwd:dir,sandbox:"off",timeoutMs:10_000})), first=new AbortController();
+    const running=runner.run("sleep 20 & wait",{},undefined,{workId:"cancel-me",signal:first.signal});
+    while(!runner.activeWork("cancel-me").length) await new Promise(resolve=>setImmediate(resolve));
+    const independent=runner.run("printf independent",{},undefined,{workId:"keep-me"});
+    first.abort();const result=await running;assert.equal(result.timedOut,false);assert.equal(runner.activeWork("cancel-me").length,0);
+    assert.equal((await independent).stdout,"independent");
+  } finally {rmSync(dir,{recursive:true,force:true});}
+});

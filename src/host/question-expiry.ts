@@ -127,6 +127,12 @@ export class QuestionWatch {
   list(): WatchedQuestion[] {
     return [...this.pending.values()].map(question => ({ ...question }));
   }
+  cancelWork(workId: string): void {
+    for (const [key, question] of this.pending) if (question.work?.id === workId) {
+      this.append({ kind: "settled", id: question.id, at: new Date().toISOString(), verdict: "superseded", reason: "work cancelled" });
+      this.pending.delete(key); this.answered.delete(question.id);
+    }
+  }
 
   /**
    * The person who was asked has spoken (INV-533). Called from the door a reply comes

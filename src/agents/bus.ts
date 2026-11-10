@@ -1,4 +1,4 @@
-import { WorkAttention, personMessage, peerWorkConversation, type WorkStamp } from "./work-attention.ts";
+import { messageWorkId, WorkAttention, personMessage, peerWorkConversation, type WorkStamp } from "./work-attention.ts";
 import type { InboundMessage } from "./admitted-message.ts";
 export type { InboundMessage } from "./admitted-message.ts";
 import type { TaskBinding } from "../host/execution-binding.ts";
@@ -94,6 +94,7 @@ export type TurnRunner = (
 ) => Promise<void>;
 
 interface ActiveTurn {
+  workId?: string;
   principalId?: string;
   controller: AbortController;
   /** True while the running turn was started by the user, not by a wake. */
@@ -364,6 +365,7 @@ export class AgentBus {
     // acknowledge work that is not yet written down, which is the whole failure being fixed.
     message = this.admitMessage?.(agentId, message) ?? message;
     const admission = this.inbox?.admit(agentId, message);
+    if (this.workAttention?.cancelledMessage(message)) { this.inbox?.drop(admission); return admission; }
     const queue = this.pending.get(agentId) ?? [];
     queue.push({ ...message, admission });
     this.pending.set(agentId, queue);
@@ -658,6 +660,7 @@ export class AgentBus {
     if (!this.workAttention) return;
     const queue = this.pending.get(agentId) ?? [];
     const kept = queue.filter(message => {
+      if (this.workAttention!.cancelledMessage(message)) { this.inbox?.drop(message.admission); return false; }
       if (message.informational || !message.work || this.workAttention!.valid(message.work, agentId)) return true;
       this.inbox?.drop(message.admission); return false;
     });
@@ -706,6 +709,16 @@ export class AgentBus {
       stopped.add(agentId);
     }
     return [...stopped];
+  }
+  workQueue(workId: string): {id:string;agentId:string}[] {
+    return [...this.pending.entries()].flatMap(([agentId,rows])=>rows.filter(message=>messageWorkId(message)===workId).map(message=>({id:message.id,agentId})));
+  }
+  workExecutions(workId: string): { agentId: string; conversation: string }[] {
+    return [...this.active.entries()].filter(([, run]) => run.workId === workId).map(([key]) => ({ agentId: agentOfKey(key), conversation: key.slice(key.indexOf("\0") + 1) }));
+  }
+  interruptWork(workId: string): void {
+    for (const run of this.active.values()) if (run.workId === workId) run.controller.abort();
+    for (const agentId of this.pending.keys()) this.dropStaleWork(agentId);
   }
 
   /** The distinct conversations an agent currently has messages queued for. */
@@ -766,7 +779,9 @@ export class AgentBus {
         // while this call waited on the chain. Burning a model call on an empty
         // prompt would answer a question nobody is still asking.
         if (inbound.length === 0) return;
+        this.active.get(key)!.workId = inbound[0] ? messageWorkId(inbound[0]) : undefined;
         if (this.workAttention && (inbound[0]?.work?.owner !== agentId || !this.workAttention.valid(inbound[0].work, agentId))) executionConversation = peerWorkConversation(inbound, conversation);
+        if (inbound[0]?.work) this.workAttention?.execution(inbound[0].work, agentId, executionConversation);
         this.active.get(key)!.principalId = inbound[0]?.principalId; this.active.get(key)!.userDriven = inbound.some(personMessage);
         let acknowledged = false;
         const acknowledge = () => {

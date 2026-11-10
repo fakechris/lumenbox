@@ -1,3 +1,4 @@
+import {workBox} from "./work-executor.ts";
 import { taskHoldsAttention } from "./task-attention.ts";
 import { executionTarget } from "./tool-roster.ts";
 import { needsComputer } from "./tool-capabilities.ts";
@@ -1551,10 +1552,10 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     if (ended) return;
     ended = true;
     endedHow = how;
-    if (work?.owner === agent.id && bus.workAttention?.valid(work, agent.id)) {
+    if (work?.owner === agent.id && work.conversation === conversation && bus.workAttention?.valid(work, agent.id)) {
       const unfinished = registry.readDurableState(agent.id, conversation).todos?.some(item => item.status !== "done") || taskHoldsAttention(deps.tasks?.get(taskBinding?.taskId ?? work.taskId ?? ""), conversation);
       const unavailable = bus.workAttention.get(work.owner, work.conversation)?.unavailable?.[0];
-      const pendingPeers = (bus.workAttention.get(work.owner, work.conversation)?.awaiting.length ?? 0) + bus.relatedPending(agent.id, work) + (deps.pendingWork?.open().filter(item => item.workId === workId && item.kind !== "reminder").length ?? 0);
+      const pendingPeers = (bus.workAttention.get(work.owner, work.conversation)?.awaiting.length ?? 0) + bus.relatedPending(agent.id, work) + (deps.pendingWork?.open().filter(item => item.workId === workId && item.kind !== "reminder" && item.kind !== "command").length ?? 0);
       bus.workAttention.settle(work, how !== "done" || unfinished || pendingPeers || confirmationPending || unavailable ? "waiting" : "answered", (blockedCapability || unavailable) ? "required tool unavailable: " + (blockedCapability ?? unavailable!.tool) : how !== "done" ? how : confirmationPending ? "waiting for confirmation" : pendingPeers ? "waiting for related work" : unfinished ? "unfinished plan" : undefined);
     }
     deps.tasks?.progress.close(progressContext);
@@ -1809,7 +1810,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
             agent,
             registry,
             bus,
-            box,
+            box: workBox(box, work, agent.id, conversation, bus, deps.pendingWork), signal,
             files: deps.files,
             claims: deps.claims,
             policy: deps.policy,
@@ -3307,7 +3308,7 @@ ${outcome.text}`;
             agent,
             registry,
             bus,
-            box,
+            box: workBox(box, work, agent.id, conversation, bus, deps.pendingWork), signal,
             files: deps.files,
             claims: deps.claims,
             policy: deps.policy,

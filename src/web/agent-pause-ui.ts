@@ -32,7 +32,7 @@ export const AGENT_PAUSE_JS = `(function () {
         if (p) { call("POST", "/api/agents/resume", { id: a.id }).then(refresh).catch(function (e) { note.textContent = e.message; }); return; }
         window.askInline(b, "{{ui.agent-pause.pause}} " + a.name + "{{ui.agent-pause.its-turn-stops-its-background}}", "").then(function (reason) {
           if (reason === null) return;
-          call("POST", "/api/agents/pause", { id: a.id, reason: reason }).then(function (d) { note.textContent = a.name + " {{ui.agent-pause.paused}}" + (d.jobsStopped && d.jobsStopped.length ? "; " + d.jobsStopped.length + " {{ui.agent-pause.background-job-s-stopped}}" : "."); refresh(); }).catch(function (e) { note.textContent = e.message; });
+          call("POST", "/api/agents/pause", { id: a.id, reason: reason }).then(function (d) { note.textContent = a.name + " {{ui.agent-pause.paused}}" + (d.jobsStopped && d.jobsStopped.length ? "; " + d.jobsStopped.length + " {{ui.agent-pause.background-job-s-stopped}}" : ".") + (d.errors && d.errors.length ? " {{ui.wc.unconfirmed}}: " + d.errors.join("; ") : ""); refresh(); }).catch(function (e) { note.textContent = e.message; });
         });
       };
       row.appendChild(b);
