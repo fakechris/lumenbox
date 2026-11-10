@@ -5687,7 +5687,7 @@ document.addEventListener("click", function (event) {
     // A question is answered where it was asked: the same conversation, in the chat
     // column. A task opens its card on the board beside this panel.
     var conversation = open.getAttribute("data-att-open");
-    if (conversation) select(current, conversation);
+    if (conversation) { showTab("desktop"); select(current, conversation); }
     else if (open.getAttribute("data-att-task")) { window.openTaskFocus(open.getAttribute("data-att-task")); } else { showTab("tasks"); } // scrolled is reset so the board brings the card into view // the board is where a task opens; from the chat view that means switching to it
   }
 });

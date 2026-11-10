@@ -107,6 +107,7 @@ export const UI_TASK_FOCUS: Record<string, readonly [string, string]> = {
   "ui.tf.exportScope": ["步骤筛选（任务概览与进度覆盖整个可读任务）", "Step filters (overview and progress cover the whole readable task)"],
   "ui.tf.exportExpires": ["最晚下载时间（新导出可替换旧副本；重启、记录变化或来源移除后需重新生成）：", "Available up to (new exports may replace older copies; recreate after restart, record changes or source removal):"],
   "ui.tf.exportError": ["记录暂时无法导出，请确认任务仍可读取后重新生成。", "Record unavailable. Confirm you can still read the task and recreate it."],
+  "ui.tf.attentionUnavailable": ["待处理信息暂时无法读取，请重试。", "Unable to load attention items. Please retry."],
   "ui.tf.backChat": ["返回会话与成员", "Back to conversation and agents"],
   "ui.tf.assignee": ["负责人", "Assignee"],
   "ui.tf.needsAction": ["需要你处理", "Needs your attention"],
