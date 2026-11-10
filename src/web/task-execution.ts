@@ -53,7 +53,9 @@ export class TaskExecutions {
     const grouped = new Map<string, { start?: ExecutionStepRecord; end?: ExecutionStepRecord }>();
     const ended = new Set<string>(), active = new Map<string, string>();
     for (const r of source.records) {
-      if (r.event === "begin" && r.executionId) {
+      // Recovery can observe a replay before the full prompt/config begin is written.
+      // Its durable start still supersedes the preceding physical invocation.
+      if ((r.event === "begin" || r.event === "step" || r.event === "maintenance" || r.event === "selection") && r.executionId) {
         const previous = active.get(r.id);
         if (previous && previous !== r.executionId) ended.add(previous);
         active.set(r.id, r.executionId);
@@ -119,7 +121,7 @@ export class TaskExecutions {
     rows.sort((a, b) => (a.view.startedAt ?? "").localeCompare(b.view.startedAt ?? "") || a.view.id.localeCompare(b.view.id));
     this.prune();
     const snapshot: Snapshot = { id: randomUUID(), taskId, filters: { ...filters },
-      highWater: sourceDigest(rows.map(r => [r.view.id, r.view.sourceRefs])),
+      highWater: sourceDigest([partial, rows.map(r => r.view)]),
       rows, partial, createdAt: this.now() };
     this.snapshots.set(snapshot.id, snapshot);
     this.prune();

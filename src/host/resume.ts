@@ -1,4 +1,5 @@
 import { ExecutionArchives } from "./execution-archives.ts";
+import { randomUUID } from "node:crypto";
 import type { TaskBinding } from "./execution-binding.ts";
 import type { ExecutionStepRecord, ExecutionSelectionRecord, ExecutionMaintenanceRecord } from "./execution-records.ts";
 /**
@@ -235,7 +236,7 @@ export class TurnLedger {
   private readonly path: string | undefined;
   private lines = 0;
   private readonly executionArchives: ExecutionArchives;
-  private readonly executionListeners = new Set<(record: ExecutionStepRecord | ExecutionSelectionRecord | ExecutionMaintenanceRecord) => void>();
+  private readonly executionListeners = new Set<(record: ExecutionStepRecord | ExecutionSelectionRecord | ExecutionMaintenanceRecord, revision: string) => void>();
   private readonly pendingExecution = new Map<string, Map<string, ExecutionStepRecord | ExecutionSelectionRecord | ExecutionMaintenanceRecord>>();
 
   /**
@@ -321,7 +322,7 @@ export class TurnLedger {
   observeExecution(record: ExecutionStepRecord): void { this.append(record, record.phase === "start"); this.executionChanged(record); }
 
   observeMaintenance(record: ExecutionMaintenanceRecord): void { this.append(record); this.executionChanged(record); }
-  onExecution(listener: (record: ExecutionStepRecord | ExecutionSelectionRecord | ExecutionMaintenanceRecord) => void): () => void {
+  onExecution(listener: (record: ExecutionStepRecord | ExecutionSelectionRecord | ExecutionMaintenanceRecord, revision: string) => void): () => void {
     this.executionListeners.add(listener); return () => this.executionListeners.delete(listener);
   }
   private executionChanged(record: ExecutionStepRecord | ExecutionSelectionRecord | ExecutionMaintenanceRecord): void {
@@ -329,7 +330,8 @@ export class TurnLedger {
       const tasks = this.pendingExecution.get(record.id) ?? new Map();
       tasks.set(record.taskBinding.taskId, record); this.pendingExecution.set(record.id, tasks);
     }
-    for (const listener of this.executionListeners) { try { listener(record); } catch { /* notification never redoes an effect */ } }
+    const revision = randomUUID(); // change identity, distinct from the persisted source record id
+    for (const listener of this.executionListeners) { try { listener(record, revision); } catch { /* notification never redoes an effect */ } }
   }
 
   /** Re-publish invalidation after transcript results land, including recovery appends. No second result record. */

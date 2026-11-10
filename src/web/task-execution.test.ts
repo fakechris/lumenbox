@@ -96,12 +96,16 @@ test("same turn/call in another invocation remains a distinct attempt and never 
   const f = fixture();
   try {
     f.start(1); // The process dies here: no end record for the original invocation.
+    const beforeCrash = f.service().open("task-A", access);
+    f.turns.observeExecution({ ...f.scope, executionId: "early-recovery", attempt: 2, event: "step", recordId: "early-start", phase: "start", toolUseId: "c1", tool: "read_file", at: new Date(9_000).toISOString() });
+    // A second crash inside recovery, before its late prompt/config begin record.
     f.turns.begin({ ...f.scope, executionId: "resumed", attempt: 2, about: "resume" });
     f.turns.observeExecution({ ...f.scope, executionId: "resumed", attempt: 2, event: "step", recordId: "resumed-start", phase: "start", toolUseId: "c1", tool: "read_file", at: new Date(10_000).toISOString() });
     const page = f.service().open("task-A", access);
-    assert.equal(page.total, 3);
-    assert.deepEqual(page.steps.map(s => s.outcome), ["succeeded", "unknown", "running"]);
-    assert.notEqual(page.steps[1]!.id, page.steps[2]!.id);
+    assert.equal(page.total, 4);
+    assert.deepEqual(page.steps.map(s => s.outcome), ["succeeded", "unknown", "unknown", "running"]);
+    assert.notEqual(page.highWater, beforeCrash.highWater);
+    assert.notEqual(page.steps[2]!.id, page.steps[3]!.id);
   } finally { f.cleanup(); }
 });
 
@@ -110,8 +114,9 @@ test("an early end notification is followed by invalidation after durable transc
   try {
     const executions = f.service();
     const snapshots: ReturnType<TaskExecutions["open"]>[] = [];
-    const stop = f.turns.onExecution(record => {
-      if (record.event === "step" && record.phase === "end") snapshots.push(executions.open("task-A", access));
+    const revisions: string[] = [];
+    const stop = f.turns.onExecution((record, revision) => {
+      if (record.event === "step" && record.phase === "end") { revisions.push(revision); snapshots.push(executions.open("task-A", access)); }
     });
     f.start(0);
     f.turns.observeExecution({ ...f.scope, event: "step", recordId: "end", phase: "end", toolUseId: "c0", tool: "read_file", at: new Date().toISOString() });
@@ -119,6 +124,7 @@ test("an early end notification is followed by invalidation after durable transc
     f.entries.push({ role: "user", kind: "results", turnId: "turn", executionId: "invocation",
       blocks: [{ type: "tool_result", tool_use_id: "c0", content: "durable result" }] });
     f.turns.executionCommitted("turn");
+    assert.notEqual(revisions[0], revisions[1], "a committed source refresh has a new change identity");
     assert.equal(snapshots.at(-1)!.steps[0]!.outcome, "succeeded");
     assert.equal(executions.detail("task-A", access, { snapshot: snapshots.at(-1)!.snapshot, step: snapshots.at(-1)!.steps[0]!.id }).result, "durable result");
     assert.equal(snapshots[0]!.steps[0]!.outcome, "unknown", "the old high-water remains frozen");
