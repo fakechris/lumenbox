@@ -17,12 +17,11 @@ function beginLiveReplay() {
 function finishLiveReplay(replay) {
   if (liveReplay !== replay) return;
   liveReplay = null;
-  replay.events.forEach(handleLiveTool);
+  replay.events.forEach(function (e) { stream.onmessage({ data: JSON.stringify(e) }); });
 }
 function handleLiveTool(e) {
   if (e.type !== "tool_start" && e.type !== "tool_end") return false;
   if (!inView(e)) return true;
-  if (liveReplay) { liveReplay.events.push(e); return true; }
   var key = liveCallKey(e), pending = key && openCall.get(key);
   if (e.type === "tool_start") {
     if (pending) return true;

@@ -6189,6 +6189,7 @@ ${LIVE_TOOLS_JS}
 
 stream.onmessage = function (raw) {
   var e = JSON.parse(raw.data);
+  if (liveReplay && (inView(e) || (e.type === "message_sent" && currentConversation === "main" && (e.fromId === current || e.toId === current)))) { liveReplay.events.push(e); return; }
   var line = activityLine(e);
   if (line) feed(line.html, line.cls);
 

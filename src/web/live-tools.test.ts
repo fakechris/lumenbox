@@ -12,9 +12,13 @@ function page() {
   const scope = {
     stream: {} as { onmessage: (raw: { data: string }) => void },
     current: "a", currentConversation: "main", openAgent: null, openWork: null,
-    openCall: new Map(), thread: [] as { calls: { result: string; isError?: boolean }[] }[],
+    openCall: new Map(), thread: [] as { kind: string; done?: boolean; calls: { result: string; isError?: boolean }[] }[],
     inView(e: { agentId: string; conversation?: string }) { return e.agentId === scope.current && (e.conversation || "main") === scope.currentConversation; },
     activityLine: () => null, toolDetail: (_: string, input: unknown) => JSON.stringify(input),
+    markViewed: () => {}, requestAnimationFrame: () => {},
+    $: () => ({ style: {} }), busy: new Set(), live: new Map(),
+    closeOpen: () => { if (scope.openWork) (scope.openWork as { done: boolean }).done = true; },
+    dropWorking: () => {}, renderAgents: () => {}, refresh: () => {},
     redrawItem: () => {}, pushItem: (item: never) => { scope.thread.push(item); return item; },
   };
   const replay = html.slice(html.indexOf("function replayEntry("), html.indexOf("function agentById("));
@@ -33,6 +37,27 @@ test("background conversation completion does not consume the foreground tool re
   event({ type: "tool_end", agentId: "a", conversation: "fork/1", turnId: "f", toolUseId: "child-call", summary: "child result" });
   event({ type: "tool_end", agentId: "a", conversation: "main", turnId: "t", toolUseId: "main-call", summary: "main result" });
   assert.equal(scope.thread[0]!.calls[0]!.result, "main result");
+});
+
+test("history loading preserves tools before the following final answer", () => {
+  const view = page(); view.begin();
+  const base = { agentId: "a", turnId: "t", toolUseId: "c", tool: "read_file" };
+  view.event({ ...base, type: "tool_start", input: {} });
+  view.event({ ...base, type: "tool_end", summary: "checked" });
+  view.event({ type: "text", agentId: "a", delta: "Final answer" });
+  view.finish();
+  assert.deepEqual(Array.from(view.scope.thread, x => x.kind), ["work", "agent"]);
+  assert.equal(view.scope.thread[0]!.done, true);
+});
+
+test("turn completion during history loading closes the buffered work", () => {
+  const view = page(); view.begin();
+  const base = { agentId: "a", turnId: "t", toolUseId: "c", tool: "read_file" };
+  view.event({ ...base, type: "tool_start", input: {} });
+  view.event({ ...base, type: "tool_end", summary: "checked" });
+  view.event({ type: "turn_finished", agentId: "a" });
+  view.finish();
+  assert.equal(view.scope.thread[0]!.done, true);
 });
 
 test("same-name concurrent calls settle in reverse order, once each and only in their turn", () => {
