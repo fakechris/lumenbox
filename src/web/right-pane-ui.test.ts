@@ -25,7 +25,7 @@ test("activity stays bounded and a live failure remains visible while collapsed 
   const feed = runInNewContext(`${ACTIVITY_FEED_JS}; feed`, scope) as (html: string, cls?: string, at?: string) => void;
   for (let n = 0; n < 230; n++) feed("Retained entry", "err", "2026-11-01T00:00:00Z");
   assert.equal(nodes.feed!.children.length, 200);
-  assert.equal(nodes["activity-retention", "task-return-feedback"]!.hidden, false);
+  assert.equal(nodes["activity-retention"]!.hidden, false);
   assert.equal(nodes["activity-unread"]!.textContent, "", "replayed errors are not new failures");
   feed("Sending failed", "err");
   assert.match(nodes["activity-unread"]!.textContent, /1 .*newErrors/);
