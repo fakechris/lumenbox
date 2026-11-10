@@ -145,6 +145,7 @@ export class AcpDelegates {
       ...(input.call !== undefined ? { call: input.call } : {}),
       actor: `agent:${input.agentId}`,
     });
+    if(opening)this.deps.pendingWork?.admitted(opening,undefined);
     if (input.workId && this.deps.isCancelled?.(input.workId)) {
       const resource:StopResource={kind:"delegate",id:opening ?? jobId,agentId:input.agentId,state:"unconfirmed",detail:"Session opened after cancellation"};
       this.deps.cancelledResource?.(input.workId,resource);

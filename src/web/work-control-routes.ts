@@ -13,7 +13,7 @@ export function workControlFor(host: Orchestrator, pauses: AgentPauses, question
   }});
 }
 export async function workControlRoute(route: string, url: URL, control: WorkControl, deps: {
-  host: Orchestrator; pauses: AgentPauses; refusedAdmin:()=>boolean; mayReadAgent:(id:string)=>boolean; by:()=>string;
+  host: Orchestrator; pauses: AgentPauses; refusedAdmin:()=>boolean; mayReadAgent:(id:string)=>boolean; mayReadTask:(id:string)=>boolean; by:()=>string;
   readJson:()=>Promise<Record<string,unknown>>;
 }): Promise<{status:number;body:unknown}|undefined> {
   if (!['GET /api/work-control/preview','POST /api/work-control/cancel','POST /api/work-control/pause-members'].includes(route)) return undefined;
@@ -36,11 +36,13 @@ export async function workControlRoute(route: string, url: URL, control: WorkCon
     }
     const taskId=typeof input.taskId==='string' && input.taskId ? input.taskId : undefined;
     const task=taskId?deps.host.tasks?.get(taskId):undefined;
+    if(taskId && !deps.mayReadTask(taskId))return {status:403,body:{error:"Task access required"}};
     if(taskId&&!task) return {status:404,body:{error:"Task not found"}};
-    const target: WorkTarget={agentId:task?.assigneeId??String(input.agentId??""),conversation:task?.conversation??String(input.conversation??"main"),...(taskId?{taskId}: {})};
-    if(!deps.mayReadAgent(target.agentId))return {status:403,body:{error:"Box access required"}};
+    const target: WorkTarget={agentId:task?(task.assigneeId??""):String(input.agentId??""),conversation:task?.conversation??String(input.conversation??"main"),...(taskId?{taskId}: {})};
+    if(target.agentId && !deps.mayReadAgent(target.agentId))return {status:403,body:{error:"Box access required"}};
     const preview=control.preview(target);
     if([...preview.participants.map(row=>row.id),...preview.resources.flatMap(row=>row.agentId?[row.agentId]:[])].some(id=>!deps.mayReadAgent(id)))return {status:403,body:{error:"Box access required for every participant"}};
+    if(preview.resources.some(row=>row.kind==="task" && !deps.mayReadTask(row.id)))return {status:403,body:{error:"Task access required for every linked task"}};
     if(route.startsWith('GET ')) return {status:200,body:preview};
     const cancelled=await control.cancel(target,String(input.token??""),deps.by(),String(input.reason??"Cancelled by the user").slice(0,500));
     return {status:200,body:{cancelled,externalEffectsNeedVerification:true}};

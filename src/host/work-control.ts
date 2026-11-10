@@ -107,14 +107,20 @@ export class WorkControl {
     if (pending.kind==="delegate" || pending.kind==="command") {
       if (pending.data?.mode==="session" || pending.data?.mode==="opening-session") {
         const watch=host.acpDelegates.get(pending.child);
-        if (watch) await host.acpDelegates.cancel(pending.child);
-        else {const box=host.boxFor(pending.agentId);if(!box)throw new Error("Computer unavailable");await box.acpClose({session_id:pending.child});const running=(await box.acpSessions()).sessions.some(session=>session.session_id===pending.child && session.running);if(!running){host.pendingWork?.dropped(pending.id,"cancelled");return confirmed;}}
-        return {...row,state:"requested",detail:"Engine cancellation requested; process exit is not confirmed"};
+        if(watch?.inFlight){
+          if(watch.inFlight.workId!==ended.id)return {...row,state:"unconfirmed",detail:"Session now belongs to another or unknown work; it was not modified"};
+          if(await host.acpDelegates.cancel(pending.child))return {...row,state:"requested",detail:"Engine cancellation requested; process exit is not confirmed"};
+        }
+        const box=host.boxFor(pending.agentId);if(!box)throw new Error("Computer unavailable");
+        if(watch)await host.acpDelegates.close(pending.child,"work cancelled");else await box.acpClose({session_id:pending.child});
+        const running=(await box.acpSessions()).sessions.some(session=>session.session_id===pending.child && session.running);
+        if(!running && pending.admitted){host.pendingWork?.dropped(pending.id,"cancelled");return confirmed;}
+        return {...row,state:"unconfirmed",detail:"Session close sent; exit or in-flight creation settlement is not confirmed"};
       }
       const box=host.boxFor(pending.agentId); if (!box) throw new Error("Computer unavailable");
       await box.killJob(pending.child);
       const status=await box.waitForJob({job_id:pending.child,timeout_ms:100});
-      if (status.running) return {...row,state:"requested",detail:"Stop requested; process exit is not confirmed"};
+      if (status.running || !pending.admitted) return {...row,state:"requested",detail:"Stop requested; process exit or in-flight creation settlement is not confirmed"};
     }
     host.pendingWork?.dropped(pending.id,"cancelled");
     if (pending.kind==="ext-job") return {...row,state:"unconfirmed",detail:"Follow-up is revoked; the extension has no generic stop protocol"};

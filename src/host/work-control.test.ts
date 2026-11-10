@@ -28,16 +28,31 @@ test("the real host revokes a task and its native waits before callbacks, retain
     const pauses=new AgentPauses({dirFor:id=>registry.dirFor(id),interrupt:ids=>host.bus.interruptAgents(ids,"paused"),wake:()=>{},tell:async()=>{},receipt:()=>{},log:()=>{},box:()=>undefined});
     const control=workControlFor(host,pauses,questions,secrets,desktops), target={agentId:mia.id,conversation:"main"};
     const first=control.preview(target);
-    const denied={host,pauses,refusedAdmin:()=>false,mayReadAgent:(id:string)=>id===mia.id,by:()=>"outside-admin",readJson:async()=>({agentId:mia.id,conversation:"main",token:control.preview(target).token})};
+    const denied={host,pauses,refusedAdmin:()=>false,mayReadAgent:(id:string)=>id===mia.id,mayReadTask:()=>true,by:()=>"outside-admin",readJson:async()=>({agentId:mia.id,conversation:"main",token:control.preview(target).token})};
     const hidden=await workControlRoute("GET /api/work-control/preview",new URL(`http://localhost/?agentId=${mia.id}`),control,denied);
     assert.equal(hidden?.status,403,"even an admin cannot read an inaccessible collaborating box");
     const rejected=await workControlRoute("POST /api/work-control/cancel",new URL("http://localhost/"),control,denied);
     assert.equal(rejected?.status,403);assert.equal(focus.valid(root,mia.id),true);
     const batch=await workControlRoute("POST /api/work-control/pause-members",new URL("http://localhost/"),control,{...denied,readJson:async()=>({agents:[mia.id,zed.id]})});
     assert.equal(batch?.status,403);assert.equal(pauses.pauseOf(mia.id),undefined,"check every member before the durable pause barrier");
+    const privateTask=tasks.create({title:"Another person's unassigned task",requester:"other-person"})!;
+    const privatePreview=await workControlRoute("GET /api/work-control/preview",new URL(`http://localhost/?agentId=${mia.id}&taskId=${privateTask.id}`),control,{...denied,mayReadTask:id=>id!==privateTask.id});
+    assert.equal(privatePreview?.status,403,"an accessible agent cannot authorize another person's unassigned task");
+    const ownPreview=await workControlRoute("GET /api/work-control/preview",new URL(`http://localhost/?agentId=${mia.id}&taskId=${privateTask.id}`),control,denied);
+    assert.ok(ownPreview);const ownBody=ownPreview.body as {legacy:boolean;target:{agentId:string}};
+    assert.equal(ownBody.legacy,true);assert.equal(ownBody.target.agentId,"");
     const killed:string[]=[];
-    const rawBox={startJob:async()=>{throw new Error("response lost after creating remote job");},killJob:async(id:string)=>{killed.push(id);},waitForJob:async()=>({running:false})};
+    let releaseLate!:()=>void,lateCreated=false;const lateReady=new Promise<void>(resolve=>{releaseLate=resolve;});
+    const rawBox={startJob:async(_command:string,options?:{jobId?:string})=>{if(options?.jobId==="late-creation"){await lateReady;lateCreated=true;return {job_id:"late-creation"};}throw new Error("response lost after creating remote job");},killJob:async(id:string)=>{killed.push(id);if(id==="late-creation" && lateCreated)throw new Error("late stop unreachable");},waitForJob:async()=>({running:false})};
+    const closedSessions:string[]=[];
+    Object.assign(rawBox,{acpClose:async({session_id}:{session_id:string})=>{closedSessions.push(session_id);},acpSessions:async()=>({sessions:[]})});
     host.boxFor=()=>rawBox as never;
+    host.acpDelegates.get=id=>id==="idle-session"?{inFlight:undefined} as never:id==="reassigned-session"?{inFlight:{workId:other.id}} as never:undefined;
+    host.acpDelegates.cancel=async()=>{throw new Error("must not claim a request was sent for an idle or reassigned session");};
+    host.acpDelegates.close=async id=>{closedSessions.push(id);};
+    for(const id of ["idle-session","reassigned-session"]){const record=pendingWork.prepare({kind:"delegate",agentId:mia.id,workId:root.id,parent:"main",child:id,brief:"old brief",data:{mode:"session"}});pendingWork.admitted(record,undefined);}
+
+    const lateStarting=workBox(rawBox as never,root,mia.id,"main",host.bus,pendingWork)!.startJob("build",{jobId:"late-creation"});
     await assert.rejects(workBox(rawBox as never,root,mia.id,"main",host.bus,pendingWork)!.startJob("build",{jobId:"created-with-lost-response"}),/response lost/);
     assert.ok(new PendingWork(join(dir,"pending-work.jsonl")).open().some(row=>row.child==="created-with-lost-response"),"unknown dispatch retains its known cleanup id across restart");
 
@@ -47,7 +62,14 @@ test("the real host revokes a task and its native waits before callbacks, retain
     pendingWork.prepare({kind:"pause",agentId:mia.id,workId:root.id,parent:"main",child:"resume-tool",brief:"continue",data:{approvalId:approval.id}});
     pendingWork.prepare({kind:"orchestrate",agentId:mia.id,workId:root.id,parent:"main",child:"plan",brief:"subtask",data:{cards:[child.id]}});
     const preview=control.preview(target), ended=await control.cancel(target,preview.token!,"Chris","Task went off track");
-    assert.deepEqual(killed,["created-with-lost-response"]);
+    assert.deepEqual(closedSessions,["idle-session"],"an idle old session is actually closed; another work's current brief is untouched");
+    const oldSession=pendingWork.open().find(row=>row.child==="reassigned-session")!;
+    assert.equal(ended.resources.find(row=>row.id===oldSession.id)?.state,"unconfirmed");
+    assert.deepEqual(killed.sort(),["created-with-lost-response","late-creation"]);
+    const lateRecord=pendingWork.open().find(row=>row.child==="late-creation")!;
+    assert.equal(ended.resources.find(row=>row.id===lateRecord.id)?.state,"requested","absence cannot confirm stop while creation is in flight");
+    releaseLate();await lateStarting;
+    assert.equal(focus.cancelled(root.id)?.resources.find(row=>row.id===lateRecord.id)?.state,"unconfirmed","a late creation whose cleanup fails stays recoverable");
     assert.equal(focus.valid(root,mia.id),false);assert.equal(focus.valid(other,zed.id),true);
     assert.equal(questions.list().some(row=>row.id===q.id),false);assert.equal(secrets.size,0);assert.equal(desktops.size,0);assert.equal(host.policy.pending().length,0);assert.equal(tasks.get(rootTask.id)!.status,"dropped");assert.equal(tasks.get(child.id)!.status,"dropped");
     assert.equal(pendingWork.open().some(row=>row.id===item),false);
@@ -55,7 +77,7 @@ test("the real host revokes a task and its native waits before callbacks, retain
     host.bus.deliverSystem(mia.id,"LATE_CANCELLED_RESULT","main",root.id);await host.bus.idle();assert.equal(calls,0);
     await host.prompt(zed.id,"Continue independent work",undefined,{work:other,synthetic:true,origin:"host:jobs"});assert.equal(calls,1);
     let read=false;
-    const response=await workControlRoute("POST /api/work-control/cancel",new URL("http://localhost/"),control,{host,pauses,refusedAdmin:()=>true,mayReadAgent:()=>false,by:()=>"stranger",readJson:async()=>{read=true;return {};}});
+    const response=await workControlRoute("POST /api/work-control/cancel",new URL("http://localhost/"),control,{host,pauses,refusedAdmin:()=>true,mayReadAgent:()=>false,mayReadTask:()=>false,by:()=>"stranger",readJson:async()=>{read=true;return {};}});
     assert.equal(response!.status,0);assert.equal(read,false);
   } finally {if(previous===undefined)delete process.env.AGENTBOX_HOME;else process.env.AGENTBOX_HOME=previous;rmSync(dir,{recursive:true,force:true});}
 });

@@ -3324,7 +3324,7 @@ test("Delegate in session mode: opened, steered, cancelled and closed through th
     const committed = () => readFileSync(join(dir, "pending-work.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line) as { event: string; how?: string; data?: { mode?: string } });
     while (!committed().some(entry => entry.event === "committed") && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 20));
     const entries = committed();
-    assert.equal(entries.find(entry => entry.event === "prepared")?.data?.mode, "session");
+    assert.equal(entries.find(entry => entry.event === "prepared" && entry.data?.mode === "session")?.data?.mode, "session");
     assert.deepEqual(entries.filter(entry => entry.event === "committed").map(entry => entry.how), ["aborted"], "the engine confirmed the cancel, so the brief is aborted");
   } finally {
     result.cleanup();

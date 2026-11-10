@@ -27,7 +27,7 @@ export function workBox(box: BoxClient | undefined, work: WorkStamp | undefined,
       const shape=result as {job_id?:unknown;still_running?:{job_id?:unknown}} | undefined;
       const jobId=name==="startJob"?shape?.job_id:shape?.still_running?.job_id;
       if(typeof jobId!=="string")return result;
-      recorded=record(jobId);
+      recorded=record(jobId);if(recorded)pending?.admitted(recorded,undefined);
       const cancelled=bus.workAttention?.cancelled(work.id);
       if(cancelled){
         const resource:StopResource={kind:recorded?"command":"job",id:recorded??jobId,agentId,state:"unconfirmed",detail:"Command returned after cancellation; stop not yet confirmed"};
