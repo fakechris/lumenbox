@@ -4465,6 +4465,7 @@ function select(id, conversation) {
     .then(function (r) { return r.json(); })
     .then(function (entries) {
       if (liveReplay !== replay || current !== id || currentConversation !== selectedConversation) return;
+      if (window.taskFocusVisible) { window.taskConversationDirty = true; finishLiveReplay(replay); return; }
       var seenKey = "lumen-seen:" + id + ":" + currentConversation;
       var lastSeen = -1;
       try { lastSeen = Number(localStorage.getItem(seenKey) || "-1"); } catch (error) {}
@@ -6176,6 +6177,7 @@ stream.onmessage = function (raw) {
   if (handleLiveTool(e)) return;
 
   if (e.type === "message_sent") {
+    if (window.taskFocusVisible) { if (currentConversation === "main" && (e.fromId === current || e.toId === current)) window.taskConversationDirty = true; return; }
     // Teammates talk in the team room, never inside someone's outside chat, so these
     // only render when the team room is the one on screen.
     if (currentConversation !== "main") return;

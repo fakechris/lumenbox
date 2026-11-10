@@ -94,6 +94,7 @@ function rebuildEventViews() {
   busy.clear();
   return refresh().then(function () {
     var reads = [refreshTasks()];
+    if (window.taskFocusVisible) window.taskConversationDirty = true;
     if (!window.taskFocusVisible && id && current === id && currentConversation === conversation && agentById(id)) reads.push(select(id, conversation));
     $("feed").textContent = "";
     reads.push(loadActivity().then(function (cursor) { feedCursor = cursor; }));

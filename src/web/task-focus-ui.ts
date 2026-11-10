@@ -64,8 +64,10 @@ export const TASK_FOCUS_JS = String.raw`(function () {
   }
   function connection() { return document.documentElement.dataset.connection || "reconnecting"; }
   function status(task) {
+    if (task.status === "done" || task.status === "dropped") return word(task.status === "done" ? "ended" : "dropped");
     if (task.pursuit && task.pursuit.status === "paused") return word("paused") + (task.pursuit.pausedReason ? " · " + t("ui.tf.pause." + task.pursuit.pausedReason) : "");
     if (task.pursuit && task.pursuit.status === "verifying") return word("verifying");
+    if (task.needsApprovals && task.needsApprovals.length) return word("approval");
     var stage = task.stage || "";
     return stage === "working" ? word("working") : stage === "working/queued" ? word("queued") : stage.indexOf("person/") === 0 ? word("needs") : task.status === "done" ? word("ended") : task.status === "dropped" ? word("dropped") : word("idle");
   }
@@ -84,8 +86,11 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     root.querySelector("[data-tf-conversation]").disabled = !task.assigneeId;
     by("status").innerHTML = statuses.map(function (pair) { return '<span><i></i><b>' + word(pair[0]) + '</b> ' + safe(pair[1]) + '</span>'; }).join("");
     by("activity").textContent = word("action") + ": " + actionName(latest) + (latest && (latest.endedAt || latest.startedAt) ? " · " + word("activity") + " " + new Date(latest.endedAt || latest.startedAt).toLocaleString() : "");
-    var needs = (window.lastAttention && window.lastAttention.mine || []).filter(function (item) { return item.ref === task.id; });
-    by("needs").innerHTML = needs.map(function (item) { return attentionRow(item, true, true); }).join("");
+    var terminal = task.status === "done" || task.status === "dropped";
+    var needs = terminal ? [] : (window.lastAttention && window.lastAttention.mine || []).filter(function (item) { return item.ref === task.id && (!item.stage || item.stage === task.stage) && (item.kind !== "review" || task.status === "review"); });
+    by("needs").innerHTML = needs.map(function (item) { return attentionRow(item, true, true); }).join("") + (terminal ? [] : task.needsApprovals || []).map(function (item) {
+      return '<div class="ui-row"><span>' + word("approval") + ': ' + safe(item.description) + '</span>' + (view.role === "admin" || view.role === "driver" ? '<button class="btn sm" data-att-approve="' + safe(item.id) + '">' + safe(t("consent.once")) + '</button><button class="btn sm ghost" data-att-deny="' + safe(item.id) + '">' + safe(t("consent.deny")) + '</button>' : '') + '</div>';
+    }).join("");
     by("new").hidden = !view.dirty;
     ["overview","execution","artifacts","costs"].forEach(function (tab) { by("tab-" + tab).setAttribute("aria-selected", String(tab === view.tab)); by("tab-" + tab).tabIndex = tab === view.tab ? 0 : -1; });
   }
@@ -239,7 +244,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     }).catch(function (error) {
       if (active !== view || view.generation !== generation) return;
       if (error.status === 403 || error.status === 404) { deny(view,error); return; }
-      if (error.status === 409 && !fallback) { view.readingAnchor = null; view.selected = ""; view.rowNodes.clear(); return loadPage(view,null,null,true,true).then(function () { if (active === view && by("coverage")) by("coverage").textContent = word("expired"); }); }
+      if (error.status === 409 && !fallback) { view.readingAnchor = null; view.selected = ""; view.detail = null; view.detailGeneration++; if (view.detailController) view.detailController.abort(); view.page = null; view.listTop = 0; view.rowNodes.clear(); if (by("list")) by("list").textContent = word("loading"); if (by("detail")) by("detail").textContent = word("select"); return loadPage(view,null,null,true,true).then(function () { if (active === view && by("coverage")) by("coverage").textContent = word("expired"); }); }
       if (view.tab === "execution" && by("list")) by("list").innerHTML = '<div class="tf-empty">' + word("error") + '</div>';
     });
   }
@@ -270,9 +275,10 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     ensure(); returnFocus = document.activeElement;
     var view = viewFor(id);
     if (!window.taskFocusVisible && typeof captureEventReading === "function") window.taskBackReading = { agent:current,conversation:currentConversation,reading:captureEventReading($("chat")) };
+    view.generation++; view.detailGeneration++; if (view.detailController) view.detailController.abort(); view.task = null;
     active = view; window.taskFocusVisible = true; openTask = id; root.hidden = false; view.detail = null; view.page = null; view.activity = null; view.liveAction = null; view.record = null; view.role = null; view.cost = null; view.costGeneration = (view.costGeneration || 0) + 1;
     var openGeneration = view.openGeneration = (view.openGeneration || 0) + 1;
-    get("/api/me").then(function (me) { if (active !== view || view.openGeneration !== openGeneration) return; view.role = me.role || "viewer"; if (view.task && view.tab === "artifacts") render(view); if (view.detail && view.tab === "execution") syncApproval(view,view.detail,by("detail")); }).catch(function () {});
+    get("/api/me").then(function (me) { if (active !== view || view.openGeneration !== openGeneration) return; view.role = me.role || "viewer"; if (view.task) header(view); if (view.task && view.tab === "artifacts") render(view); if (view.detail && view.tab === "execution") syncApproval(view,view.detail,by("detail")); }).catch(function () {});
     by("title").textContent = word("loading"); by("body").textContent = ""; by("status").textContent = ""; by("activity").textContent = ""; by("needs").textContent = "";
     var url = new URL(location.href); url.searchParams.set("task",id); if (push !== false && url.href !== location.href) history.pushState({},"",url);
     var wantedTab = url.searchParams.get("tasktab"), wantedStep = url.searchParams.get("step");
@@ -306,10 +312,22 @@ export const TASK_FOCUS_JS = String.raw`(function () {
   window.openTaskFocus = open;
   window.addEventListener("DOMContentLoaded",function () { if (active && active.task && active.tab !== "execution") render(active); });
   window.refreshTaskExecution = function () { if (!active) return Promise.resolve(); var view = active; return loadItem(view).then(function () { if (active === view && view.task && view.tab === "costs") loadCosts(view); if (active === view && view.task) return loadPage(view,null,view.readingAnchor && view.readingAnchor.id || view.anchor || view.selected,true); }); };
+  function queueHeader(view) {
+    if (view.headerQueued) return; view.headerQueued = true;
+    requestAnimationFrame(function () { view.headerQueued = false; if (active === view) header(view); });
+  }
   window.taskFocusEvent = function (event) {
+    if (active && event.type === "approval_settled" && active.task && (active.task.needsApprovals || []).some(function (item) { return item.id === event.id; })) {
+      var settledView = active; loadItem(settledView); if (settledView.detail) syncApproval(settledView,settledView.detail,by("detail")); return;
+    }
+    if (event.type === "task_changed" && window.noteTaskBoardChange) window.noteTaskBoardChange(event);
     if (!active || event.taskId !== active.id) return;
-    if (event.type === "task_execution") { active.dirty = true; header(active); }
-    if (event.type === "tool_start" || event.type === "tool_end") { active.liveAction = { name:event.tool,detail:toolDetail(event.tool,event.input || {}),startedAt:new Date().toISOString() }; header(active); }
+    if (event.type === "task_changed" && !active.itemQueued) {
+      var view = active; view.itemQueued = true;
+      setTimeout(function () { view.itemQueued = false; if (active === view) loadItem(view); },250);
+    }
+    if (event.type === "task_execution") { active.dirty = true; queueHeader(active); }
+    if (event.type === "tool_start" || event.type === "tool_end") { active.liveAction = { name:event.tool,detail:toolDetail(event.tool,event.input || {}),startedAt:new Date().toISOString() }; queueHeader(active); }
   };
   window.addEventListener("lumen-connection",function () { if (active) header(active); });
   window.addEventListener("popstate",function () { var id = new URL(location.href).searchParams.get("task"); if (id) open(id,false); else close(false); });

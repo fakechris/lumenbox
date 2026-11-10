@@ -65,6 +65,19 @@ export class TaskExecutions {
     return { turns, partial, scope: "explicit-retained-unshared-turns" as const };
   }
 
+  /** Join live approvals only through their recorded call binding, never the currently doing task. */
+  approvals<T extends { id: string; agentId: string; description: string }>(taskId: string, access: ExecutionAccess, pending: readonly T[]) {
+    if (!pending.length || !access.task(taskId)) return [];
+    const ids = new Map(pending.map(item => [item.id, item]));
+    const matched = new Set<string>();
+    for (const record of this.deps.turns.executionRecords().records) {
+      if (record.event !== "step" || !record.agentId || !record.boxId || record.taskBinding?.taskId !== taskId || !this.allowed({ taskId, agentId: record.agentId, boxId: record.boxId }, access)) continue;
+      const id = record.gate?.approvalId, item = id ? ids.get(id) : undefined;
+      if (item && item.agentId === record.agentId) matched.add(item.id);
+    }
+    return pending.filter(item => matched.has(item.id)).map(item => ({ id: item.id, description: item.description }));
+  }
+
   /** Snapshot rows are immutable metadata and source hashes, never copies of all result bodies. */
   open(taskId: string, access: ExecutionAccess, filters: ExecutionFilters = {}, anchor?: string) {
     if (!access.task(taskId)) throw new ExecutionReset("task unavailable");

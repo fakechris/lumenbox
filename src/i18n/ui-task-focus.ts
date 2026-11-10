@@ -28,6 +28,7 @@ export const UI_TASK_FOCUS: Record<string, readonly [string, string]> = {
   "ui.tf.connected": ["已连接", "Connected"],
   "ui.tf.reconnecting": ["正在重连", "Reconnecting"],
   "ui.tf.syncing": ["正在同步", "Synchronizing"],
+  "ui.tf.approval": ["等待确认", "Awaiting confirmation"],
   "ui.tf.pending": ["尚未提交", "Not submitted"],
   "ui.tf.review": ["等待审阅", "Awaiting review"],
   "ui.tf.ended": ["任务已结束", "Task ended"],

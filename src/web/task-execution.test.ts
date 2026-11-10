@@ -261,3 +261,17 @@ test("cost scope uses retained explicit turns and excludes shared or unreadable 
     assert.equal(f.service().costScope("task-A", access).turns.has("hidden-turn"), false);
   } finally { f.cleanup(); }
 });
+
+test("current task approval hints join the recorded call and current pending ledger, with historical box access", () => {
+  const f = fixture();
+  try {
+    f.turns.observeExecution({ ...f.scope, event: "step", recordId: "waiting-A", phase: "end", toolUseId: "c0", tool: "read_file", at: new Date().toISOString(),
+      gate: { verdict: "waiting", basis: "requires confirmation", approvalId: "approval-A" } });
+    f.turns.observeExecution({ ...f.scope, taskBinding: { taskId: "task-B", role: "executor" }, event: "step", recordId: "waiting-B", phase: "end", toolUseId: "other", tool: "read_file", at: new Date().toISOString(),
+      gate: { verdict: "waiting", basis: "another task", approvalId: "approval-B" } });
+    const pending = [{ id: "approval-A", agentId: "agent", description: "confirm A" }, { id: "approval-B", agentId: "agent", description: "confirm B" }];
+    assert.deepEqual(f.service().approvals("task-A", access, pending), [{ id: "approval-A", description: "confirm A" }]);
+    assert.deepEqual(f.service().approvals("task-A", access, []), [], "a historical waiting verdict is not a current need");
+    assert.deepEqual(f.service().approvals("task-A", { ...access, box: () => false }, pending), []);
+  } finally { f.cleanup(); }
+});

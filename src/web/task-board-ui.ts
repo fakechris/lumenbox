@@ -83,6 +83,14 @@ document.addEventListener("click",function (event) {
   else return;
   state.refreshIds = false; $("tasklist").scrollTop = 0; refreshTasks();
 });
+var taskBoardChangeQueued = false;
+window.noteTaskBoardChange = function (event) {
+  var state = taskBoardState;
+  if (state.ids.indexOf(event.taskId) < 0) state.dirty = true;
+  if (window.taskFocusVisible || $("tasksview").style.display === "none" || taskBoardChangeQueued) return;
+  taskBoardChangeQueued = true;
+  setTimeout(function () { taskBoardChangeQueued = false; if (!window.taskFocusVisible && $("tasksview").style.display !== "none") refreshTasks(); },500);
+};
 window.openTasksForConversation = function () {
   if (!current) return;
   var agent = current, conversation = currentConversation;
