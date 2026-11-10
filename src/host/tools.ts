@@ -1,3 +1,5 @@
+import type { ToolOutcome } from "./tool-outcome.ts";
+export type { ToolOutcome } from "./tool-outcome.ts";
 import { isComputerWrite } from "../cua/execution.ts";
 import { inputValueHash, parseSensitiveInput, SENSITIVE_INPUT_TTL_MS } from "../protocol/sensitive-input.ts";
 import { approvalOf, computerWithVision, desktopGuard, visionActionSchema, visionExpectSchema } from "./computer-vision.ts";
@@ -69,7 +71,7 @@ import { resolveHostSecrets } from "./host-secrets.ts";
 import { sniffImage } from "./image-refusal.ts";
 import { hostOf } from "./learnings.ts";
 import { noteSiteLearning, readSiteLearnings, siteLearningsNote } from "./site-learnings.ts";
-import type { McpManager, ToolEffect } from "./mcp.ts";
+import type { McpManager } from "./mcp.ts";
 import { MCP_FACE_TOKEN_VARIABLE, type McpFace } from "./mcp-face.ts";
 import { dedupe, dedupeKey, describeFrom, memoryRef, validateRecord } from "./memory.ts"; import { recallMatches } from "./memory-relevance.ts"; import { recallable } from "./memory-scope.ts"; import { orgItemId, type OrgKnowledge } from "./org-knowledge.ts"; import { alreadyPending, forTeamTier, pendingNotice, teamReviewOn } from "./team-memory-review.ts";
 import { guardMemoryCandidate } from "./memory-guard.ts";
@@ -111,6 +113,7 @@ function foregroundWindowMs(): number {
 }
 
 export interface ToolContext {
+  taskBinding?: import("./execution-binding.ts").TaskBinding;
   agent: AgentRecord;
   /** Watches the commands a turn let go of past their foreground window (INV-1461); absent means none is watched. */
   jobWatch?: JobWatch;
@@ -350,45 +353,6 @@ export interface ToolContext {
 }
 
 /** A tool result: text for the model, plus optional images. */
-export interface ToolOutcome {
-  text: string;
-  /**
-   * Fork ledger ids to commit once this result is durably in the parent's transcript
-   * (docs/32 §1). Written by the turn engine after the results entry is appended — the tool
-   * cannot know that moment, and committing before it is the review's finding #5.
-   */
-  commit?: { id: string; how: CommitHow }[];
-  /** base64 image payloads to attach to the tool result. */
-  images?: { mediaType: "image/webp" | "image/png" | "image/jpeg" | "image/gif"; data: string }[];
-  isError?: boolean;
-  /**
-   * What the transcript stores instead of `text`, when the two must differ.
-   *
-   * The model sees `text`; the durable record sees this. Exactly one tool uses it, and
-   * the reason is the only reason worth having: `RunOnHost` is told which vault secrets a
-   * command was given, so for those calls the harness *knows* the output may contain a
-   * credential — no pattern, no guess, no model judgement (docs/15). Every other approach
-   * to keeping secrets out of the record is a suspicion applied everywhere; this is
-   * certainty applied in one place.
-   *
-   * It is not containment from the model, which nothing achieves: the model read the
-   * output and can restate it. It is containment from the *record*, which is what R7 is
-   * about.
-   */
-  recordAs?: string;
-  /**
-   * The approval this call is waiting on, when the policy gate put it in front of a person
-   * instead of running it (INV-774). The step ledger records it, so a restart parks the
-   * turn on the person's answer rather than answering the call `outcome_unknown`.
-   */
-  approval?: { id: string };
-  /**
-   * What the result asked the harness to do (INV-861), and which prefixed tool asked — the
-   * turn applies them through effects.ts after the call, never inside a fork.
-   */
-  effects?: ToolEffect[];
-  effectsFrom?: string;
-}
 
 /**
  * Conversations a fork runs in are named so they are recognisable as forks —
@@ -2690,7 +2654,7 @@ export async function dispatchTool(
           mine = (await box.listDisplays()).find(entry => entry.index === index);
         } catch (error) {
           const outcome = boxErrorOutcome(error) ?? "failed";
-          return { text: outcomeLine(outcome, error instanceof Error ? error.message : String(error)), isError: true };
+          return { text: outcomeLine(outcome, error instanceof Error ? error.message : String(error)), isError: true, outcome };
         }
         if (mine === undefined || mine.controller !== "user") {
           return { text: `${outcomeLine("ok")} Your desktop is yours again. Take a screenshot before acting: the person may have changed what is on it.` };
@@ -2751,7 +2715,7 @@ export async function dispatchTool(
         const outcome = boxErrorOutcome(error);
         if (outcome === undefined) throw error;
         const message = error instanceof Error ? error.message : String(error);
-        return { text: outcomeLine(outcome, message), isError: true };
+        return { text: outcomeLine(outcome, message), isError: true, outcome };
       }
 
       const outcome = computerOutcome(result, actions.some(isComputerWrite));
@@ -2803,7 +2767,7 @@ export async function dispatchTool(
       }
 
       return {
-        text: notes.join(" "), ...approvalOf(result),
+        text: notes.join(" "), outcome, ...approvalOf(result),
         images: result.screenshot
           ? [{ mediaType: result.screenshot_media_type ?? "image/webp", data: result.screenshot }]
           : undefined,
@@ -2862,7 +2826,7 @@ export async function dispatchTool(
       // A command that outlived its window runs on as a job; the watch wakes this agent when it ends (INV-1461).
       const ending = { /* the policy the agent declared, or wake_on_failure; a command that only waits is recorded and the agent pointed at Jobs wait (INV-1613) */ onEnd: isWaitOnly(command) ? "record" as const : parseOnEnd(input.on_end) ?? "wake_on_failure" as const, waitOnly: isWaitOnly(command) };
       if (result.still_running !== undefined) context.jobWatch?.watch({ agentId: context.agent.id, conversation: context.conversation ?? MAIN_CONVERSATION, jobId: result.still_running.job_id, command, onEnd: ending.onEnd, ...(input.wake_when !== undefined ? { wakeWhen: String(input.wake_when) } : {}) });
-      return { text: formatExec(result, input.timeout_ms ? Number(input.timeout_ms) : undefined, foregroundMs, ending) };
+      return { text: formatExec(result, input.timeout_ms ? Number(input.timeout_ms) : undefined, foregroundMs, ending), outcome: result.timed_out || result.exit_code !== 0 ? "failed" : "ok" };
     }
 
     case "Orchestrate": {
@@ -2926,7 +2890,7 @@ export async function dispatchTool(
                 child: children[index]!,
                 brief,
                 ...(context.workId !== undefined ? { workId: context.workId } : {}),
-                ...(context.turnId !== undefined ? { turnId: context.turnId } : {}),
+                ...(context.turnId !== undefined ? { turnId: context.turnId } : {}), ...(context.taskBinding ? { data: { taskBinding: context.taskBinding } } : {}),
               })
             );
           }
@@ -2958,9 +2922,10 @@ export async function dispatchTool(
         try {
           const seq = context.bus.sendFromUser(context.agent.id, brief, {
             conversation,
+            ...(context.taskBinding && context.turnId && context.workId && ids[index] ? { taskBinding: { taskId: context.taskBinding.taskId, role: "child" as const, parent: { conversation: parent, turnId: context.turnId, workId: context.workId, forkId: ids[index]! } } } : {}),
             steerable: false, origin: "host:fork", // the parent agent's brief, not the person's words (INV-1571)
           });
-          if (ids[index] !== undefined) { context.pendingWork?.admitted(ids[index]!, seq); const taskId = currentTaskOf({ agent: context.agent, conversation: parent, ...(context.tasks !== undefined ? { tasks: context.tasks } : {}) })?.id; context.pendingWork?.forks?.spawned({ id: ids[index]!, agentId: context.agent.id, parent, child: conversation, brief, ...(taskId !== undefined ? { taskId } : {}) }); } // what a person sees of it (INV-1667)
+          if (ids[index] !== undefined) { context.pendingWork?.admitted(ids[index]!, seq); const taskId = context.taskBinding?.taskId; context.pendingWork?.forks?.spawned({ id: ids[index]!, agentId: context.agent.id, parent, child: conversation, brief, ...(taskId !== undefined ? { taskId } : {}) }); } // what a person sees of it (INV-1667)
           await context.bus.runExclusive(context.agent.id, { conversation });
           const said = context.registry
             .readTranscript(context.agent.id, conversation)
@@ -4001,7 +3966,7 @@ export async function dispatchTool(
             continue;
           }
           return {
-            text: outcomeLine("unknown", `${provider.title} did not answer: ${detail}${plan.note === undefined ? "" : ` — ${plan.note}`}`),
+            outcome: "unknown", text: outcomeLine("unknown", `${provider.title} did not answer: ${detail}${plan.note === undefined ? "" : ` — ${plan.note}`}`),
             isError: true,
           };
         }
@@ -4060,7 +4025,7 @@ export async function dispatchTool(
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return { text: outcomeLine(boxErrorOutcome(error) ?? "failed", message), isError: true };
+        return { text: outcomeLine(boxErrorOutcome(error) ?? "failed", message), isError: true, outcome: boxErrorOutcome(error) ?? "failed" };
       }
     }
 
@@ -4215,7 +4180,7 @@ export async function dispatchTool(
           );
         }
         parts.push(result.snapshot);
-        return { text: parts.join("\n\n"), ...(outcome === "unknown" ? { isError: true } : {}) };
+        return { text: parts.join("\n\n"), outcome, ...(outcome === "unknown" ? { isError: true } : {}) };
       };
       try {
         return afterCommit(writePathKey(context.agent.id, context.conversation), input, render(await box.browser(request)));
@@ -4259,7 +4224,7 @@ export async function dispatchTool(
             return afterCommit(writePathKey(context.agent.id, context.conversation), input, render(await box.browser({ ...request, confirmed: true, ...(sensitive !== undefined ? { inputApproval: { ...sensitive, expiresAt: decision.inputExpiresAt ?? Date.now() + SENSITIVE_INPUT_TTL_MS } } : {}) })));
           } catch (again) {
             const why = again instanceof Error ? again.message : String(again);
-            return { text: outcomeLine(boxErrorOutcome(again) ?? "failed", why), isError: true };
+            return { text: outcomeLine(boxErrorOutcome(again) ?? "failed", why), isError: true, outcome: boxErrorOutcome(again) ?? "failed" };
           }
         }
         // An owner refusal is refused; a box that went quiet is unknown; anything the
@@ -4276,13 +4241,13 @@ export async function dispatchTool(
             ...(context.boxOwner !== undefined ? { owner: context.boxOwner } : {}),
           });
           return afterCommit(writePathKey(context.agent.id, context.conversation), input, {
-            text: `${verdict}\n\nThe page as it stands: ${now.title || "(untitled)"} — ${now.url}\n\n${now.snapshot}`,
+            outcome: boxErrorOutcome(error) ?? "failed", text: `${verdict}\n\nThe page as it stands: ${now.title || "(untitled)"} — ${now.url}\n\n${now.snapshot}`,
             isError: true,
           });
         } catch {
           // The snapshot failing too means the browser is the problem, and the original
           // message already says so.
-          return afterCommit(writePathKey(context.agent.id, context.conversation), input, { text: verdict, isError: true });
+          return afterCommit(writePathKey(context.agent.id, context.conversation), input, { text: verdict, isError: true, outcome: boxErrorOutcome(error) ?? "failed" });
         }
       }
     }

@@ -86,12 +86,13 @@ export function parseLevel(raw: unknown): Level | undefined {
 }
 
 /** The task an agent is doing in this conversation: the policy gate's level (below) and the config version a turn records against (INV-1669), and the fork record (INV-1667). */
-export function currentTaskOf<T extends { status: string; conversation?: string }>(context: { agent: { id: string }; conversation?: string; tasks?: { forAgent: (agentId: string) => readonly T[] } }): T | undefined {
+export function currentTaskOf<T extends { id?: string; status: string; conversation?: string }>(context: { agent: { id: string }; conversation?: string; taskBinding?: { taskId: string }; tasks?: { forAgent: (agentId: string) => readonly T[] } }): T | undefined {
   const here = context.conversation ?? "main";
+  if (context.taskBinding) return context.tasks?.forAgent(context.agent.id).find(task => task.id === context.taskBinding!.taskId);
   return context.tasks?.forAgent(context.agent.id).find(task => task.status === "doing" && (task.conversation ?? "main") === here);
 }
 
 /** The level of the task an agent is doing in this conversation, for the policy gate; none when it has no task in hand. */
-export function levelOfCurrentTask(context: { agent: { id: string }; conversation?: string; tasks?: { forAgent: (agentId: string) => readonly { status: string; conversation?: string; level?: Level }[] } }): Level | undefined {
+export function levelOfCurrentTask(context: { agent: { id: string }; conversation?: string; taskBinding?: { taskId: string }; tasks?: { forAgent: (agentId: string) => readonly { id?: string; status: string; conversation?: string; level?: Level }[] } }): Level | undefined {
   return currentTaskOf(context)?.level;
 }

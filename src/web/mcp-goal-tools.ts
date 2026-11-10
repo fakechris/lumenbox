@@ -103,7 +103,7 @@ export function mcpGoalTools(deps: McpGoalDeps): McpServerTool[] {
         const created = board.pursuitIn(conversation);
         if (result.draft === undefined || created === undefined) throw new Error(result.text);
         // The first turn drafts the checklist; the pursuit task is the work, so this turn opens no task of its own.
-        void orchestrator.prompt(agent.id, result.draft.prompt, { userId: principalId }, { conversation, lane: "agent" })
+        void orchestrator.prompt(agent.id, result.draft.prompt, { userId: principalId }, { conversation, lane: "agent", taskBinding: { taskId: result.draft.taskId, role: "executor" } })
           .catch(error => log(`mcp goal ${created.id}: drafting turn failed (${error instanceof Error ? error.message : String(error)})`));
         return `${created.id} — ${agent.profile.name} is drafting a checklist for this goal, then works on it. Ask task_status about ${created.id}.\nstatus: in_progress`;
       },

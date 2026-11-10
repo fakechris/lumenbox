@@ -1,3 +1,6 @@
+import { taskRecord } from "./mcp-record.ts";
+import { TaskExecutions } from "./task-execution.ts";
+import { taskExecutionRoute } from "./task-execution-routes.ts";
 /**
  * A local web UI for driving and watching the agents.
  *
@@ -287,6 +290,7 @@ type OutboundEvent =
   | { type: "question_expired"; agentId: string; agentName: string; question: string; verdict: "default" | "skipped" }
   /** An agent drew or updated a card (docs/79); `messages` are the A2UI messages the page's processor takes. */
   | { type: "surface"; agentId: string; agentName: string; surfaceId: string; title?: string; messages: A2uiMessage[]; conversation?: string }
+  | { type: "task_execution"; taskId: string; revision: string }
   | { type: "task_aging"; taskId: string; title: string; kind: "nudge" | "archived" | "closed"; text: string }
   /** A reaction set or cleared on one message of one thread (INV-111), so every open page shows it. */
   | { type: "reaction"; agentId: string; conversation: string; index: number; emoji: string | null; by: string }
@@ -1520,7 +1524,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // line where a tool call fell between them, which is how the final reply reads too.
       let streamed = "";
       const listener = (event: TurnEvent) => {
-        if (event.agentId !== agent.id || event.conversation !== conversation) return;
+        if (event.agentId !== agent.id || event.conversation !== conversation || (taskId !== undefined && event.taskId !== taskId)) return;
         if (event.type === "stuck") {
           stuck = event.reason;
           return;
@@ -1569,6 +1573,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // showing somebody else's answer. Even explicit channel additions use this path.
         await orchestrator.prompt(agent.id, text, { userId: principal }, {
           conversation,
+          ...(taskId !== undefined ? { taskBinding: { taskId, role: "executor" as const } } : {}),
           steerable: false,
           ...(origin?.messageId !== undefined ? { messageId: origin.messageId } : {}),
           ...(origin?.addressed === false ? { addressed: false } : {}),
@@ -2994,7 +2999,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // The outside door (docs/90 §2): a computer and a team, never our memory, files or settings; every call goes through a person's objects (INV-1358).
   const taskActive = (task: { assigneeId?: string; conversation?: string }) => task.assigneeId !== undefined && task.conversation !== undefined && (orchestrator.bus.isActive(task.assigneeId, task.conversation) || orchestrator.jobWatch.openJobs(task.assigneeId, task.conversation).length > 0);
   const sideDoorStage = (task: Task) => stageWorldOf(task, { undeliverableChats: new Set(outbox.problems().map(receipt => receipt.chatKey)), questions: questions.list(), agentIds: new Set(registry.list().map(agent => agent.id)), chatKeyOf: conversation => conversations.chatKeyFor(conversation), active: taskActive });
+  const taskExecutions = new TaskExecutions({ namespace: registry.box.id, turns: orchestrator.turns ?? { executionRecords: () => ({ records: [], partial: true }) }, registry });
   const changeFeed = new ChangeFeed({ stageOf: task => taskStage(task, sideDoorStage(task)) }); orchestrator.tasks?.onChange(task => changeFeed.record(task)); feedForks(changeFeed, orchestrator.pendingWork?.forks, id => orchestrator.tasks?.get(id)); // watch (INV-1508), with the forks of a task's turns (INV-1667)
+  const stopExecutionFeed = orchestrator.turns?.onExecution((record, revision) => { const id = record.taskBinding?.taskId; const task = id ? orchestrator.tasks?.get(id) : undefined; if (task) { changeFeed.recordExecution(task, revision); broadcast({ type: "task_execution", taskId: task.id, revision }); } });
   const sideDoorTools = () => mcpServerTools({
     registry, orchestrator, principals, workDir: workRootOf(registry.defaultBox()), log, redact: text => outboundRedactor(vault.heldValues())(text), mayDrive: (agentId, principalId) => mayEnterBox(registry.boxOf(agentId), principalId) && mandateWorld().mayDrive(principalId), mayReadTask: (task, principalId) => (task.assigneeId !== undefined && registry.has(task.assigneeId) ? mayEnterBox(registry.boxOf(task.assigneeId), principalId) : task.requester === principalId), // INV-1668: a deliverable's bytes to whoever may see the task, as the web route has it
     stageWorld: sideDoorStage, changeFeed, listen: listener => { channelTurnListeners.add(listener); return () => channelTurnListeners.delete(listener); },
@@ -3901,6 +3908,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         const mayReadTask = (task: Task) => caller.userId === undefined || (task.assigneeId ? mayReadAgent(task.assigneeId) : task.requester === principals.resolve(caller.userId).id); if (deliverableRoute(route, url, res, { tasks: orchestrator.tasks, mayReadTask, send })) return; if (taskGateRoute(route, url, res, { tasks: orchestrator.tasks, mayReadTask, readTranscript: (agentId, conversation) => registry.readTranscript(agentId, conversation), roster: () => registry.list().map(record => ({ id: record.id, name: record.profile.name })), verdictOf: callId => orchestrator.policy.verdicts.get(callId), send })) return; // the gate's verdicts on its steps, the chat's own join (INV-1672) // a task's deliverable, to whoever sees the task (INV-1663)
+        if (taskExecutionRoute(route, url, res, { executions: taskExecutions, access: { task: id => { const task = orchestrator.tasks?.get(id); return task !== undefined && mayReadTask(task); }, agent: mayReadAgent, box: mayReadBox }, record: id => taskRecord(orchestrator.tasks!.get(id)!, { nameOf: id => registry.tryGet(id)?.profile.name ?? id, stageWorld: sideDoorStage }), send })) return;
         if (route === "GET /api/tasks") {
           send(res, 200, { tasks: orchestrator.tasks?.list().filter(mayReadTask).map(task => { const forks = orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []; return { ...task, configVersions: switchesForTask(registry, task.id), ...(forks.length > 0 ? { forks } : {}), ...dependencyView(task, orchestrator.tasks!) }; }) ?? [] }); // and what it waits on and what waits on it (INV-1740) // with the agent configuration versions it ran under (INV-1669) and the division of work (INV-1667)
           return;
@@ -6988,6 +6996,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   return () => {
     personalBoxesStopping = true;
+    stopExecutionFeed?.();
     for (const client of clients) client.end();
     // The backup timer, or an embedding that restarts the server in one process leaves the old one
     // firing alongside the new — two backups a tick, sharing a timestamp and a partial directory.

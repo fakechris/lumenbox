@@ -1,3 +1,7 @@
+import { ExecutionArchives } from "./execution-archives.ts";
+import { randomUUID } from "node:crypto";
+import type { TaskBinding } from "./execution-binding.ts";
+import type { ExecutionStepRecord, ExecutionSelectionRecord, ExecutionMaintenanceRecord } from "./execution-records.ts";
 /**
  * Picking a turn back up after the process ended underneath it.
  *
@@ -27,7 +31,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import type { GoalMarker } from "./goal-mode.ts";
 import type { AgentVersion } from "./agent-version.ts";
-import { appendLine, archiveSettled, type LedgerKind } from "./jsonl.ts";
+import { appendLine, archiveSettled, archivePaths, type LedgerKind } from "./jsonl.ts";
 import { redactDeep } from "./secret-redaction.ts";
 import { dirname, join } from "node:path";
 import { agentboxHome, envNumber } from "../config.ts";
@@ -63,6 +67,9 @@ interface BeginRecord {
   causedBy?: string[];
   id: string;
   event: "begin";
+  executionId?: string;
+  boxId?: string;
+  taskBinding?: TaskBinding;
   agentId: string;
   at: string;
   /** The turn this one is picking up, when it is a resumption. */
@@ -181,10 +188,11 @@ interface CleanRecord {
   at: string;
 }
 
-type LedgerRecord = BeginRecord | EndRecord | CleanRecord;
+type LedgerRecord = BeginRecord | EndRecord | CleanRecord | ExecutionStepRecord | ExecutionSelectionRecord | ExecutionMaintenanceRecord;
 
 /** Persisted on the recovery admission, so a second restart retains its lineage. */
 export interface ResumeMarker {
+  taskBinding?: TaskBinding;
   id: string;
   attempt: number;
   workId?: string;
@@ -194,6 +202,7 @@ export interface ResumeMarker {
 
 /** A turn that began and never ended. */
 export interface InterruptedTurn {
+  taskBinding?: TaskBinding;
   principalId?: string;
   causedBy?: string[];
   id: string;
@@ -226,6 +235,9 @@ const FORK_CONVERSATION_PREFIX = "fork/";
 export class TurnLedger {
   private readonly path: string | undefined;
   private lines = 0;
+  private readonly executionArchives: ExecutionArchives;
+  private readonly executionListeners = new Set<(record: ExecutionStepRecord | ExecutionSelectionRecord | ExecutionMaintenanceRecord, revision: string) => void>();
+  private readonly pendingExecution = new Map<string, Map<string, ExecutionStepRecord | ExecutionSelectionRecord | ExecutionMaintenanceRecord>>();
 
   /**
    * `null` means keep no ledger; omitted means the default path.
@@ -239,10 +251,14 @@ export class TurnLedger {
     private readonly onWarn: (message: string) => void = () => {}
   ) {
     this.path = path ?? undefined;
+    this.executionArchives = new ExecutionArchives(this.path);
   }
 
   /** Records that a turn is starting. Returns the handle its end is reported against. */
   begin(options: {
+    executionId?: string;
+    boxId?: string;
+    taskBinding?: TaskBinding;
     principalId?: string;
     causedBy?: string[];
     agentId: string;
@@ -266,9 +282,13 @@ export class TurnLedger {
     configVersion?: number;
     now?: Date;
   }): string {
+    if (options.executionId && this.path) { mkdirSync(dirname(this.path), { recursive: true }); this.executionArchives.capture(); }
     const record: BeginRecord = {
       id: options.id,
       event: "begin",
+      ...(options.executionId !== undefined ? { executionId: options.executionId } : {}),
+      ...(options.boxId !== undefined ? { boxId: options.boxId } : {}),
+      ...(options.taskBinding !== undefined ? { taskBinding: options.taskBinding } : {}),
       ...(options.principalId !== undefined ? { principalId: options.principalId } : {}),
       ...(options.causedBy !== undefined ? { causedBy: [...options.causedBy] } : {}),
       agentId: options.agentId,
@@ -293,6 +313,52 @@ export class TurnLedger {
     };
     this.append(record, true);
     return record.id;
+  }
+
+  /** Required before a selected task dispatches another call; selection survives a restart. */
+  selectExecution(record: ExecutionSelectionRecord): void { this.append(record, true); this.executionChanged(record); }
+
+  /** Start identity is required before dispatch; missing end timing is recoverable from transcript. */
+  observeExecution(record: ExecutionStepRecord): void { this.append(record, record.phase === "start"); this.executionChanged(record); }
+
+  observeMaintenance(record: ExecutionMaintenanceRecord): void { this.append(record); this.executionChanged(record); }
+  onExecution(listener: (record: ExecutionStepRecord | ExecutionSelectionRecord | ExecutionMaintenanceRecord, revision: string) => void): () => void {
+    this.executionListeners.add(listener); return () => this.executionListeners.delete(listener);
+  }
+  private executionChanged(record: ExecutionStepRecord | ExecutionSelectionRecord | ExecutionMaintenanceRecord): void {
+    if (record.taskBinding) {
+      const tasks = this.pendingExecution.get(record.id) ?? new Map();
+      tasks.set(record.taskBinding.taskId, record); this.pendingExecution.set(record.id, tasks);
+    }
+    const revision = randomUUID(); // change identity, distinct from the persisted source record id
+    for (const listener of this.executionListeners) { try { listener(record, revision); } catch { /* notification never redoes an effect */ } }
+  }
+
+  /** Re-publish invalidation after transcript results land, including recovery appends. No second result record. */
+  executionCommitted(id: string): void {
+    for (const record of this.pendingExecution.get(id)?.values() ?? []) this.executionChanged(record);
+  }
+
+  /** Explicit history reader: monthly archives and live records, with copied archive/live rows deduplicated. */
+  executionRecords(): { records: LedgerRecord[]; partial: boolean } {
+    if (this.path === undefined) return { records: [], partial: true };
+    const records: LedgerRecord[] = [], seen = new Set<string>();
+    let partial = this.executionArchives.missing();
+    for (const path of [...archivePaths(this.path), this.path]) {
+      if (!existsSync(path)) { if (path === this.path) partial = true; continue; }
+      try {
+        for (const line of readFileSync(path, "utf8").split("\n")) {
+          if (!line.trim()) continue;
+          try {
+            const record = JSON.parse(line) as LedgerRecord;
+            if (typeof record?.id !== "string" || typeof record?.at !== "string") { partial = true; continue; }
+            const key = "recordId" in record ? record.recordId : JSON.stringify(record);
+            if (!seen.has(key)) { seen.add(key); records.push(record); }
+          } catch { partial = true; }
+        }
+      } catch { partial = true; }
+    }
+    return { records, partial };
   }
 
   /** The agent's version on its most recent turn in this conversation (INV-1474): what an eval case is stamped with. */
@@ -330,6 +396,7 @@ export class TurnLedger {
       ...(category !== undefined ? { category } : {}),
       ...(evidence !== undefined && evidence.length > 0 ? { evidence: [...evidence] } : {}),
     });
+    this.executionCommitted(id); this.pendingExecution.delete(id);
     if (this.lines > COMPACT_AT && this.interrupted().length === 0) this.compact();
   }
 
@@ -400,6 +467,7 @@ export class TurnLedger {
           agentId: record.agentId,
           at: record.at,
           about: record.about,
+          ...(record.taskBinding !== undefined ? { taskBinding: record.taskBinding } : {}),
           attempt: record.attempt,
           ...(record.conversation !== undefined ? { conversation: record.conversation } : {}),
           ...(record.contextEpoch !== undefined ? { contextEpoch: record.contextEpoch } : {}),
@@ -407,6 +475,11 @@ export class TurnLedger {
           ...(record.workId !== undefined ? { workId: record.workId } : {}),
           ...(record.goal !== undefined ? { goal: record.goal } : {}),
         });
+      } else if (record.event === "selection") {
+        const turn = open.get(record.id);
+        if (turn !== undefined) turn.taskBinding = record.taskBinding;
+      } else if (record.event === "step" || record.event === "maintenance") {
+        continue;
       } else if (record.event === "clean") {
         const turn = open.get(record.id);
         if (turn !== undefined) turn.cleanExit = true;
@@ -498,7 +571,8 @@ export class TurnLedger {
   private compact(): void {
     if (this.path === undefined) return;
     try {
-      archiveSettled(this.path, this.readLines());
+      const archive = archiveSettled(this.path, this.readLines());
+      this.executionArchives.capture(archive);
       const temp = `${this.path}.${process.pid}.tmp`;
       writeFileSync(temp, "", "utf8");
       renameSync(temp, this.path);

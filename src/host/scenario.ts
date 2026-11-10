@@ -321,6 +321,7 @@ export interface EpisodeOptions {
   boxKind?: "docker" | "attached" | "host";
   /** What the turns emit — tool_start, tool_end with the gate's verdict (INV-1664) — as the page would receive it. */
   onEvent?: (event: TurnEvent) => void;
+  turns?: import("./resume.ts").TurnLedger;
   /**
    * The write-time memory judge (INV-1333). Absent clears every candidate, so episodes about other
    * things are unchanged; `"model"` uses the real one, whose prompt the script answers by its first line.
@@ -493,6 +494,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       ...(options.provider !== undefined ? { provider: options.provider } : {}),
       ...(options.policy !== undefined ? { policy: options.policy } : {}), ...(options.boxKind !== undefined ? { boxKind: options.boxKind } : {}),
       ...(options.onEvent !== undefined ? { onEvent: options.onEvent } : {}),
+      ...(options.turns !== undefined ? { turns: options.turns } : {}),
       ...(options.mcp !== undefined ? { mcp: options.mcp } : {}),
       ...(options.tasks !== undefined ? { tasks: options.tasks } : {}),
       ...(options.outbox !== undefined ? { outbox: options.outbox } : {}),

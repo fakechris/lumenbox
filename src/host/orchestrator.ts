@@ -2098,7 +2098,7 @@ export class Orchestrator {
       this.bus.sendFromUser(agent.id, resumePrompt(turn.about, turn.at), { ...(goal === undefined ? {} : { goal }),
         synthetic: true, // model-text: resume
         ...(turn.principalId !== undefined ? { principalId: turn.principalId } : {}),
-        resumeOf: { id: turn.id, attempt: turn.cleanExit ? turn.attempt : turn.attempt + 1,
+        resumeOf: { ...(turn.taskBinding !== undefined ? { taskBinding: turn.taskBinding } : {}), id: turn.id, attempt: turn.cleanExit ? turn.attempt : turn.attempt + 1,
           ...(turn.workId !== undefined ? { workId: turn.workId } : {}) },
         // The turn resumes in the conversation it was interrupted in: an answer to a
         // group chat's question must not surface in the team room.
@@ -2140,7 +2140,7 @@ export class Orchestrator {
       ...(turn.principalId !== undefined ? { principalId: turn.principalId } : {}),
       ...(turn.conversation !== undefined ? { conversation: turn.conversation } : {}),
       steerable: false,
-      resumeOf: { id: turn.id, attempt: turn.cleanExit ? turn.attempt : turn.attempt + 1,
+      resumeOf: { ...(turn.taskBinding !== undefined ? { taskBinding: turn.taskBinding } : {}), id: turn.id, attempt: turn.cleanExit ? turn.attempt : turn.attempt + 1,
         ...(turn.workId !== undefined ? { workId: turn.workId } : {}),
         continues: true, ...(approval !== undefined ? { approval } : {}) },
     });
@@ -2347,18 +2347,7 @@ export class Orchestrator {
     agentIdOrName: string,
     text: string,
     caller?: { userId?: string },
-    options: {
-      conversation?: string;
-      steerable?: boolean;
-      lane?: Lane;
-      synthetic?: boolean; origin?: string; // the host part that wrote it (INV-1571); see InboundMessage.origin
-      /** False when a room message named nobody (INV-775); see `InboundMessage.addressed`. */
-      addressed?: boolean;
-      /** The message's id from the door it came through (INV-613); see `AgentBus.sendFromUser`. */
-      messageId?: string;
-      /** A routine's declared tools (INV-691); see `InboundMessage.toolScope`. */
-      toolScope?: readonly string[];
-    } = {}
+    options: import("./prompt-options.ts").PromptOptions = {}
   ): Promise<void> {
     if (isContextCommand(text) || isRecoveryCommand(text) || isRetryCommand(text) || isGoalCommand(text)) throw new Error("上下文控制命令只能通过已接入的独立私聊入口执行；不会让模型模拟切换或恢复。");
     const agent = this.registry.resolve(agentIdOrName);
@@ -2366,6 +2355,7 @@ export class Orchestrator {
     return this.registry.withContext(agent.id, conversation, async () => {
     this.bus.sendFromUser(agent.id, text, {
       conversation,
+      ...(options.taskBinding !== undefined ? { taskBinding: options.taskBinding } : {}),
       ...(caller?.userId !== undefined ? { principalId: caller.userId } : {}),
       ...(options.synthetic === true ? { synthetic: true } : {}), ...(options.origin !== undefined ? { origin: options.origin } : {}),
       ...(options.steerable === false ? { steerable: false } : {}),

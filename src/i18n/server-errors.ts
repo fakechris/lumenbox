@@ -14,6 +14,7 @@
  */
 
 export const SERVER_ERRORS = {
+  "err.task-execution-reset": ["任务过程快照已过期或不可用，请重新加载任务概览。", "Execution snapshot unavailable; reload the task overview."],
   // ── hooks and webhooks ───────────────────────────────────────────────────────────────────────
   "err.hook-refused": ["没有这个 hook，或者密钥不对。", "Unknown hook, or the secret is wrong."],
   "err.hook-post-only": ["请用 POST 把内容发到这个地址。", "POST the content to this URL."],

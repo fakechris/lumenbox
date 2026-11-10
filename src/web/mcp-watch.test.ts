@@ -19,6 +19,18 @@ function wired(capacity?: number) {
 }
 const mine = (who: string) => (event: { requester: string }) => event.requester === who;
 
+test("execution watermarks invalidate the task summary and cursors reset across process epochs", () => {
+  const { board, feed } = wired();
+  const task = board.create({ title: "long work", requester: "p1" })!;
+  const cursor = feed.since(undefined, () => true).cursor;
+  feed.recordExecution(task, "observation-1");
+  const result = feed.since(cursor, mine("p1"));
+  assert.deepEqual(result.events.map(e => e.execution), [{ revision: "observation-1" }]);
+  assert.equal(JSON.stringify(result).includes("tool_input"), false);
+  assert.equal(new ChangeFeed().since(result.cursor, () => true).reset, true);
+  assert.equal(feed.since("0", () => true).reset, true, "legacy numeric cursors reacquire a snapshot once");
+});
+
 test("a wait returns as soon as a matching task moves; with nothing, it times out empty on the same cursor", async () => {
   const { board, feed } = wired();
   const start = feed.since(undefined, mine("p1"));
@@ -79,10 +91,13 @@ test("a fork of a task's turn is on the feed, step by step, for the task's reque
 test("a cursor older than the ring says reset; scope mine sees only my tasks; all sees everyone's", () => {
   const { board, feed } = wired(3);
   const cursor = feed.since(undefined, () => true).cursor;
-  for (let i = 0; i < 5; i++) board.update(board.create({ title: `t${i}`, requester: i % 2 === 0 ? "p1" : "p2" })!.id, { status: "doing" }, "a1");
+  let recent = cursor;
+  for (let i = 0; i < 5; i++) {
+    board.update(board.create({ title: `t${i}`, requester: i % 2 === 0 ? "p1" : "p2" })!.id, { status: "doing" }, "a1");
+    if (i === 1) recent = feed.since(undefined, () => true).cursor;
+  }
   assert.equal(feed.since(cursor, () => true).reset, true, "two of five changes are gone");
   assert.equal(feed.since("999", () => true).reset, true, "a cursor from the future is not trusted");
-  const recent = String(Number(feed.since(undefined, () => true).cursor) - 3);
   const held = feed.since(recent, () => true);
   assert.equal(held.reset, false);
   assert.deepEqual(feed.since(recent, mine("p1")).events.map(event => event.requester), ["p1", "p1"]);

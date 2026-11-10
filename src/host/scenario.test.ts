@@ -45,6 +45,55 @@ import { CredentialChecks, CredentialWaits } from "./credential-waits.ts";
 import { parseSkillFile, skillFrom } from "./skills.ts";
 import { Vault } from "./vault.ts";
 
+test("admitted task, child and late task selection stay distinct across multiple works (INV-1785)", async () => {
+  const { TurnLedger } = await import("./resume.ts");
+  const { TaskExecutions } = await import("../web/task-execution.ts");
+  const { PendingWork } = await import("./pending-work.ts");
+  const dir = mkdtempSync(join(tmpdir(), "task-execution-scenario-"));
+  const tasks = new TaskStore(join(dir, "tasks.jsonl"));
+  const turns = new TurnLedger(join(dir, "turns.jsonl"));
+  const pendingWork = new PendingWork(join(dir, "pending.jsonl"));
+  let taskA = "", taskB = "", mainRound = 0, childRead = false;
+  const episode = await runEpisode({
+    team: [{ name: "Nova" }], says: [], tasks, turns, pendingWork,
+    files: { "/home/box/work/object.md": "one authoritative object" },
+    script: ({ system }) => {
+      if (/You are a fork/.test(system)) {
+        if (!childRead) { childRead = true; return { call: "read_file", input: { path: "/home/box/work/object.md" } }; }
+        return { say: 'Child checked the object. HANDOFF: {"status":"done"}' };
+      }
+      const n = mainRound++;
+      if (n === 0 || n === 3 || n === 5) return { call: "read_file", input: { path: "/home/box/work/object.md" } };
+      if (n === 1) return { call: "Fork", input: { briefs: ["Check the object independently"], background: true } };
+      if (n === 2) return { call: "Tasks", input: { action: "take", id: taskB } };
+      return { say: "Checked the object." };
+    },
+    drive: async ({ registry, bus, frontId }) => {
+      taskB = tasks.create({ title: "Other task already doing", requester: "p", assigneeId: frontId })!.id;
+      tasks.update(taskB, { status: "doing" }, frontId);
+      taskA = tasks.create({ title: "Admitted task", requester: "p", assigneeId: frontId, sourceMessageId: "admission-A" })!.id;
+      bus.sendFromUser(frontId, "Read and check the object.", { messageId: "admission-A", steerable: false, taskBinding: { taskId: taskA, role: "executor" } });
+      await bus.wake(frontId); await bus.idle();
+      bus.sendFromUser(frontId, "Read the object once more.", { steerable: false, taskBinding: { taskId: taskA, role: "executor" } });
+      await bus.wake(frontId); await bus.idle();
+      for (let i = 0; i < 40; i++) tasks.update(taskA, { note: `history ${i}` }, frontId);
+      assert.equal(tasks.get(taskA)!.history.length, 30);
+      assert.ok(registry.readTranscript(frontId).length > 0);
+    },
+  });
+  try {
+    const executions = new TaskExecutions({ namespace: "test-installation", turns, registry: episode.registry });
+    const access = { task: () => true, agent: () => true, box: () => true };
+    const a = executions.open(taskA, access), b = executions.open(taskB, access);
+    assert.ok(a.steps.some(step => step.role === "child"), "child inherited the explicit task through durable admission");
+    assert.ok(b.steps.some(step => step.name === "Tasks"));
+    assert.ok(b.steps.some(step => step.name === "read_file"));
+    assert.equal(a.steps.some(step => step.name === "Tasks"), false, "taking B never retroactively reassigns prior A calls");
+    assert.ok(new Set(a.steps.map(step => step.workId)).size >= 2, "one task can span multiple actual works");
+    assert.ok(a.steps.every(step => step.taskId === taskA) && b.steps.every(step => step.taskId === taskB));
+  } finally { episode.cleanup(); rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("a parent and its fork expose distinct call identities that survive transcript replay (INV-1784)", async () => {
   const { toDisplayEntries } = await import("../web/transcript.ts");
   const events: import("./turn.ts").TurnEvent[] = [];
@@ -3320,13 +3369,16 @@ test("a Configure save mid-turn leaves the running turn on its version; the next
   let taskId = "";
   const result = await runEpisode({
     team: [{ name: "Nova", tools: ["read_file", "bash", "Tasks"] }], says: [], tasks, policy,
-    drive: async ({ registry, frontId, say }) => {
+    drive: async ({ registry, frontId, bus }) => {
       roster = registry;
       const task = tasks.create({ title: "写两份周报", requester: "user", assigneeId: frontId })!;
       tasks.update(task.id, { status: "doing" }, frontId);
       taskId = task.id;
-      await say("第一份");
-      await say("第二份");
+      for (const text of ["第一份", "第二份"]) {
+        bus.sendFromUser(frontId, text, { taskBinding: { taskId, role: "executor" } });
+        await bus.wake(frontId);
+        await bus.idle();
+      }
     },
     script: ({ offered: names, messages }) => {
       // The round counter spans the episode, so the turn is read off the person's latest line.
