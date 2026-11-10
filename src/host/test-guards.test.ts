@@ -28,13 +28,17 @@ test("a test cannot reach the network, and says so where the call was made", asy
     "a vendor call must not leave the machine"
   );
 
-  // Loopback stays open on purpose: several suites stand up a real server and call it.
-  // Nothing is listening on this port, so the failure is a connection refusal from the
-  // stack rather than a refusal from the guard — which is the distinction being pinned.
-  await assert.rejects(fetch("http://127.0.0.1:9/nothing"), error => {
-    assert.doesNotMatch(String(error), /BlockedByTestGuard/, "loopback must not be blocked");
-    return true;
-  });
+  // A connection failure is not proof that the OS permits loopback. Require an actual
+  // response from a fresh local server, rather than accepting any transport failure.
+  const { createServer } = await import("node:http");
+  const server = createServer((_req, response) => { response.writeHead(403); response.end("local refusal"); });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address(); assert.ok(address && typeof address === "object");
+    const response = await fetch(`http://127.0.0.1:${address.port}/guard-probe`);
+    assert.equal(response.status, 403, "the real loopback response must pass the OS and in-process layers");
+    assert.equal(await response.text(), "local refusal");
+  } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
 });
 
 test("below HTTP too: a raw socket or a TLS connection to anywhere but loopback is refused at the call (INV-1238)", async () => {
