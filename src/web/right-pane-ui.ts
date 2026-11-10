@@ -2,25 +2,23 @@
 export const RIGHT_PANE_STYLE = String.raw`
 .task-chat-back,.task-return{display:none}
 @media(max-width:900px){body.task-chat-visible #shell{flex-direction:column}body.task-chat-visible #sidebar{width:100%;flex:0 0 32vh}body.task-chat-visible #rightpane{display:none}body.task-chat-visible .task-return{display:block;flex:none;text-align:left;padding:var(--sp-2) var(--sp-4);border-bottom:1px solid var(--border)}body.task-board-visible #sidebar,body.task-board-visible #middle{display:none}body.task-board-visible #rightpane{width:100%;flex:1;border-left:0}body #topbar{overflow-x:auto;overflow-y:hidden}body #topbar>*{flex-shrink:0;white-space:nowrap}body #topbar .mid{min-width:0}body:has(> #taskfocus:not([hidden])) #shell{overflow:hidden}body.task-board-visible .task-chat-back{display:block;grid-column:1/-1;justify-self:start}}
+.task-scope-head{padding:var(--sp-4);border-bottom:1px solid var(--border);flex:none}.task-scope-head h2{font-size:var(--fs-lg);font-weight:500;margin:0}.task-scope-head p{font-size:var(--fs-sm);margin:var(--sp-2) 0 0;overflow-wrap:anywhere}.task-scope-head .ui-link{margin-top:var(--sp-2)}.task-board-error{padding:var(--sp-3) var(--sp-4);font-size:var(--fs-sm)}.task-reading{overscroll-behavior:contain}.task-others{padding:var(--sp-4);border-top:1px solid var(--border)}.task-others>summary{font-size:var(--fs-sm);color:var(--muted);cursor:pointer}.task-others .task-row{padding-left:0;padding-right:0}.task-others[hidden]{display:none}#taskotherlist{max-height:45vh;overflow:auto}.task-team-visible #middle{display:none}.task-team-visible #rightpane{flex:1;width:auto}.task-team-visible #rightpane>.paneheader{display:none}.task-team-visible #agents .agent.on{background:transparent}.task-team-visible #agents .agent.on .nm{color:var(--text)}.task-team-visible #taskreading{width:100%;max-width:1100px;align-self:center}body.task-board-visible:not(.task-team-visible) #attention,body.task-board-visible:not(.task-team-visible) #activity-panel{display:none!important}
 #tasksview{display:none;flex:1;min-height:0;flex-direction:column}.task-compose{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:var(--sp-2);padding:var(--sp-3) var(--sp-4);border-bottom:1px solid var(--border)}.task-compose input{grid-column:1/-1;min-width:0;padding:var(--sp-2) var(--sp-3);border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:inherit;font-size:var(--fs-md)}.task-compose .field{margin:0;min-width:0}.task-compose select{max-width:100%;font-size:var(--fs-sm)}.task-compose a{font-size:var(--fs-sm);align-self:center}
 .pane-disclosure{flex:none;min-width:0;border-bottom:1px solid var(--border)}.pane-disclosure>summary{padding:var(--sp-3) var(--sp-4);cursor:pointer;font-size:var(--fs-sm);color:var(--text-soft)}.pane-disclosure>summary::marker{color:var(--muted)}.pane-disclosure>summary:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}.pane-count{font-variant-numeric:tabular-nums;margin-left:var(--sp-2);color:var(--muted)}.attention-error{padding:var(--sp-3) var(--sp-4);font-size:var(--fs-sm);line-height:1.6}.attention-pager{justify-content:space-between;padding:var(--sp-2) var(--sp-4);font-size:var(--fs-xs)}.attention-pager[hidden]{display:none}.attention-body{max-height:28vh;overflow:auto;padding:0 var(--sp-4) var(--sp-2);overscroll-behavior:contain}.attention-row{padding:var(--sp-2) 0;font-size:var(--fs-sm);line-height:1.6;min-width:0}.attention-copy{overflow-wrap:anywhere}.attention-copy strong{font-weight:500}.attention-actions:empty{display:none}.attention-actions{margin-top:var(--sp-1)}.attention-actions .mono{font-size:var(--fs-xs)}.attention-label,.attention-owed{color:var(--warn)}.attention-label{font-size:var(--fs-xs)}.attention-waiting{color:var(--muted)}.attention-sidebar{display:flex;gap:var(--sp-2);align-items:baseline;font-size:var(--fs-sm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-decoration:none}
 #activity-panel{border-top:1px solid var(--border);border-bottom:0}.feed{max-height:24vh;overflow-y:auto;padding:0 0 var(--sp-2);overscroll-behavior:contain}.activity-unread{color:var(--accent);font-size:var(--fs-xs);margin-left:var(--sp-2)}.activity-error{color:var(--danger)}.activity-retention{font-size:var(--fs-xs);color:var(--muted);padding:0 var(--sp-4) var(--sp-2)}
 `;
 export const TASKS_PANEL_HTML = String.raw`<div id="tasksview">
-  <div class="task-compose">
-    <button class="btn sm ghost task-chat-back" data-task-chat>{{ui.tf.backChat}}</button>
-    <input id="tasknew" aria-label="{{ui.page.new-task-title}}" placeholder="{{ui.page.new-task-title}}" spellcheck="false">
-    <div class="field"><select id="taskassign" aria-label="{{ui.tf.assignee}}"></select></div>
-    <button class="btn sm" id="taskadd">{{ui.page.add}}</button>
-    <a href="#" id="inboxonly" class="dim" title="{{ui.page.only-what-the-agents-found}}">{{ui.page.inbox}}</a>
-  </div>
+  <header class="task-scope-head"><button class="btn sm ghost task-chat-back" data-task-chat>{{ui.tf.backChat}}</button><h2 id="taskscope-title"></h2><p id="taskscope-note" class="dim"></p><button class="ui-link" id="taskscope-back" hidden>{{ui.tc.backContext}}</button></header>
+  <div id="taskboard-error" class="task-board-error" role="status" hidden>{{ui.tf.error}} <button class="btn sm ghost" data-board-refresh>{{ui.tf.refresh}}</button></div>
   <details id="attention" class="pane-disclosure" style="display:none">
     <summary>{{ui.tf.needsAction}}<span class="pane-count" id="attention-count"></span></summary>
     <div id="attention-error" class="attention-error" role="status" hidden>{{ui.tf.attentionUnavailable}} <button class="btn sm ghost" data-att-refresh>{{ui.tf.refresh}}</button></div>
     <div id="attention-body" class="attention-body"></div>
     <div id="attention-pager" class="ui-row attention-pager" hidden><button class="btn sm ghost" data-att-prev>{{ui.tf.previous}}</button><span id="attention-range"></span><button class="btn sm ghost" data-att-next>{{ui.tf.next}}</button></div>
   </details>
-  <div class="scroll" id="tasklist" title="{{ui.page.the-board-what-waits-on}}"></div>
+  <div id="taskreading" class="scroll task-reading"><div id="tasklist" title="{{ui.page.the-board-what-waits-on}}"></div>
+    <details id="taskothers" class="task-others"><summary id="taskother-label"></summary><div id="taskotherlist"></div><div id="taskotherpager" class="ui-row tf-taskpager"></div></details>
+  </div>
 </div>`;
 export const ACTIVITY_PANEL_HTML = String.raw`<details id="activity-panel" class="pane-disclosure">
   <summary>{{ui.page.activity-all-agents}}<span id="activity-count" class="pane-count"></span><span id="activity-unread" class="activity-unread" role="status" aria-live="polite"></span></summary>
@@ -34,6 +32,7 @@ function activitySummary() {
   badge.textContent = activityErrors ? activityErrors + " {{ui.tf.newErrors}}" : activityUnread ? activityUnread + " {{ui.tf.newEvents}}" : "";
   badge.classList.toggle("activity-error",activityErrors > 0);
   $("task-return-feedback").textContent = activityErrors ? activityErrors + " {{ui.tf.newErrors}}" : "";
+  $("alltasks-feedback").textContent = activityErrors ? activityErrors + " {{ui.tf.newErrors}}" : "";
 }
 $("activity-panel").addEventListener("toggle",function () {
   if (this.open && this.getClientRects().length) { $("feed").scrollTop = $("feed").scrollHeight; activityUnread = 0; activityErrors = 0; activitySummary(); }

@@ -189,7 +189,7 @@ test("long waiting lists scroll within Tasks instead of overlapping Activity", (
   assert.match(APP_HTML, /\.attention-body\{max-height:28vh;overflow:auto/);
   assert.match(APP_HTML, /<details id="attention"[^>]*>\s*<summary>/);
   assert.match(APP_HTML, /<details id="activity-panel"[^>]*>\s*<summary>/);
-  assert.match(APP_HTML, /<div class="scroll" id="tasklist" title="[^"]+"><\/div>/); // titled since INV-1647: the board, under the waiting list
+  assert.match(APP_HTML, /<div id="taskreading" class="scroll task-reading"><div id="tasklist" title="[^"]+"><\/div>/); // titled since INV-1647: the board, under the waiting list
 });
 
 test("the feed renders the plain-language phrase and falls back to the tool name (INV-783)", () => {

@@ -39,7 +39,8 @@ export function taskListRoute(route: string, url: URL, res: ServerResponse, deps
   send: (res: ServerResponse, status: number, body: unknown) => void;
 }): boolean {
   if (route !== "GET /api/tasks/list" && route !== "GET /api/tasks/item") return false;
-  const available = deps.tasks().filter(deps.allowed).filter(task => !url.searchParams.has("agent") || task.assigneeId === url.searchParams.get("agent")).filter(task => !url.searchParams.has("conversation") || (task.conversation ?? "main") === url.searchParams.get("conversation"));
+  const other = url.searchParams.get("other") === "1";
+  const available = deps.tasks().filter(deps.allowed).filter(task => !url.searchParams.has("agent") || task.assigneeId === url.searchParams.get("agent")).filter(task => !url.searchParams.has("conversation") || ((task.conversation ?? "main") === url.searchParams.get("conversation")) !== other);
   if (route.endsWith("/item")) {
     const task = available.find(task => task.id === url.searchParams.get("task"));
     deps.send(res, task ? 200 : 404, task ? { task: deps.detail(task) } : apiError("task-none")); return true;
@@ -61,7 +62,7 @@ export function taskListRoute(route: string, url: URL, res: ServerResponse, deps
   const limit = Math.min(100, Math.max(1, Math.trunc(Number(url.searchParams.get("limit") ?? 50))));
   try {
     if (!Number.isFinite(limit)) throw new Error("invalid limit");
-    const page = deps.pages.read(rows, JSON.stringify([inbox, priority, url.searchParams.get("agent"), url.searchParams.get("conversation")]), url.searchParams.get("cursor"), limit);
+    const page = deps.pages.read(rows, JSON.stringify([inbox, priority, other, url.searchParams.get("agent"), url.searchParams.get("conversation")]), url.searchParams.get("cursor"), limit);
     deps.send(res, 200, { ...page, tasks: page.tasks.map(project) });
   } catch {
     deps.send(res, 409, { reset: true, ...apiError("task-execution-reset") });

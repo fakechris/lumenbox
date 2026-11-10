@@ -4,7 +4,7 @@
      status: current
      covers: task
      audience: user
-     updated: 2026-11-06
+     updated: 2026-11-10
 -->
 # Tasks and records
 
@@ -31,12 +31,22 @@ nobody takes it until a person presses *Commit*.
 
 ### In the app
 
-- **Add a task:** the Tasks tab → type in *New task title…*, pick an agent or leave it
-  `unassigned`, and press *Add*.
-- **See what needs you:** the board lists what waits on you first. Press `inbox` to see only
-  what agents proposed; press *Commit* to make one real work, or *Dismiss* to close it.
-- **Accept work:** set the task's state to `done` in its row. If a reviewer is named, the
-  assignee's `done` moves the task to `review` instead, and the reviewer's closes it.
+- **Follow the current work:** choose a member and a conversation, then open *Tasks*. The
+  heading names that member and conversation. Tasks from their other conversations are folded
+  under a separate heading and load only when expanded. *Team tasks* in the top bar opens the
+  clearly labelled view across members; the return link takes you back to the current conversation.
+- **Give someone work:** describe the goal and requirements in their conversation. You do not
+  need to select that member again in the task-reading panel.
+- **See what needs you:** the sidebar's waiting summary opens the team view, with waiting
+  tasks first and other decisions in the expandable attention area. Open a proposed task to
+  review it; *Commit* makes it real work and *Dismiss* declines it.
+- **Accept work:** open a task awaiting review and inspect *Results and review*. An authorized
+  requester, reviewer or direct operator can press *Accept completed work*, or record requested
+  changes without claiming work has resumed. Follow its linked conversation to discuss the changes.
+  The server's review rules still apply; a refusal or redirected state is shown explicitly.
+- **Adjust execution scope:** *Advanced management* inside the task's results view explains
+  authorization in words. State correction and execution-scope changes affect the real task,
+  remain permission checked and are recorded. These are not progress or priority controls.
 - **Open a task:** click its id or title. The detail shows *Deliverables* (each file with
   *Download*), *Configuration vN* (the agent's settings it ran on), *Division of work*, and the
   history with its evidence.
@@ -70,7 +80,9 @@ From another tool over MCP, `fetch_deliverable` reads a task's deliverable.
 
 ## Where to see the result
 
-- The Tasks tab: the state, the chips (`due …`, `waiting on …`, `proposed`) and the history.
+- The Tasks tab: read-only state, sourced progress, and a link to the task. A missing association
+  is shown as an empty conversation view; use the member’s other conversations or Team tasks
+  to find older work.
 - The task detail: its deliverables, the configuration version and the division of work.
 - The Audit tab and `agentbox usage`: what was done and what it cost.
 

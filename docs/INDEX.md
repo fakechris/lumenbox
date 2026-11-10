@@ -55,7 +55,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [manual/reference-tools](manual/reference-tools.md) | Reference: the built-in tools | current | generated |
 | [manual/skills](manual/skills.md) | Skills | current | 2026-11-06 |
 | [manual/supervision](manual/supervision.md) | Supervision | current | 2026-11-06 |
-| [manual/tasks-and-records](manual/tasks-and-records.md) | Tasks and records | current | 2026-11-06 |
+| [manual/tasks-and-records](manual/tasks-and-records.md) | Tasks and records | current | 2026-11-10 |
 | [manual/teams/media-desk](manual/teams/media-desk.md) | Media desk: one source, three forms | current | 2026-11-06 |
 | [manual/teams/ship](manual/teams/ship.md) | Ship: a product, an engineer and a reviewer | current | 2026-11-06 |
 | [manual/teams/starter](manual/teams/starter.md) | The starter team: a coordinator on call, with a researcher, an operator and a reviewer | current | 2026-11-06 |
