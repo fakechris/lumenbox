@@ -1,3 +1,4 @@
+import { taskBoardRecord } from "./task-board-record.ts";
 import { taskCostRoute } from "./task-cost-routes.ts";
 import { taskListRoute, TaskListPages } from "./task-list-routes.ts";
 import { SseReplay } from "./sse-replay.ts";
@@ -3906,7 +3907,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (taskCostRoute(route, url, res, { executions: taskExecutions, refused: () => refusedRole("admin"), access: { task: id => { const task = orchestrator.tasks?.get(id); return task !== undefined && mayReadTask(task); }, agent: mayReadAgent, box: mayReadBox }, records: () => orchestrator.usage.since(0, Number.MAX_SAFE_INTEGER), rates: configuredRates, compacted: () => orchestrator.usage.compacted(), send })) return;
         if (taskExecutionRoute(route, url, res, { executions: taskExecutions, access: { task: id => { const task = orchestrator.tasks?.get(id); return task !== undefined && mayReadTask(task); }, agent: mayReadAgent, box: mayReadBox }, record: id => taskRecord(orchestrator.tasks!.get(id)!, { nameOf: id => registry.tryGet(id)?.profile.name ?? id, stageWorld: sideDoorStage }), send })) return;
         const taskView = (task: Task) => { const forks = orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []; return { ...task, stage: taskRecord(task, { nameOf: id => registry.tryGet(id)?.profile.name ?? id, stageWorld: sideDoorStage }).stage, configVersions: switchesForTask(registry, task.id), ...(forks.length ? { forks } : {}), ...dependencyView(task, orchestrator.tasks!) }; };
-        if (taskListRoute(route, url, res, { pages: taskListPages, tasks: () => orchestrator.tasks?.list() ?? [], allowed: mayReadTask, detail: taskView, send })) return;
+        if (taskListRoute(route, url, res, { pages: taskListPages, tasks: () => orchestrator.tasks?.list() ?? [], allowed: mayReadTask, detail: taskView, summary: task => ({ ...taskBoardRecord(task), ...dependencyView(task, orchestrator.tasks!) }), send })) return;
         if (route === "GET /api/tasks") {
           send(res, 200, { tasks: orchestrator.tasks?.list().filter(mayReadTask).map(task => { const forks = orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []; return { ...task, configVersions: switchesForTask(registry, task.id), ...(forks.length > 0 ? { forks } : {}), ...dependencyView(task, orchestrator.tasks!) }; }) ?? [] }); // and what it waits on and what waits on it (INV-1740) // with the agent configuration versions it ran under (INV-1669) and the division of work (INV-1667)
           return;

@@ -1,11 +1,12 @@
 /** One task workspace, backed by the authorized execution projection (INV-1786). */
 export const TASK_FOCUS_STYLE = String.raw`
 html:has(#taskfocus:not([hidden])),body:has(> #taskfocus:not([hidden])){overflow:hidden}#taskfocus[hidden]{display:none}#taskfocus{position:fixed;inset:40px 0 0 224px;z-index:25;background:var(--bg);display:flex;flex-direction:column;min-width:0}
-.tf-head{padding:20px 28px 12px;border-bottom:1px solid var(--border);background:var(--surface)}.tf-top,.tf-status,.tf-pager,.tf-filters{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.tf-top{justify-content:space-between}.tf-head h1{font-size:clamp(20px,2.2vw,30px);line-height:1.25;font-weight:500;margin:14px 0 10px;max-width:1000px}.tf-status{font-size:12px}.tf-status b{font-weight:500}.tf-status span{display:inline-flex;gap:6px;align-items:center}.tf-status i{width:6px;height:6px;border-radius:50%;background:var(--accent)}.tf-activity{font-size:12px;line-height:1.7;margin-top:10px;color:var(--text-soft)}.tf-needs{padding:10px 0;color:var(--warn)}
-.tf-tabs{display:flex;gap:20px;margin-top:14px}.tf-tabs button{background:none;border:0;border-bottom:2px solid transparent;padding:8px 0;font:inherit;font-size:13px;color:var(--muted);cursor:pointer}.tf-tabs button[aria-selected=true]{color:var(--text);border-color:var(--accent)}.tf-tabs button:focus-visible,.tf-step:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.tf-body{flex:1;min-height:0;overflow:auto}.tf-overview{max-width:1000px;padding:24px 28px;line-height:1.65}.tf-overview h2{font-size:14px;margin:0 0 10px;font-weight:600}.tf-overview section{margin-bottom:26px}.tf-overview p{white-space:pre-wrap;margin:6px 0}.tf-note{font-size:12px;color:var(--muted);line-height:1.6}.tf-execution{height:100%;display:flex;flex-direction:column}.tf-filters{padding:12px 24px;border-bottom:1px solid var(--border);font-size:12px}.tf-filters label{display:flex;gap:6px;align-items:center}.tf-filters select{font:inherit;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px;max-width:180px}.tf-split{display:grid;grid-template-columns:minmax(280px,38%) minmax(0,1fr);flex:1;min-height:0}.tf-list{overflow:auto;border-right:1px solid var(--border);padding:8px 0}.tf-step{display:block;width:100%;border:0;background:none;text-align:left;padding:10px 20px;color:var(--text);cursor:pointer;border-bottom:1px solid var(--border);font:inherit;font-size:12px}.tf-step:hover{background:var(--surface-hover)}.tf-step[aria-pressed=true]{background:var(--accent-soft)}.tf-step strong{display:block;font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tf-step small{display:block;color:var(--muted);font-size:11px;margin-top:5px}.tf-step .tf-failed,.tf-step .tf-unknown{color:var(--danger)}.tf-group{padding:12px 20px 5px;font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}.tf-detail{overflow:auto;padding:20px 26px;min-width:0}.tf-detail h2{font-size:17px;font-weight:500;margin:0 0 10px}.tf-detail h3{font-size:12px;font-weight:600;margin:22px 0 6px}.tf-detail pre{font-size:12px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--code-bg);color:var(--code-text);padding:12px;border-radius:4px}.tf-detail code{overflow-wrap:anywhere}.tf-pager{padding:10px 20px;border-top:1px solid var(--border);font-size:12px;justify-content:space-between}.tf-empty{padding:24px;color:var(--muted);font-size:13px}.tf-loading{color:var(--muted)}.tf-taskpager{padding:10px 16px;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center;font-size:12px}.tf-taskpager span{flex:1}
-@media(max-width:900px){#taskfocus{left:0}.tf-head{padding:14px 16px 8px}.tf-overview{padding:20px 16px}.tf-split{grid-template-columns:minmax(200px,42%) minmax(0,1fr)}.tf-detail{padding:16px}.tf-filters{padding:10px 16px}.tf-step{padding:10px 12px}}
-@media(max-width:600px){.tf-split{display:flex;flex-direction:column;overflow:auto}.tf-list{flex:0 0 36%;min-height:160px;max-height:260px;border-right:0;border-bottom:1px solid var(--border)}.tf-detail{flex:1;min-height:240px}.tf-tabs{gap:16px}.tf-head h1{font-size:20px}.tf-status{gap:8px}.tf-body{overflow:hidden}.tf-overview{height:100%;overflow:auto;box-sizing:border-box}}
+.tf-head{padding:var(--sp-5) var(--sp-6) var(--sp-3);border-bottom:1px solid var(--border);background:var(--surface)}.tf-top,.tf-status,.tf-pager,.tf-filters{display:flex;align-items:center;gap:var(--sp-3);flex-wrap:wrap}.tf-top{justify-content:space-between}.tf-head h1{font-size:var(--fs-xl);line-height:1.25;font-weight:500;margin:var(--sp-4) 0 var(--sp-3);max-width:1000px}.tf-status{font-size:var(--fs-sm)}.tf-status b{font-weight:500}.tf-status span{display:inline-flex;gap:var(--sp-2);align-items:center}.tf-status i{width:6px;height:6px;border-radius:50%;background:var(--accent)}.tf-activity{font-size:var(--fs-sm);line-height:1.7;margin-top:var(--sp-3);color:var(--text-soft)}.tf-needs{padding:var(--sp-3) 0;color:var(--warn)}
+.tf-tabs{display:flex;gap:var(--sp-5);margin-top:var(--sp-4)}.tf-tabs button{background:none;border:0;border-bottom:2px solid transparent;padding:var(--sp-2) 0;font:inherit;font-size:var(--fs-md);color:var(--muted);cursor:pointer}.tf-tabs button[aria-selected=true]{color:var(--text);border-color:var(--accent)}.tf-tabs button:focus-visible,.tf-step:focus-visible{outline:2px solid var(--accent);outline-offset:var(--sp-1)}
+.tf-body{flex:1;min-height:0;overflow:auto}.tf-overview{max-width:1000px;padding:var(--sp-5) var(--sp-6);line-height:1.65}.tf-overview h2{font-size:var(--fs-md);margin:0 0 var(--sp-3);font-weight:600}.tf-overview section{margin-bottom:26px}.tf-overview p{white-space:pre-wrap;margin:var(--sp-2) 0}.tf-note{font-size:var(--fs-sm);color:var(--muted);line-height:1.6}.tf-execution{height:100%;display:flex;flex-direction:column}.tf-filters{padding:var(--sp-3) var(--sp-5);border-bottom:1px solid var(--border);font-size:var(--fs-sm)}.tf-filters label{display:flex;gap:var(--sp-2);align-items:center}.tf-filters select{font:inherit;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-input);padding:var(--sp-1);max-width:180px}.tf-split{display:grid;grid-template-columns:minmax(280px,38%) minmax(0,1fr);flex:1;min-height:0}.tf-list{overflow:auto;border-right:1px solid var(--border);padding:var(--sp-2) 0}.tf-step{display:block;width:100%;border:0;background:none;text-align:left;padding:var(--sp-3) var(--sp-5);color:var(--text);cursor:pointer;border-bottom:1px solid var(--border);font:inherit;font-size:var(--fs-sm)}.tf-step:hover{background:var(--surface-hover)}.tf-step[aria-pressed=true]{background:var(--accent-soft)}.tf-step strong{display:block;font-size:var(--fs-md);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tf-step small{display:block;color:var(--muted);font-size:var(--fs-xs);margin-top:var(--sp-1)}.tf-step .tf-failed,.tf-step .tf-unknown{color:var(--danger)}.tf-group{padding:var(--sp-3) var(--sp-5) var(--sp-1);font-size:var(--fs-xs);letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}.tf-detail{overflow:auto;padding:var(--sp-5) var(--sp-6);min-width:0}.tf-detail h2{font-size:var(--fs-lg);font-weight:500;margin:0 0 var(--sp-3)}.tf-detail h3{font-size:var(--fs-sm);font-weight:600;margin:var(--sp-5) 0 var(--sp-2)}.tf-detail pre{font-size:var(--fs-sm);line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--code-bg);color:var(--code-text);padding:var(--sp-3);border-radius:var(--radius-input)}.tf-detail code{overflow-wrap:anywhere}.tf-pager{padding:var(--sp-3) var(--sp-5);border-top:1px solid var(--border);font-size:var(--fs-sm);justify-content:space-between}.tf-empty{padding:var(--sp-5);color:var(--muted);font-size:var(--fs-md)}.tf-loading{color:var(--muted)}.tf-taskpager{padding:var(--sp-3) var(--sp-4);border-bottom:1px solid var(--border);display:flex;gap:var(--sp-2);align-items:center;font-size:var(--fs-sm)}.tf-taskpager span{flex:1}
+@media(max-width:900px){#taskfocus{left:0}.tf-head{padding:var(--sp-4) var(--sp-4) var(--sp-2)}.tf-overview{padding:var(--sp-5) var(--sp-4)}.tf-split{grid-template-columns:minmax(200px,42%) minmax(0,1fr)}.tf-detail{padding:var(--sp-4)}.tf-filters{padding:var(--sp-3) var(--sp-4)}.tf-step{padding:var(--sp-3) var(--sp-3)}}
+@media(max-width:600px){.tf-split{display:flex;flex-direction:column;overflow:auto}.tf-list{flex:0 0 36%;min-height:160px;max-height:260px;border-right:0;border-bottom:1px solid var(--border)}.tf-detail{flex:1;min-height:240px}.tf-tabs{gap:var(--sp-4)}.tf-head h1{font-size:var(--fs-xl)}.tf-status{gap:var(--sp-2)}.tf-body{overflow:hidden}.tf-overview{height:100%;overflow:auto;box-sizing:border-box}}
+.tf-coverage{padding:var(--sp-2) var(--sp-5)}
 `;
 
 export const TASK_FOCUS_JS = String.raw`(function () {
@@ -41,7 +42,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
         return;
       }
       var filter = event.target.getAttribute("data-tf-filter"); if (!filter || !active) return;
-      active.filters[filter] = event.target.value; active.selected = ""; active.page = null; active.rowNodes = new Map(); remember(active); loadPage(active, null, null, true);
+      active.filters[filter] = event.target.value; active.selected = ""; active.detail = null; active.detailGeneration++; if (active.detailController) active.detailController.abort(); if (by("detail")) by("detail").textContent = word("select"); active.page = null; active.rowNodes = new Map(); remember(active); loadPage(active, null, null, true);
     });
     root.addEventListener("keydown", function (event) {
       var tab = event.target.getAttribute("data-tf-tab");
@@ -90,7 +91,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
   }
   function deny(view, error) {
     if (active !== view) return;
-    view.generation++; view.detailGeneration++; if (view.detailController) view.detailController.abort();
+    view.generation++; view.detailGeneration++; view.costGeneration = (view.costGeneration || 0) + 1; view.cost = null; if (view.detailController) view.detailController.abort();
     view.detail = null; view.task = null; view.page = null; view.rowNodes.clear();
     by("title").textContent = error.status === 403 || error.status === 404 ? word("denied") : word("error");
     by("activity").textContent = ""; by("status").textContent = ""; by("needs").textContent = "";
@@ -98,7 +99,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
   }
   function overview(view) {
     var task = view.task, html = '<div class="tf-overview"><section><h2>' + word("goal") + '</h2><p>' + safe(task.description || task.title) + '</p>';
-    if (task.contract) html += '<p>' + safe(task.contract.outcome || "") + '</p>';
+    if (task.contract) html += ["outcome","scope","constraints"].filter(function (key) { return task.contract[key]; }).map(function (key) { return '<h2>' + word("contract." + key) + '</h2><p>' + safe(task.contract[key]) + '</p>'; }).join("");
     html += '</section><section><h2>' + word("state") + '</h2><p>' + safe(status(task)) + '</p>' + (window.taskProgressHtml ? window.taskProgressHtml(task) : '<p class="tf-note">' + word("phaseOnly") + '</p>') + '</section>';
     var reply = view.record && view.record.reply;
     if (reply) html += '<section><h2>' + word("latestReply") + '</h2><p>' + safe(reply.text) + '</p><div class="tf-note">' + safe(reply.by) + ' · ' + safe(new Date(reply.at).toLocaleString()) + '</div></section>';
@@ -111,8 +112,9 @@ export const TASK_FOCUS_JS = String.raw`(function () {
       var states = {open:"queued",doing:"working",blocked:"needs",review:"review",done:"ended",dropped:"dropped"};
       html += '<section><label>' + word("state") + ' <select data-tf-status>' + Object.keys(states).map(function (value) { return '<option value="' + value + '"' + (value === task.status ? ' selected' : '') + '>' + word(states[value]) + '</option>'; }).join("") + '</select></label></section>';
     }
+    if (task.contract) html += ["acceptance","verification"].filter(function (key) { return task.contract[key]; }).map(function (key) { return '<section><h2>' + word("contract." + key) + '</h2><p>' + safe(task.contract[key]) + '</p></section>'; }).join("");
     if (checks.length) html += '<section><h2>' + word("checklist") + '</h2>' + checks.map(function (item) { return '<p>' + safe(item.text) + (item.verdict ? ' · ' + safe(item.verdict) : '') + '</p>'; }).join("") + '</section>';
-    ["claimAccountHtml","divisionHtml","taskDepsHtml","configVersionsHtml"].forEach(function (fn) { if (window[fn]) html += window[fn](task); });
+    ["claimAccountHtml","orgPromoteHtml","divisionHtml","taskDepsHtml","configVersionsHtml"].forEach(function (fn) { if (window[fn]) html += window[fn](task); });
     if (task.recoveries && task.recoveries.length) html += '<section><h2>' + word("attempt") + '</h2>' + task.recoveries.map(function (attempt) { return '<p>' + safe(attempt.operationId) + ' · ' + word("attempt") + ' ' + attempt.attempt + ' · ' + safe(attempt.status) + '</p>'; }).join("") + '</section>';
     return html + '</div>';
   }
@@ -122,7 +124,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
       var report = view.cost.report;
       html += '<section><h2>' + word("estimated") + '</h2><p>' + (typeof report.money === "number" ? '$' + report.money.toFixed(4) : word("unknown")) + '</p><p>' + word("inputTokens") + ': ' + report.totals.inputTokens + ' · ' + word("outputTokens") + ': ' + report.totals.outputTokens + '</p><p class="tf-note">' + word("costScope") + ((view.cost.coverage === "partial" || report.compacted) ? ' · ' + word("partial") : '') + '</p></section>';
     }
-    if (pursuit) html += '<section><h2>' + word("budget") + '</h2><p>' + safe(pursuit.spent && pursuit.spent.cost) + ' / ' + safe(pursuit.limits && pursuit.limits.cost) + '</p><p class="tf-note">' + word("weighted") + '</p><p>' + word("continuations") + ': ' + safe(pursuit.spent && pursuit.spent.continuations) + '</p></section>';
+    if (pursuit) html += '<section><h2>' + word("budget") + '</h2><p>' + safe(pursuit.spent && pursuit.spent.cost) + ' / ' + safe(pursuit.limits && pursuit.limits.budget !== undefined ? pursuit.limits.budget : word("unknown")) + '</p><p class="tf-note">' + word("weighted") + '</p><p>' + word("continuations") + ': ' + safe(pursuit.spent && pursuit.spent.continuations) + '</p></section>';
     return html + '</div>';
   }
   function filters(view) {
@@ -131,11 +133,19 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     function select(key, values) { return '<label>' + word(key) + '<select data-tf-filter="' + key + '"><option value="">' + word("all") + '</option>' + values.map(function (value) { return '<option value="' + safe(value) + '"' + (f[key] === value ? ' selected' : '') + '>' + (key === "work" ? safe(value.slice(0,12)) : word(value)) + '</option>'; }).join("") + '</select></label>'; }
     return select("role",["executor","child","verifier"]) + select("outcome",["running","succeeded","failed","unknown","waiting","refused"]) + select("work",work);
   }
+  function syncWorkFilter(view) {
+    if (active !== view || view.tab !== "execution") return;
+    var select = root.querySelector('[data-tf-filter="work"]'); if (!select || document.activeElement === select) return;
+    var values = Array.from(new Set((view.activity && view.activity.groups || []).map(function (group) { return group.workId; })));
+    if (view.filters.work && values.indexOf(view.filters.work) < 0) values.push(view.filters.work);
+    var html = '<option value="">' + word("all") + '</option>' + values.map(function (value) { return '<option value="' + safe(value) + '">' + safe(value.slice(0,12)) + '</option>'; }).join("");
+    if (select.__options !== html) { select.innerHTML = html; select.value = view.filters.work || ""; select.__options = html; }
+  }
   function render(view) {
     if (active !== view || !view.task) return;
     header(view); by("body").setAttribute("aria-labelledby","tf-tab-" + view.tab);
     if (view.tab !== "execution") { by("body").innerHTML = view.tab === "artifacts" ? artifacts(view) : view.tab === "costs" ? costs(view) : overview(view); return; }
-    by("body").innerHTML = '<div class="tf-execution"><div class="tf-filters">' + filters(view) + '</div><div class="tf-note" style="padding:8px 24px" id="tf-coverage"></div><div class="tf-split"><div id="tf-list" class="tf-list" aria-label="' + word("execution") + '"></div><article id="tf-detail" class="tf-detail"></article></div><div class="tf-pager"><button class="btn sm ghost" data-tf-prev>' + word("previous") + '</button><span id="tf-range"></span><button class="btn sm ghost" data-tf-next>' + word("next") + '</button></div></div>';
+    by("body").innerHTML = '<div class="tf-execution"><div class="tf-filters">' + filters(view) + '</div><div class="tf-note tf-coverage" id="tf-coverage"></div><div class="tf-split"><div id="tf-list" class="tf-list" aria-label="' + word("execution") + '"></div><article id="tf-detail" class="tf-detail"></article></div><div class="tf-pager"><button class="btn sm ghost" data-tf-prev>' + word("previous") + '</button><span id="tf-range"></span><button class="btn sm ghost" data-tf-next>' + word("next") + '</button></div></div>';
     paintPage(view);
     if (view.selected) loadDetail(view, view.selected); else by("detail").textContent = word("select");
   }
@@ -214,7 +224,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
       view.page = page; view.pageCursor = cursor; view.anchor = page.steps[0] && page.steps[0].id; view.dirty = false;
       if (!Object.values(view.filters).some(Boolean)) view.activity = page.activity;
       if (page.task) view.record = page.task;
-      header(view); if (view.tab === "execution") { paintPage(view); if (view.selected) loadDetail(view,view.selected); } else render(view);
+      header(view); syncWorkFilter(view); if (view.tab === "execution") { paintPage(view); if (view.selected) loadDetail(view,view.selected); } else render(view);
       remember(view);
     }).catch(function (error) {
       if (active !== view || view.generation !== generation) return;
@@ -227,30 +237,40 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     var generation = view.itemGeneration = (view.itemGeneration || 0) + 1;
     return get("/api/tasks/item?task=" + encodeURIComponent(view.id)).then(function (data) { if (active !== view || view.itemGeneration !== generation) return; view.task = data.task; header(view); }).catch(function (error) { if (active === view && view.itemGeneration === generation) deny(view,error); });
   }
+  function loadCosts(view) {
+    var generation = view.costGeneration = (view.costGeneration || 0) + 1;
+    return get("/api/tasks/execution/costs?task=" + encodeURIComponent(view.id)).then(function (data) {
+      if (active !== view || view.costGeneration !== generation) return;
+      var changed = JSON.stringify(view.cost) !== JSON.stringify(data); view.cost = data;
+      if (changed && view.tab === "costs") render(view);
+    }).catch(function () {
+      if (active !== view || view.costGeneration !== generation) return;
+      var changed = view.cost !== null; view.cost = null;
+      if (changed && view.tab === "costs") render(view);
+    });
+  }
   function changeTab(tab) {
     if (!active) return;
     if (by("list")) active.listTop = by("list").scrollTop;
     active.tab = tab; remember(active); render(active);
-    if (tab === "costs") {
-      var view = active;
-      get("/api/tasks/execution/costs?task=" + encodeURIComponent(view.id)).then(function (data) { if (active === view) { view.cost = data; if (view.tab === "costs") render(view); } }).catch(function () { if (active === view) view.cost = null; });
-    }
+    if (tab === "costs") loadCosts(active);
     if (tab === "execution" && !active.page) loadPage(active,null,active.anchor || active.selected,true);
   }
   function open(id,push) {
     ensure(); returnFocus = document.activeElement;
-    var view = viewFor(id); active = view; openTask = id; root.hidden = false; view.detail = null; view.role = null;
-    get("/api/me").then(function (me) { if (active !== view) return; view.role = me.role || "viewer"; if (view.task && view.tab === "artifacts") render(view); if (view.detail && view.tab === "execution") syncApproval(view,view.detail,by("detail")); }).catch(function () {});
+    var view = viewFor(id); active = view; openTask = id; root.hidden = false; view.detail = null; view.role = null; view.cost = null; view.costGeneration = (view.costGeneration || 0) + 1;
+    var openGeneration = view.openGeneration = (view.openGeneration || 0) + 1;
+    get("/api/me").then(function (me) { if (active !== view || view.openGeneration !== openGeneration) return; view.role = me.role || "viewer"; if (view.task && view.tab === "artifacts") render(view); if (view.detail && view.tab === "execution") syncApproval(view,view.detail,by("detail")); }).catch(function () {});
     by("title").textContent = word("loading"); by("body").textContent = ""; by("status").textContent = ""; by("activity").textContent = ""; by("needs").textContent = "";
     var url = new URL(location.href); url.searchParams.set("task",id); if (push !== false && url.href !== location.href) history.pushState({},"",url);
     var wantedTab = url.searchParams.get("tasktab"), wantedStep = url.searchParams.get("step");
     if (["overview","execution","artifacts","costs"].indexOf(wantedTab) >= 0) view.tab = wantedTab;
     if (wantedStep) { if (wantedStep !== view.selected) view.anchor = wantedStep; view.selected = wantedStep; }
-    return loadItem(view).then(function () { if (active !== view || !view.task) return; render(view); by("tab-" + view.tab).focus(); return loadPage(view,null,view.anchor || view.selected,true); });
+    return loadItem(view).then(function () { if (active !== view || !view.task || view.openGeneration !== openGeneration) return; render(view); by("tab-" + view.tab).focus(); if (view.tab === "costs") loadCosts(view); return loadPage(view,null,view.anchor || view.selected,true); });
   }
   function close(update) {
     if (!root) return;
-    if (active) { if (by("list")) active.listTop = by("list").scrollTop; remember(active); active.detail = null; if (active.detailController) active.detailController.abort(); }
+    if (active) { if (by("list")) active.listTop = by("list").scrollTop; remember(active); active.detail = null; active.cost = null; active.costGeneration = (active.costGeneration || 0) + 1; if (active.detailController) active.detailController.abort(); }
     active = null; openTask = ""; root.hidden = true; by("body").textContent = "";
     if (update) { var url = new URL(location.href); ["task","tasktab","step"].forEach(function (key) { url.searchParams.delete(key); }); history.pushState({},"",url); }
     if (returnFocus && returnFocus.isConnected) returnFocus.focus();
@@ -267,7 +287,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
   }
   window.openTaskFocus = open;
   window.addEventListener("DOMContentLoaded",function () { if (active && active.task && active.tab !== "execution") render(active); });
-  window.refreshTaskExecution = function () { if (!active) return Promise.resolve(); var view = active; return loadItem(view).then(function () { if (active === view && view.task) return loadPage(view,null,view.anchor || view.selected,true); }); };
+  window.refreshTaskExecution = function () { if (!active) return Promise.resolve(); var view = active; return loadItem(view).then(function () { if (active === view && view.task && view.tab === "costs") loadCosts(view); if (active === view && view.task) return loadPage(view,null,view.anchor || view.selected,true); }); };
   window.taskFocusEvent = function (event) {
     if (!active || event.taskId !== active.id) return;
     if (event.type === "task_execution") { active.dirty = true; header(active); }
@@ -277,7 +297,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
   window.addEventListener("popstate",function () { var id = new URL(location.href).searchParams.get("task"); if (id) open(id,false); else close(false); });
   setInterval(function () {
     if (!active || document.visibilityState === "hidden") return;
-    var view = active; loadItem(view).then(function () { if (active !== view || !view.task || !view.page) return; return get("/api/tasks/execution?" + new URLSearchParams({ task:view.id,snapshot:view.page.snapshot,anchor:view.anchor || "" })).then(function (page) {
+    var view = active; loadItem(view).then(function () { if (active !== view || !view.task || !view.page) return; if (view.tab === "costs") loadCosts(view); return get("/api/tasks/execution?" + new URLSearchParams({ task:view.id,snapshot:view.page.snapshot,anchor:view.anchor || "" })).then(function (page) {
       if (active !== view) return;
       if (!page.steps.length && view.page.steps.length) { view.page = page; view.selected = ""; view.detail = null; if (view.tab === "execution") render(view); }
       else if (view.selected && view.tab === "execution") loadDetail(view,view.selected,true);

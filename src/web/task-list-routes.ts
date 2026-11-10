@@ -35,7 +35,7 @@ export class TaskListPages {
 }
 
 export function taskListRoute(route: string, url: URL, res: ServerResponse, deps: {
-  pages: TaskListPages; tasks: () => readonly Task[]; allowed: (task: Task) => boolean; detail: (task: Task) => unknown;
+  pages: TaskListPages; tasks: () => readonly Task[]; allowed: (task: Task) => boolean; detail: (task: Task) => unknown; summary?: (task: Task) => unknown;
   send: (res: ServerResponse, status: number, body: unknown) => void;
 }): boolean {
   if (route !== "GET /api/tasks/list" && route !== "GET /api/tasks/item") return false;
@@ -51,17 +51,18 @@ export function taskListRoute(route: string, url: URL, res: ServerResponse, deps
     const left = priority.indexOf(a.id), right = priority.indexOf(b.id);
     return left >= 0 && right >= 0 ? left - right : left >= 0 ? -1 : right >= 0 ? 1 : 0;
   });
+  const project = deps.summary ?? deps.detail;
   const ids = url.searchParams.get("ids");
   if (ids !== null) {
     const requested = ids.split(",").slice(0, 100), byId = new Map(rows.map(task => [task.id, task]));
-    deps.send(res, 200, { tasks: requested.flatMap(id => byId.has(id) ? [deps.detail(byId.get(id)!)] : []),
+    deps.send(res, 200, { tasks: requested.flatMap(id => byId.has(id) ? [project(byId.get(id)!)] : []),
       head: rows.slice(0, 50).map(task => task.id), total: rows.length }); return true;
   }
   const limit = Math.min(100, Math.max(1, Math.trunc(Number(url.searchParams.get("limit") ?? 50))));
   try {
     if (!Number.isFinite(limit)) throw new Error("invalid limit");
     const page = deps.pages.read(rows, JSON.stringify([inbox, priority, url.searchParams.get("agent"), url.searchParams.get("conversation")]), url.searchParams.get("cursor"), limit);
-    deps.send(res, 200, { ...page, tasks: page.tasks.map(deps.detail) });
+    deps.send(res, 200, { ...page, tasks: page.tasks.map(project) });
   } catch {
     deps.send(res, 409, { reset: true, ...apiError("task-execution-reset") });
   }

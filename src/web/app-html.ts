@@ -1,4 +1,4 @@
-import { TASK_BOARD_JS } from "./task-board-ui.ts";
+import { TASK_BOARD_JS, TASK_BOARD_STYLE } from "./task-board-ui.ts";
 import { TASK_FOCUS_JS, TASK_FOCUS_STYLE } from "./task-focus-ui.ts";
 import { EVENT_RECOVERY_JS } from "./event-recovery.ts";
 import { LIVE_TOOLS_JS } from "./live-tools.ts";
@@ -53,6 +53,7 @@ var MSG = {{@messages}}, MSG_LOCALE = "{{@locale}}";
 </script>
 <style>
 ${TASK_FOCUS_STYLE}
+${TASK_BOARD_STYLE}
   /* ── Lumen tokens ─────────────────────────────────────────────────────────── */
   @font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 400; font-display: swap;
     src: url("/assets/fonts/IBMPlexSans-Regular.woff2") format("woff2"); }

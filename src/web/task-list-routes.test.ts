@@ -1,16 +1,18 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createServer } from "node:http";
+import { taskBoardRecord } from "./task-board-record.ts";
 import { TaskStore } from "../host/tasks.ts";
 import { TaskListPages, taskListRoute } from "./task-list-routes.ts";
 
 test("1600-task board reads bounded pages across updates, scopes and authorization changes", async () => {
   const tasks = new TaskStore(null), pages = new TaskListPages();
   for (let n = 0; n < 1600; n++) tasks.create({ title: "Task " + n, requester: "p", assigneeId: "a", conversation: n % 2 ? "other" : "chat" });
+  for (let id = 1; id <= 50; id++) for (let move = 0; move < 30; move++) tasks.update("t" + id, { note: "n".repeat(500) }, "a");
   let allowed = true;
   const server = createServer((req,res) => {
     const url = new URL(req.url!,"http://localhost");
-    taskListRoute("GET " + url.pathname,url,res,{ pages,tasks:()=>tasks.list(),allowed:()=>allowed,detail:task=>task,
+    taskListRoute("GET " + url.pathname,url,res,{ pages,tasks:()=>tasks.list(),allowed:()=>allowed,detail:task=>task,summary:taskBoardRecord,
       send:(out,status,body)=>{out.writeHead(status,{"content-type":"application/json"});out.end(JSON.stringify(body));} });
   });
   await new Promise<void>(resolve=>server.listen(0,"127.0.0.1",resolve));
@@ -18,6 +20,7 @@ test("1600-task board reads bounded pages across updates, scopes and authorizati
   const read = async (query:string) => { const response=await fetch(base+query); return {status:response.status,body:await response.json() as { tasks: {id:string}[]; task?:{id:string}; total:number; nextCursor:string|null }}; };
   try {
     const first = await read("/api/tasks/list?limit=50&priority=t1");
+    assert.ok(JSON.stringify(first.body).length < 50000, "board previews exclude thirty-entry histories even for heavily updated tasks");
     assert.equal(first.body.total,1600); assert.equal(first.body.tasks.length,50); assert.equal(first.body.tasks[0]!.id,"t1");
     const ids = first.body.tasks.map(task=>task.id);
     tasks.update("t1",{note:"A live update must not invalidate the retained list of ids"},"a");

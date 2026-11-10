@@ -1,43 +1,24 @@
 /** Keyed, paged board rows; a refresh never replaces the entire list (INV-1786). */
+export const TASK_BOARD_STYLE = String.raw`
+.task-row{padding:var(--sp-3) var(--sp-4);border-bottom:1px solid var(--border)}.task-row.is-open{background:var(--surface)}.task-row-head{align-items:baseline}.task-row-head .chip{font-size:var(--fs-xs)}.task-id{font-size:var(--fs-xs);color:var(--muted);text-decoration:none}.task-title{flex:1;min-width:0;font-size:var(--fs-md);font-weight:500;color:var(--text);text-decoration:none;overflow-wrap:anywhere}.task-meta,.task-attention{padding-left:var(--sp-5);font-size:var(--fs-xs)}.task-warn{color:var(--warn)}.task-danger{color:var(--danger)}.task-muted{color:var(--muted)}.task-select-field{margin:0}.task-select-field select{font-size:var(--fs-xs);height:var(--sp-5);padding:0 var(--sp-3);background-position:right var(--sp-1) center}.task-status-doing{color:var(--accent)}.task-status-blocked{color:var(--warn)}.task-status-review{color:var(--accent-2)}.task-status-done{color:var(--success)}
+`;
 export const TASK_BOARD_JS = String.raw`function taskBoardMarkup(t, mark) {
-        var assignee = t.assigneeId ? nameOf(t.assigneeId) : "{{ui.app.unassigned}}";
-        var reviewer = t.reviewerId ? " {{ui.app.review-by}} " + esc(nameOf(t.reviewerId)) : "";
-        var last = t.history && t.history.length ? t.history[t.history.length - 1] : null;
-        var lastNote = last && last.note ? esc(last.note) : "";
-        var open = t.id === openTask;
-        var proposed = t.proposedBy
-          ? ' <span class="chip" style="font-size:10px">{{ui.app.proposed}}</span>' +
-            ' <button class="btn sm accent" data-commit="' + esc(t.id) + '" title="{{ui.app.make-this-proposal-real-work}}">{{ui.app.commit}}</button>' + (t.status !== "dropped" ? ' <button class="btn sm ghost" data-dismiss="' + esc(t.id) + '" title="{{ui.app.not-worth-doing-closes-it}}">{{ui.app.dismiss}}</button>' : "") + (t.discovery ? ' <span class="chip" style="font-size:10px" title="' + esc(t.discovery.evidence) + '">' + esc(t.discovery.kind) + " {{ui.app.from-3}} " + esc(t.discovery.source) + (t.discovery.whyNow ? " — " + esc(t.discovery.whyNow) : "") + "</span>" : "")
-          : "";
-        // Due, ageing and a pending close (INV-527/529): said on the row, so an overdue or
-        // idle task is not one more line that looks like every other.
-        var live = t.status !== "done" && t.status !== "dropped";
-        var overdue = live && t.due && Date.parse(t.due) < Date.now();
-        var dueChip = t.due ? ' <span class="chip" style="font-size:10px' + (overdue ? ';color:var(--danger)' : '') + '" title="{{ui.app.due}}">' + (overdue ? "{{ui.app.overdue}} " : "{{ui.app.due}} ") + esc(String(t.due).slice(0, 10)) + "</span>" : "";
-        var agingChip = live && t.aging ? ' <span class="chip" style="font-size:10px;color:var(--warn)" title="{{ui.app.nudged}} ' + t.aging.nudges + ' time(s), ' + esc(t.aging.reason) + '">{{ui.app.nudged}} ' + t.aging.nudges + "/2</span>" : "";
-        var closeChip = live && t.closeProposal
-          ? ' <span class="chip" style="font-size:10px;color:var(--warn)" title="' + esc(t.closeProposal.reason) + '">{{ui.app.close-proposed-by}} ' + esc(nameOf(t.closeProposal.by)) + "{{ui.app.closes}} " + esc(String(t.closeProposal.decideBy).slice(0, 16).replace("T", " ")) + "</span>" +
-            ' <button class="btn ghost sm" data-oppose="' + esc(t.id) + '">{{ui.app.keep-open}}</button>'
-          : "";
-        // Waiting on somebody, or asked to come back later (INV-532): both say why this
-        // one is not late, which is what a person reading a row of overdue chips needs.
-        var waitingChip = live && t.waitingOn ? ' <span class="chip" style="font-size:10px" title="{{ui.app.waiting-on-somebody-outside-this}}">{{ui.app.waiting-on}} ' + esc(String(t.waitingOn).slice(0, 40)) + "</span>" : "";
-        var snoozeChip = live && t.snoozeUntil && Date.parse(t.snoozeUntil) > Date.now() ? ' <span class="chip" style="font-size:10px;color:var(--muted)" title="{{ui.app.quiet-until-then}}">{{ui.app.not-until}} ' + esc(String(t.snoozeUntil).slice(0, 10)) + "</span>" : "";
-        proposed += dueChip + waitingChip + snoozeChip + agingChip + closeChip + (window.taskDepsChip ? window.taskDepsChip(t) : "") + (live && window.exceptionRetryHtml ? window.exceptionRetryHtml(t) : ""); // what it waits on and what waits on it (INV-1740, task-deps-ui.ts); Retry what failed on it (INV-1741)
-        return '<div style="padding:10px 16px;border-bottom:1px solid var(--border)' +
-            (open ? ";background:var(--surface)" : "") + '">' +
-          '<div style="display:flex;gap:9px;align-items:baseline">' +
-            '<a href="#" data-open="' + esc(t.id) + '" class="mono" style="font-size:11px;color:var(--muted);text-decoration:none">' + esc(t.id) + "</a>" +
-            '<a href="#" data-open="' + esc(t.id) + '" style="flex:1;font-size:13px;font-weight:500;color:var(--text);text-decoration:none">' + esc(t.title) + "</a>" + proposed + (t.level ? '<select data-level="' + esc(t.id) + '" title="How far the AI may take this alone (INV-1650): L1 tidy · L2 propose · L3 partial · L4 do it, outward steps confirmed · L5 end to end — set by ' + esc(t.levelBy || "rule") + '" style="height:24px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--muted);font-size:11px">' + [1, 2, 3, 4, 5].map(function (l) { return '<option value="' + l + '"' + (l === t.level ? " selected" : "") + ">L" + l + "</option>"; }).join("") + "</select>" : "") +
-            '<select data-task="' + esc(t.id) + '" style="height:24px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:' + taskStatusColor(t.status) + ';font-size:11px">' +
-              TASK_STATUSES.map(function (s) {
-                return '<option value="' + s + '"' + (s === t.status ? " selected" : "") + ">" + s + "</option>";
-              }).join("") +
-            "</select>" +
-          "</div>" +
-          '<div class="dim" style="font-size:11px;padding-left:26px">' + esc(assignee) + reviewer +
-            (lastNote ? ' — <span style="font-style:italic">' + lastNote + "</span>" : "") + "</div>" + (mark ? '<div style="padding-left:26px">' + mark + "</div>" : "") +
-        "</div>";
+  var assignee = t.assigneeId ? nameOf(t.assigneeId) : "{{ui.app.unassigned}}";
+  var reviewer = t.reviewerId ? " {{ui.app.review-by}} " + esc(nameOf(t.reviewerId)) : "";
+  var last = t.history && t.history.length ? t.history[t.history.length - 1] : null;
+  var lastNote = last && last.note ? esc(last.note) : "";
+  var proposed = t.proposedBy ? ' <span class="chip ui-badge">{{ui.app.proposed}}</span> <button class="btn sm accent" data-commit="' + esc(t.id) + '" title="{{ui.app.make-this-proposal-real-work}}">{{ui.app.commit}}</button>' + (t.status !== "dropped" ? ' <button class="btn sm ghost" data-dismiss="' + esc(t.id) + '" title="{{ui.app.not-worth-doing-closes-it}}">{{ui.app.dismiss}}</button>' : '') + (t.discovery ? ' <span class="chip ui-badge" title="' + esc(t.discovery.evidence) + '">' + esc(t.discovery.kind) + ' {{ui.app.from-3}} ' + esc(t.discovery.source) + (t.discovery.whyNow ? ' — ' + esc(t.discovery.whyNow) : '') + '</span>' : '') : '';
+  var live = t.status !== "done" && t.status !== "dropped";
+  var overdue = live && t.due && Date.parse(t.due) < Date.now();
+  var dueChip = t.due ? ' <span class="chip ui-badge' + (overdue ? ' task-danger' : '') + '" title="{{ui.app.due}}">' + (overdue ? '{{ui.app.overdue}} ' : '{{ui.app.due}} ') + esc(String(t.due).slice(0,10)) + '</span>' : '';
+  var agingChip = live && t.aging ? ' <span class="chip ui-badge task-warn" title="{{ui.app.nudged}} ' + t.aging.nudges + '/2">{{ui.app.nudged}} ' + t.aging.nudges + '/2</span>' : '';
+  var closeChip = live && t.closeProposal ? ' <span class="chip ui-badge task-warn" title="' + esc(t.closeProposal.reason) + '">{{ui.app.close-proposed-by}} ' + esc(nameOf(t.closeProposal.by)) + '{{ui.app.closes}} ' + esc(String(t.closeProposal.decideBy).slice(0,16).replace('T',' ')) + '</span> <button class="btn ghost sm" data-oppose="' + esc(t.id) + '">{{ui.app.keep-open}}</button>' : '';
+  var waitingChip = live && t.waitingOn ? ' <span class="chip ui-badge" title="{{ui.app.waiting-on-somebody-outside-this}}">{{ui.app.waiting-on}} ' + esc(String(t.waitingOn).slice(0,40)) + '</span>' : '';
+  var snoozeChip = live && t.snoozeUntil && Date.parse(t.snoozeUntil) > Date.now() ? ' <span class="chip ui-badge task-muted" title="{{ui.app.quiet-until-then}}">{{ui.app.not-until}} ' + esc(String(t.snoozeUntil).slice(0,10)) + '</span>' : '';
+  proposed += dueChip + waitingChip + snoozeChip + agingChip + closeChip + (window.taskDepsChip ? window.taskDepsChip(t) : '') + (live && window.exceptionRetryHtml ? window.exceptionRetryHtml(t) : '');
+  var level = t.level ? '<div class="field task-select-field ui-w-xs"><select data-level="' + esc(t.id) + '" title="{{ui.tf.autonomy}}">' + [1,2,3,4,5].map(function (n) { return '<option value="' + n + '"' + (n === t.level ? ' selected' : '') + '>L' + n + '</option>'; }).join('') + '</select></div>' : '';
+  var status = '<div class="field task-select-field ui-w-sm"><select data-task="' + esc(t.id) + '" class="task-status-' + esc(t.status) + '">' + TASK_STATUSES.map(function (value) { return '<option value="' + value + '"' + (value === t.status ? ' selected' : '') + '>' + value + '</option>'; }).join('') + '</select></div>';
+  return '<div class="task-row' + (t.id === openTask ? ' is-open' : '') + '"><div class="ui-row task-row-head"><a href="#" data-open="' + esc(t.id) + '" class="mono task-id">' + esc(t.id) + '</a><a href="#" data-open="' + esc(t.id) + '" class="task-title">' + esc(t.title) + '</a>' + proposed + level + status + '</div><div class="dim task-meta">' + esc(assignee) + reviewer + (lastNote ? ' — <em>' + lastNote + '</em>' : '') + '</div>' + (mark ? '<div class="task-attention">' + mark + '</div>' : '') + '</div>';
 }
 var taskBoardState = { ids: [], nodes: new Map(), cursor: null, next: null, stack: [], query: "", inbox: false, scope: null, loading: null, dirty: false, total: 0 };
 function taskBoardPager() {
