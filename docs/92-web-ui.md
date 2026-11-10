@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: web-ui
-     updated: 2026-11-03
+     updated: 2026-11-10
 -->
 # The web UI's visual rules: type, spacing, components
 
@@ -59,7 +59,36 @@ title. Space between related controls is `--sp-2`, between groups `--sp-3`, and 
 - Don't use `prompt()`, `alert()` for input, or anything else the desktop app does not
   implement.
 
-## 4. Checking
+## 4. Panel headers
+
+`src/web/pane-header.ts` owns the shared `.paneheader` layout. A panel's available width,
+not the outer window width, determines wrapping. Identity (`.lead`) and actions
+(`.headactions`) each wrap within their own bounds; the groups also wrap onto separate rows.
+Header height follows its content. Do not restore a fixed height or an unshrinkable action
+group, and do not fix collisions by reducing font size or clipping controls.
+
+Long identity text may ellipsize. Action labels and runtime usage remain readable by
+wrapping. New controls, including those inserted after loading (configuration versions,
+task links, running state and Stop), belong to one of the groups and obey the same rule.
+Popovers anchor below the whole header and remain inside the panel's horizontal bounds.
+
+Window overflow is insufficient evidence: two descendants can overlap without making the
+document wider. Browser checks must assert that visible controls do not intersect and that
+children remain inside their group. Exercise both languages, long identity/version/usage,
+busy and idle states, narrow and wide panels, and enlarged text. Include keyboard activation
+and popovers so wrapping does not merely make a broken control look correct.
+
+## 5. First-use guidance and connection state
+
+An installation with retained agent conversation history and a task at review or done has
+reached the first-work milestone. Do not automatically reopen Set up when a box disconnects
+or credentials change. Those are current availability problems, visible in box status and
+Settings. Guide explicitly reopens the checklist; a used installation's offline box is
+described as offline, with a manage-connection action. Closing is remembered per installation
+in this browser and survives polling and reload. A different installation still receives its
+own first-use guide.
+
+## 6. Checking
 
 - `node --experimental-transform-types --test src/web/ui-style.test.ts` counts inline layout in
   the settings scripts.
@@ -67,3 +96,9 @@ title. Space between related controls is `--sp-2`, between groups `--sp-3`, and 
   dark, before and after, in a hidden Electron window.
 - The main page's own 338 inline styles predate this. They move to classes when their section is
   next changed, not in one sweep.
+- `npx playwright-core install chromium` then `npm run test:layout` runs an isolated production
+  server with anonymous local state, no box and no provider calls. CI runs this browser gate
+  separately from the hermetic unit suite. `UI_LAYOUT_BROWSER` can select an existing browser;
+  `UI_LAYOUT_OUTPUT` selects the directory for geometry results and screenshots (default:
+  ignored `research/ui-layout`). The check covers both panel headers and the first-use guide's
+  offline/completed/dismissed states. New header controls must be included in its geometry set.
