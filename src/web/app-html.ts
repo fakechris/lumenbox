@@ -1,3 +1,5 @@
+import { TASK_BOARD_JS } from "./task-board-ui.ts";
+import { TASK_FOCUS_JS, TASK_FOCUS_STYLE } from "./task-focus-ui.ts";
 import { EVENT_RECOVERY_JS } from "./event-recovery.ts";
 import { LIVE_TOOLS_JS } from "./live-tools.ts";
 
@@ -50,6 +52,7 @@ var MSG = {{@messages}}, MSG_LOCALE = "{{@locale}}";
 })();
 </script>
 <style>
+${TASK_FOCUS_STYLE}
   /* ── Lumen tokens ─────────────────────────────────────────────────────────── */
   @font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 400; font-display: swap;
     src: url("/assets/fonts/IBMPlexSans-Regular.woff2") format("woff2"); }
@@ -4593,6 +4596,7 @@ function refreshConversations(id) {
 // re-renders while the panel is open.
 setInterval(function () { if (current) refreshConversations(current); }, 5000);
 
+var taskConversationLink = document.createElement("button"); taskConversationLink.className = "btn sm ghost"; taskConversationLink.textContent = "{{ui.tf.taskContext}}"; taskConversationLink.onclick = function () { return window.openTasksForConversation(); }; $("foldall").before(taskConversationLink);
 $("foldall").onclick = function (event) {
   event.preventDefault();
   folded = !folded;
@@ -5744,76 +5748,12 @@ document.addEventListener("click", function (event) {
     // column. A task opens its card on the board beside this panel.
     var conversation = open.getAttribute("data-att-open");
     if (conversation) select(current, conversation);
-    else { openTask = open.getAttribute("data-att-task"); taskScrolled = false; showTab("tasks"); } // scrolled is reset so the board brings the card into view // the board is where a task opens; from the chat view that means switching to it
+    else if (open.getAttribute("data-att-task")) { window.openTaskFocus(open.getAttribute("data-att-task")); } else { showTab("tasks"); } // scrolled is reset so the board brings the card into view // the board is where a task opens; from the chat view that means switching to it
   }
 });
 
-function refreshTasks() {
-  // What needs me is read first (INV-543) and then merged onto the board's rows (INV-1654): one list, the owed rows on top.
-  // The assignee picker doubles as the roster; refreshed with the board.
-  $("taskassign").innerHTML = '<option value="">{{ui.app.unassigned}}</option>' +
-    agents.map(function (a) { return '<option value="' + esc(a.id) + '">' + esc(a.name) + "</option>"; }).join("");
-  return renderAttention().then(function () { return fetch("/api/tasks"); })
-    .then(function (r) { return r.json(); })
-    .then(function (data) {
-      var tasks = data.tasks || [];
-      if (!tasks.length) {
-        $("tasklist").innerHTML = '<div class="dim" style="padding:12px 16px;font-size:13px">{{ui.app.nothing-on-the-board-add}}</div>';
-        return;
-      }
-      // Owed rows first, then live statuses before closed, newest change first within a group (board-order.ts).
-      if (window.inboxOnly) tasks = tasks.filter(function (t) { return t.proposedBy && t.status !== "dropped"; }); // the inbox: proposals awaiting a person (INV-1652)
-      var att = window.lastAttention || {}, marks = {};
-      var rows = typeof boardOrder === "function" ? boardOrder(tasks, att.mine || [], att.theirs || []) : tasks.map(function (t) { return { task: t }; });
-      rows.forEach(function (r) { marks[r.task.id] = r.mine ? attentionRow(r.mine, true, true) : r.theirs ? attentionRow(r.theirs, false, true) : ""; });
-      $("tasklist").innerHTML = rows.map(function (r) { var t = r.task;
-        var assignee = t.assigneeId ? nameOf(t.assigneeId) : "{{ui.app.unassigned}}";
-        var reviewer = t.reviewerId ? " {{ui.app.review-by}} " + esc(nameOf(t.reviewerId)) : "";
-        var last = t.history && t.history.length ? t.history[t.history.length - 1] : null;
-        var lastNote = last && last.note ? esc(last.note) : "";
-        var open = t.id === openTask;
-        var proposed = t.proposedBy
-          ? ' <span class="chip" style="font-size:10px">{{ui.app.proposed}}</span>' +
-            ' <button class="btn sm accent" data-commit="' + esc(t.id) + '" title="{{ui.app.make-this-proposal-real-work}}">{{ui.app.commit}}</button>' + (t.status !== "dropped" ? ' <button class="btn sm ghost" data-dismiss="' + esc(t.id) + '" title="{{ui.app.not-worth-doing-closes-it}}">{{ui.app.dismiss}}</button>' : "") + (t.discovery ? ' <span class="chip" style="font-size:10px" title="' + esc(t.discovery.evidence) + '">' + esc(t.discovery.kind) + " {{ui.app.from-3}} " + esc(t.discovery.source) + (t.discovery.whyNow ? " — " + esc(t.discovery.whyNow) : "") + "</span>" : "")
-          : "";
-        // Due, ageing and a pending close (INV-527/529): said on the row, so an overdue or
-        // idle task is not one more line that looks like every other.
-        var live = t.status !== "done" && t.status !== "dropped";
-        var overdue = live && t.due && Date.parse(t.due) < Date.now();
-        var dueChip = t.due ? ' <span class="chip" style="font-size:10px' + (overdue ? ';color:var(--danger)' : '') + '" title="{{ui.app.due}}">' + (overdue ? "{{ui.app.overdue}} " : "{{ui.app.due}} ") + esc(String(t.due).slice(0, 10)) + "</span>" : "";
-        var agingChip = live && t.aging ? ' <span class="chip" style="font-size:10px;color:var(--warn)" title="{{ui.app.nudged}} ' + t.aging.nudges + ' time(s), ' + esc(t.aging.reason) + '">{{ui.app.nudged}} ' + t.aging.nudges + "/2</span>" : "";
-        var closeChip = live && t.closeProposal
-          ? ' <span class="chip" style="font-size:10px;color:var(--warn)" title="' + esc(t.closeProposal.reason) + '">{{ui.app.close-proposed-by}} ' + esc(nameOf(t.closeProposal.by)) + "{{ui.app.closes}} " + esc(String(t.closeProposal.decideBy).slice(0, 16).replace("T", " ")) + "</span>" +
-            ' <button class="btn ghost sm" data-oppose="' + esc(t.id) + '">{{ui.app.keep-open}}</button>'
-          : "";
-        // Waiting on somebody, or asked to come back later (INV-532): both say why this
-        // one is not late, which is what a person reading a row of overdue chips needs.
-        var waitingChip = live && t.waitingOn ? ' <span class="chip" style="font-size:10px" title="{{ui.app.waiting-on-somebody-outside-this}}">{{ui.app.waiting-on}} ' + esc(String(t.waitingOn).slice(0, 40)) + "</span>" : "";
-        var snoozeChip = live && t.snoozeUntil && Date.parse(t.snoozeUntil) > Date.now() ? ' <span class="chip" style="font-size:10px;color:var(--muted)" title="{{ui.app.quiet-until-then}}">{{ui.app.not-until}} ' + esc(String(t.snoozeUntil).slice(0, 10)) + "</span>" : "";
-        proposed += dueChip + waitingChip + snoozeChip + agingChip + closeChip + (window.taskDepsChip ? window.taskDepsChip(t) : "") + (live && window.exceptionRetryHtml ? window.exceptionRetryHtml(t) : ""); // what it waits on and what waits on it (INV-1740, task-deps-ui.ts); Retry what failed on it (INV-1741)
-        return '<div style="padding:10px 16px;border-bottom:1px solid var(--border)' +
-            (open ? ";background:var(--surface)" : "") + '">' +
-          '<div style="display:flex;gap:9px;align-items:baseline">' +
-            '<a href="#" data-open="' + esc(t.id) + '" class="mono" style="font-size:11px;color:var(--muted);text-decoration:none">' + esc(t.id) + "</a>" +
-            '<a href="#" data-open="' + esc(t.id) + '" style="flex:1;font-size:13px;font-weight:500;color:var(--text);text-decoration:none">' + esc(t.title) + "</a>" + proposed + (t.level ? '<select data-level="' + esc(t.id) + '" title="How far the AI may take this alone (INV-1650): L1 tidy · L2 propose · L3 partial · L4 do it, outward steps confirmed · L5 end to end — set by ' + esc(t.levelBy || "rule") + '" style="height:24px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--muted);font-size:11px">' + [1, 2, 3, 4, 5].map(function (l) { return '<option value="' + l + '"' + (l === t.level ? " selected" : "") + ">L" + l + "</option>"; }).join("") + "</select>" : "") +
-            '<select data-task="' + esc(t.id) + '" style="height:24px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:' + taskStatusColor(t.status) + ';font-size:11px">' +
-              TASK_STATUSES.map(function (s) {
-                return '<option value="' + s + '"' + (s === t.status ? " selected" : "") + ">" + s + "</option>";
-              }).join("") +
-            "</select>" +
-          "</div>" +
-          '<div class="dim" style="font-size:11px;padding-left:26px">' + esc(assignee) + reviewer +
-            (lastNote ? ' — <span style="font-style:italic">' + lastNote + "</span>" : "") + "</div>" + (marks[t.id] ? '<div style="padding-left:26px">' + marks[t.id] + "</div>" : "") +
-          (open ? taskDetail(t) : "") +
-        "</div>";
-      }).join("");
-      if (openTask) {
-        var row = document.querySelector('[data-open="' + openTask + '"]');
-        if (row && !taskScrolled) { row.scrollIntoView({ block: "start" }); taskScrolled = true; } // from the top: the card below it is the point (INV-1654)
-      }
-    })
-    .catch(function () {});
-}
+${TASK_FOCUS_JS}
+${TASK_BOARD_JS}
 
 document.getElementById("tasklist").addEventListener("click", function (event) {
   var id = event.target.getAttribute && event.target.getAttribute("data-oppose");
@@ -5843,9 +5783,7 @@ document.getElementById("tasklist").addEventListener("click", function (event) {
   var id = target.getAttribute("data-open");
   if (id) {
     event.preventDefault();
-    openTask = openTask === id ? "" : id;
-    taskScrolled = true;
-    refreshTasks();
+    window.openTaskFocus(id);
     return;
   }
   var commitId = target.getAttribute("data-commit"), dismissId = target.getAttribute("data-dismiss"); // a proposal is committed or dismissed with a click (INV-1652); a dismissed finding is not proposed again
@@ -6193,6 +6131,7 @@ ${LIVE_TOOLS_JS}
 
 stream.onmessage = function (raw) {
   var e = JSON.parse(raw.data);
+  if (window.taskFocusEvent) window.taskFocusEvent(e);
   if (liveReplay && (inView(e) || (e.type === "message_sent" && currentConversation === "main" && (e.fromId === current || e.toId === current)))) { liveReplay.events.push(e); return; }
   if (inView(e) && !unseenLiveText(e)) return;
   var line = !raw.skipFeed && activityLine(e);
@@ -7249,7 +7188,7 @@ setInterval(refresh, 15000);
 
 // A chat card's "open in the workshop" link lands here: the board, with that task
 // already open. Done after the first refresh so the roster is there to name people.
-if (openTask) showTab("tasks");
+if (openTask) { showTab("tasks"); window.openTaskFocus(openTask,false); }
 // ── the shelf and the Set up card (docs/39 §2, §4) ───────────────────────────────────
 function shelfCard(head, sub, action, dataAttr, preview) {
   return '<div class="shelfrow" style="padding:8px 4px;border-bottom:1px solid var(--border)">' +

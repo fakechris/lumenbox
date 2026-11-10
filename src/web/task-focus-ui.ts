@@ -1,0 +1,286 @@
+/** One task workspace, backed by the authorized execution projection (INV-1786). */
+export const TASK_FOCUS_STYLE = String.raw`
+html:has(#taskfocus:not([hidden])),body:has(> #taskfocus:not([hidden])){overflow:hidden}#taskfocus[hidden]{display:none}#taskfocus{position:fixed;inset:40px 0 0 224px;z-index:25;background:var(--bg);display:flex;flex-direction:column;min-width:0}
+.tf-head{padding:20px 28px 12px;border-bottom:1px solid var(--border);background:var(--surface)}.tf-top,.tf-status,.tf-pager,.tf-filters{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.tf-top{justify-content:space-between}.tf-head h1{font-size:clamp(20px,2.2vw,30px);line-height:1.25;font-weight:500;margin:14px 0 10px;max-width:1000px}.tf-status{font-size:12px}.tf-status b{font-weight:500}.tf-status span{display:inline-flex;gap:6px;align-items:center}.tf-status i{width:6px;height:6px;border-radius:50%;background:var(--accent)}.tf-activity{font-size:12px;line-height:1.7;margin-top:10px;color:var(--text-soft)}.tf-needs{padding:10px 0;color:var(--warn)}
+.tf-tabs{display:flex;gap:20px;margin-top:14px}.tf-tabs button{background:none;border:0;border-bottom:2px solid transparent;padding:8px 0;font:inherit;font-size:13px;color:var(--muted);cursor:pointer}.tf-tabs button[aria-selected=true]{color:var(--text);border-color:var(--accent)}.tf-tabs button:focus-visible,.tf-step:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.tf-body{flex:1;min-height:0;overflow:auto}.tf-overview{max-width:1000px;padding:24px 28px;line-height:1.65}.tf-overview h2{font-size:14px;margin:0 0 10px;font-weight:600}.tf-overview section{margin-bottom:26px}.tf-overview p{white-space:pre-wrap;margin:6px 0}.tf-note{font-size:12px;color:var(--muted);line-height:1.6}.tf-execution{height:100%;display:flex;flex-direction:column}.tf-filters{padding:12px 24px;border-bottom:1px solid var(--border);font-size:12px}.tf-filters label{display:flex;gap:6px;align-items:center}.tf-filters select{font:inherit;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px;max-width:180px}.tf-split{display:grid;grid-template-columns:minmax(280px,38%) minmax(0,1fr);flex:1;min-height:0}.tf-list{overflow:auto;border-right:1px solid var(--border);padding:8px 0}.tf-step{display:block;width:100%;border:0;background:none;text-align:left;padding:10px 20px;color:var(--text);cursor:pointer;border-bottom:1px solid var(--border);font:inherit;font-size:12px}.tf-step:hover{background:var(--surface-hover)}.tf-step[aria-pressed=true]{background:var(--accent-soft)}.tf-step strong{display:block;font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tf-step small{display:block;color:var(--muted);font-size:11px;margin-top:5px}.tf-step .tf-failed,.tf-step .tf-unknown{color:var(--danger)}.tf-group{padding:12px 20px 5px;font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}.tf-detail{overflow:auto;padding:20px 26px;min-width:0}.tf-detail h2{font-size:17px;font-weight:500;margin:0 0 10px}.tf-detail h3{font-size:12px;font-weight:600;margin:22px 0 6px}.tf-detail pre{font-size:12px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--code-bg);color:var(--code-text);padding:12px;border-radius:4px}.tf-detail code{overflow-wrap:anywhere}.tf-pager{padding:10px 20px;border-top:1px solid var(--border);font-size:12px;justify-content:space-between}.tf-empty{padding:24px;color:var(--muted);font-size:13px}.tf-loading{color:var(--muted)}.tf-taskpager{padding:10px 16px;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center;font-size:12px}.tf-taskpager span{flex:1}
+@media(max-width:900px){#taskfocus{left:0}.tf-head{padding:14px 16px 8px}.tf-overview{padding:20px 16px}.tf-split{grid-template-columns:minmax(200px,42%) minmax(0,1fr)}.tf-detail{padding:16px}.tf-filters{padding:10px 16px}.tf-step{padding:10px 12px}}
+@media(max-width:600px){.tf-split{display:flex;flex-direction:column;overflow:auto}.tf-list{flex:0 0 36%;min-height:160px;max-height:260px;border-right:0;border-bottom:1px solid var(--border)}.tf-detail{flex:1;min-height:240px}.tf-tabs{gap:16px}.tf-head h1{font-size:20px}.tf-status{gap:8px}.tf-body{overflow:hidden}.tf-overview{height:100%;overflow:auto;box-sizing:border-box}}
+`;
+
+export const TASK_FOCUS_JS = String.raw`(function () {
+  var views = new Map(), active = null, root = null, returnFocus = null;
+  var TABS = ["overview","execution","artifacts","costs"];
+  function word(key) { return t("ui.tf." + key); }
+  function safe(text) { return esc(text == null ? "" : String(text)); }
+  function by(id) { return document.getElementById("tf-" + id); }
+  function get(path, signal) {
+    return fetch(path, { signal: signal }).then(function (response) {
+      return response.json().then(function (body) { if (!response.ok) { var error = new Error(body.error || word("error")); error.status = response.status; throw error; } return body; });
+    });
+  }
+  function remember(view) {
+    try { sessionStorage.setItem("lumen-task-view:" + view.id, JSON.stringify({ tab: view.tab, filters: view.filters, selected: view.selected, anchor: view.page && view.page.steps[0] && view.page.steps[0].id, listTop: view.listTop })); } catch (error) {}
+    if (active !== view) return;
+    var url = new URL(location.href); url.searchParams.set("task", view.id); url.searchParams.set("tasktab", view.tab);
+    if (view.selected) url.searchParams.set("step", view.selected); else url.searchParams.delete("step");
+    history.replaceState({}, "", url);
+  }
+  function ensure() {
+    if (root) return;
+    root = document.createElement("section"); root.id = "taskfocus"; root.hidden = true; root.setAttribute("aria-label", word("title"));
+    root.innerHTML = '<header class="tf-head"><div class="tf-top"><button class="btn sm ghost" data-tf-close>' + word("back") + '</button><span class="dim mono" id="tf-id"></span><button class="btn sm ghost" data-tf-conversation>' + word("conversation") + '</button></div><h1 id="tf-title"></h1><div id="tf-status" class="tf-status"></div><div id="tf-activity" class="tf-activity"></div><div id="tf-needs" class="tf-needs"></div><button class="btn sm ghost" id="tf-new" data-tf-refresh hidden>' + word("new") + '</button><nav class="tf-tabs" role="tablist">' + TABS.map(function (tab) { return '<button role="tab" id="tf-tab-' + tab + '" data-tf-tab="' + tab + '" aria-controls="tf-body">' + word(tab) + '</button>'; }).join("") + '</nav></header><div id="tf-body" class="tf-body" role="tabpanel"></div>';
+    document.body.appendChild(root);
+    root.addEventListener("click", click);
+    root.addEventListener("change", function (event) {
+      if (event.target.hasAttribute("data-tf-status") && active) {
+        var view = active;
+        fetch("/api/tasks/update",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({id:view.id,status:event.target.value})}).then(function (response) { return response.json().then(function (body) { if (!response.ok) throw new Error(body.error || word("error")); return body; }); }).then(function (body) {
+          if (body.note) feed(safe(body.note),"warn"); return window.refreshTaskExecution();
+        }).then(function () { if (active === view && view.task) render(view); }).catch(function (error) { if (active === view) { by("needs").textContent = error.message; loadItem(view); } });
+        return;
+      }
+      var filter = event.target.getAttribute("data-tf-filter"); if (!filter || !active) return;
+      active.filters[filter] = event.target.value; active.selected = ""; active.page = null; active.rowNodes = new Map(); remember(active); loadPage(active, null, null, true);
+    });
+    root.addEventListener("keydown", function (event) {
+      var tab = event.target.getAttribute("data-tf-tab");
+      if (tab && (event.key === "ArrowRight" || event.key === "ArrowLeft")) {
+        event.preventDefault(); var tabs = ["overview","execution","artifacts","costs"], index = tabs.indexOf(tab);
+        changeTab(tabs[(index + (event.key === "ArrowRight" ? 1 : 3)) % 4]); by("tab-" + active.tab).focus();
+      }
+      if (event.key === "Escape") close(true);
+    });
+  }
+  function viewFor(id) {
+    if (views.has(id)) return views.get(id);
+    var saved = {}; try { saved = JSON.parse(sessionStorage.getItem("lumen-task-view:" + id) || "{}"); } catch (error) {}
+    var view = { id: id, tab: saved.tab || "overview", filters: Object.fromEntries(["role","outcome","work"].filter(function (key) { return saved.filters && typeof saved.filters[key] === "string"; }).map(function (key) { return [key,saved.filters[key]]; })), selected: saved.selected || "", anchor: saved.anchor, listTop: saved.listTop,
+      rowNodes: new Map(), generation: 0, detailGeneration: 0, page: null, task: null, detail: null };
+    if (["overview","execution","artifacts","costs"].indexOf(view.tab) < 0) view.tab = "overview";
+    views.set(id, view); while (views.size > 8) views.delete(views.keys().next().value);
+    return view;
+  }
+  function connection() { return document.documentElement.dataset.connection || "reconnecting"; }
+  function status(task) {
+    if (task.pursuit && task.pursuit.status === "paused") return word("paused") + (task.pursuit.pausedReason ? " · " + t("ui.tf.pause." + task.pursuit.pausedReason) : "");
+    if (task.pursuit && task.pursuit.status === "verifying") return word("verifying");
+    var stage = task.stage || "";
+    return stage === "working" ? word("working") : stage === "working/queued" ? word("queued") : stage.indexOf("person/") === 0 ? word("needs") : task.status === "done" ? word("ended") : task.status === "dropped" ? word("dropped") : word("idle");
+  }
+  function actionName(step) {
+    if (!step) return word("noActivity");
+    var names = { read_file: "read", bash: "command", WebSearch: "search", web_search: "search", compacted: "compacted", retrying: "retrying" };
+    return (names[step.name] ? word(names[step.name]) : step.name) + (step.detail ? " · " + step.detail : "");
+  }
+  function header(view) {
+    if (active !== view || !view.task) return;
+    var task = view.task, activity = view.activity || {}, latest = view.liveAction || activity.current || activity.latest;
+    by("title").textContent = task.pursuit && task.pursuit.objective || task.title;
+    by("id").textContent = task.id;
+    var review = task.status === "review" ? word("review") : task.status === "done" ? word("ended") : task.status === "dropped" ? word("dropped") : word("pending");
+    var statuses = [["state",status(task)],["connection",word(connection())],["acceptance",review]];
+    root.querySelector("[data-tf-conversation]").disabled = !task.assigneeId;
+    by("status").innerHTML = statuses.map(function (pair) { return '<span><i></i><b>' + word(pair[0]) + '</b> ' + safe(pair[1]) + '</span>'; }).join("");
+    by("activity").textContent = word("action") + ": " + actionName(latest) + (latest && (latest.endedAt || latest.startedAt) ? " · " + word("activity") + " " + new Date(latest.endedAt || latest.startedAt).toLocaleString() : "");
+    var needs = (window.lastAttention && window.lastAttention.mine || []).filter(function (item) { return item.ref === task.id; });
+    by("needs").innerHTML = needs.map(function (item) { return attentionRow(item, true, true); }).join("");
+    by("new").hidden = !view.dirty;
+    ["overview","execution","artifacts","costs"].forEach(function (tab) { by("tab-" + tab).setAttribute("aria-selected", String(tab === view.tab)); by("tab-" + tab).tabIndex = tab === view.tab ? 0 : -1; });
+  }
+  function deny(view, error) {
+    if (active !== view) return;
+    view.generation++; view.detailGeneration++; if (view.detailController) view.detailController.abort();
+    view.detail = null; view.task = null; view.page = null; view.rowNodes.clear();
+    by("title").textContent = error.status === 403 || error.status === 404 ? word("denied") : word("error");
+    by("activity").textContent = ""; by("status").textContent = ""; by("needs").textContent = "";
+    by("body").innerHTML = '<div class="tf-empty"><button class="btn sm" data-tf-refresh>' + word("refresh") + '</button></div>';
+  }
+  function overview(view) {
+    var task = view.task, html = '<div class="tf-overview"><section><h2>' + word("goal") + '</h2><p>' + safe(task.description || task.title) + '</p>';
+    if (task.contract) html += '<p>' + safe(task.contract.outcome || "") + '</p>';
+    html += '</section><section><h2>' + word("state") + '</h2><p>' + safe(status(task)) + '</p>' + (window.taskProgressHtml ? window.taskProgressHtml(task) : '<p class="tf-note">' + word("phaseOnly") + '</p>') + '</section>';
+    var reply = view.record && view.record.reply;
+    if (reply) html += '<section><h2>' + word("latestReply") + '</h2><p>' + safe(reply.text) + '</p><div class="tf-note">' + safe(reply.by) + ' · ' + safe(new Date(reply.at).toLocaleString()) + '</div></section>';
+    return html + '<section class="tf-note">' + word("coverage") + '</section></div>';
+  }
+  function artifacts(view) {
+    var task = view.task, checks = task.pursuit && task.pursuit.checklist || [];
+    var html = '<div class="tf-overview"><section><h2>' + word("artifacts") + '</h2>' + (window.deliverablesHtml && window.deliverablesHtml(task) || '<p class="tf-note">' + word("noArtifacts") + '</p>') + '</section><section><h2>' + word("reviewer") + '</h2><p>' + safe(task.reviewerId ? nameOf(task.reviewerId) || task.reviewerId : word("noReviewer")) + '</p></section>';
+    if (view.role === "admin" || view.role === "driver") {
+      var states = {open:"queued",doing:"working",blocked:"needs",review:"review",done:"ended",dropped:"dropped"};
+      html += '<section><label>' + word("state") + ' <select data-tf-status>' + Object.keys(states).map(function (value) { return '<option value="' + value + '"' + (value === task.status ? ' selected' : '') + '>' + word(states[value]) + '</option>'; }).join("") + '</select></label></section>';
+    }
+    if (checks.length) html += '<section><h2>' + word("checklist") + '</h2>' + checks.map(function (item) { return '<p>' + safe(item.text) + (item.verdict ? ' · ' + safe(item.verdict) : '') + '</p>'; }).join("") + '</section>';
+    ["claimAccountHtml","divisionHtml","taskDepsHtml","configVersionsHtml"].forEach(function (fn) { if (window[fn]) html += window[fn](task); });
+    if (task.recoveries && task.recoveries.length) html += '<section><h2>' + word("attempt") + '</h2>' + task.recoveries.map(function (attempt) { return '<p>' + safe(attempt.operationId) + ' · ' + word("attempt") + ' ' + attempt.attempt + ' · ' + safe(attempt.status) + '</p>'; }).join("") + '</section>';
+    return html + '</div>';
+  }
+  function costs(view) {
+    var pursuit = view.task.pursuit, html = '<div class="tf-overview"><section><h2>' + word("costs") + '</h2><p>' + word("noCost") + '</p></section>';
+    if (view.cost && view.cost.report.records > 0) {
+      var report = view.cost.report;
+      html += '<section><h2>' + word("estimated") + '</h2><p>' + (typeof report.money === "number" ? '$' + report.money.toFixed(4) : word("unknown")) + '</p><p>' + word("inputTokens") + ': ' + report.totals.inputTokens + ' · ' + word("outputTokens") + ': ' + report.totals.outputTokens + '</p><p class="tf-note">' + word("costScope") + ((view.cost.coverage === "partial" || report.compacted) ? ' · ' + word("partial") : '') + '</p></section>';
+    }
+    if (pursuit) html += '<section><h2>' + word("budget") + '</h2><p>' + safe(pursuit.spent && pursuit.spent.cost) + ' / ' + safe(pursuit.limits && pursuit.limits.cost) + '</p><p class="tf-note">' + word("weighted") + '</p><p>' + word("continuations") + ': ' + safe(pursuit.spent && pursuit.spent.continuations) + '</p></section>';
+    return html + '</div>';
+  }
+  function filters(view) {
+    var f = view.filters, groups = view.activity && view.activity.groups || [];
+    var work = Array.from(new Set(groups.map(function (g) { return g.workId; })));
+    function select(key, values) { return '<label>' + word(key) + '<select data-tf-filter="' + key + '"><option value="">' + word("all") + '</option>' + values.map(function (value) { return '<option value="' + safe(value) + '"' + (f[key] === value ? ' selected' : '') + '>' + (key === "work" ? safe(value.slice(0,12)) : word(value)) + '</option>'; }).join("") + '</select></label>'; }
+    return select("role",["executor","child","verifier"]) + select("outcome",["running","succeeded","failed","unknown","waiting","refused"]) + select("work",work);
+  }
+  function render(view) {
+    if (active !== view || !view.task) return;
+    header(view); by("body").setAttribute("aria-labelledby","tf-tab-" + view.tab);
+    if (view.tab !== "execution") { by("body").innerHTML = view.tab === "artifacts" ? artifacts(view) : view.tab === "costs" ? costs(view) : overview(view); return; }
+    by("body").innerHTML = '<div class="tf-execution"><div class="tf-filters">' + filters(view) + '</div><div class="tf-note" style="padding:8px 24px" id="tf-coverage"></div><div class="tf-split"><div id="tf-list" class="tf-list" aria-label="' + word("execution") + '"></div><article id="tf-detail" class="tf-detail"></article></div><div class="tf-pager"><button class="btn sm ghost" data-tf-prev>' + word("previous") + '</button><span id="tf-range"></span><button class="btn sm ghost" data-tf-next>' + word("next") + '</button></div></div>';
+    paintPage(view);
+    if (view.selected) loadDetail(view, view.selected); else by("detail").textContent = word("select");
+  }
+  function paintPage(view) {
+    if (active !== view || view.tab !== "execution" || !by("list")) return;
+    var list = by("list"), page = view.page;
+    if (!page) { list.innerHTML = '<div class="tf-empty">' + word("loading") + '</div>'; return; }
+    by("coverage").textContent = (page.coverage === "partial" ? word("partial") + ' · ' : '') + word("coverage");
+    by("range").textContent = page.from + '–' + page.to + ' / ' + page.total;
+    root.querySelector("[data-tf-prev]").disabled = !page.previousCursor; root.querySelector("[data-tf-next]").disabled = !page.nextCursor;
+    var retained = new Set(), lastGroup = "";
+    list.querySelectorAll(".tf-group,.tf-empty").forEach(function (node) { node.remove(); });
+    page.steps.forEach(function (step) {
+      retained.add(step.id);
+      var group = step.role + ' · ' + step.workId + ' · ' + step.conversation + ' · ' + step.attempt;
+      if (group !== lastGroup) { var label = document.createElement("div"); label.className = "tf-group"; label.textContent = word(step.role) + ' · ' + word("work") + ' ' + step.workId.slice(0,8) + ' · ' + word("attempt") + ' ' + step.attempt + ' · ' + step.conversation; list.appendChild(label); lastGroup = group; }
+      var node = view.rowNodes.get(step.id);
+      if (!node) { node = document.createElement("button"); node.type = "button"; node.className = "tf-step"; node.setAttribute("data-tf-step",step.id); view.rowNodes.set(step.id,node); }
+      var html = '<strong>' + safe(actionName(step)) + '</strong><small class="tf-' + step.outcome + '">' + word(step.outcome) + ' · ' + safe(new Date(step.startedAt || step.endedAt).toLocaleTimeString()) + '</small>';
+      if (node.innerHTML !== html) node.innerHTML = html;
+      node.setAttribute("aria-pressed",String(step.id === view.selected)); list.appendChild(node);
+    });
+    list.querySelectorAll("[data-tf-step]").forEach(function (node) { if (view.rowNodes.get(node.getAttribute("data-tf-step")) !== node) node.remove(); });
+    view.rowNodes.forEach(function (node,id) { if (!retained.has(id)) { node.remove(); view.rowNodes.delete(id); } });
+    if (!page.steps.length) list.innerHTML = '<div class="tf-empty">' + word("empty") + '</div>';
+    if (view.listTop !== undefined) list.scrollTop = view.listTop;
+  }
+  function paintDetail(view, detail) {
+    if (active !== view || view.tab !== "execution" || !by("detail")) return;
+    var panel = by("detail"); panel.textContent = "";
+    var h = document.createElement("h2"); h.textContent = actionName(detail); panel.appendChild(h);
+    var state = document.createElement("p"); state.className = "tf-note"; state.textContent = word(detail.role) + ' · ' + word("attempt") + ' ' + detail.attempt + ' · ' + word(detail.outcome); panel.appendChild(state);
+    var note = document.createElement("p"); note.className = "tf-note"; note.textContent = word("historical"); panel.appendChild(note);
+    if (detail.gate) { var gate = document.createElement("p"); gate.textContent = detail.gate.basis; panel.appendChild(gate); }
+    function section(title,text) { var label = document.createElement("h3"); label.textContent = word(title); var pre = document.createElement("pre"); pre.textContent = text; panel.appendChild(label); panel.appendChild(pre); }
+    if (detail.kind === "maintenance") section("result",JSON.stringify(detail.maintenance,null,2));
+    else { section("input",JSON.stringify(detail.input,null,2)); section("result",detail.result == null ? word("missing") : detail.result); }
+    if (detail.sourceExpired || detail.inputTruncated || detail.resultTruncated) { var warning = document.createElement("p"); warning.className = "tf-note"; warning.textContent = detail.sourceExpired ? word("expired") : word("truncated"); panel.appendChild(warning); }
+    var sources = document.createElement("details"), summary = document.createElement("summary"); summary.textContent = word("sources"); sources.appendChild(summary);
+    var code = document.createElement("pre"); code.textContent = [word("work") + ': ' + detail.workId,word("sourceTurn") + ': ' + detail.turnId,word("sourceExecution") + ': ' + detail.executionId].concat((detail.sourceRefs || []).concat(detail.parent ? [JSON.stringify(detail.parent)] : [])).join("\n"); sources.appendChild(code); panel.appendChild(sources);
+    syncApproval(view,detail,panel);
+  }
+  function syncApproval(view,detail,panel) {
+    if (view.role !== "admin" && view.role !== "driver") return;
+    if (detail.gate && detail.gate.approvalId) get("/api/policy").then(function (data) {
+      if (active !== view || view.selected !== detail.id || !panel || !panel.isConnected) return;
+      panel.querySelectorAll("[data-tf-approval]").forEach(function (node) { node.remove(); });
+      if (!(data.pending || []).some(function (item) { return item.id === detail.gate.approvalId; })) return;
+      var actions = document.createElement("div"); actions.setAttribute("data-tf-approval",""); actions.innerHTML = '<button class="btn sm" data-att-approve="' + safe(detail.gate.approvalId) + '">' + safe(t("consent.once")) + '</button> <button class="btn sm ghost" data-att-deny="' + safe(detail.gate.approvalId) + '">' + safe(t("consent.deny")) + '</button>'; panel.appendChild(actions);
+    }).catch(function () {});
+  }
+  function loadDetail(view,id,quiet) {
+    view.selected = id; remember(view);
+    if (!view.page || view.tab !== "execution") return Promise.resolve();
+    var generation = ++view.detailGeneration, snapshot = view.page.snapshot;
+    if (view.detailController) view.detailController.abort(); view.detailController = new AbortController();
+    if (!quiet) by("detail").textContent = word("loading");
+    by("list").querySelectorAll("[data-tf-step]").forEach(function (node) { node.setAttribute("aria-pressed",String(node.getAttribute("data-tf-step") === id)); });
+    return get("/api/tasks/execution/step?" + new URLSearchParams({ task:view.id,snapshot:snapshot,step:id }),view.detailController.signal).then(function (detail) {
+      if (active !== view || generation !== view.detailGeneration || !view.page || view.page.snapshot !== snapshot) return;
+      if (quiet && JSON.stringify(view.detail) === JSON.stringify(detail)) { syncApproval(view,detail,by("detail")); return; }
+      view.detail = detail; paintDetail(view,detail);
+    }).catch(function (error) {
+      if (error.name === "AbortError" || active !== view || generation !== view.detailGeneration) return;
+      if (error.status === 403 || error.status === 404) deny(view,error);
+      else { view.detail = null; if (by("detail")) by("detail").textContent = error.status === 409 ? word("expired") : word("error"); }
+    });
+  }
+  function loadPage(view,cursor,anchor,fresh,fallback) {
+    var generation = ++view.generation, query = { task:view.id };
+    Object.keys(view.filters).forEach(function (key) { if (view.filters[key]) query[key] = view.filters[key]; });
+    if (!fresh && view.page) query.snapshot = view.page.snapshot;
+    if (cursor) query.cursor = cursor; if (anchor) query.anchor = anchor;
+    return get("/api/tasks/execution?" + new URLSearchParams(query)).then(function (page) {
+      if (active !== view || view.generation !== generation) return;
+      view.page = page; view.pageCursor = cursor; view.anchor = page.steps[0] && page.steps[0].id; view.dirty = false;
+      if (!Object.values(view.filters).some(Boolean)) view.activity = page.activity;
+      if (page.task) view.record = page.task;
+      header(view); if (view.tab === "execution") { paintPage(view); if (view.selected) loadDetail(view,view.selected); } else render(view);
+      remember(view);
+    }).catch(function (error) {
+      if (active !== view || view.generation !== generation) return;
+      if (error.status === 403 || error.status === 404) { deny(view,error); return; }
+      if (error.status === 409 && !fallback) { view.selected = ""; view.rowNodes.clear(); return loadPage(view,null,null,true,true).then(function () { if (active === view && by("coverage")) by("coverage").textContent = word("expired"); }); }
+      if (view.tab === "execution" && by("list")) by("list").innerHTML = '<div class="tf-empty">' + word("error") + '</div>';
+    });
+  }
+  function loadItem(view) {
+    var generation = view.itemGeneration = (view.itemGeneration || 0) + 1;
+    return get("/api/tasks/item?task=" + encodeURIComponent(view.id)).then(function (data) { if (active !== view || view.itemGeneration !== generation) return; view.task = data.task; header(view); }).catch(function (error) { if (active === view && view.itemGeneration === generation) deny(view,error); });
+  }
+  function changeTab(tab) {
+    if (!active) return;
+    if (by("list")) active.listTop = by("list").scrollTop;
+    active.tab = tab; remember(active); render(active);
+    if (tab === "costs") {
+      var view = active;
+      get("/api/tasks/execution/costs?task=" + encodeURIComponent(view.id)).then(function (data) { if (active === view) { view.cost = data; if (view.tab === "costs") render(view); } }).catch(function () { if (active === view) view.cost = null; });
+    }
+    if (tab === "execution" && !active.page) loadPage(active,null,active.anchor || active.selected,true);
+  }
+  function open(id,push) {
+    ensure(); returnFocus = document.activeElement;
+    var view = viewFor(id); active = view; openTask = id; root.hidden = false; view.detail = null; view.role = null;
+    get("/api/me").then(function (me) { if (active !== view) return; view.role = me.role || "viewer"; if (view.task && view.tab === "artifacts") render(view); if (view.detail && view.tab === "execution") syncApproval(view,view.detail,by("detail")); }).catch(function () {});
+    by("title").textContent = word("loading"); by("body").textContent = ""; by("status").textContent = ""; by("activity").textContent = ""; by("needs").textContent = "";
+    var url = new URL(location.href); url.searchParams.set("task",id); if (push !== false && url.href !== location.href) history.pushState({},"",url);
+    var wantedTab = url.searchParams.get("tasktab"), wantedStep = url.searchParams.get("step");
+    if (["overview","execution","artifacts","costs"].indexOf(wantedTab) >= 0) view.tab = wantedTab;
+    if (wantedStep) { if (wantedStep !== view.selected) view.anchor = wantedStep; view.selected = wantedStep; }
+    return loadItem(view).then(function () { if (active !== view || !view.task) return; render(view); by("tab-" + view.tab).focus(); return loadPage(view,null,view.anchor || view.selected,true); });
+  }
+  function close(update) {
+    if (!root) return;
+    if (active) { if (by("list")) active.listTop = by("list").scrollTop; remember(active); active.detail = null; if (active.detailController) active.detailController.abort(); }
+    active = null; openTask = ""; root.hidden = true; by("body").textContent = "";
+    if (update) { var url = new URL(location.href); ["task","tasktab","step"].forEach(function (key) { url.searchParams.delete(key); }); history.pushState({},"",url); }
+    if (returnFocus && returnFocus.isConnected) returnFocus.focus();
+  }
+  function click(event) {
+    if (!active) return;
+    var node = event.target.closest("button"); if (!node) return;
+    if (node.hasAttribute("data-tf-close")) { close(true); return; }
+    if (node.hasAttribute("data-tf-conversation")) { var task = active.task; close(true); if (task && task.assigneeId) { select(task.assigneeId,task.conversation || "main"); showTab("desktop"); } return; }
+    var tab = node.getAttribute("data-tf-tab"), step = node.getAttribute("data-tf-step");
+    if (tab) { changeTab(tab); return; } if (step) { loadDetail(active,step); return; }
+    if (node.hasAttribute("data-tf-refresh")) { var view = active; loadItem(view).then(function () { if (active !== view || !view.task) return; render(view); loadPage(view,null,view.anchor || view.selected,true); }); }
+    if (active.page && (node.hasAttribute("data-tf-next") || node.hasAttribute("data-tf-prev"))) { active.listTop = 0; active.selected = ""; active.detail = null; if (by("detail")) by("detail").textContent = word("select"); loadPage(active,node.hasAttribute("data-tf-next") ? active.page.nextCursor : active.page.previousCursor,null,false); }
+  }
+  window.openTaskFocus = open;
+  window.addEventListener("DOMContentLoaded",function () { if (active && active.task && active.tab !== "execution") render(active); });
+  window.refreshTaskExecution = function () { if (!active) return Promise.resolve(); var view = active; return loadItem(view).then(function () { if (active === view && view.task) return loadPage(view,null,view.anchor || view.selected,true); }); };
+  window.taskFocusEvent = function (event) {
+    if (!active || event.taskId !== active.id) return;
+    if (event.type === "task_execution") { active.dirty = true; header(active); }
+    if (event.type === "tool_start" || event.type === "tool_end") { active.liveAction = { name:event.tool,detail:toolDetail(event.tool,event.input || {}),startedAt:new Date().toISOString() }; header(active); }
+  };
+  window.addEventListener("lumen-connection",function () { if (active) header(active); });
+  window.addEventListener("popstate",function () { var id = new URL(location.href).searchParams.get("task"); if (id) open(id,false); else close(false); });
+  setInterval(function () {
+    if (!active || document.visibilityState === "hidden") return;
+    var view = active; loadItem(view).then(function () { if (active !== view || !view.task || !view.page) return; return get("/api/tasks/execution?" + new URLSearchParams({ task:view.id,snapshot:view.page.snapshot,anchor:view.anchor || "" })).then(function (page) {
+      if (active !== view) return;
+      if (!page.steps.length && view.page.steps.length) { view.page = page; view.selected = ""; view.detail = null; if (view.tab === "execution") render(view); }
+      else if (view.selected && view.tab === "execution") loadDetail(view,view.selected,true);
+    }).catch(function (error) { if (error.status === 409) return window.refreshTaskExecution(); if (error.status === 403 || error.status === 404) deny(view,error); }); });
+  },8000);
+})();`;

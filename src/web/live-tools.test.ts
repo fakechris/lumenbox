@@ -10,6 +10,7 @@ function page() {
   const handler = html.slice(html.indexOf("stream.onmessage = function"), html.indexOf("stream.onerror"));
   const helpers = /\/\* Live tool calls \*\/([\s\S]+?)\/\* End live tool calls \*\//.exec(html)?.[1] ?? "";
   const scope = {
+    window: {},
     stream: {} as { onmessage: (raw: { data: string }) => void },
     current: "a", currentConversation: "main", openAgent: null, openWork: null,
     openCall: new Map(), thread: [] as { kind: string; done?: boolean; calls: { result: string; isError?: boolean }[] }[],
