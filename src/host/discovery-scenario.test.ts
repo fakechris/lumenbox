@@ -42,7 +42,7 @@ test("three findings become three proposals once; a person commits one; the next
 
   const second = await runEpisode({ team: [{ name: "Scout" }], says: ["Look around again."], tasks, script });
   assert.ok(second.observations.some(o => o.kind === "turn"));
-  assert.equal(tasks.list().length, 3, "nothing was proposed twice — the dismissed one included");
+  assert.equal(tasks.list().filter(task=>!task.workRoot?.automatic).length, 3, "nothing was proposed twice — the dismissed one included");
   // The scripted agent tried to propose again (the scenario does not keep tool results, so the attempts are the evidence) and the board let none through.
   const attempts = second.observations.filter(o => o.kind === "call" && (o as { name?: string }).name === "Tasks");
   assert.ok(attempts.length >= 1, "the second round did try");

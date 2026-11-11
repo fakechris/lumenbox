@@ -1,3 +1,4 @@
+import {workRootSummary} from "../host/work-root-store.ts";
 import { summarizeTaskProgress, type TaskProgressSummary, type ProgressSourceAccess } from "../host/task-progress.ts";
 /**
  * A task as the record has it, for a caller that reads facts rather than prose (INV-1506, docs/90 §3.1).
@@ -36,6 +37,7 @@ export interface PursuitRecord {
 }
 
 export interface TaskRecord {
+  work?:ReturnType<typeof workRootSummary>;
   progress?: TaskProgressSummary;
   id: string;
   title: string;
@@ -104,6 +106,7 @@ export function taskRecord(task: Task, deps: { progressAccess?: ProgressSourceAc
   const forks = deps.forksOf?.(task.id) ?? [];
   const reply = lastReply(task);
   return {
+    work:workRootSummary(task),
     progress: summarizeTaskProgress(task, 16, deps.progressAccess),
     id: task.id,
     title: task.title,

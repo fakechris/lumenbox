@@ -86,7 +86,7 @@ test("user installation resumes to a verified artifact after failure while a hun
       await bus.idle(1000);
       assert.equal(rounds, 2, "a missing capability produces one bounded stop; held peers consume no model rounds");
       assert.equal(bus.heldCount(frontId), 100);
-      assert.equal(tasks.list().length, 0);
+      assert.equal(tasks.list().filter(task=>!task.workRoot?.automatic).length, 0,"no probe work was created beside the user request");
       assert.equal(registry.readDurableState(frontId, workStateConversation(work, "main")).todos?.[0]?.text, "Install the provided package");
       assert.equal(registry.readDurableState(frontId).todos?.[0]?.text, "OLD AUDIT OBJECTIVE", "old record remains intact, but is not the current plan");
       assert.match(JSON.stringify(registry.readTranscript(frontId)), /required bash tool is unavailable/);
@@ -99,7 +99,7 @@ test("user installation resumes to a verified artifact after failure while a hun
       assert.equal(completed.unavailable, undefined, "successful use clears the specific capability blocker");
       assert.equal(files.get("/home/box/work/skills/package/SKILL.md"), "installed-package");
       assert.equal(registry.readDurableState(frontId, workStateConversation(work, "main")).todos?.[0]?.status, "done");
-      assert.equal(tasks.list().length, 0, "neither recovery nor queued peers create audit probes");
+      assert.equal(tasks.list().filter(task=>!task.workRoot?.automatic).length, 0, "neither recovery nor queued peers create audit probes");
       assert.deepEqual([...handledPeers].sort((a, b) => a - b), Array.from({ length: 100 }, (_, i) => i), "every held message is eventually delivered, not silently dropped");
       assert.equal(bus.heldCount(frontId), 0);
     },
@@ -255,7 +255,7 @@ test("an audit's forged write calls cannot create recursive work or replace the 
     },
   });
   try {
-    assert.equal(tasks.list().length, 1); assert.equal(tasks.get(target)!.status, "review");
+    assert.equal(tasks.list().filter(task=>!task.workRoot?.automatic).length, 1); assert.equal(tasks.get(target)!.status, "review");
     assert.equal(episode.files.has("/home/box/work/probe.txt"), false);
     assert.equal(episode.score.peerMessages, 0);
     assert.equal(readTarget, true, "host-admitted reviewer can read this task only");
@@ -297,7 +297,7 @@ test("an old unscoped audit cannot take over a new installation request or creat
     },
   });
   try {
-    assert.equal(tasks.list().length, 0, "stale audit must not generate more real work");
+    assert.equal(tasks.list().filter(task=>!task.workRoot?.automatic).length, 0, "stale audit must not generate more real work");
     assert.equal(episode.score.trail.some(call => call.endsWith(":Tasks")), false);
     assert.ok(episode.score.said.every(reply => !reply.text.includes("old audit")));
     assert.match(episode.score.said.at(-1)!.text, /installation is blocked/);
@@ -348,7 +348,7 @@ test("admitted task, child and late task selection stay distinct across multiple
     assert.ok(b.steps.some(step => step.name === "Tasks"));
     assert.ok(b.steps.some(step => step.name === "read_file"));
     assert.equal(a.steps.some(step => step.name === "Tasks"), false, "taking B never retroactively reassigns prior A calls");
-    assert.ok(new Set(a.steps.map(step => step.workId)).size >= 2, "one task can span multiple actual works");
+    assert.equal(new Set(a.steps.filter(step=>step.role!=="child").map(step => step.workId)).size, 1, "explicit follow-ups retain one durable work root across attempts");
     assert.ok(a.steps.every(step => step.taskId === taskA) && b.steps.every(step => step.taskId === taskB));
   } finally { episode.cleanup(); rmSync(dir, { recursive: true, force: true }); }
 });
@@ -4073,16 +4073,16 @@ test("an L4 task's agent drafts a message: it waits in the Outbox, goes out once
       if (last.includes("approved your message")) return { call: "Outbox", input: { kind: "message", target: "here", body: "Also: the launch party is on Saturday.", why: "people are planning around it" } };
       return { call: "Outbox", input: { kind: "message", target: "here", body: "The release moves to Friday.", why: "the team asked for the new date" } };
     },
-    drive: async ({ bus, frontId, say }) => {
+    drive: async ({ bus, frontId }) => {
       const task = tasks.create({ title: "Tell the team the new release date", requester: "chris", assigneeId: frontId, level: 4 })!;
       tasks.update(task.id, { status: "doing" }, frontId);
       outbox.connect({
         chatFor: draft => chatTarget(draft, { canSend: () => false, chatOf: () => "feishu:oc_team" }),
         deliver: async (draft, chatKey) => { sent.push({ chatKey, text: draft.body }); return { delivered: true }; },
-        tell: (agentId, conversation, text) => { bus.deliverSystem(agentId, text, conversation); },
+        tell: (agentId, conversation, text, work) => { bus.deliverSystem(agentId, text, conversation,work?.id); },
         note: (taskId, text) => { tasks.update(taskId, { note: text }, "outbox"); },
       });
-      await say("Tell the team the release moved to Friday.");
+      bus.sendFromUser(frontId,"Tell the team the release moved to Friday.",{taskBinding:{taskId:task.id,role:"executor"}});await bus.wake(frontId);await bus.idle();
       assert.deepEqual(sent, [], "drafted, not sent");
       const [first] = outbox.waiting();
       assert.equal(first?.taskId, task.id);
@@ -4103,7 +4103,7 @@ test("an L4 task's agent drafts a message: it waits in the Outbox, goes out once
     assert.equal(readReason, true, "the agent's next turn read the person's reason");
     assert.match(result.score.said.at(-1)?.text ?? "", /will not announce the party/);
     assert.deepEqual(outbox.list().map(draft => [draft.status, draft.delivery?.delivered ?? null]), [["approved", true], ["rejected", null]]);
-    const notes = tasks.list()[0]!.history.map(change => change.note ?? "");
+    const notes = tasks.list().find(task=>task.title === "Tell the team the new release date")!.history.map(change => change.note ?? "");
     assert.ok(notes.some(note => /sent to feishu:oc_team, approved by Chris/.test(note)), "the delivery is on the task's record");
     assert.ok(notes.some(note => note.includes(reason)), "and so is the refusal");
     assert.deepEqual(result.score.refusals, []);

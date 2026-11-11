@@ -24,6 +24,7 @@ export function admittedTaskBinding(input: {
   if (goal) candidates.push({ taskId: goal.taskId, role: goal.verify ? "verifier" : "executor" });
   for (const message of input.inbound) {
     if (message.taskBinding) candidates.push(message.taskBinding);
+    else if(message.work?.taskId && message.work.owner===input.agentId && message.work.conversation===input.conversation) candidates.push({taskId:message.work.taskId,role:"executor"});
     // An admitted message's exact immutable id also proves its original task.
     for (const task of tasks.list()) if (task.sourceMessageId === message.id) candidates.push({ taskId: task.id, role: "executor" });
   }
@@ -48,7 +49,7 @@ export function admittedTaskBinding(input: {
 }
 
 export function hasAdmittedTask(input: { inbound: readonly InboundMessage[]; tasks?: TaskStore; goal?: GoalMarker; resume?: ResumeMarker }): boolean {
-  return !!input.goal || !!input.resume?.taskBinding || input.inbound.some(message => !!message.taskBinding || input.tasks?.list().some(task => task.sourceMessageId === message.id));
+  return !!input.goal || !!input.resume?.taskBinding || input.inbound.some(message => !!message.taskBinding || !!message.work?.taskId || input.tasks?.list().some(task => task.sourceMessageId === message.id));
 }
 
 /** A successful board take is an explicit boundary; earlier calls keep their original selection. */

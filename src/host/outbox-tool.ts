@@ -46,6 +46,7 @@ export function runOutboxTool(context: ToolContext, input: Record<string, unknow
   const id = outbox.newId();
   const description = draftDescription({ id, kind, target, body });
   const approval = context.policy.requestConfirmation({
+    ...(context.work?{returnTo:{work:context.work,conversation:context.conversation??"main"}}:{}),
     agentId: context.agent.id,
     agentName: context.agent.profile.name,
     description,
@@ -55,6 +56,7 @@ export function runOutboxTool(context: ToolContext, input: Record<string, unknow
   });
   const background = typeof input.background === "string" && input.background.trim() !== "" ? input.background.trim().slice(0, 1000) : undefined;
   outbox.record({
+    ...(context.work?{work:context.work}:{}),
     id, agentId: context.agent.id, agentName: context.agent.profile.name, conversation: context.conversation ?? "main",
     ...(task !== undefined ? { taskId: task.id } : {}), ...(task?.level !== undefined ? { level: task.level } : {}),
     kind, target, body, why, ...(background !== undefined ? { background } : {}), approvalId: approval.id,

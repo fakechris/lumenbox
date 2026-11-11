@@ -145,7 +145,7 @@ export interface OrchestrationDeps {
 /** What the board does with a plan; absent, a plan leaves no cards. */
 export interface PlanBoard {
   /** Cards for a plan just submitted, in item order — or one card for the whole plan — or none when no task is in hand. */
-  open(input: { agentId: string; parent: string; plan: OrchestrationPlan }): string[];
+  open(input: { taskId?:string; agentId: string; parent: string; plan: OrchestrationPlan }): string[];
   /** Closes a card with what its item (or, for a whole-plan card, the plan) came to. */
   settle(cardId: string, status: ItemStatus, text: string): void;
 }
@@ -217,7 +217,7 @@ export class Orchestrations {
    * Takes a plan from a turn. Returns what the model is told, and the approval when the person has
    * to confirm first. A plan identical to one still open is not started twice.
    */
-  submit(input: { workId?: string; agentId: string; agentName: string; parent: string; plan: OrchestrationPlan }): { text: string; approval?: { id: string } } {
+  submit(input: { taskId?:string; workId?: string; agentId: string; agentName: string; parent: string; plan: OrchestrationPlan }): { text: string; approval?: { id: string } } {
     if (input.workId && this.deps.isCancelled?.(input.workId)) return {text:"Work cancelled; no plan was started."};
     const hash = planHash(input.plan);
     const calls = planCalls(input.plan);
@@ -239,7 +239,7 @@ export class Orchestrations {
           action: "start a fan-out of sub-agents",
         })
       : undefined;
-    const cards = this.deps.board?.open({ agentId: input.agentId, parent: input.parent, plan: input.plan }) ?? [];
+    const cards = this.deps.board?.open({ taskId:input.taskId, agentId: input.agentId, parent: input.parent, plan: input.plan }) ?? [];
     const id = this.deps.pendingWork.prepare({
       agentId: input.agentId,
       kind: "orchestrate", workId: input.workId,

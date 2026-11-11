@@ -5,6 +5,8 @@ import type { ResumeMarker } from "../host/resume.ts";
 import type { Lane } from "./bus.ts";
 
 export interface InboundMessage {
+  /** Explicit transport relation; no component infers task ownership from conversation activity. */
+  workRelation?: "new" | "continue";
   /** Host-stamped root work. Agent tools cannot choose its identity or participants. */
   work?: import("./work-attention.ts").WorkStamp; informational?: true;
   /** Host-only review snapshot; persisted with admission, never parsed from model prose. */

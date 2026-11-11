@@ -8,7 +8,7 @@ import { TaskListPages, taskListRoute } from "./task-list-routes.ts";
 
 test("1600-task board reads bounded pages across updates, scopes and authorization changes", async () => {
   const tasks = new TaskStore(null), pages = new TaskListPages();
-  for (let n = 0; n < 1600; n++) tasks.create({ title: "Task " + n, requester: "p", assigneeId: "a", conversation: n % 2 ? "other" : "chat" });
+  for (let n = 0; n < 1600; n++) tasks.create({ title: "Task " + n, requester: "p", assigneeId: "a", conversation: n % 2 ? "other" : "chat", ...(n===0?{workRoot:{state:{id:"root-0",owner:"a",conversation:"chat",generation:1,epoch:0,status:"waiting",messages:[],peers:[],awaiting:[]},requests:Array.from({length:1000},(_,i)=>({id:"request-"+i,hash:"h".repeat(64),relation:"continue",state:"started"}))}}:{}) });
   for (let id = 1; id <= 50; id++) for (let move = 0; move < 30; move++) tasks.update("t" + id, { note: "n".repeat(500) }, "a");
   let allowed = true;
   const server = createServer((req,res) => {

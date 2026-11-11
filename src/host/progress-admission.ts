@@ -12,7 +12,7 @@ export function admitProgressMessage(tasks: TaskStore | undefined, agentId: stri
   // A goal callback must carry the scope it observed, even if it only reaches the bus after a pause/resume.
   if (message.goal && !message.goal.progressScope) return message;
   const task = tasks.get(binding.taskId);
-  const admission = tasks.progress.reserve(binding.taskId, task?.pursuit?.workId ?? randomUUID(), message.goal?.verify ? "verifier" : task?.pursuit ? "continuation" : "new", message.goal?.progressScope);
+  const admission = tasks.progress.reserve(binding.taskId, message.work?.id ?? task?.pursuit?.workId ?? randomUUID(), message.goal?.verify ? "verifier" : task?.pursuit ? "continuation" : "new", message.goal?.progressScope);
   return admission ? { ...message, taskBinding: { ...binding, progressAdmission: admission } } : message;
 }
 

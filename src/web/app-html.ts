@@ -3981,7 +3981,7 @@ function sendSurfaceAction(item, action) {
   fetch("/api/prompt", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ agent: current, text: text, conversation: currentConversation })
+    body: JSON.stringify({ agent: current, text: text, conversation: currentConversation, messageId:crypto.randomUUID() })
   }).then(function (res) {
     if (!res.ok) return res.text().then(function (t) { feed("{{ui.app.action-rejected}} " + esc(t), "err"); });
   }).catch(function (error) { feed("{{ui.app.action-failed}} " + esc(error.message), "err"); });
@@ -4042,7 +4042,7 @@ function sendAnswer(item, text) {
   fetch("/api/prompt", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ agent: current, text: text, conversation: currentConversation })
+    body: JSON.stringify({ agent: current, text: text, conversation: currentConversation, messageId:crypto.randomUUID() })
   }).then(function (res) {
     if (!res.ok) return res.text().then(function (t) { feed("{{ui.app.answer-rejected}} " + esc(t), "err"); });
   }).catch(function (error) { feed("{{ui.app.answer-failed}} " + esc(error.message), "err"); });
@@ -6232,7 +6232,7 @@ $("form").onsubmit = function (event) {
     headers: { "content-type": "application/json" },
     // Send to the thread on screen, not always the team room: reading a chat thread
     // and replying should reach that chat, not surface in the room the reader left.
-    body: JSON.stringify({ agent: target, text: text, conversation: conversation })
+    body: JSON.stringify({ agent: target, text: text, conversation: conversation, messageId:crypto.randomUUID() })
   }).then(function (res) {
     if (!res.ok) return res.text().then(function (t) { feed("{{ui.app.prompt-rejected}} " + esc(t), "err"); });
   }).catch(function (error) {

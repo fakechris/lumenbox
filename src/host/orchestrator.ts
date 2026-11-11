@@ -326,7 +326,7 @@ export class Orchestrator {
   renderPerson(principalId: string | undefined): string | undefined { return this.people.render(principalId ?? this.people.operator, principalId === undefined ? "the operator" : (this.personName?.(principalId) ?? "the person")); }
   readonly generations = new BoxGenerations(line => console.error(`[box] ${line}`)); // which incarnation of each box a slow callback belongs to (INV-1476); bumped on every (re)connect
   readonly agentFacts = new AgentFacts(new ConversationState(join(agentboxHome(), "conversation-state.jsonl")), { approvals: () => this.policy.pending(), questions: () => this.questionsOpen?.() ?? [], pausedForSpend: () => this.pausedForSpend?.() ?? [], working: id => this.bus.isActive(id) }); questionsOpen?: () => readonly { agentId: string; conversation: string; question: string; askedAt: number }[]; pausedForSpend?: () => readonly { agentId: string; day: string }[]; // the four facts a sidebar row is drawn from (INV-1625); the two readers are wired by the server
-  readonly exceptions = new ExceptionLedger(join(agentboxHome(), "exceptions.jsonl"), { taskOf: (agentId, conversation) => this.tasks?.list().find(task => task.assigneeId === agentId && task.conversation === conversation && task.status !== "done" && task.status !== "dropped")?.id }); readonly jobWatch = new JobWatch({ observed: (job,end) => { if (end.exit_code !== undefined || end.interrupted) this.pendingWork?.commit((this.pendingWork?.open() ?? []).filter(row => row.kind === "command" && row.child === job.jobId && row.workId === job.work?.id).map(row => ({id:row.id,how:"unknown" as const,why:"Process exit observed; business result not verified"}))); }, isCancelled: id => !!this.bus.workAttention?.cancelled(id), started: job => { if (job.work) this.bus.workAttention?.hold(job.work, job.jobId); }, released: job => { if (job.work) this.bus.workAttention?.release(job.work, job.jobId); }, box: () => this.boxClient(), log: line => console.error(`[jobs] ${line}`), ended: (job, end) => noteJobEnd(this.exceptions, job, end), wake: (agentId, conversation, text, work) => this.prompt(agentId, text, undefined, { conversation, work, steerable: false, lane: "background", synthetic: true, origin: "host:jobs" }).then(() => undefined), generation: agentId => this.generations.current(this.registry.boxOf(agentId).id) });
+  readonly exceptions = new ExceptionLedger(join(agentboxHome(), "exceptions.jsonl"), { taskOf: (agentId, conversation) => this.bus.workAttention?.get(agentId,conversation)?.taskId }); readonly jobWatch = new JobWatch({ observed: (job,end) => { if (end.exit_code !== undefined || end.interrupted) this.pendingWork?.commit((this.pendingWork?.open() ?? []).filter(row => row.kind === "command" && row.child === job.jobId && row.workId === job.work?.id).map(row => ({id:row.id,how:"unknown" as const,why:"Process exit observed; business result not verified"}))); }, isCancelled: id => !!this.bus.workAttention?.cancelled(id), started: job => { if (job.work) this.bus.workAttention?.hold(job.work, job.jobId); }, released: job => { if (job.work) this.bus.workAttention?.release(job.work, job.jobId); }, box: () => this.boxClient(), log: line => console.error(`[jobs] ${line}`), ended: (job, end) => noteJobEnd(this.exceptions, job, end), wake: (agentId, conversation, text, work) => this.prompt(agentId, text, undefined, { conversation, work, steerable: false, lane: "background", synthetic: true, origin: "host:jobs" }).then(() => undefined), generation: agentId => this.generations.current(this.registry.boxOf(agentId).id) });
   /**
    * Agents whose current turn is installing a template, by the template's id (docs/29 §5.3).
    * Set around the setup prompt and cleared after it, never by the agent.
@@ -1090,6 +1090,7 @@ export class Orchestrator {
     inbox?.start(inbox.pending().filter(item =>
       ownedMessages.has(ownershipKey(item.agentId, item.message.conversation, item.message.id))
     ).map(item => item.seq));
+    const workFocus=new WorkAttention(join(agentboxHome(),"work-attention.json"),(agent,conversation)=>this.registry.contextStore(agent,conversation).current().epoch,this.tasks?.workRoots);
     this.bus = new AgentBus(
       this.registry,
       (agent, inbound, signal, conversation, acknowledge) => this.executeTurn(agent, inbound, signal, conversation, acknowledge),
@@ -1098,7 +1099,7 @@ export class Orchestrator {
         if (event.type === "turn_finished") this.goalLoop?.onTurnFinished(event.agentId); // a turn ending is what lets a goal consider its next continuation (INV-770)
       },
       inbox,
-      true, (agentId, message) => admitProgressMessage(this.tasks, agentId, message), new WorkAttention(join(agentboxHome(), "work-attention.json"), (agent, conversation) => this.registry.contextStore(agent, conversation).current().epoch)
+      true, (agentId, message) => admitProgressMessage(this.tasks, agentId, message), workFocus, this.tasks?.workRoots.admission(workFocus)
     );
     this.goalLoop = this.tasks === undefined ? undefined : new GoalLoop({ modelRecoveryRoot: this.registry.root,
       tasks: this.tasks,
@@ -2346,7 +2347,7 @@ export class Orchestrator {
     }).review({ ...input, agentName: agent.profile.name });
   }
 
-  /** Sends a user message to an agent and runs its turn to completion. */
+
   async prompt(
     agentIdOrName: string,
     text: string,
@@ -2358,7 +2359,7 @@ export class Orchestrator {
     const conversation = options.conversation ?? MAIN_CONVERSATION;
     return this.registry.withContext(agent.id, conversation, async () => {
     this.bus.sendFromUser(agent.id, text, {
-      conversation, ...(options.work ? { work: options.work } : {}), ...(options.audit !== undefined ? { audit: options.audit } : {}),
+      conversation, ...(options.workRelation?{workRelation:options.workRelation}:{}), ...(options.work ? { work: options.work } : {}), ...(options.audit !== undefined ? { audit: options.audit } : {}),
       ...(options.taskBinding !== undefined ? { taskBinding: options.taskBinding } : {}),
       ...(caller?.userId !== undefined ? { principalId: caller.userId } : {}),
       ...(options.synthetic === true ? { synthetic: true } : {}), ...(options.origin !== undefined ? { origin: options.origin } : {}),
@@ -2368,6 +2369,7 @@ export class Orchestrator {
       ...(options.addressed === false ? { addressed: false } : {}),
       ...(options.toolScope !== undefined ? { toolScope: options.toolScope } : {}),
     });
+    options.onAdmitted?.();
     const before = this.registry.readTranscript(agent.id, conversation).length; this.agentFacts.noteInbound(agent.id, conversation, { fromId: "user", ...(options.synthetic === true ? { synthetic: true } : {}), ...(options.origin !== undefined ? { origin: options.origin } : {}), ...(options.messageId !== undefined ? { messageId: options.messageId } : {}) }); // what reached the agent, for its row (INV-1625)
     await this.bus.runExclusive(agent.id, { userDriven: true, conversation });
 

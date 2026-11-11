@@ -2855,7 +2855,7 @@ export async function dispatchTool(
         agentId: context.agent.id,
         agentName: context.agent.profile.name,
         parent: context.conversation ?? MAIN_CONVERSATION,
-        plan: parsed.plan, workId: context.workId,
+        plan: parsed.plan, workId: context.workId, taskId:context.taskBinding?.taskId,
       });
       return { text: submitted.text };
     }

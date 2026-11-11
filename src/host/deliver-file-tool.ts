@@ -35,7 +35,7 @@ export function withDeliverFileTool(tools: { name: string; input_schema: unknown
       properties: {
         path: { type: "string", description: `The file's absolute path, under ${DOCKER_WORK}/.` }, // the box's own, as the tool list is read on it (inBox)
         note: { type: "string", description: "One line on what it is, for the person who opens it." },
-        task_id: { type: "string", description: "The task it belongs to, e.g. \"t12\". Omit when you have one live task." },
+        task_id: { type: "string", description: "The task it belongs to, e.g. \"t12\". Omit to use the admitted task." },
       },
       required: ["path", "note"],
     },
@@ -46,17 +46,12 @@ function refused(reason: string): ToolOutcome {
   return { text: outcomeLine("refused", reason), isError: true };
 }
 
-/** The task a delivery is for: the one named, or the caller's one live task (in this conversation first). */
+/** Delivery uses the explicit selection captured by admission or a successful Tasks take. */
 function taskFor(context: ToolContext, named: string): Task | string {
   const board = context.tasks!;
   if (named !== "") return board.get(named) ?? `there is no task ${named}`;
-  const mine = board.list().filter(task => isLive(task.status) && task.assigneeId === context.agent.id && task.proposedBy === undefined);
-  const here = mine.filter(task => task.conversation === context.conversation);
-  const pick = here.length === 1 ? here : mine;
-  if (pick.length === 1) return pick[0]!;
-  return pick.length === 0
-    ? "you have no live task to deliver to; give task_id"
-    : `you have ${pick.length} live tasks (${pick.map(task => task.id).join(", ")}); give task_id`;
+  const selected=context.taskBinding?.taskId;
+  return selected ? board.get(selected) ?? `there is no task ${selected}` : "no admitted task selected; give task_id";
 }
 
 export async function deliverFileTool(context: ToolContext, input: Record<string, unknown>): Promise<ToolOutcome> {

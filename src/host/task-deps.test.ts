@@ -125,7 +125,7 @@ test("an Orchestrate plan from a turn working a task: one card per item, the tas
     });
     const parsed = parsePlan({ brief: "Vendors", items: ["acme", "globex", "initech"], prompt: "Price of {{item}}" });
     assert.ok("plan" in parsed);
-    orchestrations.submit({ agentId: "ada", agentName: "Ada", parent: "main", plan: parsed.plan });
+    orchestrations.submit({ taskId:"t1", agentId: "ada", agentName: "Ada", parent: "main", plan: parsed.plan });
     assert.deepEqual(tasks.get("t1")!.blockedBy, ["t2", "t3", "t4"]);
     assert.match(describeTask(tasks.get("t1")!, id => id, tasks), /waiting on 3 of 3/);
     assert.equal(tasks.get("t2")!.status, "doing");

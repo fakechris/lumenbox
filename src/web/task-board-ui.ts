@@ -7,6 +7,9 @@ export const TASK_BOARD_STYLE = String.raw`
 export const TASK_BOARD_JS = String.raw`
 function taskBoardMarkup(task) {
   var state = t("ui.tf.board." + task.status), progress = task.progress && window.taskProgressHtml ? progressLines(task.progress,MSG_LOCALE)[0] : "";
+  if(task.work && task.work.automatic && task.status !== "done" && task.status !== "dropped") {
+    state = t("ui.tc.work." + task.work.phase);
+  }
   var meta = taskBoardState.mode === "team" ? esc(task.assigneeId ? nameOf(task.assigneeId) : t("ui.app.unassigned")) + ' · ' : '';
   var live = task.status !== "done" && task.status !== "dropped";
   var decision = live && (window.lastAttention && window.lastAttention.mine || []).find(function (item) { return item.ref === task.id && (item.kind !== "review" || task.status === "review") && (item.kind !== "close-proposal" || task.closeProposal); });

@@ -23,6 +23,7 @@
  * Append-only and replayed; a record, never compacted.
  */
 
+import type {WorkStamp} from "../agents/work-attention.ts";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -50,6 +51,7 @@ export interface Draft {
   agentName: string;
   conversation: string;
   taskId?: string;
+  work?: WorkStamp;
   level?: number;
   kind: DraftKind;
   /** Who or where it is for, as the agent named it: a chat key, "here", a person, a site. */
@@ -81,8 +83,8 @@ export interface OutboxWorld {
   /** Where a draft can be delivered by the host itself; undefined when it cannot be (another kind, an unknown target). */
   chatFor: (draft: Draft) => string | undefined;
   deliver: (draft: Draft, chatKey: string) => Promise<{ delivered: boolean; detail?: string }>;
-  tell: (agentId: string, conversation: string, text: string) => void;
-  note?: (taskId: string, text: string) => void;
+  tell: (agentId: string, conversation: string, text: string, work?:WorkStamp) => void;
+  note?: (taskId: string, text: string, work?:WorkStamp) => void;
   log?: (line: string) => void;
 }
 
@@ -164,13 +166,13 @@ export class OutboxDrafts {
     const world = this.world;
     if (world === undefined) return draft;
     if (draft.status === "rejected") {
-      world.tell(draft.agentId, draft.conversation, rejectedText(draft));
+      world.tell(draft.agentId, draft.conversation, rejectedText(draft),draft.work);
       if (draft.taskId !== undefined) world.note?.(draft.taskId, `Outbox ${draft.id}: ${draft.kind} to ${draft.target} refused by ${draft.decidedBy ?? "a person"} — ${draft.reason ?? "no reason given"}`);
       return draft;
     }
     const chat = world.chatFor(draft);
     if (chat === undefined) {
-      world.tell(draft.agentId, draft.conversation, approvedToDoText(draft));
+      world.tell(draft.agentId, draft.conversation, approvedToDoText(draft),draft.work);
       if (draft.taskId !== undefined) world.note?.(draft.taskId, `Outbox ${draft.id}: ${draft.kind} to ${draft.target} approved by ${draft.decidedBy ?? "a person"}${draft.edited === true ? " (edited)" : ""}; the agent carries it out`);
       return draft;
     }
@@ -184,7 +186,7 @@ export class OutboxDrafts {
     this.append({ event: "delivered", id: draft.id, delivery });
     draft = this.get(draft.id)!;
     world.log?.(`outbox ${draft.id}: ${delivery.delivered ? `delivered to ${chat}` : `not delivered — ${delivery.detail ?? "no reason"}`}`);
-    world.tell(draft.agentId, draft.conversation, deliveredText(draft));
+    world.tell(draft.agentId, draft.conversation, deliveredText(draft),draft.work);
     if (draft.taskId !== undefined) world.note?.(draft.taskId, delivery.delivered ? `Outbox ${draft.id}: sent to ${chat}${draft.edited === true ? " as edited by " : ", approved by "}${draft.decidedBy ?? "a person"}` : `Outbox ${draft.id}: approved, but not delivered — ${delivery.detail ?? "no reason"}`);
     return draft;
   }

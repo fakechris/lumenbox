@@ -36,7 +36,7 @@ export interface ContextRecoveryDeps {
  * remains. Treating review as running made completed work permanently trap a private chat.
  */
 export function contextTaskBlockers(
-  tasks: readonly Pick<Task, "id" | "status" | "conversation" | "pursuit">[],
+  tasks: readonly Pick<Task, "id" | "status" | "conversation" | "pursuit" | "workRoot">[],
   conversation: string,
   excludeTaskId?: string
 ): string[] {
@@ -50,6 +50,7 @@ export function contextTaskBlockers(
     ...pursuitBlockers(inScope, conversation),
     ...inScope
       .filter(task => task.pursuit === undefined)
+      .filter(task => !task.workRoot?.automatic || !task.workRoot.state.unresolved && (task.workRoot.state.status === "waiting" || task.workRoot.state.status === "running"))
       .filter(task => task.status === "open" || task.status === "doing" || task.status === "blocked")
       .map(task => `任务 ${task.id}：${task.status}`),
   ];

@@ -64,6 +64,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
   }
   function connection() { return document.documentElement.dataset.connection || "reconnecting"; }
   function status(task) {
+    if(task.work && task.work.automatic && !["done","dropped"].includes(task.status))return t("ui.tc.work."+task.work.phase);
     if (task.status === "done" || task.status === "dropped") return word(task.status === "done" ? "ended" : "dropped");
     if (task.pursuit && task.pursuit.status === "paused") return word("paused") + (task.pursuit.pausedReason ? " · " + t("ui.tf.pause." + task.pursuit.pausedReason) : "");
     if (task.pursuit && task.pursuit.status === "verifying") return word("verifying");
@@ -80,7 +81,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     if (active !== view || !view.task) return;
     var task = view.task, activity = view.activity || {}, latest = view.liveAction || activity.current || activity.latest;
     by("title").textContent = task.title; by("title").title = by("title").textContent;
-    by("id").textContent = task.id; by("cancel").setAttribute("data-work-cancel",task.id); by("cancel").hidden = ["done","dropped"].includes(task.status);
+    by("id").textContent = task.id; by("cancel").setAttribute("data-work-cancel",task.id); by("cancel").hidden = !task.work && ["done","dropped"].includes(task.status);
     var review = task.status === "review" ? word("review") : task.status === "done" ? word("ended") : task.status === "dropped" ? word("dropped") : word("pending");
     var statuses = [["state",status(task)],["connection",word(connection())],["acceptance",review]];
     root.querySelector("[data-tf-conversation]").disabled = !task.assigneeId || !task.conversation;

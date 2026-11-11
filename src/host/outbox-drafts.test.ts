@@ -157,7 +157,7 @@ test("the Outbox tool drafts against the task in hand and asks the person on a c
     const tasks = new TaskStore(join(home, "tasks.jsonl"));
     const task = tasks.create({ title: "Tell the team the new release date", requester: "chris", assigneeId: ada.id, level: 4 })!;
     tasks.update(task.id, { status: "doing" }, ada.id);
-    const context = { agent: ada, registry, bus, box: undefined, tasks, policy: w.policy, outbox: w.drafts };
+    const context = { agent: ada, registry, bus, box: undefined, tasks, taskBinding:{taskId:task.id,role:"executor"}, policy: w.policy, outbox: w.drafts };
     const refused = await dispatchTool("Outbox", { kind: "message", target: "here", body: "Friday." }, context as never);
     assert.equal(refused.isError, true, "no reason, no draft");
     const said = await dispatchTool("Outbox", { kind: "message", target: "here", body: "Friday.", why: "they asked" }, context as never);
