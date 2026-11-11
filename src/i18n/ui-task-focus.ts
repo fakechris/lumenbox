@@ -1,4 +1,7 @@
 export const UI_TASK_FOCUS: Record<string, readonly [string, string]> = {
+  "ui.tc.internalRecords": ["内部及未关联记录", "Internal and unlinked records"],
+  "ui.tc.userRecords": ["返回用户任务", "Back to user tasks"],
+  "ui.tc.internalNote": ["成员自建、子任务及来源未确认的历史记录；不作为用户待审工作。", "Agent-created, subtasks and unverified historical records; separate from user review."],
   "ui.work.confirmationPending": ["等待你的确认", "Waiting for your confirmation"],
   "ui.work.planPending": ["计划还有未完成的步骤", "Plan has unfinished steps"],
   "ui.work.collaborationPending": ["等待相关工作的结果", "Waiting for related results"],

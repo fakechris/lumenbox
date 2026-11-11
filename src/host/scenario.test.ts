@@ -4139,3 +4139,15 @@ test("cancelling a multi-agent installation prevents job, fork and late callback
     }});
   episode.cleanup();
 });
+
+test("agent suggestions during a user request remain internal until a person commits them", async () => {
+ const tasks=new TaskStore(null);
+ const episode=await runEpisode({team:[{name:"Mia",tools:["Tasks"]}],tasks,says:["Organize the requested work"],script:({round})=>round===0?{call:"Tasks",input:{action:"create",propose:true,title:"Optional independent suggestion"}}:round===1?{call:"Tasks",input:{action:"create",title:"Requested user work",parent:"none"}}:{say:"The requested work is recorded."}});
+ try {
+  const suggestion=tasks.list().find(task=>task.title==="Optional independent suggestion")!;
+  const requested=tasks.list().find(task=>task.title==="Requested user work")!;
+  assert.equal(suggestion.origin?.kind,"internal");assert.equal(requested.origin?.kind,"user");
+  assert.ok(requested.origin?.workId,"the host supplies the admitted work identity");
+  tasks.commit(suggestion.id,"chris");assert.equal(tasks.get(suggestion.id)!.origin?.kind,"user");
+ } finally {episode.cleanup();}
+});

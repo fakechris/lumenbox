@@ -8,7 +8,7 @@ export const RIGHT_PANE_STYLE = String.raw`
 #activity-panel{border-top:1px solid var(--border);border-bottom:0}.feed{max-height:24vh;overflow-y:auto;padding:0 0 var(--sp-2);overscroll-behavior:contain}.activity-unread{color:var(--accent);font-size:var(--fs-xs);margin-left:var(--sp-2)}.activity-error{color:var(--danger)}.activity-retention{font-size:var(--fs-xs);color:var(--muted);padding:0 var(--sp-4) var(--sp-2)}
 `;
 export const TASKS_PANEL_HTML = String.raw`<div id="tasksview">
-  <header class="task-scope-head"><button class="btn sm ghost task-chat-back" data-task-chat>{{ui.tf.backChat}}</button><h2 id="taskscope-title"></h2><p id="taskscope-note" class="dim"></p><button class="ui-link" id="taskscope-back" hidden>{{ui.tc.backContext}}</button></header>
+  <header class="task-scope-head"><button class="btn sm ghost task-chat-back" data-task-chat>{{ui.tf.backChat}}</button><button class="ui-link" id="task-records-toggle">{{ui.tc.internalRecords}}</button><h2 id="taskscope-title"></h2><p id="taskscope-note" class="dim"></p><button class="ui-link" id="taskscope-back" hidden>{{ui.tc.backContext}}</button></header>
   <div id="taskboard-error" class="task-board-error" role="status" hidden>{{ui.tf.error}} <button class="btn sm ghost" data-board-refresh>{{ui.tf.refresh}}</button></div>
   <details id="attention" class="pane-disclosure" style="display:none">
     <summary>{{ui.tf.needsAction}}<span class="pane-count" id="attention-count"></span></summary>

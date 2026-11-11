@@ -1,3 +1,4 @@
+import { taskAudience } from "./task-audience.ts";
 /**
  * What is waiting on me, and what I am waiting on (INV-543).
  *
@@ -74,7 +75,7 @@ export interface AttentionInput {
   /** The work directory of an agent's box (`workDir`, box-paths.ts): where the files its submission names are (INV-1737). The image's when not given. */
   workOf?: (agentId: string) => string;
   /** The agents (INV-1647): a task an agent reviews is the team's to settle, not the person's. */
-  agentIds?: ReadonlySet<string>;
+  agentIds?: ReadonlySet<string>; personIds?: ReadonlySet<string>;
   /** Pending approvals, the most common block (INV-1622/1627): one item each, answered from the strip. */
   approvals?: readonly { id: string; agentId: string; agentName: string; description: string; action?: string; requestedAt: string; why?: string; taskLevel?: number }[];
   /** Outbox drafts waiting for a person (INV-1739); each is listed once, as itself, never again as its consent record. */
@@ -213,7 +214,7 @@ export function attentionFor(input: AttentionInput): Attention {
     stages[task.id] = taskStage(task, stageWorldOf(task, { undeliverableChats, questions: input.questions, ...(input.agentIds !== undefined ? { agentIds: input.agentIds } : {}), ...(input.chatKeyOf !== undefined ? { chatKeyOf: input.chatKeyOf } : {}), ...(input.active !== undefined ? { active: input.active } : {}) }));
   }
   for (const task of input.tasks) {
-    if (!isLive(task)) continue;
+    if (!isLive(task) || input.agentIds && taskAudience(task,input.agentIds,input.personIds) !== "user") continue;
     // A wake the mandate refused (INV-1457): the work waits for the person whose word it was.
     const stale = task.mandate?.stale;
     if (stale !== undefined && task.mandate?.withdrawn === undefined && isMe(task.mandate?.by ?? task.requester)) {

@@ -110,7 +110,7 @@ export interface Task {
   /** Who asked for it. */
   requester: string;
   /** The immutable admitted-message record containing the original request. */
-  sourceMessageId?: string;
+  sourceMessageId?: string; origin?: import("./task-audience.ts").TaskOrigin;
   assigneeId?: string;
   /** Named, "done" means this identity accepted it — the assignee cannot self-accept. */
   reviewerId?: string;
@@ -260,7 +260,7 @@ export class TaskStore {
     if (task.proposedBy === undefined) return false;
     const at = now.toISOString();
     const change: TaskChange = { at, by, note: `committed by ${by}` };
-    const next: Task = { ...task, updatedAt: at, history: [...task.history, change].slice(-HISTORY_LIMIT) };
+    const next: Task = { ...task, ...(!this.agents?.has(by) ? {origin:{kind:"user" as const}} : {}), updatedAt: at, history: [...task.history, change].slice(-HISTORY_LIMIT) };
     delete next.proposedBy;
     this.saveTask(next);
     for (const listener of this.listeners) listener(next);
@@ -314,7 +314,7 @@ export class TaskStore {
     title: string;
     description?: string;
     requester: string;
-    sourceMessageId?: string;
+    sourceMessageId?: string; origin?: import("./task-audience.ts").TaskOrigin;
     assigneeId?: string;
     reviewerId?: string;
     conversation?: string;
@@ -341,7 +341,7 @@ export class TaskStore {
         : {}),
       status: input.pursuit !== undefined ? taskStatusFor(input.pursuit) : "open",
       requester: input.requester,
-      ...(input.sourceMessageId !== undefined ? { sourceMessageId: input.sourceMessageId } : {}),
+      ...(input.sourceMessageId !== undefined ? { sourceMessageId: input.sourceMessageId } : {}), ...(input.origin ? {origin: structuredClone(input.origin)} : {}),
       ...(input.assigneeId !== undefined ? { assigneeId: input.assigneeId } : {}),
       ...(input.reviewerId !== undefined ? { reviewerId: input.reviewerId } : {}),
       ...(input.conversation !== undefined ? { conversation: input.conversation } : {}),

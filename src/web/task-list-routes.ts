@@ -35,7 +35,7 @@ export class TaskListPages {
 }
 
 export function taskListRoute(route: string, url: URL, res: ServerResponse, deps: {
-  pages: TaskListPages; tasks: () => readonly Task[]; allowed: (task: Task) => boolean; detail: (task: Task) => unknown; summary?: (task: Task) => unknown;
+  pages: TaskListPages; tasks: () => readonly Task[]; allowed: (task: Task) => boolean; detail: (task: Task) => unknown; summary?: (task: Task) => unknown; audience?: (task: Task) => string;
   send: (res: ServerResponse, status: number, body: unknown) => void;
 }): boolean {
   if (route !== "GET /api/tasks/list" && route !== "GET /api/tasks/item") return false;
@@ -47,7 +47,8 @@ export function taskListRoute(route: string, url: URL, res: ServerResponse, deps
   }
   const inbox = url.searchParams.get("inbox") === "1";
   const priority = (url.searchParams.get("priority") ?? "").split(",").filter(Boolean).slice(0, 100);
-  const tasks = available.filter(task => !inbox || (task.proposedBy !== undefined && task.status !== "dropped"));
+  const scope = url.searchParams.get("records");
+  const tasks = available.filter(task => !scope || !deps.audience || (deps.audience(task) === "user") === (scope === "user")).filter(task => !inbox || (task.proposedBy !== undefined && task.status !== "dropped"));
   const rows = boardOrder(tasks, [], []).map(row => row.task).sort((a, b) => {
     const left = priority.indexOf(a.id), right = priority.indexOf(b.id);
     return left >= 0 && right >= 0 ? left - right : left >= 0 ? -1 : right >= 0 ? 1 : 0;
@@ -62,7 +63,7 @@ export function taskListRoute(route: string, url: URL, res: ServerResponse, deps
   const limit = Math.min(100, Math.max(1, Math.trunc(Number(url.searchParams.get("limit") ?? 50))));
   try {
     if (!Number.isFinite(limit)) throw new Error("invalid limit");
-    const page = deps.pages.read(rows, JSON.stringify([inbox, priority, other, url.searchParams.get("agent"), url.searchParams.get("conversation")]), url.searchParams.get("cursor"), limit);
+    const page = deps.pages.read(rows, JSON.stringify([scope, inbox, priority, other, url.searchParams.get("agent"), url.searchParams.get("conversation")]), url.searchParams.get("cursor"), limit);
     deps.send(res, 200, { ...page, tasks: page.tasks.map(project) });
   } catch {
     deps.send(res, 409, { reset: true, ...apiError("task-execution-reset") });
