@@ -1,3 +1,4 @@
+import { taskAudience } from "../host/task-audience.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createServer } from "node:http";
@@ -42,4 +43,15 @@ test("1600-task board reads bounded pages across updates, scopes and authorizati
     assert.equal((await read("/api/tasks/list?ids="+ids.slice(0,50).join(","))).body.tasks.length,0);
     assert.equal((await read("/api/tasks/list?priority=t1&cursor="+encodeURIComponent(first.body.nextCursor!))).status,409);
   } finally {server.closeIdleConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}
+});
+
+test("audience filtering precedes pagination and never prevents authorized direct inspection", () => {
+ const store=new TaskStore(null), pages=new TaskListPages();
+ const human=store.create({title:"Human request",requester:"chris"})!;
+ const probe=store.create({title:"Looks important",requester:"mia"})!;
+ let status=0, body = {} as {total:number;tasks:{id:string}[];task:{id:string}};
+ const read=(path:string)=>taskListRoute("GET "+path.split("?")[0],new URL("http://localhost"+path),{} as never,{pages,tasks:()=>store.list(),allowed:()=>true,detail:task=>task,audience:task=>taskAudience(task,new Set(["mia"])),send:(_r,s,b)=>{status=s;body=b as typeof body;}});
+ read("/api/tasks/list?records=user&limit=1");assert.equal(status,200);assert.equal(body.total,1);assert.equal(body.tasks[0]!.id,human.id);
+ read("/api/tasks/list?records=internal");assert.equal(body.total,1);assert.equal(body.tasks[0]!.id,probe.id);
+ read("/api/tasks/item?task="+probe.id);assert.equal(body.task.id,probe.id,"internal history stays addressable");
 });

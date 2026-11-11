@@ -1,3 +1,4 @@
+import { taskAudience } from "../host/task-audience.ts";
 import {workControlFor, workControlRoute} from "./work-control-routes.ts";
 import {WORK_CONTROL_JS} from "./work-control-ui.ts";
 import { conversationProgress } from "./work-attention.ts";
@@ -1658,7 +1659,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           title: input.title,
           ...(input.description !== undefined ? { description: input.description } : {}),
           ...(input.sourceMessageId !== undefined ? { sourceMessageId: input.sourceMessageId } : {}),
-          requester: principals.resolve(input.identity).id,
+          requester: principals.resolve(input.identity).id, origin: {kind:"user"},
           ...(assigneeId !== undefined ? { assigneeId } : {}),
           ...(reviewerId !== undefined ? { reviewerId } : {}),
           conversation: conversationIdFor(input.threadKey ?? input.chatKey),
@@ -3923,8 +3924,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (await taskExportRoute(route, url, req, res, { exports: taskExports, access: () => { principals.reload(); unavailableBoxes = undefined; agentBoxes.clear(); const allowed = admit({ authorization: req.headers.authorization, cookie: req.headers.cookie, query: url.searchParams.get("token") }).allow; return { task: id => { const task = orchestrator.tasks?.get(id); return allowed && !!task && mayReadTask(task); }, agent: id => allowed && mayReadAgent(id), box: id => allowed && mayReadBox(id) }; }, send })) return;
         if (taskCostRoute(route, url, res, { executions: taskExecutions, refused: () => refusedRole("admin"), access: { task: id => { const task = orchestrator.tasks?.get(id); return task !== undefined && mayReadTask(task); }, agent: mayReadAgent, box: mayReadBox }, records: () => orchestrator.usage.since(0, Number.MAX_SAFE_INTEGER), rates: configuredRates, compacted: () => orchestrator.usage.compacted(), send })) return;
         if (taskExecutionRoute(route, url, res, { executions: taskExecutions, access: { task: id => { const task = orchestrator.tasks?.get(id); return task !== undefined && mayReadTask(task); }, agent: mayReadAgent, box: mayReadBox }, record: id => taskRecord(orchestrator.tasks!.get(id)!, { nameOf: id => registry.tryGet(id)?.profile.name ?? id, stageWorld: sideDoorStage, progressAccess: { agent: mayReadAgent, box: mayReadBox } }), send })) return;
-        const taskView = (task: Task) => { const forks = orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []; return { ...task, progress: summarizeTaskProgress(task, 128, { agent: mayReadAgent, box: mayReadBox }), needsApprovals: taskExecutions.approvals(task.id, { task: () => mayReadTask(task), agent: mayReadAgent, box: mayReadBox }, orchestrator.policy.pending()), stage: taskStage(task, sideDoorStage(task)), configVersions: switchesForTask(registry, task.id), ...(forks.length ? { forks } : {}), ...dependencyView(task, orchestrator.tasks!) }; };
-        if (taskListRoute(route, url, res, { pages: taskListPages, tasks: () => orchestrator.tasks?.list() ?? [], allowed: mayReadTask, detail: taskView, summary: task => ({ ...taskBoardRecord(task, { agent: mayReadAgent, box: mayReadBox }), ...dependencyView(task, orchestrator.tasks!) }), send })) return;
+        const audienceAgents = new Set(registry.list().map(agent=>agent.id)), audiencePeople = new Set(principals.list().flatMap(person=>[person.id,...person.identities])); const taskView = (task: Task) => { const forks = orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []; return { ...task, progress: summarizeTaskProgress(task, 128, { agent: mayReadAgent, box: mayReadBox }), needsApprovals: taskExecutions.approvals(task.id, { task: () => mayReadTask(task), agent: mayReadAgent, box: mayReadBox }, orchestrator.policy.pending()), stage: taskStage(task, sideDoorStage(task)), configVersions: switchesForTask(registry, task.id), ...(forks.length ? { forks } : {}), ...dependencyView(task, orchestrator.tasks!) }; };
+        if (taskListRoute(route, url, res, { audience: task => taskAudience(task,audienceAgents,audiencePeople), pages: taskListPages, tasks: () => orchestrator.tasks?.list() ?? [], allowed: mayReadTask, detail: taskView, summary: task => ({ ...taskBoardRecord(task, { agent: mayReadAgent, box: mayReadBox }), ...dependencyView(task, orchestrator.tasks!) }), send })) return;
         if (route === "GET /api/tasks") {
           send(res, 200, { tasks: orchestrator.tasks?.list().filter(mayReadTask).map(taskView) ?? [] });
           return;
@@ -4119,7 +4120,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const created = board.create({
             title: String(body.title ?? ""),
             ...(typeof body.description === "string" ? { description: body.description } : {}),
-            requester: caller.userId ?? "web",
+            requester: caller.userId ?? "web", origin: {kind:"user"},
             ...(typeof body.assigneeId === "string" && body.assigneeId !== "" ? { assigneeId: body.assigneeId } : {}),
             ...(typeof body.reviewerId === "string" && body.reviewerId !== "" ? { reviewerId: body.reviewerId } : {}),
           });
@@ -6034,7 +6035,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             questions: questions.list(),
             nameOf: id => registry.tryGet(id)?.profile.name ?? principals.list().find(person => person.id === id)?.name ?? id,
             unanswered: involuteUnanswered, workOf: id => workRootOf(registry.tryGet(id) !== undefined ? registry.boxOf(id) : undefined), // where a submission's files are (INV-1737)
-            paused: orchestrator.bus.pausedChains(), agentIds: new Set(registry.list().map(agent => agent.id)), approvals: orchestrator.policy.pending().filter(item => caller.userId === undefined || mayReadAgent(item.agentId)), outbox: orchestrator.outboxDrafts.waiting().filter(draft => caller.userId === undefined || mayReadAgent(draft.agentId)), // drafts in the Outbox (INV-1739); a parked command is the commonest block (INV-1627)
+            personIds: new Set(principals.list().flatMap(person=>[person.id,...person.identities])), paused: orchestrator.bus.pausedChains(), agentIds: new Set(registry.list().map(agent => agent.id)), approvals: orchestrator.policy.pending().filter(item => caller.userId === undefined || mayReadAgent(item.agentId)), outbox: orchestrator.outboxDrafts.waiting().filter(draft => caller.userId === undefined || mayReadAgent(draft.agentId)), // drafts in the Outbox (INV-1739); a parked command is the commonest block (INV-1627)
             undeliverable: outbox.problems(), exceptionsHanded: orchestrator.exceptions.list().filter(entry => entry.handedAt !== undefined && entry.resolvedAt === undefined && (entry.agent === undefined || caller.userId === undefined || mayReadAgent(entry.agent))), routinesHeld: (await orchestrator.scheduler.status()).filter(entry => entry.hold !== undefined && mayReadBox(entry.boxId ?? registry.box.id)).map(entry => ({ slug: entry.slug, name: entry.name, ...entry.hold! })), // INV-1665
             chatKeyOf: conversation => conversations.chatKeyFor(conversation), // The stage table's reads (INV-1464).
             active: taskActive,

@@ -15,17 +15,20 @@ function taskBoardMarkup(task) {
   return '<article class="task-row"><div class="task-reading-status task-status-' + esc(task.status) + '">' + esc(task.proposedBy ? t("ui.app.proposed") : state) + '</div><a href="#" class="task-title" data-open="' + esc(task.id) + '">' + esc(task.title) + '</a>' + (progress ? '<p class="task-meta">' + esc(progress) + '</p>' : '') + (hint ? '<p class="dim task-meta task-preview">' + esc(hint) + '</p>' : '') + (owed ? '<p class="task-meta task-warn task-preview">' + esc(t("ui.app.needs-you")) + ' ' + esc(owed) + '</p>' : '') + '<div class="task-card-footer">' + (task.conversation ? '' : esc(t("ui.tc.unlinked")) + ' · ') + meta + esc(new Date(task.updatedAt).toLocaleString()) + '</div><a href="#" class="task-reading-action" data-open="' + esc(task.id) + '">' + esc(t(task.status === "review" ? "ui.tc.viewResult" : "ui.tc.viewTask")) + ' →</a></article>';
 }
 function newBoardPage() { return {ids:[],nodes:new Map(),cursor:null,next:null,stack:[],query:"",loading:null,generation:0,total:0,dirty:false,refreshIds:false}; }
+var internalTaskRecords = false;
 var taskBoardState = Object.assign(newBoardPage(),{mode:"context",context:""}), taskOtherState = newBoardPage();
-function boardKey() { return taskBoardState.mode === "team" ? "team" : String(current || "") + ":" + String(currentConversation || "main"); }
+function boardKey() { return (taskBoardState.mode === "team" ? "team" : String(current || "") + ":" + String(currentConversation || "main")) + JSON.stringify(internalTaskRecords); }
 function resetBoardPage(state,list) {
   state.generation++; state.loading = null; state.query = ""; state.ids = []; state.nodes.clear(); state.cursor = null; state.stack = []; state.next = null; state.refreshIds = false; state.total = 0; state.dirty = false;
   $(list).textContent = ""; $(list).scrollTop = 0;
 }
+$("task-records-toggle").onclick = function () { internalTaskRecords = !internalTaskRecords; refreshTasks(true); };
 function taskScopeHeader() {
+  $("task-records-toggle").textContent = t(internalTaskRecords ? "ui.tc.userRecords" : "ui.tc.internalRecords");
   var team = taskBoardState.mode === "team", member = current ? nameOf(current) : "";
   $("taskscope-title").textContent = team ? t("ui.tc.team") : current ? t("ui.tc.memberTasks",{name:member}) : t("ui.page.tasks");
   var conv = typeof conversationLabel === "function" ? conversationLabel((typeof convLoaded !== "undefined" ? convLoaded : []).find(function (c) { return c.id === currentConversation; }) || {id:currentConversation || "main"}) : currentConversation || "main";
-  $("taskscope-note").textContent = team ? t("ui.tc.teamNote") : current ? t("ui.tc.conversation",{name:conv}) : t("ui.tc.chooseMember");
+  $("taskscope-note").textContent = internalTaskRecords ? t("ui.tc.internalNote") : team ? t("ui.tc.teamNote") : current ? t("ui.tc.conversation",{name:conv}) : t("ui.tc.chooseMember");
   $("taskscope-back").hidden = !team || !current; $("taskothers").hidden = team || !current;
   $("taskother-label").textContent = t("ui.tc.otherConversations",{name:member});
   document.body.classList.toggle("task-team-visible",team && $("tasksview").style.display !== "none");
@@ -69,6 +72,7 @@ function readTaskBoard(state,force,other) {
     if (full) {
       var priority = (window.lastAttention && window.lastAttention.mine || []).map(function (item) { return item.ref; }).filter(function (id) { return /^t\d+$/.test(id); }).slice(0,100);
       var query = new URLSearchParams({limit:"50",priority:priority.join(",")});
+      query.set("records",internalTaskRecords ? "internal" : "user");
       if (taskBoardState.mode !== "team") { query.set("agent",current); query.set("conversation",currentConversation || "main"); if (other) query.set("other","1"); }
       state.query = query.toString();
     }
@@ -108,7 +112,7 @@ document.addEventListener("click",function (event) {
 $("taskotherlist").addEventListener("click",function (event) { var link = event.target.closest("[data-open]"); if (link) { event.preventDefault(); window.openTaskFocus(link.getAttribute("data-open")); } });
 var taskBoardChangeQueued = false;
 window.noteTaskBoardChange = function (event) {
-  if (taskBoardState.ids.indexOf(event.taskId) < 0) taskBoardState.dirty = true;
+  // The authorized, audience-filtered head decides whether new user work arrived.
   if (window.taskFocusVisible || $("tasksview").style.display === "none" || taskBoardChangeQueued) return;
   taskBoardChangeQueued = true; setTimeout(function () { taskBoardChangeQueued = false; if (!window.taskFocusVisible && $("tasksview").style.display !== "none") refreshTasks(); },500);
 };
