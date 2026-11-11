@@ -15,7 +15,7 @@ const names = (id: string) => id.toUpperCase();
 function claimed(store: TaskStore, evidence: string[] = ["/work/report.md: the report"], requester = "chris"): Task {
   const task = store.create({ title: "Write the report", requester, assigneeId: "ada", reviewerId: "bob", contract: { acceptance: "report.md exists and names the quarter" } })!;
   store.update(task.id, { status: "doing" }, "ada");
-  return store.update(task.id, { status: "review", evidence }, "ada")!.task;
+  return store.deliveryCommand(task.id, "submit", "ada", { evidence })!.task;
 }
 
 test("dispatch goes to K reviewers only: the named one first, never the assignee or requester, the same set each time", () => {
@@ -74,7 +74,7 @@ test("the K+1-th reviewer gets a citation, not a round; new evidence changes the
 
   // New evidence: the same task, a new digest, the old records no longer apply.
   const reopened = store.update(task.id, { status: "doing", note: "the quarter is wrong" }, "chris")!.task;
-  const resubmitted = store.update(reopened.id, { status: "review", evidence: ["/work/report.md: Q3 named now"] }, "ada")!.task;
+  const resubmitted = store.deliveryCommand(reopened.id, "submit", "ada", { evidence: ["/work/report.md: Q3 named now"] })!.task;
   assert.notEqual(evidenceDigest(resubmitted), first.digest);
   const third = planRound(resubmitted, ledger, team, 2);
   assert.equal(third.reviewers.length, 2, "dispatched again under the new digest");

@@ -192,7 +192,7 @@ test("waiting is not abandonment: blocked, in review, waiting on somebody, or sn
     const blocked = store.create({ title: "invoice approval", requester: "chris", assigneeId: "bot", due: "2026-09-05", now: T0 })!;
     store.update(blocked.id, { status: "blocked", note: "waiting for finance" }, "bot", undefined, T0);
     const inReview = store.create({ title: "the delta", requester: "chris", assigneeId: "bot", reviewerId: "mia", due: "2026-09-05", now: T0 })!;
-    store.update(inReview.id, { status: "review" }, "bot", undefined, T0);
+    store.deliveryCommand(inReview.id, "submit", "bot", {}, undefined, T0);
     const waiting = store.create({ title: "supplier quote", requester: "chris", assigneeId: "bot", due: "2026-09-05", now: T0 })!;
     store.update(waiting.id, { waitingOn: "the supplier, who answers at month end" }, "bot", undefined, T0);
     const later = store.create({ title: "next month's migration", requester: "chris", assigneeId: "bot", due: "2026-10-31", now: T0 })!;

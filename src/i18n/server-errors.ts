@@ -138,6 +138,9 @@ export const SERVER_ERRORS = {
   "err.version-unknown": ["没有这个版本。", "No such version."],
   // ── tasks, routines and approvals ────────────────────────────────────────────────────────────
   "err.task-unknown": ["没有任务 {task}。", "No task {task}."],
+  "err.task-delivery-action": ["请选择提交结果、请求检查或接受结果。", "Use submit, request_check or accept."],
+  "err.task-delivery-version": ["交付版本无效，请重新读取任务。", "Invalid delivery version; read the current task."],
+  "err.task-delivery-refused": ["操作未执行：{reason}", "Delivery refused: {reason}"],
   "err.task-none": ["没有这个任务。", "No such task."],
   "err.task-board-missing": ["这个安装没有任务板。", "No task board on this installation."],
   "err.task-needs-title": ["任务需要一个标题。", "A task needs a title."],

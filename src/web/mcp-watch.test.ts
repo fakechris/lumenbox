@@ -52,9 +52,9 @@ test("a wait returns as soon as a matching task moves; with nothing, it times ou
 test("only what a watcher reads is an event: status, stage, a goal's status and pause; a note is not", () => {
   const { board, feed } = wired();
   const cursor = feed.since(undefined, () => true).cursor;
-  const plain = board.create({ title: "count", requester: "p1" })!;
+  const plain = board.create({ title: "count", requester: "p1", assigneeId: "a1" })!;
   board.update(plain.id, { status: "doing" }, "a1");
-  board.update(plain.id, { status: "review", note: "held" }, "a1");
+  board.deliveryCommand(plain.id, "submit", "a1", { note: "held" });
   const task = board.create({ title: "digest", requester: "p1", conversation: "c1", pursuit: newPursuit({ objective: "digest", workId: "w" }) })!;
   board.update(task.id, { status: "doing" }, "a1");
   board.update(task.id, { note: "just a note" }, "a1");

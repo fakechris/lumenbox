@@ -1,3 +1,4 @@
+import { taskDeliveryRoute } from "./task-delivery-routes.ts";
 import { taskAudience } from "../host/task-audience.ts";
 import {workControlFor, workControlRoute} from "./work-control-routes.ts";
 import {WORK_CONTROL_JS} from "./work-control-ui.ts";
@@ -1706,16 +1707,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       started: taskId => {
         orchestrator.tasks?.update(taskId, { status: "doing" }, "channel");
       },
-      // The requester's word closes reviewed work. `by` is their principal id — not the
-      // assignee, so the review gate passes; not "channel", so the record says who
-      // accepted. A task not in review means the word was chat, and the caller lets it
-      // fall through to the agent rather than inventing a verdict.
+      // Authorized channel acceptance uses the same delivery command as Web and Tasks.
       accept: (taskId, identity) => {
         const task = orchestrator.tasks?.get(taskId);
         if (task === undefined) return "unknown";
         if (task.status !== "review") return "not_review";
         const by = principals.resolve(identity).id;
-        const updated = orchestrator.tasks?.update(taskId, { status: "done", note: "验收通过" }, by);
+        const updated = orchestrator.tasks?.deliveryCommand(taskId, "accept", by, { note: "验收通过" });
         return updated?.task.status === "done" ? "done" : "not_review";
       },
       stillWorking: (taskId, note) => { orchestrator.tasks?.update(taskId, { status: "doing", note }, "channel"); }, // A turn ended but a command runs on (INV-1461): doing until that job's wake finishes it.
@@ -4223,6 +4221,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
+        const delivered = await taskDeliveryRoute(route, { board: orchestrator.tasks, refused: () => refused(), readJson: () => readJson(req), mayRead: mayReadTask, by: caller.userId ?? "web", view: taskView }); if (delivered) { if (delivered.status) send(res, delivered.status, delivered.body); return; }
         if (route === "POST /api/tasks/update") {
           if (refused()) return;
           const board = orchestrator.tasks;
@@ -4259,7 +4258,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 404, apiError("task-unknown", { task: String(body.id ?? "") }));
             return;
           }
-          send(res, 200, { task: taskView(updated.task), ...(updated.coerced ? { note: updated.coerced } : {}) });
+          send(res, updated.coerced ? 409 : 200, { task: taskView(updated.task), ...(updated.coerced ? { note: updated.coerced } : {}) });
           return;
         }
         // A close proposal (INV-529) and its objection: the assignee's way of not waiting

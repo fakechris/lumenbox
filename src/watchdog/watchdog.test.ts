@@ -21,13 +21,13 @@ const nameOf = (id: string) => id;
 
 test("each rule fires on what the record shows and stays quiet otherwise", () => {
   const board = new TaskStore(null);
-  const plain = board.create({ title: "count", requester: "p1", now: T0 })!;
+  const plain = board.create({ title: "count", requester: "p1", assigneeId: "a1", now: T0 })!;
   board.update(plain.id, { status: "doing" }, "a1", undefined, T0);
   const record = () => taskRecord(board.get(plain.id)!, { nameOf });
   assert.deepEqual(findingsFor(record(), false, at(59)), [], "under the hour: quiet");
   assert.deepEqual(findingsFor(record(), false, at(61)).map(f => f.rule), ["stalled"]);
   assert.equal(findingsFor(record(), false, at(61))[0]!.note, findingsFor(record(), false, at(300))[0]!.note, "the note does not count minutes, so the same flag is recognised");
-  board.update(plain.id, { status: "review", note: "held" }, "a1", undefined, at(1));
+  board.deliveryCommand(plain.id, "submit", "a1", { note: "held" }, undefined, at(1));
   assert.deepEqual(findingsFor(record(), false, at(300)), [], "in review: a person's, not stalled");
 
   const goal = board.create({ title: "digest", requester: "p1", conversation: "c1", pursuit: newPursuit({ objective: "digest", workId: "w", now: T0 }), now: T0 })!;

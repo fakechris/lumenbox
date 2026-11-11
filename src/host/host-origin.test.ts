@@ -70,7 +70,7 @@ test("scenario: an admitted audit is answered in its own host context; the perso
     const vic = registry.create({ name: "Vic" });
     const tasks = new TaskStore(null);
     const task = tasks.create({title:"Check the import",requester:"person",assigneeId:registry.create({name:"Worker"}).id,reviewerId:vic.id})!;
-    tasks.update(task.id,{status:"review"},task.assigneeId!);
+    tasks.deliveryCommand(task.id,"submit",task.assigneeId!);
     const scope = {taskId:task.id,digest:evidenceDigest(tasks.get(task.id)!),reviewerId:vic.id};
     const conversation = auditConversation(scope);
     const capture: ModelCapture = { params: [] };
@@ -158,7 +158,7 @@ test("submitting the current task during a tool round preserves the final user r
     const task=tasks.create({title:"Install the package",requester:"chris",assigneeId:mia.id,contract:{acceptance:"The installation was checked"}})!;
     let calls=0;
     const orch=new Orchestrator({registry,useBox:false,inbox:null,mcp:null,hooks:null,tasks,extensions:null,pendingWork:null,
-      client:fakeModel(()=>({id:"response",type:"message",role:"assistant",model:"test",content:calls++===0?[{type:"tool_use",id:"submit",name:"Tasks",input:{action:"update",id:task.id,status:"review"}}]:[{type:"text",text:"The installation was checked and submitted for review."}],stop_reason:calls===1?"tool_use":"end_turn",stop_sequence:null,usage:{input_tokens:10,output_tokens:5}} as never))});
+      client:fakeModel(()=>({id:"response",type:"message",role:"assistant",model:"test",content:calls++===0?[{type:"tool_use",id:"submit",name:"Tasks",input:{action:"submit",id:task.id}}]:[{type:"text",text:"The installation was checked and submitted for review."}],stop_reason:calls===1?"tool_use":"end_turn",stop_sequence:null,usage:{input_tokens:10,output_tokens:5}} as never))});
     orch.bus.workAttention!.existing(mia.id,"main","task-install",task.id);
     await orch.prompt(mia.id,"Finish and report the installation",{userId:"chris"});
     assert.equal(calls,2,"submission must not invalidate its own final response");

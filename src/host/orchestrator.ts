@@ -1,3 +1,4 @@
+import { requestsResultCheck } from "./task-delivery.ts";
 import { taskAttentionChanged, taskWorkId } from "./task-attention.ts";
 import { WorkAttention, workStateConversation } from "../agents/work-attention.ts";
 import { randomUUID } from "node:crypto";
@@ -847,10 +848,9 @@ export class Orchestrator {
   }
 
   private maybeAudit(task: Task): void {
-    if (task.status !== "review" || task.reviewerId === undefined) return;
+    if (task.status !== "review" || task.reviewerId === undefined || !requestsResultCheck(task.history.at(-1))) return;
     if (this.auditing.has(task.id)) return;
     const last = task.history[task.history.length - 1];
-    // The record's own moves and a reviewer's own moves must not retrigger: after either, the next actor is a person or the assignee.
     if (last?.by === "audit-guard" || last?.by === REVIEW_ACTOR || last?.by === task.reviewerId || this.verifications.recordsFor(task.id, evidenceDigest(task)).some(r => r.reviewerId === last?.by)) return;
     if (this.registry.tryGet(task.reviewerId) === undefined) return;
     const assignee = task.assigneeId !== undefined ? this.registry.tryGet(task.assigneeId) : undefined;

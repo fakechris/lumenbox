@@ -7,7 +7,7 @@ import { TaskWorkRoots, type TaskWorkRoot } from "./work-root-store.ts";
  * whose acceptance is "done". Runs are linked by the turn id on every change; the transcript is the evidence.
  *
  * Work roots are durable before admission; acceptance remains independently gated.
- *   1. **A named reviewer means the assignee cannot accept its own work.** The attempt lands in review with a
+ *   1. **A named reviewer means the assignee cannot accept its own work.** Refusal leaves the task unchanged with a
  *      note saying so; a gate the worker can wave itself through is decoration.
  *   2. **Somebody the task is not about cannot end it.** Chat acceptance is keyed by conversation, so a colleague
  *      in a shared room could type 可以 and close work that was never theirs; their attempt is refused.
@@ -29,6 +29,7 @@ import { appendLine, appendLineDurably, type LedgerKind } from "./jsonl.ts";
 import { applyFlag, type FlagOutcome, type TaskFlag } from "./task-flag.ts"; import { applyDeliverable, type TaskDeliverable } from "./task-deliverables.ts"; import { applyReply } from "./task-reply.ts";
 import { applyRevalidation, applyWithdrawal, grantMandate, type Mandate, type MandateWorld, type RevalidationResult } from "./mandate.ts";
 import { Receipts } from "./receipts.ts";
+import { deliverTask, type DeliveryAction, type DeliveryOptions, type DeliveryRecord, type DeliveryResult } from "./task-delivery.ts";
 import { clampDescription, dueOf, type TaskContract } from "./task-fields.ts";
 import { refuseUnknownAgents, type TaskAgents } from "./task-agents.ts"; import { notReady, openBlockers, PLAN_ACTOR, refuseBlockers } from "./task-deps.ts"; import { inferLevel, type Level } from "./autonomy-level.ts"; import type { Discovery } from "./discovery.ts";
 
@@ -63,6 +64,7 @@ export function isLive(status: TaskStatus): boolean {
 }
 
 export interface TaskChange {
+  delivery?: DeliveryRecord;
   at: string;
   /** Who moved it: an agent id, a principal id, or "web". */
   by: string;
@@ -101,6 +103,7 @@ export interface TaskChange {
 }
 
 export interface Task {
+  delivery?: DeliveryRecord;
   progress?: TaskProgressState; workRoot?: TaskWorkRoot;
   id: string;
   title: string;
@@ -282,7 +285,7 @@ export class TaskStore {
      * story; "why was this closed" has to survive past that, and has to be findable by
      * subject rather than by scrolling.
      */
-    private readonly receipts: Receipts = new Receipts(null)
+    private readonly receipts: Receipts = new Receipts(path === null ? null : join(dirname(path), "receipts.jsonl"))
   ) {
     this.replay();
     for (const task of this.tasks.values()) if (task.pursuit && !task.progress) {
@@ -449,13 +452,6 @@ export class TaskStore {
   }
 
   /**
-   * Moves, reassigns or annotates a task, recording who did it and in which run.
-   *
-   * Returns the updated task plus `coerced` when the review gate redirected a
-   * self-acceptance — so the caller can say so instead of silently disagreeing with
-   * what the model believes it did.
-   */
-  /**
    * What the end of a turn means for the task that turn was working.
    *
    * Not "done". A turn ending is a fact about a process; done is a judgement about work,
@@ -487,16 +483,18 @@ export class TaskStore {
     // somebody will check them, and "stopped" is not "checked" (INV-817): it waits in review
     // for the requester, the named reviewer, or the audit.
     const held = heldForReview(task);
-    if (held !== undefined) {
-      return this.update(id, { status: "review", note: `turn ended; not closed because ${held} — stopped, not verified` }, by, undefined, now);
-    }
+    if (held !== undefined || task.reviewerId !== undefined) return this.deliveryCommand(id, "submit", by, { note: `turn ended; result submitted; stopped, not verified${held ? `: ${held}` : ""}` }, undefined, now);
     return this.update(id, { status: "done" }, by, undefined, now);
   }
+
+  mayDeliver(task: Task, by: string, action: DeliveryAction): boolean { return !(action === "accept" && task.reviewerId !== undefined && task.reviewerId !== by && by === task.assigneeId) && ([task.requester, task.assigneeId, task.reviewerId].includes(by) || HARNESS_ACTORS.has(by)); }
+  deliveryCommand(id: string, action: DeliveryAction, by: string, options?: DeliveryOptions, run?: string, now?: Date): DeliveryResult | undefined { return deliverTask(this, id, action, by, options, run, now); }
+  refuseDelivery(task: Task, by: string, reason: string, now = new Date()): void { this.receipts.write({ at: now.toISOString(), by, subject: `task:${task.id}`, decision: "delivery refused", because: reason }); }
 
   update(
     id: string,
     changes: {
-      status?: TaskStatus; level?: Level; // a person's own level (INV-1650): recorded with who set it
+      delivery?: DeliveryRecord; status?: TaskStatus; level?: Level; // a person's own level (INV-1650): recorded with who set it
       assigneeId?: string | null;
       reviewerId?: string | null;
       note?: string;
@@ -520,9 +518,12 @@ export class TaskStore {
     if (task === undefined) return undefined;
     refuseUnknownAgents(this.agents, changes); if (changes.blockedBy !== undefined) refuseBlockers(this.tasks, id, changes.blockedBy);
 
+    if (task.workRoot?.state.status === "cancelled" && changes.status !== undefined && changes.status !== "dropped") { const reason = "This work was cancelled; a late task update cannot restart or accept it."; this.refuseDelivery(task, by, reason, now); return { task, coerced: reason }; }
     const at = now.toISOString();
     let coerced: string | undefined;
     let status = changes.status;
+
+    if (status === "review" && changes.delivery === undefined && !HARNESS_ACTORS.has(by)) { this.refuseDelivery(task, by, "Use submit to deliver a result, or request_check for an existing submission. The task has not moved.", now); return { task, coerced: "Use submit to deliver a result, or request_check for an existing submission. The task has not moved." }; }
 
     // A pursuit's status is derived from the goal's state and moves only through the gate
     // (docs/74 §7 R1). The review found three routes to `done` besides the gate — the
@@ -557,22 +558,8 @@ export class TaskStore {
     }
     const unready = status === "doing" && task.status !== "doing" && !HARNESS_ACTORS.has(by) ? notReady({ ...task, ...(changes.blockedBy !== undefined ? { blockedBy: changes.blockedBy } : {}) }, this.tasks) : undefined; if (unready !== undefined) { coerced = unready; status = undefined; } // ready means nothing it waits on is open (INV-1740)
 
-    // The review gate. Two rules, both about who may say a thing is finished, because
-    // "done is the requester's word" was prose in an audit prompt and prose is not a gate.
-    //
-    // 1. An assignee may not accept its own work when a reviewer was named. That is the
-    //    original rule and the reason naming a reviewer means anything.
-    // 2. Only the requester or the named reviewer may accept at all. Found by review:
-    //    acceptance in a chat is keyed by *conversation*, so any authorised person in a
-    //    shared room could type 可以 and close somebody else's task — and with no reviewer
-    //    named, the assignee could close its own. The people who may end a piece of work
-    //    are the person who asked for it and the person appointed to check it; anyone else
-    //    saying so is a remark, not a verdict.
-    const belongsToTask =
-      by === task.requester ||
-      by === task.assigneeId ||
-      (task.reviewerId !== undefined && by === task.reviewerId) ||
-      HARNESS_ACTORS.has(by);
+    // Legacy acceptance still obeys the store gate; a refusal does not submit work.
+    const belongsToTask = this.mayDeliver(task, by, "accept");
 
     // Rule one, unchanged: a named reviewer means the assignee cannot accept its own work.
     if (
@@ -581,10 +568,9 @@ export class TaskStore {
       task.reviewerId !== by &&
       by === task.assigneeId
     ) {
-      status = "review";
-      coerced =
-        `This task names ${task.reviewerId} as its reviewer, so its assignee cannot mark it ` +
-        `done. It is now in review instead; ${task.reviewerId} accepting it is what done means.`;
+      status = undefined;
+      coerced = `This task names ${task.reviewerId} as its reviewer, so its assignee cannot mark it done. ` +
+        `It has not moved. Use submit to deliver the result for checking; acceptance belongs to the authorized requester or reviewer.`;
     } else if (status === "dropped" && task.proposedBy === undefined && by !== task.requester && by !== task.reviewerId && by !== AGING_ACTOR && !HARNESS_ACTORS.has(by)) { // a proposal is not work yet: anyone may dismiss it (INV-1652)
       // Dropping is ending the work too, and it was never gated (INV-531). docs/51 says
       // "an agent does not archive; it proposes and the proposal is answerable" — but the
@@ -609,7 +595,10 @@ export class TaskStore {
         `a verdict from somebody the work was not for is a remark.`;
     }
 
+    if (coerced !== undefined) { this.refuseDelivery(task, by, coerced, now); return { task, coerced }; }
+
     const change: TaskChange = {
+      ...(changes.delivery ? { delivery: changes.delivery } : {}),
       at,
       by,
       ...(status !== undefined ? { status } : {}),
@@ -646,6 +635,7 @@ export class TaskStore {
 
     const updated: Task = {
       ...task,
+      ...(changes.delivery ? { delivery: changes.delivery } : {}),
       ...(changes.title !== undefined && changes.title.trim() !== ""
         ? { title: changes.title.replace(/\s+/g, " ").trim().slice(0, 200) }
         : {}),

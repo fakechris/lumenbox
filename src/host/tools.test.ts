@@ -378,7 +378,7 @@ test("a reviewer that has checked nothing this turn cannot accept a task", async
   try {
     const tasks = new TaskStore(join(dir, "tasks.jsonl"));
     tasks.create({ title: "Ship it", requester: "web", assigneeId: "ada", reviewerId: "bob" });
-    tasks.update("t1", { status: "review" }, "ada");
+    tasks.deliveryCommand("t1", "submit", "ada");
     const contextFor = (used: string[]) =>
       ({
         agent: { id: "bob", profile: { name: "Bob" } },
@@ -397,7 +397,7 @@ test("a reviewer that has checked nothing this turn cannot accept a task", async
     // Sending it back needs no inspection to be allowed — a note is not a verdict.
     const back = await dispatchTool("Tasks", { action: "update", id: "t1", status: "doing", note: "tests?" }, contextFor(["Tasks"]));
     assert.ok(!back.isError, back.text);
-    tasks.update("t1", { status: "review" }, "ada");
+    tasks.deliveryCommand("t1", "submit", "ada");
 
     // After a real look, acceptance stands.
     const accepted = await dispatchTool("Tasks", { action: "update", id: "t1", status: "done" }, contextFor(["read_file", "Tasks"]));
@@ -438,7 +438,7 @@ test("a skill that names the host's ledgers is not written, and a reviewer's acc
   try {
     const tasks = new TaskStore(join(dir, "tasks.jsonl"));
     tasks.create({ title: "Ship it", requester: "web", assigneeId: "ada", reviewerId: "bob" });
-    tasks.update("t1", { status: "review" }, "ada");
+    tasks.deliveryCommand("t1", "submit", "ada");
     const reviewer = {
       agent: { id: "bob", profile: { name: "Bob" } },
       registry: { tryGet: () => undefined, list: () => [] } as never,

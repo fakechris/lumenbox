@@ -243,7 +243,7 @@ test("an audit's forged write calls cannot create recursive work or replace the 
       const frontId = registry.resolve("Mia").id;
       const analyst = registry.resolve("Analyst").id;
       const task = tasks.create({ title: "Review the retained report", requester: "person", assigneeId: analyst, reviewerId: frontId, description: "AUTHORITATIVE REPORT CONTENT" })!;
-      tasks.update(task.id, { status: "review" }, analyst); target = task.id;
+      tasks.deliveryCommand(task.id, "submit", analyst); target = task.id;
       registry.writeTodos(frontId, [{ text: "Install the user's package", status: "blocked" }]);
       const audit = { taskId: task.id, digest: evidenceDigest(tasks.get(task.id)!), reviewerId: frontId };
       bus.sendFromUser(frontId, "AUDIT SNAPSHOT", { audit, conversation: auditConversation(audit), origin: "host:audit", lane: "background", steerable: false });
@@ -4150,4 +4150,27 @@ test("agent suggestions during a user request remain internal until a person com
   assert.ok(requested.origin?.workId,"the host supplies the admitted work identity");
   tasks.commit(suggestion.id,"chris");assert.equal(tasks.get(suggestion.id)!.origin?.kind,"user");
  } finally {episode.cleanup();}
+});
+
+test("a refused self-acceptance cannot create a review cascade; explicit submission leaves one check request (INV-1810)", async () => {
+  const { requestsResultCheck } = await import("./task-delivery.ts");
+  const tasks = new TaskStore(null); let target = "", round = 0, checkRequests = 0;
+  tasks.onChange(task => { if (task.id === target && requestsResultCheck(task.history.at(-1))) checkRequests++; });
+  const episode = await runEpisode({
+    team: [{ name: "Installer", tools: ["Tasks"] }, { name: "ZChecker", tools: ["Tasks"] }], tasks, says: [],
+    script: () => {
+      if (round++ === 0) return { call: "Tasks", input: { action: "update", id: target, status: "done" } };
+      if (round === 2) {
+        assert.equal(tasks.get(target)!.status, "open"); assert.equal(checkRequests, 0);
+        return { call: "Tasks", input: { action: "submit", id: target, evidence: ["package files and loader checked"] } };
+      }
+      return { say: "The installation result is submitted for checking." };
+    },
+    drive: async ({ registry, bus, frontId }) => {
+      target = tasks.create({ title: "Install the package", requester: "person", assigneeId: frontId, reviewerId: registry.resolve("ZChecker").id })!.id;
+      bus.sendFromUser(frontId, "Submit the installation result for this assigned task"); await bus.wake(frontId); await bus.idle();
+    },
+  });
+  try { assert.equal(tasks.get(target)!.status, "review", JSON.stringify(tasks.get(target)!.history)); assert.equal(checkRequests, 1); assert.equal(tasks.get(target)!.history.some(change => change.coerced), false); }
+  finally { episode.cleanup(); }
 });

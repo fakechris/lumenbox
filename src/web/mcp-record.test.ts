@@ -31,7 +31,7 @@ test("a plain task: outcome, stage, mandate, history as data; the text is what i
   const task = board.create({ title: "Count the October sales", requester: "p1", assigneeId: "a1" })!;
   board.update(task.id, { status: "doing", note: "started" }, "a1");
   for (let i = 0; i < 14; i++) board.update(task.id, { note: `step ${i}` }, "a1");
-  board.update(task.id, { status: "review", note: "incomplete (turn_budget): 60 model calls, handed back" }, "a1");
+  board.deliveryCommand(task.id, "submit", "a1", { note: "incomplete (turn_budget): 60 model calls, handed back" });
   const status = door(board, () => ({ undelivered: false, questionPending: false, active: false }));
   const now = board.get(task.id)!;
   const expectedText = `${describeOutcome(outcomeOf(now))}\n${describeTask(now, nameOf)}\n${now.history.map(change => `  ${change.at} ${nameOf(change.by)} ${change.status ?? ""} ${change.note ?? ""}`.trimEnd()).join("\n")}`;

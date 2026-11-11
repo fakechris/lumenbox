@@ -29,7 +29,7 @@ const script: Script = ({ messages }) => {
     { call: "Tasks", input: { action: "take", id: "t1" } },
     { call: "write_file", input: { path: PATH, content: REPORT } },
     { call: "DeliverFile", input: { path: PATH, note: "The Q3 summary the task asked for" } },
-    { call: "Tasks", input: { action: "update", id: "t1", status: "review", note: "Written and delivered.", evidence: [`${PATH} — the summary`] } },
+    { call: "Tasks", input: { action: "submit", id: "t1", note: "Written and delivered.", evidence: [`${PATH} — the summary`] } },
   ];
   return steps[done] ?? { say: "The Q3 summary is written and delivered on t1." };
 };
