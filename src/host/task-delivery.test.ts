@@ -39,6 +39,13 @@ test("legacy review changes and unrelated notes cannot masquerade as a submitted
     assert.equal(f.board.deliveryCommand(f.task.id, "request_check", "worker")!.outcome, "refused");
     f.board.update(f.task.id, { note: "The model says it finished" }, "worker");
     assert.equal(checks, 0);
+    f.board.deliveryCommand(f.task.id, "handoff", "worker", { note: "incomplete (turn_budget): partial result" });
+    const before = JSON.stringify(f.board.get(f.task.id));
+    for (const evidence of [undefined, ["not yet submitted artifact"]]) {
+      assert.equal(f.board.deliveryCommand(f.task.id, "request_check", "worker", { evidence })!.outcome, "refused");
+      assert.equal(JSON.stringify(f.board.get(f.task.id)), before);
+    }
+    assert.equal(f.board.deliveryCommand(f.task.id, "submit", "worker", { evidence: ["submitted artifact"] })!.outcome, "applied");
   } finally { f.cleanup(); }
 });
 

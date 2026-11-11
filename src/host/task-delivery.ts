@@ -24,6 +24,7 @@ export function deliverTask(board: TaskStore, id: string, action: DeliveryAction
   if (action === "request_check" && task.status !== "review") return refused("Submit the result first, then request a check of that result.");
   const evidence = options.evidence?.map(line => line.trim().slice(0, 300)).filter(Boolean).slice(0, 6);
   const version = evidenceDigest(evidence?.length ? { ...task, history: [...task.history, { at: now.toISOString(), by, evidence }] } : task);
+  if (action === "request_check" && version !== evidenceDigest(task)) return refused("New evidence must be submitted before requesting its check.");
   if (action === "accept" && !board.mayDeliver(task, by, action)) return refused("Only the authorized requester or reviewer may accept this result.");
   const previous = task.delivery?.version === version ? task.delivery : undefined;
   const submitted = previous?.submitted ?? previous?.action === "submit";
