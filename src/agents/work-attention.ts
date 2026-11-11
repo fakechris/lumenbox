@@ -25,7 +25,7 @@ export const messageWorkId = (message: InboundMessage): string | undefined => me
 export const personMessage = (message: InboundMessage): boolean => message.fromId === "user" && !message.synthetic && !message.origin && !message.resumeOf && !message.goal;
 const keyOf = (agent: string, conversation: string) => JSON.stringify([agent, conversation]);
 
-export interface RootPersistence { load(legacy?: {records:CurrentWork[];cancellations:CancelledWork[]}): {records: CurrentWork[]; cancellations: CancelledWork[]}; save(records: readonly CurrentWork[], cancellations: readonly CancelledWork[]): void; started?(ids:readonly string[]):void }
+export interface RootPersistence { load(legacy?: {records:CurrentWork[];cancellations:CancelledWork[]}): {records: CurrentWork[]; cancellations: CancelledWork[]}; save(records: readonly CurrentWork[], cancellations: readonly CancelledWork[]): void; started?(ids:readonly string[]):void; hasRequest?(taskId:string,messageId:string):boolean }
 
 /** Every storage adapter passes the same authority validation before projection or execution. */
 export function validateWorkRecords(data:{records:CurrentWork[];cancellations?:CancelledWork[]}):void {
@@ -81,8 +81,8 @@ export class WorkAttention {
     this.checkpoint();
   }
   epoch(agent:string,conversation:string):number {return this.epochOf(agent,conversation);}
-  generation(agent:string,conversation:string):number {return this.current.get(keyOf(agent,conversation))?.generation??0;}
-  project(state:CurrentWork,checkpoint=true):void { const row=structuredClone(state);this.roots.set(row.id,row);const key=keyOf(row.owner,row.conversation),current=this.current.get(key);if(!current||row.generation>=current.generation)this.current.set(key,row);if(checkpoint)this.checkpoint(); }
+  generation(agent:string,conversation:string):number {return Math.max(0,...[...this.roots.values()].filter(row=>row.owner===agent && row.conversation===conversation).map(row=>row.generation));}
+  project(state:CurrentWork,checkpoint=true,activate=true):void { const row=structuredClone(state);this.roots.set(row.id,row);const key=keyOf(row.owner,row.conversation),current=this.current.get(key);if(!current||row.id===current.id||activate&&row.generation>=current.generation)this.current.set(key,row);if(checkpoint)this.checkpoint(); }
   byId(id:string): CurrentWork | undefined { const work=this.roots.get(id);return work&&structuredClone(work); }
   all(): CurrentWork[] { return [...this.roots.values()].map(work=>structuredClone(work)); }
   get(agent: string, conversation: string): CurrentWork | undefined {
@@ -100,7 +100,14 @@ export class WorkAttention {
   /** Only a drained human message can claim or amend foreground work. */
   begin(agent: string, conversation: string, messages: readonly InboundMessage[]): WorkStamp | undefined {
     const humans = messages.filter(personMessage), first = humans[0];
-    if(first?.work){const admitted=this.roots.get(first.work.id);if(!admitted || !this.valid(first.work,agent))throw new Error("The admitted root is no longer executable");this.persistence?.started?.(humans.map(message=>message.id));this.settle(admitted,"running");return this.stamp(admitted);}
+    if(first?.work){
+      if(!humans.every(message=>message.work?.id===first.work!.id && this.admittedPerson(agent,conversation,message)))throw new Error("The admitted root is no longer executable");
+      this.persistence?.started?.(humans.map(message=>message.id));
+      const admitted=this.roots.get(first.work.id)!,previous=this.current.get(keyOf(agent,conversation));
+      if(previous && previous.id!==admitted.id && previous.status!=="answered" && previous.status!=="cancelled"){previous.status="waiting";previous.wait="focus";previous.reason="Focus moved to another request";}
+      const next={...admitted,status:"running" as const,reason:undefined,wait:undefined,generation:previous && previous.id!==admitted.id?this.generation(agent,conversation)+1:admitted.generation};
+      this.roots.set(next.id,next);this.current.set(keyOf(agent,conversation),next);this.save();return this.stamp(next);
+    }
     if (!first) {
       const related = messages.map(m => m.work).find(stamp => stamp && this.valid(stamp, agent));
       if (related?.owner === agent && related.conversation === conversation) this.settle(related, "running");
@@ -141,9 +148,15 @@ export class WorkAttention {
     this.save();
     return this.stamp(value);
   }
+  admittedPerson(agent:string,conversation:string,message:InboundMessage):boolean {
+    if(!personMessage(message))return false;
+    if(!message.work)return !this.persistence;
+    const work=this.roots.get(message.work.id);
+    return !!work && !work.unresolved && !this.terminations.has(work.id) && work.status!=="cancelled" && work.owner===agent && work.conversation===conversation && work.epoch===message.work.epoch && work.epoch===this.epochOf(agent,conversation) && message.work.generation<=work.generation && (work.principal??"web")===(message.principalId??"web") && (this.persistence?.hasRequest ? !!work.taskId && this.persistence.hasRequest(work.taskId,message.id) : work.messages.includes(message.id));
+  }
   eligible(agent: string, conversation: string, message: InboundMessage): boolean {
     if (this.cancelledMessage(message)) return false;
-    if (personMessage(message)) return !message.work ? !this.persistence : this.valid(message.work,agent) && (this.roots.get(message.work.id)?.principal??"web")===(message.principalId??"web");
+    if (personMessage(message)) return this.admittedPerson(agent,conversation,message);
     if (!message.informational && message.work && (!this.valid(message.work, agent) || !this.valid(message.work, message.fromId) && message.fromId !== "system" && !(message.fromId === "user" && message.synthetic))) return false;
     const current = this.get(agent, conversation);
     if (message.goal || message.resumeOf) return !current || current.status === "answered" || current.id === (message.goal?.workId ?? message.resumeOf?.workId) || !!message.goal && current.taskId !== undefined && current.taskId === message.goal.taskId;

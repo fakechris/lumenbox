@@ -266,7 +266,7 @@ export class TaskStore {
     return true;
   }
 
-  readonly workRoots = new TaskWorkRoots(() => this.list(), input => this.create(input), task => {this.saveTask(task,false,true);for(const listener of this.workListeners){try{listener(task);}catch{this.onWarn("tasks: a work observer failed after commit");}}});
+  readonly workRoots = new TaskWorkRoots(() => this.list(), input => this.create(input), task => {this.saveTask(task,false,true);for(const listener of this.workListeners){try{listener(task);}catch{this.onWarn("tasks: a work observer failed after commit");}}},id=>this.get(id));
   private readonly workListeners: ((task:Task)=>void)[]=[];
   onWorkChange(listener:(task:Task)=>void):void {this.workListeners.push(listener);}
 

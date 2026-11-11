@@ -185,7 +185,7 @@ test("admission and transition write failures fail closed, and a prepared reques
 	}
 });
 
-test("superseded roots remain queryable and revocable after restart without reviving late callbacks", () => {
+test("superseded roots remain queryable and revocable after restart without reviving late callbacks", async () => {
 	const f = fixture();
 	try {
 		const bus = f.bus();
@@ -199,6 +199,8 @@ test("superseded roots remain queryable and revocable after restart without revi
 			principalId: "p",
 			workRelation: "new",
 		});
+    assert.equal(f.focus.get(f.agent.id,"main")!.id,"install","queueing does not steal execution custody");
+    await bus.wake(f.agent.id);await bus.idle();
 		assert.equal(f.focus.get(f.agent.id, "main")!.id, "next");
 		assert.equal(f.focus.valid(old, f.agent.id), false);
 		f.reopen();
@@ -335,5 +337,26 @@ test("canonical root loading rejects corrupt state before it grants execution au
   f.bus().sendFromUser(f.agent.id,"Install the skill",{messageId:"install",principalId:"p"});
   const data=f.tasks.workRoots.load();data.records[0]!.status="not-a-state" as never;
   assert.throws(()=>new WorkAttention(undefined,()=>0,{load:()=>data,save:()=>{}}),/Invalid current-work state/);
+ }finally{f.cleanup();}
+});
+
+test("two accepted people or new requests in one conversation are both executed instead of dropping the first as stale",async()=>{
+ const f=fixture();try {
+  const ran:{id:string;work:string;principal:string}[]=[];
+  const bus=f.bus(async messages=>{ran.push({id:messages[0]!.id,work:messages[0]!.work!.id,principal:messages[0]!.principalId!});});
+  bus.sendFromUser(f.agent.id,"First request",{messageId:"first",principalId:"p"});
+  bus.sendFromUser(f.agent.id,"Second request",{messageId:"second",principalId:"p2"});
+  await bus.wake(f.agent.id);await bus.idle();
+  assert.deepEqual(ran,[{id:"first",work:"first",principal:"p"},{id:"second",work:"second",principal:"p2"}]);
+  assert.equal(f.tasks.list().length,2);
+ }finally{f.cleanup();}
+});
+
+test("explicit continuation cannot acknowledge a request under another person's execution authority",()=>{
+ const f=fixture();try {
+  const bus=f.bus();bus.sendFromUser(f.agent.id,"First request",{messageId:"first",principalId:"p"});
+  const task=f.tasks.list()[0]!;
+  assert.throws(()=>bus.sendFromUser(f.agent.id,"My follow-up",{messageId:"foreign",principalId:"other",taskBinding:{taskId:task.id,role:"executor"}}),/another principal/);
+  assert.equal(f.inbox.pending().length,1);
  }finally{f.cleanup();}
 });

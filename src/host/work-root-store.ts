@@ -15,7 +15,7 @@ export interface RootRequest {
 	relation: "new" | "continue" | "explicit";
 	state: "prepared" | "queued" | "started";
 	admission?: number;
-	selectionTaskId?: string;
+	selectionTaskId?: string; requestOf?:string;
 }
 export interface TaskWorkRoot {
 	state: CurrentWork;
@@ -30,6 +30,7 @@ export class TaskWorkRoots implements RootPersistence {
 		private readonly tasks: () => readonly Task[],
 		private readonly create: TaskStore["create"],
 		private readonly write: (task: Task) => void,
+    private readonly get:TaskStore["get"],
 	) {}
   admission(focus:WorkAttention) {
     return {
@@ -38,6 +39,7 @@ export class TaskWorkRoots implements RootPersistence {
     };
   }
 
+  hasRequest(taskId:string,id:string):boolean {return !!this.get(taskId)?.workRoot?.requests?.some(request=>request.id===id);}
 	load(legacy?: { records: CurrentWork[]; cancellations: CancelledWork[] }) {
 		const recordsWithRevocations=[...legacy?.records??[],...(legacy?.cancellations??[]).filter(row=>!legacy?.records.some(state=>state.id===row.id)).map(row=>({...row,status:"cancelled" as const,unresolved:true as const,messages:row.sourceMessages??[row.id],peers:row.participants.filter(id=>id!==row.owner),awaiting:[]}))];
     for (const state of recordsWithRevocations) {
@@ -192,6 +194,7 @@ export class TaskWorkRoots implements RootPersistence {
 			selected.sourceMessageId === message.id
 		)
 			return { message, duplicate: true };
+		if(explicit?.principal && explicit.principal!==(message.principalId??"web"))throw new Error("The work belongs to another principal; admit a separate request");
 		const previous = focus.get(agentId, conversation);
 		const continuing =
 			explicit && focus.valid(explicit, agentId)
@@ -252,7 +255,7 @@ export class TaskWorkRoots implements RootPersistence {
 			id: message.id,
 			hash,
 			relation: continuing ? "continue" : task ? "explicit" : "new",
-			state: "prepared",
+			state: "prepared",...(message.requestOf?{requestOf:message.requestOf}:{}),
 			...(selected ? { selectionTaskId: selected.id } : {}),
 		};
 		const workRoot: TaskWorkRoot = {
@@ -296,9 +299,7 @@ export class TaskWorkRoots implements RootPersistence {
 		};
 	}
   private focus(state:CurrentWork,focus:WorkAttention):void {
-    const previous=focus.get(state.owner,state.conversation);
-    if(previous && previous.id!==state.id && state.generation>=previous.generation && focus.valid(previous,previous.owner))focus.settle(previous,"waiting","focus moved to another request","focus");
-    focus.project(state);
+    focus.project(state,true,false);
   }
 
 	recover(

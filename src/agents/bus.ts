@@ -671,7 +671,7 @@ export class AgentBus {
     const queue = this.pending.get(agentId) ?? [];
     const kept = queue.filter(message => {
       if (this.workAttention!.cancelledMessage(message)) { this.inbox?.drop(message.admission); return false; }
-      if (message.informational || !message.work || this.workAttention!.valid(message.work, agentId)) return true;
+      if (message.informational || !message.work || this.workAttention!.admittedPerson(agentId,message.conversation??MAIN_CONVERSATION,message) || this.workAttention!.valid(message.work, agentId)) return true;
       this.inbox?.drop(message.admission); return false;
     });
     if (kept.length === 0) this.pending.delete(agentId); else this.pending.set(agentId, kept);

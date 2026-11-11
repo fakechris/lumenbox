@@ -1632,7 +1632,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       return "stopped";
     },
     board: {
-      admit:(taskId,messageId,text,identity)=>{const task=orchestrator.tasks?.get(taskId);if(!task?.assigneeId)throw new Error("No agent admitted to this request");const prepared=orchestrator.tasks!.workRoots.prepare(task.assigneeId,{id:messageId,text,fromId:"user",fromName:identity,principalId:principals.resolve(identity).id,conversation:task.conversation,steerable:false,taskBinding:{taskId,role:"executor"},priority:false,receivedAt:new Date().toISOString()},orchestrator.bus.workAttention!);if(prepared.message.work)orchestrator.bus.workAttention!.settle(prepared.message.work,"waiting","Awaiting channel dispatch","execution");},
+      admit:(taskId,messageId,text,identity,requestOf)=>{const task=orchestrator.tasks?.get(taskId);if(!task?.assigneeId)throw new Error("No agent admitted to this request");const prepared=orchestrator.tasks!.workRoots.prepare(task.assigneeId,{id:messageId,requestOf,text,fromId:"user",fromName:identity,principalId:principals.resolve(identity).id,conversation:task.conversation,steerable:false,taskBinding:{taskId,role:"executor"},priority:false,receivedAt:new Date().toISOString()},orchestrator.bus.workAttention!);if(prepared.message.work)orchestrator.bus.workAttention!.settle(prepared.message.work,"waiting","Awaiting channel dispatch","execution");},
       open: input => {
         const tasks = orchestrator.tasks;
         if (tasks === undefined) return undefined;

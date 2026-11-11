@@ -87,7 +87,7 @@ export interface InboundMessage {
    */
   threadKey?: string;
   /** An explicit answer button; validated against its owner and conversation. */
-  questionId?: string;
+  questionId?: string; requestOf?:string;
   /**
    * Which chat the message came from, when that is not the same thing as who sent
    * it — a Feishu group's id, a DingTalk conversation. This is what the agent's
@@ -281,7 +281,7 @@ export interface ChannelAdapter {
 
 /** A pending consent, as a card with buttons renders it. */
 export interface QuestionCardState {
-  questionId?: string;
+  questionId?: string; requestOf?:string;
   agentName: string;
   question: string;
   /** Buttons carry questionId; typed answers must name it with /answer. */
@@ -553,7 +553,7 @@ export interface ChannelManagerDeps {
    * loses failed work answers "what needs somebody" wrong.
    */
   board?: {
-    admit?: (taskId:string,messageId:string,text:string,identity:string)=>void;
+    admit?: (taskId:string,messageId:string,text:string,identity:string,requestOf?:string)=>void;
     open: (input: {
       title: string;
       /**
@@ -877,7 +877,7 @@ export class ChannelManager {
    * the agent to decide for itself rather than to wait for an answer nobody will give.
    */
   askQuestion(input: {
-    questionId?: string;
+    questionId?: string; requestOf?:string;
     conversation?: string;
     principalId?: string;
     agentId: string;
@@ -1659,7 +1659,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       const mandate = this.deps.board?.revalidate?.(owner.taskId, message.identity);
       if (mandate?.status === "stale") return reauthorisationNeeded(owner.taskId, mandate);
       const followUp = this.runTask(adapter, message, agentName ?? this.deps.defaultAgentFor?.(adapter.name), followUpPrompt({ id: owner.taskId, title: owner.title }, text), undefined, { existingTaskId: owner.taskId, cardTitle: `跟进：${owner.title}` })
-        .then(() => { const why = this.deps.board?.handedBack?.(owner.taskId); if (why !== undefined) { this.deps.log(`channel ${adapter.name}: ${owner.taskId} handed the follow-up back (${why}); routing it as new work`); return this.runTask(adapter, message, agentName ?? this.deps.defaultAgentFor?.(adapter.name), text, undefined, { cardTitle: firstLine(text) }); } return undefined; })
+        .then(() => { const why = this.deps.board?.handedBack?.(owner.taskId); if (why !== undefined) { this.deps.log(`channel ${adapter.name}: ${owner.taskId} handed the follow-up back (${why}); routing it as new work`); return this.runTask(adapter, {...message,id:`reroute:${message.id}`,requestOf:message.id}, agentName ?? this.deps.defaultAgentFor?.(adapter.name), text, undefined, { cardTitle: firstLine(text) }); } return undefined; })
         .catch(error => { this.deps.log(`channel ${adapter.name}: follow-up failed (${error instanceof Error ? error.message : String(error)})`); })
         .finally(() => { this.inflight.delete(followUp); this.inflightContexts.delete(followUp); });
       this.inflight.add(followUp); this.inflightContexts.set(followUp, conversationKey);
@@ -2047,7 +2047,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       // a task with the wrong conversation looks exactly like a task with a quiet one.
       threadKey: message.threadKey ?? chatKey,
     });
-    if(taskId && message.id)this.deps.board?.admit?.(taskId,message.id,prompt,message.identity);
+    if(taskId && message.id)this.deps.board?.admit?.(taskId,message.id,prompt,message.identity,message.requestOf);
     this.runningWork.set(runningKey, [...(this.runningWork.get(runningKey) ?? []), runningEntry]);
     mark("working");
     if (taskId !== undefined) {

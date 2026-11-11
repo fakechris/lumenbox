@@ -105,5 +105,6 @@ export interface InboundMessage {
    * runs with no inner continuation; the goal loop decides at start whether it still applies.
    */
   goal?: GoalMarker;
+  requestOf?:string;
   taskBinding?: TaskBinding;
 }
