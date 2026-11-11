@@ -1902,7 +1902,7 @@ export class Orchestrator {
       scopes: this.scopes,
       bundles: this.bundles,
       operatorRules: () => this.rules.forReview(),
-      mcp: this.mcp,
+      mcp: isolated ? undefined : this.mcp,
       askUser: this.options.askUser,
       showUI: this.options.showUI,
       askSecret: this.options.askSecret,

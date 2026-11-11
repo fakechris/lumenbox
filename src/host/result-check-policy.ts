@@ -18,6 +18,7 @@ interface CheckPlan { id: string; taskId: string; digest: string; goal: string; 
 interface CheckAccount { key: string; taskId: string; goal: string; by: string; policy: ResultCheckPolicy; rounds: number; dispatches: number; calls: number; reservedCost: number; startedAt?: number; plans: CheckPlan[] }
 export interface CheckSnapshot { policy: ResultCheckPolicy; rounds: number; dispatches: number; calls: number; reservedCost: number; startedAt?: number; plans: readonly CheckPlan[] }
 const hash = (input: unknown) => createHash("sha256").update(JSON.stringify(input)).digest("hex");
+const effectivePlan = (plan: CheckPlan, now: number): CheckPlan => plan.phase === "running" && plan.deadline <= now ? { ...plan, phase: "stopped", reason: "The check's cumulative time allowance is exhausted." } : plan;
 const keyOf = (task: Task) => task.workRoot?.state.id ?? task.id;
 export const checkGoal = (task: Task): string => hash([task.id, task.title, task.description, task.contract, task.workRoot?.state.id, task.workRoot?.state.generation, task.workRoot?.state.epoch]);
 const finite = (n: unknown, max: number) => typeof n === "number" && Number.isFinite(n) && n > 0 && n <= max;
@@ -58,7 +59,7 @@ export class ResultChecks {
   }
   snapshot(task: Task): CheckSnapshot {
     const account = this.accounts.get(keyOf(task));
-    return structuredClone(account ? { policy: account.goal === checkGoal(task) ? account.policy : { mode: "manual" as const }, rounds: account.rounds, dispatches: account.dispatches, calls: account.calls, reservedCost: account.reservedCost, ...(account.startedAt !== undefined ? { startedAt: account.startedAt } : {}), plans: account.plans } : { policy: { mode: "manual" as const }, rounds: 0, dispatches: 0, calls: 0, reservedCost: 0, plans: [] });
+    return structuredClone(account ? { policy: account.goal === checkGoal(task) ? account.policy : { mode: "manual" as const }, rounds: account.rounds, dispatches: account.dispatches, calls: account.calls, reservedCost: account.reservedCost, ...(account.startedAt !== undefined ? { startedAt: account.startedAt } : {}), plans: account.plans.map(plan => effectivePlan(plan, this.now())) } : { policy: { mode: "manual" as const }, rounds: 0, dispatches: 0, calls: 0, reservedCost: 0, plans: [] });
   }
   begin(task: Task, reviewers: string[]): { plan?: CheckPlan; reason?: string } {
     const account = this.accounts.get(keyOf(task));
@@ -85,7 +86,7 @@ export class ResultChecks {
     if (!this.active(task, id, reviewerId) || !account || account.policy.mode !== "model") return { allowed: false, reason: "The check is stale, stopped or expired." };
     const deny = (reason: string) => { this.stop(task, id, reason); return { allowed: false, reason }; };
     const policy = account.policy, rate = this.rates()[profile.model], context = profile.contextWindow;
-    if (!rate || !finite(context, 10_000_000) || !finite(profile.maxTokens, 1_000_000) || ![rate.inputPerM, rate.outputPerM, rate.cacheReadPerM ?? rate.inputPerM, rate.cacheWritePerM ?? rate.inputPerM].every(value => Number.isFinite(value) && value >= 0)) return deny("A priced model and declared context/output bounds are required before spending the check budget.");
+    if (!rate || (profile.promptCaching || profile.implicitCaching) && (rate.cacheReadPerM === undefined || rate.cacheWritePerM === undefined) || !finite(context, 10_000_000) || !finite(profile.maxTokens, 1_000_000) || ![rate.inputPerM, rate.outputPerM, rate.cacheReadPerM ?? rate.inputPerM, rate.cacheWritePerM ?? rate.inputPerM].every(value => Number.isFinite(value) && value >= 0)) return deny("A priced model and declared context/output bounds are required before spending the check budget.");
     const cost = (context! * Math.max(rate.inputPerM, rate.cacheReadPerM ?? rate.inputPerM, rate.cacheWritePerM ?? rate.inputPerM) + profile.maxTokens * rate.outputPerM) / 1e6;
     if (account.calls + 1 > policy.maxCalls || account.reservedCost + cost > policy.maxCost) return deny("The check's cumulative call or cost allowance is exhausted.");
     this.save({ ...account, calls: account.calls + 1, reservedCost: account.reservedCost + cost });
@@ -93,6 +94,6 @@ export class ResultChecks {
   }
   stop(task: Task, id: string, reason: string): void {
     const account = this.accounts.get(keyOf(task)); if (!account) return;
-    this.save({ ...account, plans: account.plans.map(plan => plan.id === id ? { ...plan, phase: "stopped", reason: plan.reason ?? reason.slice(0, 1000) } : plan) });
+    this.save({ ...account, plans: account.plans.map(plan => plan.id === id ? { ...plan, phase: "stopped", reason: effectivePlan(plan, this.now()).reason ?? reason.slice(0, 1000) } : plan) });
   }
 }

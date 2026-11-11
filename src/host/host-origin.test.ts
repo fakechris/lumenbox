@@ -81,7 +81,7 @@ test("scenario: an admitted audit is answered in its own host context; the perso
         usage: { input_tokens: 10, output_tokens: 4 },
       } as never), { capture }),
     });
-    writeFileSync(join(root, "config.json"), JSON.stringify({ rates: { [orch.provider.model]: { inputPerM: 0, outputPerM: 0 } } }));
+    writeFileSync(join(root, "config.json"), JSON.stringify({ rates: { [orch.provider.model]: { inputPerM: 0, outputPerM: 0, cacheReadPerM: 0, cacheWritePerM: 0 } } }));
     orch.resultChecks.grant(tasks.get(task.id)!, { mode: "model", reason: "Verify the import", acceptance: "Import works", paths: [], reviewers: 1, maxRounds: 1, maxDispatches: 1, maxCalls: 2, maxMs: 60_000, maxCost: 1 }, "operator");
     scope.planId = orch.resultChecks.begin(tasks.get(task.id)!, [vic.id]).plan!.id;
     const conversation = auditConversation(scope);
@@ -183,7 +183,7 @@ test("adding a reviewer after submission still permits that reviewer's explicit 
     tasks.deliveryCommand(task.id, "submit", worker.id);
     await orch.settle(); assert.equal(capture.params.length, 0);
     tasks.update(task.id, { reviewerId: reviewer.id }, "person");
-    writeFileSync(join(root, "config.json"), JSON.stringify({ rates: { [orch.provider.model]: { inputPerM: 0, outputPerM: 0 } } }));
+    writeFileSync(join(root, "config.json"), JSON.stringify({ rates: { [orch.provider.model]: { inputPerM: 0, outputPerM: 0, cacheReadPerM: 0, cacheWritePerM: 0 } } }));
     orch.resultChecks.grant(tasks.get(task.id)!, { mode: "model", reason: "Check the installation", acceptance: "The package is installed", paths: [], reviewers: 1, maxRounds: 1, maxDispatches: 1, maxCalls: 2, maxMs: 60_000, maxCost: 1 }, "operator");
     assert.equal(tasks.deliveryCommand(task.id, "request_check", reviewer.id)!.outcome, "applied");
     await orch.settle(); await new Promise(resolve => setImmediate(resolve));

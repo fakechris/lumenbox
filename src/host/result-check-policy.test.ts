@@ -60,13 +60,13 @@ test("every provider attempt reserves durable cumulative calls and worst-case co
 });
 
 test("expiry, stale evidence, cancellation, unpriced models and insufficient cost bounds stop before spending", () => {
-  for (const why of ["expired", "stale", "cancelled", "unpriced", "cost"] as const) {
+  for (const why of ["expired", "stale", "cancelled", "unpriced", "cache-unpriced", "cost"] as const) {
     const f = fixture(); try {
       f.checks.grant(f.task, why === "cost" ? { ...MODEL_CHECK, maxCost: 0.00001 } : MODEL_CHECK, "operator");
       const plan = f.checks.begin(f.task, ["reviewer"]).plan!;
       if (why === "expired") f.tick(60_001);
       const task = why === "stale" ? { ...f.task, description: "Another goal" } : why === "cancelled" ? { ...f.task, status: "dropped" as const } : f.task;
-      const result = f.checks.reserve(task, plan.id, "reviewer", why === "unpriced" ? { ...profile, model: "unknown" } : profile);
+      const result = f.checks.reserve(task, plan.id, "reviewer", why === "unpriced" ? { ...profile, model: "unknown" } : why === "cache-unpriced" ? { ...profile, promptCaching: true } : profile);
       assert.equal(result.allowed, false, why); assert.equal(f.checks.snapshot(task).calls, 0);
     } finally { f.cleanup(); }
   }

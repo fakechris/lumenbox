@@ -5,7 +5,7 @@ import type { TaskStore } from "./tasks.ts";
 import { evidenceDigest } from "./review-dispatch.ts";
 
 export interface AuditContext { taskId: string; digest: string; reviewerId: string; planId?: string; paths?: readonly string[]; assigneeId?: string; sourceConversation?: string }
-export const AUDIT_READ_TOOLS = new Set(["ReadHistory", "Tasks", "read_file", "list_dir", "Recall", "NothingToSay"]);
+export const AUDIT_READ_TOOLS = new Set(["ReadHistory", "Tasks", "read_file", "list_dir", "NothingToSay"]);
 
 export function auditConversation(scope: AuditContext): string {
   return "audit-" + createHash("sha256").update(JSON.stringify([scope.taskId, scope.digest, scope.reviewerId, scope.planId])).digest("hex").slice(0, 32);
