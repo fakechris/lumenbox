@@ -553,6 +553,7 @@ export interface ChannelManagerDeps {
    * loses failed work answers "what needs somebody" wrong.
    */
   board?: {
+    admit?: (taskId:string,messageId:string,text:string,identity:string)=>void;
     open: (input: {
       title: string;
       /**
@@ -2011,7 +2012,6 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     const runningKey = message.threadKey ?? chatKey;
     const targetChatKey = message.threadKey ?? chatKey;
     const runningEntry: { agentName: string | undefined; identity: string; adapterName: string; taskId?: string } = { agentName, identity: message.identity, adapterName: adapter.name, taskId: message.id ?? message.messageId };
-    this.runningWork.set(runningKey, [...(this.runningWork.get(runningKey) ?? []), runningEntry]);
     // What this turn should know it was handed: files in this message, plus any dropped
     // wordlessly in this conversation just before. In the prompt and nowhere else — the
     // card and the board carry the person's own words, not a path listing.
@@ -2019,6 +2019,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       ...(this.takeDrops(message.threadKey ?? chatKey) ?? []),
       ...(droppedFiles ?? []),
     ];
+    const prompt=handedFiles.length ? `${text}\n\n[随这条消息收到的文件: ${handedFiles.join(", ")}]` : text;
     // Everything this task says sits under the message that asked for it.
     const anchor: PushOptions | undefined =
       message.messageId !== undefined ? { replyTo: message.messageId } : undefined;
@@ -2028,8 +2029,6 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       if (message.messageId === undefined) return;
       void adapter.noteStatus?.(message.messageId, status).catch(() => {});
     };
-    mark("working");
-
     const ahead = this.deps.ahead?.(agentName, runningKey) ?? 0;
     const taskId = options?.skipTask === true ? undefined : options?.existingTaskId ?? this.deps.board?.open({
       title: firstLine(text),
@@ -2048,6 +2047,9 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       // a task with the wrong conversation looks exactly like a task with a quiet one.
       threadKey: message.threadKey ?? chatKey,
     });
+    if(taskId && message.id)this.deps.board?.admit?.(taskId,message.id,prompt,message.identity);
+    this.runningWork.set(runningKey, [...(this.runningWork.get(runningKey) ?? []), runningEntry]);
+    mark("working");
     if (taskId !== undefined) {
       this.lastTask.set(runningKey, taskId);
       runningEntry.taskId = taskId;
@@ -2194,17 +2196,13 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         if (options.recoveryOperationId !== undefined) this.deps.recover?.started(options.existingTaskId, options.recoveryOperationId);
         this.deps.board?.started(options.existingTaskId);
       }
-      const waiting = taskId !== undefined && options?.existingTaskId === undefined ? this.deps.credentials?.gate(taskId, () => this.runTask(adapter, message, agentName, text, droppedFiles, { ...options, existingTaskId: taskId })) : undefined; if (waiting !== undefined) { clearTimeout(ackTimer); await deliver(waiting); return; }
-      // The opening line goes out the moment the model says it, so the person reads "我先查
-      // 一下" while the search runs instead of silence until it ends. Remembered so the
-      // final reply is not the same sentence twice when a model repeats itself.
+      const waiting = taskId !== undefined && options?.existingTaskId === undefined ? this.deps.credentials?.gate(taskId, () => this.runTask(adapter, message, agentName, text, handedFiles, { ...options, existingTaskId: taskId })) : undefined; if (waiting !== undefined) { clearTimeout(ackTimer); await deliver(waiting); return; }
+      // The opening line is streamed once.
       let interim: string | undefined;
       let interimDelivery: Promise<void> | undefined;
       const asked = await this.deps.ask(
         agentName,
-        handedFiles.length > 0
-          ? `${text}\n\n[随这条消息收到的文件: ${handedFiles.join(", ")}]`
-          : text,
+        prompt,
         message.identity,
         chatKey,
         onProgress,

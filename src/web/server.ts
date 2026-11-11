@@ -1632,6 +1632,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       return "stopped";
     },
     board: {
+      admit:(taskId,messageId,text,identity)=>{const task=orchestrator.tasks?.get(taskId);if(!task?.assigneeId)throw new Error("No agent admitted to this request");const prepared=orchestrator.tasks!.workRoots.prepare(task.assigneeId,{id:messageId,text,fromId:"user",fromName:identity,principalId:principals.resolve(identity).id,conversation:task.conversation,steerable:false,taskBinding:{taskId,role:"executor"},priority:false,receivedAt:new Date().toISOString()},orchestrator.bus.workAttention!);if(prepared.message.work)orchestrator.bus.workAttention!.settle(prepared.message.work,"waiting","Awaiting channel dispatch","execution");},
       open: input => {
         const tasks = orchestrator.tasks;
         if (tasks === undefined) return undefined;
@@ -1645,10 +1646,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // The unknown-agent error is thrown (and relayed) by ask; the board entry
           // simply goes unassigned.
         }
-        // A reviewer if the team has one that is not the assignee: naming it here is
-        // what makes the review gate — and the audit turn behind it — apply to work
-        // asked for from a chat, where nobody is watching the board. An installation
-        // with no reviewer agent keeps the old behaviour rather than inventing one.
+        // A separate reviewer owns acceptance on teams that have one.
         const reviewerId = registry
           .list()
           .find(
@@ -1657,7 +1655,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               /review/i.test(candidate.profile.title ?? "")
           )?.id;
         const task = tasks.create({
-          title: input.title,
+          durable:true, title: input.title,
           ...(input.description !== undefined ? { description: input.description } : {}),
           ...(input.sourceMessageId !== undefined ? { sourceMessageId: input.sourceMessageId } : {}),
           requester: principals.resolve(input.identity).id, origin: {kind:"user"},

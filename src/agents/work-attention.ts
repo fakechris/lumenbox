@@ -27,6 +27,19 @@ const keyOf = (agent: string, conversation: string) => JSON.stringify([agent, co
 
 export interface RootPersistence { load(legacy?: {records:CurrentWork[];cancellations:CancelledWork[]}): {records: CurrentWork[]; cancellations: CancelledWork[]}; save(records: readonly CurrentWork[], cancellations: readonly CancelledWork[]): void; started?(ids:readonly string[]):void }
 
+/** Every storage adapter passes the same authority validation before projection or execution. */
+export function validateWorkRecords(data:{records:CurrentWork[];cancellations?:CancelledWork[]}):void {
+  const strings=(value:unknown):boolean=>Array.isArray(value)&&value.every(item=>typeof item==="string"&&item.length>0);
+  const stamp=(row:WorkStamp):boolean=>!!row && typeof row.id==="string"&&!!row.id&&typeof row.owner==="string"&&!!row.owner&&typeof row.conversation==="string"&&!!row.conversation&&Number.isInteger(row.epoch)&&row.epoch>=0&&Number.isInteger(row.generation)&&row.generation>=0;
+  if(!Array.isArray(data.records) || data.cancellations!==undefined && !Array.isArray(data.cancellations))throw new Error("Invalid work state collection");
+  for(const row of data.records){
+    if(!stamp(row)||!strings(row.messages)||!strings(row.peers)||!strings(row.awaiting??[])||!["running","waiting","answered","cancelled"].includes(row.status)||row.wait!==undefined&&!["queue","interrupted","focus","capability","confirmation","dependency","plan","execution"].includes(row.wait)||row.unresolved!==undefined&&row.unresolved!==true)throw new Error("Invalid current-work state; restore it before continuing");
+  }
+  for(const row of data.cancellations??[]){
+    if(!stamp(row)||!strings(row.participants)||!row.at||!row.by||!Array.isArray(row.resources)||row.sourceMessages!==undefined&&!strings(row.sourceMessages)||row.resources.some(item=>!item || typeof item.id!=="string"||typeof item.kind!=="string"||item.state!==undefined&&!["requested","confirmed","unconfirmed"].includes(item.state)))throw new Error("Invalid work cancellation state; restore it before continuing");
+  }
+}
+
 export class WorkAttention {
   private readonly roots = new Map<string, CurrentWork>();
   private readonly current = new Map<string, CurrentWork>();
@@ -37,13 +50,12 @@ export class WorkAttention {
     if (path && existsSync(path)) {
       const data = JSON.parse(readFileSync(path, "utf8")) as { schema: number; records: CurrentWork[]; cancellations?: CancelledWork[] };
       if (data.schema !== 1 || !Array.isArray(data.records)) throw new Error("Unsupported current-work state; restore it before continuing");
+      validateWorkRecords(data);
       for (const row of data.cancellations ?? []) {
-        if (!row.id || !row.owner || !row.conversation || !Array.isArray(row.participants) || !row.at || !row.by) throw new Error("Invalid work cancellation state");
         this.terminations.set(row.id, row);
         for(const id of row.sourceMessages ?? [row.id])this.cancelledInputs.add(id);
       }
       for (const row of data.records) {
-        if (!row.id || !row.owner || !row.conversation || !Number.isInteger(row.epoch) || !Number.isInteger(row.generation) || !Array.isArray(row.messages) || !Array.isArray(row.peers) || !["running", "waiting", "answered", "cancelled"].includes(row.status)) throw new Error("Invalid current-work state");
         const restored = { ...row, ...((row.status !== "cancelled" && (row.status === "running" || row.awaiting?.some(item => item.startsWith("volatile:")))) ? { status: "waiting" as const, reason: "execution interrupted", wait:"interrupted" as const } : {}), awaiting: (row.awaiting ?? []).filter(item => !item.startsWith("volatile:")) };
         this.project(restored,false);
       }
@@ -56,6 +68,8 @@ export class WorkAttention {
     if(this.persistence===persistence)return;
     if(this.persistence)throw new Error("Work roots already have a persistence authority");
     const data=persistence.load({records:[...this.roots.values()],cancellations:[...this.terminations.values()]});
+    validateWorkRecords(data);
+    if(new Set(data.records.map(row=>row.id)).size!==data.records.length)throw new Error("Multiple tasks claim one work root; restore their linkage before continuing");
     this.persistence=persistence;this.current.clear();this.roots.clear();
     const restored=data.records.map(row=>{
       const interrupted=row.status!=="cancelled" && (row.status==="running" || row.awaiting.some(item=>item.startsWith("volatile:")));

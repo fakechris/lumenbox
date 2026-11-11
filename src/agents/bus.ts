@@ -176,6 +176,7 @@ export class AgentBus {
     let restored = 0;
     for (const item of pending) {
       if (this.registry.tryGet(item.agentId) === undefined) continue;
+      if(this.workAttention?.cancelledMessage(item.message)){this.inbox?.drop(item.seq);continue;}
       const queue = this.pending.get(item.agentId) ?? [];
       const prepared=this.userWork?.prepare(item.agentId,item.message);
       const message=prepared?.message??item.message;

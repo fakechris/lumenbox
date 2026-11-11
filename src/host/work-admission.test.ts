@@ -318,3 +318,22 @@ test("legacy revocations survive migration even after the old focus file is remo
   assert.equal(f.focus.byId("revoked")!.status,"cancelled");
  }finally{f.cleanup();}
 });
+
+test("a cancellation committed before queue cleanup cannot block recovery of another user request",async()=>{
+ const f=fixture();try{
+  const bus=f.bus();bus.sendFromUser(f.agent.id,"Install the skill",{messageId:"cancelled",principalId:"p"});
+  f.focus.cancel(f.focus.byId("cancelled")!,"p","Stop before crash");
+  bus.sendFromUser(f.agent.id,"Other work",{messageId:"other",principalId:"p",workRelation:"new"});
+  f.reopen();const ran:string[]=[];const recovered=f.bus(async messages=>{ran.push(messages[0]!.id);});
+  assert.equal(recovered.recover(),1);await recovered.idle();
+  assert.deepEqual(ran,["other"]);assert.equal(f.inbox.pending().length,0);
+ }finally{f.cleanup();}
+});
+
+test("canonical root loading rejects corrupt state before it grants execution authority",()=>{
+ const f=fixture();try{
+  f.bus().sendFromUser(f.agent.id,"Install the skill",{messageId:"install",principalId:"p"});
+  const data=f.tasks.workRoots.load();data.records[0]!.status="not-a-state" as never;
+  assert.throws(()=>new WorkAttention(undefined,()=>0,{load:()=>data,save:()=>{}}),/Invalid current-work state/);
+ }finally{f.cleanup();}
+});
