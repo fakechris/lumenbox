@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: storage
-     updated: 2026-11-07
+     updated: 2026-11-11
 -->
 # Data
 
@@ -53,6 +53,30 @@ agents/<agentId>/
   todos.json                the agent's todo list, same
   box-owner                 this agent's claim on its desktop, 0600
 ```
+
+### Result-check authority
+
+`result-checks.jsonl` is a durable record of operator-granted check policies, activities and
+cumulative reservations. `verifications.jsonl` remains the single verdict record; neither
+ledger creates a new user task. Default policy is manual: submitting a result does not itself
+authorize model expenditure. An operator can authorize exact file/hash checks, or a model check
+with a concrete purpose, acceptance, exact read paths, K reviewers and total round, dispatch,
+call, time and configured-currency limits. File checks have a three-round and 60-second total
+limit. Passing file conditions is not acceptance of the user's whole request.
+
+A goal/version change invalidates the policy. Evidence versions identify activities: unchanged
+evidence is never dispatched twice, including no-verdict replies or disagreement. New evidence
+can consume a remaining round; it cannot reset the work-root account. Each physical provider
+attempt reserves worst-case cost from declared context/output bounds and configured rates
+before calling; failures, process restart and regranting do not refund it. Unpriced or unbounded
+models are held. These are conservative allowances, not a claim of exact invoiced spend.
+
+The review execution reads only the approved task, original conversation and exact evidence
+paths. No delegation, MCP/native escape, write, shared-memory, lifecycle-hook, memory-selection
+or summarizer calls are available to it. A stopped/expired/stale activity cannot spend again.
+The operator's check API is `GET/POST /api/tasks/checks`; POST requires admin, readable task and
+current goal/evidence versions. GET is read-only for authorized task readers. Check policy and
+stop controls are not exposed as agent tools. Business acceptance remains a separate action.
 
 ### 2.1 `profile.json`
 

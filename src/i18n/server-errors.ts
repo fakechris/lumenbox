@@ -14,6 +14,10 @@
  */
 
 export const SERVER_ERRORS = {
+  "err.task-check-unknown": ["工作不存在或你无权查看。", "Work unavailable."],
+  "err.task-check-stale": ["工作或证据已经变化，请重新查看后再授权检查。", "The work or evidence changed; read it before authorizing checks."],
+  "err.task-check-action": ["请选择授权检查或停止检查。", "Use grant or stop."],
+  "err.task-check-refused": ["检查授权未变更：{reason}", "Check authority unchanged: {reason}"],
   "err.task-export-unavailable": ["任务记录暂时不可用，请从当前任务重新生成。", "Task record unavailable. Recreate it from the current task."],
   "err.task-execution-reset": ["任务过程快照已过期或不可用，请重新加载任务概览。", "Execution snapshot unavailable; reload the task overview."],
   // ── hooks and webhooks ───────────────────────────────────────────────────────────────────────

@@ -1,3 +1,4 @@
+import { resultCheckRoute } from "./result-check-routes.ts";
 import { taskDeliveryRoute } from "./task-delivery-routes.ts";
 import { taskAudience } from "../host/task-audience.ts";
 import {workControlFor, workControlRoute} from "./work-control-routes.ts";
@@ -1502,10 +1503,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         ...(taskId !== undefined ? { taskId } : {}),
         at: new Date().toISOString(),
       });
-      // The board row gets a name while the work runs: the first line of a request is
-      // a request, not a name, and rows nobody can tell apart are how "各种 task 都
-      // 对应不上" happened. Fire-and-forget — a title is never worth delaying the turn,
-      // and the person's whole message is already on the task as its description.
       if (taskId !== undefined) {
         void orchestrator.retitleTask(agent.id, taskId, text).catch(() => {});
       }
@@ -1647,8 +1644,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // The unknown-agent error is thrown (and relayed) by ask; the board entry
           // simply goes unassigned.
         }
-        // A separate reviewer owns acceptance on teams that have one.
-        const reviewerId = registry
+          const reviewerId = registry
           .list()
           .find(
             candidate =>
@@ -4222,6 +4218,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         const delivered = await taskDeliveryRoute(route, { board: orchestrator.tasks, refused: () => refused(), readJson: () => readJson(req), mayRead: mayReadTask, by: caller.userId ?? "web", view: taskView }); if (delivered) { if (delivered.status) send(res, delivered.status, delivered.body); return; }
+        const checkResponse = await resultCheckRoute(route, url, { checks: orchestrator.resultChecks, tasks: orchestrator.tasks, refused: write => refusedRole(write ? "admin" : "viewer"), mayRead: mayReadTask, readJson: () => readJson(req), by: caller.userId ?? "web" }); if (checkResponse) { if (checkResponse.status) send(res, checkResponse.status, checkResponse.body); return; }
         if (route === "POST /api/tasks/update") {
           if (refused()) return;
           const board = orchestrator.tasks;

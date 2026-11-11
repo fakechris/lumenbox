@@ -106,7 +106,7 @@ export function buildAuditPrompt(input: {
     "",
     "The host reads those lines, not your prose: a reply without them counts as no verdict, " +
       "and no verdict is not a pass. Your verdict is kept as a record of this claim and its evidence, " +
-      "beside another reviewer's; two that agree settle it, and everyone else cites the record instead of checking again.",
+      "with the configured reviewers; disagreement ends this check, and everyone else cites the record instead of checking again.",
     "",
     "The host records your verdict and moves the task. Do not move it yourself. A passing audit " +
       "leaves a person's work IN REVIEW: done is the requester's word. Your audit is a separate " +

@@ -336,7 +336,7 @@ export interface EpisodeOptions {
   /** The fork ledger (docs/32): what Delegate records and the Jobs tool settles (INV-908). */
   pendingWork?: PendingWork;
   /** A task board for the turns (INV-769): the Tasks and Goal tools need one to act on. */
-  tasks?: TaskStore;
+  tasks?: TaskStore; resultChecks?: import("./result-check-policy.ts").ResultChecks;
   /** Where an Outbox draft waits for the person (INV-1739). */
   outbox?: OutboxDrafts;
   /**
@@ -502,7 +502,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       ...(options.onEvent !== undefined ? { onEvent: options.onEvent } : {}),
       ...(options.turns !== undefined ? { turns: options.turns } : {}),
       ...(options.mcp !== undefined ? { mcp: options.mcp } : {}),
-      ...(options.tasks !== undefined ? { tasks: options.tasks } : {}),
+      ...(options.tasks !== undefined ? { tasks: options.tasks } : {}), ...(options.resultChecks ? { resultChecks: options.resultChecks } : {}),
       ...(options.outbox !== undefined ? { outbox: options.outbox } : {}),
       ...(options.pendingWork !== undefined ? { pendingWork: options.pendingWork } : {}),
       ...(acpDelegates !== undefined ? { acpDelegates } : {}),

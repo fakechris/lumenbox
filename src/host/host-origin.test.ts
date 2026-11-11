@@ -15,7 +15,7 @@ import { evidenceDigest } from "./review-dispatch.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRegistry } from "../agents/registry.ts";
@@ -71,8 +71,7 @@ test("scenario: an admitted audit is answered in its own host context; the perso
     const tasks = new TaskStore(null);
     const task = tasks.create({title:"Check the import",requester:"person",assigneeId:registry.create({name:"Worker"}).id,reviewerId:vic.id})!;
     tasks.deliveryCommand(task.id,"submit",task.assigneeId!);
-    const scope = {taskId:task.id,digest:evidenceDigest(tasks.get(task.id)!),reviewerId:vic.id};
-    const conversation = auditConversation(scope);
+    const scope = {taskId:task.id,digest:evidenceDigest(tasks.get(task.id)!),reviewerId:vic.id, planId: ""};
     const capture: ModelCapture = { params: [] };
     const orch = new Orchestrator({
       registry, useBox: false, inbox: null, mcp: null, hooks: null, tasks, extensions: null, pendingWork: null,
@@ -82,6 +81,10 @@ test("scenario: an admitted audit is answered in its own host context; the perso
         usage: { input_tokens: 10, output_tokens: 4 },
       } as never), { capture }),
     });
+    writeFileSync(join(root, "config.json"), JSON.stringify({ rates: { [orch.provider.model]: { inputPerM: 0, outputPerM: 0 } } }));
+    orch.resultChecks.grant(tasks.get(task.id)!, { mode: "model", reason: "Verify the import", acceptance: "Import works", paths: [], reviewers: 1, maxRounds: 1, maxDispatches: 1, maxCalls: 2, maxMs: 60_000, maxCost: 1 }, "operator");
+    scope.planId = orch.resultChecks.begin(tasks.get(task.id)!, [vic.id]).plan!.id;
+    const conversation = auditConversation(scope);
     await orch.prompt(vic.id, audit.text, undefined, { audit: scope, conversation, steerable: false, lane: "background", origin: "host:audit" });
     await orch.prompt(vic.id, "thanks, and the summary?", { userId: "chris" });
 
@@ -180,6 +183,8 @@ test("adding a reviewer after submission still permits that reviewer's explicit 
     tasks.deliveryCommand(task.id, "submit", worker.id);
     await orch.settle(); assert.equal(capture.params.length, 0);
     tasks.update(task.id, { reviewerId: reviewer.id }, "person");
+    writeFileSync(join(root, "config.json"), JSON.stringify({ rates: { [orch.provider.model]: { inputPerM: 0, outputPerM: 0 } } }));
+    orch.resultChecks.grant(tasks.get(task.id)!, { mode: "model", reason: "Check the installation", acceptance: "The package is installed", paths: [], reviewers: 1, maxRounds: 1, maxDispatches: 1, maxCalls: 2, maxMs: 60_000, maxCost: 1 }, "operator");
     assert.equal(tasks.deliveryCommand(task.id, "request_check", reviewer.id)!.outcome, "applied");
     await orch.settle(); await new Promise(resolve => setImmediate(resolve));
     assert.equal(capture.params.length, 1, "the explicit request reaches the real audit dispatcher once");

@@ -118,7 +118,7 @@ function foregroundWindowMs(): number {
 
 export interface ToolContext {
   signal?: AbortSignal;
-  audit?: import("./audit-context.ts").AuditContext;
+  audit?: import("./audit-context.ts").AuditContext; resultChecks?: import("./result-check-policy.ts").ResultChecks;
   work?: import("../agents/work-attention.ts").WorkStamp; historyConversation?: string;
   progressContext?: import("./task-progress.ts").ProgressContext;
   taskBinding?: import("./execution-binding.ts").TaskBinding;
@@ -5013,7 +5013,7 @@ export async function dispatchTool(
       }
       const action = String(input.action ?? "");
       const nameOf = (id: string) => context.registry.tryGet(id)?.profile.name ?? id;
-      const cited = (task: Task) => { const line = context.verifications !== undefined ? citationFor(task, context.verifications, context.reviewersPerClaim ?? DEFAULT_REVIEWERS_PER_CLAIM, nameOf) : undefined; return line === undefined ? "" : `\n  · ${line}`; }; // the record stands in for a re-check (INV-1614)
+      const cited = (task: Task) => { const policy = context.resultChecks?.snapshot(task).policy; const line = context.verifications !== undefined ? citationFor(task, context.verifications, policy?.mode === "model" ? policy.reviewers : policy?.mode === "files" ? 1 : context.reviewersPerClaim ?? DEFAULT_REVIEWERS_PER_CLAIM, nameOf) : undefined; return line === undefined ? "" : `\n  · ${line}`; }; // the record stands in for a re-check (INV-1614)
       const resolveAgent = (raw: string): string | undefined => teammateNamed(context, raw)?.id; // an id or a name; teammates say names, the board stores ids
       const mayAssign = (taskId: string): boolean => {
         const task = board.get(taskId);

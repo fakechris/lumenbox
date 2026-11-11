@@ -56,7 +56,7 @@ test("records dedupe by (claim, digest, reviewer); K agreeing records settle; a 
   }
 });
 
-test("the K+1-th reviewer gets a citation, not a round; new evidence changes the digest and dispatches again; a split costs one more reviewer", () => {
+test("the K+1-th reviewer gets a citation, not a round; new evidence changes the digest and dispatches again; a split stops at the authorized K", () => {
   const store = new TaskStore(null);
   const task = claimed(store);
   const team = ["ada", "bob", "cy", "dee", "enzo"];
@@ -80,14 +80,12 @@ test("the K+1-th reviewer gets a citation, not a round; new evidence changes the
   assert.equal(third.reviewers.length, 2, "dispatched again under the new digest");
   assert.equal(citationFor(resubmitted, ledger, 2, names), undefined);
 
-  // A split: one pass and one fail is not a settlement; one more reviewer is owed.
+  // A split stops; it never purchases an extra opinion.
   ledger.add({ taskId: task.id, digest: third.digest, reviewerId: third.reviewers[0]!, verdict: "pass", basis: "fine" });
   ledger.add({ taskId: task.id, digest: third.digest, reviewerId: third.reviewers[1]!, verdict: "fail", basis: "not fine" });
-  const fourth = planRound(resubmitted, ledger, team, 2);
-  assert.equal(fourth.reviewers.length, 1);
-  assert.ok(!third.reviewers.includes(fourth.reviewers[0]!));
-  ledger.add({ taskId: task.id, digest: third.digest, reviewerId: fourth.reviewers[0]!, verdict: "fail", basis: "also not fine" });
-  assert.equal(planRound(resubmitted, ledger, team, 2).settled?.verdict, "fail");
+  assert.deepEqual(planRound(resubmitted, ledger, team, 2).reviewers, []);
+  assert.equal(planRound(resubmitted, ledger, team, 2).settled, undefined);
+
 });
 
 test("a round asks the owed reviewers at once and the record moves the task: pass stays in review with the citation, fail goes back to doing with the findings, a voided review is a none", async () => {
@@ -123,12 +121,11 @@ test("a round asks the owed reviewers at once and the record moves the task: pas
   assert.equal(second.settled, undefined);
   assert.match(store.get(failing.id)!.history.at(-1)!.note!, /void or no-verdict/);
   assert.equal(ledger.recordsFor(failing.id, plan.digest).filter(r => r.verdict === "none").length, 1);
-  // The next round asks one more, who fails: settled fail, back to doing with the findings.
-  const third = await reviewRound({ ...deps, ask: async (reviewerId: string) => { asked.push(reviewerId); return { reply: FAIL }; } }, store.get(failing.id)!);
-  assert.equal(third.settled?.verdict, "fail");
-  const sent = store.get(failing.id)!;
-  assert.equal(sent.status, "doing");
-  assert.match(sent.history.at(-1)!.note!, /^verified not complete by [A-Z]+, [A-Z]+ on evidence [0-9a-f]{16}: audit did not pass/);
+  // A void consumes its authorized attempt; unchanged evidence cannot restart it.
+  const third = await reviewRound({ ...deps, ask: async () => { throw new Error("No repeated review"); } }, store.get(failing.id)!);
+  assert.deepEqual(third.asked, []);
+  assert.equal(third.settled, undefined);
+  assert.equal(store.get(failing.id)!.status, "review");
   assert.deepEqual(verdictOf(passing, "I think it is fine"), { verdict: "none", basis: "audit gave no verdict (reply did not follow the protocol); not accepted — a person decides" });
 });
 

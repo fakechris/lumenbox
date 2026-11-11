@@ -1,3 +1,5 @@
+import { ResultChecks } from "./result-check-policy.ts";
+import { runResultCheck } from "./result-check-runner.ts";
 import { requestsResultCheck } from "./task-delivery.ts";
 import { taskAttentionChanged, taskWorkId } from "./task-attention.ts";
 import { WorkAttention, workStateConversation } from "../agents/work-attention.ts";
@@ -319,6 +321,7 @@ export class Orchestrator {
   readonly skillProvenance: SkillProvenance;
   readonly hooks: HookRunner | undefined;
   /** The commands turns let go of past their foreground window (INV-1461); their end wakes the agent on the background lane. */
+  readonly resultChecks = new ResultChecks(join(agentboxHome(), "result-checks.jsonl"));
   readonly verifications = new VerificationLedger(join(agentboxHome(), "verifications.jsonl")); // what each reviewer found, by claim and evidence digest (INV-1614)
   /** The host's one record of each person (INV-1653); every turn reads it, the judge's kept preferences feed it, Settings → Mine edits it. The name reader is wired by the server, which knows the principals. */
   readonly people = new PersonRecords(join(agentboxHome(), "people.jsonl")); personName?: (principalId: string) => string | undefined;
@@ -848,25 +851,15 @@ export class Orchestrator {
   }
 
   private maybeAudit(task: Task): void {
-    if (task.status !== "review" || task.reviewerId === undefined || !requestsResultCheck(task.history.at(-1))) return;
-    if (this.auditing.has(task.id)) return;
-    if (this.registry.tryGet(task.reviewerId) === undefined) return;
-    const assignee = task.assigneeId !== undefined ? this.registry.tryGet(task.assigneeId) : undefined;
+    if (task.status !== "review" || !requestsResultCheck(task.history.at(-1)) || !this.tasks || this.auditing.has(task.id)) return;
     this.auditing.add(task.id);
-    // K reviewers, one record each, and the record moves the task (INV-1614); the workspace snapshot around each turn still voids a review that edited the work.
-    void reviewRound({
-      ledger: this.verifications, k: loadConfig().reviewersPerClaim ?? DEFAULT_REVIEWERS_PER_CLAIM, candidates: () => this.registry.list().map(agent => agent.id), nameOf: id => this.registry.tryGet(id)?.profile.name ?? id,
-      current: id => this.tasks?.get(id), move: (id, change) => { this.tasks?.update(id, change, REVIEW_ACTOR); }, log: line => console.error(`[audit] ${line}`), isAgent: id => this.registry.has(id), // an agent's own ask closes on a passing record (INV-1647)
-      ask: async (reviewerId, current) => {
-        const audit = { taskId: current.id, digest: evidenceDigest(current), reviewerId };
-        const conversation = auditConversation(audit), messageId = randomUUID();
-        if (!auditCurrent(audit, reviewerId, conversation, this.tasks)) return { reply: "", voided: "review no longer current" };
-        await this.prompt(reviewerId, buildAuditPrompt({ task: current, assigneeName: assignee?.profile.name ?? current.assigneeId ?? "the assignee", ...(current.conversation !== undefined ? { conversation: current.conversation } : {}) }), undefined, { audit, conversation, messageId, steerable: false, lane: "background", origin: "host:audit" });
-        return auditCurrent(audit, reviewerId, conversation, this.tasks)
-          ? { reply: this.replyForMessage(reviewerId, messageId, conversation) }
-          : { reply: "", voided: "review was cancelled or its evidence changed" };
-      },
-    }, task).catch(error => console.error(`[audit] ${task.id}: ${error instanceof Error ? error.message : String(error)}`)).finally(() => this.auditing.delete(task.id));
+    void runResultCheck(task, {
+      checks: this.resultChecks, verifications: this.verifications, tasks: this.tasks,
+      candidates: () => this.registry.list().filter(agent => !task.assigneeId || this.registry.boxOf(agent.id).id === this.registry.boxOf(task.assigneeId).id).map(agent => agent.id), nameOf: id => this.registry.tryGet(id)?.profile.name ?? id, isAgent: id => this.registry.has(id),
+      read: async (current, path) => { const box = current.assigneeId ? this.boxFor(current.assigneeId) : undefined; if (!box) throw new Error("No computer is available for this check"); return box.readFile(path); },
+      ask: async (reviewerId, prompt, audit, conversation) => { const messageId = randomUUID(); await this.prompt(reviewerId, prompt, undefined, { audit, conversation, messageId, steerable: false, lane: "background", origin: "host:audit" }); return this.replyForMessage(reviewerId, messageId, conversation); },
+      log: line => console.error(`[check] ${line}`),
+    }).catch(error => console.error(`[check] ${task.id}: ${error instanceof Error ? error.message : String(error)}`)).finally(() => this.auditing.delete(task.id));
   }
 
   /** The box workspace as path→hash, or undefined when there is no box to ask. */
@@ -1864,7 +1857,7 @@ export class Orchestrator {
     // not spawn somebody's bridges as a side effect. And kicked off rather than waited
     // on — a turn that blocks until every configured server has finished booting is a
     // turn whose first token is hostage to the slowest thing an operator installed.
-    const isolated = this.registry.contextMode(agent.id, conversation) !== "normal";
+    const isolated = this.registry.contextMode(agent.id, conversation) !== "normal" || inbound.some(message => message.audit);
     if (!isolated && this.mcp.configured) this.mcp.warm();
     // Refreshed before the prompt is built, and never allowed to fail the turn — a box with no
     // skills directory is the normal state of a fresh install.
@@ -1941,7 +1934,7 @@ export class Orchestrator {
       boxKind: this.boxEntryOf(agent.id).kind, boxWorkDir: this.boxEntryOf(agent.id).workDir,
       // The same cheap profile the summariser and the note-taker use: choosing memories is the least interesting work here.
       selectMemory: prompt => this.askCheaply(agent, prompt),
-      skillProvenance: this.skillProvenance, jobWatch: this.jobWatch, verifications: this.verifications, syncStanding: agentId => this.memoryMirror.sync(agentId), person: principalId => this.renderPerson(principalId), orgKnowledge: this.orgKnowledge, conflicts: this.conflicts, outbox: this.outboxDrafts, ...(this.spendLimits !== undefined ? { spendLimits: this.spendLimits } : {}),
+      resultChecks: this.resultChecks, skillProvenance: this.skillProvenance, jobWatch: this.jobWatch, verifications: this.verifications, syncStanding: agentId => this.memoryMirror.sync(agentId), person: principalId => this.renderPerson(principalId), orgKnowledge: this.orgKnowledge, conflicts: this.conflicts, outbox: this.outboxDrafts, ...(this.spendLimits !== undefined ? { spendLimits: this.spendLimits } : {}),
       ...(this.templateSetups.has(agent.id) ? { templateSetup: this.templateSetups.get(agent.id)! } : {}),
       templates: this.templates, hooks: this.hooks,
       // Same cheap profile. Shadow by default: the verdicts land in auto-review.jsonl and the web

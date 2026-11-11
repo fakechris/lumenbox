@@ -10,7 +10,7 @@
  * verdict is a record keyed by the claim and a digest of its evidence; K agreeing records
  * settle the claim and anyone else asked about it is shown the record to cite, not a reason
  * to recompute. New evidence changes the digest, which is what makes the old records stale
- * and sends the claim round again — a dissent is new evidence, not a louder opinion.
+ * and sends the claim round again — a dissent stops the check rather than buying another reviewer.
  */
 
 import { createHash } from "node:crypto";
@@ -120,7 +120,7 @@ export class VerificationLedger {
 /**
  * What to do with a claim in review: nothing but a citation when it is settled under the
  * evidence as it stands; otherwise the reviewers still owed a verdict, up to K. Reviewers who
- * split (one pass, one fail) are not a settlement; one more is asked, while any remain.
+ * split (one pass, one fail) are not a settlement; a person decides.
  */
 export function planRound(
   task: Pick<Task, "id" | "title" | "description" | "contract" | "history" | "assigneeId" | "requester" | "reviewerId">,
@@ -131,9 +131,8 @@ export function planRound(
   const digest = evidenceDigest(task);
   const settled = ledger.settled(task.id, digest, k);
   if (settled !== undefined) return { digest, settled, reviewers: [] };
-  const answered = ledger.recordsFor(task.id, digest).filter(r => r.verdict !== "none").map(r => r.reviewerId);
-  const split = answered.length >= k ? answered.length - k + 1 : 0; // the extra rounds a disagreement has cost so far
-  const chosen = pickReviewers(task, candidates, k + split).filter(id => !answered.includes(id));
+  const answered = ledger.recordsFor(task.id, digest).map(r => r.reviewerId);
+  const chosen = pickReviewers(task, candidates, k).filter(id => !answered.includes(id));
   return { digest, reviewers: chosen };
 }
 
@@ -171,7 +170,7 @@ export interface RoundDeps {
  * the record, and the record — not any one reply — moves the task. Settled pass is done when
  * the requester is an agent (INV-1647) and stays in review for a person's word otherwise, the
  * citation on it either way; settled fail goes back to doing with the findings; a split is said
- * and costs one more reviewer next time round.
+ * and stops at the configured reviewer count.
  */
 export async function reviewRound(deps: RoundDeps, task: Task): Promise<{ asked: string[]; settled?: Settled }> {
   const plan = planRound(task, deps.ledger, deps.candidates(), deps.k);
@@ -193,6 +192,7 @@ export async function reviewRound(deps: RoundDeps, task: Task): Promise<{ asked:
       const { verdict, basis } = verdictOf(task, answer.reply);
       deps.ledger.add({ taskId: task.id, digest: plan.digest, reviewerId, verdict, basis });
     } catch (error) {
+      deps.ledger.add({ taskId: task.id, digest: plan.digest, reviewerId, verdict: "none", basis: "The check failed before producing a verdict; no automatic retry." });
       deps.log(`${task.id}: ${deps.nameOf(reviewerId)}'s review failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }));
@@ -203,7 +203,7 @@ export async function reviewRound(deps: RoundDeps, task: Task): Promise<{ asked:
   const records = deps.ledger.recordsFor(task.id, plan.digest);
   if (settled === undefined) {
     const said = records.filter(r => r.verdict !== "none");
-    deps.move(task.id, { status: "review", note: said.length >= deps.k ? `reviewers disagree (${said.map(r => `${deps.nameOf(r.reviewerId)}: ${r.verdict}`).join(", ")}); one more will be asked` : `audit gave ${records.length - said.length} void or no-verdict repl${records.length - said.length === 1 ? "y" : "ies"}; not accepted — a person decides` });
+    deps.move(task.id, { status: "review", note: said.length >= deps.k ? `reviewers disagree (${said.map(r => `${deps.nameOf(r.reviewerId)}: ${r.verdict}`).join(", ")}); no additional reviewers; a person decides` : `audit gave ${records.length - said.length} void or no-verdict repl${records.length - said.length === 1 ? "y" : "ies"}; not accepted — a person decides` });
     return { asked: plan.reviewers };
   }
   const names = settled.by.map(deps.nameOf).join(", ");
