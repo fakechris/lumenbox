@@ -105,6 +105,7 @@ test("check-policy API requires operator access and a current goal version; corr
     assert.equal((await resultCheckRoute(route, url, deps))!.status, 0);
     assert.equal((await resultCheckRoute(route, url, { ...deps, refused: () => false, readJson: async () => ({ ...await deps.readJson(), expectedGoal: "stale" }) }))!.status, 409);
     assert.equal((await resultCheckRoute(route, url, { ...deps, refused: () => false }))!.status, 200);
+    assert.equal((await resultCheckRoute(route, url, { ...deps, refused: () => false, readJson: async () => ({ ...await deps.readJson(), action: "stop", planId: "missing" }) }))!.status, 409, "unknown activity cannot be reported as stopped");
     writeFileSync(f.path, "{torn budget authority");
     assert.throws(() => new ResultChecks(f.path), /JSON/);
   } finally { f.cleanup(); }

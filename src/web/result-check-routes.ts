@@ -12,7 +12,7 @@ export async function resultCheckRoute(route: string, url: URL, deps: { checks: 
   if (route.startsWith("GET")) return { status: 200, body: { goalVersion: checkGoal(task), evidenceVersion: evidenceDigest(task), check: deps.checks.snapshot(task) } };
   if (body.expectedGoal !== checkGoal(task) || body.expectedEvidence !== evidenceDigest(task)) return { status: 409, body: apiError("task-check-stale") };
   try {
-    if (body.action === "stop") deps.checks.stop(task, String(body.planId ?? ""), "Stopped by the operator; previous cost reservations remain consumed.");
+    if (body.action === "stop") { if (!deps.checks.stop(task, String(body.planId ?? ""), "Stopped by the operator; previous cost reservations remain consumed.")) throw new Error("No such check activity belongs to this work."); }
     else if (body.action === "grant") deps.checks.grant(task, body.policy, deps.by);
     else return { status: 400, body: apiError("task-check-action") };
     return { status: 200, body: { goalVersion: checkGoal(task), evidenceVersion: evidenceDigest(task), check: deps.checks.snapshot(task) } };

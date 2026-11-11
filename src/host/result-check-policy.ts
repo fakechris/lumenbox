@@ -92,8 +92,10 @@ export class ResultChecks {
     this.save({ ...account, calls: account.calls + 1, reservedCost: account.reservedCost + cost });
     return { allowed: true };
   }
-  stop(task: Task, id: string, reason: string): void {
-    const account = this.accounts.get(keyOf(task)); if (!account) return;
-    this.save({ ...account, plans: account.plans.map(plan => plan.id === id ? { ...plan, phase: "stopped", reason: effectivePlan(plan, this.now()).reason ?? reason.slice(0, 1000) } : plan) });
+  stop(task: Task, id: string, reason: string): boolean {
+    const account = this.accounts.get(keyOf(task)), found = account?.plans.find(plan => plan.id === id && plan.taskId === task.id);
+    if (!account || !found) return false;
+    if (found.phase !== "stopped") this.save({ ...account, plans: account.plans.map(plan => plan.id === id ? { ...plan, phase: "stopped", reason: effectivePlan(plan, this.now()).reason ?? reason.slice(0, 1000) } : plan) });
+    return true;
   }
 }
