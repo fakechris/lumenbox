@@ -60,9 +60,14 @@ export class DeliveryRecovery {
   private record(delivery: Delivery, title: string, phase: Phase, by: string, extras: Partial<Pick<Decision, "reason" | "externalEffectUnconfirmed" | "proof">> = {}): void {
     appendLineDurably(this.deps.decisionsPath, JSON.stringify({ schema: "delivery-disposition/v1", id: delivery.id, phase, by, at: this.now().toISOString(), delivery: { ...delivery, ...(delivery.requestTitle ? { requestTitle: redactText(delivery.requestTitle) } : {}) }, title, ...extras, ...(extras.reason ? { reason: redactText(extras.reason) } : {}) } satisfies Decision));
   }
+  private transport(): Map<string, Receipt[]> {
+    const rows = new Map<string, Receipt[]>();
+    for (const receipt of this.deps.outbox.entries()) { const id = answerDeliveryId(receipt.purpose); if (id) { const group = rows.get(id) ?? []; group.push(receipt); rows.set(id, group); } }
+    return rows;
+  }
   private pending(id: string): Delivery | undefined { return this.deps.deliveries.entries().find(row => row.id === id); }
 
-  private view(delivery: Delivery, decision?: Decision, includeContent = true, capturedContent?: string, observedWorking?: boolean): RecoveryView {
+  private view(delivery: Delivery, decision?: Decision, includeContent = true, capturedContent?: string, observedWorking?: boolean, transport = this.transport()): RecoveryView {
     const id = delivery.id, working = this.isWorking(delivery, observedWorking);
     const task = delivery.taskId ? this.deps.task(delivery.taskId) : undefined;
     const title = redactText(task?.title || delivery.requestTitle || decision?.title || `Old reply from ${delivery.at.slice(0, 10)}; original request unavailable`).slice(0, 200);
@@ -78,10 +83,12 @@ export class DeliveryRecovery {
     else if (delivery.kind === "interaction" && (task.status === "done" || task.status === "dropped")) { phase = "needs_review"; reason = "The interaction has ended but an old reply remains pending."; }
     else if (source !== "verified" || !Number.isFinite(Date.parse(delivery.at)) || this.now().getTime() - Date.parse(delivery.at) > STALE_MS) { phase = "needs_review"; reason = source === "conflict" ? "The sending agent differs from the task's current assignee; inspect the reply and destination." : "This historical reply requires inspection before sending."; }
     if (!includeContent && phase === "ready") reason = "Open this reply to inspect its content and current authorization.";
+    const receipts = transport.get(id) ?? [];
+    if (!decision && receipts.length && !working && phase !== "cancelled") { phase = "unknown"; reason = "An earlier transport receipt exists without a confirmed reply disposition; inspect it before sending again."; }
     if (decision) { phase = decision.phase === "sending" && !this.busy.has(id) ? "unknown" : decision.phase; reason = decision.reason ?? (phase === "unknown" ? "A prior send may have reached the recipient; its outcome is unknown." : `Reply disposition: ${phase}.`); }
     const canSend = includeContent && this.deps.deliveries.isCurrent(delivery) && !!raw && !!task && !working && !root?.cancellation && root?.state.status !== "cancelled" && !["sending", "sent", "discarded"].includes(phase);
-    const row = { id, title, agentId: delivery.agentId, ...(delivery.taskId ? { taskId: delivery.taskId } : {}), conversation: delivery.conversation, destination: delivery.chatKey, at: delivery.at, phase, source, reason, content: redactText(raw).slice(0, 8000), contentIncluded: includeContent, canSend, canDiscard: !working && phase !== "sent" && phase !== "discarded", ...(decision?.externalEffectUnconfirmed ? { externalEffectUnconfirmed: true } : {}) };
-    const signature = JSON.stringify([row, createHash("sha256").update(raw).digest("hex"), task?.updatedAt, task?.workRoot, decision]);
+    const row = { id, title, agentId: delivery.agentId, ...(delivery.taskId ? { taskId: delivery.taskId } : {}), conversation: delivery.conversation, destination: delivery.chatKey, at: delivery.at, phase, source, reason, content: redactText(raw).slice(0, 8000), contentIncluded: includeContent, canSend, canDiscard: !working && phase !== "sent" && phase !== "discarded", ...(decision?.externalEffectUnconfirmed || phase === "unknown" ? { externalEffectUnconfirmed: true } : {}) };
+    const signature = JSON.stringify([row, createHash("sha256").update(raw).digest("hex"), task?.updatedAt, task?.workRoot, decision, receipts]);
     return { ...row, token: createHmac("sha256", this.signingKey).update(signature).digest("hex") };
   }
   preview(id: string): RecoveryView | undefined {
@@ -89,11 +96,11 @@ export class DeliveryRecovery {
     return delivery ? this.view(delivery, decision) : undefined;
   }
   list(limit = 50, offset = 0, allowed: (row: Delivery) => boolean = () => true): RecoveryView[] {
-    const decisions = this.decisions(), deliveries = new Map(this.deps.deliveries.entries().map(row => [row.id, row])), working = this.deps.workingSnapshot?.();
+    const decisions = this.decisions(), deliveries = new Map(this.deps.deliveries.entries().map(row => [row.id, row])), working = this.deps.workingSnapshot?.(), transport = this.transport();
     for (const row of decisions.values()) if (!deliveries.has(row.id)) deliveries.set(row.id, row.delivery);
     const start = Number.isFinite(offset) ? Math.max(0, Math.trunc(offset)) : 0;
     const count = Number.isFinite(limit) ? Math.min(100, Math.max(1, Math.trunc(limit))) : 50;
-    return [...deliveries.values()].filter(allowed).slice(start, start + count).map(row => this.view(row, decisions.get(row.id), false, undefined, working?.has(replyExecutionKey(row.agentId, row.conversation))));
+    return [...deliveries.values()].filter(allowed).slice(start, start + count).map(row => this.view(row, decisions.get(row.id), false, undefined, working?.has(replyExecutionKey(row.agentId, row.conversation)), transport));
   }
   private pinned(id: string, token: string): { delivery: Delivery; view: RecoveryView; content: string } {
     const decision = this.decisions().get(id), delivery = this.pending(id) ?? decision?.delivery;
@@ -132,13 +139,13 @@ export class DeliveryRecovery {
     return this.preview(id)!;
   }
   async sweep(): Promise<void> {
-    const decisions = this.decisions(), entries = this.deps.deliveries.entries(), working = this.deps.workingSnapshot?.();
+    const decisions = this.decisions(), entries = this.deps.deliveries.entries(), working = this.deps.workingSnapshot?.(), transport = this.transport();
     for (const delivery of entries) {
       const observed = working?.has(replyExecutionKey(delivery.agentId, delivery.conversation));
-      const meta = this.view(delivery, decisions.get(delivery.id), false, undefined, observed);
+      const meta = this.view(delivery, decisions.get(delivery.id), false, undefined, observed, transport);
       if (meta.phase === "discarded") this.cleanDiscarded(delivery);
       else if (meta.phase === "ready") {
-        const candidate = this.view(delivery, decisions.get(delivery.id), true, undefined, observed);
+        const candidate = this.view(delivery, decisions.get(delivery.id), true, undefined, observed, transport);
         if (candidate.phase === "ready") await this.send(delivery.id, candidate.token, "host");
       }
     }

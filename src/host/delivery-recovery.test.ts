@@ -235,3 +235,20 @@ test("a held inventory uses one queue and execution snapshot per sweep, without 
     assert.equal(scans, 1); assert.equal(snapshots, 1); assert.equal(f.reads(), 0); assert.equal(f.sent.length, 0);
   } finally { f.cleanup(); }
 });
+
+
+test("old transport receipts without a disposition never authorize automatic replay", async () => {
+  for (const status of ["pending", "sent", "dropped"] as const) {
+    const f = fixture(); try {
+      const purpose = describePurpose({ kind: "answer", deliveryId: "owed" });
+      f.outbox.enqueue({ id: "legacy-receipt", chatKey: f.delivery.chatKey, purpose, text: "Old wrapped answer" });
+      if (status === "sent") f.outbox.sent("legacy-receipt");
+      if (status === "dropped") f.outbox.dropped("legacy-receipt", "old failure");
+      const view = f.recovery.preview("owed")!;
+      assert.equal(view.phase, "unknown"); assert.equal(view.externalEffectUnconfirmed, true);
+      await f.recovery.sweep(); assert.equal(f.sent.length, 0);
+      const discarded = f.recovery.discard("owed", view.token, "operator");
+      assert.equal(discarded.externalEffectUnconfirmed, true);
+    } finally { f.cleanup(); }
+  }
+});

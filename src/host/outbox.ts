@@ -97,6 +97,9 @@ export class Outbox {
 
   get(id: string): Receipt | undefined { return this.replay().get(id); }
 
+  /** Snapshot for recovery: a settled transport may still have an unclosed reply debt. */
+  entries(): Receipt[] { return [...this.replay().values()]; }
+
   /** Still on its way, with the text a retry needs. */
   pending(): Receipt[] {
     return [...this.replay().values()].filter(receipt => receipt.status === "pending");
