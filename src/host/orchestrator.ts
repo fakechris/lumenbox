@@ -850,8 +850,6 @@ export class Orchestrator {
   private maybeAudit(task: Task): void {
     if (task.status !== "review" || task.reviewerId === undefined || !requestsResultCheck(task.history.at(-1))) return;
     if (this.auditing.has(task.id)) return;
-    const last = task.history[task.history.length - 1];
-    if (last?.by === "audit-guard" || last?.by === REVIEW_ACTOR || last?.by === task.reviewerId || this.verifications.recordsFor(task.id, evidenceDigest(task)).some(r => r.reviewerId === last?.by)) return;
     if (this.registry.tryGet(task.reviewerId) === undefined) return;
     const assignee = task.assigneeId !== undefined ? this.registry.tryGet(task.assigneeId) : undefined;
     this.auditing.add(task.id);

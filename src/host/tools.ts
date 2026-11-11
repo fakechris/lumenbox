@@ -1,5 +1,5 @@
 import { deliveryTool, reviewerInspectionRefusal } from "./task-delivery-tools.ts";
-import { isDeliveryAction } from "./task-delivery.ts";
+import { isDeliveryAction } from "./task-delivery.ts"; import { evidenceDigest } from "./review-dispatch.ts";
 import { executionTarget } from "./tool-roster.ts";
 import { TASK_PROGRESS_TOOL, runTaskProgressTool } from "./task-progress-tool.ts";
 import type { ToolOutcome } from "./tool-outcome.ts";
@@ -1745,7 +1745,7 @@ evidence: {
         "something a successor needs to know happens. Statuses: open (nobody on it), " +
         "doing, blocked (say why in the note), review (finished, awaiting acceptance), " +
         "done, dropped. If a task names a reviewer, only the reviewer can move it to " +
-        "done. Use submit to deliver your result, request_check to check a submitted result, and accept for authorized acceptance. A refusal never submits work. " +
+        "done. Use submit to deliver your result, request_check to check a submitted result, and accept for authorized acceptance. Use handoff to report incomplete execution without requesting a check. A refusal never submits work. " +
         "Your own live tasks are already in your instructions every turn; `list` is for " +
         "seeing the whole board. Use `read` with an id for the current full description of " +
         "your assigned task, including connection details; list is only a summary. " +
@@ -1756,7 +1756,7 @@ evidence: {
         properties: {
           action: {
             type: "string",
-            enum: ["create", "take", "update", "list", "read", "propose_close", "submit", "request_check", "accept"],
+            enum: ["create", "take", "update", "list", "read", "propose_close", "submit", "request_check", "accept", "handoff"],
             description:
               "create a task; take one (assigns it to you, status doing); update one's " +
               "status/note/assignee; list the board; read current details of your assigned task.",
@@ -1793,7 +1793,7 @@ evidence: {
           constraints: { type: "string", description: "For create: what must not be done or changed." },
           acceptance: { type: "string", description: "For create: how the reviewer decides it is done." },
           verification: { type: "string", description: "For create: how the result is to be checked — the command, the page, the file." },
-          expected_version: { type: "string", description: "For delivery actions: the evidence version last read; a stale version is refused." }, evidence: {
+          expected_version: { type: "string", description: "For delivery actions: the evidence version returned by read; a stale version is refused." }, evidence: {
             type: "array",
             items: { type: "string" },
             description:
@@ -5038,7 +5038,7 @@ export async function dispatchTool(
         if (task.assigneeId !== context.agent.id && context.audit?.taskId !== task.id) {
           return { text: "Task details are available to its current assignee. Ask for assignment before reading them.", isError: true };
         }
-        return { text: `${describeTask(task, nameOf, board)}${cited(task)}\n\n${task.description ?? "No additional description."}` };
+        return { text: `${describeTask(task, nameOf, board)}${cited(task)}\nEvidence version: ${evidenceDigest(task)}\n\n${task.description ?? "No additional description."}` };
       }
 
       if (action === "create") {

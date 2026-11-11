@@ -4258,7 +4258,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 404, apiError("task-unknown", { task: String(body.id ?? "") }));
             return;
           }
-          send(res, updated.coerced ? 409 : 200, { task: taskView(updated.task), ...(updated.coerced ? { note: updated.coerced } : {}) });
+          send(res, updated.coerced ? 409 : 200, { task: taskView(updated.task), ...(updated.coerced ? { note: updated.coerced, ...apiError("task-delivery-refused", { reason: updated.coerced }) } : {}) });
           return;
         }
         // A close proposal (INV-529) and its objection: the assignee's way of not waiting

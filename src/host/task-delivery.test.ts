@@ -18,8 +18,9 @@ test("delivery intentions survive restart and repeated submission cannot dispatc
     assert.equal(checks, 1);
     const reopened = new TaskStore(f.path); let writes = 0; reopened.onChange(() => writes++);
     assert.equal(reopened.deliveryCommand(f.task.id, "submit", "worker", { evidence: ["installed files and loader result"] })!.outcome, "unchanged");
+    assert.equal(reopened.deliveryCommand(f.task.id, "request_check", "reviewer")!.outcome, "applied");
     assert.equal(reopened.deliveryCommand(f.task.id, "request_check", "reviewer")!.outcome, "unchanged");
-    assert.equal(writes, 0);
+    assert.equal(writes, 1);
     reopened.update(f.task.id, { status: "doing", note: "The result was rejected" }, "reviewer");
     assert.equal(reopened.deliveryCommand(f.task.id, "submit", "worker")!.outcome, "refused");
     assert.equal(reopened.get(f.task.id)!.status, "doing");

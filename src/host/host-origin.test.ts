@@ -167,3 +167,23 @@ test("submitting the current task during a tool round preserves the final user r
     assert.equal(orch.bus.workAttention!.get(mia.id,"main")!.status,"answered");
   } finally {if(previousHome===undefined)delete process.env.AGENTBOX_HOME;else process.env.AGENTBOX_HOME=previousHome;rmSync(root,{recursive:true,force:true});}
 });
+
+test("adding a reviewer after submission still permits that reviewer's explicit check request", async () => {
+  const root = mkdtempSync(join(tmpdir(), "late-reviewer-")), previousHome = process.env.AGENTBOX_HOME;
+  process.env.AGENTBOX_HOME = root;
+  try {
+    const registry = new AgentRegistry(join(root, "agents")), worker = registry.create({ name: "Worker" }), reviewer = registry.create({ name: "Reviewer" });
+    const tasks = new TaskStore(null), capture: ModelCapture = { params: [] };
+    const orch = new Orchestrator({ registry, useBox: false, inbox: null, mcp: null, hooks: null, tasks, extensions: null, pendingWork: null,
+      client: fakeModel(() => ({ id: "check", type: "message", role: "assistant", model: "test", content: [{ type: "text", text: "Status: complete\nIntegrity: clean\nContract audit: aligned\nNext action: none" }], stop_reason: "end_turn", stop_sequence: null, usage: { input_tokens: 10, output_tokens: 4 } } as never), { capture }) });
+    const task = tasks.create({ title: "Install the package", requester: "person", assigneeId: worker.id })!;
+    tasks.deliveryCommand(task.id, "submit", worker.id);
+    await orch.settle(); assert.equal(capture.params.length, 0);
+    tasks.update(task.id, { reviewerId: reviewer.id }, "person");
+    assert.equal(tasks.deliveryCommand(task.id, "request_check", reviewer.id)!.outcome, "applied");
+    await orch.settle(); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(capture.params.length, 1, "the explicit request reaches the real audit dispatcher once");
+    assert.equal(tasks.deliveryCommand(task.id, "request_check", reviewer.id)!.outcome, "unchanged");
+    await orch.settle(); assert.equal(capture.params.length, 1);
+  } finally { if (previousHome === undefined) delete process.env.AGENTBOX_HOME; else process.env.AGENTBOX_HOME = previousHome; rmSync(root, { recursive: true, force: true }); }
+});
