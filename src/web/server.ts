@@ -1,4 +1,4 @@
-import { DeliveryRecovery } from "../host/delivery-recovery.ts";
+import { DeliveryRecovery, replyExecutionKey } from "../host/delivery-recovery.ts";
 import { deliveryRecoveryRoute } from "./delivery-recovery-routes.ts";
 import { taskAudience } from "../host/task-audience.ts";
 import {workControlFor, workControlRoute} from "./work-control-routes.ts";
@@ -1021,6 +1021,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const outbox = new Outbox(join(agentboxHome(), "outbox.jsonl"));
   const replyRecovery: DeliveryRecovery = new DeliveryRecovery({
     deliveries, outbox, decisionsPath: join(agentboxHome(), "delivery-dispositions.jsonl"),
+    workingSnapshot: () => new Set((orchestrator.turns?.interrupted() ?? []).map(turn => replyExecutionKey(turn.agentId, turn.conversation))),
     task: id => orchestrator.tasks?.get(id), isWorking: row => orchestrator.hasOpenTurn(row.agentId, row.conversation),
     reply: row => outboundRedactor(vault.heldValues())(row.messageId !== undefined ? orchestrator.replyForMessage(row.agentId, row.messageId, row.conversation) : orchestrator.replySince(row.agentId, row.before, row.conversation)),
     send: async (row, text) => { const result = await channels.tryPushToChat(row.chatKey, text, { kind: "answer", deliveryId: row.id }); if (!result.delivered) throw new Error(result.why ?? "Reply delivery was not confirmed"); },
@@ -1493,6 +1494,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // later process recover the answer: everything the agent says past `before` in this
       // conversation is the reply to this request, and the transcript is already durable.
       const owed = randomUUID();
+      return replyRecovery.trackOriginal(owed, async () => {
       deliveries.open({
         id: owed, kind: origin?.interaction ? "interaction" : "request", requestTitle: redactText(text.split("\n")[0] ?? "").slice(0, 200),
         ...(origin?.messageId !== undefined ? { messageId: origin.messageId } : {}),
@@ -1613,6 +1615,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (silence !== undefined) return silence;
       }
       return reply;
+      });
     },
     // Channel requests live on the team board: "t12" means the same thing in the
     // chat's card, the web UI and an agent's prompt. A failure closes as blocked with

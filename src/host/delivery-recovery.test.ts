@@ -8,6 +8,7 @@ import { Deliveries, type Delivery } from "./deliveries.ts";
 import { Outbox } from "./outbox.ts";
 import { TaskStore, type Task } from "./tasks.ts";
 import { OutboxSender } from "../channels/outbox-sender.ts";
+import { outboundId } from "./outbox.ts";
 import { describePurpose } from "./outbound.ts";
 import { deliveryRecoveryRoute } from "../web/delivery-recovery-routes.ts";
 
@@ -153,9 +154,84 @@ test("a durable discard still fences recovery when closing the old queue fails",
     const preview = f.recovery.preview("owed")!;
     f.deliveries.close = () => { throw new Error("queue unavailable after durable decision"); };
     assert.throws(() => f.recovery.discard("owed", preview.token, "operator"));
-    const restarted = new DeliveryRecovery({ ...f.deps, deliveries: new Deliveries(f.queuePath) });
+    const reopened = new Deliveries(f.queuePath);
+    const restarted = new DeliveryRecovery({ ...f.deps, deliveries: reopened });
     assert.equal(restarted.preview("owed")!.phase, "discarded");
     await restarted.sweep(); assert.equal(f.sent.length, 0);
     assert.equal(restarted.discard("owed", preview.token, "operator").phase, "discarded", "a repeated discard is idempotent");
+    assert.equal(reopened.entries().length, 0, "the durable decision also resumes interrupted queue cleanup");
+  } finally { f.cleanup(); }
+});
+
+
+test("a queued old payload cannot borrow a newly pinned reply's authority", async () => {
+  const f = fixture(); let release!: () => void, started!: () => void;
+  try {
+    const blocked = new Promise<void>(resolve => { started = resolve; });
+    const wire: string[] = [];
+    const adapter = { sendToChat: async (_key: string, text: string) => { if (text === "notice") { started(); await new Promise<void>(resolve => { release = resolve; }); } wire.push(text); } };
+    const sender = new OutboxSender(f.outbox, () => {}, undefined, () => NOW, undefined, receipt => recovery.authorizeReceipt(receipt));
+    const recovery = new DeliveryRecovery({ ...f.deps, send: async (row, text) => {
+      const result = await sender.send({ adapter, chatKey: row.chatKey, text, purpose: { kind: "answer", deliveryId: row.id } });
+      if (!result.delivered) throw new Error(result.why);
+    } });
+    const notice = sender.send({ adapter, chatKey: f.delivery.chatKey, text: "notice", purpose: { kind: "notice", about: "test" } });
+    await blocked;
+    const purpose = describePurpose({ kind: "answer", deliveryId: "owed" });
+    f.outbox.enqueue({ id: outboundId(f.delivery.chatKey, purpose, "old answer"), chatKey: f.delivery.chatKey, text: "old answer", purpose });
+    await sender.resume(() => adapter);
+    const sending = recovery.send("owed", recovery.preview("owed")!.token, "operator");
+    release(); await notice; await sending;
+    assert.deepEqual(wire, ["notice", "The recovered answer"]);
+    assert.equal(recovery.preview("owed")!.phase, "sent");
+  } finally { f.cleanup(); }
+});
+
+test("an unclaimed outbox reply is held; channel replacement during backoff fences its retry", async () => {
+  const f = fixture(); let incarnation = 1, release!: () => void, started!: () => void;
+  try {
+    const deliveries = new Deliveries(f.queuePath, { incarnationOf: () => incarnation });
+    const paused = new Promise<void>(resolve => { started = resolve; });
+    let calls = 0;
+    const adapter = { sendToChat: async () => { calls++; throw new Error("connection lost"); } };
+    const sender = new OutboxSender(f.outbox, () => {}, async () => { started(); await new Promise<void>(resolve => { release = resolve; }); }, () => NOW, undefined, receipt => recovery.authorizeReceipt(receipt));
+    const recovery = new DeliveryRecovery({ ...f.deps, deliveries, send: async (row, text) => {
+      const result = await sender.send({ adapter, chatKey: row.chatKey, text, purpose: { kind: "answer", deliveryId: row.id } });
+      if (!result.delivered) throw new Error(result.why);
+    } });
+    const purpose = describePurpose({ kind: "answer", deliveryId: "owed" });
+    const id = outboundId(f.delivery.chatKey, purpose, "The recovered answer");
+    f.outbox.enqueue({ id, chatKey: f.delivery.chatKey, text: "The recovered answer", purpose });
+    assert.equal((await sender.retry(f.delivery.chatKey, adapter)).sent, 0);
+    assert.equal(calls, 0, "a queued receipt alone cannot authorize a wire send");
+    const sending = recovery.send("owed", recovery.preview("owed")!.token, "operator");
+    await paused; incarnation = 2; release(); await sending;
+    assert.equal(calls, 1, "the replaced channel must never receive the backoff retry");
+    assert.equal(recovery.preview("owed")!.phase, "unknown");
+  } finally { f.cleanup(); }
+});
+
+test("the original promise owns its reply until it settles, even between model turns", async () => {
+  const f = fixture(); let release!: () => void;
+  try {
+    const original = f.recovery.trackOriginal("owed", () => new Promise<void>(resolve => { release = resolve; }));
+    const view = f.recovery.preview("owed")!;
+    assert.equal(view.phase, "waiting"); assert.equal(view.canDiscard, false);
+    assert.throws(() => f.recovery.discard("owed", view.token, "operator"), /still active/);
+    await f.recovery.sweep(); assert.equal(f.sent.length, 0);
+    release(); await original;
+    assert.equal(f.recovery.preview("owed")!.canDiscard, true);
+  } finally { f.cleanup(); }
+});
+
+test("a held inventory uses one queue and execution snapshot per sweep, without loading 1600 bodies", async () => {
+  const f = fixture(); try {
+    f.setTask(undefined);
+    for (let n = 0; n < 1600; n++) f.deliveries.open({ ...f.delivery, id: `held-${n}` });
+    const entries = f.deliveries.entries.bind(f.deliveries); let scans = 0, snapshots = 0;
+    f.deliveries.entries = () => { scans++; return entries(); };
+    const recovery = new DeliveryRecovery({ ...f.deps, isWorking: () => { throw new Error("per-row ledger scan"); }, workingSnapshot: () => { snapshots++; return new Set<string>(); } });
+    await recovery.sweep();
+    assert.equal(scans, 1); assert.equal(snapshots, 1); assert.equal(f.reads(), 0); assert.equal(f.sent.length, 0);
   } finally { f.cleanup(); }
 });
