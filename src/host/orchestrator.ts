@@ -4,7 +4,7 @@ import { requestsResultCheck } from "./task-delivery.ts";
 import { taskAttentionChanged, taskWorkId } from "./task-attention.ts";
 import { WorkAttention, workStateConversation } from "../agents/work-attention.ts";
 import { randomUUID } from "node:crypto";
-import { auditConversation, auditCurrent } from "./audit-context.ts";
+import { auditConversation, auditCurrent, isAuditConversation } from "./audit-context.ts";
 import { admitProgressMessage } from "./progress-admission.ts";
 /**
  * Wires the registry, the bus, the box, and the turn loop into one runtime.
@@ -856,7 +856,7 @@ export class Orchestrator {
     void runResultCheck(task, {
       checks: this.resultChecks, verifications: this.verifications, tasks: this.tasks,
       candidates: () => this.registry.list().filter(agent => !task.assigneeId || this.registry.boxOf(agent.id).id === this.registry.boxOf(task.assigneeId).id).map(agent => agent.id), nameOf: id => this.registry.tryGet(id)?.profile.name ?? id, isAgent: id => this.registry.has(id),
-      read: async (current, path) => { const box = current.assigneeId ? this.boxFor(current.assigneeId) : undefined; if (!box) throw new Error("No computer is available for this check"); return box.readFile(path); },
+      read: async (current, path) => { const box = current.assigneeId ? this.boxFor(current.assigneeId) : undefined; if (!box) throw new Error("No computer is available for this check"); const file = await box.downloadFile(path); const bytes = Buffer.from(file.base64, "base64"); if (bytes.length !== file.size || bytes.length > 10 * 1024 * 1024) throw new Error("Incomplete or oversized file bytes"); return bytes; },
       ask: async (reviewerId, prompt, audit, conversation) => { const messageId = randomUUID(); await this.prompt(reviewerId, prompt, undefined, { audit, conversation, messageId, steerable: false, lane: "background", origin: "host:audit" }); return this.replyForMessage(reviewerId, messageId, conversation); },
       log: line => console.error(`[check] ${line}`),
     }).catch(error => console.error(`[check] ${task.id}: ${error instanceof Error ? error.message : String(error)}`)).finally(() => this.auditing.delete(task.id));
@@ -2043,6 +2043,7 @@ export class Orchestrator {
     let parked = 0;
 
     for (const turn of outstanding) {
+      if (this.retireInterruptedCheck(turn)) { abandoned++; continue; }
       if (turn.workId && this.bus.workAttention?.cancelled(turn.workId)) { this.turns?.end(turn.id, "work-cancelled"); abandoned++; continue; }
       // Inbox replay already queued this durable continuation after a second crash.
       if (this.bus.hasPendingResume(turn.id)) continue;
@@ -2123,12 +2124,15 @@ export class Orchestrator {
     this.continueTurn(turn, { id: approvalId, how });
   }
 
-  /**
-   * Continues an interrupted turn as itself (INV-774): the ledger record is closed and
-   * reopened under the same id by the turn, the wake carries no user text, and `runTurn`
-   * answers the open step from the transcript before asking the model anything.
-   */
+  private retireInterruptedCheck(turn: InterruptedTurn): boolean {
+    if (!turn.audit && !isAuditConversation(turn.conversation ?? "")) return false;
+    const task = turn.audit ? this.tasks?.get(turn.audit.taskId) : undefined;
+    if (task && turn.audit?.planId) this.resultChecks.stop(task, turn.audit.planId, "Host restart interrupted this check; it is not resumed as ordinary work. Reserved costs remain consumed.");
+    this.turns?.end(turn.id, "result-check-interrupted"); this.steps?.closed(turn.id);
+    return true;
+  }
   private continueTurn(turn: InterruptedTurn, approval?: { id: string; how: "allowed" | "refused" | "gone" }): boolean {
+    if (this.retireInterruptedCheck(turn)) return false;
     const goal = this.goalLoop?.resumeGoal(turn);
     if (goal === false) { this.turns?.end(turn.id, "goal no longer active"); return false; }
     this.bus.sendFromUser(turn.agentId, continuationNote(turn.about), { ...(goal === undefined ? {} : { goal }),

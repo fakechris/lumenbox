@@ -9,7 +9,7 @@ import type { Task, TaskStore } from "./tasks.ts";
 interface Dependencies {
   checks: ResultChecks; verifications: VerificationLedger; tasks: TaskStore;
   candidates: () => string[]; nameOf: (id: string) => string; isAgent: (id: string) => boolean;
-  read: (task: Task, path: string) => Promise<{ content: string; truncated: boolean }>;
+  read: (task: Task, path: string) => Promise<Uint8Array>;
   ask: (reviewerId: string, prompt: string, audit: AuditContext, conversation: string) => Promise<string>;
   log: (line: string) => void;
 }
@@ -29,8 +29,8 @@ export async function runResultCheck(task: Task, deps: Dependencies): Promise<vo
         if (!current || !deps.checks.active(current, plan.id)) { stopReason = "Check cancelled, expired or evidence changed."; return; }
         try {
           const read = await deps.read(current, file.path);
-          if (read.truncated) { if (verdict !== "fail") verdict = "none"; basis.push(`${file.acceptance}: full file unavailable`); }
-          else if (createHash("sha256").update(read.content).digest("hex") !== file.sha256) { verdict = "fail"; basis.push(`${file.acceptance}: file bytes differ from the approved artifact`); }
+          if (read.byteLength > 10 * 1024 * 1024) { if (verdict !== "fail") verdict = "none"; basis.push(`${file.acceptance}: file exceeds the bounded check size`); }
+          else if (createHash("sha256").update(read).digest("hex") !== file.sha256) { verdict = "fail"; basis.push(`${file.acceptance}: file bytes differ from the approved artifact`); }
           else basis.push(`${file.acceptance}: approved file bytes confirmed`);
         } catch { if (verdict !== "fail") verdict = "none"; basis.push(`${file.acceptance}: file could not be read`); }
       }

@@ -41,7 +41,7 @@ import { approvalOutcomeResult, notStartedResult, outcomeUnknownResult } from ".
 import { idempotencyOf } from "../protocol/idempotency.ts";
 import { changedPromptSegments, type PromptFingerprint } from "./resume.ts";
 import type { PendingWork } from "./pending-work.ts";
-import { admittedAudit, auditCurrent, auditToolAllowed, AUDIT_READ_TOOLS } from "./audit-context.ts";
+import { admittedAudit, auditCurrent, auditToolAllowed, AUDIT_READ_TOOLS, isAuditConversation } from "./audit-context.ts";
 import type { Effects } from "./effects.ts";
 import type { Orchestrations } from "./orchestrate.ts";
 import type { McpFace } from "./mcp-face.ts";
@@ -1431,7 +1431,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   const registry = workRegistry(deps.registry, agent.id, conversation, historyConversation, work, entry => personAuthoredText(entry as HistoryEntry) ?? (givesTasks(entryChannel(entry as HistoryEntry)) ? entry.text : undefined));
   const audit = admittedAudit(inbound);
   const auditValid = () => !audit || !!audit.planId && !!deps.tasks?.get(audit.taskId) && auditCurrent(audit, agent.id, conversation, deps.tasks) && deps.resultChecks?.active(deps.tasks.get(audit.taskId)!, audit.planId, agent.id) === true;
-  if (inbound.some(message => message.origin === "host:audit") && (!audit || !auditValid())) return;
+  if ((isAuditConversation(conversation) || inbound.some(message => message.origin === "host:audit")) && (!audit || !auditValid())) return;
   if (audit?.planId) { const task = deps.tasks!.get(audit.taskId)!; const deadline = deps.resultChecks!.snapshot(task).plans.find(plan => plan.id === audit.planId)!.deadline; signal = AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, deadline - Date.now()))]); }
   const contextMode = registry.contextMode(agent.id, conversation);
   const clean = contextMode === "clean";
@@ -2158,7 +2158,7 @@ ${outcome.text}`;
   // Setup still belongs to the inbox. Persist the message ids before acknowledging
   // them, so startup can reconcile a crash between these two synchronous writes.
   if (isForkConversation(conversation)) deps.pendingWork?.forks?.started(agent.id, conversation); /* a fork's first turn is a step of its chain (INV-1667) */ const agentVersion = agentVersionOf(standing, offeredSkills); const configVersion = registry.configVersions.beginTurn({ agentId: agent.id, profile: agent.profile, turnId, conversation, standing: agentVersion.standing, task: taskBinding?.taskId }); deps.turns?.begin({ // configVersion: the version this turn is held to until it ends (INV-1669)
-    id: turnId, executionId, boxId: registry.boxOf(agent.id).id, ...(taskBinding ? { taskBinding } : {}),
+    id: turnId, executionId, ...(audit ? { audit } : {}), boxId: registry.boxOf(agent.id).id, ...(taskBinding ? { taskBinding } : {}),
     agentId: agent.id,
     causedBy: inbound.map(message => message.id),
     ...(deps.caller?.userId !== undefined ? { principalId: deps.caller.userId } : {}),

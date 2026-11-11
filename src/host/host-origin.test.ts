@@ -1,3 +1,4 @@
+import { TurnLedger } from "./resume.ts";
 import { newPursuit } from "./goal-mode.ts";
 import { TaskStore } from "./tasks.ts";
 import { auditConversation } from "./audit-context.ts";
@@ -190,5 +191,31 @@ test("adding a reviewer after submission still permits that reviewer's explicit 
     assert.equal(capture.params.length, 1, "the explicit request reaches the real audit dispatcher once");
     assert.equal(tasks.deliveryCommand(task.id, "request_check", reviewer.id)!.outcome, "unchanged");
     await orch.settle(); assert.equal(capture.params.length, 1);
+  } finally { if (previousHome === undefined) delete process.env.AGENTBOX_HOME; else process.env.AGENTBOX_HOME = previousHome; rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("restart retires new and legacy result checks; neither recovery queue nor missing scope can downgrade them to ordinary work", async () => {
+  const root = mkdtempSync(join(tmpdir(), "check-restart-")), previousHome = process.env.AGENTBOX_HOME;
+  process.env.AGENTBOX_HOME = root;
+  try {
+    const registry = new AgentRegistry(join(root, "agents")), worker = registry.create({ name: "Worker" }), reviewer = registry.create({ name: "Checker" });
+    const tasks = new TaskStore(null), path = join(root, "turns.jsonl"), turns = new TurnLedger(path);
+    const task = tasks.create({ title: "Install the skill", requester: "person", assigneeId: worker.id })!;
+    tasks.deliveryCommand(task.id, "submit", worker.id);
+    let modelCalls = 0;
+    const orch = new Orchestrator({ registry, tasks, turns, useBox: false, inbox: null, mcp: null, hooks: null, extensions: null, pendingWork: null, client: fakeModel(() => { modelCalls++; throw new Error("Recovery must never reach the model"); }) });
+    orch.resultChecks.grant(tasks.get(task.id)!, { mode: "model", reason: "Check the installed skill", acceptance: "Approved skill exists", paths: [], reviewers: 1, maxRounds: 1, maxDispatches: 1, maxCalls: 2, maxMs: 60000, maxCost: 1 }, "operator");
+    const plan = orch.resultChecks.begin(tasks.get(task.id)!, [reviewer.id]).plan!;
+    const audit = { taskId: task.id, digest: evidenceDigest(tasks.get(task.id)!), reviewerId: reviewer.id, planId: plan.id };
+    turns.begin({ id: "new-check", agentId: reviewer.id, about: "Inspect evidence", audit, conversation: auditConversation(audit) });
+    turns.begin({ id: "legacy-check", agentId: reviewer.id, about: "Old audit", conversation: "audit-legacy" });
+    assert.deepEqual(new TurnLedger(path).interrupted().find(row => row.id === "new-check")!.audit, audit);
+    assert.deepEqual(orch.resumeInterrupted(), { resumed: 0, abandoned: 2 });
+    await orch.prompt(reviewer.id, "Replay of an old queued continuation", undefined, { conversation: "audit-legacy", synthetic: true });
+    await orch.settle();
+    assert.equal(modelCalls, 0); assert.equal(tasks.list().length, 1);
+    assert.equal(turns.interrupted().length, 0);
+    assert.match(orch.resultChecks.snapshot(tasks.get(task.id)!).plans[0]!.reason!, /restart interrupted/);
   } finally { if (previousHome === undefined) delete process.env.AGENTBOX_HOME; else process.env.AGENTBOX_HOME = previousHome; rmSync(root, { recursive: true, force: true }); }
 });

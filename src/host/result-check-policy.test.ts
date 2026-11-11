@@ -75,9 +75,9 @@ test("expiry, stale evidence, cancellation, unpriced models and insufficient cos
 test("deterministic installation file checks use approved bytes, no model, and never replace business acceptance", async () => {
   const f = fixture(); let modelCalls = 0, reads = 0;
   try {
-    const content = "---\nname: import\n---\nInstalled skill", sha256 = createHash("sha256").update(content).digest("hex");
+    const content = Buffer.from([0x50, 0x4b, 0xff, 0x80, 0x00]), sha256 = createHash("sha256").update(content).digest("hex");
     const ledger = new VerificationLedger();
-    const deps = { checks: f.checks, verifications: ledger, tasks: f.tasks, candidates: () => ["worker", "reviewer"], nameOf: (id: string) => id, isAgent: () => true, read: async () => { reads++; return { content, truncated: false }; }, ask: async () => { modelCalls++; return ""; }, log: () => {} };
+    const deps = { checks: f.checks, verifications: ledger, tasks: f.tasks, candidates: () => ["worker", "reviewer"], nameOf: (id: string) => id, isAgent: () => true, read: async () => { reads++; return Buffer.from(content); }, ask: async () => { modelCalls++; return ""; }, log: () => {} };
     await runResultCheck(f.task, deps); assert.equal(modelCalls, 0); assert.equal(reads, 0);
     f.checks.grant(f.tasks.get(f.task.id)!, { mode: "files", reason: "Verify the approved skill was copied completely", files: [{ path: "/work/skills/import/SKILL.md", sha256, acceptance: "Approved skill file matches" }] }, "operator");
     await runResultCheck(f.tasks.get(f.task.id)!, deps);
