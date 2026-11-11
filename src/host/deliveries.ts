@@ -32,6 +32,8 @@ export const LEDGER_KIND: LedgerKind = "queue";
 const COMPACT_AT = 200;
 
 export interface Delivery {
+  /** Admission under durable reply disposition; absent records always require inspection. */
+  recoveryVersion?: 1;
   requestTitle?: string;
   kind?: "request" | "interaction";
   id: string;

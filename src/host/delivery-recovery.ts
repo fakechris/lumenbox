@@ -39,7 +39,7 @@ export class DeliveryRecovery {
   async trackOriginal<T>(id: string, run: () => Promise<T>): Promise<T> { this.original.add(id); try { return await run(); } finally { this.original.delete(id); } }
   private isWorking(delivery: Delivery, observed?: boolean): boolean { return this.original.has(delivery.id) || (observed ?? this.deps.isWorking(delivery)); }
   private hash(value: string): string { return createHash("sha256").update(value).digest("hex"); }
-  private deliveryHash(row: Delivery): string { return this.hash(JSON.stringify([row.id, row.messageId, row.agentId, row.chatKey, row.incarnation ?? 1, row.conversation, row.taskId, row.identity, row.kind, row.at, row.before])); }
+  private deliveryHash(row: Delivery): string { return this.hash(JSON.stringify([row.id, row.messageId, row.agentId, row.chatKey, row.incarnation ?? 1, row.conversation, row.taskId, row.identity, row.kind, row.recoveryVersion, row.at, row.before])); }
   private authorityHash(delivery: Delivery): string {
     const task = delivery.taskId ? this.deps.task(delivery.taskId) : undefined, root = task?.workRoot?.state;
     return this.hash(JSON.stringify([task?.id, task?.requester, task?.assigneeId, task?.sourceMessageId, task?.conversation, root?.id, root?.owner, root?.conversation, root?.generation, root?.epoch, root?.unresolved, root?.status === "cancelled", root?.messages, task?.mandate, task?.workRoot?.cancellation]));
@@ -81,7 +81,7 @@ export class DeliveryRecovery {
     else if (!this.deps.deliveries.isCurrent(delivery) || root?.cancellation || root?.state.status === "cancelled") { phase = "cancelled"; reason = "This work was cancelled; its old reply will not be sent."; }
     else if (includeContent && !raw || !task) { phase = "needs_review"; reason = "The original request or reply is unavailable; do not reconstruct or resend it."; }
     else if (delivery.kind === "interaction" && (task.status === "done" || task.status === "dropped")) { phase = "needs_review"; reason = "The interaction has ended but an old reply remains pending."; }
-    else if (source !== "verified" || !Number.isFinite(Date.parse(delivery.at)) || this.now().getTime() - Date.parse(delivery.at) > STALE_MS) { phase = "needs_review"; reason = source === "conflict" ? "The sending agent differs from the task's current assignee; inspect the reply and destination." : "This historical reply requires inspection before sending."; }
+    else if (delivery.recoveryVersion !== 1 || source !== "verified" || !Number.isFinite(Date.parse(delivery.at)) || this.now().getTime() - Date.parse(delivery.at) > STALE_MS) { phase = "needs_review"; reason = source === "conflict" ? "The sending agent differs from the task's current assignee; inspect the reply and destination." : "This historical reply requires inspection before sending."; }
     if (!includeContent && phase === "ready") reason = "Open this reply to inspect its content and current authorization.";
     const receipts = transport.get(id) ?? [];
     if (!decision && receipts.length && !working && phase !== "cancelled") { phase = "unknown"; reason = "An earlier transport receipt exists without a confirmed reply disposition; inspect it before sending again."; }
@@ -143,7 +143,8 @@ export class DeliveryRecovery {
     for (const delivery of entries) {
       const observed = working?.has(replyExecutionKey(delivery.agentId, delivery.conversation));
       const meta = this.view(delivery, decisions.get(delivery.id), false, undefined, observed, transport);
-      if (meta.phase === "discarded") this.cleanDiscarded(delivery);
+      if (meta.phase === "unknown" && !decisions.has(delivery.id)) this.record(delivery, meta.title, "unknown", "host", { reason: meta.reason, externalEffectUnconfirmed: true });
+      else if (meta.phase === "discarded") this.cleanDiscarded(delivery);
       else if (meta.phase === "ready") {
         const candidate = this.view(delivery, decisions.get(delivery.id), true, undefined, observed, transport);
         if (candidate.phase === "ready") await this.send(delivery.id, candidate.token, "host");

@@ -19,7 +19,7 @@ function fixture() {
   const task = tasks.create({ title: "Explain the speech models", requester: "person", assigneeId: "agent", sourceMessageId: "source", workRoot: { state: { id: "work", owner: "agent", conversation: "main", generation: 1, epoch: 0, status: "answered", messages: ["source"], peers: [], awaiting: [] } } })!;
   let current: Task | undefined = task, content = "The recovered answer", working = false, reads = 0;
   const sent: string[] = [];
-  const delivery: Delivery = { id: "owed", messageId: "source", kind: "request", agentId: "agent", conversation: "main", chatKey: "feishu:room", at: NOW.toISOString(), taskId: task.id, before: 0 };
+  const delivery: Delivery = { id: "owed", recoveryVersion: 1, messageId: "source", kind: "request", agentId: "agent", conversation: "main", chatKey: "feishu:room", at: NOW.toISOString(), taskId: task.id, before: 0 };
   deliveries.open(delivery);
   const deps = { deliveries, outbox, decisionsPath, task: () => current, reply: () => { reads++; return content; }, isWorking: () => working, now: () => NOW, send: async (_row: Delivery, text: string) => { sent.push(text); } };
   return { dir, queuePath, decisionsPath, deliveries, outbox, task, delivery, sent, deps, recovery: new DeliveryRecovery(deps), setTask: (t: Task | undefined) => { current = t; }, setContent: (s: string) => { content = s; }, setWorking: (v: boolean) => { working = v; }, reads: () => reads, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
@@ -244,11 +244,31 @@ test("old transport receipts without a disposition never authorize automatic rep
       f.outbox.enqueue({ id: "legacy-receipt", chatKey: f.delivery.chatKey, purpose, text: "Old wrapped answer" });
       if (status === "sent") f.outbox.sent("legacy-receipt");
       if (status === "dropped") f.outbox.dropped("legacy-receipt", "old failure");
+      f.deliveries.open({ ...f.delivery, recoveryVersion: undefined });
       const view = f.recovery.preview("owed")!;
       assert.equal(view.phase, "unknown"); assert.equal(view.externalEffectUnconfirmed, true);
       await f.recovery.sweep(); assert.equal(f.sent.length, 0);
-      const discarded = f.recovery.discard("owed", view.token, "operator");
+      for (let n = 0; n < 500; n++) {
+        f.outbox.enqueue({ id: `unrelated-${n}`, chatKey: "other-room", purpose: "notice", text: "unrelated" });
+        f.outbox.sent(`unrelated-${n}`);
+      }
+      const restarted = new DeliveryRecovery(f.deps);
+      assert.equal(restarted.preview("owed")!.phase, "unknown", "queue compaction cannot erase observed uncertainty");
+      await restarted.sweep(); assert.equal(f.sent.length, 0);
+      const discarded = restarted.discard("owed", restarted.preview("owed")!.token, "operator");
       assert.equal(discarded.externalEffectUnconfirmed, true);
     } finally { f.cleanup(); }
   }
+});
+
+
+test("a legacy debt remains held even when its old transport evidence was compacted before recovery", async () => {
+  const f = fixture(); try {
+    f.deliveries.open({ ...f.delivery, recoveryVersion: undefined });
+    assert.equal(f.recovery.preview("owed")!.phase, "needs_review");
+    await f.recovery.sweep(); assert.equal(f.sent.length, 0);
+    const view = f.recovery.preview("owed")!;
+    await f.recovery.send("owed", view.token, "operator");
+    assert.equal(f.sent.length, 1, "legacy delivery requires explicit preview approval");
+  } finally { f.cleanup(); }
 });

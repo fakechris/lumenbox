@@ -1496,7 +1496,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       const owed = randomUUID();
       return replyRecovery.trackOriginal(owed, async () => {
       deliveries.open({
-        id: owed, kind: origin?.interaction ? "interaction" : "request", requestTitle: redactText(text.split("\n")[0] ?? "").slice(0, 200),
+        id: owed, recoveryVersion: 1, kind: origin?.interaction ? "interaction" : "request", requestTitle: redactText(text.split("\n")[0] ?? "").slice(0, 200),
         ...(origin?.messageId !== undefined ? { messageId: origin.messageId } : {}),
         // The thread when there is one. The room key here sent a recovered answer to the
         // bottom of the group while the question sat inside a topic (2026-09-02, "接
