@@ -55,6 +55,12 @@ jobs:
       - name: test
         run: npm run test:ci
 
+      # Geometry is a browser fact: string tests cannot detect two controls covering each other.
+      - name: install the layout-check browser
+        run: npx playwright-core install --with-deps chromium
+      - name: panel layout and first-use guide browser regressions
+        run: npm run test:layout
+
       # Last, because a build failure is less informative than a type error and takes longer to read.
       - name: build
         run: npm run build
