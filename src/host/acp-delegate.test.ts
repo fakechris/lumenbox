@@ -120,7 +120,34 @@ test("a brief settles on the engine's end_turn: done, the answer in the note, th
     const second = await f.settledNote(text => /and again/.test(text));
     assert.match(second.text, /whether it did the work is unknown.*delivered no report/);
     assert.deepEqual(f.committed().filter(r => r.event === "committed").map(r => r.how), ["done", "unknown"]);
-    await f.delegates.close(started.jobId);
+    const box = f.delegates.get(started.jobId)!.box;
+    const originalSend = box.acpSend.bind(box);
+    let releaseSend!: () => void;
+    const sendingGate = new Promise<void>(resolve => { releaseSend = resolve; });
+    box.acpSend = async request => { const response = await originalSend(request); await sendingGate; return response; };
+    const admission = f.delegates.continueWith(started.jobId, "SLOW new work", { engine: "fake", workId: "other-work" });
+    try {
+      assert.equal(f.delegates.get(started.jobId)?.inFlight?.workId, "other-work", "cancellation sees new ownership before send acknowledges");
+      await assert.rejects(f.delegates.continueWith(started.jobId, "duplicate", { engine: "fake" }), /still working/);
+    } finally { releaseSend(); await admission; box.acpSend = originalSend; }
+    await f.delegates.cancel(started.jobId);
+    await f.settledNote(text => /SLOW new work/.test(text));
+    const originalClose = box.acpClose.bind(box);
+    let releaseClose!: () => void;
+    const closingGate = new Promise<void>(resolve => { releaseClose = resolve; });
+    box.acpClose = async request => { await closingGate; return originalClose(request); };
+    const closing = f.delegates.close(started.jobId, "old work cancelled");
+    try {
+      await assert.rejects(f.delegates.continueWith(started.jobId, "new unrelated work", { engine: "fake", workId: "other-work" }), /closing or closed/);
+      assert.equal(f.delegates.get(started.jobId)?.inFlight, undefined, "closing an idle session must not admit and then abort new work");
+    } finally { releaseClose(); await closing; }
+    const uncertain = await f.start("check before lost acknowledgement");
+    await f.settledNote(text => /check before lost acknowledgement/.test(text));
+    f.delegates.get(uncertain.jobId)!.box.acpSend = async () => { throw new Error("send acknowledgement lost"); };
+    await assert.rejects(f.delegates.continueWith(uncertain.jobId, "uncertain brief", { engine: "fake", workId: "uncertain-work" }), /send acknowledgement lost/);
+    assert.equal(f.delegates.get(uncertain.jobId), undefined, "a failed admission with confirmed cleanup does not wedge the session busy");
+    await f.settledNote(text => /closed after the brief acknowledgement was lost/i.test(text));
+    assert.equal(f.pendingWork.open().filter(work => work.child === uncertain.jobId).length, 0, "the uncertain admission is durably settled after cleanup");
   } finally {
     f.cleanup();
   }
@@ -293,8 +320,7 @@ test("an engine that ignores the cancel: the host settles the brief as aborted a
     assert.equal(row?.how, "aborted");
     assert.match(row?.why ?? "", /the agent cancelled the brief; the engine did not confirm the cancel within 0s, so the host closed the session/);
     assert.equal(f.delegates.get(started.jobId), undefined, "the session is gone from the host");
-    // The note goes out before the close finishes (SIGTERM, then up to 3 s for the engine to go).
-    for (let i = 0; i < 100 && f.acp.list().some(s => s.session_id === started.jobId); i++) await new Promise(resolve => setTimeout(resolve, 50));
+    // The stopped report follows the close acknowledgement, never precedes it.
     assert.equal(f.acp.list().some(s => s.session_id === started.jobId), false, "and from the box");
   } finally {
     f.cleanup();
@@ -312,8 +338,7 @@ test("consent times out and the engine ignores the cancel that follows: aborted 
     assert.match(row?.why ?? "", /nobody answered the engine's permission question within the consent wait; the engine did not confirm the cancel within 0s/);
     assert.equal(f.policy.pending().length, 0, "the question was withdrawn");
     assert.equal(f.delegates.get(started.jobId), undefined);
-    // The close that follows the note still runs; let it finish before the directory goes.
-    for (let i = 0; i < 100 && f.acp.list().some(s => s.session_id === started.jobId); i++) await new Promise(resolve => setTimeout(resolve, 50));
+    // A stop report is not emitted while the host is still waiting for close.
     assert.equal(f.acp.list().some(s => s.session_id === started.jobId), false, "the session is gone from the box");
   } finally {
     f.cleanup();
@@ -335,5 +360,46 @@ test("an engine that confirms the cancel settles on its own word, and the grace 
     await f.delegates.close(started.jobId);
   } finally {
     f.cleanup();
+  }
+});
+
+test("an exit arriving before the close response waits for that response; a rejected close remains observable", async () => {
+  for (const rejected of [false, true]) {
+    let publish!: (page: Awaited<ReturnType<AcpBox["acpEvents"]>>) => void;
+    const page = new Promise<Awaited<ReturnType<AcpBox["acpEvents"]>>>(resolve => { publish = resolve; });
+    let confirm!: () => void, refuse!: (error: Error) => void, closes = 0;
+    const acknowledgement = new Promise<void>((resolve, reject) => { confirm = resolve; refuse = reject; });
+    const notes: string[] = [];
+    const box = {
+      acpOpen: async () => ({ engine_session_id: "session", log_path: "/fixture/log" }),
+      acpSend: async () => ({ rpc_id: 1 }),
+      acpEvents: async () => page,
+      acpClose: async () => { closes++; await acknowledgement; return {}; },
+    } as unknown as AcpBox;
+    let reachedGrace!: () => void;
+    const graceReached = new Promise<void>(resolve => { reachedGrace = resolve; });
+    const delegates = new AcpDelegates({ deliver: (_agent, text) => notes.push(text), cancelGraceMs: 1,
+      log: text => { if (text.includes("did not confirm the cancel")) reachedGrace(); } });
+    try {
+      await delegates.start({ box, agentId: "a", agentName: "A", conversation: "main", engine: "fake", command: "unused", cwd: "/fixture", env: {}, prompt: "work", report: "/fixture/report" }, "job-close");
+      await delegates.cancel("job-close");
+      const closing = delegates.close("job-close");
+      // Observe both callers now so the deliberately rejected operation is handled.
+      const results = Promise.allSettled([closing, delegates.close("job-close")]);
+      publish({ events: [], last_seq: 0, running: false, exit_code: 0 });
+      await graceReached;
+      await new Promise<void>(resolve => setImmediate(resolve));
+      assert.equal(notes.length, 0, "neither an exit nor an expired cancel grace can confirm a pending close");
+      assert.ok(delegates.get("job-close")?.inFlight, "pending is not stopped");
+      assert.equal(closes, 1, "concurrent close requests share one operation");
+      if (rejected) refuse(new Error("close acknowledgement lost")); else confirm();
+      const outcomes = await results;
+      await new Promise<void>(resolve => setImmediate(resolve));
+      assert.ok(outcomes.every(outcome => outcome.status === (rejected ? "rejected" : "fulfilled")));
+      assert.equal(notes.length, 1, "the brief is settled exactly once");
+      assert.match(notes[0]!, rejected ? /engine exited/ : /session was closed by the agent/);
+      assert.doesNotMatch(notes[0]!, /session stays open/, "a closed session must not invite continued work");
+      assert.equal(delegates.get("job-close"), undefined);
+    } finally { delegates.stop(); }
   }
 });

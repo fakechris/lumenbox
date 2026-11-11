@@ -47,18 +47,35 @@ import { Vault } from "./vault.ts";
 import { auditConversation } from "./audit-context.ts";
 import { evidenceDigest } from "./review-dispatch.ts";
 
-test("user installation holds attention across failure, new turns and a hundred priority peers (INV-1797)", async () => {
+test("user installation resumes to a verified artifact after failure while a hundred priority peers wait (INV-1797)", async () => {
   const { WorkAttention, workStateConversation } = await import("../agents/work-attention.ts");
-  const focus = new WorkAttention(); let rounds = 0; const tasks = new TaskStore(null);
+  const focus = new WorkAttention(); let rounds = 0; let reported = false; const handledPeers = new Set<number>(); const tasks = new TaskStore(null);
   const episode = await runEpisode({
     workAttention: focus, team: [{ name: "Mia", tools: ["SetTodos", "Tasks"] }, { name: "Zed" }], says: [], tasks,
-    script: ({ system, messages }) => {
+    script: ({ system, messages, opened }) => {
+      if (opened.includes("UNRELATED PEER")) {
+        assert.equal(reported, true, "unrelated messages may run only after the user's verified result");
+        for (const match of opened.matchAll(/UNRELATED PEER (\d+)/g)) handledPeers.add(Number(match[1]));
+        return { call: "NothingToSay", input: {} };
+      }
       assert.doesNotMatch(system + JSON.stringify(messages), /OLD AUDIT OBJECTIVE|UNRELATED PEER/, "old work is not execution context");
       if (rounds++ === 0) return { call: "SetTodos", input: { todos: [{ text: "Install the provided package", status: "doing" }] } };
       if (rounds === 2) return { call: "bash", input: { command: "ls ~/Downloads" } };
-      return { call: "Tasks", input: { action: "create", title: "Unrelated probe", assignee: "Mia" } };
+      if (rounds === 3) return { call: "bash", input: { command: 'echo "installed-package" > /home/box/work/skills/package/SKILL.md' } };
+      if (rounds === 4) return { call: "read_file", input: { path: "/home/box/work/skills/package/SKILL.md" } };
+      if (rounds === 5) {
+        const blocks = messages.flatMap(message => Array.isArray(message.content) ? message.content : []);
+        const read = blocks.find(block => block.type === "tool_use" && block.name === "read_file");
+        assert.ok(read && read.type === "tool_use", "the requested artifact was read through the tool");
+        const result = blocks.find(block => block.type === "tool_result" && block.tool_use_id === read.id);
+        assert.ok(result && result.type === "tool_result" && !result.is_error, "readback succeeded before completion");
+        assert.match(JSON.stringify(result.content), /installed-package/, "the readback itself contains the installed artifact");
+        return { call: "SetTodos", input: { todos: [{ text: "Install the provided package", status: "done" }] } };
+      }
+      reported = true;
+      return { say: "The requested package was installed and its SKILL.md was read back." };
     },
-    drive: async ({ registry, bus, frontId }) => {
+    drive: async ({ registry, bus, frontId, files }) => {
       registry.appendTranscript(frontId, { role: "user", host: true, text: "OLD AUDIT OBJECTIVE", at: new Date().toISOString() });
       registry.writeTodos(frontId, [{ text: "OLD AUDIT OBJECTIVE", status: "doing" }]);
       bus.sendFromUser(frontId, "Install the provided package", { messageId: "install-work" });
@@ -73,6 +90,18 @@ test("user installation holds attention across failure, new turns and a hundred 
       assert.equal(registry.readDurableState(frontId, workStateConversation(work, "main")).todos?.[0]?.text, "Install the provided package");
       assert.equal(registry.readDurableState(frontId).todos?.[0]?.text, "OLD AUDIT OBJECTIVE", "old record remains intact, but is not the current plan");
       assert.match(JSON.stringify(registry.readTranscript(frontId)), /required bash tool is unavailable/);
+      registry.update(frontId, { tools: ["SetTodos", "Tasks", "bash", "read_file", "NothingToSay"] });
+      bus.sendFromUser(frontId, "The tool is available now; continue the package installation", { messageId: "continue-install" });
+      await bus.wake(frontId); await bus.idle();
+      const completed = focus.get(frontId, "main")!;
+      assert.equal(completed.id, work.id, "recovery continues the user's work, not a new audit or task");
+      assert.equal(completed.status, "answered");
+      assert.equal(completed.unavailable, undefined, "successful use clears the specific capability blocker");
+      assert.equal(files.get("/home/box/work/skills/package/SKILL.md"), "installed-package");
+      assert.equal(registry.readDurableState(frontId, workStateConversation(work, "main")).todos?.[0]?.status, "done");
+      assert.equal(tasks.list().length, 0, "neither recovery nor queued peers create audit probes");
+      assert.deepEqual([...handledPeers].sort((a, b) => a - b), Array.from({ length: 100 }, (_, i) => i), "every held message is eventually delivered, not silently dropped");
+      assert.equal(bus.heldCount(frontId), 0);
     },
   });
   episode.cleanup();
@@ -3297,7 +3326,13 @@ test("Delegate in session mode: opened, steered, cancelled and closed through th
         return { ok: true };
       },
       acpEvents: async (request: Parameters<InstanceType<typeof AcpService>["events"]>[0]) => acp.events(request),
-      acpClose: async (request: Parameters<InstanceType<typeof AcpService>["close"]>[0]) => (await acp.close(request))!,
+      acpClose: async (request: Parameters<InstanceType<typeof AcpService>["close"]>[0]) => {
+        const closed = await acp.close(request);
+        // The event poll receives the exit before the close response: make this
+        // ordering deterministic instead of relying on scheduler load to expose it.
+        await new Promise<void>(resolve => setImmediate(resolve));
+        return closed!;
+      },
       acpSessions: async () => ({ sessions: acp.list() }),
     } as never,
     script: ({ round, messages }) => {
@@ -3325,7 +3360,7 @@ test("Delegate in session mode: opened, steered, cancelled and closed through th
     while (!committed().some(entry => entry.event === "committed") && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 20));
     const entries = committed();
     assert.equal(entries.find(entry => entry.event === "prepared" && entry.data?.mode === "session")?.data?.mode, "session");
-    assert.deepEqual(entries.filter(entry => entry.event === "committed").map(entry => entry.how), ["aborted"], "the engine confirmed the cancel, so the brief is aborted");
+    assert.deepEqual(entries.filter(entry => entry.event === "committed").map(entry => entry.how), ["aborted"], "an explicit close or confirmed cancel is aborted, never an unsolicited engine failure");
   } finally {
     result.cleanup();
     acp.shutdown();

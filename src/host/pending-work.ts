@@ -295,7 +295,9 @@ export class PendingWork {
         // gone is dropped, with the log's path so the parent can read what it left.
         // A session (docs/81) is not a job the box lists; the host reattaches or settles it
         // itself (acp-delegate.ts reattach), so the job sweep leaves it alone.
-        if (fork.data?.mode === "session") continue;
+        // An opening/sending acknowledgement can be lost while ACP keeps running.
+        // Retain that unknown admission for session cleanup; jobs() cannot disprove it.
+        if (fork.data?.mode === "session" || fork.data?.mode === "opening-session") continue;
         const status = await deps.jobStatus(fork.agentId, fork.child);
         if (status === undefined) continue;
         if (status.running) continue;
