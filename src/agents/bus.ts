@@ -161,7 +161,7 @@ export class AgentBus {
     /** The runner acknowledges only after its recovery ledger has taken custody. */
     private readonly deferredStart = false,
     private readonly admitMessage?: (agentId: string, message: InboundMessage) => InboundMessage,
-    readonly workAttention?: WorkAttention
+    readonly workAttention?: WorkAttention, private readonly userWork?: {prepare(agent:string,message:InboundMessage):{message:InboundMessage;duplicate?:boolean;admission?:number};committed(message:InboundMessage,seq:number|undefined):void}
   ) {}
 
   /**
@@ -176,8 +176,13 @@ export class AgentBus {
     let restored = 0;
     for (const item of pending) {
       if (this.registry.tryGet(item.agentId) === undefined) continue;
+      if(this.workAttention?.cancelledMessage(item.message)){this.inbox?.drop(item.seq);continue;}
       const queue = this.pending.get(item.agentId) ?? [];
-      queue.push({ ...item.message, admission: item.seq });
+      const prepared=this.userWork?.prepare(item.agentId,item.message);
+      const message=prepared?.message??item.message;
+      this.userWork?.committed(message,item.seq);
+      if(queue.some(row=>row.id===message.id))continue;
+      queue.push({ ...message, admission: item.seq });
       this.pending.set(item.agentId, queue);
       restored += 1;
     }
@@ -363,8 +368,12 @@ export class AgentBus {
   private enqueue(agentId: string, message: InboundMessage): number | undefined {
     // Recorded before it is queued, and before the sender is told anything. The other order would
     // acknowledge work that is not yet written down, which is the whole failure being fixed.
-    message = this.admitMessage?.(agentId, message) ?? message;
-    const admission = this.inbox?.admit(agentId, message);
+    const prepared=this.userWork?.prepare(agentId,message);message=prepared?.message??message;
+    if(prepared?.duplicate)return prepared.admission;
+    const retained=this.inbox?.pending().find(row=>row.agentId===agentId && row.message.id===message.id);
+    message = retained?.message ?? this.admitMessage?.(agentId, message) ?? message;
+    const admission = retained?.seq ?? this.inbox?.admit(agentId, message);
+    this.userWork?.committed(message,admission);
     if (this.workAttention?.cancelledMessage(message)) { this.inbox?.drop(admission); return admission; }
     const queue = this.pending.get(agentId) ?? [];
     queue.push({ ...message, admission });
@@ -462,13 +471,13 @@ export class AgentBus {
       taskBinding?: TaskBinding;
       principalId?: string;
       resumeOf?: ResumeMarker;
-      work?: WorkStamp;
+      work?: WorkStamp; workRelation?: "new" | "continue";
       audit?: import("../host/audit-context.ts").AuditContext;
     } = {}
   ): number | undefined {
     return this.enqueue(agentId, {
       id: options.messageId ?? randomUUID(),
-      ...(options.work ? {work: options.work} : {}),
+      ...(options.work ? {work: options.work} : {}), ...(options.workRelation?{workRelation:options.workRelation}:{}),
       ...(options.audit !== undefined ? { audit: options.audit } : {}),
       ...(options.resumeOf !== undefined ? { resumeOf: options.resumeOf } : {}),
       ...(options.principalId !== undefined ? { principalId: options.principalId } : {}),
@@ -528,10 +537,10 @@ export class AgentBus {
     const firstKickoff = samePrincipal.findIndex(message => message.steerable === false);
     const taken = boundBatch( // and at most so many, so much: the rest is the next turn's (INV-1572)
       firstKickoff === 0 ? samePrincipal.slice(0, 1) : firstKickoff > 0 ? samePrincipal.slice(0, firstKickoff) : samePrincipal, this.batchLimits);
+    const work = this.workAttention?.begin(agentId, conversation, taken);
     const left = queue.filter(message => !taken.includes(message));
     if (left.length === 0) this.pending.delete(agentId);
     else this.pending.set(agentId, left);
-    const work = this.workAttention?.begin(agentId, conversation, taken);
     return work ? taken.map(message => ({ ...message, work })) : taken;
   }
 
@@ -558,6 +567,7 @@ export class AgentBus {
     const taken = queue.filter(
       message =>
         (message.conversation ?? MAIN_CONVERSATION) === conversation && isSteering(message) &&
+        (!this.userWork || message.work?.id===this.active.get(workerKey(agentId,conversation))?.workId) &&
         message.principalId === this.active.get(workerKey(agentId, conversation))?.principalId
     );
     if (taken.length === 0) return [];
@@ -661,7 +671,7 @@ export class AgentBus {
     const queue = this.pending.get(agentId) ?? [];
     const kept = queue.filter(message => {
       if (this.workAttention!.cancelledMessage(message)) { this.inbox?.drop(message.admission); return false; }
-      if (message.informational || !message.work || this.workAttention!.valid(message.work, agentId)) return true;
+      if (message.informational || !message.work || this.workAttention!.admittedPerson(agentId,message.conversation??MAIN_CONVERSATION,message) || this.workAttention!.valid(message.work, agentId)) return true;
       this.inbox?.drop(message.admission); return false;
     });
     if (kept.length === 0) this.pending.delete(agentId); else this.pending.set(agentId, kept);

@@ -10,6 +10,7 @@
  * `idle` means it waits for something to happen. Derived every time, never stored.
  */
 
+import {workRootSummary} from "./work-root-store.ts";
 import type { Task } from "./tasks.ts";
 
 export type TaskStage =
@@ -37,14 +38,14 @@ export interface StageWorld {
 }
 
 /** The world for one task from what the host holds; the attention page and the side door read it the same way (INV-1506). */
-export function stageWorldOf<T extends Pick<Task, "conversation" | "assigneeId" | "reviewerId">>(
+export function stageWorldOf<T extends Pick<Task, "conversation" | "assigneeId" | "reviewerId" | "workRoot">>(
   task: T,
-  reads: { undeliverableChats: ReadonlySet<string>; chatKeyOf?: (conversation: string) => string | undefined; questions: readonly { conversation?: string; agentId?: string }[]; agentIds?: ReadonlySet<string>; active?: (task: T) => boolean },
+  reads: { undeliverableChats: ReadonlySet<string>; chatKeyOf?: (conversation: string) => string | undefined; questions: readonly { conversation?: string; agentId?: string; work?:{id:string} }[]; agentIds?: ReadonlySet<string>; active?: (task: T) => boolean },
 ): StageWorld {
   const chatKey = task.conversation !== undefined ? reads.chatKeyOf?.(task.conversation) : undefined;
   return {
     undelivered: chatKey !== undefined && reads.undeliverableChats.has(chatKey),
-    questionPending: reads.questions.some(question => question.conversation === task.conversation && (task.assigneeId === undefined || question.agentId === task.assigneeId)),
+    questionPending: reads.questions.some(question => (!task.workRoot || question.work?.id===task.workRoot.state.id) && question.conversation === task.conversation && (task.assigneeId === undefined || question.agentId === task.assigneeId)),
     active: reads.active?.(task) ?? false,
     reviewerIsAgent: task.reviewerId !== undefined && (reads.agentIds?.has(task.reviewerId) ?? false),
   };
@@ -65,7 +66,7 @@ export function stageWorldOf<T extends Pick<Task, "conversation" | "assigneeId" 
  * | working         | status doing and something of it runs now                             |
  * | idle            | status doing and nothing runs: it waits for a message, a job, a wake  |
  */
-export function taskStage(task: Pick<Task, "status" | "history" | "mandate" | "proposedBy">, world: StageWorld): TaskStage {
+export function taskStage(task: Pick<Task, "status" | "history" | "mandate" | "proposedBy" | "workRoot">, world: StageWorld): TaskStage {
   if (task.status === "done" || task.status === "dropped") return "ended";
   if (world.undelivered) return "person/delivery";
   const last = task.history.at(-1);
@@ -74,6 +75,12 @@ export function taskStage(task: Pick<Task, "status" | "history" | "mandate" | "p
   if (world.questionPending || asksWithOptions || staleMandate) return "person/answer";
   if (task.status === "review") return world.reviewerIsAgent === true ? "review" : "person/review";
   if (task.status === "blocked") return "person/blocked";
+  const root=workRootSummary(task);
+  if(root?.automatic){
+    if(root.phase==="cancelled")return "ended";
+    if(root.phase==="running")return "working";
+    return root.phase==="queued" ? "working/queued" : "idle";
+  }
   if (task.status === "open") return "working/queued";
   return world.active ? "working" : "idle";
 }

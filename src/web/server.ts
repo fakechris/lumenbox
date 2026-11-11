@@ -239,6 +239,7 @@ import { provisionedBoxDriver } from "../box/kubernetes-box.ts";
 import { personalAllocationRefusal, personalBoxesOf, personalQuotaFor } from "../host/box-quota.ts";
 import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
 import { attentionFor, isDecision, urgencyOf } from "../host/attention.ts"; import { docsReaderAt, involuteStateReader, ownerAttention, PACKAGE_DOCS_DIR, watchOrgEvidence } from "../host/org-knowledge-staleness.ts"; import { parseLevel } from "../host/autonomy-level.ts"; import { openTurnsOf, staleApprovals } from "../host/approval-wait.ts";
+import {workRootSummary} from "../host/work-root-store.ts";
 import { stageWorldOf, taskStage } from "../host/task-stage.ts";
 import { ChangeFeed, feedForks } from "./mcp-watch.ts";
 import { InvoluteConsumer } from "../host/involute-inbox.ts";
@@ -1631,6 +1632,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       return "stopped";
     },
     board: {
+      admit:(taskId,messageId,text,identity,requestOf)=>{const task=orchestrator.tasks?.get(taskId);if(!task?.assigneeId)throw new Error("No agent admitted to this request");const prepared=orchestrator.tasks!.workRoots.prepare(task.assigneeId,{id:messageId,requestOf,text,fromId:"user",fromName:identity,principalId:principals.resolve(identity).id,conversation:task.conversation,steerable:false,taskBinding:{taskId,role:"executor"},priority:false,receivedAt:new Date().toISOString()},orchestrator.bus.workAttention!);if(prepared.message.work)orchestrator.bus.workAttention!.settle(prepared.message.work,"waiting","Awaiting channel dispatch","execution");},
       open: input => {
         const tasks = orchestrator.tasks;
         if (tasks === undefined) return undefined;
@@ -1644,10 +1646,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // The unknown-agent error is thrown (and relayed) by ask; the board entry
           // simply goes unassigned.
         }
-        // A reviewer if the team has one that is not the assignee: naming it here is
-        // what makes the review gate — and the audit turn behind it — apply to work
-        // asked for from a chat, where nobody is watching the board. An installation
-        // with no reviewer agent keeps the old behaviour rather than inventing one.
+        // A separate reviewer owns acceptance on teams that have one.
         const reviewerId = registry
           .list()
           .find(
@@ -1656,7 +1655,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               /review/i.test(candidate.profile.title ?? "")
           )?.id;
         const task = tasks.create({
-          title: input.title,
+          durable:true, title: input.title,
           ...(input.description !== undefined ? { description: input.description } : {}),
           ...(input.sourceMessageId !== undefined ? { sourceMessageId: input.sourceMessageId } : {}),
           requester: principals.resolve(input.identity).id, origin: {kind:"user"},
@@ -2013,7 +2012,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         );
       }
     }
-  chats = channels; orchestrator.outboxDrafts.connect({ chatFor: draft => chatTarget(draft, { canSend: key => channels.adapterFor(key)?.sendToChat !== undefined, chatOf: conversation => conversations.chatKeyFor(conversation) }), deliver: (draft, chatKey) => channels.tryPushToChat(chatKey, draft.body, { kind: "draft", id: draft.id }).then(result => ({ delivered: result.delivered, ...(result.why !== undefined ? { detail: result.why } : {}) })), tell: (agentId, conversation, text) => { orchestrator.bus.deliverSystem(agentId, text, conversation); }, note: (taskId, text) => { orchestrator.tasks?.update(taskId, { note: text }, "outbox"); }, log }); // an answered Outbox draft is carried, noted and told (INV-1739)
+  chats = channels; orchestrator.outboxDrafts.connect({ chatFor: draft => chatTarget(draft, { canSend: key => channels.adapterFor(key)?.sendToChat !== undefined, chatOf: conversation => conversations.chatKeyFor(conversation) }), deliver: (draft, chatKey) => channels.tryPushToChat(chatKey, draft.body, { kind: "draft", id: draft.id }).then(result => ({ delivered: result.delivered, ...(result.why !== undefined ? { detail: result.why } : {}) })), tell: (agentId, conversation, text, work) => { orchestrator.bus.deliverSystem(agentId, text, conversation,work?.id); }, note: (taskId, text) => { orchestrator.tasks?.update(taskId, { note: text }, "outbox"); }, log }); // an answered Outbox draft is carried, noted and told (INV-1739)
   channels.start();
   // What was still on its way when the process last stopped goes again (INV-1460).
   void outboxSender.resume(chatKey => { const door = channels.adapterFor(chatKey); return door?.sendToChat === undefined ? undefined : { sendToChat: (key, text) => door.sendToChat!(key, text) }; })
@@ -3007,12 +3006,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     };
     return { box, agent: id => registry.has(id) && box(registry.boxOf(id).id) };
   }
-  const taskActive = (task: { assigneeId?: string; conversation?: string }) => task.assigneeId !== undefined && task.conversation !== undefined && (orchestrator.bus.isActive(task.assigneeId, task.conversation) || orchestrator.jobWatch.openJobs(task.assigneeId, task.conversation).length > 0);
+  const taskActive = (task: Task) => task.workRoot ? orchestrator.bus.workExecutions(task.workRoot.state.id).length>0 || orchestrator.jobWatch.workJobs(task.workRoot.state.id).length>0 : task.assigneeId !== undefined && task.conversation !== undefined && (orchestrator.bus.isActive(task.assigneeId, task.conversation) || orchestrator.jobWatch.openJobs(task.assigneeId, task.conversation).length > 0);
   const sideDoorStage = (task: Task) => stageWorldOf(task, { undeliverableChats: new Set(outbox.problems().map(receipt => receipt.chatKey)), questions: questions.list(), agentIds: new Set(registry.list().map(agent => agent.id)), chatKeyOf: conversation => conversations.chatKeyFor(conversation), active: taskActive });
   const taskListPages = new TaskListPages();
   const taskExecutions = new TaskExecutions({ namespace: registry.box.id, turns: orchestrator.turns ?? { executionRecords: () => ({ records: [], partial: true }) }, registry });
   const taskExports = new TaskExports({ home: agentboxHome(), executions: taskExecutions, task: id => orchestrator.tasks?.get(id) });
   const changeFeed = new ChangeFeed({ stageOf: task => taskStage(task, sideDoorStage(task)) }); orchestrator.tasks?.onChange(task => { changeFeed.record(task); broadcast({ type: "task_changed", taskId: task.id, revision: task.updatedAt }); }); feedForks(changeFeed, orchestrator.pendingWork?.forks, id => orchestrator.tasks?.get(id)); // watch (INV-1508), with the forks of a task's turns (INV-1667)
+  orchestrator.tasks?.onWorkChange(task=>broadcast({type:"task_changed",taskId:task.id,revision:task.updatedAt}));
   const stopExecutionFeed = orchestrator.turns?.onExecution((record, revision) => { const id = record.taskBinding?.taskId; const task = id ? orchestrator.tasks?.get(id) : undefined; if (task) { changeFeed.recordExecution(task, revision); broadcast({ type: "task_execution", taskId: task.id, revision }); } });
   const sideDoorTools = () => mcpServerTools({
     progressAccess: progressAccessForPrincipal,
@@ -3924,7 +3924,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (await taskExportRoute(route, url, req, res, { exports: taskExports, access: () => { principals.reload(); unavailableBoxes = undefined; agentBoxes.clear(); const allowed = admit({ authorization: req.headers.authorization, cookie: req.headers.cookie, query: url.searchParams.get("token") }).allow; return { task: id => { const task = orchestrator.tasks?.get(id); return allowed && !!task && mayReadTask(task); }, agent: id => allowed && mayReadAgent(id), box: id => allowed && mayReadBox(id) }; }, send })) return;
         if (taskCostRoute(route, url, res, { executions: taskExecutions, refused: () => refusedRole("admin"), access: { task: id => { const task = orchestrator.tasks?.get(id); return task !== undefined && mayReadTask(task); }, agent: mayReadAgent, box: mayReadBox }, records: () => orchestrator.usage.since(0, Number.MAX_SAFE_INTEGER), rates: configuredRates, compacted: () => orchestrator.usage.compacted(), send })) return;
         if (taskExecutionRoute(route, url, res, { executions: taskExecutions, access: { task: id => { const task = orchestrator.tasks?.get(id); return task !== undefined && mayReadTask(task); }, agent: mayReadAgent, box: mayReadBox }, record: id => taskRecord(orchestrator.tasks!.get(id)!, { nameOf: id => registry.tryGet(id)?.profile.name ?? id, stageWorld: sideDoorStage, progressAccess: { agent: mayReadAgent, box: mayReadBox } }), send })) return;
-        const audienceAgents = new Set(registry.list().map(agent=>agent.id)), audiencePeople = new Set(principals.list().flatMap(person=>[person.id,...person.identities])); const taskView = (task: Task) => { const forks = orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []; return { ...task, progress: summarizeTaskProgress(task, 128, { agent: mayReadAgent, box: mayReadBox }), needsApprovals: taskExecutions.approvals(task.id, { task: () => mayReadTask(task), agent: mayReadAgent, box: mayReadBox }, orchestrator.policy.pending()), stage: taskStage(task, sideDoorStage(task)), configVersions: switchesForTask(registry, task.id), ...(forks.length ? { forks } : {}), ...dependencyView(task, orchestrator.tasks!) }; };
+        const audienceAgents = new Set(registry.list().map(agent=>agent.id)), audiencePeople = new Set(principals.list().flatMap(person=>[person.id,...person.identities])); const taskView = (task: Task) => { const forks = orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []; return { ...task, work:workRootSummary(task), workRoot:undefined, progress: summarizeTaskProgress(task, 128, { agent: mayReadAgent, box: mayReadBox }), needsApprovals: taskExecutions.approvals(task.id, { task: () => mayReadTask(task), agent: mayReadAgent, box: mayReadBox }, orchestrator.policy.pending()), stage: taskStage(task, sideDoorStage(task)), configVersions: switchesForTask(registry, task.id), ...(forks.length ? { forks } : {}), ...dependencyView(task, orchestrator.tasks!) }; };
         if (taskListRoute(route, url, res, { audience: task => taskAudience(task,audienceAgents,audiencePeople), pages: taskListPages, tasks: () => orchestrator.tasks?.list() ?? [], allowed: mayReadTask, detail: taskView, summary: task => ({ ...taskBoardRecord(task, { agent: mayReadAgent, box: mayReadBox }), ...dependencyView(task, orchestrator.tasks!) }), send })) return;
         if (route === "GET /api/tasks") {
           send(res, 200, { tasks: orchestrator.tasks?.list().filter(mayReadTask).map(taskView) ?? [] });
@@ -6746,13 +6746,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             void channels.pushToChat(chatKey, `〔控制台〕${text}`, { kind: "notice", about: "console" });
           }
 
-          // Echo the prompt so every connected page shows it, then answer
-          // immediately: the turn's output arrives over the event stream, and a
-          // long turn must not hold the HTTP request open.
-          // Attributed, so a transcript stops saying "the user" once there is more than one person
-          // in a tenant. Carried on the event too, since that is what the feed renders.
-          const promptMessageId = randomUUID();
-          broadcast({
+          // Acknowledge only after durable admission; an id can be retried after a lost response.
+          const promptMessageId = typeof body.messageId === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(body.messageId) ? body.messageId : randomUUID();
+
+          const before = registry.readTranscript(agentId, conversation).length;
+          void orchestrator
+            .prompt(agentId, text, caller, { conversation, messageId: promptMessageId, ...(body.workRelation === "new" || body.workRelation === "continue" ? {workRelation:body.workRelation} : {}), onAdmitted:()=>{          broadcast({
             type: "prompt", messageId: promptMessageId,
             agentId,
             text,
@@ -6761,9 +6760,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           });
           send(res, 202, { accepted: true });
 
-          const before = registry.readTranscript(agentId, conversation).length;
-          void orchestrator
-            .prompt(agentId, text, caller, { conversation, messageId: promptMessageId })
+          } })
             .then(() => {
               // The reply belongs to the same room the interjection went to. Read back
               // from the transcript, the same way the channel path recovers an answer.
@@ -6777,6 +6774,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             .then(() => orchestrator.settle())
             .catch((error: unknown) => {
               const message = error instanceof Error ? error.message : String(error);
+              if (!res.headersSent) send(res, 500, { error: message });
               log(`turn failed: ${message}`);
               broadcast({ type: "error", agentId, message });
             });

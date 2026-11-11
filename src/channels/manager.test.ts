@@ -2861,11 +2861,13 @@ test("a person's message in a task's thread runs as a follow-up on that task, no
   const adapter = cardAdapter();
   const asked: string[] = [];
   const opened: string[] = [];
+  const admissions:{id:string;text:string;requestOf?:string}[]=[];
   let handed: string | undefined;
   const manager = new ChannelManager({
     mayDrive: () => true, log: () => {},
     ask: async (_agent, text) => { asked.push(text); return "ok"; },
     board: {
+      admit:(_taskId,id,text,_identity,requestOf)=>{const previous=admissions.find(row=>row.id===id);assert.ok(!previous || previous.text===text,"one admission id cannot mean two prompts");admissions.push({id,text,requestOf});},
       open: input => { opened.push(input.title); return `t${opened.length}`; },
       started: () => {}, closed: () => "done" as const,
       ownerOf: threadKey => (threadKey === "feishu:oc_room:thread1" ? { taskId: "t1", title: "Sum the reports" } : undefined),
@@ -2886,6 +2888,8 @@ test("a person's message in a task's thread runs as a follow-up on that task, no
     await manager.idle();
     assert.deepEqual(opened, ["另外帮我订个会议室"], "handed back, the message is routed as new work");
     assert.equal(asked.length, 3);
+    assert.notEqual(admissions[1]!.id,admissions[2]!.id);
+    assert.equal(admissions[2]!.requestOf,admissions[1]!.id,"rerouting retains the original human request link");
     assert.equal(asked[2], "另外帮我订个会议室", "the new turn carries the person's words, not the follow-up wrapper");
 
     await adapter.inject({ ...thread, threadKey: undefined, messageId: "m4", text: "新需求" });
@@ -2912,4 +2916,23 @@ test("a reply whose task forked carries one line counting the children and how m
     assert.deepEqual(asked, ["t1"], "asked about the task this reply settles");
     manager.stop();
   }
+});
+
+test("channel receipts and credential waits follow durable root admission, and admission failure sends no working card",async()=>{
+ const {TaskStore}=await import("../host/tasks.ts"),{WorkAttention}=await import("../agents/work-attention.ts");
+ const tasks=new TaskStore(null),focus=new WorkAttention(undefined,()=>0,tasks.workRoots),adapter=cardAdapter();
+ let failed=false,asked=0,receipts=0,gated=0;
+ const post=adapter.postTaskCard!;
+ adapter.postTaskCard=(...args)=>{assert.ok(tasks.list().some(task=>task.workRoot?.requests?.length));receipts++;return post(...args);};
+ const manager=new ChannelManager({mayDrive:()=>true,ahead:()=>1,log:()=>{},ask:async()=>{asked++;return "should not run without credentials";},
+  board:{open:input=>tasks.create({title:input.title,requester:input.identity,assigneeId:"mia",conversation:"chat",sourceMessageId:input.sourceMessageId})!.id,
+    admit:(taskId,id,text,identity)=>{if(failed)throw new Error("root write failed");tasks.workRoots.prepare("mia",{id,text,fromId:"user",fromName:"Chris",principalId:identity,conversation:"chat",steerable:false,priority:false,receivedAt:new Date().toISOString(),taskBinding:{taskId,role:"executor"}},focus);},started:()=>{},closed:()=>"failed"},
+  credentials:{gate:taskId=>{gated++;assert.ok(tasks.get(taskId)!.workRoot);return "Credentials required";}}
+ });
+ manager.register(adapter,true,"test");await started(manager);
+ await adapter.inject({identity:"p",senderLabel:"Chris",text:"Install the skill"});await manager.idle();
+ assert.equal(receipts,1);assert.equal(gated,1);assert.equal(asked,0);assert.equal(tasks.list()[0]!.workRoot!.requests![0]!.state,"prepared");
+ failed=true;await adapter.inject({identity:"p",senderLabel:"Chris",text:"Another request"});await manager.idle();
+ assert.equal(receipts,1,"no accepted/working acknowledgement before root commit");assert.equal(gated,1);assert.equal(asked,0);
+ manager.stop();
 });

@@ -478,6 +478,8 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
   let goalLoop: GoalLoop | undefined;
   let goalGate: GoalGate | undefined;
   let jobWatch: JobWatch | undefined;
+  const focus=options.workAttention ?? new WorkAttention(undefined,(id,conversation)=>registry.contextStore(id,conversation).current().epoch,options.tasks?.workRoots);
+  if(options.tasks)focus.attach(options.tasks.workRoots);
   const bus: AgentBus = new AgentBus(registry, async (record, inbound, signal, conversation) => {
     if (goalLoop !== undefined && !goalLoop.turnStarting(record.id, conversation, inbound)) return;
     if (goalLoop === undefined && goalGate?.verifierMayRun(inbound) === false) return;
@@ -542,7 +544,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
     } as never);
   }, event => {
     if (event.type === "turn_finished") goalLoop?.onTurnFinished(event.agentId);
-  }, undefined, false, (agentId, message) => admitProgressMessage(options.tasks, agentId, message), options.workAttention ?? new WorkAttention(undefined, (id, conversation) => registry.contextStore(id, conversation).current().epoch));
+  }, undefined, false, (agentId, message) => admitProgressMessage(options.tasks, agentId, message), focus, options.tasks?.workRoots.admission(focus));
   // Explicit history fixtures represent an already-admitted interrupted work, as a real resume does.
   if (options.history?.length) bus.workAttention!.existing(front.id, "main", "scenario-existing-work");
   // Engines kept alive as sessions (docs/81): the bus delivers their notes, as the orchestrator's does.

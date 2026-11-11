@@ -33,7 +33,7 @@ function setup(conversation = "main") {
   const task = tasks.create({ title: "Quarterly report", requester: "p-chris", assigneeId: AGENT, conversation })!;
   tasks.update(task.id, { status: "doing" }, AGENT);
   const files = new Map<string, Buffer>();
-  const context = { agent: { id: AGENT }, tasks, box: box(files), conversation, turnId: "turn-1" } as unknown as ToolContext;
+  const context = { agent: { id: AGENT }, tasks, taskBinding:{taskId:task.id,role:"executor"}, box: box(files), conversation, turnId: "turn-1" } as unknown as ToolContext;
   return { tasks, task, files, context };
 }
 

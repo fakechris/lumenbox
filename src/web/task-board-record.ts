@@ -1,3 +1,4 @@
+import {workRootSummary} from "../host/work-root-store.ts";
 import { summarizeTaskProgress, type ProgressSourceAccess } from "../host/task-progress.ts";
 /** Board previews contain no full history, fork ledger or configuration history. Open the task for those. */
 import type { Task } from "../host/tasks.ts";
@@ -5,6 +6,7 @@ const preview = (text: string | undefined, limit: number) => text === undefined 
 export function taskBoardRecord(task: Task, access?: ProgressSourceAccess) {
   const last = task.history.at(-1);
   return {
+    work:workRootSummary(task),
     progress: summarizeTaskProgress(task, 3, access),
     id: task.id, title: task.title, status: task.status, requester: task.requester,
     assigneeId: task.assigneeId, conversation: task.conversation, reviewerId: task.reviewerId, updatedAt: task.updatedAt, createdAt: task.createdAt,

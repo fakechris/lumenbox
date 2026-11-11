@@ -30,8 +30,8 @@ export class WorkControl {
     const {host} = this.deps;
     if (!host.registry.has(target.agentId) && !target.taskId) throw new Error("Unknown agent");
     const task = target.taskId ? host.tasks?.get(target.taskId) : undefined;
-    const work = host.bus.workAttention?.get(target.agentId, target.conversation);
-    const trusted = work && (!target.taskId || work.taskId === target.taskId) && work.status !== "answered" ? work : undefined;
+    const work = task?.workRoot ? host.bus.workAttention?.byId(task.workRoot.state.id) : host.bus.workAttention?.get(target.agentId, target.conversation);
+    const trusted = work && !work.unresolved && (!target.taskId || work.taskId === target.taskId) ? work : undefined;
     const legacy: WorkPreview = { target, title: task?.title ?? (host.registry.tryGet(target.agentId)?.profile.name ?? "Task"), legacy:true, participants:host.registry.has(target.agentId)?[{id:target.agentId,name:host.registry.get(target.agentId).profile.name}]:[], resources:[], unknown:["No reliable current work association. Select the members to pause; historical descendants cannot be inferred safely."] };
     if (!trusted) return legacy;
     const cancelled = host.bus.workAttention?.cancelled(trusted.id);

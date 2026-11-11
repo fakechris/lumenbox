@@ -1,3 +1,4 @@
+import { TaskWorkRoots, type TaskWorkRoot } from "./work-root-store.ts";
 /**
  * The task board: work as an object, not a message.
  *
@@ -5,9 +6,7 @@
  * the smallest object that answers those: title, assignee, status with a history of who moved it, an optional reviewer
  * whose acceptance is "done". Runs are linked by the turn id on every change; the transcript is the evidence.
  *
- * **Advisory, like claims — with two exceptions**, both about who may say a task is done; the history makes
- * movement visible rather than impossible. The exceptions:
- *
+ * Work roots are durable before admission; acceptance remains independently gated.
  *   1. **A named reviewer means the assignee cannot accept its own work.** The attempt lands in review with a
  *      note saying so; a gate the worker can wave itself through is decoration.
  *   2. **Somebody the task is not about cannot end it.** Chat acceptance is keyed by conversation, so a colleague
@@ -102,7 +101,7 @@ export interface TaskChange {
 }
 
 export interface Task {
-  progress?: TaskProgressState;
+  progress?: TaskProgressState; workRoot?: TaskWorkRoot;
   id: string;
   title: string;
   description?: string;
@@ -267,6 +266,10 @@ export class TaskStore {
     return true;
   }
 
+  readonly workRoots = new TaskWorkRoots(() => this.list(), input => this.create(input), task => {this.saveTask(task,false,true);for(const listener of this.workListeners){try{listener(task);}catch{this.onWarn("tasks: a work observer failed after commit");}}},id=>this.get(id));
+  private readonly workListeners: ((task:Task)=>void)[]=[];
+  onWorkChange(listener:(task:Task)=>void):void {this.workListeners.push(listener);}
+
   onChange(listener: (task: Task) => void): () => void { this.listeners.push(listener); return () => { const index = this.listeners.indexOf(listener); if (index >= 0) this.listeners.splice(index, 1); }; } onCreate(listener: (task: Task) => void): void { this.created.push(listener); }
 
   constructor(
@@ -326,7 +329,7 @@ export class TaskStore {
     pursuit?: Pursuit;
     mandate?: { source?: string; rulesHash?: string }; // What the mandate rests on (INV-1457).
     blockedBy?: string[]; level?: Level; discovery?: Discovery; // blockedBy: what it waits on (INV-1740); level: a person's own setting (INV-1650), else the rule infers one; discovery: from a sensing routine (INV-1652), always a proposal
-    now?: Date;
+    now?: Date; durable?: boolean; workRoot?: TaskWorkRoot;
   }): Task | undefined {
     const title = input.title.replace(/\s+/g, " ").trim().slice(0, 200);
     if (title === "") return undefined;
@@ -340,7 +343,7 @@ export class TaskStore {
         ? { description: clampDescription(input.description) }
         : {}),
       status: input.pursuit !== undefined ? taskStatusFor(input.pursuit) : "open",
-      requester: input.requester,
+      requester: input.requester, ...(input.workRoot?{workRoot:{...input.workRoot,state:{...input.workRoot.state,taskId:`t${this.counter}`}}}:{}),
       ...(input.sourceMessageId !== undefined ? { sourceMessageId: input.sourceMessageId } : {}), ...(input.origin ? {origin: structuredClone(input.origin)} : {}),
       ...(input.assigneeId !== undefined ? { assigneeId: input.assigneeId } : {}),
       ...(input.reviewerId !== undefined ? { reviewerId: input.reviewerId } : {}),
@@ -357,7 +360,7 @@ export class TaskStore {
       updatedAt: at,
       history: [{ at, by: input.requester, status: input.pursuit !== undefined ? taskStatusFor(input.pursuit) : "open", note: `${input.proposedBy !== undefined ? "proposed, awaiting a person's commit" : input.pursuit !== undefined ? "goal set by the person" : "created"} · L${input.level ?? inferred.level}${input.level !== undefined ? " set by the requester" : ` by rule: ${inferred.reasons.join("; ")}`}` }],
     };
-    this.saveTask(task); for (const listener of this.created) listener(task);
+    this.saveTask(task,false,input.durable); for (const listener of this.created) listener(task);
     return this.get(task.id);
   }
 
@@ -873,11 +876,11 @@ export class TaskStore {
     return events;
   }
 
-  private saveTask(task: Task, progressWrite = false): void {
+  private saveTask(task: Task, progressWrite = false, durable = false): void {
     const previous = this.tasks.get(task.id)?.progress;
     const progress = alignTaskProgress(task, progressWrite ? task.progress : previous ?? task.progress);
     const next = { ...task, ...(progress ? { progress } : {}) };
-    this.append({ kind: "task", task: next }, progressWrite || previous !== progress);
+    this.append({ kind: "task", task: next }, durable || !!task.workRoot || progressWrite || previous !== progress);
     if (progress) task.progress = progress;
     this.tasks.set(task.id, task);
   }
@@ -896,7 +899,6 @@ export class TaskStore {
       this.lines += 1;
     } catch (error) {
       if (durable) throw error;
-      // Ordinary bookkeeping remains best effort; progress authority must be durable.
       const detail = error instanceof Error ? error.message : String(error);
       this.onWarn(`tasks: cannot write ${this.path} (${detail})`);
     }
@@ -1032,7 +1034,7 @@ export class TaskStore {
     try {
       const cutoff = now.getTime() - RETAIN_CLOSED_MS;
       for (const [id, task] of this.tasks) {
-        if (!isLive(task.status) && Date.parse(task.updatedAt) < cutoff) this.tasks.delete(id);
+        if (!task.workRoot && !isLive(task.status) && Date.parse(task.updatedAt) < cutoff) this.tasks.delete(id);
       }
       checkpointTasks(this.path, this.counter, this.tasks.values());
       this.lines = this.tasks.size + 1;

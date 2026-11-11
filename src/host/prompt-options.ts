@@ -1,6 +1,7 @@
 import type { Lane } from "../agents/bus.ts";
 
 export interface PromptOptions {
+      workRelation?: "new" | "continue"; onAdmitted?: () => void;
       work?: import("../agents/work-attention.ts").WorkStamp;
       audit?: import("./audit-context.ts").AuditContext;
       conversation?: string;

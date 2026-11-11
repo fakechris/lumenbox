@@ -1828,14 +1828,13 @@ async function main(): Promise<number> {
     }
 
     case "skill": return (await import("./host/skill-pack.ts")).cmdSkill(rest, { out, err, home: homedir(), claudeDir: process.env.CLAUDE_CONFIG_DIR, codexHome: process.env.CODEX_HOME, mcpUrl: process.env.AGENTBOX_MCP_URL }); // INV-1668: the LumenBox skill pack for Claude Code / Codex
+    case "recover-work": return (await import("./host/work-recovery.ts")).recoverWorkCommand(rest,{out,err});
     case "where":
       out(`state:  ${agentboxHome()}`);
       out(`agents: ${defaultAgentsRoot()}`);
       return 0;
 
     case "usage": {
-      // The re-runnable version of the fifteen throwaway scripts from 2026-08-26. The
-      // reading and the arithmetic live in spend.ts, tested; this is the printer.
       const { UsageLog } = await import("./host/usage.ts");
       const { describeSpend, summariseSpend } = await import("./host/spend.ts");
       const { TaskStore } = await import("./host/tasks.ts");

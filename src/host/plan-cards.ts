@@ -20,8 +20,8 @@ import type { TaskStore } from "./tasks.ts";
 
 export function planCards(tasks: TaskStore): PlanBoard {
   return {
-    open({ agentId, parent, plan }) {
-      const task = currentTaskOf({ agent: { id: agentId }, conversation: parent, tasks });
+    open({ agentId, parent, plan,taskId }) {
+      const task = currentTaskOf({ agent: { id: agentId }, conversation: parent, tasks, ...(taskId?{taskBinding:{taskId}}:{}) });
       if (task === undefined) return [];
       const titles = plan.items.length <= ORCHESTRATE_CONFIRM_AT
         ? plan.items.map((item, index) => `${plan.brief} — ${index + 1}/${plan.items.length}: ${item}`)
