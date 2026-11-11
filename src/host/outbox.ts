@@ -95,6 +95,8 @@ export class Outbox {
     this.settle();
   }
 
+  get(id: string): Receipt | undefined { return this.replay().get(id); }
+
   /** Still on its way, with the text a retry needs. */
   pending(): Receipt[] {
     return [...this.replay().values()].filter(receipt => receipt.status === "pending");

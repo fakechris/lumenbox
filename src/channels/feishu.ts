@@ -1167,7 +1167,7 @@ export class FeishuChannel implements ChannelAdapter {
                 ...(threadKey !== undefined ? { threadKey } : {}),
                 ...(cardMessageId !== undefined ? { messageId: cardMessageId } : {}),
                 senderLabel,
-                text: chosen,
+                text: chosen, interaction: true,
                 ...(data.action?.value?.questionId !== undefined ? { questionId: data.action.value.questionId } : {}),
               })
             )

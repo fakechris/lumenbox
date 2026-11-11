@@ -128,7 +128,7 @@ export interface InboundMessage {
    * purpose: a bot that stays silent when spoken to is the worse failure.
    */
   addressed?: boolean;
-  privateChat?: boolean; // positive evidence from the wire, never inferred
+  privateChat?: boolean; interaction?: true; // positive evidence from the wire, never inferred
   admittedByDoor?: true; // the door admitted the sender itself (INV-1288, a tailmsg peer on its allow list); the drive list is not consulted, and the letter is still never an approval
 }
 
@@ -477,7 +477,7 @@ export interface ChannelManagerDeps {
     /** The reply as it is being written — everything so far, each time it grows. */
     onText?: (soFar: string) => void,
     /** The message's own id, when this ask is one message becoming a turn (INV-613). */
-    origin?: { messageId: string; questionId?: string; addressed?: false }
+    origin?: { messageId: string; questionId?: string; addressed?: false; interaction?: true }
   ) => Promise<AskReply>;
   /**
    * How many requests are ahead of a new one for this agent and chat. Zero means it
@@ -1337,7 +1337,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     // several messages into one prompt.
     message.id = randomUUID();
     this.deps.messages?.admitted({
-      id: message.id,
+      id: message.id, ...(message.interaction ? { kind: "interaction" as const } : {}),
       channel: adapter.name,
       ...(message.messageId !== undefined ? { channelMessageId: message.messageId } : {}),
       chatKey: message.chatKey ?? message.identity,
@@ -2222,7 +2222,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         onText,
         message.id !== undefined
           ? {
-              messageId: message.id,
+              messageId: message.id, ...(message.interaction ? { interaction: true as const } : {}),
               ...(options?.questionId !== undefined ? { questionId: options.questionId } : {}),
               // A room message that named nobody, on a door that runs every message: the turn
               // is a person's, but nobody is waiting on this agent, so it may stay silent (INV-775).

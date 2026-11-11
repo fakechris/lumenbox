@@ -32,6 +32,8 @@ export const LEDGER_KIND: LedgerKind = "queue";
 const COMPACT_AT = 200;
 
 export interface Delivery {
+  requestTitle?: string;
+  kind?: "request" | "interaction";
   id: string;
   /** New records recover by causal identity; before is only the legacy fallback. */
   messageId?: string;
@@ -102,7 +104,7 @@ export class Deliveries {
    * On a healthy process this is the requests currently in flight. Just after a restart it
    * is exactly the set whose promises died — which is the only time anybody asks.
    */
-  pending(): Delivery[] {
+  entries(): Delivery[] {
     if (!existsSync(this.path)) return [];
     const open = new Map<string, Delivery>();
     let settled = 0;
@@ -124,13 +126,20 @@ export class Deliveries {
       }
     }
     this.settled = settled;
+    return [...open.values()];
+  }
+
+  isCurrent(delivery: Delivery): boolean { return (delivery.incarnation ?? 1) === this.incarnationOf(delivery.chatKey); }
+
+  pending(): Delivery[] {
+    const open = this.entries();
     // The fail-closed check from docs/22 §4: an answer owed to a chat whose channel
     // has since been replaced is a **dead letter, reported** — never a delivery to
     // whoever holds the door now. Closed so recovery does not retry it forever;
     // the transcript still holds the answer if a person goes looking.
     const current: Delivery[] = [];
-    for (const delivery of open.values()) {
-      if ((delivery.incarnation ?? 1) === this.incarnationOf(delivery.chatKey)) {
+    for (const delivery of open) {
+      if (this.isCurrent(delivery)) {
         current.push(delivery);
         continue;
       }
