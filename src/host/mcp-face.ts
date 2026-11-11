@@ -78,6 +78,8 @@ export interface McpRoute {
 
 /** What the face needs from the host, narrowed so it can be faked. */
 export interface McpFaceDeps {
+  isCancelled?: (workId:string) => boolean;
+  returnFor?: (agentId:string,conversation:string,workId:string) => import("../agents/work-attention.ts").WorkReturn | undefined;
   mcp: () => { tools(): McpTool[]; call(name: string, input: unknown): Promise<string> } | undefined;
   policy?: PolicyGate;
   hooks?: HookRunner;
@@ -210,6 +212,7 @@ export class McpFace {
   authenticate(key: string, presented: string | undefined): McpRoute | undefined {
     const route = this.routes.get(key);
     if (route === undefined || presented === undefined || presented === "") return undefined;
+    if (route.workId && this.deps.isCancelled?.(route.workId)) { this.revoke(key,"work cancelled"); return undefined; }
     if (!sameSecret(route.token, presented)) return undefined;
     const now = this.now();
     if (now > route.leaseUntil || now > route.ceiling) {
@@ -232,6 +235,7 @@ export class McpFace {
   async renew(): Promise<void> {
     const now = this.now();
     for (const route of [...this.routes.values()]) {
+      if (route.workId && this.deps.isCancelled?.(route.workId)) { this.revoke(route.key,"work cancelled"); continue; }
       if (now > route.ceiling) {
         this.revoke(route.key, "ceiling reached");
         continue;
@@ -354,10 +358,10 @@ export class McpFace {
     // The waiting is shared with the ACP session's permission question (delegated-consent.ts).
     const consent = await awaitDelegatedConsent(
       this.deps.policy,
-      { agentId: route.agentId, agentName: route.agentName, ...(route.jobId !== undefined ? { jobId: route.jobId } : {}), engineTool, input },
-      { now: () => this.now(), pollMs: this.deps.pollMs, log: line => this.deps.log?.(`route ${route.key}: ${line}`), by: "mcp-face" }
+      { agentId: route.agentId, agentName: route.agentName, ...(route.jobId !== undefined ? { jobId: route.jobId } : {}), engineTool, input, ...(route.workId ? {returnTo:this.deps.returnFor?.(route.agentId,route.conversation,route.workId)} : {}) },
+      { cancelled: () => !!route.workId && !!this.deps.isCancelled?.(route.workId), now: () => this.now(), pollMs: this.deps.pollMs, log: line => this.deps.log?.(`route ${route.key}: ${line}`), by: "mcp-face" }
     );
-    return consent.allow ? allow : deny(consent.reason);
+    return consent.allow ? (route.workId && this.deps.isCancelled?.(route.workId) ? deny("Work cancelled") : allow) : deny(consent.reason);
   }
 
   private async call(route: McpRoute, name: string, input: Record<string, unknown>): Promise<string> {
@@ -370,7 +374,7 @@ export class McpFace {
     let text = "";
     try {
       const decision = this.deps.policy?.check({
-        kind: "tool",
+        kind: "tool", ...(route.workId ? {returnTo:this.deps.returnFor?.(route.agentId,route.conversation,route.workId)} : {}),
         agentId: route.agentId,
         agentName: route.agentName,
         tool: name,
@@ -390,6 +394,7 @@ export class McpFace {
       }
       const manager = this.deps.mcp();
       if (manager === undefined) throw new Error("No MCP servers are connected on the host.");
+      if (route.workId && this.deps.isCancelled?.(route.workId)) throw new Error("Work cancelled");
       text = await manager.call(name, input);
       if (text.length > RESULT_MAX_CHARS) text = `${text.slice(0, RESULT_MAX_CHARS)}\n[clamped to ${RESULT_MAX_CHARS} characters]`;
       if (this.deps.hooks?.has("PostToolUse", name)) {

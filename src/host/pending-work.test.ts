@@ -199,6 +199,7 @@ test("a delegated job in the ledger: running stays open, exited commits, gone or
     const exited = ledger.prepare({ agentId: "a1", kind: "delegate", parent: "main", child: "job-bbbbbbbb", brief: "opencode: lint" });
     const gone = ledger.prepare({ agentId: "a1", kind: "delegate", parent: "main", child: "job-cccccccc", brief: "claude: docs" });
     const interrupted = ledger.prepare({ agentId: "a1", kind: "delegate", parent: "main", child: "job-dddddddd", brief: "claude: build" });
+    ledger.prepare({ agentId: "a1", kind: "delegate", parent: "main", child: "job-eeeeeeee", workId: "uncertain-work", brief: "ACP send acknowledgement lost", data: { mode: "opening-session" } });
     for (const id of [running, exited, gone, interrupted]) ledger.admitted(id, undefined);
     assert.ok(ledger.open().every(work => work.kind === "delegate"));
 
@@ -217,7 +218,7 @@ test("a delegated job in the ledger: running stays open, exited commits, gone or
         : { running: false },
     });
     assert.deepEqual(dropped.map(work => work.child), ["job-cccccccc", "job-dddddddd"]);
-    assert.deepEqual(new PendingWork(path).open().map(work => work.child), ["job-aaaaaaaa"], "the running one stays open");
+    assert.deepEqual(new PendingWork(path).open().map(work => work.child), ["job-aaaaaaaa", "job-eeeeeeee"], "running jobs and unconfirmed ACP admissions survive restart for explicit cleanup");
     const events = readFileSync(path, "utf8").trim().split("\n").map(line => JSON.parse(line) as { event: string; id: string; how?: string });
     assert.ok(events.some(entry => entry.event === "committed" && entry.id === exited && entry.how === "failed"), "exit 3 is failed");
     assert.equal(notes.length, 2);
@@ -228,7 +229,7 @@ test("a delegated job in the ledger: running stays open, exited commits, gone or
     // The first observer commits; the next finds nothing open.
     assert.equal(new PendingWork(path).commitDelegate("job-aaaaaaaa", "done"), true);
     assert.equal(new PendingWork(path).commitDelegate("job-aaaaaaaa", "done"), false);
-    assert.deepEqual(new PendingWork(path).open(), []);
+    assert.deepEqual(new PendingWork(path).open().map(work => work.child), ["job-eeeeeeee"], "settling the known job does not discard the unknown ACP admission");
   } finally {
     cleanup();
   }

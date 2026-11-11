@@ -44,7 +44,7 @@ export interface CommitNote {
   /** The repository's state after the run, in words (INV-1258). */
   worktree?: string;
 }
-export type DropWhy = "restart" | "unrecorded" | "refused";
+export type DropWhy = "restart" | "unrecorded" | "refused" | "cancelled";
 
 /**
  * `fork` and `delegate` are the fork ledger's own (docs/32). `pause`, `ext-job` and `reminder`
@@ -52,7 +52,7 @@ export type DropWhy = "restart" | "unrecorded" | "refused";
  * written before they are acknowledged, settled when delivered — and recovered by effects.ts,
  * not by the fork sweep. `orchestrate` is a fan-out plan (INV-862), recovered by orchestrate.ts.
  */
-export type WorkKind = "fork" | "delegate" | "pause" | "ext-job" | "reminder" | "orchestrate";
+export type WorkKind = "fork" | "delegate" | "pause" | "ext-job" | "reminder" | "orchestrate" | "command";
 
 /** Whether a kind belongs to the fork ledger proper, which the startup sweep settles. */
 export function isForkLedgerKind(kind: WorkKind): boolean {
@@ -82,6 +82,7 @@ type Record_ = PreparedRecord | AdmittedRecord | CommittedRecord | DroppedRecord
 
 /** A fork or a delegated job that was prepared and neither committed nor dropped. */
 export interface OpenFork {
+  workId?: string;
   id: string;
   kind: WorkKind;
   agentId: string;
@@ -104,7 +105,7 @@ export interface SweepDeps {
   endForkTurns: (how: string) => number;
   lastWordsOf: (agentId: string, conversation: string) => string | undefined;
   /** Queues a system note durably; returns whether it was admitted. */
-  deliver: (agentId: string, text: string, conversation: string) => boolean;
+  deliver: (agentId: string, text: string, conversation: string, workId?: string) => boolean;
   /** Whether a note carrying this tag already waits in the parent's inbox. */
   noteQueued: (agentId: string, conversation: string, tag: string) => boolean;
   agentExists: (agentId: string) => boolean;
@@ -253,6 +254,7 @@ export class PendingWork {
           brief: record.brief,
           at: record.at,
           admitted: false,
+          ...(record.workId !== undefined ? {workId: record.workId} : {}),
           ...(record.data !== undefined ? { data: record.data } : {}),
         });
       } else if (record.event === "admitted") {
@@ -293,7 +295,9 @@ export class PendingWork {
         // gone is dropped, with the log's path so the parent can read what it left.
         // A session (docs/81) is not a job the box lists; the host reattaches or settles it
         // itself (acp-delegate.ts reattach), so the job sweep leaves it alone.
-        if (fork.data?.mode === "session") continue;
+        // An opening/sending acknowledgement can be lost while ACP keeps running.
+        // Retain that unknown admission for session cleanup; jobs() cannot disprove it.
+        if (fork.data?.mode === "session" || fork.data?.mode === "opening-session") continue;
         const status = await deps.jobStatus(fork.agentId, fork.child);
         if (status === undefined) continue;
         if (status.running) continue;
@@ -316,7 +320,7 @@ export class PendingWork {
               `. ` +
               (status.log_path !== undefined ? `Its log is at ${status.log_path} — read_file it. ` : "") +
               `Anything it did is an attempt, not a result; nothing was re-run.`,
-            fork.parent
+            fork.parent, fork.workId
           );
           if (!admitted) continue;
         }
@@ -341,7 +345,7 @@ export class PendingWork {
               ? `Its last words: "${last.replace(/\s+/g, " ").trim().slice(0, 300)}". `
               : "It had said nothing yet. ") +
             `Anything it did is an attempt, not a result; nothing was re-run. Decide whether the piece still needs doing.`,
-          fork.parent
+          fork.parent, fork.workId
         );
         // A note that could not be admitted leaves the record open, so the next start tries
         // again — the one case where staying open is right.

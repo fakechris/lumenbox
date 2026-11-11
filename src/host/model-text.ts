@@ -203,7 +203,7 @@ function statementAround(lines: readonly string[], index: number): string {
 }
 
 /** The host parts that queue prompts to an agent (INV-1571). Each is shown as `[from the host (host:<part>)]`. */
-export const HOST_ORIGINS: ReadonlySet<string> = new Set(["audit", "commitments", "fork", "jobs", "orchestrate", "pause", "questions"]);
+export const HOST_ORIGINS: ReadonlySet<string> = new Set(["audit", "commitments", "fork", "jobs", "orchestrate", "pause", "questions", "superseded-result"]);
 
 /** `<host_notification source="…">` wrappers the host writes into turns. */
 export const NOTIFICATION_SOURCES: ReadonlySet<string> = new Set(["box", "goal", "pause"]);

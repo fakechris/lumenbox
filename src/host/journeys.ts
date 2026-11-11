@@ -236,7 +236,7 @@ export const JOURNEYS: readonly Journey[] = [
     id: "routine-check/refused",
     kind: "routine-check",
     variant: "refused",
-    ask: "The model tries to run the routine on the operator's own machine; there is no host runner, so that tool is not offered and the call is refused; the check is answered from the box.",
+    ask: "The model tries to run the routine on the operator's own machine; there is no host runner, so that tool is not offered; the host reports the unavailable capability and retains the request without executing the rest of the round.",
     episode: {
       team: [{ name: "Ada" }],
       files: DIGEST,
@@ -249,7 +249,10 @@ export const JOURNEYS: readonly Journey[] = [
     },
     checks: {
       "the host call was refused on record": r => refused(r, /Unknown tool: RunOnHost|not available|refused/i),
-      "answered from the box anyway": r => r.score.said.some(s => /digest-2026-09-13\.md/.test(s.text)),
+      // Missing computer capability ends the turn in the host, before the scripted model's
+      // next answer. Judge the actual user report and assert that later actions did not run.
+      "the person receives the capability blocker": r => (r.registry.readTranscript(r.registry.list()[0]!.id) as {role?:string;kind?:string;text?:string}[]).some(entry => entry.role === "assistant" && !entry.kind && /required RunOnHost tool is unavailable/.test(entry.text ?? "")),
+      "no fallback action or success claim runs after the blocker": r => !r.score.trail.some(step => /read_file/.test(step)) && r.score.said.length === 0,
     },
     artifacts: [`${WORK}/out/digest-2026-09-13.md`],
   },

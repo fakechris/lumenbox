@@ -62,9 +62,8 @@ export function settleAudit(
  * The load-bearing sentences, each here because its absence has a known failure:
  * re-derive the constraints from the original request (auditing against the
  * assignee's summary audits the summary); a populated field or an open file is
- * not completion (the consumed final state is); do not modify files (the
- * snapshot outside this prompt checks it anyway); move the task at the end
- * (an audit that reports into the void changes nothing).
+ * not completion (the consumed final state is); read only the authorized evidence;
+ * the host commits a version-checked verdict, never the reviewer itself.
  */
 export function buildAuditPrompt(input: {
   task: Task;
@@ -85,7 +84,7 @@ export function buildAuditPrompt(input: {
     ...(acceptance !== undefined
       ? [`Acceptance criteria, in the requester's words — judge against these first:\n${acceptance}`, ""]
       : []),
-    `Read their work with ReadHistory (${where}) and reproduce the step that matters yourself ` +
+    `Read their work with ReadHistory (${where}) and inspect the evidence for the step that matters ` +
       "rather than trusting their account of it — the failure you exist to catch is the one " +
       "where a step looked like it worked and did not.",
     "",
@@ -94,8 +93,8 @@ export function buildAuditPrompt(input: {
       "field, a correct preview, an open file are not completion; the consumed final state is. " +
       "If several candidate artifacts exist, prove the right one is the one that counts.",
     "",
-    "Do not modify any files. An audit that edits the work is void, and the workspace is " +
-      "checked for changes after your turn.",
+    "Do not modify any files, task records, shared memory or other agents. Only read-only tools are available. " +
+      "Do not create live probe tasks to reproduce a gate; if isolated reproduction is unavailable, report blocked.",
     "",
     "Reply with exactly these three header lines first, then your evidence in prose — what you " +
       "verified, what you could not, what is wrong:",
@@ -109,11 +108,9 @@ export function buildAuditPrompt(input: {
       "and no verdict is not a pass. Your verdict is kept as a record of this claim and its evidence, " +
       "beside another reviewer's; two that agree settle it, and everyone else cites the record instead of checking again.",
     "",
-    "Finally, move the task with the Tasks tool. If your own headers say complete and clean, " +
-      "add a note saying what you verified and LEAVE IT IN REVIEW — done is the requester's " +
-      "word, not yours; they accept in the chat, and your job was to make that acceptance " +
-      "safe. Otherwise move it back to doing, with a note quoting your findings so the " +
-      "assignee knows exactly what to fix.",
+    "The host records your verdict and moves the task. Do not move it yourself. A passing audit " +
+      "leaves a person's work IN REVIEW: done is the requester's word. Your audit is a separate " +
+      "piece of work and does not complete a user's unrelated request.",
     "",
     `Original request: ${input.task.description ?? input.task.title}`,
   ].join("\n");

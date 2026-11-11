@@ -28,13 +28,17 @@ test("a test cannot reach the network, and says so where the call was made", asy
     "a vendor call must not leave the machine"
   );
 
-  // Loopback stays open on purpose: several suites stand up a real server and call it.
-  // Nothing is listening on this port, so the failure is a connection refusal from the
-  // stack rather than a refusal from the guard — which is the distinction being pinned.
-  await assert.rejects(fetch("http://127.0.0.1:9/nothing"), error => {
-    assert.doesNotMatch(String(error), /BlockedByTestGuard/, "loopback must not be blocked");
-    return true;
-  });
+  // A connection failure is not proof that the OS permits loopback. Require an actual
+  // response from a fresh local server, rather than accepting any transport failure.
+  const { createServer } = await import("node:http");
+  const server = createServer((_req, response) => { response.writeHead(403); response.end("local refusal"); });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address(); assert.ok(address && typeof address === "object");
+    const response = await fetch(`http://127.0.0.1:${address.port}/guard-probe`);
+    assert.equal(response.status, 403, "the real loopback response must pass the OS and in-process layers");
+    assert.equal(await response.text(), "local refusal");
+  } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
 });
 
 test("below HTTP too: a raw socket or a TLS connection to anywhere but loopback is refused at the call (INV-1238)", async () => {
@@ -61,6 +65,18 @@ test("what a test spawns cannot reach out either, where the OS can be asked (INV
   const probe = spawnSync("curl", ["-sS", "-m", "5", "-o", "/dev/null", "https://example.com"], { encoding: "utf8" });
   if (osNet === "denied") {
     assert.notEqual(probe.status, 0, `a spawned curl must fail under the OS deny (status ${probe.status}, ${probe.stderr.trim()})`);
+    if(process.platform === "darwin") {
+      // No Node guard in this child, no DNS, and no reliance on a working Internet route.
+      // A timeout/refused/no-route error cannot prove the Seatbelt rule still denies egress.
+      const direct=spawnSync(process.execPath,["-e",`
+        const socket=require('node:net').connect({host:'192.0.2.1',port:443});
+        socket.setTimeout(1000,()=>process.exit(3));
+        socket.on('connect',()=>process.exit(4));
+        socket.on('error',error=>{process.stdout.write(error.code);process.exit(['EPERM','EACCES'].includes(error.code)?0:2);});
+      `],{encoding:"utf8",timeout:3000});
+      assert.equal(direct.status,0,`the OS must deny raw non-loopback TCP, not just fail DNS: ${direct.stdout} ${direct.stderr}`);
+      assert.match(direct.stdout,/^(EPERM|EACCES)$/);
+    }
   } else {
     // Said, not hidden: on this machine the OS layer is missing and only Node's calls are guarded.
     console.error("[test-guards] OS network layer unavailable here; spawned processes are not denied (the runner said so)");

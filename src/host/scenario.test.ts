@@ -44,6 +44,265 @@ import { TaskStore } from "./tasks.ts";
 import { CredentialChecks, CredentialWaits } from "./credential-waits.ts";
 import { parseSkillFile, skillFrom } from "./skills.ts";
 import { Vault } from "./vault.ts";
+import { auditConversation } from "./audit-context.ts";
+import { evidenceDigest } from "./review-dispatch.ts";
+
+test("user installation resumes to a verified artifact after failure while a hundred priority peers wait (INV-1797)", async () => {
+  const { WorkAttention, workStateConversation } = await import("../agents/work-attention.ts");
+  const focus = new WorkAttention(); let rounds = 0; let reported = false; const handledPeers = new Set<number>(); const tasks = new TaskStore(null);
+  const episode = await runEpisode({
+    workAttention: focus, team: [{ name: "Mia", tools: ["SetTodos", "Tasks"] }, { name: "Zed" }], says: [], tasks,
+    script: ({ system, messages, opened }) => {
+      if (opened.includes("UNRELATED PEER")) {
+        assert.equal(reported, true, "unrelated messages may run only after the user's verified result");
+        for (const match of opened.matchAll(/UNRELATED PEER (\d+)/g)) handledPeers.add(Number(match[1]));
+        return { call: "NothingToSay", input: {} };
+      }
+      assert.doesNotMatch(system + JSON.stringify(messages), /OLD AUDIT OBJECTIVE|UNRELATED PEER/, "old work is not execution context");
+      if (rounds++ === 0) return { call: "SetTodos", input: { todos: [{ text: "Install the provided package", status: "doing" }] } };
+      if (rounds === 2) return { call: "bash", input: { command: "ls ~/Downloads" } };
+      if (rounds === 3) return { call: "bash", input: { command: 'echo "installed-package" > /home/box/work/skills/package/SKILL.md' } };
+      if (rounds === 4) return { call: "read_file", input: { path: "/home/box/work/skills/package/SKILL.md" } };
+      if (rounds === 5) {
+        const blocks = messages.flatMap(message => Array.isArray(message.content) ? message.content : []);
+        const read = blocks.find(block => block.type === "tool_use" && block.name === "read_file");
+        assert.ok(read && read.type === "tool_use", "the requested artifact was read through the tool");
+        const result = blocks.find(block => block.type === "tool_result" && block.tool_use_id === read.id);
+        assert.ok(result && result.type === "tool_result" && !result.is_error, "readback succeeded before completion");
+        assert.match(JSON.stringify(result.content), /installed-package/, "the readback itself contains the installed artifact");
+        return { call: "SetTodos", input: { todos: [{ text: "Install the provided package", status: "done" }] } };
+      }
+      reported = true;
+      return { say: "The requested package was installed and its SKILL.md was read back." };
+    },
+    drive: async ({ registry, bus, frontId, files }) => {
+      registry.appendTranscript(frontId, { role: "user", host: true, text: "OLD AUDIT OBJECTIVE", at: new Date().toISOString() });
+      registry.writeTodos(frontId, [{ text: "OLD AUDIT OBJECTIVE", status: "doing" }]);
+      bus.sendFromUser(frontId, "Install the provided package", { messageId: "install-work" });
+      await bus.wake(frontId); await bus.idle();
+      const work = focus.get(frontId, "main")!;
+      assert.equal(work.status, "waiting"); assert.match(work.reason!, /bash/);
+      for (let i = 0; i < 100; i++) bus.send({ fromId: registry.resolve("Zed").id, toId: frontId, text: `UNRELATED PEER ${i}`, priority: true });
+      await bus.idle(1000);
+      assert.equal(rounds, 2, "a missing capability produces one bounded stop; held peers consume no model rounds");
+      assert.equal(bus.heldCount(frontId), 100);
+      assert.equal(tasks.list().length, 0);
+      assert.equal(registry.readDurableState(frontId, workStateConversation(work, "main")).todos?.[0]?.text, "Install the provided package");
+      assert.equal(registry.readDurableState(frontId).todos?.[0]?.text, "OLD AUDIT OBJECTIVE", "old record remains intact, but is not the current plan");
+      assert.match(JSON.stringify(registry.readTranscript(frontId)), /required bash tool is unavailable/);
+      registry.update(frontId, { tools: ["SetTodos", "Tasks", "bash", "read_file", "NothingToSay"] });
+      bus.sendFromUser(frontId, "The tool is available now; continue the package installation", { messageId: "continue-install" });
+      await bus.wake(frontId); await bus.idle();
+      const completed = focus.get(frontId, "main")!;
+      assert.equal(completed.id, work.id, "recovery continues the user's work, not a new audit or task");
+      assert.equal(completed.status, "answered");
+      assert.equal(completed.unavailable, undefined, "successful use clears the specific capability blocker");
+      assert.equal(files.get("/home/box/work/skills/package/SKILL.md"), "installed-package");
+      assert.equal(registry.readDurableState(frontId, workStateConversation(work, "main")).todos?.[0]?.status, "done");
+      assert.equal(tasks.list().length, 0, "neither recovery nor queued peers create audit probes");
+      assert.deepEqual([...handledPeers].sort((a, b) => a - b), Array.from({ length: 100 }, (_, i) => i), "every held message is eventually delivered, not silently dropped");
+      assert.equal(bus.heldCount(frontId), 0);
+    },
+  });
+  episode.cleanup();
+});
+
+test("an admitted collaborator can return before the owner finishes without losing the result or taking over its plan (INV-1797)", async () => {
+  const { WorkAttention, workStateConversation } = await import("../agents/work-attention.ts");
+  const focus = new WorkAttention(); let ownerRounds = 0; let returned = false;
+  const episode = await runEpisode({
+    workAttention: focus, team: [{ name: "Mia" }, { name: "Zed" }], says: [],
+    script: ({ agent, messages, system }) => {
+      if (agent === "Zed") return { say: "Package verified successfully" };
+      const text = JSON.stringify(messages);
+      assert.doesNotMatch(text + system, /OLD AUDIT OBJECTIVE/);
+      if (text.includes("Package verified successfully")) { returned = true; return { say: "Your package has been verified." }; }
+      if (ownerRounds++ === 0) return { call: "SendToAgent", input: { target_id: "Zed", message: "Verify the package" } };
+      return { say: "Waiting for the package verification." };
+    },
+    drive: async ({ bus, registry, frontId }) => {
+      registry.writeTodos(frontId, [{ text: "OLD AUDIT OBJECTIVE", status: "doing" }]);
+      bus.sendFromUser(frontId, "Have Zed verify this package", { conversation: "private-chat", messageId: "verification-work" });
+      await bus.wake(frontId); await bus.idle();
+      assert.equal(returned, true, "host-stamped result returned to the original private conversation");
+      assert.equal(focus.get(frontId, "private-chat")!.status, "answered");
+      assert.equal(focus.get(frontId, "private-chat")!.awaiting.length, 0);
+      assert.equal(registry.readDurableState(frontId, workStateConversation(focus.get(frontId, "private-chat"), "private-chat")).todos?.length ?? 0, 0);
+      assert.equal(registry.readTranscript(registry.resolve("Zed").id).length, 0, "collaborator conversation cannot pollute its main user chat");
+      assert.match(JSON.stringify(registry.readTranscript(frontId, "private-chat")), /Your package has been verified/);
+    },
+  });
+  episode.cleanup();
+});
+
+test("a foreground command finishing later returns to its waiting user work while unrelated peers stay held (INV-1797)", async () => {
+  const { JobWatch } = await import("./job-watch.ts");
+  const { WorkAttention } = await import("../agents/work-attention.ts");
+  let finishJob!: () => void; const completed = new Promise<void>(resolve => { finishJob = resolve; });
+  const focus = new WorkAttention(); let calls = 0, received = false;
+  const episode = await runEpisode({
+    workAttention: focus, team: [{name:"Mia"},{name:"Zed"}], says: [],
+    box: {waitForJob: (async () => { await completed; return {running:false,exit_code:0,log_path:"/jobs/package.log",tail:"package build ready"}; }) as never},
+    jobWatch: ({bus,box}) => {
+      box.exec = (async (command: string) => ({stdout:"",stderr:"",exit_code:0,...(command === "compile-package" ? {still_running:{job_id:"package-job",pid:123,log_path:"/jobs/package.log"}} : {})})) as never;
+      return new JobWatch({box:()=>box as never, mergeMs:1, log:()=>{}, started:job=>{if(job.work)focus.hold(job.work,job.jobId);}, released:job=>{if(job.work)focus.release(job.work,job.jobId);}, wake: async (agent,conversation,text,work)=>{bus.deliverSystem(agent,text,conversation,work);}}); },
+    script: ({messages}) => {
+      if (JSON.stringify(messages).includes("package build ready")) {received = true; return {say:"The package build is verified."};}
+      if(calls++ === 0) return {call:"bash",input:{command:"compile-package"}};
+      return {say:"Waiting for the package build."};
+    },
+    drive: async ({bus,registry,frontId}) => {
+      bus.sendFromUser(frontId,"Build the package."); await bus.wake(frontId); await bus.idle();
+      assert.equal(focus.get(frontId,"main")!.status,"waiting");
+      bus.send({fromId:registry.resolve("Zed").id,toId:frontId,text:"Unrelated old audit",priority:true});
+      await bus.idle(); assert.equal(bus.heldCount(frontId),1);
+      finishJob(); await settled(()=>received); await bus.idle();
+      assert.equal(focus.get(frontId,"main")!.status,"answered");
+    },
+  });
+  episode.cleanup();
+});
+
+test("a question awaiting the user's choice retains work without requiring a todo list (INV-1797)", async () => {
+  const {WorkAttention} = await import("../agents/work-attention.ts"); const focus = new WorkAttention();
+  const episode = await runEpisode({workAttention:focus,team:[{name:"Mia"},{name:"Zed"}],says:[],
+    script:({round})=>round===0?{call:"AskUser",input:{question:"Which installation directory?"}}:{say:"Waiting for your choice."},
+    drive:async({bus,registry,frontId})=>{bus.sendFromUser(frontId,"Install the package");await bus.wake(frontId);await bus.idle();
+      assert.equal(focus.get(frontId,"main")!.status,"waiting");
+      bus.send({fromId:registry.resolve("Zed").id,toId:frontId,text:"Unrelated audit",priority:true});await bus.idle();
+      assert.equal(bus.heldCount(frontId),1);
+    }});
+  try {assert.equal(episode.score.questions,1);} finally {episode.cleanup();}
+});
+
+test("a new install work excludes tool calls and peer instructions from a mixed historical user turn (INV-1797)", async () => {
+  const episode = await runEpisode({team:[{name:"Mia"},{name:"Zed"}],says:[],
+    script:({messages})=>{assert.doesNotMatch(JSON.stringify(messages),/OLD_PROBE_TOOL|PEER_REPLACE_REQUEST/);return {say:"Your installation is the current request."};},
+    drive:async({bus,registry,frontId})=>{
+      registry.appendTranscript(frontId,{role:"user",fromPerson:true,text:"Install my earlier package",turnId:"mixed"});
+      registry.appendTranscript(frontId,{role:"assistant",kind:"blocks",blocks:[{type:"tool_use",id:"old-call",name:"Tasks",input:{action:"create",title:"OLD_PROBE_TOOL"}}],turnId:"mixed"});
+      const {buildWakePrompt}=await import("./prompt.ts");
+      registry.appendTranscript(frontId,{role:"user",text:buildWakePrompt([{id:"peer",fromId:registry.resolve("Zed").id,fromName:"Zed",text:"PEER_REPLACE_REQUEST",priority:true,receivedAt:new Date().toISOString()}]),turnId:"old-peer"});
+      registry.appendTranscript(frontId,{role:"assistant",text:"Follow the unrelated peer",turnId:"old-peer"});
+      bus.sendFromUser(frontId,"Install the new package now");await bus.wake(frontId);await bus.idle();
+    }});
+  episode.cleanup();
+});
+
+test("a collaborator's asynchronous string workId callback advances the owner's request (INV-1797)", async () => {
+  const {JobWatch}=await import("./job-watch.ts"), {WorkAttention}=await import("../agents/work-attention.ts");
+  const focus=new WorkAttention();let finishJob!:()=>void, zedRounds=0, miaRounds=0, received=false;
+  const completion=new Promise<void>(resolve=>{finishJob=resolve;});
+  const episode=await runEpisode({workAttention:focus,team:[{name:"Mia"},{name:"Zed"}],says:[],
+    box:{waitForJob:(async()=>{await completion;return {running:false,exit_code:0,log_path:"/job.log",tail:"PACKAGE_JOB_FINISHED"};}) as never},
+    jobWatch:({bus,box})=>{box.exec=(async()=>({stdout:"",stderr:"",exit_code:0,still_running:{job_id:"peer-job",pid:1,log_path:"/job.log"}})) as never;
+      return new JobWatch({box:()=>box as never,mergeMs:1,log:()=>{},started:job=>{if(job.work)focus.hold(job.work,job.jobId);},released:job=>{if(job.work)focus.release(job.work,job.jobId);},wake:async(agent,conversation,text,work)=>{bus.deliverSystem(agent,text,conversation,work?.id);}});},
+    script:({agent,messages})=>{
+      const text=JSON.stringify(messages);
+      if(agent==="Zed") {if(text.includes("PACKAGE_JOB_FINISHED"))return {say:"FINAL_PACKAGE_RECEIPT"};if(zedRounds++===0)return {call:"bash",input:{command:"build-package"}};return {say:"Waiting for the package job."};}
+      if(text.includes("FINAL_PACKAGE_RECEIPT")){received=true;return {say:"Your package is verified."};}
+      if(miaRounds++===0)return {call:"SendToAgent",input:{target_id:"Zed",message:"Build and verify the package"}};
+      return {say:"Waiting for the package verification."};
+    },
+    drive:async({bus,frontId})=>{bus.sendFromUser(frontId,"Have Zed build the package");await bus.wake(frontId);await bus.idle();
+      assert.equal(focus.get(frontId,"main")!.status,"waiting");finishJob();await settled(()=>received);await bus.idle();
+      assert.equal(focus.get(frontId,"main")!.status,"answered");
+    }});
+  episode.cleanup();
+});
+
+test("a collaborator's missing capability remains the user's blocker, not a completed request (INV-1797)", async () => {
+  const {WorkAttention}=await import("../agents/work-attention.ts"); const focus=new WorkAttention();let miaRounds=0;
+  const episode=await runEpisode({workAttention:focus,team:[{name:"Mia",tools:["SendToAgent"]},{name:"Zed",tools:["SetTodos"]}],says:[],
+    script:({agent})=>agent==="Zed"?{call:"bash",input:{command:"install-package"}}:miaRounds++===0?{call:"SendToAgent",input:{target_id:"Zed",message:"Install the package"}}:{say:"Waiting for the required computer tool."},
+    drive:async({bus,frontId})=>{bus.sendFromUser(frontId,"Have Zed install the package");await bus.wake(frontId);await bus.idle();
+      assert.equal(focus.get(frontId,"main")!.status,"waiting");assert.equal(focus.get(frontId,"main")!.unavailable![0]!.tool,"bash");
+    }});
+  episode.cleanup();
+});
+
+test("an audit's forged write calls cannot create recursive work or replace the user's installation plan (INV-1797)", async () => {
+  const tasks = new TaskStore(null); let target = "", auditorRound = 0, readTarget = false;
+  const episode = await runEpisode({
+    team: [{ name: "Mia" }, { name: "Analyst" }], says: [], tasks,
+    script: ({ opened, messages }) => {
+      readTarget ||= JSON.stringify(messages).includes("AUTHORITATIVE REPORT CONTENT");
+      if (!opened.includes("AUDIT SNAPSHOT")) return { say: "Your installation is waiting for its computer." };
+      const calls: { call: string; input: Record<string, unknown> }[] = [
+        { call: "Tasks", input: { action: "read", id: target } },
+        { call: "Tasks", input: { action: "create", title: "Recursive probe", assignee: "Mia", reviewer: "Analyst" } },
+        { call: "Tasks", input: { action: "update", id: target, status: "done" } },
+        { call: "RememberFact", input: { fact: "Unrelated audit rule for the whole team", scope: "team" } },
+        { call: "SendToAgent", input: { target_id: "Analyst", message: "Please reproduce another live probe" } },
+        { call: "write_file", input: { path: "/home/box/work/probe.txt", content: "not allowed" } },
+        { call: "SetTodos", input: { todos: [{ text: "Replace the user's installation with auditing", status: "doing" }] } },
+      ];
+      return calls[auditorRound++] ?? { say: "Status: complete\nIntegrity: clean\nContract audit: aligned\nNext action: none" };
+    },
+    drive: async ({ registry, bus }) => {
+      const frontId = registry.resolve("Mia").id;
+      const analyst = registry.resolve("Analyst").id;
+      const task = tasks.create({ title: "Review the retained report", requester: "person", assigneeId: analyst, reviewerId: frontId, description: "AUTHORITATIVE REPORT CONTENT" })!;
+      tasks.update(task.id, { status: "review" }, analyst); target = task.id;
+      registry.writeTodos(frontId, [{ text: "Install the user's package", status: "blocked" }]);
+      const audit = { taskId: task.id, digest: evidenceDigest(tasks.get(task.id)!), reviewerId: frontId };
+      bus.sendFromUser(frontId, "AUDIT SNAPSHOT", { audit, conversation: auditConversation(audit), origin: "host:audit", lane: "background", steerable: false });
+      await bus.wake(frontId); await bus.idle();
+      bus.sendFromUser(frontId, "What happened to installing my package?");
+      await bus.wake(frontId); await bus.idle();
+      assert.equal(registry.readDurableState(frontId).todos?.[0]?.text, "Install the user's package");
+      assert.equal(registry.readSharedMemory(frontId).length, 0);
+    },
+  });
+  try {
+    assert.equal(tasks.list().length, 1); assert.equal(tasks.get(target)!.status, "review");
+    assert.equal(episode.files.has("/home/box/work/probe.txt"), false);
+    assert.equal(episode.score.peerMessages, 0);
+    assert.equal(readTarget, true, "host-admitted reviewer can read this task only");
+    const auditThread = episode.registry.list().flatMap(agent => episode.registry.readTranscript(agent.id, auditConversation({taskId: target, digest: evidenceDigest(tasks.get(target)!), reviewerId: episode.registry.resolve("Mia").id})));
+    assert.equal((JSON.stringify(auditThread).match(/Review refused:/g) ?? []).length, 6, "six forged side effects receive explicit tool errors");
+    const main = episode.registry.readTranscript(episode.registry.resolve("Mia").id);
+    assert.ok(!JSON.stringify(main).includes("AUDIT SNAPSHOT"), "audit history stays outside the person's conversation");
+  } finally { episode.cleanup(); }
+});
+
+test("an audit queued against an older evidence version consumes no model turn or tool (INV-1797)", async () => {
+  const tasks = new TaskStore(null); let modelCalls = 0;
+  const episode = await runEpisode({team:[{name:"Mia"},{name:"Worker"}],says:[],tasks,
+    script:()=>{modelCalls++;return {call:"Tasks",input:{action:"create",title:"Probe",assignee:"Mia"}};},
+    drive:async({bus,registry})=>{
+      const reviewer = registry.resolve("Mia").id, worker = registry.resolve("Worker").id;
+      const task = tasks.create({title:"Check artifact",requester:"person",assigneeId:worker,reviewerId:reviewer})!;
+      tasks.update(task.id,{status:"review"},worker);
+      const audit = {taskId:task.id,digest:evidenceDigest(tasks.get(task.id)!),reviewerId:reviewer};
+      bus.sendFromUser(reviewer,"Review old evidence",{audit,conversation:auditConversation(audit),origin:"host:audit",lane:"background"});
+      tasks.update(task.id,{description:"Revised evidence after admission"},worker);
+      await bus.wake(reviewer);await bus.idle();
+    }});
+  try {assert.equal(modelCalls,0);assert.equal(tasks.list().length,1);} finally {episode.cleanup();}
+});
+
+test("an old unscoped audit cannot take over a new installation request or create live probe work (INV-1797)", async () => {
+  const tasks = new TaskStore(null);
+  const episode = await runEpisode({
+    team: [{ name: "Mia" }, { name: "Reviewer" }], says: [], tasks,
+    script: ({ opened, round }) => opened.includes("LEGACY AUDIT")
+      ? round === 0 ? { call: "Tasks", input: { action: "create", title: "Unrelated live probe", assignee: "Mia", reviewer: "Reviewer" } } : { say: "Status: complete — old audit" }
+      : { say: "The installation is blocked until its computer is available." },
+    drive: async ({ bus, frontId }) => {
+      bus.sendFromUser(frontId, "LEGACY AUDIT: reproduce the old completion gate.", { origin: "host:audit", lane: "background", steerable: false });
+      await bus.wake(frontId); await bus.idle();
+      bus.sendFromUser(frontId, "Install the package I supplied.");
+      await bus.wake(frontId); await bus.idle();
+    },
+  });
+  try {
+    assert.equal(tasks.list().length, 0, "stale audit must not generate more real work");
+    assert.equal(episode.score.trail.some(call => call.endsWith(":Tasks")), false);
+    assert.ok(episode.score.said.every(reply => !reply.text.includes("old audit")));
+    assert.match(episode.score.said.at(-1)!.text, /installation is blocked/);
+  } finally { episode.cleanup(); }
+});
 
 test("admitted task, child and late task selection stay distinct across multiple works (INV-1785)", async () => {
   const { TurnLedger } = await import("./resume.ts");
@@ -1744,7 +2003,7 @@ for (const receipt of ["changed", "partial", "legacy_failed"]) {
     let writes = 0;
     let reads = 0;
     const episode = await runEpisode({
-      team: [{ name: "Nova" }], says: ["点击一次保存，然后检查当前状态。"],
+      team: [{ name: "Nova" }], says: ["点击一次保存，然后检查当前状态。"], display: 1,
       box: {
         computer: async actions => {
           if (actions.some(action => action.action === "click")) {
@@ -1954,7 +2213,8 @@ test("an email send through a connector waits for a person when the tier gate en
       describeTools: () => "google__send_email",
     };
     let toolResult = "";
-    const result = await runEpisode({
+    const {WorkAttention}=await import("../agents/work-attention.ts"); const focus = new WorkAttention();
+    const result = await runEpisode({workAttention:focus,
       team: [{ name: "Nova" }], says: ["给王总发封邮件说报价明天给他"],
       policy,
       mcp: mcp as never,
@@ -1971,6 +2231,7 @@ test("an email send through a connector waits for a person when the tier gate en
         assert.equal(pending.action, "call send_email on google, a service outside the box", "the card says what it does, in the host's words");
         assert.match(pending.description, /wang@example\.com/, "and shows the exact action");
         assert.match(toolResult, /approv/i, "the agent is told it is waiting on a person");
+        assert.equal(focus.get(result.registry.list()[0]!.id,"main")!.status,"waiting","first-run approval retains foreground work");
       } else {
         assert.equal(sent.length, 1, "shadow changes no decision");
         assert.equal(policy.tierShadow().tools[0]?.tool, "google__send_email", "but it is counted as a question a person would have been asked");
@@ -2336,7 +2597,7 @@ test("a preference said before two compactions is in the ledger with provenance 
     ]);
   let summaries = 0;
   let flushes = 0;
-  let reportContext = "";
+  let reportContext = ""; let planRecorded = false;
   const result = await runEpisode({
     team: [{ name: "Nova" }], says: [], memory: true,
     selectMemory: async () => '{"selected":[1]}',
@@ -2365,12 +2626,16 @@ test("a preference said before two compactions is in the ledger with provenance 
         reportContext = system + JSON.stringify(messages);
         return { say: "报告：全长 12 公里，气温 20 摄氏度。" };
       }
+      if (!planRecorded) { planRecorded = true; return { call: "SetTodos", input: { todos: [{text: "Continue the report", status: "doing"}] } }; }
       return { say: "继续中。" };
     },
-    drive: async ({ registry, frontId, say }) => {
+    drive: async ({ registry, bus, frontId, say }) => {
       await say("继续");
       assert.equal(summaries, 1, "the first turn compacted (over the entry trigger)");
-      for (const entry of filler(1000, 80)) registry.appendTranscript(frontId, entry);
+      const {workRegistry, workStateConversation} = await import("../agents/work-attention.ts");
+      const work = bus.workAttention!.get(frontId, "main")!;
+      const execution = workRegistry(registry, frontId, "main", workStateConversation(work, "main"), work);
+      for (const entry of filler(1000, 80)) execution.appendTranscript(frontId, entry);
       await say("再继续");
       assert.equal(summaries, 2, "and the second compacted the first summary");
       await say("给我一份报告");
@@ -3061,7 +3326,13 @@ test("Delegate in session mode: opened, steered, cancelled and closed through th
         return { ok: true };
       },
       acpEvents: async (request: Parameters<InstanceType<typeof AcpService>["events"]>[0]) => acp.events(request),
-      acpClose: async (request: Parameters<InstanceType<typeof AcpService>["close"]>[0]) => (await acp.close(request))!,
+      acpClose: async (request: Parameters<InstanceType<typeof AcpService>["close"]>[0]) => {
+        const closed = await acp.close(request);
+        // The event poll receives the exit before the close response: make this
+        // ordering deterministic instead of relying on scheduler load to expose it.
+        await new Promise<void>(resolve => setImmediate(resolve));
+        return closed!;
+      },
       acpSessions: async () => ({ sessions: acp.list() }),
     } as never,
     script: ({ round, messages }) => {
@@ -3088,8 +3359,8 @@ test("Delegate in session mode: opened, steered, cancelled and closed through th
     const committed = () => readFileSync(join(dir, "pending-work.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line) as { event: string; how?: string; data?: { mode?: string } });
     while (!committed().some(entry => entry.event === "committed") && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 20));
     const entries = committed();
-    assert.equal(entries.find(entry => entry.event === "prepared")?.data?.mode, "session");
-    assert.deepEqual(entries.filter(entry => entry.event === "committed").map(entry => entry.how), ["aborted"], "the engine confirmed the cancel, so the brief is aborted");
+    assert.equal(entries.find(entry => entry.event === "prepared" && entry.data?.mode === "session")?.data?.mode, "session");
+    assert.deepEqual(entries.filter(entry => entry.event === "committed").map(entry => entry.how), ["aborted"], "an explicit close or confirmed cancel is aborted, never an unsolicited engine failure");
   } finally {
     result.cleanup();
     acp.shutdown();
@@ -3840,4 +4111,31 @@ test("an L4 task's agent drafts a message: it waits in the Outbox, goes out once
     result.cleanup();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("cancelling a multi-agent installation prevents job, fork and late callbacks from reviving it while another task still runs (INV-1798)", async()=>{
+  const {WorkAttention}=await import("../agents/work-attention.ts"), {JobWatch}=await import("./job-watch.ts");
+  const focus=new WorkAttention();let finish!:()=>void,watch!:import("./job-watch.ts").JobWatch,mi=0,zi=0,afterCancel=0,cancelled=false;
+  const done=new Promise<void>(resolve=>{finish=resolve;});
+  const episode=await runEpisode({team:[{name:"Mia"},{name:"Zed"}],workAttention:focus,says:[],
+    box:{exec:(async()=>({stdout:"",stderr:"",exit_code:0,still_running:{job_id:"job-cancel-test",pid:1,log_path:"/job.log"}})) as never,
+      waitForJob:(async()=>{await done;return {running:false,exit_code:137,log_path:"/job.log",tail:"LATE_CANCELLED_PACKAGE_RESULT"};}) as never,killJob:(async()=>{finish();return {};}) as never},
+    jobWatch:({bus,box})=>{box.exec=(async()=>({stdout:"",stderr:"",exit_code:0,still_running:{job_id:"job-cancel-test",pid:1,log_path:"/job.log"}})) as never;watch=new JobWatch({box:()=>box as never,isCancelled:id=>!!focus.cancelled(id),started:job=>{if(job.work)focus.hold(job.work,job.jobId);},released:job=>{if(job.work)focus.release(job.work,job.jobId);},log:()=>{},mergeMs:1,wake:async(id,conversation,text,work)=>{bus.deliverSystem(id,text,conversation,work);}});return watch;},
+    script:({agent,messages})=>{
+      const text=JSON.stringify(messages);
+      if(cancelled){afterCancel++;assert.match(text,/NEW_UNRELATED_REQUEST/);assert.doesNotMatch(text,/LATE_CANCELLED_PACKAGE_RESULT/);return {say:"The unrelated task can continue."};}
+      if(agent==="Mia" && mi++===0)return {call:"SendToAgent",input:{target_id:"Zed",message:"Build this installation package"}};
+      if(agent==="Zed" && zi++===0)return {call:"bash",input:{command:"build-package"}};
+      return {say:"Waiting for package verification."};
+    },drive:async({bus,registry,frontId,say})=>{
+      await say("Install the package and verify it");const root=focus.get(frontId,"main")!;assert.equal(root.status,"waiting");
+      const zed=registry.resolve("Zed").id;assert.equal(watch.workJobs(root.id).length,1);
+      focus.cancel(root,"Chris","This installation went off track");bus.interruptWork(root.id);cancelled=true;
+      await watch.stopWorkJob("job-cancel-test",root.id);
+      bus.deliverSystem(frontId,"LATE_CANCELLED_PACKAGE_RESULT","main",root.id);
+      bus.sendFromUser(frontId,"old installation replay",{messageId:root.id});
+      await bus.idle();assert.equal(afterCancel,0);assert.equal(bus.pendingCount(frontId),0);
+      bus.sendFromUser(zed,"NEW_UNRELATED_REQUEST",{steerable:false});await bus.wake(zed);await bus.idle();assert.equal(afterCancel,1);
+    }});
+  episode.cleanup();
 });

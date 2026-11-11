@@ -6,9 +6,8 @@
  * and wakes the agent with a host note saying how long it was paused and by whom; the messages that
  * queued meanwhile are read in that turn.
  *
- * Background jobs carry no owner the host can read back, but every one an agent has is named in its
- * own record: "Started as job-…" for one it started, "continuing as job-…" for a command that outlived
- * its foreground time (exec-format.ts) — so the tail of that record names them.
+ * Explicit box job ownership authorizes cleanup. Historical text is only a diagnostic hint:
+ * a quoted peer message cannot authorize stopping that peer's process or an unowned process.
  */
 
 import { closeSync, existsSync, fstatSync, openSync, readdirSync, readSync } from "node:fs";
@@ -19,7 +18,7 @@ export interface AgentPauseDeps {
   dirFor: (agentId: string) => string;
   /** Ends its turns in flight; returns whose it ended. */
   interrupt: (agentIds: string[], reason: string) => string[];
-  box: () => { jobs(): Promise<{ jobs: { job_id: string; running: boolean; owner?: string }[] }>; killJob(jobId: string): Promise<unknown> } | undefined;
+  box: () => { jobs(): Promise<{ jobs: { job_id: string; running: boolean; owner?: string }[] }>; killJob(jobId: string): Promise<unknown>; waitForJob?(request:{job_id:string;timeout_ms:number}):Promise<{running:boolean}> } | undefined;
   /** Gives the agent a host message in the lane drained first, so it arrives with what people sent meanwhile. */
   tell: (agentId: string, text: string) => Promise<void>;
   /** Wakes every conversation with a queue: a chat thread's messages wait as long as the main one's. */
@@ -56,6 +55,8 @@ export function recordsIn(agentDir: string): string[] {
   return found;
 }
 
+export interface PauseResult { jobsStopped: string[]; turnStopped: boolean; jobsUnconfirmed?: string[]; errors?: string[] }
+
 export class AgentPauses {
   constructor(private readonly deps: AgentPauseDeps) {}
 
@@ -63,21 +64,44 @@ export class AgentPauses {
     return readPause(this.deps.dirFor(agentId));
   }
 
-  async pause(agentId: string, by: string, reason: string): Promise<{ jobsStopped: string[]; turnStopped: boolean }> {
+  async pause(agentId: string, by: string, reason: string): Promise<PauseResult> {
     writePause(this.deps.dirFor(agentId), { by, at: (this.deps.now?.() ?? new Date()).toISOString(), reason });
+    return this.stopPaused(agentId, by, reason);
+  }
+
+  async pauseMany(agentIds: string[], by: string, reason: string, afterBarrier?: (ids:string[])=>void): Promise<{ paused: string[]; failures: {agentId:string;error:string}[]; results: {agentId:string;result:PauseResult}[] }> {
+    const paused: string[] = [], failures: {agentId:string;error:string}[] = [];
+    // All selected agents are durably barred before the first asynchronous cleanup begins.
+    for (const id of new Set(agentIds)) {
+      try { if (!this.pauseOf(id)) writePause(this.deps.dirFor(id), {by,at:(this.deps.now?.() ?? new Date()).toISOString(),reason}); paused.push(id); }
+      catch (error) { failures.push({agentId:id,error:error instanceof Error ? error.message : String(error)}); }
+    }
+    afterBarrier?.(paused);
+    const results = await Promise.all(paused.map(async agentId => { try { return {agentId,result:await this.stopPaused(agentId,by,reason)}; } catch(error) { return {agentId,result:{jobsStopped:[],turnStopped:false,errors:[error instanceof Error?error.message:String(error)]}}; } }));
+    return {paused,failures,results};
+  }
+
+  private async stopPaused(agentId: string, by: string, reason: string): Promise<PauseResult> {
     const turnStopped = this.deps.interrupt([agentId], "paused").length > 0;
-    const jobsStopped: string[] = [];
+    const jobsStopped: string[] = [], jobsUnconfirmed: string[] = [], errors: string[] = [];
     const box = this.deps.box();
     if (box !== undefined) {
       const named = new Set(recordsIn(this.deps.dirFor(agentId)).flatMap(path => jobsNamedIn(path)));
-      const running = (await box.jobs().catch((error: unknown) => { this.deps.log(`pause: could not list jobs: ${error instanceof Error ? error.message : String(error)}`); return { jobs: [] }; })).jobs.filter(job => job.running && (job.owner === `agent:${agentId}` || named.has(job.job_id)));
+      const jobs = (await box.jobs().catch((error: unknown) => { errors.push(`Could not list background jobs: ${error instanceof Error ? error.message : String(error)}`); this.deps.log(errors.at(-1)!); return { jobs: [] }; })).jobs;
+      const running=jobs.filter(job=>job.running && job.owner===`agent:${agentId}`);
+      for(const job of jobs.filter(job=>job.running && !job.owner && named.has(job.job_id))){jobsUnconfirmed.push(job.job_id);errors.push(`Ownership of ${job.job_id} is unknown; a quoted history entry cannot authorize stopping it`);}
       for (const job of running) {
-        await box.killJob(job.job_id).then(() => jobsStopped.push(job.job_id), error => this.deps.log(`pause: could not stop ${job.job_id}: ${error instanceof Error ? error.message : String(error)}`));
+        try {
+          await box.killJob(job.job_id);
+          const status=await box.waitForJob?.({job_id:job.job_id,timeout_ms:100});
+          if(status && !status.running)jobsStopped.push(job.job_id);
+          else {jobsUnconfirmed.push(job.job_id);errors.push(`Stop requested for ${job.job_id}; process exit is unconfirmed`);}
+        } catch(error) {jobsUnconfirmed.push(job.job_id);errors.push(`Could not confirm stopping ${job.job_id}: ${error instanceof Error?error.message:String(error)}`);this.deps.log(errors.at(-1)!);}
       }
-    }
-    this.deps.receipt(`agent:${agentId}`, "paused", `${by}${reason ? `: ${reason}` : ""}; ${turnStopped ? "turn stopped" : "no turn in flight"}; ${jobsStopped.length} background job(s) stopped`);
+    } else errors.push("Computer unavailable; background jobs could not be checked");
+    this.deps.receipt(`agent:${agentId}`, "paused", `${by}${reason ? `: ${reason}` : ""}; ${turnStopped ? "turn stopped" : "no turn in flight"}; ${jobsStopped.length} background job exit(s) confirmed; ${jobsUnconfirmed.length} unconfirmed${errors.length ? `; unconfirmed: ${errors.join("; ")}` : ""}`);
     this.deps.log(`${by} paused ${agentId}${reason ? ` (${reason})` : ""}; stopped ${jobsStopped.length} job(s)`);
-    return { jobsStopped, turnStopped };
+    return { jobsStopped, turnStopped, ...(jobsUnconfirmed.length?{jobsUnconfirmed}:{}), ...(errors.length ? {errors} : {}) };
   }
 
   async resume(agentId: string, by: string): Promise<boolean> {
@@ -86,7 +110,7 @@ export class AgentPauses {
     clearPause(this.deps.dirFor(agentId));
     this.deps.receipt(`agent:${agentId}`, "resumed", `${by}; paused since ${pause.at} by ${pause.by}`);
     const since = pause.at ? Math.max(1, Math.round(((this.deps.now?.() ?? new Date()).getTime() - Date.parse(pause.at)) / 60_000)) : undefined;
-    await this.deps.tell(agentId, `<host_notification source="pause">${by} resumed you${since !== undefined ? ` after about ${since} minute${since === 1 ? "" : "s"}` : ""}; ${pause.by} had paused you${pause.reason ? ` (${pause.reason})` : ""}. Your background jobs from before were stopped. Messages people sent you meanwhile come with this note; teammates' follow after. Read them before picking anything else back up.</host_notification>`);
+    await this.deps.tell(agentId, `<host_notification source="pause">${by} resumed you${since !== undefined ? ` after about ${since} minute${since === 1 ? "" : "s"}` : ""}; ${pause.by} had paused you${pause.reason ? ` (${pause.reason})` : ""}. Stop requests were sent for known background jobs; verify any unconfirmed jobs before continuing. Messages people sent you meanwhile come with this note; teammates' follow after. Read them before picking anything else back up.</host_notification>`);
     this.deps.wake(agentId);
     return true;
   }

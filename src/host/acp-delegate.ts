@@ -20,6 +20,8 @@
  * Metering is not here: the engine's model traffic goes through the relay, whose rows are
  * the bill (model-relay.ts). `usage_update` from the engine is context occupancy, not tokens.
  */
+import { cleanupBox } from "./work-executor.ts";
+import type {StopResource} from "../agents/work-attention.ts";
 import { createHash } from "node:crypto";
 import type { BoxClient } from "../box/client.ts";
 import type { AcpEvent } from "../protocol/index.ts";
@@ -33,10 +35,13 @@ import { describeWorktree, worktreeState } from "./worktree-state.ts";
 export type AcpBox = Pick<BoxClient, "acpOpen" | "acpSend" | "acpReply" | "acpEvents" | "acpClose" | "acpSessions"> & Partial<Pick<BoxClient, "exec" | "readFile">>;
 
 export interface AcpDelegateDeps {
+  returnFor?: (agentId:string,conversation:string,workId:string) => import("../agents/work-attention.ts").WorkReturn | undefined;
+  cancelledResource?: (workId:string,resource:StopResource)=>void;
+  isCancelled?: (workId: string) => boolean;
   pendingWork?: PendingWork;
   policy?: PolicyGate;
   /** The note to the agent that delegated, in the conversation it delegated from. */
-  deliver: (agentId: string, text: string, conversation: string) => void;
+  deliver: (agentId: string, text: string, conversation: string, workId?: string) => void;
   log?: (line: string) => void;
   now?: () => number;
   /** How long one events poll waits in the box before answering empty. */
@@ -78,9 +83,11 @@ interface Watch {
   cwd: string;
   report: string;
   /** The brief in flight, if any: its prompt's rpc id and what the engine has said so far. */
-  inFlight?: { promptRpcId: number; brief: string; text: string };
+  inFlight?: { workId?: string; promptRpcId: number; brief: string; text: string };
   since: number;
   stopped: boolean;
+  closing?: Promise<void>;
+  admitting?: Promise<void>;
 }
 
 export interface StartInput {
@@ -128,6 +135,9 @@ export class AcpDelegates {
    * be written closes the session again, because a brief nobody can settle must not run.
    */
   async start(input: StartInput, jobId: string): Promise<{ jobId: string; engineSessionId: string; logPath: string }> {
+    if (input.workId && this.deps.isCancelled?.(input.workId)) throw new Error("Work cancelled");
+    // Persist the client-chosen session id before dispatch: a lost response is outcome unknown.
+    const opening=this.deps.pendingWork?.prepare({kind:"delegate",agentId:input.agentId,parent:input.conversation,child:jobId,workId:input.workId,brief:`${input.engine}: opening session`,data:{mode:"opening-session",engine:input.engine,cwd:input.cwd}});
     const opened = await input.box.acpOpen({
       session_id: jobId,
       command: input.command,
@@ -137,6 +147,18 @@ export class AcpDelegates {
       ...(input.call !== undefined ? { call: input.call } : {}),
       actor: `agent:${input.agentId}`,
     });
+    if(opening)this.deps.pendingWork?.admitted(opening,undefined);
+    if (input.workId && this.deps.isCancelled?.(input.workId)) {
+      const resource:StopResource={kind:"delegate",id:opening ?? jobId,agentId:input.agentId,state:"unconfirmed",detail:"Session opened after cancellation"};
+      this.deps.cancelledResource?.(input.workId,resource);
+      try{
+        const raw=cleanupBox(input.box);await raw.acpClose({session_id:jobId});
+        const running=(await raw.acpSessions()).sessions.some(row=>row.session_id===jobId && row.running);
+        this.deps.cancelledResource?.(input.workId,{...resource,state:running?"requested":"confirmed"});
+        if(!running && opening)this.deps.pendingWork?.dropped(opening,"cancelled");
+      }catch{/* retain the durable unconfirmed session for recovery */}
+      throw new Error("Work cancelled while the session opened");
+    }
     const watch: Watch = {
       jobId,
       agentId: input.agentId,
@@ -151,10 +173,11 @@ export class AcpDelegates {
     };
     this.watches.set(jobId, watch);
     try {
-      await this.brief(watch, input.prompt, { engine: input.engine, workId: input.workId, turnId: input.turnId });
+      await this.brief(watch, input.prompt, { engine: input.engine, workId: input.workId, turnId: input.turnId }, opening);
+      if(opening)this.deps.pendingWork?.dropped(opening,"unrecorded");
     } catch (error) {
       this.watches.delete(jobId);
-      await input.box.acpClose({ session_id: jobId }).catch(() => undefined);
+      await cleanupBox(input.box).acpClose({ session_id: jobId }).catch(() => undefined);
       throw error;
     }
     void this.loop(watch);
@@ -169,12 +192,25 @@ export class AcpDelegates {
     await this.brief(watch, prompt, extra);
   }
 
-  private async brief(watch: Watch, prompt: string, extra: { engine: string; workId?: string; turnId?: string }): Promise<void> {
+  private async brief(watch: Watch, prompt: string, extra: { engine: string; workId?: string; turnId?: string }, opening?: string): Promise<void> {
+    if (watch.closing || watch.stopped) throw new Error(`${watch.jobId} is closing or closed; start a new session for new work`);
+    if (extra.workId && this.deps.isCancelled?.(extra.workId)) throw new Error("Work cancelled");
+    // Reserve ownership before transport yields: cancellation of an older work must
+    // see this new brief even while its send acknowledgement is still pending.
+    const admission = opening ?? this.deps.pendingWork?.prepare({
+      agentId: watch.agentId, kind: "delegate", parent: watch.conversation, child: watch.jobId,
+      workId: extra.workId, turnId: extra.turnId, brief: `${extra.engine}: sending ${prompt}`,
+      data: { mode: "opening-session", engine: extra.engine, cwd: watch.cwd },
+    });
+    const reservation = { workId: extra.workId, promptRpcId: -1, brief: `${extra.engine}: ${prompt}`, text: "" };
+    watch.inFlight = reservation;
+    watch.admitting = (async () => {
     const sent = await watch.box.acpSend({
       session_id: watch.jobId,
       method: "session/prompt",
       params: { sessionId: watch.engineSessionId, prompt: [{ type: "text", text: prompt }] },
     });
+    if (watch.stopped || watch.closing || watch.inFlight !== reservation) throw new Error("The session closed while admitting the brief");
     const promptRpcId = sent.rpc_id!;
     const data: SessionData & { engine: string } = { engine: extra.engine, mode: "session", engineSessionId: watch.engineSessionId, cwd: watch.cwd, promptRpcId, report: watch.report };
     const id = this.deps.pendingWork?.prepare({
@@ -188,7 +224,18 @@ export class AcpDelegates {
       data: { ...data },
     });
     if (id !== undefined) this.deps.pendingWork?.admitted(id, undefined);
-    watch.inFlight = { promptRpcId, brief: `${extra.engine}: ${prompt}`, text: "" };
+    if (admission) this.deps.pendingWork?.dropped(admission, "unrecorded");
+    reservation.promptRpcId = promptRpcId;
+    if (extra.workId && this.deps.isCancelled?.(extra.workId)) await this.cancel(watch.jobId);
+    })();
+    try { await watch.admitting; }
+    catch (error) {
+      // A failed send can have reached the engine. Close instead of permitting a
+      // duplicate brief; if cleanup also fails, the durable admission stays visible.
+      if (!watch.stopped) await this.closeWatch(watch, "closed after the brief acknowledgement was lost")
+        .catch(() => this.deps.log?.(`acp ${watch.jobId}: brief admission and session close remain unconfirmed`));
+      throw error;
+    } finally { watch.admitting = undefined; }
   }
 
   /**
@@ -224,7 +271,7 @@ export class AcpDelegates {
     const watch = this.watches.get(jobId);
     if (watch === undefined) throw new Error(`${jobId} is not an open delegate session on this host`);
     if (watch.inFlight === undefined) return false;
-    await watch.box.acpSend({ session_id: jobId, method: "session/cancel", params: { sessionId: watch.engineSessionId }, notify: true });
+    await cleanupBox(watch.box).acpSend({ session_id: jobId, method: "session/cancel", params: { sessionId: watch.engineSessionId }, notify: true });
     void this.awaitCancel(watch, "the agent cancelled the brief");
     return true;
   }
@@ -233,7 +280,7 @@ export class AcpDelegates {
    * Waits the grace for the engine to confirm a cancel already sent. Not awaited by the caller:
    * the confirmation is an event the keeper's loop handles, and holding that loop would hold
    * the very answer this waits for. When the brief is still in flight at the deadline, the
-   * host settles it as aborted, naming the layer that gave up, and closes the session.
+   * host closes the session, then settles it as aborted only after the close succeeds.
    */
   private async awaitCancel(watch: Watch, why: string): Promise<void> {
     const inFlight = watch.inFlight;
@@ -247,20 +294,32 @@ export class AcpDelegates {
       if (watch.inFlight !== inFlight || watch.stopped) return;
     }
     this.deps.log?.(`acp ${watch.jobId}: the engine did not confirm the cancel within ${Math.round(grace / 1000)}s; closing the session`);
-    watch.stopped = true;
-    this.watches.delete(watch.jobId);
-    this.settle(watch, "aborted", `${why}; the engine did not confirm the cancel within ${Math.round(grace / 1000)}s, so the host closed the session`);
-    await watch.box.acpClose({ session_id: watch.jobId }).catch(() => undefined);
+    try {
+      await this.closeWatch(watch, `${why}; the engine did not confirm the cancel within ${Math.round(grace / 1000)}s, so the host closed the session`);
+    } catch (error) {
+      this.deps.log?.(`acp ${watch.jobId}: closing after cancel was not confirmed (${error instanceof Error ? error.message : String(error)})`);
+    }
   }
 
   /** Ends the engine; a brief still in flight is settled as aborted by the host's own hand. */
   async close(jobId: string, why = "closed by the agent"): Promise<void> {
     const watch = this.watches.get(jobId);
     if (watch === undefined) throw new Error(`${jobId} is not an open delegate session on this host`);
-    watch.stopped = true;
-    this.watches.delete(jobId);
-    await watch.box.acpClose({ session_id: jobId }).catch(() => undefined);
-    if (watch.inFlight !== undefined) this.settle(watch, "aborted", `the session was ${why} before the engine answered`);
+    await this.closeWatch(watch, `the session was ${why} before the engine answered`);
+  }
+
+  private async closeWatch(watch: Watch, reason: string): Promise<void> {
+    if (watch.stopped) return;
+    if (watch.closing) return watch.closing;
+    // Keep the poller from interpreting our own close as an engine failure. A failed
+    // close retains the watcher and its brief; only a confirmed close settles it.
+    watch.closing = (async () => {
+      await cleanupBox(watch.box).acpClose({ session_id: watch.jobId });
+      watch.stopped = true;
+      this.watches.delete(watch.jobId);
+      if (watch.inFlight !== undefined) this.settle(watch, "aborted", reason);
+    })();
+    try { await watch.closing; } finally { watch.closing = undefined; }
   }
 
   /**
@@ -269,7 +328,7 @@ export class AcpDelegates {
    * session id in its stored cwd — the brief that was in flight is then unknown, because the
    * engine's answer to it is gone with the old process; a load the engine refuses is failed.
    */
-  async reattach(box: AcpBox, items: { agentId: string; agentName: string; conversation: string; jobId: string; brief: string; data: SessionData & { engine: string } }[]): Promise<void> {
+  async reattach(box: AcpBox, items: { workId?: string; agentId: string; agentName: string; conversation: string; jobId: string; brief: string; data: SessionData & { engine: string } }[]): Promise<void> {
     if (items.length === 0) return;
     let sessions: Awaited<ReturnType<AcpBox["acpSessions"]>>["sessions"];
     try {
@@ -279,6 +338,7 @@ export class AcpDelegates {
       return;
     }
     for (const item of items) {
+      if (item.workId && this.deps.isCancelled?.(item.workId)) { await box.acpClose({session_id:item.jobId}).catch(() => undefined); continue; }
       if (this.watches.has(item.jobId)) continue;
       const known = sessions.find(s => s.session_id === item.jobId);
       const watch: Watch = {
@@ -292,7 +352,7 @@ export class AcpDelegates {
         report: recordedReportFile(item.data as unknown as Record<string, unknown>, item.jobId),
         since: 0,
         stopped: false,
-        inFlight: { promptRpcId: item.data.promptRpcId, brief: item.brief, text: "" },
+        inFlight: { workId: item.workId, promptRpcId: item.data.promptRpcId, brief: item.brief, text: "" },
       };
       if (known?.running === true) {
         this.watches.set(item.jobId, watch);
@@ -327,7 +387,7 @@ export class AcpDelegates {
       if (box === undefined || agentName === undefined) continue;
       await this.reattach(
         box,
-        items.map(item => ({ agentId, agentName, conversation: item.parent, jobId: item.child, brief: item.brief, data: item.data as unknown as SessionData & { engine: string } }))
+        items.map(item => ({ agentId, agentName, conversation: item.parent, jobId: item.child, brief: item.brief, workId: item.workId, data: item.data as unknown as SessionData & { engine: string } }))
       );
     }
   }
@@ -337,7 +397,7 @@ export class AcpDelegates {
     const deadline = (this.deps.now ?? Date.now)() + timeoutMs;
     let since = 0;
     while ((this.deps.now ?? Date.now)() < deadline) {
-      const page = await watch.box.acpEvents({ session_id: watch.jobId, since, timeout_ms: 1_000 });
+      const page = await cleanupBox(watch.box).acpEvents({ session_id: watch.jobId, since, timeout_ms: 1_000 });
       for (const event of page.events) {
         since = event.seq;
         if (event.kind === "response" && event.message?.id === rpcId) return event.message;
@@ -351,13 +411,18 @@ export class AcpDelegates {
     while (!watch.stopped) {
       let page: Awaited<ReturnType<AcpBox["acpEvents"]>>;
       try {
-        page = await watch.box.acpEvents({ session_id: watch.jobId, since: watch.since, timeout_ms: this.deps.eventsTimeoutMs ?? 25_000 });
+        page = await cleanupBox(watch.box).acpEvents({ session_id: watch.jobId, since: watch.since, timeout_ms: this.deps.eventsTimeoutMs ?? 25_000 });
       } catch (error) {
         this.deps.log?.(`acp ${watch.jobId}: events unreachable (${error instanceof Error ? error.message : String(error)}); retrying`);
         await new Promise(resolve => setTimeout(resolve, 2_000));
         continue;
       }
+      // acpClose can publish the exit before its response reaches this host. Wait for
+      // that operation so its own shutdown is not mistaken for an unsolicited crash.
+      if (watch.admitting) await watch.admitting.catch(() => undefined);
+      if (watch.closing) await watch.closing.catch(() => undefined);
       for (const event of page.events) {
+        if (watch.closing) await watch.closing.catch(() => undefined);
         // A keeper told to stop while a poll was out hands nothing on: the next keeper will.
         if (watch.stopped) return;
         watch.since = event.seq;
@@ -366,9 +431,9 @@ export class AcpDelegates {
       if (watch.stopped) return;
       if (!page.running) {
         // The engine is gone. A brief in flight is failed; the watch ends either way.
-        if (watch.inFlight !== undefined) this.settle(watch, "failed", `the engine exited (${page.exit_code ?? "unknown"}) before answering`);
         watch.stopped = true;
         this.watches.delete(watch.jobId);
+        if (watch.inFlight !== undefined) this.settle(watch, "failed", `the engine exited (${page.exit_code ?? "unknown"}) before answering`);
         return;
       }
     }
@@ -401,14 +466,17 @@ export class AcpDelegates {
       else this.settle(watch, "failed", `the engine stopped with ${stop || "no reason"}`);
       return;
     }
-    if (event.kind === "exit" && watch.inFlight !== undefined) {
-      this.settle(watch, "failed", `the engine exited (${event.exit_code ?? "unknown"}) before answering`);
+    if (event.kind === "exit") {
+      watch.stopped = true;
+      this.watches.delete(watch.jobId);
+      if (watch.inFlight !== undefined) this.settle(watch, "failed", `the engine exited (${event.exit_code ?? "unknown"}) before answering`);
     }
   }
 
   /** The engine asked something. Only a permission question is answered; anything else is refused by name. */
   private async engineAsks(watch: Watch, message: Record<string, unknown>): Promise<void> {
     const rpcId = message.id as number | string;
+    if (watch.inFlight?.workId && this.deps.isCancelled?.(watch.inFlight.workId)) { await watch.box.acpReply({session_id:watch.jobId,rpc_id:rpcId,error:{code:-32000,message:"Work cancelled"}}); return; }
     if (message.method !== "session/request_permission") {
       await watch.box.acpReply({ session_id: watch.jobId, rpc_id: rpcId, error: { code: -32601, message: `${String(message.method)} is not something this host answers` } }).catch(() => undefined);
       return;
@@ -420,12 +488,12 @@ export class AcpDelegates {
     const deny = params.options?.find(o => o.kind === "reject_once")?.optionId ?? "deny";
     const consent = await awaitDelegatedConsent(
       this.deps.policy,
-      { agentId: watch.agentId, agentName: watch.agentName, jobId: watch.jobId, engineTool, input },
-      { now: this.deps.now, pollMs: this.deps.consentPollMs, waitMs: this.deps.consentWaitMs, log: this.deps.log, by: "acp-delegate" }
+      { agentId: watch.agentId, agentName: watch.agentName, jobId: watch.jobId, engineTool, input, ...(watch.inFlight?.workId ? {returnTo:this.deps.returnFor?.(watch.agentId,watch.conversation,watch.inFlight.workId)} : {}) },
+      { cancelled: () => !!watch.inFlight?.workId && !!this.deps.isCancelled?.(watch.inFlight.workId), now: this.deps.now, pollMs: this.deps.consentPollMs, waitMs: this.deps.consentWaitMs, log: this.deps.log, by: "acp-delegate" }
     );
     if (watch.stopped) return;
     // Never allow-always: a grant that lives inside the engine is one the gate never sees again.
-    const optionId = consent.allow ? allowOnce : deny;
+    const optionId = consent.allow && !(watch.inFlight?.workId && this.deps.isCancelled?.(watch.inFlight.workId)) ? allowOnce : deny;
     await watch.box.acpReply({ session_id: watch.jobId, rpc_id: rpcId, result: { outcome: { outcome: "selected", optionId } } }).catch(() => undefined);
     if (!consent.allow && consent.timedOut === true) {
       // The engine would hold the turn open for ever on a question nobody answered (measured);
@@ -451,8 +519,8 @@ export class AcpDelegates {
       const answer = judged.outcome === "done" && inFlight.text.trim() !== "" ? ` Its answer: ${inFlight.text.trim().slice(0, 1_500)}` : "";
       this.deps.deliver(
         watch.agentId,
-        `${delegateEndedNote(watch.jobId, inFlight.brief, { ...judged, ...(worktree !== undefined ? { worktree } : {}), ...(delivery !== undefined ? { delivery } : {}) })}${answer} [The session stays open: continue it with Delegate session_id=${watch.jobId}, or close it.]`,
-        watch.conversation
+        `${delegateEndedNote(watch.jobId, inFlight.brief, { ...judged, ...(worktree !== undefined ? { worktree } : {}), ...(delivery !== undefined ? { delivery } : {}) })}${answer}${watch.stopped ? "" : ` [The session stays open: continue it with Delegate session_id=${watch.jobId}, or close it.]`}`,
+        watch.conversation, inFlight.workId
       );
     })();
   }

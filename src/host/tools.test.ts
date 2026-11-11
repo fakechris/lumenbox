@@ -211,6 +211,14 @@ test("ReadHistory reads the conversation the agent is in, not the team room", as
 
   await dispatchTool("ReadHistory", { search: "anything" }, context);
   assert.deepEqual(asked, ["feishu-oc_room-om_topic"]);
+  for (const conversation of ["../../other-box-agent/conversation", "../conversation", "/tmp/private", "fork/../secret", "main\\..\\secret"]) {
+    const rejected = await dispatchTool("ReadHistory", {conversation}, context);
+    assert.equal(rejected.isError,true,"a model-supplied path cannot choose another agent's host files");
+  }
+  assert.equal(asked.length,1,"invalid paths never reach registry history reads");
+  await dispatchTool("ReadHistory",{conversation:"main"},context);
+  await dispatchTool("ReadHistory",{conversation:"fork/main-child-1"},context);
+  assert.deepEqual(asked,["feishu-oc_room-om_topic","main","fork/main-child-1"]);
 });
 
 // ── template setup turn (docs/29 §5.3) ─────────────────────────────────────────
@@ -1174,4 +1182,10 @@ test("the tool list names the box's own work directory on a host box, and is the
   assert.ok(host.includes(`detail in a file under ${work} and point at it`) && host.includes(`FilePreview (\`path\` under ${work}`), "SetPlan and ShowUI");
   assert.ok(host.includes(`The file's absolute path, under ${work}/.`), "DeliverFile");
   assert.equal(JSON.stringify(tools), image, "the list itself is not changed");
+});
+
+test("a failed desktop preflight reports an unavailable capability without dispatching the browser action", async () => {
+  let dispatched=false;
+  const result=await dispatchTool("browser_snapshot",{}, {agent:{id:"a",profile:{name:"Mia"}},registry:{list:()=>[]},ensureDesktop:async()=>{throw new Error("Desktop disconnected");},box:{browser:async()=>{dispatched=true;}}} as never);
+  assert.equal(result.unavailable,"browser_snapshot");assert.equal(result.isError,true);assert.equal(dispatched,false);
 });

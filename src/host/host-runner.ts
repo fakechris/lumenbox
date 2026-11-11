@@ -31,7 +31,8 @@
  * per integration. The agent runs `pi "refactor the repo"` the way it runs `ls`.
  */
 
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
+import {randomUUID} from "node:crypto";
 import { existsSync } from "node:fs";
 import { callEnvironment } from "../egress/call.ts";
 import type { HostEgress } from "./host-egress.ts";
@@ -95,6 +96,9 @@ export function hostRunnerConfig(raw: {
 }
 
 export class HostRunner {
+  private readonly active = new Map<string,{workId:string;stop:()=>Promise<boolean>}>();
+  activeWork(workId:string): string[] { return [...this.active].filter(([,row])=>row.workId===workId).map(([id])=>id); }
+  async stopWorkRun(id:string,workId:string): Promise<boolean> { const row=this.active.get(id); if(!row || row.workId!==workId)return false;return row.stop(); }
   constructor(
     private readonly config: HostRunnerConfig,
     private readonly deps: HostProcessDeps = {}
@@ -137,18 +141,19 @@ export class HostRunner {
    * `call` is the INV-784 token for the tool call this is: the egress proxy credential, so
    * the relay's record names the call and its refusals come back on the result (INV-1345).
    */
-  async run(command: string, secretEnv: Record<string, string> = {}, call?: string): Promise<HostRunResult> {
+  async run(command: string, secretEnv: Record<string, string> = {}, call?: string, binding?: {workId:string;signal?:AbortSignal}): Promise<HostRunResult> {
     const reason = this.unavailableReason();
     if (reason !== undefined) throw new Error(reason);
     const cwd = this.config.cwd!;
 
     const egress = this.config.sandbox === "on" ? await this.deps.egress : undefined;
+    binding?.signal?.throwIfAborted();
     const release = call !== undefined && egress !== undefined ? egress.calls.begin(call) : () => {};
     const egressEnv = egress === undefined ? {} : call !== undefined ? callEnvironment(call, egress.port) : proxyEnvironment(egress.port);
     // Through the login shell so an agent's `pi`/`claude`/`osascript` resolves the
     // same way it does in the person's own terminal — PATH, aliases, rc files. The
     // command is a single argument to the shell, never interpolated into a string,
-    // which is why this uses execFile and not exec.
+    // which is why spawn receives a separate argument vector.
     const wrapped =
       this.config.sandbox === "on"
         ? this.deps.sandbox!.wrap("/bin/sh", ["-lc", command], { cwd, allowWrite: this.config.allowWrite, loopbackPorts: egress === undefined ? [] : [egress.port] })
@@ -156,40 +161,36 @@ export class HostRunner {
     const env = { ...process.env, ...egressEnv, ...(wrapped?.env ?? {}), ...secretEnv };
 
     return new Promise(resolve => {
-      const child = execFile(
-        wrapped?.command ?? "/bin/sh",
-        wrapped?.args ?? ["-lc", command],
-        {
-          cwd,
-          timeout: this.config.timeoutMs,
-          maxBuffer: this.config.maxOutputBytes + 1_000_000,
-          killSignal: "SIGKILL",
-          env,
-        },
-        (error, stdout, stderr) => {
-          release();
-          const cap = (text: string): [string, number] => {
-            if (text.length <= this.config.maxOutputBytes) return [text, 0];
-            return [text.slice(0, this.config.maxOutputBytes), text.length - this.config.maxOutputBytes];
-          };
-          const [outText, outDropped] = cap(String(stdout));
-          const [errText, errDropped] = cap(String(stderr));
-          const timedOut =
-            error !== null && (error as NodeJS.ErrnoException & { killed?: boolean }).killed === true;
-          const result: HostRunResult = {
-            stdout: outText,
-            stderr: errText,
-            code: child.exitCode,
-            timedOut,
-            truncatedBytes: outDropped + errDropped,
-          };
-          if (wrapped !== undefined) {
-            const note = sandboxViolations(wrapped, { code: child.exitCode, stderr: String(stderr) });
-            result.sandbox = { mechanism: wrapped.mechanism, ...(note !== undefined ? { note } : {}) };
-          }
-          resolve(result);
-        }
-      );
+      const id=randomUUID();let timedOut=false,stopping:Promise<boolean>|undefined;
+      const child=spawn(wrapped?.command ?? "/bin/sh",wrapped?.args ?? ["-lc",command],{cwd,env,detached:process.platform!=="win32",stdio:["ignore","pipe","pipe"]});
+      const groupAlive=()=>{if(!child.pid)return false;try{process.kill(process.platform==="win32"?child.pid:-child.pid,0);return true;}catch(error){return (error as NodeJS.ErrnoException).code!=="ESRCH";}};
+      const forget=()=>{this.active.delete(id);binding?.signal?.removeEventListener("abort",abort);};
+      const stop=():Promise<boolean>=>{
+        if(stopping)return stopping;
+        stopping=(async()=>{
+          const kill=(signal:NodeJS.Signals)=>{try{if(process.platform!=="win32" && child.pid)process.kill(-child.pid,signal);else child.kill(signal);}catch{/* absence is verified below */}};
+          if(groupAlive()){kill("SIGTERM");await new Promise(resolve=>setTimeout(resolve,250));if(groupAlive())kill("SIGKILL");}
+          for(let i=0;i<50 && groupAlive();i++)await new Promise(resolve=>setTimeout(resolve,10));
+          const confirmed=!groupAlive() && process.platform!=="win32";
+          if(confirmed)forget();else stopping=undefined;
+          return confirmed;
+        })();
+        return stopping;
+      };
+      const abort=()=>{void stop();};
+      const output={stdout:"",stderr:"",dropped:0,total:0};
+      const capture=(which:"stdout"|"stderr",text:string)=>{output.total+=text.length;const room=Math.max(0,this.config.maxOutputBytes-output[which].length);output[which]+=text.slice(0,room);output.dropped+=Math.max(0,text.length-room);if(output.total>this.config.maxOutputBytes+1_000_000)void stop();};
+      child.stdout.setEncoding("utf8");child.stderr.setEncoding("utf8");
+      child.stdout.on("data",text=>capture("stdout",String(text)));child.stderr.on("data",text=>capture("stderr",String(text)));
+      child.on("error",error=>capture("stderr",error.message));
+      const timeout=setTimeout(()=>{timedOut=true;void stop();},this.config.timeoutMs);timeout.unref();
+      child.once("close",async code=>{
+        clearTimeout(timeout);if(stopping)await stopping;else if(!groupAlive())forget();release();
+        const result:HostRunResult={stdout:output.stdout,stderr:output.stderr,code,timedOut,truncatedBytes:output.dropped};
+        if(wrapped){const note=sandboxViolations(wrapped,{code,stderr:output.stderr});result.sandbox={mechanism:wrapped.mechanism,...(note?{note}: {})};}
+        resolve(result);
+      });
+      if(binding){this.active.set(id,{workId:binding.workId,stop});binding.signal?.addEventListener("abort",abort,{once:true});if(binding.signal?.aborted)void stop();}
     });
   }
 }

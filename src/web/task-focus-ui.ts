@@ -32,7 +32,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
   function ensure() {
     if (root) return;
     root = document.createElement("section"); root.id = "taskfocus"; root.hidden = true; root.setAttribute("aria-label", word("title"));
-    root.innerHTML = '<header class="tf-head"><div class="ui-row tf-top"><button class="btn sm ghost" data-tf-close>' + word("back") + '</button><span class="dim mono" id="tf-id"></span><button class="btn sm ghost" data-tf-conversation>' + word("conversation") + '</button></div><h1 id="tf-title"></h1><div id="tf-status" class="ui-row tf-status"></div><div id="tf-activity" class="tf-activity"></div><div id="tf-needs" class="tf-needs"></div><button class="btn sm ghost" id="tf-new" data-tf-refresh hidden>' + word("new") + '</button><nav class="tf-tabs" role="tablist">' + TABS.map(function (tab) { return '<button role="tab" id="tf-tab-' + tab + '" data-tf-tab="' + tab + '" aria-controls="tf-body">' + word(tab) + '</button>'; }).join("") + '</nav></header><div id="tf-body" class="tf-body" role="tabpanel"></div>';
+    root.innerHTML = '<header class="tf-head"><div class="ui-row tf-top"><button class="btn sm ghost" data-tf-close>' + word("back") + '</button><span class="dim mono" id="tf-id"></span><button class="btn sm ghost" data-tf-conversation>' + word("conversation") + '</button></div><button class="btn sm ghost" data-work-cancel="" id="tf-cancel">{{ui.wc.open}}</button><h1 id="tf-title"></h1><div id="tf-status" class="ui-row tf-status"></div><div id="tf-activity" class="tf-activity"></div><div id="tf-needs" class="tf-needs"></div><button class="btn sm ghost" id="tf-new" data-tf-refresh hidden>' + word("new") + '</button><nav class="tf-tabs" role="tablist">' + TABS.map(function (tab) { return '<button role="tab" id="tf-tab-' + tab + '" data-tf-tab="' + tab + '" aria-controls="tf-body">' + word(tab) + '</button>'; }).join("") + '</nav></header><div id="tf-body" class="tf-body" role="tabpanel"></div>';
     document.body.appendChild(root);
     root.addEventListener("click", click);
     root.addEventListener("change", function (event) {
@@ -80,7 +80,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     if (active !== view || !view.task) return;
     var task = view.task, activity = view.activity || {}, latest = view.liveAction || activity.current || activity.latest;
     by("title").textContent = task.title; by("title").title = by("title").textContent;
-    by("id").textContent = task.id;
+    by("id").textContent = task.id; by("cancel").setAttribute("data-work-cancel",task.id); by("cancel").hidden = ["done","dropped"].includes(task.status);
     var review = task.status === "review" ? word("review") : task.status === "done" ? word("ended") : task.status === "dropped" ? word("dropped") : word("pending");
     var statuses = [["state",status(task)],["connection",word(connection())],["acceptance",review]];
     root.querySelector("[data-tf-conversation]").disabled = !task.assigneeId || !task.conversation;

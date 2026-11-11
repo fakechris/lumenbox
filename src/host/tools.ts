@@ -1,3 +1,4 @@
+import { executionTarget } from "./tool-roster.ts";
 import { TASK_PROGRESS_TOOL, runTaskProgressTool } from "./task-progress-tool.ts";
 import type { ToolOutcome } from "./tool-outcome.ts";
 export type { ToolOutcome } from "./tool-outcome.ts";
@@ -114,6 +115,9 @@ function foregroundWindowMs(): number {
 }
 
 export interface ToolContext {
+  signal?: AbortSignal;
+  audit?: import("./audit-context.ts").AuditContext;
+  work?: import("../agents/work-attention.ts").WorkStamp; historyConversation?: string;
   progressContext?: import("./task-progress.ts").ProgressContext;
   taskBinding?: import("./execution-binding.ts").TaskBinding;
   agent: AgentRecord;
@@ -167,7 +171,7 @@ export interface ToolContext {
     agentName: string;
     id: string;
     description: string;
-    conversation?: string;
+    conversation?: string; work?: import("../agents/work-attention.ts").WorkStamp;
   }) => string | undefined;
   /**
    * Hands the agent's desktop to the person with one instruction. The person sees the
@@ -178,7 +182,7 @@ export interface ToolContext {
     agentName: string;
     instruction: string;
     reason: "auth" | "captcha" | "payment" | "other";
-    conversation?: string;
+    conversation?: string; work?: import("../agents/work-attention.ts").WorkStamp;
   }) => string | undefined;
   /**
    * Shows the person a card the agent composed (docs/79). The host checks the
@@ -205,7 +209,7 @@ export interface ToolContext {
     fallback?: string; recommended?: string; // which answer it leans to, in its words (INV-1651)
     /** How long the question is open before the default (or a skip) is applied. */
     expiresInMinutes?: number;
-    conversation?: string;
+    conversation?: string; work?: import("../agents/work-attention.ts").WorkStamp;
   }) => Promise<string | undefined>;
   /**
    * The MCP servers whose tools are on offer this turn. Absent means none, which is
@@ -446,6 +450,8 @@ export const FORK_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
 
 /** Whether a conversation name is a fork child's. */
 /** The tools that reach the person. Withheld on a turn teammates opened (docs/42 §2). */
+export const DESKTOP_TOOLS = new Set(["computer", "browser_open", "browser_snapshot", "browser_read", "browser_act", "browser_scroll", "browser_wait_for", "browser_pages", "browser_upload", "browser_fill_secret", "RunOperation", "HandOverDesktop"]);
+export const HOST_EXECUTION_UNAVAILABLE = "Host execution is not available on this box.";
 export const PERSON_FACING_TOOLS: ReadonlySet<string> = new Set(["AskUser", "AskSecret", "HandOverDesktop", "ShowUI"]);
 
 export function isForkConversation(conversation: string | undefined): boolean {
@@ -1334,7 +1340,7 @@ export function buildTools(
     {
       name: "SendToAgent",
       description:
-        "Send a message to another of your user's agents. Delivery is fire-and-forget: it " +
+        "By default, the current work awaits the result. For information that needs no result, set expect_result:false. Send a message to another of your user's agents. Delivery is fire-and-forget: it " +
         "wakes that agent and returns an acknowledgement immediately. It does NOT return " +
         "their reply, and you must not wait or poll for one in this turn — send it and move " +
         "on. Any reply arrives later as its own message that wakes you on a fresh turn. " +
@@ -1346,6 +1352,7 @@ export function buildTools(
       input_schema: {
         type: "object",
         properties: {
+          expect_result: {type:"boolean",description:"False only for informational updates that need no reply. Default true: the user work remains waiting for a related result."},
           target_id: {
             type: "string",
             description:
@@ -1546,6 +1553,7 @@ export function buildTools(
       input_schema: {
         type: "object",
         properties: {
+          conversation: { type: "string", description: "An explicit earlier conversation to inspect; omitted reads this work. Use main for earlier team-room work." },
           search: {
             type: "string",
             description:
@@ -2605,7 +2613,7 @@ export async function dispatchTool(
   // Before the switch, so no tool added later can bypass it. A refusal comes back as a tool error:
   // the model sees why, and can stop or ask, rather than retrying into a wall.
   const decision = context.policy?.check({
-    kind: "tool",
+    kind: "tool", ...(context.work ? {returnTo:{work:context.work,conversation:context.conversation ?? MAIN_CONVERSATION}} : {}),
     agentId: context.agent.id,
     agentName: context.agent.profile.name,
     tool: name,
@@ -2630,11 +2638,9 @@ export async function dispatchTool(
     };
   }
 
-  if (name === "computer" || ["browser_open", "browser_snapshot", "browser_read", "browser_act",
-    "browser_scroll", "browser_wait_for", "browser_pages", "browser_upload", "browser_fill_secret", "RunOperation",
-    "HandOverDesktop"].includes(name)) {
+  if (DESKTOP_TOOLS.has(name)) {
     try { await context.ensureDesktop?.(); }
-    catch (error) { return { text: error instanceof Error ? error.message : String(error), isError: true }; }
+    catch (error) { return { text: error instanceof Error ? error.message : String(error), isError: true, unavailable: name }; }
   }
 
   switch (name) {
@@ -2805,7 +2811,7 @@ export async function dispatchTool(
           jobId, actor: `agent:${context.agent.id}`, // the per-agent job limit and pause-by-owner (INV-1557)
           ...callFor(context, jobId),
         });
-        if (parseOnEnd(input.on_end) !== undefined) context.jobWatch?.watch({ /* watched only when asked (INV-1613); a chosen background job is the agent's own business, so the cap does not kill it */ agentId: context.agent.id, conversation: context.conversation ?? MAIN_CONVERSATION, jobId: started.job_id, command, onEnd: parseOnEnd(input.on_end)!, ...(input.wake_when !== undefined ? { wakeWhen: String(input.wake_when) } : {}), capped: false });
+        context.jobWatch?.watch({ /* watched only when asked (INV-1613); a chosen background job is the agent's own business, so the cap does not kill it */ agentId: context.agent.id, conversation: context.conversation ?? MAIN_CONVERSATION, ...(context.work ? { work: context.work } : {}), jobId: started.job_id, command, onEnd: parseOnEnd(input.on_end) ?? "record", ...(input.wake_when !== undefined ? { wakeWhen: String(input.wake_when) } : {}), capped: false });
         return {
           text:
             `Started as ${started.job_id} (pid ${started.pid}).\n` +
@@ -2832,7 +2838,7 @@ export async function dispatchTool(
       });
       // A command that outlived its window runs on as a job; the watch wakes this agent when it ends (INV-1461).
       const ending = { /* the policy the agent declared, or wake_on_failure; a command that only waits is recorded and the agent pointed at Jobs wait (INV-1613) */ onEnd: isWaitOnly(command) ? "record" as const : parseOnEnd(input.on_end) ?? "wake_on_failure" as const, waitOnly: isWaitOnly(command) };
-      if (result.still_running !== undefined) context.jobWatch?.watch({ agentId: context.agent.id, conversation: context.conversation ?? MAIN_CONVERSATION, jobId: result.still_running.job_id, command, onEnd: ending.onEnd, ...(input.wake_when !== undefined ? { wakeWhen: String(input.wake_when) } : {}) });
+      if (result.still_running !== undefined) context.jobWatch?.watch({ agentId: context.agent.id, conversation: context.conversation ?? MAIN_CONVERSATION, ...(context.work ? { work: context.work } : {}), jobId: result.still_running.job_id, command, onEnd: context.work && !ending.waitOnly && parseOnEnd(input.on_end) === undefined ? "wake" : ending.onEnd, ...(input.wake_when !== undefined ? { wakeWhen: String(input.wake_when) } : {}) });
       return { text: formatExec(result, input.timeout_ms ? Number(input.timeout_ms) : undefined, foregroundMs, ending), outcome: result.timed_out || result.exit_code !== 0 ? "failed" : "ok" };
     }
 
@@ -2849,7 +2855,7 @@ export async function dispatchTool(
         agentId: context.agent.id,
         agentName: context.agent.profile.name,
         parent: context.conversation ?? MAIN_CONVERSATION,
-        plan: parsed.plan,
+        plan: parsed.plan, workId: context.workId,
       });
       return { text: submitted.text };
     }
@@ -2928,7 +2934,7 @@ export async function dispatchTool(
         let result: string;
         try {
           const seq = context.bus.sendFromUser(context.agent.id, brief, {
-            conversation,
+            conversation, ...(context.work ? { work: context.work } : {}),
             ...(context.taskBinding && context.turnId && context.workId && ids[index] ? { taskBinding: { taskId: context.taskBinding.taskId, role: "child" as const, ...(context.taskBinding.progressAdmission ? { progressAdmission: { ...context.taskBinding.progressAdmission, kind: "child" as const } } : {}), parent: { conversation: parent, turnId: context.turnId, workId: context.workId, forkId: ids[index]! } } } : {}),
             steerable: false, origin: "host:fork", // the parent agent's brief, not the person's words (INV-1571)
           });
@@ -2968,6 +2974,7 @@ export async function dispatchTool(
       // it lands, the same path a cut-short join already uses, so the front agent's turn ends
       // now and the person keeps getting answers.
       if (input.background === true) {
+        if (context.work) for (const child of children) context.bus.workAttention?.hold(context.work, child);
         for (const [index, run] of runs.entries()) {
           void run.then(text => {
             const tag = ids[index] !== undefined ? `${forkTag(ids[index]!)} ` : "";
@@ -2976,8 +2983,9 @@ export async function dispatchTool(
               `${tag}A fork you started has finished. Fold it into what you tell the person; ` +
                 `they never heard of the fork. If it changes nothing you need to say, call ` +
                 `${SILENCE_TOOL} with the reason.\n\n${text}`,
-              parent
+              parent, context.work
             );
+            if (context.work) context.bus.workAttention?.release(context.work, children[index]!);
             if (ids[index] !== undefined && (seq !== undefined || context.bus.inboxless)) {
               context.pendingWork?.commit([{ id: ids[index]!, how: hows[index]! === "failed" ? "failed" : "late" }]);
             }
@@ -3056,7 +3064,7 @@ export async function dispatchTool(
             `${tag}A fork you were waiting on when a new instruction arrived has finished. ` +
               `Fold it into what you already reported if it still matters; if it does not, call ` +
               `${SILENCE_TOOL} with the reason.\n\n${text}`,
-            parent
+            parent, context.work
           );
           // Admitted durably is delivered. The tag lets a restart's sweep see the note is
           // already queued if this commit line never lands.
@@ -3298,8 +3306,7 @@ export async function dispatchTool(
       }
       if (preset.permissionArgs !== undefined && !wantsPermission) faceNote += "No face is reachable from this box, so the engine runs with permissions skipped; the box is the sandbox.\n";
 
-      // The engine's own thread: resumed when this conversation delegated to the same engine
-      // in the same directory with the same model, fresh with a reason otherwise.
+      // Resume only the same engine, directory and model in this conversation.
       let sessionNote = "";
       if (preset.session !== undefined && input.session !== false && context.delegateSessions !== undefined) {
         const capsule = context.delegateSessions.open({
@@ -3461,7 +3468,7 @@ export async function dispatchTool(
       // "enabled" can change under a prompt built a moment earlier.
       if (context.hostRunner === undefined || !context.hostRunner.enabled) {
         return {
-          text: "Host execution is not available on this box.",
+          text: HOST_EXECUTION_UNAVAILABLE, unavailable: name,
           isError: true,
         };
       }
@@ -3483,7 +3490,7 @@ export async function dispatchTool(
       if (granted.length > 0) context.policy?.taint.mark(context.turnId ?? "", "vault");
 
       try {
-        const result = await context.hostRunner.run(command, secrets.env, callFor(context).call).finally(() => { erased = secrets.finish().erased; });
+        const result = await context.hostRunner.run(command, secrets.env, callFor(context).call, context.work ? {workId:context.work.id,signal:context.signal} : undefined).finally(() => { erased = secrets.finish().erased; });
         const parts = [
           result.stdout.trim() !== "" ? result.stdout : "(no stdout)",
           result.stderr.trim() !== "" ? `stderr:\n${result.stderr}` : "",
@@ -3602,7 +3609,7 @@ export async function dispatchTool(
         return { text: "There is nowhere to ask for a secret on this run. Say what you would need and stop.", isError: true };
       }
       const where = context.askSecret({
-        agentId: context.agent.id,
+        agentId: context.agent.id, work: context.work,
         agentName: context.agent.profile.name,
         id,
         description,
@@ -3653,7 +3660,7 @@ export async function dispatchTool(
         return { text: "There is no desktop to hand over on this run.", isError: true };
       }
       const where = context.handOver({
-        agentId: context.agent.id,
+        agentId: context.agent.id, work: context.work,
         agentName: context.agent.profile.name,
         instruction,
         reason: reason === "auth" || reason === "captcha" || reason === "payment" ? reason : "other",
@@ -3703,7 +3710,7 @@ export async function dispatchTool(
       }
       const where = await context.askUser({
         ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}),
-        agentId: context.agent.id,
+        agentId: context.agent.id, work: context.work,
         agentName: context.agent.profile.name,
         question,
         ...(options !== undefined && options.length > 0 ? { options } : {}),
@@ -4212,7 +4219,7 @@ export async function dispatchTool(
             };
           }
           const decision = context.policy.check({
-            kind: "tool",
+            kind: "tool", ...(context.work ? {returnTo:{work:context.work,conversation:context.conversation ?? MAIN_CONVERSATION}} : {}),
             agentId: context.agent.id,
             agentName: context.agent.profile.name,
             tool: name,
@@ -4617,7 +4624,7 @@ export async function dispatchTool(
         fromId: context.agent.id,
         toId: targetId,
         text: String(input.message ?? ""),
-        priority: input.priority === true,
+        priority: input.priority === true, work: context.work, expectResult: input.expect_result !== false,
         hops: context.chainHops ?? 0,
       });
       return { text: ack };
@@ -4900,7 +4907,9 @@ export async function dispatchTool(
       // is a different room it may never have been in. Silent, because a wrong history
       // reads exactly like a thin one.
       // Each context version apart, so an anchor is (epoch, index) and stays put (INV-1188).
-      const parts = context.registry.readContextTranscriptsByEpoch(target.id, context.conversation);
+      const thread = typeof input.conversation === "string" ? input.conversation : context.audit ? context.tasks?.get(context.audit.taskId)?.conversation ?? "main" : target.id === context.agent.id ? context.historyConversation ?? context.conversation : context.work?.conversation ?? context.conversation;
+      if (thread !== undefined && !/^[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(thread)) return {text: "Invalid conversation identifier; history stays within the selected agent.", isError: true};
+      const parts = context.registry.readContextTranscriptsByEpoch(target.id, thread);
       const query = {
         ...(typeof input.search === "string" && input.search.trim() !== ""
           ? { search: input.search.trim() }
@@ -5024,7 +5033,7 @@ export async function dispatchTool(
         if (task === undefined) return { text: "No such task on the board.", isError: true };
         // Details can contain task-scoped connection credentials. Keep summaries
         // team-visible, but read the current description only for its assignee.
-        if (task.assigneeId !== context.agent.id) {
+        if (task.assigneeId !== context.agent.id && context.audit?.taskId !== task.id) {
           return { text: "Task details are available to its current assignee. Ask for assignment before reading them.", isError: true };
         }
         return { text: `${describeTask(task, nameOf, board)}${cited(task)}\n\n${task.description ?? "No additional description."}` };
@@ -5391,7 +5400,7 @@ export async function dispatchTool(
     }
 
     case "UseMcpTool": {
-      const target = String(input.tool ?? "");
+      const target = executionTarget(name, input);
       // A deferred built-in (INV-1341): dispatched by its own name, so the gate, the tier and the
       // record all see the tool itself, not the pair.
       if (context.deferredTools?.some(tool => tool.name === target) === true) {
@@ -5409,7 +5418,7 @@ export async function dispatchTool(
       }
       // The gate judged `UseMcpTool`; the inner tool is a separate decision, or this is a way around every rule.
       const inner = context.policy?.check({
-        kind: "tool",
+        kind: "tool", ...(context.work ? {returnTo:{work:context.work,conversation:context.conversation ?? MAIN_CONVERSATION}} : {}),
         agentId: context.agent.id,
         agentName: context.agent.profile.name,
         tool: target,

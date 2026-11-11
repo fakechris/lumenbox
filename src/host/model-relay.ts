@@ -49,6 +49,7 @@ export interface RelayRoute {
 }
 
 export interface ModelRelayDeps {
+  isCancelled?: (workId:string) => boolean;
   /** The provider a delegated engine's traffic goes to, and the key for it. */
   provider: () => ProviderProfile;
   key: (profile: ProviderProfile) => string | undefined;
@@ -128,6 +129,7 @@ export class ModelRelay {
   /** Where the box reaches this host; set by the web server once it listens. */
   baseUrl: string | undefined;
   private readonly routes = new Map<string, RelayRoute>();
+  private readonly requests = new Map<string,Set<AbortController>>();
   private readonly now: () => number;
 
   constructor(private readonly deps: ModelRelayDeps) {
@@ -151,6 +153,7 @@ export class ModelRelay {
     workId?: string;
     preset: string;
   }): { route: RelayRoute; url: string } | { error: string } {
+    if(input.workId && this.deps.isCancelled?.(input.workId))return {error:"Work cancelled"};
     if (this.baseUrl === undefined) {
       return { error: "The model relay has no address yet (the web server has not said where the box can reach it)." };
     }
@@ -184,6 +187,7 @@ export class ModelRelay {
   }
 
   revoke(key: string, why: string): void {
+    for(const request of this.requests.get(key) ?? [])request.abort();this.requests.delete(key);
     if (this.routes.delete(key)) this.deps.log?.(`relay route ${key} revoked: ${why}`);
   }
 
@@ -197,6 +201,7 @@ export class ModelRelay {
   authenticate(key: string, headers: IncomingMessage["headers"]): RelayRoute | undefined {
     const route = this.routes.get(key);
     if (route === undefined) return undefined;
+    if(route.workId && this.deps.isCancelled?.(route.workId)){this.revoke(key,"work cancelled");return undefined;}
     const bearer = /^Bearer\s+(.+)$/i.exec(headers.authorization ?? "")?.[1]?.trim();
     const apiKey = typeof headers["x-api-key"] === "string" ? headers["x-api-key"].trim() : undefined;
     const presented = bearer ?? apiKey;
@@ -280,6 +285,9 @@ export class ModelRelay {
     if (profile.auth === "bearer") headers.authorization = `Bearer ${key}`;
     else headers["x-api-key"] = key;
 
+    if(!this.routes.has(route.key) || route.workId && this.deps.isCancelled?.(route.workId)){res.writeHead(401);res.end();return;}
+    const controller=new AbortController(), requests=this.requests.get(route.key) ?? new Set<AbortController>();requests.add(controller);this.requests.set(route.key,requests);
+    const forget=()=>{requests.delete(controller);if(!requests.size)this.requests.delete(route.key);};
     route.inFlight += 1;
     route.calls += 1;
     const doFetch = this.deps.fetch ?? fetch;
@@ -289,10 +297,10 @@ export class ModelRelay {
         method: req.method ?? "POST",
         headers,
         ...(req.method === "GET" || req.method === "HEAD" ? {} : { body }),
-        signal: AbortSignal.timeout(10 * 60_000),
+        signal: AbortSignal.any([controller.signal,AbortSignal.timeout(10 * 60_000)]),
       });
     } catch (error) {
-      route.inFlight -= 1;
+      forget();route.inFlight -= 1;
       res.writeHead(502, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: { message: `The relay could not reach ${profile.label}: ${error instanceof Error ? error.message : String(error)}` } }));
       return;
@@ -314,6 +322,7 @@ export class ModelRelay {
       } else {
         const reader = response.body.getReader();
         for (;;) {
+          controller.signal.throwIfAborted();
           const { done, value } = await reader.read();
           if (done) break;
           if (value === undefined) continue;
@@ -329,7 +338,7 @@ export class ModelRelay {
       this.deps.log?.(`relay route ${route.key}: stream ended early (${error instanceof Error ? error.message : String(error)})`);
       res.end();
     } finally {
-      route.inFlight -= 1;
+      forget();route.inFlight -= 1;
       const counted = countUsage(seen.join(""));
       const usage = this.deps.usage?.();
       if (usage !== undefined && response.status < 400) {

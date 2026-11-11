@@ -1,3 +1,4 @@
+import { messageWorkId, WorkAttention, personMessage, peerWorkConversation, type WorkStamp } from "./work-attention.ts";
 import type { InboundMessage } from "./admitted-message.ts";
 export type { InboundMessage } from "./admitted-message.ts";
 import type { TaskBinding } from "../host/execution-binding.ts";
@@ -17,7 +18,7 @@ import type { TaskBinding } from "../host/execution-binding.ts";
 import type { ResumeMarker } from "../host/resume.ts";
 import type { GoalMarker } from "../host/goal-mode.ts";
 import { randomUUID } from "node:crypto";
-import { envNumber } from "../config.ts"; import { batchLimitsFrom, boundBatch } from "./turn-batch.ts";
+import { batchLimitsFrom, boundBatch } from "./turn-batch.ts";
 import type { Inbox } from "./inbox.ts";
 import { readPause } from "./pause.ts";
 import {
@@ -70,17 +71,6 @@ export type Lane = "user" | "agent" | "background";
 
 const LANE_ORDER: readonly Lane[] = ["user", "agent", "background"];
 
-/**
- * How long a lower lane may be passed over before it goes first anyway.
- *
- * Strict priority alone starves: a busy room's stream of questions would keep an audit
- * or a digest waiting forever, and work that never runs is worse than work that runs
- * late. Two minutes is chosen to be far longer than any ordinary turn — so it only
- * fires when a lane really is being held down — and the promotion is self-limiting,
- * because draining that lane empties it.
- */
-const STARVATION_MS = envNumber("AGENTBOX_LANE_STARVATION_MS", 120_000);
-
 /** The lane a message belongs to, from what it declared or what it is. */
 export function laneOf(message: InboundMessage): Lane {
   if (message.lane !== undefined) return message.lane;
@@ -89,33 +79,9 @@ export function laneOf(message: InboundMessage): Lane {
   return "agent";
 }
 
-/**
- * Which lane the next turn takes: the highest one present, unless a lane has been
- * held down past the starvation window — and then the highest *starved* one.
- *
- * The second clause reads oddly until you follow it through. It fires only when a
- * lower lane is old and the higher lanes are not, which is exactly the shape of
- * starvation: a stream of *fresh* questions arriving while an audit waits. When the
- * questions are old too they are starved themselves, and being higher they still go
- * first — which is right, because then nothing is being held down, the agent is
- * simply behind.
- *
- * Its own function because it is the whole of the policy and deserves to be tested
- * without a bus, a registry, or a clock anyone has to fake.
- */
-export function chooseLane(
-  messages: readonly InboundMessage[],
-  now: number,
-  starvationMs: number = STARVATION_MS
-): Lane | undefined {
-  const present = LANE_ORDER.filter(lane => messages.some(message => laneOf(message) === lane));
-  if (present.length === 0) return undefined;
-  const starved = present.filter(lane =>
-    messages.some(
-      message => laneOf(message) === lane && now - Date.parse(message.receivedAt) > starvationMs
-    )
-  );
-  return (starved[0] ?? present[0])!;
+/** User work wins regardless of how long background has waited. Fairness never grants authority. */
+export function chooseLane(messages: readonly InboundMessage[], _now: number, _legacyWindow?: number): Lane | undefined {
+  return LANE_ORDER.find(lane => messages.some(message => laneOf(message) === lane));
 }
 
 /** Runs one turn for an agent. Returns when the agent's turn is finished. */
@@ -128,6 +94,7 @@ export type TurnRunner = (
 ) => Promise<void>;
 
 interface ActiveTurn {
+  workId?: string;
   principalId?: string;
   controller: AbortController;
   /** True while the running turn was started by the user, not by a wake. */
@@ -193,7 +160,8 @@ export class AgentBus {
     private readonly inbox: Inbox<InboundMessage> | undefined = undefined,
     /** The runner acknowledges only after its recovery ledger has taken custody. */
     private readonly deferredStart = false,
-    private readonly admitMessage?: (agentId: string, message: InboundMessage) => InboundMessage
+    private readonly admitMessage?: (agentId: string, message: InboundMessage) => InboundMessage,
+    readonly workAttention?: WorkAttention
   ) {}
 
   /**
@@ -232,6 +200,7 @@ export class AgentBus {
     toId: string;
     text: string;
     priority?: boolean;
+    work?: WorkStamp; expectResult?: boolean;
     relayed?: boolean;
   /**
    * How many turns this message is from a person (INV-1277): 0 when the sending turn was
@@ -287,14 +256,21 @@ export class AgentBus {
       );
     }
 
+    const expectsResult = input.expectResult !== false;
+    const targetWork = this.workAttention?.get(target.id, MAIN_CONVERSATION);
+    if (expectsResult && targetWork && targetWork.status !== "answered" && targetWork.id !== input.work?.id && targetWork.awaiting.includes(input.fromId)) return "Not sent: that member is already waiting for your result. A return dependency would deadlock; finish or send the result without requesting another reply.";
+    const work = input.work ? this.workAttention?.link(input.work, input.fromId, target.id, expectsResult) : undefined;
+    if (input.work && !work) return "Not sent: the originating user work is no longer current or this sender was not admitted to it.";
     const message: InboundMessage = {
+      ...(work ? { work } : {}), ...(!expectsResult ? {informational: true as const} : {}),
+      ...(work?.owner === target.id ? { conversation: work.conversation } : {}),
       id: randomUUID(),
       fromId: input.fromId,
       fromName,
       text,
       priority,
       receivedAt: new Date().toISOString(),
-      ...(input.relayed === true ? { relayed: true } : {}),
+      ...(input.relayed === true || !expectsResult ? { relayed: true } : {}),
       ...(hops > 0 ? { hops } : {}),
     };
 
@@ -333,6 +309,8 @@ export class AgentBus {
       `if they reply, or if their turn fails — asking them to confirm receipt buys nothing this ` +
       `line has not already told you.`;
 
+    if (this.workAttention && !this.workAttention.eligible(target.id, message.conversation ?? MAIN_CONVERSATION, message)) return `${promise} Held while their current user work is unfinished; priority does not interrupt it. Do not poll or ask for receipt.`;
+    if (!expectsResult) return `${promise} This is informational; no result is awaited and no acknowledgement reply is requested.`;
     return priority
       ? `${promise} Marked priority, so it interrupts their current non-user work and wakes them now.`
       : promise;
@@ -362,7 +340,10 @@ export class AgentBus {
       const theirs = inbound
         .filter(message => message.fromId === senderId)
         .map(message => message.id);
+      const work = inbound.find(message => message.fromId === senderId)?.work;
+      if (work) this.workAttention?.link(work, agent.id, senderId);
       this.enqueue(senderId, {
+        ...(work ? { work, conversation: work.conversation } : {}),
         id: randomUUID(),
         fromId: SYSTEM_SENDER,
         fromName: SYSTEM_SENDER,
@@ -384,6 +365,7 @@ export class AgentBus {
     // acknowledge work that is not yet written down, which is the whole failure being fixed.
     message = this.admitMessage?.(agentId, message) ?? message;
     const admission = this.inbox?.admit(agentId, message);
+    if (this.workAttention?.cancelledMessage(message)) { this.inbox?.drop(admission); return admission; }
     const queue = this.pending.get(agentId) ?? [];
     queue.push({ ...message, admission });
     this.pending.set(agentId, queue);
@@ -395,7 +377,8 @@ export class AgentBus {
       }
     }
 
-    if (!message.priority) return admission;
+    if (!message.priority && !personMessage(message)) return admission;
+    if (this.workAttention && !this.workAttention.eligible(agentId, message.conversation ?? MAIN_CONVERSATION, message)) return admission;
 
     // Priority supersedes background work but never interrupts the user's own turn:
     // the user is watching that one, and yanking it out from under them is worse
@@ -479,10 +462,14 @@ export class AgentBus {
       taskBinding?: TaskBinding;
       principalId?: string;
       resumeOf?: ResumeMarker;
+      work?: WorkStamp;
+      audit?: import("../host/audit-context.ts").AuditContext;
     } = {}
   ): number | undefined {
     return this.enqueue(agentId, {
       id: options.messageId ?? randomUUID(),
+      ...(options.work ? {work: options.work} : {}),
+      ...(options.audit !== undefined ? { audit: options.audit } : {}),
       ...(options.resumeOf !== undefined ? { resumeOf: options.resumeOf } : {}),
       ...(options.principalId !== undefined ? { principalId: options.principalId } : {}),
       fromId: "user",
@@ -513,9 +500,10 @@ export class AgentBus {
     conversation: string = MAIN_CONVERSATION,
     now: number = Date.now()
   ): InboundMessage[] {
+    this.dropStaleWork(agentId);
     const queue = this.pending.get(agentId) ?? [];
     const mine = queue.filter(
-      message => (message.conversation ?? MAIN_CONVERSATION) === conversation
+      message => (message.conversation ?? MAIN_CONVERSATION) === conversation && (this.workAttention?.eligible(agentId, conversation, message) ?? true)
     );
     if (mine.length === 0) return [];
 
@@ -534,14 +522,17 @@ export class AgentBus {
     // promised three answers all showed the same one.
     // Different principals must never share the authority of a batched turn.
     const otherPrincipal = inLane.findIndex(message => message.principalId !== inLane[0]?.principalId);
-    const samePrincipal = otherPrincipal < 0 ? inLane : inLane.slice(0, otherPrincipal);
+    const sameAuthority = inLane.findIndex(message => message.work?.id !== inLane[0]?.work?.id || message.work?.generation !== inLane[0]?.work?.generation || message.fromId !== inLane[0]?.fromId && chosen === "agent");
+    const boundary = Math.min(otherPrincipal < 0 ? inLane.length : otherPrincipal, sameAuthority < 0 ? inLane.length : sameAuthority);
+    const samePrincipal = inLane.slice(0, boundary);
     const firstKickoff = samePrincipal.findIndex(message => message.steerable === false);
     const taken = boundBatch( // and at most so many, so much: the rest is the next turn's (INV-1572)
       firstKickoff === 0 ? samePrincipal.slice(0, 1) : firstKickoff > 0 ? samePrincipal.slice(0, firstKickoff) : samePrincipal, this.batchLimits);
     const left = queue.filter(message => !taken.includes(message));
     if (left.length === 0) this.pending.delete(agentId);
     else this.pending.set(agentId, left);
-    return taken;
+    const work = this.workAttention?.begin(agentId, conversation, taken);
+    return work ? taken.map(message => ({ ...message, work })) : taken;
   }
 
   hasPendingResume(turnId: string): boolean {
@@ -570,6 +561,8 @@ export class AgentBus {
         message.principalId === this.active.get(workerKey(agentId, conversation))?.principalId
     );
     if (taken.length === 0) return [];
+    const work = this.workAttention?.begin(agentId, conversation, taken);
+    if (work) for (const message of taken) message.work = work;
     record?.(taken);
     const left = queue.filter(message => !taken.includes(message));
     if (left.length === 0) this.pending.delete(agentId);
@@ -614,8 +607,15 @@ export class AgentBus {
    * so it opens a turn of its own once the conversation is free, where the agent reads it
    * as what it is: a late report, not an instruction.
    */
-  deliverSystem(agentId: string, text: string, conversation: string = MAIN_CONVERSATION): number | undefined {
+  deliverSystem(agentId: string, text: string, conversation: string = MAIN_CONVERSATION, related?: WorkStamp | string): number | undefined {
+    const work = typeof related === "string" ? this.workAttention?.forId(agentId, conversation, related) : related;
+    if (related && this.workAttention && (!work || !this.workAttention.valid(work, agentId))) {
+      // Retain a late result for diagnosis, consume it once, and never reinterpret it as new work.
+      const seq = this.inbox?.admit(agentId, {id: randomUUID(), fromId: SYSTEM_SENDER, fromName: SYSTEM_SENDER, text: clampMessage(text, AGENT_MESSAGE_MAX_LENGTH), priority: false, receivedAt: new Date().toISOString(), conversation, origin: "host:superseded-result", ...(work ? {work} : {})});
+      this.inbox?.drop(seq); return seq;
+    }
     const seq = this.enqueue(agentId, {
+      ...(work ? {work} : {}),
       id: randomUUID(),
       fromId: SYSTEM_SENDER,
       fromName: SYSTEM_SENDER,
@@ -656,6 +656,22 @@ export class AgentBus {
     return queue.filter(m => (m.conversation ?? MAIN_CONVERSATION) === conversation).length;
   }
 
+  private dropStaleWork(agentId: string): void {
+    if (!this.workAttention) return;
+    const queue = this.pending.get(agentId) ?? [];
+    const kept = queue.filter(message => {
+      if (this.workAttention!.cancelledMessage(message)) { this.inbox?.drop(message.admission); return false; }
+      if (message.informational || !message.work || this.workAttention!.valid(message.work, agentId)) return true;
+      this.inbox?.drop(message.admission); return false;
+    });
+    if (kept.length === 0) this.pending.delete(agentId); else this.pending.set(agentId, kept);
+  }
+  private readyCount(agentId: string, conversation: string): number {
+    return (this.pending.get(agentId) ?? []).filter(message => (message.conversation ?? MAIN_CONVERSATION) === conversation && (this.workAttention?.eligible(agentId, conversation, message) ?? true)).length;
+  }
+  heldCount(agentId: string, conversation = MAIN_CONVERSATION): number { return this.queuedCount(agentId, conversation) - this.readyCount(agentId, conversation); }
+  relatedPending(agentId: string, stamp: WorkStamp): number { return (this.pending.get(agentId) ?? []).filter(message => message.work?.id === stamp.id && message.work.generation === stamp.generation).length; }
+
   /** Whether a turn is in flight for this agent and conversation. */
   isActive(agentId: string, conversation: string = MAIN_CONVERSATION): boolean {
     return this.active.has(workerKey(agentId, conversation));
@@ -693,6 +709,16 @@ export class AgentBus {
       stopped.add(agentId);
     }
     return [...stopped];
+  }
+  workQueue(workId: string): {id:string;agentId:string}[] {
+    return [...this.pending.entries()].flatMap(([agentId,rows])=>rows.filter(message=>messageWorkId(message)===workId).map(message=>({id:message.id,agentId})));
+  }
+  workExecutions(workId: string): { agentId: string; conversation: string }[] {
+    return [...this.active.entries()].filter(([, run]) => run.workId === workId).map(([key]) => ({ agentId: agentOfKey(key), conversation: key.slice(key.indexOf("\0") + 1) }));
+  }
+  interruptWork(workId: string): void {
+    for (const run of this.active.values()) if (run.workId === workId) run.controller.abort();
+    for (const agentId of this.pending.keys()) this.dropStaleWork(agentId);
   }
 
   /** The distinct conversations an agent currently has messages queued for. */
@@ -741,6 +767,7 @@ export class AgentBus {
       });
 
       let inbound: InboundMessage[] = [];
+      let executionConversation = conversation;
       let started = false;
       try {
         // Drain inside the exclusive section, so messages that arrived while we
@@ -752,7 +779,10 @@ export class AgentBus {
         // while this call waited on the chain. Burning a model call on an empty
         // prompt would answer a question nobody is still asking.
         if (inbound.length === 0) return;
-        this.active.get(key)!.principalId = inbound[0]?.principalId;
+        this.active.get(key)!.workId = inbound[0] ? messageWorkId(inbound[0]) : undefined;
+        if (this.workAttention && (inbound[0]?.work?.owner !== agentId || !this.workAttention.valid(inbound[0].work, agentId))) executionConversation = peerWorkConversation(inbound, conversation);
+        if (inbound[0]?.work) this.workAttention?.execution(inbound[0].work, agentId, executionConversation);
+        this.active.get(key)!.principalId = inbound[0]?.principalId; this.active.get(key)!.userDriven = inbound.some(personMessage);
         let acknowledged = false;
         const acknowledge = () => {
           if (acknowledged) return;
@@ -760,9 +790,9 @@ export class AgentBus {
           acknowledged = true;
         };
         if (!this.deferredStart) acknowledge();
-        this.onEvent({ type: "turn_started", agentId, conversation, inboundCount: inbound.length });
+        this.onEvent({ type: "turn_started", agentId, conversation: executionConversation, inboundCount: inbound.length });
         started = true;
-        await this.runTurn(agent, inbound, controller.signal, conversation, acknowledge);
+        await this.runTurn(agent, inbound, controller.signal, executionConversation, acknowledge);
         // A rejected goal wake may return without opening a turn. It is consumed too.
         acknowledge();
       } catch (error) {
@@ -777,7 +807,7 @@ export class AgentBus {
         }
         // After the active flag is cleared, not before (INV-770): "finished" is read by the goal
         // loop as "this conversation is free", and it used to fire while the turn still held it.
-        if (started) this.onEvent({ type: "turn_finished", agentId, conversation });
+        if (started) this.onEvent({ type: "turn_finished", agentId, conversation: executionConversation });
       }
     })();
 
@@ -792,7 +822,7 @@ export class AgentBus {
     // Anything that landed for this conversation during the turn — or the priority
     // message that cut it short — deserves a follow-up. When this call came from a
     // worker loop, that loop handles it and the guard makes this a no-op.
-    if (this.queuedCount(agentId, conversation) > 0) {
+    if (this.readyCount(agentId, conversation) > 0) {
       void this.wake(agentId);
     }
   }
@@ -808,6 +838,7 @@ export class AgentBus {
    * re-runs after the aborted turn unwinds without dropping the message that caused it.
    */
   async wake(agentId: string): Promise<void> {
+    this.dropStaleWork(agentId);
     const loops: Promise<void>[] = [];
     for (const conversation of this.pendingConversations(agentId)) {
       const key = workerKey(agentId, conversation);
@@ -818,7 +849,7 @@ export class AgentBus {
         (async () => {
           try {
             // A paused agent's queue waits for a person, not for this loop (INV-1554): spinning on it would never end.
-            while (this.queuedCount(agentId, conversation) > 0 && this.pauseOf(agentId) === undefined) {
+            while (this.readyCount(agentId, conversation) > 0 && this.pauseOf(agentId) === undefined) {
               try {
                 await this.runExclusive(agentId, { userDriven: false, conversation });
               } catch (error) {
@@ -875,7 +906,7 @@ export class AgentBus {
 
   private totalPending(): number {
     let total = 0;
-    for (const queue of this.pending.values()) total += queue.length;
+    for (const agentId of this.pending.keys()) for (const conversation of this.pendingConversations(agentId)) total += this.readyCount(agentId, conversation);
     return total;
   }
 }

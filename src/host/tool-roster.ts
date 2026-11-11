@@ -148,3 +148,8 @@ export function lookupPair(externalCount: number, deferred: readonly Anthropic.T
     },
   ];
 }
+
+/** The gateway does not change which concrete tool a call asks to execute. */
+export function executionTarget(name: string, input: Record<string, unknown>): string {
+  return name === "UseMcpTool" ? String(input.tool ?? "") : name;
+}

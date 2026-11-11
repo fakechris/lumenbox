@@ -1,3 +1,6 @@
+import {workControlFor, workControlRoute} from "./work-control-routes.ts";
+import {WORK_CONTROL_JS} from "./work-control-ui.ts";
+import { conversationProgress } from "./work-attention.ts";
 import { summarizeTaskProgress, type ProgressSourceAccess } from "../host/task-progress.ts";
 import { progressLines } from "../host/task-progress-view.ts";
 import { taskProgressSurface } from "../host/task-progress-surface.ts";
@@ -570,15 +573,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     }
   };
 
-  // Channel task cards listen here while their ask is in flight: each listener is a narrow filter on (agent, conversation), added before the prompt and removed after
-  // it settles. A set rather than a rewiring of onTurnEvent per ask, because two chats
-  // can be driving two agents at once.
+  // Per-chat listeners let several channel task cards observe independent turns.
   const channelTurnListeners = new Set<(event: TurnEvent) => void>();
   const idempotency = new IdempotencyStore();
   /** Secrets agents asked the person for, by id; names and descriptions only. */
-  const pendingSecrets = new Map<string, { agentId: string; agentName: string; id: string; description: string; conversation?: string; at: string }>();
+  const pendingSecrets = new Map<string, { agentId: string; agentName: string; id: string; description: string; work?: import("../agents/work-attention.ts").WorkStamp; conversation?: string; at: string }>();
   /** Desktops handed to the person, by agent. */
-  const pendingHandovers = new Map<string, { agentId: string; agentName: string; instruction: string; reason: string; conversation?: string; at: string; desktopPath?: string }>();
+  const pendingHandovers = new Map<string, { agentId: string; agentName: string; instruction: string; reason: string; work?: import("../agents/work-attention.ts").WorkStamp; conversation?: string; at: string; desktopPath?: string }>();
 
   let probeKeeper: ProbeKeeper | undefined; // set once the pauses exist; a probe before that is only broadcast (INV-1553)
   const orchestrator = new Orchestrator({
@@ -681,7 +682,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // then put to the person, under the identity it was put to — only their reply
       // answers it. A question from the page names nobody, and any voice in that
       // conversation is the one that was asked.
-      const watched = questions.ask({
+      const watched = questions.ask({ work: input.work,
         agentId: input.agentId,
         agentName: input.agentName,
         conversation: input.conversation ?? "main",
@@ -2199,7 +2200,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         conversation: question.conversation,
       });
       void orchestrator
-        .prompt(question.agentId, expiry.cue, undefined, { conversation: question.conversation, steerable: false, lane: "background", synthetic: true, origin: "host:questions" })
+        .prompt(question.agentId, expiry.cue, undefined, { conversation: question.conversation, steerable: false, lane: "background", synthetic: true, origin: "host:questions", work: question.work })
         .catch(error => log(`question: could not wake ${question.agentName} after expiry (${error instanceof Error ? error.message : String(error)})`));
     }
   }, 60_000);
@@ -2551,7 +2552,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     const problems = extensions.problems.length > 0 ? `; ${extensions.problems.join("; ")}` : "";
     log(`extensions: ${extensions.loaded.length} loaded, ${extensions.tools.length} tool(s)${problems}`);
   }
-  // The fork ledger first (docs/32 §1): it cancels what the inbox would otherwise replay and
+  const workControl = workControlFor(orchestrator,agentPauses,questions,pendingSecrets,pendingHandovers,hostRunner);
+  await workControl.recover();
+  // Sweep forks before replaying their admissions (docs/32 §1).
   // ends what the turn ledger would otherwise resume, for every fork the last process left open.
   const sweptForks = await orchestrator.sweepPendingWork();
   if (sweptForks > 0) log(`dropped ${sweptForks} fork${sweptForks === 1 ? "" : "s"} left open by the last restart; their parents were told`);
@@ -3477,7 +3480,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
         // Settings → Supervision (INV-1528): its own script and routes, like the decision model's below.
-        if (route === "GET /app/supervision.js") { res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(localizeScript(ROW_ORDER_JS + BOARD_ORDER_JS + UI_STYLE_JS + INLINE_ASK_JS + AGENT_PAUSE_JS + EXCEPTIONS_JS + SUPERVISION_JS + SUPERVISION_WIZARD_JS + BOX_UPDATE_JS + DIAGNOSTICS_JS + CLAIM_ACCOUNT_JS + PUSH_BUDGET_JS + SPEND_LIMIT_JS + PROVIDER_REST_JS + TEAM_MEMORY_REVIEW_JS + OUTBOX_JS + ORG_KNOWLEDGE_JS + ORG_CORRECTION_JS + PROVIDER_FALLBACK_JS + PERSON_JS + ROUTINE_RUNS_JS + DELIVERABLES_JS + TOOL_PERMS_JS + CONFIG_HISTORY_JS + CREDENTIALS_JS + DIVISION_JS + TASK_GATE_JS + INSTALLATION_JS + MACHINE_JS + ORGANISATIONS_JS + GUEST_JS + INSTALLATIONS_JS + NODES_JS + TASK_DEPS_JS, localeOf(req, url))); return; } // + Apply update (INV-1538), askInline (INV-1540)
+        if (route === "GET /app/supervision.js") { res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(localizeScript(WORK_CONTROL_JS + ROW_ORDER_JS + BOARD_ORDER_JS + UI_STYLE_JS + INLINE_ASK_JS + AGENT_PAUSE_JS + EXCEPTIONS_JS + SUPERVISION_JS + SUPERVISION_WIZARD_JS + BOX_UPDATE_JS + DIAGNOSTICS_JS + CLAIM_ACCOUNT_JS + PUSH_BUDGET_JS + SPEND_LIMIT_JS + PROVIDER_REST_JS + TEAM_MEMORY_REVIEW_JS + OUTBOX_JS + ORG_KNOWLEDGE_JS + ORG_CORRECTION_JS + PROVIDER_FALLBACK_JS + PERSON_JS + ROUTINE_RUNS_JS + DELIVERABLES_JS + TOOL_PERMS_JS + CONFIG_HISTORY_JS + CREDENTIALS_JS + DIVISION_JS + TASK_GATE_JS + INSTALLATION_JS + MACHINE_JS + ORGANISATIONS_JS + GUEST_JS + INSTALLATIONS_JS + NODES_JS + TASK_DEPS_JS, localeOf(req, url))); return; } // + Apply update (INV-1538), askInline (INV-1540)
         const supervised = await supervisionRoute(route, { home: agentboxHome(), configPath: configPath(), agents: () => registry.list().map(agent => agent.profile.name), readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: role => refusedRole(role), logFile: defaultSupervisionLog() });
         if (supervised !== undefined) { if (supervised.status !== 0) send(res, supervised.status, supervised.body); return; }
         // Settings → Model → Decision model (INV-1412): its own script, its own two routes.
@@ -4156,7 +4159,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             request.agentId,
             `[The person saved the secret ${id} securely. You never see its value; name it in RunOnHost's \`secrets\` to use it, ` +
               `or, if it is a provider key, delegated engines can use it through the relay. Confirm it by its effect, never by printing it.]`,
-            request.conversation ?? MAIN_CONVERSATION
+            request.conversation ?? MAIN_CONVERSATION, request.work
           );
           send(res, 200, { saved: true });
           return;
@@ -4171,7 +4174,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             orchestrator.bus.deliverSystem(
               request.agentId,
               `[The person dismissed your request for ${id} without saving it. Do without it, or say plainly what cannot be done.]`,
-              request.conversation ?? MAIN_CONVERSATION
+              request.conversation ?? MAIN_CONVERSATION, request.work
             );
           }
           send(res, 200, { dismissed: request !== undefined });
@@ -4196,7 +4199,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           orchestrator.bus.deliverSystem(
             agentId,
             `[The person handed the desktop back to you. Continue your task — start by taking a screenshot, because the screen changed while you were not there${typeof body.note === "string" && body.note.trim() !== "" ? `. They said: ${body.note.trim().slice(0, 300)}` : ""}.]`,
-            handover.conversation ?? MAIN_CONVERSATION
+            handover.conversation ?? MAIN_CONVERSATION, handover.work
           );
           send(res, 200, { returned: true });
           return;
@@ -5361,7 +5364,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // The plan and todos belong to a conversation now; the page shows whichever
           // thread it is viewing, defaulting to the team room.
           const conversation = url.searchParams.get("conversation") ?? MAIN_CONVERSATION;
-          send(res, 200, orchestrator.registry.readDurableState(agentId, conversation));
+          if (refused(agentId)) return;
+          send(res, 200, conversationProgress(orchestrator.registry, orchestrator.bus, agentId, conversation));
           return;
         }
 
@@ -5373,9 +5377,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 404, apiError("agent-unknown", { agent: agentId }));
             return;
           }
-          // Recorded and effective immediately; the turn notices at its next round boundary. Not an
-          // abort: cutting a request in flight would leave a tool call with no result, which the
-          // next turn cannot replay.
+          // Stop is per turn; persistent work cancellation is handled by workControlRoute.
           orchestrator.policy.stop(agentId);
           send(res, 202, { stopped: agentId });
           return;
@@ -5388,7 +5390,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const id = String(body.id ?? "");
           const scope =
             body.scope === "session" || body.scope === "always" ? body.scope : "once";
-          const waiting = orchestrator.policy.pending().find(item => item.id === id);
+          const waiting = orchestrator.policy.pending().find(item => item.id === id), parked = orchestrator.approvalIsParked(id);
           const answered =
             route === "POST /api/approve"
               ? orchestrator.policy.grant(id, "user", scope)
@@ -5407,11 +5409,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             broadcast({ type: "approval_settled", id, agentId: waiting.agentId, how: allowed ? "allowed" : "refused", ...(allowed ? { scope } : {}) });
             // An extension's confirmation is continued by the harness itself (INV-861): the agent
             // hears the result from there, and a "go ahead" here would send it to retry nothing.
-            if (waiting.harnessResumes !== true) orchestrator.bus.deliverSystem(
+            if (waiting.harnessResumes !== true && !parked) orchestrator.bus.deliverSystem(
               waiting.agentId,
               allowed
                 ? `[The person allowed it${scope === "once" ? " once" : scope === "session" ? " for this session" : ", standing until revoked"}: ${waiting.description}. Go ahead now.]`
-                : `[The person refused it: ${waiting.description}. Do not retry it; do without, or say what cannot be done.]`
+                : `[The person refused it: ${waiting.description}. Do not retry it; do without, or say what cannot be done.]`, waiting.returnTo?.conversation ?? MAIN_CONVERSATION, waiting.returnTo?.work
             );
           }
           send(res, 200, { id });
@@ -5641,6 +5643,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "POST /api/outbox/decide" && refused()) return; const outboxAnswer = await outboxRoute(route, { drafts: orchestrator.outboxDrafts, policy: orchestrator.policy, readJson: () => readJson(req) as Promise<Record<string, unknown>>, mayAnswer: id => caller.userId === undefined || mayReadAgent(id), answered: (draft, how) => broadcast({ type: "approval_settled", id: draft.approvalId, agentId: draft.agentId, how }), by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator") }); if (outboxAnswer !== undefined) { send(res, outboxAnswer.status, outboxAnswer.body); return; } // the Outbox: approve, edit, reject (INV-1739)
         const orgReview = await orgKnowledgeRoute(route, { ledger: orchestrator.orgKnowledge, registry, tasks: () => orchestrator.tasks, receipts: orchestrator.receipts, readJson: () => readJson(req) as Promise<Record<string, unknown>>, params: url.searchParams, refusedAdmin: () => refusedRole("admin"), by: () => caller.userId ?? orchestrator.people.operator, nameOf: id => (principals.byId(id) ?? principals.resolve(id)).name ?? id, log }); if (orgReview !== undefined) { if (orgReview.status !== 0) send(res, orgReview.status, orgReview.body); return; } // promotion and review of the organisation's knowledge (INV-1729)
         const orgItems = await orgCorrectionRoute(route, { ledger: orchestrator.orgKnowledge, readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: () => refused(), principalId: caller.userId === undefined ? undefined : principals.resolve(caller.userId).id, nameOf: id => principals.byId(id)?.name ?? id, boxName: id => registry.listBoxes().find(box => box.id === id)?.name, log }); if (orgItems !== undefined) { if (orgItems.status !== 0) send(res, orgItems.status, orgItems.body); return; } // INV-1730
+        const workStop = await workControlRoute(route,url,workControl,{host:orchestrator,pauses:agentPauses,mayReadAgent,mayReadTask:id=>{const task=orchestrator.tasks?.get(id);return !!task && mayReadTask(task);},readJson:()=>readJson(req) as Promise<Record<string,unknown>>,refusedAdmin:()=>refusedRole("admin"),by:()=>caller.userId ?? "the operator"}); if(workStop!==undefined){if(workStop.status!==0)send(res,workStop.status,workStop.body);return;}
         const person = await personRoute(route, orchestrator.people, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, caller: () => (caller.userId === undefined ? undefined : { id: caller.userId, name: principals.resolve(caller.userId).name ?? caller.userId }) }); if (person !== undefined) { send(res, person.status, person.body); return; } /* INV-1653 */ const factsRoute = await agentFactsRoute(route, orchestrator.agentFacts.state, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: () => refused(), hasAgent: id => registry.has(id) }); if (factsRoute !== undefined) { if (factsRoute.status !== 0) send(res, factsRoute.status, factsRoute.body); return; } /* INV-1625 */ const pauseRoute = await agentPauseRoute(route, agentPauses, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id), caller: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator") }); if (pauseRoute !== undefined) { if (pauseRoute.status !== 0) send(res, pauseRoute.status, pauseRoute.body); return; } const byName = () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator"); const issues = await exceptionRoute(route, { ledger: orchestrator.exceptions, readJson: () => readJson(req) as Promise<Record<string, unknown>>, mayRead: id => id === undefined || mayReadAgent(id), refused: id => (id === undefined ? refusedRole("admin") : refused(id)), by: byName, titleOf: id => orchestrator.tasks?.get(id)?.title, retry: exceptionRetryDeps({ ledger: orchestrator.exceptions, prompt: (id, text, conversation) => orchestrator.prompt(id, text, undefined, { conversation, lane: "user", synthetic: true, steerable: false }), boxFor: id => orchestrator.boxFor(id), ownerOf: id => registry.boxOwnerTokenFor(id), watch: job => orchestrator.jobWatch.watch(job), by: byName, redeliver: async chatKey => { const door = channels.adapterFor(chatKey); if (door?.sendToChat === undefined) throw new Error(`no door can send to ${chatKey}`); return outboxSender.retry(chatKey, { sendToChat: (key, text) => door.sendToChat!(key, text) }); }, runRoutine: slug => orchestrator.scheduler.runNow(slug), reconnectBox: () => keeper.tick().then(state => { box = state; return state; }), notReady: id => { const task = orchestrator.tasks?.get(id); return task === undefined || orchestrator.tasks === undefined ? undefined : notReady(task, orchestrator.tasks); } }) }); if (issues !== undefined) { if (issues.status !== 0) send(res, issues.status, issues.body); return; } /* the Issues view (INV-1741) */ const spendRoute = await spendLimitRoute(route, spendLimits, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id) }); if (spendRoute !== undefined) { if (spendRoute.status !== 0) send(res, spendRoute.status, spendRoute.body); return; } const permRoute = await toolPermissionRoute(route, url, { refused: id => refused(id), agent: id => { const record = registry.tryGet(id); return record === undefined ? undefined : { id, name: record.profile.name, ...(record.profile.toolPermissions !== undefined ? { toolPermissions: record.profile.toolPermissions } : {}) }; }, allTools: ALL_TOOLS, floorContext: () => orchestrator.policy.floorContext() }); if (permRoute !== undefined) { if (permRoute.status !== 0) send(res, permRoute.status, permRoute.body); return; } const versionRoute = await configVersionRoute(route, url, { registry, refused: id => refused(id), readJson: () => readJson(req) as Promise<Record<string, unknown>>, by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator"), log }); if (versionRoute !== undefined) { if (versionRoute.status !== 0) send(res, versionRoute.status, versionRoute.body); return; } const guestsRoute = await guestRoute(route, guestDesk, { query: () => url.searchParams, send: (chatKey, text) => channels.tryPushToChat(chatKey, text, { kind: "notice", about: "a guest answer an Admin approved" }), readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id), installationMode: () => principals.installation().mode, by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator") }); if (guestsRoute !== undefined) { if (guestsRoute.status !== 0) send(res, guestsRoute.status, guestsRoute.body); return; } /* INV-1708 */ const installed = installationRoute(route, { principals }); if (installed !== undefined) { send(res, installed.status, installed.body); return; } const merging = await mergeRoute(route, { paths: mergePaths, desktop: options.desktop === true, doorType: door => channelRecords.find(record => record.id === door)?.type, refusedAdmin: () => refusedRole("admin"), readJson: () => readJson(req) as Promise<Record<string, unknown>>, by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name : "the operator"), log }); if (merging !== undefined) { if (merging.status !== 0) send(res, merging.status, merging.body); return; } // "these are all me" (INV-1698) // INV-1554, INV-1615, INV-1664, INV-1669
         const diagnostics = await diagnosticsRoute(route, { refusedAdmin: () => refusedRole("admin"), agents: () => registry.list().map(agent => ({ id: agent.id, name: agent.profile.name })), activeTurns: id => orchestrator.bus.activeTurnsOf(id), queued: id => orchestrator.bus.pendingCount(id), watchedJobs: id => orchestrator.jobWatch.countFor(id), eventSubscribers: () => events.size, box: () => orchestrator.boxClient(), home: agentboxHome() }); if (diagnostics !== undefined) { if (diagnostics.status !== 0) send(res, diagnostics.status, diagnostics.body); return; } // INV-1559
         const rest = await providerRestRoute(route, { refusedAdmin: () => refusedRole("admin"), readJson: () => readJson(req) as Promise<Record<string, unknown>>, rests: providerRests, quotaLine: locale => quotaStatusLine(Date.now(), locale), locale: localeOf(req, url) }); if (rest !== undefined) { if (rest.status !== 0) send(res, rest.status, rest.body); return; } // INV-1577

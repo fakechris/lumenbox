@@ -1,6 +1,8 @@
 import type { Lane } from "../agents/bus.ts";
 
 export interface PromptOptions {
+      work?: import("../agents/work-attention.ts").WorkStamp;
+      audit?: import("./audit-context.ts").AuditContext;
       conversation?: string;
       taskBinding?: import("./execution-binding.ts").TaskBinding;
       steerable?: boolean;

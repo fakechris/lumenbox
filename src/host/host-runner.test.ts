@@ -8,7 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HostRunner, hostRunnerConfig } from "./host-runner.ts";
@@ -150,4 +150,25 @@ test("under the live sandbox a command writes in cwd, is refused outside it with
     rmSync(dir, { recursive: true, force: true });
     rmSync(outside, { recursive: true, force: true });
   }
+});
+
+test("cancelling one host command retains escalation for a TERM-ignoring descendant after its shell closes", async()=>{
+  const dir=mkdtempSync(join(tmpdir(),"hostrun-cancel-"));let pid:number|undefined;
+  const runner=new HostRunner(hostRunnerConfig({enabled:true,cwd:dir,sandbox:"off",timeoutMs:10_000}));
+  try {
+    const running=runner.run("sh -c 'trap \"\" TERM; echo $$ > child.pid; exec sleep 20' >/dev/null 2>&1 & wait",{},undefined,{workId:"cancel-me"});
+    for(let i=0;i<200;i++){
+      if(existsSync(join(dir,"child.pid"))){const value=Number(readFileSync(join(dir,"child.pid"),"utf8"));if(Number.isInteger(value) && value>0){pid=value;break;}}
+      await new Promise(resolve=>setTimeout(resolve,10));
+    }
+    assert.ok(pid && pid>0,"wait for the PID bytes, not only the newly created empty file");
+    const independent=runner.run("printf independent",{},undefined,{workId:"keep-me"});
+    const id=runner.activeWork("cancel-me")[0]!;
+    assert.equal(await runner.stopWorkRun(id,"unrelated"),false,"another work cannot stop this process");
+    const confirmed=await runner.stopWorkRun(id,"cancel-me");
+    assert.equal(confirmed,true,"the whole process group is observed absent before confirmation");
+    assert.throws(()=>process.kill(pid!,0),{code:"ESRCH"},"a child that ignored TERM must not survive shell exit");
+    const result=await running;assert.equal(result.timedOut,false);assert.equal(runner.activeWork("cancel-me").length,0);
+    assert.equal((await independent).stdout,"independent");
+  } finally {await Promise.all(runner.activeWork("cancel-me").map(id=>runner.stopWorkRun(id,"cancel-me")));if(pid)try{process.kill(pid,"SIGKILL");}catch{}rmSync(dir,{recursive:true,force:true});}
 });

@@ -68,14 +68,16 @@ export function parseEffects(raw: unknown): { effects: ToolEffect[]; problems: s
 }
 
 export interface EffectsDeps {
+  returnFor?: (agentId:string,conversation:string,workId:string) => import("../agents/work-attention.ts").WorkReturn | undefined;
+  isCancelled?: (workId: string) => boolean;
   pendingWork: PendingWork;
   policy: {
-    requestConfirmation(input: { agentId: string; agentName: string; description: string; action?: string }): PendingApproval;
+    requestConfirmation(input: { returnTo?: import("../agents/work-attention.ts").WorkReturn; agentId: string; agentName: string; description: string; action?: string }): PendingApproval;
     pending(): PendingApproval[];
   };
   mcp: () => McpManager | undefined;
   /** Queues a system note durably in the conversation; returns whether it was admitted. */
-  deliver: (agentId: string, text: string, conversation: string) => boolean;
+  deliver: (agentId: string, text: string, conversation: string, workId?: string) => boolean;
   log?: (line: string) => void;
   now?: () => Date;
 }
@@ -113,8 +115,9 @@ export class Effects {
    * callback it names must be a host-only tool of the same server — a result cannot aim the
    * harness at another server's tools, or at a tool the model could call itself.
    */
-  apply(input: { agentId: string; agentName: string; conversation: string; tool: string; effects: readonly ToolEffect[] }): Applied {
+  apply(input: { agentId: string; agentName: string; conversation: string; workId?: string; tool: string; effects: readonly ToolEffect[] }): Applied {
     const applied: Applied = { notes: [] };
+    if (input.workId && this.deps.isCancelled?.(input.workId)) return { notes: ["Work cancelled; no follow-up effects were admitted."] };
     for (const effect of input.effects) {
       switch (effect.type) {
         case "pause_turn": {
@@ -130,13 +133,13 @@ export class Effects {
           }
           const approval = this.deps.policy.requestConfirmation({
             agentId: input.agentId,
-            agentName: input.agentName,
+            agentName: input.agentName, ...(input.workId ? {returnTo:this.deps.returnFor?.(input.agentId,input.conversation,input.workId)} : {}),
             description: effect.reason,
             action: `continue ${input.tool} once you answer`,
           });
           this.deps.pendingWork.prepare({
             agentId: input.agentId,
-            kind: "pause",
+            kind: "pause", workId: input.workId,
             parent: input.conversation,
             child: resume,
             brief: effect.reason,
@@ -158,7 +161,7 @@ export class Effects {
           }
           this.deps.pendingWork.prepare({
             agentId: input.agentId,
-            kind: "ext-job",
+            kind: "ext-job", workId: input.workId,
             parent: input.conversation,
             child: `${serverOf(input.tool)}:${effect.jobId}`,
             brief: effect.brief ?? effect.jobId,
@@ -191,7 +194,7 @@ export class Effects {
   }
 
   private openOf(kind: OpenFork["kind"]): OpenFork[] {
-    return this.deps.pendingWork.open().filter(work => work.kind === kind);
+    return this.deps.pendingWork.open().filter(work => work.kind === kind && !(work.workId && this.deps.isCancelled?.(work.workId)));
   }
 
   /**
@@ -216,7 +219,7 @@ export class Effects {
       if (mcp === undefined) throw new Error("no tool servers are loaded");
       const result = await mcp.callFromHost(pause.child, { ...((pause.data?.resumeInput as Record<string, unknown>) ?? {}), approved });
       text = result.text;
-      const follow = this.apply({ agentId: pause.agentId, agentName: String(pause.data?.agentName ?? ""), conversation: pause.parent, tool: pause.child, effects: result.effects ?? [] });
+      const follow = this.apply({ agentId: pause.agentId, agentName: String(pause.data?.agentName ?? ""), conversation: pause.parent, workId: pause.workId, tool: pause.child, effects: result.effects ?? [] });
       if (follow.notes.length > 0) text = `${text}\n${follow.notes.join("\n")}`;
     } catch (error) {
       failed = true;
@@ -230,7 +233,7 @@ export class Effects {
       agentId: pause.agentId,
       kind: "reminder",
       parent: pause.parent,
-      child: "pause-result",
+      child: "pause-result", workId: pause.workId,
       brief: reason,
       data: { text: message, at: this.now().toISOString(), verbatim: true },
     });
@@ -242,7 +245,7 @@ export class Effects {
   jobDone(server: string, jobId: string, text: string, ok = true): boolean {
     const job = this.openOf("ext-job").find(work => work.child === `${server}:${jobId}`);
     if (job === undefined) return false;
-    const delivered = this.deps.deliver(job.agentId, `[Background job ${jobId} (${job.brief}) ${ok ? "finished" : "failed"}] ${text}`, job.parent);
+    const delivered = this.deps.deliver(job.agentId, `[Background job ${jobId} (${job.brief}) ${ok ? "finished" : "failed"}] ${text}`, job.parent, job.workId);
     if (!delivered) return false;
     this.deps.pendingWork.commit([{ id: job.id, how: ok ? "done" : "failed" }], this.now());
     return true;
@@ -257,7 +260,7 @@ export class Effects {
       if (Number.isNaN(at.getTime()) || at > now) continue;
       const body = String(reminder.data?.text ?? reminder.brief);
       const text = reminder.data?.verbatim === true ? body : `[Reminder you set: ${body}]`;
-      if (!this.deps.deliver(reminder.agentId, text, reminder.parent)) continue;
+      if (!this.deps.deliver(reminder.agentId, text, reminder.parent, reminder.workId)) continue;
       this.deps.pendingWork.commit([{ id: reminder.id, how: "done" }], now);
       count += 1;
     }
@@ -284,7 +287,7 @@ export class Effects {
           this.log(`job ${job.child}: ${resume} failed on recovery: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
-      if (this.deps.deliver(job.agentId, `[Background job ${String(job.data?.jobId)} (${job.brief}) was lost in a restart: nothing picked it back up. Anything it did is an attempt, not a result.]`, job.parent)) {
+      if (this.deps.deliver(job.agentId, `[Background job ${String(job.data?.jobId)} (${job.brief}) was lost in a restart: nothing picked it back up. Anything it did is an attempt, not a result.]`, job.parent, job.workId)) {
         this.deps.pendingWork.dropped(job.id, "restart", this.now());
         outcome.lostJobs += 1;
       }
@@ -292,7 +295,7 @@ export class Effects {
     const waiting = new Set(this.deps.policy.pending().map(approval => approval.id));
     for (const pause of this.openOf("pause")) {
       if (waiting.has(String(pause.data?.approvalId))) continue;
-      if (this.deps.deliver(pause.agentId, `[The confirmation you asked for ("${String(pause.data?.reason ?? pause.brief)}") is no longer waiting after a restart, and its follow-up did not run. Ask again if it is still needed.]`, pause.parent)) {
+      if (this.deps.deliver(pause.agentId, `[The confirmation you asked for ("${String(pause.data?.reason ?? pause.brief)}") is no longer waiting after a restart, and its follow-up did not run. Ask again if it is still needed.]`, pause.parent, pause.workId)) {
         this.deps.pendingWork.dropped(pause.id, "restart", this.now());
         outcome.closedPauses += 1;
       }

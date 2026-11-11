@@ -1,3 +1,4 @@
+import { WORK_ATTENTION_HTML, WORK_ATTENTION_STYLE, WORK_ATTENTION_JS } from "./work-attention-ui.ts";
 import { AGENT_ROW_STYLE, AGENT_ROW_JS } from "./agent-row.ts";
 import { TASK_PROGRESS_CLIENT_JS } from "../host/task-progress-view.ts";
 import { ATTENTION_PANEL_JS, RIGHT_PANE_STYLE, TASKS_PANEL_HTML, ACTIVITY_PANEL_HTML, ACTIVITY_FEED_JS } from "./right-pane-ui.ts";
@@ -55,6 +56,7 @@ var MSG = {{@messages}}, MSG_LOCALE = "{{@locale}}";
 })();
 </script>
 <style>
+${WORK_ATTENTION_STYLE}
 ${TASK_FOCUS_STYLE}
 ${TASK_BOARD_STYLE}
 ${RIGHT_PANE_STYLE}
@@ -955,6 +957,7 @@ ${AGENT_ROW_STYLE}
   </div>
   <!-- Ahead of the conversation on purpose. An agent waiting on consent has stopped working, and a
        person who has to scroll to find that out has been kept waiting by the interface. -->
+${WORK_ATTENTION_HTML}
   <div id="progress" style="display:none">
     <div id="progresshead"></div>
     <div id="progresslist"></div>
@@ -3909,6 +3912,7 @@ var workingItem = null;   // the "on it" row shown between turn start and the fi
 var surfaces = new Map(); // cards the agent composed (docs/79), by surface id, for the thread on screen
 
 function resetThread() {
+  resetCommunications(); progressRequest++;
   thread = []; openAgent = null; openWork = null; openCall.clear(); replayedText.clear(); replayedMessages.clear(); openQuestion = null; workingItem = null; cards.clear(); surfaces.clear();
   $("chat").innerHTML = "";
 }
@@ -4351,9 +4355,8 @@ function closeOpen() {
 function replayEntry(id, entry, index, unread) {
   if (entry.kind === "text") rememberReplayedText(entry);
   if (entry.kind === "peer") {
-    closeOpen();
     for (var p = 0; p < entry.messages.length; p++) {
-      pushItem({ kind: "teammate", from: entry.messages[p].from, text: entry.messages[p].text, priority: entry.messages[p].priority, at: entry.at });
+      recordCommunication({ label: entry.messages[p].from + " · {{ui.work.delivered}}", text: entry.messages[p].text });
     }
     return;
   }
@@ -4760,12 +4763,16 @@ document.getElementById("stop").addEventListener("click", function () {
 });
 
 /** The selected agent's plan and todo list, which is what a long task's progress looks like. */
+var progressRequest = 0;
 function refreshProgress() {
   if (!current) return Promise.resolve();
+  var progressAgent = current, progressConversation = currentConversation, progressTicket = ++progressRequest;
   return fetch("/api/progress?agent=" + encodeURIComponent(current) +
       "&conversation=" + encodeURIComponent(currentConversation))
     .then(function (r) { return r.json(); })
     .then(function (state) {
+      if (progressTicket !== progressRequest || current !== progressAgent || currentConversation !== progressConversation) return;
+      showCurrentWork(state.attention);
       var head = $("progresshead");
       var list = $("progresslist");
       var todos = state.todos || [];
@@ -6048,6 +6055,7 @@ function inView(e) {
   return e.agentId === current && (e.conversation || "main") === currentConversation;
 }
 
+${WORK_ATTENTION_JS}
 ${LIVE_TOOLS_JS}
 
 stream.onmessage = function (raw) {
@@ -6095,14 +6103,9 @@ stream.onmessage = function (raw) {
 
   if (e.type === "message_sent") {
     if (window.taskFocusVisible) { if (currentConversation === "main" && (e.fromId === current || e.toId === current)) window.taskConversationDirty = true; return; }
-    // Teammates talk in the team room, never inside someone's outside chat, so these
-    // only render when the team room is the one on screen.
     if (currentConversation !== "main") return;
-    // Both sides, in their own chat: the sender's record of messaging a teammate, and
-    // the recipient's of being messaged. Without the second, the pane jumps from
-    // nothing to a reply and what prompted it only shows up on reload.
-    if (e.toId === current) { closeOpen(); pushItem({ kind: "teammate", from: e.fromName, text: e.text, priority: e.priority, at: new Date().toISOString() }); }
-    else if (e.fromId === current) pushItem({ kind: "sent", to: e.toName, text: e.text, priority: e.priority, at: new Date().toISOString() });
+    if (e.toId === current) recordCommunication({ label: e.fromName + " → " + e.toName + " · {{ui.work.queued}}", text: e.text });
+    else if (e.fromId === current) recordCommunication({ label: e.fromName + " → " + e.toName + " · {{ui.work.queued}}", text: e.text });
     return;
   }
 
