@@ -195,6 +195,10 @@ the system view.
 **The composer offers two things, when asked.** "/" opening a message lists the skills, and a
 choice becomes the instruction to use it; "@" at a word lists the agents on this computer. Nothing
 shows until one of the two is typed.
+**The agent's desktop can be taken in hand.** Under its screen: take over (the box is told first, so
+the agent's next write is refused rather than typed into the person's hands) and hand back, which is
+when it learns from what was shown; record the desktop; send text to its clipboard and fetch what it
+holds.
 
 **Three levels, everywhere.**
 

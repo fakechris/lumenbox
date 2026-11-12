@@ -156,6 +156,9 @@ header.bar { position: relative; }
 .picker button { display: flex; flex-direction: column; gap: 2px; text-align: left; padding: 7px 10px; border-radius: 6px; font-size: 13px; }
 .picker button.on, .picker button:hover { background: var(--bg); }
 .picker > .why { padding: 8px 10px; }
+.desk { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); }
+.desk .acts { flex-wrap: wrap; } .desk p { margin: 0; }
+.desk input { flex: 1; min-width: 120px; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg); font: inherit; font-size: 13px; }
 .menu button { text-align: left; padding: 8px 10px; border-radius: 6px; font-size: 13px; }
 .menu button:hover { background: var(--bg); }
 .find { display: flex; align-items: center; gap: 10px; padding: 8px 24px; border-bottom: 1px solid var(--border); }
