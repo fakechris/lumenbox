@@ -126,3 +126,25 @@ test("work that is about to move by itself has nothing started beside it; an err
   assert.equal(sideTurnBudget([{ ...errand, side: true, work: stamp }], { calls: 60, repeats: 3 })!.calls, 60, "stamped work for somebody is real work");
   assert.equal(sideTurnBudget([errand], { calls: 60, repeats: 3 })!.calls, 60);
 });
+
+test("an interrupted errand is retried ahead of what its sender wrote meanwhile", async () => {
+  const w = world();
+  try {
+    w.bus.sendFromUser(w.mia.id, "Migrate the billing database");
+    await w.bus.wake(w.mia.id); await w.bus.idle();
+    const release = w.gate("first:");
+    fromBob(w, "first: is the staging build green?");
+    const side = w.bus.wake(w.mia.id);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    fromBob(w, "second: and the release notes?");
+    w.settle("answered");
+    w.bus.sendFromUser(w.mia.id, "Use Saturday night");
+    const person = w.bus.wake(w.mia.id);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    release(); await person; await side; await w.bus.idle();
+    const retried = w.ran.filter(row => !row.aborted && row.texts.some(text => text.includes("first:"))).at(-1)!;
+    const both = w.ran.filter(row => !row.aborted).flatMap(row => row.texts).filter(text => /first:|second:/.test(text));
+    assert.ok(retried, "the interrupted message ran again");
+    assert.ok(both.findIndex(text => text.includes("first:")) < both.findIndex(text => text.includes("second:")), "in the order it was sent");
+  } finally { w.cleanup(); }
+});

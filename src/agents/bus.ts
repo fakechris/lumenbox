@@ -813,7 +813,8 @@ export class AgentBus {
         if (inbound[0]?.work) this.workAttention?.execution(inbound[0].work, agentId, executionConversation);
         this.active.get(key)!.principalId = inbound[0]?.principalId; this.active.get(key)!.userDriven = inbound.some(personMessage);
         // The person's work is moving: a colleague's errand in flight yields, and is tried again after.
-        if (key !== workerKey(agentId, SIDE_LANE) && (inbound.some(personMessage) || inbound.some(message => message.goal !== undefined || message.resumeOf !== undefined))) {
+        const ownWork = inbound.some(message => message.work?.owner === agentId && this.workAttention?.valid(message.work, agentId) === true); // a result its work was waiting for
+        if (key !== workerKey(agentId, SIDE_LANE) && (ownWork || inbound.some(personMessage) || inbound.some(message => message.goal !== undefined || message.resumeOf !== undefined))) {
           this.active.get(key)!.forPerson = true;
           const side = this.active.get(workerKey(agentId, SIDE_LANE));
           if (side !== undefined) { side.preempted = true; this.onEvent({ type: "turn_interrupted", agentId, reason: "user_work" }); side.controller.abort(); }
@@ -833,8 +834,11 @@ export class AgentBus {
       } catch (error) {
         if (this.active.get(key)?.preempted) { // not a failure: the person went first, and this is queued again
           const again = inbound.filter(message => (message.redriven ?? 0) < SIDE_RETRIES).map(message => ({ ...message, redriven: (message.redriven ?? 0) + 1 }));
-          for (const message of again) this.pending.set(agentId, [...this.pending.get(agentId) ?? [], { ...message, admission: this.inbox?.admit(agentId, message) }]);
-          if (again.length === inbound.length) return;
+          // Ahead of what arrived meanwhile: the colleague's messages keep the order they were sent in.
+          this.pending.set(agentId, [...again.map(message => ({ ...message, admission: this.inbox?.admit(agentId, message) })), ...this.pending.get(agentId) ?? []]);
+          const spent = inbound.filter(message => (message.redriven ?? 0) >= SIDE_RETRIES);
+          if (spent.length > 0) this.notifySenders(agent, spent, error); // only what will not be tried again
+          return;
         }
         // The senders are told. Their acknowledgement said the message would be delivered, and it
         // was — into a turn that then failed, which they would otherwise wait on forever. This is
