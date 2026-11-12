@@ -2,10 +2,10 @@
  * The work panel, overview level (INV-1825, docs/99 §6): what is asked of the person, the result,
  * how far it is, and what happened — in that order, because that is the order a person needs them.
  *
- * Diagnostics are not here yet; the foot of the panel opens the classic record for them.
+ * The record itself is the diagnostics tab (next-diagnostics-ui.ts), one explicit click away.
  */
 export const NEXT_PANEL_JS = `
-var panel = { taskId: "", task: null, steps: [], stopping: null };
+var panel = { taskId: "", task: null, steps: [], total: 0, snapshot: "", coverage: "", tab: "overview" };
 
 function section(title) { var box = el("section"); box.appendChild(el("h2", "group", title)); return box; }
 function duration(ms) {
@@ -157,7 +157,9 @@ function renderPanel() {
   $("panel-chip").className = "chip " + state.tone; $("panel-chip").textContent = t("ui.next.state." + state.key);
   $("panel-who").textContent = agentName(task.assigneeId) + " · " + agoText(task.updatedAt);
   inner.replaceChildren();
+  document.querySelectorAll("[data-tab]").forEach(function (button) { button.setAttribute("aria-pressed", String(button.dataset.tab === panel.tab)); });
   inner.appendChild(el("h3", "", task.title));
+  if (panel.tab === "diagnostics") { renderDiagnostics(inner, task); return; }
   if (task.description && task.description !== task.title) inner.appendChild(el("p", "asked", task.description));
   [needBlock(task), resultBlock(task), progressBlock(task), processBlock(), stopBlock(task)].forEach(function (block) { if (block) inner.appendChild(block); });
 }
@@ -173,14 +175,14 @@ function loadPanel() {
     return getJson("/api/tasks/execution?task=" + encodeURIComponent(id) + "&limit=50").then(function (page) {
       if (panel.taskId !== id) return;
       panel.steps = (page.steps || []).filter(function (step) { return step.kind === "tool"; });
-      panel.total = page.total || panel.steps.length;
+      panel.total = page.total || panel.steps.length; panel.snapshot = page.snapshot || ""; panel.coverage = page.coverage || "";
       renderPanel();
     }, function () {});
   }, failed);
 }
 
 function openPanel(taskId) {
-  panel.taskId = taskId; panel.task = null; panel.steps = []; panel.total = 0;
+  panel.taskId = taskId; panel.task = null; panel.steps = []; panel.total = 0; panel.tab = "overview"; diag.open = ""; diag.detail = null;
   $("panel-inner").replaceChildren(); $("panel-chip").textContent = ""; $("panel-who").textContent = "";
   $("panel").hidden = false; $("scrim").hidden = false;
   loadPanel();
@@ -191,6 +193,9 @@ function panelChanged(taskId) { if (panel.taskId === taskId) { clearTimeout(pane
 function panelStart() {
   $("panel-close").addEventListener("click", closePanel);
   $("scrim").addEventListener("click", closePanel);
+  document.querySelectorAll("[data-tab]").forEach(function (button) {
+    button.addEventListener("click", function () { panel.tab = button.dataset.tab; if (panel.task) renderPanel(); });
+  });
   document.addEventListener("keydown", function (event) { if (event.key === "Escape" && panel.taskId) closePanel(); });
 }
 `;
