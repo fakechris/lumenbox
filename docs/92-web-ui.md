@@ -200,6 +200,10 @@ the agent's next write is refused rather than typed into the person's hands) and
 when it learns from what was shown; record the desktop; send text to its clipboard and fetch what it
 holds.
 
+**Usage is a report, opened from the system view.** By day, by agent, by model and by piece of
+work, tokens printed whole. Money appears only when every model in the window has a rate, and a
+total that is only a floor says so.
+
 **Three levels, everywhere.**
 
 | Level | Where | Holds |

@@ -176,3 +176,10 @@ test("\"/\" opening a message asks for a skill, \"@\" at a word asks for a colle
   assert.deepEqual(plain(composerPick("ask @bo about it", 7, "mention", "Bob", "")), { value: "ask @Bob  about it", caret: 9 });
   assert.deepEqual(plain(composerPick("/res", 4, "skill", "research-brief", "Use the research-brief skill.")), { value: "Use the research-brief skill.", caret: 29 });
 });
+
+test("the share of input served from cache is of everything read, and unknown when nothing was", () => {
+  const cacheHit = pageFunction("cacheHit", {});
+  assert.equal(cacheHit({ inputTokens: 250, cacheReadTokens: 750 }), 75);
+  assert.equal(cacheHit({ inputTokens: 0, cacheReadTokens: 0 }), undefined);
+  assert.equal(cacheHit(undefined), undefined);
+});
