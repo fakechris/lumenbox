@@ -82,7 +82,7 @@ function setupCard() {
   var steps = [
     { key: "key", done: state.key, open: function () { openEmbed("settings", "model"); } },
     { key: "box", done: state.box, open: function () { openEmbed("settings", "boxes"); } },
-    { key: "agent", done: state.agentTurn || Object.keys(next.agents).length > 0, open: function () { openEmbed("shelf"); } },
+    { key: "agent", done: state.agentTurn || Object.keys(next.agents).length > 0, open: function () { openMember(""); } },
     { key: "door", done: state.door, optional: true, open: function () { openEmbed("settings", "doors"); } },
   ];
   var card = el("div", "card-plain"), close = el("button", "act", t("ui.next.act.close"));

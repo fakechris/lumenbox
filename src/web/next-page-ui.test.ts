@@ -206,3 +206,16 @@ test("a tool is allowed, asked about or off; a floor removes the choices below i
   const rows = [{ name: "bash", group: "code", value: "allow", inherited: "allow" }, { name: "WebFetch", group: "web", value: "ask", inherited: "ask" }, { name: "edit_file", group: "code", value: "ask", inherited: "allow" }, { name: "computer", group: "desk", value: "off", inherited: "allow" }];
   assert.deepEqual(plain(toolsSaved(rows, ["bash", "ext__tool"], perms)), { tools: ["bash", "WebFetch", "edit_file", "ext__tool"], toolPermissions: { groups: { web: "ask" }, tools: { edit_file: "ask" } } }, "a tool the page does not list is kept");
 });
+
+test("every template on offer is one row with what a press sends, and is found by its name or its note", () => {
+  const shelfRows = pageFunction("shelfRows", {}), shelfFound = pageFunction("shelfFound", {});
+  const rows = JSON.parse(JSON.stringify(shelfRows({
+    marketplace: [{ slug: "support-desk", name: "Support desk", title: "Answers tickets" }],
+    mine: [{ agentId: "a1", agentName: "Mia", version: 3, name: "Weekly reporter" }],
+    catalog: [{ kind: "expert", slug: "analyst", name: "Analyst", title: "Reads the numbers" }, { kind: "crew", slug: "content", name: "Content crew", summary: "Five roles", members: [{ name: "Scout" }, { name: "Writer" }] }],
+  }))) as { group: string; name: string; note: string; send: unknown }[];
+  assert.deepEqual(rows.map(row => [row.group, row.send]), [["ready", { templateSlug: "support-desk" }], ["mine", { agentId: "a1", version: 3 }], ["role", { catalogSlug: "analyst" }], ["crew", { catalogSlug: "content" }]]);
+  assert.equal(rows[3]!.note, "Five roles · Scout, Writer", "a crew says who is in it");
+  assert.deepEqual((shelfFound(rows, " WRITER ") as { name: string }[]).map(row => row.name), ["Content crew"]);
+  assert.equal((shelfFound(rows, "") as unknown[]).length, 4);
+});

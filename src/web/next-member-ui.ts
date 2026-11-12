@@ -54,7 +54,7 @@ function renderMember() {
   });
   form.appendChild(save);
   inner.appendChild(form);
-  if (member.creating) return;
+  if (member.creating) { inner.appendChild(shelfBlock()); return; }
   var kept = el("div", "setting");
   kept.appendChild(standingFold(agent)); kept.appendChild(historyFold(agent)); kept.appendChild(templateFold(agent));
   inner.appendChild(kept);

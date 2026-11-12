@@ -211,6 +211,10 @@ to. Each tool is allowed, asked about first, or off, by group; a floor the organ
 the choice that is missing. The agent can be asked to draft a template of itself, which a person
 downloads, publishes or takes down.
 
+**A new agent starts with a name; the catalogue is one press away.** Under the blank form, folded:
+the ready-made templates, the ones made here, the roles and crews, found by typing, each created on
+the selected computer with one press; and a template somebody sent, as a file or pasted.
+
 **Three levels, everywhere.**
 
 | Level | Where | Holds |
