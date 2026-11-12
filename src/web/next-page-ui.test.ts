@@ -8,14 +8,18 @@ import vm from "node:vm";
 import { NEXT_PAGE } from "./page-locale.ts";
 import { nextLogic } from "./next-logic-ui.ts";
 
+/** The inline scripts of a page, in order. */
+const pageScripts = (page: string): string[] => [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match => match[1]!);
+
 const row = (phase: string, blocker?: string, status = "doing") => ({ status, reading: { phase, ...(blocker ? { blocker: { kind: blocker } } : {}) } });
 
 test("the page fills in both languages, and its script parses", () => {
   for (const locale of ["zh", "en"] as const) {
     const page = NEXT_PAGE(locale);
     assert.doesNotMatch(page, /\{\{/, "no unfilled word");
-    const script = /<script>([\s\S]*)<\/script>/.exec(page)![1]!;
-    assert.doesNotThrow(() => new vm.Script(script), "the page script is valid JavaScript");
+    const scripts = pageScripts(page);
+    assert.ok(scripts.length >= 2, "the theme script and the page script");
+    for (const script of scripts) assert.doesNotThrow(() => new vm.Script(script), "each page script is valid JavaScript");
   }
   assert.match(NEXT_PAGE("zh"), /全部工作/);
   assert.match(NEXT_PAGE("en"), /All work/);
@@ -77,7 +81,7 @@ test("the page somebody switched to is the one they come back to; with no choice
 
 /** One function out of the page's own script, run with the globals it reads. */
 function pageFunction(name: string, globals: Record<string, unknown>): (...args: unknown[]) => unknown {
-  const script = /<script>([\s\S]*)<\/script>/.exec(NEXT_PAGE("en"))![1]!;
+  const script = pageScripts(NEXT_PAGE("en")).sort((a, b) => b.length - a.length)[0]!;
   const start = script.indexOf(`function ${name}(`);
   assert.ok(start >= 0, `the page has ${name}`);
   let depth = 0, end = start;

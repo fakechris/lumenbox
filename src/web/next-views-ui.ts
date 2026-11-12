@@ -15,7 +15,13 @@ function agoText(iso) { var ago = nextAgo(iso, Date.now()); return t("ui.next.ti
 function isTask(ref) { return /^t\\d+$/.test(ref); }
 
 /** What an inbox item asks, in the page's own words where the server's are bookkeeping. */
-function owedText(item) { return item.kind === "review" ? t("ui.next.panel.review") : (item.detail || ""); }
+function owedText(item) {
+  if (item.kind === "review") return t("ui.next.panel.review");
+  if (item.kind === "nudged") return t("ui.next.inbox.nudged");
+  // A question's choices are buttons on its row; its sentence is the question alone.
+  if (item.answer && item.answer.options) return String(item.detail || "").split(" — ")[0];
+  return item.detail || "";
+}
 
 /** The sentence under a row's title: what the person is asked, else what holds the work, else where it stands. */
 function reasonOf(row) {
@@ -102,8 +108,9 @@ function inboxRow(item) {
   body.appendChild(el("div", "why", owedText(item)));
   open.appendChild(el("span", "who", initial(item.with || item.title)));
   open.appendChild(body);
+  // Opens the work when it is about work, else the conversation with the agent that asked.
   if (isTask(item.ref)) open.addEventListener("click", function () { openPanel(item.ref); });
-  else open.addEventListener("click", function () { location.href = "/"; });
+  else if (item.answer) open.addEventListener("click", function () { openChat(item.answer.agentId); });
   node.appendChild(open);
   if (item.kind === "approval") {
     var approve = el("button", "act-primary", t("ui.next.act.approve")), deny = el("button", "act", t("ui.next.act.deny"));
@@ -111,6 +118,16 @@ function inboxRow(item) {
     deny.addEventListener("click", function () { postJson("/api/deny", { id: item.ref }).then(function () { settle(node, t("ui.next.done.denied")); }, failed); });
     acts.appendChild(approve); acts.appendChild(deny);
   }
+  ((item.answer && item.answer.options) || []).forEach(function (option) {
+    var pick = el("button", "act", option);
+    pick.addEventListener("click", function () {
+      acts.querySelectorAll("button").forEach(function (other) { other.disabled = true; });
+      postJson("/api/prompt", { agent: item.answer.agentId, conversation: item.answer.conversation, text: option }).then(function () {
+        settle(node, t("ui.next.done.sent", { name: item.with || "" }));
+      }, function (error) { failed(error); render(); });
+    });
+    acts.appendChild(pick);
+  });
   if (acts.childNodes.length) node.appendChild(acts);
   if (item.deadline) node.appendChild(el("span", "when", agoText(item.deadline)));
   return node;
@@ -177,6 +194,11 @@ function nextStart() {
   });
   document.querySelectorAll("[data-layout]").forEach(function (button) {
     button.addEventListener("click", function () { next.layout = button.dataset.layout; render(); });
+  });
+  $("theme").addEventListener("click", function () {
+    var dark = document.documentElement.getAttribute("data-theme") !== "dark";
+    document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+    try { localStorage.setItem("lumen-theme", dark ? "dark" : "light"); } catch (error) {}
   });
   var asked = new URLSearchParams(location.search).get("view");
   if (asked === "work" || asked === "inbox" || asked === "settings" || asked === "auto" || asked === "boxes" || asked === "system") { next.view = asked; document.body.dataset.open = "1"; }

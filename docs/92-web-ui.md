@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: web-ui
-     updated: 2026-11-11
+     updated: 2026-11-12
 -->
 # The web UI's visual rules: type, spacing, components
 
@@ -158,3 +158,48 @@ Unconfirmed operations remain visible after restart and retry only their origina
 An unfinished member-pause reservation restores the real pause authority before inbox recovery;
 a completed pause never overrides a later explicit resume.
 Read/search/preview cannot execute a model, resend a reply, or mutate real work.
+
+## The rebuilt page
+
+2026-11-12 (INV-1825). Two pages serve one installation until the rebuilt one covers the classic
+one: `/?ui=next` and `/?ui=classic` choose, the choice is remembered, and both read the same data.
+Everything above this section describes the classic page; this section is the rule for the rebuilt
+one. [docs/99](99-user-work.md) §6 owns *what* a person is shown; this owns how the page is laid out.
+
+**The main line is a person's conversation with a named agent.** People remember whom they asked.
+The page opens on the computers, the agents on the one selected, and the conversation with one of
+them. That agent's unfinished work is pinned at the top of its conversation. What cuts across
+agents — everything that needs the person, all work — is one click away in the side column and is
+never the landing. A first slice that opened on an inbox and a work list was wrong, and was seen to
+be wrong on real data within the day.
+
+**Three levels, everywhere.**
+
+| Level | Where | Holds |
+|---|---|---|
+| Default | The thread, a row, a pin | What was said; one state word and one sentence of reason |
+| Detail | A fold opened in place, the work panel's overview, the screen pane, an agent's page | The agent's steps, the plan, the result, progress with where each number came from, its screen and files |
+| Diagnostics | The work panel's second tab | Raw step input and output, usage, identifiers, export |
+
+A default surface carries nothing from the third level and offers the second by a single control.
+Measured on the fixture, the classic first screen had 56 controls; the rebuilt conversation has 18.
+A new control on a default surface has to be something a person decides or needs to find.
+
+**What an agent asks is answered where it asked.** A question, a consent, a secret, a desktop handed
+over, a card it drew: each is a card in that agent's conversation, and a question or an approval is
+also a row in the inbox with its buttons on the row. Nothing that passed between agents is shown as
+a message: it is one folded line.
+
+**A read that failed is not an empty answer.** A list that could not be read says so. "Nothing went
+wrong" is only said when the server said it.
+
+**Files.** One module per surface under `src/web/next-*-ui.ts`, each exporting its script as a string;
+`next-logic-ui.ts` holds the few decisions the page makes, as plain functions shipped as their own
+source so the test runs what the page runs. Every word comes from `src/i18n/ui-next.ts`. The classic
+page's settings dialogs are shown in a frame (`embed-ui.ts`) until each is rebuilt; that bridge is
+removed pane by pane, never extended.
+
+**Checking.** `next-page-ui.test.ts` fills the page in both languages, parses every inline script, and
+checks that every looked-up id exists; a function with a regular expression or a wire format in it is
+run from the page's own source. Before a change to the page ships, it is looked at in a browser on an
+isolated fixture, wide and narrow, light and dark.
