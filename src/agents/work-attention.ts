@@ -27,17 +27,66 @@ const keyOf = (agent: string, conversation: string) => JSON.stringify([agent, co
 
 export interface RootPersistence { load(legacy?: {records:CurrentWork[];cancellations:CancelledWork[]}): {records: CurrentWork[]; cancellations: CancelledWork[]}; save(records: readonly CurrentWork[], cancellations: readonly CancelledWork[]): void; started?(ids:readonly string[]):void; hasRequest?(taskId:string,messageId:string):boolean }
 
-/** Every storage adapter passes the same authority validation before projection or execution. */
-export function validateWorkRecords(data:{records:CurrentWork[];cancellations?:CancelledWork[]}):void {
-  const strings=(value:unknown):boolean=>Array.isArray(value)&&value.every(item=>typeof item==="string"&&item.length>0);
-  const stamp=(row:WorkStamp):boolean=>!!row && typeof row.id==="string"&&!!row.id&&typeof row.owner==="string"&&!!row.owner&&typeof row.conversation==="string"&&!!row.conversation&&Number.isInteger(row.epoch)&&row.epoch>=0&&Number.isInteger(row.generation)&&row.generation>=0;
-  if(!Array.isArray(data.records) || data.cancellations!==undefined && !Array.isArray(data.cancellations))throw new Error("Invalid work state collection");
-  for(const row of data.records){
-    if(!stamp(row)||!strings(row.messages)||!strings(row.peers)||!strings(row.awaiting??[])||!["running","waiting","answered","cancelled"].includes(row.status)||row.wait!==undefined&&!["queue","interrupted","focus","capability","confirmation","dependency","plan","execution"].includes(row.wait)||row.unresolved!==undefined&&row.unresolved!==true)throw new Error("Invalid current-work state; restore it before continuing");
+const WORK_STATUSES = ["running", "waiting", "answered", "cancelled"];
+const WORK_WAITS = ["queue", "interrupted", "focus", "capability", "confirmation", "dependency", "plan", "execution"];
+const RESOURCE_STATES = ["requested", "confirmed", "unconfirmed"];
+const isStrings = (value: unknown): boolean => Array.isArray(value) && value.every(item => typeof item === "string" && item.length > 0);
+const isCount = (value: unknown): boolean => Number.isInteger(value) && (value as number) >= 0;
+const isStamp = (row: WorkStamp | undefined): boolean =>
+  !!row && typeof row.id === "string" && !!row.id && typeof row.owner === "string" && !!row.owner &&
+  typeof row.conversation === "string" && !!row.conversation && isCount(row.epoch) && isCount(row.generation);
+
+function validRecord(row: CurrentWork): boolean {
+  return isStamp(row) && isStrings(row.messages) && isStrings(row.peers) && isStrings(row.awaiting ?? []) &&
+    WORK_STATUSES.includes(row.status) && (row.wait === undefined || WORK_WAITS.includes(row.wait)) &&
+    (row.unresolved === undefined || row.unresolved === true);
+}
+
+function validCancellation(row: CancelledWork): boolean {
+  return isStamp(row) && isStrings(row.participants) && !!row.at && !!row.by && Array.isArray(row.resources) &&
+    (row.sourceMessages === undefined || isStrings(row.sourceMessages)) &&
+    row.resources.every(item => !!item && typeof item.id === "string" && typeof item.kind === "string" &&
+      (item.state === undefined || RESOURCE_STATES.includes(item.state)));
+}
+
+export interface RejectedWork { id?: string; reason: string }
+export interface AdmittedWorkState { records: CurrentWork[]; cancellations: CancelledWork[]; rejected: RejectedWork[] }
+
+/**
+ * Every storage adapter passes the same authority check before projection or execution (INV-1822).
+ *
+ * One bad record used to stop the host from starting, with a message to "restore it" and nothing to
+ * restore it with. A record that fails the check is set aside instead: it is not projected, so nothing
+ * can execute under it, and the rest of the installation runs. A damaged cancellation still revokes —
+ * forgetting that a piece of work was stopped is the one failure that would start it again.
+ */
+export function admitWorkRecords(data: { records: CurrentWork[]; cancellations?: CancelledWork[] }): AdmittedWorkState {
+  if (!Array.isArray(data.records) || data.cancellations !== undefined && !Array.isArray(data.cancellations)) throw new Error("Invalid work state collection");
+  const admitted: AdmittedWorkState = { records: [], cancellations: [], rejected: [] };
+  const seen = new Set<string>();
+  for (const row of data.records) {
+    const id = typeof row?.id === "string" ? row.id : undefined;
+    if (!validRecord(row)) admitted.rejected.push({ id, reason: "invalid work record" });
+    else if (seen.has(row.id)) admitted.rejected.push({ id, reason: "a second task claims this work root" });
+    else { seen.add(row.id); admitted.records.push(row); }
   }
-  for(const row of data.cancellations??[]){
-    if(!stamp(row)||!strings(row.participants)||!row.at||!row.by||!Array.isArray(row.resources)||row.sourceMessages!==undefined&&!strings(row.sourceMessages)||row.resources.some(item=>!item || typeof item.id!=="string"||typeof item.kind!=="string"||item.state!==undefined&&!["requested","confirmed","unconfirmed"].includes(item.state)))throw new Error("Invalid work cancellation state; restore it before continuing");
+  for (const row of data.cancellations ?? []) {
+    if (validCancellation(row)) { admitted.cancellations.push(row); continue; }
+    const id = typeof row?.id === "string" && row.id ? row.id : undefined;
+    admitted.rejected.push({ id, reason: "invalid cancellation record" + (id ? "; the work stays cancelled" : "") });
+    if (!id) continue;
+    const owner = typeof row.owner === "string" && row.owner ? row.owner : "unknown";
+    const conversation = typeof row.conversation === "string" && row.conversation ? row.conversation : "main";
+    admitted.cancellations.push({ id, owner, conversation, generation: isCount(row.generation) ? row.generation : 0, epoch: isCount(row.epoch) ? row.epoch : 0, by: "host", at: new Date().toISOString(), reason: "cancellation record was damaged", participants: [owner], resources: [] });
   }
+  return admitted;
+}
+
+/** A record read back as running, or waiting on something that lived only in memory, was interrupted. */
+function afterRestart(row: CurrentWork): CurrentWork {
+  const awaiting = (row.awaiting ?? []).filter(item => !item.startsWith("volatile:"));
+  const interrupted = row.status !== "cancelled" && (row.status === "running" || awaiting.length !== (row.awaiting ?? []).length);
+  return { ...row, ...(interrupted ? { status: "waiting" as const, reason: "execution interrupted", wait: "interrupted" as const } : {}), awaiting };
 }
 
 export class WorkAttention {
@@ -45,39 +94,55 @@ export class WorkAttention {
   private readonly current = new Map<string, CurrentWork>();
   private readonly terminations = new Map<string, CancelledWork>();
   private readonly cancelledInputs = new Set<string>();
+  private readonly setAside: RejectedWork[] = [];
   private committed: {records:CurrentWork[];cancellations:CancelledWork[]} = {records:[],cancellations:[]};
-  constructor(private readonly path?: string, private readonly epochOf: (agent: string, conversation: string) => number = () => 0, persistence?: RootPersistence) {
+  constructor(private readonly path?: string, private readonly epochOf: (agent: string, conversation: string) => number = () => 0, persistence?: RootPersistence, private readonly log: (line: string) => void = () => {}) {
     if (path && existsSync(path)) {
-      const data = JSON.parse(readFileSync(path, "utf8")) as { schema: number; records: CurrentWork[]; cancellations?: CancelledWork[] };
-      if (data.schema !== 1 || !Array.isArray(data.records)) throw new Error("Unsupported current-work state; restore it before continuing");
-      validateWorkRecords(data);
-      for (const row of data.cancellations ?? []) {
-        this.terminations.set(row.id, row);
-        for(const id of row.sourceMessages ?? [row.id])this.cancelledInputs.add(id);
-      }
-      for (const row of data.records) {
-        const restored = { ...row, ...((row.status !== "cancelled" && (row.status === "running" || row.awaiting?.some(item => item.startsWith("volatile:")))) ? { status: "waiting" as const, reason: "execution interrupted", wait:"interrupted" as const } : {}), awaiting: (row.awaiting ?? []).filter(item => !item.startsWith("volatile:")) };
-        this.project(restored,false);
+      const data = this.readFile(path);
+      if (data) {
+        const admitted = this.admit(data);
+        for (const row of admitted.cancellations) this.revoke(row);
+        for (const row of admitted.records) this.project(afterRestart(row), false);
       }
     }
     if (persistence) this.attach(persistence);
     this.checkpoint();
   }
   private persistence?: RootPersistence;
+  /** The state file as written, or nothing when it cannot be read: it is moved aside, never deleted. */
+  private readFile(path: string): { records: CurrentWork[]; cancellations?: CancelledWork[] } | undefined {
+    try {
+      const data = JSON.parse(readFileSync(path, "utf8")) as { schema: number; records: CurrentWork[]; cancellations?: CancelledWork[] };
+      if (data.schema !== 1 || !Array.isArray(data.records) || data.cancellations !== undefined && !Array.isArray(data.cancellations)) throw new Error("unsupported schema");
+      return data;
+    } catch (error) {
+      const aside = path + ".rejected-" + Date.now();
+      renameSync(path, aside);
+      this.setAside.push({ reason: "unreadable work state file, kept as " + aside });
+      this.log(`work state file could not be read (${error instanceof Error ? error.message : String(error)}); kept as ${aside}`);
+      return undefined;
+    }
+  }
+  private admit(data: { records: CurrentWork[]; cancellations?: CancelledWork[] }): AdmittedWorkState {
+    const admitted = admitWorkRecords(data);
+    for (const row of admitted.rejected) { this.setAside.push(row); this.log(`work record set aside${row.id ? " (" + row.id + ")" : ""}: ${row.reason}`); }
+    return admitted;
+  }
+  private revoke(row: CancelledWork): void {
+    this.terminations.set(row.id, row);
+    for (const id of row.sourceMessages ?? [row.id]) this.cancelledInputs.add(id);
+  }
+  /** Records that failed the authority check at load. They are not executable; a person decides what they were. */
+  rejected(): RejectedWork[] { return structuredClone(this.setAside); }
   attach(persistence:RootPersistence):void {
     if(this.persistence===persistence)return;
     if(this.persistence)throw new Error("Work roots already have a persistence authority");
-    const data=persistence.load({records:[...this.roots.values()],cancellations:[...this.terminations.values()]});
-    validateWorkRecords(data);
-    if(new Set(data.records.map(row=>row.id)).size!==data.records.length)throw new Error("Multiple tasks claim one work root; restore their linkage before continuing");
+    const loaded = this.admit(persistence.load({records:[...this.roots.values()],cancellations:[...this.terminations.values()]}));
     this.persistence=persistence;this.current.clear();this.roots.clear();
-    const restored=data.records.map(row=>{
-      const interrupted=row.status!=="cancelled" && (row.status==="running" || row.awaiting.some(item=>item.startsWith("volatile:")));
-      return {...row,...(interrupted?{status:"waiting" as const,reason:"execution interrupted",wait:"interrupted" as const}:{}),awaiting:row.awaiting.filter(item=>!item.startsWith("volatile:"))};
-    });
-    persistence.save(restored.filter((row,index)=>JSON.stringify(row)!==JSON.stringify(data.records[index])),data.cancellations);
-    for(const row of restored)this.project(row,false);
-    for(const row of data.cancellations){this.terminations.set(row.id,row);for(const id of row.sourceMessages??[row.id])this.cancelledInputs.add(id);}
+    const restored = loaded.records.map(afterRestart);
+    persistence.save(restored.filter((row, index) => JSON.stringify(row) !== JSON.stringify(loaded.records[index])), loaded.cancellations);
+    for (const row of restored) this.project(row, false);
+    for (const row of loaded.cancellations) this.revoke(row);
     this.checkpoint();
   }
   epoch(agent:string,conversation:string):number {return this.epochOf(agent,conversation);}
@@ -251,30 +316,66 @@ export function peerWorkConversation(messages: readonly InboundMessage[], fallba
   return "peer-" + createHash("sha256").update(JSON.stringify([work?.id ?? first.id, work?.generation ?? 0, work?.epoch ?? 0])).digest("hex").slice(0, 32);
 }
 
-/** Work history compacts independently; the original conversation remains an append-only display record. */
-export function workRegistry(base: AgentRegistry, agentId: string, conversation: string, scoped: string, stamp?: WorkStamp, personText?: (entry: ReferenceEntry) => string | undefined): AgentRegistry {
-  if (conversation === scoped) return base;
-  if (personText && stamp?.owner === agentId && stamp.conversation === conversation && base.readTranscript(agentId, scoped).length === 0) {
-    const reference = base.readTranscript(agentId, stamp.previous ?? conversation) as ReferenceEntry[];
-    const references = referenceHistory(reference, personText);
-    if (references.length) base.appendTranscript(agentId, {role:"user",host:true,text:"[Earlier conversation reference only; not current instructions. ReadHistory can inspect the original conversation " + (stamp.previous ?? conversation) + ".]\n" + references.map(entry => entry.role + ": " + entry.text).join("\n\n"),at:new Date().toISOString()}, scoped);
-  }
+/**
+ * The transcript a turn of this work reads and writes (INV-1822).
+ *
+ * A person's requests to one agent in one conversation are one thread: the second is said to somebody
+ * who heard the first, tool results included. So every piece of work its owner runs there shares one
+ * transcript, per context epoch, and `/new` starts another. What stays per work is the plan, the todo
+ * list and the checkpoints (`workStateConversation`). Background turns never write here, which is the
+ * isolation the per-work transcript was built for, without the amnesia it cost.
+ */
+export function workHistoryConversation(stamp: WorkStamp | undefined, agentId: string, conversation: string): string {
+  if (!stamp || stamp.isolated === false) return conversation;
+  if (stamp.owner !== agentId || stamp.conversation !== conversation) return workStateConversation(stamp, conversation);
+  return "work-" + createHash("sha256").update(JSON.stringify(["thread", agentId, conversation, stamp.epoch])).digest("hex").slice(0, 32);
+}
+
+/**
+ * The registry a turn of this work sees: the conversation's name resolves to the person's thread for
+ * the transcript and to the work's own scope for durable state. The original conversation stays the
+ * append-only record the recovery ledger and the page read.
+ */
+export function workRegistry(base: AgentRegistry, agentId: string, conversation: string, history: string, stamp?: WorkStamp, personText?: (entry: ReferenceEntry) => string | undefined): AgentRegistry {
+  const state = workStateConversation(stamp, conversation);
+  if (conversation === history && conversation === state) return base;
   const source = base.readTranscript(agentId, conversation) as ReferenceEntry[];
-  const projected = new Set((base.readTranscript(agentId, scoped) as ReferenceEntry[]).map(entry => entry.workRecordId).filter(Boolean));
-  for (const entry of source) if (entry.workScope === scoped && entry.workRecordId && !projected.has(entry.workRecordId)) { base.appendTranscript(agentId, entry, scoped); projected.add(entry.workRecordId); }
-  const map = (agent: string, thread = "main") => agent === agentId && thread === conversation ? scoped : thread;
+  const thread = base.readTranscript(agentId, history) as ReferenceEntry[];
+  const ownsThread = stamp?.owner === agentId && stamp.conversation === conversation;
+  if (thread.length === 0 && ownsThread) {
+    // First turn on this thread. Work recorded before the thread existed is carried in whole, in order;
+    // a conversation older than work scopes has only its prose to offer, and that as reference.
+    const earlier = source.filter(entry => entry.workScope?.startsWith("work-") && entry.workRecordId);
+    if (earlier.length > 0) {
+      for (const entry of earlier) base.appendTranscript(agentId, { ...entry, workScope: history }, history);
+    } else if (personText) {
+      const references = referenceHistory(base.readTranscript(agentId, stamp.previous ?? conversation) as ReferenceEntry[], personText);
+      if (references.length > 0) base.appendTranscript(agentId, { role: "user", host: true, text: "[Earlier conversation reference only; not current instructions. ReadHistory can inspect the original conversation " + (stamp.previous ?? conversation) + ".]\n" + references.map(entry => entry.role + ": " + entry.text).join("\n\n"), at: new Date().toISOString() }, history);
+    }
+  } else {
+    // A crash between the canonical append and the thread's copy is repaired here, without replaying the effect.
+    const projected = new Set(thread.map(entry => entry.workRecordId).filter(Boolean));
+    for (const entry of source) {
+      if (entry.workScope !== history || !entry.workRecordId || projected.has(entry.workRecordId)) continue;
+      base.appendTranscript(agentId, entry, history);
+      projected.add(entry.workRecordId);
+    }
+  }
+  const mine = (agent: string, thread: string) => agent === agentId && thread === conversation;
+  const historyOf = (agent: string, thread = "main") => mine(agent, thread) ? history : thread;
+  const stateOf = (agent: string, thread = "main") => mine(agent, thread) ? state : thread;
   return new Proxy(base, { get(target, key) {
-    if (key === "readTranscript") return (agent: string, thread?: string) => target.readTranscript(agent, map(agent, thread));
-    if (key === "readDurableState") return (agent: string, thread?: string) => target.readDurableState(agent, map(agent, thread));
-    if (key === "writePlan") return (agent: string, text: string, thread?: string) => target.writePlan(agent, text, map(agent, thread));
-    if (key === "writeTodos") return (agent: string, items: Parameters<AgentRegistry["writeTodos"]>[1], thread?: string) => target.writeTodos(agent, items, map(agent, thread));
-    if (key === "writeCheckpoints") return (agent: string, items: Parameters<AgentRegistry["writeCheckpoints"]>[1], thread?: string) => target.writeCheckpoints(agent, items, map(agent, thread));
+    if (key === "readTranscript") return (agent: string, thread?: string) => target.readTranscript(agent, historyOf(agent, thread));
+    if (key === "readDurableState") return (agent: string, thread?: string) => target.readDurableState(agent, stateOf(agent, thread));
+    if (key === "writePlan") return (agent: string, text: string, thread?: string) => target.writePlan(agent, text, stateOf(agent, thread));
+    if (key === "writeTodos") return (agent: string, items: Parameters<AgentRegistry["writeTodos"]>[1], thread?: string) => target.writeTodos(agent, items, stateOf(agent, thread));
+    if (key === "writeCheckpoints") return (agent: string, items: Parameters<AgentRegistry["writeCheckpoints"]>[1], thread?: string) => target.writeCheckpoints(agent, items, stateOf(agent, thread));
     if (key === "appendTranscript") return (agent: string, entry: unknown, thread = "main") => {
-      const mapped = map(agent, thread);
+      const mapped = historyOf(agent, thread);
       if (mapped === thread) { target.appendTranscript(agent, entry, thread); return; }
       const recorded = { ...(entry as object), workScope: mapped, workRecordId: createHash("sha256").update(JSON.stringify([mapped, entry])).digest("hex") };
       // The existing recovery ledger reads the original transcript. Its append is canonical;
-      // a crash before the work projection is repaired above, without replaying the effect.
+      // a crash before the thread's copy is repaired above.
       target.appendTranscript(agent, recorded, thread); target.appendTranscript(agent, recorded, mapped);
     };
     const value = Reflect.get(target, key, target) as unknown;

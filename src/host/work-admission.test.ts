@@ -332,12 +332,31 @@ test("a cancellation committed before queue cleanup cannot block recovery of ano
  }finally{f.cleanup();}
 });
 
-test("canonical root loading rejects corrupt state before it grants execution authority",()=>{
- const f=fixture();try{
-  f.bus().sendFromUser(f.agent.id,"Install the skill",{messageId:"install",principalId:"p"});
-  const data=f.tasks.workRoots.load();data.records[0]!.status="not-a-state" as never;
-  assert.throws(()=>new WorkAttention(undefined,()=>0,{load:()=>data,save:()=>{}}),/Invalid current-work state/);
- }finally{f.cleanup();}
+test("a corrupt root is set aside at load: it grants no execution authority and the others still load (INV-1822)", () => {
+  const f = fixture();
+  try {
+    const bus = f.bus();
+    bus.sendFromUser(f.agent.id, "Install the skill", { messageId: "install", principalId: "p" });
+    bus.sendFromUser(f.agent.id, "Other work", { messageId: "other", principalId: "p", workRelation: "new" });
+    const data = f.tasks.workRoots.load();
+    const corrupt = data.records.find(row => row.id === "install")!;
+    corrupt.status = "not-a-state" as never;
+    const lines: string[] = [];
+    const focus = new WorkAttention(undefined, () => 0, { load: () => data, save: () => {} }, line => lines.push(line));
+    assert.equal(focus.byId("install"), undefined, "nothing can execute under the corrupt record");
+    assert.ok(focus.byId("other"), "a sound record is unaffected");
+    assert.deepEqual(focus.rejected().map(row => row.id), ["install"]);
+    assert.match(lines.join("\n"), /install/);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("a damaged cancellation still revokes its work (INV-1822)", () => {
+  const damaged = { id: "stopped", owner: "a", conversation: "main", generation: 1, epoch: 0 } as never;
+  const focus = new WorkAttention(undefined, () => 0, { load: () => ({ records: [], cancellations: [damaged] }), save: () => {} });
+  assert.ok(focus.cancelled("stopped"), "a stopped piece of work does not start again because its record was damaged");
+  assert.equal(focus.rejected().length, 1);
 });
 
 test("two accepted people or new requests in one conversation are both executed instead of dropping the first as stale",async()=>{

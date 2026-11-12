@@ -8,3 +8,16 @@ export function taskAudience(task: Task, agentIds: ReadonlySet<string>, people?:
   // keep them discoverable as internal/unlinked rather than guessing from prose.
   return agentIds.has(task.requester) ? "internal" : task.requester === "web" ? "user" : people && !people.has(task.requester) && !task.sourceMessageId ? "internal" : "user";
 }
+
+/**
+ * A request the agent answered in its own turn (INV-1822): the record of a chat exchange, kept so the
+ * request can be found again, and never a card somebody has to look at. Anything that left a result to
+ * inspect — a deliverable, a submission, a goal — is work, and stays on the list.
+ */
+export function answeredInChat(task: Pick<Task, "status" | "workRoot" | "pursuit" | "delivery" | "deliverables">): boolean {
+  return task.status === "done"
+    && task.workRoot?.automatic === true
+    && task.pursuit === undefined
+    && task.delivery === undefined
+    && !task.deliverables?.length;
+}
