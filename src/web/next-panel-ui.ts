@@ -140,6 +140,24 @@ function stopBlock(task) {
   record.href = "/?ui=classic&once=1&agent=" + encodeURIComponent(task.assigneeId || "") + "&task=" + encodeURIComponent(task.id);
   links.appendChild(record);
   if (task.status === "done" || task.status === "dropped") return links;
+  // Put off: nobody is reminded of it until then. Said back with the day, and undone from the same place.
+  var later = Date.parse(task.snoozeUntil || "") > Date.now();
+  var snooze = el("button", "", later ? t("ui.next.act.unsnooze", { when: new Date(task.snoozeUntil).toLocaleDateString() }) : t("ui.next.act.snooze"));
+  snooze.addEventListener("click", function () {
+    if (later) { updateTask({ snoozeUntil: "" }, t("ui.next.done.unsnoozed")); return; }
+    var pick = el("span", "acts");
+    [["tomorrow", 1], ["week", 7]].forEach(function (pair) {
+      var day = el("button", "act", t("ui.next.snooze." + pair[0]));
+      day.addEventListener("click", function () {
+        var until = new Date(Date.now() + pair[1] * 86400000);
+        until.setHours(9, 0, 0, 0);
+        updateTask({ snoozeUntil: until.toISOString() }, t("ui.next.done.snoozed", { when: until.toLocaleDateString() }));
+      });
+      pick.appendChild(day);
+    });
+    snooze.replaceWith(pick);
+  });
+  links.appendChild(snooze);
   var stop = el("button", "", t("ui.next.act.stop"));
   stop.addEventListener("click", function () {
     getJson("/api/work-control/preview?taskId=" + encodeURIComponent(task.id)).then(function (preview) {

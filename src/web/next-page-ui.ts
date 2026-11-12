@@ -168,6 +168,12 @@ header.bar { position: relative; }
 .setting select { padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg); color: inherit; font: inherit; }
 .setting > label { margin-bottom: 12px; }
 .runs { padding: 4px 14px 12px 52px; }
+#work-find { width: 180px; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); font: inherit; font-size: 13px; }
+.row .under { flex-basis: 100%; display: flex; gap: 8px; align-items: flex-start; }
+.row .under:empty { display: none; }
+.row:has(.under:not(:empty)) { flex-wrap: wrap; }
+.row .under textarea, .row .under input { flex: 1; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg); font: inherit; }
+.row .under textarea { min-height: 90px; }
 .setting input { width: 140px; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg); font: inherit; }
 .side h2.group { display: flex; align-items: center; justify-content: space-between; }
 .side h2.group button { width: 22px; height: 22px; border-radius: 6px; color: var(--muted); font-size: 16px; line-height: 1; }
@@ -295,6 +301,7 @@ export const NEXT_HTML = `<!doctype html>
       <button id="thread-link">{{ui.next.thread.link}}</button>
     </div>
     <div class="tools" id="work-tools" hidden>
+      <input id="work-find" placeholder="{{ui.next.work.find}}" aria-label="{{ui.next.work.find}}">
       <button class="seg" data-layout="list" aria-pressed="true">{{ui.next.view.list}}</button>
       <button class="seg" data-layout="board" aria-pressed="false">{{ui.next.view.board}}</button>
     </div>

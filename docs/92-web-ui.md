@@ -187,6 +187,11 @@ name, what to do, who does it, what starts it — and can be run at once.
 **A whole conversation has one quiet control.** In the header: find something said in it (only
 what was said, never a step), take it away as Markdown, copy a link to it.
 
+**A decision is finished where it is shown.** A draft waiting to be sent is approved, edited or
+refused (with the reason the agent is told) on its inbox row; work is put off and found by its words
+from the work view and its panel; something that went wrong is retried, taken on or dismissed from
+the system view.
+
 **Three levels, everywhere.**
 
 | Level | Where | Holds |
