@@ -184,6 +184,8 @@ INV-1825, and the default changes only when that list is empty or bridged.
 **Automations are made and read here.** One row each: its name, what it does, when it next runs.
 A press on the row shows how its recent runs ended; a routine is made by answering four things — a
 name, what to do, who does it, what starts it — and can be run at once.
+**A whole conversation has one quiet control.** In the header: find something said in it (only
+what was said, never a step), take it away as Markdown, copy a link to it.
 
 **Three levels, everywhere.**
 

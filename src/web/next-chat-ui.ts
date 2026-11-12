@@ -7,7 +7,7 @@
  * between agents are one folded line each, opened on demand; the host's own notes are not shown.
  */
 export const NEXT_CHAT_JS = `
-var chat = { agentId: "", conversation: "main", conversations: [], plan: null, box: "", entries: [], live: null, loading: "", loadedFor: "", request: 0, jump: false, liveSurfaces: {}, expired: {} };
+var chat = { agentId: "", conversation: "main", conversations: [], plan: null, box: "", entries: [], live: null, loading: "", loadedFor: "", request: 0, jump: false, liveSurfaces: {}, expired: {}, find: "" };
 var markdown = window.markdownit ? window.markdownit({ html: false, linkify: true, breaks: true }) : null;
 
 function agentsHere() {
@@ -67,6 +67,7 @@ function renderSide() {
 }
 
 function openChat(agentId) {
+  chat.find = ""; $("find").hidden = true; $("find-text").value = "";
   // Another agent's half-written words and its thread are not this one's.
   if (agentId !== chat.agentId) { chat.live = null; chat.loadedFor = ""; chat.entries = []; chat.conversation = "main"; chat.conversations = []; chat.plan = null; chat.liveSurfaces = {}; }
   chat.agentId = agentId; next.view = "chat"; document.body.dataset.open = "1";
@@ -173,6 +174,13 @@ function renderThread(view) {
     if (steps.length === 0) return;
     thread.appendChild(fold(t("ui.next.chat.steps", { n: steps.length }), steps.map(function (tool) { return { head: tool.name, text: clip(tool.detail, 160), bad: tool.isError }; })));
     steps = [];
+  }
+  // Looking for something: only what was said that holds it, and none of the cards around it.
+  if (chat.find) {
+    var found = chat.entries.filter(function (entry) { return threadFinds(entry, chat.find); });
+    found.forEach(function (entry) { thread.appendChild(bubble(entry)); });
+    renderThreadTools(found.length); view.appendChild(thread);
+    return;
   }
   var mine = next.rows.filter(function (row) { return row.assigneeId === chat.agentId; }), delivered = mine.filter(function (row) { return nextStateOf(row).key === "review"; });
   mine.filter(function (row) { var group = nextGroupOf(nextStateOf(row).key); return group !== "done" && group !== "review"; }).forEach(function (row) {

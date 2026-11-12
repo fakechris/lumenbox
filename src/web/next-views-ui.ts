@@ -166,6 +166,7 @@ function render() {
   document.querySelectorAll("[data-nav]").forEach(function (button) { button.setAttribute("aria-current", String(button.dataset.nav === next.view)); });
   document.querySelectorAll("[data-layout]").forEach(function (button) { button.setAttribute("aria-pressed", String(button.dataset.layout === next.layout)); });
   renderScreen();
+  renderThreadTools(0);
   if (next.view === "chat") { renderChat(view); return; }
   $("view-title").textContent = t(next.view === "system" ? "ui.next.side.system" : next.view === "boxes" ? "ui.next.side.boxes2" : next.view === "settings" || next.view === "auto" ? "ui.next.side." + next.view : "ui.next.nav." + next.view);
   $("view-hint").textContent = t("ui.next." + next.view + ".hint");
@@ -222,6 +223,7 @@ function nextStart() {
   if (asked === "work" || asked === "inbox" || asked === "settings" || asked === "auto" || asked === "boxes" || asked === "system") { next.view = asked; document.body.dataset.open = "1"; }
   panelStart();
   chatStart();
+  threadStart();
   screenStart();
   memberStart();
   cardsStart();
