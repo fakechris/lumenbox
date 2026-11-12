@@ -62,6 +62,7 @@ export interface ShowUiInput {
 
 /** A surface as last drawn: enough to redraw it whole in any later process. */
 export interface SurfaceRecord {
+  work?: import("../agents/work-attention.ts").WorkStamp;
   agentId: string;
   agentName: string;
   conversation: string;

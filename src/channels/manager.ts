@@ -72,6 +72,7 @@ import {
 } from "./strings.ts";
 
 export interface InboundMessage {
+  interaction?: true;
   /** `telegram:123` — stable, and what the allow list matches. Who is *speaking*. */
   identity: string;
   /**
@@ -447,6 +448,7 @@ export interface ChannelManagerDeps {
    * the bare tool name behind it, for judgements that want the tool and not its
    * rendering.
    */
+  interactionTask?: (message: InboundMessage, agentName?: string) => string | undefined;
   ask: (
     agentName: string | undefined,
     text: string,
@@ -1992,14 +1994,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     }
   }
 
-  /**
-   * One accepted request, from acknowledgement to pushed result.
-   *
-   * Everything here degrades by capability: a card where the adapter has one, a line
-   * where it does not; a chat-addressed push where the wire distinguishes chats from
-   * senders, an identity-addressed one where it does not. Delivery failure settles the
-   * task as failed, even when generation succeeded; the transcript retains the answer.
-   */
+  /** One admitted request, or a card interaction bound to its original task. */
   private async runTask(
     adapter: ChannelAdapter,
     message: InboundMessage,
@@ -2008,6 +2003,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     droppedFiles?: readonly string[],
     options?: { questionId?: string; existingTaskId?: string; cardTitle?: string; recoveryOperationId?: string; skipTask?: boolean; onSucceeded?: () => void }
   ): Promise<void> {
+    if (message.interaction && !message.questionId && !options?.skipTask) { const taskId = this.deps.interactionTask?.(message, agentName); if (!taskId || options?.existingTaskId && options.existingTaskId !== taskId) throw new Error("This card's original work is unavailable; the press did not create a new task."); options = { ...options, existingTaskId: taskId }; }
     const chatKey = message.chatKey ?? message.identity;
     const runningKey = message.threadKey ?? chatKey;
     const targetChatKey = message.threadKey ?? chatKey;

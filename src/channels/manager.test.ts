@@ -2936,3 +2936,21 @@ test("channel receipts and credential waits follow durable root admission, and a
  assert.equal(receipts,1,"no accepted/working acknowledgement before root commit");assert.equal(gated,1);assert.equal(asked,0);
  manager.stop();
 });
+
+
+test("card interactions continue their recorded task and unavailable cards cannot create work", async () => {
+  for (const original of [undefined, "installation-work"]) {
+    const adapter = testAdapter(); const opened: string[] = []; const asked: (string | undefined)[] = [];
+    const manager = new ChannelManager({
+      mayDrive: () => true, log() {}, interactionTask: () => original,
+      ask: async (_agent, _text, _identity, _chat, _progress, _thread, taskId) => { asked.push(taskId); return "continued"; },
+      board: { open(input) { opened.push(input.title); return "unwanted-new-work"; }, started() {}, closed: () => "done" },
+    });
+    manager.register(adapter, true, "test"); await started(manager);
+    await adapter.inject({ identity: "telegram:7", chatKey: "telegram:room", senderLabel: "Chris", text: '[Action: install surface=installation-card]', interaction: true });
+    await manager.idle();
+    assert.deepEqual(opened, []);
+    assert.deepEqual(asked, original ? [original] : []);
+    manager.stop();
+  }
+});

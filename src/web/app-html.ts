@@ -1,3 +1,4 @@
+import { WORK_READING_JS, WORK_READING_STYLE } from "./work-reading-ui.ts";
 import { WORK_ATTENTION_HTML, WORK_ATTENTION_STYLE, WORK_ATTENTION_JS } from "./work-attention-ui.ts";
 import { SETUP_GUIDE_JS, SETUP_GUIDE_STYLE } from "./setup-guide.ts";
 import { PANE_HEADER_STYLE } from "./pane-header.ts";
@@ -61,6 +62,7 @@ var MSG = {{@messages}}, MSG_LOCALE = "{{@locale}}";
 ${WORK_ATTENTION_STYLE}
 ${TASK_FOCUS_STYLE}
 ${TASK_BOARD_STYLE}
+${WORK_READING_STYLE}
 ${RIGHT_PANE_STYLE}
 ${AGENT_ROW_STYLE}
   /* ── Lumen tokens ─────────────────────────────────────────────────────────── */
@@ -3723,48 +3725,7 @@ function toolCall(name, detail, result, isError) {
  * Grok's "5 messages with 2 Bots" does. Outgoing: the text was the agent's own prose above;
  * the footer only says where it went.
  */
-function peerNote(direction, name, text, priority, at) {
-  var el = $("chat");
-  var stick = nearBottom(el);
-  if (direction === "to") {
-    var foot = document.createElement("div");
-    foot.className = "sentfoot";
-    foot.innerHTML = '<details><summary><span class="peerdot" style="background:' + colorOfName(name) + '"></span>{{ui.app.messaged}} ' + esc(name) + (priority ? " {{ui.app.priority}}" : "") + '</summary><div class="det"></div></details>';
-    foot.querySelector(".det").textContent = String(text == null ? "" : text);
-    el.appendChild(foot);
-    if (stick) el.scrollTop = el.scrollHeight;
-    return foot;
-  }
-  var chips = ["{{ui.app.chip-teammate}}"];
-  if (priority) chips.push("{{ui.app.chip-priority}}");
-  var body = bubble("peer", name, text, at, { colour: colorOfName(name), chips: chips });
-  var msg = body.parentNode;
-  // Runs: the third incoming teammate message in a row starts a fold line above the run.
-  var prev = msg.previousElementSibling;
-  var run = prev && prev.classList.contains("peerrun") ? prev : null;
-  if (run) { run.appendChild(msg); }
-  else if (prev && prev.classList.contains("msg") && prev.classList.contains("peer")) {
-    var wrap = document.createElement("div");
-    wrap.className = "peerrun";
-    var fold = document.createElement("div");
-    fold.className = "peerfold";
-    el.insertBefore(fold, prev);
-    el.insertBefore(wrap, fold.nextSibling);
-    wrap.appendChild(prev); wrap.appendChild(msg);
-    fold.onclick = function () { fold.classList.toggle("shut"); relabelPeerFold(fold, wrap); };
-    run = wrap;
-  }
-  if (run) relabelPeerFold(run.previousElementSibling, run);
-  if (stick) el.scrollTop = el.scrollHeight;
-  return body;
-}
-function relabelPeerFold(fold, run) {
-  var msgs = run.querySelectorAll(".msg.peer");
-  var names = {};
-  for (var i = 0; i < msgs.length; i++) names[msgs[i].querySelector(".who").firstChild.textContent] = 1;
-  var m = Object.keys(names).length;
-  fold.textContent = (fold.classList.contains("shut") ? "▸ " : "▾ ") + msgs.length + " {{ui.app.messages-from}} " + m + (m === 1 ? " {{ui.app.teammate}}" : " {{ui.app.teammates}}");
-}
+function peerNote(direction, name, text, priority, at) { recordCommunication({ label: name + " · {{ui.work.communications}}", text: text }); }
 
 /**
  * Says what kind of box this is, wherever the box is being used.
@@ -3981,7 +3942,7 @@ function sendSurfaceAction(item, action) {
   fetch("/api/prompt", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ agent: current, text: text, conversation: currentConversation, messageId:crypto.randomUUID() })
+    body: JSON.stringify({ agent: current, text: text, conversation: currentConversation, messageId:crypto.randomUUID(), surfaceAction:{surface:item.surfaceId,name:action.name} })
   }).then(function (res) {
     if (!res.ok) return res.text().then(function (t) { feed("{{ui.app.action-rejected}} " + esc(t), "err"); });
   }).catch(function (error) { feed("{{ui.app.action-failed}} " + esc(error.message), "err"); });
@@ -4042,7 +4003,7 @@ function sendAnswer(item, text) {
   fetch("/api/prompt", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ agent: current, text: text, conversation: currentConversation, messageId:crypto.randomUUID() })
+    body: JSON.stringify({ agent: current, text: text, conversation: currentConversation, messageId:crypto.randomUUID(), surfaceAction:{surface:item.surfaceId,name:action.name} })
   }).then(function (res) {
     if (!res.ok) return res.text().then(function (t) { feed("{{ui.app.answer-rejected}} " + esc(t), "err"); });
   }).catch(function (error) { feed("{{ui.app.answer-failed}} " + esc(error.message), "err"); });
@@ -4109,7 +4070,7 @@ function drawItem(item) {
     if (item.at) div.setAttribute("data-at", String(item.at));
     if (item.streaming) div.setAttribute("data-partial", "1");
     if (item.unread) div.classList.add("unread");
-    var who = item.kind === "person" ? "{{ui.app.you}}" : item.kind === "teammate" ? item.from : nameOf(current);
+    var who = item.unverified ? "{{ui.wr.source.unknown}}" : item.kind === "person" ? "{{ui.app.you}}" : item.kind === "teammate" ? item.from : nameOf(current);
     var chips = item.kind === "teammate" ? ["{{ui.app.chip-teammate}}"].concat(item.priority ? ["{{ui.app.chip-priority}}"] : []) : [];
     if (item.kind === "teammate") div.style.setProperty("--peer-colour", colorOfName(item.from));
     div.innerHTML = whoLine(who, item.at, chips) + '<div class="body"></div>' + toolsHtml(item.kind, item.index !== undefined);
@@ -4344,6 +4305,7 @@ function replayEntry(id, entry, index, unread) {
     return;
   }
   if (entry.kind === "trigger") {
+    if (entry.provenance) { recordCommunication({label:entry.provenance === "host" ? "{{ui.wr.hostContext}}" : "{{ui.wr.source.unknown}}",text:entry.text}); return; }
     closeOpen();
     pushItem({ kind: "trigger", label: entry.label, text: entry.text, at: entry.at });
     return;
@@ -4375,7 +4337,7 @@ function replayEntry(id, entry, index, unread) {
   }
   if (openWork) { openWork.done = true; openWork.endAt = entry.at || openWork.endAt; redrawItem(openWork); openWork = null; }
   if (openAgent) { openAgent.streaming = false; redrawItem(openAgent); openAgent = null; }
-  pushItem({ kind: entry.role === "user" ? "person" : "agent", text: entry.text, at: entry.at, index: index, unread: !!unread && entry.role !== "user" });
+  pushItem({ kind: entry.role === "user" ? "person" : "agent", unverified:entry.provenance === "unknown", text: entry.text, at: entry.at, index: index, unread: !!unread && entry.role !== "user" });
 }
 
 function agentById(id) {
@@ -5687,6 +5649,7 @@ document.addEventListener("click", function (event) {
   }
 });
 
+${WORK_READING_JS}
 ${TASK_PROGRESS_CLIENT_JS}
 ${TASK_FOCUS_JS}
 ${TASK_BOARD_JS}
@@ -5976,13 +5939,8 @@ function activityLine(e) {
     if (phrase) return { html: who(e.agentName) + " " + esc(phrase), cls: "" };
     return { html: who(e.agentName) + " &rarr; " + esc(e.tool), cls: "" };
   }
-  if (e.type === "message_sent") {
-    return {
-      html: who(e.fromName) + " &rarr; " + who(e.toName) +
-        (e.priority ? " {{ui.app.priority}}" : "") + ": " + esc(String(e.text).slice(0, 90)),
-      cls: "mail"
-    };
-  }
+  if (e.type === "message_sent") return null; // Conversation communications have their own bounded disclosure.
+
   if (e.type === "turn_failed") {
     return { html: who(nameOf(e.agentId)) + " failed: " + esc(e.error), cls: "err" };
   }
@@ -6006,7 +5964,7 @@ function loadActivity() {
     .then(function (events) {
       for (var i = 0; i < events.length; i++) {
         var line = activityLine(events[i]);
-        if (line) feed(line.html, line.cls, events[i].at);
+        if (line && events[i].taskId) line.html += ' <a href="?task=' + encodeURIComponent(events[i].taskId) + '" data-wr-work="' + esc(events[i].taskId) + '">{{ui.wr.openRelated}}</a>'; if (line) feed(line.html, line.cls, events[i].at);
       }
       return events.eventCursor;
     })
@@ -6046,7 +6004,7 @@ stream.onmessage = function (raw) {
   if (window.taskFocusEvent) window.taskFocusEvent(e);
   if (liveReplay && (inView(e) || (e.type === "message_sent" && currentConversation === "main" && (e.fromId === current || e.toId === current)))) { liveReplay.events.push(e); return; }
   if (inView(e) && !unseenLiveText(e)) return;
-  var line = !raw.skipFeed && activityLine(e);
+  var line = !raw.skipFeed && activityLine(e); if (line && e.taskId) line.html += ' <a href="?task=' + encodeURIComponent(e.taskId) + '" data-wr-work="' + esc(e.taskId) + '">{{ui.wr.openRelated}}</a>';
   if (line && !window.taskFocusVisible) feed(line.html, line.cls);
 
   if (e.type === "prompt") {

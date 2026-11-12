@@ -1,3 +1,5 @@
+import { surfaceActionWork } from "./surface-action.ts";
+import { SurfaceLedger } from "./show-ui.ts";
 import { ResultChecks } from "./result-check-policy.ts";
 /**
  * The episodes that went wrong, as tests.
@@ -4203,4 +4205,26 @@ test("a result check cannot buy more model calls or create recursive tasks after
     assert.equal(tasks.list().length, 1, "forged live probe creation never becomes a task");
     assert.equal(tasks.get(checkedTask)!.status, "review", "exhaustion is never business acceptance");
   } finally { episode.cleanup(); }
+});
+
+
+test("a card choice continues the original installation after its answer, without admitting an action-shaped user goal (INV-1812)", async () => {
+  const tasks = new TaskStore(null); let rounds = 0;
+  const episode = await runEpisode({ team: [{ name: "Mia", tools: ["ShowUI"] }], tasks, says: [],
+    script: () => rounds++ === 0 ? { call: "ShowUI", input: { surface: "installation", components: [{ id: "root", component: "Button", child: "label", action: { event: { name: "confirm" } } }, { id: "label", component: "Text", text: "Continue the approved installation" }] } } : { say: "The installation request remains the same; waiting for or applying your choice." },
+    drive: async ({ bus, frontId, surfaces, say }) => {
+      await say("Install the approved skill");
+      const record = surfaces.get(frontId + "/main/installation")!;
+      assert.ok(record?.work, "ShowUI retains host-issued work identity");
+      const ledger = new SurfaceLedger(null); ledger.record(record);
+      const text = '[Action "confirm" on card installation]';
+      const decision = surfaceActionWork({ action: { surface: "installation", name: "confirm" }, text, agentId: frontId, conversation: "main", surfaces: ledger, tasks, focus: bus.workAttention });
+      assert.ok("taskBinding" in decision);
+      if (!("taskBinding" in decision)) return;
+      bus.sendFromUser(frontId, text, { taskBinding: decision.taskBinding, ...(decision.work ? { work: decision.work } : {}), steerable: false });
+      await bus.wake(frontId); await bus.idle();
+      assert.equal(tasks.list().length, 1); assert.equal(tasks.list()[0]!.title, "Install the approved skill");
+    },
+  });
+  episode.cleanup();
 });

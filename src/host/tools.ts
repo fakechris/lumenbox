@@ -191,8 +191,8 @@ export interface ToolContext {
    * components against the catalog and says where it went, or why it was refused.
    */
   showUI?: (input: {
-    principalId?: string;
-    agentId: string;
+    work?: import("../agents/work-attention.ts").WorkStamp;
+    principalId?: string; agentId: string;
     agentName: string;
     conversation?: string;
     surface: string;
@@ -3638,7 +3638,7 @@ export async function dispatchTool(
         agentId: context.agent.id,
         agentName: context.agent.profile.name,
         ...(context.conversation !== undefined ? { conversation: context.conversation } : {}),
-        surface, workDir: workDir(boxOf(context)),
+        surface, ...(context.work ? { work: context.work } : {}), workDir: workDir(boxOf(context)),
         ...(input.components !== undefined ? { components: input.components } : {}),
         ...(input.data !== undefined ? { data: input.data } : {}),
         ...(typeof input.title === "string" && input.title.trim() !== "" ? { title: input.title.trim() } : {}),

@@ -96,7 +96,7 @@ function stamp(raw: unknown): { at?: string; turnId?: string; executionId?: stri
 export type DisplayEntry =
   | {
       kind: "text";
-      role: "user" | "assistant";
+      role: "user" | "assistant"; provenance?: "unknown";
       text: string;
       /**
        * Prose that came in the same turn as tool calls: running commentary, not the
@@ -119,7 +119,7 @@ export type DisplayEntry =
    * Harmless while both sides looked alike; glaring the moment the person's messages became a
    * filled bubble (docs/46), which is the usual way a display bug is finally seen.
    */
-  | { kind: "trigger"; label: string; text: string; at?: string; /** On the line that leads a shortened thread: how many entries came before it (INV-1624). */ skipped?: number }
+  | { kind: "trigger"; provenance?: "host" | "unknown"; label: string; text: string; at?: string; /** On the line that leads a shortened thread: how many entries came before it (INV-1624). */ skipped?: number }
   | { kind: "tools"; tools: DisplayTool[] };
 
 export interface RosterEntry {
@@ -238,14 +238,15 @@ export function toDisplayEntries(
     }
 
     if (entry.role === "user") {
-      const peers = parseWakePrompt(text, knownNames);
+      const host = (raw as { host?: boolean }).host === true, person = (raw as { fromPerson?: boolean }).fromPerson === true && !host;
+      const peers = person ? undefined : parseWakePrompt(text, knownNames);
       if (peers) { display.push({ kind: "peer", messages: peers }); continue; }
-      const trigger = triggerOf(text, (raw as { fromPerson?: boolean }).fromPerson === true);
+      const trigger = host ? "System context" : triggerOf(text, person);
       if (trigger !== undefined) {
-        display.push({ kind: "trigger", label: trigger, text, ...stamp(raw) });
+        display.push({ kind: "trigger", label: trigger, provenance: host ? "host" : "unknown", text, ...stamp(raw) });
         continue;
       }
-      display.push({ kind: "text", role: "user", text, ...stamp(raw) });
+      display.push({ kind: "text", role: "user", ...(!person ? { provenance: "unknown" as const } : {}), text, ...stamp(raw) });
       continue;
     }
 

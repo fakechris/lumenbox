@@ -1,3 +1,6 @@
+import { surfaceActionWork } from "../host/surface-action.ts";
+import { workReading, workReference } from "../host/work-reading.ts";
+import { evidenceDigest } from "../host/review-dispatch.ts";
 import { resultCheckRoute } from "./result-check-routes.ts";
 import { taskDeliveryRoute } from "./task-delivery-routes.ts";
 import { taskAudience } from "../host/task-audience.ts";
@@ -253,7 +256,7 @@ import { resolveLocale } from "../i18n/locale.ts";
 import { activityPhrase, activityPhrases } from "../host/activity-phrase.ts";
 import { MESSAGES, tr } from "../i18n/messages.ts";
 import { QuestionWatch } from "../host/question-expiry.ts";
-import { compileSurface, SurfaceLedger, surfaceLedgerPath, type A2uiMessage } from "../host/show-ui.ts";
+import { compileSurface, parseActionText, SurfaceLedger, surfaceLedgerPath, type A2uiMessage } from "../host/show-ui.ts";
 import { appendLine } from "../host/jsonl.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
 import { chatFilesRoot, firstRunCue } from "../host/prompt.ts";
@@ -622,9 +625,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       broadcast({ type: "handover_pending", agentId: input.agentId, agentName: input.agentName, instruction: input.instruction, reason: input.reason });
       return "in the app";
     },
-    // A card the agent composed (docs/79). Checked here against the catalog with the page's
-    // own processor, so the page never gets a surface it would refuse; kept whole in the
-    // ledger so a later process can redraw it. The press comes back as an ordinary message.
+    // Validated cards retain their original work and full redraw messages.
     showUI: async input => {
       const conversation = input.conversation ?? "main";
       const existing = surfaces.get(input.agentId, conversation, input.surface);
@@ -638,7 +639,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           agentId: input.agentId,
           agentName: input.agentName,
           conversation,
-          surfaceId: input.surface,
+          surfaceId: input.surface, ...(input.work ? { work: input.work } : existing?.work ? { work: existing.work } : {}),
           ...(title !== undefined ? { title } : {}),
           messages: compiled.full,
           at: new Date().toISOString(),
@@ -1023,6 +1024,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const credentialWaits = new CredentialWaits({ tasks: () => orchestrator.tasks, check: (agentId, principalId) => orchestrator.credentials.forAgent(agentId, [], principalId), announce: event => broadcast(taskCredentialEvent(event)), log }); vault.onChange(() => { void credentialWaits.recheck(); }); // a credential that lands releases the work waiting on it (INV-1666)
   const guestDesk = new GuestDesk({ settings: join(agentboxHome(), "guests.jsonl"), turns: join(agentboxHome(), "guest-turns.jsonl"), reviews: join(agentboxHome(), "guest-reviews.jsonl") }); // who answers guests, what is public to them, their turns and the reviews of their answers (INV-1708, INV-1713, docs/97)
   const channels = new ChannelManager({
+    interactionTask: (message, name) => { const agent = registry.resolve(name ?? ""), parsed = parseActionText(message.text); const result = surfaceActionWork({ action: parsed ? { surface: parsed.surfaceId, name: parsed.name } : undefined, text: message.text, agentId: agent.id, conversation: conversationIdFor(message.threadKey ?? message.chatKey ?? message.identity), surfaces, focus: orchestrator.bus.workAttention, tasks: orchestrator.tasks }); if ("error" in result) throw new Error(result.error); return result.taskBinding.taskId; },
     outbox: outboxSender, credentials: { gate: (taskId, start) => credentialWaits.gateText(taskId, "channel", start) },
     // The speaking right of a host push (INV-1459): the world each purpose claims, read now; a refusal is audited.
     outbound: (purpose, chatKey) => {
@@ -3001,7 +3003,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     return { box, agent: id => registry.has(id) && box(registry.boxOf(id).id) };
   }
   const taskActive = (task: Task) => task.workRoot ? orchestrator.bus.workExecutions(task.workRoot.state.id).length>0 || orchestrator.jobWatch.workJobs(task.workRoot.state.id).length>0 : task.assigneeId !== undefined && task.conversation !== undefined && (orchestrator.bus.isActive(task.assigneeId, task.conversation) || orchestrator.jobWatch.openJobs(task.assigneeId, task.conversation).length > 0);
-  const sideDoorStage = (task: Task) => stageWorldOf(task, { undeliverableChats: new Set(outbox.problems().map(receipt => receipt.chatKey)), questions: questions.list(), agentIds: new Set(registry.list().map(agent => agent.id)), chatKeyOf: conversation => conversations.chatKeyFor(conversation), active: taskActive });
+  const checkPending = (task: Task) => orchestrator.resultChecks.snapshot(task).plans.some(plan => plan.taskId === task.id && plan.digest === evidenceDigest(task) && orchestrator.resultChecks.active(task, plan.id));
+  const sideDoorStage = (task: Task) => stageWorldOf(task, { undeliverableChats: new Set(outbox.problems().map(receipt => receipt.chatKey)), questions: questions.list(), agentIds: new Set(registry.list().map(agent => agent.id)), chatKeyOf: conversation => conversations.chatKeyFor(conversation), active: taskActive, checkPending });
   const taskListPages = new TaskListPages();
   const taskExecutions = new TaskExecutions({ namespace: registry.box.id, turns: orchestrator.turns ?? { executionRecords: () => ({ records: [], partial: true }) }, registry });
   const taskExports = new TaskExports({ home: agentboxHome(), executions: taskExecutions, task: id => orchestrator.tasks?.get(id) });
@@ -3917,20 +3920,17 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         const mayReadTask = (task: Task) => caller.userId === undefined || (task.assigneeId ? mayReadAgent(task.assigneeId) : task.requester === principals.resolve(caller.userId).id); if (deliverableRoute(route, url, res, { tasks: orchestrator.tasks, mayReadTask, send })) return; if (taskGateRoute(route, url, res, { tasks: orchestrator.tasks, mayReadTask, readTranscript: (agentId, conversation) => registry.readTranscript(agentId, conversation), roster: () => registry.list().map(record => ({ id: record.id, name: record.profile.name })), verdictOf: callId => orchestrator.policy.verdicts.get(callId), send })) return; // the gate's verdicts on its steps, the chat's own join (INV-1672) // a task's deliverable, to whoever sees the task (INV-1663)
         if (await taskExportRoute(route, url, req, res, { exports: taskExports, access: () => { principals.reload(); unavailableBoxes = undefined; agentBoxes.clear(); const allowed = admit({ authorization: req.headers.authorization, cookie: req.headers.cookie, query: url.searchParams.get("token") }).allow; return { task: id => { const task = orchestrator.tasks?.get(id); return allowed && !!task && mayReadTask(task); }, agent: id => allowed && mayReadAgent(id), box: id => allowed && mayReadBox(id) }; }, send })) return;
         if (taskCostRoute(route, url, res, { executions: taskExecutions, refused: () => refusedRole("admin"), access: { task: id => { const task = orchestrator.tasks?.get(id); return task !== undefined && mayReadTask(task); }, agent: mayReadAgent, box: mayReadBox }, records: () => orchestrator.usage.since(0, Number.MAX_SAFE_INTEGER), rates: configuredRates, compacted: () => orchestrator.usage.compacted(), send })) return;
-        if (taskExecutionRoute(route, url, res, { executions: taskExecutions, access: { task: id => { const task = orchestrator.tasks?.get(id); return task !== undefined && mayReadTask(task); }, agent: mayReadAgent, box: mayReadBox }, record: id => taskRecord(orchestrator.tasks!.get(id)!, { nameOf: id => registry.tryGet(id)?.profile.name ?? id, stageWorld: sideDoorStage, progressAccess: { agent: mayReadAgent, box: mayReadBox } }), send })) return;
-        const audienceAgents = new Set(registry.list().map(agent=>agent.id)), audiencePeople = new Set(principals.list().flatMap(person=>[person.id,...person.identities])); const taskView = (task: Task) => { const forks = orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []; return { ...task, work:workRootSummary(task), workRoot:undefined, progress: summarizeTaskProgress(task, 128, { agent: mayReadAgent, box: mayReadBox }), needsApprovals: taskExecutions.approvals(task.id, { task: () => mayReadTask(task), agent: mayReadAgent, box: mayReadBox }, orchestrator.policy.pending()), stage: taskStage(task, sideDoorStage(task)), configVersions: switchesForTask(registry, task.id), ...(forks.length ? { forks } : {}), ...dependencyView(task, orchestrator.tasks!) }; };
-        if (taskListRoute(route, url, res, { audience: task => taskAudience(task,audienceAgents,audiencePeople), pages: taskListPages, tasks: () => orchestrator.tasks?.list() ?? [], allowed: mayReadTask, detail: taskView, summary: task => ({ ...taskBoardRecord(task, { agent: mayReadAgent, box: mayReadBox }), ...dependencyView(task, orchestrator.tasks!) }), send })) return;
+        let readingBuilt = false; let readingWorld: Parameters<typeof stageWorldOf<Task>>[1] | undefined; const childReferences = new Map<string, string[]>(), readingCache = new Map<string, ReturnType<typeof workReading>>();
+        const readingFor = (task: Task) => { if (!readingBuilt) { readingBuilt = true; for (const row of orchestrator.tasks?.list() ?? []) if (row.origin?.parentId && mayReadTask(row)) { const ids = childReferences.get(row.origin.parentId) ?? []; ids.push(row.id); childReferences.set(row.origin.parentId, ids); } } let reading = readingCache.get(task.id); if (!reading) { const reference = (id: string, relation: "parent" | "dependency" | "collaboration") => workReference(id, relation, id => orchestrator.tasks?.get(id), mayReadTask); readingWorld ??= { undeliverableChats: new Set(outbox.problems().map(receipt => receipt.chatKey)), questions: questions.list(), agentIds: new Set(registry.list().map(agent => agent.id)), chatKeyOf: conversation => conversations.chatKeyFor(conversation), active: taskActive, checkPending }; reading = workReading(task, { stage: stageWorldOf(task, readingWorld!), checks: orchestrator.resultChecks.snapshot(task), verdicts: orchestrator.verifications.recordsFor(task.id, evidenceDigest(task)), references: [...(task.origin?.parentId ? [reference(task.origin.parentId, "parent")] : []), ...(task.blockedBy ?? []).map(id => reference(id, "dependency")), ...(childReferences.get(task.id) ?? []).map(id => reference(id, "collaboration"))] }); readingCache.set(task.id, reading); } return reading; };
+        if (taskExecutionRoute(route, url, res, { executions: taskExecutions, access: { task: id => { const task = orchestrator.tasks?.get(id); return task !== undefined && mayReadTask(task); }, agent: mayReadAgent, box: mayReadBox }, record: id => ({ ...taskRecord(orchestrator.tasks!.get(id)!, { nameOf: id => registry.tryGet(id)?.profile.name ?? id, stageWorld: sideDoorStage, progressAccess: { agent: mayReadAgent, box: mayReadBox } }), reading: readingFor(orchestrator.tasks!.get(id)!) }), send })) return;
+        const audienceAgents = new Set(registry.list().map(agent=>agent.id)), audiencePeople = new Set(principals.list().flatMap(person=>[person.id,...person.identities])); const taskView = (task: Task) => { const forks = orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []; return { ...task, reading: readingFor(task), work:workRootSummary(task), workRoot:undefined, progress: summarizeTaskProgress(task, 128, { agent: mayReadAgent, box: mayReadBox }), needsApprovals: taskExecutions.approvals(task.id, { task: () => mayReadTask(task), agent: mayReadAgent, box: mayReadBox }, orchestrator.policy.pending()), stage: taskStage(task, sideDoorStage(task)), configVersions: switchesForTask(registry, task.id), ...(forks.length ? { forks } : {}), ...dependencyView(task, orchestrator.tasks!) }; };
+        if (taskListRoute(route, url, res, { audience: task => taskAudience(task,audienceAgents,audiencePeople), pages: taskListPages, tasks: () => orchestrator.tasks?.list() ?? [], allowed: mayReadTask, detail: taskView, summary: task => ({ ...taskBoardRecord(task, { agent: mayReadAgent, box: mayReadBox }), reading: readingFor(task), ...dependencyView(task, orchestrator.tasks!) }), send })) return;
         if (route === "GET /api/tasks") {
           send(res, 200, { tasks: orchestrator.tasks?.list().filter(mayReadTask).map(taskView) ?? [] });
           return;
         }
 
-        // The automations: what runs by itself, when, as whom, and where it reports.
-        // Reading is open like the board; firing one by hand is a driver's call, because
-        // it spends money and wakes an agent.
         if (route === "GET /api/schedules") {
-          // Each routine's last result rides along (INV-776): a run that was judged not worth
-          // delivering is still a run, and this is where a person sees what it found.
           const lastResults = new Map<string, ReturnType<typeof orchestrator.routineResults.list>[number]>();
           for (const entry of orchestrator.routineResults.list().filter(entry => mayReadAgent(entry.agentId))) if (!lastResults.has(entry.slug)) lastResults.set(entry.slug, entry);
           send(res, 200, {
@@ -5362,7 +5362,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // thread it is viewing, defaulting to the team room.
           const conversation = url.searchParams.get("conversation") ?? MAIN_CONVERSATION;
           if (refused(agentId)) return;
-          send(res, 200, conversationProgress(orchestrator.registry, orchestrator.bus, agentId, conversation));
+          const progress = conversationProgress(orchestrator.registry, orchestrator.bus, agentId, conversation), task = progress.attention?.taskId ? orchestrator.tasks?.get(progress.attention.taskId) : undefined; send(res, 200, { ...progress, ...(progress.attention && task && mayReadTask(task) ? { attention: { ...progress.attention, reading: readingFor(task) } } : {}) });
           return;
         }
 
@@ -6034,7 +6034,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             personIds: new Set(principals.list().flatMap(person=>[person.id,...person.identities])), paused: orchestrator.bus.pausedChains(), agentIds: new Set(registry.list().map(agent => agent.id)), approvals: orchestrator.policy.pending().filter(item => caller.userId === undefined || mayReadAgent(item.agentId)), outbox: orchestrator.outboxDrafts.waiting().filter(draft => caller.userId === undefined || mayReadAgent(draft.agentId)), // drafts in the Outbox (INV-1739); a parked command is the commonest block (INV-1627)
             undeliverable: outbox.problems(), exceptionsHanded: orchestrator.exceptions.list().filter(entry => entry.handedAt !== undefined && entry.resolvedAt === undefined && (entry.agent === undefined || caller.userId === undefined || mayReadAgent(entry.agent))), routinesHeld: (await orchestrator.scheduler.status()).filter(entry => entry.hold !== undefined && mayReadBox(entry.boxId ?? registry.box.id)).map(entry => ({ slug: entry.slug, name: entry.name, ...entry.hold! })), // INV-1665
             chatKeyOf: conversation => conversations.chatKeyFor(conversation), // The stage table's reads (INV-1464).
-            active: taskActive,
+            active: taskActive, checkPending,
             ...(me === undefined ? { all: true } : {}),
           });
           const update = boxUpdate.available(); // an admin is shown a box that can be updated (INV-1538)
@@ -6044,7 +6044,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (me === undefined || roleAtLeast(principals.roleOf(me.id), "admin")) for (const probe of probeKeeper?.recent() ?? []) answer.mine.unshift({ kind: "boundary-probe", ref: probe.agentId, title: `${probe.agentName} reached for this machine's credentials`, detail: `${probe.count} attempt${probe.count === 1 ? "" : "s"} in the last hour, refused; the latest ${probe.detail}.${probe.paused ? ` ${probe.agentName} is paused — Settings → Team.` : ""}` }); // INV-1553
           answer.mine.push(...ownerAttention(orchestrator.orgKnowledge.staleItems(), owner => me === undefined || (owner !== undefined && (owner === me.id || me.identities.includes(owner))))); // an organisation item its owner must look at again (INV-1731)
           if (me === undefined || roleAtLeast(principals.roleOf(me.id), "admin")) for (const item of pendingReviews(registry.readSharedMemory())) answer.mine.unshift({ kind: "team-memory", ref: item.writer, title: `${registry.tryGet(item.writer)?.profile.name ?? "An agent"} wants the team to remember something`, detail: `"${item.record.text.slice(0, 140)}" — approve or reject in Settings → Team → Team memory.` }); // INV-1581
-          send(res, 200, { ...answer, mine: [...answer.mine].sort((a, b) => urgencyOf(a.kind) - urgencyOf(b.kind)).map(item => ({ ...item, decision: isDecision(item.kind), ...(board?.get(item.ref)?.level !== undefined ? { level: board!.get(item.ref)!.level } : {}) })), who: me?.name ?? "this installation" }); // decisions first and marked (INV-1647)
+          send(res, 200, { ...answer, mine: [...answer.mine].sort((a, b) => urgencyOf(a.kind) - urgencyOf(b.kind)).map(item => ({ ...item, ...(board?.get(item.ref) && mayReadTask(board.get(item.ref)!) ? { reading: readingFor(board.get(item.ref)!) } : {}), decision: isDecision(item.kind), ...(board?.get(item.ref)?.level !== undefined ? { level: board!.get(item.ref)!.level } : {}) })), who: me?.name ?? "this installation" }); // decisions first and marked (INV-1647)
           return;
         }
 
@@ -6714,13 +6714,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 400, apiError("text-required"));
             return;
           }
-          // Which thread the page was viewing; defaults to the team room.
           const conversation =
             typeof body.conversation === "string" && body.conversation !== ""
               ? body.conversation
               : MAIN_CONVERSATION; if (isForkChild(conversation)) { send(res, 409, apiError("fork-read-only")); return; } // INV-1667
 
-          // A console message into a channel thread is a room message, not a whisper.
+          const surfaceWork = body.surfaceAction ? surfaceActionWork({ action: body.surfaceAction, text, agentId, conversation, surfaces, focus: orchestrator.bus.workAttention, tasks: orchestrator.tasks }) : undefined;
+          if (surfaceWork && "error" in surfaceWork) { send(res, 409, apiError("surface-work-unavailable", { reason: surfaceWork.error })); return; }
           // Without this, an operator's interjection and the agent's answer were visible
           // only on the web page: the chat's members saw the agent's behaviour change
           // with no visible cause, and the thread history the agent reasons over
@@ -6742,12 +6742,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             void channels.pushToChat(chatKey, `〔控制台〕${text}`, { kind: "notice", about: "console" });
           }
 
-          // Acknowledge only after durable admission; an id can be retried after a lost response.
           const promptMessageId = typeof body.messageId === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(body.messageId) ? body.messageId : randomUUID();
 
           const before = registry.readTranscript(agentId, conversation).length;
           void orchestrator
-            .prompt(agentId, text, caller, { conversation, messageId: promptMessageId, ...(body.workRelation === "new" || body.workRelation === "continue" ? {workRelation:body.workRelation} : {}), onAdmitted:()=>{          broadcast({
+            .prompt(agentId, text, caller, { conversation, messageId: promptMessageId, ...(surfaceWork && "taskBinding" in surfaceWork ? { ...(surfaceWork.work ? { work: surfaceWork.work, workRelation: "continue" as const } : {}), taskBinding: surfaceWork.taskBinding, steerable: false } : body.workRelation === "new" || body.workRelation === "continue" ? {workRelation:body.workRelation} : {}), onAdmitted:()=>{          broadcast({
             type: "prompt", messageId: promptMessageId,
             agentId,
             text,

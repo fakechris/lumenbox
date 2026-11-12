@@ -34,19 +34,19 @@ export interface StageWorld {
   /** A turn of the assignee runs in this task's conversation right now, or a command it let go of still runs (INV-1461). */
   active: boolean;
   /** The named reviewer is an agent (INV-1647): the review is the team's, and only the person's own asks wait for the person. */
-  reviewerIsAgent?: boolean;
+  reviewerIsAgent?: boolean; checkPending?: boolean;
 }
 
 /** The world for one task from what the host holds; the attention page and the side door read it the same way (INV-1506). */
 export function stageWorldOf<T extends Pick<Task, "conversation" | "assigneeId" | "reviewerId" | "workRoot">>(
   task: T,
-  reads: { undeliverableChats: ReadonlySet<string>; chatKeyOf?: (conversation: string) => string | undefined; questions: readonly { conversation?: string; agentId?: string; work?:{id:string} }[]; agentIds?: ReadonlySet<string>; active?: (task: T) => boolean },
+  reads: { undeliverableChats: ReadonlySet<string>; chatKeyOf?: (conversation: string) => string | undefined; questions: readonly { conversation?: string; agentId?: string; work?:{id:string} }[]; agentIds?: ReadonlySet<string>; checkPending?: (task: T) => boolean; active?: (task: T) => boolean },
 ): StageWorld {
   const chatKey = task.conversation !== undefined ? reads.chatKeyOf?.(task.conversation) : undefined;
   return {
     undelivered: chatKey !== undefined && reads.undeliverableChats.has(chatKey),
     questionPending: reads.questions.some(question => (!task.workRoot || question.work?.id===task.workRoot.state.id) && question.conversation === task.conversation && (task.assigneeId === undefined || question.agentId === task.assigneeId)),
-    active: reads.active?.(task) ?? false,
+    active: reads.active?.(task) ?? false, ...(reads.checkPending ? { checkPending: reads.checkPending(task) } : {}),
     reviewerIsAgent: task.reviewerId !== undefined && (reads.agentIds?.has(task.reviewerId) ?? false),
   };
 }
@@ -73,7 +73,7 @@ export function taskStage(task: Pick<Task, "status" | "history" | "mandate" | "p
   const asksWithOptions = task.status === "blocked" && last?.options !== undefined && last.options.length > 0;
   const staleMandate = task.mandate?.stale !== undefined && task.mandate.withdrawn === undefined;
   if (world.questionPending || asksWithOptions || staleMandate) return "person/answer";
-  if (task.status === "review") return world.reviewerIsAgent === true ? "review" : "person/review";
+  if (task.status === "review") return (world.checkPending ?? world.reviewerIsAgent) === true ? "review" : "person/review";
   if (task.status === "blocked") return "person/blocked";
   const root=workRootSummary(task);
   if(root?.automatic){

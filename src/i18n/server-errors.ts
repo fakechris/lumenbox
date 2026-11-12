@@ -14,6 +14,7 @@
  */
 
 export const SERVER_ERRORS = {
+  "err.surface-work-unavailable": ["卡片操作未执行，也未新建任务：{reason}", "Card action not executed; no new task was created: {reason}"],
   "err.task-check-unknown": ["工作不存在或你无权查看。", "Work unavailable."],
   "err.task-check-stale": ["工作或证据已经变化，请重新查看后再授权检查。", "The work or evidence changed; read it before authorizing checks."],
   "err.task-check-action": ["请选择授权检查或停止检查。", "Use grant or stop."],

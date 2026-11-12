@@ -384,7 +384,7 @@ export interface EpisodeOptions {
    * `say` is one line of `says`, with the same after-turn bookkeeping, for a drive that
    * needs to change the world between turns.
    */
-  drive?: (context: { bus: AgentBus; registry: AgentRegistry; frontId: string; files: Map<string, string>; say: (line: string) => Promise<void> ; goalLoop?: GoalLoop }) => Promise<void>;
+  drive?: (context: { bus: AgentBus; registry: AgentRegistry; frontId: string; files: Map<string, string>; surfaces: ReadonlyMap<string, SurfaceRecord>; say: (line: string) => Promise<void> ; goalLoop?: GoalLoop }) => Promise<void>;
 }
 
 /**
@@ -527,12 +527,12 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
         return "in the app";
       },
       // The host's own validation (docs/79), so a scenario proves what a box would accept.
-      showUI: async (input: { agentId: string; agentName: string; conversation?: string; surface: string; components?: unknown; data?: unknown; title?: string; close?: boolean }) => {
+      showUI: async (input: { agentId: string; agentName: string; conversation?: string; surface: string; components?: unknown; data?: unknown; title?: string; close?: boolean; work?: import("../agents/work-attention.ts").WorkStamp }) => {
         const key = `${input.agentId}/${input.conversation ?? "main"}/${input.surface}`;
         const compiled = compileSurface(input, shownSurfaces.get(key));
         if (!compiled.ok) return { error: compiled.reason };
         if (input.close === true) shownSurfaces.delete(key);
-        else shownSurfaces.set(key, { agentId: input.agentId, agentName: input.agentName, conversation: input.conversation ?? "main", surfaceId: input.surface, messages: compiled.full, at: "" });
+        else shownSurfaces.set(key, { agentId: input.agentId, agentName: input.agentName, conversation: input.conversation ?? "main", surfaceId: input.surface, ...(input.work ? { work: input.work } : {}), messages: compiled.full, at: "" });
         observations.push({ at: clock++, agent: input.agentName, kind: "call", name: "ShowUI:delivered", input: { surface: input.surface, messages: compiled.send.length } });
         return { where: "in the app" };
       },
@@ -587,7 +587,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
     if (said !== "") await rememberer.record({ agentId: front.id, text: summariseExchange(line, said), ref: memoryRef("main", new Date()), conversation: "main", ...(last?.at !== undefined ? { at: last.at } : {}), ...(external ? { external: true } : {}) });
     await rememberer.settle(front.id);
   };
-  if (options.drive !== undefined) await options.drive({ bus, registry, frontId: front.id, files, say, ...(goalLoop !== undefined ? { goalLoop } : {}) });
+  if (options.drive !== undefined) await options.drive({ bus, registry, frontId: front.id, files, surfaces: shownSurfaces, say, ...(goalLoop !== undefined ? { goalLoop } : {}) });
   for (const line of options.says) await say(line);
 
   // Errors are read off the transcripts: a refused tool is the rail doing its job, and a

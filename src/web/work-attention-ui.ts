@@ -2,13 +2,13 @@
 export const WORK_ATTENTION_HTML = `<div id="currentwork" role="status" hidden></div>
 <details id="communications" hidden><summary id="communications-summary"></summary><div id="communications-list"></div></details>`;
 export const WORK_ATTENTION_STYLE = `
-#currentwork, #communications { flex: 0 0 auto; min-width: 0; border-bottom: 1px solid var(--border); padding: 8px 18px; font-size: 12px; overflow-wrap: anywhere; }
+#currentwork, #communications { flex: 0 0 auto; min-width: 0; border-bottom: 1px solid var(--border); padding: var(--sp-2) var(--sp-4); font-size: var(--fs-sm); overflow-wrap: anywhere; }
 #currentwork { color: var(--text-soft); }
 #communications { color: var(--muted); }
 #communications summary { cursor: pointer; }
 #communications-list { max-height: min(240px, 28vh); overflow: auto; }
-#communications-list article { padding: 8px 0; border-top: 1px solid var(--border); }
-#communications-list p { white-space: pre-wrap; margin: 4px 0; color: var(--text-soft); }
+#communications-list article { padding: var(--sp-2) 0; border-top: 1px solid var(--border); }
+#communications-list p { white-space: pre-wrap; margin: var(--sp-1) 0; color: var(--text-soft); }
 #communications[hidden], #currentwork[hidden] { display: none; }
 `;
 export const WORK_ATTENTION_JS = `
@@ -41,6 +41,7 @@ function showCurrentWork(attention) {
   var label = attention.status === "cancelled" ? "{{ui.work.cancelled}}" : attention.status === "waiting" ? "{{ui.work.waiting}}" : "{{ui.work.running}}";
   var reasons = {"waiting for confirmation":"{{ui.work.confirmationPending}}","unfinished plan":"{{ui.work.planPending}}", "waiting for related work":"{{ui.work.collaborationPending}}", "execution interrupted":"{{ui.work.interrupted}}", "failed":"{{ui.work.failed}}", "aborted":"{{ui.work.interrupted}}", "incomplete":"{{ui.work.incomplete}}"};
   var reason = attention.reason && attention.reason.indexOf("required tool unavailable:") === 0 ? "{{ui.work.toolMissing}}" : reasons[attention.reason] || attention.reason;
+  if (attention.reading && typeof workReadingHtml === "function") { node.innerHTML = workReadingLink(attention.reading) + ' · ' + esc(workReadingPhase(attention.reading)) + workReadingHtml(attention.reading,false); return; }
   node.textContent = label + (reason ? " · " + reason : "") + (attention.held ? " · {{ui.work.held}} " + attention.held : "");
 }
 `;
