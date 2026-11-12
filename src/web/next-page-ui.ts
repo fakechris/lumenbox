@@ -32,6 +32,11 @@ import { NEXT_SET_TEAM_JS } from "./next-set-team-ui.ts";
 import { NEXT_SET_LIMITS_JS } from "./next-set-limits-ui.ts";
 import { NEXT_SET_BOXES_JS } from "./next-set-boxes-ui.ts";
 import { NEXT_SET_BOXES_MORE_JS } from "./next-set-boxes-more-ui.ts";
+import { NEXT_SET_MEMORY_JS } from "./next-set-memory-ui.ts";
+import { NEXT_SET_SUPERVISION_JS } from "./next-set-supervision-ui.ts";
+import { NEXT_SET_GUESTS_JS } from "./next-set-guests-ui.ts";
+import { NEXT_SET_SHELL_JS } from "./next-set-shell-ui.ts";
+import { INSTALLATIONS_JS } from "./installations-ui.ts";
 import { NEXT_SPEND_JS } from "./next-spend-ui.ts";
 import { NEXT_COMPOSER_JS } from "./next-composer-ui.ts";
 import { NEXT_MEMBER_JS } from "./next-member-ui.ts";
@@ -41,6 +46,7 @@ import { NEXT_SYSTEM_JS } from "./next-system-ui.ts";
 
 const STYLE = `
 :root {
+  --sidebar: var(--rail); --radius-input: 8px;
   --bg: #f7f6f2; --rail: #efece5; --surface: #fffdfa; --border: #e7e1d8; --border-strong: #cdc4b6;
   --text: #1f1a17; --soft: #443a32; --muted: #71675d;
   --accent: #9f4f24; --accent-soft: #f4dfd2; --blue: #2563bb; --blue-soft: #dbe7f7;
@@ -226,7 +232,6 @@ body[data-view="chat"] #view-title { cursor: pointer; }
 .msg:hover .msg-tools, .msg-me:hover .msg-tools, .msg:focus-within .msg-tools, .msg-me:focus-within .msg-tools { display: flex; }
 .msg-tools button { font-size: 11px; padding: 1px 7px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--muted); }
 .msg-me .msg-tools button { background: transparent; color: inherit; border-color: rgba(255,255,255,.3); }
-.embed { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: 5; background: rgba(31,26,23,.18); }
 button.row { width: 100%; text-align: left; }
 .setting .row .why, .list button.row .why { white-space: normal; }
 .setup-step { display: flex; align-items: center; gap: 10px; }
@@ -381,7 +386,6 @@ export const NEXT_HTML = `<!doctype html>
   <header><b id="member-title"></b><button class="x" id="member-close" aria-label="{{ui.next.act.close}}">×</button></header>
   <div class="inner" id="member-inner"></div>
 </aside>
-<iframe class="embed" id="embed" title="{{ui.next.side.settings}}" hidden></iframe>
 <div class="toast" id="toast" role="status" hidden></div>
 <script>
 var MSG = {{@messages}};
@@ -442,6 +446,10 @@ ${NEXT_SET_TEAM_JS}
 ${NEXT_SET_LIMITS_JS}
 ${NEXT_SET_BOXES_JS}
 ${NEXT_SET_BOXES_MORE_JS}
+${NEXT_SET_MEMORY_JS}
+${NEXT_SET_SUPERVISION_JS}
+${NEXT_SET_GUESTS_JS}
+${NEXT_SET_SHELL_JS}
 ${NEXT_SPEND_JS}
 ${NEXT_COMPOSER_JS}
 ${NEXT_MEMBER_JS}
@@ -450,5 +458,6 @@ ${NEXT_CARDS_JS}
 ${NEXT_SYSTEM_JS}
 nextStart();
 </script>
+<script>${INSTALLATIONS_JS}</script>
 </body>
 </html>`;

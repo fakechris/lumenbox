@@ -244,17 +244,21 @@ versions can be gone back to.
 text file in place, with the way to open it in a tab or download it; a kind that cannot be shown
 says so.
 
-**Settings open pane by pane, in place.** A pane that has been rebuilt opens inside the settings
-view with a way back; one that has not opens the classic dialog in a frame. Rebuilt so far: what is a
-person's own (what the agents know about them, the tokens they issued, the approvals they gave once
-and for all), and the model (provider, key, model, pictures, summaries, web search, the providers to
-fall back to, the accounts resting, the rules every agent is given, the small model that makes
-judgements), the doors (chat channels, the people waiting to be let in, connected services), and
-the team (people and their roles, invitations, scopes, the secrets lent to agents, each agent's
-ceilings, team memory waiting for a person, outside tool servers), and the computers (this box's
-image and updating it, its CPU ceiling, starting it over, commands on the person's own machine,
-attaching another computer, personal-computer quotas, nodes, what the host process uses). A key or
-a secret is typed, saved and never shown again; a token or an invitation is shown once.
+**Settings open pane by pane, in place.** Every pane is the rebuilt page's own and opens inside the
+settings view with a way back: the model (provider, key, model, pictures, summaries, web search, the
+providers to fall back to, the accounts resting, the rules every agent is given, the small model
+that makes judgements); the computers (this box's image and updating it, its CPU ceiling, starting
+it over, commands on the person's own machine, attaching another computer, quotas, nodes, what the
+host process uses); the doors (chat channels, the people waiting to be let in, connected services);
+the team (people and roles, invitations, scopes, the secrets lent to agents, each agent's ceilings,
+team memory waiting for a person, outside tool servers); what is a person's own (what the agents
+know about them, their tokens, their standing approvals); memory (each agent's lines, corrected or
+withdrawn, what waits to become the organisation's knowledge and what it already holds);
+supervision (the watchdog, the supervising model, its runs); and guests. In the desktop app two more
+are listed, asked of the app's shell rather than of a server: what this machine is for, and the
+organisations it is connected to; the column of installations at the window's edge is the same
+module the classic page uses. A key or a secret is typed, saved and never shown again; a token or
+an invitation is shown once.
 
 **What a person typed survives a redraw.** The view is rebuilt whenever something changes. A field
 the person touched is found again by its label and given its value, caret and focus back, and a fold
@@ -282,10 +286,8 @@ wrong" is only said when the server said it.
 
 **Files.** One module per surface under `src/web/next-*-ui.ts`, each exporting its script as a string;
 `next-logic-ui.ts` holds the few decisions the page makes, as plain functions shipped as their own
-source so the test runs what the page runs. Every word comes from `src/i18n/ui-next.ts`. The classic
-page's settings dialogs are shown in a frame (`embed-ui.ts`) until each is rebuilt; that bridge is
-removed pane by pane; a new surface is built here, not bridged. An agent's configuration was
-bridged for a day and is native now.
+source so the test runs what the page runs. Every word comes from `src/i18n/ui-next.ts`. Nothing of the classic
+page is framed: a surface is built here or it is not here.
 
 **Checking.** `next-page-ui.test.ts` fills the page in both languages, parses every inline script, and
 checks that every looked-up id exists; a function with a regular expression or a wire format in it is

@@ -286,3 +286,12 @@ test("an image is said to be current, ready, to be downloaded, or not this versi
   const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
   assert.deepEqual(["", "3", "99", "100", "1.5", "-1", "two"].map(text => plain(quotaValue(text))), [{ ok: true, value: null }, { ok: true, value: 3 }, { ok: true, value: 99 }, { ok: false }, { ok: false }, { ok: false }, { ok: false }]);
 });
+
+test("a supervision run's ceilings are read strictly, and the desktop app's panes are offered only where its shell is", () => {
+  const supervisionNumbers = pageFunction("supervisionNumbers", {});
+  const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
+  assert.deepEqual(plain(supervisionNumbers({ maxMinutes: "30", maxModelCalls: "40", budget: "" })), { maxMinutes: 30, maxModelCalls: 40, budget: "" });
+  assert.deepEqual([{ maxMinutes: "0", maxModelCalls: "40", budget: "" }, { maxMinutes: "30", maxModelCalls: "1.5", budget: "" }, { maxMinutes: "30", maxModelCalls: "40", budget: "-2" }].map(form => plain(supervisionNumbers(form)).bad), ["maxMinutes", "maxModelCalls", "budget"]);
+  const panes = (shell: unknown) => plain(pageFunction("shellPanes", { appShell: () => shell ?? {} })());
+  assert.deepEqual([panes(undefined), panes({ machine: {} }), panes({ machine: {}, organisations: {} })], [[], ["machine"], ["machine", "organisations"]]);
+});
