@@ -94,6 +94,8 @@ export const UI_NEXT: Record<string, readonly [string, string]> = {
   "ui.next.chat.steps": ["{n} 步", "{n} steps"],
   "ui.next.chat.team": ["成员协作 · {n} 条", "Between agents · {n}"],
   "ui.next.chat.earlier": ["更早的 {n} 条在完整记录里", "{n} earlier entries are in the full record"],
+  "ui.next.chat.delivered": ["{name} 交付了结果", "{name} delivered a result"],
+  "ui.next.chat.moreFiles": ["还有 {n} 个文件，在详情里", "{n} more files are in the details"],
   "ui.next.chat.working": ["{name} 正在做…", "{name} is working…"],
   "ui.next.chat.stop": ["停下这一轮", "Stop this turn"],
   "ui.next.chat.you": ["你", "You"],
