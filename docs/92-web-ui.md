@@ -249,8 +249,10 @@ view with a way back; one that has not opens the classic dialog in a frame. Rebu
 person's own (what the agents know about them, the tokens they issued, the approvals they gave once
 and for all), and the model (provider, key, model, pictures, summaries, web search, the providers to
 fall back to, the accounts resting, the rules every agent is given, the small model that makes
-judgements), and the doors (chat channels, the people waiting to be let in, connected services). A
-key or a secret is typed, saved and never shown again; a token is shown once.
+judgements), the doors (chat channels, the people waiting to be let in, connected services), and
+the team (people and their roles, invitations, scopes, the secrets lent to agents, each agent's
+ceilings, team memory waiting for a person, outside tool servers). A key or a secret is typed, saved
+and never shown again; a token or an invitation is shown once.
 
 **Three levels, everywhere.**
 

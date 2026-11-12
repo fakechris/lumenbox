@@ -28,6 +28,8 @@ import { NEXT_TEACH_JS } from "./next-teach-ui.ts";
 import { NEXT_SET_MINE_JS } from "./next-set-mine-ui.ts";
 import { NEXT_SET_MODEL_JS } from "./next-set-model-ui.ts";
 import { NEXT_SET_DOORS_JS } from "./next-set-doors-ui.ts";
+import { NEXT_SET_TEAM_JS } from "./next-set-team-ui.ts";
+import { NEXT_SET_LIMITS_JS } from "./next-set-limits-ui.ts";
 import { NEXT_SPEND_JS } from "./next-spend-ui.ts";
 import { NEXT_COMPOSER_JS } from "./next-composer-ui.ts";
 import { NEXT_MEMBER_JS } from "./next-member-ui.ts";
@@ -428,6 +430,8 @@ ${NEXT_TEACH_JS}
 ${NEXT_SET_MINE_JS}
 ${NEXT_SET_MODEL_JS}
 ${NEXT_SET_DOORS_JS}
+${NEXT_SET_TEAM_JS}
+${NEXT_SET_LIMITS_JS}
 ${NEXT_SPEND_JS}
 ${NEXT_COMPOSER_JS}
 ${NEXT_MEMBER_JS}
