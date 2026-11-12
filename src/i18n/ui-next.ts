@@ -308,6 +308,8 @@ export const UI_NEXT: Record<string, readonly [string, string]> = {
   "ui.next.teach.try": ["先在它的例子上试一遍", "Try it on its cases first"],
   "ui.next.teach.tried": ["试运行通过", "Cases passed"],
   "ui.next.teach.triedDone": ["试运行完成", "The cases were run"],
+  "ui.next.screen.openFile": ["在新标签打开", "Open in a new tab"],
+  "ui.next.screen.noPreview": ["这种文件不能在这里预览，可以打开或下载。", "This kind of file cannot be shown here; open it or download it."],
   "ui.next.team.label": ["团队", "Team"],
   "ui.next.team.all": ["全部成员", "Everyone"],
   "ui.next.team.none": ["没有团队的", "In no team"],

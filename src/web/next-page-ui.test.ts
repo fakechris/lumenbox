@@ -250,3 +250,8 @@ test("a managed row says its state, where it came from and when it next acts, an
   assert.equal(manageNote({ state: "waiting", source: "routine", condition: "paused by an admin" }), "waiting · routine · paused by an admin");
   assert.equal(manageNote({ state: "running", source: "" }), "Running", "a code the page has words for is said in them");
 });
+
+test("a file is shown in place as a picture or as text, and one that cannot be shown says so", () => {
+  const previewKind = pageFunction("previewKind", {});
+  assert.deepEqual(["chart.PNG", "notes.md", "data.jsonl", "report.pdf", "archive.tar.gz", "Makefile"].map(name => previewKind(name)), ["image", "text", "text", "other", "other", "text"]);
+});
