@@ -145,6 +145,7 @@ export const UI_NEXT: Record<string, readonly [string, string]> = {
   "ui.next.auto.pause": ["暂停", "Pause"],
   "ui.next.auto.resume": ["恢复", "Resume"],
   "ui.next.auto.event": ["有事件时触发", "Runs when its event arrives"],
+  "ui.next.try": ["试用新界面", "Try the new view"],
   "ui.next.time.now": ["刚刚", "just now"],
   "ui.next.time.minutes": ["{n} 分钟前", "{n} min ago"],
   "ui.next.time.hours": ["{n} 小时前", "{n} h ago"],

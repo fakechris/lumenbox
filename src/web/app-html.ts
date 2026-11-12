@@ -903,6 +903,7 @@ ${AGENT_ROW_STYLE}
   <div id="sidefoot">
     <div class="footrow"><span class="dot" id="boxdot"></span><span id="boxinfo">box</span></div>
     <div id="buildinfo"></div>
+    <a id="nextui" href="/?ui=next" style="font-size:var(--fs-xs);color:var(--muted)">{{ui.next.try}}</a>
   </div>
 </div>
 

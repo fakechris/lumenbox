@@ -60,3 +60,17 @@ test("progress is shown only where something was counted, and never from a stale
   assert.deepEqual(nextLogic.nextProgressOf({ sources: [{ processed: 41, total: 70, source: "agent-reported" }] }), { done: 41, total: 70 });
   assert.deepEqual(nextLogic.nextAgo(new Date(Date.now() - 5 * 60_000).toISOString(), Date.now()), { key: "minutes", n: 5 });
 });
+
+test("the page somebody switched to is the one they come back to; with no choice it is the classic one", async () => {
+  const { pageChoice, APP_PAGE } = await import("./page-locale.ts");
+  const ask = (path: string, cookie?: string) => pageChoice({ headers: cookie ? { cookie } : {} } as never, new URL(path, "http://127.0.0.1"));
+  assert.equal(ask("/").page, APP_PAGE, "no choice: classic");
+  assert.equal(ask("/").remember, undefined);
+  assert.equal(ask("/?ui=next").page, NEXT_PAGE);
+  assert.match(ask("/?ui=next").remember!, /^lumen-ui=next; /);
+  assert.equal(ask("/", "agentbox_ui=x; lumen-ui=next").page, NEXT_PAGE, "remembered across a plain reload");
+  assert.equal(ask("/?ui=classic", "lumen-ui=next").page, APP_PAGE, "and switching back is one link");
+  assert.match(ask("/?ui=classic", "lumen-ui=next").remember!, /^lumen-ui=classic; /);
+  assert.equal(ask("/?ui=sideways").page, APP_PAGE, "an unknown choice is no choice");
+  assert.equal(ask("/?ui=next", "lumen-ui=next").remember, undefined, "nothing to remember twice");
+});
