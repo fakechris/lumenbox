@@ -17,6 +17,7 @@ import { NEXT_SCREEN_JS } from "./next-screen-ui.ts";
 import { NEXT_SETTINGS_JS } from "./next-settings-ui.ts";
 import { NEXT_AUTO_JS } from "./next-auto-ui.ts";
 import { NEXT_THREAD_JS } from "./next-thread-ui.ts";
+import { NEXT_COMPOSER_JS } from "./next-composer-ui.ts";
 import { NEXT_MEMBER_JS } from "./next-member-ui.ts";
 import { NEXT_BOXES_JS } from "./next-boxes-ui.ts";
 import { NEXT_CARDS_JS } from "./next-cards-ui.ts";
@@ -148,10 +149,16 @@ header.bar select { font: inherit; font-size: 13px; padding: 4px 8px; border-rad
 header.bar { position: relative; }
 .menu { position: absolute; right: 14px; top: 46px; z-index: 5; display: flex; flex-direction: column; min-width: 180px; padding: 4px; }
 .menu { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12); }
+.menu[hidden], .find[hidden], .picker[hidden] { display: none; }
+.composer { position: relative; }
+.picker { position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); width: min(520px, calc(100% - 32px)); display: flex; flex-direction: column; padding: 4px; }
+.picker { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.1); max-height: 280px; overflow: auto; }
+.picker button { display: flex; flex-direction: column; gap: 2px; text-align: left; padding: 7px 10px; border-radius: 6px; font-size: 13px; }
+.picker button.on, .picker button:hover { background: var(--bg); }
+.picker > .why { padding: 8px 10px; }
 .desk { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); }
 .desk .acts { flex-wrap: wrap; } .desk p { margin: 0; }
 .desk input { flex: 1; min-width: 120px; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg); font: inherit; font-size: 13px; }
-.menu[hidden], .find[hidden] { display: none; }
 .menu button { text-align: left; padding: 8px 10px; border-radius: 6px; font-size: 13px; }
 .menu button:hover { background: var(--bg); }
 .find { display: flex; align-items: center; gap: 10px; padding: 8px 24px; border-bottom: 1px solid var(--border); }
@@ -316,6 +323,7 @@ export const NEXT_HTML = `<!doctype html>
   </div>
   <section class="view" id="view"></section>
   <div class="composer" id="composer" hidden>
+    <div class="picker" id="composer-menu" hidden></div>
     <form id="composer-form"><textarea id="composer-text" rows="1"></textarea><button class="act-primary" id="composer-send" type="submit">{{ui.next.act.send}}</button></form>
   </div>
 </main>
@@ -374,6 +382,7 @@ ${NEXT_SCREEN_JS}
 ${NEXT_SETTINGS_JS}
 ${NEXT_AUTO_JS}
 ${NEXT_THREAD_JS}
+${NEXT_COMPOSER_JS}
 ${NEXT_MEMBER_JS}
 ${NEXT_BOXES_JS}
 ${NEXT_CARDS_JS}
