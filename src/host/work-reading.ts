@@ -41,7 +41,7 @@ export function workReading(task: Task, world: { stage: StageWorld; checks: Chec
   const boundary = task.workRoot?.state.unresolved ? "unverified" : task.workRoot ? "linked" : "historical";
   const reason = phase === "waiting" && boundary !== "linked" ? "historicalWaiting" : phase;
   const references = world.references ?? [];
-  const root = task.workRoot?.state, blocker = root?.status === "waiting" ? { kind: root.wait ?? (root.reason === "failed" ? "failed" : "execution"), tools: [...new Set((root.unavailable ?? []).map(row => row.tool))] } : undefined;
+  const root = task.workRoot?.state, blocker = root?.status === "waiting" ? { kind: root.reason === "failed" ? "failed" : root.reason === "aborted" ? "interrupted" : root.wait ?? "execution", tools: [...new Set((root.unavailable ?? []).map(row => row.tool))] } : undefined;
   return { ...(blocker ? { blocker } : {}), id: task.id, title: task.title, phase, reason, source: workSource(task), boundary, checks, evidenceVersion: evidenceDigest(task),
     ...(task.assigneeId && task.conversation ? { conversation: { agentId: task.assigneeId, id: task.conversation } } : {}),
     actions: [{ kind: "open", scope: "work" }, { kind: task.status === "review" || task.status === "done" ? "result" : "process", scope: "work" }, ...(task.assigneeId && task.conversation ? [{ kind: "conversation" as const, scope: "conversation" as const }] : [])],

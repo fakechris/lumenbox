@@ -6,6 +6,8 @@ import { workReading, workReference, workSource } from "./work-reading.ts";
 import { evidenceDigest } from "./review-dispatch.ts";
 import { attentionFor } from "./attention.ts";
 
+const blockedState = () => ({ id: "work", owner: "worker", conversation: "main", generation: 1, epoch: 0, messages: [], peers: [], awaiting: [] });
+
 test("an agent reviewer is not evidence that a check is running; the requester still sees the review decision", () => {
   const store = new TaskStore(null), checks = new ResultChecks();
   const task = store.create({ title: "Install the requested skill", requester: "person", assigneeId: "worker", reviewerId: "checker", origin: { kind: "user" } })!;
@@ -26,6 +28,8 @@ test("source is explicit provenance, never a title pattern or the current select
   const reading = workReading({ ...task, status: "doing" }, { checks: checks.snapshot(task), stage: { active: false, questionPending: false, undelivered: false } });
   const blocked = workReading({ ...task, workRoot: { state: { id: "work", owner: "worker", conversation: "main", generation: 1, epoch: 0, status: "waiting", wait: "capability", reason: "required tool unavailable: bash", unavailable: [{ participant: "worker", tool: "bash" }], messages: [], peers: [], awaiting: [] } } }, { checks: checks.snapshot(task), stage: { active: false, questionPending: false, undelivered: false } });
   assert.deepEqual(blocked.blocker, { kind: "capability", tools: ["bash"] });
+  const failed = workReading({ ...task, workRoot: { state: { ...blockedState(), status: "waiting", wait: "execution", reason: "failed" } } }, { checks: checks.snapshot(task), stage: { active: false, questionPending: false, undelivered: false } });
+  assert.equal(failed.blocker?.kind, "failed");
   assert.equal(reading.reason, "historicalWaiting"); assert.equal(reading.boundary, "historical");
   assert.equal(reading.actions.some(action => action.kind === "conversation"), false);
 });

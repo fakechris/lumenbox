@@ -2003,7 +2003,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     droppedFiles?: readonly string[],
     options?: { questionId?: string; existingTaskId?: string; cardTitle?: string; recoveryOperationId?: string; skipTask?: boolean; onSucceeded?: () => void }
   ): Promise<void> {
-    if (message.interaction && !message.questionId && !options?.skipTask) { const taskId = this.deps.interactionTask?.({ ...message, text }, agentName); if (!taskId || options?.existingTaskId && options.existingTaskId !== taskId) throw new Error("This card's original work is unavailable; the press did not create a new task."); options = { ...options, existingTaskId: taskId }; }
+    if (message.interaction && !message.questionId && !options?.skipTask) { const taskId = this.deps.interactionTask?.({ ...message, text: parseAddress(message.text).text }, agentName); if (!taskId || options?.existingTaskId && options.existingTaskId !== taskId) throw new Error("This card's original work is unavailable; the press did not create a new task."); options = { ...options, existingTaskId: taskId }; }
     const chatKey = message.chatKey ?? message.identity;
     const runningKey = message.threadKey ?? chatKey;
     const targetChatKey = message.threadKey ?? chatKey;

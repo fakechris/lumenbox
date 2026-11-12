@@ -32,15 +32,15 @@ try {
     await page.goto(meta.base + "/?lang=" + lang + "&agent=" + meta.agent);
     await page.waitForFunction(() => !!window.openTeamTasks && !!current);
     if (await page.locator("#settingswrap").isVisible()) await page.locator("#setcancel").click();
+    await page.setViewportSize({ width: 1440, height: 1000 });
     // A normal AskUser choice is not a ShowUI surface action. Exercise the actual button.
     let answer;
     await page.route("**/api/prompt", async route => { answer = route.request().postDataJSON(); await route.fulfill({ json: { ok: true } }); });
     await page.evaluate(() => window.pushItem({ kind: "question", question: "Choose installation directory", options: ["Use approved folder"] }));
-    const sentAnswer = page.waitForResponse(response => response.url() === meta.base + "/api/prompt");
-    await page.locator(".qopt").last().click();
-    await sentAnswer;
+    await Promise.all([page.waitForResponse(response => response.url() === meta.base + "/api/prompt"), page.locator(".qopt").last().click()]);
     assert.equal(answer?.text, "Use approved folder"); assert.equal(answer?.surfaceAction, undefined);
     await page.unroute("**/api/prompt");
+    await page.setViewportSize({ width, height: 1000 });
     await page.evaluate(dark => { document.documentElement.dataset.theme = dark ? "dark" : "light"; window.openTeamTasks(); }, dark);
     await page.waitForSelector("[data-task-row]");
     assert.ok(await page.locator("[data-task-row]").count() <= 50);
