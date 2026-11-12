@@ -224,6 +224,7 @@ export const UI_NEXT: Record<string, readonly [string, string]> = {
   "ui.next.system.version": ["版本", "Version"],
   "ui.next.system.wrong": ["出过问题的 · {n}", "What went wrong · {n}"],
   "ui.next.system.nothingWrong": ["没有未处理的异常。", "Nothing is waiting to be dealt with."],
+  "ui.next.system.unreadable": ["现在读不到这部分，不代表没有。", "This could not be read just now, which is not the same as there being none."],
   "ui.next.system.retry": ["重试", "Retry"],
   "ui.next.system.history": ["内部历史记录", "Internal history"],
   "ui.next.system.historyNote": ["有 {n} 条成员之间的审核、检查等内部记录。它们不出现在收件、工作和对话里，也不会自己再启动。", "{n} internal records of reviews and checks between agents are kept. They appear in no inbox, work list or conversation, and none of them starts again by itself."],

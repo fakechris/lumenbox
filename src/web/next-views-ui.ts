@@ -197,6 +197,8 @@ function nextStart() {
     if (kind === "turn_started" || kind === "turn_finished" || kind === "turn_failed") { var who = next.agents[event.agentId]; if (who) who.running = kind === "turn_started"; }
     chatEvent(event);
     cardsEvent(event);
+    // The system page is a snapshot: what can change it re-reads it while it is the page being looked at.
+    if (next.view === "system" && (kind === "turn_failed" || kind === "turn_finished" || kind === "error" || kind === "reset")) loadSystem();
   };
 }
 `;

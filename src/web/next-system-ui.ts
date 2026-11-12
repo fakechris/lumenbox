@@ -4,16 +4,22 @@
  * so it is one click into Settings and never on a default surface.
  */
 export const NEXT_SYSTEM_JS = `
-var system = { state: null, exceptions: null, history: null };
+var system = { state: null, exceptions: null, history: null, failed: false, loading: false };
 
 function loadSystem() {
+  if (system.loading) return;
+  system.loading = true;
   var none = function () { return null; };
   Promise.all([
     getJson("/api/state").catch(none),
     getJson("/api/exceptions").catch(none),
     getJson("/api/tasks/list?records=internal&limit=1").catch(none),
   ]).then(function (got) {
-    system.state = got[0]; system.exceptions = got[1]; system.history = got[2];
+    system.loading = false;
+    // A read that failed is kept as "not known", never shown as an empty, healthy answer.
+    system.failed = got[0] === null;
+    if (got[0] !== null) system.state = got[0];
+    system.exceptions = got[1]; system.history = got[2];
     if (next.view === "system") render();
   });
 }
@@ -32,7 +38,11 @@ function exceptionRow(entry) {
   row.appendChild(body);
   [["retry", t("ui.next.system.retry")], ["dismiss", t("ui.next.card.dismiss")]].forEach(function (pair) {
     var button = el("button", "act", pair[1]);
-    button.addEventListener("click", function () { postJson("/api/exceptions/" + pair[0], { id: entry.id }).then(loadSystem, failed); });
+    button.addEventListener("click", function () {
+      // One press, one request: the row's buttons stay off until this one has answered.
+      acts.querySelectorAll("button").forEach(function (other) { other.disabled = true; });
+      postJson("/api/exceptions/" + pair[0], { id: entry.id }).then(loadSystem, function (error) { failed(error); loadSystem(); });
+    });
     acts.appendChild(button);
   });
   row.appendChild(acts);
@@ -41,7 +51,14 @@ function exceptionRow(entry) {
 }
 
 function renderSystem(view) {
-  if (!system.state) { loadSystem(); return; }
+  if (!system.state) {
+    // Asked for once; a failure is said, with the way to ask again, rather than asked for on every redraw.
+    if (!system.failed) { loadSystem(); return; }
+    var again = el("button", "act", t("ui.next.system.retry"));
+    again.addEventListener("click", function () { system.failed = false; loadSystem(); });
+    view.appendChild(el("p", "empty", t("ui.next.system.unreadable"))); view.appendChild(again);
+    return;
+  }
   var state = system.state, health = el("section", "setting"), usage = state.usageToday || {};
   health.appendChild(el("h2", "group", t("ui.next.system.health")));
   health.appendChild(fact(t("ui.next.system.model"), String(state.provider || "")));
@@ -56,13 +73,14 @@ function renderSystem(view) {
   });
   var wrong = el("div", "list");
   wrong.appendChild(el("h2", "group", t("ui.next.system.wrong", { n: open.length })));
-  if (open.length === 0) wrong.appendChild(el("p", "why", t("ui.next.system.nothingWrong")));
+  if (system.exceptions === null) wrong.appendChild(el("p", "why", t("ui.next.system.unreadable")));
+  else if (open.length === 0) wrong.appendChild(el("p", "why", t("ui.next.system.nothingWrong")));
   open.slice(0, 30).forEach(function (entry) { wrong.appendChild(exceptionRow(entry)); });
   view.appendChild(wrong);
 
   var kept = el("section", "setting"), total = (system.history && system.history.total) || 0;
   kept.appendChild(el("h2", "group", t("ui.next.system.history")));
-  kept.appendChild(el("p", "", t("ui.next.system.historyNote", { n: total })));
+  kept.appendChild(el("p", "", system.history === null ? t("ui.next.system.unreadable") : t("ui.next.system.historyNote", { n: total })));
   view.appendChild(kept);
 }
 `;
