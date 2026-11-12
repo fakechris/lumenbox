@@ -164,7 +164,7 @@ Each stage is independently shippable and leaves the suite green.
 2. **Done: a side lane instead of holding.** A colleague's errand runs beside a person's waiting
    work and yields to it (§5); the hold remains for what must enter the person's thread. Scenario: a person's work waits on a tool; a colleague's unrelated message is
    handled; the person's plan and context are unchanged.
-3. **One writer.** In two parts.
+3. **One writer.**
    - **Done: the card follows the root, and the three records are read in one place.** A request
      that started is `doing` and one a person stopped is `dropped`, written where the root is
      written (`followRoot`) instead of corrected for by each reader. `work-execution.ts` puts
@@ -172,16 +172,26 @@ Each stage is independently shippable and leaves the suite green.
      conversation's focus, so `answered` means released, which a finished request and a parked one
      both are — and an episode that ends with them contradicting each other fails. Nothing new
      creates a card marked internal: the guard test names the two places that still do.
-   - **Left: one stored field.** A lifecycle module owns execution state for goals and ordinary
-     work alike, the pursuit's and the root's statuses become that one field, and `WorkAttention`
-     keeps only the focus. This changes what is stored, so it lands with stage 4's migration.
+   - **Not done, on purpose: one stored field.** Making the pursuit's and the root's statuses one
+     field changes every reader and writer of a goal for no difference a person or an agent can
+     see: since the card follows the root and an episode fails when the three records contradict
+     each other, they are already one state said three ways. It is done when something needs it.
    - **Done: ended internal records can be archived.** An admin moves them, from the system view,
      to the month's archive beside the ledger (`task-archive.ts`): appended and checked on disk
      before anything leaves the board, and put back with one press. Nothing is deleted.
-4. **Requests leave the board.** Promotion (§2) replaces create-then-hide. Existing records are
-   migrated where the source message can be verified and left unresolved, non-executable and off
-   the default lists where it cannot.
-5. **The page** is rebuilt on the three levels (INV-1825), reading the two axes.
+4. **Requests leave the board.**
+   - **Done: an answered request leaves the ledger.** It was already off every list
+     (`answeredInChat`). A record carrying a work root was never retired, so every chat message
+     stayed in the file for good; a request that was answered or stopped now leaves it a month
+     after it closed, for the archive, like any closed card (`closedLongEnough`). Closed records
+     past their time are archived, where they used to be dropped.
+   - **Not done, on purpose: no record at all for an answered request.** The record is where the
+     request's root lives while its turn runs, and how a message delivered twice is recognised as
+     the same one (`TaskWorkRoots.prepare`). Promotion instead of create-then-retire would move
+     both elsewhere and buy nothing a person sees. If it is taken up, the inbound ledger has to
+     carry the root and the duplicate check first.
+5. **Done.** The page is rebuilt on the three levels (INV-1825) and is the one a person gets;
+   [docs/92](92-web-ui.md) is its rule.
 
 ## 8. What this document refuses
 
