@@ -44,3 +44,32 @@ test("known response costs survive restart, retain the prior reported floor and 
     assert.throws(() => resumed.recordCost("response-1", 19), /changed/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("the work allowance is counted over a day: long work is not paused for ever by its hundred-and-twentieth blip (INV-1823)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "model-retries-window-"));
+  try {
+    let now = Date.parse("2026-11-12T00:00:00Z");
+    const hour = 3_600_000;
+    const open = () => new ModelRetries(dir, "long-goal", 100, 3, 24 * hour, () => now);
+    const first = open();
+    assert.equal(first.reserve(), true); assert.equal(first.reserve(), true); assert.equal(first.reserve(), true);
+    assert.equal(first.reserve(), false, "a storm inside the window is still bounded");
+    assert.equal(open().reserve(), false, "and a restart inside it refunds nothing");
+    now += 23 * hour;
+    assert.equal(open().reserve(), false);
+    now += 2 * hour;
+    const later = open();
+    assert.equal(later.reserve(), true, "a day on, the allowance is there again");
+    assert.equal(later.exhausted, false);
+    now += 25 * hour;
+    // A ledger written before times were kept: its reservations take the file's last write, so they age out too.
+    const legacyDir = mkdtempSync(join(tmpdir(), "model-retries-legacy-"));
+    const old = new ModelRetries(legacyDir, "old-goal", 100, 2, 24 * hour, () => Date.now());
+    old.reserve(); old.reserve();
+    const file = join(legacyDir, "model-retries", readdirSync(join(legacyDir, "model-retries"))[0]!);
+    writeFileSync(file, '{"retry":1}\n{"retry":2}\n');
+    assert.equal(new ModelRetries(legacyDir, "old-goal", 100, 2, 24 * hour, () => Date.now()).exhausted, true, "just written: still counted");
+    assert.equal(new ModelRetries(legacyDir, "old-goal", 100, 2, 24 * hour, () => Date.now() + 25 * hour).exhausted, false, "a day after its last write: aged out");
+    rmSync(legacyDir, { recursive: true, force: true });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

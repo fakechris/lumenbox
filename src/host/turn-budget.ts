@@ -33,10 +33,13 @@ export const DEFAULT_TURN_BUDGET: TurnBudgetConfig = { calls: 60, repeats: 3 };
 /** The fraction of `calls` at which the model is warned, once. */
 const WARN_AT = 0.8;
 
+/** How many times the repeat limit one exact call may run in a turn in all, however much happened between. */
+const TOTAL_FACTOR = 4;
+
 export class TurnBudget {
   private used = 0;
   private warned = false;
-  private readonly seen = new Map<string, { count: number; result: Anthropic.ToolResultBlockParam["content"] }>();
+  private readonly seen = new Map<string, { count: number; total: number; result: Anthropic.ToolResultBlockParam["content"] }>();
 
   constructor(readonly limits: TurnBudgetConfig = DEFAULT_TURN_BUDGET) {}
 
@@ -58,22 +61,26 @@ export class TurnBudget {
   /** The replay for a call seen too often, or undefined when the call should run. */
   replayFor(tool: string, input: unknown): Anthropic.ToolResultBlockParam["content"] | undefined {
     const entry = this.seen.get(signatureOf(tool, input));
-    if (entry === undefined || entry.count < this.limits.repeats || entry.result === undefined) return undefined;
-    return entry.result;
+    if (entry === undefined || entry.result === undefined) return undefined;
+    return entry.count >= this.limits.repeats || entry.total >= this.limits.repeats * TOTAL_FACTOR ? entry.result : undefined;
   }
 
   /** A call that ran, and what it returned, so the next identical one can be answered from here. */
-  ran(tool: string, input: unknown, result: Anthropic.ToolResultBlockParam["content"]): void {
+  ran(tool: string, input: unknown, result: Anthropic.ToolResultBlockParam["content"], changedTheWorld = false): void {
     const key = signatureOf(tool, input);
     const entry = this.seen.get(key);
     // Past the limit the stored result is the last real one; a replay must not replace it with itself.
-    const kept = entry !== undefined && entry.count >= this.limits.repeats ? entry.result : result;
-    this.seen.set(key, { count: (entry?.count ?? 0) + 1, result: kept });
+    const kept = entry !== undefined && this.replayFor(tool, input) !== undefined ? entry.result : result;
+    // The same script after an edit, the same check after a wait, is not the same call again (INV-1823):
+    // a different call that acted starts every other call's run of repeats afresh. The total still
+    // stands, so two calls taking turns cannot go round for ever.
+    if (changedTheWorld) for (const [other, seen] of this.seen) if (other !== key) seen.count = 0;
+    this.seen.set(key, { count: (entry?.count ?? 0) + 1, total: (entry?.total ?? 0) + 1, result: kept });
   }
 
   /** How many times this exact call has run. */
   repeatsOf(tool: string, input: unknown): number {
-    return this.seen.get(signatureOf(tool, input))?.count ?? 0;
+    return this.seen.get(signatureOf(tool, input))?.total ?? 0;
   }
 }
 

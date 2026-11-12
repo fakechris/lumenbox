@@ -1,14 +1,17 @@
-/** Consecutive failures reset on success; the work's durable recovery allowance does not. */
+/** Consecutive failures reset on success; the work's durable recovery allowance does not — it is counted over a day (INV-1823). */
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { appendLineDurably } from "./jsonl.ts";
-import { MAX_TURN_RETRIES, MAX_WORK_RETRIES } from "./transient.ts";
+import { MAX_TURN_RETRIES, MAX_WORK_RETRIES, WORK_RETRY_WINDOW_MS } from "./transient.ts";
 
 export class ModelRetries {
   private consecutive = 0;
   private turn = 0;
+  /** Every reservation this work ever made, in order: the ledger's sequence. */
   private work = 0;
+  /** When each was made; one written before times were kept takes the ledger's last write, so it too ages out. */
+  private reservedAt: number[] = [];
   private held = 0;
   private measured = 0;
   private base = 0;
@@ -16,7 +19,10 @@ export class ModelRetries {
   private stamp = "";
   private readonly costs = new Map<string, number>();
   private readonly path: string;
-  constructor(dir: string, workId: string, private readonly turnLimit = MAX_TURN_RETRIES, private readonly workLimit = MAX_WORK_RETRIES) {
+  constructor(
+    dir: string, workId: string, private readonly turnLimit = MAX_TURN_RETRIES, private readonly workLimit = MAX_WORK_RETRIES,
+    private readonly windowMs = WORK_RETRY_WINDOW_MS, private readonly now: () => number = () => Date.now(),
+  ) {
     this.path = join(dir, "model-retries", `${createHash("sha256").update(workId).digest("hex")}.jsonl`);
     this.refresh();
   }
@@ -24,13 +30,17 @@ export class ModelRetries {
     const stat = existsSync(this.path) ? statSync(this.path) : undefined;
     const stamp = stat === undefined ? "absent" : `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
     if (stamp === this.stamp) return;
-    this.work = 0; this.held = 0; this.measured = 0; this.base = 0; this.hasBase = false; this.costs.clear();
+    this.work = 0; this.reservedAt = []; this.held = 0; this.measured = 0; this.base = 0; this.hasBase = false; this.costs.clear();
     if (stat !== undefined && stat.size > 0) {
       // Malformed durable state fails closed rather than silently restoring paid attempts.
       for (const line of readFileSync(this.path, "utf8").split("\n").filter(Boolean)) {
-        const row = JSON.parse(line) as { retry?: number; heldCost?: number; baseCost?: number; cost?: number; id?: string };
+        const row = JSON.parse(line) as { retry?: number; at?: string; heldCost?: number; baseCost?: number; cost?: number; id?: string };
         if (row.heldCost !== undefined && Number.isFinite(row.heldCost) && row.heldCost >= 0) this.held += row.heldCost;
-        else if (row.retry !== undefined && Number.isSafeInteger(row.retry) && row.retry === this.work + 1) this.work = row.retry;
+        else if (row.retry !== undefined && Number.isSafeInteger(row.retry) && row.retry === this.work + 1) {
+          this.work = row.retry;
+          const at = row.at === undefined ? Number.NaN : Date.parse(row.at);
+          this.reservedAt.push(Number.isFinite(at) ? at : stat.mtimeMs);
+        }
         else if (row.baseCost !== undefined && !this.hasBase && Number.isFinite(row.baseCost) && row.baseCost >= 0) { this.base = row.baseCost; this.hasBase = true; }
         else if (typeof row.id === "string" && row.cost !== undefined && Number.isFinite(row.cost) && row.cost >= 0 && !this.costs.has(row.id)) { this.costs.set(row.id, row.cost); this.measured += row.cost; }
         else throw new Error("Invalid model recovery ledger");
@@ -66,14 +76,17 @@ export class ModelRetries {
     this.refresh(); this.append({ heldCost: cost }); this.held += cost;
   }
   get attempt(): number { return this.consecutive + 1; }
-  get exhausted(): boolean { return this.turn >= this.turnLimit || this.work >= this.workLimit; }
+  /** Reservations inside the window: what the work allowance is measured against. */
+  private get recent(): number { const since = this.now() - this.windowMs; return this.reservedAt.filter(at => at > since).length; }
+  get exhausted(): boolean { return this.turn >= this.turnLimit || this.recent >= this.workLimit; }
   succeeded(): void { this.consecutive = 0; }
   /** Reserve before the paid retry, so process restart cannot refund it. */
   reserve(): boolean {
     this.refresh(); // another execution of the same work may have reserved since construction
     if (this.exhausted) return false;
-    this.append({ retry: this.work + 1 });
-    this.work++; this.turn++; this.consecutive++;
+    const at = this.now();
+    this.append({ retry: this.work + 1, at: new Date(at).toISOString() });
+    this.work++; this.reservedAt.push(at); this.turn++; this.consecutive++;
     return true;
   }
 }
