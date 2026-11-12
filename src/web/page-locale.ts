@@ -25,7 +25,6 @@ import { resolveLocale, type Locale } from "../i18n/locale.ts";
 import { MESSAGES, tr } from "../i18n/messages.ts";
 import { APP_HTML, LOGIN_HTML } from "./app-html.ts";
 import { NEXT_HTML } from "./next-page-ui.ts";
-import { withEmbed } from "./embed-ui.ts";
 
 const MARKER = /\{\{(@?[\w.-]+)\}\}/g;
 
@@ -103,7 +102,7 @@ export function localized(template: string, kind: "page" | "script"): (locale: L
 }
 
 /** The workshop and the sign-in page, each filled once per language. */
-export const APP_PAGE = localized(withEmbed(APP_HTML), "page");
+export const APP_PAGE = localized(APP_HTML, "page");
 /** The rebuilt page (INV-1825): the same data, reached with `?ui=next` until it is the default. */
 export const NEXT_PAGE = localized(NEXT_HTML, "page");
 export const LOGIN_PAGE = localized(LOGIN_HTML, "page");
@@ -117,9 +116,8 @@ export const LOGIN_PAGE = localized(LOGIN_HTML, "page");
  */
 export const UI_COOKIE = "lumen-ui";
 export function pageChoice(req: IncomingMessage, url: URL): { page: (locale: Locale) => string; remember?: string } {
-  // The classic page framed by the rebuilt one for a dialog it has not rebuilt: served, never remembered.
-  // So is a template link, whose import dialog is still the classic page's.
-  if (url.searchParams.has("embed") || url.searchParams.has("import")) return { page: APP_PAGE };
+  // A template link opens the classic page, whose import dialog it is: served, never remembered.
+  if (url.searchParams.has("import")) return { page: APP_PAGE };
   const asked = url.searchParams.get("ui");
   const kept = new RegExp(`(?:^|;\\s*)${UI_COOKIE}=(next|classic)`).exec(req.headers.cookie ?? "")?.[1];
   const choice = asked === "next" || asked === "classic" ? asked : kept ?? "classic";

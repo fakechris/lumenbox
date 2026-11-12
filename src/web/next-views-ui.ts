@@ -313,7 +313,6 @@ function nextStart() {
   screenStart();
   memberStart();
   cardsStart();
-  embedStart();
   // A link to one piece of work — from a chat message, a notification — opens it.
   if (linked) openPanel(linked);
   refresh();

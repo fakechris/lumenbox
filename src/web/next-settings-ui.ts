@@ -16,11 +16,10 @@ function numberField(labelText, value, min, max) {
   return { label: label, input: input };
 }
 
-/** One settings pane, opened: native where it has been rebuilt, the classic dialog in a frame where it has not. */
+/** One settings pane, opened in the settings view. */
 function openSettingsPane(key) {
   next.view = "settings"; document.body.dataset.open = "1";
-  if (NATIVE_PANES[key]) { settings.pane = key; render(); return; }
-  settings.pane = ""; render(); openEmbed("settings", key);
+  settings.pane = NATIVE_PANES[key] ? key : ""; render();
 }
 
 function renderSettings(view) {
@@ -50,10 +49,9 @@ function renderSettings(view) {
   });
   long.appendChild(save);
   view.appendChild(long);
-  // The other settings are the classic page's dialogs, opened here in a frame until each is rebuilt (embed-ui.ts).
   var more = el("div", "list");
   more.appendChild(el("h2", "group", t("ui.next.settings.more")));
-  SETTING_PANES.forEach(function (key) {
+  SETTING_PANES.concat(shellPanes()).forEach(function (key) {
     var row = el("button", "row"), body = el("span", "body");
     body.appendChild(el("div", "title", t("ui.pane." + key)));
     body.appendChild(el("div", "why", t("ui.pane." + key + ".about")));
@@ -71,23 +69,10 @@ function renderSettings(view) {
 }
 
 var SETTING_PANES = ["model", "boxes", "doors", "team", "mine", "memory", "supervision", "guests"];
-// The panes rebuilt here; the rest still open the classic dialog in a frame.
-var NATIVE_PANES = { mine: renderMinePane, model: renderModelPane, doors: renderDoorsPane, team: renderTeamPane, boxes: renderBoxesPane };
-
-/** A classic dialog in a frame over the page; it says when it has closed, and the frame goes. */
-function openEmbed(kind, tab) {
-  var frame = $("embed");
-  frame.src = "/?embed=" + kind + (tab ? "&tab=" + encodeURIComponent(tab) : "") + "&lang={{@locale}}";
-  frame.hidden = false;
-}
-function embedStart() {
-  window.addEventListener("message", function (event) {
-    if (event.origin !== location.origin || !event.data || event.data.lumen !== "embed-closed") return;
-    var frame = $("embed");
-    frame.hidden = true; frame.removeAttribute("src");
-    settings.long = null; refresh();
-  });
-}
+var NATIVE_PANES = {
+  mine: renderMinePane, model: renderModelPane, doors: renderDoorsPane, team: renderTeamPane, boxes: renderBoxesPane,
+  memory: renderMemoryPane, supervision: renderSupervisionPane, guests: renderGuestsPane, machine: renderMachinePane, organisations: renderOrganisationsPane,
+};
 
 /**
  * Getting started, for an installation that has not yet done a piece of work: the few things an agent
