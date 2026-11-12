@@ -164,3 +164,15 @@ test("a conversation exported is what was said, by whom, in order; steps and asi
   const threadFinds = pageFunction("threadFinds", {});
   assert.deepEqual(entries.map(entry => threadFinds(entry, "the")), [false, false, false, true], "found in what was said, whatever its case; never in a step or an aside");
 });
+
+test("\"/\" opening a message asks for a skill, \"@\" at a word asks for a colleague, and a path or an address asks for nothing", () => {
+  const composerQuery = pageFunction("composerQuery", {}), composerPick = pageFunction("composerPick", {});
+  const plain = (value: unknown) => JSON.parse(JSON.stringify(value ?? null));
+  assert.deepEqual(plain(composerQuery("/res", 4)), { kind: "skill", query: "res" });
+  assert.equal(composerQuery("see /home/box/work", 18), null, "mid-sentence a slash is a path");
+  assert.equal(composerQuery("/research brief on", 18), null, "a skill name is one word: after a space it is a message");
+  assert.deepEqual(plain(composerQuery("ask @bo about it", 7)), { kind: "mention", query: "bo" }, "at the caret, not at the end");
+  assert.equal(composerQuery("mail a@b.com", 12), null);
+  assert.deepEqual(plain(composerPick("ask @bo about it", 7, "mention", "Bob", "")), { value: "ask @Bob  about it", caret: 9 });
+  assert.deepEqual(plain(composerPick("/res", 4, "skill", "research-brief", "Use the research-brief skill.")), { value: "Use the research-brief skill.", caret: 29 });
+});

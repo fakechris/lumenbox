@@ -257,6 +257,7 @@ function nextStart() {
   var asked = new URLSearchParams(location.search).get("view"), linked = new URLSearchParams(location.search).get("task");
   if (asked === "work" || asked === "inbox" || asked === "settings" || asked === "auto" || asked === "boxes" || asked === "system") { next.view = asked; document.body.dataset.open = "1"; }
   panelStart();
+  composerStart(); // first: its Enter, with the menu open, is not the composer's
   chatStart();
   threadStart();
   screenStart();
