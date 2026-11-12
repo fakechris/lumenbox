@@ -115,10 +115,10 @@ h2.group:first-child { margin-top: 0; }
 .needbox textarea { width: 100%; margin-top: 10px; min-height: 64px; border: 1px solid var(--border-strong); border-radius: 8px; padding: 8px; font: inherit; background: var(--surface); }
 .file { display: flex; justify-content: space-between; gap: 12px; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin: 6px 0; font-size: 13px; text-decoration: none; }
 .file span:last-child { color: var(--muted); flex: none; }
-.counts { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin: 8px 0; }
-.count { border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
-.count b { display: block; font-size: 20px; }
-.count small { color: var(--muted); display: block; }
+.tallies { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin: 8px 0; }
+.tally { border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
+.tally b { display: block; font-size: 20px; }
+.tally small { color: var(--muted); display: block; }
 .budget { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: var(--bg); border-radius: 10px; padding: 10px 12px; margin: 8px 0; font-size: 13px; }
 .steps { list-style: none; margin: 0; padding: 0; }
 .steps li { display: flex; gap: 10px; padding: 7px 0; border-top: 1px solid var(--border); font-size: 13px; }
@@ -130,11 +130,10 @@ h2.group:first-child { margin-top: 0; }
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 10px; font-size: 13px; max-width: 80vw; }
 @media (max-width: 720px) {
   body { flex-direction: column; }
-  .side { width: 100%; max-height: 42vh; border-right: 0; border-bottom: 1px solid var(--border); }
-  body[data-view="chat"] .side { max-height: none; flex: 1; }
-  body[data-view="chat"][data-open="1"] .side { display: none; }
-  body[data-view="chat"]:not([data-open="1"]) main { display: none; }
-  body:not([data-view="chat"]) .agents, body:not([data-view="chat"]) .side h2.group, body:not([data-view="chat"]) .boxes { display: none; }
+  .side { width: 100%; border-right: 0; border-bottom: 1px solid var(--border); }
+  .side { max-height: none; flex: 1; }
+  body[data-open="1"] .side { display: none; }
+  body:not([data-open="1"]) main { display: none; }
   header.bar { padding: 8px 14px; flex-wrap: wrap; } .view { padding: 14px; } .composer { padding: 8px 14px 12px; }
   .row { flex-wrap: wrap; } .when { display: none; }
   .board { grid-template-columns: 1fr; }

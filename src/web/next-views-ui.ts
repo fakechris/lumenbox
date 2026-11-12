@@ -128,6 +128,7 @@ function renderInbox(view) {
 
 function render() {
   var view = $("view");
+  next.atEnd = view.scrollHeight - view.scrollTop - view.clientHeight < 80; next.scrollTop = view.scrollTop;
   view.replaceChildren();
   document.body.dataset.view = next.view;
   renderSide();

@@ -77,10 +77,10 @@ function progressBlock(task) {
   var sources = ((task.progress && task.progress.sources) || []).filter(function (row) { return !row.stale; });
   var pursuit = task.pursuit;
   if (sources.length === 0 && !pursuit) return null;
-  var box = section(t("ui.next.panel.progress")), counts = el("div", "counts");
+  var box = section(t("ui.next.panel.progress")), counts = el("div", "tallies");
   function count(value, label, source) {
     if (typeof value !== "number") return;
-    var cell = el("div", "count");
+    var cell = el("div", "tally");
     cell.appendChild(el("b", "", value)); cell.appendChild(el("span", "", t("ui.next.count." + label)));
     cell.appendChild(el("small", "", t("ui.next.source." + (SOURCE_KEY[source] || "agent"))));
     counts.appendChild(cell);

@@ -7,7 +7,7 @@
  * between agents are one folded line each, opened on demand; the host's own notes are not shown.
  */
 export const NEXT_CHAT_JS = `
-var chat = { agentId: "", box: "", entries: [], live: null, loading: "" };
+var chat = { agentId: "", box: "", entries: [], live: null, loading: "", loadedFor: "", request: 0, jump: false };
 var markdown = window.markdownit ? window.markdownit({ html: false, linkify: true, breaks: true }) : null;
 
 function agentsHere() {
@@ -63,6 +63,8 @@ function renderSide() {
 }
 
 function openChat(agentId) {
+  // Another agent's half-written words and its thread are not this one's.
+  if (agentId !== chat.agentId) { chat.live = null; chat.loadedFor = ""; chat.entries = []; }
   chat.agentId = agentId; next.view = "chat"; document.body.dataset.open = "1";
   history.replaceState(null, "", "?ui=next&agent=" + encodeURIComponent(agentId));
   render();
@@ -122,9 +124,9 @@ function renderThread(view) {
     bar.appendChild(stop); thread.appendChild(bar);
   }
   if (thread.childNodes.length === 0) thread.appendChild(el("p", "empty", t(agent ? "ui.next.chat.empty" : "ui.next.chat.none")));
-  var atEnd = view.scrollHeight - view.scrollTop - view.clientHeight < 80 || chat.jump;
   view.appendChild(thread);
-  if (atEnd) view.scrollTop = view.scrollHeight;
+  // Follow the newest words only for somebody who was already reading the end (measured before the redraw).
+  if (next.atEnd || chat.jump) view.scrollTop = view.scrollHeight; else view.scrollTop = next.scrollTop;
   chat.jump = false;
 }
 
@@ -138,17 +140,23 @@ function renderChat(view) {
   if (chat.loadedFor === chat.agentId) renderThread(view);
 }
 
+/** The conversation is on screen: this agent's, in a visible tab, not behind the agent list on a narrow screen. */
+function chatVisible() {
+  var narrow = window.matchMedia("(max-width: 720px)").matches;
+  return next.view === "chat" && document.visibilityState === "visible" && (!narrow || document.body.dataset.open === "1");
+}
+
 function loadThread() {
-  var id = chat.agentId;
+  var id = chat.agentId, request = ++chat.request;
   if (!id) return;
   chat.loading = id;
   getJson("/api/transcript?agent=" + encodeURIComponent(id) + "&conversation=main").then(function (entries) {
-    if (chat.agentId !== id) return;
+    if (chat.agentId !== id || request !== chat.request) return; // a newer read is on its way
     if (chat.loadedFor !== id) { chat.jump = true; chat.live = next.agents[id] && next.agents[id].running ? { text: "", doing: "" } : null; }
     chat.entries = entries; chat.loadedFor = id; chat.loading = "";
     if (next.view === "chat") render();
-    postJson("/api/agents/viewed", { id: id }).catch(function () {});
-  }, function (error) { chat.loading = ""; failed(error); });
+    if (chatVisible()) postJson("/api/agents/viewed", { id: id }).catch(function () {});
+  }, function (error) { if (request === chat.request) chat.loading = ""; failed(error); });
 }
 
 function sendMessage() {
@@ -177,7 +185,8 @@ function chatStart() {
   $("composer-form").addEventListener("submit", function (event) { event.preventDefault(); sendMessage(); });
   input.addEventListener("keydown", function (event) { if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); sendMessage(); } });
   input.addEventListener("input", function () { input.style.height = ""; input.style.height = Math.min(input.scrollHeight, 180) + "px"; });
-  $("back").addEventListener("click", function () { delete document.body.dataset.open; });
+  // Back is always to the agents: from a conversation, and from the two views that cut across them.
+  $("back").addEventListener("click", function () { next.view = "chat"; delete document.body.dataset.open; render(); });
   var asked = new URLSearchParams(location.search).get("agent");
   if (asked) { chat.agentId = asked; document.body.dataset.open = "1"; }
 }
