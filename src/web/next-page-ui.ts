@@ -236,6 +236,8 @@ button.fact { width: 100%; text-align: left; }
 .fact .bad { color: var(--bad); } .fact .warn { color: var(--warn); } .fact code { font-size: 12px; overflow-wrap: anywhere; text-align: right; }
 button.link { text-align: left; font-weight: 600; text-decoration: underline; text-decoration-color: var(--border-strong); }
 .setting .fold-body > input { width: 100%; max-width: 320px; }
+.files img { max-width: 100%; border-radius: 8px; border: 1px solid var(--border); }
+.files pre.raw { max-height: none; }
 .shelf .fact { align-items: center; } .shelf h2.group { margin: 10px 0 2px; }
 .fold-body { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; }
 .fold-body textarea { width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg); font: 12.5px/1.5 "IBM Plex Mono", ui-monospace, monospace; }

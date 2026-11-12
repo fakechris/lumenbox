@@ -6,7 +6,7 @@
  * button in the conversation's header, and the same desktop and file endpoints the classic page uses.
  */
 export const NEXT_SCREEN_JS = `
-var screen2 = { open: false, tab: "desktop", dir: "", root: "", entries: [], error: "", mine: {}, recording: {} };
+var screen2 = { open: false, tab: "desktop", dir: "", root: "", entries: [], error: "", mine: {}, recording: {}, preview: "", text: null };
 
 function loadFiles(dir) {
   getJson("/api/files" + (dir ? "?dir=" + encodeURIComponent(dir) : "")).then(function (got) {
@@ -26,8 +26,36 @@ function uploadFile(file) {
   reader.readAsDataURL(file);
 }
 
+/** How a file can be shown without leaving the page: as a picture, as text, or not at all. */
+function previewKind(name) {
+  var ext = (/\\.([A-Za-z0-9]+)$/.exec(name) || ["", ""])[1].toLowerCase();
+  if (["png", "jpg", "jpeg", "gif", "webp", "svg"].indexOf(ext) >= 0) return "image";
+  if (["md", "txt", "log", "json", "jsonl", "csv", "tsv", "yaml", "yml", "xml", "html", "css", "js", "ts", "py", "sh", "sql", "toml", "ini", "env"].indexOf(ext) >= 0) return "text";
+  return ext ? "other" : "text";
+}
+
+/** One file, looked at in place: what it holds when that can be shown, and always the way to open or keep it. */
+function previewBlock() {
+  var box = el("div", "files"), path = screen2.preview, name = path.split("/").pop(), href = "/api/file?path=" + encodeURIComponent(path), kind = previewKind(name);
+  var back = el("button", "file", "‹ " + name), open = el("a", "act", t("ui.next.screen.openFile")), keep = el("a", "act", t("ui.next.template.download")), acts = el("div", "acts");
+  back.addEventListener("click", function () { screen2.preview = ""; screen2.text = null; renderScreen(); });
+  open.href = href; open.target = "_blank"; open.rel = "noopener"; keep.href = href + "&download=1";
+  acts.appendChild(open); acts.appendChild(keep); box.appendChild(back); box.appendChild(acts);
+  if (kind === "image") { var picture = el("img"); picture.src = href; picture.alt = name; box.appendChild(picture); }
+  else if (kind === "text") {
+    if (screen2.text === null) {
+      box.appendChild(el("p", "why", t("ui.next.auto.reading")));
+      fetch(href).then(function (response) { if (!response.ok) throw new Error(String(response.status)); return response.text(); }).then(function (text) {
+        if (screen2.preview === path) { screen2.text = text.length > 200000 ? text.slice(0, 200000) + "\\n…" : text; renderScreen(); }
+      }, function () { if (screen2.preview === path) { screen2.text = ""; renderScreen(); } });
+    } else { var shown = el("pre", "raw"); shown.textContent = screen2.text; box.appendChild(shown); }
+  } else box.appendChild(el("p", "why", t("ui.next.screen.noPreview")));
+  return box;
+}
+
 function filesBlock() {
   var box = el("div", "files");
+  if (screen2.preview) return previewBlock();
   if (screen2.error) { box.appendChild(el("p", "why", screen2.error)); return box; }
   var pick = el("button", "act", t("ui.next.screen.upload")), input = el("input");
   input.type = "file"; input.multiple = true; input.hidden = true;
@@ -46,8 +74,8 @@ function filesBlock() {
       row.addEventListener("click", function () { loadFiles(path); });
       row.appendChild(el("span", "", entry.name + "/")); row.appendChild(el("span", "", ""));
     } else {
-      row = el("a", "file");
-      row.href = "/api/file?path=" + encodeURIComponent(path); row.target = "_blank"; row.rel = "noopener";
+      row = el("button", "file");
+      row.addEventListener("click", function () { screen2.preview = path; screen2.text = null; renderScreen(); });
       row.appendChild(el("span", "", entry.name)); row.appendChild(el("span", "", bytes(entry.size || 0)));
     }
     box.appendChild(row);

@@ -240,6 +240,10 @@ lists its drafts: the skill it wrote, its question if it has one (an answer make
 trial on its own cases where it carries an operation, then publish or refuse; a published skill's
 versions can be gone back to.
 
+**A file is looked at where it is listed.** In the screen pane's files, a press shows a picture or a
+text file in place, with the way to open it in a tab or download it; a kind that cannot be shown
+says so.
+
 **Three levels, everywhere.**
 
 | Level | Where | Holds |
