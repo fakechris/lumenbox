@@ -22,7 +22,9 @@ result — kept on your machine, apart from what the agent says about itself.
 A finished turn is not accepted work: when a task has acceptance criteria, a due date or an
 outside dependency, the end of the turn moves it to `review`, and a person decides `done`.
 Check the task's history: "turn ended; not closed because … — stopped, not verified". A plain
-one-off question closes when it is answered.
+one-off question closes when it is answered and is no longer listed among the tasks; search
+still finds it. The next thing you say in the same conversation is said to an agent that
+remembers what the last turn read and did.
 
 An agent's proposal is not agreed work: a task an agent proposes carries a `proposed` chip, and
 nobody takes it until a person presses *Commit*.

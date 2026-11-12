@@ -4,6 +4,7 @@ import type { ServerResponse } from "node:http";
 import type { Task } from "../host/tasks.ts";
 import { boardOrder } from "./board-order.ts";
 import { apiError } from "./api-error.ts";
+import { answeredInChat } from "../host/task-audience.ts";
 
 export class TaskListPages {
   private readonly pages = new Map<string, { ids: string[]; query: string; at: number }>();
@@ -49,7 +50,8 @@ export function taskListRoute(route: string, url: URL, res: ServerResponse, deps
   const inbox = url.searchParams.get("inbox") === "1";
   const priority = (url.searchParams.get("priority") ?? "").split(",").filter(Boolean).slice(0, 100);
   const scope = url.searchParams.get("records");
-  const tasks = available.filter(task => !search || [task.title, task.description, task.id].some(value => value?.toLocaleLowerCase().includes(search))).filter(task => !scope || !deps.audience || (deps.audience(task) === "user") === (scope === "user")).filter(task => !inbox || (task.proposedBy !== undefined && task.status !== "dropped"));
+  // A question answered in chat is not a card (INV-1822): it is found by searching, never listed.
+  const tasks = available.filter(task => search !== "" || !answeredInChat(task)).filter(task => !search || [task.title, task.description, task.id].some(value => value?.toLocaleLowerCase().includes(search))).filter(task => !scope || !deps.audience || (deps.audience(task) === "user") === (scope === "user")).filter(task => !inbox || (task.proposedBy !== undefined && task.status !== "dropped"));
   const rows = boardOrder(tasks, [], []).map(row => row.task).sort((a, b) => {
     const left = priority.indexOf(a.id), right = priority.indexOf(b.id);
     return left >= 0 && right >= 0 ? left - right : left >= 0 ? -1 : right >= 0 ? 1 : 0;

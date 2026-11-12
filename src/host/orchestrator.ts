@@ -1078,7 +1078,7 @@ export class Orchestrator {
     inbox?.start(inbox.pending().filter(item =>
       ownedMessages.has(ownershipKey(item.agentId, item.message.conversation, item.message.id))
     ).map(item => item.seq));
-    const workFocus=new WorkAttention(join(agentboxHome(),"work-attention.json"),(agent,conversation)=>this.registry.contextStore(agent,conversation).current().epoch,this.tasks?.workRoots);
+    const workFocus=new WorkAttention(join(agentboxHome(),"work-attention.json"),(agent,conversation)=>this.registry.contextStore(agent,conversation).current().epoch,this.tasks?.workRoots,line=>console.error(`[work] ${line}`));
     this.bus = new AgentBus(
       this.registry,
       (agent, inbound, signal, conversation, acknowledge) => this.executeTurn(agent, inbound, signal, conversation, acknowledge),
