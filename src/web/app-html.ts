@@ -4003,7 +4003,7 @@ function sendAnswer(item, text) {
   fetch("/api/prompt", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ agent: current, text: text, conversation: currentConversation, messageId:crypto.randomUUID(), surfaceAction:{surface:item.surfaceId,name:action.name} })
+    body: JSON.stringify({ agent: current, text: text, conversation: currentConversation, messageId:crypto.randomUUID() })
   }).then(function (res) {
     if (!res.ok) return res.text().then(function (t) { feed("{{ui.app.answer-rejected}} " + esc(t), "err"); });
   }).catch(function (error) { feed("{{ui.app.answer-failed}} " + esc(error.message), "err"); });

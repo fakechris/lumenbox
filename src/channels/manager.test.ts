@@ -8,6 +8,8 @@
  * gets pushed when is a contract these tests pin.
  */
 
+import { surfacePressText } from "./feishu.ts";
+import { parseActionText } from "../host/show-ui.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -2942,12 +2944,12 @@ test("card interactions continue their recorded task and unavailable cards canno
   for (const original of [undefined, "installation-work"]) {
     const adapter = testAdapter(); const opened: string[] = []; const asked: (string | undefined)[] = [];
     const manager = new ChannelManager({
-      mayDrive: () => true, log() {}, interactionTask: () => original,
+      mayDrive: () => true, log() {}, interactionTask: message => { assert.equal(parseActionText(message.text)?.surfaceId, "installation-card"); return original; },
       ask: async (_agent, _text, _identity, _chat, _progress, _thread, taskId) => { asked.push(taskId); return "continued"; },
       board: { open(input) { opened.push(input.title); return "unwanted-new-work"; }, started() {}, closed: () => "done" },
     });
     manager.register(adapter, true, "test"); await started(manager);
-    await adapter.inject({ identity: "telegram:7", chatKey: "telegram:room", senderLabel: "Chris", text: '[Action: install surface=installation-card]', interaction: true });
+    await adapter.inject({ identity: "telegram:7", chatKey: "telegram:room", senderLabel: "Chris", text: surfacePressText({ act: "install", surface: "installation-card", agent: "Mia" }), interaction: true });
     await manager.idle();
     assert.deepEqual(opened, []);
     assert.deepEqual(asked, original ? [original] : []);

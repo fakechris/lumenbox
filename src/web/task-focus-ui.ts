@@ -416,7 +416,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
   window.openTaskFocus = open;
   window.closeTaskFocusForContext = function () { returnFocus = null; close(true); };
   window.addEventListener("DOMContentLoaded",function () { if (active && active.task && active.tab !== "execution") render(active); });
-  window.refreshTaskExecution = function () { if (!active) return Promise.resolve(); var view = active; return loadItem(view).then(function () { if (active === view && view.task && view.tab === "costs") loadCosts(view); if (active === view && view.task) return loadPage(view,null,view.readingAnchor && view.readingAnchor.id || view.anchor || view.selected,true); }); };
+  window.refreshTaskExecution = function () { if (!active) return Promise.resolve(); var view = active; deny(view,{status:0}); by("title").textContent = word("loading"); by("body").textContent = ""; return loadItem(view).then(function () { if (active === view && view.task) render(view); if (active === view && view.task && view.tab === "costs") loadCosts(view); if (active === view && view.task) return loadPage(view,null,view.readingAnchor && view.readingAnchor.id || view.anchor || view.selected,true); }); };
   function queueHeader(view) {
     if (view.headerQueued) return; view.headerQueued = true;
     requestAnimationFrame(function () { view.headerQueued = false; if (active === view) header(view); });

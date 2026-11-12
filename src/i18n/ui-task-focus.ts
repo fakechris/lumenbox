@@ -1,4 +1,13 @@
 export const UI_TASK_FOCUS: Record<string, readonly [string, string]> = {
+  "ui.wr.blocker.queue": ["请求已排队，等待开始。", "The request is queued, awaiting execution."],
+  "ui.wr.blocker.interrupted": ["执行已中断，需要恢复后继续。", "Execution was interrupted and needs recovery."],
+  "ui.wr.blocker.focus": ["这项工作已暂存，当前正在处理另一项请求。", "This work is retained while another request is handled."],
+  "ui.wr.blocker.capability": ["缺少完成这项工作所需的工具或环境。", "A tool or environment required for this work is unavailable."],
+  "ui.wr.blocker.confirmation": ["等待你的回答或确认。", "Waiting for your answer or confirmation."],
+  "ui.wr.blocker.dependency": ["等待关联工作的结果。", "Waiting for related work to return."],
+  "ui.wr.blocker.plan": ["执行计划仍有未完成的步骤。", "The execution plan still has unfinished steps."],
+  "ui.wr.blocker.execution": ["本轮未完成工作，需要继续执行。", "This execution did not finish the work; continuation is needed."],
+  "ui.wr.blocker.failed": ["执行失败，请查看执行过程后决定如何继续。", "Execution failed. Inspect the process before deciding how to continue."],
   "ui.wr.progress": ["现在的进展与依据", "Current progress and evidence"],
   "ui.wr.hostContext": ["系统提供的执行上下文", "Host execution context"],
   "ui.wr.phase.proposal": ["等待确认的提案", "Proposal awaiting commitment"],

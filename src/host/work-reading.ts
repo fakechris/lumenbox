@@ -8,6 +8,7 @@ export type WorkSource = "user" | "collaboration" | "internal" | "unknown";
 export interface WorkReference { title: string; id?: string; availability: "available" | "unavailable"; relation: "parent" | "dependency" | "collaboration" }
 export interface WorkReading {
   id: string; title: string; phase: string; reason: string; source: WorkSource; evidenceVersion: string;
+  blocker?: { kind: string; tools: string[] };
   boundary: "linked" | "historical" | "unverified";
   conversation?: { agentId: string; id: string };
   references: WorkReference[]; moreReferences: number;
@@ -26,7 +27,7 @@ export function workReference(id: string, relation: WorkReference["relation"], l
 export function workReading(task: Task, world: { stage: StageWorld; checks: CheckSnapshot; references?: WorkReference[]; verdicts?: VerificationRecord[] }): WorkReading {
   const latest = world.checks.plans.filter(plan => plan.taskId === task.id).at(-1);
   const current = latest?.digest === evidenceDigest(task) ? latest : undefined;
-  const verdicts = current ? world.verdicts ?? [] : [], needed = world.checks.policy.mode === "model" ? world.checks.policy.reviewers : 1;
+  const verdicts = current ? (world.verdicts ?? []).filter(row => !current.reviewers.length || current.reviewers.includes(row.reviewerId)) : [], needed = Math.max(1, current?.reviewers.length ?? 0);
   const passed = verdicts.filter(row => row.verdict === "pass").length, failed = verdicts.filter(row => row.verdict === "fail").length;
   const checks: WorkReading["checks"] = {
     result: passed && failed ? "disagreement" : passed >= needed ? "passed" : failed >= needed ? "failed" : verdicts.length ? "incomplete" : "notChecked",
@@ -40,7 +41,8 @@ export function workReading(task: Task, world: { stage: StageWorld; checks: Chec
   const boundary = task.workRoot?.state.unresolved ? "unverified" : task.workRoot ? "linked" : "historical";
   const reason = phase === "waiting" && boundary !== "linked" ? "historicalWaiting" : phase;
   const references = world.references ?? [];
-  return { id: task.id, title: task.title, phase, reason, source: workSource(task), boundary, checks, evidenceVersion: evidenceDigest(task),
+  const root = task.workRoot?.state, blocker = root?.status === "waiting" ? { kind: root.wait ?? (root.reason === "failed" ? "failed" : "execution"), tools: [...new Set((root.unavailable ?? []).map(row => row.tool))] } : undefined;
+  return { ...(blocker ? { blocker } : {}), id: task.id, title: task.title, phase, reason, source: workSource(task), boundary, checks, evidenceVersion: evidenceDigest(task),
     ...(task.assigneeId && task.conversation ? { conversation: { agentId: task.assigneeId, id: task.conversation } } : {}),
     actions: [{ kind: "open", scope: "work" }, { kind: task.status === "review" || task.status === "done" ? "result" : "process", scope: "work" }, ...(task.assigneeId && task.conversation ? [{ kind: "conversation" as const, scope: "conversation" as const }] : [])],
     references: references.slice(0, 12), moreReferences: Math.max(0, references.length - 12),

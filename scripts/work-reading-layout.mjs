@@ -24,6 +24,7 @@ try {
   const results = [];
   for (const lang of ["zh", "en"]) for (const dark of [false, true]) for (const width of [1440, 480]) {
     const context = await browser.newContext({ viewport: { width, height: 1000 }, extraHTTPHeaders: { authorization: "Bearer layout-fixture", "x-agentbox-user": "web:layout-viewer" }, colorScheme: dark ? "dark" : "light" });
+    await context.addInitScript(() => localStorage.setItem("lumen-onboarded", "1"));
     const page = await context.newPage(), errors = [], requests = []; activePage = page;
     page.on("pageerror", error => errors.push(error.message));
     page.on("request", request => requests.push(request.url()));
@@ -31,6 +32,15 @@ try {
     await page.goto(meta.base + "/?lang=" + lang + "&agent=" + meta.agent);
     await page.waitForFunction(() => !!window.openTeamTasks && !!current);
     if (await page.locator("#settingswrap").isVisible()) await page.locator("#setcancel").click();
+    // A normal AskUser choice is not a ShowUI surface action. Exercise the actual button.
+    let answer;
+    await page.route("**/api/prompt", async route => { answer = route.request().postDataJSON(); await route.fulfill({ json: { ok: true } }); });
+    await page.evaluate(() => window.pushItem({ kind: "question", question: "Choose installation directory", options: ["Use approved folder"] }));
+    const sentAnswer = page.waitForResponse(response => response.url() === meta.base + "/api/prompt");
+    await page.locator(".qopt").last().click();
+    await sentAnswer;
+    assert.equal(answer?.text, "Use approved folder"); assert.equal(answer?.surfaceAction, undefined);
+    await page.unroute("**/api/prompt");
     await page.evaluate(dark => { document.documentElement.dataset.theme = dark ? "dark" : "light"; window.openTeamTasks(); }, dark);
     await page.waitForSelector("[data-task-row]");
     assert.ok(await page.locator("[data-task-row]").count() <= 50);
@@ -70,6 +80,15 @@ try {
     const count = await page.locator("[data-tf-step]").count();
     await page.evaluate(id => { for (let n = 0; n < 100; n++) window.taskFocusEvent({ type: "task_changed", taskId: id }); }, meta.task);
     assert.equal(await page.locator("[data-tf-step]").count(), count, "incremental task events do not replace the steps");
+    let releaseAuthorization;
+    const authorizationHeld = new Promise(done => { releaseAuthorization = done; });
+    await page.route("**/api/tasks/item?*", async route => { await authorizationHeld; await route.fulfill({ status: 403, json: { error: "Access no longer available" } }); });
+    await page.evaluate(() => { void window.refreshTaskExecution(); });
+    assert.equal(await page.locator("#tf-body").innerText(), "");
+    assert.equal(await page.locator("#tf-cancel").isVisible(), false);
+    releaseAuthorization();
+    await page.waitForFunction(() => document.getElementById("tf-body").textContent.includes("Record unavailable") || document.getElementById("tf-body").textContent.includes("记录不可用"));
+    await page.unroute("**/api/tasks/item?*");
     await page.evaluate(() => window.openTaskFocus("missing-fixture-record"));
     await page.waitForFunction(() => document.getElementById("tf-body").textContent.includes("Record unavailable") || document.getElementById("tf-body").textContent.includes("记录不可用"));
     assert.equal(await page.locator("#tf-cancel").isVisible(), false);

@@ -4,7 +4,7 @@ export const WORK_READING_STYLE = String.raw`
 `;
 export const WORK_READING_JS = String.raw`
 function workReadingPhase(reading) { return t("ui.wr.phase." + reading.phase); }
-function workReadingReason(reading) { return t("ui.wr.reason." + reading.reason); }
+function workReadingReason(reading) { return reading.blocker ? t("ui.wr.blocker." + reading.blocker.kind) + (reading.blocker.tools.length ? " · " + reading.blocker.tools.join(", ") : "") : t("ui.wr.reason." + reading.reason); }
 function workReadingLink(reading) { return '<a class="wr-open" href="?task=' + encodeURIComponent(reading.id) + '" data-wr-work="' + esc(reading.id) + '">' + esc(reading.title) + '</a>'; }
 function workReadingHtml(reading, detail) {
   if (!reading) return "";
