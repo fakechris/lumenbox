@@ -136,6 +136,7 @@ function render() {
   $("composer").hidden = true;
   document.querySelectorAll("[data-nav]").forEach(function (button) { button.setAttribute("aria-current", String(button.dataset.nav === next.view)); });
   document.querySelectorAll("[data-layout]").forEach(function (button) { button.setAttribute("aria-pressed", String(button.dataset.layout === next.layout)); });
+  renderScreen();
   if (next.view === "chat") { renderChat(view); return; }
   $("view-title").textContent = t("ui.next.nav." + next.view);
   $("view-hint").textContent = t("ui.next." + next.view + ".hint");
@@ -170,6 +171,7 @@ function nextStart() {
   if (asked === "work" || asked === "inbox") next.view = asked;
   panelStart();
   chatStart();
+  screenStart();
   refresh();
   // What changes a row or the inbox arrives as an event; the page re-reads rather than patching.
   var events = new EventSource("/api/events");
