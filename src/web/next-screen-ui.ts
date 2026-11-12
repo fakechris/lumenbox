@@ -6,7 +6,7 @@
  * button in the conversation's header, and the same desktop and file endpoints the classic page uses.
  */
 export const NEXT_SCREEN_JS = `
-var screen2 = { open: false, tab: "desktop", dir: "", root: "", entries: [], error: "", mine: {}, recording: {}, preview: "", text: null };
+var screen2 = { open: false, tab: "desktop", dir: "", root: "", entries: [], error: "", mine: {}, recording: {}, pinned: {}, preview: "", text: null };
 
 function loadFiles(dir) {
   getJson("/api/files" + (dir ? "?dir=" + encodeURIComponent(dir) : "")).then(function (got) {
@@ -143,8 +143,14 @@ function deskControls(agent) {
       if (held && navigator.clipboard) navigator.clipboard.writeText(held).then(function () { toast(t("ui.next.msg.copied")); }, function () {});
     }, failed);
   });
+  // Kept: the desktop is not reclaimed while idle, for something left open on it on purpose.
+  var pinned = !!screen2.pinned[id], pin = el("button", "act", t(pinned ? "ui.next.desk.unpin" : "ui.next.desk.pin"));
+  pin.addEventListener("click", function () {
+    pin.disabled = true;
+    postJson("/api/desktop/pin", { agent: id, pinned: !pinned }).then(function () { screen2.pinned[id] = !pinned; renderScreen(); }, function (error) { pin.disabled = false; failed(error); });
+  });
   var hands = el("div", "acts"), clip2 = el("div", "acts");
-  hands.appendChild(hold); hands.appendChild(record);
+  hands.appendChild(hold); hands.appendChild(record); hands.appendChild(pin);
   clip2.appendChild(text); clip2.appendChild(paste); clip2.appendChild(copy);
   box.appendChild(hands); if (mine) box.appendChild(el("p", "why", t("ui.next.desk.mineNote", { name: agent.name }))); box.appendChild(clip2);
   return box;

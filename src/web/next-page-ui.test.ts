@@ -279,3 +279,10 @@ test("a role change sends the whole roster with one role changed; a limit left e
   assert.deepEqual([plain(limitValue("")), plain(limitValue(" 2.5 ")), plain(limitValue("0")), plain(limitValue("-1")), plain(limitValue("lots"))], [{ ok: true, value: null }, { ok: true, value: 2.5 }, { ok: true, value: 0 }, { ok: false }, { ok: false }]);
   assert.deepEqual(plain(listOf(" a, ,b ,")), ["a", "b"]);
 });
+
+test("an image is said to be current, ready, to be downloaded, or not this version's; a quota is a whole number from 0 to 99 or nothing", () => {
+  const imageWord = pageFunction("imageWord", {}), quotaValue = pageFunction("quotaValue", {});
+  assert.deepEqual([null, { runningId: "a", expectedId: "a", available: true }, { runningId: "a", expectedId: "b", available: true }, { runningId: "a", expectedId: "b", available: false, needsPull: true }, { runningId: "a", available: false }].map(state => imageWord(state)), ["unknown", "current", "ready", "pull", "behind"]);
+  const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
+  assert.deepEqual(["", "3", "99", "100", "1.5", "-1", "two"].map(text => plain(quotaValue(text))), [{ ok: true, value: null }, { ok: true, value: 3 }, { ok: true, value: 99 }, { ok: false }, { ok: false }, { ok: false }, { ok: false }]);
+});
