@@ -181,6 +181,10 @@ work panel's full record is the classic task view for one look (`&once=1`), whic
 the page the person chose. What the classic page still does and this one does not is listed on
 INV-1825, and the default changes only when that list is empty or bridged.
 
+**Automations are made and read here.** One row each: its name, what it does, when it next runs.
+A press on the row shows how its recent runs ended; a routine is made by answering four things — a
+name, what to do, who does it, what starts it — and can be run at once.
+
 **Three levels, everywhere.**
 
 | Level | Where | Holds |

@@ -99,28 +99,4 @@ function setupCard() {
   card.appendChild(close);
   return card;
 }
-
-function renderAuto(view) {
-  if (!settings.routines) {
-    getJson("/api/schedules").then(function (got) { settings.routines = got.schedules || []; if (next.view === "auto") render(); }, failed);
-    return;
-  }
-  if (settings.routines.length === 0) { view.appendChild(el("p", "empty", t("ui.next.auto.empty"))); return; }
-  var list = el("div", "list");
-  settings.routines.forEach(function (routine) {
-    var row = el("div", "row"), body = el("span", "body"), toggle = el("button", "act", t(routine.paused ? "ui.next.auto.resume" : "ui.next.auto.pause"));
-    var when = routine.nextRun ? t("ui.next.auto.next", { when: new Date(routine.nextRun).toLocaleString() }) : t("ui.next.auto.event");
-    body.appendChild(el("div", "title", routine.name || routine.slug));
-    body.appendChild(el("div", "why", [routine.described || routine.schedule || "", when].filter(Boolean).join(" · ")));
-    row.appendChild(el("span", "who", initial(routine.agent || routine.name)));
-    row.appendChild(body);
-    row.appendChild(el("span", routine.paused ? "chip" : "chip-run", t(routine.paused ? "ui.next.auto.paused" : "ui.next.auto.on")));
-    toggle.addEventListener("click", function () {
-      postJson(routine.paused ? "/api/schedules/resume" : "/api/schedules/pause", { slug: routine.slug }).then(function () { settings.routines = null; render(); }, failed);
-    });
-    row.appendChild(toggle);
-    list.appendChild(row);
-  });
-  view.appendChild(list);
-}
 `;
