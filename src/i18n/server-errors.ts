@@ -138,6 +138,7 @@ export const SERVER_ERRORS = {
   "err.pinned-boolean": ["pinned 必须是布尔值", "pinned must be a boolean"],
   "err.message-index": ["index 必须是一条消息的序号", "index must be a message index"],
   "err.reaction-unknown": ["这不是页面提供的回应之一", "not one of the reactions this page offers"],
+  "err.task-archive-action": ["只能归档或恢复", "The action is archive or restore"],
   "err.long-work-range": ["续跑片数须为 0–1000 的整数，时长须为 1–168 小时的整数", "Slices must be a whole number from 0 to 1000 and hours a whole number from 1 to 168"],
   "err.text-required": ["text 不能为空", "text is required"],
   "err.console-context-command": ["控制台主会话还包含团队活动，暂不支持上下文恢复命令。请在已接入的独立私聊使用；本次没有修改上下文。", "The console's main conversation also carries team activity, so it does not take context-recovery commands yet. Use them in a connected private chat; the context was not changed."],
