@@ -204,6 +204,11 @@ holds.
 work, tokens printed whole. Money appears only when every model in the window has a rate, and a
 total that is only a floor says so.
 
+**An agent's page holds its whole configuration.** Name, role and persona first; in folds, read when
+opened: the model it runs on and the teams it is in, the files it reads every turn (one shown at a
+time, saved on its own), and every saved version of its configuration, any of which can be gone back
+to.
+
 **Three levels, everywhere.**
 
 | Level | Where | Holds |
