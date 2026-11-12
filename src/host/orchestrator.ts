@@ -4,6 +4,9 @@ import { ResultChecks } from "./result-check-policy.ts";
 import { runResultCheck } from "./result-check-runner.ts";
 import { requestsResultCheck } from "./task-delivery.ts";
 import { taskAttentionChanged, taskWorkId } from "./task-attention.ts";
+import { continueAcrossBudget, longRequestLimits } from "./long-request.ts";
+import { summarizeTaskProgress } from "./task-progress.ts";
+import { progressLines } from "./task-progress-view.ts";
 import { WorkAttention, workStateConversation } from "../agents/work-attention.ts";
 import { randomUUID } from "node:crypto";
 import { auditConversation, auditCurrent, isAuditConversation } from "./audit-context.ts";
@@ -1113,6 +1116,7 @@ export class Orchestrator {
         await this.options.deliverToChat?.(chatKey, text, task.assigneeId, true);
       },
       revalidate: task => this.options.mandateWorld === undefined || this.tasks!.revalidate(task.id, task.requester, this.options.mandateWorld()).status === "ok",
+      progress: task => { const summary = summarizeTaskProgress(task, 8); return summary === undefined ? [] : progressLines(summary, "en", id => this.registry.tryGet(id)?.profile.name ?? id); },
       judgeExperiment: (prompt, agentId) => this.askCheaply(this.registry.get(agentId), prompt), // the ledger's one question per continuation (INV-1475)
       log: line => console.error(`[goal] ${line}`),
     });
@@ -1951,6 +1955,7 @@ export class Orchestrator {
         if (report.marker.verify !== undefined) void this.goalGate?.verifierEnded(report);
         else void this.goalLoop?.turnEnded(report);
       },
+      continueAcrossBudget: slice => this.tasks !== undefined && this.goalLoop !== undefined && continueAcrossBudget(this.tasks, slice, longRequestLimits(loadConfig().longWork)),
       ...(this.goalGate !== undefined ? { goalGate: this.goalGate } : {}),
       onEvent: event => {
         if (!inbound.some(message => message.audit) && event.type === "stuck" && event.agentId === agent.id) {

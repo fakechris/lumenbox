@@ -4974,6 +4974,8 @@ export async function dispatchTool(
       const task = board.pursuitIn(conversation);
       if (task?.pursuit === undefined) return { text: "No goal is set for this conversation. The person sets one with /goal.", isError: true };
       const action = String(input.action ?? "");
+      // A request the host is carrying across turn budgets has no checklist and no claim (INV-1823): it ends when it is answered.
+      if (task.pursuit.completion === "answer") return { text: `Task ${task.id} is an ordinary request the host continues across turn budgets (continuation ${task.pursuit.spent.continuations} of at most ${task.pursuit.limits.continuations}). There is no checklist or completion claim: when the work is finished, reply to the person with the result.`, ...(action === "status" ? {} : { isError: true }) };
       if (action === "status") return { text: describePursuit(task) };
       if (action === "checklist_add") {
         if (task.assigneeId !== context.agent.id) return { text: `Goal ${task.id} is ${task.assigneeId ?? "nobody"}'s to pursue; only its assignee drafts the checklist.`, isError: true };

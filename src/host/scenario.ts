@@ -1,3 +1,4 @@
+import { type BudgetSlice, continueAcrossBudget, longRequestLimits } from "./long-request.ts";
 import { taskAttentionChanged, taskWorkId } from "./task-attention.ts";
 import { WorkAttention } from "../agents/work-attention.ts";
 import { admitProgressMessage } from "./progress-admission.ts";
@@ -305,6 +306,8 @@ function message(content: Anthropic.ContentBlock[], stop: Anthropic.Message["sto
 }
 
 export interface EpisodeOptions {
+  /** The ceiling on what the host continues on its own (INV-1823); absent means the defaults. Needs `goalLoop` and `tasks`. */
+  longWork?: { continuations?: number; activeHours?: number };
   workAttention?: import("../agents/work-attention.ts").WorkAttention;
   /** The agents the episode starts with. The first is the one the person talks to. */
   team: { name: string; description?: string; tools?: readonly string[]; toolPermissions?: ToolPermissions }[];
@@ -540,6 +543,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
         if (report.marker.verify !== undefined) void goalGate?.verifierEnded(report);
         else void goalLoop?.turnEnded(report);
       },
+      continueAcrossBudget: (slice: BudgetSlice) => options.tasks !== undefined && goalLoop !== undefined && continueAcrossBudget(options.tasks, slice, longRequestLimits(options.longWork)),
       ...(goalGate !== undefined ? { goalGate } : {}),
     } as never);
   }, event => {

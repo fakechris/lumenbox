@@ -128,6 +128,7 @@ import {
 } from "./guards.ts";
 import { malformedNudge, malformedOutput, sanitizeHistoryText } from "./output-integrity.ts";
 import { type GoalTurnReport, isWorkingTool } from "./goal-loop.ts";
+import type { BudgetSlice } from "./long-request.ts";
 import { isReadTool, readLoadNudge, readLoadNudgeDue } from "./read-load.ts";
 import { commandIsConfirmed, type GoalGate } from "./goal-gate.ts"; import { recordedEndsNote } from "./job-end.ts";
 import { DEFAULT_TOKEN_WEIGHTS, weightedCost } from "./goal-mode.ts";
@@ -640,6 +641,8 @@ export interface TurnDeps {
   onEvent?: (event: TurnEvent) => void;
   /** A goal continuation turn ended (INV-770): what it did and how, for the loop's accounting. */
   onGoalTurn?: (report: GoalTurnReport) => void;
+  /** A person's request reached the turn budget (INV-1823): true when the host will continue it itself. */
+  continueAcrossBudget?: (slice: BudgetSlice) => boolean;
   /** The completion gate (INV-771): the Goal tool's claim_complete goes through it. */
   goalGate?: GoalGate;
   /**
@@ -1471,6 +1474,9 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   // as three unrelated short turns. A goal continuation inherits the pursuit's id the same way a resumption
   // inherits its work's (INV-770): every turn of one objective is one piece of work in the ledgers.
   const goal = inbound.find(message => message.goal !== undefined)?.goal;
+  // A goal working in the background does not talk into the chat; a request the host is merely carrying
+  // across budgets answers the person like any turn (INV-1823).
+  const quietGoal = goal !== undefined && deps.tasks?.get(goal.taskId)?.pursuit?.completion !== "answer";
   let taskBinding = admittedTaskBinding({ agentId: agent.id, conversation, inbound, tasks: deps.tasks, goal, resume: deps.resumeOf });
   const workId = deps.resumeOf?.workId ?? goal?.workId ?? work?.id ?? (taskBinding?.role === "executor" ? taskBinding.progressAdmission?.rootWorkId : undefined) ?? randomUUID();
   const executionId = randomUUID(), attempt = deps.resumeOf?.attempt ?? 1;
@@ -1556,7 +1562,10 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     ended = true;
     endedHow = how;
     if (work?.owner === agent.id && work.conversation === conversation && bus.workAttention?.valid(work, agent.id)) {
-      const unfinished = registry.readDurableState(agent.id, conversation).todos?.some(item => item.status !== "done") || taskHoldsAttention(deps.tasks?.get(taskBinding?.taskId ?? work.taskId ?? ""), conversation);
+      // A request the host carried across budgets is over when this turn answers (INV-1823): its own
+      // pursuit, which the loop closes just after, is not something the work still waits on.
+      const answering = goal !== undefined && !quietGoal && how === "done";
+      const unfinished = registry.readDurableState(agent.id, conversation).todos?.some(item => item.status !== "done") || !answering && taskHoldsAttention(deps.tasks?.get(taskBinding?.taskId ?? work.taskId ?? ""), conversation);
       const unavailable = bus.workAttention.get(work.owner, work.conversation)?.unavailable?.[0];
       const pendingPeers = (deps.policy?.pending().filter(item=>item.returnTo?.work.id===work.id).length??0) + (bus.workAttention.byId(work.id)?.awaiting.length ?? 0) + bus.relatedPending(agent.id, work) + (deps.pendingWork?.open().filter(item => item.workId === workId && item.kind !== "reminder" && item.kind !== "command").length ?? 0);
       const lacking = blockedCapability ?? unavailable?.tool;
@@ -2313,7 +2322,12 @@ ${outcome.text}`;
     const spend = budget.call();
     if (spend === "warn") budgetWarningDue = true;
     if (spend === "hit" || spendHit !== undefined) { // or the agent's spend line (INV-1615): the same hand-back
-      const report = withCheckpoints(spendHit?.report ?? budgetReport(budget, callsThisTurn, chinese, goal !== undefined), registry.readDurableState(agent.id, conversation));
+      // A person's own request that did real work is continued by the host (INV-1823), and says so.
+      const continued = goal !== undefined || (spendHit === undefined && work !== undefined && deps.continueAcrossBudget?.({
+        taskId: taskBinding?.taskId ?? work.taskId, workId, agentId: agent.id, conversation,
+        worked: [...toolsUsedThisTurn].some(isWorkingTool),
+      }) === true);
+      const report = withCheckpoints(spendHit?.report ?? budgetReport(budget, callsThisTurn, chinese, continued), registry.readDurableState(agent.id, conversation));
       registry.appendTranscript(agent.id, { role: "assistant", text: report, at: new Date().toISOString(), turnId, executionId, attempt, textThrough } satisfies TranscriptEntry, conversation);
       emit({ type: "text", agentId: agent.id, agentName: agent.profile.name, delta: report });
       emit({ type: "turn_budget_hit", agentId: agent.id, calls: budget.callsUsed, limit: budget.limits.calls });
@@ -3053,7 +3067,7 @@ ${outcome.text}`;
         // A continuation's closing words are the record's, not the person's reply: filed as
         // blocks, which `replySince` never delivers, so a goal working in the background does
         // not talk into the chat (docs/74 §3.7). The finish-only report is sent by the loop.
-        if (goal !== undefined) {
+        if (quietGoal) {
           registry.appendTranscript(agent.id, {
             role: "assistant",
             kind: "blocks",
@@ -3149,7 +3163,7 @@ ${outcome.text}`;
       roundText.trim().length >= FILED_ANSWER_FLOOR &&
       toolUses.every(use => BOOKKEEPING_TOOLS.has(use.name));
     if (filedAnswer) {
-      registry.appendTranscript(agent.id, goal !== undefined
+      registry.appendTranscript(agent.id, quietGoal
         ? { role: "assistant", kind: "blocks", blocks: [{ type: "text", text: roundText }], at: new Date().toISOString(), turnId, silent: { reason: "goal continuation: kept on the record, not delivered" } }
         // Stamped with the turn (INV-1264): the channel reply is selected by turn id, and an
         // unstamped answer was the one entry it skipped — a 15K analysis filed here was never

@@ -26,6 +26,14 @@ one-off question closes when it is answered and is no longer listed among the ta
 still finds it. The next thing you say in the same conversation is said to an agent that
 remembers what the last turn read and did.
 
+A request too big for one turn is continued for you. A turn stops after a set number of model
+calls; when it stops there having done real work, the host starts the next slice itself, and
+goes on until the agent answers, stops making progress, or reaches the ceiling — 30 further
+slices or 12 hours of active time by default. The ceiling is what one request may spend of your
+own model budget unattended: set `longWork` in `~/.agentbox/config.json`
+(`{ "continuations": 30, "activeHours": 12 }`; `0` continuations turns it off) to raise or
+lower it for the whole installation. You can stop the work at any time from its task.
+
 An agent's proposal is not agreed work: a task an agent proposes carries a `proposed` chip, and
 nobody takes it until a person presses *Commit*.
 
