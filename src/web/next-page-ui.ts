@@ -18,6 +18,7 @@ import { NEXT_SETTINGS_JS } from "./next-settings-ui.ts";
 import { NEXT_MEMBER_JS } from "./next-member-ui.ts";
 import { NEXT_BOXES_JS } from "./next-boxes-ui.ts";
 import { NEXT_CARDS_JS } from "./next-cards-ui.ts";
+import { NEXT_SYSTEM_JS } from "./next-system-ui.ts";
 
 const STYLE = `
 :root {
@@ -175,6 +176,8 @@ button.row { width: 100%; text-align: left; }
 .setting .row .why, .list button.row .why { white-space: normal; }
 .setup-step { display: flex; align-items: center; gap: 10px; }
 .setup-done { color: var(--ok); width: 16px; } .setup-todo { color: var(--muted); width: 16px; }
+.fact { display: flex; justify-content: space-between; gap: 16px; padding: 6px 0; border-top: 1px solid var(--border); font-size: 13px; }
+.fact:first-of-type { border-top: 0; } .fact span:last-child { text-align: right; overflow-wrap: anywhere; }
 .scrim { position: fixed; inset: 0; background: rgba(31,26,23,.18); }
 .panel { position: fixed; top: 12px; right: 12px; bottom: 12px; width: min(600px, calc(100vw - 24px)); background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 18px 50px rgba(31,26,23,.16); display: flex; flex-direction: column; }
 .panel > header { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
@@ -315,6 +318,7 @@ ${NEXT_SETTINGS_JS}
 ${NEXT_MEMBER_JS}
 ${NEXT_BOXES_JS}
 ${NEXT_CARDS_JS}
+${NEXT_SYSTEM_JS}
 nextStart();
 </script>
 </body>

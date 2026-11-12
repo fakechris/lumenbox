@@ -46,6 +46,12 @@ function renderSettings(view) {
     more.appendChild(row);
   });
   view.appendChild(more);
+  var status = el("button", "row"), body = el("span", "body");
+  body.appendChild(el("div", "title", t("ui.next.side.system")));
+  body.appendChild(el("div", "why", t("ui.next.system.open")));
+  status.appendChild(body);
+  status.addEventListener("click", function () { next.view = "system"; system.state = null; render(); });
+  more.appendChild(status);
 }
 
 var SETTING_PANES = ["model", "boxes", "doors", "team", "mine", "memory", "supervision", "guests"];
