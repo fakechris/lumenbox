@@ -189,8 +189,52 @@ function renderInbox(view) {
   view.appendChild(list);
 }
 
+/**
+ * What a person has typed and opened survives a redraw. The view is rebuilt whenever something
+ * changes — an agent's event, a read that landed — and a form in it would otherwise lose what was
+ * being typed. Fields the person touched are found again by what they are (their label, their place
+ * among fields so labelled) and given their value, caret and focus back; folds they opened stay open.
+ * A different view, or a save that went through, starts clean.
+ */
+function editName(node) {
+  var label = node.closest("label");
+  return node.tagName + ":" + (node.type || "") + ":" + (label ? label.textContent.slice(0, 60) : node.placeholder || node.getAttribute("aria-label") || "");
+}
+function eachField(view, visit) {
+  var seen = {};
+  view.querySelectorAll("input, textarea, select").forEach(function (node) {
+    var name = editName(node);
+    seen[name] = (seen[name] || 0) + 1;
+    visit(node, name + "#" + seen[name]);
+  });
+}
+function keepEdits(view) {
+  var kept = { fields: {}, open: {} };
+  eachField(view, function (node, key) {
+    if (node.dataset.edited) kept.fields[key] = { value: node.value, checked: node.checked, focus: document.activeElement === node, at: node.selectionStart };
+  });
+  view.querySelectorAll("details[open] > summary").forEach(function (summary) { kept.open[summary.textContent] = true; });
+  return kept;
+}
+function restoreEdits(view, kept) {
+  view.querySelectorAll("details > summary").forEach(function (summary) { if (kept.open[summary.textContent] && !summary.parentNode.open) summary.parentNode.open = true; });
+  eachField(view, function (node, key) {
+    var was = kept.fields[key];
+    if (!was) return;
+    if (node.type === "checkbox" || node.type === "radio") node.checked = was.checked; else if (node.type !== "file") node.value = was.value;
+    node.dataset.edited = "1";
+    if (was.focus) { node.focus(); try { node.selectionStart = node.selectionEnd = was.at; } catch (error) {} }
+  });
+}
+
 function render() {
-  var view = $("view");
+  var view = $("view"), drawing = [next.view, settings.pane, next.view === "chat" ? chat.agentId + "/" + chat.conversation : ""].join("|");
+  var kept = drawing === next.drawn ? keepEdits(view) : null;
+  next.drawn = drawing;
+  try { renderView(view); } finally { if (kept) restoreEdits(view, kept); }
+}
+
+function renderView(view) {
   next.atEnd = view.scrollHeight - view.scrollTop - view.clientHeight < 80; next.scrollTop = view.scrollTop;
   view.replaceChildren();
   document.body.dataset.view = next.view;
@@ -259,6 +303,10 @@ function nextStart() {
   var pane = new URLSearchParams(location.search).get("pane");
   if (asked === "settings" && pane && NATIVE_PANES[pane]) settings.pane = pane;
   panelStart();
+  // A field the person touched is theirs until it is sent or the view changes.
+  ["input", "change"].forEach(function (kind) {
+    $("view").addEventListener(kind, function (event) { if (event.target && event.target.dataset) event.target.dataset.edited = "1"; }, true);
+  });
   composerStart(); // first: its Enter, with the menu open, is not the composer's
   chatStart();
   threadStart();

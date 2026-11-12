@@ -30,6 +30,8 @@ import { NEXT_SET_MODEL_JS } from "./next-set-model-ui.ts";
 import { NEXT_SET_DOORS_JS } from "./next-set-doors-ui.ts";
 import { NEXT_SET_TEAM_JS } from "./next-set-team-ui.ts";
 import { NEXT_SET_LIMITS_JS } from "./next-set-limits-ui.ts";
+import { NEXT_SET_BOXES_JS } from "./next-set-boxes-ui.ts";
+import { NEXT_SET_BOXES_MORE_JS } from "./next-set-boxes-more-ui.ts";
 import { NEXT_SPEND_JS } from "./next-spend-ui.ts";
 import { NEXT_COMPOSER_JS } from "./next-composer-ui.ts";
 import { NEXT_MEMBER_JS } from "./next-member-ui.ts";
@@ -401,7 +403,13 @@ function getJson(path) {
 }
 function postJson(path, body) {
   return fetch(path, { method: "POST", headers: { "content-type": "application/json", "accept-language": "{{@locale}}" }, body: JSON.stringify(body) }).then(function (res) {
-    return res.json().catch(function () { return {}; }).then(function (data) { if (!res.ok) throw new Error(data && data.error ? data.error : String(res.status)); return data; });
+    return res.json().catch(function () { return {}; }).then(function (data) {
+      // A refusal carries what the server said beside its words: "saved, but not in effect" is still a save.
+      if (!res.ok) { var problem = new Error(data && data.error ? data.error : String(res.status)); problem.data = data || {}; throw problem; }
+      // What was typed has been sent: the next redraw shows what the server holds (render in next-views-ui.ts).
+      document.querySelectorAll("#view [data-edited]").forEach(function (node) { delete node.dataset.edited; });
+      return data;
+    });
   });
 }
 var toastTimer = 0;
@@ -432,6 +440,8 @@ ${NEXT_SET_MODEL_JS}
 ${NEXT_SET_DOORS_JS}
 ${NEXT_SET_TEAM_JS}
 ${NEXT_SET_LIMITS_JS}
+${NEXT_SET_BOXES_JS}
+${NEXT_SET_BOXES_MORE_JS}
 ${NEXT_SPEND_JS}
 ${NEXT_COMPOSER_JS}
 ${NEXT_MEMBER_JS}

@@ -251,8 +251,14 @@ and for all), and the model (provider, key, model, pictures, summaries, web sear
 fall back to, the accounts resting, the rules every agent is given, the small model that makes
 judgements), the doors (chat channels, the people waiting to be let in, connected services), and
 the team (people and their roles, invitations, scopes, the secrets lent to agents, each agent's
-ceilings, team memory waiting for a person, outside tool servers). A key or a secret is typed, saved
-and never shown again; a token or an invitation is shown once.
+ceilings, team memory waiting for a person, outside tool servers), and the computers (this box's
+image and updating it, its CPU ceiling, starting it over, commands on the person's own machine,
+attaching another computer, personal-computer quotas, nodes, what the host process uses). A key or
+a secret is typed, saved and never shown again; a token or an invitation is shown once.
+
+**What a person typed survives a redraw.** The view is rebuilt whenever something changes. A field
+the person touched is found again by its label and given its value, caret and focus back, and a fold
+they opened stays open, until the view changes or a save goes through.
 
 **Three levels, everywhere.**
 
