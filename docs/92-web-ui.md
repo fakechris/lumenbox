@@ -220,6 +220,11 @@ is no control; with some, one choice above the list shows a team, the agents in 
 and is remembered; an admin renames a team for everybody in it. The conversation picker reads
 thirty conversations at a time and offers the earlier ones.
 
+**The work panel holds the uncommon things too, folded.** What a piece of work waits on and what
+waits on it, each a press away; a fold to set its status, its level and what it waits on by hand,
+and to propose what it found as the organisation's knowledge; and, under diagnostics, what the
+policy gate decided at each step.
+
 **Three levels, everywhere.**
 
 | Level | Where | Holds |

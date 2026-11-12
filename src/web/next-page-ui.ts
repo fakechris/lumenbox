@@ -21,6 +21,7 @@ import { NEXT_AGENT_CONFIG_JS } from "./next-agent-config-ui.ts";
 import { NEXT_AGENT_TOOLS_JS } from "./next-agent-tools-ui.ts";
 import { NEXT_SHELF_JS } from "./next-shelf-ui.ts";
 import { NEXT_TEAMS_JS } from "./next-teams-ui.ts";
+import { NEXT_PANEL_MORE_JS } from "./next-panel-more-ui.ts";
 import { NEXT_SPEND_JS } from "./next-spend-ui.ts";
 import { NEXT_COMPOSER_JS } from "./next-composer-ui.ts";
 import { NEXT_MEMBER_JS } from "./next-member-ui.ts";
@@ -227,6 +228,8 @@ button.fact { width: 100%; text-align: left; }
 .teams { display: flex; gap: 6px; align-items: center; padding: 0 4px 6px; } .teams[hidden] { display: none; }
 .teams select, .teams input { flex: 1; min-width: 0; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); font: inherit; font-size: 12.5px; }
 .teams button { font-size: 12px; color: var(--muted); }
+#panel-inner .fold-body label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--soft); }
+#panel-inner .fold-body select, #panel-inner .fold-body input { padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg); font: inherit; }
 .shelf .fact { align-items: center; } .shelf h2.group { margin: 10px 0 2px; }
 .fold-body { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; }
 .fold-body textarea { width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg); font: 12.5px/1.5 "IBM Plex Mono", ui-monospace, monospace; }
@@ -403,6 +406,7 @@ ${NEXT_AGENT_CONFIG_JS}
 ${NEXT_AGENT_TOOLS_JS}
 ${NEXT_SHELF_JS}
 ${NEXT_TEAMS_JS}
+${NEXT_PANEL_MORE_JS}
 ${NEXT_SPEND_JS}
 ${NEXT_COMPOSER_JS}
 ${NEXT_MEMBER_JS}
