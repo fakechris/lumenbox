@@ -8,6 +8,11 @@
  *   - **size**: a production `.ts` file is at most `limit` lines (1000). Files already over it
  *     are listed with their current length as their own ceiling; a listed file may get shorter,
  *     never longer, and leaves the list when it fits again.
+ *   - **width**: a production line is at most `limit` characters (240). The size rule counts lines,
+ *     and was met for a while by writing longer ones — six files lost lines and gained bytes in one
+ *     week, one line reaching 2682 characters (INV-1826). Files with longer lines are listed with how
+ *     many they have; the count may only fall, and a file not listed has none. The word tables under
+ *     `src/i18n/` are exempt: a sentence in two languages is one line by design.
  *   - **env**: `process.env` is read only in the configuration and startup layers (`allowed`).
  *     Files reading it elsewhere are listed; a listed file may stop, never a new one start.
  *
@@ -17,7 +22,8 @@
  * Three ways to fail: a new violation; a baseline entry added or a ceiling raised (checked
  * against the merge base's copy when git can show one); an entry that no longer violates and
  * was not removed. `--write-baseline` lowers and removes, never adds; `--init` writes the first
- * baseline for a repository adopting the ratchet and is not for anything else.
+ * baseline for a repository adopting the ratchet and is not for anything else; `--init-width` did
+ * the same once for the width rule, and refuses when that section already exists.
  *
  *   node scripts/arch-ratchet.mjs                  check
  *   node scripts/arch-ratchet.mjs --write-baseline  lower ceilings / drop entries that now pass
@@ -27,13 +33,15 @@ import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
 export const DEFAULT_LIMIT = 1000;
+export const DEFAULT_WIDTH = 240;
+const WIDTH_EXEMPT = [/^src\/i18n\//];
 export const BASELINE_FILE = "arch-baseline.json";
 const PRODUCTION = /\.ts$/;
 const EXCLUDED = [/\.test\.ts$/, /\.sweep\.ts$/, /(^|\/)testing\//, /(^|\/)fixtures\//, /\.d\.ts$/];
 const ENV_READ = /\bprocess\.env\b/;
 
 /** Every production source file under `root/src`, with what the two rules measure. */
-export function scan(root) {
+export function scan(root, width = DEFAULT_WIDTH) {
   const files = [];
   const walk = dir => {
     for (const entry of readdirSync(dir)) {
@@ -45,7 +53,9 @@ export function scan(root) {
       const rel = relative(root, path).split(sep).join("/");
       if (!PRODUCTION.test(rel) || EXCLUDED.some(pattern => pattern.test(rel))) continue;
       const text = readFileSync(path, "utf8");
-      files.push({ path: rel, lines: text.split("\n").length, readsEnv: ENV_READ.test(text) });
+      const lines = text.split("\n");
+      const wide = WIDTH_EXEMPT.some(pattern => pattern.test(rel)) ? 0 : lines.filter(line => line.length > width).length;
+      files.push({ path: rel, lines: lines.length, wide, readsEnv: ENV_READ.test(text) });
     }
   };
   walk(join(root, "src"));
@@ -75,6 +85,21 @@ export function verify(baseline, files, previous) {
       problems.push(`${file.path} reads process.env outside the configuration and startup layers (${[...allowed].join(", ")}): take the value as a parameter`);
     }
   }
+  const width = baseline.width?.limit ?? DEFAULT_WIDTH;
+  const wideCeilings = baseline.width?.files ?? {};
+  for (const file of files) {
+    const ceiling = wideCeilings[file.path];
+    if (ceiling !== undefined) {
+      if (file.wide > ceiling) problems.push(`${file.path} has ${file.wide} lines over ${width} characters, above its ceiling of ${ceiling}: break the line instead of lengthening it`);
+    } else if (file.wide > 0) {
+      problems.push(`${file.path} has ${file.wide} line(s) over ${width} characters and is not in the baseline: a long line is not a way under the line limit`);
+    }
+  }
+  for (const [path, ceiling] of Object.entries(wideCeilings)) {
+    const file = byPath.get(path);
+    if (file === undefined) problems.push(`baseline lists ${path} (${ceiling} wide lines) but the file is gone: remove the entry`);
+    else if (file.wide === 0) problems.push(`${path} has no line over ${width} characters any more: remove its width entry (stale entries hide regressions)`);
+  }
   for (const [path, ceiling] of Object.entries(ceilings)) {
     const file = byPath.get(path);
     if (file === undefined) problems.push(`baseline lists ${path} (${ceiling} lines) but the file is gone: remove the entry`);
@@ -92,6 +117,15 @@ export function verify(baseline, files, previous) {
       if (before[path] === undefined) problems.push(`baseline gained ${path}: the ratchet only turns one way (the file must fit the limit instead)`);
       else if (ceiling > before[path]) problems.push(`${path}'s ceiling rose from ${before[path]} to ${ceiling}: ceilings only come down`);
     }
+    // The width rule's first baseline is the one commit allowed to add entries: before it there was no list to grow.
+    if (previous.width !== undefined) {
+      const beforeWide = previous.width.files ?? {};
+      for (const [path, ceiling] of Object.entries(wideCeilings)) {
+        if (beforeWide[path] === undefined) problems.push(`the width baseline gained ${path}: the ratchet only turns one way (break the long lines instead)`);
+        else if (ceiling > beforeWide[path]) problems.push(`${path}'s width ceiling rose from ${beforeWide[path]} to ${ceiling}: ceilings only come down`);
+      }
+      if ((previous.width.limit ?? DEFAULT_WIDTH) < width) problems.push(`the width limit rose from ${previous.width.limit ?? DEFAULT_WIDTH} to ${width}`);
+    }
     if ((previous.size?.limit ?? DEFAULT_LIMIT) < limit) problems.push(`the size limit rose from ${previous.size?.limit ?? DEFAULT_LIMIT} to ${limit}`);
     const beforeEnv = new Set(previous.env?.files ?? []);
     for (const path of envListed) if (!beforeEnv.has(path)) problems.push(`baseline gained ${path} as an env reader: the ratchet only turns one way`);
@@ -107,6 +141,7 @@ export function earned(baseline, files) {
   const allowed = new Set(baseline.env?.allowed ?? []);
   return {
     size: { limit, files: Object.fromEntries(files.filter(file => file.lines > limit).map(file => [file.path, file.lines])) },
+    width: { limit: baseline.width?.limit ?? DEFAULT_WIDTH, files: Object.fromEntries(files.filter(file => file.wide > 0).map(file => [file.path, file.wide])) },
     env: { allowed: [...allowed], files: files.filter(file => file.readsEnv && !allowed.has(file.path)).map(file => file.path) },
   };
 }
@@ -120,7 +155,11 @@ export function lowered(baseline, files) {
     if (now.size.files[path] !== undefined) kept[path] = Math.min(ceiling, now.size.files[path]);
   }
   const envKept = (baseline.env?.files ?? []).filter(path => now.env.files.includes(path));
-  return { size: { limit: now.size.limit, files: kept }, env: { allowed: now.env.allowed, files: envKept } };
+  const wideKept = {};
+  for (const [path, ceiling] of Object.entries(baseline.width?.files ?? {})) {
+    if (now.width.files[path] !== undefined) wideKept[path] = Math.min(ceiling, now.width.files[path]);
+  }
+  return { size: { limit: now.size.limit, files: kept }, ...(baseline.width !== undefined ? { width: { limit: now.width.limit, files: wideKept } } : {}), env: { allowed: now.env.allowed, files: envKept } };
 }
 
 /**
@@ -156,6 +195,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exit(0);
   }
   const baseline = JSON.parse(readFileSync(path, "utf8"));
+  if (args.has("--init-width")) {
+    if (baseline.width !== undefined) { console.error("[arch] the width baseline exists: it is lowered with --write-baseline, never written again"); process.exit(1); }
+    const { size, env } = baseline;
+    writeFileSync(path, `${JSON.stringify({ size, width: earned(baseline, files).width, env }, null, 2)}\n`);
+    console.log(`[arch] wrote the width baseline`);
+    process.exit(0);
+  }
   if (args.has("--write-baseline")) {
     const next = lowered(baseline, files);
     writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`);
@@ -169,5 +215,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exit(1);
   }
   const over = Object.keys(baseline.size?.files ?? {}).length;
-  console.log(`[arch] ok: ${files.length} production files; ${over} over the limit and held at their ceilings; ${(baseline.env?.files ?? []).length} env reader(s) held outside the layers${previous === undefined ? " (no merge base to compare the baseline with)" : ""}`);
+  const wide = Object.values(baseline.width?.files ?? {}).reduce((sum, count) => sum + count, 0);
+  console.log(`[arch] ok: ${files.length} production files; ${over} over the limit and held at their ceilings; ${wide} over-wide line(s) held and falling; ${(baseline.env?.files ?? []).length} env reader(s) held outside the layers${previous === undefined ? " (no merge base to compare the baseline with)" : ""}`);
 }
