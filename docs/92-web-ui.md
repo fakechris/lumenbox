@@ -215,6 +215,11 @@ downloads, publishes or takes down.
 the ready-made templates, the ones made here, the roles and crews, found by typing, each created on
 the selected computer with one press; and a template somebody sent, as a file or pasted.
 
+**Teams narrow the agent list, when there are any.** A team is a tag agents carry. With none, there
+is no control; with some, one choice above the list shows a team, the agents in none, or everyone,
+and is remembered; an admin renames a team for everybody in it. The conversation picker reads
+thirty conversations at a time and offers the earlier ones.
+
 **Three levels, everywhere.**
 
 | Level | Where | Holds |

@@ -219,3 +219,14 @@ test("every template on offer is one row with what a press sends, and is found b
   assert.deepEqual((shelfFound(rows, " WRITER ") as { name: string }[]).map(row => row.name), ["Content crew"]);
   assert.equal((shelfFound(rows, "") as unknown[]).length, 4);
 });
+
+test("the agent list narrows to a team; agents in none are their own choice, and a team nobody here is in narrows nothing", () => {
+  const teamsOf = pageFunction("teamsOf", {}), inTeam = pageFunction("inTeam", { teamsOf });
+  const agents = [{ name: "Ada", tags: ["ops", "editorial"] }, { name: "Bob", tags: ["ops"] }, { name: "Vic", tags: [] }, { name: "Mia" }];
+  const names = (rows: unknown) => (rows as { name: string }[]).map(row => row.name);
+  assert.deepEqual(JSON.parse(JSON.stringify(teamsOf(agents))), ["editorial", "ops", "-"]);
+  assert.deepEqual(JSON.parse(JSON.stringify(teamsOf([{ name: "Vic", tags: [] }]))), [], "no team, no control");
+  assert.deepEqual(names(inTeam(agents, "ops")), ["Ada", "Bob"]);
+  assert.deepEqual(names(inTeam(agents, "-")), ["Vic", "Mia"]);
+  assert.deepEqual(names(inTeam(agents, "gone")), ["Ada", "Bob", "Vic", "Mia"], "a remembered team from another computer does not empty the list");
+});

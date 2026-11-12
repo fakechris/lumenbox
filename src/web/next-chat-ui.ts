@@ -43,8 +43,10 @@ function renderSide() {
     button.addEventListener("click", function () { chat.box = box.id; chat.agentId = ""; render(); });
     holder.appendChild(button);
   });
-  var here = agentsHere();
-  if (!here.some(function (agent) { return agent.id === chat.agentId; })) chat.agentId = here[0] ? here[0].id : "";
+  var everyone = agentsHere(), here = inTeam(everyone, teams.chosen);
+  renderTeams(everyone);
+  // The agent being talked to stays the one talked to when the list is narrowed to another team.
+  if (!everyone.some(function (agent) { return agent.id === chat.agentId; })) chat.agentId = here[0] ? here[0].id : "";
   list.replaceChildren();
   here.forEach(function (agent) {
     var row = el("button", "agent"), body = el("span", "body");
@@ -249,9 +251,22 @@ function renderChat(view) {
       option.value = row.id; option.selected = row.id === chat.conversation;
       picker.appendChild(option);
     });
+    if (chat.conversationsTotal > chat.conversations.length) {
+      var older = el("option", "", t("ui.next.chat.older", { n: chat.conversationsTotal - chat.conversations.length }));
+      older.value = "+"; picker.appendChild(older);
+    }
   }
   if (agent && chat.loading !== chat.agentId && chat.loadedFor !== chat.agentId) loadThread();
   if (chat.loadedFor === chat.agentId || !agent) renderThread(view);
+}
+
+/** The agent's conversations, thirty at a time: the first page replaces the list, a later one adds to it. */
+function loadConversations(id, offset) {
+  getJson("/api/conversations?agent=" + encodeURIComponent(id) + "&limit=30&offset=" + offset).then(function (got) {
+    if (chat.agentId !== id) return;
+    chat.conversations = (offset ? chat.conversations : []).concat(got.conversations || []); chat.conversationsTotal = got.total || chat.conversations.length;
+    if (next.view === "chat") render();
+  }, function () {});
 }
 
 /** The conversation is on screen: this agent's, in a visible tab, not behind the agent list on a narrow screen. */
@@ -272,7 +287,7 @@ function loadThread() {
     if (chatVisible()) postJson("/api/agents/viewed", { id: id, conversation: chat.conversation }).catch(function () {});
     // Beside the thread, and allowed to fail: a viewer may not read the plan, and one conversation needs no picker.
     getJson("/api/progress?agent=" + encodeURIComponent(id) + "&conversation=" + encodeURIComponent(chat.conversation)).then(function (plan) { if (request === chat.request) { chat.plan = plan; if (next.view === "chat") render(); } }, function () {});
-    getJson("/api/conversations?agent=" + encodeURIComponent(id) + "&limit=30").then(function (got) { if (chat.agentId === id) { chat.conversations = got.conversations || []; if (next.view === "chat") render(); } }, function () {});
+    loadConversations(id, 0);
   }, function (error) { if (request === chat.request) chat.loading = ""; failed(error); });
 }
 
@@ -324,6 +339,7 @@ function chatStart() {
   // Back is always to the agents: from a conversation, and from the two views that cut across them.
   $("back").addEventListener("click", function () { next.view = "chat"; delete document.body.dataset.open; render(); });
   $("conversations").addEventListener("change", function (event) {
+    if (event.target.value === "+") { loadConversations(chat.agentId, chat.conversations.length); return; }
     chat.conversation = event.target.value; chat.loadedFor = ""; chat.entries = []; chat.live = null; chat.plan = null; chat.liveSurfaces = {};
     render();
   });
