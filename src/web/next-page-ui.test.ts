@@ -77,6 +77,8 @@ test("the page somebody switched to is the one they come back to; with no choice
   assert.match(ask("/?ui=classic", "lumen-ui=next").remember!, /^lumen-ui=classic; /);
   assert.equal(ask("/?ui=sideways").page, APP_PAGE, "an unknown choice is no choice");
   assert.equal(ask("/?ui=next", "lumen-ui=next").remember, undefined, "nothing to remember twice");
+  assert.deepEqual([ask("/?ui=classic&once=1&task=t1", "lumen-ui=next").page, ask("/?ui=classic&once=1&task=t1", "lumen-ui=next").remember], [APP_PAGE, undefined], "one look at the other page changes nothing");
+  assert.deepEqual([ask("/?import=abc", "lumen-ui=next").page, ask("/?import=abc", "lumen-ui=next").remember], [APP_PAGE, undefined], "a template link opens where its dialog is");
 });
 
 /** One function out of the page's own script, run with the globals it reads. */
@@ -130,4 +132,22 @@ test("a delivered result is decided where the person was talking: Accept closes 
   await Promise.resolve();
   assert.deepEqual(JSON.parse(JSON.stringify(posted)), [["/api/tasks/update", { id: "t1", status: "done" }]]);
   assert.deepEqual(opened, ["t1"], "what to change is written in the panel, beside the result");
+});
+
+test("a draft waiting to be sent and a proposal to close are decided on their inbox rows", async () => {
+  interface Fake { text: string; kids: Fake[]; childNodes: Fake[]; style: Record<string, string>; press?: () => void; appendChild(kid: Fake): void; addEventListener(name: string, run: () => void): void; replaceChildren(): void; querySelectorAll(): Fake[] }
+  const el = (_tag: string, _cls = "", text = ""): Fake => {
+    const kids: Fake[] = [], node: Fake = { text, kids, childNodes: kids, style: {}, appendChild(kid) { node.kids.push(kid); }, addEventListener(_name, run) { node.press = run; }, replaceChildren() {}, querySelectorAll: () => [] };
+    return node;
+  };
+  const posted: unknown[] = [];
+  const inboxRow = pageFunction("inboxRow", {
+    el, t: (key: string) => key, owedText: () => "", initial: () => "A", isTask: () => true, openPanel: () => {}, openChat: () => {}, failed: () => {}, settle: () => {},
+    postJson: (path: string, body: unknown) => { posted.push([path, body]); return Promise.resolve({}); },
+  });
+  const buttons = (kind: string) => (inboxRow({ kind, ref: "r1", title: "x" }) as Fake).kids.slice(1).flatMap(kid => kid.kids);
+  buttons("outbox")[0]!.press!(); buttons("close-proposal")[0]!.press!();
+  await Promise.resolve();
+  assert.deepEqual(JSON.parse(JSON.stringify(posted)), [["/api/outbox/decide", { id: "r1", decision: "approve" }], ["/api/tasks/oppose-close", { id: "r1" }]]);
+  assert.equal(buttons("review").length, 0, "a row with nothing to decide on it has no buttons");
 });

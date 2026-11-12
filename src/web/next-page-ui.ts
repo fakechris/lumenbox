@@ -61,6 +61,8 @@ a { color: inherit; }
 .count { min-width: 18px; height: 18px; border-radius: 9px; background: var(--accent); color: #fff; font-size: 11px; line-height: 18px; text-align: center; padding: 0 5px; flex: none; }
 .side-links { display: flex; flex-direction: column; gap: 2px; border-top: 1px solid var(--border); padding-top: 8px; }
 .side-links button, .side-links a { padding: 7px 10px; border-radius: 8px; font-size: 13px; color: var(--soft); text-align: left; text-decoration: none; }
+.side-foot { display: flex; align-items: center; gap: 2px; }
+.side-foot a { margin-left: auto; font-size: 12px; color: var(--muted); }
 .side-links [aria-current="true"] { background: var(--surface); box-shadow: 0 0 0 1px var(--border); }
 main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 header.bar { min-height: 52px; display: flex; align-items: center; gap: 12px; padding: 0 24px; border-bottom: 1px solid var(--border); flex: none; }
@@ -260,7 +262,11 @@ export const NEXT_HTML = `<!doctype html>
     <button data-nav="auto">{{ui.next.side.auto}}</button>
     <button data-nav="boxes">{{ui.next.side.boxes2}}</button>
     <button data-nav="settings">{{ui.next.side.settings}}</button>
-    <button id="theme" aria-label="{{ui.next.theme}}" title="{{ui.next.theme}}">◐</button>
+    <div class="side-foot">
+      <button id="theme" aria-label="{{ui.next.theme}}" title="{{ui.next.theme}}">◐</button>
+      <button id="lang">{{ui.next.lang}}</button>
+      <a id="classic" href="/?ui=classic">{{ui.next.classic}}</a>
+    </div>
   </div>
 </nav>
 <main>

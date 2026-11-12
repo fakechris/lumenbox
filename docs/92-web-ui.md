@@ -174,6 +174,13 @@ agents — everything that needs the person, all work — is one click away in t
 never the landing. A first slice that opened on an inbox and a work list was wrong, and was seen to
 be wrong on real data within the day.
 
+**Nothing is lost by using it.** A link to one piece of work (`?task=`), to an agent's conversation
+(`?agent=&conversation=`), opens there. A template link (`?import=`) opens the classic page, whose
+dialog it is. The foot of the side column switches language and goes back to the classic page; the
+work panel's full record is the classic task view for one look (`&once=1`), which does not change
+the page the person chose. What the classic page still does and this one does not is listed on
+INV-1825, and the default changes only when that list is empty or bridged.
+
 **Three levels, everywhere.**
 
 | Level | Where | Holds |
@@ -198,7 +205,9 @@ wrong" is only said when the server said it.
 `next-logic-ui.ts` holds the few decisions the page makes, as plain functions shipped as their own
 source so the test runs what the page runs. Every word comes from `src/i18n/ui-next.ts`. The classic
 page's settings dialogs are shown in a frame (`embed-ui.ts`) until each is rebuilt; that bridge is
-removed pane by pane, never extended.
+removed pane by pane. It was extended once, to an agent's whole configuration (model, standing
+instructions, what it must ask before using, earlier versions), so that using this page takes
+nothing away; a new surface is built here, not bridged.
 
 **Checking.** `next-page-ui.test.ts` fills the page in both languages, parses every inline script, and
 checks that every looked-up id exists; a function with a regular expression or a wire format in it is

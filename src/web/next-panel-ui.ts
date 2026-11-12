@@ -29,7 +29,13 @@ function needBlock(task) {
     deny.addEventListener("click", function () { postJson("/api/deny", { id: approval.id }).then(function () { toast(t("ui.next.done.denied")); loadPanel(); refreshSoon(); }, failed); });
     row.appendChild(approve); row.appendChild(deny); box.appendChild(line); box.appendChild(row);
   });
-  if (stage === "person/review") {
+  if (task.reading && task.reading.phase === "proposal") {
+    box.appendChild(el("div", "", t("ui.next.panel.proposal", { name: agentName(task.proposedBy || task.requester) })));
+    var commit = el("button", "act-primary", t("ui.next.act.commit")), dismiss = el("button", "act", t("ui.next.act.dismiss"));
+    commit.addEventListener("click", function () { postJson("/api/tasks/commit", { id: task.id }).then(function () { toast(t("ui.next.done.committed")); loadPanel(); refreshSoon(); }, failed); });
+    dismiss.addEventListener("click", function () { updateTask({ status: "dropped", note: t("ui.next.note.dismissed") }, t("ui.next.done.dismissed")); });
+    acts.appendChild(commit); acts.appendChild(dismiss);
+  } else if (stage === "person/review") {
     box.appendChild(el("div", "", t("ui.next.panel.review")));
     var accept = el("button", "act-primary", t("ui.next.act.accept")), changes = el("button", "act", t("ui.next.act.changes"));
     accept.addEventListener("click", function () { updateTask({ status: "done" }, t("ui.next.done.accepted")); });
@@ -130,7 +136,8 @@ function stopBlock(task) {
     links.appendChild(chat);
   }
   var record = el("a", "", t("ui.next.act.fullRecord"));
-  record.href = "/?agent=" + encodeURIComponent(task.assigneeId || "") + "&task=" + encodeURIComponent(task.id);
+  // The classic page's task view, for one look: the page the person uses stays the one they chose.
+  record.href = "/?ui=classic&once=1&agent=" + encodeURIComponent(task.assigneeId || "") + "&task=" + encodeURIComponent(task.id);
   links.appendChild(record);
   if (task.status === "done" || task.status === "dropped") return links;
   var stop = el("button", "", t("ui.next.act.stop"));

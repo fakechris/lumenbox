@@ -118,6 +118,16 @@ function inboxRow(item) {
     deny.addEventListener("click", function () { postJson("/api/deny", { id: item.ref }).then(function () { settle(node, t("ui.next.done.denied")); }, failed); });
     acts.appendChild(approve); acts.appendChild(deny);
   }
+  if (item.kind === "outbox") {
+    var send = el("button", "act-primary", t("ui.next.act.approve"));
+    send.addEventListener("click", function () { postJson("/api/outbox/decide", { id: item.ref, decision: "approve" }).then(function () { settle(node, t("ui.next.done.approved")); }, failed); });
+    acts.appendChild(send);
+  }
+  if (item.kind === "close-proposal") {
+    var keep = el("button", "act", t("ui.next.act.keepOpen"));
+    keep.addEventListener("click", function () { postJson("/api/tasks/oppose-close", { id: item.ref }).then(function () { settle(node, t("ui.next.done.kept")); }, failed); });
+    acts.appendChild(keep);
+  }
   ((item.answer && item.answer.options) || []).forEach(function (option) {
     var pick = el("button", "act", option);
     pick.addEventListener("click", function () {
@@ -175,6 +185,7 @@ function refresh() {
   getJson("/api/setup").then(function (got) { settings.setup = got; }, function () {});
   return Promise.all([getJson("/api/state"), getJson("/api/attention"), getJson("/api/tasks/list?records=user&limit=100"), machines]).then(function (got) {
     boxes.list = got[3].boxes || []; boxes.own = got[3].own || "";
+    var first = Object.keys(next.agents).length === 0;
     next.agents = {}; member.allTools = got[0].allTools || [];
     (got[0].agents || []).forEach(function (agent) { next.agents[agent.id] = agent; });
     next.mine = got[1].mine || [];
@@ -182,6 +193,8 @@ function refresh() {
     // An agent named in the address decides which computer is shown.
     if (chat.agentId && next.agents[chat.agentId] && !chat.box) chat.box = next.agents[chat.agentId].boxId || "";
     render();
+    // Work opened from a link was drawn before anybody's name was known.
+    if (first && panel.task) renderPanel();
   }, failed).then(function () { next.loading = false; });
 }
 
@@ -200,7 +213,12 @@ function nextStart() {
     document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
     try { localStorage.setItem("lumen-theme", dark ? "dark" : "light"); } catch (error) {}
   });
-  var asked = new URLSearchParams(location.search).get("view");
+  // The person's choice of language, kept the way the classic page keeps it (INV-1684).
+  $("lang").addEventListener("click", function () {
+    document.cookie = "lumen-lang=" + ("{{@locale}}" === "zh" ? "en" : "zh") + "; path=/; max-age=31536000; samesite=lax";
+    location.reload();
+  });
+  var asked = new URLSearchParams(location.search).get("view"), linked = new URLSearchParams(location.search).get("task");
   if (asked === "work" || asked === "inbox" || asked === "settings" || asked === "auto" || asked === "boxes" || asked === "system") { next.view = asked; document.body.dataset.open = "1"; }
   panelStart();
   chatStart();
@@ -208,6 +226,8 @@ function nextStart() {
   memberStart();
   cardsStart();
   embedStart();
+  // A link to one piece of work — from a chat message, a notification — opens it.
+  if (linked) openPanel(linked);
   refresh();
   // What changes a row or the inbox arrives as an event; the page re-reads rather than patching.
   var events = new EventSource("/api/events");

@@ -319,7 +319,7 @@ function chatStart() {
     chat.conversation = event.target.value; chat.loadedFor = ""; chat.entries = []; chat.live = null; chat.plan = null; chat.liveSurfaces = {};
     render();
   });
-  var asked = new URLSearchParams(location.search).get("agent");
-  if (asked) { chat.agentId = asked; document.body.dataset.open = "1"; }
+  var asked = new URLSearchParams(location.search).get("agent"), thread = new URLSearchParams(location.search).get("conversation");
+  if (asked) { chat.agentId = asked; if (thread) chat.conversation = thread; document.body.dataset.open = "1"; }
 }
 `;
