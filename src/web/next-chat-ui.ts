@@ -13,7 +13,9 @@ var markdown = window.markdownit ? window.markdownit({ html: false, linkify: tru
 function agentsHere() {
   return Object.keys(next.agents).map(function (id) { return next.agents[id]; }).filter(function (agent) { return !chat.box || agent.boxId === chat.box; });
 }
+/** The computers to choose between: the ones the server lists, else the ones the agents name. */
 function boxesKnown() {
+  if (boxes.list.length) return boxes.list.map(function (box) { return { id: box.id, name: box.name, off: box.connected === false }; });
   var seen = {}, list = [];
   Object.keys(next.agents).forEach(function (id) {
     var agent = next.agents[id];
@@ -36,7 +38,7 @@ function renderSide() {
   holder.replaceChildren();
   holder.hidden = boxes.length < 2;
   boxes.forEach(function (box) {
-    var button = el("button", "", box.name);
+    var button = el("button", box.off ? "off" : "", box.name);
     button.setAttribute("aria-pressed", String(box.id === chat.box));
     button.addEventListener("click", function () { chat.box = box.id; chat.agentId = ""; render(); });
     holder.appendChild(button);
@@ -58,6 +60,7 @@ function renderSide() {
     row.addEventListener("click", function () { openChat(agent.id); });
     list.appendChild(row);
   });
+  boxNotice();
   var needs = $("needs");
   needs.hidden = next.mine.length === 0;
   needs.textContent = t("ui.next.side.needs", { n: next.mine.length });
