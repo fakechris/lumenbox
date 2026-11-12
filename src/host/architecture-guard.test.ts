@@ -295,3 +295,14 @@ test("a chat command, a Settings pane and a rule-file key each have one home, an
 
   assert.equal(guard.rulesProblems([{ path: "host/rules.ts", text: "const tier = meta.tier;" }]).length, 1, "a rule key read by hand");
 });
+
+test("an activity is never work: nothing new creates a card marked internal (docs/99 §2)", () => {
+  // host/work-root-store.ts gives a root that arrived without a card one to be stored on, and recovers a legacy root the same way.
+  // host/tools.ts is the Tasks tool: an agent's proposal, a routine's discovery, and a card with no person's work above it.
+  // Both leave when requests leave the board (docs/99 §7, stage 4). A result check, an audit, a probe is recorded on the work it belongs to.
+  const allowed = new Set(["host/work-root-store.ts", "host/tools.ts"]);
+  const offenders = sources()
+    .filter(file => /origin:\s*\{[^}]*"internal"/.test(file.text) && !allowed.has(file.path))
+    .map(file => file.path);
+  assert.deepEqual(offenders, [], "record an activity on the work it belongs to instead of creating a card for it");
+});
