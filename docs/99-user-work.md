@@ -116,9 +116,18 @@ An agent serves one person's unfinished work in a conversation before anything e
 that conversation. That is custody, and it is the rule INV-1797 established. Three limits keep it
 from becoming a lock:
 
-1. **Custody is per conversation, not per agent.** A message that belongs to other work runs in its
-   own conversation, concurrently. It is not held until the person's work ends. (Today it is held;
-   stage 2 changes this.)
+1. **A colleague is answered beside a waiting person, never instead of one.** A message from
+   another agent that is not part of the person's work runs on a side lane — one errand at a time
+   per agent, in a conversation of its own — and only while the person's work waits on something
+   outside the agent: the person's answer, an approval, a tool, a colleague's result. While one of
+   the person's turns is running, or their work is between two slices of its own, nothing starts
+   beside it. When the person's work can move again, the errand in flight is interrupted and tried
+   again afterwards; that is not a failure and its sender is not told it was. An errand the host
+   did not stamp as part of somebody's work gets a small call budget, so answering a colleague
+   cannot spend what the person's work needs. The errand sees none of the person's work — not its
+   thread, its plan, nor its card on the board — cannot address the person, and shows nowhere on a
+   default surface. Everything else addressed to the person's conversation — a routine's result, a
+   notice from the host, an informational note — still waits for it.
 2. **A person's new request always gets in.** It moves the focus; the earlier work waits with the
    reason "focus moved" and is resumed, not lost.
 3. **Custody ends with the work**, by the lifecycle — not by the model tidying its todo list. A
@@ -152,9 +161,8 @@ Each stage is independently shippable and leaves the suite green.
 1. **Done.** The person's thread is continuous; answered requests leave no card; a bad record does
    not stop the host (INV-1822). An ordinary request crosses turn budgets under a ceiling the
    operator sets (INV-1823).
-2. **Concurrency instead of holding.** Messages that belong to other work execute in their own
-   conversation while a person's work waits; the hold remains only for what must enter the
-   person's thread. Scenario: a person's work waits on a tool; a colleague's unrelated message is
+2. **Done: a side lane instead of holding.** A colleague's errand runs beside a person's waiting
+   work and yields to it (§5); the hold remains for what must enter the person's thread. Scenario: a person's work waits on a tool; a colleague's unrelated message is
    handled; the person's plan and context are unchanged.
 3. **One writer.** A lifecycle module owns execution state for goals and ordinary work alike; the
    pursuit's and the root's statuses become one field, with the mapping of §4 as its test.

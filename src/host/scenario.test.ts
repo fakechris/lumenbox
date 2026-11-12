@@ -52,14 +52,14 @@ import { Vault } from "./vault.ts";
 import { auditConversation } from "./audit-context.ts";
 import { evidenceDigest } from "./review-dispatch.ts";
 
-test("user installation resumes to a verified artifact after failure while a hundred priority peers wait (INV-1797)", async () => {
+test("user installation resumes to a verified artifact after failure; a hundred priority peers are answered beside it and never enter it (INV-1797, INV-1824)", async () => {
   const { WorkAttention, workStateConversation } = await import("../agents/work-attention.ts");
   const focus = new WorkAttention(); let rounds = 0; let reported = false; const handledPeers = new Set<number>(); const tasks = new TaskStore(null);
   const episode = await runEpisode({
     workAttention: focus, team: [{ name: "Mia", tools: ["SetTodos", "Tasks"] }, { name: "Zed" }], says: [], tasks,
     script: ({ system, messages, opened }) => {
       if (opened.includes("UNRELATED PEER")) {
-        assert.equal(reported, true, "unrelated messages may run only after the user's verified result");
+        assert.doesNotMatch(system + JSON.stringify(messages), /Install the provided package|OLD AUDIT OBJECTIVE/, "a colleague's errand sees neither the person's work nor old work");
         for (const match of opened.matchAll(/UNRELATED PEER (\d+)/g)) handledPeers.add(Number(match[1]));
         return { call: "NothingToSay", input: {} };
       }
@@ -88,9 +88,10 @@ test("user installation resumes to a verified artifact after failure while a hun
       const work = focus.get(frontId, "main")!;
       assert.equal(work.status, "waiting"); assert.match(work.reason!, /bash/);
       for (let i = 0; i < 100; i++) bus.send({ fromId: registry.resolve("Zed").id, toId: frontId, text: `UNRELATED PEER ${i}`, priority: true });
-      await bus.idle(1000);
-      assert.equal(rounds, 2, "a missing capability produces one bounded stop; held peers consume no model rounds");
-      assert.equal(bus.heldCount(frontId), 100);
+      await bus.idle();
+      assert.equal(rounds, 2, "a missing capability produces one bounded stop; the peers add no round to the person's work");
+      assert.equal(reported, false, "and answering them did not move or settle it");
+      assert.equal(focus.get(frontId, "main")!.status, "waiting");
       assert.equal(tasks.list().filter(task=>!task.workRoot?.automatic).length, 0,"no probe work was created beside the user request");
       assert.equal(registry.readDurableState(frontId, workStateConversation(work, "main")).todos?.[0]?.text, "Install the provided package");
       assert.equal(registry.readDurableState(frontId).todos?.[0]?.text, "OLD AUDIT OBJECTIVE", "old record remains intact, but is not the current plan");
@@ -140,7 +141,7 @@ test("an admitted collaborator can return before the owner finishes without losi
   episode.cleanup();
 });
 
-test("a foreground command finishing later returns to its waiting user work while unrelated peers stay held (INV-1797)", async () => {
+test("a foreground command finishing later returns to its waiting user work; an unrelated peer is answered elsewhere meanwhile (INV-1797, INV-1824)", async () => {
   const { JobWatch } = await import("./job-watch.ts");
   const { WorkAttention } = await import("../agents/work-attention.ts");
   let finishJob!: () => void; const completed = new Promise<void>(resolve => { finishJob = resolve; });
@@ -160,7 +161,7 @@ test("a foreground command finishing later returns to its waiting user work whil
       bus.sendFromUser(frontId,"Build the package."); await bus.wake(frontId); await bus.idle();
       assert.equal(focus.get(frontId,"main")!.status,"waiting");
       bus.send({fromId:registry.resolve("Zed").id,toId:frontId,text:"Unrelated old audit",priority:true});
-      await bus.idle(); assert.equal(bus.heldCount(frontId),1);
+      await bus.idle(); assert.equal(bus.heldCount(frontId),0); assert.equal(focus.get(frontId,"main")!.status,"waiting","answering a colleague left the person's work where it was");
       finishJob(); await settled(()=>received); await bus.idle();
       assert.equal(focus.get(frontId,"main")!.status,"answered");
     },
@@ -171,11 +172,11 @@ test("a foreground command finishing later returns to its waiting user work whil
 test("a question awaiting the user's choice retains work without requiring a todo list (INV-1797)", async () => {
   const {WorkAttention} = await import("../agents/work-attention.ts"); const focus = new WorkAttention();
   const episode = await runEpisode({workAttention:focus,team:[{name:"Mia"},{name:"Zed"}],says:[],
-    script:({round})=>round===0?{call:"AskUser",input:{question:"Which installation directory?"}}:{say:"Waiting for your choice."},
+    script:({round,opened})=>opened.includes("Unrelated audit")?{say:"Noted."}:round===0?{call:"AskUser",input:{question:"Which installation directory?"}}:{say:"Waiting for your choice."},
     drive:async({bus,registry,frontId})=>{bus.sendFromUser(frontId,"Install the package");await bus.wake(frontId);await bus.idle();
       assert.equal(focus.get(frontId,"main")!.status,"waiting");
       bus.send({fromId:registry.resolve("Zed").id,toId:frontId,text:"Unrelated audit",priority:true});await bus.idle();
-      assert.equal(bus.heldCount(frontId),1);
+      assert.equal(bus.heldCount(frontId),0); assert.equal(focus.get(frontId,"main")!.status,"waiting","the question is still the person's to answer");
     }});
   try {assert.equal(episode.score.questions,1);} finally {episode.cleanup();}
 });

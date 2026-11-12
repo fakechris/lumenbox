@@ -1,3 +1,4 @@
+import { isSideWork, SIDE_LANE, SIDE_RETRIES, sideBatch } from "./side-work.ts";
 import { messageWorkId, WorkAttention, personMessage, peerWorkConversation, type WorkStamp } from "./work-attention.ts";
 import type { InboundMessage } from "./admitted-message.ts";
 export type { InboundMessage } from "./admitted-message.ts";
@@ -99,6 +100,8 @@ interface ActiveTurn {
   controller: AbortController;
   /** True while the running turn was started by the user, not by a wake. */
   userDriven: boolean;
+  /** A person's work is moving in this turn — their message, or the host continuing it: side work yields (INV-1824). */
+  forPerson?: boolean; preempted?: boolean;
 }
 
 /**
@@ -318,7 +321,7 @@ export class AgentBus {
       `if they reply, or if their turn fails — asking them to confirm receipt buys nothing this ` +
       `line has not already told you.`;
 
-    if (this.workAttention && !this.workAttention.eligible(target.id, message.conversation ?? MAIN_CONVERSATION, message)) return `${promise} Held while their current user work is unfinished; priority does not interrupt it. Do not poll or ask for receipt.`;
+    if (this.workAttention && !this.workAttention.eligible(target.id, message.conversation ?? MAIN_CONVERSATION, message) && !isSideWork(this.workAttention, target.id, message)) return `${promise} Held while their current user work is unfinished; priority does not interrupt it. Do not poll or ask for receipt.`;
     if (!expectsResult) return `${promise} This is informational; no result is awaited and no acknowledgement reply is requested.`;
     return priority
       ? `${promise} Marked priority, so it interrupts their current non-user work and wakes them now.`
@@ -516,6 +519,11 @@ export class AgentBus {
   ): InboundMessage[] {
     this.dropStaleWork(agentId);
     const queue = this.pending.get(agentId) ?? [];
+    if (conversation === SIDE_LANE) {
+      const taken = boundBatch(sideBatch(this.sideReady(agentId)), this.batchLimits);
+      this.pending.set(agentId, queue.filter(message => !taken.includes(message)));
+      return taken.map(message => ({ ...message, side: true as const }));
+    }
     const mine = queue.filter(
       message => (message.conversation ?? MAIN_CONVERSATION) === conversation && (this.workAttention?.eligible(agentId, conversation, message) ?? true)
     );
@@ -680,7 +688,13 @@ export class AgentBus {
     });
     if (kept.length === 0) this.pending.delete(agentId); else this.pending.set(agentId, kept);
   }
+  /** A colleague's errands that may run now: the person's work is waiting and none of their turns is running (docs/99 §5). */
+  private sideReady(agentId: string): InboundMessage[] {
+    for (const [key, turn] of this.active) if (agentOfKey(key) === agentId && (turn.forPerson || turn.userDriven)) return [];
+    return (this.pending.get(agentId) ?? []).filter(message => isSideWork(this.workAttention, agentId, message));
+  }
   private readyCount(agentId: string, conversation: string): number {
+    if (conversation === SIDE_LANE) return this.sideReady(agentId).length;
     return (this.pending.get(agentId) ?? []).filter(message => (message.conversation ?? MAIN_CONVERSATION) === conversation && (this.workAttention?.eligible(agentId, conversation, message) ?? true)).length;
   }
   heldCount(agentId: string, conversation = MAIN_CONVERSATION): number { return this.queuedCount(agentId, conversation) - this.readyCount(agentId, conversation); }
@@ -748,6 +762,7 @@ export class AgentBus {
         order.push(conversation);
       }
     }
+    if (this.sideReady(agentId).length > 0) order.push(SIDE_LANE);
     return order;
   }
 
@@ -797,6 +812,12 @@ export class AgentBus {
         if (this.workAttention && (inbound[0]?.work?.owner !== agentId || !this.workAttention.valid(inbound[0].work, agentId))) executionConversation = peerWorkConversation(inbound, conversation);
         if (inbound[0]?.work) this.workAttention?.execution(inbound[0].work, agentId, executionConversation);
         this.active.get(key)!.principalId = inbound[0]?.principalId; this.active.get(key)!.userDriven = inbound.some(personMessage);
+        // The person's work is moving: a colleague's errand in flight yields, and is tried again after.
+        if (key !== workerKey(agentId, SIDE_LANE) && (inbound.some(personMessage) || inbound.some(message => message.goal !== undefined || message.resumeOf !== undefined))) {
+          this.active.get(key)!.forPerson = true;
+          const side = this.active.get(workerKey(agentId, SIDE_LANE));
+          if (side !== undefined) { side.preempted = true; this.onEvent({ type: "turn_interrupted", agentId, reason: "user_work" }); side.controller.abort(); }
+        }
         let acknowledged = false;
         const acknowledge = () => {
           if (acknowledged) return;
@@ -810,6 +831,11 @@ export class AgentBus {
         // A rejected goal wake may return without opening a turn. It is consumed too.
         acknowledge();
       } catch (error) {
+        if (this.active.get(key)?.preempted) { // not a failure: the person went first, and this is queued again
+          const again = inbound.filter(message => (message.redriven ?? 0) < SIDE_RETRIES).map(message => ({ ...message, redriven: (message.redriven ?? 0) + 1 }));
+          for (const message of again) this.pending.set(agentId, [...this.pending.get(agentId) ?? [], { ...message, admission: this.inbox?.admit(agentId, message) }]);
+          if (again.length === inbound.length) return;
+        }
         // The senders are told. Their acknowledgement said the message would be delivered, and it
         // was — into a turn that then failed, which they would otherwise wait on forever. This is
         // the one case where silence turns that acknowledgement into a lie.
@@ -836,7 +862,7 @@ export class AgentBus {
     // Anything that landed for this conversation during the turn — or the priority
     // message that cut it short — deserves a follow-up. When this call came from a
     // worker loop, that loop handles it and the guard makes this a no-op.
-    if (this.readyCount(agentId, conversation) > 0) {
+    if (this.readyCount(agentId, conversation) > 0 || this.readyCount(agentId, SIDE_LANE) > 0) {
       void this.wake(agentId);
     }
   }

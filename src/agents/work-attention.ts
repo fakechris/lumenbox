@@ -90,6 +90,19 @@ function afterRestart(row: CurrentWork): CurrentWork {
   return { ...row, ...(interrupted ? { status: "waiting" as const, reason: "execution interrupted", wait: "interrupted" as const } : {}), awaiting };
 }
 
+/**
+ * Why a person's work is still open when its turn ends, and what kind of wait that is — or neither,
+ * when it is answered. The order is the order of what a person most needs to hear first.
+ */
+export function whyWaiting(turn: { lacking?: string; how: string; confirmationPending: boolean; pendingPeers: boolean; unfinished: boolean }): [string | undefined, WorkWait | undefined] {
+  if (turn.lacking !== undefined) return ["required tool unavailable: " + turn.lacking, "capability"];
+  if (turn.how !== "done") return [turn.how, "execution"];
+  if (turn.confirmationPending) return ["waiting for confirmation", "confirmation"];
+  if (turn.pendingPeers) return ["waiting for related work", "dependency"];
+  if (turn.unfinished) return ["unfinished plan", "plan"];
+  return [undefined, undefined];
+}
+
 export class WorkAttention {
   private readonly roots = new Map<string, CurrentWork>();
   private readonly current = new Map<string, CurrentWork>();
