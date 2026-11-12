@@ -34,7 +34,7 @@ import { clampDescription, dueOf, type TaskContract } from "./task-fields.ts";
 import { refuseUnknownAgents, type TaskAgents } from "./task-agents.ts"; import { notReady, openBlockers, PLAN_ACTOR, refuseBlockers } from "./task-deps.ts"; import { inferLevel, type Level } from "./autonomy-level.ts"; import type { Discovery } from "./discovery.ts";
 
 import { alignTaskProgress, type TaskProgressState, TaskProgressReceiver } from "./task-progress.ts";
-import { checkpointTasks } from "./task-progress-storage.ts";
+import { checkpointTasks, retireClosed } from "./task-progress-storage.ts";
 export { clampContract, clampDescription, DESCRIPTION_LIMIT, dueOf, type TaskContract } from "./task-fields.ts";
 
 /** What each task is now, plus a grace period on closed ones so a person asking about something just finished still gets an answer. */
@@ -1027,9 +1027,7 @@ export class TaskStore {
     if (this.path === null) return;
     try {
       const cutoff = now.getTime() - RETAIN_CLOSED_MS;
-      for (const [id, task] of this.tasks) {
-        if (!task.workRoot && !isLive(task.status) && Date.parse(task.updatedAt) < cutoff) this.tasks.delete(id);
-      }
+      retireClosed(this.path, this.tasks, cutoff, now);
       checkpointTasks(this.path, this.counter, this.tasks.values());
       this.lines = this.tasks.size + 1;
       this.checkpointBytes = statSync(this.path).size;

@@ -107,6 +107,8 @@ export class TaskWorkRoots implements RootPersistence {
     const revoked = new Map(cancellations.map(row => [row.id, row]));
     for (const state of records) {
       let task = state.taskId ? tasks.get(state.taskId) : undefined;
+      // A request that is over and whose record has since been retired is not given a new one to live on.
+      if (!task && state.taskId !== undefined && (state.status === "answered" || state.status === "cancelled")) continue;
       if (!task) {
         task = this.create({
           title: "Host work: " + state.id,

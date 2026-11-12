@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { TaskStore, type Task } from "./tasks.ts";
 import { archivable, archiveEnded, restoreArchived } from "./task-archive.ts";
 import { taskArchiveRoute } from "../web/task-archive-routes.ts";
+import type { CurrentWork } from "../agents/work-attention.ts";
 
 const audience = (task: Task) => (task.requester === "agent-a" ? "internal" : "user");
 
@@ -64,5 +65,29 @@ test("from the page: anybody counts, only an admin moves records, and the file i
     assert.match(done.file, /^tasks\.\d{4}-\d{2}\.jsonl$/);
     body = { action: "restore" };
     assert.equal(((await call("POST /api/tasks/archive"))!.body as { restored: number }).restored, 1);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("a chat request that was answered leaves the ledger for the archive once it has been closed a month; it used to stay for good", () => {
+  const home = mkdtempSync(join(tmpdir(), "task-archive-"));
+  try {
+    const store = new TaskStore(join(home, "tasks.jsonl"));
+    const root = (id: string, status: CurrentWork["status"]) => ({ state: { id, owner: "agent-b", conversation: "main", generation: 1, epoch: 0, messages: [id], peers: [], awaiting: [], status } as unknown as CurrentWork, automatic: true as const });
+    const asked = (title: string, id: string, status: CurrentWork["status"], extra: Partial<Parameters<TaskStore["create"]>[0]> = {}) =>
+      store.create({ title, requester: "web:chris", assigneeId: "agent-b", conversation: "main", origin: { kind: "user" }, workRoot: root(id, status), ...extra })!;
+    const answered = asked("what time is it", "w1", "answered"), waiting = asked("migrate the database", "w2", "waiting");
+    store.update(answered.id, { status: "done" }, "agent-b");
+    const closedAt = Date.parse(store.get(answered.id)!.updatedAt);
+    store.relocate([], [], new Date(closedAt + 29 * 86_400_000));
+    assert.ok(store.get(answered.id), "within the month it is still where a redelivered message would find it");
+    const later = new Date(closedAt + 31 * 86_400_000);
+    store.relocate([], [], later);
+    assert.equal(store.get(answered.id), undefined);
+    assert.ok(store.get(waiting.id), "work that is not over stays, however old");
+    const archive = join(home, `tasks.${later.toISOString().slice(0, 7)}.jsonl`);
+    assert.equal(JSON.parse(readFileSync(archive, "utf8").trim()).task.title, "what time is it", "and it went to the archive, whole");
+    // Its root is still in the focus's memory until a restart: saving it must not give it a new record.
+    store.workRoots.save([{ ...answered.workRoot!.state, taskId: answered.id }], []);
+    assert.deepEqual(store.list().map(task => task.title), ["migrate the database"]);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
