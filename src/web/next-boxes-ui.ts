@@ -56,8 +56,8 @@ function renderBoxes(view) {
     list.appendChild(row);
   });
   view.appendChild(list);
-  var more = el("section", "setting"), link = el("a", "act", t("ui.next.settings.openClassic"));
-  link.href = "/?ui=classic";
+  var more = el("section", "setting"), link = el("button", "act", t("ui.next.box.addOpen"));
+  link.addEventListener("click", function () { openEmbed("settings", "boxes"); });
   more.appendChild(el("h2", "group", t("ui.next.box.add")));
   more.appendChild(el("p", "", t("ui.next.box.addNote")));
   more.appendChild(link);

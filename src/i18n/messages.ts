@@ -43,6 +43,7 @@ const UI_WORDS: Record<string, readonly [zh: string, en: string]> = {
   ...UI_NEXT, // the rebuilt page (INV-1825)
   ...UI_SECTIONS,
   ...Object.fromEntries(SETTINGS_PANES.map(pane => [`ui.pane.${pane.key}`, [pane.titleZh, pane.title] as const])),
+  ...Object.fromEntries(SETTINGS_PANES.map(pane => [`ui.pane.${pane.key}.about`, [pane.aboutZh, pane.about] as const])), // what each is for, on the rebuilt page (INV-1825)
   "ui.manualUrl": [MANUAL_URL_ZH, MANUAL_URL],
   "ui.manualUrl.personal-only": [manualPage(PERSONAL_ONLY_PAGE, "zh"), manualPage(PERSONAL_ONLY_PAGE, "en")], // INV-1689
   "ui.docUrl.two-installations": [TWO_INSTALLATIONS_DOC, TWO_INSTALLATIONS_DOC], // INV-1706
