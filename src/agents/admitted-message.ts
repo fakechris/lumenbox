@@ -15,6 +15,10 @@ export interface InboundMessage {
   resumeOf?: ResumeMarker;
   /** Authenticated host identity, frozen at admission; never supplied by an agent tool. */
   principalId?: string;
+  /** How often a person's work interrupted this message's side turn and it was queued again (INV-1824). */
+  redriven?: number;
+  /** Taken on the side lane: a colleague's errand beside a person's waiting work (docs/99 §5). Set by the bus only. */
+  side?: true;
   fromId: string;
   fromName: string;
   text: string;

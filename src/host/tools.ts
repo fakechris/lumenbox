@@ -120,6 +120,8 @@ export interface ToolContext {
   signal?: AbortSignal;
   audit?: import("./audit-context.ts").AuditContext; resultChecks?: import("./result-check-policy.ts").ResultChecks;
   work?: import("../agents/work-attention.ts").WorkStamp; historyConversation?: string;
+  /** A colleague's errand beside a person's waiting work (docs/99 §5): it reads no conversation of its own agent but its own. */
+  side?: boolean;
   progressContext?: import("./task-progress.ts").ProgressContext;
   taskBinding?: import("./execution-binding.ts").TaskBinding;
   agent: AgentRecord;
@@ -4910,6 +4912,7 @@ export async function dispatchTool(
       // reads exactly like a thin one.
       // Each context version apart, so an anchor is (epoch, index) and stays put (INV-1188).
       const thread = typeof input.conversation === "string" ? input.conversation : context.audit ? context.tasks?.get(context.audit.taskId)?.conversation ?? "main" : target.id === context.agent.id ? context.historyConversation ?? context.conversation : context.work?.conversation ?? context.conversation;
+      if (context.side && target.id === context.agent.id && thread !== (context.historyConversation ?? context.conversation)) return { text: "This turn answers a colleague beside a person's request; that request's conversation is not readable from here.", isError: true };
       if (thread !== undefined && !/^[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(thread)) return {text: "Invalid conversation identifier; history stays within the selected agent.", isError: true};
       const parts = context.registry.readContextTranscriptsByEpoch(target.id, thread);
       const query = {
