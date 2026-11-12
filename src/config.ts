@@ -823,7 +823,7 @@ export function saveConfig(
     digests?: Record<string, number | null>;
     startupItem?: boolean | null;
     teamMemoryReview?: boolean | null;
-    personalBoxQuota?: number | null;
+    personalBoxQuota?: number | null; longWork?: AgentboxConfig["longWork"] | null; // the unattended ceiling (INV-1823)
     personBoxQuotas?: Record<string, number | null>;
     departmentBoxQuotas?: Record<string, number | null>;
   }
@@ -866,9 +866,9 @@ export function saveConfig(
     // sandbox and timeout keys an operator wrote by hand (INV-1344).
     else raw.hostExec = { ...(raw.hostExec !== null && typeof raw.hostExec === "object" ? (raw.hostExec as Record<string, unknown>) : {}), ...changes.hostExec };
   }
-  if (changes.personalBoxQuota !== undefined) {
-    if (changes.personalBoxQuota === null) delete raw.personalBoxQuota;
-    else raw.personalBoxQuota = changes.personalBoxQuota;
+  for (const key of ["personalBoxQuota", "longWork"] as const) {
+    if (changes[key] === undefined) continue;
+    if (changes[key] === null) delete raw[key]; else raw[key] = changes[key];
   }
   for (const [field, patch] of [
     ["personBoxQuotas", changes.personBoxQuotas],
