@@ -150,7 +150,7 @@ function refresh() {
   if (next.loading) return Promise.resolve();
   next.loading = true;
   return Promise.all([getJson("/api/state"), getJson("/api/attention"), getJson("/api/tasks/list?records=user&limit=100")]).then(function (got) {
-    next.agents = {};
+    next.agents = {}; member.allTools = got[0].allTools || [];
     (got[0].agents || []).forEach(function (agent) { next.agents[agent.id] = agent; });
     next.mine = got[1].mine || [];
     next.rows = got[2].tasks || [];
@@ -175,6 +175,7 @@ function nextStart() {
   panelStart();
   chatStart();
   screenStart();
+  memberStart();
   refresh();
   // What changes a row or the inbox arrives as an event; the page re-reads rather than patching.
   var events = new EventSource("/api/events");
