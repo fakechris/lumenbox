@@ -184,9 +184,9 @@ function renderPanel() {
   inner.replaceChildren();
   document.querySelectorAll("[data-tab]").forEach(function (button) { button.setAttribute("aria-pressed", String(button.dataset.tab === panel.tab)); });
   inner.appendChild(el("h3", "", task.title));
-  if (panel.tab === "diagnostics") { renderDiagnostics(inner, task); return; }
+  if (panel.tab === "diagnostics") { renderDiagnostics(inner, task); inner.appendChild(gateBlock(task)); return; }
   if (task.description && task.description !== task.title) inner.appendChild(el("p", "asked", task.description));
-  [needBlock(task), resultBlock(task), progressBlock(task), processBlock(), stopBlock(task)].forEach(function (block) { if (block) inner.appendChild(block); });
+  [needBlock(task), resultBlock(task), progressBlock(task), processBlock(), dependsBlock(task), manageBlock(task), stopBlock(task)].forEach(function (block) { if (block) inner.appendChild(block); });
 }
 
 function loadPanel() {
