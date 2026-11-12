@@ -1,12 +1,13 @@
 /**
- * The two rebuilt views (INV-1825): the inbox and the work list.
+ * The two views that cut across agents (INV-1825): everything that needs the person, and all work.
+ * Secondary by design — the main line is the conversation (next-chat-ui.ts) — but one click away.
  *
  * Default level only (docs/99 §6): a state and a reason per row. Anything richer is the panel's.
  * The inbox is `/api/attention`'s `mine`; the work list is `/api/tasks/list?records=user` — the same
  * two reads the classic page makes, shown without the rest.
  */
 export const NEXT_VIEWS_JS = `
-var next = { view: "inbox", layout: "list", agents: {}, mine: [], rows: [], loading: false };
+var next = { view: "chat", layout: "list", agents: {}, mine: [], rows: [], loading: false };
 
 function agentName(id) { return next.agents[id] ? next.agents[id].name : (id || ""); }
 function initial(name) { return (name || "?").trim().slice(0, 1).toUpperCase(); }
@@ -128,13 +129,15 @@ function renderInbox(view) {
 function render() {
   var view = $("view");
   view.replaceChildren();
-  $("view-title").textContent = t("ui.next.nav." + next.view);
-  $("view-hint").textContent = t("ui.next." + next.view + ".hint");
+  document.body.dataset.view = next.view;
+  renderSide();
   $("work-tools").hidden = next.view !== "work";
+  $("composer").hidden = true;
   document.querySelectorAll("[data-nav]").forEach(function (button) { button.setAttribute("aria-current", String(button.dataset.nav === next.view)); });
   document.querySelectorAll("[data-layout]").forEach(function (button) { button.setAttribute("aria-pressed", String(button.dataset.layout === next.layout)); });
-  var badge = $("inbox-badge");
-  badge.hidden = next.mine.length === 0; badge.textContent = String(next.mine.length);
+  if (next.view === "chat") { renderChat(view); return; }
+  $("view-title").textContent = t("ui.next.nav." + next.view);
+  $("view-hint").textContent = t("ui.next." + next.view + ".hint");
   if (next.view === "inbox") renderInbox(view); else renderWork(view);
 }
 
@@ -146,6 +149,8 @@ function refresh() {
     (got[0].agents || []).forEach(function (agent) { next.agents[agent.id] = agent; });
     next.mine = got[1].mine || [];
     next.rows = got[2].tasks || [];
+    // An agent named in the address decides which computer is shown.
+    if (chat.agentId && next.agents[chat.agentId] && !chat.box) chat.box = next.agents[chat.agentId].boxId || "";
     render();
   }, failed).then(function () { next.loading = false; });
 }
@@ -155,7 +160,7 @@ function refreshSoon() { clearTimeout(refreshTimer); refreshTimer = setTimeout(r
 
 function nextStart() {
   document.querySelectorAll("[data-nav]").forEach(function (button) {
-    button.addEventListener("click", function () { next.view = button.dataset.nav; history.replaceState(null, "", "?ui=next&view=" + next.view); render(); });
+    button.addEventListener("click", function () { next.view = button.dataset.nav; document.body.dataset.open = "1"; history.replaceState(null, "", "?ui=next&view=" + next.view); render(); });
   });
   document.querySelectorAll("[data-layout]").forEach(function (button) {
     button.addEventListener("click", function () { next.layout = button.dataset.layout; render(); });
@@ -163,6 +168,7 @@ function nextStart() {
   var asked = new URLSearchParams(location.search).get("view");
   if (asked === "work" || asked === "inbox") next.view = asked;
   panelStart();
+  chatStart();
   refresh();
   // What changes a row or the inbox arrives as an event; the page re-reads rather than patching.
   var events = new EventSource("/api/events");
@@ -171,6 +177,8 @@ function nextStart() {
     var kind = event && event.type;
     if (kind === "task_changed" || kind === "approval_pending" || kind === "approval_settled" || kind === "question" || kind === "turn_finished" || kind === "turn_failed" || kind === "reset") refreshSoon();
     if ((kind === "task_changed" || kind === "task_execution") && event.taskId) panelChanged(event.taskId);
+    if (kind === "turn_started" || kind === "turn_finished" || kind === "turn_failed") { var who = next.agents[event.agentId]; if (who) who.running = kind === "turn_started"; }
+    chatEvent(event);
   };
 }
 `;

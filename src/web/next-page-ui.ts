@@ -1,6 +1,8 @@
 /**
- * The rebuilt page (INV-1825, docs/99 §6): a narrow rail, an inbox that is the only place asking for
- * a person's attention, work one row each, and a panel that opens on demand.
+ * The rebuilt page (INV-1825, docs/99 §6). Its main line is what a person remembers: which agent, on
+ * which computer, they talked to. So it opens on the agents and the conversation with one of them;
+ * that agent's work sits pinned in its conversation. What cuts across agents — everything that needs
+ * the person, all work — is one click away and never the landing.
  *
  * It reads the endpoints the classic page reads and writes nothing new: no storage changed for it,
  * so `/?ui=next` and `/` can be switched between at will. What is not rebuilt yet links to the
@@ -9,6 +11,7 @@
 import { NEXT_LOGIC_JS } from "./next-logic-ui.ts";
 import { NEXT_VIEWS_JS } from "./next-views-ui.ts";
 import { NEXT_PANEL_JS } from "./next-panel-ui.ts";
+import { NEXT_CHAT_JS } from "./next-chat-ui.ts";
 
 const STYLE = `
 :root {
@@ -23,13 +26,25 @@ body { font: 14px/1.5 "IBM Plex Sans", "PingFang SC", system-ui, sans-serif; col
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
 a { color: inherit; }
 [hidden] { display: none !important; }
-.rail { width: 64px; flex: none; background: var(--rail); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; padding: 12px 0; gap: 4px; }
-.rail .logo { width: 30px; height: 30px; border-radius: 8px; background: var(--text); color: var(--bg); display: grid; place-items: center; font-weight: 700; margin-bottom: 12px; }
-.rail button, .rail a { width: 52px; padding: 7px 0 5px; border-radius: 10px; font-size: 11px; color: var(--muted); display: flex; flex-direction: column; align-items: center; gap: 2px; position: relative; text-decoration: none; }
-.rail svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-.rail [aria-current="true"] { background: var(--surface); color: var(--text); box-shadow: 0 0 0 1px var(--border); }
-.rail .badge { position: absolute; top: 2px; right: 8px; min-width: 16px; height: 16px; border-radius: 8px; background: var(--accent); color: #fff; font-size: 10px; line-height: 16px; padding: 0 4px; }
-.rail .spacer { flex: 1; }
+.side { width: 248px; flex: none; background: var(--rail); border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 14px 10px; gap: 6px; min-height: 0; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; padding: 0 6px 8px; }
+.brand .logo { width: 26px; height: 26px; border-radius: 7px; background: var(--text); color: var(--bg); display: grid; place-items: center; font-weight: 700; font-size: 13px; }
+.boxes { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 2px 6px; }
+.boxes button { padding: 3px 10px; border-radius: 999px; font-size: 12px; color: var(--muted); border: 1px solid transparent; }
+.boxes button[aria-pressed="true"] { background: var(--surface); color: var(--text); border-color: var(--border); }
+.needs { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border-radius: 10px; background: var(--warn-soft); color: var(--warn); font-size: 13px; font-weight: 500; }
+.side h2.group { margin: 10px 8px 4px; }
+.agents { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
+.agent { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 10px; text-align: left; width: 100%; }
+.agent:hover { background: rgba(31,26,23,.04); }
+.agent[aria-current="true"] { background: var(--surface); box-shadow: 0 0 0 1px var(--border); }
+.agent .body { line-height: 1.3; }
+.agent .role { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--blue); flex: none; }
+.count { min-width: 18px; height: 18px; border-radius: 9px; background: var(--accent); color: #fff; font-size: 11px; line-height: 18px; text-align: center; padding: 0 5px; flex: none; }
+.side-links { display: flex; flex-direction: column; gap: 2px; border-top: 1px solid var(--border); padding-top: 8px; }
+.side-links button, .side-links a { padding: 7px 10px; border-radius: 8px; font-size: 13px; color: var(--soft); text-align: left; text-decoration: none; }
+.side-links [aria-current="true"] { background: var(--surface); box-shadow: 0 0 0 1px var(--border); }
 main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 header.bar { min-height: 52px; display: flex; align-items: center; gap: 12px; padding: 0 24px; border-bottom: 1px solid var(--border); flex: none; }
 header.bar h1 { font-size: 16px; font-weight: 600; margin: 0; }
@@ -52,7 +67,8 @@ h2.group:first-child { margin-top: 0; }
 .meter { height: 3px; border-radius: 2px; background: var(--border); margin-top: 6px; max-width: 260px; }
 .meter i { display: block; height: 100%; border-radius: 2px; background: var(--blue); }
 .chip { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 999px; font-size: 12px; background: var(--rail); color: var(--soft); flex: none; }
-.chip.need { background: var(--warn-soft); color: var(--warn); }
+.chip.need, .chip-need { background: var(--warn-soft); color: var(--warn); }
+.chip-need { display: inline-flex; padding: 2px 8px; border-radius: 999px; font-size: 11px; flex: none; }
 .chip.run { background: var(--blue-soft); color: var(--blue); }
 .chip.done { background: var(--ok-soft); color: var(--ok); }
 .chip.stuck { background: var(--bad-soft); color: var(--bad); }
@@ -68,6 +84,25 @@ h2.group:first-child { margin-top: 0; }
 .card .title { white-space: normal; margin: 6px 0 2px; }
 .card .why { white-space: normal; }
 .card .foot { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--muted); font-size: 12px; }
+.thread { max-width: 780px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px; }
+.pin { display: flex; align-items: center; gap: 12px; padding: 9px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); width: 100%; text-align: left; }
+.msg, .msg-me { max-width: 82%; padding: 9px 14px; border-radius: 14px; background: var(--surface); border: 1px solid var(--border); overflow-wrap: anywhere; align-self: flex-start; }
+.msg-me { align-self: flex-end; background: var(--text); color: var(--bg); border-color: var(--text); white-space: pre-wrap; }
+.msg p { margin: 0 0 8px; } .msg p:last-child { margin-bottom: 0; }
+.msg pre { background: var(--bg); padding: 8px 10px; border-radius: 8px; overflow: auto; font-size: 12.5px; }
+.msg code { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12.5px; }
+.msg table { border-collapse: collapse; } .msg td, .msg th { border: 1px solid var(--border); padding: 3px 8px; }
+.aside { color: var(--muted); font-size: 13px; align-self: flex-start; max-width: 82%; overflow-wrap: anywhere; }
+.fold { color: var(--muted); font-size: 13px; align-self: flex-start; max-width: 100%; }
+.fold summary { cursor: pointer; }
+.fold ul { list-style: none; margin: 6px 0 0; padding: 0 0 0 14px; border-left: 2px solid var(--border); }
+.fold li { padding: 2px 0; overflow-wrap: anywhere; }
+.fold li.bad { color: var(--bad); }
+.fold b { color: var(--soft); font-weight: 500; }
+.livebar { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; align-self: flex-start; }
+.composer { flex: none; padding: 10px 24px 16px; }
+.composer form { max-width: 780px; margin: 0 auto; display: flex; gap: 8px; align-items: flex-end; }
+.composer textarea { flex: 1; min-height: 44px; max-height: 180px; resize: none; padding: 11px 14px; border-radius: 12px; border: 1px solid var(--border-strong); background: var(--surface); font: inherit; }
 .scrim { position: fixed; inset: 0; background: rgba(31,26,23,.18); }
 .panel { position: fixed; top: 12px; right: 12px; bottom: 12px; width: min(600px, calc(100vw - 24px)); background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 18px 50px rgba(31,26,23,.16); display: flex; flex-direction: column; }
 .panel > header { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
@@ -93,29 +128,21 @@ h2.group:first-child { margin-top: 0; }
 .steps .flag.bad { color: var(--bad); }
 .foot-links { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--border); font-size: 13px; color: var(--muted); }
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 10px; font-size: 13px; max-width: 80vw; }
-@media (max-width: 640px) {
-  body { flex-direction: column-reverse; }
-  .rail { width: 100%; flex-direction: row; justify-content: space-around; border-right: 0; border-top: 1px solid var(--border); padding: 6px 0; }
-  .rail .logo, .rail .spacer { display: none; }
-  header.bar { padding: 8px 14px; flex-wrap: wrap; } .view { padding: 14px; }
+@media (max-width: 720px) {
+  body { flex-direction: column; }
+  .side { width: 100%; max-height: 42vh; border-right: 0; border-bottom: 1px solid var(--border); }
+  body[data-view="chat"] .side { max-height: none; flex: 1; }
+  body[data-view="chat"][data-open="1"] .side { display: none; }
+  body[data-view="chat"]:not([data-open="1"]) main { display: none; }
+  body:not([data-view="chat"]) .agents, body:not([data-view="chat"]) .side h2.group, body:not([data-view="chat"]) .boxes { display: none; }
+  header.bar { padding: 8px 14px; flex-wrap: wrap; } .view { padding: 14px; } .composer { padding: 8px 14px 12px; }
   .row { flex-wrap: wrap; } .when { display: none; }
   .board { grid-template-columns: 1fr; }
   .panel { inset: 0; width: auto; border-radius: 0; }
+  .back { display: inline-flex !important; }
 }
+.back { display: none; padding: 4px 8px; border-radius: 8px; color: var(--muted); }
 `;
-
-const ICON: Record<string, string> = {
-  inbox: `<path d="M4 13l2.5-8h11L20 13v6H4z"/><path d="M4 13h5l1 2h4l1-2h5"/>`,
-  work: `<rect x="5" y="4" width="14" height="16" rx="2"/><path d="M9 9h6M9 13h6M9 17h3"/>`,
-  chat: `<path d="M5 5h14v11H10l-5 4z"/>`,
-  team: `<circle cx="9" cy="9" r="3"/><circle cx="17" cy="10" r="2.2"/><path d="M3.5 19c.6-3 2.8-4.5 5.5-4.5s4.9 1.5 5.5 4.5"/>`,
-  auto: `<path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v5h-5"/>`,
-  settings: `<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/>`,
-};
-const icon = (name: string): string => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICON[name]}</svg>`;
-/** Rebuilt here; the rest open the classic page until they are. */
-const navButton = (name: string): string => `<button data-nav="${name}">${icon(name)}{{ui.next.nav.${name}}}${name === "inbox" ? `<span class="badge" id="inbox-badge" hidden></span>` : ""}</button>`;
-const navLink = (name: string, href: string): string => `<a href="${href}" title="{{ui.next.soon}}">${icon(name)}{{ui.next.nav.${name}}}</a>`;
 
 export const NEXT_HTML = `<!doctype html>
 <html lang="{{@lang}}">
@@ -124,21 +151,24 @@ export const NEXT_HTML = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ui.next.title}}</title>
 <link rel="icon" href="data:,">
+<script src="/vendor/markdown-it.js"></script>
 <style>${STYLE}</style>
 </head>
 <body>
-<nav class="rail" aria-label="{{ui.next.nav.label}}">
-  <div class="logo" aria-hidden="true">L</div>
-  ${navButton("inbox")}
-  ${navButton("work")}
-  ${navLink("chat", "/")}
-  ${navLink("team", "/")}
-  ${navLink("auto", "/")}
-  <div class="spacer"></div>
-  ${navLink("settings", "/")}
+<nav class="side" aria-label="{{ui.next.nav.label}}">
+  <div class="brand"><span class="logo" aria-hidden="true">L</span>{{ui.next.title}}</div>
+  <div class="boxes" id="boxes" aria-label="{{ui.next.side.boxes}}"></div>
+  <button class="needs" id="needs" data-nav="inbox" hidden></button>
+  <h2 class="group">{{ui.next.side.label}}</h2>
+  <div class="agents" id="agents"></div>
+  <div class="side-links">
+    <button data-nav="work">{{ui.next.side.work}}</button>
+    <a href="/?ui=classic">{{ui.next.side.classic}}</a>
+  </div>
 </nav>
 <main>
   <header class="bar">
+    <button class="back" id="back" aria-label="{{ui.next.side.label}}">‹</button>
     <h1 id="view-title"></h1><span class="hint" id="view-hint"></span>
     <div class="tools" id="work-tools" hidden>
       <button class="seg" data-layout="list" aria-pressed="true">{{ui.next.view.list}}</button>
@@ -146,6 +176,9 @@ export const NEXT_HTML = `<!doctype html>
     </div>
   </header>
   <section class="view" id="view"></section>
+  <div class="composer" id="composer" hidden>
+    <form id="composer-form"><textarea id="composer-text" rows="1"></textarea><button class="act-primary" id="composer-send" type="submit">{{ui.next.act.send}}</button></form>
+  </div>
 </main>
 <div class="scrim" id="scrim" hidden></div>
 <aside class="panel" id="panel" aria-label="{{ui.next.panel.label}}" hidden>
@@ -184,6 +217,7 @@ function toast(text) {
 function failed(error) { toast(t("ui.next.failed", { error: error && error.message ? error.message : String(error) })); }
 ${NEXT_LOGIC_JS}
 ${NEXT_VIEWS_JS}
+${NEXT_CHAT_JS}
 ${NEXT_PANEL_JS}
 nextStart();
 </script>

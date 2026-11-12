@@ -17,8 +17,8 @@ test("the page fills in both languages, and its script parses", () => {
     const script = /<script>([\s\S]*)<\/script>/.exec(page)![1]!;
     assert.doesNotThrow(() => new vm.Script(script), "the page script is valid JavaScript");
   }
-  assert.match(NEXT_PAGE("zh"), /收件/);
-  assert.match(NEXT_PAGE("en"), /Inbox/);
+  assert.match(NEXT_PAGE("zh"), /全部工作/);
+  assert.match(NEXT_PAGE("en"), /All work/);
 });
 
 test("every element the script looks up by id is in the markup", () => {
