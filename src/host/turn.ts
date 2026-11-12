@@ -18,7 +18,7 @@ import { observeExecution, observedReplay } from "./execution-observer.ts";
 
 import type { TurnEvent } from "./turn-events.ts";
 export type { TurnEvent } from "./turn-events.ts";
-import { needsFreshObservation } from "./tool-freshness.ts";
+import { actsOnTheBox, needsFreshObservation } from "./tool-freshness.ts";
 import { reserveFailedModelSpend } from "./failed-model-spend.ts";
 import { ModelRetries } from "./model-retries.ts";
 import { watchModelStream, waitForRetry } from "./model-stream.ts";
@@ -3471,7 +3471,7 @@ ${outcome.text}`;
       // what the record keeps are two different things, and the block that goes to the
       // model must not carry the substitute anywhere it could be mistaken for the answer.
       return {
-        block: (() => { const block = toolResultBlock(toolUse.id, outcome); budget.ran(toolUse.name, toolUse.input ?? {}, block.content); return block; })(),
+        block: (() => { const block = toolResultBlock(toolUse.id, outcome); budget.ran(toolUse.name, toolUse.input ?? {}, block.content, !outcome.isError && actsOnTheBox(toolUse.name)); return block; })(),
         ...(outcome.recordAs !== undefined ? { recordAs: outcome.recordAs } : {}),
         ...(outcome.commit !== undefined ? { commit: outcome.commit } : {}),
       };

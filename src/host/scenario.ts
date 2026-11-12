@@ -130,7 +130,7 @@ export interface EpisodeResult {
 }
 
 /** A box that keeps its files in a Map, so a scenario can assert on what landed. */
-function memoryBox(files: Map<string, string>, overrides: Partial<BoxClient> = {}): BoxClient {
+function memoryBox(files: Map<string, string>, overrides: Partial<BoxClient> = {}, wrote?: (path: string, content: string) => void): BoxClient {
   const box = {
     ...overrides,
     exec: async (command: string) => {
@@ -157,6 +157,7 @@ function memoryBox(files: Map<string, string>, overrides: Partial<BoxClient> = {
     },
     writeFile: async (path: string, content: string) => {
       files.set(path, content);
+      wrote?.(path, content); // after the write has landed: throwing here is an acknowledgement that never arrived
       return { path, bytes: content.length };
     },
     readFile: async (path: string) => {
@@ -361,6 +362,8 @@ export interface EpisodeOptions {
    * say. Everything not given keeps the memory box's behaviour.
    */
   box?: Partial<BoxClient>;
+  /** Called after each file write has landed in the memory box; throwing models a write whose acknowledgement was lost (INV-1823). */
+  wrote?: (path: string, content: string) => void;
   /** A desktop index, so browser tools are offered and reach the scripted box rather than refusing for want of a display. */
   display?: number;
   /** A credential vault, so `browser_fill_secret` and host secrets resolve (INV-1309). */
@@ -400,7 +403,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
   const home = mkdtempSync(join(tmpdir(), "agentbox-scenario-"));
   const registry = new AgentRegistry(home);
   const files = new Map<string, string>(Object.entries(options.files ?? {}));
-  const box = memoryBox(files, options.box ?? {});
+  const box = memoryBox(files, options.box ?? {}, options.wrote);
   // The real mirror over the memory box, so the standing files (INV-777) land where the tools
   // and the prompt expect them, exactly as the orchestrator syncs them.
   const mirror = new MemoryMirror({ registry, box: () => box });

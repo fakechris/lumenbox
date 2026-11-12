@@ -299,6 +299,13 @@ export const STREAM_IDLE_DEADLINE_MS = envNumber("AGENTBOX_STREAM_IDLE_DEADLINE_
 export const MAX_TURN_RETRIES = envNumber("AGENTBOX_MAX_TURN_RETRIES", 12);
 /** Shared by Goal slices and resumptions carrying the same work ID. */
 export const MAX_WORK_RETRIES = envNumber("AGENTBOX_MAX_WORK_RETRIES", 120);
+/**
+ * The span the work allowance is counted over (INV-1823). It was counted over the work's whole life, so
+ * a goal that ran for days used it up and was then paused by the next blip, for ever: a bound on a
+ * retry storm had become a lifetime ration. A storm is many retries close together; over a day they
+ * are weather.
+ */
+export const WORK_RETRY_WINDOW_MS = envNumber("AGENTBOX_WORK_RETRY_WINDOW_MS", 24 * 3_600_000);
 
 /** The most of a server's `retry-after` to honour, so a bad header cannot stall a turn for an hour. */
 export const MAX_RETRY_AFTER_MS = 30_000;

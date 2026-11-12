@@ -14,3 +14,14 @@ export function needsFreshObservation(name: string, input: Record<string, unknow
   if (name === "connector_request") return idempotencyOfHttp(String(input.method ?? "GET")).kind === "read";
   return idempotencyOfAnnotations(external.find(tool => tool.name === name)?.annotations)?.kind === "read";
 }
+
+/**
+ * The calls after which the same script, the same check, the same page is worth running again:
+ * the ones that change the box or what a browser shows. Keeping a plan or a note is not one, or
+ * an agent alternating an action with a note would never meet the repeat limit (INV-1823).
+ */
+const BOX_ACTS = new Set(["bash", "edit_file", "write_file", "computer", "browser_open", "browser_act", "browser_upload"]);
+
+export function actsOnTheBox(name: string): boolean {
+  return BOX_ACTS.has(name);
+}
