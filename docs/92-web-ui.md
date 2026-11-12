@@ -168,7 +168,8 @@ one. [docs/99](99-user-work.md) §6 owns *what* a person is shown; this owns how
 
 **The main line is a person's conversation with a named agent.** People remember whom they asked.
 The page opens on the computers, the agents on the one selected, and the conversation with one of
-them. That agent's unfinished work is pinned at the top of its conversation. What cuts across
+them. That agent's unfinished work is pinned at the top of its conversation, and a result it
+delivered is a card at the end of it, decided there. What cuts across
 agents — everything that needs the person, all work — is one click away in the side column and is
 never the landing. A first slice that opened on an inbox and a work list was wrong, and was seen to
 be wrong on real data within the day.
@@ -202,4 +203,7 @@ removed pane by pane, never extended.
 **Checking.** `next-page-ui.test.ts` fills the page in both languages, parses every inline script, and
 checks that every looked-up id exists; a function with a regular expression or a wire format in it is
 run from the page's own source. Before a change to the page ships, it is looked at in a browser on an
-isolated fixture, wide and narrow, light and dark.
+isolated fixture, wide and narrow, light and dark. `scripts/ui-next-layout.mjs` (part of
+`npm run test:layout`, so of CI) holds the geometry in both languages at both widths: nothing wider
+than the window, the result card and the composer in their column, card buttons not overlapping or
+cut, the work panel on screen, a way back on a narrow screen.
