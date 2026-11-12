@@ -87,7 +87,8 @@ a { color: inherit; }
 .side-links { display: flex; flex-direction: column; gap: 2px; border-top: 1px solid var(--border); padding-top: 8px; }
 .side-links button, .side-links a { padding: 7px 10px; border-radius: 8px; font-size: 13px; color: var(--soft); text-align: left; text-decoration: none; }
 .side-foot { display: flex; align-items: center; gap: 2px; }
-.side-foot a { margin-left: auto; font-size: 12px; color: var(--muted); }
+.side-foot a { margin-left: auto; font-size: 12px; color: var(--muted); text-align: right; }
+.side-foot button { white-space: nowrap; flex: none; }
 .side-links [aria-current="true"] { background: var(--surface); box-shadow: 0 0 0 1px var(--border); }
 main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 header.bar { min-height: 52px; display: flex; align-items: center; gap: 12px; padding: 0 24px; border-bottom: 1px solid var(--border); flex: none; }

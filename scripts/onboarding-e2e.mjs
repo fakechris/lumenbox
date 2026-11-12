@@ -58,6 +58,7 @@ export function parseArgs(argv) {
       case "--cdp-port": out.cdpPort = Number(next()); break;
       case "--run-dir": out.runDir = next(); break;
       case "--dmg": out.dmg = next(); break;
+      case "--sums": out.sums = next(); break;
       case "--box-timeout-min": out.boxTimeoutMin = Number(next()); break;
       case "--reply-timeout-min": out.replyTimeoutMin = Number(next()); break;
       case "--cleanup": out.cleanup = next(); break;
@@ -264,6 +265,28 @@ class App {
     throw new Error(`timed out waiting for ${what}${last ? ` (last: ${last.message})` : ""}`);
   }
 
+  /**
+   * A new machine is first asked what it is for (the shell's own page, before any server runs). A
+   * person setting up their own computer picks "personal" and continues; so does this.
+   */
+  async firstRun() {
+    const target = await this.waitFor("the first window", async () => {
+      const list = await (await fetch(`http://127.0.0.1:${this.run.options.cdpPort}/json`)).json();
+      return list.find(t => t.type === "page" && (t.url.startsWith("data:text/html") || t.url.startsWith(`http://127.0.0.1:${this.run.options.port}`)));
+    }, 120_000);
+    if (!target.url.startsWith("data:text/html")) return "no question asked";
+    const ws = new WebSocket(target.webSocketDebuggerUrl);
+    await new Promise((ok, fail) => { ws.addEventListener("open", ok); ws.addEventListener("error", fail); });
+    const expression = "(function(){ var r = document.querySelector('input[name=use][value=personal]'); if (!r) return 'no personal choice on the page'; r.checked = true; document.getElementById('go').click(); return 'personal chosen'; })()";
+    const answer = await new Promise(done => {
+      ws.addEventListener("message", event => { const message = JSON.parse(event.data); if (message.id === 1) done(message.result?.result?.value); });
+      ws.send(JSON.stringify({ id: 1, method: "Runtime.evaluate", params: { expression, returnByValue: true } }));
+    });
+    ws.close();
+    if (answer !== "personal chosen") throw new Error(`the first-run question could not be answered: ${answer}`);
+    return answer;
+  }
+
   async connect() {
     const targets = await this.waitFor("the app window", async () => {
       const list = await (await fetch(`http://127.0.0.1:${this.run.options.cdpPort}/json`)).json();
@@ -350,7 +373,9 @@ async function fetchArtifacts(run) {
   const dmg = options.dmg ? resolve(options.dmg) : join(run.dir, dmgName(options.version, arch));
   await run.step("download", async () => {
     const base = `https://github.com/${REPO}/releases/download/v${options.version}`;
-    sh("curl", ["-fsSL", "--retry", "3", "-o", join(run.dir, "SHA256SUMS"), `${base}/SHA256SUMS`]);
+    // Before publishing there are no published sums: --sums FILE checks a candidate DMG against the ones about to be published.
+    if (options.sums) writeFileSync(join(run.dir, "SHA256SUMS"), readFileSync(resolve(options.sums)));
+    else sh("curl", ["-fsSL", "--retry", "3", "-o", join(run.dir, "SHA256SUMS"), `${base}/SHA256SUMS`]);
     if (!options.dmg) sh("curl", ["-fsSL", "--retry", "3", "-o", dmg, `${base}/${dmgName(options.version, arch)}`], { timeout: 1_800_000 });
     const want = expectedDigest(readFileSync(join(run.dir, "SHA256SUMS"), "utf8"), dmgName(options.version, arch));
     if (want === undefined) throw new Error(`SHA256SUMS does not list ${dmgName(options.version, arch)}`);
@@ -391,6 +416,7 @@ async function phaseNoDocker(run) {
   try {
     app.start();
     await run.step("nodocker: app starts", async () => {
+      await app.firstRun();
       await app.waitFor("the server", async () => (await app.api("/api/setup")) !== undefined, 120_000);
       await app.connect();
       await app.shot("01-first-launch");
@@ -416,6 +442,7 @@ async function phaseFull(run) {
   try {
     app.start();
     if (!(await run.step("full: first launch shows the set-up card", async () => {
+      await app.firstRun();
       await app.waitFor("the server", async () => (await app.api("/api/setup")) !== undefined, 120_000);
       await app.connect();
       const setup = await app.api("/api/setup");
