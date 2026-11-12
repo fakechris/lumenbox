@@ -190,3 +190,19 @@ test("a configuration version is said by what it changed, and a restored one by 
   assert.equal(versionLine({ n: 1, changes: [] }), "ui.next.config.first");
   assert.equal(versionLine({ n: 4, restoredFrom: 2, changes: [{ field: "model" }] }), "ui.next.config.backTo2 · model");
 });
+
+test("a tool is allowed, asked about or off; a floor removes the choices below it, and a save sends only what differs from the group", () => {
+  const toolStateOf = pageFunction("toolStateOf", {}), toolsSaved = pageFunction("toolsSaved", {});
+  const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
+  const perms = { groups: { web: "ask" }, tools: { bash: "ask" } }, floors = { browser_upload: { effect: "ask" }, RunOnHost: { effect: "deny" } }, never = ["AskUser"];
+  const state = (name: string, group: string, tools: string[] | null) => plain(toolStateOf(name, group, tools, perms, floors, never)) as { value: string; choices: string[]; inherited: string };
+  assert.deepEqual([state("bash", "code", null).value, state("WebFetch", "web", null).value, state("read_file", "code", null).value], ["ask", "ask", "allow"], "its own setting, its group's, the default");
+  assert.equal(state("read_file", "code", ["bash"]).value, "off", "left out of the agent's list");
+  assert.deepEqual(state("browser_upload", "web", null).choices, ["ask", "off"], "the organisation's floor cannot be gone below");
+  const forced = plain(toolStateOf("RunOperation", "other", null, perms, { RunOperation: { effect: "ask" } }, never)) as { inherited: string };
+  assert.equal(forced.inherited, "ask", "and what it forces is not saved as the agent's own choice");
+  assert.deepEqual(state("RunOnHost", "other", null).choices, ["off"]);
+  assert.deepEqual(state("AskUser", "team", null).choices, ["allow", "off"], "asking before asking is not a choice");
+  const rows = [{ name: "bash", group: "code", value: "allow", inherited: "allow" }, { name: "WebFetch", group: "web", value: "ask", inherited: "ask" }, { name: "edit_file", group: "code", value: "ask", inherited: "allow" }, { name: "computer", group: "desk", value: "off", inherited: "allow" }];
+  assert.deepEqual(plain(toolsSaved(rows, ["bash", "ext__tool"], perms)), { tools: ["bash", "WebFetch", "edit_file", "ext__tool"], toolPermissions: { groups: { web: "ask" }, tools: { edit_file: "ask" } } }, "a tool the page does not list is kept");
+});

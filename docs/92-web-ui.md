@@ -207,7 +207,9 @@ total that is only a floor says so.
 **An agent's page holds its whole configuration.** Name, role and persona first; in folds, read when
 opened: the model it runs on and the teams it is in, the files it reads every turn (one shown at a
 time, saved on its own), and every saved version of its configuration, any of which can be gone back
-to.
+to. Each tool is allowed, asked about first, or off, by group; a floor the organisation set shows as
+the choice that is missing. The agent can be asked to draft a template of itself, which a person
+downloads, publishes or takes down.
 
 **Three levels, everywhere.**
 
@@ -233,9 +235,8 @@ wrong" is only said when the server said it.
 `next-logic-ui.ts` holds the few decisions the page makes, as plain functions shipped as their own
 source so the test runs what the page runs. Every word comes from `src/i18n/ui-next.ts`. The classic
 page's settings dialogs are shown in a frame (`embed-ui.ts`) until each is rebuilt; that bridge is
-removed pane by pane. It was extended once, to an agent's whole configuration (model, standing
-instructions, what it must ask before using, earlier versions), so that using this page takes
-nothing away; a new surface is built here, not bridged.
+removed pane by pane; a new surface is built here, not bridged. An agent's configuration was
+bridged for a day and is native now.
 
 **Checking.** `next-page-ui.test.ts` fills the page in both languages, parses every inline script, and
 checks that every looked-up id exists; a function with a regular expression or a wire format in it is
