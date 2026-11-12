@@ -175,6 +175,9 @@ Each stage is independently shippable and leaves the suite green.
    - **Left: one stored field.** A lifecycle module owns execution state for goals and ordinary
      work alike, the pursuit's and the root's statuses become that one field, and `WorkAttention`
      keeps only the focus. This changes what is stored, so it lands with stage 4's migration.
+   - **Done: ended internal records can be archived.** An admin moves them, from the system view,
+     to the month's archive beside the ledger (`task-archive.ts`): appended and checked on disk
+     before anything leaves the board, and put back with one press. Nothing is deleted.
 4. **Requests leave the board.** Promotion (§2) replaces create-then-hide. Existing records are
    migrated where the source message can be verified and left unresolved, non-executable and off
    the default lists where it cannot.

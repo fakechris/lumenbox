@@ -4,7 +4,7 @@
  * so it is one click into Settings and never on a default surface.
  */
 export const NEXT_SYSTEM_JS = `
-var system = { state: null, exceptions: null, history: null, failed: false, loading: false };
+var system = { state: null, exceptions: null, history: null, archive: null, archived: null, failed: false, loading: false };
 
 function loadSystem() {
   if (system.loading) return;
@@ -14,12 +14,13 @@ function loadSystem() {
     getJson("/api/state").catch(none),
     getJson("/api/exceptions").catch(none),
     getJson("/api/tasks/list?records=internal&limit=1").catch(none),
+    getJson("/api/tasks/archive").catch(none),
   ]).then(function (got) {
     system.loading = false;
     // A read that failed is kept as "not known", never shown as an empty, healthy answer.
     system.failed = got[0] === null;
     if (got[0] !== null) system.state = got[0];
-    system.exceptions = got[1]; system.history = got[2];
+    system.exceptions = got[1]; system.history = got[2]; system.archive = got[3];
     if (next.view === "system") render();
   });
 }
@@ -81,6 +82,31 @@ function renderSystem(view) {
   var kept = el("section", "setting"), total = (system.history && system.history.total) || 0;
   kept.appendChild(el("h2", "group", t("ui.next.system.history")));
   kept.appendChild(el("p", "", system.history === null ? t("ui.next.system.unreadable") : t("ui.next.system.historyNote", { n: total })));
+  var ended = (system.archive && system.archive.ended) || 0;
+  if (ended > 0 || system.archived) kept.appendChild(archiveActs(ended));
   view.appendChild(kept);
+}
+
+/** Ended internal records go to an archive file, not away: asked twice, and undone with one press. */
+function archiveActs(ended) {
+  var acts = el("div", "acts"), move = function (action, done) {
+    acts.querySelectorAll("button").forEach(function (other) { other.disabled = true; });
+    postJson("/api/tasks/archive", { action: action }).then(function (got) { system.archived = action === "archive" ? got : null; toast(done(got)); loadSystem(); }, function (error) { failed(error); loadSystem(); });
+  };
+  if (ended > 0) {
+    var ask = el("button", "act", t("ui.next.system.archive", { n: ended }));
+    ask.addEventListener("click", function () {
+      var sure = el("button", "act-danger", t("ui.next.system.archiveSure", { n: ended }));
+      sure.addEventListener("click", function () { move("archive", function (got) { return t("ui.next.system.archived", { n: got.archived, file: got.file || "" }); }); });
+      acts.replaceChildren(sure);
+    });
+    acts.appendChild(ask);
+  }
+  if (system.archived) {
+    var undo = el("button", "act", t("ui.next.system.restore", { n: system.archived.archived }));
+    undo.addEventListener("click", function () { move("restore", function (got) { return t("ui.next.system.restored", { n: got.restored }); }); });
+    acts.appendChild(undo);
+  }
+  return acts;
 }
 `;

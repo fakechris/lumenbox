@@ -1022,6 +1022,7 @@ export class TaskStore {
    * retention window. The counter marker goes first, so an id from a dropped task is
    * never reused — "t12" must mean one thing forever.
    */
+  relocate(leave: readonly string[], back: readonly Task[] = [], now = new Date()): void { for (const id of leave) this.tasks.delete(id); for (const task of back) this.tasks.set(task.id, task); this.compact(now, true); } // task-archive.ts
   private compact(now: Date, durable = false): void {
     if (this.path === null) return;
     try {
@@ -1034,8 +1035,7 @@ export class TaskStore {
       this.checkpointBytes = statSync(this.path).size;
     } catch (error) {
       if (durable) throw error;
-      const detail = error instanceof Error ? error.message : String(error);
-      this.onWarn(`tasks: cannot compact ${this.path} (${detail})`);
+      this.onWarn(`tasks: cannot compact ${this.path} (${error instanceof Error ? error.message : String(error)})`);
     }
   }
 }
