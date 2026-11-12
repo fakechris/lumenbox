@@ -83,6 +83,7 @@ function renderSystem(view) {
   view.appendChild(wrong);
 
   view.appendChild(activityBlock());
+  view.appendChild(manageBlock2());
 
   var kept = el("section", "setting"), total = (system.history && system.history.total) || 0;
   kept.appendChild(el("h2", "group", t("ui.next.system.history")));
