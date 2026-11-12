@@ -151,3 +151,16 @@ test("a draft waiting to be sent and a proposal to close are decided on their in
   assert.deepEqual(JSON.parse(JSON.stringify(posted)), [["/api/outbox/decide", { id: "r1", decision: "approve" }], ["/api/tasks/oppose-close", { id: "r1" }]]);
   assert.equal(buttons("review").length, 0, "a row with nothing to decide on it has no buttons");
 });
+
+test("a conversation exported is what was said, by whom, in order; steps and asides stay behind", () => {
+  const threadMarkdown = pageFunction("threadMarkdown", {});
+  const entries = [
+    { kind: "text", role: "user", text: "Summarise October.", at: "2026-11-02T09:15:00Z" },
+    { kind: "tools", tools: [{ name: "read_file" }] },
+    { kind: "text", role: "assistant", aside: true, text: "reading the tickets" },
+    { kind: "text", role: "assistant", text: "Five themes.\n\n- login\n" },
+  ];
+  assert.equal(threadMarkdown(entries, "Mia", "You"), "## You · 2026-11-02 09:15\n\nSummarise October.\n\n## Mia\n\nFive themes.\n\n- login\n");
+  const threadFinds = pageFunction("threadFinds", {});
+  assert.deepEqual(entries.map(entry => threadFinds(entry, "the")), [false, false, false, true], "found in what was said, whatever its case; never in a step or an aside");
+});
