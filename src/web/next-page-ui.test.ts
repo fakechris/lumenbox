@@ -109,3 +109,25 @@ test("a press on an agent's card is the line the server parses it from", async (
     assert.deepEqual(parseActionText(line), { name: "confirm", surfaceId: "installation", context: { n: 1 } }, locale);
   }
 });
+
+test("a delivered result is decided where the person was talking: Accept closes it, and a long file list is cut", async () => {
+  interface Fake { cls: string; text: string; kids: Fake[]; dataset: Record<string, string>; href?: string; press?: () => void; appendChild(kid: Fake): void; addEventListener(name: string, run: () => void): void }
+  const el = (_tag: string, cls = "", text = ""): Fake => {
+    const node: Fake = { cls, text, kids: [], dataset: {}, appendChild(kid) { node.kids.push(kid); }, addEventListener(_name, run) { node.press = run; } };
+    return node;
+  };
+  const posted: unknown[] = [], opened: string[] = [];
+  const files = [1, 2, 3, 4, 5, 6].map(n => ({ id: `f${n}`, name: `part-${n}.md` }));
+  const resultCard = pageFunction("resultCard", {
+    el, t: (key: string, values?: { n?: number }) => key + (values?.n ?? ""), agentName: () => "Mia", toast: () => {}, refreshSoon: () => {}, failed: () => {}, encodeURIComponent,
+    openPanel: (id: string) => opened.push(id), postJson: (path: string, body: unknown) => { posted.push([path, body]); return Promise.resolve({}); },
+  });
+  const card = resultCard({ id: "t1", title: "October report", assigneeId: "mia", deliverables: files }) as Fake;
+  assert.equal(card.kids.filter(kid => kid.cls === "file").length, 4);
+  assert.ok(card.kids.some(kid => kid.text === "ui.next.chat.moreFiles2"), "the rest are counted, not listed");
+  const [accept, changes] = card.kids.at(-1)!.kids;
+  accept!.press!(); changes!.press!();
+  await Promise.resolve();
+  assert.deepEqual(JSON.parse(JSON.stringify(posted)), [["/api/tasks/update", { id: "t1", status: "done" }]]);
+  assert.deepEqual(opened, ["t1"], "what to change is written in the panel, beside the result");
+});

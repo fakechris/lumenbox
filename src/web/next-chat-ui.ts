@@ -140,6 +140,30 @@ function planCard() {
   return card;
 }
 
+/** A delivered result, where the person was talking when it arrived: what it is, its files, and the decision. */
+function resultCard(row) {
+  var card = el("div", "card-plain"), acts = el("div", "acts"), files = row.deliverables || [];
+  var accept = el("button", "act-primary", t("ui.next.act.accept")), changes = el("button", "act", t("ui.next.act.changes")), open = el("button", "act", t("ui.next.act.open"));
+  card.dataset.result = row.id;
+  card.appendChild(el("div", "card-head", t("ui.next.chat.delivered", { name: agentName(row.assigneeId) })));
+  card.appendChild(el("div", "", row.title));
+  files.slice(0, 4).forEach(function (file) {
+    var link = el("a", "file", file.name);
+    link.href = "/api/tasks/deliverable?task=" + encodeURIComponent(row.id) + "&id=" + encodeURIComponent(file.id);
+    card.appendChild(link);
+  });
+  ((row.reading && row.reading.evidence) || []).slice(0, 2).forEach(function (line) { card.appendChild(el("div", "why", line)); });
+  if (files.length > 4) card.appendChild(el("div", "why", t("ui.next.chat.moreFiles", { n: files.length - 4 })));
+  accept.addEventListener("click", function () {
+    postJson("/api/tasks/update", { id: row.id, status: "done" }).then(function () { toast(t("ui.next.done.accepted")); refreshSoon(); }, failed);
+  });
+  // Saying what to change needs room and the result beside it: the panel has both.
+  changes.addEventListener("click", function () { openPanel(row.id); });
+  open.addEventListener("click", function () { openPanel(row.id); });
+  acts.appendChild(accept); acts.appendChild(changes); acts.appendChild(open); card.appendChild(acts);
+  return card;
+}
+
 function clip(text, limit) { text = String(text || "").replace(/\\s+/g, " "); return text.length > limit ? text.slice(0, limit) + "…" : text; }
 
 /** The thread as a person reads it: adjacent steps become one fold, the host's notes are left out. */
@@ -150,7 +174,8 @@ function renderThread(view) {
     thread.appendChild(fold(t("ui.next.chat.steps", { n: steps.length }), steps.map(function (tool) { return { head: tool.name, text: clip(tool.detail, 160), bad: tool.isError }; })));
     steps = [];
   }
-  next.rows.filter(function (row) { return row.assigneeId === chat.agentId && nextGroupOf(nextStateOf(row).key) !== "done"; }).forEach(function (row) {
+  var mine = next.rows.filter(function (row) { return row.assigneeId === chat.agentId; }), delivered = mine.filter(function (row) { return nextStateOf(row).key === "review"; });
+  mine.filter(function (row) { var group = nextGroupOf(nextStateOf(row).key); return group !== "done" && group !== "review"; }).forEach(function (row) {
     var pin = el("button", "pin"), body = el("span", "body");
     body.appendChild(el("div", "title", row.title)); body.appendChild(el("div", "why", reasonOf(row)));
     pin.appendChild(chip(nextStateOf(row))); pin.appendChild(body);
@@ -185,6 +210,7 @@ function renderThread(view) {
   if (lastAsk && chat.expired[lastAsk.question.question]) thread.appendChild(el("div", "aside", t("ui.next.chat.expired", { name: agent ? agent.name : "" })));
   else if (lastAsk && !chat.live) thread.appendChild(askCard(lastAsk, agent));
   if (agent) pendingCards(agent).forEach(function (card) { thread.appendChild(card); });
+  delivered.forEach(function (row) { thread.appendChild(resultCard(row)); });
   if (chat.live) {
     if (chat.live.text) thread.appendChild(bubble({ role: "assistant", text: chat.live.text }, true));
     var bar = el("div", "livebar"), stop = el("button", "act", t("ui.next.chat.stop"));
