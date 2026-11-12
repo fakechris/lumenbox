@@ -21,6 +21,8 @@ function owedText(item) { return item.kind === "review" ? t("ui.next.panel.revie
 function reasonOf(row) {
   var owed = next.mine.filter(function (item) { return item.ref === row.id; })[0];
   if (owed && owedText(owed)) return owedText(owed);
+  // What a job is waiting on outside the agent — credentials it lacks, most often — is the reason, in the board's words.
+  if (row.waitingOn) return row.waitingOn;
   var reading = row.reading || {};
   if (reading.blocker && MSG["ui.wr.blocker." + reading.blocker.kind]) {
     var tools = (reading.blocker.tools || []).join(", ");
@@ -180,6 +182,7 @@ function nextStart() {
   chatStart();
   screenStart();
   memberStart();
+  cardsStart();
   refresh();
   // What changes a row or the inbox arrives as an event; the page re-reads rather than patching.
   var events = new EventSource("/api/events");
@@ -190,6 +193,7 @@ function nextStart() {
     if ((kind === "task_changed" || kind === "task_execution") && event.taskId) panelChanged(event.taskId);
     if (kind === "turn_started" || kind === "turn_finished" || kind === "turn_failed") { var who = next.agents[event.agentId]; if (who) who.running = kind === "turn_started"; }
     chatEvent(event);
+    cardsEvent(event);
   };
 }
 `;

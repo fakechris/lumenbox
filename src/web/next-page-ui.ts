@@ -17,6 +17,7 @@ import { NEXT_SCREEN_JS } from "./next-screen-ui.ts";
 import { NEXT_SETTINGS_JS } from "./next-settings-ui.ts";
 import { NEXT_MEMBER_JS } from "./next-member-ui.ts";
 import { NEXT_BOXES_JS } from "./next-boxes-ui.ts";
+import { NEXT_CARDS_JS } from "./next-cards-ui.ts";
 
 const STYLE = `
 :root {
@@ -156,6 +157,19 @@ body[data-view="chat"] #view-title { cursor: pointer; }
 .toolgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 4px 12px; margin-top: 8px; }
 .toolgrid .tool { flex-direction: row; align-items: center; gap: 6px; font-size: 12.5px; color: var(--soft); }
 .toolgrid input { width: auto; }
+.card-need, .card-stuck, .card-plain { align-self: flex-start; max-width: 82%; border-radius: 14px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.card-need { background: var(--warn-soft); }
+.card-stuck { background: var(--bad-soft); }
+.card-plain { background: var(--surface); border: 1px solid var(--border); min-width: 260px; }
+.card-head { font-weight: 600; }
+.card-code { display: block; background: var(--surface); border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.5 "IBM Plex Mono", ui-monospace, monospace; }
+.card-need .acts { flex-wrap: wrap; }
+.card-need input { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--surface); font: inherit; }
+.card-need a.act-primary { text-decoration: none; }
+.msg-tools { display: none; gap: 4px; margin-top: 6px; }
+.msg:hover .msg-tools, .msg-me:hover .msg-tools, .msg:focus-within .msg-tools, .msg-me:focus-within .msg-tools { display: flex; }
+.msg-tools button { font-size: 11px; padding: 1px 7px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--muted); }
+.msg-me .msg-tools button { background: transparent; color: inherit; border-color: rgba(255,255,255,.3); }
 .scrim { position: fixed; inset: 0; background: rgba(31,26,23,.18); }
 .panel { position: fixed; top: 12px; right: 12px; bottom: 12px; width: min(600px, calc(100vw - 24px)); background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 18px 50px rgba(31,26,23,.16); display: flex; flex-direction: column; }
 .panel > header { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
@@ -294,6 +308,7 @@ ${NEXT_SCREEN_JS}
 ${NEXT_SETTINGS_JS}
 ${NEXT_MEMBER_JS}
 ${NEXT_BOXES_JS}
+${NEXT_CARDS_JS}
 nextStart();
 </script>
 </body>
