@@ -230,6 +230,11 @@ and, for an admin, the audit record of commands and windows on a computer, which
 it is open, hides what the system's own probes ran unless asked, and says when the record may be
 incomplete.
 
+**An admin manages everything that runs from one fold.** In the system view: what is executing,
+what is set to start, what ended, and the agents, with stop, pause, disable and discard. A press
+does nothing by itself: the server says what the action covers and what it cannot know, in words,
+and the second press does it once.
+
 **Three levels, everywhere.**
 
 | Level | Where | Holds |

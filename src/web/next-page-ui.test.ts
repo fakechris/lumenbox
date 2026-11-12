@@ -242,3 +242,11 @@ test("an activity event is a line saying who did what; a command in the audit re
   assert.equal(auditLine({ type: "exec", detail: { user: "box", pwd: "/home/box/work", cmd: "npm test" } }), "box /home/box/work $ npm test");
   assert.equal(auditLine({ type: "window_focus", window: "Chromium — Billing" }), "Chromium — Billing");
 });
+
+test("a managed row says its state, where it came from and when it next acts, and nothing for what it does not have", () => {
+  const words: Record<string, string> = { "ui.wg.running": "Running" };
+  const manageWord = pageFunction("manageWord", { MSG: words, t: (key: string) => words[key] });
+  const manageNote = pageFunction("manageNote", { manageWord });
+  assert.equal(manageNote({ state: "waiting", source: "routine", condition: "paused by an admin" }), "waiting · routine · paused by an admin");
+  assert.equal(manageNote({ state: "running", source: "" }), "Running", "a code the page has words for is said in them");
+});
