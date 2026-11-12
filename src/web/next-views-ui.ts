@@ -238,7 +238,7 @@ function refreshSoon() { clearTimeout(refreshTimer); refreshTimer = setTimeout(r
 
 function nextStart() {
   document.querySelectorAll("[data-nav]").forEach(function (button) {
-    button.addEventListener("click", function () { next.view = button.dataset.nav; document.body.dataset.open = "1"; history.replaceState(null, "", "?ui=next&view=" + next.view); render(); });
+    button.addEventListener("click", function () { next.view = button.dataset.nav; settings.pane = ""; document.body.dataset.open = "1"; history.replaceState(null, "", "?ui=next&view=" + next.view); render(); });
   });
   $("work-find").addEventListener("input", function () { findWork($("work-find").value.trim()); });
   document.querySelectorAll("[data-layout]").forEach(function (button) {
@@ -256,6 +256,8 @@ function nextStart() {
   });
   var asked = new URLSearchParams(location.search).get("view"), linked = new URLSearchParams(location.search).get("task");
   if (asked === "work" || asked === "inbox" || asked === "settings" || asked === "auto" || asked === "boxes" || asked === "system") { next.view = asked; document.body.dataset.open = "1"; }
+  var pane = new URLSearchParams(location.search).get("pane");
+  if (asked === "settings" && pane && NATIVE_PANES[pane]) settings.pane = pane;
   panelStart();
   composerStart(); // first: its Enter, with the menu open, is not the composer's
   chatStart();
