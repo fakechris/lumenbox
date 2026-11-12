@@ -31,10 +31,11 @@ test("a job that ends after its box was reconnected does not wake the agent; one
   const watch = new JobWatch({ box: () => box as never, wake: async (_a, _c, text) => { woken.push(text); }, log: line => logs.push(line), pollMs: 5, mergeMs: 5, generation: () => generation }); // on_end wake: the policy is not what this test is about (INV-1613)
   watch.watch({ jobId: "j1", agentId: "a1", conversation: "main", command: "sleep 1", onEnd: "wake" } as never);
   generation = 2; // the box was reconnected while j1 ran
-  await new Promise(resolve => setTimeout(resolve, 40));
+  for (const deadline = Date.now() + 2_000; logs.length === 0 && Date.now() < deadline; ) await new Promise(resolve => setTimeout(resolve, 5));
   assert.deepEqual(woken, [], "the old incarnation's job end is not a wake");
   assert.ok(logs.some(line => /^stale-generation: job watch j1 began at box generation 1, now 2; the wake is dropped$/.test(line)));
   watch.watch({ jobId: "j2", agentId: "a1", conversation: "main", command: "sleep 1", onEnd: "wake" } as never);
-  await new Promise(resolve => setTimeout(resolve, 40));
+  // Waited for, not timed: 40 ms was not enough under a loaded suite (INV-1829).
+  for (const deadline = Date.now() + 2_000; woken.length === 0 && Date.now() < deadline; ) await new Promise(resolve => setTimeout(resolve, 5));
   assert.equal(woken.length, 1, "the same generation: woken as before");
 });
