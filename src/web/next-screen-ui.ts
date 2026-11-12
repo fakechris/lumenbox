@@ -15,9 +15,23 @@ function loadFiles(dir) {
   }, function (error) { screen2.entries = []; screen2.error = error.message; renderScreen(); });
 }
 
+/** A file from the person's machine into the folder being looked at; the agent finds it there. */
+function uploadFile(file) {
+  var reader = new FileReader();
+  reader.onload = function () {
+    var base64 = String(reader.result).split(",")[1] || "", path = screen2.dir.replace(/\\/$/, "") + "/" + file.name;
+    postJson("/api/file", { path: path, base64: base64 }).then(function () { toast(t("ui.next.screen.uploaded", { name: file.name })); loadFiles(screen2.dir); }, failed);
+  };
+  reader.readAsDataURL(file);
+}
+
 function filesBlock() {
   var box = el("div", "files");
   if (screen2.error) { box.appendChild(el("p", "why", screen2.error)); return box; }
+  var pick = el("label", "act", t("ui.next.screen.upload")), input = el("input");
+  input.type = "file"; input.multiple = true; input.hidden = true;
+  input.addEventListener("change", function () { Array.prototype.forEach.call(input.files, uploadFile); });
+  pick.appendChild(input); box.appendChild(pick);
   if (screen2.dir && screen2.root && screen2.dir !== screen2.root) {
     var up = el("button", "file", "‹ " + screen2.dir.slice(screen2.root.length) );
     up.addEventListener("click", function () { loadFiles(screen2.dir.replace(/\\/[^\\/]+\\/?$/, "") || screen2.root); });

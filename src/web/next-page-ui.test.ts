@@ -74,3 +74,34 @@ test("the page somebody switched to is the one they come back to; with no choice
   assert.equal(ask("/?ui=sideways").page, APP_PAGE, "an unknown choice is no choice");
   assert.equal(ask("/?ui=next", "lumen-ui=next").remember, undefined, "nothing to remember twice");
 });
+
+/** One function out of the page's own script, run with the globals it reads. */
+function pageFunction(name: string, globals: Record<string, unknown>): (...args: unknown[]) => unknown {
+  const script = /<script>([\s\S]*)<\/script>/.exec(NEXT_PAGE("en"))![1]!;
+  const start = script.indexOf(`function ${name}(`);
+  assert.ok(start >= 0, `the page has ${name}`);
+  let depth = 0, end = start;
+  for (let i = script.indexOf("{", start); i < script.length; i++) {
+    if (script[i] === "{") depth++;
+    if (script[i] === "}" && --depth === 0) { end = i + 1; break; }
+  }
+  return vm.runInNewContext(`(${script.slice(start, end)})`, globals) as (...args: unknown[]) => unknown;
+}
+
+test("\"@Bob …\" typed to Ada is said to Bob; a name mid-sentence, an unknown name and the agent's own are not", () => {
+  const agents = { a: { id: "a", name: "Ada" }, b: { id: "b", name: "Bob" } };
+  const addressed = pageFunction("addressed", { next: { agents }, chat: { agentId: "a" } });
+  assert.deepEqual(JSON.parse(JSON.stringify(addressed("@bob  check the build"))), { agent: agents.b, text: "check the build" });
+  assert.equal(addressed("ask @Bob about it"), null);
+  assert.equal(addressed("@Nobody hello"), null);
+  assert.equal(addressed("@Ada hello"), null, "already talking to Ada");
+});
+
+test("a press on an agent's card is the line the server parses it from", async () => {
+  const { parseActionText } = await import("../host/show-ui.ts");
+  const { MESSAGES } = await import("../i18n/messages.ts");
+  for (const locale of ["zh", "en"] as const) {
+    const line = MESSAGES[locale]["ui.next.card.actionLine"]!.replace("{name}", JSON.stringify("confirm")).replace("{id}", "installation").replace("{context}", ': {"n":1}');
+    assert.deepEqual(parseActionText(line), { name: "confirm", surfaceId: "installation", context: { n: 1 } }, locale);
+  }
+});

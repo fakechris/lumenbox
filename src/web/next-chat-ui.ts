@@ -7,7 +7,7 @@
  * between agents are one folded line each, opened on demand; the host's own notes are not shown.
  */
 export const NEXT_CHAT_JS = `
-var chat = { agentId: "", conversation: "main", conversations: [], plan: null, box: "", entries: [], live: null, loading: "", loadedFor: "", request: 0, jump: false };
+var chat = { agentId: "", conversation: "main", conversations: [], plan: null, box: "", entries: [], live: null, loading: "", loadedFor: "", request: 0, jump: false, liveSurfaces: {} };
 var markdown = window.markdownit ? window.markdownit({ html: false, linkify: true, breaks: true }) : null;
 
 function agentsHere() {
@@ -68,18 +68,35 @@ function renderSide() {
 
 function openChat(agentId) {
   // Another agent's half-written words and its thread are not this one's.
-  if (agentId !== chat.agentId) { chat.live = null; chat.loadedFor = ""; chat.entries = []; chat.conversation = "main"; chat.conversations = []; chat.plan = null; }
+  if (agentId !== chat.agentId) { chat.live = null; chat.loadedFor = ""; chat.entries = []; chat.conversation = "main"; chat.conversations = []; chat.plan = null; chat.liveSurfaces = {}; }
   chat.agentId = agentId; next.view = "chat"; document.body.dataset.open = "1";
   history.replaceState(null, "", "?ui=next&agent=" + encodeURIComponent(agentId));
   render();
 }
 
-function bubble(entry) {
-  if (entry.role === "user") return el("div", "msg-me", entry.text);
+/** What a person does with something that was said: shown on hover, never by default. */
+function messageTools(entry) {
+  var bar = el("div", "msg-tools");
+  function tool(label, run) { var button = el("button", "", label); button.addEventListener("click", run); bar.appendChild(button); }
+  tool(t("ui.next.msg.copy"), function () { navigator.clipboard.writeText(entry.text).then(function () { toast(t("ui.next.msg.copied")); }, failed); });
+  tool(t("ui.next.msg.quote"), function () {
+    var input = $("composer-text"), quoted = entry.text.split(String.fromCharCode(10)).slice(0, 6).map(function (line) { return "> " + line; }).join(String.fromCharCode(10));
+    input.value = quoted + String.fromCharCode(10, 10) + input.value; input.focus();
+  });
+  if (entry.role === "user") tool(t("ui.next.msg.again"), function () { $("composer-text").value = entry.text; $("composer-text").focus(); });
+  return bar;
+}
+
+function bubble(entry, bare) {
   if (entry.aside) return el("div", "aside", entry.text);
-  var node = el("div", "msg");
-  if (markdown) node.innerHTML = markdown.render(entry.text); else node.textContent = entry.text;
+  var node = el("div", entry.role === "user" ? "msg-me" : "msg");
+  if (entry.role === "user") node.textContent = entry.text;
+  else if (markdown) node.innerHTML = markdown.render(entry.text); // raw HTML is off in the renderer: what is said cannot become markup
+  else node.textContent = entry.text;
   node.querySelectorAll("a").forEach(function (link) { link.target = "_blank"; link.rel = "noopener noreferrer"; });
+  // Words filed as a person's that the record cannot attribute are said to be so, not shown as theirs.
+  if (entry.provenance === "unknown") node.insertBefore(el("div", "why", t("ui.next.chat.unknown")), node.firstChild);
+  if (!bare) node.appendChild(messageTools(entry));
   return node;
 }
 function fold(summary, lines) {
@@ -104,6 +121,7 @@ function askCard(tool, agent) {
     acts.appendChild(pick);
   });
   if (acts.childNodes.length) card.appendChild(acts);
+  if (tool.question.fallback) card.appendChild(el("div", "why", t("ui.next.chat.fallback", { text: tool.question.fallback })));
   return card;
 }
 
@@ -137,12 +155,18 @@ function renderThread(view) {
     pin.addEventListener("click", function () { openPanel(row.id); });
     thread.appendChild(pin);
   });
-  var plan = planCard(), lastAsk = null;
+  var plan = planCard(), lastAsk = null, drawn = {};
   if (plan) thread.appendChild(plan);
   chat.entries.forEach(function (entry) {
     if (entry.kind === "tools") {
       (entry.tools || []).forEach(function (tool) { if (tool.question && tool.result === undefined) lastAsk = tool; });
-      steps = steps.concat((entry.tools || []).filter(function (tool) { return !tool.question; }));
+      (entry.tools || []).forEach(function (tool) {
+        if (!tool.surface || tool.isError) return;
+        flush();
+        thread.appendChild(feedSurface(tool.surface.surfaceId, tool.surface.title, tool.surface.messages || [], true));
+        drawn[tool.surface.surfaceId] = true;
+      });
+      steps = steps.concat((entry.tools || []).filter(function (tool) { return !tool.question && !tool.surface; }));
       return;
     }
     if (entry.kind === "text" && entry.role === "user") lastAsk = null; // answered by what was said next
@@ -153,9 +177,12 @@ function renderThread(view) {
     else if (entry.kind === "trigger" && entry.skipped) thread.appendChild(el("div", "aside", t("ui.next.chat.earlier", { n: entry.skipped })));
   });
   flush();
+  // A card drawn in the turn still running is not in the record yet: it is kept from the live event.
+  Object.keys(chat.liveSurfaces).forEach(function (id) { if (!drawn[id]) thread.appendChild(feedSurface(id, "", [], false)); });
   if (lastAsk && !chat.live) thread.appendChild(askCard(lastAsk, agent));
+  if (agent) pendingCards(agent).forEach(function (card) { thread.appendChild(card); });
   if (chat.live) {
-    if (chat.live.text) thread.appendChild(bubble({ role: "assistant", text: chat.live.text }));
+    if (chat.live.text) thread.appendChild(bubble({ role: "assistant", text: chat.live.text }, true));
     var bar = el("div", "livebar"), stop = el("button", "act", t("ui.next.chat.stop"));
     bar.appendChild(el("span", "dot"));
     bar.appendChild(el("span", "", chat.live.doing || t("ui.next.chat.working", { name: agent ? agent.name : "" })));
@@ -211,9 +238,21 @@ function loadThread() {
   }, function (error) { if (request === chat.request) chat.loading = ""; failed(error); });
 }
 
+/** "@Bob …" typed to Ada is said to Bob: the agent whose name leads the message, when it is another one. */
+function addressed(text) {
+  var match = /^@(\\S+)\\s+/.exec(text);
+  if (!match) return null;
+  var other = Object.keys(next.agents).map(function (id) { return next.agents[id]; }).filter(function (agent) {
+    return agent.name.toLowerCase() === match[1].toLowerCase() && agent.id !== chat.agentId;
+  })[0];
+  return other ? { agent: other, text: text.slice(match[0].length) } : null;
+}
+
 function sendMessage() {
   var input = $("composer-text"), text = input.value.trim(), id = chat.agentId;
   if (!text || !id) return;
+  var to = addressed(text);
+  if (to && to.text) { input.value = to.text; openChat(to.agent.id); sendMessage(); return; }
   input.value = ""; input.style.height = "";
   chat.entries = chat.entries.concat([{ kind: "text", role: "user", text: text }]);
   chat.live = { text: "", doing: "" }; chat.jump = true;
@@ -228,7 +267,13 @@ function chatEvent(event) {
   if (event.type === "turn_started") { chat.live = { text: "", doing: "" }; render(); }
   else if (event.type === "text" && typeof event.delta === "string") { chat.live = chat.live || { text: "", doing: "" }; chat.live.text += event.delta; render(); }
   else if (event.type === "tool_start") { chat.live = chat.live || { text: "", doing: "" }; chat.live.text = ""; chat.live.doing = event.phrase || event.tool || ""; render(); }
-  else if (event.type === "turn_finished" || event.type === "turn_failed" || event.type === "turn_interrupted") { chat.live = null; loadThread(); }
+  else if (event.type === "retrying" && chat.live) {
+    if (event.discardPartial) chat.live.text = "";
+    chat.live.doing = t("ui.next.chat.retrying", { n: event.attempt }); render();
+  }
+  else if (event.type === "compacted" && chat.live) { chat.live.doing = t("ui.next.chat.compacted"); render(); }
+  else if (event.type === "turn_budget_hit" && chat.live) { chat.live.doing = t("ui.next.chat.budget", { n: event.limit }); render(); }
+  else if (event.type === "turn_finished" || event.type === "turn_failed" || event.type === "turn_interrupted") { chat.live = null; chat.liveSurfaces = {}; loadThread(); }
   else if (event.type === "prompt" || event.type === "reset") loadThread();
 }
 
@@ -240,7 +285,7 @@ function chatStart() {
   // Back is always to the agents: from a conversation, and from the two views that cut across them.
   $("back").addEventListener("click", function () { next.view = "chat"; delete document.body.dataset.open; render(); });
   $("conversations").addEventListener("change", function (event) {
-    chat.conversation = event.target.value; chat.loadedFor = ""; chat.entries = []; chat.live = null; chat.plan = null;
+    chat.conversation = event.target.value; chat.loadedFor = ""; chat.entries = []; chat.live = null; chat.plan = null; chat.liveSurfaces = {};
     render();
   });
   var asked = new URLSearchParams(location.search).get("agent");
