@@ -1,3 +1,4 @@
+import { executionDisagreement } from "./work-execution.ts";
 import { type BudgetSlice, continueAcrossBudget, longRequestLimits } from "./long-request.ts";
 import { taskAttentionChanged, taskWorkId } from "./task-attention.ts";
 import { WorkAttention } from "../agents/work-attention.ts";
@@ -639,5 +640,8 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
     refusals,
   };
 
+  // The three records of how far a piece of work has got may not contradict each other once the episode is over (docs/99 §4).
+  const contradictions = (options.tasks?.list() ?? []).flatMap(task => executionDisagreement(task) ?? []);
+  if (contradictions.length > 0) throw new Error(`work records contradict each other: ${contradictions.join("; ")}`);
   return { score, observations, registry, files, cleanup: () => rmSync(home, { recursive: true, force: true }) };
 }

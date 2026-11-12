@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { redactText } from "./secret-redaction.ts";
 import type { InboundMessage } from "../agents/admitted-message.ts";
 import { personMessage, type WorkAttention } from "../agents/work-attention.ts";
-import type { Task, TaskStore } from "./tasks.ts";
+import type { Task, TaskStatus, TaskStore } from "./tasks.ts";
 import type { CancelledWork, CurrentWork, RootPersistence } from "../agents/work-attention.ts";
 export interface RootRequest {
   id: string;
@@ -78,9 +78,9 @@ export class TaskWorkRoots implements RootPersistence {
           !task.workRoot,
       );
       const cancellation = legacy?.cancellations.find(row => row.id === state.id);
-      if (task) this.write({ ...task, workRoot: { state, cancellation } });
-      else
-        this.create({
+      if (task) this.write(followRoot({ ...task, workRoot: { state, cancellation } }));
+      else {
+        const made = this.create({
           title: "Recovered work: " + state.id,
           requester: "host",
           assigneeId: state.owner,
@@ -89,6 +89,8 @@ export class TaskWorkRoots implements RootPersistence {
           durable: true,
           workRoot: { state: { ...state, unresolved: true }, cancellation },
         });
+        if (made && followRoot(made) !== made) this.write(followRoot(made));
+      }
     }
     const records: CurrentWork[] = [],
       cancellations: CancelledWork[] = [];
@@ -128,7 +130,7 @@ export class TaskWorkRoots implements RootPersistence {
       };
       const value = JSON.stringify(workRoot);
       if (this.written.get(task.id) === value) continue;
-      this.write({ ...task, workRoot: structuredClone(workRoot) });
+      this.write(followRoot({ ...task, workRoot: structuredClone(workRoot) }));
       this.written.set(task.id, value);
     }
   }
@@ -379,4 +381,20 @@ export function workRootSummary(task: Pick<Task, "workRoot">) {
     epoch: state.epoch,
     automatic: root.automatic === true,
   };
+}
+
+/**
+ * The board status a root's transition requires (docs/99 §4). A request that started is not "open",
+ * and one a person stopped is not still on the board: the root is where those facts are observed, so
+ * the card follows it here, in the one place a root is written, instead of every reader correcting
+ * for a status nobody moved. What somebody said of the card — blocked, in review, done — stands, and
+ * a goal's card follows its pursuit.
+ */
+export function followRoot(task: Task, now: Date = new Date()): Task {
+  const phase = workRootSummary(task)?.phase;
+  if (task.pursuit !== undefined || (task.status !== "open" && task.status !== "doing")) return task;
+  const status: TaskStatus | undefined = phase === "cancelled" ? "dropped" : task.status === "open" && (phase === "running" || phase === "waiting" || phase === "interrupted") ? "doing" : undefined;
+  if (status === undefined) return task;
+  const at = now.toISOString();
+  return { ...task, status, updatedAt: at, history: [...task.history, { at, by: "host", status, note: status === "dropped" ? "stopped" : "started" }].slice(-30) };
 }

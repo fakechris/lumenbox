@@ -51,7 +51,7 @@ keeping such cards off every list (`answeredInChat`, INV-1822).
 **An activity is never work.** A result check, an audit, a probe an agent invents, a message
 between agents: each belongs to a piece of work, or to the system, and is recorded as such. None
 creates a card. `origin.kind: "internal"` on a task is the mark of a record in the wrong store; new
-code does not write one, and `architecture-guard.test.ts` holds that line once stage 3 lands.
+code does not write one, and `architecture-guard.test.ts` holds that line.
 
 **A goal is work with two more fields.** What made a goal different was never a mode: it was a
 budget (how far the host may carry it unattended) and a completion standard (who says it is
@@ -164,10 +164,17 @@ Each stage is independently shippable and leaves the suite green.
 2. **Done: a side lane instead of holding.** A colleague's errand runs beside a person's waiting
    work and yields to it (§5); the hold remains for what must enter the person's thread. Scenario: a person's work waits on a tool; a colleague's unrelated message is
    handled; the person's plan and context are unchanged.
-3. **One writer.** A lifecycle module owns execution state for goals and ordinary work alike; the
-   pursuit's and the root's statuses become one field, with the mapping of §4 as its test.
-   `WorkAttention` becomes the per-conversation focus over it and stops storing state of its own.
-   Activities stop creating tasks; the guard test pins it.
+3. **One writer.** In two parts.
+   - **Done: the card follows the root, and the three records are read in one place.** A request
+     that started is `doing` and one a person stopped is `dropped`, written where the root is
+     written (`followRoot`) instead of corrected for by each reader. `work-execution.ts` puts
+     `Task.status`, the pursuit's status and the root's side by side — the root is the
+     conversation's focus, so `answered` means released, which a finished request and a parked one
+     both are — and an episode that ends with them contradicting each other fails. Nothing new
+     creates a card marked internal: the guard test names the two places that still do.
+   - **Left: one stored field.** A lifecycle module owns execution state for goals and ordinary
+     work alike, the pursuit's and the root's statuses become that one field, and `WorkAttention`
+     keeps only the focus. This changes what is stored, so it lands with stage 4's migration.
 4. **Requests leave the board.** Promotion (§2) replaces create-then-hide. Existing records are
    migrated where the source message can be verified and left unresolved, non-executable and off
    the default lists where it cannot.
