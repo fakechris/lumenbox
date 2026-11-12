@@ -161,8 +161,9 @@ Read/search/preview cannot execute a model, resend a reply, or mutate real work.
 
 ## The rebuilt page
 
-2026-11-12 (INV-1825). Two pages serve one installation until the rebuilt one covers the classic
-one: `/?ui=next` and `/?ui=classic` choose, the choice is remembered, and both read the same data.
+2026-11-12 (INV-1825). Two pages serve one installation. The rebuilt one is what a person gets, since
+every surface of the classic one was rebuilt on it; `/?ui=classic` and `/?ui=next` choose, the choice
+is remembered, and both read the same data.
 Everything above this section describes the classic page; this section is the rule for the rebuilt
 one. [docs/99](99-user-work.md) §6 owns *what* a person is shown; this owns how the page is laid out.
 
@@ -175,11 +176,11 @@ never the landing. A first slice that opened on an inbox and a work list was wro
 be wrong on real data within the day.
 
 **Nothing is lost by using it.** A link to one piece of work (`?task=`), to an agent's conversation
-(`?agent=&conversation=`), opens there. A template link (`?import=`) opens the classic page, whose
-dialog it is. The foot of the side column switches language and goes back to the classic page; the
-work panel's full record is the classic task view for one look (`&once=1`), which does not change
-the page the person chose. What the classic page still does and this one does not is listed on
-INV-1825, and the default changes only when that list is empty or bridged.
+(`?agent=&conversation=`) or to a shared template (`?import=`, shown for the person to read before
+they import it) opens here. The foot of the side column switches language and goes back to the
+classic page; the work panel's full record is the classic task view for one look (`&once=1`), which
+does not change the page the person chose. Under the desktop app the header drags the window, and
+on a Mac the side column leaves room for the window's buttons.
 
 **Automations are made and read here.** One row each: its name, what it does, when it next runs.
 A press on the row shows how its recent runs ended; a routine is made by answering four things — a

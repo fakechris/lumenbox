@@ -78,7 +78,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [70-cua-linux-validation](70-cua-linux-validation.md) | Linux CUA 回归矩阵与状态验收 | current | 2026-09-22 |
 | [84-preset-matrix](84-preset-matrix.md) | The Delegate support matrix: presets × providers × scenarios | current | 2026-10-26 |
 | [85-decision-model](85-decision-model.md) | The decision model: switched judgements beside the cheap profile | current | 2026-11-01 |
-| [86-onboarding-acceptance](86-onboarding-acceptance.md) | Onboarding acceptance: a new user's first run on the published release | current | 2026-10-31 |
+| [86-onboarding-acceptance](86-onboarding-acceptance.md) | Onboarding acceptance: a new user's first run on the published release | current | 2026-11-12 |
 | [87-prompt-parts](87-prompt-parts.md) | Built-in prompt parts: a team's override, and what happens when the default moves | current | 2026-11-01 |
 | [88-improve](88-improve.md) | A check-up for one agent: scenarios in isolation, a judged report, a proposal nobody applies | current | 2026-11-01 |
 | [91-watchdog](91-watchdog.md) | The watchdog: a control loop outside the orchestrator | current | 2026-11-06 |

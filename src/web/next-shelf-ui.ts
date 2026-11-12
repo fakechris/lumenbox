@@ -5,7 +5,7 @@
  * computer that is selected.
  */
 export const NEXT_SHELF_JS = `
-var shelf = { data: null, error: "", find: "", open: false };
+var shelf = { data: null, error: "", find: "", open: false, shared: null };
 
 /** Every template on offer as one list of rows: where it comes from, what to show, and what a press sends. */
 function shelfRows(data) {
@@ -35,6 +35,35 @@ function shelfMade(created) {
   toast(t("ui.next.shelf.made", { names: (created || []).map(function (row) { return row.name; }).join(", ") }));
   closeMember();
   refresh().then(function () { if (first) openChat(first.id); });
+}
+
+/**
+ * Arriving from a share page ("/?import=<id>"): the template is fetched for the person to read, and
+ * nothing is added until they press Import themselves.
+ */
+function landSharedTemplate() {
+  var shareId = new URLSearchParams(location.search).get("import");
+  if (!shareId) return;
+  history.replaceState(null, "", location.pathname);
+  getJson("/api/templates/preview?shareId=" + encodeURIComponent(shareId)).then(function (got) {
+    shelf.shared = { shareId: shareId, name: got.name || "", document: got.document || "", by: got.ownerName || "", about: got.description || "" };
+    openMember("");
+  }, failed);
+}
+
+function sharedBlock() {
+  var shared = shelf.shared, box = el("div", "needbox"), go = el("button", "act-primary", t("ui.next.shelf.import")), no = el("button", "act", t("ui.next.auto.cancel")), acts = el("div", "acts");
+  var where = chat.box || ((shelf.data && shelf.data.boxes || [])[0] || {}).id || "";
+  box.appendChild(el("div", "card-head", t("ui.next.shelf.shared", { name: shared.name, by: shared.by || t("ui.next.shelf.someone") })));
+  if (shared.about) box.appendChild(el("div", "", shared.about));
+  go.addEventListener("click", function () {
+    go.disabled = true;
+    var body = Object.assign({ template: shared.document, shareId: shared.shareId }, shared.name ? { name: shared.name } : {}, where ? { boxId: where } : {});
+    postJson("/api/templates/import", body).then(function (got) { shelf.shared = null; shelfMade([{ id: got.id, name: got.name }]); }, function (error) { go.disabled = false; failed(error); });
+  });
+  no.addEventListener("click", function () { shelf.shared = null; renderMember(); });
+  acts.appendChild(go); acts.appendChild(no); box.appendChild(acts);
+  return box;
 }
 
 /** Closed until asked for: making an agent starts with a name, and the catalogue is one press away. */

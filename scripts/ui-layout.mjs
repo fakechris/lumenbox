@@ -44,7 +44,7 @@ try {
       { n: 122, from: "2026-01-01T00:00:00Z", agentId: meta.agent, by: "fixture" },
     ] } }));
     await page.route("**/api/setup", route => route.fulfill({ json: setup }));
-    await page.goto(meta.base + "/?lang=" + lang + "&agent=" + meta.agent);
+    await page.goto(meta.base + "/?ui=classic&lang=" + lang + "&agent=" + meta.agent);
     await page.waitForFunction(() => typeof window.configVersionChip === "function" && typeof current !== "undefined" && current);
     if (await page.locator("#settingswrap").isVisible()) await page.locator("#setcancel").click();
     await page.waitForSelector("#cvchip", { state: "visible" });

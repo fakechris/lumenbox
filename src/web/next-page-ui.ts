@@ -5,8 +5,8 @@
  * the person, all work — is one click away and never the landing.
  *
  * It reads the endpoints the classic page reads and writes nothing new: no storage changed for it,
- * so `/?ui=next` and `/` can be switched between at will. What is not rebuilt yet links to the
- * classic page rather than pretending.
+ * so the two pages can be switched between at will. It is the page a person gets; the classic one
+ * is a link away at the foot of the side column.
  */
 import { NEXT_LOGIC_JS } from "./next-logic-ui.ts";
 import { NEXT_VIEWS_JS } from "./next-views-ui.ts";
@@ -254,6 +254,12 @@ button.link { text-align: left; font-weight: 600; text-decoration: underline; te
 .setting .acts > input { flex: 1; min-width: 120px; width: auto; }
 .setting .fact .acts { flex-wrap: wrap; justify-content: flex-end; } .setting .fact select { padding: 4px 8px; font-size: 12.5px; max-width: 180px; }
 .setting .fold-body textarea { min-height: 160px; }
+/* Under the desktop app: the header and the brand drag the window; on a Mac the brand sits below the window's buttons. */
+body.electron header.bar, body.electron .brand { -webkit-app-region: drag; }
+body.electron header.bar button, body.electron header.bar select, body.electron header.bar input, body.electron header.bar a { -webkit-app-region: no-drag; }
+body.electron-mac .side { padding-top: 40px; }
+.box-notice a { color: inherit; text-decoration: underline; margin-right: 8px; }
+.box-notice pre.raw { width: 100%; box-sizing: border-box; max-height: 120px; overflow: auto; font-size: 11px; margin: 0; }
 .shelf .fact { align-items: center; } .shelf h2.group { margin: 10px 0 2px; }
 .fold-body { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; }
 .fold-body textarea { width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg); font: 12.5px/1.5 "IBM Plex Mono", ui-monospace, monospace; }

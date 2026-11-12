@@ -299,8 +299,8 @@ class App {
 
   /** Opens Settings on a tab and waits until the dialog has loaded the saved config (it fills itself after a fetch). */
   async openSettings(tab) {
-    await this.inPage(`openSettings(${JSON.stringify(tab)}), true`);
-    await this.waitFor(`Settings → ${tab}`, () => this.inPage("document.getElementById('settingswrap').style.display === 'flex' && document.getElementById('setprovider').options.length > 0"), 30_000, 500);
+    await this.inPage(`openSettingsPane(${JSON.stringify(tab)}), true`);
+    await this.waitFor(`Settings → ${tab}`, () => this.inPage("document.querySelectorAll('#view section.setting').length > 0 && (document.getElementById('set-provider') === null || document.getElementById('set-provider').options.length > 0)"), 30_000, 500);
   }
 
   async shot(name) {
@@ -398,9 +398,8 @@ async function phaseNoDocker(run) {
     });
     await run.step("nodocker: Settings says what to do", async () => {
       const state = await app.waitFor("a docker diagnosis", async () => (await app.api("/api/state")).box?.docker, 60_000);
-      await app.openSettings("boxes");
-      await sleep(1500);
-      const text = await app.inPage("document.getElementById('setboxstate').innerText");
+      // The rebuilt page says it beside the agents, where the silence is: the notice above the list.
+      const text = await app.waitFor("the box notice", () => app.inPage("(function(){ var n = document.getElementById('box-notice'); return n && !n.hidden && n.innerText.length > 0 ? n.innerText : undefined; })()"), 30_000);
       await app.shot("02-box-without-docker");
       if (state.state !== "no-engine") throw new Error(`diagnosis is ${state.state}, expected no-engine`);
       if (!/docker|orbstack/i.test(text ?? "")) throw new Error(`the Box section does not mention Docker: "${text}"`);
@@ -420,7 +419,7 @@ async function phaseFull(run) {
       await app.waitFor("the server", async () => (await app.api("/api/setup")) !== undefined, 120_000);
       await app.connect();
       const setup = await app.api("/api/setup");
-      const visible = await app.waitFor("the set-up card", () => app.inPage("getComputedStyle(document.getElementById('setupcard')).display !== 'none' && document.getElementById('setupcard').innerText.length > 0"), 30_000);
+      const visible = await app.waitFor("the set-up card", () => app.inPage("document.querySelectorAll('#view .card-plain .setup-step').length > 0"), 30_000);
       await app.shot("01-first-launch");
       if (setup.key || setup.box) throw new Error(`a fresh home already has ${setup.key ? "a key" : ""} ${setup.box ? "a box" : ""}`);
       return `card shown (${visible}); key=${setup.key} box=${setup.box}`;
@@ -428,32 +427,34 @@ async function phaseFull(run) {
     if (!(await run.step("full: key saved in Settings", async () => {
       const key = process.env[options.keyEnv];
       await app.openSettings("model");
-      const chosen = await app.inPage(`(function(){ var p = document.getElementById('setprovider'); p.value = ${JSON.stringify(options.provider)}; p.dispatchEvent(new Event('change')); return p.value; })()`);
+      const chosen = await app.inPage(`(function(){ var p = document.getElementById('set-provider'); p.value = ${JSON.stringify(options.provider)}; p.dispatchEvent(new Event('change')); return p.value; })()`);
       if (chosen !== options.provider) throw new Error(`Settings has no provider ${options.provider}`);
-      await app.inPage(`(function(){ var k = document.getElementById('setkey'); k.value = ${JSON.stringify(key)}; k.dispatchEvent(new Event('input')); return true; })()`);
-      await app.inPage("document.getElementById('setsave').click(), true");
+      await app.inPage(`(function(){ var k = document.getElementById('set-key'); k.value = ${JSON.stringify(key)}; k.dispatchEvent(new Event('input')); return true; })()`);
+      await app.inPage("document.getElementById('set-save').click(), true");
       await app.waitFor("the key to count", async () => (await app.api("/api/setup")).key === true, 30_000);
-      await app.inPage("document.getElementById('setkey').value = '', true");
       await app.shot("02-key-saved");
-      const status = await app.inPage("document.getElementById('setstatus').innerText");
+      // The pane is redrawn from what the server holds: the key field comes back empty, which is checked rather than done.
+      const leftBehind = await app.waitFor("the key field to be cleared", () => app.inPage("(function(){ var k = document.getElementById('set-key'); return k && k.value === '' ? 'cleared' : undefined; })()"), 15_000);
+      const status = (await app.inPage("(document.getElementById('set-note') || {}).innerText")) + " · key field " + leftBehind;
       return `provider ${options.provider}; ${(status ?? "").replace(/\s+/g, " ").slice(0, 120)}`;
     }))) return;
     let pullSeconds;
     if (!(await run.step("full: Start the box", async () => {
-      await app.openSettings("boxes");
+      await app.inPage("openChat(Object.keys(next.agents)[0] || ''), true");
+      await app.waitFor("the Start button", () => app.inPage("!!document.getElementById('box-start')"), 30_000);
       await app.shot("03-box-before-start");
       const started = Date.now();
-      await app.inPage("document.getElementById('setboxup').click(), true");
+      await app.inPage("document.getElementById('box-start').click(), true");
       let lastLog = "";
       try {
         await app.waitFor("the box to connect", async () => {
-          lastLog = (await app.inPage("document.getElementById('setboxlog').innerText")) ?? lastLog;
+          lastLog = (await app.inPage("boxes.log.join(String.fromCharCode(10))")) || lastLog;
           return (await app.api("/api/state")).box?.ok === true;
         }, options.boxTimeoutMin * 60_000, 5000);
       } catch (error) {
         writeFileSync(join(run.dir, "full", "box-start.log"), lastLog);
         await app.shot("04-box-failed");
-        throw new Error(`${error.message}; Settings shows: ${lastLog.trim().split("\n").pop()?.slice(0, 240) ?? ""}`);
+        throw new Error(`${error.message}; the page shows: ${lastLog.trim().split("\n").pop()?.slice(0, 240) ?? ""}`);
       }
       pullSeconds = Math.round((Date.now() - started) / 1000);
       writeFileSync(join(run.dir, "full", "box-start.log"), lastLog);
@@ -461,20 +462,19 @@ async function phaseFull(run) {
       return `connected after ${pullSeconds}s (${run.manifest.imageWasCached ? "image was cached" : "including the first pull"})`;
     }))) return;
     if (!(await run.step("full: green dot", async () => {
-      await app.inPage("document.getElementById('setcancel').click(), true");
-      const dot = await app.waitFor("the box dot", () => app.inPage("document.getElementById('boxdot').className.includes('ok') && document.getElementById('boxdot').className"), 60_000);
+      // The rebuilt page has no dot: a computer that is up says nothing, and the notice that it is not goes away.
+      const dot = await app.waitFor("the box notice to go", () => app.inPage("document.getElementById('box-notice').hidden === true ? 'no notice: the box is up' : undefined"), 60_000);
       await app.shot("05-green-dot");
       return dot;
     }))) return;
     if (!(await run.step("full: first message answered", async () => {
       const text = "你好，请用一句话介绍你自己。Hello — one sentence about yourself, please.";
-      await app.inPage(`(function(){ var i = document.getElementById('input'); i.value = ${JSON.stringify(text)}; i.dispatchEvent(new Event('input')); document.getElementById('send').click(); return true; })()`);
+      await app.inPage(`(function(){ var i = document.getElementById('composer-text'); i.value = ${JSON.stringify(text)}; i.dispatchEvent(new Event('input')); document.getElementById('composer-send').click(); return true; })()`);
       const reply = await app.waitFor("a reply from the agent", async () => {
         const setup = await app.api("/api/setup");
         if (!setup.agentTurn) return undefined;
-        // An agent's bubble carries data-role="agent" and no role class (bubble() in
-        // app-html.ts gives agents the empty role); its text is in .body, under the name row.
-        return app.inPage("(function(){ var all = document.querySelectorAll('#chat .msg[data-role=\"agent\"] .body'); var last = all[all.length - 1]; return last && last.innerText.trim().length > 0 ? last.innerText.trim() : undefined; })()");
+        // An agent's words are the bubbles of class "msg" in the thread (a person's are "msg-me").
+        return app.inPage("(function(){ var all = document.querySelectorAll('#view .thread .msg'); var last = all[all.length - 1]; return last && last.innerText.trim().length > 0 ? last.innerText.trim() : undefined; })()");
       }, options.replyTimeoutMin * 60_000, 3000);
       await app.shot("06-first-reply");
       return `reply: ${reply.replace(/\s+/g, " ").slice(0, 160)}`;

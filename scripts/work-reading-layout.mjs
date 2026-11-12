@@ -29,7 +29,7 @@ try {
     page.on("pageerror", error => errors.push(error.message));
     page.on("request", request => requests.push(request.url()));
     await page.route("**/*", route => route.request().url().startsWith(meta.base) ? route.continue() : route.abort());
-    await page.goto(meta.base + "/?lang=" + lang + "&agent=" + meta.agent);
+    await page.goto(meta.base + "/?ui=classic&lang=" + lang + "&agent=" + meta.agent);
     await page.waitForFunction(() => !!window.openTeamTasks && !!current);
     if (await page.locator("#settingswrap").isVisible()) await page.locator("#setcancel").click();
     await page.setViewportSize({ width: 1440, height: 1000 });
