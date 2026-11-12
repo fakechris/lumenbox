@@ -33,6 +33,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [92-web-ui](92-web-ui.md) | The web UI's visual rules: type, spacing, components | current | 2026-11-11 |
 | [93-skills](93-skills.md) | Skills: the SKILL.md contract, where skills live, and how a skill becomes a routine | current | 2026-11-07 |
 | [94-catalog](94-catalog.md) | The catalog: experts, crews, connectors and shelf templates | current | 2026-11-05 |
+| [99-user-work](99-user-work.md) | A person's work: requests, work, and what happens inside it | current | 2026-11-12 |
 | [glossary](glossary.md) | Glossary and controlled vocabulary | current | 2026-11-07 |
 
 ## manual
