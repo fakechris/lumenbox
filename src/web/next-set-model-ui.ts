@@ -5,7 +5,7 @@
  * and never shown again.
  */
 export const NEXT_SET_MODEL_JS = `
-var model = { config: null, error: "", fallbacks: null, rests: null, note: "", test: "" };
+var model = { config: null, error: "", fallbacks: null, rests: null, note: "", test: "", parts: null, jev: null };
 
 function loadModel() {
   getJson("/api/config").then(function (got) { model.config = got; model.error = ""; }, function (error) { model.error = error.message; model.config = model.config || {}; })
@@ -13,6 +13,8 @@ function loadModel() {
   // An admin's to read: for anybody else these two simply are not shown.
   getJson("/api/provider/fallbacks").then(function (got) { model.fallbacks = got; if (next.view === "settings") render(); }, function () { model.fallbacks = null; });
   getJson("/api/provider/rests").then(function (got) { model.rests = got; if (next.view === "settings") render(); }, function () { model.rests = null; });
+  getJson("/api/prompt-parts").then(function (got) { model.parts = got.parts || []; if (next.view === "settings") render(); }, function () { model.parts = null; });
+  getJson("/api/jev").then(function (got) { model.jev = got; if (next.view === "settings") render(); }, function () { model.jev = null; });
 }
 
 /** What a save sends for the model settings. An empty model or address clears it; a key is sent only when one was typed. */
@@ -122,9 +124,66 @@ function restsBlock() {
   return box;
 }
 
+/**
+ * The rules every agent is given, which an admin may reword. One that the product has since updated
+ * underneath an edited copy says so, and offers both ways out.
+ */
+function rulesBlock() {
+  if (!model.parts || !model.parts.length) return null;
+  var box = el("section", "setting"), zh = "{{@locale}}" === "zh";
+  box.appendChild(el("h2", "group", t("ui.next.model.rules")));
+  box.appendChild(el("p", "why", t("ui.next.model.rulesNote")));
+  model.parts.forEach(function (part) {
+    var fold = el("details", "fold"), body = el("div", "fold-body"), text = el("textarea"), acts = el("div", "acts"), save = el("button", "act", t("ui.next.settings.save"));
+    var decide = function (decision, extra) {
+      postJson("/api/prompt-parts", Object.assign({ key: part.key, decision: decision }, extra || {})).then(function () { toast(t("ui.next.settings.saved2")); loadModel(); }, failed);
+    };
+    fold.appendChild(el("summary", "", ((zh && part.titleZh) || part.title) + (part.status === "default" ? "" : " · " + t("ui.next.model.rule." + part.status))));
+    body.appendChild(el("p", "why", (zh && part.aboutZh) || part.about || ""));
+    text.rows = 10; text.value = part.text;
+    save.addEventListener("click", function () { decide("edit", { text: text.value }); });
+    acts.appendChild(save);
+    if (part.status === "overridden" || part.status === "default-updated") {
+      var back = el("button", "act", t(part.status === "overridden" ? "ui.next.model.rule.toDefault" : "ui.next.model.rule.takeNew"));
+      back.addEventListener("click", function () { decide("default"); });
+      acts.appendChild(back);
+    }
+    if (part.status === "default-updated") {
+      var keep = el("button", "act", t("ui.next.model.rule.keepMine"));
+      keep.addEventListener("click", function () { decide("keep"); });
+      acts.appendChild(keep);
+    }
+    body.appendChild(text); body.appendChild(acts); fold.appendChild(body); box.appendChild(fold);
+  });
+  return box;
+}
+
+/** The small model that makes yes-or-no judgements for the host, point by point: off, watching only, or deciding. */
+function judgeBlock() {
+  if (!model.jev) return null;
+  var box = el("section", "setting"), key = el("input"), keep = el("button", "act", t("ui.next.settings.save")), row = el("div", "acts");
+  box.appendChild(el("h2", "group", t("ui.next.model.judge")));
+  box.appendChild(el("p", "why", t("ui.next.model.judgeNote") + " " + t(model.jev.keyPresent ? "ui.next.model.keySet" : "ui.next.model.keyMissing")));
+  (model.jev.points || []).forEach(function (point) {
+    var pick = selectOf((point.modes || []).map(function (mode) { return [mode, t("ui.next.model.judge." + mode)]; }), point.mode), change = {};
+    pick.addEventListener("change", function () {
+      change[point.point] = pick.value;
+      postJson("/api/jev", { points: change }).then(function (got) { model.jev = got; toast(t("ui.next.settings.saved2")); }, function (error) { failed(error); loadModel(); });
+    });
+    box.appendChild(labelled(point.label, pick));
+  });
+  key.type = "password"; key.autocomplete = "off"; key.placeholder = t("ui.next.model.key");
+  keep.addEventListener("click", function () {
+    if (!key.value.trim()) { key.focus(); return; }
+    postJson("/api/jev", { key: key.value.trim() }).then(function (got) { model.jev = got; key.value = ""; toast(t("ui.next.settings.saved2")); render(); }, failed);
+  });
+  row.appendChild(key); row.appendChild(keep); box.appendChild(row);
+  return box;
+}
+
 function renderModelPane(view) {
   if (model.config === null) { view.appendChild(el("p", "empty", t("ui.next.auto.reading"))); loadModel(); return; }
   if (model.error) { view.appendChild(el("p", "why", model.error)); return; }
-  [restsBlock(), modelForm(), fallbackBlock()].forEach(function (block) { if (block) view.appendChild(block); });
+  [restsBlock(), modelForm(), fallbackBlock(), rulesBlock(), judgeBlock()].forEach(function (block) { if (block) view.appendChild(block); });
 }
 `;

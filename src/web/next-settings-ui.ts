@@ -72,7 +72,7 @@ function renderSettings(view) {
 
 var SETTING_PANES = ["model", "boxes", "doors", "team", "mine", "memory", "supervision", "guests"];
 // The panes rebuilt here; the rest still open the classic dialog in a frame.
-var NATIVE_PANES = { mine: renderMinePane, model: renderModelPane };
+var NATIVE_PANES = { mine: renderMinePane, model: renderModelPane, doors: renderDoorsPane };
 
 /** A classic dialog in a frame over the page; it says when it has closed, and the frame goes. */
 function openEmbed(kind, tab) {

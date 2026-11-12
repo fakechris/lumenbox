@@ -248,8 +248,9 @@ says so.
 view with a way back; one that has not opens the classic dialog in a frame. Rebuilt so far: what is a
 person's own (what the agents know about them, the tokens they issued, the approvals they gave once
 and for all), and the model (provider, key, model, pictures, summaries, web search, the providers to
-fall back to, the accounts resting). A key is typed, saved and never shown again; a token is shown
-once.
+fall back to, the accounts resting, the rules every agent is given, the small model that makes
+judgements), and the doors (chat channels, the people waiting to be let in, connected services). A
+key or a secret is typed, saved and never shown again; a token is shown once.
 
 **Three levels, everywhere.**
 

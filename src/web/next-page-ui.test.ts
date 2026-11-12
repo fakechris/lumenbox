@@ -265,3 +265,8 @@ test("saving the model sends a key only when one was typed, clears what was empt
   assert.deepEqual(plain(modelBody({ ...form, searchProvider: "" })).searchProvider, "", "choosing no search service is sent, so the server clears it");
   assert.deepEqual(plain(modelBody({ ...form, searchKey: "s1" })), { provider: "minimax", model: "MiniMax-M3", baseUrl: null, vision: "auto", summaryModel: null, searchProvider: "brave", searchKey: "s1" });
 });
+
+test("a saved channel says what happens next: it is connecting, or it needs a restart", () => {
+  const doorSaved = pageFunction("doorSaved", { t: (key: string) => key });
+  assert.deepEqual([doorSaved({ started: true, restartNeeded: false }), doorSaved({ started: false, restartNeeded: true }), doorSaved({})], ["ui.next.doors.connecting", "ui.next.doors.restart", "ui.next.settings.saved2"]);
+});
