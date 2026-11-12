@@ -263,7 +263,7 @@ function refresh() {
   var machines = getJson("/api/boxes").then(function (got) { return got; }, function () { return { boxes: [], own: "" }; });
   getJson("/api/setup").then(function (got) { settings.setup = got; }, function () {});
   return Promise.all([getJson("/api/state"), getJson("/api/attention"), getJson("/api/tasks/list?records=user&limit=100"), machines]).then(function (got) {
-    boxes.list = got[3].boxes || []; boxes.own = got[3].own || "";
+    boxes.list = got[3].boxes || []; boxes.own = got[3].own || ""; boxes.state = got[0].box || null;
     var first = Object.keys(next.agents).length === 0;
     next.agents = {}; member.allTools = got[0].allTools || [];
     (got[0].agents || []).forEach(function (agent) { next.agents[agent.id] = agent; });
@@ -282,7 +282,7 @@ function refreshSoon() { clearTimeout(refreshTimer); refreshTimer = setTimeout(r
 
 function nextStart() {
   document.querySelectorAll("[data-nav]").forEach(function (button) {
-    button.addEventListener("click", function () { next.view = button.dataset.nav; settings.pane = ""; document.body.dataset.open = "1"; history.replaceState(null, "", "?ui=next&view=" + next.view); render(); });
+    button.addEventListener("click", function () { next.view = button.dataset.nav; settings.pane = ""; document.body.dataset.open = "1"; history.replaceState(null, "", "?view=" + next.view); render(); });
   });
   $("work-find").addEventListener("input", function () { findWork($("work-find").value.trim()); });
   document.querySelectorAll("[data-layout]").forEach(function (button) {
@@ -313,6 +313,14 @@ function nextStart() {
   screenStart();
   memberStart();
   cardsStart();
+  // Under the desktop app the header is also the window's title bar, and on a Mac its corner holds the window's buttons.
+  if (navigator.userAgent.indexOf("Electron") >= 0) {
+    document.body.classList.add("electron");
+    if (/Macintosh/.test(navigator.userAgent)) document.body.classList.add("electron-mac");
+  }
+  landSharedTemplate();
+  // What the desktop app calls to show an agent, when a notification about it is pressed.
+  window.select = function (agentId) { if (next.agents[agentId]) openChat(agentId); };
   // A link to one piece of work — from a chat message, a notification — opens it.
   if (linked) openPanel(linked);
   refresh();
@@ -326,6 +334,7 @@ function nextStart() {
     if (kind === "turn_started" || kind === "turn_finished" || kind === "turn_failed") { var who = next.agents[event.agentId]; if (who) who.running = kind === "turn_started"; }
     chatEvent(event);
     cardsEvent(event);
+    boxSetupEvent(event);
     // The system page is a snapshot: what can change it re-reads it while it is the page being looked at.
     if (next.view === "system" && (kind === "turn_failed" || kind === "turn_finished" || kind === "error" || kind === "reset")) loadSystem();
   };

@@ -65,20 +65,20 @@ test("progress is shown only where something was counted, and never from a stale
   assert.deepEqual(nextLogic.nextAgo(new Date(Date.now() - 5 * 60_000).toISOString(), Date.now()), { key: "minutes", n: 5 });
 });
 
-test("the page somebody switched to is the one they come back to; with no choice it is the classic one", async () => {
+test("with no choice the page is the rebuilt one; the page somebody switched to is the one they come back to", async () => {
   const { pageChoice, APP_PAGE } = await import("./page-locale.ts");
   const ask = (path: string, cookie?: string) => pageChoice({ headers: cookie ? { cookie } : {} } as never, new URL(path, "http://127.0.0.1"));
-  assert.equal(ask("/").page, APP_PAGE, "no choice: classic");
+  assert.equal(ask("/").page, NEXT_PAGE, "no choice: the rebuilt page");
   assert.equal(ask("/").remember, undefined);
-  assert.equal(ask("/?ui=next").page, NEXT_PAGE);
-  assert.match(ask("/?ui=next").remember!, /^lumen-ui=next; /);
-  assert.equal(ask("/", "agentbox_ui=x; lumen-ui=next").page, NEXT_PAGE, "remembered across a plain reload");
-  assert.equal(ask("/?ui=classic", "lumen-ui=next").page, APP_PAGE, "and switching back is one link");
-  assert.match(ask("/?ui=classic", "lumen-ui=next").remember!, /^lumen-ui=classic; /);
-  assert.equal(ask("/?ui=sideways").page, APP_PAGE, "an unknown choice is no choice");
-  assert.equal(ask("/?ui=next", "lumen-ui=next").remember, undefined, "nothing to remember twice");
+  assert.equal(ask("/?ui=classic").page, APP_PAGE);
+  assert.match(ask("/?ui=classic").remember!, /^lumen-ui=classic; /);
+  assert.equal(ask("/", "agentbox_ui=x; lumen-ui=classic").page, APP_PAGE, "remembered across a plain reload");
+  assert.equal(ask("/?ui=next", "lumen-ui=classic").page, NEXT_PAGE, "and switching back is one link");
+  assert.match(ask("/?ui=next", "lumen-ui=classic").remember!, /^lumen-ui=next; /);
+  assert.equal(ask("/?ui=sideways").page, NEXT_PAGE, "an unknown choice is no choice");
+  assert.equal(ask("/?ui=classic", "lumen-ui=classic").remember, undefined, "nothing to remember twice");
   assert.deepEqual([ask("/?ui=classic&once=1&task=t1", "lumen-ui=next").page, ask("/?ui=classic&once=1&task=t1", "lumen-ui=next").remember], [APP_PAGE, undefined], "one look at the other page changes nothing");
-  assert.deepEqual([ask("/?import=abc", "lumen-ui=next").page, ask("/?import=abc", "lumen-ui=next").remember], [APP_PAGE, undefined], "a template link opens where its dialog is");
+  assert.equal(ask("/?import=abc").page, NEXT_PAGE, "a template link is the rebuilt page's to open");
 });
 
 /** One function out of the page's own script, run with the globals it reads. */
@@ -294,4 +294,9 @@ test("a supervision run's ceilings are read strictly, and the desktop app's pane
   assert.deepEqual([{ maxMinutes: "0", maxModelCalls: "40", budget: "" }, { maxMinutes: "30", maxModelCalls: "1.5", budget: "" }, { maxMinutes: "30", maxModelCalls: "40", budget: "-2" }].map(form => plain(supervisionNumbers(form)).bad), ["maxMinutes", "maxModelCalls", "budget"]);
   const panes = (shell: unknown) => plain(pageFunction("shellPanes", { appShell: () => shell ?? {} })());
   assert.deepEqual([panes(undefined), panes({ machine: {} }), panes({ machine: {}, organisations: {} })], [[], ["machine"], ["machine", "organisations"]]);
+});
+
+test("a computer that is not there says why in words a person can act on: no Docker, Docker stopped, or simply offline", () => {
+  const why = (docker: unknown, own = "b1") => pageFunction("boxWhy", { boxes: { own, state: docker === undefined ? null : { docker } } })({ id: "b1" });
+  assert.deepEqual([why({ state: "no-binary" }), why({ state: "no-engine" }), why(undefined), why({ state: "no-binary" }, "other")], ["missing", "stopped", "offline", "offline"]);
 });

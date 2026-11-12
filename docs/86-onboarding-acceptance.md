@@ -2,7 +2,7 @@
      title: Onboarding acceptance: a new user's first run on the published release
      family: guide
      status: current
-     updated: 2026-10-31
+     updated: 2026-11-12
 -->
 # Onboarding acceptance: a new user's first run on the published release
 
@@ -27,8 +27,8 @@ This page is the runbook for the agent that runs it.
 | nodocker: Settings says what to do | `/api/state` diagnoses `no-engine` and Settings → Boxes tells the person to start Docker Desktop or OrbStack |
 | full: first launch shows the set-up card | a fresh home has no key and no box, and the set-up card is on screen |
 | full: key saved in Settings | the provider chosen and the key typed into Settings → Model, Save pressed, and `/api/setup` counts the key |
-| full: Start the box | Start the box pressed in Settings → Boxes, and the box connects within `--box-timeout-min` (default 40). The time includes the image pull when the image was not cached |
-| full: green dot | the sidebar box dot turns ok |
+| full: Start the box | Start pressed on the notice above the agent list, and the box connects within `--box-timeout-min` (default 40). The time includes the image pull when the image was not cached |
+| full: green dot | the notice that the box is not running goes away (the rebuilt page has no dot: a computer that is up says nothing) |
 | full: first message answered | a message sent from the chat box gets a non-empty assistant reply within `--reply-timeout-min` (default 6) |
 | nothing else touched | every container that existed before the run has the same id and start time after it |
 

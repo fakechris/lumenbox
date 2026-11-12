@@ -74,7 +74,7 @@ function openChat(agentId) {
   if (agentId !== chat.agentId) { chat.live = null; chat.loadedFor = ""; chat.entries = []; chat.conversation = "main"; chat.conversations = []; chat.plan = null; chat.liveSurfaces = {}; }
   chat.agentId = agentId; next.view = "chat"; document.body.dataset.open = "1";
   if (next.agents[agentId] && next.agents[agentId].boxId) chat.box = next.agents[agentId].boxId; // an agent on another computer brings its computer with it
-  history.replaceState(null, "", "?ui=next&agent=" + encodeURIComponent(agentId));
+  history.replaceState(null, "", "?agent=" + encodeURIComponent(agentId));
   render();
 }
 

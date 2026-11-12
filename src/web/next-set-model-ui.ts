@@ -55,6 +55,8 @@ function modelForm() {
     (preset.models || []).forEach(function (value) { var node = el("option"); node.value = value; list.appendChild(node); });
   };
   provider.addEventListener("change", follow); follow();
+  // Named, because the first-run acceptance drives these four through the window (scripts/onboarding-e2e.mjs).
+  provider.id = "set-provider"; key.id = "set-key";
   var form = function () {
     return { provider: provider.value, model: name.value, baseUrl: address.value, key: key.value, vision: vision.value, summaryModel: summary.value, searchProvider: searchProvider.value, searchKey: searchKey.value, searchWas: searchWas };
   };
@@ -81,6 +83,7 @@ function modelForm() {
     }, function (error) { model.test = t("ui.next.model.testBad", { error: error.message }); }).then(function () { test.disabled = false; note.textContent = model.test; });
   });
   var note = el("p", "why", model.test || model.note);
+  save.id = "set-save"; note.id = "set-note";
   acts.appendChild(save); acts.appendChild(test); box.appendChild(acts); box.appendChild(note);
   return box;
 }

@@ -17,7 +17,7 @@ try {
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, extraHTTPHeaders: { authorization: "Bearer layout-fixture", "x-agentbox-user": "web:layout-viewer" } }); await context.addInitScript(() => localStorage.setItem("lumen-onboarded", "1"));
     const page = await context.newPage(), errors = []; active = page; page.on("pageerror", error => errors.push(error.message));
     await page.route("**/*", route => route.request().url().startsWith(meta.base) ? route.continue() : route.abort());
-    await page.goto(meta.base + "/?lang=" + lang + "&agent=" + meta.agent); await page.waitForFunction(() => !!window.openWorkManagement && !!current);
+    await page.goto(meta.base + "/?ui=classic&lang=" + lang + "&agent=" + meta.agent); await page.waitForFunction(() => !!window.openWorkManagement && !!current);
     await page.locator("#work-management-nav").click(); await page.waitForSelector("[data-wg-resource]"); await page.setViewportSize({ width, height: 1000 });
     await page.evaluate(dark => { document.documentElement.dataset.theme = dark ? "dark" : "light"; }, dark);
     await page.addStyleTag({ content: ":root{--fs-xs:17.6px;--fs-sm:19.2px;--fs-md:20.8px;--fs-body:24px;--fs-lg:28.8px;--fs-xl:35.2px}html{font-size:24px}" });
