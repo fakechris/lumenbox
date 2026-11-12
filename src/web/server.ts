@@ -3387,7 +3387,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             (requestedBox && !mayReadBox(requestedBox))) { send(res, 403, apiError("box-not-yours")); return; }
         }
         if (route === "GET /") {
-          const chosen = pageChoice(req, url); if (chosen.remember) res.setHeader("set-cookie", chosen.remember); // whichever page was switched to stays (INV-1825)
+          const chosen = pageChoice(req, url); if (chosen.remember) res.appendHeader("set-cookie", chosen.remember); // appended: a first visit also sets the sign-in cookie // whichever page was switched to stays (INV-1825)
           send(res, 200, chosen.page(localeOf(req, url)), "text/html");
           return;
         }
