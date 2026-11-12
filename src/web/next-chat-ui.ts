@@ -51,7 +51,8 @@ function renderSide() {
     body.appendChild(el("div", "role", agent.running ? t("ui.next.agent.working") : (agent.title || agent.description || "")));
     row.appendChild(el("span", "who", initial(agent.name)));
     row.appendChild(body);
-    if (agentOwes(agent)) row.appendChild(el("span", "chip-need", t("ui.next.agent.needs")));
+    if (member.paused[agent.id]) row.appendChild(el("span", "chip", t("ui.next.agent.paused")));
+    else if (agentOwes(agent)) row.appendChild(el("span", "chip-need", t("ui.next.agent.needs")));
     else if (agent.running) row.appendChild(el("span", "dot"));
     else if (agent.facts && agent.facts.unreadCount) row.appendChild(el("span", "count", agent.facts.unreadCount));
     row.addEventListener("click", function () { openChat(agent.id); });

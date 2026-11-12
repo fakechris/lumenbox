@@ -15,6 +15,7 @@ import { NEXT_CHAT_JS } from "./next-chat-ui.ts";
 import { NEXT_DIAGNOSTICS_JS } from "./next-diagnostics-ui.ts";
 import { NEXT_SCREEN_JS } from "./next-screen-ui.ts";
 import { NEXT_SETTINGS_JS } from "./next-settings-ui.ts";
+import { NEXT_MEMBER_JS } from "./next-member-ui.ts";
 
 const STYLE = `
 :root {
@@ -140,10 +141,23 @@ header.bar select { font: inherit; font-size: 13px; padding: 4px 8px; border-rad
 .setting .fields { display: flex; gap: 14px; flex-wrap: wrap; margin: 12px 0; }
 .setting label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--soft); }
 .setting input { width: 140px; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg); font: inherit; }
+.side h2.group { display: flex; align-items: center; justify-content: space-between; }
+.side h2.group button { width: 22px; height: 22px; border-radius: 6px; color: var(--muted); font-size: 16px; line-height: 1; }
+.side h2.group button:hover { background: var(--surface); color: var(--text); }
+body[data-view="chat"] #view-title { cursor: pointer; }
+.setting label { width: 100%; }
+.setting label input:not([type]), .setting textarea { width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg); font: inherit; }
+.setting textarea { min-height: 120px; resize: vertical; }
+.panel .setting { border: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; max-width: none; }
+.panel .setting .act-primary { align-self: flex-start; }
+.toolgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 4px 12px; margin-top: 8px; }
+.toolgrid .tool { flex-direction: row; align-items: center; gap: 6px; font-size: 12.5px; color: var(--soft); }
+.toolgrid input { width: auto; }
 .scrim { position: fixed; inset: 0; background: rgba(31,26,23,.18); }
 .panel { position: fixed; top: 12px; right: 12px; bottom: 12px; width: min(600px, calc(100vw - 24px)); background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 18px 50px rgba(31,26,23,.16); display: flex; flex-direction: column; }
 .panel > header { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
 .panel > header .tabs { margin-left: auto; }
+#member > header .x { margin-left: auto; }
 .panel > header .x { font-size: 20px; color: var(--muted); width: 28px; }
 .panel .inner { padding: 18px; overflow: auto; flex: 1; }
 .panel h3 { font-size: 18px; margin: 0 0 6px; overflow-wrap: anywhere; }
@@ -197,7 +211,7 @@ export const NEXT_HTML = `<!doctype html>
   <div class="brand"><span class="logo" aria-hidden="true">L</span>{{ui.next.title}}</div>
   <div class="boxes" id="boxes" aria-label="{{ui.next.side.boxes}}"></div>
   <button class="needs" id="needs" data-nav="inbox" hidden></button>
-  <h2 class="group">{{ui.next.side.label}}</h2>
+  <h2 class="group">{{ui.next.side.label}}<button id="agent-new" aria-label="{{ui.next.member.add}}" title="{{ui.next.member.add}}">+</button></h2>
   <div class="agents" id="agents"></div>
   <div class="side-links">
     <button data-nav="work">{{ui.next.side.work}}</button>
@@ -231,6 +245,10 @@ export const NEXT_HTML = `<!doctype html>
     <span class="tabs"><button class="seg" data-tab="overview" aria-pressed="true">{{ui.next.tab.overview}}</button><button class="seg" data-tab="diagnostics" aria-pressed="false">{{ui.next.tab.diagnostics}}</button></span>
     <button class="x" id="panel-close" aria-label="{{ui.next.act.close}}">×</button></header>
   <div class="inner" id="panel-inner"></div>
+</aside>
+<aside class="panel" id="member" aria-label="{{ui.next.member.label}}" hidden>
+  <header><b id="member-title"></b><button class="x" id="member-close" aria-label="{{ui.next.act.close}}">×</button></header>
+  <div class="inner" id="member-inner"></div>
 </aside>
 <div class="toast" id="toast" role="status" hidden></div>
 <script>
@@ -269,6 +287,7 @@ ${NEXT_PANEL_JS}
 ${NEXT_DIAGNOSTICS_JS}
 ${NEXT_SCREEN_JS}
 ${NEXT_SETTINGS_JS}
+${NEXT_MEMBER_JS}
 nextStart();
 </script>
 </body>
