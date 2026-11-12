@@ -1,3 +1,5 @@
+import { deliveryTool, reviewerInspectionRefusal } from "./task-delivery-tools.ts";
+import { isDeliveryAction } from "./task-delivery.ts"; import { evidenceDigest } from "./review-dispatch.ts";
 import { executionTarget } from "./tool-roster.ts";
 import { TASK_PROGRESS_TOOL, runTaskProgressTool } from "./task-progress-tool.ts";
 import type { ToolOutcome } from "./tool-outcome.ts";
@@ -116,7 +118,7 @@ function foregroundWindowMs(): number {
 
 export interface ToolContext {
   signal?: AbortSignal;
-  audit?: import("./audit-context.ts").AuditContext;
+  audit?: import("./audit-context.ts").AuditContext; resultChecks?: import("./result-check-policy.ts").ResultChecks;
   work?: import("../agents/work-attention.ts").WorkStamp; historyConversation?: string;
   progressContext?: import("./task-progress.ts").ProgressContext;
   taskBinding?: import("./execution-binding.ts").TaskBinding;
@@ -189,8 +191,8 @@ export interface ToolContext {
    * components against the catalog and says where it went, or why it was refused.
    */
   showUI?: (input: {
-    principalId?: string;
-    agentId: string;
+    work?: import("../agents/work-attention.ts").WorkStamp;
+    principalId?: string; agentId: string;
     agentName: string;
     conversation?: string;
     surface: string;
@@ -1691,7 +1693,7 @@ export function buildTools(
         type: "object",
         properties: {
           action: { type: "string", enum: ["status", "checklist_add", "claim_complete"] }, ...CLAIM_ACCOUNT_SCHEMA, // what the work decided and left unchecked (INV-1574)
-          evidence: {
+evidence: {
             type: "array",
             description: "For claim_complete: per checklist item, where the proof is.",
             items: {
@@ -1743,7 +1745,7 @@ export function buildTools(
         "something a successor needs to know happens. Statuses: open (nobody on it), " +
         "doing, blocked (say why in the note), review (finished, awaiting acceptance), " +
         "done, dropped. If a task names a reviewer, only the reviewer can move it to " +
-        "done — your finish is `review`, and that is not a formality you can skip. " +
+        "done. Use submit to deliver your result, request_check to check a submitted result, and accept for authorized acceptance. Use handoff to report incomplete execution without requesting a check. A refusal never submits work. " +
         "Your own live tasks are already in your instructions every turn; `list` is for " +
         "seeing the whole board. Use `read` with an id for the current full description of " +
         "your assigned task, including connection details; list is only a summary. " +
@@ -1754,7 +1756,7 @@ export function buildTools(
         properties: {
           action: {
             type: "string",
-            enum: ["create", "take", "update", "list", "read", "propose_close"],
+            enum: ["create", "take", "update", "list", "read", "propose_close", "submit", "request_check", "accept", "handoff"],
             description:
               "create a task; take one (assigns it to you, status doing); update one's " +
               "status/note/assignee; list the board; read current details of your assigned task.",
@@ -1791,7 +1793,7 @@ export function buildTools(
           constraints: { type: "string", description: "For create: what must not be done or changed." },
           acceptance: { type: "string", description: "For create: how the reviewer decides it is done." },
           verification: { type: "string", description: "For create: how the result is to be checked — the command, the page, the file." },
-          evidence: {
+          expected_version: { type: "string", description: "For delivery actions: the evidence version returned by read; a stale version is refused." }, evidence: {
             type: "array",
             items: { type: "string" },
             description:
@@ -3636,7 +3638,7 @@ export async function dispatchTool(
         agentId: context.agent.id,
         agentName: context.agent.profile.name,
         ...(context.conversation !== undefined ? { conversation: context.conversation } : {}),
-        surface, workDir: workDir(boxOf(context)),
+        surface, ...(context.work ? { work: context.work } : {}), workDir: workDir(boxOf(context)),
         ...(input.components !== undefined ? { components: input.components } : {}),
         ...(input.data !== undefined ? { data: input.data } : {}),
         ...(typeof input.title === "string" && input.title.trim() !== "" ? { title: input.title.trim() } : {}),
@@ -5011,7 +5013,7 @@ export async function dispatchTool(
       }
       const action = String(input.action ?? "");
       const nameOf = (id: string) => context.registry.tryGet(id)?.profile.name ?? id;
-      const cited = (task: Task) => { const line = context.verifications !== undefined ? citationFor(task, context.verifications, context.reviewersPerClaim ?? DEFAULT_REVIEWERS_PER_CLAIM, nameOf) : undefined; return line === undefined ? "" : `\n  · ${line}`; }; // the record stands in for a re-check (INV-1614)
+      const cited = (task: Task) => { const policy = context.resultChecks?.snapshot(task).policy; const line = context.verifications !== undefined ? citationFor(task, context.verifications, policy?.mode === "model" ? policy.reviewers : policy?.mode === "files" ? 1 : context.reviewersPerClaim ?? DEFAULT_REVIEWERS_PER_CLAIM, nameOf) : undefined; return line === undefined ? "" : `\n  · ${line}`; }; // the record stands in for a re-check (INV-1614)
       const resolveAgent = (raw: string): string | undefined => teammateNamed(context, raw)?.id; // an id or a name; teammates say names, the board stores ids
       const mayAssign = (taskId: string): boolean => {
         const task = board.get(taskId);
@@ -5036,7 +5038,7 @@ export async function dispatchTool(
         if (task.assigneeId !== context.agent.id && context.audit?.taskId !== task.id) {
           return { text: "Task details are available to its current assignee. Ask for assignment before reading them.", isError: true };
         }
-        return { text: `${describeTask(task, nameOf, board)}${cited(task)}\n\n${task.description ?? "No additional description."}` };
+        return { text: `${describeTask(task, nameOf, board)}${cited(task)}\nEvidence version: ${evidenceDigest(task)}\n\n${task.description ?? "No additional description."}` };
       }
 
       if (action === "create") {
@@ -5113,31 +5115,13 @@ export async function dispatchTool(
         return { text: `You are on it: ${describeTask(taken.task, nameOf, board)}.` };
       }
 
+      if (isDeliveryAction(action)) return deliveryTool(board, input, context);
+
       if (action === "update") {
         const status = String(input.status ?? "");
-        // A reviewer's acceptance is worth something only if the reviewer looked. Not an
-        // opinion about the quality of the look — the one mechanical fact available: did
-        // this turn call any tool besides the board before saying done? A verdict from
-        // the assignee's summary alone is the assignee grading itself with a second name
-        // on it (docs/20's objection; Argus rewrites such a "done" to "continue").
         const target = board.get(String(input.id ?? ""));
-        if (
-          status === "done" &&
-          target !== undefined &&
-          target.reviewerId === context.agent.id &&
-          target.assigneeId !== context.agent.id &&
-          context.toolsUsedThisTurn !== undefined &&
-          [...context.toolsUsedThisTurn].every(tool => tool === "Tasks")
-        ) {
-          return {
-            text:
-              `Not accepted: you are the reviewer of ${target.id} and this turn has checked ` +
-              `nothing yet — no file read, no command run, no page opened. Inspect the work ` +
-              `first (read the artifact, run the check, look at the screen), then accept or ` +
-              `send it back with a note saying what is wrong.`,
-            isError: true,
-          };
-        }
+        const refusal = status === "done" ? reviewerInspectionRefusal(target, context.agent.id, context.toolsUsedThisTurn) : undefined;
+        if (refusal) return { text: refusal, isError: true };
         const assigneeRaw = String(input.assignee ?? "").trim();
         const assigneeId = assigneeRaw === "" ? undefined : resolveAgent(assigneeRaw);
         if (assigneeRaw !== "" && assigneeId === undefined) {
@@ -5176,6 +5160,7 @@ export async function dispatchTool(
         if (updated === undefined) {
           return { text: `No task ${String(input.id ?? "")} on the board.`, isError: true };
         }
+        if (updated.coerced) return { text: updated.coerced, isError: true };
         const told =
           assigneeId !== undefined && assigneeId !== target?.assigneeId
             ? tellAssignee(context, updated.task.id, updated.task.title, assigneeId)

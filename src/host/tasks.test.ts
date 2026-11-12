@@ -49,7 +49,7 @@ test("the review gate: a named reviewer means the assignee cannot self-accept", 
   try {
     store.create({ title: "Ship the release", requester: "web", assigneeId: "ada", reviewerId: "bob" });
     const attempt = store.update("t1", { status: "done" }, "ada")!;
-    assert.equal(attempt.task.status, "review", "coerced, not obeyed");
+    assert.equal(attempt.task.status, "open", "a refusal is not submission");
     assert.match(attempt.coerced ?? "", /cannot mark it done/);
 
     // The reviewer accepting is what done means.
@@ -59,7 +59,7 @@ test("the review gate: a named reviewer means the assignee cannot self-accept", 
 
     // And a reviewer sending it back works like anything else.
     store.create({ title: "Another", requester: "web", assigneeId: "ada", reviewerId: "bob" });
-    store.update("t2", { status: "review" }, "ada");
+    store.deliveryCommand("t2", "submit", "ada");
     const back = store.update("t2", { status: "doing", note: "the header is wrong" }, "bob")!;
     assert.equal(back.task.status, "doing");
   } finally {
@@ -76,7 +76,7 @@ test("somebody the task is not about cannot end it", () => {
   const { store, cleanup } = tempStore();
   try {
     store.create({ title: "整理报表", requester: "feishu:chris", assigneeId: "ada" });
-    store.update("t1", { status: "review" }, "ada");
+    store.deliveryCommand("t1", "submit", "ada");
 
     const outsider = store.update("t1", { status: "done", note: "看着挺好" }, "feishu:dana")!;
     assert.equal(outsider.task.status, "review", "refused, and not nudged somewhere else");
@@ -126,24 +126,19 @@ test("a request too long to keep says so where it was cut", () => {
   }
 });
 
-test("a coerced move is marked as one, so a listener need not read the sentence", () => {
-  // The pitfall writer must fire on a refused self-acceptance and not on an ordinary move
-  // to review. Recognising the coercion by its wording would break the day the wording
-  // changes, and the failure would be silent — the registry would simply stop learning.
-  const { store, cleanup } = tempStore();
+test("a refused delivery is audited without changing the task or notifying business listeners", () => {
+  const { store, reopen, cleanup } = tempStore();
   try {
-    store.create({ title: "Ship it", requester: "web", assigneeId: "ada", reviewerId: "bob" });
-    const coerced = store.update("t1", { status: "done" }, "ada")!;
-    assert.equal(coerced.task.history.at(-1)!.coerced, true);
-
-    // An assignee that parks its own work for review deliberately is not coerced.
-    store.create({ title: "Another", requester: "web", assigneeId: "ada", reviewerId: "bob" });
-    const deliberate = store.update("t2", { status: "review", note: "ready" }, "ada")!;
-    assert.equal(deliberate.task.history.at(-1)!.coerced, undefined);
-    assert.equal(deliberate.coerced, undefined);
-  } finally {
-    cleanup();
-  }
+    const task = store.create({ title: "Ship it", requester: "web", assigneeId: "ada", reviewerId: "bob" })!;
+    let changes = 0; store.onChange(() => changes++);
+    const before = JSON.stringify(task);
+    const refused = store.update(task.id, { status: "done", title: "must not rename", note: "must not publish" }, "ada")!;
+    assert.match(refused.coerced!, /Use submit/);
+    assert.equal(JSON.stringify(reopen().get(task.id)), before);
+    assert.equal(changes, 0);
+    assert.equal(store.deliveryCommand(task.id, "submit", "ada", { evidence: ["verified artifact"] })!.outcome, "applied");
+    assert.equal(changes, 1);
+  } finally { cleanup(); }
 });
 
 test("the board survives a restart; a torn last line costs one snapshot, not the board", () => {
@@ -200,11 +195,11 @@ test("every onChange listener fires after a recorded change, with the task as it
   // blocked-ping are wired at different times by different modules.
   store.onChange(task => seen.push(`channel ${task.id}:${task.status}`));
   const task = store.create({ title: "audit me", requester: "chris", assigneeId: "a1", reviewerId: "v1" })!;
-  store.update(task.id, { status: "done" }, "a1"); // review gate coerces to review
+  store.deliveryCommand(task.id, "submit", "a1"); // an explicit submission notifies business listeners
   assert.deepEqual(
     seen,
     [`audit ${task.id}:review`, `channel ${task.id}:review`],
-    "create does not fire; the coerced update reaches both listeners"
+    "create does not fire; explicit submission reaches both listeners"
   );
 });
 
@@ -217,7 +212,7 @@ test("a finished turn does not overrule a status the agent chose", () => {
   const { store, cleanup } = tempStore();
   try {
     const task = store.create({ title: "size the local models", requester: "feishu:ou_1", assigneeId: "ada" })!;
-    store.update(task.id, { status: "review", note: "16GB, here is what fits" }, "ada");
+    store.deliveryCommand(task.id, "submit", "ada", { note: "16GB, here is what fits" });
 
     store.turnFinished(task.id);
 
@@ -331,7 +326,7 @@ test("a reviewer's acceptance records what it checked; other moves carry nothing
   const { store, cleanup } = tempStore();
   try {
     store.create({ title: "Ship it", requester: "web", assigneeId: "ada", reviewerId: "bob" });
-    store.update("t1", { status: "review" }, "ada");
+    store.deliveryCommand("t1", "submit", "ada");
     store.update("t1", { status: "done", checked: ["read_file src/app.ts", "bash npm test"] }, "bob");
     assert.deepEqual(store.get("t1")!.history.at(-1)?.checked, ["read_file src/app.ts", "bash npm test"]);
     store.update("t1", { status: "doing", checked: ["x"] }, "ada");
@@ -374,7 +369,7 @@ test("a submission for review carries its evidence lines, bounded", () => {
   const { store, cleanup } = tempStore();
   try {
     store.create({ title: "Fix the fetch", requester: "web", assigneeId: "ada", reviewerId: "bob" });
-    store.update("t1", { status: "review", evidence: ["https://github.com/x/y/pull/9 — the diff", "npm test → 12 passed", "", "x".repeat(400)] }, "ada");
+    store.deliveryCommand("t1", "submit", "ada", { evidence: ["https://github.com/x/y/pull/9 — the diff", "npm test → 12 passed", "", "x".repeat(400)] });
     const last = store.get("t1")!.history.at(-1)!;
     assert.equal(last.evidence?.length, 3);
     assert.equal(last.evidence?.[2]?.length, 300);

@@ -27,6 +27,7 @@ export const MESSAGES_SCHEMA = "lumenbox.message/v1";
 
 export interface MessageRecord {
   schema: typeof MESSAGES_SCHEMA;
+  kind?: "interaction";
   /** Minted at the door; the same id the inbox and the transcript carry. */
   id: string;
   /** The door's name, e.g. `feishu-personal`. */

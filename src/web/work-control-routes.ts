@@ -12,6 +12,18 @@ export function workControlFor(host: Orchestrator, pauses: AgentPauses, question
     cancel: workId => { for(const map of [secrets,desktops]) for(const [id,row] of map.entries()) if(row.work?.id===workId) map.delete(id); },
   }});
 }
+export async function pauseManagedMembers(host: Orchestrator, pauses: AgentPauses, agents: string[], by: string, reason: string) {
+      const nativeStops:Promise<{kind:string;id:string;state:string}>[]=[];
+      const result=await pauses.pauseMany(agents,by,reason,ids=>{
+        for(const route of host.modelRelay.active())if(ids.includes(route.agentId))host.modelRelay.revoke(route.key,"member paused");
+        for(const route of host.mcpFace.active())if(ids.includes(route.agentId))host.mcpFace.revoke(route.key,"member paused");
+        for(const session of host.acpDelegates.list())if(ids.includes(session.agentId))nativeStops.push(new Promise(resolve=>{
+          const timer=setTimeout(()=>resolve({kind:"delegate",id:session.jobId,state:"unconfirmed"}),3000);
+          host.acpDelegates.close(session.jobId,"member paused").then(()=>{clearTimeout(timer);resolve({kind:"delegate",id:session.jobId,state:"confirmed"});},()=>{clearTimeout(timer);resolve({kind:"delegate",id:session.jobId,state:"unconfirmed"});});
+        }));
+      });
+      return {...result,nativeStops:await Promise.all(nativeStops),warning:"Old messages remain queued. Review them before resuming; unlinked external sessions require verification."};
+}
 export async function workControlRoute(route: string, url: URL, control: WorkControl, deps: {
   host: Orchestrator; pauses: AgentPauses; refusedAdmin:()=>boolean; mayReadAgent:(id:string)=>boolean; mayReadTask:(id:string)=>boolean; by:()=>string;
   readJson:()=>Promise<Record<string,unknown>>;
@@ -23,16 +35,7 @@ export async function workControlRoute(route: string, url: URL, control: WorkCon
     if (route==='POST /api/work-control/pause-members') {
       if(!Array.isArray(input.agents) || !input.agents.length || input.agents.length>100 || input.agents.some(id=>typeof id!=="string" || !deps.host.registry.has(id))) return {status:400,body:{error:"Choose the members to pause explicitly"}};
       if((input.agents as string[]).some(id=>!deps.mayReadAgent(id)))return {status:403,body:{error:"Box access required for every selected member"}};
-      const nativeStops:Promise<{kind:string;id:string;state:string}>[]=[];
-      const result=await deps.pauses.pauseMany(input.agents as string[],deps.by(),String(input.reason??"User containment of an unlinked historical task").slice(0,500),ids=>{
-        for(const route of deps.host.modelRelay.active())if(ids.includes(route.agentId))deps.host.modelRelay.revoke(route.key,"member paused");
-        for(const route of deps.host.mcpFace.active())if(ids.includes(route.agentId))deps.host.mcpFace.revoke(route.key,"member paused");
-        for(const session of deps.host.acpDelegates.list())if(ids.includes(session.agentId))nativeStops.push(new Promise(resolve=>{
-          const timer=setTimeout(()=>resolve({kind:"delegate",id:session.jobId,state:"unconfirmed"}),3000);
-          deps.host.acpDelegates.close(session.jobId,"member paused").then(()=>{clearTimeout(timer);resolve({kind:"delegate",id:session.jobId,state:"confirmed"});},()=>{clearTimeout(timer);resolve({kind:"delegate",id:session.jobId,state:"unconfirmed"});});
-        }));
-      });
-      return {status:200,body:{...result,nativeStops:await Promise.all(nativeStops),warning:"Old messages remain queued. Review them before resuming; unlinked external sessions require verification."}};
+      return {status:200,body:await pauseManagedMembers(deps.host,deps.pauses,input.agents as string[],deps.by(),String(input.reason??"User containment of an unlinked historical task").slice(0,500))};
     }
     const taskId=typeof input.taskId==='string' && input.taskId ? input.taskId : undefined;
     const task=taskId?deps.host.tasks?.get(taskId):undefined;

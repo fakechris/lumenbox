@@ -32,6 +32,7 @@ try {
     const context = await browser.newContext({ viewport: { width: 1800, height: 1100 }, extraHTTPHeaders: {
       authorization: "Bearer layout-fixture", "x-agentbox-user": "web:layout-viewer",
     } });
+    await context.addInitScript(() => localStorage.setItem("lumen-onboarded", "1"));
     const page = await context.newPage(), errors = [];
     const actualSetup = await (await context.request.get(meta.base + "/api/setup")).json();
     assert.equal(actualSetup.established, true); assert.equal(actualSetup.box, false);

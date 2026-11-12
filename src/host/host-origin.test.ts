@@ -1,3 +1,4 @@
+import { TurnLedger } from "./resume.ts";
 import { newPursuit } from "./goal-mode.ts";
 import { TaskStore } from "./tasks.ts";
 import { auditConversation } from "./audit-context.ts";
@@ -15,7 +16,7 @@ import { evidenceDigest } from "./review-dispatch.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRegistry } from "../agents/registry.ts";
@@ -70,9 +71,8 @@ test("scenario: an admitted audit is answered in its own host context; the perso
     const vic = registry.create({ name: "Vic" });
     const tasks = new TaskStore(null);
     const task = tasks.create({title:"Check the import",requester:"person",assigneeId:registry.create({name:"Worker"}).id,reviewerId:vic.id})!;
-    tasks.update(task.id,{status:"review"},task.assigneeId!);
-    const scope = {taskId:task.id,digest:evidenceDigest(tasks.get(task.id)!),reviewerId:vic.id};
-    const conversation = auditConversation(scope);
+    tasks.deliveryCommand(task.id,"submit",task.assigneeId!);
+    const scope = {taskId:task.id,digest:evidenceDigest(tasks.get(task.id)!),reviewerId:vic.id, planId: ""};
     const capture: ModelCapture = { params: [] };
     const orch = new Orchestrator({
       registry, useBox: false, inbox: null, mcp: null, hooks: null, tasks, extensions: null, pendingWork: null,
@@ -82,6 +82,10 @@ test("scenario: an admitted audit is answered in its own host context; the perso
         usage: { input_tokens: 10, output_tokens: 4 },
       } as never), { capture }),
     });
+    writeFileSync(join(root, "config.json"), JSON.stringify({ rates: { [orch.provider.model]: { inputPerM: 0, outputPerM: 0, cacheReadPerM: 0, cacheWritePerM: 0 } } }));
+    orch.resultChecks.grant(tasks.get(task.id)!, { mode: "model", reason: "Verify the import", acceptance: "Import works", paths: [], reviewers: 1, maxRounds: 1, maxDispatches: 1, maxCalls: 2, maxMs: 60_000, maxCost: 1 }, "operator");
+    scope.planId = orch.resultChecks.begin(tasks.get(task.id)!, [vic.id]).plan!.id;
+    const conversation = auditConversation(scope);
     await orch.prompt(vic.id, audit.text, undefined, { audit: scope, conversation, steerable: false, lane: "background", origin: "host:audit" });
     await orch.prompt(vic.id, "thanks, and the summary?", { userId: "chris" });
 
@@ -158,7 +162,7 @@ test("submitting the current task during a tool round preserves the final user r
     const task=tasks.create({title:"Install the package",requester:"chris",assigneeId:mia.id,contract:{acceptance:"The installation was checked"}})!;
     let calls=0;
     const orch=new Orchestrator({registry,useBox:false,inbox:null,mcp:null,hooks:null,tasks,extensions:null,pendingWork:null,
-      client:fakeModel(()=>({id:"response",type:"message",role:"assistant",model:"test",content:calls++===0?[{type:"tool_use",id:"submit",name:"Tasks",input:{action:"update",id:task.id,status:"review"}}]:[{type:"text",text:"The installation was checked and submitted for review."}],stop_reason:calls===1?"tool_use":"end_turn",stop_sequence:null,usage:{input_tokens:10,output_tokens:5}} as never))});
+      client:fakeModel(()=>({id:"response",type:"message",role:"assistant",model:"test",content:calls++===0?[{type:"tool_use",id:"submit",name:"Tasks",input:{action:"submit",id:task.id}}]:[{type:"text",text:"The installation was checked and submitted for review."}],stop_reason:calls===1?"tool_use":"end_turn",stop_sequence:null,usage:{input_tokens:10,output_tokens:5}} as never))});
     orch.bus.workAttention!.existing(mia.id,"main","task-install",task.id);
     await orch.prompt(mia.id,"Finish and report the installation",{userId:"chris"});
     assert.equal(calls,2,"submission must not invalidate its own final response");
@@ -166,4 +170,52 @@ test("submitting the current task during a tool round preserves the final user r
     assert.equal(tasks.get(task.id)!.status,"review");
     assert.equal(orch.bus.workAttention!.get(mia.id,"main")!.status,"answered");
   } finally {if(previousHome===undefined)delete process.env.AGENTBOX_HOME;else process.env.AGENTBOX_HOME=previousHome;rmSync(root,{recursive:true,force:true});}
+});
+
+test("adding a reviewer after submission still permits that reviewer's explicit check request", async () => {
+  const root = mkdtempSync(join(tmpdir(), "late-reviewer-")), previousHome = process.env.AGENTBOX_HOME;
+  process.env.AGENTBOX_HOME = root;
+  try {
+    const registry = new AgentRegistry(join(root, "agents")), worker = registry.create({ name: "Worker" }), reviewer = registry.create({ name: "Reviewer" });
+    const tasks = new TaskStore(null), capture: ModelCapture = { params: [] };
+    const orch = new Orchestrator({ registry, useBox: false, inbox: null, mcp: null, hooks: null, tasks, extensions: null, pendingWork: null,
+      client: fakeModel(() => ({ id: "check", type: "message", role: "assistant", model: "test", content: [{ type: "text", text: "Status: complete\nIntegrity: clean\nContract audit: aligned\nNext action: none" }], stop_reason: "end_turn", stop_sequence: null, usage: { input_tokens: 10, output_tokens: 4 } } as never), { capture }) });
+    const task = tasks.create({ title: "Install the package", requester: "person", assigneeId: worker.id })!;
+    tasks.deliveryCommand(task.id, "submit", worker.id);
+    await orch.settle(); assert.equal(capture.params.length, 0);
+    tasks.update(task.id, { reviewerId: reviewer.id }, "person");
+    writeFileSync(join(root, "config.json"), JSON.stringify({ rates: { [orch.provider.model]: { inputPerM: 0, outputPerM: 0, cacheReadPerM: 0, cacheWritePerM: 0 } } }));
+    orch.resultChecks.grant(tasks.get(task.id)!, { mode: "model", reason: "Check the installation", acceptance: "The package is installed", paths: [], reviewers: 1, maxRounds: 1, maxDispatches: 1, maxCalls: 2, maxMs: 60_000, maxCost: 1 }, "operator");
+    assert.equal(tasks.deliveryCommand(task.id, "request_check", reviewer.id)!.outcome, "applied");
+    await orch.settle(); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(capture.params.length, 1, "the explicit request reaches the real audit dispatcher once");
+    assert.equal(tasks.deliveryCommand(task.id, "request_check", reviewer.id)!.outcome, "unchanged");
+    await orch.settle(); assert.equal(capture.params.length, 1);
+  } finally { if (previousHome === undefined) delete process.env.AGENTBOX_HOME; else process.env.AGENTBOX_HOME = previousHome; rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("restart retires new and legacy result checks; neither recovery queue nor missing scope can downgrade them to ordinary work", async () => {
+  const root = mkdtempSync(join(tmpdir(), "check-restart-")), previousHome = process.env.AGENTBOX_HOME;
+  process.env.AGENTBOX_HOME = root;
+  try {
+    const registry = new AgentRegistry(join(root, "agents")), worker = registry.create({ name: "Worker" }), reviewer = registry.create({ name: "Checker" });
+    const tasks = new TaskStore(null), path = join(root, "turns.jsonl"), turns = new TurnLedger(path);
+    const task = tasks.create({ title: "Install the skill", requester: "person", assigneeId: worker.id })!;
+    tasks.deliveryCommand(task.id, "submit", worker.id);
+    let modelCalls = 0;
+    const orch = new Orchestrator({ registry, tasks, turns, useBox: false, inbox: null, mcp: null, hooks: null, extensions: null, pendingWork: null, client: fakeModel(() => { modelCalls++; throw new Error("Recovery must never reach the model"); }) });
+    orch.resultChecks.grant(tasks.get(task.id)!, { mode: "model", reason: "Check the installed skill", acceptance: "Approved skill exists", paths: [], reviewers: 1, maxRounds: 1, maxDispatches: 1, maxCalls: 2, maxMs: 60000, maxCost: 1 }, "operator");
+    const plan = orch.resultChecks.begin(tasks.get(task.id)!, [reviewer.id]).plan!;
+    const audit = { taskId: task.id, digest: evidenceDigest(tasks.get(task.id)!), reviewerId: reviewer.id, planId: plan.id };
+    turns.begin({ id: "new-check", agentId: reviewer.id, about: "Inspect evidence", audit, conversation: auditConversation(audit) });
+    turns.begin({ id: "legacy-check", agentId: reviewer.id, about: "Old audit", conversation: "audit-legacy" });
+    assert.deepEqual(new TurnLedger(path).interrupted().find(row => row.id === "new-check")!.audit, audit);
+    assert.deepEqual(orch.resumeInterrupted(), { resumed: 0, abandoned: 2 });
+    await orch.prompt(reviewer.id, "Replay of an old queued continuation", undefined, { conversation: "audit-legacy", synthetic: true });
+    await orch.settle();
+    assert.equal(modelCalls, 0); assert.equal(tasks.list().length, 1);
+    assert.equal(turns.interrupted().length, 0);
+    assert.match(orch.resultChecks.snapshot(tasks.get(task.id)!).plans[0]!.reason!, /restart interrupted/);
+  } finally { if (previousHome === undefined) delete process.env.AGENTBOX_HOME; else process.env.AGENTBOX_HOME = previousHome; rmSync(root, { recursive: true, force: true }); }
 });

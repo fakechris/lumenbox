@@ -41,7 +41,7 @@ test("five agents, ten claims: at most 10 × K review turns, every claim settled
   for (let n = 1; n <= 10; n++) {
     const task = store.create({ title: `claim ${n}`, requester: "chris", assigneeId: "ada", reviewerId: "bob", contract: { acceptance: `output ${n} exists` } })!;
     store.update(task.id, { status: "doing" }, "ada");
-    claims.push(store.update(task.id, { status: "review", evidence: [`/work/out-${n}.md: the output`] }, "ada")!.task);
+    claims.push(store.deliveryCommand(task.id, "submit", "ada", { evidence: [`/work/out-${n}.md: the output`] })!.task);
   }
   while (rounds.size > 0) await Promise.all([...rounds]);
 

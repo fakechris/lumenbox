@@ -101,8 +101,8 @@ export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
         // it closes, so task_status can say `incomplete (turn_budget)` rather than `done`.
         const stop = task === undefined ? () => {} : deps.listen(event => {
           if (event.agentId !== agent.id || event.taskId !== task.id || (event.conversation !== undefined && event.conversation !== "main")) return;
-          if (event.type === "turn_budget_hit") orchestrator.tasks?.update(task.id, { status: "review", note: `incomplete (turn_budget): ${event.calls} model calls, handed back` }, agent.id);
-          if (event.type === "stuck") orchestrator.tasks?.update(task.id, { status: "review", note: `incomplete (rounds): ${event.reason.split("\n")[0]?.slice(0, 160) ?? "stopped"}` }, agent.id);
+          if (event.type === "turn_budget_hit") orchestrator.tasks?.deliveryCommand(task.id, "handoff", agent.id, { note: `incomplete (turn_budget): ${event.calls} model calls, handed back` });
+          if (event.type === "stuck") orchestrator.tasks?.deliveryCommand(task.id, "handoff", agent.id, { note: `incomplete (rounds): ${event.reason.split("\n")[0]?.slice(0, 160) ?? "stopped"}` });
         });
         // Not awaited: the caller gets an id now and asks later, which is the only
         // shape that works for work measured in minutes. The task closes when the turn does,

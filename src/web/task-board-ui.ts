@@ -10,17 +10,19 @@ function taskBoardMarkup(task) {
   if(task.work && task.work.automatic && task.status !== "done" && task.status !== "dropped") {
     state = t("ui.tc.work." + task.work.phase);
   }
+  if (task.reading && typeof workReadingPhase === "function") state = workReadingPhase(task.reading);
   var meta = taskBoardState.mode === "team" ? esc(task.assigneeId ? nameOf(task.assigneeId) : t("ui.app.unassigned")) + ' · ' : '';
   var live = task.status !== "done" && task.status !== "dropped";
   var decision = live && (window.lastAttention && window.lastAttention.mine || []).find(function (item) { return item.ref === task.id && (item.kind !== "review" || task.status === "review") && (item.kind !== "close-proposal" || task.closeProposal); });
   var owed = decision ? decision.detail + (decision.deadline ? ' · ' + new Date(decision.deadline).toLocaleString() : '') : "";
   var hint = task.proposedBy ? t("ui.tc.proposal") : task.waitingOn || (task.status === "review" && !owed ? t("ui.tc.awaitReview") : "");
+  if (task.reading && typeof workReadingReason === "function") hint = workReadingReason(task.reading);
   return '<article class="task-row"><div class="task-reading-status task-status-' + esc(task.status) + '">' + esc(task.proposedBy ? t("ui.app.proposed") : state) + '</div><a href="#" class="task-title" data-open="' + esc(task.id) + '">' + esc(task.title) + '</a>' + (progress ? '<p class="task-meta">' + esc(progress) + '</p>' : '') + (hint ? '<p class="dim task-meta task-preview">' + esc(hint) + '</p>' : '') + (owed ? '<p class="task-meta task-warn task-preview">' + esc(t("ui.app.needs-you")) + ' ' + esc(owed) + '</p>' : '') + '<div class="task-card-footer">' + (task.conversation ? '' : esc(t("ui.tc.unlinked")) + ' · ') + meta + esc(new Date(task.updatedAt).toLocaleString()) + '</div><a href="#" class="task-reading-action" data-open="' + esc(task.id) + '">' + esc(t(task.status === "review" ? "ui.tc.viewResult" : "ui.tc.viewTask")) + ' →</a></article>';
 }
 function newBoardPage() { return {ids:[],nodes:new Map(),cursor:null,next:null,stack:[],query:"",loading:null,generation:0,total:0,dirty:false,refreshIds:false}; }
-var internalTaskRecords = false;
+var internalTaskRecords = false, taskSearch = "", taskSearchTimer;
 var taskBoardState = Object.assign(newBoardPage(),{mode:"context",context:""}), taskOtherState = newBoardPage();
-function boardKey() { return (taskBoardState.mode === "team" ? "team" : String(current || "") + ":" + String(currentConversation || "main")) + JSON.stringify(internalTaskRecords); }
+function boardKey() { return (taskBoardState.mode === "team" ? "team" : String(current || "") + ":" + String(currentConversation || "main")) + JSON.stringify([internalTaskRecords,taskSearch]); }
 function resetBoardPage(state,list) {
   state.generation++; state.loading = null; state.query = ""; state.ids = []; state.nodes.clear(); state.cursor = null; state.stack = []; state.next = null; state.refreshIds = false; state.total = 0; state.dirty = false;
   $(list).textContent = ""; $(list).scrollTop = 0;
@@ -75,6 +77,7 @@ function readTaskBoard(state,force,other) {
     if (full) {
       var priority = (window.lastAttention && window.lastAttention.mine || []).map(function (item) { return item.ref; }).filter(function (id) { return /^t\d+$/.test(id); }).slice(0,100);
       var query = new URLSearchParams({limit:"50",priority:priority.join(",")});
+      if (taskSearch) query.set("search",taskSearch);
       query.set("records",internalTaskRecords ? "internal" : "user");
       if (taskBoardState.mode !== "team") { query.set("agent",current); query.set("conversation",currentConversation || "main"); if (other) query.set("other","1"); }
       state.query = query.toString();
@@ -120,4 +123,6 @@ window.noteTaskBoardChange = function (event) {
   taskBoardChangeQueued = true; setTimeout(function () { taskBoardChangeQueued = false; if (!window.taskFocusVisible && $("tasksview").style.display !== "none") refreshTasks(); },500);
 };
 window.openTasksForConversation = function () { window.taskBoardContextChanged(); showTab("tasks"); };
+
+$("task-search").addEventListener("input",function () { var value = this.value.trim(); clearTimeout(taskSearchTimer); taskSearchTimer = setTimeout(function () { if (taskSearch === value) return; taskSearch = value; resetBoardPage(taskBoardState,"tasklist"); resetBoardPage(taskOtherState,"taskotherlist"); refreshTasks(true); },200); });
 `;

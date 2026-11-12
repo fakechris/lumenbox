@@ -1,3 +1,8 @@
+import { GovernanceLedger, WorkGovernance, resourceKey } from "./work-governance.ts";
+import { writePause, clearPause } from "../agents/pause.ts";
+import { surfaceActionWork } from "./surface-action.ts";
+import { SurfaceLedger } from "./show-ui.ts";
+import { ResultChecks } from "./result-check-policy.ts";
 /**
  * The episodes that went wrong, as tests.
  *
@@ -223,8 +228,9 @@ test("a collaborator's missing capability remains the user's blocker, not a comp
 
 test("an audit's forged write calls cannot create recursive work or replace the user's installation plan (INV-1797)", async () => {
   const tasks = new TaskStore(null); let target = "", auditorRound = 0, readTarget = false;
+  const checks = new ResultChecks(undefined, () => Date.now(), () => ({ scenario: { inputPerM: 0, outputPerM: 0 } })); let auditThreadName = "";
   const episode = await runEpisode({
-    team: [{ name: "Mia" }, { name: "Analyst" }], says: [], tasks,
+    team: [{ name: "Mia" }, { name: "Analyst" }], says: [], tasks, resultChecks: checks, provider: { label: "scenario", model: "scenario", contextWindow: 200000, maxTokens: 1024 } as ProviderProfile,
     script: ({ opened, messages }) => {
       readTarget ||= JSON.stringify(messages).includes("AUTHORITATIVE REPORT CONTENT");
       if (!opened.includes("AUDIT SNAPSHOT")) return { say: "Your installation is waiting for its computer." };
@@ -243,9 +249,11 @@ test("an audit's forged write calls cannot create recursive work or replace the 
       const frontId = registry.resolve("Mia").id;
       const analyst = registry.resolve("Analyst").id;
       const task = tasks.create({ title: "Review the retained report", requester: "person", assigneeId: analyst, reviewerId: frontId, description: "AUTHORITATIVE REPORT CONTENT" })!;
-      tasks.update(task.id, { status: "review" }, analyst); target = task.id;
+      tasks.deliveryCommand(task.id, "submit", analyst); target = task.id;
       registry.writeTodos(frontId, [{ text: "Install the user's package", status: "blocked" }]);
-      const audit = { taskId: task.id, digest: evidenceDigest(tasks.get(task.id)!), reviewerId: frontId };
+      checks.grant(tasks.get(task.id)!, { mode: "model", reason: "Inspect the retained report", acceptance: "Report content exists", paths: [], reviewers: 1, maxRounds: 1, maxDispatches: 1, maxCalls: 20, maxMs: 60_000, maxCost: 1 }, "operator");
+      const audit = { taskId: task.id, digest: evidenceDigest(tasks.get(task.id)!), reviewerId: frontId, planId: checks.begin(tasks.get(task.id)!, [frontId]).plan!.id };
+      auditThreadName = auditConversation(audit);
       bus.sendFromUser(frontId, "AUDIT SNAPSHOT", { audit, conversation: auditConversation(audit), origin: "host:audit", lane: "background", steerable: false });
       await bus.wake(frontId); await bus.idle();
       bus.sendFromUser(frontId, "What happened to installing my package?");
@@ -259,7 +267,7 @@ test("an audit's forged write calls cannot create recursive work or replace the 
     assert.equal(episode.files.has("/home/box/work/probe.txt"), false);
     assert.equal(episode.score.peerMessages, 0);
     assert.equal(readTarget, true, "host-admitted reviewer can read this task only");
-    const auditThread = episode.registry.list().flatMap(agent => episode.registry.readTranscript(agent.id, auditConversation({taskId: target, digest: evidenceDigest(tasks.get(target)!), reviewerId: episode.registry.resolve("Mia").id})));
+    const auditThread = episode.registry.list().flatMap(agent => episode.registry.readTranscript(agent.id, auditThreadName));
     assert.equal((JSON.stringify(auditThread).match(/Review refused:/g) ?? []).length, 6, "six forged side effects receive explicit tool errors");
     const main = episode.registry.readTranscript(episode.registry.resolve("Mia").id);
     assert.ok(!JSON.stringify(main).includes("AUDIT SNAPSHOT"), "audit history stays outside the person's conversation");
@@ -4150,4 +4158,98 @@ test("agent suggestions during a user request remain internal until a person com
   assert.ok(requested.origin?.workId,"the host supplies the admitted work identity");
   tasks.commit(suggestion.id,"chris");assert.equal(tasks.get(suggestion.id)!.origin?.kind,"user");
  } finally {episode.cleanup();}
+});
+
+test("a refused self-acceptance cannot create a review cascade; explicit submission leaves one check request (INV-1810)", async () => {
+  const { requestsResultCheck } = await import("./task-delivery.ts");
+  const tasks = new TaskStore(null); let target = "", round = 0, checkRequests = 0;
+  tasks.onChange(task => { if (task.id === target && requestsResultCheck(task.history.at(-1))) checkRequests++; });
+  const episode = await runEpisode({
+    team: [{ name: "Installer", tools: ["Tasks"] }, { name: "ZChecker", tools: ["Tasks"] }], tasks, says: [],
+    script: () => {
+      if (round++ === 0) return { call: "Tasks", input: { action: "update", id: target, status: "done" } };
+      if (round === 2) {
+        assert.equal(tasks.get(target)!.status, "open"); assert.equal(checkRequests, 0);
+        return { call: "Tasks", input: { action: "submit", id: target, evidence: ["package files and loader checked"] } };
+      }
+      return { say: "The installation result is submitted for checking." };
+    },
+    drive: async ({ registry, bus, frontId }) => {
+      target = tasks.create({ title: "Install the package", requester: "person", assigneeId: frontId, reviewerId: registry.resolve("ZChecker").id })!.id;
+      bus.sendFromUser(frontId, "Submit the installation result for this assigned task"); await bus.wake(frontId); await bus.idle();
+    },
+  });
+  try { assert.equal(tasks.get(target)!.status, "review", JSON.stringify(tasks.get(target)!.history)); assert.equal(checkRequests, 1); assert.equal(tasks.get(target)!.history.some(change => change.coerced), false); }
+  finally { episode.cleanup(); }
+});
+
+
+test("a result check cannot buy more model calls or create recursive tasks after its shared budget ends (INV-1811)", async () => {
+  const tasks = new TaskStore(null), checks = new ResultChecks(undefined, () => Date.now(), () => ({ scenario: { inputPerM: 1, outputPerM: 1 } }));
+  let calls = 0, checkedTask = "";
+  const episode = await runEpisode({
+    team: [{ name: "Mia" }, { name: "Checker" }], tasks, resultChecks: checks, says: [], provider: { label: "scenario", model: "scenario", maxTokens: 100, contextWindow: 10000 } as ProviderProfile,
+    script: () => { calls++; return { call: "Tasks", input: { action: "create", title: "Probe the review mechanism", assignee: "Mia" } }; },
+    drive: async ({ registry, bus }) => {
+      const worker = registry.resolve("Mia").id, reviewer = registry.resolve("Checker").id;
+      const task = tasks.create({ title: "Install the requested skill", requester: "person", assigneeId: worker })!;
+      tasks.deliveryCommand(task.id, "submit", worker, { evidence: ["Installed artifact"] }); checkedTask = task.id;
+      const current = tasks.get(task.id)!;
+      checks.grant(current, { mode: "model", reason: "Check installed artifact", acceptance: "Only the requested skill is installed", paths: [], reviewers: 1, maxRounds: 1, maxDispatches: 1, maxCalls: 2, maxMs: 60000, maxCost: 1 }, "operator");
+      const audit = { taskId: task.id, digest: evidenceDigest(current), reviewerId: reviewer, planId: checks.begin(current, [reviewer]).plan!.id };
+      bus.sendFromUser(reviewer, "Check the installed artifact only", { origin: "host:audit", audit, conversation: auditConversation(audit), lane: "background", steerable: false });
+      await bus.wake(reviewer); await bus.idle();
+    },
+  });
+  try {
+    assert.equal(calls, 2, "the third physical provider attempt is refused before the fake wire");
+    assert.equal(checks.snapshot(tasks.get(checkedTask)!).calls, 2);
+    assert.equal(tasks.list().length, 1, "forged live probe creation never becomes a task");
+    assert.equal(tasks.get(checkedTask)!.status, "review", "exhaustion is never business acceptance");
+  } finally { episode.cleanup(); }
+});
+
+
+test("a card choice continues the original installation after its answer, without admitting an action-shaped user goal (INV-1812)", async () => {
+  const tasks = new TaskStore(null); let rounds = 0;
+  const episode = await runEpisode({ team: [{ name: "Mia", tools: ["ShowUI"] }], tasks, says: [],
+    script: () => rounds++ === 0 ? { call: "ShowUI", input: { surface: "installation", components: [{ id: "root", component: "Button", child: "label", action: { event: { name: "confirm" } } }, { id: "label", component: "Text", text: "Continue the approved installation" }] } } : { say: "The installation request remains the same; waiting for or applying your choice." },
+    drive: async ({ bus, frontId, surfaces, say }) => {
+      await say("Install the approved skill");
+      const record = surfaces.get(frontId + "/main/installation")!;
+      assert.ok(record?.work, "ShowUI retains host-issued work identity");
+      const ledger = new SurfaceLedger(null); ledger.record(record);
+      const text = '[Action "confirm" on card installation]';
+      const decision = surfaceActionWork({ action: { surface: "installation", name: "confirm" }, text, agentId: frontId, conversation: "main", surfaces: ledger, tasks, focus: bus.workAttention });
+      assert.ok("taskBinding" in decision);
+      if (!("taskBinding" in decision)) return;
+      bus.sendFromUser(frontId, text, { taskBinding: decision.taskBinding, ...(decision.work ? { work: decision.work } : {}), steerable: false });
+      await bus.wake(frontId); await bus.idle();
+      assert.equal(tasks.list().length, 1); assert.equal(tasks.list()[0]!.title, "Install the approved skill");
+    },
+  });
+  episode.cleanup();
+});
+
+
+test("stopping selected legacy callbacks across members leaves the new installation goal free to finish (INV-1814)", async () => {
+  const ledger = new GovernanceLedger(), control = new WorkGovernance(ledger); let calls = 0;
+  const tasks = new TaskStore(null);
+  const episode = await runEpisode({ team: [{ name: "Mia", tools: ["write_file"] }, { name: "Bob", tools: [] }], tasks, says: [],
+    script: ({ agent }) => { assert.equal(agent, "Mia", "stopped legacy callbacks cannot invoke another model"); return calls++ === 0 ? { call: "write_file", input: { path: "/home/box/work/skills/approved/SKILL.md", content: "Approved installation", overwrite: false } } : { say: "Installed the approved skill. The original files remain unchanged." }; },
+    drive: async ({ bus, registry }) => {
+      bus.resourceAllowed = message => ledger.allows(message);
+      const agents = registry.list();
+      for (const agent of agents) { writePause(registry.dirFor(agent.id), { by: "fixture", at: new Date().toISOString(), reason: "hold old work for explicit disposition" }); bus.sendFromUser(agent.id, "Old cross-agent audit callback", { messageId: "old-" + agent.id, synthetic: true, origin: "host:old-work" }); }
+      const resources = bus.snapshot().queued.map(({ agentId, message }) => ({ key: resourceKey("message", message.id), kind: "message", title: "Old callback", section: "future" as const, state: "queued", source: "unknown", version: message.id, agentId, actions: ["stop" as const], scope: "messageOnly", unknown: ["otherMessagesRemain"], target: { id: message.id } }));
+      const adapter = { inventory: async () => ({ rows: resources, unknown: [] }), mayRead: () => true, apply: async () => { bus.discardRevoked(); return { confirmed: true }; } };
+      const preview = await control.preview(adapter, resources.map(row => ({ key: row.key, action: "stop" as const })));
+      await control.execute(adapter, { token: preview.token, operationId: "stop-old-collaboration" }, "person");
+      for (const agent of agents) { assert.throws(() => bus.sendFromUser(agent.id, "Late old callback", { messageId: "old-" + agent.id, synthetic: true }), /stopped/); clearPause(registry.dirFor(agent.id)); }
+      const mia = agents.find(agent => agent.profile.name === "Mia")!;
+      bus.sendFromUser(mia.id, "Install the approved skill and preserve the original files"); await bus.wake(mia.id); await bus.idle();
+      assert.equal(bus.snapshot().queued.length, 0); assert.equal(tasks.list().filter(task => task.origin?.kind === "user").length, 1);
+    },
+  });
+  try { assert.equal(episode.files.get("/home/box/work/skills/approved/SKILL.md"), "Approved installation", JSON.stringify(episode.score)); assert.ok(episode.score.said.some(row => row.text.includes("Installed"))); } finally { episode.cleanup(); }
 });

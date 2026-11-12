@@ -64,6 +64,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
   }
   function connection() { return document.documentElement.dataset.connection || "reconnecting"; }
   function status(task) {
+    if (task.reading && typeof workReadingPhase === "function") return workReadingPhase(task.reading);
     if(task.work && task.work.automatic && !["done","dropped"].includes(task.status))return t("ui.tc.work."+task.work.phase);
     if (task.status === "done" || task.status === "dropped") return word(task.status === "done" ? "ended" : "dropped");
     if (task.pursuit && task.pursuit.status === "paused") return word("paused") + (task.pursuit.pausedReason ? " · " + t("ui.tf.pause." + task.pursuit.pausedReason) : "");
@@ -81,11 +82,12 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     if (active !== view || !view.task) return;
     var task = view.task, activity = view.activity || {}, latest = view.liveAction || activity.current || activity.latest;
     by("title").textContent = task.title; by("title").title = by("title").textContent;
-    by("id").textContent = task.id; by("cancel").setAttribute("data-work-cancel",task.id); by("cancel").hidden = !task.work && ["done","dropped"].includes(task.status);
+    by("id").textContent = task.id; by("cancel").setAttribute("data-work-cancel",task.id); by("cancel").hidden = !["admin","driver"].includes(view.role) || ["done","dropped"].includes(task.status);
     var review = task.status === "review" ? word("review") : task.status === "done" ? word("ended") : task.status === "dropped" ? word("dropped") : word("pending");
-    var statuses = [["state",status(task)],["connection",word(connection())],["acceptance",review]];
+    var statuses = [["state",status(task)],["connection",word(connection())]]; if (!task.reading) statuses.push(["acceptance",review]);
     root.querySelector("[data-tf-conversation]").disabled = !task.assigneeId || !task.conversation;
     by("status").innerHTML = statuses.map(function (pair) { return '<span><i></i><b>' + word(pair[0]) + '</b> ' + safe(pair[1]) + '</span>'; }).join("");
+    by("activity").hidden = !!task.reading && !latest;
     by("activity").textContent = word("action") + ": " + actionName(latest) + (latest && (latest.endedAt || latest.startedAt) ? " · " + word("activity") + " " + new Date(latest.endedAt || latest.startedAt).toLocaleString() : "");
     var terminal = task.status === "done" || task.status === "dropped";
     var needs = terminal ? [] : (window.lastAttention && window.lastAttention.mine || []).filter(function (item) { return item.ref === task.id && (!item.stage || item.stage === task.stage) && (item.kind !== "review" || task.status === "review"); });
@@ -100,9 +102,10 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     if (active !== view) return;
     cancelExport(view); view.generation++; view.detailGeneration++; view.costGeneration = (view.costGeneration || 0) + 1; view.cost = null; if (view.detailController) view.detailController.abort();
     view.detail = null; view.task = null; view.page = null; view.rowNodes.clear();
+    by("cancel").hidden = true; root.querySelector("[data-tf-conversation]").disabled = true;
     by("title").textContent = error.status === 403 || error.status === 404 ? word("denied") : word("error");
     by("activity").textContent = ""; by("status").textContent = ""; by("needs").textContent = "";
-    by("body").innerHTML = '<div class="tf-empty"><button class="btn sm" data-tf-refresh>' + word("refresh") + '</button></div>';
+    by("body").innerHTML = '<div class="tf-empty"><h2>' + t("ui.wr.unavailableTitle") + '</h2><p>' + t("ui.wr.unavailableNote") + '</p><button class="btn sm" data-tf-refresh>' + word("refresh") + '</button></div>';
   }
   function prose(text) {
     var value = String(text == null ? "" : text), clipped = value.length > 32000;
@@ -118,12 +121,13 @@ export const TASK_FOCUS_JS = String.raw`(function () {
   function overview(view) {
     var task = view.task, html = '<div class="tf-overview"><section><h2>' + word("goal") + '</h2>' + prose(task.pursuit && task.pursuit.objective || task.description || task.title);
     if (task.contract) html += ["outcome","scope","constraints"].filter(function (key) { return task.contract[key]; }).map(function (key) { return '<h2>' + t("ui.tf.contract." + key) + '</h2>' + prose(task.contract[key]); }).join("");
-    html += '</section><section><h2>' + word("state") + '</h2><p>' + safe(status(task)) + '</p>' + '<div id="tf-progress">' + (window.taskProgressHtml ? window.taskProgressHtml(task) : '<p class="tf-note">' + word("phaseOnly") + '</p>') + '</div></section>';
+    html += '</section><section><h2>' + (task.reading ? t("ui.wr.progress") : word("state")) + '</h2>' + (task.reading ? '' : '<p>' + safe(status(task)) + '</p>') + '<div id="tf-progress">' + (task.reading && !(task.progress && task.progress.sources && task.progress.sources.length) ? '' : window.taskProgressHtml ? window.taskProgressHtml(task) : '<p class="tf-note">' + word("phaseOnly") + '</p>') + '</div></section>';
+    if (task.reading && typeof workReadingHtml === "function") html += '<section id="tf-reading">' + workReadingHtml(task.reading,true) + '</section>';
     html += taskReport(view);
     return html + changes(task) + '<section class="tf-note">' + word("coverage") + '</section></div>';
   }
   function taskReport(view) {
-    var reply = view.record && view.record.reply;
+    var reply = view.record && view.record.reply; if (view.task.reading && !reply) return "";
     var row = reply || (view.task.history || []).slice().reverse().find(function (entry) { return !!entry.note; });
     if (!row) return "";
     return '<section><h2>' + (reply ? word("latestReply") : t("ui.tc.latestTaskChange")) + '</h2>' + prose(reply ? row.text : row.note) + '<div class="tf-note">' + safe(nameOf(row.by) || row.by) + ' · ' + safe(new Date(row.at).toLocaleString()) + '</div></section>';
@@ -329,7 +333,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
   }
   function loadItem(view) {
     var generation = view.itemGeneration = (view.itemGeneration || 0) + 1;
-    return get("/api/tasks/item?task=" + encodeURIComponent(view.id)).then(function (data) { if (active !== view || view.itemGeneration !== generation) return; view.task = data.task; header(view); if (view.tab === "overview" && by("progress") && window.taskProgressHtml) { var html = window.taskProgressHtml(view.task); if (by("progress").innerHTML !== html) by("progress").innerHTML = html; } }).catch(function (error) { if (active === view && view.itemGeneration === generation) deny(view,error); });
+    return get("/api/tasks/item?task=" + encodeURIComponent(view.id)).then(function (data) { if (active !== view || view.itemGeneration !== generation) return; view.task = data.task; header(view); if (by("reading") && view.task.reading && typeof workReadingHtml === "function") { var readingHtml = workReadingHtml(view.task.reading,true); if (by("reading").innerHTML !== readingHtml && !by("reading").contains(document.activeElement)) { var disclosure = by("reading").querySelector("details"); var wasOpen = disclosure && disclosure.open; by("reading").innerHTML = readingHtml; if (wasOpen && by("reading").querySelector("details")) by("reading").querySelector("details").open = true; } } if (view.tab === "overview" && by("progress") && window.taskProgressHtml) { var html = view.task.reading && !(view.task.progress && view.task.progress.sources && view.task.progress.sources.length) ? "" : window.taskProgressHtml(view.task); if (by("progress").innerHTML !== html) by("progress").innerHTML = html; } }).catch(function (error) { if (active === view && view.itemGeneration === generation) deny(view,error); });
   }
   function loadCosts(view) {
     var generation = view.costGeneration = (view.costGeneration || 0) + 1;
@@ -358,6 +362,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
     active = view; window.taskFocusVisible = true; openTask = id; root.hidden = false; view.detail = null; view.page = null; view.activity = null; view.liveAction = null; view.record = null; view.role = null; view.actor = null; view.actionMessage = ""; view.actionBusy = false; view.cost = null; view.costGeneration = (view.costGeneration || 0) + 1;
     var openGeneration = view.openGeneration = (view.openGeneration || 0) + 1;
     get("/api/me").then(function (me) { if (active !== view || view.openGeneration !== openGeneration) return; view.role = me.role || "viewer"; view.actor = me.identity === null ? "web" : typeof me.identity === "string" ? me.identity : null; if (view.task) header(view); if (view.task && view.tab === "artifacts") render(view); if (view.detail && view.tab === "execution") syncApproval(view,view.detail,by("detail")); }).catch(function () {});
+    by("cancel").hidden = true; root.querySelector("[data-tf-conversation]").disabled = true;
     by("title").textContent = word("loading"); by("body").textContent = ""; by("status").textContent = ""; by("activity").textContent = ""; by("needs").textContent = "";
     var url = new URL(location.href); url.searchParams.set("task",id); if (push !== false && url.href !== location.href) history.pushState({},"",url);
     var wantedTab = url.searchParams.get("tasktab"), wantedStep = url.searchParams.get("step");
@@ -411,7 +416,7 @@ export const TASK_FOCUS_JS = String.raw`(function () {
   window.openTaskFocus = open;
   window.closeTaskFocusForContext = function () { returnFocus = null; close(true); };
   window.addEventListener("DOMContentLoaded",function () { if (active && active.task && active.tab !== "execution") render(active); });
-  window.refreshTaskExecution = function () { if (!active) return Promise.resolve(); var view = active; return loadItem(view).then(function () { if (active === view && view.task && view.tab === "costs") loadCosts(view); if (active === view && view.task) return loadPage(view,null,view.readingAnchor && view.readingAnchor.id || view.anchor || view.selected,true); }); };
+  window.refreshTaskExecution = function () { if (!active) return Promise.resolve(); var view = active; deny(view,{status:0}); by("title").textContent = word("loading"); by("body").textContent = ""; return loadItem(view).then(function () { if (active === view && view.task) render(view); if (active === view && view.task && view.tab === "costs") loadCosts(view); if (active === view && view.task) return loadPage(view,null,view.readingAnchor && view.readingAnchor.id || view.anchor || view.selected,true); }); };
   function queueHeader(view) {
     if (view.headerQueued) return; view.headerQueued = true;
     requestAnimationFrame(function () { view.headerQueued = false; if (active === view) header(view); });

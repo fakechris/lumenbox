@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: web-ui
-     updated: 2026-11-10
+     updated: 2026-11-11
 -->
 # The web UI's visual rules: type, spacing, components
 
@@ -102,3 +102,59 @@ own first-use guide.
   `UI_LAYOUT_OUTPUT` selects the directory for geometry results and screenshots (default:
   ignored `research/ui-layout`). The check covers both panel headers and the first-use guide's
   offline/completed/dismissed states. New header controls must be included in its geometry set.
+
+## User work reading
+
+`host/work-reading.ts` owns the read contract for the original goal, current phase and reason,
+provenance boundary, evidence, check impact and related work. Task list/search, detail, attention
+and the current conversation consume that projection; they must not independently infer business
+state from a reviewer name, a title pattern or the selected agent. A reviewer being configured is
+not an active check. File/model checks never stand in for the user's acceptance.
+
+Keep the existing palette and fonts. Main task views read work in the selected member and
+conversation; search narrows that scope. No repeated member picker, New task form, status or
+level controls belong in the reading view. Management stays explicitly disclosed. Ordinary peer
+messages and host context are bounded, collapsed evidence beside the chat, not new user turns.
+Questions, approvals and failures that need a decision remain directly visible. Card actions
+carry an explicit surface reference and continue the host-recorded original work. Missing,
+ended or superseded cards cannot create a new goal from their generated action text.
+
+Unknown source/execution links stay unknown. Related objects use meaningful titles and links;
+removed and inaccessible objects share a non-leaking explanation. Opening or refreshing a record
+must clear stale content and mutation controls before a new authorization response. Full task
+history and diagnostic wording remain disclosed separately from the latest submitted result.
+
+Keep existing keyed 50-task/100-step initial pages and lazy step bodies. Updates to the reading
+summary preserve open disclosures, focus and scroll. `scripts/work-reading-layout.mjs` uses an
+isolated production server with 1600 user tasks and 2000 retained steps to exercise search,
+links, large text, both languages and themes, missing objects and incremental events.
+
+## Global work management
+
+The global Work management entry is independent of the selected member and conversation.
+My work opens the existing work list; executions, future entries, historical records and
+explicit member pauses are separate views. Physical agent-turn counts, work-record counts
+and known future-resource counts have different meanings. Zero turns never means all future
+behavior is stopped. Offline or cached automation inventories retain an explicit boundary.
+
+Read projections use stable resource identities from the bus, task/work roots, interrupted
+turns, pending work, scheduler, external intake and delivery ledgers. They do not infer work
+relationships from titles or timestamps. Legacy cards remain searchable; ended internal
+archives require explicit inclusion. Pages contain at most 50 rows. Opening a reference uses
+existing task details and their access/missing-record boundary.
+
+An operator previews each selected action and scope before confirming. Whole-work cancellation
+uses verified work roots. A rootless record does not authorize cancelling an entire collaboration.
+A selected queued message, recovery attempt or callback stops only its named resource. Member
+pauses affect every work item of those explicitly selected members, retain queues, and may resume.
+Disabling an automation or external entry is durable and blocks future admission; already started
+or queued execution requires a separate stop. Discarding a reply changes delivery, never acceptance.
+
+The resource-revocation ledger records the entire explicit scope before asynchronous cleanup.
+It stores revocations and operation receipts, not another task or execution state machine. Each
+underlying authority checks its barrier on startup and before the relevant continuation/dispatch.
+Results distinguish confirmed cleanup from requested/unconfirmed cleanup and external effects.
+Unconfirmed operations remain visible after restart and retry only their original unfinished scope.
+An unfinished member-pause reservation restores the real pause authority before inbox recovery;
+a completed pause never overrides a later explicit resume.
+Read/search/preview cannot execute a model, resend a reply, or mutate real work.

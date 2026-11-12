@@ -100,7 +100,7 @@ test("pausing stops the turn in flight and only this agent's running background 
       dirFor: () => root,
       wake: () => {},
       interrupt: ids => { interrupted.push(ids); return ids; },
-      box: () => ({ jobs: async () => ({ jobs: [{ job_id: "job-aaaaaaaaaaaaaaaa", running: true }, { job_id: "job-bbbbbbbbbbbbbbbb", running: false }, { job_id: "job-cccccccccccccccc", running: true, owner:"agent:zed" }, { job_id: "job-dddddddd", running: true, owner: "agent:bob" }] }), killJob: async id => { killed.push(id); },waitForJob:async()=>({running:false}) }),
+      box: id => { assert.equal(id,"bob","cleanup must resolve the selected member’s computer"); return { jobs: async () => ({ jobs: [{ job_id: "job-aaaaaaaaaaaaaaaa", running: true }, { job_id: "job-bbbbbbbbbbbbbbbb", running: false }, { job_id: "job-cccccccccccccccc", running: true, owner:"agent:zed" }, { job_id: "job-dddddddd", running: true, owner: "agent:bob" }] }), killJob: async id => { killed.push(id); },waitForJob:async()=>({running:false}) }; },
       tell: async (_id, text) => { told.push(text); },
       receipt: (subject, decision) => receipts.push(`${subject} ${decision}`),
       log: () => {},

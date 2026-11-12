@@ -8,7 +8,7 @@ export const RIGHT_PANE_STYLE = String.raw`
 #activity-panel{border-top:1px solid var(--border);border-bottom:0}.feed{max-height:24vh;overflow-y:auto;padding:0 0 var(--sp-2);overscroll-behavior:contain}.activity-unread{color:var(--accent);font-size:var(--fs-xs);margin-left:var(--sp-2)}.activity-error{color:var(--danger)}.activity-retention{font-size:var(--fs-xs);color:var(--muted);padding:0 var(--sp-4) var(--sp-2)}
 `;
 export const TASKS_PANEL_HTML = String.raw`<div id="tasksview">
-  <header class="task-scope-head"><button class="btn sm ghost task-chat-back" data-task-chat>{{ui.tf.backChat}}</button><button class="ui-link" id="task-records-toggle">{{ui.tc.internalRecords}}</button><h2 id="taskscope-title"></h2><p id="taskscope-note" class="dim"></p><button class="ui-link" id="taskscope-back" hidden>{{ui.tc.backContext}}</button></header>
+  <header class="task-scope-head"><button class="btn sm ghost task-chat-back" data-task-chat>{{ui.tf.backChat}}</button><button class="ui-link" id="task-records-toggle">{{ui.tc.internalRecords}}</button><h2 id="taskscope-title"></h2><div class="field wr-search"><label for="task-search">{{ui.wr.search}}</label><input id="task-search" type="search" placeholder="{{ui.wr.searchHint}}"></div><p id="taskscope-note" class="dim"></p><button class="ui-link" id="taskscope-back" hidden>{{ui.tc.backContext}}</button></header>
   <div id="taskboard-error" class="task-board-error" role="status" hidden>{{ui.tf.error}} <button class="btn sm ghost" data-board-refresh>{{ui.tf.refresh}}</button></div>
   <details id="attention" class="pane-disclosure" style="display:none">
     <summary>{{ui.tf.needsAction}}<span class="pane-count" id="attention-count"></span></summary>
@@ -63,9 +63,9 @@ function attentionRow(item, owed, onBoard) {
     item.kind === "question" && !/^t\d+$/.test(item.ref) ? '<button class="btn sm ghost" data-att-open="' + esc(item.ref) + '">' + esc(t("ui.attention.answer")) + "</button>" :
     item.kind === "paused" ? '<button class="btn sm ghost" data-att-open="' + esc(item.ref) + '">' + esc(t("ui.attention.open")) + "</button>" : item.kind === "routine-paused" ? '<button class="btn sm" data-routine-resume="' + esc(item.ref) + '">{{ui.app.resume}}</button>' : item.kind === "exception" ? '<button class="btn sm" data-exc-retry="' + esc(item.ref) + '">{{ui.exceptions.retry}}</button><button class="btn sm ghost" data-exc-dismiss="' + esc(item.ref) + '">{{ui.exceptions.dismiss}}</button>' : // routine-runs-ui.ts (INV-1665), exceptions-ui.ts (INV-1741)
     onBoard ? "" : '<button class="btn sm ghost" data-att-task="' + esc(item.ref) + '">' + esc(t("ui.attention.open")) + "</button>";
-  return '<div class="attention-row' + (onBoard ? (owed ? ' attention-owed' : ' attention-waiting') : '') + '" title="' + esc(item.title + " — " + item.detail) + '">' +
-    '<div class="attention-copy">' + (onBoard ? '<span class="attention-label">' + (owed ? "{{ui.app.needs-you}} " : "{{ui.tf.waitingFor}} ") + '</span>' : '<strong>' + esc(item.title) + '</strong> ') + '<span class="dim">' + esc(item.detail) + (item.stage && !onBoard ? " · " + esc(item.stage) : "") + '</span></div>' +
-    '<div class="ui-row attention-actions">' + (item.deadline ? '<span class="dim mono">' + esc(whenOf(item.deadline)) + '</span>' : '') + (!onBoard && item.level ? '<span class="chip">L' + esc(item.level) + '</span>' : '') + (owed ? act : '') + '</div></div>';
+  return '<div class="attention-row' + (onBoard ? (owed ? ' attention-owed' : ' attention-waiting') : '') + '" title="' + esc((item.reading ? item.reading.title : item.title) + " — " + item.detail) + '">' +
+    '<div class="attention-copy">' + (onBoard ? '<span class="attention-label">' + (owed ? "{{ui.app.needs-you}} " : "{{ui.tf.waitingFor}} ") + '</span>' : '<strong>' + (item.reading ? workReadingLink(item.reading) : esc(item.title)) + '</strong> ') + '<span class="dim">' + esc(item.detail) + (item.reading && !onBoard ? " · " + esc(workReadingPhase(item.reading)) : "") + '</span></div>' +
+    '<div class="ui-row attention-actions">' + (item.deadline ? '<span class="dim mono">' + esc(whenOf(item.deadline)) + '</span>' : '') + (owed ? act : '') + '</div></div>';
 }
 var attentionNodes = new Map(), attentionItems = [], attentionOffset = 0, attentionGeneration = 0;
 function paintAttention() {

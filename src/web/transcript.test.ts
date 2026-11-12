@@ -86,7 +86,7 @@ test("tool traffic becomes tool rows, not empty bubbles", () => {
 
   const display = toDisplayEntries(entries, [{ id: "id-Ada", name: "Ada" }]);
 
-  assert.deepEqual(display[0], { kind: "text", role: "user", text: "take a screenshot", at: "t" });
+  assert.deepEqual(display[0], { kind: "text", role: "user", provenance: "unknown", text: "take a screenshot", at: "t" });
   // Marked `aside`: prose in the same turn as tool calls is running commentary, not the
   // answer, and the reader of a long piece of research needs to see where the work stops
   // and the conclusion starts. Known here by construction rather than guessed — a

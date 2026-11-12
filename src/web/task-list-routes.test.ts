@@ -38,8 +38,10 @@ test("1600-task board reads bounded pages across updates, scopes and authorizati
     assert.ok(other.body.tasks.every(task=>tasks.get(task.id)!.conversation!=="chat"),"other-conversation pages cannot include the active conversation");
     assert.equal((await read("/api/tasks/list?agent=a&conversation=chat&cursor="+encodeURIComponent(other.body.nextCursor!))).status,409,"opposite conversation scopes cannot reuse cursors");
     assert.equal((await read("/api/tasks/list?cursor="+encodeURIComponent(first.body.nextCursor!))).status,409,"query changes cannot reuse a cursor");
+    const search = await read("/api/tasks/list?search=" + encodeURIComponent("Older unlinked")); assert.equal(search.body.total,1); assert.equal(search.body.tasks[0]!.id,unlinked.id);
     allowed=false;
     assert.equal((await read("/api/tasks/item?task=t1")).status,404);
+    assert.equal((await read("/api/tasks/list?search=" + encodeURIComponent("Older unlinked"))).body.total,0,"search cannot disclose inaccessible work");
     assert.equal((await read("/api/tasks/list?ids="+ids.slice(0,50).join(","))).body.tasks.length,0);
     assert.equal((await read("/api/tasks/list?priority=t1&cursor="+encodeURIComponent(first.body.nextCursor!))).status,409);
   } finally {server.closeIdleConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}

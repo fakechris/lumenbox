@@ -241,6 +241,7 @@ export class PendingWork {
   }
 
   /** Forks prepared and never settled, oldest first. */
+  resourceAllowed: (id: string) => boolean = () => true;
   open(): OpenFork[] {
     const open = new Map<string, OpenFork>();
     for (const record of this.read()) {
@@ -267,7 +268,7 @@ export class PendingWork {
         open.delete(record.id);
       }
     }
-    return [...open.values()];
+    return [...open.values()].filter(row => this.resourceAllowed(row.id));
   }
 
   /**

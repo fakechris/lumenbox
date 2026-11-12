@@ -171,12 +171,16 @@ export class AgentBus {
    * before anything runs — so nothing replayed has executed anything, and re-queueing it cannot
    * duplicate a side effect.
    */
+  resourcePause: (agentId: string) => ReturnType<typeof readPause> = () => undefined;
+  resourceAllowed: (message: InboundMessage) => boolean = () => true;
+  snapshot() { return { running: [...this.active.entries()].map(([key, row]) => ({ agentId: agentOfKey(key), conversation: key.slice(key.indexOf("\0") + 1), workId: row.workId })), queued: [...this.pending.entries()].flatMap(([agentId, rows]) => rows.map(message => ({ agentId, message }))) }; }
+  discardRevoked(): void { for (const id of this.pending.keys()) this.dropStaleWork(id); }
   recover(): number {
     const pending = this.inbox?.pending() ?? [];
     let restored = 0;
     for (const item of pending) {
       if (this.registry.tryGet(item.agentId) === undefined) continue;
-      if(this.workAttention?.cancelledMessage(item.message)){this.inbox?.drop(item.seq);continue;}
+      if(!this.resourceAllowed(item.message) || this.workAttention?.cancelledMessage(item.message)){this.inbox?.drop(item.seq);continue;}
       const queue = this.pending.get(item.agentId) ?? [];
       const prepared=this.userWork?.prepare(item.agentId,item.message);
       const message=prepared?.message??item.message;
@@ -368,6 +372,7 @@ export class AgentBus {
   private enqueue(agentId: string, message: InboundMessage): number | undefined {
     // Recorded before it is queued, and before the sender is told anything. The other order would
     // acknowledge work that is not yet written down, which is the whole failure being fixed.
+    if (!this.resourceAllowed(message)) throw Error("This resource was stopped by the operator.");
     const prepared=this.userWork?.prepare(agentId,message);message=prepared?.message??message;
     if(prepared?.duplicate)return prepared.admission;
     const retained=this.inbox?.pending().find(row=>row.agentId===agentId && row.message.id===message.id);
@@ -667,11 +672,10 @@ export class AgentBus {
   }
 
   private dropStaleWork(agentId: string): void {
-    if (!this.workAttention) return;
     const queue = this.pending.get(agentId) ?? [];
     const kept = queue.filter(message => {
-      if (this.workAttention!.cancelledMessage(message)) { this.inbox?.drop(message.admission); return false; }
-      if (message.informational || !message.work || this.workAttention!.admittedPerson(agentId,message.conversation??MAIN_CONVERSATION,message) || this.workAttention!.valid(message.work, agentId)) return true;
+      if (!this.resourceAllowed(message) || this.workAttention?.cancelledMessage(message)) { this.inbox?.drop(message.admission); return false; }
+      if (!this.workAttention || message.informational || !message.work || this.workAttention.admittedPerson(agentId,message.conversation??MAIN_CONVERSATION,message) || this.workAttention!.valid(message.work, agentId)) return true;
       this.inbox?.drop(message.admission); return false;
     });
     if (kept.length === 0) this.pending.delete(agentId); else this.pending.set(agentId, kept);
@@ -694,7 +698,7 @@ export class AgentBus {
 
   /** Whether a person paused this agent, and why (INV-1554). */
   pauseOf(agentId: string): ReturnType<typeof readPause> {
-    return this.registry.has(agentId) ? readPause(this.registry.dirFor(agentId)) : undefined;
+    return this.resourcePause(agentId) ?? (this.registry.has(agentId) ? readPause(this.registry.dirFor(agentId)) : undefined);
   }
 
   /** How many turns are in flight across every agent (INV-1538). */

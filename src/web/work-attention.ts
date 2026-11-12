@@ -6,5 +6,5 @@ import type { AgentRegistry } from "../agents/registry.ts";
 export function conversationProgress(registry: AgentRegistry, bus: AgentBus, agent: string, conversation: string) {
   const work = bus.workAttention?.get(agent, conversation);
   return { ...registry.readDurableState(agent, workStateConversation(work, conversation)),
-    attention: work ? { status: work.status, reason: work.reason, held: bus.heldCount(agent, conversation) } : undefined };
+    attention: work ? { taskId: work.taskId, status: work.status, reason: work.reason, held: bus.heldCount(agent, conversation) } : undefined };
 }

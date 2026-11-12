@@ -211,6 +211,7 @@ export class Effects {
   }
 
   private async settlePause(pause: OpenFork, approved: boolean): Promise<void> {
+    if (!this.deps.pendingWork.resourceAllowed(pause.id)) return;
     const reason = String(pause.data?.reason ?? pause.brief);
     let text: string;
     let failed = false;
@@ -219,12 +220,14 @@ export class Effects {
       if (mcp === undefined) throw new Error("no tool servers are loaded");
       const result = await mcp.callFromHost(pause.child, { ...((pause.data?.resumeInput as Record<string, unknown>) ?? {}), approved });
       text = result.text;
+      if (!this.deps.pendingWork.resourceAllowed(pause.id)) return;
       const follow = this.apply({ agentId: pause.agentId, agentName: String(pause.data?.agentName ?? ""), conversation: pause.parent, workId: pause.workId, tool: pause.child, effects: result.effects ?? [] });
       if (follow.notes.length > 0) text = `${text}\n${follow.notes.join("\n")}`;
     } catch (error) {
       failed = true;
       text = `The follow-up could not run: ${error instanceof Error ? error.message : String(error)}`;
     }
+    if (!this.deps.pendingWork.resourceAllowed(pause.id)) return;
     const message = `[You asked the person to confirm "${reason}"; they ${approved ? "confirmed" : "declined"}.] ${text}`;
     // The callback has run and must not run again, so what it said is made durable before the
     // pause is closed: a note due now, which `deliverDue` retries until the inbox takes it —
@@ -277,6 +280,7 @@ export class Effects {
     const outcome = { resumedJobs: 0, lostJobs: 0, closedPauses: 0 };
     const mcp = this.deps.mcp();
     for (const job of this.openOf("ext-job")) {
+      if (!this.deps.pendingWork.resourceAllowed(job.id)) continue;
       const resume = String(job.data?.resumeTool ?? "");
       if (mcp?.isHostOnly(resume) === true) {
         try {
@@ -287,7 +291,7 @@ export class Effects {
           this.log(`job ${job.child}: ${resume} failed on recovery: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
-      if (this.deps.deliver(job.agentId, `[Background job ${String(job.data?.jobId)} (${job.brief}) was lost in a restart: nothing picked it back up. Anything it did is an attempt, not a result.]`, job.parent, job.workId)) {
+      if (this.deps.pendingWork.resourceAllowed(job.id) && this.deps.deliver(job.agentId, `[Background job ${String(job.data?.jobId)} (${job.brief}) was lost in a restart: nothing picked it back up. Anything it did is an attempt, not a result.]`, job.parent, job.workId)) {
         this.deps.pendingWork.dropped(job.id, "restart", this.now());
         outcome.lostJobs += 1;
       }
@@ -295,7 +299,7 @@ export class Effects {
     const waiting = new Set(this.deps.policy.pending().map(approval => approval.id));
     for (const pause of this.openOf("pause")) {
       if (waiting.has(String(pause.data?.approvalId))) continue;
-      if (this.deps.deliver(pause.agentId, `[The confirmation you asked for ("${String(pause.data?.reason ?? pause.brief)}") is no longer waiting after a restart, and its follow-up did not run. Ask again if it is still needed.]`, pause.parent, pause.workId)) {
+      if (this.deps.pendingWork.resourceAllowed(pause.id) && this.deps.deliver(pause.agentId, `[The confirmation you asked for ("${String(pause.data?.reason ?? pause.brief)}") is no longer waiting after a restart, and its follow-up did not run. Ask again if it is still needed.]`, pause.parent, pause.workId)) {
         this.deps.pendingWork.dropped(pause.id, "restart", this.now());
         outcome.closedPauses += 1;
       }

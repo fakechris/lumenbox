@@ -1,3 +1,4 @@
+import type { AuditContext } from "./audit-context.ts";
 import { ExecutionArchives } from "./execution-archives.ts";
 import { randomUUID } from "node:crypto";
 import type { TaskBinding } from "./execution-binding.ts";
@@ -63,6 +64,7 @@ export const LEDGER_KIND: LedgerKind = "record";
 const COMPACT_AT = envNumber("AGENTBOX_TURN_LEDGER_COMPACT_AT", 5_000);
 
 interface BeginRecord {
+  audit?: AuditContext;
   principalId?: string;
   causedBy?: string[];
   id: string;
@@ -202,6 +204,7 @@ export interface ResumeMarker {
 
 /** A turn that began and never ended. */
 export interface InterruptedTurn {
+  audit?: AuditContext;
   taskBinding?: TaskBinding;
   principalId?: string;
   causedBy?: string[];
@@ -256,6 +259,7 @@ export class TurnLedger {
 
   /** Records that a turn is starting. Returns the handle its end is reported against. */
   begin(options: {
+    audit?: AuditContext;
     executionId?: string;
     boxId?: string;
     taskBinding?: TaskBinding;
@@ -285,7 +289,7 @@ export class TurnLedger {
     if (options.executionId && this.path) { mkdirSync(dirname(this.path), { recursive: true }); this.executionArchives.capture(); }
     const record: BeginRecord = {
       id: options.id,
-      event: "begin",
+      event: "begin", ...(options.audit ? { audit: options.audit } : {}),
       ...(options.executionId !== undefined ? { executionId: options.executionId } : {}),
       ...(options.boxId !== undefined ? { boxId: options.boxId } : {}),
       ...(options.taskBinding !== undefined ? { taskBinding: options.taskBinding } : {}),
@@ -461,7 +465,7 @@ export class TurnLedger {
       if (record.event === "begin") {
         if (record.resumeOf !== undefined && record.resumeOf !== record.id) open.delete(record.resumeOf);
         open.set(record.id, {
-          id: record.id,
+          id: record.id, ...(record.audit ? { audit: record.audit } : {}),
           ...(record.principalId !== undefined ? { principalId: record.principalId } : {}),
           ...(record.causedBy !== undefined ? { causedBy: record.causedBy } : {}),
           agentId: record.agentId,

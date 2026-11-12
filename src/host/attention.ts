@@ -96,7 +96,7 @@ export interface AttentionInput {
   /** The chat a task's conversation delivers to, so an undeliverable message is matched to its task (INV-1464). */
   chatKeyOf?: (conversation: string) => string | undefined;
   /** Whether something of this task runs right now: the assignee's turn in its conversation, or a command it let go of. */
-  active?: (task: Task) => boolean;
+  active?: (task: Task) => boolean; checkPending?: (task: Task) => boolean;
   all?: boolean;
   now?: Date;
 }
@@ -211,7 +211,7 @@ export function attentionFor(input: AttentionInput): Attention {
   const undeliverableChats = new Set((input.undeliverable ?? []).map(receipt => receipt.chatKey)); const byId = new Map(input.tasks.map(task => [task.id, task])); // byId: the blockers a waiting row names (INV-1740)
   for (const task of input.tasks) {
     if (!isLive(task)) continue;
-    stages[task.id] = taskStage(task, stageWorldOf(task, { undeliverableChats, questions: input.questions, ...(input.agentIds !== undefined ? { agentIds: input.agentIds } : {}), ...(input.chatKeyOf !== undefined ? { chatKeyOf: input.chatKeyOf } : {}), ...(input.active !== undefined ? { active: input.active } : {}) }));
+    stages[task.id] = taskStage(task, stageWorldOf(task, { undeliverableChats, questions: input.questions, ...(input.agentIds !== undefined ? { agentIds: input.agentIds } : {}), ...(input.chatKeyOf !== undefined ? { chatKeyOf: input.chatKeyOf } : {}), ...(input.active !== undefined ? { active: input.active } : {}), ...(input.checkPending ? { checkPending: input.checkPending } : {}) }));
   }
   for (const task of input.tasks) {
     if (!isLive(task) || input.agentIds && taskAudience(task,input.agentIds,input.personIds) !== "user") continue;
@@ -249,7 +249,7 @@ export function attentionFor(input: AttentionInput): Attention {
       });
       continue;
     }
-    if (task.status === "review" && isMe(task.reviewerId) && !(task.reviewerId !== undefined && input.agentIds?.has(task.reviewerId))) { // an agent reviewer settles it by the record (INV-1614/1647)
+    if (task.status === "review" && (isMe(task.reviewerId) || input.checkPending !== undefined && isMe(task.requester)) && stages[task.id] === "person/review") { // an agent reviewer settles it by the record (INV-1614/1647)
       mine.push({
         kind: "review",
         ref: task.id, stage: stages[task.id],

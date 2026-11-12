@@ -77,11 +77,15 @@ export function outboundVerdict(purpose: OutboundPurpose, world: OutboundWorld, 
 }
 
 /** One line for the audit row and the log: the purpose and what it names. */
+const ANSWER_PREFIX = "answer owed as ";
+/** Reads the host's own persisted transport-purpose format, including old queue records. */
+export function answerDeliveryId(purpose: string): string | null | undefined { return !purpose.startsWith(ANSWER_PREFIX) ? undefined : purpose.length > ANSWER_PREFIX.length ? purpose.slice(ANSWER_PREFIX.length) : null; }
+
 export function describePurpose(purpose: OutboundPurpose): string {
   switch (purpose.kind) {
     case "result": return `result for ${purpose.taskId}`;
     case "attention": return `attention under ${purpose.ref}`;
-    case "answer": return `answer owed as ${purpose.deliveryId}`;
+    case "answer": return ANSWER_PREFIX + purpose.deliveryId;
     case "ack": return `ack of ${purpose.messageId}`;
     case "notice": return purpose.about === undefined ? "notice" : `notice: ${purpose.about}`;
     case "draft": return `outbox draft ${purpose.id}`;

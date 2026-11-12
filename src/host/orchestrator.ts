@@ -1,7 +1,12 @@
+import { readPause, writePause } from "../agents/pause.ts";
+import { GovernanceLedger, resourceKey, routineResource } from "./work-governance.ts";
+import { ResultChecks } from "./result-check-policy.ts";
+import { runResultCheck } from "./result-check-runner.ts";
+import { requestsResultCheck } from "./task-delivery.ts";
 import { taskAttentionChanged, taskWorkId } from "./task-attention.ts";
 import { WorkAttention, workStateConversation } from "../agents/work-attention.ts";
 import { randomUUID } from "node:crypto";
-import { auditConversation, auditCurrent } from "./audit-context.ts";
+import { auditConversation, auditCurrent, isAuditConversation } from "./audit-context.ts";
 import { admitProgressMessage } from "./progress-admission.ts";
 /**
  * Wires the registry, the bus, the box, and the turn loop into one runtime.
@@ -318,6 +323,8 @@ export class Orchestrator {
   readonly skillProvenance: SkillProvenance;
   readonly hooks: HookRunner | undefined;
   /** The commands turns let go of past their foreground window (INV-1461); their end wakes the agent on the background lane. */
+  readonly governance: GovernanceLedger;
+  readonly resultChecks = new ResultChecks(join(agentboxHome(), "result-checks.jsonl"));
   readonly verifications = new VerificationLedger(join(agentboxHome(), "verifications.jsonl")); // what each reviewer found, by claim and evidence digest (INV-1614)
   /** The host's one record of each person (INV-1653); every turn reads it, the judge's kept preferences feed it, Settings → Mine edits it. The name reader is wired by the server, which knows the principals. */
   readonly people = new PersonRecords(join(agentboxHome(), "people.jsonl")); personName?: (principalId: string) => string | undefined;
@@ -363,8 +370,6 @@ export class Orchestrator {
    * estimate.
    */
   readonly policy = new PolicyGate({
-    // A reusable approval belongs to the box, not to whichever agent happened to ask
-    // (INV-539, docs/22 §3): two agents in one box must get the same answer.
     boxOf: agentId => {
       try {
         return this.registry.boxOf(agentId).id;
@@ -373,11 +378,9 @@ export class Orchestrator {
       }
     },
     spendUnavailable: () => this.usage.unavailable(),
-    // The box's egress allow list for the taint rule (INV-1309), read lazily: bundles come later.
     egressAllow: agentId => { try { return this.bundles.forBox(this.registry.boxOf(agentId))?.egressHosts ?? []; } catch { return []; } },
     spentSince: sinceMs => {
       const totals = this.usage.totalsSince(sinceMs);
-      // Every billed class, cache reads and writes included: a budget ignoring them let a cache-heavy run report near-zero spend.
       return (
         totals.inputTokens +
         totals.outputTokens +
@@ -389,7 +392,6 @@ export class Orchestrator {
       this.usage.spentSincePrincipal(sinceMs, principalId),
     spentSinceAgent: (sinceMs, agentId) => this.usage.spentSinceAgent(sinceMs, agentId),
     log: line => console.error(`[policy] ${line}`),
-    // Read lazily: the store is built after the gate, and rules reload with the config.
     rules: lazyRuleStore(() => this.rules),
   });
 
@@ -478,7 +480,6 @@ export class Orchestrator {
    */
   reloadMcp(): { started: string[]; stopped: string[]; kept: string[] } | undefined {
     if (!this.mcpFromConfig) return undefined;
-    // Every route dies with the list it was minted against (docs/33 §0a): a hot-swapped server must not hand a running engine tools nobody named.
     const revoked = this.mcpFace.revokeAll("MCP servers reloaded");
     if (revoked > 0) console.error(`[mcp-face] ${revoked} route(s) revoked by the reload`);
     return this.mcp.reload(mcpServersFrom(loadConfig(line => console.error(`[config] ${line}`))));
@@ -632,6 +633,7 @@ export class Orchestrator {
   });
 
   readonly scheduler = new Scheduler({
+    allowed: skill => !this.governance.revoked(routineResource(skill)),
     precheck: async (skill, agent) => this.credentials.forRoutine(skill, agent), // skipped and held with missing_credentials (INV-1666)
     spentSinceAgent: (sinceMs, agentId) => this.usage.spentSinceAgent(sinceMs, agentId), workDirOf: agent => workDir(this.registry.tryGet(agent) !== undefined ? this.boxEntryOf(agent) : undefined), // the run's prompt names its box's (INV-1737)
     due: async () => {
@@ -691,13 +693,10 @@ export class Orchestrator {
         })));
     },
     observed: (slug, would) => this.policy.notifyObserved(slug, would), finished: (skill, agent, result, reason) => noteRoutineEnd(this.exceptions, skill.slug, agent, result, reason), // The observe-mode audit row (INV-1458); every run's end on the exception list (INV-1741).
-    // Through the ordinary prompt path, so the policy gate checks a scheduled turn like any other (a box over budget stops firing). Its own turn
-    // always: a kickoff absorbed as steering would bury its report in an unrelated reply. A delivering run happens *in* the chat's conversation. Last time's commitments open the next run (INV-528).
     priorCommitments: slug => priorCommitmentsPrompt(this.commitments.lastFor(slug), this.tasks?.list() ?? []),
     run: async (agent, prompt, deliver, slug, toolScope, deliverWhen, identity) => {
       const scope = toolScope !== undefined ? { toolScope } : {};
       const startedMs = Date.now();
-      // How the run came out is read off the turn ledger afterwards (INV-1404): done, partial (the turn stopped itself) or failed.
       const resultOf = (agentId: string) => routineResult(this.turns?.endedSince(agentId, startedMs) ?? []);
       const why = (agentId: string) => { const reason = routineReason(this.turns?.endedSince(agentId, startedMs) ?? []); return reason === undefined ? {} : { reason }; }; // the run history's line (INV-1665)
       if (deliver === undefined) {
@@ -847,28 +846,15 @@ export class Orchestrator {
   }
 
   private maybeAudit(task: Task): void {
-    if (task.status !== "review" || task.reviewerId === undefined) return;
-    if (this.auditing.has(task.id)) return;
-    const last = task.history[task.history.length - 1];
-    // The record's own moves and a reviewer's own moves must not retrigger: after either, the next actor is a person or the assignee.
-    if (last?.by === "audit-guard" || last?.by === REVIEW_ACTOR || last?.by === task.reviewerId || this.verifications.recordsFor(task.id, evidenceDigest(task)).some(r => r.reviewerId === last?.by)) return;
-    if (this.registry.tryGet(task.reviewerId) === undefined) return;
-    const assignee = task.assigneeId !== undefined ? this.registry.tryGet(task.assigneeId) : undefined;
+    if (task.status !== "review" || !requestsResultCheck(task.history.at(-1)) || !this.tasks || this.auditing.has(task.id)) return;
     this.auditing.add(task.id);
-    // K reviewers, one record each, and the record moves the task (INV-1614); the workspace snapshot around each turn still voids a review that edited the work.
-    void reviewRound({
-      ledger: this.verifications, k: loadConfig().reviewersPerClaim ?? DEFAULT_REVIEWERS_PER_CLAIM, candidates: () => this.registry.list().map(agent => agent.id), nameOf: id => this.registry.tryGet(id)?.profile.name ?? id,
-      current: id => this.tasks?.get(id), move: (id, change) => { this.tasks?.update(id, change, REVIEW_ACTOR); }, log: line => console.error(`[audit] ${line}`), isAgent: id => this.registry.has(id), // an agent's own ask closes on a passing record (INV-1647)
-      ask: async (reviewerId, current) => {
-        const audit = { taskId: current.id, digest: evidenceDigest(current), reviewerId };
-        const conversation = auditConversation(audit), messageId = randomUUID();
-        if (!auditCurrent(audit, reviewerId, conversation, this.tasks)) return { reply: "", voided: "review no longer current" };
-        await this.prompt(reviewerId, buildAuditPrompt({ task: current, assigneeName: assignee?.profile.name ?? current.assigneeId ?? "the assignee", ...(current.conversation !== undefined ? { conversation: current.conversation } : {}) }), undefined, { audit, conversation, messageId, steerable: false, lane: "background", origin: "host:audit" });
-        return auditCurrent(audit, reviewerId, conversation, this.tasks)
-          ? { reply: this.replyForMessage(reviewerId, messageId, conversation) }
-          : { reply: "", voided: "review was cancelled or its evidence changed" };
-      },
-    }, task).catch(error => console.error(`[audit] ${task.id}: ${error instanceof Error ? error.message : String(error)}`)).finally(() => this.auditing.delete(task.id));
+    void runResultCheck(task, {
+      checks: this.resultChecks, verifications: this.verifications, tasks: this.tasks,
+      candidates: () => this.registry.list().filter(agent => !task.assigneeId || this.registry.boxOf(agent.id).id === this.registry.boxOf(task.assigneeId).id).map(agent => agent.id), nameOf: id => this.registry.tryGet(id)?.profile.name ?? id, isAgent: id => this.registry.has(id),
+      read: async (current, path) => { const box = current.assigneeId ? this.boxFor(current.assigneeId) : undefined; if (!box) throw new Error("No computer is available for this check"); const file = await box.downloadFile(path); const bytes = Buffer.from(file.base64, "base64"); if (bytes.length !== file.size || bytes.length > 10 * 1024 * 1024) throw new Error("Incomplete or oversized file bytes"); return bytes; },
+      ask: async (reviewerId, prompt, audit, conversation) => { const messageId = randomUUID(); await this.prompt(reviewerId, prompt, undefined, { audit, conversation, messageId, steerable: false, lane: "background", origin: "host:audit" }); return this.replyForMessage(reviewerId, messageId, conversation); },
+      log: line => console.error(`[check] ${line}`),
+    }).catch(error => console.error(`[check] ${task.id}: ${error instanceof Error ? error.message : String(error)}`)).finally(() => this.auditing.delete(task.id));
   }
 
   /** The box workspace as path→hash, or undefined when there is no box to ask. */
@@ -893,6 +879,7 @@ export class Orchestrator {
   }
 
   constructor(private readonly options: OrchestratorOptions = {}) {
+    this.governance = new GovernanceLedger(options.pendingWork === null ? null : join(agentboxHome(), "work-governance.jsonl"));
     setRejectionNote(entry => { this.usage.record(entry); });
     this.tasks =
       options.tasks === null
@@ -949,7 +936,7 @@ export class Orchestrator {
         ? undefined
         : (options.pendingWork ??
           new PendingWork(pendingWorkPath(), line => console.error(`[pending-work] ${line}`)));
-    // What a person sees of the forks (INV-1667), kept beside the ledger the host itself made; a ledger a test hands in brings its own or none.
+    if (this.pendingWork) this.pendingWork.resourceAllowed = id => !this.governance.revoked(resourceKey("pending", id));
     if (options.pendingWork === undefined && this.pendingWork !== undefined) this.pendingWork.forks = new ForkEvents(forkEventsPath(), line => console.error(`[fork-events] ${line}`));
     this.skillProvenance =
       options.skillProvenance === null
@@ -973,6 +960,7 @@ export class Orchestrator {
             log: line => console.error(`[hooks] ${line}`),
           }));
     this.registry = options.registry ?? new AgentRegistry();
+    this.governance.restorePauses((id,by,at)=>{if(!this.registry.has(id))return false;const dir=this.registry.dirFor(id);if(!readPause(dir))writePause(dir,{by,at,reason:"Restored pending member pause"});return true;});
     this.memoryMirror = new MemoryMirror({
       registry: this.registry,
       box: agentId => this.boxFor(agentId), memoryDir: agentId => memoryDir(this.boxEntryOf(agentId)), standingRoot: agentId => standingRoot(this.boxEntryOf(agentId)), // the agent's box's (INV-1734, INV-1736)
@@ -1101,6 +1089,8 @@ export class Orchestrator {
       inbox,
       true, (agentId, message) => admitProgressMessage(this.tasks, agentId, message), workFocus, this.tasks?.workRoots.admission(workFocus)
     );
+    this.bus.resourcePause = id => this.governance.pendingPause(id);
+    this.bus.resourceAllowed = message => this.governance.allows(message);
     this.goalLoop = this.tasks === undefined ? undefined : new GoalLoop({ modelRecoveryRoot: this.registry.root,
       tasks: this.tasks,
       agentName: id => this.registry.tryGet(id)?.profile.name,
@@ -1866,7 +1856,7 @@ export class Orchestrator {
     // not spawn somebody's bridges as a side effect. And kicked off rather than waited
     // on — a turn that blocks until every configured server has finished booting is a
     // turn whose first token is hostage to the slowest thing an operator installed.
-    const isolated = this.registry.contextMode(agent.id, conversation) !== "normal";
+    const isolated = this.registry.contextMode(agent.id, conversation) !== "normal" || inbound.some(message => message.audit);
     if (!isolated && this.mcp.configured) this.mcp.warm();
     // Refreshed before the prompt is built, and never allowed to fail the turn — a box with no
     // skills directory is the normal state of a fresh install.
@@ -1911,7 +1901,7 @@ export class Orchestrator {
       scopes: this.scopes,
       bundles: this.bundles,
       operatorRules: () => this.rules.forReview(),
-      mcp: this.mcp,
+      mcp: isolated ? undefined : this.mcp,
       askUser: this.options.askUser,
       showUI: this.options.showUI,
       askSecret: this.options.askSecret,
@@ -1943,7 +1933,7 @@ export class Orchestrator {
       boxKind: this.boxEntryOf(agent.id).kind, boxWorkDir: this.boxEntryOf(agent.id).workDir,
       // The same cheap profile the summariser and the note-taker use: choosing memories is the least interesting work here.
       selectMemory: prompt => this.askCheaply(agent, prompt),
-      skillProvenance: this.skillProvenance, jobWatch: this.jobWatch, verifications: this.verifications, syncStanding: agentId => this.memoryMirror.sync(agentId), person: principalId => this.renderPerson(principalId), orgKnowledge: this.orgKnowledge, conflicts: this.conflicts, outbox: this.outboxDrafts, ...(this.spendLimits !== undefined ? { spendLimits: this.spendLimits } : {}),
+      resultChecks: this.resultChecks, skillProvenance: this.skillProvenance, jobWatch: this.jobWatch, verifications: this.verifications, syncStanding: agentId => this.memoryMirror.sync(agentId), person: principalId => this.renderPerson(principalId), orgKnowledge: this.orgKnowledge, conflicts: this.conflicts, outbox: this.outboxDrafts, ...(this.spendLimits !== undefined ? { spendLimits: this.spendLimits } : {}),
       ...(this.templateSetups.has(agent.id) ? { templateSetup: this.templateSetups.get(agent.id)! } : {}),
       templates: this.templates, hooks: this.hooks,
       // Same cheap profile. Shadow by default: the verdicts land in auto-review.jsonl and the web
@@ -2052,6 +2042,8 @@ export class Orchestrator {
     let parked = 0;
 
     for (const turn of outstanding) {
+      if (this.governance.revoked(resourceKey("recovery", turn.id)) || turn.workId && this.governance.revoked(resourceKey("work", turn.workId)) || turn.causedBy?.some(id => this.governance.revoked(resourceKey("message", id)))) { this.turns?.end(turn.id, "resource-stopped"); abandoned++; continue; }
+      if (this.retireInterruptedCheck(turn)) { abandoned++; continue; }
       if (turn.workId && this.bus.workAttention?.cancelled(turn.workId)) { this.turns?.end(turn.id, "work-cancelled"); abandoned++; continue; }
       // Inbox replay already queued this durable continuation after a second crash.
       if (this.bus.hasPendingResume(turn.id)) continue;
@@ -2132,12 +2124,15 @@ export class Orchestrator {
     this.continueTurn(turn, { id: approvalId, how });
   }
 
-  /**
-   * Continues an interrupted turn as itself (INV-774): the ledger record is closed and
-   * reopened under the same id by the turn, the wake carries no user text, and `runTurn`
-   * answers the open step from the transcript before asking the model anything.
-   */
+  private retireInterruptedCheck(turn: InterruptedTurn): boolean {
+    if (!turn.audit && !isAuditConversation(turn.conversation ?? "")) return false;
+    const task = turn.audit ? this.tasks?.get(turn.audit.taskId) : undefined;
+    if (task && turn.audit?.planId) this.resultChecks.stop(task, turn.audit.planId, "Host restart interrupted this check; it is not resumed as ordinary work. Reserved costs remain consumed.");
+    this.turns?.end(turn.id, "result-check-interrupted"); this.steps?.closed(turn.id);
+    return true;
+  }
   private continueTurn(turn: InterruptedTurn, approval?: { id: string; how: "allowed" | "refused" | "gone" }): boolean {
+    if (this.retireInterruptedCheck(turn)) return false;
     const goal = this.goalLoop?.resumeGoal(turn);
     if (goal === false) { this.turns?.end(turn.id, "goal no longer active"); return false; }
     this.bus.sendFromUser(turn.agentId, continuationNote(turn.about), { ...(goal === undefined ? {} : { goal }),

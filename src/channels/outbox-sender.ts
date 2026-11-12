@@ -10,7 +10,7 @@
 
 import type { OutboundPurpose } from "../host/outbound.ts";
 import { describePurpose } from "../host/outbound.ts";
-import { conversationGone, OUTBOX_MAX_ATTEMPTS, outboundId, type Outbox, retryDelayMs } from "../host/outbox.ts";
+import { conversationGone, OUTBOX_MAX_ATTEMPTS, outboundId, type Outbox, type Receipt, retryDelayMs } from "../host/outbox.ts";
 
 export interface Sender {
   sendToChat(chatKey: string, text: string): Promise<void>;
@@ -23,6 +23,8 @@ export interface SendOutcome {
   duplicate?: boolean;
 }
 
+type SendAuthorization = boolean | { allow: boolean; terminal?: boolean; reason?: string };
+
 export class OutboxSender {
   private readonly chains = new Map<string, Promise<unknown>>();
 
@@ -33,7 +35,8 @@ export class OutboxSender {
     private readonly wait: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms)),
     private readonly now: () => Date = () => new Date(),
     /** Each try's outcome (INV-1741): the exception list counts a failure and resolves when the chat takes one. */
-    private readonly observe?: (event: "sent" | "failed" | "dropped", detail: { id: string; chatKey: string; attempts: number; error?: string }) => void
+    private readonly observe?: (event: "sent" | "failed" | "dropped", detail: { id: string; chatKey: string; attempts: number; error?: string }) => void,
+    private readonly maySend: (receipt: Receipt) => SendAuthorization = () => true
   ) {}
 
   /**
@@ -63,8 +66,10 @@ export class OutboxSender {
     const day = input.purpose.kind === "notice" ? this.now().toISOString().slice(0, 10) : undefined;
     const id = outboundId(input.chatKey, purpose, input.text, day);
     if (this.outbox.enqueue({ id, chatKey: input.chatKey, purpose, text: input.text }) === "duplicate") {
-      this.log(`outbox: ${purpose} to ${input.chatKey} already sent as ${id}; not sent again`);
-      return Promise.resolve({ delivered: true, duplicate: true });
+      const receipt = this.outbox.get(id);
+      if (receipt?.status === "sent") return Promise.resolve({ delivered: true, duplicate: true });
+      if (receipt?.status !== "pending") return Promise.resolve({ delivered: false, why: "The receipt was dropped or is unavailable" });
+      return this.chained(input.chatKey, () => this.attempt(id, input, receipt.attempts, after));
     }
     return this.chained(input.chatKey, () => this.attempt(id, input, 0, after));
   }
@@ -92,6 +97,17 @@ export class OutboxSender {
   /** `once`: a person's Retry — one try, whatever the count, and no backoff after it. */
   private async attempt(id: string, input: { adapter: Sender; chatKey: string; text: string }, failures: number, after?: () => Promise<void>, once = false): Promise<SendOutcome> {
     for (let tried = failures; ; tried += 1) {
+      const receipt = this.outbox.get(id);
+      if (receipt?.status === "sent") return { delivered: true, duplicate: true };
+      if (!receipt || receipt.status !== "pending") return { delivered: false, why: "The receipt is no longer pending" };
+      let verdict: SendAuthorization;
+      try { verdict = this.maySend(receipt); } catch { return { delivered: false, why: "Delivery authority is unavailable; the message is held" }; }
+      const allow = typeof verdict === "boolean" ? verdict : verdict.allow;
+      if (!allow) {
+        const why = typeof verdict === "boolean" ? "Delivery authority requires inspection" : verdict.reason ?? "Delivery authority requires inspection";
+        if (typeof verdict !== "boolean" && verdict.terminal) this.outbox.dropped(id, why);
+        return { delivered: false, why };
+      }
       try {
         await input.adapter.sendToChat(input.chatKey, input.text);
         this.outbox.sent(id);

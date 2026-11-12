@@ -1,3 +1,4 @@
+import type { ResultChecks } from "./result-check-policy.ts";
 import {workBox} from "./work-executor.ts";
 import { taskHoldsAttention } from "./task-attention.ts";
 import { executionTarget } from "./tool-roster.ts";
@@ -40,7 +41,7 @@ import { approvalOutcomeResult, notStartedResult, outcomeUnknownResult } from ".
 import { idempotencyOf } from "../protocol/idempotency.ts";
 import { changedPromptSegments, type PromptFingerprint } from "./resume.ts";
 import type { PendingWork } from "./pending-work.ts";
-import { admittedAudit, auditCurrent, auditToolAllowed, AUDIT_READ_TOOLS } from "./audit-context.ts";
+import { admittedAudit, auditCurrent, auditToolAllowed, AUDIT_READ_TOOLS, isAuditConversation } from "./audit-context.ts";
 import type { Effects } from "./effects.ts";
 import type { Orchestrations } from "./orchestrate.ts";
 import type { McpFace } from "./mcp-face.ts";
@@ -610,7 +611,7 @@ export interface TurnDeps {
    */
   networkEvents?: Pick<NetworkEventLog, "query">;
   /** The turn's own budget (INV-1354): model calls and identical-call repeats. Absent means the defaults. */
-  turnBudget?: TurnBudgetConfig;
+  turnBudget?: TurnBudgetConfig; resultChecks?: ResultChecks;
   /** The fork ledger (docs/32): forks are recorded before they start and committed here. */
   pendingWork?: PendingWork;
   /** Acts on the effects a tool result asks for (INV-861). Absent means results are text only. */
@@ -1429,7 +1430,9 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   let blockedCapability: string | undefined; let confirmationPending = false;
   const registry = workRegistry(deps.registry, agent.id, conversation, historyConversation, work, entry => personAuthoredText(entry as HistoryEntry) ?? (givesTasks(entryChannel(entry as HistoryEntry)) ? entry.text : undefined));
   const audit = admittedAudit(inbound);
-  if (inbound.some(message => message.origin === "host:audit") && (!audit || !auditCurrent(audit, agent.id, conversation, deps.tasks))) return;
+  const auditValid = () => !audit || !!audit.planId && !!deps.tasks?.get(audit.taskId) && auditCurrent(audit, agent.id, conversation, deps.tasks) && deps.resultChecks?.active(deps.tasks.get(audit.taskId)!, audit.planId, agent.id) === true;
+  if ((isAuditConversation(conversation) || inbound.some(message => message.origin === "host:audit")) && (!audit || !auditValid())) return;
+  if (audit?.planId) { const task = deps.tasks!.get(audit.taskId)!; const deadline = deps.resultChecks!.snapshot(task).plans.find(plan => plan.id === audit.planId)!.deadline; signal = AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, deadline - Date.now()))]); }
   const contextMode = registry.contextMode(agent.id, conversation);
   const clean = contextMode === "clean";
   const recovering = contextMode === "recover";
@@ -1569,21 +1572,21 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   if (!audit && !isolated && box !== undefined && deps.syncStanding !== undefined) {
     await deps.syncStanding(agent.id).catch(() => undefined);
   }
-  const standing = isolated ? undefined : readStanding(registry.dirFor(agent.id), agent.profile.name);
-  const standingNotice = standing === undefined || audit ? undefined : changeNotice(takeChanges(registry.dirFor(agent.id), standing)); const person = isolated ? undefined : deps.person?.(deps.caller?.userId); // INV-1653
+  const standing = isolated || audit ? undefined : readStanding(registry.dirFor(agent.id), agent.profile.name);
+  const standingNotice = standing === undefined || audit ? undefined : changeNotice(takeChanges(registry.dirFor(agent.id), standing)); const person = isolated || audit ? undefined : deps.person?.(deps.caller?.userId); // INV-1653
 
   // Both personal and shared memories pass the same relevance gate, even below budget.
   // Admitted by scope for this turn's person, then only what may be recalled: a cite-only item is read by id, never here (INV-1725).
-  const ownMemory = isolated ? [] : recallable(registry.readMemoryRecords(agent.id));
-  const sharedMemory = isolated ? [] : recallable(registry.readSharedMemory(agent.id, deps.caller?.userId));
-  const memoryQuery = inbound.map(message => message.text).join(" "); const orgKnowledge = isolated ? undefined : deps.orgKnowledge?.section(agent.id, deps.caller?.userId, memoryQuery); const memoryConflicts = isolated ? undefined : deps.conflicts?.section({ agentId: agent.id, agent: ownMemory, box: sharedMemory, org: deps.orgKnowledge?.recalledFor(agent.id, deps.caller?.userId) ?? [] }); // L1 admitted for the person driving, before ranking (INV-1726); pairs across layers, each side read as this turn may read it (INV-1732)
+  const ownMemory = isolated || audit ? [] : recallable(registry.readMemoryRecords(agent.id));
+  const sharedMemory = isolated || audit ? [] : recallable(registry.readSharedMemory(agent.id, deps.caller?.userId));
+  const memoryQuery = inbound.map(message => message.text).join(" "); const orgKnowledge = isolated || audit ? undefined : deps.orgKnowledge?.section(agent.id, deps.caller?.userId, memoryQuery); const memoryConflicts = isolated || audit ? undefined : deps.conflicts?.section({ agentId: agent.id, agent: ownMemory, box: sharedMemory, org: deps.orgKnowledge?.recalledFor(agent.id, deps.caller?.userId) ?? [] }); // L1 admitted for the person driving, before ranking (INV-1726); pairs across layers, each side read as this turn may read it (INV-1732)
   const selection = {
     query: memoryQuery,
     ask: deps.selectMemory ?? (async () => undefined),
     log: (line: string) => console.error(`[memory] ${agent.profile.name}: ${line}`),
   };
   const emptyRecall: MemoryRecall = { records: [], omitted: 0, excluded: 0, method: "empty" };
-  const [memoryRecall, sharedMemoryRecall] = isolated
+  const [memoryRecall, sharedMemoryRecall] = isolated || audit
     ? [emptyRecall, emptyRecall]
     : await Promise.all([chooseRelevant({ records: ownMemory, ...selection }), chooseRelevant({
         records: sharedMemory, budget: SHARED_CHAR_BUDGET, ...selection,
@@ -1918,14 +1921,10 @@ ${outcome.text}`;
   // Ends of jobs this conversation was not woken for (INV-1613): said once, beside the message, not in the transcript.
   const endedNote = continuing ? undefined : recordedEndsNote(deps.jobWatch?.takeRecorded(agent.id, conversation, work?.id) ?? []);
 
-  // Before assembling: a conversation that has grown past what fits is summarised, once, and the
-  // summary is persisted so later turns pay nothing. Measured on this system at 158KB and 40k
-  // tokens after a day — the end of that road is a turn failing on a request that cannot be made
-  // smaller, at the worst possible moment.
-  if (deps.hooks?.has("PreCompact")) {
+  if (!audit && deps.hooks?.has("PreCompact")) {
     await deps.hooks.run("PreCompact", { session_id: turnId, agent_name: agent.profile.name, trigger: "auto" });
   }
-  history = await compactHistory({
+  if (!audit) history = await compactHistory({
     history,
     agent,
     registry,
@@ -2159,7 +2158,7 @@ ${outcome.text}`;
   // Setup still belongs to the inbox. Persist the message ids before acknowledging
   // them, so startup can reconcile a crash between these two synchronous writes.
   if (isForkConversation(conversation)) deps.pendingWork?.forks?.started(agent.id, conversation); /* a fork's first turn is a step of its chain (INV-1667) */ const agentVersion = agentVersionOf(standing, offeredSkills); const configVersion = registry.configVersions.beginTurn({ agentId: agent.id, profile: agent.profile, turnId, conversation, standing: agentVersion.standing, task: taskBinding?.taskId }); deps.turns?.begin({ // configVersion: the version this turn is held to until it ends (INV-1669)
-    id: turnId, executionId, boxId: registry.boxOf(agent.id).id, ...(taskBinding ? { taskBinding } : {}),
+    id: turnId, executionId, ...(audit ? { audit } : {}), boxId: registry.boxOf(agent.id).id, ...(taskBinding ? { taskBinding } : {}),
     agentId: agent.id,
     causedBy: inbound.map(message => message.id),
     ...(deps.caller?.userId !== undefined ? { principalId: deps.caller.userId } : {}),
@@ -2243,6 +2242,7 @@ ${outcome.text}`;
 
   /** Only completed rounds are rebuilt; full tool results retain their durable references. */
   async function refreshContext(): Promise<void> {
+    if (audit) return; // A check has no unbudgeted summarizer or memory-selection calls.
     if (deps.hooks?.has("PreCompact")) await deps.hooks.run("PreCompact", { session_id: turnId, agent_name: agent.profile.name, trigger: "auto" });
     history = await compactHistory({
       history: registry.readTranscript(agent.id, conversation) as TranscriptEntry[], agent, registry, client, provider: answering,
@@ -2375,7 +2375,7 @@ ${outcome.text}`;
     }
 
     if (work && !bus.workAttention!.valid(work, agent.id)) throw new TurnAborted();
-    if (audit && !auditCurrent(audit, agent.id, conversation, deps.tasks)) return;
+    if (!auditValid()) return;
     emit({ type: "round", agentId: agent.id, round });
 
     // Proactive guard, before the request rather than after it fails. Compaction of the *history*
@@ -2444,15 +2444,14 @@ ${outcome.text}`;
       }
     }
 
-    // Tracked per attempt: whether anything reached the watcher. A retry cannot duplicate stored
-    // history — nothing is appended until the round completes — but it can show a partial answer
-    // twice, and the watcher is told so it can drop the first.
     let outputProduced = false;
     const attemptControl = new AbortController();
 
-    // One span per attempt, all of a turn's rounds in one trace (traceId is the
-    // turnId). Covers both wires: OpenAIWireClient answers the same messages.stream
-    // shape, so this is the single boundary every LLM call crosses.
+    if (audit) {
+      const task = deps.tasks?.get(audit.taskId);
+      const permit = task && audit.planId ? deps.resultChecks?.reserve(task, audit.planId, agent.id, answering) : undefined;
+      if (!permit?.allowed) { emit({ type: "text", agentId: agent.id, agentName: agent.profile.name, delta: permit?.reason ?? "This result check has no spending authority." }); return; }
+    }
     const span = deps.tracer?.start(
       "llm.round",
       {
@@ -3059,7 +3058,7 @@ ${outcome.text}`;
         // A Stop hook may send the model back once: its reason becomes the next user message,
         // and `stop_hook_active` tells the hook it already did so, which is how a hook avoids
         // looping the turn forever (Claude Code's contract, kept exactly).
-        if (deps.hooks?.has("Stop")) {
+        if (!audit && deps.hooks?.has("Stop")) {
           const hook = await deps.hooks.run("Stop", {
             session_id: turnId,
             agent_name: agent.profile.name,
@@ -3267,7 +3266,7 @@ ${outcome.text}`;
       let outcome: ToolOutcome;
       if (blockedCapability) {
         outcome = { text: "Not executed: this user work is waiting for its required tool. No unrelated work may replace it.", isError: true };
-      } else if (audit && (!auditCurrent(audit, agent.id, conversation, deps.tasks) || !auditToolAllowed(audit, toolUse.name, toolInput))) {
+      } else if (audit && (!auditValid() || !auditToolAllowed(audit, toolUse.name, toolInput))) {
         outcome = { text: "Review refused: this audit may only read its current evidence. It cannot create probe tasks, change work, send messages or write memory.", isError: true };
       } else if (isolated || ((effectiveTools !== undefined || !!work && PERSON_FACING_TOOLS.has(toolUse.name)) && !offeredHere || !!work && requiredComputerTool && !offeredCapability)) {
         if (work && !isolated && requiredComputerTool) { blockedCapability = calledTool; bus.workAttention?.capability(work, agent.id, calledTool, false); }
@@ -3324,7 +3323,7 @@ ${outcome.text}`;
             hostRunner: isForkConversation(conversation) ? undefined : deps.hostRunner,
             vault: deps.vault,
             oauth: isForkConversation(conversation) ? undefined : deps.oauth,
-            tasks: deps.tasks, taskBinding: callBinding, progressContext, audit, work, historyConversation,
+            tasks: deps.tasks, taskBinding: callBinding, progressContext, audit, resultChecks: deps.resultChecks, work, historyConversation,
             ...(deps.goalGate !== undefined ? { goalGate: deps.goalGate } : {}),
             scopes: deps.scopes,
             mcp: isForkConversation(conversation) ? undefined : deps.mcp,

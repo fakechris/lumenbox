@@ -72,6 +72,7 @@ import {
 } from "./strings.ts";
 
 export interface InboundMessage {
+  interaction?: true;
   /** `telegram:123` — stable, and what the allow list matches. Who is *speaking*. */
   identity: string;
   /**
@@ -447,6 +448,7 @@ export interface ChannelManagerDeps {
    * the bare tool name behind it, for judgements that want the tool and not its
    * rendering.
    */
+  interactionTask?: (message: InboundMessage, agentName?: string) => string | undefined;
   ask: (
     agentName: string | undefined,
     text: string,
@@ -477,7 +479,7 @@ export interface ChannelManagerDeps {
     /** The reply as it is being written — everything so far, each time it grows. */
     onText?: (soFar: string) => void,
     /** The message's own id, when this ask is one message becoming a turn (INV-613). */
-    origin?: { messageId: string; questionId?: string; addressed?: false }
+    origin?: { messageId: string; questionId?: string; addressed?: false; interaction?: true }
   ) => Promise<AskReply>;
   /**
    * How many requests are ahead of a new one for this agent and chat. Zero means it
@@ -1337,7 +1339,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     // several messages into one prompt.
     message.id = randomUUID();
     this.deps.messages?.admitted({
-      id: message.id,
+      id: message.id, ...(message.interaction ? { kind: "interaction" as const } : {}),
       channel: adapter.name,
       ...(message.messageId !== undefined ? { channelMessageId: message.messageId } : {}),
       chatKey: message.chatKey ?? message.identity,
@@ -1992,14 +1994,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     }
   }
 
-  /**
-   * One accepted request, from acknowledgement to pushed result.
-   *
-   * Everything here degrades by capability: a card where the adapter has one, a line
-   * where it does not; a chat-addressed push where the wire distinguishes chats from
-   * senders, an identity-addressed one where it does not. Delivery failure settles the
-   * task as failed, even when generation succeeded; the transcript retains the answer.
-   */
+  /** One admitted request, or a card interaction bound to its original task. */
   private async runTask(
     adapter: ChannelAdapter,
     message: InboundMessage,
@@ -2008,6 +2003,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     droppedFiles?: readonly string[],
     options?: { questionId?: string; existingTaskId?: string; cardTitle?: string; recoveryOperationId?: string; skipTask?: boolean; onSucceeded?: () => void }
   ): Promise<void> {
+    if (message.interaction && !message.questionId && !options?.skipTask) { const taskId = this.deps.interactionTask?.({ ...message, text: parseAddress(message.text).text }, agentName); if (!taskId || options?.existingTaskId && options.existingTaskId !== taskId) throw new Error("This card's original work is unavailable; the press did not create a new task."); options = { ...options, existingTaskId: taskId }; }
     const chatKey = message.chatKey ?? message.identity;
     const runningKey = message.threadKey ?? chatKey;
     const targetChatKey = message.threadKey ?? chatKey;
@@ -2222,7 +2218,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         onText,
         message.id !== undefined
           ? {
-              messageId: message.id,
+              messageId: message.id, ...(message.interaction ? { interaction: true as const } : {}),
               ...(options?.questionId !== undefined ? { questionId: options.questionId } : {}),
               // A room message that named nobody, on a door that runs every message: the turn
               // is a person's, but nobody is waiting on this agent, so it may stay silent (INV-775).

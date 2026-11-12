@@ -109,7 +109,7 @@ test("in an outside chat the delivered file goes into the chat's outbox, where t
 test("a task in review that names a file and marked no deliverable says so on the reviewer's card", async () => {
   const { tasks, task, files, context } = setup();
   tasks.update(task.id, { reviewerId: "p-chris" }, "p-chris");
-  tasks.update(task.id, { status: "review", note: "Done", evidence: ["/home/box/work/report.docx — the report"] }, AGENT);
+  tasks.deliveryCommand(task.id, "submit", AGENT, { note: "Done", evidence: ["/home/box/work/report.docx — the report"] });
   const card = () => attentionFor({ principalId: "p-chris", identities: [], tasks: tasks.list(), questions: [], nameOf: id => id }).mine.find(item => item.kind === "review")!;
   assert.match(card().detail, /No deliverable was marked: the submission names report\.docx/);
   files.set("/home/box/work/report.md", Buffer.from("r"));
@@ -123,7 +123,7 @@ test("on a host box a deliverable is a file under its own work directory, and th
   const host = { ...context, boxKind: "host", boxWorkDir: work } as ToolContext;
   files.set("/home/box/work/report.md", Buffer.from("r"));
   assert.match((await deliverFileTool(host, { path: "/home/box/work/report.md", note: "r" })).text, new RegExp(`must be a file under ${work}/`));
-  tasks.update(task.id, { reviewerId: "p-chris", status: "review", note: "Done", evidence: [`${work}/out/q3.md — the report`] }, AGENT);
+  tasks.update(task.id, { reviewerId: "p-chris" }, AGENT); tasks.deliveryCommand(task.id, "submit", AGENT, { note: "Done", evidence: [`${work}/out/q3.md — the report`] });
   const card = () => attentionFor({ principalId: "p-chris", identities: [], tasks: tasks.list(), questions: [], nameOf: id => id, workOf: () => work }).mine.find(item => item.kind === "review")!;
   assert.match(card().detail, /the submission names q3\.md/);
   files.set(`${work}/out/q3.md`, Buffer.from("# Q3\n"));

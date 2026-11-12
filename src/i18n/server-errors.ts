@@ -14,6 +14,12 @@
  */
 
 export const SERVER_ERRORS = {
+  "err.work-management-refused": ["未执行所选处置，请刷新范围后重试：{reason}", "Selected disposition was not executed; refresh its scope and retry: {reason}"],
+  "err.surface-work-unavailable": ["卡片操作未执行，也未新建任务：{reason}", "Card action not executed; no new task was created: {reason}"],
+  "err.task-check-unknown": ["工作不存在或你无权查看。", "Work unavailable."],
+  "err.task-check-stale": ["工作或证据已经变化，请重新查看后再授权检查。", "The work or evidence changed; read it before authorizing checks."],
+  "err.task-check-action": ["请选择授权检查或停止检查。", "Use grant or stop."],
+  "err.task-check-refused": ["检查授权未变更：{reason}", "Check authority unchanged: {reason}"],
   "err.task-export-unavailable": ["任务记录暂时不可用，请从当前任务重新生成。", "Task record unavailable. Recreate it from the current task."],
   "err.task-execution-reset": ["任务过程快照已过期或不可用，请重新加载任务概览。", "Execution snapshot unavailable; reload the task overview."],
   // ── hooks and webhooks ───────────────────────────────────────────────────────────────────────
@@ -138,6 +144,12 @@ export const SERVER_ERRORS = {
   "err.version-unknown": ["没有这个版本。", "No such version."],
   // ── tasks, routines and approvals ────────────────────────────────────────────────────────────
   "err.task-unknown": ["没有任务 {task}。", "No task {task}."],
+  "err.task-delivery-action": ["请选择提交结果、请求检查、接受结果或未完成交还。", "Use submit, request_check, accept or handoff."],
+  "err.task-delivery-version": ["交付版本无效，请重新读取任务。", "Invalid delivery version; read the current task."],
+  "err.task-delivery-refused": ["操作未执行：{reason}", "Delivery refused: {reason}"],
+  "err.delivery-unknown": ["没有这条可访问的待发送回复。", "No accessible pending reply."],
+  "err.delivery-action": ["请选择补发或不再发送。", "Use send or discard."],
+  "err.delivery-refused": ["未处理这条回复：{reason}", "Reply disposition refused: {reason}"],
   "err.task-none": ["没有这个任务。", "No such task."],
   "err.task-board-missing": ["这个安装没有任务板。", "No task board on this installation."],
   "err.task-needs-title": ["任务需要一个标题。", "A task needs a title."],

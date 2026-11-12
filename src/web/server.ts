@@ -1,3 +1,13 @@
+import { WorkGovernance, resourceKey } from "../host/work-governance.ts";
+import { governanceResources } from "./work-governance-resources.ts";
+import { governanceRoute } from "./work-governance-routes.ts";
+import { surfaceActionWork } from "../host/surface-action.ts";
+import { workReading, workReference } from "../host/work-reading.ts";
+import { evidenceDigest } from "../host/review-dispatch.ts";
+import { resultCheckRoute } from "./result-check-routes.ts";
+import { taskDeliveryRoute } from "./task-delivery-routes.ts";
+import { DeliveryRecovery, replyExecutionKey } from "../host/delivery-recovery.ts";
+import { deliveryRecoveryRoute } from "./delivery-recovery-routes.ts";
 import { taskAudience } from "../host/task-audience.ts";
 import {workControlFor, workControlRoute} from "./work-control-routes.ts";
 import {WORK_CONTROL_JS} from "./work-control-ui.ts";
@@ -111,7 +121,6 @@ function readToolList(value: unknown): readonly string[] | null | undefined | Er
   if (!Array.isArray(value) || value.some(item => typeof item !== "string")) {
     return new Error("tools must be an array of tool names");
   }
-  // An MCP tool (`server__tool`) or service (`server__*`) is named before it is connected, so it is not checked against what is connected now (INV-759).
   const unknown = (value as string[]).filter(name => !ALL_TOOLS.includes(name) && !isMcpEntry(name));
   if (unknown.length > 0) {
     return new Error(`Unknown tools: ${unknown.join(", ")}. Known: ${ALL_TOOLS.join(", ")}.`);
@@ -225,7 +234,7 @@ import {
 } from "./mcp-server.ts";
 import { McpTokenStore } from "./mcp-tokens.ts";
 import { Vault, type Grant } from "../host/vault.ts";
-import { setRedactionSource } from "../host/secret-redaction.ts";
+import { setRedactionSource, redactText } from "../host/secret-redaction.ts";
 import { OAuthGate } from "../host/oauth.ts";
 import { MemoryAdmin } from "../host/memory-admin.ts";
 import { ConnectCodeStore } from "../box/connect-codes.ts";
@@ -251,7 +260,7 @@ import { resolveLocale } from "../i18n/locale.ts";
 import { activityPhrase, activityPhrases } from "../host/activity-phrase.ts";
 import { MESSAGES, tr } from "../i18n/messages.ts";
 import { QuestionWatch } from "../host/question-expiry.ts";
-import { compileSurface, SurfaceLedger, surfaceLedgerPath, type A2uiMessage } from "../host/show-ui.ts";
+import { compileSurface, parseActionText, SurfaceLedger, surfaceLedgerPath, type A2uiMessage } from "../host/show-ui.ts";
 import { appendLine } from "../host/jsonl.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
 import { chatFilesRoot, firstRunCue } from "../host/prompt.ts";
@@ -347,13 +356,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         try {
           parsed = (await response.json()) as Record<string, unknown>;
         } catch {
-          // A non-JSON answer is reported by status alone.
         }
         return { ok: response.ok, status: response.status, error: String(parsed.error ?? `control plane answered ${response.status}`), body: parsed };
       },
     };
   };
-  // The doors, loaded before the people: identity links and knocks record the incarnation of the channel they were observed under (docs/22 §4), so the lookup has to exist before the principals file is read.
   const channelRecordsPath = join(agentboxHome(), CHANNEL_RECORDS_FILENAME);
   const preferences = new PreferenceStore(join(agentboxHome(), "preferences.json"));
   const channelRecords = ensureChannelRecords(channelRecordsPath, registry.box.id);
@@ -450,8 +457,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     events.publish(event);
   };
 
-  // Inside a try because construction itself can refuse — the attached provisioner throws when no token is configured (v4 claims review, finding 7), and a server that cannot
-  // reach a box is a server without a box, not no server at all. The stub keeps the interface honest: every connect answers with the reason.
   const provisioner = (() => {
     try {
       return options.boxProvisioner ?? resolveBoxProvisioner();
@@ -620,9 +625,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       broadcast({ type: "handover_pending", agentId: input.agentId, agentName: input.agentName, instruction: input.instruction, reason: input.reason });
       return "in the app";
     },
-    // A card the agent composed (docs/79). Checked here against the catalog with the page's
-    // own processor, so the page never gets a surface it would refuse; kept whole in the
-    // ledger so a later process can redraw it. The press comes back as an ordinary message.
+    // Validated cards retain their original work and full redraw messages.
     showUI: async input => {
       const conversation = input.conversation ?? "main";
       const existing = surfaces.get(input.agentId, conversation, input.surface);
@@ -636,7 +639,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           agentId: input.agentId,
           agentName: input.agentName,
           conversation,
-          surfaceId: input.surface,
+          surfaceId: input.surface, ...(input.work ? { work: input.work } : existing?.work ? { work: existing.work } : {}),
           ...(title !== undefined ? { title } : {}),
           messages: compiled.full,
           at: new Date().toISOString(),
@@ -1017,10 +1020,18 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   const acked = new Set<string>();
   const outbox = new Outbox(join(agentboxHome(), "outbox.jsonl"));
-  const outboxSender = new OutboxSender(outbox, log, undefined, undefined, (event, detail) => noteDelivery(orchestrator.exceptions, event, detail, chatKey => orchestrator.tasks?.list().find(task => task.conversation !== undefined && task.status !== "done" && task.status !== "dropped" && conversations.chatKeyFor(task.conversation) === chatKey)?.id)); // each try onto the exception list (INV-1741)
+  const replyRecovery: DeliveryRecovery = new DeliveryRecovery({
+    deliveries, outbox, revoked: id => !!orchestrator.governance.revoked(resourceKey("reply", id)), decisionsPath: join(agentboxHome(), "delivery-dispositions.jsonl"),
+    workingSnapshot: () => new Set((orchestrator.turns?.interrupted() ?? []).map(turn => replyExecutionKey(turn.agentId, turn.conversation))),
+    task: id => orchestrator.tasks?.get(id), isWorking: row => orchestrator.hasOpenTurn(row.agentId, row.conversation),
+    reply: row => outboundRedactor(vault.heldValues())(row.messageId !== undefined ? orchestrator.replyForMessage(row.agentId, row.messageId, row.conversation) : orchestrator.replySince(row.agentId, row.before, row.conversation)),
+    send: async (row, text) => { const result = await channels.tryPushToChat(row.chatKey, text, { kind: "answer", deliveryId: row.id }); if (!result.delivered) throw new Error(result.why ?? "Reply delivery was not confirmed"); },
+  });
+  const outboxSender = new OutboxSender(outbox, log, undefined, undefined, (event, detail) => noteDelivery(orchestrator.exceptions, event, detail, chatKey => orchestrator.tasks?.list().find(task => task.conversation !== undefined && task.status !== "done" && task.status !== "dropped" && conversations.chatKeyFor(task.conversation) === chatKey)?.id), receipt => orchestrator.governance.revoked(resourceKey("outbox", receipt.id!)) ? {allow:false,terminal:true,reason:"Revoked by operator"} : replyRecovery.authorizeReceipt(receipt)); // each try onto the exception list (INV-1741)
   const credentialWaits = new CredentialWaits({ tasks: () => orchestrator.tasks, check: (agentId, principalId) => orchestrator.credentials.forAgent(agentId, [], principalId), announce: event => broadcast(taskCredentialEvent(event)), log }); vault.onChange(() => { void credentialWaits.recheck(); }); // a credential that lands releases the work waiting on it (INV-1666)
   const guestDesk = new GuestDesk({ settings: join(agentboxHome(), "guests.jsonl"), turns: join(agentboxHome(), "guest-turns.jsonl"), reviews: join(agentboxHome(), "guest-reviews.jsonl") }); // who answers guests, what is public to them, their turns and the reviews of their answers (INV-1708, INV-1713, docs/97)
   const channels = new ChannelManager({
+    interactionTask: (message, name) => { const agent = registry.resolve(name ?? ""), parsed = parseActionText(message.text); const result = surfaceActionWork({ action: parsed ? { surface: parsed.surfaceId, name: parsed.name } : undefined, text: message.text, agentId: agent.id, conversation: conversationIdFor(message.threadKey ?? message.chatKey ?? message.identity), surfaces, focus: orchestrator.bus.workAttention, tasks: orchestrator.tasks }); if ("error" in result) throw new Error(result.error); return result.taskBinding.taskId; },
     outbox: outboxSender, credentials: { gate: (taskId, start) => credentialWaits.gateText(taskId, "channel", start) },
     // The speaking right of a host push (INV-1459): the world each purpose claims, read now; a refusal is audited.
     outbound: (purpose, chatKey) => {
@@ -1485,8 +1496,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // later process recover the answer: everything the agent says past `before` in this
       // conversation is the reply to this request, and the transcript is already durable.
       const owed = randomUUID();
+      return replyRecovery.trackOriginal(owed, async () => {
       deliveries.open({
-        id: owed,
+        id: owed, recoveryVersion: 1, kind: origin?.interaction ? "interaction" : "request", requestTitle: redactText(text.split("\n")[0] ?? "").slice(0, 200),
         ...(origin?.messageId !== undefined ? { messageId: origin.messageId } : {}),
         // The thread when there is one. The room key here sent a recovered answer to the
         // bottom of the group while the question sat inside a topic (2026-09-02, "接
@@ -1501,10 +1513,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         ...(taskId !== undefined ? { taskId } : {}),
         at: new Date().toISOString(),
       });
-      // The board row gets a name while the work runs: the first line of a request is
-      // a request, not a name, and rows nobody can tell apart are how "各种 task 都
-      // 对应不上" happened. Fire-and-forget — a title is never worth delaying the turn,
-      // and the person's whole message is already on the task as its description.
       if (taskId !== undefined) {
         void orchestrator.retitleTask(agent.id, taskId, text).catch(() => {});
       }
@@ -1605,6 +1613,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (silence !== undefined) return silence;
       }
       return reply;
+      });
     },
     // Channel requests live on the team board: "t12" means the same thing in the
     // chat's card, the web UI and an agent's prompt. A failure closes as blocked with
@@ -1646,8 +1655,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // The unknown-agent error is thrown (and relayed) by ask; the board entry
           // simply goes unassigned.
         }
-        // A separate reviewer owns acceptance on teams that have one.
-        const reviewerId = registry
+          const reviewerId = registry
           .list()
           .find(
             candidate =>
@@ -1706,16 +1714,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       started: taskId => {
         orchestrator.tasks?.update(taskId, { status: "doing" }, "channel");
       },
-      // The requester's word closes reviewed work. `by` is their principal id — not the
-      // assignee, so the review gate passes; not "channel", so the record says who
-      // accepted. A task not in review means the word was chat, and the caller lets it
-      // fall through to the agent rather than inventing a verdict.
+      // Authorized channel acceptance uses the same delivery command as Web and Tasks.
       accept: (taskId, identity) => {
         const task = orchestrator.tasks?.get(taskId);
         if (task === undefined) return "unknown";
         if (task.status !== "review") return "not_review";
         const by = principals.resolve(identity).id;
-        const updated = orchestrator.tasks?.update(taskId, { status: "done", note: "验收通过" }, by);
+        const updated = orchestrator.tasks?.deliveryCommand(taskId, "accept", by, { note: "验收通过" });
         return updated?.task.status === "done" ? "done" : "not_review";
       },
       stillWorking: (taskId, note) => { orchestrator.tasks?.update(taskId, { status: "doing", note }, "channel"); }, // A turn ended but a command runs on (INV-1461): doing until that job's wake finishes it.
@@ -2016,62 +2021,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   channels.start();
   // What was still on its way when the process last stopped goes again (INV-1460).
   void outboxSender.resume(chatKey => { const door = channels.adapterFor(chatKey); return door?.sendToChat === undefined ? undefined : { sendToChat: (key, text) => door.sendToChat!(key, text) }; })
-    .then(resumed => { if (resumed > 0) log(`outbox: ${resumed} pending message(s) sent again after the restart`); });
+    .then(resumed => { if (resumed > 0) log(`outbox: ${resumed} pending message(s) queued for recovery checks after the restart`); });
 
-  // Answers that were owed when this process last stopped.
-  //
-  // A channel request is answered by an awaited promise, and that promise is the only
-  // thing that knows where the answer goes. It dies with the process — while the turn is
-  // recovered from the ledger and runs to completion, so the work is done, the money is
-  // spent, and the reply is delivered nowhere. Observed: t12 sat in `doing` with its turn
-  // finished half an hour earlier and its answer sitting unread in the transcript.
-  //
-  // Nothing about the reply was stored. It is recovered the same way the live path builds
-  // it — everything the agent said past the recorded index — because the transcript is
-  // already durable and the promise was never where the answer lived.
-  // Not once at startup — that was the bug this replaces. The startup sweep ran before
-  // the resumed turn had produced anything, found the transcript empty, and skipped the
-  // debt for the lifetime of the process; the turn then finished a complete, good answer
-  // into a transcript nobody was watching, and the person got silence. Observed on t58:
-  // the delivery sat open in the ledger while its answer sat finished on disk. The sweep
-  // now repeats until the book is clear, and it will not hand over a reply while the turn
-  // writing it is still open.
-  const settleOwed = async () => {
-    for (const owed of deliveries.pending()) {
-      // A turn still writing *in this conversation* is an answer still being written; a
-      // turn in another chat is not (INV-435). Wait for the next pass only for the first.
-      if (orchestrator.hasOpenTurn(owed.agentId, owed.conversation)) continue;
-      let reply = "";
-      try {
-        reply = (owed.messageId !== undefined
-          ? orchestrator.replyForMessage(owed.agentId, owed.messageId, owed.conversation)
-          : orchestrator.replySince(owed.agentId, owed.before, owed.conversation)).trim();
-      } catch {
-        // A transcript that cannot be read is a delivery that cannot be recovered; it
-        // falls through to the stuck-task rescue rather than holding up the others.
-      }
-      if (reply === "") continue;
-      log(`delivering an answer owed since ${owed.at} to ${owed.chatKey}`);
-      const late = `晚到了一步——这个在我重启时做完的:\n\n${reply}`;
-      try {
-        await channels.pushToChat(owed.chatKey, late, { kind: "answer", deliveryId: owed.id });
-        // Closed by the id the request carried. It matters: the sweep below would
-        // otherwise reopen a task whose answer had just been handed over and ask the
-        // person to request it again.
-        if (owed.taskId !== undefined) {
-          orchestrator.tasks?.update(
-            owed.taskId,
-            { status: "done", note: "answered after a restart" },
-            "restart"
-          );
-        }
-        deliveries.close(owed.id);
-      } catch {
-        // Left owed, so the next pass tries again. A delivery that is dropped because
-        // the chat was briefly unreachable is the bug this exists to fix.
-      }
-    }
-  };
+  // Recovery checks the original request and durable disposition before any automatic send.
+  const settleOwed = async () => { try { await replyRecovery.sweep(); } catch (error) { log(`reply recovery held: ${error instanceof Error ? error.message : String(error)}`); } };
   const owedSweep = setInterval(() => { if (deliveries.pending().length > 0) void settleOwed(); }, 20_000); // Cheap when the book is clear.
   owedSweep.unref?.();
   void (async () => {
@@ -2269,7 +2222,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    * this machine has no inbound port on most networks, and the ledger over there is the
    * same one either way.
    */
-  const involuteConfig = loadConfig().involute;
+  const externalEnabled = (id: string) => !orchestrator.governance.revoked(resourceKey("external", id)); const involuteConfig = loadConfig().involute;
   /** Questions to our agents that nobody answered, for the attention page (INV-556 A4). */
   const involuteUnanswered: { work: string; agent: string; detail: string }[] = [];
   const involuteConsumer =
@@ -2282,7 +2235,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               // The credential is resolved per poll, not held: a revoked secret stops
               // working on the next pass rather than at the next restart.
               const token = vault.resolve(entry.secretId, { agentId: entry.agentId, agentName: agent?.profile.name ?? entry.handle, scopeGrants: true });
-              if (agent === undefined || token === undefined) return [];
+              if (agent === undefined || token === undefined || !externalEnabled(entry.agentId)) return [];
               return [
                 {
                   agentId: agent.id,
@@ -2293,6 +2246,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               ];
             }),
           runTurn: async input => {
+            if (!externalEnabled(input.agentId)) throw Error("This external entry was disabled by the operator.");
             const before = registry.readTranscript(input.agentId, input.conversation).length;
             await orchestrator.prompt(input.agentId, input.prompt, undefined, {
               conversation: input.conversation,
@@ -2335,7 +2289,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           successorFor: handle => parseSuccessor(involuteConfig.agents.find(entry => entry.handle === handle)?.successor),
           // An agent whose record is gone cannot take a turn, and a request is not claimed in
           // its name: claiming says "I am doing this".
-          canRun: agentId => registry.tryGet(agentId) !== undefined,
+          canRun: agentId => registry.tryGet(agentId) !== undefined && externalEnabled(agentId),
           // What was written down about this item when the decisions were made (INV-551).
           receiptsFor: subject => describeReceipts(orchestrator.receipts.forSubject(subject)),
           log: line => log(line),
@@ -2438,7 +2392,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const boxUpdate = new BoxUpdateService({ activeTurns: () => orchestrator.bus.activeAgentIds().filter(id => registry.tryGet(id) !== undefined && registry.boxOf(id).id === registry.box.id).length, reconnect: async () => { box = await orchestrator.connectBox(); }, broadcast: (line, done) => broadcast({ type: "box_setup", line, ...(done !== undefined ? { done: true, ok: done.ok } : {}) }), log });
   probeKeeper = new ProbeKeeper({ nameOf: id => registry.tryGet(id)?.profile.name ?? id, isPaused: id => agentPauses.pauseOf(id) !== undefined, pause: (id, why) => agentPauses.pause(id, "LumenBox (boundary probes)", why), log, notify: text => { broadcast({ type: "error", boxId: registry.box.id, message: text }); for (const { adapter, identity } of adminRecipients(principals.list())) void channels.push(adapter, identity, text); } }); // INV-1553
   providerRests.on(event => { const text = restNotice(event); log(text); broadcast({ type: "error", boxId: registry.box.id, message: text }); for (const { adapter, identity } of adminRecipients(principals.list())) void channels.push(adapter, identity, text); }); // once when a plan runs out, once when it is back (INV-1577)
-  const agentPauses = new AgentPauses({ dirFor: id => registry.dirFor(id), wake: id => { void orchestrator.bus.wake(id); }, interrupt: (ids, why) => orchestrator.bus.interruptAgents(ids, why), box: () => orchestrator.boxClient(), log, tell: async (id, text) => { void orchestrator.prompt(id, text, undefined, { lane: "user", synthetic: true, steerable: false }).catch(error => log(`resume: ${error instanceof Error ? error.message : String(error)}`)); }, receipt: (subject, decision, because) => orchestrator.receipts.write({ at: new Date().toISOString(), by: "host", subject, decision, because }) }); const spendLimits = new SpendLimits({ ledger: () => todaysRows(orchestrator.usage.since(0, Number.MAX_SAFE_INTEGER), new Date()), rates: () => configuredRates(), pause: (id, why) => agentPauses.pause(id, "LumenBox (spend limit)", why), resume: (id, by) => agentPauses.resume(id, by), isPaused: id => agentPauses.pauseOf(id) !== undefined, nameOf: id => registry.tryGet(id)?.profile.name ?? id, log, notify: text => { broadcast({ type: "error", boxId: registry.box.id, message: text }); for (const { adapter, identity } of adminRecipients(principals.list())) void channels.push(adapter, identity, text); } }, join(agentboxHome(), "spend-limits.jsonl")); orchestrator.spendLimits = spendLimits; setInterval(() => { void spendLimits.sweep().catch(error => log(`spend limits: ${error instanceof Error ? error.message : String(error)}`)); }, 60_000).unref(); // INV-1554 // model-text: pause-resume // INV-1615 orchestrator.questionsOpen = () => questions.list(); orchestrator.pausedForSpend = () => spendLimits.pausedForSpend(); orchestrator.personName = id => (principals.byId(id) ?? principals.resolve(id)).name; orchestrator.orgKnowledge.mode = () => boxRegistrationModeAt(principalsPath(), options.desktop === true); // the desktop app with no installation field is personal: it never writes L1 (INV-1726)
+  const agentPauses = new AgentPauses({ dirFor: id => registry.dirFor(id), wake: id => { void orchestrator.bus.wake(id); }, interrupt: (ids, why) => orchestrator.bus.interruptAgents(ids, why), box: id => orchestrator.boxFor(id), log, tell: async (id, text) => { void orchestrator.prompt(id, text, undefined, { lane: "user", synthetic: true, steerable: false }).catch(error => log(`resume: ${error instanceof Error ? error.message : String(error)}`)); }, receipt: (subject, decision, because) => orchestrator.receipts.write({ at: new Date().toISOString(), by: "host", subject, decision, because }) }); const spendLimits = new SpendLimits({ ledger: () => todaysRows(orchestrator.usage.since(0, Number.MAX_SAFE_INTEGER), new Date()), rates: () => configuredRates(), pause: (id, why) => agentPauses.pause(id, "LumenBox (spend limit)", why), resume: (id, by) => agentPauses.resume(id, by), isPaused: id => agentPauses.pauseOf(id) !== undefined, nameOf: id => registry.tryGet(id)?.profile.name ?? id, log, notify: text => { broadcast({ type: "error", boxId: registry.box.id, message: text }); for (const { adapter, identity } of adminRecipients(principals.list())) void channels.push(adapter, identity, text); } }, join(agentboxHome(), "spend-limits.jsonl")); orchestrator.spendLimits = spendLimits; setInterval(() => { void spendLimits.sweep().catch(error => log(`spend limits: ${error instanceof Error ? error.message : String(error)}`)); }, 60_000).unref(); // INV-1554 // model-text: pause-resume // INV-1615 orchestrator.questionsOpen = () => questions.list(); orchestrator.pausedForSpend = () => spendLimits.pausedForSpend(); orchestrator.personName = id => (principals.byId(id) ?? principals.resolve(id)).name; orchestrator.orgKnowledge.mode = () => boxRegistrationModeAt(principalsPath(), options.desktop === true); // the desktop app with no installation field is personal: it never writes L1 (INV-1726)
   orchestrator.orgKnowledge.isAdmin = id => id === undefined || principals.roleOf(id) === "admin"; orchestrator.orgKnowledge.notify = (owner, notice) => { const text = tr("org.unverified-notice", resolveLocale({}), { ...notice, by: principals.byId(notice.by)?.name ?? notice.by }); log(`organisation knowledge: told ${owner} that ${notice.id} was marked unverified`); for (const identity of principals.byId(owner)?.identities ?? []) { const adapter = identity.split(":")[0] ?? ""; if (adapter !== "" && adapter !== "web") void channels.push(adapter, identity, text); } }; // the roster says who is an Admin; an owner is told on their own channels (INV-1730) // the row's "waiting on you" readers (INV-1625); the person's name for the record (INV-1653)
   void boxUpdate.check();
   // The box's image against the one this app expects (INV-1538, docs/12 §6). Checked every ten minutes; admins are told once per
@@ -2552,7 +2506,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     const problems = extensions.problems.length > 0 ? `; ${extensions.problems.join("; ")}` : "";
     log(`extensions: ${extensions.loaded.length} loaded, ${extensions.tools.length} tool(s)${problems}`);
   }
-  const workControl = workControlFor(orchestrator,agentPauses,questions,pendingSecrets,pendingHandovers,hostRunner);
+  const globalWork = new WorkGovernance(orchestrator.governance); const workControl = workControlFor(orchestrator,agentPauses,questions,pendingSecrets,pendingHandovers,hostRunner);
   await workControl.recover();
   // Sweep forks before replaying their admissions (docs/32 §1).
   // ends what the turn ledger would otherwise resume, for every fork the last process left open.
@@ -3007,7 +2961,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     return { box, agent: id => registry.has(id) && box(registry.boxOf(id).id) };
   }
   const taskActive = (task: Task) => task.workRoot ? orchestrator.bus.workExecutions(task.workRoot.state.id).length>0 || orchestrator.jobWatch.workJobs(task.workRoot.state.id).length>0 : task.assigneeId !== undefined && task.conversation !== undefined && (orchestrator.bus.isActive(task.assigneeId, task.conversation) || orchestrator.jobWatch.openJobs(task.assigneeId, task.conversation).length > 0);
-  const sideDoorStage = (task: Task) => stageWorldOf(task, { undeliverableChats: new Set(outbox.problems().map(receipt => receipt.chatKey)), questions: questions.list(), agentIds: new Set(registry.list().map(agent => agent.id)), chatKeyOf: conversation => conversations.chatKeyFor(conversation), active: taskActive });
+  const checkPending = (task: Task) => orchestrator.resultChecks.snapshot(task).plans.some(plan => plan.taskId === task.id && plan.digest === evidenceDigest(task) && orchestrator.resultChecks.active(task, plan.id));
+  const sideDoorStage = (task: Task) => stageWorldOf(task, { undeliverableChats: new Set(outbox.problems().map(receipt => receipt.chatKey)), questions: questions.list(), agentIds: new Set(registry.list().map(agent => agent.id)), chatKeyOf: conversation => conversations.chatKeyFor(conversation), active: taskActive, checkPending });
   const taskListPages = new TaskListPages();
   const taskExecutions = new TaskExecutions({ namespace: registry.box.id, turns: orchestrator.turns ?? { executionRecords: () => ({ records: [], partial: true }) }, registry });
   const taskExports = new TaskExports({ home: agentboxHome(), executions: taskExecutions, task: id => orchestrator.tasks?.get(id) });
@@ -3923,20 +3878,17 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         const mayReadTask = (task: Task) => caller.userId === undefined || (task.assigneeId ? mayReadAgent(task.assigneeId) : task.requester === principals.resolve(caller.userId).id); if (deliverableRoute(route, url, res, { tasks: orchestrator.tasks, mayReadTask, send })) return; if (taskGateRoute(route, url, res, { tasks: orchestrator.tasks, mayReadTask, readTranscript: (agentId, conversation) => registry.readTranscript(agentId, conversation), roster: () => registry.list().map(record => ({ id: record.id, name: record.profile.name })), verdictOf: callId => orchestrator.policy.verdicts.get(callId), send })) return; // the gate's verdicts on its steps, the chat's own join (INV-1672) // a task's deliverable, to whoever sees the task (INV-1663)
         if (await taskExportRoute(route, url, req, res, { exports: taskExports, access: () => { principals.reload(); unavailableBoxes = undefined; agentBoxes.clear(); const allowed = admit({ authorization: req.headers.authorization, cookie: req.headers.cookie, query: url.searchParams.get("token") }).allow; return { task: id => { const task = orchestrator.tasks?.get(id); return allowed && !!task && mayReadTask(task); }, agent: id => allowed && mayReadAgent(id), box: id => allowed && mayReadBox(id) }; }, send })) return;
         if (taskCostRoute(route, url, res, { executions: taskExecutions, refused: () => refusedRole("admin"), access: { task: id => { const task = orchestrator.tasks?.get(id); return task !== undefined && mayReadTask(task); }, agent: mayReadAgent, box: mayReadBox }, records: () => orchestrator.usage.since(0, Number.MAX_SAFE_INTEGER), rates: configuredRates, compacted: () => orchestrator.usage.compacted(), send })) return;
-        if (taskExecutionRoute(route, url, res, { executions: taskExecutions, access: { task: id => { const task = orchestrator.tasks?.get(id); return task !== undefined && mayReadTask(task); }, agent: mayReadAgent, box: mayReadBox }, record: id => taskRecord(orchestrator.tasks!.get(id)!, { nameOf: id => registry.tryGet(id)?.profile.name ?? id, stageWorld: sideDoorStage, progressAccess: { agent: mayReadAgent, box: mayReadBox } }), send })) return;
-        const audienceAgents = new Set(registry.list().map(agent=>agent.id)), audiencePeople = new Set(principals.list().flatMap(person=>[person.id,...person.identities])); const taskView = (task: Task) => { const forks = orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []; return { ...task, work:workRootSummary(task), workRoot:undefined, progress: summarizeTaskProgress(task, 128, { agent: mayReadAgent, box: mayReadBox }), needsApprovals: taskExecutions.approvals(task.id, { task: () => mayReadTask(task), agent: mayReadAgent, box: mayReadBox }, orchestrator.policy.pending()), stage: taskStage(task, sideDoorStage(task)), configVersions: switchesForTask(registry, task.id), ...(forks.length ? { forks } : {}), ...dependencyView(task, orchestrator.tasks!) }; };
-        if (taskListRoute(route, url, res, { audience: task => taskAudience(task,audienceAgents,audiencePeople), pages: taskListPages, tasks: () => orchestrator.tasks?.list() ?? [], allowed: mayReadTask, detail: taskView, summary: task => ({ ...taskBoardRecord(task, { agent: mayReadAgent, box: mayReadBox }), ...dependencyView(task, orchestrator.tasks!) }), send })) return;
+        let readingBuilt = false; let readingWorld: Parameters<typeof stageWorldOf<Task>>[1] | undefined; const childReferences = new Map<string, string[]>(), readingCache = new Map<string, ReturnType<typeof workReading>>();
+        const readingFor = (task: Task) => { if (!readingBuilt) { readingBuilt = true; for (const row of orchestrator.tasks?.list() ?? []) if (row.origin?.parentId && mayReadTask(row)) { const ids = childReferences.get(row.origin.parentId) ?? []; ids.push(row.id); childReferences.set(row.origin.parentId, ids); } } let reading = readingCache.get(task.id); if (!reading) { const reference = (id: string, relation: "parent" | "dependency" | "collaboration") => workReference(id, relation, id => orchestrator.tasks?.get(id), mayReadTask); readingWorld ??= { undeliverableChats: new Set(outbox.problems().map(receipt => receipt.chatKey)), questions: questions.list(), agentIds: new Set(registry.list().map(agent => agent.id)), chatKeyOf: conversation => conversations.chatKeyFor(conversation), active: taskActive, checkPending }; reading = workReading(task, { stage: stageWorldOf(task, readingWorld!), checks: orchestrator.resultChecks.snapshot(task), verdicts: orchestrator.verifications.recordsFor(task.id, evidenceDigest(task)), references: [...(task.origin?.parentId ? [reference(task.origin.parentId, "parent")] : []), ...(task.blockedBy ?? []).map(id => reference(id, "dependency")), ...(childReferences.get(task.id) ?? []).map(id => reference(id, "collaboration"))] }); readingCache.set(task.id, reading); } return reading; };
+        if (taskExecutionRoute(route, url, res, { executions: taskExecutions, access: { task: id => { const task = orchestrator.tasks?.get(id); return task !== undefined && mayReadTask(task); }, agent: mayReadAgent, box: mayReadBox }, record: id => ({ ...taskRecord(orchestrator.tasks!.get(id)!, { nameOf: id => registry.tryGet(id)?.profile.name ?? id, stageWorld: sideDoorStage, progressAccess: { agent: mayReadAgent, box: mayReadBox } }), reading: readingFor(orchestrator.tasks!.get(id)!) }), send })) return;
+        const audienceAgents = new Set(registry.list().map(agent=>agent.id)), audiencePeople = new Set(principals.list().flatMap(person=>[person.id,...person.identities])); const taskView = (task: Task) => { const forks = orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []; return { ...task, reading: readingFor(task), work:workRootSummary(task), workRoot:undefined, progress: summarizeTaskProgress(task, 128, { agent: mayReadAgent, box: mayReadBox }), needsApprovals: taskExecutions.approvals(task.id, { task: () => mayReadTask(task), agent: mayReadAgent, box: mayReadBox }, orchestrator.policy.pending()), stage: taskStage(task, sideDoorStage(task)), configVersions: switchesForTask(registry, task.id), ...(forks.length ? { forks } : {}), ...dependencyView(task, orchestrator.tasks!) }; };
+        if (taskListRoute(route, url, res, { audience: task => taskAudience(task,audienceAgents,audiencePeople), pages: taskListPages, tasks: () => orchestrator.tasks?.list() ?? [], allowed: mayReadTask, detail: taskView, summary: task => ({ ...taskBoardRecord(task, { agent: mayReadAgent, box: mayReadBox }), reading: readingFor(task), ...dependencyView(task, orchestrator.tasks!) }), send })) return;
         if (route === "GET /api/tasks") {
           send(res, 200, { tasks: orchestrator.tasks?.list().filter(mayReadTask).map(taskView) ?? [] });
           return;
         }
 
-        // The automations: what runs by itself, when, as whom, and where it reports.
-        // Reading is open like the board; firing one by hand is a driver's call, because
-        // it spends money and wakes an agent.
         if (route === "GET /api/schedules") {
-          // Each routine's last result rides along (INV-776): a run that was judged not worth
-          // delivering is still a run, and this is where a person sees what it found.
           const lastResults = new Map<string, ReturnType<typeof orchestrator.routineResults.list>[number]>();
           for (const entry of orchestrator.routineResults.list().filter(entry => mayReadAgent(entry.agentId))) if (!lastResults.has(entry.slug)) lastResults.set(entry.slug, entry);
           send(res, 200, {
@@ -4223,6 +4175,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
+        const delivered = await taskDeliveryRoute(route, { board: orchestrator.tasks, refused: () => refused(), readJson: () => readJson(req), mayRead: mayReadTask, by: caller.userId ?? "web", view: taskView }); if (delivered) { if (delivered.status) send(res, delivered.status, delivered.body); return; }
+        const checkResponse = await resultCheckRoute(route, url, { checks: orchestrator.resultChecks, tasks: orchestrator.tasks, refused: write => refusedRole(write ? "admin" : "viewer"), mayRead: mayReadTask, readJson: () => readJson(req), by: caller.userId ?? "web" }); if (checkResponse) { if (checkResponse.status) send(res, checkResponse.status, checkResponse.body); return; }
+        const recoveredReply = await deliveryRecoveryRoute(route, url, { recovery: replyRecovery, refused: () => refusedRole("admin"), readJson: () => readJson(req), mayRead: row => mayReadAgent(row.agentId) && (!row.taskId || !orchestrator.tasks?.get(row.taskId) || mayReadTask(orchestrator.tasks.get(row.taskId)!)), by: caller.userId ?? "web" }); if (recoveredReply) { if (recoveredReply.status) send(res, recoveredReply.status, recoveredReply.body); return; }
         if (route === "POST /api/tasks/update") {
           if (refused()) return;
           const board = orchestrator.tasks;
@@ -4259,7 +4214,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 404, apiError("task-unknown", { task: String(body.id ?? "") }));
             return;
           }
-          send(res, 200, { task: taskView(updated.task), ...(updated.coerced ? { note: updated.coerced } : {}) });
+          send(res, updated.coerced ? 409 : 200, { task: taskView(updated.task), ...(updated.coerced ? { note: updated.coerced, ...apiError("task-delivery-refused", { reason: updated.coerced }) } : {}) });
           return;
         }
         // A close proposal (INV-529) and its objection: the assignee's way of not waiting
@@ -5366,7 +5321,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // thread it is viewing, defaulting to the team room.
           const conversation = url.searchParams.get("conversation") ?? MAIN_CONVERSATION;
           if (refused(agentId)) return;
-          send(res, 200, conversationProgress(orchestrator.registry, orchestrator.bus, agentId, conversation));
+          const progress = conversationProgress(orchestrator.registry, orchestrator.bus, agentId, conversation), task = progress.attention?.taskId ? orchestrator.tasks?.get(progress.attention.taskId) : undefined; send(res, 200, { ...progress, ...(progress.attention && task && mayReadTask(task) ? { attention: { ...progress.attention, reading: readingFor(task) } } : {}) });
           return;
         }
 
@@ -5644,6 +5599,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "POST /api/outbox/decide" && refused()) return; const outboxAnswer = await outboxRoute(route, { drafts: orchestrator.outboxDrafts, policy: orchestrator.policy, readJson: () => readJson(req) as Promise<Record<string, unknown>>, mayAnswer: id => caller.userId === undefined || mayReadAgent(id), answered: (draft, how) => broadcast({ type: "approval_settled", id: draft.approvalId, agentId: draft.agentId, how }), by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator") }); if (outboxAnswer !== undefined) { send(res, outboxAnswer.status, outboxAnswer.body); return; } // the Outbox: approve, edit, reject (INV-1739)
         const orgReview = await orgKnowledgeRoute(route, { ledger: orchestrator.orgKnowledge, registry, tasks: () => orchestrator.tasks, receipts: orchestrator.receipts, readJson: () => readJson(req) as Promise<Record<string, unknown>>, params: url.searchParams, refusedAdmin: () => refusedRole("admin"), by: () => caller.userId ?? orchestrator.people.operator, nameOf: id => (principals.byId(id) ?? principals.resolve(id)).name ?? id, log }); if (orgReview !== undefined) { if (orgReview.status !== 0) send(res, orgReview.status, orgReview.body); return; } // promotion and review of the organisation's knowledge (INV-1729)
         const orgItems = await orgCorrectionRoute(route, { ledger: orchestrator.orgKnowledge, readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: () => refused(), principalId: caller.userId === undefined ? undefined : principals.resolve(caller.userId).id, nameOf: id => principals.byId(id)?.name ?? id, boxName: id => registry.listBoxes().find(box => box.id === id)?.name, log }); if (orgItems !== undefined) { if (orgItems.status !== 0) send(res, orgItems.status, orgItems.body); return; } // INV-1730
+        const governanceResponse = await governanceRoute(route,url,{service:globalWork,adapter:()=>governanceResources({by:caller.userId ?? "web",host:orchestrator,outbox,pauses:agentPauses,control:workControl,replies:replyRecovery,external:involuteConfig?.agents ?? [],mayReadAgent,mayReadTask,mayReadBox}),refused:()=>refusedRole("admin"),readJson:()=>readJson(req) as Promise<Record<string,unknown>>,by:caller.userId ?? "web"}); if(governanceResponse){if(governanceResponse.status)send(res,governanceResponse.status,governanceResponse.body);return;}
         const workStop = await workControlRoute(route,url,workControl,{host:orchestrator,pauses:agentPauses,mayReadAgent,mayReadTask:id=>{const task=orchestrator.tasks?.get(id);return !!task && mayReadTask(task);},readJson:()=>readJson(req) as Promise<Record<string,unknown>>,refusedAdmin:()=>refusedRole("admin"),by:()=>caller.userId ?? "the operator"}); if(workStop!==undefined){if(workStop.status!==0)send(res,workStop.status,workStop.body);return;}
         const person = await personRoute(route, orchestrator.people, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, caller: () => (caller.userId === undefined ? undefined : { id: caller.userId, name: principals.resolve(caller.userId).name ?? caller.userId }) }); if (person !== undefined) { send(res, person.status, person.body); return; } /* INV-1653 */ const factsRoute = await agentFactsRoute(route, orchestrator.agentFacts.state, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: () => refused(), hasAgent: id => registry.has(id) }); if (factsRoute !== undefined) { if (factsRoute.status !== 0) send(res, factsRoute.status, factsRoute.body); return; } /* INV-1625 */ const pauseRoute = await agentPauseRoute(route, agentPauses, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id), caller: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator") }); if (pauseRoute !== undefined) { if (pauseRoute.status !== 0) send(res, pauseRoute.status, pauseRoute.body); return; } const byName = () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator"); const issues = await exceptionRoute(route, { ledger: orchestrator.exceptions, readJson: () => readJson(req) as Promise<Record<string, unknown>>, mayRead: id => id === undefined || mayReadAgent(id), refused: id => (id === undefined ? refusedRole("admin") : refused(id)), by: byName, titleOf: id => orchestrator.tasks?.get(id)?.title, retry: exceptionRetryDeps({ ledger: orchestrator.exceptions, prompt: (id, text, conversation) => orchestrator.prompt(id, text, undefined, { conversation, lane: "user", synthetic: true, steerable: false }), boxFor: id => orchestrator.boxFor(id), ownerOf: id => registry.boxOwnerTokenFor(id), watch: job => orchestrator.jobWatch.watch(job), by: byName, redeliver: async chatKey => { const door = channels.adapterFor(chatKey); if (door?.sendToChat === undefined) throw new Error(`no door can send to ${chatKey}`); return outboxSender.retry(chatKey, { sendToChat: (key, text) => door.sendToChat!(key, text) }); }, runRoutine: slug => orchestrator.scheduler.runNow(slug), reconnectBox: () => keeper.tick().then(state => { box = state; return state; }), notReady: id => { const task = orchestrator.tasks?.get(id); return task === undefined || orchestrator.tasks === undefined ? undefined : notReady(task, orchestrator.tasks); } }) }); if (issues !== undefined) { if (issues.status !== 0) send(res, issues.status, issues.body); return; } /* the Issues view (INV-1741) */ const spendRoute = await spendLimitRoute(route, spendLimits, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id) }); if (spendRoute !== undefined) { if (spendRoute.status !== 0) send(res, spendRoute.status, spendRoute.body); return; } const permRoute = await toolPermissionRoute(route, url, { refused: id => refused(id), agent: id => { const record = registry.tryGet(id); return record === undefined ? undefined : { id, name: record.profile.name, ...(record.profile.toolPermissions !== undefined ? { toolPermissions: record.profile.toolPermissions } : {}) }; }, allTools: ALL_TOOLS, floorContext: () => orchestrator.policy.floorContext() }); if (permRoute !== undefined) { if (permRoute.status !== 0) send(res, permRoute.status, permRoute.body); return; } const versionRoute = await configVersionRoute(route, url, { registry, refused: id => refused(id), readJson: () => readJson(req) as Promise<Record<string, unknown>>, by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator"), log }); if (versionRoute !== undefined) { if (versionRoute.status !== 0) send(res, versionRoute.status, versionRoute.body); return; } const guestsRoute = await guestRoute(route, guestDesk, { query: () => url.searchParams, send: (chatKey, text) => channels.tryPushToChat(chatKey, text, { kind: "notice", about: "a guest answer an Admin approved" }), readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id), installationMode: () => principals.installation().mode, by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator") }); if (guestsRoute !== undefined) { if (guestsRoute.status !== 0) send(res, guestsRoute.status, guestsRoute.body); return; } /* INV-1708 */ const installed = installationRoute(route, { principals }); if (installed !== undefined) { send(res, installed.status, installed.body); return; } const merging = await mergeRoute(route, { paths: mergePaths, desktop: options.desktop === true, doorType: door => channelRecords.find(record => record.id === door)?.type, refusedAdmin: () => refusedRole("admin"), readJson: () => readJson(req) as Promise<Record<string, unknown>>, by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name : "the operator"), log }); if (merging !== undefined) { if (merging.status !== 0) send(res, merging.status, merging.body); return; } // "these are all me" (INV-1698) // INV-1554, INV-1615, INV-1664, INV-1669
         const diagnostics = await diagnosticsRoute(route, { refusedAdmin: () => refusedRole("admin"), agents: () => registry.list().map(agent => ({ id: agent.id, name: agent.profile.name })), activeTurns: id => orchestrator.bus.activeTurnsOf(id), queued: id => orchestrator.bus.pendingCount(id), watchedJobs: id => orchestrator.jobWatch.countFor(id), eventSubscribers: () => events.size, box: () => orchestrator.boxClient(), home: agentboxHome() }); if (diagnostics !== undefined) { if (diagnostics.status !== 0) send(res, diagnostics.status, diagnostics.body); return; } // INV-1559
@@ -6038,7 +5994,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             personIds: new Set(principals.list().flatMap(person=>[person.id,...person.identities])), paused: orchestrator.bus.pausedChains(), agentIds: new Set(registry.list().map(agent => agent.id)), approvals: orchestrator.policy.pending().filter(item => caller.userId === undefined || mayReadAgent(item.agentId)), outbox: orchestrator.outboxDrafts.waiting().filter(draft => caller.userId === undefined || mayReadAgent(draft.agentId)), // drafts in the Outbox (INV-1739); a parked command is the commonest block (INV-1627)
             undeliverable: outbox.problems(), exceptionsHanded: orchestrator.exceptions.list().filter(entry => entry.handedAt !== undefined && entry.resolvedAt === undefined && (entry.agent === undefined || caller.userId === undefined || mayReadAgent(entry.agent))), routinesHeld: (await orchestrator.scheduler.status()).filter(entry => entry.hold !== undefined && mayReadBox(entry.boxId ?? registry.box.id)).map(entry => ({ slug: entry.slug, name: entry.name, ...entry.hold! })), // INV-1665
             chatKeyOf: conversation => conversations.chatKeyFor(conversation), // The stage table's reads (INV-1464).
-            active: taskActive,
+            active: taskActive, checkPending,
             ...(me === undefined ? { all: true } : {}),
           });
           const update = boxUpdate.available(); // an admin is shown a box that can be updated (INV-1538)
@@ -6048,7 +6004,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (me === undefined || roleAtLeast(principals.roleOf(me.id), "admin")) for (const probe of probeKeeper?.recent() ?? []) answer.mine.unshift({ kind: "boundary-probe", ref: probe.agentId, title: `${probe.agentName} reached for this machine's credentials`, detail: `${probe.count} attempt${probe.count === 1 ? "" : "s"} in the last hour, refused; the latest ${probe.detail}.${probe.paused ? ` ${probe.agentName} is paused — Settings → Team.` : ""}` }); // INV-1553
           answer.mine.push(...ownerAttention(orchestrator.orgKnowledge.staleItems(), owner => me === undefined || (owner !== undefined && (owner === me.id || me.identities.includes(owner))))); // an organisation item its owner must look at again (INV-1731)
           if (me === undefined || roleAtLeast(principals.roleOf(me.id), "admin")) for (const item of pendingReviews(registry.readSharedMemory())) answer.mine.unshift({ kind: "team-memory", ref: item.writer, title: `${registry.tryGet(item.writer)?.profile.name ?? "An agent"} wants the team to remember something`, detail: `"${item.record.text.slice(0, 140)}" — approve or reject in Settings → Team → Team memory.` }); // INV-1581
-          send(res, 200, { ...answer, mine: [...answer.mine].sort((a, b) => urgencyOf(a.kind) - urgencyOf(b.kind)).map(item => ({ ...item, decision: isDecision(item.kind), ...(board?.get(item.ref)?.level !== undefined ? { level: board!.get(item.ref)!.level } : {}) })), who: me?.name ?? "this installation" }); // decisions first and marked (INV-1647)
+          send(res, 200, { ...answer, mine: [...answer.mine].sort((a, b) => urgencyOf(a.kind) - urgencyOf(b.kind)).map(item => ({ ...item, ...(board?.get(item.ref) && mayReadTask(board.get(item.ref)!) ? { reading: readingFor(board.get(item.ref)!) } : {}), decision: isDecision(item.kind), ...(board?.get(item.ref)?.level !== undefined ? { level: board!.get(item.ref)!.level } : {}) })), who: me?.name ?? "this installation" }); // decisions first and marked (INV-1647)
           return;
         }
 
@@ -6718,13 +6674,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 400, apiError("text-required"));
             return;
           }
-          // Which thread the page was viewing; defaults to the team room.
           const conversation =
             typeof body.conversation === "string" && body.conversation !== ""
               ? body.conversation
               : MAIN_CONVERSATION; if (isForkChild(conversation)) { send(res, 409, apiError("fork-read-only")); return; } // INV-1667
 
-          // A console message into a channel thread is a room message, not a whisper.
+          const surfaceWork = body.surfaceAction ? surfaceActionWork({ action: body.surfaceAction, text, agentId, conversation, surfaces, focus: orchestrator.bus.workAttention, tasks: orchestrator.tasks }) : undefined;
+          if (surfaceWork && "error" in surfaceWork) { send(res, 409, apiError("surface-work-unavailable", { reason: surfaceWork.error })); return; }
           // Without this, an operator's interjection and the agent's answer were visible
           // only on the web page: the chat's members saw the agent's behaviour change
           // with no visible cause, and the thread history the agent reasons over
@@ -6746,12 +6702,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             void channels.pushToChat(chatKey, `〔控制台〕${text}`, { kind: "notice", about: "console" });
           }
 
-          // Acknowledge only after durable admission; an id can be retried after a lost response.
           const promptMessageId = typeof body.messageId === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(body.messageId) ? body.messageId : randomUUID();
 
           const before = registry.readTranscript(agentId, conversation).length;
           void orchestrator
-            .prompt(agentId, text, caller, { conversation, messageId: promptMessageId, ...(body.workRelation === "new" || body.workRelation === "continue" ? {workRelation:body.workRelation} : {}), onAdmitted:()=>{          broadcast({
+            .prompt(agentId, text, caller, { conversation, messageId: promptMessageId, ...(surfaceWork && "taskBinding" in surfaceWork ? { ...(surfaceWork.work ? { work: surfaceWork.work, workRelation: "continue" as const } : {}), taskBinding: surfaceWork.taskBinding, steerable: false } : body.workRelation === "new" || body.workRelation === "continue" ? {workRelation:body.workRelation} : {}), onAdmitted:()=>{          broadcast({
             type: "prompt", messageId: promptMessageId,
             agentId,
             text,
