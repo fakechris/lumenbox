@@ -15,6 +15,7 @@ import { NEXT_CHAT_JS } from "./next-chat-ui.ts";
 import { NEXT_DIAGNOSTICS_JS } from "./next-diagnostics-ui.ts";
 import { NEXT_SCREEN_JS } from "./next-screen-ui.ts";
 import { NEXT_SETTINGS_JS } from "./next-settings-ui.ts";
+import { NEXT_AUTO_JS } from "./next-auto-ui.ts";
 import { NEXT_THREAD_JS } from "./next-thread-ui.ts";
 import { NEXT_MEMBER_JS } from "./next-member-ui.ts";
 import { NEXT_BOXES_JS } from "./next-boxes-ui.ts";
@@ -164,6 +165,9 @@ header.bar { position: relative; }
 .setting h2.group { margin: 0 0 8px; }
 .setting .fields { display: flex; gap: 14px; flex-wrap: wrap; margin: 12px 0; }
 .setting label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--soft); }
+.setting select { padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg); color: inherit; font: inherit; }
+.setting > label { margin-bottom: 12px; }
+.runs { padding: 4px 14px 12px 52px; }
 .setting input { width: 140px; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg); font: inherit; }
 .side h2.group { display: flex; align-items: center; justify-content: space-between; }
 .side h2.group button { width: 22px; height: 22px; border-radius: 6px; color: var(--muted); font-size: 16px; line-height: 1; }
@@ -358,6 +362,7 @@ ${NEXT_PANEL_JS}
 ${NEXT_DIAGNOSTICS_JS}
 ${NEXT_SCREEN_JS}
 ${NEXT_SETTINGS_JS}
+${NEXT_AUTO_JS}
 ${NEXT_THREAD_JS}
 ${NEXT_MEMBER_JS}
 ${NEXT_BOXES_JS}
