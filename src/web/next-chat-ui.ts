@@ -157,7 +157,8 @@ function renderThread(view) {
     pin.addEventListener("click", function () { openPanel(row.id); });
     thread.appendChild(pin);
   });
-  var plan = planCard(), lastAsk = null, drawn = {};
+  var plan = planCard(), lastAsk = null, drawn = {}, setup = setupCard();
+  if (setup) thread.appendChild(setup);
   if (plan) thread.appendChild(plan);
   chat.entries.forEach(function (entry) {
     if (entry.kind === "tools") {
@@ -215,7 +216,7 @@ function renderChat(view) {
     });
   }
   if (agent && chat.loading !== chat.agentId && chat.loadedFor !== chat.agentId) loadThread();
-  if (chat.loadedFor === chat.agentId) renderThread(view);
+  if (chat.loadedFor === chat.agentId || !agent) renderThread(view);
 }
 
 /** The conversation is on screen: this agent's, in a visible tab, not behind the agent list on a narrow screen. */

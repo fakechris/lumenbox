@@ -85,8 +85,8 @@ function credentialsCard(need, agent) {
   (need.items || []).filter(function (item) { return item.state !== "present"; }).forEach(function (item) {
     box.appendChild(el("div", "", item.id + " — " + item.why));
   });
-  var link = el("a", "act", t("ui.next.settings.openClassic"));
-  link.href = "/?ui=classic";
+  var link = el("button", "act", t("ui.next.card.credentialsOpen"));
+  link.addEventListener("click", function () { openEmbed("settings", "team"); });
   box.appendChild(link);
   return box;
 }

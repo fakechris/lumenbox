@@ -170,6 +170,11 @@ body[data-view="chat"] #view-title { cursor: pointer; }
 .msg:hover .msg-tools, .msg-me:hover .msg-tools, .msg:focus-within .msg-tools, .msg-me:focus-within .msg-tools { display: flex; }
 .msg-tools button { font-size: 11px; padding: 1px 7px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--muted); }
 .msg-me .msg-tools button { background: transparent; color: inherit; border-color: rgba(255,255,255,.3); }
+.embed { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: 5; background: rgba(31,26,23,.18); }
+button.row { width: 100%; text-align: left; }
+.setting .row .why, .list button.row .why { white-space: normal; }
+.setup-step { display: flex; align-items: center; gap: 10px; }
+.setup-done { color: var(--ok); width: 16px; } .setup-todo { color: var(--muted); width: 16px; }
 .scrim { position: fixed; inset: 0; background: rgba(31,26,23,.18); }
 .panel { position: fixed; top: 12px; right: 12px; bottom: 12px; width: min(600px, calc(100vw - 24px)); background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 18px 50px rgba(31,26,23,.16); display: flex; flex-direction: column; }
 .panel > header { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
@@ -269,6 +274,7 @@ export const NEXT_HTML = `<!doctype html>
   <header><b id="member-title"></b><button class="x" id="member-close" aria-label="{{ui.next.act.close}}">×</button></header>
   <div class="inner" id="member-inner"></div>
 </aside>
+<iframe class="embed" id="embed" title="{{ui.next.side.settings}}" hidden></iframe>
 <div class="toast" id="toast" role="status" hidden></div>
 <script>
 var MSG = {{@messages}};

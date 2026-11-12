@@ -154,6 +154,7 @@ function refresh() {
   next.loading = true;
   // The computers are a fourth read that may be refused or slow; the page does not wait on it to be useful.
   var machines = getJson("/api/boxes").then(function (got) { return got; }, function () { return { boxes: [], own: "" }; });
+  getJson("/api/setup").then(function (got) { settings.setup = got; }, function () {});
   return Promise.all([getJson("/api/state"), getJson("/api/attention"), getJson("/api/tasks/list?records=user&limit=100"), machines]).then(function (got) {
     boxes.list = got[3].boxes || []; boxes.own = got[3].own || "";
     next.agents = {}; member.allTools = got[0].allTools || [];
@@ -183,6 +184,7 @@ function nextStart() {
   screenStart();
   memberStart();
   cardsStart();
+  embedStart();
   refresh();
   // What changes a row or the inbox arrives as an event; the page re-reads rather than patching.
   var events = new EventSource("/api/events");
