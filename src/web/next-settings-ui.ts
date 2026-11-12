@@ -7,7 +7,7 @@
  * itself, when next, and a switch.
  */
 export const NEXT_SETTINGS_JS = `
-var settings = { long: null, routines: null, setup: null };
+var settings = { long: null, routines: null, setup: null, pane: "", me: null };
 
 function numberField(labelText, value, min, max) {
   var label = el("label", "", labelText), input = el("input");
@@ -16,7 +16,23 @@ function numberField(labelText, value, min, max) {
   return { label: label, input: input };
 }
 
+/** One settings pane, opened: native where it has been rebuilt, the classic dialog in a frame where it has not. */
+function openSettingsPane(key) {
+  next.view = "settings"; document.body.dataset.open = "1";
+  if (NATIVE_PANES[key]) { settings.pane = key; render(); return; }
+  settings.pane = ""; render(); openEmbed("settings", key);
+}
+
 function renderSettings(view) {
+  // Who is asking decides what can be changed; asked once.
+  if (settings.me === null) { settings.me = {}; getJson("/api/me").then(function (got) { settings.me = got || {}; if (next.view === "settings") render(); }, function () {}); }
+  if (settings.pane && NATIVE_PANES[settings.pane]) {
+    var back = el("button", "file", "‹ " + t("ui.next.side.settings") + " · " + t("ui.pane." + settings.pane));
+    back.addEventListener("click", function () { settings.pane = ""; render(); });
+    view.appendChild(back);
+    NATIVE_PANES[settings.pane](view);
+    return;
+  }
   if (!settings.long) {
     getJson("/api/long-work").then(function (got) { settings.long = got; if (next.view === "settings") render(); }, failed);
     return;
@@ -42,7 +58,7 @@ function renderSettings(view) {
     body.appendChild(el("div", "title", t("ui.pane." + key)));
     body.appendChild(el("div", "why", t("ui.pane." + key + ".about")));
     row.appendChild(body);
-    row.addEventListener("click", function () { openEmbed("settings", key); });
+    row.addEventListener("click", function () { openSettingsPane(key); });
     more.appendChild(row);
   });
   view.appendChild(more);
@@ -55,6 +71,8 @@ function renderSettings(view) {
 }
 
 var SETTING_PANES = ["model", "boxes", "doors", "team", "mine", "memory", "supervision", "guests"];
+// The panes rebuilt here; the rest still open the classic dialog in a frame.
+var NATIVE_PANES = { mine: renderMinePane, model: renderModelPane };
 
 /** A classic dialog in a frame over the page; it says when it has closed, and the frame goes. */
 function openEmbed(kind, tab) {
@@ -80,10 +98,10 @@ function setupCard() {
   var state = settings.setup;
   if (!state || state.established || localStorage.getItem("lumen-setup-closed:" + state.installationId) === "1") return null;
   var steps = [
-    { key: "key", done: state.key, open: function () { openEmbed("settings", "model"); } },
-    { key: "box", done: state.box, open: function () { openEmbed("settings", "boxes"); } },
+    { key: "key", done: state.key, open: function () { openSettingsPane("model"); } },
+    { key: "box", done: state.box, open: function () { openSettingsPane("boxes"); } },
     { key: "agent", done: state.agentTurn || Object.keys(next.agents).length > 0, open: function () { openMember(""); } },
-    { key: "door", done: state.door, optional: true, open: function () { openEmbed("settings", "doors"); } },
+    { key: "door", done: state.door, optional: true, open: function () { openSettingsPane("doors"); } },
   ];
   var card = el("div", "card-plain"), close = el("button", "act", t("ui.next.act.close"));
   card.appendChild(el("div", "card-head", t("ui.next.setup.title")));

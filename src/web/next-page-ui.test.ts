@@ -255,3 +255,13 @@ test("a file is shown in place as a picture or as text, and one that cannot be s
   const previewKind = pageFunction("previewKind", {});
   assert.deepEqual(["chart.PNG", "notes.md", "data.jsonl", "report.pdf", "archive.tar.gz", "Makefile"].map(name => previewKind(name)), ["image", "text", "text", "other", "other", "text"]);
 });
+
+test("saving the model sends a key only when one was typed, clears what was emptied, and touches web search only when it changed", () => {
+  const modelBody = pageFunction("modelBody", {});
+  const form = { provider: "minimax", model: " MiniMax-M3 ", baseUrl: "https://x", key: "", vision: "auto", summaryModel: "", searchProvider: "brave", searchKey: "", searchWas: "brave" };
+  const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
+  assert.deepEqual(plain(modelBody(form)), { provider: "minimax", model: "MiniMax-M3", baseUrl: null, vision: "auto", summaryModel: null }, "an address belongs to a custom provider only");
+  assert.deepEqual(plain(modelBody({ ...form, provider: "custom", key: " k1 ", model: "" })), { provider: "custom", model: null, baseUrl: "https://x", vision: "auto", summaryModel: null, key: "k1" });
+  assert.deepEqual(plain(modelBody({ ...form, searchProvider: "" })).searchProvider, "", "choosing no search service is sent, so the server clears it");
+  assert.deepEqual(plain(modelBody({ ...form, searchKey: "s1" })), { provider: "minimax", model: "MiniMax-M3", baseUrl: null, vision: "auto", summaryModel: null, searchProvider: "brave", searchKey: "s1" });
+});

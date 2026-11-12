@@ -57,7 +57,7 @@ function renderBoxes(view) {
   });
   view.appendChild(list);
   var more = el("section", "setting"), link = el("button", "act", t("ui.next.box.addOpen"));
-  link.addEventListener("click", function () { openEmbed("settings", "boxes"); });
+  link.addEventListener("click", function () { openSettingsPane("boxes"); });
   more.appendChild(el("h2", "group", t("ui.next.box.add")));
   more.appendChild(el("p", "", t("ui.next.box.addNote")));
   more.appendChild(link);

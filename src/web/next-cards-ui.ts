@@ -86,7 +86,7 @@ function credentialsCard(need, agent) {
     box.appendChild(el("div", "", item.id + " — " + item.why));
   });
   var link = el("button", "act", t("ui.next.card.credentialsOpen"));
-  link.addEventListener("click", function () { openEmbed("settings", "team"); });
+  link.addEventListener("click", function () { openSettingsPane("team"); });
   box.appendChild(link);
   return box;
 }

@@ -244,6 +244,13 @@ versions can be gone back to.
 text file in place, with the way to open it in a tab or download it; a kind that cannot be shown
 says so.
 
+**Settings open pane by pane, in place.** A pane that has been rebuilt opens inside the settings
+view with a way back; one that has not opens the classic dialog in a frame. Rebuilt so far: what is a
+person's own (what the agents know about them, the tokens they issued, the approvals they gave once
+and for all), and the model (provider, key, model, pictures, summaries, web search, the providers to
+fall back to, the accounts resting). A key is typed, saved and never shown again; a token is shown
+once.
+
 **Three levels, everywhere.**
 
 | Level | Where | Holds |
