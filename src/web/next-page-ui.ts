@@ -148,6 +148,9 @@ header.bar select { font: inherit; font-size: 13px; padding: 4px 8px; border-rad
 header.bar { position: relative; }
 .menu { position: absolute; right: 14px; top: 46px; z-index: 5; display: flex; flex-direction: column; min-width: 180px; padding: 4px; }
 .menu { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12); }
+.desk { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); }
+.desk .acts { flex-wrap: wrap; } .desk p { margin: 0; }
+.desk input { flex: 1; min-width: 120px; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg); font: inherit; font-size: 13px; }
 .menu[hidden], .find[hidden] { display: none; }
 .menu button { text-align: left; padding: 8px 10px; border-radius: 6px; font-size: 13px; }
 .menu button:hover { background: var(--bg); }
