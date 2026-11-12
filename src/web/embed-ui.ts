@@ -3,7 +3,8 @@
  *
  * The rebuilt page does not yet have its own model, channel, team, memory, supervision and guest
  * settings, or the template shelf. Rather than send a person to another page for them, it opens the
- * classic page in a frame with `?embed=settings&tab=…` (or `embed=shelf`): the classic page then
+ * classic page in a frame with `?embed=settings&tab=…` (or `embed=shelf`, or `embed=agent&tab=<id>`
+ * for everything about one agent the rebuilt agent page does not edit): the classic page then
  * shows that one dialog and nothing else, and tells the page that framed it when the dialog closes.
  * A bridge, to be removed pane by pane as each is rebuilt.
  */
@@ -15,15 +16,26 @@ html[data-embed] body > *:not(#settingswrap):not(#shelfwrap):not(#agentwrap) { d
 export const EMBED_JS = `
 (function () {
   var query = new URLSearchParams(location.search), embed = query.get("embed");
-  if (embed !== "settings" && embed !== "shelf") return;
+  if (embed !== "settings" && embed !== "shelf" && embed !== "agent") return;
   document.documentElement.setAttribute("data-embed", embed);
-  var wrap = $(embed === "shelf" ? "shelfwrap" : "settingswrap"), opened = false;
-  if (embed === "shelf") openShelf(); else openSettings(query.get("tab") || "model");
+  var wrap = $(embed === "shelf" ? "shelfwrap" : embed === "agent" ? "agentwrap" : "settingswrap"), opened = false;
+  function closed() { if (window.parent !== window) window.parent.postMessage({ lumen: "embed-closed", embed: embed }, location.origin); }
   // Told once, when the dialog that was opened is closed again: the framing page takes the frame away.
   new MutationObserver(function () {
     if (wrap.style.display !== "none") { opened = true; return; }
-    if (opened && window.parent !== window) window.parent.postMessage({ lumen: "embed-closed", embed: embed }, location.origin);
+    if (opened) closed();
   }).observe(wrap, { attributes: true, attributeFilter: ["style"] });
+  if (embed === "shelf") openShelf();
+  else if (embed === "settings") openSettings(query.get("tab") || "model");
+  else {
+    // One agent's whole configuration. The dialog needs the agent, which arrives with the page's first read.
+    var tries = 0, timer = setInterval(function () {
+      var agent = agents.filter(function (row) { return row.id === query.get("tab"); })[0];
+      if (!agent && ++tries < 100) return;
+      clearInterval(timer);
+      if (agent) openAgentModal("edit", agent); else closed();
+    }, 100);
+  }
   opened = wrap.style.display !== "none";
 })();
 `;

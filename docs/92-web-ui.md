@@ -205,7 +205,9 @@ wrong" is only said when the server said it.
 `next-logic-ui.ts` holds the few decisions the page makes, as plain functions shipped as their own
 source so the test runs what the page runs. Every word comes from `src/i18n/ui-next.ts`. The classic
 page's settings dialogs are shown in a frame (`embed-ui.ts`) until each is rebuilt; that bridge is
-removed pane by pane, never extended.
+removed pane by pane. It was extended once, to an agent's whole configuration (model, standing
+instructions, what it must ask before using, earlier versions), so that using this page takes
+nothing away; a new surface is built here, not bridged.
 
 **Checking.** `next-page-ui.test.ts` fills the page in both languages, parses every inline script, and
 checks that every looked-up id exists; a function with a regular expression or a wire format in it is

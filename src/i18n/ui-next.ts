@@ -168,6 +168,7 @@ export const UI_NEXT: Record<string, readonly [string, string]> = {
   "ui.next.member.pause": ["暂停这个成员", "Pause this agent"],
   "ui.next.member.resume": ["恢复这个成员", "Resume this agent"],
   "ui.next.member.pausedNote": ["已暂停，它的消息会留着等恢复。{reason}", "Paused; its messages wait until it is resumed. {reason}"],
+  "ui.next.member.more": ["模型、常驻指令与更多配置", "Model, standing instructions and more"],
   "ui.next.member.delete": ["删除这个成员", "Delete this agent"],
   "ui.next.member.deleteNote": ["它的记录会归档保留，不会删除。", "Its records are archived, not deleted."],
   "ui.next.member.deleteConfirm": ["确认删除", "Confirm delete"],

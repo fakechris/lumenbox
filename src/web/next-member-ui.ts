@@ -55,6 +55,10 @@ function renderMember() {
   pause.addEventListener("click", function () {
     postJson(isPaused ? "/api/agents/resume" : "/api/agents/pause", { id: member.id }).then(function () { loadPauses(); refreshSoon(); }, failed);
   });
+  // Its model, standing instructions, what it must ask before using, earlier versions: the classic dialog, in a frame.
+  var more = el("button", "", t("ui.next.member.more"));
+  more.addEventListener("click", function () { var id = member.id; closeMember(); openEmbed("agent", id); });
+  acts.appendChild(more);
   var remove = el("button", "", t("ui.next.member.delete"));
   remove.addEventListener("click", function () {
     var confirm = el("button", "act-danger", t("ui.next.member.deleteConfirm"));
