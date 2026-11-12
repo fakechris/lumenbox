@@ -78,6 +78,8 @@ export interface GoalLoopDeps {
   durableState: (agentId: string, conversation: string) => DurableState | undefined;
   /** The workspace as path→hash, when there is a box to ask. */
   manifest?: () => Promise<Map<string, string> | undefined>;
+  /** What the host has on record about the task's objects, as lines for the continuation wake (INV-1823). */
+  progress?: (task: Task) => string[];
   /** Tell the person, in their chat. */
   notify: (task: Task, text: string) => Promise<void>;
   /** The cheap profile, for the one experiment question a continuation gets (INV-1475). Absent: no ledger, the hash stall stands. */
@@ -277,7 +279,7 @@ export class GoalLoop {
     const nth = pursuit.spent.continuations + 1;
     this.deps.tasks.setPursuit(task.id, current => ({ ...current, spent: { ...current.spent, continuations: nth } }), limit === undefined ? `continuation ${nth} started` : `finish-only turn started: ${limit}`);
     this.deps.log(`goal ${task.id}: ${limit === undefined ? `continuation ${nth}` : `finish-only turn (${limit})`} for ${this.deps.agentName(key.agentId) ?? key.agentId} (workId ${pursuit.workId})`);
-    const text = limit === undefined ? continuationNotice(task, nth) : finishOnlyNotice(task, limit);
+    const text = limit === undefined ? continuationNotice(task, nth, this.deps.progress?.(task) ?? []) : finishOnlyNotice(task, limit);
     this.deps.bus.sendFromUser(key.agentId, text, { conversation: key.conversation, synthetic: true, steerable: false, lane: "background", goal: marker }); // model-text: goal
     void this.deps.bus.wake(key.agentId);
   }
@@ -328,6 +330,15 @@ export class GoalLoop {
       const personSeq = this.personSeq.get(this.convKey(key.agentId, key.conversation)) ?? 0;
       const timer = this.schedule(() => { this.pending.delete(task.id); this.start(key, seq, personSeq); }, delay);
       this.pending.set(task.id, { seq, personSeq, cancel: timer.cancel });
+      return;
+    }
+
+    // A request carried across turn budgets ends the way any request does: the agent answered (INV-1823).
+    if (pursuit.completion === "answer" && !budgetSlice) {
+      this.deps.tasks.setPursuit(task.id, current => ({ ...current, status: "complete", spent: { ...current.spent, errorStreak: 0, idleStreak: 0, activeMs: current.spent.activeMs + elapsed, cost: Math.max(current.spent.cost, cost) } }), `answered after ${pursuit.spent.continuations} continuation(s)`);
+      this.deps.log(`goal ${task.id}: the request was answered after ${pursuit.spent.continuations} continuation(s)`);
+      // Its work is settled unless the turn left something open — a question, a plan, a peer's result.
+      if (this.deps.tasks.get(task.id)?.workRoot?.state.status === "answered") this.deps.tasks.turnFinished(task.id);
       return;
     }
 

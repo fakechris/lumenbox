@@ -474,7 +474,9 @@ export class TaskStore {
     if (task === undefined) return undefined;
     if (task.status !== "open" && task.status !== "doing") return { task };
     // A turn ending says nothing about a goal (docs/74 §7 R1): the gate does.
-    if (task.pursuit !== undefined || openBlockers(task, this.tasks).length > 0) return { task }; // nor about a task still waiting on others (INV-1740): it stays where it is until they finish
+    // Except a request the host carried across turn budgets (INV-1823): answered, it is an ordinary request again.
+    const answered = task.pursuit?.completion === "answer" && task.pursuit.status === "complete";
+    if ((task.pursuit !== undefined && !answered) || openBlockers(task, this.tasks).length > 0) return { task }; // nor about a task still waiting on others (INV-1740): it stays where it is until they finish
     // Attributed to whoever the work belongs to, so the gate sees the same thing it sees
     // when that agent marks its own task done — because that is what is happening.
     const by = task.assigneeId ?? "channel";
@@ -532,7 +534,7 @@ export class TaskStore {
     // requester keeps two words: accepting a completed goal, and clearing it.
     if (task.pursuit !== undefined && status !== undefined && status !== task.status) {
       const allowed =
-        by === GOAL_GATE_ACTOR ||
+        by === GOAL_GATE_ACTOR || (task.pursuit.completion === "answer" && task.pursuit.status === "complete") || // answered: ordinary again (INV-1823)
         (by === task.requester && ((status === "done" && task.status === "review") || status === "dropped"));
       if (!allowed) {
         status = undefined;
@@ -948,11 +950,12 @@ export class TaskStore {
     change: (pursuit: Pursuit) => Pursuit,
     note: string,
     by: string = GOAL_GATE_ACTOR,
-    now: Date = new Date()
+    now: Date = new Date(),
+    initial?: Pursuit // for a live task that has none: the host's, when a request outgrows its turn (INV-1823)
   ): { task: Task } | undefined {
-    const task = this.tasks.get(id);
-    if (task?.pursuit === undefined) return undefined;
-    const pursuit = change(task.pursuit);
+    const task = this.tasks.get(id), before = task?.pursuit ?? (task !== undefined && isLive(task.status) ? initial : undefined);
+    if (task === undefined || before === undefined) return undefined;
+    const pursuit = change(before);
     const status = taskStatusFor(pursuit);
     const at = now.toISOString();
     const updated: Task = {

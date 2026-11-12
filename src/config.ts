@@ -43,6 +43,8 @@ export interface AgentboxConfig {
    * person, and how many times the identical tool call may run before it is replayed instead.
    */
   turnBudget?: { calls?: number; repeats?: number };
+  /** How far the host carries one request past a turn's budget unattended (INV-1823); read and bounded by long-request.ts. */
+  longWork?: { continuations?: number; activeHours?: number };
   /**
    * The local hour (0–23) at which an unattended upgrade may run.
    *
@@ -354,6 +356,7 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
       onWarn
     ),
     ...(readTurnBudget(raw.turnBudget, onWarn) !== undefined ? { turnBudget: readTurnBudget(raw.turnBudget, onWarn) } : {}),
+    ...(typeof raw.longWork === "object" && raw.longWork !== null && !Array.isArray(raw.longWork) ? { longWork: raw.longWork as NonNullable<AgentboxConfig["longWork"]> } : {}),
     ...(readHour(raw.upgradeHour, onWarn) !== undefined
       ? { upgradeHour: readHour(raw.upgradeHour, onWarn) }
       : {}),
