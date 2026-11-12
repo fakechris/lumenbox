@@ -30,7 +30,7 @@ function renderMember() {
   if (!agent) { closeMember(); return; }
   $("member-title").textContent = member.creating ? t("ui.next.member.new") : agent.name;
   var form = el("div", "setting"), name = field(t("ui.next.member.name"), agent.name), title = field(t("ui.next.member.role"), agent.title), persona = field(t("ui.next.member.persona"), agent.description, true);
-  var tools = toolPicker(agent.tools), save = el("button", "act-primary", t(member.creating ? "ui.next.member.create" : "ui.next.settings.save"));
+  var tools = toolChoices(agent, member.creating), save = el("button", "act-primary", t(member.creating ? "ui.next.member.create" : "ui.next.settings.save"));
   agentConfigFor(member.creating ? "" : member.id);
   var extra = modelFields(agent), moreBox = el("details", "fold");
   [name, title, persona].forEach(function (row) { form.appendChild(row.label); });
@@ -42,7 +42,7 @@ function renderMember() {
   toolsBox.appendChild(tools.node);
   form.appendChild(toolsBox);
   save.addEventListener("click", function () {
-    var body = Object.assign({ name: name.input.value.trim(), title: title.input.value.trim(), description: persona.input.value, tools: tools.value() }, extra.value());
+    var body = Object.assign({ name: name.input.value.trim(), title: title.input.value.trim(), description: persona.input.value }, tools.value(), extra.value());
     if (!body.name) { name.input.focus(); return; }
     var sent = member.creating ? postJson("/api/agents", Object.assign({ boxId: chat.box || undefined }, body)) : postJson("/api/agents/update", Object.assign({ id: member.id }, body));
     sent.then(function (got) {
@@ -56,17 +56,13 @@ function renderMember() {
   inner.appendChild(form);
   if (member.creating) return;
   var kept = el("div", "setting");
-  kept.appendChild(standingFold(agent)); kept.appendChild(historyFold(agent));
+  kept.appendChild(standingFold(agent)); kept.appendChild(historyFold(agent)); kept.appendChild(templateFold(agent));
   inner.appendChild(kept);
   var acts = el("div", "foot-links"), isPaused = !!member.paused[member.id];
   var pause = el("button", "", t(isPaused ? "ui.next.member.resume" : "ui.next.member.pause"));
   pause.addEventListener("click", function () {
     postJson(isPaused ? "/api/agents/resume" : "/api/agents/pause", { id: member.id }).then(function () { loadPauses(); refreshSoon(); }, failed);
   });
-  // Its model, standing instructions, what it must ask before using, earlier versions: the classic dialog, in a frame.
-  var more = el("button", "", t("ui.next.member.more"));
-  more.addEventListener("click", function () { var id = member.id; closeMember(); openEmbed("agent", id); });
-  acts.appendChild(more);
   var remove = el("button", "", t("ui.next.member.delete"));
   remove.addEventListener("click", function () {
     var confirm = el("button", "act-danger", t("ui.next.member.deleteConfirm"));

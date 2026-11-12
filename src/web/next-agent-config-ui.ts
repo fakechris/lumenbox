@@ -4,13 +4,13 @@
  * through. Each is a fold on the agent's page, read when opened; none is on a default surface.
  */
 export const NEXT_AGENT_CONFIG_JS = `
-var agentConfig = { presets: null, scopes: null, files: null, file: "AGENTS.md", cap: 0, versions: null, current: null, forId: "" };
+var agentConfig = { presets: null, scopes: null, files: null, file: "AGENTS.md", cap: 0, versions: null, current: null, forId: "", template: null };
 var STANDING_NAMES = ["AGENTS.md", "SOUL.md", "USER.md", "HEARTBEAT.md"];
 
 /** Opened on another agent, what was read for the last one is not this one's. */
 function agentConfigFor(id) {
   if (agentConfig.forId === id) return;
-  agentConfig.forId = id; agentConfig.files = null; agentConfig.versions = null; agentConfig.current = null; agentConfig.file = STANDING_NAMES[0];
+  agentConfig.forId = id; agentConfig.template = null; agentConfig.files = null; agentConfig.versions = null; agentConfig.current = null; agentConfig.file = STANDING_NAMES[0];
 }
 
 /** A fold whose body is drawn, and its data asked for, the first time it is opened. */
@@ -123,6 +123,51 @@ function historyFold(agent) {
       }
       body.appendChild(line);
     });
+  });
+}
+
+/**
+ * The agent as something others can start from: it drafts a template of itself, a person looks at
+ * what was staged, and only a person publishes it or takes it down.
+ */
+function templateFold(agent) {
+  return lazyFold(t("ui.next.template.title"), "template", function (body) {
+    var again = function () { agentConfig.template = null; if (member.id === agent.id) renderMember(); };
+    if (agentConfig.template === null) {
+      body.replaceChildren(el("p", "why", t("ui.next.auto.reading")));
+      getJson("/api/templates/mine?agent=" + encodeURIComponent(agent.id)).then(function (got) {
+        agentConfig.template = got;
+        if (member.id === agent.id) renderMember();
+      }, function (error) { body.replaceChildren(el("p", "why", error.message)); });
+      return;
+    }
+    var mine = agentConfig.template, versions = mine.versions || [], draft = el("button", "act", t("ui.next.template.draft", { name: agent.name }));
+    body.replaceChildren(el("p", "why", t("ui.next.template.note")));
+    draft.addEventListener("click", function () {
+      draft.disabled = true;
+      postJson("/api/templates/share", { agent: agent.id }).then(function () { toast(t("ui.next.template.asked", { name: agent.name })); }, function (error) { draft.disabled = false; failed(error); });
+    });
+    body.appendChild(draft);
+    versions.slice().reverse().forEach(function (version) {
+      var line = el("div", "fact"), get = el("a", "act", t("ui.next.template.download"));
+      get.href = "/api/templates/download?agent=" + encodeURIComponent(agent.id) + "&version=" + encodeURIComponent(version.version);
+      line.appendChild(el("span", "why", "v" + version.version + " · " + (version.name || "") + " · " + new Date(version.stagedAt).toLocaleDateString()));
+      line.appendChild(get); body.appendChild(line);
+    });
+    if (mine.share && mine.share.published) {
+      var down = el("button", "act", t("ui.next.template.unpublish"));
+      down.addEventListener("click", function () { postJson("/api/templates/unpublish", { agent: agent.id }).then(again, failed); });
+      body.appendChild(fact(t("ui.next.template.published", { version: mine.share.version }), mine.share.url || ""));
+      body.appendChild(down);
+    } else if (versions.length && mine.canPublish) {
+      var who = el("select"), publish = el("button", "act-primary", t("ui.next.template.publish")), row = el("div", "acts");
+      ["tenant", "public"].forEach(function (value) { var node = el("option", "", t("ui.next.template.to." + value)); node.value = value; who.appendChild(node); });
+      publish.addEventListener("click", function () {
+        publish.disabled = true;
+        postJson("/api/templates/publish", { agent: agent.id, visibility: who.value }).then(again, function (error) { publish.disabled = false; failed(error); });
+      });
+      row.appendChild(who); row.appendChild(publish); body.appendChild(row);
+    } else if (versions.length) body.appendChild(el("p", "why", t("ui.next.template.cannotPublish")));
   });
 }
 `;
