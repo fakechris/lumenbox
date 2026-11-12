@@ -138,9 +138,12 @@ function render() {
   document.querySelectorAll("[data-layout]").forEach(function (button) { button.setAttribute("aria-pressed", String(button.dataset.layout === next.layout)); });
   renderScreen();
   if (next.view === "chat") { renderChat(view); return; }
-  $("view-title").textContent = t("ui.next.nav." + next.view);
+  $("view-title").textContent = t(next.view === "settings" || next.view === "auto" ? "ui.next.side." + next.view : "ui.next.nav." + next.view);
   $("view-hint").textContent = t("ui.next." + next.view + ".hint");
-  if (next.view === "inbox") renderInbox(view); else renderWork(view);
+  if (next.view === "inbox") renderInbox(view);
+  else if (next.view === "settings") renderSettings(view);
+  else if (next.view === "auto") renderAuto(view);
+  else renderWork(view);
 }
 
 function refresh() {
@@ -168,7 +171,7 @@ function nextStart() {
     button.addEventListener("click", function () { next.layout = button.dataset.layout; render(); });
   });
   var asked = new URLSearchParams(location.search).get("view");
-  if (asked === "work" || asked === "inbox") next.view = asked;
+  if (asked === "work" || asked === "inbox" || asked === "settings" || asked === "auto") { next.view = asked; document.body.dataset.open = "1"; }
   panelStart();
   chatStart();
   screenStart();

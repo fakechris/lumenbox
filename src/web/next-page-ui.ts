@@ -14,6 +14,7 @@ import { NEXT_PANEL_JS } from "./next-panel-ui.ts";
 import { NEXT_CHAT_JS } from "./next-chat-ui.ts";
 import { NEXT_DIAGNOSTICS_JS } from "./next-diagnostics-ui.ts";
 import { NEXT_SCREEN_JS } from "./next-screen-ui.ts";
+import { NEXT_SETTINGS_JS } from "./next-settings-ui.ts";
 
 const STYLE = `
 :root {
@@ -71,7 +72,8 @@ h2.group:first-child { margin-top: 0; }
 .chip { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 999px; font-size: 12px; background: var(--rail); color: var(--soft); flex: none; }
 .chip.need, .chip-need { background: var(--warn-soft); color: var(--warn); }
 .chip-need { display: inline-flex; padding: 2px 8px; border-radius: 999px; font-size: 11px; flex: none; }
-.chip.run { background: var(--blue-soft); color: var(--blue); }
+.chip.run, .chip-run { background: var(--blue-soft); color: var(--blue); }
+.chip-run { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 999px; font-size: 12px; flex: none; }
 .chip.done { background: var(--ok-soft); color: var(--ok); }
 .chip.stuck { background: var(--bad-soft); color: var(--bad); }
 .act, .act-primary, .act-danger { padding: 5px 12px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--surface); font-size: 13px; flex: none; }
@@ -133,6 +135,11 @@ header.bar select { font: inherit; font-size: 13px; padding: 4px 8px; border-rad
 .screen-body iframe { flex: 1; min-height: 320px; width: 100%; border: 0; border-radius: 10px; background: #000; }
 .files { display: flex; flex-direction: column; }
 .files .file { width: 100%; text-align: left; background: none; cursor: pointer; }
+.setting { max-width: 640px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 14px; }
+.setting h2.group { margin: 0 0 8px; }
+.setting .fields { display: flex; gap: 14px; flex-wrap: wrap; margin: 12px 0; }
+.setting label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--soft); }
+.setting input { width: 140px; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg); font: inherit; }
 .scrim { position: fixed; inset: 0; background: rgba(31,26,23,.18); }
 .panel { position: fixed; top: 12px; right: 12px; bottom: 12px; width: min(600px, calc(100vw - 24px)); background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 18px 50px rgba(31,26,23,.16); display: flex; flex-direction: column; }
 .panel > header { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
@@ -194,7 +201,8 @@ export const NEXT_HTML = `<!doctype html>
   <div class="agents" id="agents"></div>
   <div class="side-links">
     <button data-nav="work">{{ui.next.side.work}}</button>
-    <a href="/?ui=classic">{{ui.next.side.classic}}</a>
+    <button data-nav="auto">{{ui.next.side.auto}}</button>
+    <button data-nav="settings">{{ui.next.side.settings}}</button>
   </div>
 </nav>
 <main>
@@ -260,6 +268,7 @@ ${NEXT_CHAT_JS}
 ${NEXT_PANEL_JS}
 ${NEXT_DIAGNOSTICS_JS}
 ${NEXT_SCREEN_JS}
+${NEXT_SETTINGS_JS}
 nextStart();
 </script>
 </body>
