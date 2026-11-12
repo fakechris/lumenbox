@@ -70,6 +70,7 @@ function openChat(agentId) {
   // Another agent's half-written words and its thread are not this one's.
   if (agentId !== chat.agentId) { chat.live = null; chat.loadedFor = ""; chat.entries = []; chat.conversation = "main"; chat.conversations = []; chat.plan = null; chat.liveSurfaces = {}; }
   chat.agentId = agentId; next.view = "chat"; document.body.dataset.open = "1";
+  if (next.agents[agentId] && next.agents[agentId].boxId) chat.box = next.agents[agentId].boxId; // an agent on another computer brings its computer with it
   history.replaceState(null, "", "?ui=next&agent=" + encodeURIComponent(agentId));
   render();
 }
@@ -90,6 +91,7 @@ function messageTools(entry) {
 function bubble(entry, bare) {
   if (entry.aside) return el("div", "aside", entry.text);
   var node = el("div", entry.role === "user" ? "msg-me" : "msg");
+  if (!bare) node.tabIndex = 0; // reachable by keyboard, so its tools are too
   if (entry.role === "user") node.textContent = entry.text;
   else if (markdown) node.innerHTML = markdown.render(entry.text); // raw HTML is off in the renderer: what is said cannot become markup
   else node.textContent = entry.text;
@@ -166,7 +168,7 @@ function renderThread(view) {
         thread.appendChild(feedSurface(tool.surface.surfaceId, tool.surface.title, tool.surface.messages || [], true));
         drawn[tool.surface.surfaceId] = true;
       });
-      steps = steps.concat((entry.tools || []).filter(function (tool) { return !tool.question && !tool.surface; }));
+      steps = steps.concat((entry.tools || []).filter(function (tool) { return !tool.question && !(tool.surface && !tool.isError); }));
       return;
     }
     if (entry.kind === "text" && entry.role === "user") lastAsk = null; // answered by what was said next

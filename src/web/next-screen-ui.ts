@@ -17,10 +17,11 @@ function loadFiles(dir) {
 
 /** A file from the person's machine into the folder being looked at; the agent finds it there. */
 function uploadFile(file) {
-  var reader = new FileReader();
+  // Where it goes is decided now: the folder shown may change before the file has been read.
+  var reader = new FileReader(), folder = screen2.dir, path = folder.replace(/\\/$/, "") + "/" + file.name;
   reader.onload = function () {
-    var base64 = String(reader.result).split(",")[1] || "", path = screen2.dir.replace(/\\/$/, "") + "/" + file.name;
-    postJson("/api/file", { path: path, base64: base64 }).then(function () { toast(t("ui.next.screen.uploaded", { name: file.name })); loadFiles(screen2.dir); }, failed);
+    var base64 = String(reader.result).split(",")[1] || "";
+    postJson("/api/file", { path: path, base64: base64 }).then(function () { toast(t("ui.next.screen.uploaded", { name: file.name })); loadFiles(folder); }, failed);
   };
   reader.readAsDataURL(file);
 }
@@ -28,10 +29,11 @@ function uploadFile(file) {
 function filesBlock() {
   var box = el("div", "files");
   if (screen2.error) { box.appendChild(el("p", "why", screen2.error)); return box; }
-  var pick = el("label", "act", t("ui.next.screen.upload")), input = el("input");
+  var pick = el("button", "act", t("ui.next.screen.upload")), input = el("input");
   input.type = "file"; input.multiple = true; input.hidden = true;
   input.addEventListener("change", function () { Array.prototype.forEach.call(input.files, uploadFile); });
-  pick.appendChild(input); box.appendChild(pick);
+  pick.addEventListener("click", function () { input.click(); });
+  box.appendChild(pick); box.appendChild(input);
   if (screen2.dir && screen2.root && screen2.dir !== screen2.root) {
     var up = el("button", "file", "‹ " + screen2.dir.slice(screen2.root.length) );
     up.addEventListener("click", function () { loadFiles(screen2.dir.replace(/\\/[^\\/]+\\/?$/, "") || screen2.root); });

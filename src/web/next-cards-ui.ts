@@ -7,7 +7,7 @@
  * these — an approval answered in a chat, one that expired — end without any event.
  */
 export const NEXT_CARDS_JS = `
-var cards = { approvals: [], secrets: [], handovers: [], credentials: {}, surfaces: {}, vendor: "idle", waiting: [] };
+var cards = { approvals: [], secrets: [], handovers: [], credentials: {}, surfaces: {}, secretNodes: {}, vendor: "idle", waiting: [] };
 
 function loadCards() {
   var none = function () { return {}; };
@@ -47,8 +47,10 @@ function approvalCard(approval, agent) {
   return box;
 }
 
+/** Made once per request and kept: a redraw of the thread must not empty a field somebody is typing a secret into. */
 function secretCard(request, agent) {
-  var box = cardBox("need", t("ui.next.card.secret", { name: agent.name, id: request.id })), acts = el("div", "acts"), input = el("input");
+  if (cards.secretNodes[request.id]) return cards.secretNodes[request.id];
+  var box = cards.secretNodes[request.id] = cardBox("need", t("ui.next.card.secret", { name: agent.name, id: request.id })), acts = el("div", "acts"), input = el("input");
   input.type = "password"; input.autocomplete = "off";
   box.appendChild(el("div", "", request.description));
   box.appendChild(input);

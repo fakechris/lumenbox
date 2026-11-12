@@ -167,7 +167,7 @@ body[data-view="chat"] #view-title { cursor: pointer; }
 .card-need input { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--surface); font: inherit; }
 .card-need a.act-primary { text-decoration: none; }
 .msg-tools { display: none; gap: 4px; margin-top: 6px; }
-.msg:hover .msg-tools, .msg-me:hover .msg-tools { display: flex; }
+.msg:hover .msg-tools, .msg-me:hover .msg-tools, .msg:focus-within .msg-tools, .msg-me:focus-within .msg-tools { display: flex; }
 .msg-tools button { font-size: 11px; padding: 1px 7px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--muted); }
 .msg-me .msg-tools button { background: transparent; color: inherit; border-color: rgba(255,255,255,.3); }
 .scrim { position: fixed; inset: 0; background: rgba(31,26,23,.18); }
