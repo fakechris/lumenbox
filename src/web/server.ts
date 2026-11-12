@@ -3,6 +3,8 @@ import { workReading, workReference } from "../host/work-reading.ts";
 import { evidenceDigest } from "../host/review-dispatch.ts";
 import { resultCheckRoute } from "./result-check-routes.ts";
 import { taskDeliveryRoute } from "./task-delivery-routes.ts";
+import { DeliveryRecovery, replyExecutionKey } from "../host/delivery-recovery.ts";
+import { deliveryRecoveryRoute } from "./delivery-recovery-routes.ts";
 import { taskAudience } from "../host/task-audience.ts";
 import {workControlFor, workControlRoute} from "./work-control-routes.ts";
 import {WORK_CONTROL_JS} from "./work-control-ui.ts";
@@ -230,7 +232,7 @@ import {
 } from "./mcp-server.ts";
 import { McpTokenStore } from "./mcp-tokens.ts";
 import { Vault, type Grant } from "../host/vault.ts";
-import { setRedactionSource } from "../host/secret-redaction.ts";
+import { setRedactionSource, redactText } from "../host/secret-redaction.ts";
 import { OAuthGate } from "../host/oauth.ts";
 import { MemoryAdmin } from "../host/memory-admin.ts";
 import { ConnectCodeStore } from "../box/connect-codes.ts";
@@ -1020,7 +1022,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   const acked = new Set<string>();
   const outbox = new Outbox(join(agentboxHome(), "outbox.jsonl"));
-  const outboxSender = new OutboxSender(outbox, log, undefined, undefined, (event, detail) => noteDelivery(orchestrator.exceptions, event, detail, chatKey => orchestrator.tasks?.list().find(task => task.conversation !== undefined && task.status !== "done" && task.status !== "dropped" && conversations.chatKeyFor(task.conversation) === chatKey)?.id)); // each try onto the exception list (INV-1741)
+  const replyRecovery: DeliveryRecovery = new DeliveryRecovery({
+    deliveries, outbox, decisionsPath: join(agentboxHome(), "delivery-dispositions.jsonl"),
+    workingSnapshot: () => new Set((orchestrator.turns?.interrupted() ?? []).map(turn => replyExecutionKey(turn.agentId, turn.conversation))),
+    task: id => orchestrator.tasks?.get(id), isWorking: row => orchestrator.hasOpenTurn(row.agentId, row.conversation),
+    reply: row => outboundRedactor(vault.heldValues())(row.messageId !== undefined ? orchestrator.replyForMessage(row.agentId, row.messageId, row.conversation) : orchestrator.replySince(row.agentId, row.before, row.conversation)),
+    send: async (row, text) => { const result = await channels.tryPushToChat(row.chatKey, text, { kind: "answer", deliveryId: row.id }); if (!result.delivered) throw new Error(result.why ?? "Reply delivery was not confirmed"); },
+  });
+  const outboxSender = new OutboxSender(outbox, log, undefined, undefined, (event, detail) => noteDelivery(orchestrator.exceptions, event, detail, chatKey => orchestrator.tasks?.list().find(task => task.conversation !== undefined && task.status !== "done" && task.status !== "dropped" && conversations.chatKeyFor(task.conversation) === chatKey)?.id), receipt => replyRecovery.authorizeReceipt(receipt)); // each try onto the exception list (INV-1741)
   const credentialWaits = new CredentialWaits({ tasks: () => orchestrator.tasks, check: (agentId, principalId) => orchestrator.credentials.forAgent(agentId, [], principalId), announce: event => broadcast(taskCredentialEvent(event)), log }); vault.onChange(() => { void credentialWaits.recheck(); }); // a credential that lands releases the work waiting on it (INV-1666)
   const guestDesk = new GuestDesk({ settings: join(agentboxHome(), "guests.jsonl"), turns: join(agentboxHome(), "guest-turns.jsonl"), reviews: join(agentboxHome(), "guest-reviews.jsonl") }); // who answers guests, what is public to them, their turns and the reviews of their answers (INV-1708, INV-1713, docs/97)
   const channels = new ChannelManager({
@@ -1489,8 +1498,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // later process recover the answer: everything the agent says past `before` in this
       // conversation is the reply to this request, and the transcript is already durable.
       const owed = randomUUID();
+      return replyRecovery.trackOriginal(owed, async () => {
       deliveries.open({
-        id: owed,
+        id: owed, recoveryVersion: 1, kind: origin?.interaction ? "interaction" : "request", requestTitle: redactText(text.split("\n")[0] ?? "").slice(0, 200),
         ...(origin?.messageId !== undefined ? { messageId: origin.messageId } : {}),
         // The thread when there is one. The room key here sent a recovered answer to the
         // bottom of the group while the question sat inside a topic (2026-09-02, "接
@@ -1605,6 +1615,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (silence !== undefined) return silence;
       }
       return reply;
+      });
     },
     // Channel requests live on the team board: "t12" means the same thing in the
     // chat's card, the web UI and an agent's prompt. A failure closes as blocked with
@@ -2012,62 +2023,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   channels.start();
   // What was still on its way when the process last stopped goes again (INV-1460).
   void outboxSender.resume(chatKey => { const door = channels.adapterFor(chatKey); return door?.sendToChat === undefined ? undefined : { sendToChat: (key, text) => door.sendToChat!(key, text) }; })
-    .then(resumed => { if (resumed > 0) log(`outbox: ${resumed} pending message(s) sent again after the restart`); });
+    .then(resumed => { if (resumed > 0) log(`outbox: ${resumed} pending message(s) queued for recovery checks after the restart`); });
 
-  // Answers that were owed when this process last stopped.
-  //
-  // A channel request is answered by an awaited promise, and that promise is the only
-  // thing that knows where the answer goes. It dies with the process — while the turn is
-  // recovered from the ledger and runs to completion, so the work is done, the money is
-  // spent, and the reply is delivered nowhere. Observed: t12 sat in `doing` with its turn
-  // finished half an hour earlier and its answer sitting unread in the transcript.
-  //
-  // Nothing about the reply was stored. It is recovered the same way the live path builds
-  // it — everything the agent said past the recorded index — because the transcript is
-  // already durable and the promise was never where the answer lived.
-  // Not once at startup — that was the bug this replaces. The startup sweep ran before
-  // the resumed turn had produced anything, found the transcript empty, and skipped the
-  // debt for the lifetime of the process; the turn then finished a complete, good answer
-  // into a transcript nobody was watching, and the person got silence. Observed on t58:
-  // the delivery sat open in the ledger while its answer sat finished on disk. The sweep
-  // now repeats until the book is clear, and it will not hand over a reply while the turn
-  // writing it is still open.
-  const settleOwed = async () => {
-    for (const owed of deliveries.pending()) {
-      // A turn still writing *in this conversation* is an answer still being written; a
-      // turn in another chat is not (INV-435). Wait for the next pass only for the first.
-      if (orchestrator.hasOpenTurn(owed.agentId, owed.conversation)) continue;
-      let reply = "";
-      try {
-        reply = (owed.messageId !== undefined
-          ? orchestrator.replyForMessage(owed.agentId, owed.messageId, owed.conversation)
-          : orchestrator.replySince(owed.agentId, owed.before, owed.conversation)).trim();
-      } catch {
-        // A transcript that cannot be read is a delivery that cannot be recovered; it
-        // falls through to the stuck-task rescue rather than holding up the others.
-      }
-      if (reply === "") continue;
-      log(`delivering an answer owed since ${owed.at} to ${owed.chatKey}`);
-      const late = `晚到了一步——这个在我重启时做完的:\n\n${reply}`;
-      try {
-        await channels.pushToChat(owed.chatKey, late, { kind: "answer", deliveryId: owed.id });
-        // Closed by the id the request carried. It matters: the sweep below would
-        // otherwise reopen a task whose answer had just been handed over and ask the
-        // person to request it again.
-        if (owed.taskId !== undefined) {
-          orchestrator.tasks?.update(
-            owed.taskId,
-            { status: "done", note: "answered after a restart" },
-            "restart"
-          );
-        }
-        deliveries.close(owed.id);
-      } catch {
-        // Left owed, so the next pass tries again. A delivery that is dropped because
-        // the chat was briefly unreachable is the bug this exists to fix.
-      }
-    }
-  };
+  // Recovery checks the original request and durable disposition before any automatic send.
+  const settleOwed = async () => { try { await replyRecovery.sweep(); } catch (error) { log(`reply recovery held: ${error instanceof Error ? error.message : String(error)}`); } };
   const owedSweep = setInterval(() => { if (deliveries.pending().length > 0) void settleOwed(); }, 20_000); // Cheap when the book is clear.
   owedSweep.unref?.();
   void (async () => {
@@ -4219,6 +4178,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         const delivered = await taskDeliveryRoute(route, { board: orchestrator.tasks, refused: () => refused(), readJson: () => readJson(req), mayRead: mayReadTask, by: caller.userId ?? "web", view: taskView }); if (delivered) { if (delivered.status) send(res, delivered.status, delivered.body); return; }
         const checkResponse = await resultCheckRoute(route, url, { checks: orchestrator.resultChecks, tasks: orchestrator.tasks, refused: write => refusedRole(write ? "admin" : "viewer"), mayRead: mayReadTask, readJson: () => readJson(req), by: caller.userId ?? "web" }); if (checkResponse) { if (checkResponse.status) send(res, checkResponse.status, checkResponse.body); return; }
+        const recoveredReply = await deliveryRecoveryRoute(route, url, { recovery: replyRecovery, refused: () => refusedRole("admin"), readJson: () => readJson(req), mayRead: row => mayReadAgent(row.agentId) && (!row.taskId || !orchestrator.tasks?.get(row.taskId) || mayReadTask(orchestrator.tasks.get(row.taskId)!)), by: caller.userId ?? "web" }); if (recoveredReply) { if (recoveredReply.status) send(res, recoveredReply.status, recoveredReply.body); return; }
         if (route === "POST /api/tasks/update") {
           if (refused()) return;
           const board = orchestrator.tasks;
