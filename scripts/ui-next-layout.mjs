@@ -66,6 +66,7 @@ try {
     // The way to the other language and the other page: on screen, side by side.
     if (width < 1000) { await page.goto(`${meta.base}/?ui=next&lang=${lang}`); await page.waitForSelector(".agent"); }
     const foot = [await box("#theme"), await box("#lang"), await box("#classic")];
+    assert.ok(foot[1].height < 40, `${where}: the language switch wraps onto two lines`);
     assert.ok(foot[0].x + foot[0].width <= foot[1].x + 1 && foot[1].x + foot[1].width <= foot[2].x + 1 && foot[2].x + foot[2].width <= width + 1, `${where}: the foot controls overlap or leave the screen`);
     // A link to one piece of work opens it.
     await page.goto(`${meta.base}/?ui=next&lang=${lang}&task=${meta.task}`);

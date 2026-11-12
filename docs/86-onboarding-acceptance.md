@@ -67,7 +67,10 @@ node scripts/onboarding-e2e.mjs --version 0.3.8 --key-env MINIMAX_API_KEY --prov
 
 Docker Desktop or OrbStack must be running for the full phase (the nodocker phase hides it
 from the app on its own). Run only `--phases nodocker` on a machine without Docker.
-`--dmg FILE` skips the download and checks a local DMG against the published sums instead.
+`--dmg FILE` skips the download and checks a local DMG against the published sums instead;
+with `--sums FILE` it is checked against a local `SHA256SUMS`, which is how a candidate is
+walked before it is published. A new machine is first asked what it is for: the script answers
+"personal", as a person setting up their own computer does.
 `--allow-unnotarized` is for releases from before notarization (0.3.8 and earlier).
 Expect 10–40 minutes, most of it the first pull.
 
