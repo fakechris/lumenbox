@@ -12,6 +12,7 @@ import { NEXT_LOGIC_JS } from "./next-logic-ui.ts";
 import { NEXT_VIEWS_JS } from "./next-views-ui.ts";
 import { NEXT_PANEL_JS } from "./next-panel-ui.ts";
 import { NEXT_CHAT_JS } from "./next-chat-ui.ts";
+import { NEXT_DIAGNOSTICS_JS } from "./next-diagnostics-ui.ts";
 
 const STYLE = `
 :root {
@@ -103,10 +104,30 @@ h2.group:first-child { margin-top: 0; }
 .composer { flex: none; padding: 10px 24px 16px; }
 .composer form { max-width: 780px; margin: 0 auto; display: flex; gap: 8px; align-items: flex-end; }
 .composer textarea { flex: 1; min-height: 44px; max-height: 180px; resize: none; padding: 11px 14px; border-radius: 12px; border: 1px solid var(--border-strong); background: var(--surface); font: inherit; }
+.ask { align-self: flex-start; max-width: 82%; background: var(--warn-soft); border-radius: 14px; padding: 10px 14px; }
+.ask .acts { margin-top: 8px; flex-wrap: wrap; }
+.plan { align-self: stretch; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); padding: 9px 14px; font-size: 13px; }
+.plan summary { cursor: pointer; font-weight: 500; }
+.plan ul { list-style: none; margin: 8px 0 2px; padding: 0; }
+.plan li { padding: 2px 0 2px 20px; position: relative; }
+.plan li::before { content: "○"; position: absolute; left: 0; color: var(--muted); }
+.plan li.todo-done { color: var(--muted); } .plan li.todo-done::before { content: "✓"; color: var(--ok); }
+.plan li.todo-doing { font-weight: 500; } .plan li.todo-doing::before { content: "●"; color: var(--blue); }
+.plan li.todo-blocked::before { content: "!"; color: var(--bad); }
+header.bar select { font: inherit; font-size: 13px; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); max-width: 260px; }
+.tabs { display: flex; gap: 2px; background: var(--bg); border-radius: 9px; padding: 2px; }
+.diag-note { background: var(--bg); border-radius: 10px; padding: 10px 12px; color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+.diag { width: 100%; border-collapse: collapse; font: 12.5px/1.5 "IBM Plex Mono", ui-monospace, monospace; }
+.diag td { padding: 6px 8px; border-top: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; }
+.diag tr.step { cursor: pointer; } .diag tr.step:hover { background: var(--bg); }
+.diag .bad { color: var(--bad); }
+.raw { background: #26211e; color: #f4efe8; border-radius: 8px; padding: 10px 12px; margin: 4px 0 10px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; font: 12px/1.5 "IBM Plex Mono", ui-monospace, monospace; }
+.ids { font: 12px/1.6 "IBM Plex Mono", ui-monospace, monospace; color: var(--muted); overflow-wrap: anywhere; }
 .scrim { position: fixed; inset: 0; background: rgba(31,26,23,.18); }
 .panel { position: fixed; top: 12px; right: 12px; bottom: 12px; width: min(600px, calc(100vw - 24px)); background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 18px 50px rgba(31,26,23,.16); display: flex; flex-direction: column; }
 .panel > header { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
-.panel > header .x { margin-left: auto; font-size: 20px; color: var(--muted); width: 28px; }
+.panel > header .tabs { margin-left: auto; }
+.panel > header .x { font-size: 20px; color: var(--muted); width: 28px; }
 .panel .inner { padding: 18px; overflow: auto; flex: 1; }
 .panel h3 { font-size: 18px; margin: 0 0 6px; overflow-wrap: anywhere; }
 .panel .asked { color: var(--soft); margin: 0 0 16px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 9em; overflow: auto; }
@@ -169,6 +190,7 @@ export const NEXT_HTML = `<!doctype html>
   <header class="bar">
     <button class="back" id="back" aria-label="{{ui.next.side.label}}">‹</button>
     <h1 id="view-title"></h1><span class="hint" id="view-hint"></span>
+    <select id="conversations" aria-label="{{ui.next.chat.conversation}}" hidden></select>
     <div class="tools" id="work-tools" hidden>
       <button class="seg" data-layout="list" aria-pressed="true">{{ui.next.view.list}}</button>
       <button class="seg" data-layout="board" aria-pressed="false">{{ui.next.view.board}}</button>
@@ -181,7 +203,9 @@ export const NEXT_HTML = `<!doctype html>
 </main>
 <div class="scrim" id="scrim" hidden></div>
 <aside class="panel" id="panel" aria-label="{{ui.next.panel.label}}" hidden>
-  <header><span class="chip" id="panel-chip"></span><span class="when" id="panel-who"></span><button class="x" id="panel-close" aria-label="{{ui.next.act.close}}">×</button></header>
+  <header><span class="chip" id="panel-chip"></span><span class="when" id="panel-who"></span>
+    <span class="tabs"><button class="seg" data-tab="overview" aria-pressed="true">{{ui.next.tab.overview}}</button><button class="seg" data-tab="diagnostics" aria-pressed="false">{{ui.next.tab.diagnostics}}</button></span>
+    <button class="x" id="panel-close" aria-label="{{ui.next.act.close}}">×</button></header>
   <div class="inner" id="panel-inner"></div>
 </aside>
 <div class="toast" id="toast" role="status" hidden></div>
@@ -218,6 +242,7 @@ ${NEXT_LOGIC_JS}
 ${NEXT_VIEWS_JS}
 ${NEXT_CHAT_JS}
 ${NEXT_PANEL_JS}
+${NEXT_DIAGNOSTICS_JS}
 nextStart();
 </script>
 </body>
