@@ -4,7 +4,7 @@
  * one is made. Opened from the agent's name; never part of the default surface.
  */
 export const NEXT_MEMBER_JS = `
-var member = { id: "", creating: false, paused: {}, allTools: [] };
+var member = { id: "", creating: false, paused: {}, allTools: [], open: "" };
 
 function field(labelText, value, multiline) {
   var label = el("label", "", labelText), input = el(multiline ? "textarea" : "input");
@@ -31,13 +31,18 @@ function renderMember() {
   $("member-title").textContent = member.creating ? t("ui.next.member.new") : agent.name;
   var form = el("div", "setting"), name = field(t("ui.next.member.name"), agent.name), title = field(t("ui.next.member.role"), agent.title), persona = field(t("ui.next.member.persona"), agent.description, true);
   var tools = toolPicker(agent.tools), save = el("button", "act-primary", t(member.creating ? "ui.next.member.create" : "ui.next.settings.save"));
+  agentConfigFor(member.creating ? "" : member.id);
+  var extra = modelFields(agent), moreBox = el("details", "fold");
   [name, title, persona].forEach(function (row) { form.appendChild(row.label); });
+  moreBox.appendChild(el("summary", "", t("ui.next.config.modelAndTeams")));
+  extra.nodes.forEach(function (node) { moreBox.appendChild(node); });
+  form.appendChild(moreBox);
   var toolsBox = el("details", "fold");
   toolsBox.appendChild(el("summary", "", t("ui.next.member.tools")));
   toolsBox.appendChild(tools.node);
   form.appendChild(toolsBox);
   save.addEventListener("click", function () {
-    var body = { name: name.input.value.trim(), title: title.input.value.trim(), description: persona.input.value, tools: tools.value() };
+    var body = Object.assign({ name: name.input.value.trim(), title: title.input.value.trim(), description: persona.input.value, tools: tools.value() }, extra.value());
     if (!body.name) { name.input.focus(); return; }
     var sent = member.creating ? postJson("/api/agents", Object.assign({ boxId: chat.box || undefined }, body)) : postJson("/api/agents/update", Object.assign({ id: member.id }, body));
     sent.then(function (got) {
@@ -50,6 +55,9 @@ function renderMember() {
   form.appendChild(save);
   inner.appendChild(form);
   if (member.creating) return;
+  var kept = el("div", "setting");
+  kept.appendChild(standingFold(agent)); kept.appendChild(historyFold(agent));
+  inner.appendChild(kept);
   var acts = el("div", "foot-links"), isPaused = !!member.paused[member.id];
   var pause = el("button", "", t(isPaused ? "ui.next.member.resume" : "ui.next.member.pause"));
   pause.addEventListener("click", function () {
@@ -78,7 +86,7 @@ function loadPauses() {
 }
 
 function openMember(agentId) {
-  member.id = agentId || ""; member.creating = !agentId;
+  member.id = agentId || ""; member.creating = !agentId; member.open = "";
   $("member").hidden = false; $("scrim").hidden = false;
   renderMember();
 }

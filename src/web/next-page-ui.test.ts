@@ -183,3 +183,10 @@ test("the share of input served from cache is of everything read, and unknown wh
   assert.equal(cacheHit({ inputTokens: 0, cacheReadTokens: 0 }), undefined);
   assert.equal(cacheHit(undefined), undefined);
 });
+
+test("a configuration version is said by what it changed, and a restored one by where it went back to", () => {
+  const versionLine = pageFunction("versionLine", { t: (key: string, values?: { n?: number }) => key + (values?.n ?? "") });
+  assert.equal(versionLine({ n: 3, changes: [{ field: "model" }, { field: "tools" }] }), "model, tools");
+  assert.equal(versionLine({ n: 1, changes: [] }), "ui.next.config.first");
+  assert.equal(versionLine({ n: 4, restoredFrom: 2, changes: [{ field: "model" }] }), "ui.next.config.backTo2 · model");
+});
