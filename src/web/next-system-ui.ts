@@ -69,6 +69,8 @@ function renderSystem(view) {
   if (state.build) health.appendChild(fact(t("ui.next.system.version"), [state.build.version, state.build.commit].filter(Boolean).join(" · ")));
   view.appendChild(health);
 
+  view.appendChild(spendBlock());
+
   var open = [];
   ((system.exceptions && system.exceptions.groups) || []).forEach(function (group) {
     group.entries.forEach(function (entry) { if (!entry.resolvedAt) open.push(entry); });

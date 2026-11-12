@@ -17,6 +17,7 @@ import { NEXT_SCREEN_JS } from "./next-screen-ui.ts";
 import { NEXT_SETTINGS_JS } from "./next-settings-ui.ts";
 import { NEXT_AUTO_JS } from "./next-auto-ui.ts";
 import { NEXT_THREAD_JS } from "./next-thread-ui.ts";
+import { NEXT_SPEND_JS } from "./next-spend-ui.ts";
 import { NEXT_COMPOSER_JS } from "./next-composer-ui.ts";
 import { NEXT_MEMBER_JS } from "./next-member-ui.ts";
 import { NEXT_BOXES_JS } from "./next-boxes-ui.ts";
@@ -215,6 +216,7 @@ button.row { width: 100%; text-align: left; }
 .setting .row .why, .list button.row .why { white-space: normal; }
 .setup-step { display: flex; align-items: center; gap: 10px; }
 .setup-done { color: var(--ok); width: 16px; } .setup-todo { color: var(--muted); width: 16px; }
+button.fact { width: 100%; text-align: left; }
 .fact { display: flex; justify-content: space-between; gap: 16px; padding: 6px 0; border-top: 1px solid var(--border); font-size: 13px; }
 .fact:first-of-type { border-top: 0; } .fact span:last-child { text-align: right; overflow-wrap: anywhere; }
 .scrim { position: fixed; inset: 0; background: rgba(31,26,23,.18); }
@@ -382,6 +384,7 @@ ${NEXT_SCREEN_JS}
 ${NEXT_SETTINGS_JS}
 ${NEXT_AUTO_JS}
 ${NEXT_THREAD_JS}
+${NEXT_SPEND_JS}
 ${NEXT_COMPOSER_JS}
 ${NEXT_MEMBER_JS}
 ${NEXT_BOXES_JS}
