@@ -174,6 +174,13 @@ agents — everything that needs the person, all work — is one click away in t
 never the landing. A first slice that opened on an inbox and a work list was wrong, and was seen to
 be wrong on real data within the day.
 
+**Nothing is lost by using it.** A link to one piece of work (`?task=`), to an agent's conversation
+(`?agent=&conversation=`), opens there. A template link (`?import=`) opens the classic page, whose
+dialog it is. The foot of the side column switches language and goes back to the classic page; the
+work panel's full record is the classic task view for one look (`&once=1`), which does not change
+the page the person chose. What the classic page still does and this one does not is listed on
+INV-1825, and the default changes only when that list is empty or bridged.
+
 **Three levels, everywhere.**
 
 | Level | Where | Holds |
