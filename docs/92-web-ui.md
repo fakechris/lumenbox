@@ -155,4 +155,6 @@ It stores revocations and operation receipts, not another task or execution stat
 underlying authority checks its barrier on startup and before the relevant continuation/dispatch.
 Results distinguish confirmed cleanup from requested/unconfirmed cleanup and external effects.
 Unconfirmed operations remain visible after restart and retry only their original unfinished scope.
+An unfinished member-pause reservation restores the real pause authority before inbox recovery;
+a completed pause never overrides a later explicit resume.
 Read/search/preview cannot execute a model, resend a reply, or mutate real work.
