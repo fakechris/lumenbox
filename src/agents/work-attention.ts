@@ -39,7 +39,8 @@ const isStamp = (row: WorkStamp | undefined): boolean =>
 function validRecord(row: CurrentWork): boolean {
   return isStamp(row) && isStrings(row.messages) && isStrings(row.peers) && isStrings(row.awaiting ?? []) &&
     WORK_STATUSES.includes(row.status) && (row.wait === undefined || WORK_WAITS.includes(row.wait)) &&
-    (row.unresolved === undefined || row.unresolved === true);
+    (row.unresolved === undefined || row.unresolved === true) &&
+    (row.executions === undefined || Array.isArray(row.executions) && row.executions.every(item => !!item && typeof item.agentId === "string" && typeof item.conversation === "string"));
 }
 
 function validCancellation(row: CancelledWork): boolean {
@@ -77,7 +78,7 @@ export function admitWorkRecords(data: { records: CurrentWork[]; cancellations?:
     if (!id) continue;
     const owner = typeof row.owner === "string" && row.owner ? row.owner : "unknown";
     const conversation = typeof row.conversation === "string" && row.conversation ? row.conversation : "main";
-    admitted.cancellations.push({ id, owner, conversation, generation: isCount(row.generation) ? row.generation : 0, epoch: isCount(row.epoch) ? row.epoch : 0, by: "host", at: new Date().toISOString(), reason: "cancellation record was damaged", participants: [owner], resources: [] });
+    admitted.cancellations.push({ id, owner, conversation, generation: isCount(row.generation) ? row.generation : 0, epoch: isCount(row.epoch) ? row.epoch : 0, by: "host", at: new Date().toISOString(), reason: "cancellation record was damaged", participants: [owner], resources: [], ...(isStrings(row.sourceMessages) ? { sourceMessages: row.sourceMessages } : {}) });
   }
   return admitted;
 }
@@ -147,7 +148,10 @@ export class WorkAttention {
   }
   epoch(agent:string,conversation:string):number {return this.epochOf(agent,conversation);}
   generation(agent:string,conversation:string):number {return Math.max(0,...[...this.roots.values()].filter(row=>row.owner===agent && row.conversation===conversation).map(row=>row.generation));}
-  project(state:CurrentWork,checkpoint=true,activate=true):void { const row=structuredClone(state);this.roots.set(row.id,row);const key=keyOf(row.owner,row.conversation),current=this.current.get(key);if(!current||row.id===current.id||activate&&row.generation>=current.generation)this.current.set(key,row);if(checkpoint)this.checkpoint(); }
+  project(state:CurrentWork,checkpoint=true,activate=true):void {
+    // The one door into the projection: a record set aside at load cannot come back through a retried request.
+    if (!validRecord(state)) throw new Error("This work record is invalid and was set aside; it cannot execute");
+    const row=structuredClone(state);this.roots.set(row.id,row);const key=keyOf(row.owner,row.conversation),current=this.current.get(key);if(!current||row.id===current.id||activate&&row.generation>=current.generation)this.current.set(key,row);if(checkpoint)this.checkpoint(); }
   byId(id:string): CurrentWork | undefined { const work=this.roots.get(id);return work&&structuredClone(work); }
   all(): CurrentWork[] { return [...this.roots.values()].map(work=>structuredClone(work)); }
   get(agent: string, conversation: string): CurrentWork | undefined {

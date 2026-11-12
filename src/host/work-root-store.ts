@@ -24,6 +24,10 @@ export interface TaskWorkRoot {
 	requests?: RootRequest[];
 	historical?: { epoch: number; turnId?: string; sourceIds: string[] };
 }
+/** A root whose shape can be read at all. One that cannot is left on its task and never loaded (INV-1822). */
+const soundRoot = (task: Task): task is Task & { workRoot: TaskWorkRoot } =>
+	typeof task.workRoot?.state === "object" && task.workRoot.state !== null;
+
 export class TaskWorkRoots implements RootPersistence {
 	private readonly written = new Map<string, string>();
 	constructor(
@@ -43,7 +47,7 @@ export class TaskWorkRoots implements RootPersistence {
 	load(legacy?: { records: CurrentWork[]; cancellations: CancelledWork[] }) {
 		const recordsWithRevocations=[...legacy?.records??[],...(legacy?.cancellations??[]).filter(row=>!legacy?.records.some(state=>state.id===row.id)).map(row=>({...row,status:"cancelled" as const,unresolved:true as const,messages:row.sourceMessages??[row.id],peers:row.participants.filter(id=>id!==row.owner),awaiting:[]}))];
     for (const state of recordsWithRevocations) {
-      const recorded=this.tasks().find(task=>task.workRoot?.state.id===state.id);
+      const recorded=this.tasks().find(task=>soundRoot(task)&&task.workRoot.state.id===state.id);
       if(recorded){
         const cancelled=legacy?.cancellations.find(row=>row.id===state.id);
         if(cancelled && !recorded.workRoot!.cancellation)this.write({...recorded,workRoot:{...recorded.workRoot!,state:{...recorded.workRoot!.state,status:"cancelled"},cancellation:cancelled}});
@@ -74,7 +78,7 @@ export class TaskWorkRoots implements RootPersistence {
 		const records: CurrentWork[] = [],
 			cancellations: CancelledWork[] = [];
 		for (const task of this.tasks())
-			if (task.workRoot) {
+			if (soundRoot(task)) {
 				records.push(task.workRoot.state);
 				if (task.workRoot.cancellation)
 					cancellations.push(task.workRoot.cancellation);

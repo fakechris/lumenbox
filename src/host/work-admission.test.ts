@@ -346,6 +346,7 @@ test("a corrupt root is set aside at load: it grants no execution authority and 
     assert.equal(focus.byId("install"), undefined, "nothing can execute under the corrupt record");
     assert.ok(focus.byId("other"), "a sound record is unaffected");
     assert.deepEqual(focus.rejected().map(row => row.id), ["install"]);
+    assert.throws(() => focus.project(corrupt), /set aside/, "a retried request cannot project it back");
     assert.match(lines.join("\n"), /install/);
   } finally {
     f.cleanup();
@@ -353,9 +354,10 @@ test("a corrupt root is set aside at load: it grants no execution authority and 
 });
 
 test("a damaged cancellation still revokes its work (INV-1822)", () => {
-  const damaged = { id: "stopped", owner: "a", conversation: "main", generation: 1, epoch: 0 } as never;
+  const damaged = { id: "stopped", owner: "a", conversation: "main", generation: 1, epoch: 0, sourceMessages: ["m1"] } as never;
   const focus = new WorkAttention(undefined, () => 0, { load: () => ({ records: [], cancellations: [damaged] }), save: () => {} });
   assert.ok(focus.cancelled("stopped"), "a stopped piece of work does not start again because its record was damaged");
+  assert.equal(focus.cancelledMessage({ id: "m1", fromId: "user", fromName: "p", text: "again", priority: false, receivedAt: "" }), true, "nor does the message that asked for it");
   assert.equal(focus.rejected().length, 1);
 });
 
