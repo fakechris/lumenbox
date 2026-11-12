@@ -270,3 +270,12 @@ test("a saved channel says what happens next: it is connecting, or it needs a re
   const doorSaved = pageFunction("doorSaved", { t: (key: string) => key });
   assert.deepEqual([doorSaved({ started: true, restartNeeded: false }), doorSaved({ started: false, restartNeeded: true }), doorSaved({})], ["ui.next.doors.connecting", "ui.next.doors.restart", "ui.next.settings.saved2"]);
 });
+
+test("a role change sends the whole roster with one role changed; a limit left empty is no limit of its own, and nonsense is not sent", () => {
+  const rosterWith = pageFunction("rosterWith", {}), limitValue = pageFunction("limitValue", {}), listOf = pageFunction("listOf", {});
+  const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
+  const people = [{ id: "p1", name: "Chris", role: "admin", identities: ["web:chris"], anchors: {} }, { id: "p2", name: "Dana", role: "viewer" }];
+  assert.deepEqual(plain(rosterWith(people, "p2", "driver")), [{ id: "p1", name: "Chris", role: "admin", identities: ["web:chris"] }, { id: "p2", name: "Dana", role: "driver", identities: [] }]);
+  assert.deepEqual([plain(limitValue("")), plain(limitValue(" 2.5 ")), plain(limitValue("0")), plain(limitValue("-1")), plain(limitValue("lots"))], [{ ok: true, value: null }, { ok: true, value: 2.5 }, { ok: true, value: 0 }, { ok: false }, { ok: false }]);
+  assert.deepEqual(plain(listOf(" a, ,b ,")), ["a", "b"]);
+});
