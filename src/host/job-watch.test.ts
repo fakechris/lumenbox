@@ -18,7 +18,16 @@ function fakeBox(script: { running: boolean; exit_code?: number; tail?: string }
   return box;
 }
 
-const settle = (ms = 40) => new Promise(resolve => setTimeout(resolve, ms));
+/**
+ * Waits for what the test expects, then a little longer. A fixed 40 ms was enough on an idle machine
+ * and not under a loaded suite (INV-1829): what should happen is waited for, up to two seconds; the
+ * pause after it is what shows something happening that should not.
+ */
+async function settle(reached?: () => boolean, ms = 40): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (reached !== undefined && !reached() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
+  await new Promise(resolve => setTimeout(resolve, ms));
+}
 
 test("a failed job wakes the agent once in its conversation with the exit and the tail; the watch is then closed", async () => {
   const box = fakeBox([{ running: true }, { running: false, exit_code: 2, tail: "3 tests failed" }]);
@@ -26,7 +35,7 @@ test("a failed job wakes the agent once in its conversation with the exit and th
   const watch = new JobWatch({ box: () => box, wake: async (agentId, conversation, text) => { woken.push({ agentId, conversation, text }); }, log: () => {}, pollMs: 5, mergeMs: 5 });
   watch.watch({ agentId: "a1", conversation: "feishu-oc_1", jobId: "job-aaaaaaaa", command: "npm test" });
   assert.equal(watch.openJobs("a1", "feishu-oc_1").length, 1);
-  await settle();
+  await settle(() => woken.length >= 1);
   assert.equal(woken.length, 1);
   assert.deepEqual([woken[0]!.agentId, woken[0]!.conversation], ["a1", "feishu-oc_1"]);
   assert.match(woken[0]!.text, /finished with exit code 2: job-aaaaaaaa[\s\S]*3 tests failed/);
@@ -41,7 +50,7 @@ test("by default an exit 0 does not wake: it is recorded for the next turn, and 
   const logged: string[] = [];
   const watch = new JobWatch({ box: () => box, wake: async (_a, _c, text) => { woken.push(text); }, log: line => logged.push(line), pollMs: 5, mergeMs: 5 });
   watch.watch({ agentId: "a1", conversation: "main", jobId: "job-ok", command: "sleep 20; curl -s http://host/api" });
-  await settle();
+  await settle(() => watch.openJobs("a1", "main").length === 0);
   assert.deepEqual(woken, []);
   const recorded = watch.takeRecorded("a1", "main");
   assert.equal(recorded.length, 1);
@@ -55,21 +64,21 @@ test("on_end wake wakes on exit 0; record never wakes, even on failure; wake_whe
   const woken: string[] = [];
   const watch = new JobWatch({ box: () => fakeBox([{ running: false, exit_code: 0, tail: "ok" }]), wake: async (_a, _c, text) => { woken.push(text); }, log: () => {}, pollMs: 5, mergeMs: 5 });
   watch.watch({ agentId: "a1", conversation: "c1", jobId: "job-w", command: "make", onEnd: "wake" });
-  await settle();
+  await settle(() => woken.length >= 1);
   assert.equal(woken.length, 1);
   assert.match(woken[0]!, /exit code 0: job-w/);
 
   const failing = fakeBox([{ running: false, exit_code: 1, tail: "boom" }]);
   const quiet = new JobWatch({ box: () => failing, wake: async (_a, _c, text) => { woken.push(text); }, log: () => {}, pollMs: 5, mergeMs: 5 });
   quiet.watch({ agentId: "a1", conversation: "c2", jobId: "job-r", command: "make", onEnd: "record" });
-  await settle();
+  await settle(() => quiet.openJobs("a1", "c2").length === 0);
   assert.equal(woken.length, 1);
   assert.equal(quiet.takeRecorded("a1", "c2").length, 1);
 
   const ready = fakeBox([{ running: false, exit_code: 0, tail: "listening on 8080" }]);
   const named = new JobWatch({ box: () => ready, wake: async (_a, _c, text) => { woken.push(text); }, log: () => {}, pollMs: 5, mergeMs: 5 });
   named.watch({ agentId: "a1", conversation: "c3", jobId: "job-l", command: "serve", onEnd: "wake_on_failure", wakeWhen: "listening" });
-  await settle();
+  await settle(() => woken.length >= 2);
   assert.equal(woken.length, 2);
   assert.match(woken[1]!, /job-l/);
 });
@@ -79,7 +88,7 @@ test("ends that wake within one window are merged into a single wake; a differen
   const watch = new JobWatch({ box: () => fakeBox([{ running: false, exit_code: 1, tail: "x" }]), wake: async (_a, conversation, text) => { woken.push({ conversation, text }); }, log: () => {}, pollMs: 5, mergeMs: 30 });
   for (let i = 0; i < 5; i++) watch.watch({ agentId: "a1", conversation: "main", jobId: `job-${i}`, command: `step ${i}` });
   watch.watch({ agentId: "a1", conversation: "fork-1", jobId: "job-f", command: "other" });
-  await settle(80);
+  await settle(() => woken.length >= 2, 80);
   assert.equal(woken.length, 2);
   const main = woken.find(w => w.conversation === "main")!;
   assert.match(main.text, /^\[5 commands you started earlier ended within a few seconds of each other; all of them follow.\]/);
@@ -97,7 +106,7 @@ test("past the cap the job is killed and the agent told so; watching the same jo
   watch.watch({ agentId: "a1", conversation: "c", jobId: "job-bbbbbbbb", command: "sleep 999" });
   assert.equal(watch.openJobs("a1", "c").length, 1);
   clock = 1_000;
-  await settle();
+  await settle(() => woken.length >= 1);
   assert.deepEqual(box.killed, ["job-bbbbbbbb"]);
   assert.equal(woken.length, 1);
   assert.match(woken[0]!, /was stopped after 30 minutes/);
@@ -108,7 +117,7 @@ test("past the cap the job is killed and the agent told so; watching the same jo
   const uncapped = new JobWatch({ box: () => server, wake: async (_a, _c, text) => { woken.push(text); }, log: () => {}, pollMs: 5, capMs: 100, mergeMs: 5, now: () => clock });
   uncapped.watch({ agentId: "a1", conversation: "c", jobId: "job-srv", command: "node server.js", onEnd: "wake", capped: false });
   clock = 5_000;
-  await settle(60);
+  await settle(() => woken.length >= 2, 60);
   assert.deepEqual(server.killed, []);
   assert.equal(woken.length, 2);
   assert.match(woken[1]!, /exit code 0: job-srv/);
