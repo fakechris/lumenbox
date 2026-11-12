@@ -82,7 +82,7 @@ import { Orchestrator } from "../host/orchestrator.ts";
 import { describeProvider, type ProviderProfile } from "../host/provider.ts";
 import { configuredProviders, SEARCH_PROVIDERS } from "../host/web.ts";
 import type { TurnEvent } from "../host/turn.ts";
-import { APP_PAGE, LOGIN_PAGE, localeOf, localizeScript, requestLocaleOf } from "./page-locale.ts"; import { apiError, localizedBody } from "./api-error.ts"; import { bootstrapPage, desktopWaitingPage, notLinkedPage, oauthResultPage } from "./server-pages.ts"; import { invitationLink, loginPageWithDoors, webSignInDoors } from "./sign-in.ts";
+import { APP_PAGE, LOGIN_PAGE, NEXT_PAGE, localeOf, localizeScript, requestLocaleOf } from "./page-locale.ts"; import { apiError, localizedBody } from "./api-error.ts"; import { bootstrapPage, desktopWaitingPage, notLinkedPage, oauthResultPage } from "./server-pages.ts"; import { invitationLink, loginPageWithDoors, webSignInDoors } from "./sign-in.ts";
 import {
   authorize,
   callerOf,
@@ -3386,7 +3386,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             (requestedBox && !mayReadBox(requestedBox))) { send(res, 403, apiError("box-not-yours")); return; }
         }
         if (route === "GET /") {
-          send(res, 200, APP_PAGE(localeOf(req, url)), "text/html");
+          send(res, 200, (url.searchParams.get("ui") === "next" ? NEXT_PAGE : APP_PAGE)(localeOf(req, url)), "text/html"); // the rebuilt page is opt-in until it covers the classic one (INV-1825)
           return;
         }
 
