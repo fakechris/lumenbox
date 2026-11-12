@@ -129,6 +129,7 @@ test("every live task has a stage by the table, a blocked task with options is a
   assert.deepEqual(answer.stages, { t3: "person/answer", t4: "working", t5: "person/delivery" });
   const question = answer.mine.find(item => item.ref === "t3");
   assert.deepEqual({ kind: question?.kind, stage: question?.stage, with: question?.with }, { kind: "question", stage: "person/answer", with: "Ada" });
+  assert.deepEqual(question?.answer, { agentId: "bot", conversation: "feishu-oc_1", options: ["us", "eu"] }, "answerable where it is listed: to whom, where, and the choices (INV-1825)");
   assert.match(question?.detail ?? "", /us or eu\? — us \/ eu/);
   assert.equal(answer.theirs.find(item => item.ref === "t4")?.stage, "working");
 });

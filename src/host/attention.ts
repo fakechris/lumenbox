@@ -44,6 +44,8 @@ export interface AttentionItem {
   with?: string;
   /** The task's stage by the table in task-stage.ts (INV-1464), on items that are about a task. */
   stage?: TaskStage;
+  /** For a question: whom an answer goes to and the choices offered, so it can be answered where it is listed (INV-1825). */
+  answer?: { agentId: string; conversation: string; options?: string[] };
   /** An Outbox draft (INV-1739), whole: the page shows the words, the target, the background and the case. */
   draft?: Pick<Draft, "id" | "kind" | "target" | "body" | "why" | "background" | "taskId" | "level" | "agentName" | "createdAt">;
 }
@@ -159,7 +161,7 @@ export function attentionFor(input: AttentionInput): Attention {
           ? `${question.agentName} is waiting; with no answer it goes with: ${question.fallback}`
           : `${question.agentName} is waiting; with no answer it decides and says which way`) + (questionLeanText(question.agentName, question.recommended) !== undefined ? ` · ${questionLeanText(question.agentName, question.recommended)}` : ""), // INV-1651
       deadline: new Date(question.expiresAt).toISOString(),
-      with: question.agentName,
+      with: question.agentName, answer: { agentId: question.agentId, conversation: question.conversation },
     });
   }
 
@@ -276,7 +278,7 @@ export function attentionFor(input: AttentionInput): Attention {
     }
     if (stages[task.id] === "person/answer" && task.mandate?.stale === undefined && isMe(task.requester)) {
       const last = task.history.at(-1);
-      mine.push({ kind: "question", ref: task.id, stage: stages[task.id], title: task.title, detail: `${last?.note ?? "a question is pending"}${last?.options !== undefined && last.options.length > 0 ? ` — ${last.options.join(" / ")}` : ""}`, ...(task.assigneeId !== undefined ? { with: input.nameOf(task.assigneeId) } : {}) });
+      mine.push({ kind: "question", ref: task.id, stage: stages[task.id], title: task.title, detail: `${last?.note ?? "a question is pending"}${last?.options !== undefined && last.options.length > 0 ? ` — ${last.options.join(" / ")}` : ""}`, ...(task.assigneeId !== undefined ? { with: input.nameOf(task.assigneeId), answer: { agentId: task.assigneeId, conversation: task.conversation ?? "main", ...(last?.options?.length ? { options: last.options } : {}) } } : {}) });
       continue;
     }
     if (isMe(task.requester)) {

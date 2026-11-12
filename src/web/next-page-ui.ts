@@ -27,6 +27,14 @@ const STYLE = `
   --accent: #9f4f24; --accent-soft: #f4dfd2; --blue: #2563bb; --blue-soft: #dbe7f7;
   --ok: #2f7d52; --ok-soft: #e4f0e8; --warn: #a85e10; --warn-soft: #fff3df; --bad: #b04545; --bad-soft: #fbe9e7;
 }
+html[data-theme="dark"] {
+  --bg: #0f1218; --rail: #0b0e13; --surface: #161b24; --border: #232b38; --border-strong: #33405280;
+  --text: #e6edf5; --soft: #c2cfde; --muted: #8492a6;
+  --accent: #e08a5b; --accent-soft: rgba(224,138,91,.16); --blue: #6aa5f8; --blue-soft: rgba(59,130,246,.18);
+  --ok: #4ecb86; --ok-soft: rgba(34,197,94,.15); --warn: #f0b34a; --warn-soft: rgba(245,158,11,.14); --bad: #f08a8a; --bad-soft: rgba(240,90,90,.14);
+}
+html[data-theme="dark"] .msg-me, html[data-theme="dark"] .act-primary, html[data-theme="dark"] .brand .logo { background: #e6edf5; color: #0f1218; border-color: #e6edf5; }
+html[data-theme="dark"] .agent:hover { background: rgba(255,255,255,.04); }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body { font: 14px/1.5 "IBM Plex Sans", "PingFang SC", system-ui, sans-serif; color: var(--text); background: var(--bg); display: flex; }
@@ -232,6 +240,14 @@ export const NEXT_HTML = `<!doctype html>
 <style>${STYLE}</style>
 </head>
 <body>
+<script>
+// Before anything is drawn: the theme the person chose, else the one their system asks for. The key is the classic page's.
+(function () {
+  var saved = null; try { saved = localStorage.getItem("lumen-theme"); } catch (error) {}
+  var dark = saved ? saved === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
+  document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+})();
+</script>
 <nav class="side" aria-label="{{ui.next.nav.label}}">
   <div class="brand"><span class="logo" aria-hidden="true">L</span>{{ui.next.title}}</div>
   <div class="boxes" id="boxes" aria-label="{{ui.next.side.boxes}}"></div>
@@ -244,6 +260,7 @@ export const NEXT_HTML = `<!doctype html>
     <button data-nav="auto">{{ui.next.side.auto}}</button>
     <button data-nav="boxes">{{ui.next.side.boxes2}}</button>
     <button data-nav="settings">{{ui.next.side.settings}}</button>
+    <button id="theme" aria-label="{{ui.next.theme}}" title="{{ui.next.theme}}">◐</button>
   </div>
 </nav>
 <main>

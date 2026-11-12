@@ -7,7 +7,7 @@
  * between agents are one folded line each, opened on demand; the host's own notes are not shown.
  */
 export const NEXT_CHAT_JS = `
-var chat = { agentId: "", conversation: "main", conversations: [], plan: null, box: "", entries: [], live: null, loading: "", loadedFor: "", request: 0, jump: false, liveSurfaces: {} };
+var chat = { agentId: "", conversation: "main", conversations: [], plan: null, box: "", entries: [], live: null, loading: "", loadedFor: "", request: 0, jump: false, liveSurfaces: {}, expired: {} };
 var markdown = window.markdownit ? window.markdownit({ html: false, linkify: true, breaks: true }) : null;
 
 function agentsHere() {
@@ -182,7 +182,8 @@ function renderThread(view) {
   flush();
   // A card drawn in the turn still running is not in the record yet: it is kept from the live event.
   Object.keys(chat.liveSurfaces).forEach(function (id) { if (!drawn[id]) thread.appendChild(feedSurface(id, "", [], false)); });
-  if (lastAsk && !chat.live) thread.appendChild(askCard(lastAsk, agent));
+  if (lastAsk && chat.expired[lastAsk.question.question]) thread.appendChild(el("div", "aside", t("ui.next.chat.expired", { name: agent ? agent.name : "" })));
+  else if (lastAsk && !chat.live) thread.appendChild(askCard(lastAsk, agent));
   if (agent) pendingCards(agent).forEach(function (card) { thread.appendChild(card); });
   if (chat.live) {
     if (chat.live.text) thread.appendChild(bubble({ role: "assistant", text: chat.live.text }, true));
@@ -277,6 +278,7 @@ function chatEvent(event) {
   else if (event.type === "compacted" && chat.live) { chat.live.doing = t("ui.next.chat.compacted"); render(); }
   else if (event.type === "turn_budget_hit" && chat.live) { chat.live.doing = t("ui.next.chat.budget", { n: event.limit }); render(); }
   else if (event.type === "turn_finished" || event.type === "turn_failed" || event.type === "turn_interrupted") { chat.live = null; chat.liveSurfaces = {}; loadThread(); }
+  else if (event.type === "question_expired") { chat.expired[event.question] = true; render(); }
   else if (event.type === "prompt" || event.type === "reset") loadThread();
 }
 
