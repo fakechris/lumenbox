@@ -192,6 +192,10 @@ refused (with the reason the agent is told) on its inbox row; work is put off an
 from the work view and its panel; something that went wrong is retried, taken on or dismissed from
 the system view.
 
+**The composer offers two things, when asked.** "/" opening a message lists the skills, and a
+choice becomes the instruction to use it; "@" at a word lists the agents on this computer. Nothing
+shows until one of the two is typed.
+
 **Three levels, everywhere.**
 
 | Level | Where | Holds |
