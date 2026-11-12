@@ -235,6 +235,11 @@ what is set to start, what ended, and the agents, with stop, pause, disable and 
 does nothing by itself: the server says what the action covers and what it cannot know, in words,
 and the second press does it once.
 
+**What an agent learned from being shown is reviewed before it is used.** A fold in the system view
+lists its drafts: the skill it wrote, its question if it has one (an answer makes a new draft), a
+trial on its own cases where it carries an operation, then publish or refuse; a published skill's
+versions can be gone back to.
+
 **Three levels, everywhere.**
 
 | Level | Where | Holds |

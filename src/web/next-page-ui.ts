@@ -24,6 +24,7 @@ import { NEXT_TEAMS_JS } from "./next-teams-ui.ts";
 import { NEXT_PANEL_MORE_JS } from "./next-panel-more-ui.ts";
 import { NEXT_ACTIVITY_JS } from "./next-activity-ui.ts";
 import { NEXT_MANAGE_JS } from "./next-manage-ui.ts";
+import { NEXT_TEACH_JS } from "./next-teach-ui.ts";
 import { NEXT_SPEND_JS } from "./next-spend-ui.ts";
 import { NEXT_COMPOSER_JS } from "./next-composer-ui.ts";
 import { NEXT_MEMBER_JS } from "./next-member-ui.ts";
@@ -414,6 +415,7 @@ ${NEXT_TEAMS_JS}
 ${NEXT_PANEL_MORE_JS}
 ${NEXT_ACTIVITY_JS}
 ${NEXT_MANAGE_JS}
+${NEXT_TEACH_JS}
 ${NEXT_SPEND_JS}
 ${NEXT_COMPOSER_JS}
 ${NEXT_MEMBER_JS}
