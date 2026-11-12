@@ -107,6 +107,23 @@ export const APP_PAGE = localized(APP_HTML, "page");
 export const NEXT_PAGE = localized(NEXT_HTML, "page");
 export const LOGIN_PAGE = localized(LOGIN_HTML, "page");
 
+/**
+ * Which page a request for `/` gets (INV-1825). `?ui=next|classic` chooses and is remembered in a
+ * cookie, so the page somebody switched to is the one its own reloads and links come back to; with
+ * neither, the classic page, until the rebuilt one covers everything it does. Both read the same
+ * data, so switching changes nothing but the page.
+ */
+export const UI_COOKIE = "lumen-ui";
+export function pageChoice(req: IncomingMessage, url: URL): { page: (locale: Locale) => string; remember?: string } {
+  const asked = url.searchParams.get("ui");
+  const kept = new RegExp(`(?:^|;\\s*)${UI_COOKIE}=(next|classic)`).exec(req.headers.cookie ?? "")?.[1];
+  const choice = asked === "next" || asked === "classic" ? asked : kept ?? "classic";
+  return {
+    page: choice === "next" ? NEXT_PAGE : APP_PAGE,
+    ...(asked === choice && asked !== kept ? { remember: `${UI_COOKIE}=${choice}; Path=/; Max-Age=31536000; SameSite=Lax` } : {}),
+  };
+}
+
 /** The language of one request to the web server. */
 export function localeOf(req: IncomingMessage, url: URL): Locale {
   const acceptLanguage = req.headers["accept-language"];
