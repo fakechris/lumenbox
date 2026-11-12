@@ -230,3 +230,15 @@ test("the agent list narrows to a team; agents in none are their own choice, and
   assert.deepEqual(names(inTeam(agents, "-")), ["Vic", "Mia"]);
   assert.deepEqual(names(inTeam(agents, "gone")), ["Ada", "Bob", "Vic", "Mia"], "a remembered team from another computer does not empty the list");
 });
+
+test("an activity event is a line saying who did what; a command in the audit record is shown as it was run", () => {
+  const activityLine = pageFunction("activityLine", {}), auditLine = pageFunction("auditLine", {});
+  const words = { you: "You", started: "started a turn", failed: "failed:", interrupted: "was interrupted", asked: "asked:", card: "showed a card:" };
+  const line = (event: Record<string, unknown>) => JSON.parse(JSON.stringify(activityLine(event, "zh", (id: string) => (id === "a1" ? "Mia" : ""), words)));
+  assert.deepEqual(line({ type: "tool_start", agentName: "Mia", tool: "read_file", phrase: { en: "is reading a file", zh: "正在读文件" } }), { who: "Mia", text: "正在读文件", tone: "" });
+  assert.deepEqual(line({ type: "tool_start", agentName: "Mia", tool: "read_file" }), { who: "Mia", text: "→ read_file", tone: "" }, "an older event has no phrase");
+  assert.deepEqual(line({ type: "turn_failed", agentId: "a1", error: "no key" }), { who: "Mia", text: "failed: no key", tone: "bad" });
+  assert.equal(line({ type: "message_sent", agentId: "a1" }), null, "what passes between agents is not in the feed");
+  assert.equal(auditLine({ type: "exec", detail: { user: "box", pwd: "/home/box/work", cmd: "npm test" } }), "box /home/box/work $ npm test");
+  assert.equal(auditLine({ type: "window_focus", window: "Chromium — Billing" }), "Chromium — Billing");
+});

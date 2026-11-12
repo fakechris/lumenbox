@@ -225,6 +225,11 @@ waits on it, each a press away; a fold to set its status, its level and what it 
 and to propose what it found as the organisation's knowledge; and, under diagnostics, what the
 policy gate decided at each step.
 
+**What has been happening is in the system view, folded.** The agents' recent activity, a line each;
+and, for an admin, the audit record of commands and windows on a computer, which keeps reading while
+it is open, hides what the system's own probes ran unless asked, and says when the record may be
+incomplete.
+
 **Three levels, everywhere.**
 
 | Level | Where | Holds |

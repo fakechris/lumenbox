@@ -82,6 +82,8 @@ function renderSystem(view) {
   open.slice(0, 30).forEach(function (entry) { wrong.appendChild(exceptionRow(entry)); });
   view.appendChild(wrong);
 
+  view.appendChild(activityBlock());
+
   var kept = el("section", "setting"), total = (system.history && system.history.total) || 0;
   kept.appendChild(el("h2", "group", t("ui.next.system.history")));
   kept.appendChild(el("p", "", system.history === null ? t("ui.next.system.unreadable") : t("ui.next.system.historyNote", { n: total })));
