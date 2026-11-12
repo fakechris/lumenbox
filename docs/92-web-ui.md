@@ -185,6 +185,11 @@ INV-1825, and the default changes only when that list is empty or bridged.
 A press on the row shows how its recent runs ended; a routine is made by answering four things — a
 name, what to do, who does it, what starts it — and can be run at once.
 
+**A decision is finished where it is shown.** A draft waiting to be sent is approved, edited or
+refused (with the reason the agent is told) on its inbox row; work is put off and found by its words
+from the work view and its panel; something that went wrong is retried, taken on or dismissed from
+the system view.
+
 **Three levels, everywhere.**
 
 | Level | Where | Holds |

@@ -34,10 +34,11 @@ function fact(label, value) {
 function exceptionRow(entry) {
   var row = el("div", "row"), body = el("span", "body"), acts = el("span", "acts");
   body.appendChild(el("div", "title", entry.subject));
-  body.appendChild(el("div", "why", entry.reason + (entry.attempt > 1 ? " ×" + entry.attempt : "")));
+  body.appendChild(el("div", "why", entry.reason + (entry.attempt > 1 ? " ×" + entry.attempt : "") + (entry.handedAt ? " · " + t("ui.next.system.handed", { name: entry.handedBy || "" }) : "")));
   row.appendChild(el("span", "who", initial(agentName(entry.agent))));
   row.appendChild(body);
-  [["retry", t("ui.next.system.retry")], ["dismiss", t("ui.next.card.dismiss")]].forEach(function (pair) {
+  // Taking it on yourself is offered once: an entry somebody already took says who.
+  [["retry", t("ui.next.system.retry")]].concat(entry.handedAt ? [] : [["hand", t("ui.next.system.hand")]]).concat([["dismiss", t("ui.next.card.dismiss")]]).forEach(function (pair) {
     var button = el("button", "act", pair[1]);
     button.addEventListener("click", function () {
       // One press, one request: the row's buttons stay off until this one has answered.

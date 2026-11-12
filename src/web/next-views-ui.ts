@@ -81,7 +81,23 @@ function workCard(row) {
 
 var WORK_GROUPS = ["running", "you", "review", "done"];
 
+/** Looking for a piece of work by its words: the server searches every record, ended and answered ones too. */
+function findWork(text) {
+  next.search = text; clearTimeout(next.searchTimer);
+  if (!text) { next.found = null; render(); return; }
+  next.searchTimer = setTimeout(function () {
+    getJson("/api/tasks/list?limit=50&search=" + encodeURIComponent(text)).then(function (got) { if (next.search === text) { next.found = got.tasks || []; render(); } }, failed);
+  }, 250);
+}
+
 function renderWork(view) {
+  if (next.search) {
+    var hits = el("div", "list");
+    hits.appendChild(el("h2", "group", next.found ? t("ui.next.work.found", { n: next.found.length }) : t("ui.next.work.searching")));
+    (next.found || []).forEach(function (row) { hits.appendChild(workRow(row)); });
+    view.appendChild(hits);
+    return;
+  }
   var groups = {};
   WORK_GROUPS.forEach(function (name) { groups[name] = []; });
   next.rows.forEach(function (row) { groups[nextGroupOf(nextStateOf(row).key)].push(row); });
@@ -103,7 +119,7 @@ var INBOX_GROUPS = ["answer", "approve", "review", "stuck", "other"];
 function settle(node, text) { node.replaceChildren(el("span", "body", text)); node.style.opacity = "0.6"; refreshSoon(); }
 
 function inboxRow(item) {
-  var node = el("div", "row"), open = el("button", "open"), body = el("span", "body"), acts = el("span", "acts");
+  var node = el("div", "row"), open = el("button", "open"), body = el("span", "body"), acts = el("span", "acts"), under = el("div", "under");
   body.appendChild(el("div", "title", item.title));
   body.appendChild(el("div", "why", owedText(item)));
   open.appendChild(el("span", "who", initial(item.with || item.title)));
@@ -119,9 +135,26 @@ function inboxRow(item) {
     acts.appendChild(approve); acts.appendChild(deny);
   }
   if (item.kind === "outbox") {
-    var send = el("button", "act-primary", t("ui.next.act.approve"));
-    send.addEventListener("click", function () { postJson("/api/outbox/decide", { id: item.ref, decision: "approve" }).then(function () { settle(node, t("ui.next.done.approved")); }, failed); });
-    acts.appendChild(send);
+    var send = el("button", "act-primary", t("ui.next.act.approve")), change = el("button", "act", t("ui.next.act.editDraft")), refuse = el("button", "act", t("ui.next.act.deny"));
+    var decide = function (body, done) { postJson("/api/outbox/decide", Object.assign({ id: item.ref }, body)).then(function () { settle(node, done); }, failed); };
+    send.addEventListener("click", function () { decide({ decision: "approve" }, t("ui.next.done.approved")); });
+    // The whole draft is read when it is to be changed: the row carries only its first line.
+    change.addEventListener("click", function () {
+      getJson("/api/outbox").then(function (got) {
+        var draft = (got.drafts || []).filter(function (row) { return row.id === item.ref; })[0], text = el("textarea"), go = el("button", "act-primary", t("ui.next.act.sendEdited"));
+        if (!draft) { settle(node, t("ui.next.done.gone")); return; }
+        text.value = draft.body;
+        go.addEventListener("click", function () { if (text.value.trim()) decide({ decision: "edit", body: text.value }, t("ui.next.done.approved")); });
+        under.replaceChildren(text, go); text.focus();
+      }, failed);
+    });
+    refuse.addEventListener("click", function () {
+      var why = el("input"), go = el("button", "act-danger", t("ui.next.act.deny"));
+      why.placeholder = t("ui.next.outbox.why");
+      go.addEventListener("click", function () { if (why.value.trim()) decide({ decision: "reject", reason: why.value.trim() }, t("ui.next.done.denied")); });
+      under.replaceChildren(why, go); why.focus();
+    });
+    acts.appendChild(send); acts.appendChild(change); acts.appendChild(refuse);
   }
   if (item.kind === "close-proposal") {
     var keep = el("button", "act", t("ui.next.act.keepOpen"));
@@ -140,6 +173,7 @@ function inboxRow(item) {
   });
   if (acts.childNodes.length) node.appendChild(acts);
   if (item.deadline) node.appendChild(el("span", "when", agoText(item.deadline)));
+  node.appendChild(under);
   return node;
 }
 
@@ -205,6 +239,7 @@ function nextStart() {
   document.querySelectorAll("[data-nav]").forEach(function (button) {
     button.addEventListener("click", function () { next.view = button.dataset.nav; document.body.dataset.open = "1"; history.replaceState(null, "", "?ui=next&view=" + next.view); render(); });
   });
+  $("work-find").addEventListener("input", function () { findWork($("work-find").value.trim()); });
   document.querySelectorAll("[data-layout]").forEach(function (button) {
     button.addEventListener("click", function () { next.layout = button.dataset.layout; render(); });
   });
