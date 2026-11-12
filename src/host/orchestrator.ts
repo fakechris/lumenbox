@@ -1,3 +1,4 @@
+import { readPause, writePause } from "../agents/pause.ts";
 import { GovernanceLedger, resourceKey, routineResource } from "./work-governance.ts";
 import { ResultChecks } from "./result-check-policy.ts";
 import { runResultCheck } from "./result-check-runner.ts";
@@ -692,13 +693,10 @@ export class Orchestrator {
         })));
     },
     observed: (slug, would) => this.policy.notifyObserved(slug, would), finished: (skill, agent, result, reason) => noteRoutineEnd(this.exceptions, skill.slug, agent, result, reason), // The observe-mode audit row (INV-1458); every run's end on the exception list (INV-1741).
-    // Through the ordinary prompt path, so the policy gate checks a scheduled turn like any other (a box over budget stops firing). Its own turn
-    // always: a kickoff absorbed as steering would bury its report in an unrelated reply. A delivering run happens *in* the chat's conversation. Last time's commitments open the next run (INV-528).
     priorCommitments: slug => priorCommitmentsPrompt(this.commitments.lastFor(slug), this.tasks?.list() ?? []),
     run: async (agent, prompt, deliver, slug, toolScope, deliverWhen, identity) => {
       const scope = toolScope !== undefined ? { toolScope } : {};
       const startedMs = Date.now();
-      // How the run came out is read off the turn ledger afterwards (INV-1404): done, partial (the turn stopped itself) or failed.
       const resultOf = (agentId: string) => routineResult(this.turns?.endedSince(agentId, startedMs) ?? []);
       const why = (agentId: string) => { const reason = routineReason(this.turns?.endedSince(agentId, startedMs) ?? []); return reason === undefined ? {} : { reason }; }; // the run history's line (INV-1665)
       if (deliver === undefined) {
@@ -962,6 +960,7 @@ export class Orchestrator {
             log: line => console.error(`[hooks] ${line}`),
           }));
     this.registry = options.registry ?? new AgentRegistry();
+    this.governance.restorePauses((id,by,at)=>{if(!this.registry.has(id))return false;const dir=this.registry.dirFor(id);if(!readPause(dir))writePause(dir,{by,at,reason:"Restored pending member pause"});return true;});
     this.memoryMirror = new MemoryMirror({
       registry: this.registry,
       box: agentId => this.boxFor(agentId), memoryDir: agentId => memoryDir(this.boxEntryOf(agentId)), standingRoot: agentId => standingRoot(this.boxEntryOf(agentId)), // the agent's box's (INV-1734, INV-1736)
@@ -1090,6 +1089,7 @@ export class Orchestrator {
       inbox,
       true, (agentId, message) => admitProgressMessage(this.tasks, agentId, message), workFocus, this.tasks?.workRoots.admission(workFocus)
     );
+    this.bus.resourcePause = id => this.governance.pendingPause(id);
     this.bus.resourceAllowed = message => this.governance.allows(message);
     this.goalLoop = this.tasks === undefined ? undefined : new GoalLoop({ modelRecoveryRoot: this.registry.root,
       tasks: this.tasks,

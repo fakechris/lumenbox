@@ -1,3 +1,8 @@
+import { AgentRegistry } from "../agents/registry.ts";
+import { readPause, clearPause } from "../agents/pause.ts";
+import { AgentPauses } from "./agent-pause.ts";
+import { Orchestrator } from "./orchestrator.ts";
+import { fakeModel } from "./testing/fake-model.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -43,7 +48,7 @@ const message = (id: string): InboundMessage => ({
 });
 const fixture = () => {
   const dir = mkdtempSync(join(tmpdir(), "work-governance-")),
-    path = join(dir, "revocations.jsonl"),
+    path = join(dir, "work-governance.jsonl"),
     ledger = new GovernanceLedger(path);
   return {
     dir,
@@ -168,9 +173,10 @@ test("preview rejects stale, denied or expanded selections without revoking any 
 test("zero physical executions can coexist with future entries; archives and access filtering precede the 50-record page", async () => {
   const ledger = new GovernanceLedger(),
     service = new WorkGovernance(ledger);
-  const records = Array.from({ length: 1600 }, (_, n) =>
+  const records = Array.from({ length: 1601 }, (_, n) =>
     row("old-" + n, {
-      title: "Historical work " + n,
+      title: n === 0 ? "Completed internal root" : "Historical work " + n,
+      ...(n === 0 ? {state:"answered",archived:true} : {}),
       kind: "record",
       section: "history",
       actions: [],
@@ -335,4 +341,35 @@ test("stopping a confirmation callback while it is awaiting a result cannot manu
   } finally {
     f.cleanup();
   }
+});
+
+
+test("confirmed member pauses never replay after an explicit resume, including a concurrent old-operation retry", async () => {
+  const f = fixture(); try {
+    const pauses = new AgentPauses({ dirFor: () => f.dir, interrupt: () => [], box: () => undefined, wake() {}, tell: async () => {}, receipt() {}, log() {} });
+    const resource = row(resourceKey("member", "worker"), { kind: "member", agentId: "worker", actions: ["pause"] }); let applications = 0;
+    const adapter: GovernanceAdapter = { inventory: async () => ({ rows: [resource], unknown: [] }), mayRead: () => true, prepare: selections => { if (selections.length) pauses.barrier(["worker"], "operator", "selected member"); }, apply: async () => { applications++; return { confirmed: true }; } };
+    const preview = await f.service.preview(adapter, [{ key: resource.key, action: "pause" }]);
+    await Promise.all([f.service.execute(adapter,{token:preview.token,operationId:"pause-member"},"operator"),f.service.execute(adapter,{token:preview.token,operationId:"pause-member"},"operator")]);
+    assert.equal(applications,1); assert.ok(readPause(f.dir)); await pauses.resume("worker","operator"); assert.equal(readPause(f.dir),undefined);
+    await f.service.execute(adapter,{token:preview.token,operationId:"pause-member"},"operator"); assert.equal(readPause(f.dir),undefined); assert.equal(applications,1);
+    new GovernanceLedger(f.path).restorePauses(()=>{throw Error("A finished pause must not be restored after an intentional resume");});
+  } finally { f.cleanup(); }
+});
+
+test("a crash after journal commit but before writing pause files restores the real pause authority before host execution", async () => {
+  const f = fixture(), previous = process.env.AGENTBOX_HOME; process.env.AGENTBOX_HOME = f.dir;
+  try {
+    const registry = new AgentRegistry(join(f.dir,"agents")), agent = registry.create({name:"Mia"});
+    const resource = row(resourceKey("member",agent.id),{kind:"member",agentId:agent.id,actions:["pause"]});
+    const adapter: GovernanceAdapter = {inventory:async()=>({rows:[resource],unknown:[]}),mayRead:()=>true,prepare:()=>{throw Error("process crashed before writing the pause file");},apply:async()=>{throw Error("must not run");}};
+    const preview = await f.service.preview(adapter,[{key:resource.key,action:"pause"}]);
+    await assert.rejects(f.service.execute(adapter,{token:preview.token,operationId:"pause-crash-window"},"operator"),/crashed/);
+    assert.equal(readPause(registry.dirFor(agent.id)),undefined); assert.ok(new GovernanceLedger(f.path).pendingPause(agent.id));
+    let calls = 0;
+    const host = new Orchestrator({ registry,useBox:false,inbox:null,mcp:null,hooks:null,tasks:null,extensions:null,pendingWork:new PendingWork(null),client:fakeModel(()=>{calls++;throw Error("Paused members must not invoke a model");}) });
+    assert.equal(readPause(registry.dirFor(agent.id))?.by,"operator");
+    host.bus.sendFromUser(agent.id,"New request remains held");await host.bus.wake(agent.id);assert.equal(calls,0);assert.equal(host.bus.queuedCount(agent.id),1);
+    const current = new GovernanceLedger(f.path); assert.equal(current.pendingPause(agent.id),undefined,"the real pause file now owns the hold"); assert.equal(current.pendingOperations().length,1,"cleanup still requires an operator-visible confirmation");
+  } finally { if(previous===undefined)delete process.env.AGENTBOX_HOME;else process.env.AGENTBOX_HOME=previous;f.cleanup(); }
 });

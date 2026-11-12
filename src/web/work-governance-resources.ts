@@ -52,7 +52,7 @@ async function bounded<T>(promise: Promise<T>): Promise<T> {
 }
 export function governanceResources(deps: Dependencies): GovernanceAdapter {
   const { host, pauses, control, replies } = deps;
-  const read = (row: GovernedResource) =>
+  const read = (row: GovernedResource): boolean => row.kind === "operation" ? !!host.governance.operation(row.target.id!)?.selections.every(selection => read(selection.row)) :
     (row.kind !== "outbound" ||
       host.registry.listBoxes().every((box) => deps.mayReadBox(box.id))) &&
     (!row.agentId || deps.mayReadAgent(row.agentId)) &&
@@ -137,7 +137,7 @@ export function governanceResources(deps: Dependencies): GovernanceAdapter {
               kind: "work",
               title: task.title,
               section: "history",
-              state: root.status,
+              state: root.status, archived: task.status === "done" || task.status === "dropped",
               source: "linkedWork",
               agentId: root.owner,
               taskId: task.id,
@@ -446,7 +446,7 @@ export function governanceResources(deps: Dependencies): GovernanceAdapter {
           [row.id, row.phase, row.source],
         );
       for (const agent of host.registry.list()) {
-        const pause = pauses.pauseOf(agent.id);
+        const pause = pauses.pauseOf(agent.id) ?? host.governance.pendingPause(agent.id);
         add(
           {
             key: resourceKey("member", agent.id),

@@ -171,6 +171,7 @@ export class AgentBus {
    * before anything runs — so nothing replayed has executed anything, and re-queueing it cannot
    * duplicate a side effect.
    */
+  resourcePause: (agentId: string) => ReturnType<typeof readPause> = () => undefined;
   resourceAllowed: (message: InboundMessage) => boolean = () => true;
   snapshot() { return { running: [...this.active.entries()].map(([key, row]) => ({ agentId: agentOfKey(key), conversation: key.slice(key.indexOf("\0") + 1), workId: row.workId })), queued: [...this.pending.entries()].flatMap(([agentId, rows]) => rows.map(message => ({ agentId, message }))) }; }
   discardRevoked(): void { for (const id of this.pending.keys()) this.dropStaleWork(id); }
@@ -697,7 +698,7 @@ export class AgentBus {
 
   /** Whether a person paused this agent, and why (INV-1554). */
   pauseOf(agentId: string): ReturnType<typeof readPause> {
-    return this.registry.has(agentId) ? readPause(this.registry.dirFor(agentId)) : undefined;
+    return this.resourcePause(agentId) ?? (this.registry.has(agentId) ? readPause(this.registry.dirFor(agentId)) : undefined);
   }
 
   /** How many turns are in flight across every agent (INV-1538). */

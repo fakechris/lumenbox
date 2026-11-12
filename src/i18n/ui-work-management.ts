@@ -23,6 +23,8 @@ export const UI_WORK_MANAGEMENT: Record<string, readonly [string, string]> = {
   "ui.wg.retryOnly": ["只重试此处置中未确认的原范围，不扩展选择。", "Retry only the unconfirmed original scope without expanding it."],
   "ui.wg.reviewRetry": ["查看原范围并重试", "Inspect original scope and retry"],
   "ui.wg.inventoryBoundary": ["清单有未确认的范围，展开查看", "Inventory has unverified scope; expand to inspect"],
+  "ui.wg.selectPage": ["选择本页可处置项", "Select actionable items on this page"],
+  "ui.wg.clearSelection": ["清除选择", "Clear selection"],
   "ui.wg.title": ["工作管理", "Work management"],
   "ui.wg.back": ["返回", "Back"],
   "ui.wg.purpose": [
@@ -123,7 +125,7 @@ export const UI_WORK_MANAGEMENT: Record<string, readonly [string, string]> = {
   "ui.wg.user": ["用户请求", "User request"],
   "ui.wg.internal": ["内部活动", "Internal activity"],
   "ui.wg.collaboration": ["协作活动", "Collaboration"],
-  "ui.wg.host": ["宿主触发", "Host trigger"],
+  "ui.wg.host": ["机器触发", "Host trigger"],
   "ui.wg.goal": ["持续目标", "Ongoing goal"],
   "ui.wg.interrupted": ["执行中断记录", "Interrupted execution record"],
   "ui.wg.automation": [

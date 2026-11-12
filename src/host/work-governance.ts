@@ -33,6 +33,7 @@ export interface GovernedResource {
   members?: string[];
   coverage?: { kind: string; count: number }[];
   target: Record<string, string>;
+  archived?: boolean;
   revoked?: GovernanceAction;
 }
 export interface ResourceResult {
@@ -47,6 +48,7 @@ export interface Operation {
   by: string;
   at: string;
   selections: { row: GovernedResource; action: GovernanceAction }[];
+  prepared?: string[];
   results: ResourceResult[];
 }
 export class GovernanceLedger {
@@ -85,6 +87,16 @@ export class GovernanceLedger {
   save(row: Operation) {
     if (this.path) appendLineDurably(this.path, JSON.stringify(row));
     this.replay(structuredClone(row));
+  }
+  pendingPause(agentId: string) {
+    for (const operation of this.operations.values()) for (const selection of operation.selections) if (selection.action === "pause" && operation.results.find(result=>result.key===selection.row.key)?.state !== "confirmed" && selection.row.agentId === agentId && !operation.prepared?.includes(selection.row.key)) return { by: operation.by, at: operation.at, reason: "Selected member pause is awaiting durable handoff" };
+    return undefined;
+  }
+  restorePauses(prepare: (agentId: string, by: string, at: string) => boolean): void {
+    for (const stored of this.operations.values()) { const operation = structuredClone(stored); let changed = false;
+      for (const selection of operation.selections) if (selection.action === "pause" && operation.results.find(result=>result.key===selection.row.key)?.state !== "confirmed" && selection.row.agentId && !operation.prepared?.includes(selection.row.key) && prepare(selection.row.agentId, operation.by, operation.at)) { operation.prepared = [...(operation.prepared ?? []), selection.row.key]; changed = true; }
+      if (changed) this.save(operation);
+    }
   }
   pendingOperations(): Operation[] { return [...this.operations.values()].filter(row => row.results.some(result => result.state !== "confirmed")).map(row => structuredClone(row)); }
   operation(id: string) {
@@ -129,6 +141,7 @@ const digest = (value: unknown) =>
 export class WorkGovernance {
   private readonly key = randomBytes(32);
   private readonly busy = new Set<string>();
+  private readonly inFlight = new Map<string, Promise<Operation>>();
   private readonly previews = new Map<
     string,
     { selections: Operation["selections"]; at: number }
@@ -149,7 +162,7 @@ export class WorkGovernance {
       permitted = inventory.rows.filter((row) => adapter.mayRead(row));
     const rows = permitted.filter(
       (row) =>
-        (input.archive ||
+        (input.archive || !row.archived &&
           !["ended", "cancelled", "sent", "discarded"].includes(row.state)) &&
         (!input.section ||
           (input.section === "automatic"
@@ -232,7 +245,12 @@ export class WorkGovernance {
     this.previews.set(token, { selections, at: Date.now() });
     return { token, selections, unknown: inventory.unknown };
   }
-  async execute(
+  execute(adapter: GovernanceAdapter, input: {token: string; operationId: string}, by: string): Promise<Operation> {
+    const key = input.operationId, existing = this.inFlight.get(key); if (existing) return existing.then(() => this.execute(adapter,input,by));
+    const pending = this.perform(adapter,input,by); this.inFlight.set(key,pending);
+    void pending.then(()=>this.inFlight.delete(key),()=>this.inFlight.delete(key)); return pending;
+  }
+  private async perform(
     adapter: GovernanceAdapter,
     input: { token: string; operationId: string },
     by: string,
@@ -280,10 +298,13 @@ export class WorkGovernance {
     }
     if (operation.selections.some(({ row }) => !adapter.mayRead(row)))
       throw Error("Resource access required for every selected scope.");
-    adapter.prepare?.(operation.selections, by);
-    if (this.busy.has(operation.id)) return operation;
+    if (this.busy.has(operation.id) || operation.results.every(result => result.state === "confirmed")) return operation;
     this.busy.add(operation.id);
     try {
+      const unfinished = operation.selections.filter(selection => operation!.results.find(result => result.key === selection.row.key)?.state !== "confirmed");
+      adapter.prepare?.(unfinished, by);
+      operation.prepared = [...new Set([...(operation.prepared ?? []), ...unfinished.filter(selection => selection.action === "pause").map(selection => selection.row.key)])];
+      this.ledger.save(operation);
       for (const selection of operation.selections) {
         const result = operation.results.find(
           (row) => row.key === selection.row.key,
