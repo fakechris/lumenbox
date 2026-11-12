@@ -24,6 +24,7 @@ import type { IncomingMessage } from "node:http";
 import { resolveLocale, type Locale } from "../i18n/locale.ts";
 import { MESSAGES, tr } from "../i18n/messages.ts";
 import { APP_HTML, LOGIN_HTML } from "./app-html.ts";
+import { NEXT_HTML } from "./next-page-ui.ts";
 
 const MARKER = /\{\{(@?[\w.-]+)\}\}/g;
 
@@ -102,6 +103,8 @@ export function localized(template: string, kind: "page" | "script"): (locale: L
 
 /** The workshop and the sign-in page, each filled once per language. */
 export const APP_PAGE = localized(APP_HTML, "page");
+/** The rebuilt page (INV-1825): the same data, reached with `?ui=next` until it is the default. */
+export const NEXT_PAGE = localized(NEXT_HTML, "page");
 export const LOGIN_PAGE = localized(LOGIN_HTML, "page");
 
 /** The language of one request to the web server. */

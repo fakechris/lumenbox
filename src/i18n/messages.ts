@@ -26,6 +26,7 @@ import { UI_APP } from "./ui-app.ts";
 import { UI_PAGE } from "./ui-page.ts";
 import { UI_SECTIONS } from "./ui-sections.ts";
 import { SERVER_ERRORS } from "./server-errors.ts";
+import { UI_NEXT } from "./ui-next.ts";
 import { SERVER_WORDS } from "./server-words.ts";
 import { SHELL_WORDS } from "./shell-words.ts";
 import { SETTINGS_PANES } from "../web/settings-registry.ts";
@@ -39,6 +40,7 @@ const UI_WORDS: Record<string, readonly [zh: string, en: string]> = {
   ...UI_PAGE,
   ...UI_APP,
   ...UI_TASK_FOCUS, ...UI_WORK_MANAGEMENT,
+  ...UI_NEXT, // the rebuilt page (INV-1825)
   ...UI_SECTIONS,
   ...Object.fromEntries(SETTINGS_PANES.map(pane => [`ui.pane.${pane.key}`, [pane.titleZh, pane.title] as const])),
   "ui.manualUrl": [MANUAL_URL_ZH, MANUAL_URL],
