@@ -15,6 +15,7 @@ import { NEXT_CHAT_JS } from "./next-chat-ui.ts";
 import { NEXT_DIAGNOSTICS_JS } from "./next-diagnostics-ui.ts";
 import { NEXT_SCREEN_JS } from "./next-screen-ui.ts";
 import { NEXT_SETTINGS_JS } from "./next-settings-ui.ts";
+import { NEXT_THREAD_JS } from "./next-thread-ui.ts";
 import { NEXT_MEMBER_JS } from "./next-member-ui.ts";
 import { NEXT_BOXES_JS } from "./next-boxes-ui.ts";
 import { NEXT_CARDS_JS } from "./next-cards-ui.ts";
@@ -143,6 +144,14 @@ header.bar select { font: inherit; font-size: 13px; padding: 4px 8px; border-rad
 .raw { background: #26211e; color: #f4efe8; border-radius: 8px; padding: 10px 12px; margin: 4px 0 10px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; font: 12px/1.5 "IBM Plex Mono", ui-monospace, monospace; }
 .ids { font: 12px/1.6 "IBM Plex Mono", ui-monospace, monospace; color: var(--muted); overflow-wrap: anywhere; }
 #screen-toggle { margin-left: auto; }
+header.bar { position: relative; }
+.menu { position: absolute; right: 14px; top: 46px; z-index: 5; display: flex; flex-direction: column; min-width: 180px; padding: 4px; }
+.menu { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12); }
+.menu[hidden], .find[hidden] { display: none; }
+.menu button { text-align: left; padding: 8px 10px; border-radius: 6px; font-size: 13px; }
+.menu button:hover { background: var(--bg); }
+.find { display: flex; align-items: center; gap: 10px; padding: 8px 24px; border-bottom: 1px solid var(--border); }
+.find input { flex: 1; max-width: 420px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--surface); font: inherit; }
 #screen-toggle[aria-pressed="true"] { background: var(--text); color: var(--bg); border-color: var(--text); }
 .screen { width: min(46vw, 640px); flex: none; border-left: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; background: var(--surface); }
 .screen > header { display: flex; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); min-height: 52px; }
@@ -275,11 +284,22 @@ export const NEXT_HTML = `<!doctype html>
     <h1 id="view-title"></h1><span class="hint" id="view-hint"></span>
     <select id="conversations" aria-label="{{ui.next.chat.conversation}}" hidden></select>
     <button class="act" id="screen-toggle" aria-pressed="false" hidden>{{ui.next.screen.toggle}}</button>
+    <button class="act" id="thread-more" aria-label="{{ui.next.thread.more}}" title="{{ui.next.thread.more}}" hidden>⋯</button>
+    <div class="menu" id="thread-menu" hidden>
+      <button id="thread-find">{{ui.next.thread.find}}</button>
+      <button id="thread-export">{{ui.next.thread.export}}</button>
+      <button id="thread-link">{{ui.next.thread.link}}</button>
+    </div>
     <div class="tools" id="work-tools" hidden>
       <button class="seg" data-layout="list" aria-pressed="true">{{ui.next.view.list}}</button>
       <button class="seg" data-layout="board" aria-pressed="false">{{ui.next.view.board}}</button>
     </div>
   </header>
+  <div class="find" id="find" hidden>
+    <input id="find-text" placeholder="{{ui.next.thread.findPlaceholder}}" aria-label="{{ui.next.thread.find}}">
+    <span class="why" id="find-count"></span>
+    <button id="find-close" aria-label="{{ui.next.card.dismiss}}">×</button>
+  </div>
   <section class="view" id="view"></section>
   <div class="composer" id="composer" hidden>
     <form id="composer-form"><textarea id="composer-text" rows="1"></textarea><button class="act-primary" id="composer-send" type="submit">{{ui.next.act.send}}</button></form>
@@ -338,6 +358,7 @@ ${NEXT_PANEL_JS}
 ${NEXT_DIAGNOSTICS_JS}
 ${NEXT_SCREEN_JS}
 ${NEXT_SETTINGS_JS}
+${NEXT_THREAD_JS}
 ${NEXT_MEMBER_JS}
 ${NEXT_BOXES_JS}
 ${NEXT_CARDS_JS}

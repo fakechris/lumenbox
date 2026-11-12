@@ -181,6 +181,9 @@ work panel's full record is the classic task view for one look (`&once=1`), whic
 the page the person chose. What the classic page still does and this one does not is listed on
 INV-1825, and the default changes only when that list is empty or bridged.
 
+**A whole conversation has one quiet control.** In the header: find something said in it (only
+what was said, never a step), take it away as Markdown, copy a link to it.
+
 **Three levels, everywhere.**
 
 | Level | Where | Holds |
