@@ -13,6 +13,7 @@ import { NEXT_VIEWS_JS } from "./next-views-ui.ts";
 import { NEXT_PANEL_JS } from "./next-panel-ui.ts";
 import { NEXT_CHAT_JS } from "./next-chat-ui.ts";
 import { NEXT_DIAGNOSTICS_JS } from "./next-diagnostics-ui.ts";
+import { NEXT_SCREEN_JS } from "./next-screen-ui.ts";
 
 const STYLE = `
 :root {
@@ -123,6 +124,15 @@ header.bar select { font: inherit; font-size: 13px; padding: 4px 8px; border-rad
 .diag .bad { color: var(--bad); }
 .raw { background: #26211e; color: #f4efe8; border-radius: 8px; padding: 10px 12px; margin: 4px 0 10px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; font: 12px/1.5 "IBM Plex Mono", ui-monospace, monospace; }
 .ids { font: 12px/1.6 "IBM Plex Mono", ui-monospace, monospace; color: var(--muted); overflow-wrap: anywhere; }
+#screen-toggle { margin-left: auto; }
+#screen-toggle[aria-pressed="true"] { background: var(--text); color: var(--bg); border-color: var(--text); }
+.screen { width: min(46vw, 640px); flex: none; border-left: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; background: var(--surface); }
+.screen > header { display: flex; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); min-height: 52px; }
+.screen > header .x { margin-left: auto; font-size: 20px; color: var(--muted); width: 28px; }
+.screen-body { flex: 1; min-height: 0; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.screen-body iframe { flex: 1; min-height: 320px; width: 100%; border: 0; border-radius: 10px; background: #000; }
+.files { display: flex; flex-direction: column; }
+.files .file { width: 100%; text-align: left; background: none; cursor: pointer; }
 .scrim { position: fixed; inset: 0; background: rgba(31,26,23,.18); }
 .panel { position: fixed; top: 12px; right: 12px; bottom: 12px; width: min(600px, calc(100vw - 24px)); background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 18px 50px rgba(31,26,23,.16); display: flex; flex-direction: column; }
 .panel > header { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
@@ -154,6 +164,7 @@ header.bar select { font: inherit; font-size: 13px; padding: 4px 8px; border-rad
   .side { width: 100%; border-right: 0; border-bottom: 1px solid var(--border); }
   .side { max-height: none; flex: 1; }
   body[data-open="1"] .side { display: none; }
+  .screen { position: fixed; inset: 0; width: auto; z-index: 2; }
   body:not([data-open="1"]) main { display: none; }
   header.bar { padding: 8px 14px; flex-wrap: wrap; } .view { padding: 14px; } .composer { padding: 8px 14px 12px; }
   .row { flex-wrap: wrap; } .when { display: none; }
@@ -191,6 +202,7 @@ export const NEXT_HTML = `<!doctype html>
     <button class="back" id="back" aria-label="{{ui.next.side.label}}">‹</button>
     <h1 id="view-title"></h1><span class="hint" id="view-hint"></span>
     <select id="conversations" aria-label="{{ui.next.chat.conversation}}" hidden></select>
+    <button class="act" id="screen-toggle" aria-pressed="false" hidden>{{ui.next.screen.toggle}}</button>
     <div class="tools" id="work-tools" hidden>
       <button class="seg" data-layout="list" aria-pressed="true">{{ui.next.view.list}}</button>
       <button class="seg" data-layout="board" aria-pressed="false">{{ui.next.view.board}}</button>
@@ -201,6 +213,10 @@ export const NEXT_HTML = `<!doctype html>
     <form id="composer-form"><textarea id="composer-text" rows="1"></textarea><button class="act-primary" id="composer-send" type="submit">{{ui.next.act.send}}</button></form>
   </div>
 </main>
+<aside class="screen" id="screen" aria-label="{{ui.next.screen.label}}" hidden>
+  <header><span class="tabs"><button class="seg" data-screen="desktop" aria-pressed="true">{{ui.next.screen.desktop}}</button><button class="seg" data-screen="files" aria-pressed="false">{{ui.next.screen.files}}</button></span><button class="x" id="screen-close" aria-label="{{ui.next.act.close}}">×</button></header>
+  <div class="screen-body" id="screen-body"></div>
+</aside>
 <div class="scrim" id="scrim" hidden></div>
 <aside class="panel" id="panel" aria-label="{{ui.next.panel.label}}" hidden>
   <header><span class="chip" id="panel-chip"></span><span class="when" id="panel-who"></span>
@@ -223,12 +239,12 @@ function el(tag, className, text) {
   return node;
 }
 function getJson(path) {
-  return fetch(path, { headers: { accept: "application/json" } }).then(function (res) {
+  return fetch(path, { headers: { accept: "application/json", "accept-language": "{{@locale}}" } }).then(function (res) {
     return res.json().then(function (body) { if (!res.ok) throw new Error(body && body.error ? body.error : String(res.status)); return body; });
   });
 }
 function postJson(path, body) {
-  return fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(function (res) {
+  return fetch(path, { method: "POST", headers: { "content-type": "application/json", "accept-language": "{{@locale}}" }, body: JSON.stringify(body) }).then(function (res) {
     return res.json().catch(function () { return {}; }).then(function (data) { if (!res.ok) throw new Error(data && data.error ? data.error : String(res.status)); return data; });
   });
 }
@@ -243,6 +259,7 @@ ${NEXT_VIEWS_JS}
 ${NEXT_CHAT_JS}
 ${NEXT_PANEL_JS}
 ${NEXT_DIAGNOSTICS_JS}
+${NEXT_SCREEN_JS}
 nextStart();
 </script>
 </body>
