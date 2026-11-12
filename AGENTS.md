@@ -142,6 +142,9 @@ Every file in `docs/` opens with a header block naming what it is:
   every file reading `process.env` outside `src/config.ts` / `src/cli.ts` / the daemons' `main.ts`.
   A listed file may get shorter or stop reading the environment, never the reverse; a new file
   fits the limit or is split; the baseline never gains an entry (`--write-baseline` only lowers).
+  The limit counts lines, so a line may not be the way under it: `arch-baseline.json` also lists
+  every file with lines over 240 characters and how many (INV-1826); that count only falls, and a
+  file not listed has none. The word tables in `src/i18n/` are exempt.
 - **A flaky fix is believed at 16 runs, 4 at a time.** A test that failed only sometimes was
   green for its author and red under the loaded suite; a fix for one is merged only with the
   output of `npm run flaky -- <file>` (16/16) in the PR. The script runs the file the way

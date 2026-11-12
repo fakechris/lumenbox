@@ -7,12 +7,7 @@ import type { Orchestrator } from "../host/orchestrator.ts";
 import type { AgentPauses } from "../host/agent-pause.ts";
 import type { WorkControl } from "../host/work-control.ts";
 import type { DeliveryRecovery } from "../host/delivery-recovery.ts";
-import {
-  resourceKey,
-  routineResource,
-  type GovernedResource,
-  type GovernanceAdapter,
-} from "../host/work-governance.ts";
+import { resourceKey, routineResource, type GovernedResource, type GovernanceAdapter } from "../host/work-governance.ts";
 import type { Task } from "../host/tasks.ts";
 
 interface Dependencies {
@@ -27,23 +22,14 @@ interface Dependencies {
   mayReadTask: (task: Task) => boolean;
   mayReadBox: (id: string) => boolean;
 }
-const version = (value: unknown) =>
-  createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const version = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 async function bounded<T>(promise: Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       promise,
       new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () =>
-            reject(
-              Error(
-                "Automation inventory unavailable; no absence claim can be made.",
-              ),
-            ),
-          2500,
-        );
+        timer = setTimeout(() => reject(Error("Automation inventory unavailable; no absence claim can be made.")), 2500);
       }),
     ]);
   } finally {
@@ -52,20 +38,29 @@ async function bounded<T>(promise: Promise<T>): Promise<T> {
 }
 export function governanceResources(deps: Dependencies): GovernanceAdapter {
   const { host, pauses, control, replies } = deps;
-  const read = (row: GovernedResource): boolean => row.kind === "operation" ? !!host.governance.operation(row.target.id!)?.selections.every(selection => read(selection.row)) :
-    (row.kind !== "outbound" ||
-      host.registry.listBoxes().every((box) => deps.mayReadBox(box.id))) &&
-    (!row.agentId || deps.mayReadAgent(row.agentId)) &&
-    (!row.boxId || deps.mayReadBox(row.boxId)) &&
-    (!row.taskId ||
-      !host.tasks?.get(row.taskId) ||
-      deps.mayReadTask(host.tasks.get(row.taskId)!));
+  const read = (row: GovernedResource): boolean =>
+    row.kind === "operation"
+      ? !!host.governance.operation(row.target.id!)?.selections.every(selection => read(selection.row))
+      : (row.kind !== "outbound" || host.registry.listBoxes().every(box => deps.mayReadBox(box.id))) &&
+        (!row.agentId || deps.mayReadAgent(row.agentId)) &&
+        (!row.boxId || deps.mayReadBox(row.boxId)) &&
+        (!row.taskId || !host.tasks?.get(row.taskId) || deps.mayReadTask(host.tasks.get(row.taskId)!));
   return {
     mayRead: read,
     inspect(row) {
       if (row.kind === "member" && row.agentId) {
-        const id = row.agentId, bus = host.bus.snapshot();
-        return { ...row, members: [row.title], coverage: [{kind:"turn",count:bus.running.filter(run=>run.agentId===id).length},{kind:"message",count:bus.queued.filter(item=>item.agentId===id).length},{kind:"job",count:host.jobWatch.snapshot().filter(job=>job.agentId===id).length},{kind:"delegate",count:host.acpDelegates.list().filter(session=>session.agentId===id).length}] };
+        const id = row.agentId,
+          bus = host.bus.snapshot();
+        return {
+          ...row,
+          members: [row.title],
+          coverage: [
+            { kind: "turn", count: bus.running.filter(run => run.agentId === id).length },
+            { kind: "message", count: bus.queued.filter(item => item.agentId === id).length },
+            { kind: "job", count: host.jobWatch.snapshot().filter(job => job.agentId === id).length },
+            { kind: "delegate", count: host.acpDelegates.list().filter(session => session.agentId === id).length },
+          ],
+        };
       }
       if (row.kind !== "work") return row;
       const preview = control.preview({
@@ -75,54 +70,36 @@ export function governanceResources(deps: Dependencies): GovernanceAdapter {
       });
       if (
         preview.legacy ||
-        preview.participants.some((agent) => !deps.mayReadAgent(agent.id)) ||
+        preview.participants.some(agent => !deps.mayReadAgent(agent.id)) ||
         preview.resources.some(
-          (resource) =>
-            resource.kind === "task" &&
-            host.tasks?.get(resource.id) &&
-            !deps.mayReadTask(host.tasks.get(resource.id)!),
+          resource => resource.kind === "task" && host.tasks?.get(resource.id) && !deps.mayReadTask(host.tasks.get(resource.id)!),
         )
       )
         throw Error("Complete work scope unavailable.");
       const counts = new Map<string, number>();
-      for (const resource of preview.resources)
-        counts.set(resource.kind, (counts.get(resource.kind) ?? 0) + 1);
+      for (const resource of preview.resources) counts.set(resource.kind, (counts.get(resource.kind) ?? 0) + 1);
       return {
         ...row,
-        members: preview.participants.map((agent) => agent.name),
+        members: preview.participants.map(agent => agent.name),
         coverage: [...counts].map(([kind, count]) => ({ kind, count })),
       };
     },
     prepare(selections, by) {
       for (const { row, action } of selections)
-        if (action === "pause" && row.agentId)
-          pauses.barrier(
-            [row.agentId],
-            by,
-            "Operator paused the explicitly selected member",
-          );
+        if (action === "pause" && row.agentId) pauses.barrier([row.agentId], by, "Operator paused the explicitly selected member");
     },
     async inventory() {
       const rows: GovernedResource[] = [],
         unknown: string[] = [];
-      const add = (
-        row: Omit<GovernedResource, "version">,
-        identity: unknown = row,
-      ) =>
+      const add = (row: Omit<GovernedResource, "version">, identity: unknown = row) =>
         rows.push({
           ...row,
           title: redactText(row.title).slice(0, 200),
           version: version(identity),
         });
       const tasks = host.tasks?.list() ?? [],
-        names = new Map(
-          host.registry.list().map((agent) => [agent.id, agent.profile.name]),
-        );
-      const taskForWork = new Map(
-        tasks
-          .filter((task) => task.workRoot)
-          .map((task) => [task.workRoot!.state.id, task]),
-      );
+        names = new Map(host.registry.list().map(agent => [agent.id, agent.profile.name]));
+      const taskForWork = new Map(tasks.filter(task => task.workRoot).map(task => [task.workRoot!.state.id, task]));
       const seen = new Set<string>();
       for (const task of tasks) {
         const root = task.workRoot?.state,
@@ -130,24 +107,20 @@ export function governanceResources(deps: Dependencies): GovernanceAdapter {
         if (trusted && !seen.has(root.id)) {
           seen.add(root.id);
           const participants = [root.owner, ...root.peers];
-          if (participants.some((id) => !deps.mayReadAgent(id))) continue;
+          if (participants.some(id => !deps.mayReadAgent(id))) continue;
           add(
             {
               key: resourceKey("work", root.id),
               kind: "work",
               title: task.title,
               section: "history",
-              state: root.status, archived: task.status === "done" || task.status === "dropped",
+              state: root.status,
+              archived: task.status === "done" || task.status === "dropped",
               source: "linkedWork",
               agentId: root.owner,
               taskId: task.id,
               conversation: root.conversation,
-              actions:
-                root.status === "cancelled" ||
-                task.status === "done" ||
-                task.status === "dropped"
-                  ? []
-                  : ["stop"],
+              actions: root.status === "cancelled" || task.status === "done" || task.status === "dropped" ? [] : ["stop"],
               scope: "wholeWork",
               unknown: ["externalEffects"],
               target: {
@@ -165,10 +138,7 @@ export function governanceResources(deps: Dependencies): GovernanceAdapter {
               kind: "record",
               title: task.title,
               section: "history",
-              state:
-                task.status === "done" || task.status === "dropped"
-                  ? "ended"
-                  : "unverified",
+              state: task.status === "done" || task.status === "dropped" ? "ended" : "unverified",
               source: task.origin?.kind ?? "unknown",
               agentId: task.assigneeId,
               taskId: task.id,
@@ -181,10 +151,7 @@ export function governanceResources(deps: Dependencies): GovernanceAdapter {
             [task.id, task.updatedAt],
           );
         }
-        if (
-          task.pursuit &&
-          ["active", "verifying", "paused"].includes(task.pursuit.status)
-        )
+        if (task.pursuit && ["active", "verifying", "paused"].includes(task.pursuit.status))
           add(
             {
               key: resourceKey("goal", task.pursuit.workId),
@@ -208,15 +175,9 @@ export function governanceResources(deps: Dependencies): GovernanceAdapter {
       for (const run of bus.running)
         add(
           {
-            key: resourceKey(
-              "execution",
-              JSON.stringify([run.agentId, run.conversation]),
-            ),
+            key: resourceKey("execution", JSON.stringify([run.agentId, run.conversation])),
             kind: "execution",
-            title:
-              taskForWork.get(run.workId ?? "")?.title ??
-              names.get(run.agentId) ??
-              "Execution",
+            title: taskForWork.get(run.workId ?? "")?.title ?? names.get(run.agentId) ?? "Execution",
             section: "running",
             state: "running",
             source: run.workId ? "linkedExecution" : "unknown",
@@ -230,8 +191,43 @@ export function governanceResources(deps: Dependencies): GovernanceAdapter {
           },
           run,
         );
-      for (const job of host.jobWatch.snapshot()) add({ key: resourceKey("job", job.jobId), kind: "job", title: redactText(job.command).slice(0,160), section:"running", state:"pending", source:"backgroundProcess",agentId:job.agentId,conversation:job.conversation,taskId:taskForWork.get(job.work?.id ?? "")?.id,actions:[],scope:"executionOnly",unknown:["pauseMemberForUnlinked","externalEffects"],target:{} },[job.jobId,job.startedAt]);
-      for (const session of host.acpDelegates.list()) add({ key:resourceKey("delegate",session.jobId),kind:"delegate",title:names.get(session.agentId) ?? "External executor",section:session.busy?"running":"future",state:session.busy?"running":"waiting",source:"engineSession",agentId:session.agentId,condition:"engineRequest",actions:[],scope:"executionOnly",unknown:["pauseMemberForUnlinked","externalEffects"],target:{} },[session.jobId,session.busy]);
+      for (const job of host.jobWatch.snapshot())
+        add(
+          {
+            key: resourceKey("job", job.jobId),
+            kind: "job",
+            title: redactText(job.command).slice(0, 160),
+            section: "running",
+            state: "pending",
+            source: "backgroundProcess",
+            agentId: job.agentId,
+            conversation: job.conversation,
+            taskId: taskForWork.get(job.work?.id ?? "")?.id,
+            actions: [],
+            scope: "executionOnly",
+            unknown: ["pauseMemberForUnlinked", "externalEffects"],
+            target: {},
+          },
+          [job.jobId, job.startedAt],
+        );
+      for (const session of host.acpDelegates.list())
+        add(
+          {
+            key: resourceKey("delegate", session.jobId),
+            kind: "delegate",
+            title: names.get(session.agentId) ?? "External executor",
+            section: session.busy ? "running" : "future",
+            state: session.busy ? "running" : "waiting",
+            source: "engineSession",
+            agentId: session.agentId,
+            condition: "engineRequest",
+            actions: [],
+            scope: "executionOnly",
+            unknown: ["pauseMemberForUnlinked", "externalEffects"],
+            target: {},
+          },
+          [session.jobId, session.busy],
+        );
       for (const { agentId, message } of bus.queued)
         add(
           {
@@ -240,11 +236,7 @@ export function governanceResources(deps: Dependencies): GovernanceAdapter {
             title: message.text.slice(0, 160),
             section: "future",
             state: "queued",
-            source: message.origin
-              ? "host"
-              : message.work
-                ? "linkedWork"
-                : "unknown",
+            source: message.origin ? "host" : message.work ? "linkedWork" : "unknown",
             agentId,
             taskId: message.taskBinding?.taskId ?? message.work?.taskId,
             conversation: message.conversation,
@@ -257,11 +249,7 @@ export function governanceResources(deps: Dependencies): GovernanceAdapter {
           [agentId, message.id],
         );
       for (const turn of host.turns?.interrupted() ?? []) {
-        const running = bus.running.some(
-          (run) =>
-            run.agentId === turn.agentId &&
-            run.conversation === (turn.conversation ?? "main"),
-        );
+        const running = bus.running.some(run => run.agentId === turn.agentId && run.conversation === (turn.conversation ?? "main"));
         if (running) continue;
         add(
           {
@@ -305,16 +293,14 @@ export function governanceResources(deps: Dependencies): GovernanceAdapter {
           [item.id, item.workId],
         );
       try {
-        const [routines, listeners] = await bounded(
-          Promise.all([host.scheduler.status(), host.scheduler.listening()]),
-        );
+        const [routines, listeners] = await bounded(Promise.all([host.scheduler.status(), host.scheduler.listening()]));
         for (const item of [
-          ...routines.map((row) => ({
+          ...routines.map(row => ({
             ...row,
             condition: row.kind === "webhook" ? "webhookCall" : "schedule",
             next: row.nextRun,
           })),
-          ...listeners.map((row) => ({
+          ...listeners.map(row => ({
             ...row,
             condition: "matchingMessage",
             next: undefined,
@@ -323,12 +309,13 @@ export function governanceResources(deps: Dependencies): GovernanceAdapter {
           })),
         ]) {
           const key = routineResource(item);
-          const existing = rows.find(row => row.key === key); if (existing) { existing.conditions = [...new Set([...(existing.conditions ?? []), item.condition])]; continue; }
+          const existing = rows.find(row => row.key === key);
+          if (existing) {
+            existing.conditions = [...new Set([...(existing.conditions ?? []), item.condition])];
+            continue;
+          }
           const agentId = item.agent
-            ? (host.registry.tryGet(item.agent)?.id ??
-              host.registry
-                .list()
-                .find((agent) => agent.profile.name === item.agent)?.id)
+            ? (host.registry.tryGet(item.agent)?.id ?? host.registry.list().find(agent => agent.profile.name === item.agent)?.id)
             : undefined;
           add(
             {
@@ -336,15 +323,12 @@ export function governanceResources(deps: Dependencies): GovernanceAdapter {
               kind: "routine",
               title: item.name,
               section: "future",
-              state: item.paused
-                ? "paused"
-                : item.mode === "off"
-                  ? "disabled"
-                  : "enabled",
+              state: item.paused ? "paused" : item.mode === "off" ? "disabled" : "enabled",
               source: "automation",
               agentId,
               boxId: item.boxId ?? host.registry.box.id,
-              conditions: [item.condition], condition: item.condition,
+              conditions: [item.condition],
+              condition: item.condition,
               next: item.next,
               actions: ["disable"],
               scope: "triggerOnly",
@@ -361,17 +345,8 @@ export function governanceResources(deps: Dependencies): GovernanceAdapter {
       if (
         host.registry
           .listBoxes()
-          .filter((box) => deps.mayReadBox(box.id))
-          .some(
-            (box) =>
-              !host.registry
-                .list()
-                .some(
-                  (agent) =>
-                    host.registry.boxOf(agent.id).id === box.id &&
-                    host.boxFor(agent.id),
-                ),
-          )
+          .filter(box => deps.mayReadBox(box.id))
+          .some(box => !host.registry.list().some(agent => host.registry.boxOf(agent.id).id === box.id && host.boxFor(agent.id)))
       )
         unknown.push("offlineBoxUnknown");
       for (const entry of deps.external)
@@ -398,10 +373,7 @@ export function governanceResources(deps: Dependencies): GovernanceAdapter {
             {
               key: resourceKey("outbox", receipt.id),
               kind: "outbound",
-              title: redactText(receipt.text ?? "Old outbound message").slice(
-                0,
-                160,
-              ),
+              title: redactText(receipt.text ?? "Old outbound message").slice(0, 160),
               section: "history",
               state: "pending",
               source: "transport",
@@ -416,11 +388,8 @@ export function governanceResources(deps: Dependencies): GovernanceAdapter {
       for (const row of replies.list(
         Number.MAX_SAFE_INTEGER,
         0,
-        (row) =>
-          deps.mayReadAgent(row.agentId) &&
-          (!row.taskId ||
-            !host.tasks?.get(row.taskId) ||
-            deps.mayReadTask(host.tasks.get(row.taskId)!)),
+        row =>
+          deps.mayReadAgent(row.agentId) && (!row.taskId || !host.tasks?.get(row.taskId) || deps.mayReadTask(host.tasks.get(row.taskId)!)),
         true,
       ))
         add(
@@ -437,10 +406,7 @@ export function governanceResources(deps: Dependencies): GovernanceAdapter {
             condition: "replyDelivery",
             actions: row.canDiscard ? ["discard"] : [],
             scope: "replyOnly",
-            unknown: [
-              "deliveryNotAcceptance",
-              ...(row.externalEffectUnconfirmed ? ["externalEffects"] : []),
-            ],
+            unknown: ["deliveryNotAcceptance", ...(row.externalEffectUnconfirmed ? ["externalEffects"] : [])],
             target: { id: row.id },
           },
           [row.id, row.phase, row.source],
@@ -464,22 +430,44 @@ export function governanceResources(deps: Dependencies): GovernanceAdapter {
           [agent.id, pause],
         );
       }
-      for (const operation of host.governance.pendingOperations()) if (operation.by === deps.by && operation.selections.every(selection => read(selection.row))) add({key:resourceKey("operation",operation.id),kind:"operation",title:operation.selections.map(selection=>selection.row.title).slice(0,2).join(" · "),section:"history",state:"unconfirmed",source:"operatorDisposition",actions:[],scope:"retryOnly",unknown:["externalEffects"],target:{id:operation.id}},[operation.id,operation.results]);
+      for (const operation of host.governance.pendingOperations())
+        if (operation.by === deps.by && operation.selections.every(selection => read(selection.row)))
+          add(
+            {
+              key: resourceKey("operation", operation.id),
+              kind: "operation",
+              title: operation.selections
+                .map(selection => selection.row.title)
+                .slice(0, 2)
+                .join(" · "),
+              section: "history",
+              state: "unconfirmed",
+              source: "operatorDisposition",
+              actions: [],
+              scope: "retryOnly",
+              unknown: ["externalEffects"],
+              target: { id: operation.id },
+            },
+            [operation.id, operation.results],
+          );
       if (host.registry.listBoxes().length) unknown.push("catalogBoundary");
       return { rows, unknown };
     },
     async apply(row, action, by) {
       if (action === "pause" && row.agentId) {
         const result = await pauseManagedMembers(host, pauses, [row.agentId], by, "Operator paused the selected member");
-        return { confirmed: !result.failures.length && result.results.every(item => !item.result.errors?.length && !item.result.jobsUnconfirmed?.length) && result.nativeStops.every(item => item.state === "confirmed"), detail: "pauseNotPermanent" };
+        return {
+          confirmed:
+            !result.failures.length &&
+            result.results.every(item => !item.result.errors?.length && !item.result.jobsUnconfirmed?.length) &&
+            result.nativeStops.every(item => item.state === "confirmed"),
+          detail: "pauseNotPermanent",
+        };
       }
       if (action === "disable" && ["routine", "external"].includes(row.kind))
         return { confirmed: true, detail: "existingExecutionsRemain" };
       if (action === "discard" && row.kind === "outbound") {
-        deps.outbox.dropped(
-          row.target.id!,
-          "Discarded from global work management",
-        );
+        deps.outbox.dropped(row.target.id!, "Discarded from global work management");
         return { confirmed: true, detail: "externalEffects" };
       }
       if (action === "discard" && row.kind === "reply") {
@@ -497,35 +485,24 @@ export function governanceResources(deps: Dependencies): GovernanceAdapter {
         if (
           preview.legacy ||
           !preview.token ||
-          preview.participants.some((agent) => !deps.mayReadAgent(agent.id)) ||
+          preview.participants.some(agent => !deps.mayReadAgent(agent.id)) ||
           preview.resources.some(
-            (resource) =>
-              resource.kind === "task" &&
-              host.tasks?.get(resource.id) &&
-              !deps.mayReadTask(host.tasks.get(resource.id)!),
+            resource => resource.kind === "task" && host.tasks?.get(resource.id) && !deps.mayReadTask(host.tasks.get(resource.id)!),
           )
         )
           throw Error("Complete linked work scope is unavailable.");
-        const result = await control.cancel(
-          preview.target,
-          preview.token,
-          by,
-          "Stopped from global work management",
-        );
+        const result = await control.cancel(preview.target, preview.token, by, "Stopped from global work management");
         return {
-          confirmed: result.resources.every(
-            (resource) => resource.state === "confirmed",
-          ),
+          confirmed: result.resources.every(resource => resource.state === "confirmed"),
           detail: "externalEffects",
         };
       }
       if (row.kind === "goal") {
         const task = host.tasks?.get(row.taskId!);
-        if (!task?.pursuit || task.pursuit.workId !== row.target.workId)
-          throw Error("Goal changed");
+        if (!task?.pursuit || task.pursuit.workId !== row.target.workId) throw Error("Goal changed");
         host.tasks!.setPursuit(
           task.id,
-          (pursuit) => ({
+          pursuit => ({
             ...pursuit,
             status: "paused",
             pausedReason: "person",
@@ -539,9 +516,7 @@ export function governanceResources(deps: Dependencies): GovernanceAdapter {
       if (row.kind === "message") {
         host.bus.discardRevoked();
         return {
-          confirmed: !host.bus
-            .snapshot()
-            .queued.some((item) => item.message.id === row.target.id),
+          confirmed: !host.bus.snapshot().queued.some(item => item.message.id === row.target.id),
         };
       }
       if (row.kind === "recovery") {

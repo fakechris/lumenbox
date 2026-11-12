@@ -30,8 +30,8 @@ test("scan: production .ts only, counting lines and env reads", () => {
   });
   try {
     assert.deepEqual(scan(root), [
-      { path: "src/a.ts", lines: 1200, readsEnv: false },
-      { path: "src/b.ts", lines: 2, readsEnv: true },
+      { path: "src/a.ts", lines: 1200, wide: 0, readsEnv: false },
+      { path: "src/b.ts", lines: 2, wide: 0, readsEnv: true },
     ]);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -43,7 +43,7 @@ test("a clean tree against its earned baseline passes; every violation names its
   try {
     const files = scan(root);
     const base = earned(baseline({}, []), files);
-    assert.deepEqual(base, { size: { limit: 1000, files: { "src/big.ts": 1200 } }, env: { allowed: ["src/config.ts"], files: ["src/env.ts"] } });
+    assert.deepEqual(base, { size: { limit: 1000, files: { "src/big.ts": 1200 } }, width: { limit: 240, files: {} }, env: { allowed: ["src/config.ts"], files: ["src/env.ts"] } });
     assert.deepEqual(verify(base, files), []);
 
     // A listed file grew.
@@ -87,4 +87,29 @@ test("--write-baseline lowers and removes, never adds", () => {
   assert.deepEqual(lowered(base, files), { size: { limit: 1000, files: { "src/big.ts": 1100 } }, env: { allowed: ["src/config.ts"], files: ["src/env.ts"] } });
   // And what it did not add is exactly what verify then refuses.
   assert.match(verify(lowered(base, files), files).join("\n"), /src\/new\.ts is 2000 lines.*not in the baseline[\s\S]*src\/new\.ts reads process\.env/);
+});
+
+test("width: a long line is not a way under the line limit (INV-1826)", () => {
+  const long = "x".repeat(300);
+  const root = tree({ "src/packed.ts": `${long}\n${long}\nshort\n`, "src/clean.ts": "short\n", "src/i18n/words.ts": `${long}\n` });
+  try {
+    const files = scan(root);
+    assert.equal(files.find(file => file.path === "src/packed.ts").wide, 2);
+    assert.equal(files.find(file => file.path === "src/i18n/words.ts").wide, 0, "word tables are sentences in two languages: exempt");
+    const held = { ...baseline({}, []), width: { limit: 240, files: { "src/packed.ts": 2 } } };
+    assert.deepEqual(verify(held, files, held), [], "held at its ceiling");
+    assert.match(verify({ ...baseline({}, []), width: { limit: 240, files: {} } }, files).join("\n"), /packed\.ts has 2 line\(s\) over 240 characters and is not in the baseline/);
+    assert.match(verify({ ...held, width: { limit: 240, files: { "src/packed.ts": 1 } } }, files).join("\n"), /above its ceiling of 1/);
+    assert.match(verify({ ...held, width: { limit: 240, files: { "src/packed.ts": 2, "src/clean.ts": 1 } } }, files).join("\n"), /clean\.ts has no line over 240/);
+    const raised = { ...held, width: { limit: 240, files: { "src/packed.ts": 3 } } };
+    assert.match(verify(raised, files, held).join("\n"), /width ceiling rose from 2 to 3/);
+    const gained = { ...baseline({}, []), width: { limit: 240, files: { "src/packed.ts": 2 } } };
+    assert.match(verify(gained, files, { ...baseline({}, []), width: { limit: 240, files: {} } }).join("\n"), /width baseline gained src\/packed\.ts/);
+    assert.deepEqual(verify(gained, files, baseline({}, [])), [], "the commit that adopts the rule may list what is there");
+    assert.deepEqual(earned(baseline({}, []), files).width.files, { "src/packed.ts": 2 });
+    writeFileSync(join(root, "src/packed.ts"), `${long}\nshort\nshort\n`);
+    assert.deepEqual(lowered(held, scan(root)).width.files, { "src/packed.ts": 1 }, "lowered, never raised");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
