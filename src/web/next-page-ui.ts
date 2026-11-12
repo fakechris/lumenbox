@@ -16,6 +16,7 @@ import { NEXT_DIAGNOSTICS_JS } from "./next-diagnostics-ui.ts";
 import { NEXT_SCREEN_JS } from "./next-screen-ui.ts";
 import { NEXT_SETTINGS_JS } from "./next-settings-ui.ts";
 import { NEXT_MEMBER_JS } from "./next-member-ui.ts";
+import { NEXT_BOXES_JS } from "./next-boxes-ui.ts";
 
 const STYLE = `
 :root {
@@ -36,6 +37,8 @@ a { color: inherit; }
 .boxes { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 2px 6px; }
 .boxes button { padding: 3px 10px; border-radius: 999px; font-size: 12px; color: var(--muted); border: 1px solid transparent; }
 .boxes button[aria-pressed="true"] { background: var(--surface); color: var(--text); border-color: var(--border); }
+.box-notice { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; padding: 8px 10px; border-radius: 10px; background: var(--bad-soft); color: var(--bad); font-size: 13px; }
+.boxes button.off::before { content: "●"; color: var(--bad); font-size: 8px; margin-right: 5px; vertical-align: middle; }
 .needs { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border-radius: 10px; background: var(--warn-soft); color: var(--warn); font-size: 13px; font-weight: 500; }
 .side h2.group { margin: 10px 8px 4px; }
 .agents { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
@@ -210,12 +213,14 @@ export const NEXT_HTML = `<!doctype html>
 <nav class="side" aria-label="{{ui.next.nav.label}}">
   <div class="brand"><span class="logo" aria-hidden="true">L</span>{{ui.next.title}}</div>
   <div class="boxes" id="boxes" aria-label="{{ui.next.side.boxes}}"></div>
+  <div class="box-notice" id="box-notice" hidden></div>
   <button class="needs" id="needs" data-nav="inbox" hidden></button>
   <h2 class="group">{{ui.next.side.label}}<button id="agent-new" aria-label="{{ui.next.member.add}}" title="{{ui.next.member.add}}">+</button></h2>
   <div class="agents" id="agents"></div>
   <div class="side-links">
     <button data-nav="work">{{ui.next.side.work}}</button>
     <button data-nav="auto">{{ui.next.side.auto}}</button>
+    <button data-nav="boxes">{{ui.next.side.boxes2}}</button>
     <button data-nav="settings">{{ui.next.side.settings}}</button>
   </div>
 </nav>
@@ -288,6 +293,7 @@ ${NEXT_DIAGNOSTICS_JS}
 ${NEXT_SCREEN_JS}
 ${NEXT_SETTINGS_JS}
 ${NEXT_MEMBER_JS}
+${NEXT_BOXES_JS}
 nextStart();
 </script>
 </body>

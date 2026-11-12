@@ -138,18 +138,22 @@ function render() {
   document.querySelectorAll("[data-layout]").forEach(function (button) { button.setAttribute("aria-pressed", String(button.dataset.layout === next.layout)); });
   renderScreen();
   if (next.view === "chat") { renderChat(view); return; }
-  $("view-title").textContent = t(next.view === "settings" || next.view === "auto" ? "ui.next.side." + next.view : "ui.next.nav." + next.view);
+  $("view-title").textContent = t(next.view === "boxes" ? "ui.next.side.boxes2" : next.view === "settings" || next.view === "auto" ? "ui.next.side." + next.view : "ui.next.nav." + next.view);
   $("view-hint").textContent = t("ui.next." + next.view + ".hint");
   if (next.view === "inbox") renderInbox(view);
   else if (next.view === "settings") renderSettings(view);
   else if (next.view === "auto") renderAuto(view);
+  else if (next.view === "boxes") renderBoxes(view);
   else renderWork(view);
 }
 
 function refresh() {
   if (next.loading) return Promise.resolve();
   next.loading = true;
-  return Promise.all([getJson("/api/state"), getJson("/api/attention"), getJson("/api/tasks/list?records=user&limit=100")]).then(function (got) {
+  // The computers are a fourth read that may be refused or slow; the page does not wait on it to be useful.
+  var machines = getJson("/api/boxes").then(function (got) { return got; }, function () { return { boxes: [], own: "" }; });
+  return Promise.all([getJson("/api/state"), getJson("/api/attention"), getJson("/api/tasks/list?records=user&limit=100"), machines]).then(function (got) {
+    boxes.list = got[3].boxes || []; boxes.own = got[3].own || "";
     next.agents = {}; member.allTools = got[0].allTools || [];
     (got[0].agents || []).forEach(function (agent) { next.agents[agent.id] = agent; });
     next.mine = got[1].mine || [];
@@ -171,7 +175,7 @@ function nextStart() {
     button.addEventListener("click", function () { next.layout = button.dataset.layout; render(); });
   });
   var asked = new URLSearchParams(location.search).get("view");
-  if (asked === "work" || asked === "inbox" || asked === "settings" || asked === "auto") { next.view = asked; document.body.dataset.open = "1"; }
+  if (asked === "work" || asked === "inbox" || asked === "settings" || asked === "auto" || asked === "boxes") { next.view = asked; document.body.dataset.open = "1"; }
   panelStart();
   chatStart();
   screenStart();
