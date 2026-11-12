@@ -221,6 +221,7 @@ interface RunState {
 }
 
 export interface SchedulerDeps {
+  allowed?: (skill: { slug: string; boxId?: string }) => boolean;
   /** The skills with schedules, re-read each tick so an edit takes effect without a restart. */
   due: () => Promise<readonly Scheduled[]>;
   /** The skills with listeners, re-read on each message so an edit takes effect at once. */
@@ -465,11 +466,12 @@ export class Scheduler {
    * "run now" share, so the record and the failure streak cannot differ by what started it.
    */
   private launch(
-    skill: { slug: string; name: string },
+    skill: { slug: string; name: string; boxId?: string },
     agent: string,
     start: () => Promise<void | { result: RunResult; reason?: string }>,
     started: { deliver?: string; manual?: boolean; retry?: number } = {}
   ): Promise<void> {
+    if (this.deps.allowed?.(skill) === false) return Promise.resolve();
     this.running.add(skill.slug);
     const startedAt = this.now();
     let outcome: { result?: RunResult; reason?: string } = {};
@@ -543,7 +545,7 @@ export class Scheduler {
     }
     const fired: string[] = [];
     for (const skill of listening) {
-      if (skill.paused === true || this.holds.holdOf(skill.slug) !== undefined) continue;
+      if (this.deps.allowed?.(skill) === false || skill.paused === true || this.holds.holdOf(skill.slug) !== undefined) continue;
       if (skill.chat !== undefined && skill.chat !== message.chatKey && !message.chatKey.startsWith(`${skill.chat}/`)) continue;
       if (skill.mode === "off" || !listenerMatches(skill.match, message.text)) continue;
       if (this.running.has(skill.slug)) {
@@ -554,7 +556,7 @@ export class Scheduler {
       if (agent === undefined) continue;
       const deliver = message.threadKey ?? message.chatKey;
       if (skill.mode === "observe") { this.observe(skill, agent, `run as ${agent} for a message in ${deliver} matching ${skill.match}`); fired.push(skill.slug); continue; }
-      if (await this.refusal(skill, agent) !== undefined) continue;
+      if (await this.refusal(skill, agent) !== undefined || this.deps.allowed?.(skill) === false) continue;
       this.log(`${skill.name}: fired by a message in ${deliver}`);
       fired.push(skill.slug);
       void this.launch(skill, agent, () => this.deps.run(
@@ -588,7 +590,7 @@ export class Scheduler {
     for (const skill of scheduled) {
       // Paused is not due. Not logged per tick: a routine somebody switched off would fill the
       // log with the fact every thirty seconds.
-      if (skill.paused === true || skill.mode === "off" || this.holds.holdOf(skill.slug) !== undefined) continue;
+      if (this.deps.allowed?.(skill) === false || skill.paused === true || skill.mode === "off" || this.holds.holdOf(skill.slug) !== undefined) continue;
       if (!isDue(skill.schedule, this.now(), this.lastRun.get(skill.slug), skill.timezone)) continue;
 
       if (this.running.has(skill.slug)) {
@@ -632,6 +634,8 @@ export class Scheduler {
    * Reads the same state the runner uses rather than a second copy: a status view that
    * can disagree with the thing it describes is worse than none, because it is believed.
    */
+  async listening(): Promise<readonly Listening[]> { return this.deps.listeners ? this.deps.listeners() : []; }
+
   async status(): Promise<
     readonly {
       slug: string;
@@ -784,6 +788,7 @@ export class Scheduler {
     const hooked = this.deps.hooked === undefined ? [] : await this.deps.hooked().catch(() => []);
     const skill = hooked.find(candidate => candidate.slug === slug);
     if (skill === undefined) return { ok: false, reason: `No webhook routine "${slug}".` };
+    if (this.deps.allowed?.(skill) === false) return { ok: false, reason: "This automation entry was disabled by the operator." };
     if (skill.paused === true) return { ok: false, reason: `${skill.name} is paused; turn it on first.` };
     const held = this.holds.holdOf(slug);
     if (held !== undefined) return { ok: false, reason: `${skill.name} is paused (${held.reason}); resume it first.` };
@@ -795,6 +800,7 @@ export class Scheduler {
     if (agent === undefined) return { ok: false, reason: `No agent to run ${skill.name}.` };
     if (skill.mode === "observe") { this.observe(skill, agent, `run as ${agent} for a webhook call${from !== undefined ? ` from ${from}` : ""}`); return { ok: true, said: `${skill.name} is in observe mode: recorded what it would have done, nothing ran.` }; }
     const refused = await this.refusal(skill, agent);
+    if (this.deps.allowed?.(skill) === false) return { ok: false, reason: "This automation entry was disabled by the operator." };
     if (refused !== undefined) return { ok: false, reason: `${skill.name} did not run and is paused: ${refused.text}` };
 
     this.lastRun.set(slug, this.now());
@@ -834,6 +840,7 @@ export class Scheduler {
     const skills = await this.deps.due().catch(() => []);
     const skill = skills.find(candidate => candidate.slug === slug);
     if (skill === undefined) return { ok: false, reason: `No scheduled skill "${slug}".` };
+    if (this.deps.allowed?.(skill) === false) return { ok: false, reason: "This automation entry was disabled by the operator." };
     if (skill.paused === true) return { ok: false, reason: `${skill.name} is paused; turn it on first.` };
     const held = this.holds.holdOf(slug);
     if (held !== undefined) return { ok: false, reason: `${skill.name} is paused (${held.reason}); resume it first.` };
@@ -841,6 +848,7 @@ export class Scheduler {
     const agent = this.runnerFor(skill);
     if (agent === undefined) return { ok: false, reason: `No agent to run ${skill.name}.` };
     const refused = await this.refusal(skill, agent);
+    if (this.deps.allowed?.(skill) === false) return { ok: false, reason: "This automation entry was disabled by the operator." };
     if (refused !== undefined) return { ok: false, reason: `${skill.name} did not run and is paused: ${refused.text}` };
 
     this.log(`${skill.name}: firing now, ${retry !== undefined ? `retry ${retry}` : "by hand"}`);

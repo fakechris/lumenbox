@@ -1,3 +1,4 @@
+import { GovernanceLedger, resourceKey, routineResource } from "./work-governance.ts";
 import { ResultChecks } from "./result-check-policy.ts";
 import { runResultCheck } from "./result-check-runner.ts";
 import { requestsResultCheck } from "./task-delivery.ts";
@@ -321,6 +322,7 @@ export class Orchestrator {
   readonly skillProvenance: SkillProvenance;
   readonly hooks: HookRunner | undefined;
   /** The commands turns let go of past their foreground window (INV-1461); their end wakes the agent on the background lane. */
+  readonly governance: GovernanceLedger;
   readonly resultChecks = new ResultChecks(join(agentboxHome(), "result-checks.jsonl"));
   readonly verifications = new VerificationLedger(join(agentboxHome(), "verifications.jsonl")); // what each reviewer found, by claim and evidence digest (INV-1614)
   /** The host's one record of each person (INV-1653); every turn reads it, the judge's kept preferences feed it, Settings → Mine edits it. The name reader is wired by the server, which knows the principals. */
@@ -367,8 +369,6 @@ export class Orchestrator {
    * estimate.
    */
   readonly policy = new PolicyGate({
-    // A reusable approval belongs to the box, not to whichever agent happened to ask
-    // (INV-539, docs/22 §3): two agents in one box must get the same answer.
     boxOf: agentId => {
       try {
         return this.registry.boxOf(agentId).id;
@@ -377,11 +377,9 @@ export class Orchestrator {
       }
     },
     spendUnavailable: () => this.usage.unavailable(),
-    // The box's egress allow list for the taint rule (INV-1309), read lazily: bundles come later.
     egressAllow: agentId => { try { return this.bundles.forBox(this.registry.boxOf(agentId))?.egressHosts ?? []; } catch { return []; } },
     spentSince: sinceMs => {
       const totals = this.usage.totalsSince(sinceMs);
-      // Every billed class, cache reads and writes included: a budget ignoring them let a cache-heavy run report near-zero spend.
       return (
         totals.inputTokens +
         totals.outputTokens +
@@ -393,7 +391,6 @@ export class Orchestrator {
       this.usage.spentSincePrincipal(sinceMs, principalId),
     spentSinceAgent: (sinceMs, agentId) => this.usage.spentSinceAgent(sinceMs, agentId),
     log: line => console.error(`[policy] ${line}`),
-    // Read lazily: the store is built after the gate, and rules reload with the config.
     rules: lazyRuleStore(() => this.rules),
   });
 
@@ -482,7 +479,6 @@ export class Orchestrator {
    */
   reloadMcp(): { started: string[]; stopped: string[]; kept: string[] } | undefined {
     if (!this.mcpFromConfig) return undefined;
-    // Every route dies with the list it was minted against (docs/33 §0a): a hot-swapped server must not hand a running engine tools nobody named.
     const revoked = this.mcpFace.revokeAll("MCP servers reloaded");
     if (revoked > 0) console.error(`[mcp-face] ${revoked} route(s) revoked by the reload`);
     return this.mcp.reload(mcpServersFrom(loadConfig(line => console.error(`[config] ${line}`))));
@@ -636,6 +632,7 @@ export class Orchestrator {
   });
 
   readonly scheduler = new Scheduler({
+    allowed: skill => !this.governance.revoked(routineResource(skill)),
     precheck: async (skill, agent) => this.credentials.forRoutine(skill, agent), // skipped and held with missing_credentials (INV-1666)
     spentSinceAgent: (sinceMs, agentId) => this.usage.spentSinceAgent(sinceMs, agentId), workDirOf: agent => workDir(this.registry.tryGet(agent) !== undefined ? this.boxEntryOf(agent) : undefined), // the run's prompt names its box's (INV-1737)
     due: async () => {
@@ -884,6 +881,7 @@ export class Orchestrator {
   }
 
   constructor(private readonly options: OrchestratorOptions = {}) {
+    this.governance = new GovernanceLedger(options.pendingWork === null ? null : join(agentboxHome(), "work-governance.jsonl"));
     setRejectionNote(entry => { this.usage.record(entry); });
     this.tasks =
       options.tasks === null
@@ -940,7 +938,7 @@ export class Orchestrator {
         ? undefined
         : (options.pendingWork ??
           new PendingWork(pendingWorkPath(), line => console.error(`[pending-work] ${line}`)));
-    // What a person sees of the forks (INV-1667), kept beside the ledger the host itself made; a ledger a test hands in brings its own or none.
+    if (this.pendingWork) this.pendingWork.resourceAllowed = id => !this.governance.revoked(resourceKey("pending", id));
     if (options.pendingWork === undefined && this.pendingWork !== undefined) this.pendingWork.forks = new ForkEvents(forkEventsPath(), line => console.error(`[fork-events] ${line}`));
     this.skillProvenance =
       options.skillProvenance === null
@@ -1092,6 +1090,7 @@ export class Orchestrator {
       inbox,
       true, (agentId, message) => admitProgressMessage(this.tasks, agentId, message), workFocus, this.tasks?.workRoots.admission(workFocus)
     );
+    this.bus.resourceAllowed = message => this.governance.allows(message);
     this.goalLoop = this.tasks === undefined ? undefined : new GoalLoop({ modelRecoveryRoot: this.registry.root,
       tasks: this.tasks,
       agentName: id => this.registry.tryGet(id)?.profile.name,
@@ -2043,6 +2042,7 @@ export class Orchestrator {
     let parked = 0;
 
     for (const turn of outstanding) {
+      if (this.governance.revoked(resourceKey("recovery", turn.id)) || turn.workId && this.governance.revoked(resourceKey("work", turn.workId)) || turn.causedBy?.some(id => this.governance.revoked(resourceKey("message", id)))) { this.turns?.end(turn.id, "resource-stopped"); abandoned++; continue; }
       if (this.retireInterruptedCheck(turn)) { abandoned++; continue; }
       if (turn.workId && this.bus.workAttention?.cancelled(turn.workId)) { this.turns?.end(turn.id, "work-cancelled"); abandoned++; continue; }
       // Inbox replay already queued this durable continuation after a second crash.

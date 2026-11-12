@@ -23,6 +23,7 @@ interface Dependencies {
   task: (id: string) => Task | undefined; reply: (delivery: Delivery) => string;
   isWorking: (delivery: Delivery) => boolean;
   send: (delivery: Delivery, reply: string) => Promise<void>;
+  revoked?: (id: string) => boolean;
   now?: () => Date;
   workingSnapshot?: () => ReadonlySet<string>;
 }
@@ -95,11 +96,11 @@ export class DeliveryRecovery {
     const decision = this.decisions().get(id), delivery = this.pending(id) ?? decision?.delivery;
     return delivery ? this.view(delivery, decision) : undefined;
   }
-  list(limit = 50, offset = 0, allowed: (row: Delivery) => boolean = () => true): RecoveryView[] {
+  list(limit = 50, offset = 0, allowed: (row: Delivery) => boolean = () => true, all = false): RecoveryView[] {
     const decisions = this.decisions(), deliveries = new Map(this.deps.deliveries.entries().map(row => [row.id, row])), working = this.deps.workingSnapshot?.(), transport = this.transport();
     for (const row of decisions.values()) if (!deliveries.has(row.id)) deliveries.set(row.id, row.delivery);
     const start = Number.isFinite(offset) ? Math.max(0, Math.trunc(offset)) : 0;
-    const count = Number.isFinite(limit) ? Math.min(100, Math.max(1, Math.trunc(limit))) : 50;
+    const count = all ? Number.MAX_SAFE_INTEGER : Number.isFinite(limit) ? Math.min(100, Math.max(1, Math.trunc(limit))) : 50;
     return [...deliveries.values()].filter(allowed).slice(start, start + count).map(row => this.view(row, decisions.get(row.id), false, undefined, working?.has(replyExecutionKey(row.agentId, row.conversation)), transport));
   }
   private pinned(id: string, token: string): { delivery: Delivery; view: RecoveryView; content: string } {
@@ -123,6 +124,7 @@ export class DeliveryRecovery {
     return this.preview(id)!;
   }
   async send(id: string, token: string, by: string): Promise<RecoveryView> {
+    if (this.deps.revoked?.(id)) throw Error("This reply was revoked by the operator.");
     const existing = this.preview(id); if (existing?.phase === "sent") return existing;
     const { delivery, view, content } = this.pinned(id, token);
     if (!view.canSend || this.busy.has(id)) throw new Error("This reply cannot be sent in its current state.");
@@ -141,6 +143,7 @@ export class DeliveryRecovery {
   async sweep(): Promise<void> {
     const decisions = this.decisions(), entries = this.deps.deliveries.entries(), working = this.deps.workingSnapshot?.(), transport = this.transport();
     for (const delivery of entries) {
+      if (this.deps.revoked?.(delivery.id)) continue;
       const observed = working?.has(replyExecutionKey(delivery.agentId, delivery.conversation));
       const meta = this.view(delivery, decisions.get(delivery.id), false, undefined, observed, transport);
       if (meta.phase === "unknown" && !decisions.has(delivery.id)) this.record(delivery, meta.title, "unknown", "host", { reason: meta.reason, externalEffectUnconfirmed: true });
@@ -156,6 +159,7 @@ export class DeliveryRecovery {
     const id = answerDeliveryId(receipt.purpose);
     if (id === null) return { allow: false, reason: "The answer receipt has no delivery identity" };
     if (!id) return { allow: true };
+    if (this.deps.revoked?.(id)) return { allow: false, terminal: true, reason: "The reply was revoked by the operator" };
     const decision = this.decisions().get(id);
     const delivery = this.pending(id) ?? decision?.delivery;
     const root = delivery?.taskId ? this.deps.task(delivery.taskId)?.workRoot : undefined;

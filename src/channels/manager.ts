@@ -129,7 +129,7 @@ export interface InboundMessage {
    * purpose: a bot that stays silent when spoken to is the worse failure.
    */
   addressed?: boolean;
-  privateChat?: boolean; interaction?: true; // positive evidence from the wire, never inferred
+  privateChat?: boolean; // positive evidence from the wire, never inferred
   admittedByDoor?: true; // the door admitted the sender itself (INV-1288, a tailmsg peer on its allow list); the drive list is not consulted, and the letter is still never an approval
 }
 

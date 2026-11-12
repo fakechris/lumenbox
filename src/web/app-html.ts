@@ -1,3 +1,4 @@
+import { WORK_GOVERNANCE_JS, WORK_GOVERNANCE_STYLE } from "./work-governance-ui.ts";
 import { WORK_READING_JS, WORK_READING_STYLE } from "./work-reading-ui.ts";
 import { WORK_ATTENTION_HTML, WORK_ATTENTION_STYLE, WORK_ATTENTION_JS } from "./work-attention-ui.ts";
 import { SETUP_GUIDE_JS, SETUP_GUIDE_STYLE } from "./setup-guide.ts";
@@ -44,10 +45,7 @@ export const APP_HTML = String.raw`<!doctype html>
 <title>LumenBox</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'%3E%3Crect x='4' y='4' width='120' height='120' rx='30' fill='%23231a13'/%3E%3Cpath d='M64 32 96 49 64 66 32 49Z' fill='%23d9634a'/%3E%3Cpath d='M32 49 64 66v32L32 81Z' fill='%23d9634a' fill-opacity='.62'/%3E%3Cpath d='M96 49 64 66v32l32-17Z' fill='%23d9634a' fill-opacity='.34'/%3E%3C/svg%3E">
 <script>
-// The page's words for t(), in the language it was served in (INV-1684): defined first, so every script can read them.
 var MSG = {{@messages}}, MSG_LOCALE = "{{@locale}}";
-// The theme, before first paint: reading it after the stylesheet applies flashes the
-// wrong colors on every load for everyone on the non-default theme.
 (function () {
   var theme;
   try { theme = localStorage.getItem("lumen-theme"); } catch (error) {}
@@ -62,6 +60,7 @@ var MSG = {{@messages}}, MSG_LOCALE = "{{@locale}}";
 ${WORK_ATTENTION_STYLE}
 ${TASK_FOCUS_STYLE}
 ${TASK_BOARD_STYLE}
+${WORK_GOVERNANCE_STYLE}
 ${WORK_READING_STYLE}
 ${RIGHT_PANE_STYLE}
 ${AGENT_ROW_STYLE}
@@ -870,7 +869,7 @@ ${AGENT_ROW_STYLE}
     <svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true"><rect x="4" y="4" width="120" height="120" rx="30" fill="#231a13"/><path d="M64 32 96 49 64 66 32 49Z" fill="#d9634a"/><path d="M32 49 64 66v32L32 81Z" fill="#d9634a" fill-opacity=".62"/><path d="M96 49 64 66v32l32-17Z" fill="#d9634a" fill-opacity=".34"/></svg>
     LumenBox
   </span>
-  <button class="btn ghost sm" id="alltasksnav">{{ui.tc.team}} <span id="alltasks-feedback" class="activity-error" role="status" aria-live="polite"></span></button>
+  <button class="btn ghost sm" id="work-management-nav">{{ui.wg.title}}</button><button class="btn ghost sm" id="alltasksnav">{{ui.tc.team}} <span id="alltasks-feedback" class="activity-error" role="status" aria-live="polite"></span></button>
   <span class="mid"><span id="model">&mdash;</span></span>
   <!-- A control, so it is reachable by keyboard and announced as one. It was a span that
        opened nothing; now it opens something, and a clickable span nothing can find is a
@@ -1306,7 +1305,6 @@ ${SETTINGS_DIALOG_HTML}
 <script src="/app/jev-settings.js?lang={{@locale}}"></script><script src="/app/supervision.js?lang={{@locale}}"></script>
 <script>
 "use strict";
-// Markdown rendering is markdown-it's job, served from node_modules by this server.
 // html:false is what keeps model output inert — see src/web/markdown.ts.
 var md = window.markdownit ? window.markdownit(${JSON.stringify(MARKDOWN_OPTIONS)}) : null;
 
@@ -5653,6 +5651,7 @@ ${WORK_READING_JS}
 ${TASK_PROGRESS_CLIENT_JS}
 ${TASK_FOCUS_JS}
 ${TASK_BOARD_JS}
+${WORK_GOVERNANCE_JS}
 
 document.getElementById("tasklist").addEventListener("click", function (event) {
   var id = event.target.getAttribute && event.target.getAttribute("data-oppose");

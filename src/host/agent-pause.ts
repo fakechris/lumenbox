@@ -18,7 +18,7 @@ export interface AgentPauseDeps {
   dirFor: (agentId: string) => string;
   /** Ends its turns in flight; returns whose it ended. */
   interrupt: (agentIds: string[], reason: string) => string[];
-  box: () => { jobs(): Promise<{ jobs: { job_id: string; running: boolean; owner?: string }[] }>; killJob(jobId: string): Promise<unknown>; waitForJob?(request:{job_id:string;timeout_ms:number}):Promise<{running:boolean}> } | undefined;
+  box: (agentId: string) => { jobs(): Promise<{ jobs: { job_id: string; running: boolean; owner?: string }[] }>; killJob(jobId: string): Promise<unknown>; waitForJob?(request:{job_id:string;timeout_ms:number}):Promise<{running:boolean}> } | undefined;
   /** Gives the agent a host message in the lane drained first, so it arrives with what people sent meanwhile. */
   tell: (agentId: string, text: string) => Promise<void>;
   /** Wakes every conversation with a queue: a chat thread's messages wait as long as the main one's. */
@@ -64,6 +64,8 @@ export class AgentPauses {
     return readPause(this.deps.dirFor(agentId));
   }
 
+  barrier(ids: string[], by: string, reason: string): void { for (const id of ids) if (!this.pauseOf(id)) writePause(this.deps.dirFor(id), { by, reason, at: (this.deps.now?.() ?? new Date()).toISOString() }); }
+
   async pause(agentId: string, by: string, reason: string): Promise<PauseResult> {
     writePause(this.deps.dirFor(agentId), { by, at: (this.deps.now?.() ?? new Date()).toISOString(), reason });
     return this.stopPaused(agentId, by, reason);
@@ -84,7 +86,7 @@ export class AgentPauses {
   private async stopPaused(agentId: string, by: string, reason: string): Promise<PauseResult> {
     const turnStopped = this.deps.interrupt([agentId], "paused").length > 0;
     const jobsStopped: string[] = [], jobsUnconfirmed: string[] = [], errors: string[] = [];
-    const box = this.deps.box();
+    const box = this.deps.box(agentId);
     if (box !== undefined) {
       const named = new Set(recordsIn(this.deps.dirFor(agentId)).flatMap(path => jobsNamedIn(path)));
       const jobs = (await box.jobs().catch((error: unknown) => { errors.push(`Could not list background jobs: ${error instanceof Error ? error.message : String(error)}`); this.deps.log(errors.at(-1)!); return { jobs: [] }; })).jobs;

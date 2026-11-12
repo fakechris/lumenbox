@@ -1,3 +1,5 @@
+import { GovernanceLedger, WorkGovernance, resourceKey } from "./work-governance.ts";
+import { writePause, clearPause } from "../agents/pause.ts";
 import { surfaceActionWork } from "./surface-action.ts";
 import { SurfaceLedger } from "./show-ui.ts";
 import { ResultChecks } from "./result-check-policy.ts";
@@ -4227,4 +4229,27 @@ test("a card choice continues the original installation after its answer, withou
     },
   });
   episode.cleanup();
+});
+
+
+test("stopping selected legacy callbacks across members leaves the new installation goal free to finish (INV-1814)", async () => {
+  const ledger = new GovernanceLedger(), control = new WorkGovernance(ledger); let calls = 0;
+  const tasks = new TaskStore(null);
+  const episode = await runEpisode({ team: [{ name: "Mia", tools: ["write_file"] }, { name: "Bob", tools: [] }], tasks, says: [],
+    script: ({ agent }) => { assert.equal(agent, "Mia", "stopped legacy callbacks cannot invoke another model"); return calls++ === 0 ? { call: "write_file", input: { path: "/home/box/work/skills/approved/SKILL.md", content: "Approved installation", overwrite: false } } : { say: "Installed the approved skill. The original files remain unchanged." }; },
+    drive: async ({ bus, registry }) => {
+      bus.resourceAllowed = message => ledger.allows(message);
+      const agents = registry.list();
+      for (const agent of agents) { writePause(registry.dirFor(agent.id), { by: "fixture", at: new Date().toISOString(), reason: "hold old work for explicit disposition" }); bus.sendFromUser(agent.id, "Old cross-agent audit callback", { messageId: "old-" + agent.id, synthetic: true, origin: "host:old-work" }); }
+      const resources = bus.snapshot().queued.map(({ agentId, message }) => ({ key: resourceKey("message", message.id), kind: "message", title: "Old callback", section: "future" as const, state: "queued", source: "unknown", version: message.id, agentId, actions: ["stop" as const], scope: "messageOnly", unknown: ["otherMessagesRemain"], target: { id: message.id } }));
+      const adapter = { inventory: async () => ({ rows: resources, unknown: [] }), mayRead: () => true, apply: async () => { bus.discardRevoked(); return { confirmed: true }; } };
+      const preview = await control.preview(adapter, resources.map(row => ({ key: row.key, action: "stop" as const })));
+      await control.execute(adapter, { token: preview.token, operationId: "stop-old-collaboration" }, "person");
+      for (const agent of agents) { assert.throws(() => bus.sendFromUser(agent.id, "Late old callback", { messageId: "old-" + agent.id, synthetic: true }), /stopped/); clearPause(registry.dirFor(agent.id)); }
+      const mia = agents.find(agent => agent.profile.name === "Mia")!;
+      bus.sendFromUser(mia.id, "Install the approved skill and preserve the original files"); await bus.wake(mia.id); await bus.idle();
+      assert.equal(bus.snapshot().queued.length, 0); assert.equal(tasks.list().filter(task => task.origin?.kind === "user").length, 1);
+    },
+  });
+  try { assert.equal(episode.files.get("/home/box/work/skills/approved/SKILL.md"), "Approved installation", JSON.stringify(episode.score)); assert.ok(episode.score.said.some(row => row.text.includes("Installed"))); } finally { episode.cleanup(); }
 });

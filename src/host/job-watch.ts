@@ -124,6 +124,8 @@ export class JobWatch {
   }
 
   /** How many of this agent's jobs are being watched, across its conversations (INV-1559 diagnostics). */
+  snapshot(): WatchedJob[] { return [...this.open.values()].map(row => ({ ...row })); }
+
   countFor(agentId: string): number {
     return [...this.open.values()].filter(job => job.agentId === agentId).length;
   }

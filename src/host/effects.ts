@@ -219,12 +219,14 @@ export class Effects {
       if (mcp === undefined) throw new Error("no tool servers are loaded");
       const result = await mcp.callFromHost(pause.child, { ...((pause.data?.resumeInput as Record<string, unknown>) ?? {}), approved });
       text = result.text;
+      if (!this.deps.pendingWork.resourceAllowed(pause.id)) return;
       const follow = this.apply({ agentId: pause.agentId, agentName: String(pause.data?.agentName ?? ""), conversation: pause.parent, workId: pause.workId, tool: pause.child, effects: result.effects ?? [] });
       if (follow.notes.length > 0) text = `${text}\n${follow.notes.join("\n")}`;
     } catch (error) {
       failed = true;
       text = `The follow-up could not run: ${error instanceof Error ? error.message : String(error)}`;
     }
+    if (!this.deps.pendingWork.resourceAllowed(pause.id)) return;
     const message = `[You asked the person to confirm "${reason}"; they ${approved ? "confirmed" : "declined"}.] ${text}`;
     // The callback has run and must not run again, so what it said is made durable before the
     // pause is closed: a note due now, which `deliverDue` retries until the inbox takes it —
