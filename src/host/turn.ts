@@ -112,7 +112,7 @@ import { DURABLE_RESULT_CHARS, type ResolutionConfig } from "../protocol/index.t
 import type { KeptEvidence } from "./resume.ts";
 import { keepToolResult, readKeptSources, RESULT_KEPT_MARKER } from "./results.ts";
 import { keptPointer, parseKeptPointer } from "./fetched.ts";
-import { checkQuotes, quoteReportLine } from "./quote-check.ts"; import { answerAfterSendBack, NOT_YET_SEEN } from "./sent-back.ts";
+import { checkQuotes, quoteReportLine } from "./quote-check.ts"; import { answerAfterSendBack, NOT_YET_SEEN } from "./sent-back.ts"; import { unrequestedTurn } from "./turn-standing.ts";
 import { deliverableReport, MAX_DELIVERABLE_NUDGES, outboxFindings } from "./deliverables.ts";
 import type { BoxClass } from "../box/access.ts";
 import { emptySectionFaults, buildSystemPromptParts, buildTurnPrompt,
@@ -2153,7 +2153,7 @@ ${outcome.text}`;
     if (peerRecord === undefined) return;
     const names = [peer.fromId.toLowerCase(), (peerRecord?.profile.name ?? peer.fromName).toLowerCase()];
     if (names.some(name => messagedThisTurn.has(name))) return;
-    const ack = deps.bus.send({ fromId: agent.id, toId: peer.fromId, text, relayed: true, hops: chainHops, work });
+    const ack = deps.bus.send({ fromId: agent.id, toId: peer.fromId, text, relayed: true, hops: chainHops, work, asked: !unrequestedTurn(inbound, work, personOpened, registry) });
     console.error(`[turn] ${agent.profile.name}: prose reply carried to ${peer.fromName}: ${ack.slice(0, 80)}`);
   };
   // How many tool calls this turn has made, across continuations: the structural signal the
@@ -3347,7 +3347,7 @@ ${outcome.text}`;
             hostRunner: isForkConversation(conversation) ? undefined : deps.hostRunner,
             vault: deps.vault,
             oauth: isForkConversation(conversation) ? undefined : deps.oauth,
-            tasks: deps.tasks, taskBinding: callBinding, progressContext, audit, resultChecks: deps.resultChecks, work, historyConversation, side: sideWork,
+            tasks: deps.tasks, taskBinding: callBinding, progressContext, audit, resultChecks: deps.resultChecks, work, historyConversation, side: sideWork, unrequested: unrequestedTurn(inbound, work, personOpened, registry),
             ...(deps.goalGate !== undefined ? { goalGate: deps.goalGate } : {}),
             scopes: deps.scopes,
             mcp: isForkConversation(conversation) ? undefined : deps.mcp,

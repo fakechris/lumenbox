@@ -4313,3 +4313,38 @@ test("stopping selected legacy callbacks across members leaves the new installat
   });
   try { assert.equal(episode.files.get("/home/box/work/skills/approved/SKILL.md"), "Approved installation", JSON.stringify(episode.score)); assert.ok(episode.score.said.some(row => row.text.includes("Installed"))); } finally { episode.cleanup(); }
 });
+
+// INV-1844, the shape of 2026-11-02..10: a teammate's message that traces to nobody's request sets an agent making
+// cards for others. 1,633 cards were made that way against 39 by a person, and nothing was delivered to anyone.
+test("INV-1844: a turn nobody asked for may propose work but not start it or hand it out; a person's request, and what is assigned under it, is work", { timeout: 20_000 }, async () => {
+  const { WorkAttention } = await import("../agents/work-attention.ts");
+  const focus = new WorkAttention(), tasks = new TaskStore(null), seen = new Map<string, number>();
+  const nth = (key: string) => { const n = seen.get(key) ?? 0; seen.set(key, n + 1); return n; };
+  const episode = await runEpisode({
+    workAttention: focus, team: [{ name: "Ada", tools: ["Tasks"] }, { name: "Bob", tools: ["Tasks"] }], says: [], tasks,
+    script: ({ opened }) => {
+      if (opened.includes("audit my card")) { const n = nth("probe"); return n < 3 ? { call: "Tasks", input: { action: "create", title: `[probe ${n}] does the gate fire`, assignee: "Bob" } } : { say: "Three probes filed." }; }
+      if (opened.includes("weekly report")) return nth("report") === 0 ? { call: "Tasks", input: { action: "create", title: "Collect the figures", assignee: "Bob", parent: "none" } } : { say: "Bob is collecting the figures." };
+      if (opened.includes("is assigned to you")) return nth("assigned") === 0 ? { call: "Tasks", input: { action: "create", title: "Pull last week's numbers", parent: "none" } } : { say: "On it." };
+      return { say: "ok" };
+    },
+    drive: async ({ registry, bus, say }) => {
+      const ada = registry.resolve("Ada").id, bob = registry.resolve("Bob").id;
+      bus.send({ fromId: bob, toId: ada, text: "audit my card t9, would you" });
+      await bus.wake(ada); await bus.idle();
+      await say("write the weekly report");
+      await bus.idle();
+    },
+  });
+  try {
+    const cards = tasks.list(), probes = cards.filter(task => task.title.startsWith("[probe"));
+    assert.equal(probes.length, 3);
+    assert.ok(probes.every(task => task.proposedBy !== undefined), "what a turn nobody asked for wants done waits for a person");
+    const bob = episode.registry.resolve("Bob").id;
+    const told = (episode.registry.readTranscript(bob) as { role?: string; text?: string }[]).filter(entry => entry.role === "user").map(entry => entry.text ?? "").join("\n");
+    assert.doesNotMatch(told, /probe/, "and nobody is woken to do it");
+    const asked = cards.find(task => task.title === "Collect the figures")!, under = cards.find(task => task.title === "Pull last week's numbers")!;
+    assert.equal(asked.proposedBy, undefined, "work made for a person's request is work");
+    assert.ok(under !== undefined && under.proposedBy === undefined, "and so is what the teammate it was assigned to makes under it: the request travelled with the assignment");
+  } finally { episode.cleanup(); }
+});
