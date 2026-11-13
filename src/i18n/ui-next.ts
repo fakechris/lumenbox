@@ -124,7 +124,7 @@ export const UI_NEXT: Record<string, readonly [string, string]> = {
   "ui.next.chat.resultsElsewhere": ["另有 {n} 个结果等你看，在「{where}」", "{n} more waiting for you to look at, in “{where}”"],
   "ui.next.chat.unreadElsewhere": ["{n} 条未读，在「{where}」", "{n} unread in “{where}”"],
   "ui.next.sent.label": ["发到了对话里：{what} · {when}", "Sent to the chat: {what} · {when}"],
-  "ui.next.sent.text": ["LumenBox 的通知", "a notice from LumenBox"],
+  "ui.next.sent.text": ["一条消息", "a message"],
   "ui.next.sent.image": ["一张图片", "an image"],
   "ui.next.sent.file": ["一个文件", "a file"],
   "ui.next.sent.card.task": ["进度卡", "a progress card"],

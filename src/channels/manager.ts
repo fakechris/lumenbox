@@ -749,7 +749,7 @@ export class ChannelManager {
   registerAndStart(adapter: ChannelAdapter, detail: StatusLine | string): boolean {
     if (this.adapters.some(existing => existing.name === adapter.name)) return false;
     this.register(adapter, true, detail);
-    this.startAdapter(adapter);
+    this.startAdapter(this.adapters.at(-1)!); // the one just registered, as registered: wrapped when sends are recorded
     return true;
   }
 

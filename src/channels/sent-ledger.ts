@@ -9,8 +9,10 @@
  *
  * So the record is taken at the one place every send passes: the adapter. `recording` wraps a door, and
  * each outbound method that returns leaves a line under the conversation the chat maps to. A send that
- * threw leaves none — the line means it went. Bytes are not kept, names are; text is kept as sent, which
- * is after the outbound redaction, so nothing is here that the chat did not already receive.
+ * threw leaves none — the line means it went. The one exception is the line a door's own handler returns
+ * for the door to send (a refusal, the answer to a command): the door sends it from inside itself, so it is
+ * recorded as it is handed over. Bytes are not kept, names are. Text passes the outbound redaction again
+ * on its way into the file: a card's words did not go through it on their way to the chat.
  *
  * One file per conversation, because the reader is a thread being drawn and a single file would be
  * scanned whole for each one.
@@ -20,7 +22,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { conversationIdFor } from "../agents/registry.ts";
 import { appendLine, type LedgerKind } from "../host/jsonl.ts";
-import type { ChannelAdapter } from "./manager.ts";
+import type { ChannelAdapter, InboundMessage } from "./manager.ts";
 
 /** What was sent is what happened: never compacted, never dropped. */
 export const LEDGER_KIND: LedgerKind = "record";
@@ -46,14 +48,17 @@ export class SentLedger {
   constructor(
     private readonly dir: string,
     private readonly onError: (why: string) => void = () => {},
-    private readonly now: () => Date = () => new Date()
+    private readonly now: () => Date = () => new Date(),
+    /** Held secrets taken out before a word is written (INV-1360's redaction, read now). */
+    private readonly redact: (text: string) => string = text => text
   ) {}
 
   /** A send that returned. Failing to write the line is reported and never fails the send it describes. */
   note(row: Omit<SentRow, "at">): void {
     try {
       mkdirSync(this.dir, { recursive: true });
-      const text = row.text === undefined ? undefined : row.text.length > TEXT_KEPT ? `${row.text.slice(0, TEXT_KEPT)}…` : row.text;
+      const clean = row.text === undefined ? undefined : this.redact(row.text);
+      const text = clean === undefined ? undefined : clean.length > TEXT_KEPT ? `${clean.slice(0, TEXT_KEPT)}…` : clean;
       appendLine(this.pathFor(conversationIdFor(row.chatKey)), JSON.stringify({ at: this.now().toISOString(), ...row, ...(text !== undefined ? { text } : {}) }));
     } catch (error) {
       this.onError(`sent ledger: ${row.kind} to ${row.chatKey} was sent but not recorded (${error instanceof Error ? error.message : String(error)})`);
@@ -79,12 +84,13 @@ export class SentLedger {
 
 type Card = { title?: string; question?: string; description?: string };
 /** Each outbound method, and the row a call to it leaves. Anything not listed is not a send. */
-const SENDS: Record<string, (args: unknown[]) => Omit<SentRow, "door" | "at">> = {
+const SENDS: Record<string, (args: unknown[], result: unknown) => Omit<SentRow, "door" | "at"> | undefined> = {
   send: ([identity, text]) => ({ chatKey: String(identity), kind: "text", text: String(text) }),
   sendToChat: ([chatKey, text]) => ({ chatKey: String(chatKey), kind: "text", text: String(text) }),
   sendImage: ([chatKey]) => ({ chatKey: String(chatKey), kind: "image" }),
   sendFile: ([chatKey, name]) => ({ chatKey: String(chatKey), kind: "file", name: String(name) }),
-  postTaskCard: ([chatKey, card]) => ({ chatKey: String(chatKey), kind: "card", card: "task", text: (card as Card).title ?? "" }),
+  // No handle back means the door posted no card.
+  postTaskCard: ([chatKey, card], handle) => handle === undefined ? undefined : ({ chatKey: String(chatKey), kind: "card", card: "task", text: (card as Card).title ?? "" }),
   postQuestionCard: ([identity, card, chatKey]) => ({ chatKey: String(chatKey ?? identity), kind: "card", card: "question", text: (card as Card).question ?? "" }),
   postApprovalCard: ([identity, card, chatKey]) => ({ chatKey: String(chatKey ?? identity), kind: "card", card: "approval", text: (card as Card).description ?? "" }),
   postSurfaceCard: ([identity, card, chatKey]) => ({ chatKey: String(chatKey ?? identity), kind: "card", card: "surface", text: (card as Card).title ?? "" }),
@@ -96,11 +102,18 @@ export function recording(adapter: ChannelAdapter, ledger: SentLedger): ChannelA
   return new Proxy(adapter, {
     get(target, property, receiver) {
       const value = Reflect.get(target, property, receiver) as unknown;
+      // What the handler returns, the door sends itself, from inside: taken here, where it is handed over.
+      if (property === "start") return (onMessage: (message: InboundMessage) => Promise<string | undefined>) => target.start(async message => {
+        const line = await onMessage(message);
+        if (line !== undefined && line.trim() !== "") ledger.note({ door: target.name, chatKey: message.threadKey ?? message.chatKey ?? message.identity, kind: "text", text: line });
+        return line;
+      });
       const row = typeof property === "string" ? SENDS[property] : undefined;
       if (row === undefined || typeof value !== "function") return typeof value === "function" ? value.bind(target) : value;
       return async (...args: unknown[]) => {
         const result = await (value as (...all: unknown[]) => Promise<unknown>).apply(target, args);
-        ledger.note({ door: target.name, ...row(args) });
+        const sent = row(args, result);
+        if (sent !== undefined) ledger.note({ door: target.name, ...sent });
         return result;
       };
     },
