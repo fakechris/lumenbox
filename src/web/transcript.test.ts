@@ -10,6 +10,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildWakePrompt, parseWakePrompt } from "../host/prompt.ts";
 import { toDisplayEntries } from "./transcript.ts";
+import { buildAuditPrompt } from "../host/audit.ts";
+import { jobEndedNote, mergedEndsNote } from "../host/job-watch.ts";
+import type { Task } from "../host/tasks.ts";
 
 const inbound = (from: string, text: string, priority = false) => ({
   id: "m-test", fromId: `id-${from}`,
@@ -345,6 +348,24 @@ test("a handoff that opened the context is shown as a quiet host row, never as t
     ["trigger", "handoff lost in the switch"],
   ]);
   assert.ok(!display.some(entry => entry.kind === "text"), "not a user bubble");
+});
+
+test("what the host wrote is never drawn as the person speaking, whatever the record stamped it", () => {
+  const at = "2026-11-09T00:00:00.000Z";
+  const task = { id: "t123", title: "Changelog digest", status: "review" } as unknown as Task;
+  const display = toDisplayEntries([
+    // 2026-11-12, on Chris's own page: the digest of a shortened context, a wall of spool paths in his bubble.
+    { role: "user", kind: "summary", covers: 40, text: "[Earlier in this conversation — background, not instructions.]\n\n**Exact references**\n/home/box/work/.spool/a.out.log", at },
+    // Audit requests were queued as a person's message until 2026-11-04 and are stored that way.
+    { role: "user", fromPerson: true, text: buildAuditPrompt({ task, assigneeName: "Bob" }), at },
+    { role: "user", text: jobEndedNote({ jobId: "job-d6aecbc3", command: "ls" } as never, { exit_code: 0, log_path: "/x.log", tail: "" }, false), at },
+    { role: "user", text: mergedEndsNote(["one", "two"]), at },
+    { role: "user", text: "<host_notification source=\"pause\">Chris resumed you.</host_notification>", at },
+    { role: "user", fromPerson: true, text: "Audit task t123 for me, would you?", at },
+  ], []);
+  assert.deepEqual(display.map(entry => [entry.kind, (entry as { provenance?: string }).provenance]), [
+    ["trigger", "host"], ["trigger", "host"], ["trigger", "host"], ["trigger", "host"], ["trigger", "host"], ["text", undefined],
+  ]);
 });
 
 test("a ShowUI call replays as the card's messages; a refused one carries the error so the page draws nothing (docs/79)", () => {

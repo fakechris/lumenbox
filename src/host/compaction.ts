@@ -26,6 +26,7 @@
 import { envNumber } from "../config.ts";
 import { AGENT_WAKE_CUE } from "../agents/bus.ts";
 import type Anthropic from "@anthropic-ai/sdk";
+import { LEGACY_HOST_PROMPTS } from "./legacy-host-prompts.ts";
 
 /**
  * Characters per token, and the per-message overhead the API adds.
@@ -456,18 +457,6 @@ export const PINNED_USER_CHARS = 2_000;
  * longer demonstrates, newest tools first, capped. Results are trimmed hard — the
  * schema a weak model imitates lives in the call, not in what came back.
  */
-/**
- * Host prompts that were written before the `host` stamp existed, recognised by their opening
- * words so a record nobody rewrites still reads right. Each is the exact text the host writes
- * (`progress.ts` continuationPrompt, `turn.ts` last round and Stop hook), so a person who
- * happens to type these words is not mistaken for the host.
- */
-const LEGACY_HOST_PROMPTS: readonly RegExp[] = [
-  /^You have used \d+ tool rounds, which is the limit for one turn/,
-  /^\[last round\] You have one response left in this turn/,
-  /^\[Stop hook\] /,
-];
-
 /** Written by the host to the model, as opposed to said by a person or a teammate. */
 export function isHostAuthored(entry: HistoryEntry): boolean {
   if ("kind" in entry) return false;
