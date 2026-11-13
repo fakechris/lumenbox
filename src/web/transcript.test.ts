@@ -90,15 +90,13 @@ test("tool traffic becomes tool rows, not empty bubbles", () => {
   const display = toDisplayEntries(entries, [{ id: "id-Ada", name: "Ada" }]);
 
   assert.deepEqual(display[0], { kind: "text", role: "user", provenance: "unknown", text: "take a screenshot", at: "t" });
-  // Marked `aside`: prose in the same turn as tool calls is running commentary, not the
-  // answer, and the reader of a long piece of research needs to see where the work stops
-  // and the conclusion starts. Known here by construction rather than guessed — a
-  // `blocks` entry is by definition a round that went on to call something.
+  // Marked `opening`: the first thing said beside the calls of a turn a person opened went to
+  // that person while the tools ran — a chat received it as a message — so it is drawn as said.
   assert.deepEqual(display[1], {
     kind: "text",
     role: "assistant",
     text: "Looking now.",
-    aside: true,
+    opening: true,
     at: "t",
   });
   // The result is folded into the call it answers, so the page has one row to collapse.
@@ -267,6 +265,10 @@ test("the final answer is not marked as commentary", () => {
         blocks: [{ type: "tool_result", tool_use_id: "1", content: [{ type: "text", text: "ok" }] }],
         at: "t",
       },
+      { role: "assistant", kind: "blocks", blocks: [{ type: "text", text: "Now the second." }, { type: "tool_use", id: "2", name: "bash", input: { command: "true" } }], at: "t" },
+      { role: "user", kind: "results", blocks: [{ type: "tool_result", tool_use_id: "2", content: [{ type: "text", text: "ok" }] }], at: "t" },
+      // A finished answer a gate held for another look: filed with no call, and replaced by what follows.
+      { role: "assistant", kind: "blocks", blocks: [{ type: "text", text: "The second one, by \"about 3x\"." }], at: "t" },
       { role: "assistant", text: "The second one, by about 3x.", at: "t" },
     ] as never,
     []
@@ -275,9 +277,8 @@ test("the final answer is not marked as commentary", () => {
     (entry): entry is Extract<typeof entry, { kind: "text" }> =>
       entry.kind === "text" && entry.role === "assistant"
   );
-  assert.equal(texts.length, 2);
-  assert.equal((texts[0] as { aside?: true }).aside, true, "the narration");
-  assert.equal((texts[1] as { aside?: true }).aside, undefined, "the answer");
+  assert.deepEqual(texts.map(entry => (entry as { opening?: true }).opening ? "said first" : (entry as { aside?: true }).aside ? "aside" : "answer"),
+    ["said first", "aside", "aside", "answer"], "what the person was shown is drawn as said; narration after it and a draft sent back are not");
 });
 
 // ── a turn nobody typed is not the person speaking (docs/46) ──────────────────────────────

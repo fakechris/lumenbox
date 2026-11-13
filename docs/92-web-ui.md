@@ -299,6 +299,16 @@ each. Looking clears the count at once.
 host notifications are host context in the transcript (`transcript.ts`, by the table in
 `model-text.ts`), whatever an old record stamped them.
 
+**The bubbles are what the person was told.** A conversation that comes through a chat door and the
+same conversation on the page show the same things said, in the same order; the page may show more
+around them (steps, files, work), never less of what was said. Two rules carry it (INV-1841). The
+first thing an agent says beside its calls in a turn a person opened is sent to that person while the
+tools run, so it is a bubble (`opening`), marked in the record (`told`) and derived for records older
+than the mark. And an answer a gate held for another look is not lost when the agent answers the gate
+instead of the person: a closing text less than half the draft's length is a note about it, and the
+reply is the draft followed by the note (`src/host/sent-back.ts`). The chat's reply and the page's
+bubbles are read from the same transcript entries, and a scenario holds the two equal.
+
 **A read that failed is not an empty answer.** A list that could not be read says so. "Nothing went
 wrong" is only said when the server said it.
 

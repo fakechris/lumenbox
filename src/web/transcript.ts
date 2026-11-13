@@ -107,6 +107,8 @@ export type DisplayEntry =
        * live stream draws when a `tool_start` follows an open message.
        */
       aside?: true;
+      /** Said to the person while the tools ran: the turn's opening line, a message in its own right. */
+      opening?: true;
       /** When it was said, from the transcript; absent on entries written before it was kept. */
       at?: string;
       turnId?: string; executionId?: string; textThrough?: number; causedBy?: string[];
@@ -173,6 +175,8 @@ export function toDisplayEntries(
   const knownNames = roster.map(entry => entry.name);
   /** The ids of the calls in the entry just pushed, so results can be matched to it. */
   let awaiting: { entry: { tools: DisplayTool[] }; ids: string[] } | undefined;
+  /** A person opened the turn being read and has not been shown anything of it yet. */
+  let owedOpening = false;
 
   for (const raw of entries) {
     const entry = (raw ?? {}) as Record<string, unknown>;
@@ -187,9 +191,14 @@ export function toDisplayEntries(
         .map(block => String(block.text ?? ""))
         .join("")
         .trim();
-      if (text) display.push({ kind: "text", role: "assistant", text, aside: true, ...stamp(raw) });
-
       const calls = blocks.filter(block => block.type === "tool_use");
+      // The first thing an agent says beside its calls in a turn a person opened went to that person while the
+      // tools ran (turn.ts, the opening line) — in a chat it is a message they received. It is what was said,
+      // not commentary: measured on 2026-11-13, 29 of 246 chat requests had their longest answer drawn as nothing.
+      const told = entry.told === true || (owedOpening && calls.length > 0 && entry.silent === undefined);
+      if (text && told) owedOpening = false;
+      if (text) display.push({ kind: "text", role: "assistant", text, ...(told ? { opening: true as const } : { aside: true as const }), ...stamp(raw) });
+
       const tools: DisplayTool[] = calls.map(block => ({
         ...(typeof entry.turnId === "string" && typeof block.id === "string" ? { turnId: entry.turnId, toolUseId: block.id, ...(typeof entry.executionId === "string" ? { executionId: entry.executionId } : {}), ...(typeof entry.attempt === "number" ? { attempt: entry.attempt } : {}) } : {}),
         name: String(block.name ?? "tool"),
@@ -251,12 +260,14 @@ export function toDisplayEntries(
       // names them (model-text.ts), so a notice recorded before the flag is not shown as typed.
       const host = (raw as { host?: boolean }).host === true || entryChannel(raw as HistoryEntry) === "host", person = (raw as { fromPerson?: boolean }).fromPerson === true && !host;
       const peers = person ? undefined : parseWakePrompt(text, knownNames);
-      if (peers) { display.push({ kind: "peer", messages: peers }); continue; }
+      if (peers) { owedOpening = false; display.push({ kind: "peer", messages: peers }); continue; }
       const trigger = host ? "System context" : triggerOf(text, person);
       if (trigger !== undefined) {
+        owedOpening = false; // the host opened this one: its prose beside the calls goes to nobody
         display.push({ kind: "trigger", label: trigger, provenance: host ? "host" : "unknown", text, ...stamp(raw) });
         continue;
       }
+      owedOpening = true;
       display.push({ kind: "text", role: "user", ...(!person ? { provenance: "unknown" as const } : {}), text, ...stamp(raw) });
       continue;
     }

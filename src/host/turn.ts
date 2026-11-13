@@ -112,7 +112,7 @@ import { DURABLE_RESULT_CHARS, type ResolutionConfig } from "../protocol/index.t
 import type { KeptEvidence } from "./resume.ts";
 import { keepToolResult, readKeptSources, RESULT_KEPT_MARKER } from "./results.ts";
 import { keptPointer, parseKeptPointer } from "./fetched.ts";
-import { checkQuotes, quoteReportLine } from "./quote-check.ts";
+import { checkQuotes, quoteReportLine } from "./quote-check.ts"; import { answerAfterSendBack, NOT_YET_SEEN } from "./sent-back.ts";
 import { deliverableReport, MAX_DELIVERABLE_NUDGES, outboxFindings } from "./deliverables.ts";
 import type { BoxClass } from "../box/access.ts";
 import { emptySectionFaults, buildSystemPromptParts, buildTurnPrompt,
@@ -746,7 +746,7 @@ export type TranscriptEntry =
       turnId?: string;
       executionId?: string;
       attempt?: number;
-      textThrough?: number;
+      textThrough?: number; /** Its text went to the person while the tools ran: the opening line (INV-1841). */ told?: true;
       /** The turn ended in deliberate silence — `NothingToSay` was called — and why (INV-775). */
       silent?: { reason: string };
     }
@@ -1551,7 +1551,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   let ended = false;
   let endedHow: string | undefined;
   let stoppedBy: GoalTurnReport["stopReason"]; let spendWarning: string | undefined; let spendHit: Extract<SpendVerdict, { kind: "hit_wake" | "hit_day" }> | undefined; // stoppedBy: set when the turn stopped itself, so it ends "incomplete", not "done" (INV-1404); the agent's spend lines (INV-1615): a reminder due, or a line reached
-  let lastFinalText: string | undefined;
+  let lastFinalText: string | undefined, sentBack: string | undefined; // sentBack: an answer a gate held for another look (sent-back.ts)
   /** The whole turn's spend, for a goal's budget (INV-772). */
   const turnUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
   // The first specific failure class this turn saw, kept across retries (INV-1235): filed under what first went wrong, not the last wrapper.
@@ -2990,9 +2990,9 @@ ${outcome.text}`;
             role: "user",
             content:
               `${line}\n\nFix the quotation marks, not the finding: if a sentence is your wording ` +
-              `rather than the source's, say it without the marks. Then give the answer again.`,
+              `rather than the source's, say it without the marks. ${NOT_YET_SEEN}`,
           });
-          finishing = false;
+          finishing = false; sentBack = finalText;
           continue;
         }
       }
@@ -3005,7 +3005,7 @@ ${outcome.text}`;
         conversation !== MAIN_CONVERSATION) {
         const report = deliverableReport(await outboxFindings(box, chatFilesRoot(conversation, { kind: deps.boxKind, workDir: deps.boxWorkDir })), chinese);
         if (report !== undefined) {
-          deliverableNudges += 1;
+          deliverableNudges += 1; sentBack = finalText;
           console.error(`[conduct] ${agent.profile.name}: delivery gate fired (${deliverableNudges}/${MAX_DELIVERABLE_NUDGES})`);
           registry.appendTranscript(agent.id, {
             role: "assistant",
@@ -3014,7 +3014,7 @@ ${outcome.text}`;
             at: new Date().toISOString(),
             turnId, executionId, attempt, textThrough,
           } satisfies TranscriptEntry, conversation);
-          messages.push({ role: "user", content: report });
+          messages.push({ role: "user", content: `${report}\n\n${NOT_YET_SEEN}` });
           finishing = false;
           continue;
         }
@@ -3041,7 +3041,7 @@ ${outcome.text}`;
           registry.appendTranscript(agent.id, { role: "user", text: note, at: new Date().toISOString(), turnId, host: true } satisfies TranscriptEntry, conversation);
           messages.push({ role: "user", content: note });
           forceTools = { type: "none" };
-          newerLook = finalText;
+          newerLook = sentBack = finalText;
           finishing = false;
           // The look must not be what runs the turn out of rounds: on the last one, it gets one more.
           if (round === MAX_ROUNDS - 1) round -= 1;
@@ -3060,7 +3060,7 @@ ${outcome.text}`;
       }
 
       if (finalText.trim()) {
-        lastFinalText = finalText;
+        const answer = answerAfterSendBack(sentBack, finalText); lastFinalText = answer; sentBack = undefined;
         // A continuation's closing words are the record's, not the person's reply: filed as
         // blocks, which `replySince` never delivers, so a goal working in the background does
         // not talk into the chat (docs/74 §3.7). The finish-only report is sent by the loop.
@@ -3075,7 +3075,7 @@ ${outcome.text}`;
           } satisfies TranscriptEntry, conversation);
         } else registry.appendTranscript(agent.id, {
           role: "assistant",
-          text: finalText,
+          text: answer,
           at: new Date().toISOString(),
           turnId, executionId, attempt, textThrough,
         } satisfies TranscriptEntry, conversation);
@@ -3098,7 +3098,7 @@ ${outcome.text}`;
             continue;
           }
         }
-        relayProseToPeer(finalText);
+        relayProseToPeer(answer);
         return;
       }
 
@@ -3154,8 +3154,7 @@ ${outcome.text}`;
     // promoted into an answer.
     const roundText = response.content
       .filter((block): block is Anthropic.TextBlock => block.type === "text")
-      .map(block => block.text)
-      .join("");
+      .map(block => block.text).join("");
     const filedAnswer =
       roundText.trim().length >= FILED_ANSWER_FLOOR &&
       toolUses.every(use => BOOKKEEPING_TOOLS.has(use.name));
@@ -3172,7 +3171,8 @@ ${outcome.text}`;
     // tool for this because its plain text is never shown; ours is, so the same effect is one event: the text
     // the model said beside its first calls goes to the chat now, once, and stays out of the final reply.
     // Measured on Bob's thread: the line "你说得对，我先查一下" had been filed as blocks and shown to nobody.
-    if (personOpened && !interimDelivered && toolUses.length > 0 && !filedAnswer && roundText.trim() !== "") {
+    const told = personOpened && !interimDelivered && toolUses.length > 0 && !filedAnswer && roundText.trim() !== "";
+    if (told) {
       interimDelivered = true;
       emit({ type: "interim", agentId: agent.id, agentName: agent.profile.name, text: roundText.trim() });
       console.error(`[conduct] ${agent.profile.name}: interim line delivered (${roundText.trim().length} chars)`);
@@ -3202,7 +3202,7 @@ ${outcome.text}`;
           (block.type === "text" && !filedAnswer) || block.type === "tool_use"
       ),
       at: requestedAt,
-      turnId, executionId, attempt, textThrough,
+      turnId, executionId, attempt, textThrough, ...(told ? { told: true as const } : {}), // what the person was shown is marked as shown (INV-1841)
     } satisfies TranscriptEntry, conversation);
     const results: Anthropic.ToolResultBlockParam[] = [];
     /** Tool-use ids whose stored text differs from what the model was shown. */
