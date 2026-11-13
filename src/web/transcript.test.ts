@@ -113,18 +113,55 @@ test("tool traffic becomes tool rows, not empty bubbles", () => {
   assert.equal(display[3], undefined);
 });
 
-test("a wake prompt in a transcript becomes a peer entry", () => {
+test("a wake prompt in a transcript becomes a peer entry; it is part of a request only when the agent had asked that teammate", () => {
+  const roster = [{ id: "id-Ada", name: "Ada" }, { id: "id-Bob", name: "Bob" }];
   const entries = [
+    { role: "user", fromPerson: true, text: "ask Ada for the figures", at: "t" },
+    { role: "assistant", kind: "blocks", blocks: [{ type: "tool_use", id: "s1", name: "SendToAgent", input: { target_id: "id-Ada", text: "figures please" } }], at: "t" },
+    { role: "user", kind: "results", blocks: [{ type: "tool_result", tool_use_id: "s1", content: "sent" }], at: "t" },
     { role: "user", text: buildWakePrompt([inbound("Ada", "over to you")]), at: "t" },
+    { role: "assistant", text: "Ada says 42.", at: "t" },
+    { role: "user", text: buildWakePrompt([inbound("Bob", "audit my card?")]), at: "t" },
     { role: "assistant", text: "on it", at: "t" },
   ];
+  const display = toDisplayEntries(entries, roster);
+  assert.deepEqual(display[2], { kind: "peer", messages: [{ from: "Ada", priority: false, text: "over to you" }] });
+  assert.deepEqual(display[3], { kind: "text", role: "assistant", text: "Ada says 42.", at: "t" }, "the answer the person was waiting for");
+  assert.deepEqual(display.slice(4).map(entry => entry.background), [true, true], "a teammate nobody asked, and what the agent did about it, is not this conversation's");
+});
 
-  const display = toDisplayEntries(entries, [{ id: "id-Ada", name: "Ada" }, { id: "id-Bob", name: "Bob" }]);
-  assert.deepEqual(display[0], {
-    kind: "peer",
-    messages: [{ from: "Ada", priority: false, text: "over to you" }],
-  });
-  assert.deepEqual(display[1], { kind: "text", role: "assistant", text: "on it", at: "t" });
+// 2026-11-13, Chris's own page: three agents' main conversations held a plan he had not asked for, runs of steps,
+// a wall of checkpoints and one stop notice four times. He had opened 64 turns there; the host's audits 1,208.
+test("what no request opened folds to one line; a request, and the job it started, stay as they were", async () => {
+  const { asRequests, spanOf } = await import("./request-thread.ts");
+  const { budgetReport } = await import("../host/turn-budget.ts");
+  const task = { id: "t1858", title: "probe", status: "review" } as unknown as Task;
+  const audit = (n: number) => [
+    { role: "user", host: true, text: "[from the host (host:audit), not from a person] " + buildAuditPrompt({ task, assigneeName: "Vic" }), at: "2026-11-02T00:0" + n + ":00.000Z" },
+    { role: "assistant", kind: "blocks", blocks: [{ type: "tool_use", id: "a" + n, name: "SetTodos", input: { todos: [{ text: "取证", status: "doing" }, { text: "落 note", status: "pending" }] } }], at: "t" },
+    { role: "user", kind: "results", blocks: [{ type: "tool_result", tool_use_id: "a" + n, content: "ok" }], at: "t" },
+    { role: "user", text: jobEndedNote({ jobId: "job-0000aaaa", command: "ls" } as never, { exit_code: 0, log_path: "/x.log", tail: "" }, false), at: "t" },
+    { role: "assistant", text: "Both cards verified byte-for-byte.", at: "t" },
+  ];
+  const display = toDisplayEntries([
+    { role: "user", fromPerson: true, text: "build the report", at: "2026-11-01T00:00:00.000Z" },
+    { role: "assistant", kind: "blocks", blocks: [{ type: "tool_use", id: "b1", name: "bash", input: { command: "make report &" } }], at: "t" },
+    { role: "user", kind: "results", blocks: [{ type: "tool_result", tool_use_id: "b1", content: "started job-1234abcd" }], at: "t" },
+    ...audit(1), ...audit(2),
+    { role: "user", text: jobEndedNote({ jobId: "job-1234abcd", command: "make report" } as never, { exit_code: 0, log_path: "/r.log", tail: "done" }, false), at: "t" },
+    { role: "assistant", text: "The report is built.", at: "t" },
+    { role: "assistant", text: "A person stopped this turn. Do not continue, retry, or start related work; report where you got to and end the turn.", at: "t" },
+    { role: "assistant", text: "A person stopped this turn. Do not continue, retry, or start related work; report where you got to and end the turn.", at: "t" },
+    { role: "assistant", text: budgetReport({ limits: { calls: 60 } } as never, ["bash ls"], true), at: "t" },
+  ], []);
+  const tools = display.find(entry => entry.kind === "tools" && entry.background === true) as { tools: { detail: string }[] };
+  assert.equal(tools.tools[0]!.detail, "取证 · 落 note", "a step says what it was given, never [object Object]");
+  const thread = asRequests(display);
+  assert.deepEqual(thread.map(entry => entry.kind === "text" ? entry.role + ":" + entry.text.slice(0, 20) : entry.kind === "background" ? `background ${entry.turns}/${entry.steps}` : entry.kind === "status" ? "status:" + entry.what : entry.kind), [
+    "user:build the report", "tools", "background 4/2", "trigger", "assistant:The report is built.", "status:stopped", "status:budget",
+  ], "the person's request and the job it started are whole; two audits and their job notices are one line; what the host wrote in the agent's place is a state, said once however often it was written");
+  const folded = thread[2] as { first: number; last: number };
+  assert.equal(spanOf(display, folded.first, folded.last).entries.length, folded.last - folded.first + 1, "and the line opens to exactly what it stands for");
 });
 
 test("entries with nothing to show are dropped", () => {

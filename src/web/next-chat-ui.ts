@@ -7,7 +7,7 @@
  * between agents are one folded line each, opened on demand; the host's own notes are not shown.
  */
 export const NEXT_CHAT_JS = `
-var chat = { agentId: "", conversation: "main", conversations: [], plan: null, box: "", entries: [], live: null, loading: "", loadedFor: "", request: 0, jump: false, liveSurfaces: {}, expired: {}, find: "", changing: "" };
+var chat = { agentId: "", conversation: "main", conversations: [], plan: null, box: "", entries: [], live: null, loading: "", loadedFor: "", request: 0, jump: false, liveSurfaces: {}, expired: {}, find: "", changing: "", tail: 0 };
 var markdown = window.markdownit ? window.markdownit({ html: false, linkify: true, breaks: true }) : null;
 
 function agentsHere() {
@@ -169,10 +169,12 @@ function renderThread(view) {
     pin.addEventListener("click", function () { openPanel(row.id); });
     thread.appendChild(pin);
   });
-  var plan = planCard(), lastAsk = null, drawn = {}, setup = setupCard();
+  // The plan shown is the plan of what the person asked: one an agent made for work nobody here asked for stays with that work.
+  var plan = planIsMine() ? planCard() : null, lastAsk = null, drawn = {}, setup = setupCard();
+  var mine = askedList(); if (mine) thread.appendChild(mine);
   if (setup) thread.appendChild(setup);
   if (plan) thread.appendChild(plan);
-  chat.entries.forEach(function (entry) {
+  chat.entries.forEach(function (entry, index) {
     if (entry.kind === "tools") {
       (entry.tools || []).forEach(function (tool) { if (tool.question && tool.result === undefined) lastAsk = tool; });
       (entry.tools || []).forEach(function (tool) {
@@ -187,10 +189,12 @@ function renderThread(view) {
     if (entry.kind === "text" && entry.role === "user") lastAsk = null; // answered by what was said next
     if (entry.kind === "text" && entry.aside) return; // commentary beside steps: the fold's, not the thread's
     flush();
-    if (entry.kind === "text") thread.appendChild(bubble(entry));
+    if (entry.kind === "text") { var said = bubble(entry); said.dataset.entry = index; thread.appendChild(said); }
     else if (entry.kind === "peer") thread.appendChild(fold(t("ui.next.chat.team", { n: (entry.messages || []).length }), (entry.messages || []).map(function (message) { return { head: message.from, text: clip(message.text, 300) }; })));
     else if (entry.kind === "sent") thread.appendChild(sentRow(entry));
-    else if (entry.kind === "trigger" && entry.skipped) thread.appendChild(el("div", "aside", t("ui.next.chat.earlier", { n: entry.skipped })));
+    else if (entry.kind === "background") thread.appendChild(backgroundRow(entry));
+    else if (entry.kind === "status") thread.appendChild(statusRow(entry));
+    else if (entry.kind === "trigger" && entry.skipped) thread.appendChild(earlierRow(entry));
   });
   flush();
   // A card drawn in the turn still running is not in the record yet: it is kept from the live event.
@@ -201,10 +205,12 @@ function renderThread(view) {
   delivered.filter(inThisConversation).forEach(function (row) { thread.appendChild(resultCard(row)); });
   if (agent) elsewhereNotes(agent, delivered.filter(function (row) { return !inThisConversation(row); })).forEach(function (note) { thread.appendChild(note); });
   if (chat.live) {
-    if (chat.live.text) thread.appendChild(bubble({ role: "assistant", text: chat.live.text }, true));
+    // Its words and its steps are shown as they come only for what the person asked; other work is one line saying it is busy.
+    var own = ownTurn();
+    if (own && chat.live.text) thread.appendChild(bubble({ role: "assistant", text: chat.live.text }, true));
     var bar = el("div", "livebar"), stop = el("button", "act", t("ui.next.chat.stop"));
     bar.appendChild(el("span", "dot"));
-    bar.appendChild(el("span", "", chat.live.doing || t("ui.next.chat.working", { name: agent ? agent.name : "" })));
+    bar.appendChild(el("span", "", own ? chat.live.doing || t("ui.next.chat.working", { name: agent ? agent.name : "" }) : t("ui.next.chat.busyElsewhere", { name: agent ? agent.name : "" })));
     stop.addEventListener("click", function () { postJson("/api/stop", { agent: chat.agentId }).catch(failed); });
     bar.appendChild(stop); thread.appendChild(bar);
   }
@@ -263,7 +269,7 @@ function loadThread() {
   var id = chat.agentId, request = ++chat.request;
   if (!id) return;
   chat.loading = id;
-  getJson("/api/transcript?sent=1&agent=" + encodeURIComponent(id) + "&conversation=" + encodeURIComponent(chat.conversation)).then(function (entries) {
+  getJson("/api/transcript?sent=1&requests=1" + (chat.tail ? "&tail=" + chat.tail : "") + "&agent=" + encodeURIComponent(id) + "&conversation=" + encodeURIComponent(chat.conversation)).then(function (entries) {
     if (chat.agentId !== id || request !== chat.request) return; // a newer read is on its way
     if (chat.loadedFor !== id) { chat.jump = true; chat.live = next.agents[id] && next.agents[id].running ? { text: "", doing: "" } : null; }
     chat.entries = entries; chat.loadedFor = id; chat.loading = "";
@@ -306,7 +312,9 @@ function chatEvent(event) {
   if (event.type === "turn_started") { chat.live = { text: "", doing: "" }; render(); }
   else if (event.type === "text" && typeof event.delta === "string") { chat.live = chat.live || { text: "", doing: "" }; chat.live.text += event.delta; render(); }
   // What it said as it set to work stays said: the same line a chat receives while the tools run.
-  else if (event.type === "interim" && typeof event.text === "string") { chat.entries = chat.entries.concat([{ kind: "text", role: "assistant", text: event.text, opening: true }]); if (chat.live) chat.live.text = ""; render(); }
+  else if (event.type === "interim" && typeof event.text === "string" && ownTurn()) {
+    chat.entries = chat.entries.concat([{ kind: "text", role: "assistant", text: event.text, opening: true }]); if (chat.live) chat.live.text = ""; render();
+  }
   else if (event.type === "tool_start") { chat.live = chat.live || { text: "", doing: "" }; chat.live.text = ""; chat.live.doing = event.phrase || event.tool || ""; render(); }
   else if (event.type === "retrying" && chat.live) {
     if (event.discardPartial) chat.live.text = "";

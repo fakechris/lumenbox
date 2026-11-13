@@ -60,6 +60,81 @@ function sentRow(entry) {
   return row;
 }
 
+/** Whether the newest thing in the thread is the person's own request: then what runs now is theirs to watch. */
+function ownTurn() {
+  for (var i = chat.entries.length - 1; i >= 0; i--) {
+    var entry = chat.entries[i];
+    if (entry.kind === "background") return false;
+    if (entry.kind === "text" && entry.role === "user") return true;
+  }
+  return true; // nothing said yet: whatever starts here was started from here
+}
+
+/** Whether the plan on record was made for something the person asked: its newest SetTodos is in their request, not behind a fold of other work. */
+function planIsMine() {
+  for (var i = chat.entries.length - 1; i >= 0; i--) {
+    var entry = chat.entries[i];
+    if (entry.kind === "background") return false;
+    if (entry.kind === "tools" && (entry.tools || []).some(function (tool) { return tool.name === "SetTodos"; })) return true;
+  }
+  return false;
+}
+
+/** Work nobody asked for in this conversation, as one line: how much there was, and the way into it. */
+function backgroundRow(entry) {
+  var box = el("details", "fold"), body = el("ul"), when = entry.to || entry.from;
+  box.appendChild(el("summary", "", t("ui.next.chat.background", { turns: entry.turns, steps: entry.steps }) + (when ? " · " + agoText(when) : "")));
+  box.appendChild(el("div", "why", t("ui.next.chat.backgroundWhy")));
+  box.appendChild(body);
+  box.addEventListener("toggle", function () {
+    if (!box.open || box.dataset.read) return;
+    box.dataset.read = "1";
+    getJson("/api/transcript?agent=" + encodeURIComponent(chat.agentId) + "&conversation=" + encodeURIComponent(chat.conversation) + "&span=" + entry.first + "-" + entry.last).then(function (got) {
+      if (got.more) body.appendChild(el("li", "why", t("ui.next.chat.backgroundMore", { n: got.more })));
+      (got.entries || []).forEach(function (row) {
+        var line = el("li");
+        if (row.kind === "tools") line.appendChild(el("span", "why", (row.tools || []).map(function (tool) { return tool.name; }).join(" · ")));
+        else if (row.kind === "peer") (row.messages || []).forEach(function (message) { line.appendChild(el("b", "", message.from)); line.appendChild(el("span", "", " " + clip(message.text, 200))); });
+        else if (row.kind === "trigger") line.appendChild(el("span", "why", clip(row.text, 200)));
+        else if (row.text) line.appendChild(el("span", "", clip(row.text, 300)));
+        if (line.childNodes.length) body.appendChild(line);
+      });
+    }, failed);
+  });
+  return box;
+}
+
+/** How a turn ended when the agent did not end it: stopped by the person, or out of its allowance. The host's own words are behind the line. */
+function statusRow(entry) {
+  var box = el("details", "fold");
+  box.appendChild(el("summary", "", t("ui.next.chat.ended." + entry.what)));
+  box.appendChild(rich(entry.text, "report"));
+  return box;
+}
+
+/** What is older than what is drawn: asked for, it is read. */
+function earlierRow(entry) {
+  var more = el("button", "elsewhere", t("ui.next.chat.earlier", { n: entry.skipped }));
+  more.addEventListener("click", function () { chat.tail = (chat.tail || 400) * 4; chat.loadedFor = ""; loadThread(); });
+  return more;
+}
+
+/** Everything the person asked in this conversation, newest first: the way back to a request among everything else. */
+function askedList() {
+  var asked = chat.entries.map(function (entry, index) { return { entry: entry, index: index }; }).filter(function (row) { return row.entry.kind === "text" && row.entry.role === "user"; });
+  if (asked.length < 3) return null;
+  var box = el("details", "fold"), list = el("ul");
+  box.appendChild(el("summary", "", t("ui.next.chat.yours", { n: asked.length })));
+  asked.reverse().forEach(function (row) {
+    var line = el("li"), go = el("button", "elsewhere", clip(row.entry.text, 80));
+    go.addEventListener("click", function () { var node = document.querySelector("[data-entry='" + row.index + "']"); if (node) node.scrollIntoView({ block: "center" }); });
+    if (row.entry.at) line.appendChild(el("span", "why", agoText(row.entry.at) + " "));
+    line.appendChild(go); list.appendChild(line);
+  });
+  box.appendChild(list);
+  return box;
+}
+
 /** A row of work belongs to the conversation it was asked in; one with none recorded is the main one's. */
 function inThisConversation(row) { return (row.conversation || "main") === chat.conversation; }
 

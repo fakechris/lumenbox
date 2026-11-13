@@ -173,7 +173,7 @@ import { blockedQuestion, describePurpose, outboundVerdict } from "../host/outbo
 import { decidePart, partIn, type PartKey, partViews, strayOverrides } from "../host/prompt-parts.ts";
 import { ownerOf } from "../host/follow-up.ts";
 import { Outbox } from "../host/outbox.ts";
-import { OutboxSender } from "../channels/outbox-sender.ts"; import { SentLedger } from "../channels/sent-ledger.ts"; import { withSent } from "./sent-in-thread.ts";
+import { OutboxSender } from "../channels/outbox-sender.ts"; import { SentLedger } from "../channels/sent-ledger.ts"; import { withSent } from "./sent-in-thread.ts"; import { asRequests, spanOf } from "./request-thread.ts";
 import { ALL_TOOLS } from "../host/orchestrator.ts";
 import {
   CATALOG_CONNECTORS,
@@ -274,7 +274,7 @@ import { catchUpFloor } from "../channels/ingress.ts";
 import { REPLAY_MAX_AGE_MS } from "../channels/feishu.ts";
 import { ActivityLog } from "./activity.ts";
 import { a2uiPath, vendorPath } from "./markdown.ts";
-import { latestForDisplay, toDisplayEntries } from "./transcript.ts";
+import { DISPLAY_TAIL, latestForDisplay, toDisplayEntries } from "./transcript.ts";
 import { isReactionEmoji, readReactions, setReaction } from "./reactions.ts";
 import { editDiffOf } from "./line-diff.ts";
 
@@ -5884,7 +5884,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             id: record.id,
             name: record.profile.name,
           }));
-          const shown = toDisplayEntries(registry.readTranscript(id, conversation), roster, callId => orchestrator.policy.verdicts.get(callId), conversations.chatKeyFor(conversation) !== undefined), drawn = url.searchParams.get("sent") === "1" ? withSent(shown, sentLedger.in(conversation)) : shown; send(res, 200, url.searchParams.get("all") === "1" ? drawn : latestForDisplay(drawn)); // the newest part only, unless asked (INV-1624); what the chat was sent beside it, when asked (INV-1841)
+          const shown = toDisplayEntries(registry.readTranscript(id, conversation), roster, callId => orchestrator.policy.verdicts.get(callId), conversations.chatKeyFor(conversation) !== undefined), span = /^(\d+)-(\d+)$/.exec(url.searchParams.get("span") ?? ""), asked = url.searchParams.get("requests") === "1" ? asRequests(shown) : shown, drawn = url.searchParams.get("sent") === "1" ? withSent(asked, sentLedger.in(conversation)) : asked; send(res, 200, span ? spanOf(shown, Number(span[1]), Number(span[2])) : url.searchParams.get("all") === "1" ? drawn : latestForDisplay(drawn, Math.min(Math.max(Number(url.searchParams.get("tail")) || DISPLAY_TAIL, 1), 5000))); // the newest part only, unless asked (INV-1624); what the chat was sent beside it, when asked (INV-1841)
           return;
         }
 

@@ -99,6 +99,9 @@ export function replayNote(tool: string, times: number, chinese: boolean): strin
     : `[This identical ${tool} call has now been made ${times} times; it was not run again — the result below is the previous one. Change approach, or tell the person what you have.]`;
 }
 
+/** How a budget report opens, in each form below: the page tells the host's hand-back from the agent's own words by it. */
+export const BUDGET_REPORT = /^(这一轮|本轮)用完了 \d+ 次模型调用的预算|^This (turn|slice) used its budget of \d+ model calls/;
+
 /** What the person is told when the turn ends on its budget: an outcome, said plainly. */
 export function budgetReport(budget: TurnBudget, calls: readonly string[], chinese: boolean, goal = false): string {
   const tools = new Map<string, number>();

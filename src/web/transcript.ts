@@ -18,6 +18,7 @@ import { type SurfaceDraw, surfaceDrawOf } from "../host/show-ui-catalog.ts";
 import { type EditDiff, editDiffOf } from "./line-diff.ts";
 import type { GateVerdict } from "../host/gate-verdict.ts";
 import { entryChannel } from "../host/model-text.ts";
+import { BUDGET_REPORT } from "../host/turn-budget.ts";
 import type { HistoryEntry } from "../host/compaction.ts";
 
 export interface DisplayTool {
@@ -95,7 +96,7 @@ function stamp(raw: unknown): { at?: string; turnId?: string; executionId?: stri
     ...(typeof entry.textThrough === "number" ? { textThrough: entry.textThrough } : {}) };
 }
 
-export type DisplayEntry =
+export type DisplayEntry = (
   /** Something a chat door sent that the transcript does not hold: a notice, a card, a file (sent-in-thread.ts). */
   | { kind: "sent"; what: "text" | "image" | "file" | "card"; door: string; at: string; card?: string; text?: string; name?: string }
   | {
@@ -126,7 +127,15 @@ export type DisplayEntry =
    * filled bubble (docs/46), which is the usual way a display bug is finally seen.
    */
   | { kind: "trigger"; provenance?: "host" | "unknown"; label: string; text: string; at?: string; /** On the line that leads a shortened thread: how many entries came before it (INV-1624). */ skipped?: number }
-  | { kind: "tools"; tools: DisplayTool[] };
+  | { kind: "tools"; tools: DisplayTool[] }
+  /** Something the host wrote in the agent's place when a turn ended early: a state of the turn, not something the agent said. */
+  | { kind: "status"; what: "stopped" | "budget"; text: string; at?: string }
+  /** Turns nobody asked for in this conversation, folded to a count (request-thread.ts). `first`/`last` index the unfolded entries. */
+  | { kind: "background"; turns: number; steps: number; first: number; last: number; from?: string; to?: string }
+) & {
+  /** Part of a turn that no person's request opened: an audit the host dispatched, and what followed from it. */
+  background?: true;
+};
 
 export interface RosterEntry {
   id: string;
@@ -152,8 +161,16 @@ function toolDetail(name: string, input: unknown, roster: readonly RosterEntry[]
       .join(" + ");
   }
 
-  const values = Object.values(args).map(value => String(value));
-  return values.length > 0 ? values[0]! : "";
+  const first = Object.values(args)[0];
+  return first === undefined ? "" : readable(first);
+}
+
+/** An argument as a person can read it: a list of things with names is their names, never "[object Object]". */
+function readable(value: unknown): string {
+  if (typeof value !== "object" || value === null) return String(value);
+  const named = (item: Record<string, unknown>) => String(item.text ?? item.title ?? item.name ?? JSON.stringify(item));
+  if (Array.isArray(value)) return value.map(item => typeof item === "object" && item !== null ? named(item as Record<string, unknown>) : String(item)).join(" · ");
+  return JSON.stringify(value);
 }
 
 function resultText(block: Record<string, unknown>): string {
@@ -166,6 +183,9 @@ function resultText(block: Record<string, unknown>): string {
     .map(part => String((part as { text?: unknown }).text ?? ""))
     .join("\n");
 }
+
+/** How the host's audit request opens, stamped or not (audit.ts buildAuditPrompt). */
+const AUDIT_DISPATCH = /^(\[from the host \(host:audit\)[^\]]*\]\s*)?Audit task t\d+:|^\[from the host \(host:audit\)/;
 
 export function toDisplayEntries(
   entries: readonly unknown[],
@@ -181,6 +201,18 @@ export function toDisplayEntries(
   let awaiting: { entry: { tools: DisplayTool[] }; ids: string[] } | undefined;
   /** A person opened the turn being read and has not been shown anything of it yet. */
   let owedOpening = false;
+  /**
+   * Whether what is being read belongs to no request made in this conversation. A person speaking, or a routine a
+   * person set, opens a request. The host's audit dispatch never does. A teammate's message belongs to the request
+   * only when the agent had asked that teammate something while working on it, and a job notice only when the job
+   * was started while working on it: both are as often the tail of a request as noise from elsewhere, and the
+   * record says which. The host's other notes arrive inside a turn and continue whatever it is.
+   */
+  let background = false;
+  /** Teammates the agent wrote to, and jobs it started, while working on the request now open. */
+  const asked = new Set<string>(), started = new Set<string>();
+  const JOB_ID = /\bjob-[0-9a-f]{6,}\b/g;
+  const push = (entry: DisplayEntry) => { display.push(background ? { ...entry, background: true } : entry); };
 
   for (const raw of entries) {
     const entry = (raw ?? {}) as Record<string, unknown>;
@@ -196,12 +228,17 @@ export function toDisplayEntries(
         .join("")
         .trim();
       const calls = blocks.filter(block => block.type === "tool_use");
+      if (!background) for (const call of calls) {
+        const input = (call.input ?? {}) as Record<string, unknown>;
+        const mate = input.target_id ?? input.agent ?? input.to;
+        if ((call.name === "SendToAgent" || call.name === "Delegate") && typeof mate === "string") { asked.add(mate); asked.add(roster.find(entry => entry.id === mate)?.name ?? mate); }
+      }
       // The first thing an agent says beside its calls in a turn a person opened went to that person while the
       // tools ran (turn.ts, the opening line) — in a chat it is a message they received. It is what was said,
       // not commentary: measured on 2026-11-13, 29 of 246 chat requests had their longest answer drawn as nothing.
       const told = entry.told === true || (owedOpening && calls.length > 0 && entry.silent === undefined);
       if (text && told) owedOpening = false;
-      if (text) display.push({ kind: "text", role: "assistant", text, ...(told ? { opening: true as const } : { aside: true as const }), ...stamp(raw) });
+      if (text) push({ kind: "text", role: "assistant", text, ...(told ? { opening: true as const } : { aside: true as const }), ...stamp(raw) });
 
       const tools: DisplayTool[] = calls.map(block => ({
         ...(typeof entry.turnId === "string" && typeof block.id === "string" ? { turnId: entry.turnId, toolUseId: block.id, ...(typeof entry.executionId === "string" ? { executionId: entry.executionId } : {}), ...(typeof entry.attempt === "number" ? { attempt: entry.attempt } : {}) } : {}),
@@ -218,9 +255,9 @@ export function toDisplayEntries(
       }));
       if (tools.length > 0) {
         const entryWithTools = { kind: "tools" as const, tools };
-        display.push(entryWithTools);
+        push(entryWithTools);
         awaiting = {
-          entry: entryWithTools,
+          entry: display.at(-1) as typeof entryWithTools,
           ids: calls.map(block => String(block.id ?? "")),
         };
       }
@@ -234,6 +271,7 @@ export function toDisplayEntries(
         const at = awaiting?.ids.indexOf(String(block.tool_use_id ?? "")) ?? -1;
         const tool = at >= 0 ? awaiting!.entry.tools[at] : undefined;
         if (!tool) continue;
+        if (!background) for (const job of resultText(block).match(JOB_ID) ?? []) started.add(job);
         tool.result = resultText(block);
         tool.isError = block.is_error === true;
       }
@@ -248,14 +286,14 @@ export function toDisplayEntries(
     // Folded like any other harness cue, so the page shows a quiet row that opens to the note.
     if (entry.kind === "summary" && typeof entry.handoff === "object" && entry.handoff !== null) {
       const lost = (entry.handoff as { lost?: unknown }).lost === true;
-      display.push({ kind: "trigger", label: lost ? "handoff lost in the switch" : "carried over from the previous context", text, ...stamp(raw) });
+      push({ kind: "trigger", label: lost ? "handoff lost in the switch" : "carried over from the previous context", text, ...stamp(raw) });
       continue;
     }
 
     // What the host kept of an older stretch when it shortened the context: its own digest, filed
     // under the user role because that is where the model reads it. Never the person speaking.
     if (entry.kind === "summary") {
-      display.push({ kind: "trigger", label: "summary of the earlier conversation", provenance: "host", text, ...stamp(raw) });
+      push({ kind: "trigger", label: "summary of the earlier conversation", provenance: "host", text, ...stamp(raw) });
       continue;
     }
 
@@ -264,19 +302,26 @@ export function toDisplayEntries(
       // names them (model-text.ts), so a notice recorded before the flag is not shown as typed.
       const host = (raw as { host?: boolean }).host === true || entryChannel(raw as HistoryEntry) === "host", person = (raw as { fromPerson?: boolean }).fromPerson === true && !host;
       const peers = person ? undefined : parseWakePrompt(text, knownNames);
-      if (peers) { owedOpening = false; display.push({ kind: "peer", messages: peers }); continue; }
+      if (peers) { owedOpening = false; background = !peers.some(message => asked.has(message.from)); push({ kind: "peer", messages: peers }); continue; }
       const trigger = host ? "System context" : triggerOf(text, person);
       if (trigger !== undefined) {
+        // A teammate's message whose sender cannot be read (it left the roster) cannot be tied to a request either.
+        if (AUDIT_DISPATCH.test(text) || text.startsWith("[agent]")) background = true;
+        else if (/^\[(A command you started earlier|\d+ commands you started earlier)/.test(text)) background = !(text.match(JOB_ID) ?? []).some(job => started.has(job));
+        else if (!host && triggerOf(text, person) !== undefined && !/^\[(resumed|system)\]/.test(text.trimStart())) background = false; // a routine, a webhook, a first run: a person set those
         owedOpening = false; // the host opened this one: its prose beside the calls goes to nobody
-        display.push({ kind: "trigger", label: trigger, provenance: host ? "host" : "unknown", text, ...stamp(raw) });
+        push({ kind: "trigger", label: trigger, provenance: host ? "host" : "unknown", text, ...stamp(raw) });
         continue;
       }
-      owedOpening = true;
-      display.push({ kind: "text", role: "user", ...(!person && !fromChat ? { provenance: "unknown" as const } : {}), text, ...stamp(raw) });
+      owedOpening = true; background = false; asked.clear();
+      push({ kind: "text", role: "user", ...(!person && !fromChat ? { provenance: "unknown" as const } : {}), text, ...stamp(raw) });
       continue;
     }
 
-    display.push({ kind: "text", role: "assistant", text, ...stamp(raw) });
+    // Written by the host in the agent's place when the turn was cut short: said as a state, not as its words.
+    const ended = /^A person stopped this turn\./.test(text) ? "stopped" as const : BUDGET_REPORT.test(text) ? "budget" as const : undefined;
+    if (ended !== undefined) { push({ kind: "status", what: ended, text, ...stamp(raw) }); continue; }
+    push({ kind: "text", role: "assistant", text, ...stamp(raw) });
   }
 
   return display;

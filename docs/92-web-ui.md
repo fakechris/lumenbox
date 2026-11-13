@@ -318,6 +318,20 @@ each as a quiet row, "sent to the chat", at its time; what the thread already sa
 topics are listed under the chat in the conversation picker, and work pinned or waiting in a thread
 is the work asked for in that conversation.
 
+**A conversation is what a person asked and what they were told.** A thread draws the turns a
+request opened — a person speaking, or a routine a person set — and nothing else as conversation
+(INV-1843). A turn the host's audit dispatch opened is background; a teammate's message belongs to
+the request only when the agent had written to that teammate while working on it, and a job notice
+only when the job was started while working on it (`transcript.ts` marks each entry; the record
+says which, nothing is guessed from wording). A run of background entries is one line,
+*Background activity · N turns · M steps*, which opens to what it stands for
+(`request-thread.ts`, `/api/transcript?requests=1` and `&span=`). What the host wrote in the
+agent's place when a turn ended early — the stop notice, the out-of-allowance report — is a line
+saying how the turn ended, with the host's words behind it. The plan card is shown when the plan
+was made in the person's own request; while the agent works on something else the live bar says
+only that it is busy. *What you asked* at the head of a thread lists the person's requests and
+goes to each. Older entries are loaded when asked for. Nothing in the record is changed or removed.
+
 **A read that failed is not an empty answer.** A list that could not be read says so. "Nothing went
 wrong" is only said when the server said it.
 
