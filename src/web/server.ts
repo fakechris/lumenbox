@@ -5884,7 +5884,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             id: record.id,
             name: record.profile.name,
           }));
-          const shown = toDisplayEntries(registry.readTranscript(id, conversation), roster, callId => orchestrator.policy.verdicts.get(callId)), drawn = url.searchParams.get("sent") === "1" ? withSent(shown, sentLedger.in(conversation)) : shown; send(res, 200, url.searchParams.get("all") === "1" ? drawn : latestForDisplay(drawn)); // the newest part only, unless asked (INV-1624); what the chat was sent beside it, when asked (INV-1841)
+          const shown = toDisplayEntries(registry.readTranscript(id, conversation), roster, callId => orchestrator.policy.verdicts.get(callId), conversations.chatKeyFor(conversation) !== undefined), drawn = url.searchParams.get("sent") === "1" ? withSent(shown, sentLedger.in(conversation)) : shown; send(res, 200, url.searchParams.get("all") === "1" ? drawn : latestForDisplay(drawn)); // the newest part only, unless asked (INV-1624); what the chat was sent beside it, when asked (INV-1841)
           return;
         }
 

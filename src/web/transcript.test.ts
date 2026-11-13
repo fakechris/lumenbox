@@ -90,6 +90,9 @@ test("tool traffic becomes tool rows, not empty bubbles", () => {
   const display = toDisplayEntries(entries, [{ id: "id-Ada", name: "Ada" }]);
 
   assert.deepEqual(display[0], { kind: "text", role: "user", provenance: "unknown", text: "take a screenshot", at: "t" });
+  // In a chat's own conversation the same unstamped words came through the door: 167 of a person's 246 chat messages
+  // on the live record were drawn "unknown source" beside the chat that showed them under his name.
+  assert.equal((toDisplayEntries(entries, [], () => undefined, true)[0] as { provenance?: string }).provenance, undefined);
   // Marked `opening`: the first thing said beside the calls of a turn a person opened went to
   // that person while the tools ran — a chat received it as a message — so it is drawn as said.
   assert.deepEqual(display[1], {
