@@ -27,7 +27,7 @@
 import { mandateNote, reauthorisationNeeded } from "./mandate-text.ts";
 import { followUpPrompt } from "../host/follow-up.ts";
 import { describePurpose, type OutboundPurpose } from "../host/outbound.ts";
-import type { OutboxSender } from "./outbox-sender.ts";
+import type { OutboxSender } from "./outbox-sender.ts"; import { recording, type SentLedger } from "./sent-ledger.ts";
 import { CONNECTED, statusText, type ChannelStatus, type StatusLine } from "./status-line.ts";
 import type { Locale } from "../i18n/locale.ts";
 import { claimsReference, contextMode, isContextCommand, isGoalCommand, isPlainRetry, isRecoveryCommand, isRetryCommand, parseAcceptance, parseAddress, parseApprovalReply, parseBind, parseBoardRequest, parseContinuation, parseDesktopRequest, parseDigestRequest, parseHelpRequest, parseMeetingJoinRequest, parseRecoveryCommand, parseRosterRequest, parseSchedulesRequest, parseScopeRequest, parseScreenRequest, parseStopRequest, parseUpgradeApproval, renderHelp, chatCommand } from "./commands.ts";
@@ -377,7 +377,7 @@ export interface ChannelManagerDeps {
   incarnationOf?: (chatKey: string) => number;
   /** The speaking right of a host-initiated push (INV-1459): refused with a reason when its purpose's claim does not hold. */
   outbound?: (purpose: OutboundPurpose, chatKey: string) => { allow: true } | { allow: false; reason: string };
-  outbox?: OutboxSender; // Sends under a receipt, retried and ordered per chat (INV-1460).
+  outbox?: OutboxSender; sent?: SentLedger; // outbox: sends under a receipt, retried and ordered per chat (INV-1460); sent: a line for everything a door sends (INV-1841)
   /**
    * The door's own default (docs/22 §2): who answers a message that names nobody,
    * per adapter. Absent, or undefined for an adapter, falls through to the
@@ -734,7 +734,7 @@ export class ChannelManager {
 
   register(adapter: ChannelAdapter, configured: boolean, detail: StatusLine | string): void {
     this.statuses.set(adapter.name, { name: adapter.name, configured, running: false, line: detail });
-    if (configured) this.adapters.push(adapter);
+    if (configured) this.adapters.push(this.deps.sent !== undefined ? recording(adapter, this.deps.sent) : adapter);
   }
 
   start(): void {
@@ -749,7 +749,7 @@ export class ChannelManager {
   registerAndStart(adapter: ChannelAdapter, detail: StatusLine | string): boolean {
     if (this.adapters.some(existing => existing.name === adapter.name)) return false;
     this.register(adapter, true, detail);
-    this.startAdapter(adapter);
+    this.startAdapter(this.adapters.at(-1)!); // the one just registered, as registered: wrapped when sends are recorded
     return true;
   }
 

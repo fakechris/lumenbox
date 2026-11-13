@@ -96,6 +96,8 @@ function stamp(raw: unknown): { at?: string; turnId?: string; executionId?: stri
 }
 
 export type DisplayEntry =
+  /** Something a chat door sent that the transcript does not hold: a notice, a card, a file (sent-in-thread.ts). */
+  | { kind: "sent"; what: "text" | "image" | "file" | "card"; door: string; at: string; card?: string; text?: string; name?: string }
   | {
       kind: "text";
       role: "user" | "assistant"; provenance?: "unknown";
@@ -169,7 +171,9 @@ export function toDisplayEntries(
   entries: readonly unknown[],
   roster: readonly RosterEntry[],
   /** The gate's verdict for a call by its tool_use id, when the gate kept one (INV-1664). */
-  verdictOf: (callId: string) => GateVerdict | undefined = () => undefined
+  verdictOf: (callId: string) => GateVerdict | undefined = () => undefined,
+  /** The conversation is a chat's: what is filed as said there, and is not the host's or a cue, came through the door from a person. */
+  fromChat = false
 ): DisplayEntry[] {
   const display: DisplayEntry[] = [];
   const knownNames = roster.map(entry => entry.name);
@@ -268,7 +272,7 @@ export function toDisplayEntries(
         continue;
       }
       owedOpening = true;
-      display.push({ kind: "text", role: "user", ...(!person ? { provenance: "unknown" as const } : {}), text, ...stamp(raw) });
+      display.push({ kind: "text", role: "user", ...(!person && !fromChat ? { provenance: "unknown" as const } : {}), text, ...stamp(raw) });
       continue;
     }
 

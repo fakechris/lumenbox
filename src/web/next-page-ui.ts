@@ -231,6 +231,8 @@ body[data-view="chat"] #view-title { cursor: pointer; }
 .card-plain .why, .panel .why { white-space: normal; }
 .panel .report { margin-bottom: 12px; }
 .card-plain textarea { width: 100%; min-height: 64px; }
+.sent { align-self: flex-start; max-width: 82%; display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; color: var(--soft); }
+.sent .why { white-space: normal; }
 .elsewhere { align-self: flex-start; color: var(--soft); font-size: 13px; text-align: left; text-decoration: underline; text-underline-offset: 3px; }
 .card-code { display: block; background: var(--surface); border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.5 "IBM Plex Mono", ui-monospace, monospace; }
 .card-need .acts { flex-wrap: wrap; }

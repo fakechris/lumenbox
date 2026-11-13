@@ -34,11 +34,30 @@ function conversationLabel(id) {
   return row && row.firstLine ? clip(row.firstLine, 40) : t("ui.next.chat.another");
 }
 
+/** Whether a chat has more than one conversation here: only then is it worth a heading of its own. */
+function chatHasTopics(rows, chatKey) { return rows.filter(function (row) { return row.chat === chatKey; }).length > 1; }
+/** A chat's name on the page: the door it is behind and how the chat itself began, or the end of its id where that is not loaded. */
+function chatLabel(rows, chatKey) {
+  var door = chatKey.split(":")[0].split("-")[0], root = rows.filter(function (row) { return row.chat === chatKey && !row.topic; })[0];
+  var name = MSG["ui.next.door." + door] ? t("ui.next.door." + door) : door;
+  return name + " · " + (root && root.firstLine ? clip(root.firstLine, 24) : chatKey.slice(-6)) + " (" + rows.filter(function (row) { return row.chat === chatKey; }).length + ")";
+}
+
 /** Another conversation of the agent being talked to, without leaving the page. */
 function showConversation(agentId, conversation) {
   if (agentId !== chat.agentId) openChat(agentId);
   chat.conversation = conversation || "main"; chat.loadedFor = ""; chat.entries = []; chat.live = null; chat.plan = null; chat.liveSurfaces = {};
   next.view = "chat"; closePanel(); render();
+}
+
+/** Something the chat was sent that is not the agent speaking: a notice in LumenBox's own voice, a card, a file. */
+function sentRow(entry) {
+  var what = entry.what === "card" ? t("ui.next.sent.card." + (MSG["ui.next.sent.card." + entry.card] ? entry.card : "task")) : t("ui.next.sent." + entry.what);
+  var row = el("div", "sent"), label = el("div", "why", t("ui.next.sent.label", { what: what, when: agoText(entry.at) }));
+  row.appendChild(label);
+  if (entry.what === "text") row.appendChild(rich(entry.text, "report"));
+  else if (entry.text || entry.name) row.appendChild(el("div", "", entry.name || clip(entry.text, 160)));
+  return row;
 }
 
 /** A row of work belongs to the conversation it was asked in; one with none recorded is the main one's. */

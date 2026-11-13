@@ -173,7 +173,7 @@ import { blockedQuestion, describePurpose, outboundVerdict } from "../host/outbo
 import { decidePart, partIn, type PartKey, partViews, strayOverrides } from "../host/prompt-parts.ts";
 import { ownerOf } from "../host/follow-up.ts";
 import { Outbox } from "../host/outbox.ts";
-import { OutboxSender } from "../channels/outbox-sender.ts";
+import { OutboxSender } from "../channels/outbox-sender.ts"; import { SentLedger } from "../channels/sent-ledger.ts"; import { withSent } from "./sent-in-thread.ts";
 import { ALL_TOOLS } from "../host/orchestrator.ts";
 import {
   CATALOG_CONNECTORS,
@@ -1028,12 +1028,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     reply: row => outboundRedactor(vault.heldValues())(row.messageId !== undefined ? orchestrator.replyForMessage(row.agentId, row.messageId, row.conversation) : orchestrator.replySince(row.agentId, row.before, row.conversation)),
     send: async (row, text) => { const result = await channels.tryPushToChat(row.chatKey, text, { kind: "answer", deliveryId: row.id }); if (!result.delivered) throw new Error(result.why ?? "Reply delivery was not confirmed"); },
   });
-  const outboxSender = new OutboxSender(outbox, log, undefined, undefined, (event, detail) => noteDelivery(orchestrator.exceptions, event, detail, chatKey => orchestrator.tasks?.list().find(task => task.conversation !== undefined && task.status !== "done" && task.status !== "dropped" && conversations.chatKeyFor(task.conversation) === chatKey)?.id), receipt => orchestrator.governance.revoked(resourceKey("outbox", receipt.id!)) ? {allow:false,terminal:true,reason:"Revoked by operator"} : replyRecovery.authorizeReceipt(receipt)); // each try onto the exception list (INV-1741)
+  const outboxSender = new OutboxSender(outbox, log, undefined, undefined, (event, detail) => noteDelivery(orchestrator.exceptions, event, detail, chatKey => orchestrator.tasks?.list().find(task => task.conversation !== undefined && task.status !== "done" && task.status !== "dropped" && conversations.chatKeyFor(task.conversation) === chatKey)?.id), receipt => orchestrator.governance.revoked(resourceKey("outbox", receipt.id!)) ? {allow:false,terminal:true,reason:"Revoked by operator"} : replyRecovery.authorizeReceipt(receipt)); const sentLedger = new SentLedger(join(agentboxHome(), "sent"), log, undefined, text => outboundRedactor(vault.heldValues())(text)); // each try onto the exception list (INV-1741); a line for everything a door sends (INV-1841)
   const credentialWaits = new CredentialWaits({ tasks: () => orchestrator.tasks, check: (agentId, principalId) => orchestrator.credentials.forAgent(agentId, [], principalId), announce: event => broadcast(taskCredentialEvent(event)), log }); vault.onChange(() => { void credentialWaits.recheck(); }); // a credential that lands releases the work waiting on it (INV-1666)
   const guestDesk = new GuestDesk({ settings: join(agentboxHome(), "guests.jsonl"), turns: join(agentboxHome(), "guest-turns.jsonl"), reviews: join(agentboxHome(), "guest-reviews.jsonl") }); // who answers guests, what is public to them, their turns and the reviews of their answers (INV-1708, INV-1713, docs/97)
   const channels = new ChannelManager({
     interactionTask: (message, name) => { const agent = registry.resolve(name ?? ""), parsed = parseActionText(message.text); const result = surfaceActionWork({ action: parsed ? { surface: parsed.surfaceId, name: parsed.name } : undefined, text: message.text, agentId: agent.id, conversation: conversationIdFor(message.threadKey ?? message.chatKey ?? message.identity), surfaces, focus: orchestrator.bus.workAttention, tasks: orchestrator.tasks }); if ("error" in result) throw new Error(result.error); return result.taskBinding.taskId; },
-    outbox: outboxSender, credentials: { gate: (taskId, start) => credentialWaits.gateText(taskId, "channel", start) },
+    outbox: outboxSender, sent: sentLedger, credentials: { gate: (taskId, start) => credentialWaits.gateText(taskId, "channel", start) },
     // The speaking right of a host push (INV-1459): the world each purpose claims, read now; a refusal is audited.
     outbound: (purpose, chatKey) => {
       const verdict = outboundVerdict(purpose, {
@@ -5884,7 +5884,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             id: record.id,
             name: record.profile.name,
           }));
-          send(res, 200, url.searchParams.get("all") === "1" ? toDisplayEntries(registry.readTranscript(id, conversation), roster, callId => orchestrator.policy.verdicts.get(callId)) : latestForDisplay(toDisplayEntries(registry.readTranscript(id, conversation), roster, callId => orchestrator.policy.verdicts.get(callId)))); // the newest part only, unless asked (INV-1624)
+          const shown = toDisplayEntries(registry.readTranscript(id, conversation), roster, callId => orchestrator.policy.verdicts.get(callId), conversations.chatKeyFor(conversation) !== undefined), drawn = url.searchParams.get("sent") === "1" ? withSent(shown, sentLedger.in(conversation)) : shown; send(res, 200, url.searchParams.get("all") === "1" ? drawn : latestForDisplay(drawn)); // the newest part only, unless asked (INV-1624); what the chat was sent beside it, when asked (INV-1841)
           return;
         }
 
@@ -5952,7 +5952,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               conversation.id === MAIN_CONVERSATION
                 ? undefined
                 : registry.conversationFirstLine(id, conversation.id);
-            const children = forks.filter(fork => fork.parent === conversation.id).map(fork => ({ id: fork.child, brief: fork.brief, status: fork.status, ...(fork.reason !== undefined ? { reason: fork.reason } : {}), lastAt: fork.lastAt })); return { ...conversation, ...(firstLine !== undefined ? { firstLine } : {}), ...(children.length > 0 ? { forks: children } : {}) };
+            const children = forks.filter(fork => fork.parent === conversation.id).map(fork => ({ id: fork.child, brief: fork.brief, status: fork.status, ...(fork.reason !== undefined ? { reason: fork.reason } : {}), lastAt: fork.lastAt })); const chatKey = conversations.chatKeyFor(conversation.id); return { ...conversation, ...(firstLine !== undefined ? { firstLine } : {}), ...(chatKey !== undefined ? { chat: chatKey.split(":").slice(0, 2).join(":"), topic: chatKey.split(":").length > 2 } : {}), ...(children.length > 0 ? { forks: children } : {}) };
           });
           send(res, 200, { conversations: page, total: sorted.length });
           return;

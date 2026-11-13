@@ -309,6 +309,15 @@ instead of the person: a closing text less than half the draft's length is a not
 reply is the draft followed by the note (`src/host/sent-back.ts`). The chat's reply and the page's
 bubbles are read from the same transcript entries, and a scenario holds the two equal.
 
+What a chat receives that no transcript holds — the acknowledgement, a card, a file, the screenshot,
+the host's notices — is recorded where it leaves: each door is wrapped at registration
+(`src/channels/sent-ledger.ts`, one file per conversation under `sent/`) and a send that returned
+leaves a line. The rebuilt page asks for them with the thread (`/api/transcript?sent=1`) and draws
+each as a quiet row, "sent to the chat", at its time; what the thread already says is not repeated
+(`src/web/sent-in-thread.ts`). Conversations from before the record have no such rows. A chat's
+topics are listed under the chat in the conversation picker, and work pinned or waiting in a thread
+is the work asked for in that conversation.
+
 **A read that failed is not an empty answer.** A list that could not be read says so. "Nothing went
 wrong" is only said when the server said it.
 
