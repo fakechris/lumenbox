@@ -90,6 +90,8 @@ export interface InboundMessage {
    * webhook's own brief was drawn in the chat as the person's words, and the turn was treated
    * as one the person was waiting on.
    */
+  /** Sent from a turn that somebody asked for (INV-1844): the request's standing travels with the message, set by the host, never by the sender. */
+  asked?: true;
   synthetic?: boolean; /** Which part of the host wrote it, e.g. "host:audit" (INV-1571): never a person's words, whatever opened the turn. */ origin?: string;
   /**
    * A person said this in a room without addressing this agent (INV-775): a group message

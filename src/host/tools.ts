@@ -1,4 +1,4 @@
-import { deliveryTool, reviewerInspectionRefusal } from "./task-delivery-tools.ts";
+import { deliveryTool, reviewerInspectionRefusal } from "./task-delivery-tools.ts"; import { PROPOSED_INSTEAD } from "./turn-standing.ts";
 import { isDeliveryAction } from "./task-delivery.ts"; import { evidenceDigest } from "./review-dispatch.ts";
 import { executionTarget } from "./tool-roster.ts";
 import { TASK_PROGRESS_TOOL, runTaskProgressTool } from "./task-progress-tool.ts";
@@ -119,7 +119,7 @@ function foregroundWindowMs(): number {
 export interface ToolContext {
   signal?: AbortSignal;
   audit?: import("./audit-context.ts").AuditContext; resultChecks?: import("./result-check-policy.ts").ResultChecks;
-  work?: import("../agents/work-attention.ts").WorkStamp; historyConversation?: string;
+  work?: import("../agents/work-attention.ts").WorkStamp; historyConversation?: string; /** Nobody asked for this turn (turn-standing.ts). */ unrequested?: boolean;
   /** A colleague's errand beside a person's waiting work (docs/99 §5): it reads no conversation of its own agent but its own. */
   side?: boolean;
   progressContext?: import("./task-progress.ts").ProgressContext;
@@ -2562,7 +2562,7 @@ function tellAssignee(
   if (assigneeId === undefined || assigneeId === context.agent.id) return "";
   const ack = context.bus.send({
     fromId: context.agent.id,
-    hops: context.chainHops ?? 0,
+    hops: context.chainHops ?? 0, asked: context.unrequested !== true, // the request's standing travels with the assignment (INV-1844)
     toId: assigneeId,
     text:
       `Task ${taskId} is assigned to you: "${title}". Read it with Tasks (action: read, id: ${taskId}), ` +
@@ -4628,7 +4628,7 @@ export async function dispatchTool(
         fromId: context.agent.id,
         toId: targetId,
         text: String(input.message ?? ""),
-        priority: input.priority === true, work: context.work, expectResult: input.expect_result !== false,
+        priority: input.priority === true, work: context.work, expectResult: input.expect_result !== false, asked: context.unrequested !== true,
         hops: context.chainHops ?? 0,
       });
       return { text: ack };
@@ -5048,7 +5048,7 @@ export async function dispatchTool(
 
       if (action === "create") {
         const contract = clampContract(input as Record<string, unknown>);
-        const discovery = parseDiscovery(input); const propose = input.propose === true || discovery !== undefined; const already = discovery !== undefined ? board.byFingerprint(discovery.fingerprint) : undefined; if (already !== undefined) return { text: `Not proposed again: ${already.id} (${already.status}${already.proposedBy !== undefined ? ", awaiting a person's commit" : ""}) already carries this finding from ${discovery!.source}.${already.status === "dropped" ? " It was dismissed; do not raise it again unless the evidence changed." : ""}`, isError: true };
+        const discovery = parseDiscovery(input); const propose = input.propose === true || discovery !== undefined || context.unrequested === true; const already = discovery !== undefined ? board.byFingerprint(discovery.fingerprint) : undefined; if (already !== undefined) return { text: `Not proposed again: ${already.id} (${already.status}${already.proposedBy !== undefined ? ", awaiting a person's commit" : ""}) already carries this finding from ${discovery!.source}.${already.status === "dropped" ? " It was dismissed; do not raise it again unless the evidence changed." : ""}`, isError: true };
         const assigneeRaw = String(input.assignee ?? "").trim();
         const reviewerRaw = String(input.reviewer ?? "").trim();
         const assigneeId = assigneeRaw === "" ? undefined : resolveAgent(assigneeRaw);
@@ -5087,7 +5087,7 @@ export async function dispatchTool(
           ...(typeof input.due === "string" && input.due.trim() !== "" ? { due: input.due } : {}), ...(parseLevel(input.level) !== undefined ? { level: parseLevel(input.level)! } : {}), // INV-1650
         }); } catch (error) { if (error instanceof BlockerError) return { text: error.message, isError: true }; throw error; }
         if (created === undefined) return { text: "A task needs a title.", isError: true };
-        const told = tellAssignee(context, created.id, created.title, assigneeId);
+        const told = context.unrequested === true ? ` ${PROPOSED_INSTEAD}` : tellAssignee(context, created.id, created.title, assigneeId);
         const waits = parent !== undefined && isLive(parent.status) && !(blockedBy ?? []).includes(parent.id) && board.update(parent.id, { blockedBy: [...new Set([...(parent.blockedBy ?? []), created.id])] }, context.agent.id, context.turnId) !== undefined ? ` ${parent.id} now waits on it; it stays open until its pieces are finished, and its assignee is woken then.` : "";
         return { text: `Created ${describeTask(created, nameOf, board)}.${told}${waits}` };
       }

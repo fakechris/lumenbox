@@ -213,6 +213,8 @@ export class AgentBus {
     text: string;
     priority?: boolean;
     work?: WorkStamp; expectResult?: boolean;
+    /** The sending turn was one somebody asked for (turn-standing.ts). */
+    asked?: boolean;
     relayed?: boolean;
   /**
    * How many turns this message is from a person (INV-1277): 0 when the sending turn was
@@ -274,7 +276,7 @@ export class AgentBus {
     const work = input.work ? this.workAttention?.link(input.work, input.fromId, target.id, expectsResult) : undefined;
     if (input.work && !work) return "Not sent: the originating user work is no longer current or this sender was not admitted to it.";
     const message: InboundMessage = {
-      ...(work ? { work } : {}), ...(!expectsResult ? {informational: true as const} : {}),
+      ...(work ? { work } : {}), ...(!expectsResult ? {informational: true as const} : {}), ...(input.asked === true ? { asked: true as const } : {}),
       ...(work?.owner === target.id ? { conversation: work.conversation } : {}),
       id: randomUUID(),
       fromId: input.fromId,

@@ -202,3 +202,29 @@ Each stage is independently shippable and leaves the suite green.
 - A status the page computes for itself. The page reads; `taskStage` decides.
 - Unbounded unattended spend. Every continuation runs under a ceiling a person chose or accepted
   (`longWork`), because the model budget is the operator's own.
+
+## 9. Whose work it is: standing (INV-1844)
+
+Between 2026-11-02 and 2026-11-10 the agents of one installation made 1,633 cards for themselves
+and each other and a person made 39; nothing was delivered to anyone. The audit dispatch that drove
+it is closed (a check is asked for explicitly, granted by a person per card, and runs with read-only
+tools). What this section adds is the rule underneath.
+
+**Work reaches an agent with standing in four ways**, and only these: a person says it; a routine
+a person set fires; the host continues either; or a teammate working on one of them asks. The last
+is carried, not inferred: a message or an assignment sent from a turn somebody asked for is marked
+`asked` by the host, and the turn it wakes has standing because of it.
+
+**A turn none of those opened is unrequested** (`src/host/turn-standing.ts`): woken only by
+teammates or by the board, with no request behind any of it. It is not forbidden, and it is not
+counted or capped. What it wants done is a *proposal*: a card it creates is filed for a person to
+commit, and nobody is told to start. Standing does not travel from it, so what it sends to others
+leaves them unrequested as well.
+
+**Not limits.** A routine may run every day and a request may take a thousand steps; neither is
+bounded here. The question is only whether the work has a request behind it.
+
+**Still open** (next under INV-1844): a board wake for a card that carries no request stamp opens
+an unrequested turn even when the card was made under a request; the account of what each request
+cost against what it delivered, and the checkpoints tied to it; a routine an agent wrote for itself
+tells its person once.
