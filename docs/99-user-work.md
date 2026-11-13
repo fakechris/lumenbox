@@ -237,7 +237,9 @@ agent the account — slices and time spent, of how many — and asks it to deci
 deliver what it has and say what is left out, or stop and say why; the choice goes in its plan.
 Nobody is asked and nothing is paused by it.
 
-**Still open** (next under INV-1844): a board wake for a card that carries no request stamp opens
-an unrequested turn even when the card was made under a request; the account of what each request
-cost against what it delivered, and the checkpoints tied to it; a routine an agent wrote for itself
-tells its person once.
+A card remembers the standing it was made with (`origin.asked`), so the board's wake for it — its
+blockers are done — keeps it: a request's cards stay work, a proposal is never woken.
+
+**Not done here**, and not required by INV-1844 as amended: the billing mode (plan or metered)
+shaping the daily spend line with the level; telling the person once when a routine an agent wrote
+for itself first runs.

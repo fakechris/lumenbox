@@ -4349,6 +4349,9 @@ test("INV-1844: a turn nobody asked for may propose work but not start it or han
     const rows = usage.since(0, 1000);
     assert.deepEqual([rows.filter(row => row.unrequested === true).length, rows.filter(row => row.unrequested !== true).length > 0], [5, true],
       "and what the unrequested turns cost is marked as such in the usage ledger: the probe turn's four calls and the relay it set off");
+    const { taskHasStanding } = await import("./turn-standing.ts");
+    assert.deepEqual([asked, under, ...probes].map(taskHasStanding), [true, true, false, false, false],
+      "and when the board later wakes somebody for one of them, the wake keeps the card's standing: a request's cards are work, a proposal is never woken");
     assert.ok(under !== undefined && under.proposedBy === undefined, "and so is what the teammate it was assigned to makes under it: the request travelled with the assignment");
   } finally { episode.cleanup(); rmSync(usageDir, { recursive: true, force: true }); }
 });

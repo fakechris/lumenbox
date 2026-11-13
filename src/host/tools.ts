@@ -5078,7 +5078,7 @@ export async function dispatchTool(
           ...(goalArea !== "" ? { goal: { area: goalArea, ...(typeof input.commitment === "string" ? { commitment: input.commitment } : {}) } } : {}),
           title: String(input.title ?? ""),
           ...(typeof input.description === "string" ? { description: input.description } : {}),
-          requester: context.agent.id, origin: {kind: propose || discovery ? "internal" : parent?.origin?.kind ?? (context.work?.isolated && context.work.owner === context.agent.id ? "user" : "internal"), ...(context.work ? {workId:context.work.id} : {}), ...(parent ? {parentId:parent.id} : {})},
+          requester: context.agent.id, origin: {kind: propose || discovery ? "internal" : parent?.origin?.kind ?? (context.work?.isolated && context.work.owner === context.agent.id ? "user" : "internal"), ...(propose ? {} : { asked: true as const }), ...(context.work ? {workId:context.work.id} : {}), ...(parent ? {parentId:parent.id} : {})},
           ...(assigneeId !== undefined ? { assigneeId } : {}),
           ...(reviewerId !== undefined ? { reviewerId } : {}),
           ...(context.conversation !== undefined ? { conversation: context.conversation } : {}),

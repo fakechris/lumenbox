@@ -1,6 +1,6 @@
 /** Display provenance is host-owned and never inferred from a task's title. */
 import type { Task } from "./tasks.ts";
-export interface TaskOrigin { kind: "user" | "internal"; workId?: string; parentId?: string }
+export interface TaskOrigin { kind: "user" | "internal"; workId?: string; parentId?: string; /** Made in a turn somebody asked for (INV-1844): set by the host, so a later wake for it keeps that standing. */ asked?: true }
 export function taskAudience(task: Task, agentIds: ReadonlySet<string>, people?: ReadonlySet<string>): "user" | "subtask" | "internal" {
   if (task.origin?.parentId) return "subtask";
   if (task.origin) return task.origin.kind;

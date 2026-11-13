@@ -632,7 +632,7 @@ export class AgentBus {
    * so it opens a turn of its own once the conversation is free, where the agent reads it
    * as what it is: a late report, not an instruction.
    */
-  deliverSystem(agentId: string, text: string, conversation: string = MAIN_CONVERSATION, related?: WorkStamp | string): number | undefined {
+  deliverSystem(agentId: string, text: string, conversation: string = MAIN_CONVERSATION, related?: WorkStamp | string, asked?: boolean): number | undefined {
     const work = typeof related === "string" ? this.workAttention?.forId(agentId, conversation, related) : related;
     if (related && this.workAttention && (!work || !this.workAttention.valid(work, agentId))) {
       // Retain a late result for diagnosis, consume it once, and never reinterpret it as new work.
@@ -647,7 +647,7 @@ export class AgentBus {
       text: clampMessage(text, AGENT_MESSAGE_MAX_LENGTH),
       priority: false,
       receivedAt: new Date().toISOString(),
-      ...(conversation !== MAIN_CONVERSATION ? { conversation } : {}),
+      ...(conversation !== MAIN_CONVERSATION ? { conversation } : {}), ...(asked === true ? { asked: true as const } : {}), // the card's standing (INV-1844)
     });
     void this.wake(agentId);
     return seq;
