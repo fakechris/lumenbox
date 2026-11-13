@@ -36,18 +36,29 @@ function renderSettings(view) {
     getJson("/api/long-work").then(function (got) { settings.long = got; if (next.view === "settings") render(); }, failed);
     return;
   }
-  var long = el("section", "setting"), fields = el("div", "fields"), save = el("button", "act-primary", t("ui.next.settings.save"));
+  // One rough choice; the numbers behind it are for whoever wants them, folded away.
+  var long = el("section", "setting"), fields = el("div", "fields"), save = el("button", "act-primary", t("ui.next.settings.save")), levels = el("div", "acts"), own = el("details", "fold");
   var slices = numberField(t("ui.next.settings.slices"), settings.long.continuations, 0, 1000);
   var hours = numberField(t("ui.next.settings.hours"), settings.long.activeHours, 1, 168);
   long.appendChild(el("h2", "group", t("ui.next.settings.long")));
-  long.appendChild(el("p", "", t("ui.next.settings.longNote")));
+  long.appendChild(el("p", "", t("ui.next.settings.effortNote")));
+  ["lean", "standard", "open"].forEach(function (level) {
+    var pick = el("button", "seg", t("ui.next.settings.effort." + level));
+    pick.setAttribute("aria-pressed", String(!settings.long.custom && settings.long.effort === level));
+    pick.addEventListener("click", function () { postJson("/api/long-work", { effort: level }).then(function (got) { settings.long = got; toast(t("ui.next.settings.saved")); render(); }, failed); });
+    levels.appendChild(pick);
+  });
+  long.appendChild(levels);
+  long.appendChild(el("p", "why", t("ui.next.settings.default", { slices: settings.long.continuations, hours: settings.long.activeHours })));
+  own.appendChild(el("summary", "", t("ui.next.settings.ownNumbers")));
+  own.appendChild(el("p", "why", t("ui.next.settings.longNote")));
   fields.appendChild(slices.label); fields.appendChild(hours.label);
-  long.appendChild(fields);
-  long.appendChild(el("p", "why", t("ui.next.settings.default", { slices: settings.long.defaults.continuations, hours: settings.long.defaults.activeHours })));
+  own.appendChild(fields);
   save.addEventListener("click", function () {
     postJson("/api/long-work", { continuations: Number(slices.input.value), activeHours: Number(hours.input.value) }).then(function (got) { settings.long = got; toast(t("ui.next.settings.saved")); render(); }, failed);
   });
-  long.appendChild(save);
+  own.appendChild(save); own.open = !!settings.long.custom;
+  long.appendChild(own);
   view.appendChild(long);
   var more = el("div", "list");
   more.appendChild(el("h2", "group", t("ui.next.settings.more")));

@@ -555,8 +555,33 @@ function longRequestNotice(taskId: string, pursuit: Pursuit, seq: number, progre
     for (const line of progress) lines.push(escapeXml(line));
     lines.push("");
   }
+  if (stockTakeDue(seq)) lines.push(stockTake(seq, pursuit), "");
   lines.push(LONG_REQUEST_GUIDELINES, "</host_notification>");
   return lines.join("\n");
+}
+
+/**
+ * Whether this continuation is one at which the agent weighs the request against what it has cost (INV-1844):
+ * each time the slices spent have doubled — 2, 4, 8, 16 — so a request is looked at often while it is cheap to
+ * change course and rarely once it has proved itself. Not a count that stops anything.
+ */
+export const stockTakeDue = (seq: number): boolean => seq >= 2 && (seq & (seq - 1)) === 0;
+
+/**
+ * The account handed to the agent, and the decision that is its own to make. Nobody is asked: a person who
+ * wanted to be consulted at every doubling would have been given a question, and Chris asked for the opposite —
+ * that the agent judge whether the work is worth continuing.
+ */
+function stockTake(seq: number, pursuit: Pursuit): string {
+  const minutes = Math.round(pursuit.spent.activeMs / 60_000);
+  return [
+    `Stock-take. This request has now taken ${seq} slices and about ${minutes} minutes of work, of at most ${pursuit.limits.continuations} slices.`,
+    "Before going on, weigh what the person asked for against what it has cost and what you have to show for it, and decide yourself — do not ask them:",
+    "- continue, if what is left is worth about as much again as what has been spent;",
+    "- deliver now, if what you have already answers most of it: reply with the result and say plainly what is left out;",
+    "- stop, if it is not worth more: reply with what you found and why you are stopping.",
+    "Say which you chose and why in one line of your plan (SetTodos), then act on it.",
+  ].join("\n");
 }
 
 /** The continuation wake's text: the objective as data, the checklist, the last verdict, the rules. */

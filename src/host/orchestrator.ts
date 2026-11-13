@@ -1955,7 +1955,7 @@ export class Orchestrator {
         if (report.marker.verify !== undefined) void this.goalGate?.verifierEnded(report);
         else void this.goalLoop?.turnEnded(report);
       },
-      continueAcrossBudget: slice => this.tasks !== undefined && this.goalLoop !== undefined && continueAcrossBudget(this.tasks, slice, longRequestLimits(loadConfig().longWork)),
+      continueAcrossBudget: slice => this.tasks !== undefined && this.goalLoop !== undefined && continueAcrossBudget(this.tasks, slice, longRequestLimits(loadConfig().longWork, loadConfig().effort)),
       ...(this.goalGate !== undefined ? { goalGate: this.goalGate } : {}),
       onEvent: event => {
         if (!inbound.some(message => message.audit) && event.type === "stuck" && event.agentId === agent.id) {
