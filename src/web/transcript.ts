@@ -17,6 +17,8 @@ import { optionLabel } from "../host/ask-options.ts";
 import { type SurfaceDraw, surfaceDrawOf } from "../host/show-ui-catalog.ts";
 import { type EditDiff, editDiffOf } from "./line-diff.ts";
 import type { GateVerdict } from "../host/gate-verdict.ts";
+import { entryChannel } from "../host/model-text.ts";
+import type { HistoryEntry } from "../host/compaction.ts";
 
 export interface DisplayTool {
   turnId?: string;
@@ -237,8 +239,17 @@ export function toDisplayEntries(
       continue;
     }
 
+    // What the host kept of an older stretch when it shortened the context: its own digest, filed
+    // under the user role because that is where the model reads it. Never the person speaking.
+    if (entry.kind === "summary") {
+      display.push({ kind: "trigger", label: "summary of the earlier conversation", provenance: "host", text, ...stamp(raw) });
+      continue;
+    }
+
     if (entry.role === "user") {
-      const host = (raw as { host?: boolean }).host === true, person = (raw as { fromPerson?: boolean }).fromPerson === true && !host;
+      // The flag where the entry has one; else the host's own openings, by the one table that
+      // names them (model-text.ts), so a notice recorded before the flag is not shown as typed.
+      const host = (raw as { host?: boolean }).host === true || entryChannel(raw as HistoryEntry) === "host", person = (raw as { fromPerson?: boolean }).fromPerson === true && !host;
       const peers = person ? undefined : parseWakePrompt(text, knownNames);
       if (peers) { display.push({ kind: "peer", messages: peers }); continue; }
       const trigger = host ? "System context" : triggerOf(text, person);
