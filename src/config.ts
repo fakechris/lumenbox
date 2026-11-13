@@ -45,6 +45,8 @@ export interface AgentboxConfig {
   turnBudget?: { calls?: number; repeats?: number };
   /** How far the host carries one request past a turn's budget unattended (INV-1823); read and bounded by long-request.ts. */
   longWork?: { continuations?: number; activeHours?: number };
+  /** How much goes into one request before the host stops carrying it: one rough choice (long-request.ts). */
+  effort?: "lean" | "standard" | "open";
   /**
    * The local hour (0–23) at which an unattended upgrade may run.
    *
@@ -357,6 +359,7 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
     ),
     ...(readTurnBudget(raw.turnBudget, onWarn) !== undefined ? { turnBudget: readTurnBudget(raw.turnBudget, onWarn) } : {}),
     ...(typeof raw.longWork === "object" && raw.longWork !== null && !Array.isArray(raw.longWork) ? { longWork: raw.longWork as NonNullable<AgentboxConfig["longWork"]> } : {}),
+    ...(raw.effort === "lean" || raw.effort === "standard" || raw.effort === "open" ? { effort: raw.effort } : {}),
     ...(readHour(raw.upgradeHour, onWarn) !== undefined
       ? { upgradeHour: readHour(raw.upgradeHour, onWarn) }
       : {}),
@@ -823,7 +826,7 @@ export function saveConfig(
     digests?: Record<string, number | null>;
     startupItem?: boolean | null;
     teamMemoryReview?: boolean | null;
-    personalBoxQuota?: number | null; longWork?: AgentboxConfig["longWork"] | null; // the unattended ceiling (INV-1823)
+    personalBoxQuota?: number | null; longWork?: AgentboxConfig["longWork"] | null; effort?: AgentboxConfig["effort"] | null; // the unattended ceiling (INV-1823), and the level it follows (INV-1844)
     personBoxQuotas?: Record<string, number | null>;
     departmentBoxQuotas?: Record<string, number | null>;
   }
@@ -866,7 +869,7 @@ export function saveConfig(
     // sandbox and timeout keys an operator wrote by hand (INV-1344).
     else raw.hostExec = { ...(raw.hostExec !== null && typeof raw.hostExec === "object" ? (raw.hostExec as Record<string, unknown>) : {}), ...changes.hostExec };
   }
-  for (const key of ["personalBoxQuota", "longWork"] as const) {
+  for (const key of ["personalBoxQuota", "longWork", "effort"] as const) {
     if (changes[key] === undefined) continue;
     if (changes[key] === null) delete raw[key]; else raw[key] = changes[key];
   }

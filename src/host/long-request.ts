@@ -15,15 +15,30 @@ import type { TaskStore } from "./tasks.ts";
 
 export interface LongRequestLimits { continuations: number; activeMs: number }
 
-/** The configured ceiling, or a goal's own defaults: one allowance for anything the host continues unattended. */
-export function longRequestLimits(configured?: { continuations?: unknown; activeHours?: unknown }): LongRequestLimits {
+/**
+ * How much the installation is willing to put into one request before the host stops carrying it (INV-1844).
+ *
+ * One rough choice instead of numbers to fill in. Chris, 2026-11-13: a person's control over spend comes
+ * down to how they pay and one preference, and beyond that the agent should judge for itself whether the
+ * work is worth continuing rather than ask. `standard` is what the installation did before the choice existed.
+ */
+export type Effort = "lean" | "standard" | "open";
+export const EFFORT_LIMITS: Record<Effort, LongRequestLimits> = {
+  lean: { continuations: 8, activeMs: 4 * 3_600_000 },
+  standard: { ...DEFAULT_PURSUIT_LIMITS },
+  open: { continuations: 120, activeMs: 48 * 3_600_000 },
+};
+export const effortOf = (value: unknown): Effort => (value === "lean" || value === "open" ? value : "standard");
+
+/** The ceiling for anything the host continues unattended: the level's, unless somebody wrote numbers of their own. */
+export function longRequestLimits(configured?: { continuations?: unknown; activeHours?: unknown }, effort?: unknown): LongRequestLimits {
   // A setting that is not a whole number in range is ignored, not guessed at: 0 slices turns continuation off.
   const whole = (value: unknown, min: number, max: number): number | undefined =>
     typeof value === "number" && Number.isInteger(value) && value >= min && value <= max ? value : undefined;
   const hours = whole(configured?.activeHours, 1, 168);
   return {
-    continuations: whole(configured?.continuations, 0, 1000) ?? DEFAULT_PURSUIT_LIMITS.continuations,
-    activeMs: hours !== undefined ? hours * 3_600_000 : DEFAULT_PURSUIT_LIMITS.activeMs,
+    continuations: whole(configured?.continuations, 0, 1000) ?? EFFORT_LIMITS[effortOf(effort)].continuations,
+    activeMs: hours !== undefined ? hours * 3_600_000 : EFFORT_LIMITS[effortOf(effort)].activeMs,
   };
 }
 

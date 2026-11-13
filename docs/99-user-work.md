@@ -228,6 +228,15 @@ bounded here. The question is only whether the work has a request behind it.
 (`UsageRecord.unrequested`), and the spend report gives that share beside the total, for a day or
 for everything on file. It is a figure for a person to weigh, not a trigger: nothing is paused by it.
 
+**How far a request is carried is one choice, and the judgement is the agent's.** Chris,
+2026-11-13: a person's control over spend is how they pay and one rough preference; beyond that the
+agent decides whether the work is worth going on, and does not ask. Settings → Long work offers
+*Lean / Standard / Open* (8, 30, 120 continuations; 4, 12, 48 active hours); numbers written by hand
+are folded beneath and win while they are set. At continuations 2, 4, 8, 16 … the wake hands the
+agent the account — slices and time spent, of how many — and asks it to decide itself: continue,
+deliver what it has and say what is left out, or stop and say why; the choice goes in its plan.
+Nobody is asked and nothing is paused by it.
+
 **Still open** (next under INV-1844): a board wake for a card that carries no request stamp opens
 an unrequested turn even when the card was made under a request; the account of what each request
 cost against what it delivered, and the checkpoints tied to it; a routine an agent wrote for itself

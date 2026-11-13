@@ -117,6 +117,18 @@ test("a request that stops making progress is not continued for ever, and its ce
   }
 });
 
+test("one rough choice sets how far a request is carried, and at each doubling the agent is handed the account to judge for itself (INV-1844)", async () => {
+  const { longRequestLimits } = await import("./long-request.ts");
+  const { continuationNotice, newPursuit, stockTakeDue } = await import("./goal-mode.ts");
+  assert.deepEqual(["lean", "standard", "open", undefined].map(level => longRequestLimits(undefined, level).continuations), [8, 30, 120, 30]);
+  assert.equal(longRequestLimits({ continuations: 5, activeHours: 2 }, "open").continuations, 5, "numbers somebody wrote themselves win over the level");
+  assert.deepEqual([1, 2, 3, 4, 5, 6, 7, 8, 16].filter(stockTakeDue), [2, 4, 8, 16], "looked at often while it is cheap to change course, rarely once it has proved itself");
+  const pursuit = { ...newPursuit({ objective: "Cite 2,000 documents", workId: "w", completion: "answer", limits: longRequestLimits() }), spent: { continuations: 4, idleStreak: 0, rejections: 0, activeMs: 50 * 60_000, cost: 0 } };
+  const at = (seq: number) => continuationNotice({ id: "t1", pursuit } as never, seq);
+  assert.match(at(4), /Stock-take\. This request has now taken 4 slices and about 50 minutes[\s\S]*decide yourself — do not ask them/, "the account, and whose decision it is");
+  assert.doesNotMatch(at(5), /Stock-take/, "and not at every slice");
+});
+
 test("a request that only talked at the budget line, or a card somebody made by hand, keeps the hand-back", async () => {
   const { continueAcrossBudget, longRequestLimits } = await import("./long-request.ts");
   const tasks = new TaskStore(null);
