@@ -17,6 +17,7 @@ import { NEXT_SCREEN_JS } from "./next-screen-ui.ts";
 import { NEXT_SETTINGS_JS } from "./next-settings-ui.ts";
 import { NEXT_AUTO_JS } from "./next-auto-ui.ts";
 import { NEXT_THREAD_JS } from "./next-thread-ui.ts";
+import { NEXT_RESULT_JS } from "./next-result-ui.ts";
 import { NEXT_AGENT_CONFIG_JS } from "./next-agent-config-ui.ts";
 import { NEXT_AGENT_TOOLS_JS } from "./next-agent-tools-ui.ts";
 import { NEXT_SHELF_JS } from "./next-shelf-ui.ts";
@@ -225,6 +226,12 @@ body[data-view="chat"] #view-title { cursor: pointer; }
 .card-stuck { background: var(--bad-soft); }
 .card-plain { background: var(--surface); border: 1px solid var(--border); min-width: 260px; }
 .card-head { font-weight: 600; }
+.report { font-size: 13.5px; max-height: 15em; overflow: auto; overflow-wrap: anywhere; border-left: 2px solid var(--border); padding-left: 10px; }
+.report p { margin: 0 0 8px; } .report p:last-child { margin-bottom: 0; } .report pre { overflow: auto; font-size: 12.5px; } .report ul, .report ol { margin: 0 0 8px; padding-left: 20px; }
+.card-plain .why, .panel .why { white-space: normal; }
+.panel .report { margin-bottom: 12px; }
+.card-plain textarea { width: 100%; min-height: 64px; }
+.elsewhere { align-self: flex-start; color: var(--soft); font-size: 13px; text-align: left; text-decoration: underline; text-underline-offset: 3px; }
 .card-code { display: block; background: var(--surface); border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.5 "IBM Plex Mono", ui-monospace, monospace; }
 .card-need .acts { flex-wrap: wrap; }
 .card-need input { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--surface); font: inherit; }
@@ -438,6 +445,7 @@ ${NEXT_SCREEN_JS}
 ${NEXT_SETTINGS_JS}
 ${NEXT_AUTO_JS}
 ${NEXT_THREAD_JS}
+${NEXT_RESULT_JS}
 ${NEXT_AGENT_CONFIG_JS}
 ${NEXT_AGENT_TOOLS_JS}
 ${NEXT_SHELF_JS}

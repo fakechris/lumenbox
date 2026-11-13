@@ -282,6 +282,23 @@ over, a card it drew: each is a card in that agent's conversation, and a questio
 also a row in the inbox with its buttons on the row. Nothing that passed between agents is shown as
 a message: it is one folded line.
 
+**A result is shown with where it came from and what was said about it.** A card asking for a
+decision says through which door the work was asked (this page, a chat, an agent of its own accord),
+shows the newest thing somebody reported about it as written, and explains its buttons: *Accept*
+closes it, *Request changes* takes the note on the card and sends the work back, *Details* opens the
+panel. The card belongs to the conversation the work was asked in; from any other, a line says how
+many wait there and goes there. The panel leads with the same origin, renders the request as
+Markdown, lists what was reported, and draws no heading over an empty section. A card that asks a
+person to accept what it does not show is the failure this rule exists for.
+
+**A count leads somewhere.** An agent's unread count is over all its conversations; the row facts say
+which (`unreadIn`), the conversation picker marks them, and the open conversation carries a line to
+each. Looking clears the count at once.
+
+**What the host wrote is not the person's bubble.** Context digests, audit requests, job notices and
+host notifications are host context in the transcript (`transcript.ts`, by the table in
+`model-text.ts`), whatever an old record stamped them.
+
 **A read that failed is not an empty answer.** A list that could not be read says so. "Nothing went
 wrong" is only said when the server said it.
 

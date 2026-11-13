@@ -7,7 +7,7 @@
  * between agents are one folded line each, opened on demand; the host's own notes are not shown.
  */
 export const NEXT_CHAT_JS = `
-var chat = { agentId: "", conversation: "main", conversations: [], plan: null, box: "", entries: [], live: null, loading: "", loadedFor: "", request: 0, jump: false, liveSurfaces: {}, expired: {}, find: "" };
+var chat = { agentId: "", conversation: "main", conversations: [], plan: null, box: "", entries: [], live: null, loading: "", loadedFor: "", request: 0, jump: false, liveSurfaces: {}, expired: {}, find: "", changing: "" };
 var markdown = window.markdownit ? window.markdownit({ html: false, linkify: true, breaks: true }) : null;
 
 function agentsHere() {
@@ -143,30 +143,6 @@ function planCard() {
   return card;
 }
 
-/** A delivered result, where the person was talking when it arrived: what it is, its files, and the decision. */
-function resultCard(row) {
-  var card = el("div", "card-plain"), acts = el("div", "acts"), files = row.deliverables || [];
-  var accept = el("button", "act-primary", t("ui.next.act.accept")), changes = el("button", "act", t("ui.next.act.changes")), open = el("button", "act", t("ui.next.act.open"));
-  card.dataset.result = row.id;
-  card.appendChild(el("div", "card-head", t("ui.next.chat.delivered", { name: agentName(row.assigneeId) })));
-  card.appendChild(el("div", "", row.title));
-  files.slice(0, 4).forEach(function (file) {
-    var link = el("a", "file", file.name);
-    link.href = "/api/tasks/deliverable?task=" + encodeURIComponent(row.id) + "&id=" + encodeURIComponent(file.id);
-    card.appendChild(link);
-  });
-  ((row.reading && row.reading.evidence) || []).slice(0, 2).forEach(function (line) { card.appendChild(el("div", "why", line)); });
-  if (files.length > 4) card.appendChild(el("div", "why", t("ui.next.chat.moreFiles", { n: files.length - 4 })));
-  accept.addEventListener("click", function () {
-    postJson("/api/tasks/update", { id: row.id, status: "done" }).then(function () { toast(t("ui.next.done.accepted")); refreshSoon(); }, failed);
-  });
-  // Saying what to change needs room and the result beside it: the panel has both.
-  changes.addEventListener("click", function () { openPanel(row.id); });
-  open.addEventListener("click", function () { openPanel(row.id); });
-  acts.appendChild(accept); acts.appendChild(changes); acts.appendChild(open); card.appendChild(acts);
-  return card;
-}
-
 function clip(text, limit) { text = String(text || "").replace(/\\s+/g, " "); return text.length > limit ? text.slice(0, limit) + "…" : text; }
 
 /** The thread as a person reads it: adjacent steps become one fold, the host's notes are left out. */
@@ -220,7 +196,8 @@ function renderThread(view) {
   if (lastAsk && chat.expired[lastAsk.question.question]) thread.appendChild(el("div", "aside", t("ui.next.chat.expired", { name: agent ? agent.name : "" })));
   else if (lastAsk && !chat.live) thread.appendChild(askCard(lastAsk, agent));
   if (agent) pendingCards(agent).forEach(function (card) { thread.appendChild(card); });
-  delivered.forEach(function (row) { thread.appendChild(resultCard(row)); });
+  delivered.filter(inThisConversation).forEach(function (row) { thread.appendChild(resultCard(row)); });
+  if (agent) elsewhereNotes(agent, delivered.filter(function (row) { return !inThisConversation(row); })).forEach(function (note) { thread.appendChild(note); });
   if (chat.live) {
     if (chat.live.text) thread.appendChild(bubble({ role: "assistant", text: chat.live.text }, true));
     var bar = el("div", "livebar"), stop = el("button", "act", t("ui.next.chat.stop"));
@@ -247,7 +224,8 @@ function renderChat(view) {
   if (!picker.hidden) {
     picker.replaceChildren();
     chat.conversations.forEach(function (row) {
-      var option = el("option", "", row.id === "main" ? t("ui.next.chat.main") : clip(row.firstLine || row.id, 40));
+      var unread = ((agent && agent.facts && agent.facts.unreadIn) || []).some(function (entry) { return entry.conversation === row.id && row.id !== chat.conversation; });
+      var option = el("option", "", (unread ? "● " : "") + (row.id === "main" ? t("ui.next.chat.main") : clip(row.firstLine || row.id, 40)));
       option.value = row.id; option.selected = row.id === chat.conversation;
       picker.appendChild(option);
     });
@@ -284,7 +262,9 @@ function loadThread() {
     if (chat.loadedFor !== id) { chat.jump = true; chat.live = next.agents[id] && next.agents[id].running ? { text: "", doing: "" } : null; }
     chat.entries = entries; chat.loadedFor = id; chat.loading = "";
     if (next.view === "chat") render();
-    if (chatVisible()) postJson("/api/agents/viewed", { id: id, conversation: chat.conversation }).catch(function () {});
+    // Looking clears the count; the row is redrawn at once where there was one, so the badge does not outlive the look.
+    var counted = next.agents[id] && next.agents[id].facts && next.agents[id].facts.unreadCount;
+    if (chatVisible()) postJson("/api/agents/viewed", { id: id, conversation: chat.conversation }).then(function () { if (counted) refreshSoon(); }, function () {});
     // Beside the thread, and allowed to fail: a viewer may not read the plan, and one conversation needs no picker.
     getJson("/api/progress?agent=" + encodeURIComponent(id) + "&conversation=" + encodeURIComponent(chat.conversation)).then(function (plan) { if (request === chat.request) { chat.plan = plan; if (next.view === "chat") render(); } }, function () {});
     loadConversations(id, 0);

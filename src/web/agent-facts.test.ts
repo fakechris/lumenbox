@@ -23,6 +23,7 @@ test("a turn's prose counts once per conversation until the turn ends; the perso
   facts.noteTurnEvent({ type: "text", agentId: "vic", conversation: "main" });
   facts.noteTurnEvent({ type: "text", agentId: "vic", conversation: "goal-3" });
   assert.equal(facts.forAgent("vic").unreadCount, 2);
+  assert.deepEqual(facts.forAgent("vic").unreadIn, [{ conversation: "main", count: 1 }, { conversation: "goal-3", count: 1 }], "and the row says where, so a count is never one the page cannot lead to");
   assert.equal(facts.forAgent("vic").marker, "unread", "unread outranks working");
   facts.noteTurnEvent({ type: "turn_finished", agentId: "vic" });
   working.delete("vic");
