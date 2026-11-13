@@ -96,6 +96,8 @@ function stamp(raw: unknown): { at?: string; turnId?: string; executionId?: stri
 }
 
 export type DisplayEntry =
+  /** Something a chat door sent that the transcript does not hold: a notice, a card, a file (sent-in-thread.ts). */
+  | { kind: "sent"; what: "text" | "image" | "file" | "card"; door: string; at: string; card?: string; text?: string; name?: string }
   | {
       kind: "text";
       role: "user" | "assistant"; provenance?: "unknown";

@@ -46,7 +46,8 @@ function renderSide() {
   var everyone = agentsHere(), here = inTeam(everyone, teams.chosen);
   renderTeams(everyone);
   // The agent being talked to stays the one talked to when the list is narrowed to another team.
-  if (!everyone.some(function (agent) { return agent.id === chat.agentId; })) chat.agentId = here[0] ? here[0].id : "";
+  // Before the agents are read there is nobody to compare with: a link that names an agent keeps naming it until then.
+  if (Object.keys(next.agents).length && !everyone.some(function (agent) { return agent.id === chat.agentId; })) chat.agentId = here[0] ? here[0].id : "";
   list.replaceChildren();
   here.forEach(function (agent) {
     var row = el("button", "agent"), body = el("span", "body");
@@ -161,7 +162,7 @@ function renderThread(view) {
     return;
   }
   var mine = next.rows.filter(function (row) { return row.assigneeId === chat.agentId; }), delivered = mine.filter(function (row) { return nextStateOf(row).key === "review"; });
-  mine.filter(function (row) { var group = nextGroupOf(nextStateOf(row).key); return group !== "done" && group !== "review"; }).forEach(function (row) {
+  mine.filter(inThisConversation).filter(function (row) { var group = nextGroupOf(nextStateOf(row).key); return group !== "done" && group !== "review"; }).forEach(function (row) {
     var pin = el("button", "pin"), body = el("span", "body");
     body.appendChild(el("div", "title", row.title)); body.appendChild(el("div", "why", reasonOf(row)));
     pin.appendChild(chip(nextStateOf(row))); pin.appendChild(body);
@@ -188,6 +189,7 @@ function renderThread(view) {
     flush();
     if (entry.kind === "text") thread.appendChild(bubble(entry));
     else if (entry.kind === "peer") thread.appendChild(fold(t("ui.next.chat.team", { n: (entry.messages || []).length }), (entry.messages || []).map(function (message) { return { head: message.from, text: clip(message.text, 300) }; })));
+    else if (entry.kind === "sent") thread.appendChild(sentRow(entry));
     else if (entry.kind === "trigger" && entry.skipped) thread.appendChild(el("div", "aside", t("ui.next.chat.earlier", { n: entry.skipped })));
   });
   flush();
@@ -223,11 +225,15 @@ function renderChat(view) {
   picker.hidden = chat.conversations.length < 2;
   if (!picker.hidden) {
     picker.replaceChildren();
+    // One chat is one entry: its topics sit under it, as they do in the chat itself, not beside a hundred others.
+    var groups = {};
     chat.conversations.forEach(function (row) {
       var unread = ((agent && agent.facts && agent.facts.unreadIn) || []).some(function (entry) { return entry.conversation === row.id && row.id !== chat.conversation; });
       var option = el("option", "", (unread ? "● " : "") + (row.id === "main" ? t("ui.next.chat.main") : clip(row.firstLine || row.id, 40)));
       option.value = row.id; option.selected = row.id === chat.conversation;
-      picker.appendChild(option);
+      if (!row.chat || !chatHasTopics(chat.conversations, row.chat)) { picker.appendChild(option); return; }
+      if (!groups[row.chat]) { groups[row.chat] = el("optgroup"); groups[row.chat].label = chatLabel(chat.conversations, row.chat); picker.appendChild(groups[row.chat]); }
+      groups[row.chat].appendChild(option);
     });
     if (chat.conversationsTotal > chat.conversations.length) {
       var older = el("option", "", t("ui.next.chat.older", { n: chat.conversationsTotal - chat.conversations.length }));
@@ -257,7 +263,7 @@ function loadThread() {
   var id = chat.agentId, request = ++chat.request;
   if (!id) return;
   chat.loading = id;
-  getJson("/api/transcript?agent=" + encodeURIComponent(id) + "&conversation=" + encodeURIComponent(chat.conversation)).then(function (entries) {
+  getJson("/api/transcript?sent=1&agent=" + encodeURIComponent(id) + "&conversation=" + encodeURIComponent(chat.conversation)).then(function (entries) {
     if (chat.agentId !== id || request !== chat.request) return; // a newer read is on its way
     if (chat.loadedFor !== id) { chat.jump = true; chat.live = next.agents[id] && next.agents[id].running ? { text: "", doing: "" } : null; }
     chat.entries = entries; chat.loadedFor = id; chat.loading = "";
