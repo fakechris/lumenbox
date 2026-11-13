@@ -106,6 +106,8 @@ export type DisplayEntry = (
   | {
       kind: "text";
       role: "user" | "assistant"; provenance?: "unknown";
+      /** Where a request came from, when it was not this page: the chat door, or a routine the person set (INV-1845). */
+      source?: "feishu" | "dingtalk" | "telegram" | "routine";
       text: string;
       /**
        * Prose that came in the same turn as tool calls: running commentary, not the
@@ -310,14 +312,16 @@ export function toDisplayEntries(
       owedOpening = false;
       if (by("person")) {
         owedOpening = true; background = false; asked.clear();
-        push({ kind: "text", role: "user", text, ...stamp(raw) });
+        const door = /^(feishu|dingtalk|telegram)/.exec(heard[0]!.conversation)?.[1] as "feishu" | "dingtalk" | "telegram" | undefined;
+        push({ kind: "text", role: "user", text, ...(door !== undefined ? { source: door } : {}), ...stamp(raw) });
       } else if (by("teammate")) {
         background = !heard.some(row => row.asked);
         push({ kind: "peer", messages: parseWakePrompt(text, knownNames) ?? heard.flatMap(row => row.speaker.by === "teammate" ? [{ from: row.speaker.from, priority: false, text }] : []) });
       } else {
         // A routine a person set opens a request; the host's own notes belong to one only when it stood behind them.
         background = by("routine") ? false : !heard.some(row => row.asked);
-        push({ kind: "trigger", label: by("routine") ? triggerOf(text, false) ?? "started by a routine" : "System context", provenance: "host", text, ...stamp(raw) });
+        if (by("routine")) { owedOpening = true; push({ kind: "text", role: "user", text, source: "routine", ...stamp(raw) }); continue; } // the routine's brief is the request
+        push({ kind: "trigger", label: "System context", provenance: "host", text, ...stamp(raw) });
       }
       continue;
     }

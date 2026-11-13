@@ -102,6 +102,8 @@ function bubble(entry, bare) {
   node.querySelectorAll("a").forEach(function (link) { link.target = "_blank"; link.rel = "noopener noreferrer"; });
   // Words filed as a person's that the record cannot attribute are said to be so, not shown as theirs.
   if (entry.provenance === "unknown") node.insertBefore(el("div", "why", t("ui.next.chat.unknown")), node.firstChild);
+  // Where a request came from when it was not typed here: the chat it arrived through, or a routine.
+  if (entry.source) node.insertBefore(el("div", "why", t("ui.next.chat.source." + entry.source)), node.firstChild);
   if (!bare) node.appendChild(messageTools(entry));
   return node;
 }
