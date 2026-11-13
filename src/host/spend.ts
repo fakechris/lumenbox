@@ -64,6 +64,8 @@ export interface SpendReport {
   /** How many distinct turns contributed — an ask that took three attempts says three. */
   turns: number;
   totals: UsageTotals;
+  /** The part of it spent in turns nobody asked for (turn-standing.ts): what went in with no request to weigh it against. */
+  unrequested: UsageTotals;
   byKind: { kind: string; totals: UsageTotals }[];
   byAgent: { agent: string; totals: UsageTotals }[];
   byModel: { model: string; totals: UsageTotals }[];
@@ -205,6 +207,7 @@ export function summariseSpend(records: readonly UsageRecord[], query: SpendQuer
     records: selected.length,
     turns: new Set(selected.map(record => record.turnId).filter(id => id !== undefined)).size,
     totals: selected.reduce(add, ZERO),
+    unrequested: selected.filter(record => record.unrequested === true).reduce(add, ZERO),
     byKind: group(selected, record => record.kind ?? "unattributed", "kind"),
     byAgent: group(selected, record => record.agentName, "agent"),
     byModel: group(selected, record => record.model, "model"),

@@ -756,6 +756,8 @@ export const UI_NEXT: Record<string, readonly [string, string]> = {
   "ui.next.spend.open": ["查看用量报表", "Open the usage report"],
   "ui.next.spend.all": ["全部", "All"],
   "ui.next.spend.cache": ["输入里来自缓存的比例", "Input served from cache"],
+  "ui.next.spend.unrequested": ["其中没有请求在后面的", "Of which, with no request behind it"],
+  "ui.next.spend.unrequestedWhy": ["只由同事或看板唤醒、追不到任何人的请求的那些轮次花掉的。这样的轮次只能提议，不能自己开工。", "Spent in turns woken only by teammates or the board, tracing to no one's request. Such a turn may propose work, not start it."],
   "ui.next.spend.money": ["按配置的单价折算", "At the configured rates"],
   "ui.next.spend.unpriced": ["没有配置单价的模型：{models}，所以不显示金额", "No rate is configured for {models}, so no money is shown"],
   "ui.next.spend.floor": ["用量记录压缩过，这些数字只是下限。", "The usage record was compacted: these totals are a floor."],

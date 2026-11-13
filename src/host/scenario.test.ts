@@ -4318,10 +4318,11 @@ test("stopping selected legacy callbacks across members leaves the new installat
 // cards for others. 1,633 cards were made that way against 39 by a person, and nothing was delivered to anyone.
 test("INV-1844: a turn nobody asked for may propose work but not start it or hand it out; a person's request, and what is assigned under it, is work", { timeout: 20_000 }, async () => {
   const { WorkAttention } = await import("../agents/work-attention.ts");
-  const focus = new WorkAttention(), tasks = new TaskStore(null), seen = new Map<string, number>();
+  const { UsageLog } = await import("./usage.ts");
+  const focus = new WorkAttention(), tasks = new TaskStore(null), seen = new Map<string, number>(), usageDir = mkdtempSync(join(tmpdir(), "usage-")), usage = new UsageLog(join(usageDir, "usage.jsonl"));
   const nth = (key: string) => { const n = seen.get(key) ?? 0; seen.set(key, n + 1); return n; };
   const episode = await runEpisode({
-    workAttention: focus, team: [{ name: "Ada", tools: ["Tasks"] }, { name: "Bob", tools: ["Tasks"] }], says: [], tasks,
+    workAttention: focus, team: [{ name: "Ada", tools: ["Tasks"] }, { name: "Bob", tools: ["Tasks"] }], says: [], tasks, usage,
     script: ({ opened }) => {
       if (opened.includes("audit my card")) { const n = nth("probe"); return n < 3 ? { call: "Tasks", input: { action: "create", title: `[probe ${n}] does the gate fire`, assignee: "Bob" } } : { say: "Three probes filed." }; }
       if (opened.includes("weekly report")) return nth("report") === 0 ? { call: "Tasks", input: { action: "create", title: "Collect the figures", assignee: "Bob", parent: "none" } } : { say: "Bob is collecting the figures." };
@@ -4345,6 +4346,9 @@ test("INV-1844: a turn nobody asked for may propose work but not start it or han
     assert.doesNotMatch(told, /probe/, "and nobody is woken to do it");
     const asked = cards.find(task => task.title === "Collect the figures")!, under = cards.find(task => task.title === "Pull last week's numbers")!;
     assert.equal(asked.proposedBy, undefined, "work made for a person's request is work");
+    const rows = usage.since(0, 1000);
+    assert.deepEqual([rows.filter(row => row.unrequested === true).length, rows.filter(row => row.unrequested !== true).length > 0], [5, true],
+      "and what the unrequested turns cost is marked as such in the usage ledger: the probe turn's four calls and the relay it set off");
     assert.ok(under !== undefined && under.proposedBy === undefined, "and so is what the teammate it was assigned to makes under it: the request travelled with the assignment");
-  } finally { episode.cleanup(); }
+  } finally { episode.cleanup(); rmSync(usageDir, { recursive: true, force: true }); }
 });

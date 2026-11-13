@@ -38,13 +38,14 @@ function row(over: Partial<UsageRecord> = {}): UsageRecord {
 test("the breakdowns sum to the total, so a reader can check the report against itself", () => {
   const records = [
     row({ kind: "turn", agentName: "Ada", outputTokens: 100 }),
-    row({ kind: "turn", agentName: "Bob", outputTokens: 40 }),
+    row({ kind: "turn", agentName: "Bob", outputTokens: 40, unrequested: true }),
     row({ kind: "summarize", agentName: "Ada", outputTokens: 10 }),
     row({ kind: "memory", agentName: "Bob", outputTokens: 7 }),
   ];
   const report = summariseSpend(records, {});
 
   assert.equal(report.totals.outputTokens, 157);
+  assert.equal(report.unrequested.outputTokens, 40, "what was spent with no request behind it is said beside the total (INV-1844)");
   const sum = (rows: { totals: { outputTokens: number } }[]) =>
     rows.reduce((all, one) => all + one.totals.outputTokens, 0);
   // Three ways of cutting one number. If any of them disagrees the report is lying about

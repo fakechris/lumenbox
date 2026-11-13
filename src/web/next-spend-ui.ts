@@ -46,6 +46,9 @@ function spendBlock() {
   });
   box.appendChild(days);
   box.appendChild(fact(report.scope || t("ui.next.spend.all"), tokensOf(report.totals)));
+  // What went in with no request behind it, said next to the total: the figure to weigh against what anybody got for it.
+  var loose = report.unrequested || {};
+  if (loose.inputTokens || loose.outputTokens) { box.appendChild(fact(t("ui.next.spend.unrequested"), tokensOf(loose))); box.appendChild(el("p", "why", t("ui.next.spend.unrequestedWhy"))); }
   if (hit !== undefined && !(report.unmeasured || []).length) box.appendChild(fact(t("ui.next.spend.cache"), hit + "%"));
   if (typeof report.money === "number") box.appendChild(fact(t("ui.next.spend.money"), report.money.toFixed(2)));
   else if ((report.unpriced || []).length) box.appendChild(el("p", "why", t("ui.next.spend.unpriced", { models: report.unpriced.join(", ") })));
