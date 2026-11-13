@@ -3,7 +3,7 @@ import { GovernanceLedger, resourceKey, routineResource } from "./work-governanc
 import { ResultChecks } from "./result-check-policy.ts";
 import { runResultCheck } from "./result-check-runner.ts";
 import { requestsResultCheck } from "./task-delivery.ts";
-import { taskAttentionChanged, taskWorkId } from "./task-attention.ts"; import { taskHasStanding } from "./turn-standing.ts";
+import { taskAttentionChanged, taskWorkId } from "./task-attention.ts"; import { taskHasStanding } from "./turn-standing.ts"; import { HeardRecord } from "../agents/heard-record.ts";
 import { continueAcrossBudget, longRequestLimits } from "./long-request.ts";
 import { summarizeTaskProgress } from "./task-progress.ts";
 import { progressLines } from "./task-progress-view.ts";
@@ -1092,7 +1092,7 @@ export class Orchestrator {
       inbox,
       true, (agentId, message) => admitProgressMessage(this.tasks, agentId, message), workFocus, this.tasks?.workRoots.admission(workFocus)
     );
-    this.bus.resourcePause = id => this.governance.pendingPause(id);
+    this.bus.resourcePause = id => this.governance.pendingPause(id); this.bus.heard = new HeardRecord(join(agentboxHome(), "heard"));
     this.bus.resourceAllowed = message => this.governance.allows(message);
     this.goalLoop = this.tasks === undefined ? undefined : new GoalLoop({ modelRecoveryRoot: this.registry.root,
       tasks: this.tasks,

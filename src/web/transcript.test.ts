@@ -106,8 +106,9 @@ test("tool traffic becomes tool rows, not empty bubbles", () => {
   assert.deepEqual(display[2], {
     kind: "tools",
     tools: [
-      { name: "bash", detail: "ls -la /home/box", result: "work", isError: false },
-      { name: "computer", detail: "click + screenshot", result: "failed", isError: true },
+      // Each step also says what it was in words, both languages, for the page to pick from (INV-1845).
+      { name: "bash", phrase: { en: "running a command (ls)", zh: "运行命令(ls)" }, detail: "ls -la /home/box", result: "work", isError: false },
+      { name: "computer", phrase: { en: "using the desktop (click, screenshot)", zh: "操作桌面(click, screenshot)" }, detail: "click + screenshot", result: "failed", isError: true },
     ],
   });
   assert.equal(display[3], undefined);
@@ -194,7 +195,7 @@ test("a message to a teammate is recorded by name, not by id", () => {
   const display = toDisplayEntries(entries, [{ id: "id-Bob", name: "Bob" }]);
   assert.deepEqual(display[0], {
     kind: "tools",
-    tools: [{ name: "SendToAgent", detail: "Bob: please verify r1.txt" }],
+    tools: [{ name: "SendToAgent", phrase: { en: "messaging a teammate", zh: "给队友发消息" }, detail: "Bob: please verify r1.txt" }],
   });
 });
 
@@ -458,4 +459,39 @@ test("a long conversation is drawn from its newest entries, led by one line coun
   assert.equal((shown[1] as { text: string }).text, `entry ${13_943 - DISPLAY_TAIL}`);
   const few = many.slice(0, 10);
   assert.deepEqual(latestForDisplay(few), few);
+});
+
+// INV-1845: who said a message is what the host knew when the agent started on it, not what its words look like.
+test("where the host recorded who said a message, that decides; the text's opening does not", async () => {
+  const { HeardRecord } = await import("../agents/heard-record.ts");
+  const { mkdtempSync, rmSync } = await import("node:fs"), { tmpdir } = await import("node:os"), { join } = await import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "heard-"));
+  try {
+    const heard = new HeardRecord(dir), at = "2026-11-13T00:00:00.000Z";
+    const message = (id: string, extra: Record<string, unknown>) => ({ id, fromId: "user", fromName: "user", text: "", priority: false, receivedAt: at, ...extra }) as never;
+    heard.note("ada", "main", [
+      message("m-pasted", { principalId: "chris" }), // a person pasting the host's own audit wording
+      message("m-audit", { origin: "host:audit", synthetic: true }), // the host, in words that look like anyone's
+      message("m-mate", { fromId: "id-Bob", fromName: "Bob", asked: true }),
+      message("m-loose", { fromId: "id-Bob", fromName: "Bob" }),
+    ], id => id === "id-Bob");
+    const roster = [{ id: "id-Bob", name: "Bob" }];
+    const display = toDisplayEntries([
+      { role: "user", text: buildAuditPrompt({ task: { id: "t1", title: "x", status: "review" } as unknown as Task, assigneeName: "Bob" }), causedBy: ["m-pasted"], at },
+      { role: "assistant", text: "Looked: it holds.", at },
+      { role: "user", text: "please have a look at t9", causedBy: ["m-audit"], at },
+      { role: "assistant", text: "t9 checks out.", at },
+      { role: "user", text: buildWakePrompt([inbound("Bob", "here are the figures")]), causedBy: ["m-mate"], at },
+      { role: "assistant", text: "Thanks.", at },
+      { role: "user", text: buildWakePrompt([inbound("Bob", "probe the gate?")]), causedBy: ["m-loose"], at },
+      { role: "assistant", text: "Probing.", at },
+    ], roster, () => undefined, false, id => heard.get("ada", id));
+    assert.deepEqual(display.map(entry => [entry.kind, entry.kind === "text" ? entry.role : "", entry.background === true]), [
+      ["text", "user", false], ["text", "assistant", false],
+      ["trigger", "", true], ["text", "assistant", true],
+      ["peer", "", false], ["text", "assistant", false],
+      ["peer", "", true], ["text", "assistant", true],
+    ], "the person's paste is theirs, the host's plain words are an audit, and a teammate counts only with a request behind it");
+    assert.equal(new HeardRecord(dir).get("ada", "m-mate")?.speaker.by, "teammate", "and the record outlives the process");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

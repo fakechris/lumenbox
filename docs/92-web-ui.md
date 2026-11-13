@@ -332,6 +332,14 @@ was made in the person's own request; while the agent works on something else th
 only that it is busy. *What you asked* at the head of a thread lists the person's requests and
 goes to each. Older entries are loaded when asked for. Nothing in the record is changed or removed.
 
+**Who said a message is recorded when it is heard, not read off its words** (INV-1845). As a turn
+starts on its messages the bus writes, per message id, what the host knew: a person (and who), a
+routine, a teammate, or a part of the host — and whether a request stood behind it
+(`src/agents/heard-record.ts`, `heard/` under the data folder). The transcript cites those ids
+(`causedBy`); where the record has them, the conversation is drawn from it and no rule about the
+text's opening is consulted. Messages from before the record keep the older reading. A step in a
+fold is named in words a person reads (`activity-phrase.ts`), in the page's language.
+
 **A read that failed is not an empty answer.** A list that could not be read says so. "Nothing went
 wrong" is only said when the server said it.
 

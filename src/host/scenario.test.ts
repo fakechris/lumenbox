@@ -4355,3 +4355,26 @@ test("INV-1844: a turn nobody asked for may propose work but not start it or han
     assert.ok(under !== undefined && under.proposedBy === undefined, "and so is what the teammate it was assigned to makes under it: the request travelled with the assignment");
   } finally { episode.cleanup(); rmSync(usageDir, { recursive: true, force: true }); }
 });
+
+test("INV-1845: the bus records who said each message as a turn starts on it, and the conversation is drawn from that", { timeout: 20_000 }, async () => {
+  const { HeardRecord } = await import("../agents/heard-record.ts"), { toDisplayEntries } = await import("../web/transcript.ts");
+  const dir = mkdtempSync(join(tmpdir(), "heard-")), heard = new HeardRecord(dir);
+  let kinds: string[] = [];
+  const episode = await runEpisode({
+    team: [{ name: "Ada" }, { name: "Bob" }], says: [],
+    script: ({ opened }) => ({ say: opened.includes("figures") ? "Got the figures." : "Done." }),
+    drive: async ({ registry, bus, say }) => {
+      bus.heard = heard;
+      const ada = registry.resolve("Ada").id;
+      await say("write the summary");
+      bus.sendFromUser(ada, "The command you left running finished.", { origin: "host:jobs" });
+      await bus.wake(ada); await bus.idle();
+      kinds = toDisplayEntries(registry.readTranscript(ada), registry.list().map(record => ({ id: record.id, name: record.profile.name })), () => undefined, false, id => heard.get(ada, id))
+        .map(entry => entry.kind + (entry.background === true ? ":background" : ""));
+    },
+  });
+  try {
+    assert.deepEqual(kinds.filter(kind => kind !== "tools"), ["text", "text", "trigger:background", "text:background"],
+      "the person's request, and a job notice no request stood behind folded away — known from the record, which the wording alone did not say");
+  } finally { episode.cleanup(); rmSync(dir, { recursive: true, force: true }); }
+});
