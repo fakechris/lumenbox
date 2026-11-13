@@ -2707,7 +2707,7 @@ ${outcome.text}`;
       // The turn loop's own spend. Was never set here, so every turn row read as
       // "unattributed" beside the bookkeeping kinds — 8.5M of 8.7M tokens with no name on
       // them when the first metrics run looked (2026-09-07).
-      kind: "turn",
+      kind: "turn", ...(unrequestedTurn(inbound, work, personOpened, registry) ? { unrequested: true as const } : {}),
       // The place (INV-431): the box from the roster, the door from the conversation id.
       box: boxNameOf(registry, agent.id),
       door: doorOf(conversation),

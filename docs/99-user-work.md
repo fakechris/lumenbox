@@ -224,6 +224,10 @@ leaves them unrequested as well.
 **Not limits.** A routine may run every day and a request may take a thousand steps; neither is
 bounded here. The question is only whether the work has a request behind it.
 
+**What it cost is said.** Every usage row written in an unrequested turn is marked
+(`UsageRecord.unrequested`), and the spend report gives that share beside the total, for a day or
+for everything on file. It is a figure for a person to weigh, not a trigger: nothing is paused by it.
+
 **Still open** (next under INV-1844): a board wake for a card that carries no request stamp opens
 an unrequested turn even when the card was made under a request; the account of what each request
 cost against what it delivered, and the checkpoints tied to it; a routine an agent wrote for itself

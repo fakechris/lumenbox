@@ -125,6 +125,13 @@ export interface UsageRecord {
   box?: string;
   door?: string;
   /**
+   * The call was made in a turn nobody asked for (INV-1844, turn-standing.ts): woken only by
+   * teammates or the board, with no request behind any of it. The column that would have shown
+   * 2026-11-02 for what it was on the day: 660 million input tokens over three days sat in this
+   * ledger under agents' names, and nothing said that no request was behind them.
+   */
+  unrequested?: true;
+  /**
    * The attempt, as opposed to the work — and the key the task board already writes down.
    *
    * `workId` is the right thing to *group* by and the wrong thing to join a task on: every
