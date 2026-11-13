@@ -28,6 +28,8 @@ export interface AgentRowFacts {
   lastActivityAt?: string;
   lastViewedAt?: string;
   unreadCount: number;
+  /** Which conversations the unread are in, so the page can say where and go there. */
+  unreadIn?: { conversation: string; count: number }[];
   awaiting?: Awaiting;
   marker?: "blocked" | "unread" | "working";
 }
@@ -79,6 +81,7 @@ export class AgentFacts {
       ...(latest(f => f.lastActivityAt) !== undefined ? { lastActivityAt: latest(f => f.lastActivityAt) } : {}),
       ...(latest(f => f.lastViewedAt) !== undefined ? { lastViewedAt: latest(f => f.lastViewedAt) } : {}),
       unreadCount,
+      ...(unreadCount > 0 ? { unreadIn: own.filter(facts => facts.unreadCount > 0).map(facts => ({ conversation: facts.conversation, count: facts.unreadCount })) } : {}),
       ...(awaiting !== undefined ? { awaiting } : {}),
       ...(marker !== undefined ? { marker } : {}),
     };

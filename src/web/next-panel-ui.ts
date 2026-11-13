@@ -63,6 +63,8 @@ function needBlock(task) {
   return box.childNodes.length ? box : null;
 }
 
+/** Who writes a note to keep the books rather than to say what was done (task-board-record.ts lastReport). */
+var HOST_NOTES = { aging: 1, "audit-guard": 1, "review-guard": 1, restart: 1, host: 1, channel: 1 };
 function resultBlock(task) {
   var box = section(t("ui.next.panel.result")), files = task.deliverables || [], evidence = (task.reading && task.reading.evidence) || [];
   files.forEach(function (file) {
@@ -73,7 +75,13 @@ function resultBlock(task) {
     box.appendChild(link);
   });
   evidence.forEach(function (line) { box.appendChild(el("div", "file", line)); });
-  if (files.length === 0 && evidence.length === 0) box.appendChild(el("p", "why", t("ui.next.panel.noResult")));
+  // What was said about the work, newest first: for work with no file this is the result.
+  var said = (task.history || []).filter(function (change, index) { return change.note && !HOST_NOTES[change.by] && !(index === 0 && change.at === task.createdAt); }).slice(-3).reverse();
+  said.forEach(function (change) {
+    box.appendChild(el("div", "why", (agentName(change.by) === change.by ? originOf({ requester: change.by }) : agentName(change.by)) + " · " + agoText(change.at)));
+    box.appendChild(rich(change.note, "report"));
+  });
+  if (files.length === 0 && evidence.length === 0 && said.length === 0) box.appendChild(el("p", "why", t("ui.next.panel.noResult")));
   return box;
 }
 
@@ -111,8 +119,8 @@ function progressBlock(task) {
 }
 
 function processBlock() {
+  if (panel.steps.length === 0) return null; // nothing ran on record: no heading over an empty space
   var box = section(t("ui.next.panel.process"));
-  if (panel.steps.length === 0) { box.appendChild(el("p", "why", t("ui.next.panel.noProcess"))); return box; }
   var list = el("ul", "steps");
   panel.steps.slice(-12).forEach(function (step) {
     var line = el("li"), flagged = step.outcome !== "succeeded" && MSG["ui.next.step." + step.outcome];
@@ -130,7 +138,7 @@ function processBlock() {
 /** Stopping is two steps on purpose: the first shows what stops, the second does it. */
 function stopBlock(task) {
   var links = el("div", "foot-links");
-  if (task.assigneeId) {
+  if (task.assigneeId && (!task.conversation || task.conversation === "main")) { // another conversation is linked from the line that says where it was asked
     var chat = el("a", "", t("ui.next.act.openChat"));
     chat.href = "/?agent=" + encodeURIComponent(task.assigneeId);
     links.appendChild(chat);
@@ -185,7 +193,19 @@ function renderPanel() {
   document.querySelectorAll("[data-tab]").forEach(function (button) { button.setAttribute("aria-pressed", String(button.dataset.tab === panel.tab)); });
   inner.appendChild(el("h3", "", task.title));
   if (panel.tab === "diagnostics") { renderDiagnostics(inner, task); inner.appendChild(gateBlock(task)); return; }
-  if (task.description && task.description !== task.title) inner.appendChild(el("p", "asked", task.description));
+  var from = el("p", "why", originOf(task));
+  if (task.assigneeId && task.conversation && task.conversation !== "main") {
+    var there = el("button", "elsewhere", t("ui.next.panel.where", { where: conversationLabel(task.conversation) }));
+    there.addEventListener("click", function () { showConversation(task.assigneeId, task.conversation); });
+    from.appendChild(document.createTextNode(" · ")); from.appendChild(there);
+  }
+  inner.appendChild(from);
+  if (task.description && task.description !== task.title) {
+    // The request as it was written, links and lists intact; a long one is folded so the result is not pushed off the screen.
+    var asked = rich(task.description, "report");
+    if (task.description.length > 600) { var fold = el("details", "fold"); fold.appendChild(el("summary", "", t("ui.next.panel.askedFold"))); fold.appendChild(asked); inner.appendChild(fold); }
+    else inner.appendChild(asked);
+  }
   [needBlock(task), resultBlock(task), progressBlock(task), processBlock(), dependsBlock(task), manageBlock(task), stopBlock(task)].forEach(function (block) { if (block) inner.appendChild(block); });
 }
 

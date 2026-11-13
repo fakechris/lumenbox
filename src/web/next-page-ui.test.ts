@@ -112,26 +112,45 @@ test("a press on an agent's card is the line the server parses it from", async (
   }
 });
 
-test("a delivered result is decided where the person was talking: Accept closes it, and a long file list is cut", async () => {
-  interface Fake { cls: string; text: string; kids: Fake[]; dataset: Record<string, string>; href?: string; press?: () => void; appendChild(kid: Fake): void; addEventListener(name: string, run: () => void): void }
+test("a result waiting for the person says where it came from and what was reported, and its three buttons do three things", async () => {
+  // 2026-11-12: four cards read "Bob delivered a result" over a title and three buttons. The work was asked for in
+  // Feishu, the report was in the record, and Request changes and Open both opened the same panel.
+  interface Fake { cls: string; text: string; kids: Fake[]; dataset: Record<string, string>; value: string; href?: string; press?: () => void; appendChild(kid: Fake): void; addEventListener(name: string, run: () => void): void }
   const el = (_tag: string, cls = "", text = ""): Fake => {
-    const node: Fake = { cls, text, kids: [], dataset: {}, appendChild(kid) { node.kids.push(kid); }, addEventListener(_name, run) { node.press = run; } };
+    const node: Fake = { cls, text, kids: [], dataset: {}, value: "", appendChild(kid) { node.kids.push(kid); }, addEventListener(_name, run) { node.press = run; } };
     return node;
   };
-  const posted: unknown[] = [], opened: string[] = [];
+  const posted: unknown[] = [], opened: string[] = [], chat = { changing: "" };
   const files = [1, 2, 3, 4, 5, 6].map(n => ({ id: `f${n}`, name: `part-${n}.md` }));
+  const t = (key: string, values?: { n?: number; name?: string }) => key + (values?.n ?? "") + (values?.name ? `(${values.name})` : "");
+  const agentName = (id: string) => ({ mia: "Mia", ada: "Ada" })[id] ?? id;
+  const originOf = pageFunction("originOf", { next: { agents: { mia: {}, ada: {} } }, MSG: { "ui.next.origin.feishu": "x", "ui.next.origin.web": "x" }, t, agentName, agoText: () => "3d" });
+  assert.deepEqual(["feishu-zongheng:ou_1", "web", "ada", "mcp:k"].map(requester => originOf({ requester })),
+    ["ui.next.origin.feishu", "ui.next.origin.web", "ui.next.origin.agent(Ada)", "ui.next.origin.other"], "the door it came through, or the agent that started it");
   const resultCard = pageFunction("resultCard", {
-    el, t: (key: string, values?: { n?: number }) => key + (values?.n ?? ""), agentName: () => "Mia", toast: () => {}, refreshSoon: () => {}, failed: () => {}, encodeURIComponent,
+    el, t, agentName, originOf, chat, agoText: () => "3d", rich: (text: string, cls: string) => el("div", cls, text), toast: () => {}, refreshSoon: () => {}, failed: () => {}, encodeURIComponent,
+    render: () => {}, document: { querySelector: () => null },
     openPanel: (id: string) => opened.push(id), postJson: (path: string, body: unknown) => { posted.push([path, body]); return Promise.resolve({}); },
   });
-  const card = resultCard({ id: "t1", title: "October report", assigneeId: "mia", deliverables: files }) as Fake;
+  const row = { id: "t1", title: "October report", assigneeId: "mia", requester: "feishu:ou_1", createdAt: "2026-11-01T00:00:00.000Z", deliverables: files, report: { at: "2026-11-02T00:00:00.000Z", by: "ada", note: "Checked: **cannot be accepted as is**." } };
+  const card = resultCard(row) as Fake;
+  assert.ok(card.kids.some(kid => kid.text === "ui.next.origin.feishu · 3d"), "where the request came from");
+  assert.ok(card.kids.some(kid => kid.cls === "report" && kid.text.includes("cannot be accepted")), "what was reported is on the card");
   assert.equal(card.kids.filter(kid => kid.cls === "file").length, 4);
   assert.ok(card.kids.some(kid => kid.text === "ui.next.chat.moreFiles2"), "the rest are counted, not listed");
-  const [accept, changes] = card.kids.at(-1)!.kids;
-  accept!.press!(); changes!.press!();
+  assert.equal(card.kids.at(-1)!.text, "ui.next.chat.reviewHint(Mia)", "the buttons are explained");
+  const [accept, changes, details] = card.kids.at(-2)!.kids;
+  accept!.press!(); details!.press!(); changes!.press!();
   await Promise.resolve();
-  assert.deepEqual(JSON.parse(JSON.stringify(posted)), [["/api/tasks/update", { id: "t1", status: "done" }]]);
-  assert.deepEqual(opened, ["t1"], "what to change is written in the panel, beside the result");
+  assert.deepEqual(opened, ["t1"], "Details opens the panel; Request changes does not");
+  assert.equal(chat.changing, "t1");
+  const asking = resultCard(row) as Fake, input = asking.kids.at(-2)!, [send] = asking.kids.at(-1)!.kids;
+  send!.press!(); // nothing written: nothing sent
+  input.value = "Drop the 536-tool claim."; send!.press!();
+  await Promise.resolve();
+  assert.deepEqual(JSON.parse(JSON.stringify(posted)), [["/api/tasks/update", { id: "t1", status: "done" }], ["/api/tasks/update", { id: "t1", status: "doing", note: "Drop the 536-tool claim." }]]);
+  const bare = resultCard({ id: "t2", title: "Nothing left behind", assigneeId: "mia", requester: "web" }) as Fake;
+  assert.ok(bare.kids.some(kid => kid.text === "ui.next.chat.noReport"), "an empty result says it is empty");
 });
 
 test("a draft waiting to be sent and a proposal to close are decided on their inbox rows", async () => {

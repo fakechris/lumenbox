@@ -2,7 +2,7 @@ import { taskAudience } from "../host/task-audience.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createServer } from "node:http";
-import { taskBoardRecord } from "./task-board-record.ts";
+import { lastReport, taskBoardRecord } from "./task-board-record.ts";
 import { TaskStore } from "../host/tasks.ts";
 import { TaskListPages, taskListRoute } from "./task-list-routes.ts";
 
@@ -22,6 +22,9 @@ test("1600-task board reads bounded pages across updates, scopes and authorizati
   try {
     const first = await read("/api/tasks/list?limit=50&priority=t1");
     assert.ok(JSON.stringify(first.body).length < 50000, "board previews exclude thirty-entry histories even for heavily updated tasks");
+    const at = "2026-11-02T00:00:00.000Z";
+    assert.equal(lastReport({ createdAt: "2026-11-01T00:00:00.000Z", history: [{ at: "2026-11-01T00:00:00.000Z", by: "p", note: "created" }, { at, by: "a", note: "Done: see report.md" }, { at, by: "aging", note: "nudge 1/2: idle" }] } as never)?.note, "Done: see report.md", "a preview carries what was said about the work, not the reminder filed after it");
+    assert.equal(lastReport({ createdAt: at, history: [{ at, by: "p", note: "created" }] } as never), undefined, "the board's own line at creation is not a report");
     assert.equal(first.body.total,1600); assert.equal(first.body.tasks.length,50); assert.equal(first.body.tasks[0]!.id,"t1");
     const ids = first.body.tasks.map(task=>task.id);
     tasks.update("t1",{note:"A live update must not invalidate the retained list of ids"},"a");
