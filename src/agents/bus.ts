@@ -175,6 +175,8 @@ export class AgentBus {
    * duplicate a side effect.
    */
   resourcePause: (agentId: string) => ReturnType<typeof readPause> = () => undefined;
+  /** Who said each message a turn starts on, as the host knows it (heard-record.ts, INV-1845). */
+  heard?: import("./heard-record.ts").HeardRecord;
   resourceAllowed: (message: InboundMessage) => boolean = () => true;
   snapshot() { return { running: [...this.active.entries()].map(([key, row]) => ({ agentId: agentOfKey(key), conversation: key.slice(key.indexOf("\0") + 1), workId: row.workId })), queued: [...this.pending.entries()].flatMap(([agentId, rows]) => rows.map(message => ({ agentId, message }))) }; }
   discardRevoked(): void { for (const id of this.pending.keys()) this.dropStaleWork(id); }
@@ -828,6 +830,7 @@ export class AgentBus {
           acknowledged = true;
         };
         if (!this.deferredStart) acknowledge();
+        this.heard?.note(agentId, executionConversation, inbound, id => this.registry.has(id));
         this.onEvent({ type: "turn_started", agentId, conversation: executionConversation, inboundCount: inbound.length });
         started = true;
         await this.runTurn(agent, inbound, controller.signal, executionConversation, acknowledge);

@@ -19,6 +19,8 @@ import { type EditDiff, editDiffOf } from "./line-diff.ts";
 import type { GateVerdict } from "../host/gate-verdict.ts";
 import { entryChannel } from "../host/model-text.ts";
 import { BUDGET_REPORT } from "../host/turn-budget.ts";
+import type { HeardRow } from "../agents/heard-record.ts";
+import { activityPhrases } from "../host/activity-phrase.ts";
 import type { HistoryEntry } from "../host/compaction.ts";
 
 export interface DisplayTool {
@@ -27,6 +29,8 @@ export interface DisplayTool {
   attempt?: number;
   toolUseId?: string;
   name: string;
+  /** What the step was, in words a person reads (activity-phrase.ts), in both languages: the page picks its own. */
+  phrase?: { en: string; zh: string };
   /** The argument that identifies the call, e.g. the command bash ran. */
   detail: string;
   /** Filled in from the matching tool_result, so a call and its outcome stay together. */
@@ -193,7 +197,9 @@ export function toDisplayEntries(
   /** The gate's verdict for a call by its tool_use id, when the gate kept one (INV-1664). */
   verdictOf: (callId: string) => GateVerdict | undefined = () => undefined,
   /** The conversation is a chat's: what is filed as said there, and is not the host's or a cue, came through the door from a person. */
-  fromChat = false
+  fromChat = false,
+  /** What the host knew about a message when the agent started on it (heard-record.ts): where it has a row, it decides. */
+  heardOf: (messageId: string) => HeardRow | undefined = () => undefined
 ): DisplayEntry[] {
   const display: DisplayEntry[] = [];
   const knownNames = roster.map(entry => entry.name);
@@ -242,7 +248,7 @@ export function toDisplayEntries(
 
       const tools: DisplayTool[] = calls.map(block => ({
         ...(typeof entry.turnId === "string" && typeof block.id === "string" ? { turnId: entry.turnId, toolUseId: block.id, ...(typeof entry.executionId === "string" ? { executionId: entry.executionId } : {}), ...(typeof entry.attempt === "number" ? { attempt: entry.attempt } : {}) } : {}),
-        name: String(block.name ?? "tool"),
+        name: String(block.name ?? "tool"), phrase: activityPhrases(String(block.name ?? "tool"), block.input),
         detail: toolDetail(String(block.name ?? ""), block.input, roster),
         ...(block.name === "AskUser" && questionOf(block.input) !== undefined
           ? { question: questionOf(block.input)! }
@@ -294,6 +300,25 @@ export function toDisplayEntries(
     // under the user role because that is where the model reads it. Never the person speaking.
     if (entry.kind === "summary") {
       push({ kind: "trigger", label: "summary of the earlier conversation", provenance: "host", text, ...stamp(raw) });
+      continue;
+    }
+
+    const heard = entry.role === "user" && Array.isArray(entry.causedBy) ? (entry.causedBy as string[]).map(heardOf).filter((row): row is HeardRow => row !== undefined) : [];
+    if (heard.length > 0) {
+      // Who said it, as the host knew when the agent started on it (INV-1845): nothing here is read off the text.
+      const by = (kind: string) => heard.some(row => row.speaker.by === kind);
+      owedOpening = false;
+      if (by("person")) {
+        owedOpening = true; background = false; asked.clear();
+        push({ kind: "text", role: "user", text, ...stamp(raw) });
+      } else if (by("teammate")) {
+        background = !heard.some(row => row.asked);
+        push({ kind: "peer", messages: parseWakePrompt(text, knownNames) ?? heard.flatMap(row => row.speaker.by === "teammate" ? [{ from: row.speaker.from, priority: false, text }] : []) });
+      } else {
+        // A routine a person set opens a request; the host's own notes belong to one only when it stood behind them.
+        background = by("routine") ? false : !heard.some(row => row.asked);
+        push({ kind: "trigger", label: by("routine") ? triggerOf(text, false) ?? "started by a routine" : "System context", provenance: "host", text, ...stamp(raw) });
+      }
       continue;
     }
 

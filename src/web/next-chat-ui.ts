@@ -151,7 +151,7 @@ function renderThread(view) {
   var thread = el("div", "thread"), agent = next.agents[chat.agentId], steps = [];
   function flush() {
     if (steps.length === 0) return;
-    thread.appendChild(fold(t("ui.next.chat.steps", { n: steps.length }), steps.map(function (tool) { return { head: tool.name, text: clip(tool.detail, 160), bad: tool.isError }; })));
+    thread.appendChild(fold(t("ui.next.chat.steps", { n: steps.length }), steps.map(function (tool) { return { head: (tool.phrase && tool.phrase["{{@locale}}"]) || tool.name, text: clip(tool.detail, 160), bad: tool.isError }; })));
     steps = [];
   }
   // Looking for something: only what was said that holds it, and none of the cards around it.
