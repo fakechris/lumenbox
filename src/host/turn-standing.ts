@@ -33,6 +33,17 @@ export function unrequestedTurn(
   return inbound.every(message => message.fromId === SYSTEM_SENDER || agents.tryGet(message.fromId) !== undefined);
 }
 
+/**
+ * Whether a card was made with a request behind it, so the board's wake for it — its blockers are done — keeps
+ * that standing. A person's card, one made in a turn somebody asked for, and a record from before cards said
+ * either way. A proposal is never woken at all.
+ */
+export function taskHasStanding(task: { proposedBy?: string; origin?: { kind: string; workId?: string; asked?: true } }): boolean {
+  if (task.proposedBy !== undefined) return false;
+  const origin = task.origin;
+  return origin === undefined || origin.kind === "user" || origin.asked === true || origin.workId !== undefined;
+}
+
 /** What an agent is told when a card it made in an unrequested turn was filed as a proposal. */
 export const PROPOSED_INSTEAD =
   "Filed as a proposal, not as work: nothing in this turn traces to a person's request, so a person commits it before anyone starts. Do not do it or hand it out yourself.";
