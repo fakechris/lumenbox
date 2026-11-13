@@ -134,6 +134,7 @@ h2.group:first-child { margin-top: 0; }
 .thread { max-width: 780px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px; }
 .pin { display: flex; align-items: center; gap: 12px; padding: 9px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); width: 100%; text-align: left; }
 .msg, .msg-me { max-width: 82%; padding: 9px 14px; border-radius: 14px; background: var(--surface); border: 1px solid var(--border); overflow-wrap: anywhere; align-self: flex-start; }
+.msg-me .why { color: inherit; opacity: .7; font-size: 12px; }
 .msg-me { align-self: flex-end; background: var(--text); color: var(--bg); border-color: var(--text); white-space: pre-wrap; }
 .msg p { margin: 0 0 8px; } .msg p:last-child { margin-bottom: 0; }
 .msg pre { background: var(--bg); padding: 8px 10px; border-radius: 8px; overflow: auto; font-size: 12.5px; }
