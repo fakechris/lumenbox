@@ -58,7 +58,8 @@ import type { Vault } from "./vault.ts";
 export type ScriptedReply =
   // `stop` replays a reply that ran to the output cap (INV-761); a say ends its turn otherwise.
   | { say: string; stop?: "max_tokens" }
-  | { call: string; input: Record<string, unknown>; then?: ScriptedReply };
+  // `saying` is prose in the same reply as the call: what a model says while it starts to work.
+  | { call: string; input: Record<string, unknown>; saying?: string; then?: ScriptedReply };
 
 export interface ScriptContext {
   /** The agent this call is for. */
@@ -462,7 +463,8 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
     }
     observations.push({ at: clock++, agent, kind: "call", name: reply.call, input: reply.input });
     return message(
-      [{ type: "tool_use", id: `t${clock}`, name: reply.call, input: reply.input } as unknown as Anthropic.ContentBlock],
+      [...(reply.saying !== undefined ? [{ type: "text", text: reply.saying } as Anthropic.ContentBlock] : []),
+        { type: "tool_use", id: `t${clock}`, name: reply.call, input: reply.input } as unknown as Anthropic.ContentBlock],
       "tool_use"
     );
   };

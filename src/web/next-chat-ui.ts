@@ -299,6 +299,8 @@ function chatEvent(event) {
   if ((event.conversation || "main") !== chat.conversation) return;
   if (event.type === "turn_started") { chat.live = { text: "", doing: "" }; render(); }
   else if (event.type === "text" && typeof event.delta === "string") { chat.live = chat.live || { text: "", doing: "" }; chat.live.text += event.delta; render(); }
+  // What it said as it set to work stays said: the same line a chat receives while the tools run.
+  else if (event.type === "interim" && typeof event.text === "string") { chat.entries = chat.entries.concat([{ kind: "text", role: "assistant", text: event.text, opening: true }]); if (chat.live) chat.live.text = ""; render(); }
   else if (event.type === "tool_start") { chat.live = chat.live || { text: "", doing: "" }; chat.live.text = ""; chat.live.doing = event.phrase || event.tool || ""; render(); }
   else if (event.type === "retrying" && chat.live) {
     if (event.discardPartial) chat.live.text = "";
