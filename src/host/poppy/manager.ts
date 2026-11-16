@@ -220,11 +220,12 @@ export class PoppyManager {
     if (!this.identity) return null;
 
     const key = `${who}|${domain.toLowerCase()}`;
-    const existing = this.sessions.get(key);
-    if (existing) return existing;
-
     const company = await this.discover(domain);
     if (!company) return null;
+    // Kept only while discovery still answers with the same document (it caches for minutes): a
+    // Company that moved an endpoint or changed issuer is met with what it says now.
+    const existing = this.sessions.get(key);
+    if (existing?.company === company) return existing;
 
     // By domain, not by the identifier a document claims: a site naming another Company's issuer
     // must not share that Company's User ID or delegated key, or the two could be matched.
@@ -409,7 +410,7 @@ export class PoppyManager {
     if (!server || !this.tokenStore || !this.identity) return currentValid ? current : undefined;
     try {
       const fresh = await refreshToken(server, this.identity, refreshTokenValue);
-      this.tokenStore.set(key, issuer, fresh);
+      this.tokenStore.set(key, issuer, fresh, { refreshed: true });
       return fresh.accessToken;
     } catch (error) {
       // Only the server saying the grant is finished ends it. A 503 or a dropped connection is

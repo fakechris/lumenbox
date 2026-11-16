@@ -64,10 +64,12 @@ export class TokenStore {
   /**
    * Stores a token set. A refresh that answers without a new refresh token keeps the old one
    * (RFC 6749 §6: the server may leave it unchanged), rather than losing the way to refresh again.
+   * A sign-in never does: it may be another account, and the old account's refresh token would
+   * quietly bring that account back at the next refresh.
    */
-  set(key: string, issuer: string, tokenSet: TokenSet): void {
+  set(key: string, issuer: string, tokenSet: TokenSet, how: { refreshed?: boolean } = {}): void {
     const before = this.tokens.get(key);
-    const refreshToken = tokenSet.refreshToken ?? (before?.issuer === issuer ? before.refreshToken : undefined);
+    const refreshToken = tokenSet.refreshToken ?? (how.refreshed === true && before?.issuer === issuer ? before.refreshToken : undefined);
     this.tokens.set(key, {
       key,
       issuer,

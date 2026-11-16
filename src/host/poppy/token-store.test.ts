@@ -40,9 +40,17 @@ describe("TokenStore", () => {
   test("a refresh that sends no new refresh token keeps the old one", () => {
     withStore(store => {
       store.set(key, ISSUER, token("at_1", 3600_000, "rt_1"));
-      store.set(key, ISSUER, token("at_2", 3600_000));
+      store.set(key, ISSUER, token("at_2", 3600_000), { refreshed: true });
       assert.equal(store.get(key, ISSUER)?.refreshToken, "rt_1");
       assert.equal(store.get(key, ISSUER)?.accessToken, "at_2");
+    });
+  });
+
+  test("a sign-in that sends no refresh token does not inherit the last account's", () => {
+    withStore(store => {
+      store.set(key, ISSUER, token("at_old_account", 3600_000, "rt_old_account"));
+      store.set(key, ISSUER, token("at_new_account", 3600_000));
+      assert.equal(store.get(key, ISSUER)?.refreshToken, undefined);
     });
   });
 

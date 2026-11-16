@@ -100,7 +100,11 @@ export async function poppyGetFollowing(raw: string, init: PoppyRequest, hops = 
 function guardedHttps(url: URL, init: PoppyRequest): Promise<Response> {
   return new Promise((resolve, reject) => {
     const timeoutMs = init.signal === undefined ? (init.timeoutMs ?? DEFAULT_TIMEOUT_MS) : undefined;
-    const call = httpsRequest(url, { method: init.method ?? "GET", headers: init.headers ?? {}, lookup: guardedLookup, ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}) }, incoming => {
+    // A deadline for the whole exchange, body included: a socket timeout only measures silence,
+    // and an endpoint dripping a byte a second would never trip it.
+    let deadline: NodeJS.Timeout | undefined;
+    const call = httpsRequest(url, { method: init.method ?? "GET", headers: init.headers ?? {}, lookup: guardedLookup }, incoming => {
+      incoming.on("close", () => clearTimeout(deadline));
       let size = 0;
       incoming.on("data", (chunk: Buffer) => {
         size += chunk.length;
@@ -121,7 +125,12 @@ function guardedHttps(url: URL, init: PoppyRequest): Promise<Response> {
       if (empty) incoming.resume();
       resolve(new Response(empty ? null : (Readable.toWeb(incoming) as ReadableStream<Uint8Array>), { status, headers }));
     });
-    call.on("timeout", () => call.destroy(new PoppyRefused(`${url.host} did not answer within ${(timeoutMs ?? 0) / 1000}s`)));
+    if (timeoutMs !== undefined) {
+      deadline = setTimeout(() => call.destroy(new PoppyRefused(`${url.host} did not finish within ${timeoutMs / 1000}s`)), timeoutMs);
+      deadline.unref();
+    }
+    // With no answer, nothing else will clear it; with one, the body's close does.
+    call.on("error", () => clearTimeout(deadline));
     call.on("error", reject);
     init.signal?.addEventListener("abort", () => call.destroy(Object.assign(new Error("aborted"), { name: "AbortError" })), { once: true });
     call.end(init.body);

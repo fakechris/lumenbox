@@ -217,6 +217,40 @@ describe("a Company's operation", () => {
     await mgr.settleApproval("ap0", "allowed", () => assert.fail("answered once"));
   });
 
+  test("the card opens when the operation arrives, though the stream stays open; two Companies asking in the same words get two cards", async () => {
+    let streamSignal: AbortSignal | undefined;
+    for (const domain of ["shop.example", "mall.example"]) {
+      routes[`https://${domain}/.well-known/poppy.json`] = company(domain);
+      routes[`https://${domain}/poppy/chat`] = call => {
+        streamSignal = call.signal;
+        return new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode("event: operation\ndata: {\"id\":\"op1\",\"type\":\"refund\",\"description\":\"Refund\",\"requires_approval\":true}\n\n")); } }));
+      };
+    }
+    const mgr = await manager();
+    const cards: { description: string; streamOpen: boolean }[] = [];
+    for (const domain of ["shop.example", "mall.example"]) {
+      await dispatchPoppyTool("PoppyConverse", { domain, message: "refund" }, {
+        manager: mgr, who: "ada", conversation: "main", timeoutMs: 100,
+        requestConfirmation: input => { cards.push({ description: input.description, streamOpen: streamSignal?.aborted === false }); return { id: input.description }; },
+      });
+    }
+    assert.ok(cards.every(card => card.streamOpen), "asked while the Company's stream was still open");
+    assert.notEqual(cards[0]!.description, cards[1]!.description, "the gate folds identical words into one approval; these must not be identical");
+    assert.match(cards[1]!.description, /^mall\.example asks \(operation op1\)/);
+  });
+
+  test("a Company that changes its poppy.json is met with what it says now", async () => {
+    routes["https://shop.example/.well-known/poppy.json"] = company("shop.example");
+    routes["https://shop.example/poppy/chat"] = () => sse("data: {\"role\":\"assistant\",\"content\":\"old\"}\n\n");
+    routes["https://shop.example/v2/chat"] = () => sse("data: {\"role\":\"assistant\",\"content\":\"new\"}\n\n");
+    const mgr = await manager();
+    const ctx = { manager: mgr, who: "ada", conversation: "main" };
+    assert.match((await dispatchPoppyTool("PoppyConverse", { domain: "shop.example", message: "hi" }, ctx)).text, /old/);
+    routes["https://shop.example/.well-known/poppy.json"] = company("shop.example", { agent: { protocols: [{ type: "poppy", endpoint: "https://shop.example/v2/chat" }] } });
+    clearDiscoveryCache();
+    assert.match((await dispatchPoppyTool("PoppyConverse", { domain: "shop.example", message: "hi" }, ctx)).text, /new/);
+  });
+
   test("with nobody to ask, the agent is told it is not approved, and the Company is told nothing", async () => {
     routes["https://shop.example/.well-known/poppy.json"] = company("shop.example");
     routes["https://shop.example/poppy/chat"] = () => sse("event: operation\ndata: {\"id\":\"op1\",\"type\":\"checkout\",\"description\":\"Buy\",\"requires_approval\":true}\n\n");

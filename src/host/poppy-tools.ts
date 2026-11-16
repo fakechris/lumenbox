@@ -214,7 +214,9 @@ async function poppyConverse(
   }
 
   const messages: string[] = [];
-  const operations: { op: Operation; ask: boolean }[] = [];
+  // Asked about as each arrives, not when the stream ends: a Company that keeps its stream open
+  // after asking would otherwise hold the card back until the wait ran out.
+  const operationParts: string[] = [];
   let error: string | undefined;
   let stream: AbortController | null | undefined;
   let timedOut = false;
@@ -236,7 +238,10 @@ async function poppyConverse(
           messages.push(event.message.content);
           break;
         case "operation":
-          operations.push({ op: parseOperation({ id: event.operation.id, type: event.operation.type, description: event.operation.description, ...(event.operation.parameters ?? {}) }, ep.endpoint), ask: event.operation.requiresApproval });
+          {
+            const op = parseOperation({ id: event.operation.id, type: event.operation.type, description: event.operation.description, ...(event.operation.parameters ?? {}) }, ep.endpoint);
+            operationParts.push(event.operation.requiresApproval ? askAbout(op, domain, ctx) : `\n---\n${domain} reports an operation that needs no approval:\n\n${consentDescription(op)}`);
+          }
           break;
         case "error":
           error = event.error;
@@ -263,7 +268,7 @@ async function poppyConverse(
 
   const parts: string[] = [];
   if (messages.length > 0) parts.push(messages.join("\n\n"));
-  for (const { op, ask } of operations) parts.push(ask ? askAbout(op, domain, ctx) : `\n---\n${domain} reports an operation that needs no approval:\n\n${consentDescription(op)}`);
+  parts.push(...operationParts);
   if (timedOut) parts.push(`\n[No end of answer from ${domain} within ${(ctx.timeoutMs ?? CONVERSE_TIMEOUT_MS) / 1000}s; the conversation was closed. What it said before then is above.]`);
   if (error) parts.push(`\n[Error: ${error}]`);
   if (parts.length === 0) return { text: "(No response from the Company's agent.)" };
@@ -281,10 +286,12 @@ function askAbout(op: Operation, domain: string, ctx: PoppyToolContext): string 
   if (ctx.requestConfirmation === undefined) {
     return `${what}\n\nThere is nobody here to approve it, so it is not approved. Say so to whoever asked; do not tell ${domain} it was approved.`;
   }
+  // The card names the Company and the operation: the gate folds cards with the same words into
+  // one approval, and two Companies asking in the same words must not share one answer.
   const approval = ctx.requestConfirmation({
     agentId: ctx.who,
     agentName: ctx.agentName ?? "Poppy",
-    description: consentDescription(op),
+    description: `${domain} asks (operation ${op.id}):\n\n${consentDescription(op)}`,
     action: `answer ${domain}'s ${op.type} request`,
   });
   ctx.manager.awaitDecision(approval.id, { who: ctx.who, domain, operation: op, agentId: ctx.who, conversation: ctx.conversation });
