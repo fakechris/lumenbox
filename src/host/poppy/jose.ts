@@ -20,7 +20,8 @@ export function base64url(buf: ArrayBuffer | Uint8Array): string {
 /** SHA-256, returned as raw bytes. */
 export async function sha256(data: string | Uint8Array): Promise<Uint8Array> {
   const input = typeof data === "string" ? encoder.encode(data) : data;
-  return new Uint8Array(await crypto.subtle.digest("SHA-256", input));
+  const buf = await crypto.subtle.digest("SHA-256", input.buffer as ArrayBuffer);
+  return new Uint8Array(buf);
 }
 
 /** SHA-256, returned as base64url (for ath claim and JWK thumbprint). */

@@ -80,11 +80,13 @@ interface DelegatedKey {
 export class DelegatedKeyManager {
   private current: DelegatedKey | undefined;
   private issuing: Promise<DelegatedKey> | undefined;
+  private readonly identity: AgentIdentity;
+  private readonly lifetime: number;
 
-  constructor(
-    private readonly identity: AgentIdentity,
-    private readonly lifetime = DELEGATION_LIFETIME
-  ) {}
+  constructor(identity: AgentIdentity, lifetime = DELEGATION_LIFETIME) {
+    this.identity = identity;
+    this.lifetime = lifetime;
+  }
 
   async getKey(): Promise<DelegatedKey> {
     if (this.current && nowSeconds() < this.current.exp - RENEW_MARGIN) {

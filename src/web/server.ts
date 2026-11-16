@@ -3115,6 +3115,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (process.env.AGENTBOX_LOG_HTTP === "1") log(`web: ${route} from ${req.socket.remoteAddress}`);
       const boxSide = boxSideRefusal(req.headers.host, url.pathname); if (boxSide !== undefined) { send(res, 403, { error: boxSide }); return; } // INV-1543
 
+      // Poppy agent metadata — public endpoints that Companies fetch to verify Session JWTs.
+      if (route === "GET /poppy/agent.json" && orchestrator.poppy?.ready) {
+        send(res, 200, orchestrator.poppy.clientMetadata()); return;
+      }
+      if (route === "GET /poppy/jwks.json" && orchestrator.poppy?.ready) {
+        send(res, 200, orchestrator.poppy.jwks()); return;
+      }
+
       const decision = admit({
         authorization: req.headers.authorization,
         cookie: req.headers.cookie,

@@ -102,5 +102,5 @@ export function clientMetadataDocument(identity: AgentIdentity): Record<string, 
 
 /** The JWKS document a Company fetches to verify delegations and client assertions. */
 export function jwksDocument(identity: AgentIdentity): { keys: Array<Record<string, unknown>> } {
-  return { keys: [identity.publicJwk] };
+  return { keys: [{ ...identity.publicJwk } as Record<string, unknown>] };
 }

@@ -545,6 +545,8 @@ export interface TurnDeps {
   bundles?: BundleStore;
   /** MCP servers whose tools this turn may offer and call. Absent means none. */
   mcp?: McpManager;
+  /** How WebFetch reads a page. When present, replaces the default `fetchPage` — used for Poppy header injection. */
+  webFetch?: ToolContext["webFetch"];
   /** Puts a question to whoever drove this agent. Absent means there is nobody to ask. */
   askUser?: ToolContext["askUser"];
   showUI?: ToolContext["showUI"];
@@ -3357,6 +3359,7 @@ ${outcome.text}`;
             askSecret: deps.askSecret,
             handOver: deps.handOver,
             docReader: deps.docReader,
+            ...(deps.webFetch !== undefined ? { webFetch: deps.webFetch } : {}),
             skillProvenance: deps.skillProvenance, jobWatch: deps.jobWatch, verifications: deps.verifications,
             workId,
             ...(deps.pendingWork !== undefined ? { pendingWork: deps.pendingWork } : {}),

@@ -170,7 +170,7 @@ function decodeBody(body: Buffer, contentType: string): string {
 }
 
 /** One request, no redirect following, body capped. */
-function requestOnce(target: URL): Promise<RawResponse> {
+function requestOnce(target: URL, extraHeaders?: Record<string, string>): Promise<RawResponse> {
   return new Promise((resolve, reject) => {
     const send = target.protocol === "https:" ? httpsRequest : httpRequest;
     const call = send(
@@ -187,6 +187,7 @@ function requestOnce(target: URL): Promise<RawResponse> {
           // Decoding is a dependency and a decompression-bomb surface for no benefit at
           // this size, so ask for none.
           "accept-encoding": "identity",
+          ...extraHeaders,
         },
         timeout: TIMEOUT_MS,
       },
@@ -841,4 +842,17 @@ export async function searchWeb(query: string, count = 8): Promise<SearchResult[
   // Every provider failed, which is a different situation from no results and is reported
   // as one — an agent that cannot tell them apart says a thing does not exist.
   throw new WebError(`Every configured search provider failed.\n${failures.join("\n")}`);
+}
+
+/**
+ * Creates a transport that adds per-request headers to the default guarded fetch.
+ *
+ * The function is called for each request, including every redirect hop, so headers can
+ * differ per destination — which is what the Poppy Session JWT requires, because the
+ * token binds the URL (`htu`) and method (`htm`) of the request it accompanies.
+ */
+export function withRequestHeaders(
+  headersFn: (target: URL) => Record<string, string> | Promise<Record<string, string>>
+): typeof requestOnce {
+  return async (target: URL) => requestOnce(target, await headersFn(target));
 }
