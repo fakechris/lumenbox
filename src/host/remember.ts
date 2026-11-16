@@ -117,7 +117,7 @@ const FLUSH_EXCHANGE_CHARS = 4_000;
  * content, but so is nothing else it does, and the call cannot tell which). MCP tools are
  * decided per server: see `McpManager.pollutesMemory`.
  */
-const EXTERNAL_CONTENT_TOOLS = new Set(["WebFetch", "WebSearch", "ReadFeishuDoc", "connector_request"]);
+const EXTERNAL_CONTENT_TOOLS = new Set(["WebFetch", "WebSearch", "ReadFeishuDoc", "connector_request", "PoppyDiscover", "PoppyConverse"]);
 
 /** Whether a built-in tool's result is outside content (INV-894). Every `browser_*` tool returns page state. */
 export function readsExternalContent(tool: string): boolean {

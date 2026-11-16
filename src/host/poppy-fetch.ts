@@ -59,3 +59,23 @@ export function createPoppyFetch(
 
   return { fetch, manager };
 }
+
+/** What a turn takes from Poppy: the WebFetch that carries its headers, and the manager its tools use. */
+export interface PoppyDeps {
+  webFetch: (url: string) => Promise<FetchedPage>;
+  poppyManager: PoppyManager;
+}
+
+/**
+ * Poppy for this host, or undefined when it is off — which is unless AGENTBOX_POPPY=1. On, every page
+ * an agent fetches or opens first asks its site for poppy.json and may carry a signed session: not
+ * something an installation should start doing to every site without its operator choosing it. And
+ * only with an https:// AGENTBOX_PUBLIC_URL, because a Company cannot verify a session signed by a
+ * host it cannot reach. Off, no key is made, no site is asked, no tool is offered (docs/poppy.md).
+ */
+export function poppyFor(env: Readonly<Record<string, string | undefined>>, home: string, log: (line: string) => void): PoppyDeps | undefined {
+  const origin = env.AGENTBOX_PUBLIC_URL?.trim().replace(/\/+$/, "");
+  if (env.AGENTBOX_POPPY !== "1" || origin?.startsWith("https://") !== true) return undefined;
+  const poppy = createPoppyFetch({ home, origin }, log);
+  return { webFetch: poppy.fetch, poppyManager: poppy.manager };
+}

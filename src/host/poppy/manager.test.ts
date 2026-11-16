@@ -75,12 +75,12 @@ describe("PoppyManager", () => {
     assert.equal(kid1, kid2, "same key after restart");
   });
 
-  it("headersFor returns empty for a domain that fails discovery", async () => {
+  it("headersFor returns empty for a domain that fails discovery", async t => {
+    t.mock.method(globalThis, "fetch", async () => { throw new Error("no network in tests"); });
     const home = tmpHome();
     dirs.push(home);
     const mgr = new PoppyManager({ home, origin: "https://agent.test" });
     await mgr.init();
-    // This will try to fetch poppy.json from localhost, which won't work.
     const headers = await mgr.headersFor("GET", "https://definitely-no-poppy.invalid/api");
     assert.deepEqual(headers, {});
   });

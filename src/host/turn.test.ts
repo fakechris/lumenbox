@@ -4148,3 +4148,21 @@ test("a vault value a host command printed is scrubbed from the text and interim
     cleanup();
   }
 });
+
+test("a host without Poppy offers no Poppy tool, resident or behind the lookup pair; a host with it does", async () => {
+  const { registry, cleanup } = fixture();
+  try {
+    const ada = registry.create({ name: "Ada" });
+    const bus = new AgentBus(registry, async () => {});
+    const person = { id: "m-u", fromId: "user", fromName: "user", text: "hi", priority: false, receivedAt: "" };
+    const off: Capture = { params: [] };
+    await runTurn(ada, [person], new AbortController().signal, { client: stubClient([message([textBlock("ok")])], off).client, registry, bus, box: undefined, resolution: undefined });
+    assert.doesNotMatch(JSON.stringify(off.params[0]), /Poppy/);
+    const on: Capture = { params: [] };
+    const poppyManager = {} as NonNullable<import("./turn.ts").TurnDeps["poppyManager"]>;
+    await runTurn(ada, [{ ...person, id: "m-u2" }], new AbortController().signal, { client: stubClient([message([textBlock("ok")])], on).client, registry, bus, box: undefined, resolution: undefined, poppyManager });
+    assert.match(JSON.stringify(on.params[0]), /PoppyConverse/);
+  } finally {
+    cleanup();
+  }
+});

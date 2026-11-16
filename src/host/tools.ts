@@ -107,9 +107,7 @@ import { describeDeferred } from "./tool-roster.ts";
 import { guardShellCommand } from "./ui-automation-guard.ts";
 import type { Vault } from "./vault.ts";
 import { canSearch, type FetchedPage, fetchPage, guardUrl, isSearchEngine, MAX_TEXT, pageReadOutcome, searchWeb, WebError } from "./web.ts";
-import { poppyToolDefinitions, dispatchPoppyTool, type PoppyToolContext } from "./poppy-tools.ts";
-import { poppyBrowserJoinUrl } from "./poppy-browser.ts";
-import type { PoppyManager } from "./poppy/manager.ts";
+import { poppyCall, poppyJoin, poppyToolDefinitions } from "./poppy-tools.ts";
 import { afterCommit, withWritePath, writePathKey, writePaths } from "./write-path.ts";
 import { fetchXPost, XResolversUnavailable, xStatusRef } from "./x-post.ts";
 
@@ -135,8 +133,8 @@ export interface ToolContext {
    * must not; the default is the guarded fetch in web.ts.
    */
   webFetch?: (url: string) => Promise<FetchedPage>;
-  /** The Poppy protocol manager, when enabled. Used for Browser Join and agent conversations. */
-  poppyManager?: PoppyManager;
+  /** Poppy's manager, when this host has it on (docs/poppy.md): Browser Join and the Poppy tools. */
+  poppyManager?: import("./poppy/manager.ts").PoppyManager;
   /**
    * How WebFetch reads a post on X. Replaced only by tests, for the same reason as
    * `webFetch`: the three routes a post can arrive by are exactly what needs testing, and
@@ -388,9 +386,7 @@ export const FORK_PREFIX = "fork/";
 export const PARALLEL_SAFE_TOOLS: ReadonlySet<string> = new Set([
   "WebSearch",
   "WebFetch",
-  "PoppyDiscover",
-  "PoppyConverse",
-  "PoppyStatus",
+  "PoppyDiscover", "PoppyStatus",
   "read_file",
   "list_dir",
   "Recall",
@@ -470,57 +466,9 @@ export function isForkConversation(conversation: string | undefined): boolean {
   return (conversation ?? "").startsWith(FORK_PREFIX);
 }
 
-/** The line a fork ends with, so its outcome is read rather than guessed from prose. */
-export const HANDOFF_PREFIX = "HANDOFF: ";
+import { readHandoff, type Handoff } from "./fork-handoff.ts";
+export { FORK_PROMPT_LINE, HANDOFF_PREFIX, readHandoff, type Handoff } from "./fork-handoff.ts";
 
-/** The line a fork child's system prompt carries, so it knows what it is and is not. */
-export const FORK_PROMPT_LINE =
-  "# You are a fork\n\n" +
-  "You were forked by your own main conversation to work one slice of a larger job. Your findings " +
-  "go back to it as your final message — say them plainly and completely. You cannot message " +
-  "anyone, change the task board, remember for the team, ask a person, or fork again; if a slice " +
-  "needs one of those, say so in your findings and the turn that forked you will decide.\n\n" +
-  "End your final message with exactly one line, on its own, of the form\n" +
-  `${HANDOFF_PREFIX}{"status":"done","reason":"…"}\n` +
-  'where status is "done" (the slice is complete), "partial" (some of it, say what is missing) or ' +
-  '"blocked" (it needs something only the turn that forked you can do — say what). The reason is ' +
-  "one sentence. The line is read by a program, so keep it exact and last.";
-
-export interface Handoff {
-  status: "done" | "partial" | "blocked" | "unstated";
-  reason?: string;
-  /** The findings with the handoff line removed. */
-  body: string;
-}
-
-/**
- * Reads a fork's handoff line off the end of its findings.
- *
- * Fail-closed: no line, or a line that does not parse, or a status outside the three, is
- * `unstated` — reported as such, never promoted to done. A missing verdict is information
- * (the child ran out of context, or ignored the instruction), and the parent should see it
- * as that rather than as a quiet success. (Argus parses its roles' decision line the same
- * way; its incident log has a challenge channel that existed but was never reachable
- * because the parser and the prompt disagreed — hence the test that a well-formed line
- * changes what the parent is told.)
- */
-export function readHandoff(findings: string): Handoff {
-  const lines = findings.trimEnd().split("\n");
-  const last = lines[lines.length - 1]?.trim() ?? "";
-  if (!last.startsWith(HANDOFF_PREFIX)) return { status: "unstated", body: findings };
-  const body = lines.slice(0, -1).join("\n").trimEnd();
-  try {
-    const parsed = JSON.parse(last.slice(HANDOFF_PREFIX.length)) as { status?: unknown; reason?: unknown };
-    const status = parsed.status;
-    if (status !== "done" && status !== "partial" && status !== "blocked") {
-      return { status: "unstated", body };
-    }
-    const reason = typeof parsed.reason === "string" ? parsed.reason.trim().slice(0, 300) : undefined;
-    return { status, body, ...(reason !== undefined && reason !== "" ? { reason } : {}) };
-  } catch {
-    return { status: "unstated", body };
-  }
-}
 /**
  * How many forks one call may open.
  *
@@ -2362,10 +2310,7 @@ evidence: {
     },
   });
 
-  // Poppy protocol tools — offered when Poppy is enabled (AGENTBOX_POPPY != 0).
-  if (process.env.AGENTBOX_POPPY !== "0") {
-    tools.push(...poppyToolDefinitions());
-  }
+  tools.push(...poppyToolDefinitions()); // withheld by the turn where Poppy is off (docs/poppy.md)
 
   const offered = withheldFrom(allowed, tools);
   return fork ? offered.filter(tool => !FORK_WITHHELD_TOOLS.has(tool.name)) : offered;
@@ -4118,20 +4063,7 @@ export async function dispatchTool(
           const target = await guardUrl(String(input.url ?? ""), true);
           request.url = target.toString();
           if (typeof input.page === "string" && input.page !== "") request.page = input.page;
-
-          // Poppy Browser Join (spec 8.3): before navigating to the target, join the
-          // browser session to the Poppy Session so the Company recognises us. The join
-          // URL is a one-time redirect that sets cookies. Once done per domain per process.
-          if (context.poppyManager?.ready) {
-            const joinUrl = await poppyBrowserJoinUrl(context.poppyManager, request.url);
-            if (joinUrl) {
-              try {
-                await box.browser({ op: "open", display: context.displayIndex!, url: joinUrl, ...callFor(context) });
-              } catch {
-                // Join failure is not fatal; the page still opens, just without Poppy cookies.
-              }
-            }
-          }
+          await poppyJoin(context.poppyManager, request.url, async url => box.browser({ op: "open", display: context.displayIndex!, url: (await guardUrl(url, true)).toString(), ...callFor(context) }));
         } catch (error) {
           return {
             text: error instanceof WebError ? error.message : `Cannot open that: ${error}`,
@@ -4405,24 +4337,8 @@ export async function dispatchTool(
       return await context.docReader.read(String(input.url ?? ""));
     }
 
-    case "PoppyDiscover":
-    case "PoppyConverse":
-    case "PoppyStatus": {
-      if (!context.poppyManager) {
-        return { text: "The Poppy protocol is not enabled on this installation.", isError: true };
-      }
-      const poppyCtx: PoppyToolContext = {
-        manager: context.poppyManager,
-        agentId: context.agent.id,
-        agentName: context.agent.profile.name,
-        requestConfirmation: context.policy
-          ? (input) => context.policy!.requestConfirmation(input)
-          : undefined,
-        log: line => console.error(`[poppy] ${line}`),
-      };
-      const result = await dispatchPoppyTool(name, input, poppyCtx);
-      return { text: result.text, ...(result.isError ? { isError: true } : {}) };
-    }
+    case "PoppyDiscover": case "PoppyConverse": case "PoppyStatus":
+      return await poppyCall(name, input, context);
 
     case "WebFetch": {
       const target = String(input.url ?? "");

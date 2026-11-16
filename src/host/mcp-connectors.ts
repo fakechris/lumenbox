@@ -251,3 +251,19 @@ export function pinnedPackage(args: readonly string[] | undefined): { package: s
   }
   return undefined;
 }
+
+/** An MCP server entry as config.json spells it. */
+type ConfiguredServer = {
+  command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string>; host?: boolean;
+  hostOnlyTools?: string[]; pollutesMemory?: boolean; sandbox?: "on" | "off"; allowWrite?: string[];
+};
+
+/** The MCP server list as config.json spells it, in the manager's shape. */
+export function mcpServersFrom(config: { mcpServers?: Record<string, ConfiguredServer>; connectorVersions?: Record<string, string> }) {
+  // The connector doors above sit under the operator's entries: a config.json line with the same
+  // name overrides a door's default, an env credential turns a door on, and either may exist
+  // without the other. `connectorVersions` pins a door's package differently from the catalog
+  // without replacing its spec (INV-813).
+  const configured = Object.entries(config.mcpServers ?? {}).map(([name, server]) => ({ name, ...server }));
+  return mergeServers(configured, process.env, config.connectorVersions ?? {});
+}

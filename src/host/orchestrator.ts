@@ -106,9 +106,9 @@ import { readHandoff, type ToolContext } from "./tools.ts";
 import { JobWatch } from "./job-watch.ts"; import { ConversationState } from "./conversation-state.ts"; import { AgentFacts } from "../web/agent-facts.ts";
 import { loadConfig } from "../config.ts"; import { FallbackRuntimes, fallbackNames } from "./provider-fallback.ts"; import { setRejectionNote } from "./provider-rest.ts";
 import { McpManager } from "./mcp.ts";
-import { mergeServers } from "./mcp-connectors.ts";
+import { mcpServersFrom } from "./mcp-connectors.ts";
 import { CapabilityLedger } from "./mcp-capabilities.ts";
-import { createPoppyFetch } from "./poppy-fetch.ts";
+import { poppyFor } from "./poppy-fetch.ts"; import { POPPY_TOOLS } from "./poppy-tools.ts";
 import { PolicyGate } from "./policy.ts";
 import { TaskStore, type Task } from "./tasks.ts";
 import type { MandateWorld } from "./mandate.ts";
@@ -352,10 +352,8 @@ export class Orchestrator {
    * agents each believe they held it.
    */
   private readonly display = new DisplayLease();
-  /** The Poppy (Personal Agent Protocol) manager, when enabled. */
-  private readonly poppyManager?: import("./poppy/manager.ts").PoppyManager;
-  /** A webFetch wrapper that injects Poppy-Session headers. Undefined when Poppy is off. */
-  private readonly poppyFetch?: (url: string) => Promise<import("./web.ts").FetchedPage>;
+  /** Poppy (docs/poppy.md), when this host has it on: its manager, and the WebFetch that carries its headers. */
+  readonly poppy = poppyFor(process.env, agentboxHome(), line => console.error(`[poppy] ${line}`));
   /** Desktops already brought up, so each is started once per process. */
   /** `boxId:index` — two boxes each have a desktop 1. */
   private readonly startingDisplays = new Map<string, Promise<number | undefined>>();
@@ -1146,17 +1144,6 @@ export class Orchestrator {
       },
       log: line => console.error(`[goal] ${line}`),
     });
-
-    // Poppy (Personal Agent Protocol) — disabled with AGENTBOX_POPPY=0.
-    if (process.env.AGENTBOX_POPPY !== "0") {
-      const origin = process.env.AGENTBOX_PUBLIC_URL ?? `https://localhost`;
-      const poppy = createPoppyFetch(
-        { home: agentboxHome(), origin },
-        line => console.error(`[poppy] ${line}`),
-      );
-      (this as unknown as { poppyManager: typeof poppy.manager }).poppyManager = poppy.manager;
-      (this as unknown as { poppyFetch: typeof poppy.fetch }).poppyFetch = poppy.fetch;
-    }
   }
 
   /**
@@ -1539,11 +1526,6 @@ export class Orchestrator {
   boxClient(agentId?: string): BoxClient | undefined {
     if (agentId === undefined) return this.box;
     return this.boxFor(agentId) ?? undefined;
-  }
-
-  /** The Poppy manager, when Poppy is enabled. Used by the server to serve agent metadata endpoints. */
-  get poppy(): import("./poppy/manager.ts").PoppyManager | undefined {
-    return this.poppyManager;
   }
 
   /** The record of an agent's box, for paths and labels. */
@@ -1933,8 +1915,7 @@ export class Orchestrator {
       handOver: this.options.handOver,
       // The reader for the door this conversation's messages come through (INV-871).
       docReader: this.options.docReader ?? this.docReaderFor?.(conversation) ?? this.docReader,
-      ...(this.poppyFetch !== undefined ? { webFetch: this.poppyFetch } : {}),
-      ...(this.poppyManager !== undefined ? { poppyManager: this.poppyManager } : {}),
+      ...this.poppy,
       conversation,
       provider: runtime.provider,
       effort: this.options.effort,
@@ -2736,7 +2717,7 @@ export const ALL_TOOLS: readonly string[] = [
   "DingTalkWrite",
   // Every MCP service the box's bundles carry (INV-759). Their tool names are not known when this
   // list is written, so without it an allowlist withholds all of them.
-  ALL_MCP_TOOLS,
+  ALL_MCP_TOOLS, ...POPPY_TOOLS,
 ];
 
 /**
@@ -2806,12 +2787,3 @@ export const STARTER_TEAM: readonly {
     tools: NO_TEAM_BUILDING.filter(tool => tool !== "write_file" && tool !== ALL_MCP_TOOLS),
   },
 ];
-
-/** The MCP server list as config.json spells it, in the manager's shape. */
-function mcpServersFrom(config: { mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string>; host?: boolean; hostOnlyTools?: string[]; pollutesMemory?: boolean; sandbox?: "on" | "off"; allowWrite?: string[] }>; connectorVersions?: Record<string, string> }) {
-  // The connector doors (mcp-connectors.ts) sit under the operator's entries: a config.json
-  // line with the same name overrides a door's default, an env credential turns a door on,
-  // and either may exist without the other. `connectorVersions` pins a door's package
-  // differently from the catalog without replacing its spec (INV-813).
-  return mergeServers(Object.entries(config.mcpServers ?? {}).map(([name, server]) => ({ name, ...server })), process.env, config.connectorVersions ?? {});
-}
