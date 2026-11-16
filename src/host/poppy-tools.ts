@@ -81,6 +81,19 @@ export interface PoppyToolContext {
   manager: PoppyManager;
   /** Called when an operation arrives during a conversation. */
   onOperation?: (op: Operation) => void;
+  /**
+   * Request a confirmation from the user through the policy gate (consent card).
+   * When present, Company operations are automatically put to the user for approval.
+   */
+  requestConfirmation?: (input: {
+    agentId: string;
+    agentName: string;
+    description: string;
+    action?: string;
+  }) => { id: string };
+  /** Agent identity for consent card attribution. */
+  agentId?: string;
+  agentName?: string;
   log?: (line: string) => void;
 }
 
@@ -219,6 +232,19 @@ async function poppyConverse(
           );
           pendingOp = op;
           ctx.onOperation?.(op);
+
+          // Auto-request confirmation through the policy gate when available.
+          if (ctx.requestConfirmation && event.operation.requiresApproval) {
+            const desc = consentDescription(op);
+            const level = policyLevel(op);
+            ctx.requestConfirmation({
+              agentId: ctx.agentId ?? "poppy",
+              agentName: ctx.agentName ?? "Poppy",
+              description: desc,
+              action: `Poppy operation (${op.type}, L${level}): ${domain}`,
+            });
+            ctx.log?.(`Requested user confirmation for operation ${op.id} (${op.type}, L${level})`);
+          }
           break;
         }
         case "error":

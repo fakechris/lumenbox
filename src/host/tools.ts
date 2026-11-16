@@ -4413,6 +4413,11 @@ export async function dispatchTool(
       }
       const poppyCtx: PoppyToolContext = {
         manager: context.poppyManager,
+        agentId: context.agent.id,
+        agentName: context.agent.profile.name,
+        requestConfirmation: context.policy
+          ? (input) => context.policy!.requestConfirmation(input)
+          : undefined,
         log: line => console.error(`[poppy] ${line}`),
       };
       const result = await dispatchPoppyTool(name, input, poppyCtx);
