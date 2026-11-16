@@ -8,6 +8,8 @@
  *   - Session JWTs (fresh for every request)
  */
 
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import type { AgentIdentity } from "./identity.ts";
 import type { PoppyCompany } from "./discovery.ts";
 import {
@@ -27,6 +29,8 @@ import {
 const DELEGATION_LIFETIME = 3600;
 /** Renew this many seconds before expiry so the Company never sees an expired one. */
 const RENEW_MARGIN = 300;
+/** How long one Session JWT is good for. It is made fresh for every request. */
+const SESSION_JWT_LIFETIME = 60;
 
 // ── User IDs ──────────────────────────────────────────────────────
 
@@ -42,7 +46,36 @@ export interface UserIdStore {
   set(companyIdentifier: string, userId: string): void;
 }
 
-/** In-memory store, for development. Production should persist to encrypted disk. */
+/**
+ * User IDs on disk, so a Company sees the same User after a restart (spec 5.1). Owner-only, like
+ * the agent key; the IDs are random and carry nothing about the person. The key is the caller's:
+ * the manager makes it from whom the agent acts for and the Company's domain.
+ */
+export class FileUserIdStore implements UserIdStore {
+  private readonly ids: Map<string, string>;
+
+  constructor(private readonly path: string) {
+    let saved: Record<string, string> = {};
+    try {
+      saved = JSON.parse(readFileSync(path, "utf8")) as Record<string, string>;
+    } catch {
+      // Not there yet, or unreadable: start empty rather than refuse to talk to anyone.
+    }
+    this.ids = new Map(Object.entries(saved).filter(([, id]) => typeof id === "string"));
+  }
+
+  get(key: string): string | undefined {
+    return this.ids.get(key);
+  }
+
+  set(key: string, userId: string): void {
+    this.ids.set(key, userId);
+    mkdirSync(dirname(this.path), { recursive: true });
+    writeFileSync(this.path, JSON.stringify(Object.fromEntries(this.ids), null, 2), { mode: 0o600 });
+  }
+}
+
+/** In-memory store, for tests. */
 export class MemoryUserIdStore implements UserIdStore {
   private readonly ids = new Map<string, string>();
   get(companyIdentifier: string): string | undefined {
@@ -53,12 +86,12 @@ export class MemoryUserIdStore implements UserIdStore {
   }
 }
 
-/** Gets or creates a stable User ID for a Company. */
-export function userIdFor(company: PoppyCompany, store: UserIdStore): string {
-  const existing = store.get(company.identifier);
+/** Gets or creates a stable User ID under `key` (who the agent acts for, at which Company). */
+export function userIdFor(key: string, store: UserIdStore): string {
+  const existing = store.get(key);
   if (existing) return existing;
   const id = `usr_${randomId()}`;
-  store.set(company.identifier, id);
+  store.set(key, id);
   return id;
 }
 
@@ -93,11 +126,18 @@ export class DelegatedKeyManager {
       return this.current;
     }
     if (!this.issuing) {
-      this.issuing = this.issue().then(key => {
-        this.current = key;
-        this.issuing = undefined;
-        return key;
-      });
+      // Cleared on failure too: one failed issue must not make every later request fail with it.
+      this.issuing = this.issue().then(
+        key => {
+          this.current = key;
+          this.issuing = undefined;
+          return key;
+        },
+        (error: unknown) => {
+          this.issuing = undefined;
+          throw error;
+        },
+      );
     }
     return this.issuing;
   }
@@ -173,6 +213,8 @@ export function createSession(
         htm: method.toUpperCase(),
         htu,
         iat,
+        // Signed per request: a minute is enough for it to arrive and too short to be worth replaying.
+        exp: iat + SESSION_JWT_LIFETIME,
         jti: randomId(),
       };
       if (accessToken !== undefined) {

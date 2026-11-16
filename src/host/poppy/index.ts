@@ -10,7 +10,8 @@ export { discoverCompany, hasUcpExtension, ucpEndpoint, clearDiscoveryCache } fr
 export type { PoppyCompany } from "./discovery.ts";
 export type { PoppySession } from "./session.ts";
 export type { UserIdStore } from "./session.ts";
-export { MemoryUserIdStore } from "./session.ts";
+export { FileUserIdStore, MemoryUserIdStore } from "./session.ts";
+export { PoppyRefused, poppyRequest, usePoppyTransport, withinSite, type PoppyTransport } from "./http.ts";
 export type { AgentIdentity } from "./identity.ts";
 
 // Phase 2: OAuth

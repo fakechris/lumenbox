@@ -11,7 +11,7 @@
  */
 
 import type { PoppyManager } from "./poppy/manager.ts";
-import { parseOperation, policyLevel, consentDescription, type Operation, type OperationDecision } from "./poppy/operations.ts";
+import { parseOperation, policyLevel, consentDescription, type Operation } from "./poppy/operations.ts";
 import type { ConversationEvent } from "./poppy/conversations.ts";
 import type Anthropic from "@anthropic-ai/sdk";
 import { poppyBrowserJoinUrl } from "./poppy-browser.ts";
@@ -83,11 +83,13 @@ export function poppyToolDefinitions(): Anthropic.Tool[] {
 
 export interface PoppyToolContext {
   manager: PoppyManager;
-  /** Called when an operation arrives during a conversation. */
-  onOperation?: (op: Operation) => void;
+  /** Whom the call acts for: the agent's id (see PoppyManager). */
+  who: string;
+  /** The conversation the call came from, where the outcome of an operation is told. */
+  conversation: string;
   /**
-   * Request a confirmation from the user through the policy gate (consent card).
-   * When present, Company operations are automatically put to the user for approval.
+   * Puts a Company's operation to the person as a consent card. Absent means there is nobody to
+   * ask here, and an operation is refused to the agent rather than left hanging.
    */
   requestConfirmation?: (input: {
     agentId: string;
@@ -95,17 +97,15 @@ export interface PoppyToolContext {
     description: string;
     action?: string;
   }) => { id: string };
-  /** Agent identity for consent card attribution. */
-  agentId?: string;
   agentName?: string;
   log?: (line: string) => void;
+  /** How long to wait for a conversation's answer. Tests shorten it. */
+  timeoutMs?: number;
 }
 
 export interface PoppyToolResult {
   text: string;
   isError?: boolean;
-  /** An operation that arrived and needs user approval. */
-  pendingOperation?: Operation;
 }
 
 export async function dispatchPoppyTool(
@@ -196,6 +196,8 @@ async function poppyDiscover(domain: string, ctx: PoppyToolContext): Promise<Pop
 
 // ── PoppyConverse ─────────────────────────────────────────────
 
+const CONVERSE_TIMEOUT_MS = 60_000;
+
 async function poppyConverse(
   domain: string,
   message: string,
@@ -211,99 +213,100 @@ async function poppyConverse(
     return { text: `${domain} does not support Poppy conversations (no conversation protocol found).`, isError: true };
   }
 
-  // Collect responses.
   const messages: string[] = [];
-  let pendingOp: Operation | undefined;
+  // Asked about as each arrives, not when the stream ends: a Company that keeps its stream open
+  // after asking would otherwise hold the card back until the wait ran out.
+  const operationParts: string[] = [];
   let error: string | undefined;
+  let stream: AbortController | null | undefined;
+  let timedOut = false;
 
-  const events: ConversationEvent[] = [];
-  await new Promise<void>((resolve) => {
+  await new Promise<void>(resolve => {
+    // The stream is aborted when the wait ends, not left running behind a turn that moved on.
+    const timer = setTimeout(() => {
+      timedOut = true;
+      stream?.abort();
+      resolve();
+    }, ctx.timeoutMs ?? CONVERSE_TIMEOUT_MS);
+    const finish = () => {
+      clearTimeout(timer);
+      resolve();
+    };
     const handleEvent = (event: ConversationEvent): void => {
-      events.push(event);
+      // After the tool has answered, nothing more is taken from the stream — least of all an operation.
+      if (timedOut) return;
       switch (event.type) {
         case "message":
           messages.push(event.message.content);
           break;
-        case "operation": {
-          const op = parseOperation(
-            {
-              id: event.operation.id,
-              type: event.operation.type,
-              description: event.operation.description,
-              ...(event.operation.parameters ?? {}),
-            },
-            ep.endpoint,
-          );
-          pendingOp = op;
-          ctx.onOperation?.(op);
-
-          // Auto-request confirmation through the policy gate when available.
-          if (ctx.requestConfirmation && event.operation.requiresApproval) {
-            const desc = consentDescription(op);
-            const level = policyLevel(op);
-            ctx.requestConfirmation({
-              agentId: ctx.agentId ?? "poppy",
-              agentName: ctx.agentName ?? "Poppy",
-              description: desc,
-              action: `Poppy operation (${op.type}, L${level}): ${domain}`,
-            });
-            ctx.log?.(`Requested user confirmation for operation ${op.id} (${op.type}, L${level})`);
+        case "operation":
+          {
+            const op = parseOperation({ id: event.operation.id, type: event.operation.type, description: event.operation.description, ...(event.operation.parameters ?? {}) }, ep.endpoint);
+            operationParts.push(event.operation.requiresApproval ? askAbout(op, domain, ctx) : `\n---\n${domain} reports an operation that needs no approval:\n\n${consentDescription(op)}`);
           }
           break;
-        }
         case "error":
           error = event.error;
           break;
         case "done":
-          resolve();
+          finish();
           break;
       }
     };
 
-    ctx.manager.converse(domain, message, handleEvent, { conversationId })
+    ctx.manager.converse(domain, ctx.who, message, handleEvent, { conversationId })
       .then(ctrl => {
+        stream = ctrl;
+        // Started after the wait gave up: closed at once, so nothing it says arrives unheard.
+        if (timedOut) ctrl?.abort();
         if (!ctrl) {
           error = "Could not start conversation (no session or endpoint)";
-          resolve();
+          finish();
         }
       })
       .catch(err => {
         error = err instanceof Error ? err.message : String(err);
-        resolve();
+        finish();
       });
-
-    // Timeout: don't hang indefinitely.
-    setTimeout(() => resolve(), 60_000);
   });
 
   const parts: string[] = [];
-  if (messages.length > 0) {
-    parts.push(messages.join("\n\n"));
-  }
-  if (pendingOp) {
-    const level = policyLevel(pendingOp);
-    parts.push(
-      `\n---\n⚠️ The Company requests an operation (policy level L${level}):\n\n` +
-      consentDescription(pendingOp)
-    );
-  }
-  if (error) {
-    parts.push(`\n[Error: ${error}]`);
-  }
-  if (parts.length === 0) {
-    return { text: "(No response from the Company's agent.)" };
-  }
+  if (messages.length > 0) parts.push(messages.join("\n\n"));
+  parts.push(...operationParts);
+  if (timedOut) parts.push(`\n[No end of answer from ${domain} within ${(ctx.timeoutMs ?? CONVERSE_TIMEOUT_MS) / 1000}s; the conversation was closed. What it said before then is above.]`);
+  if (error) parts.push(`\n[Error: ${error}]`);
+  if (parts.length === 0) return { text: "(No response from the Company's agent.)" };
+  return { text: parts.join("\n") };
+}
 
-  return {
-    text: parts.join("\n"),
-    pendingOperation: pendingOp,
-  };
+/**
+ * A Company asked for an operation. It is put to the person as a consent card, and the person's
+ * answer goes back to the Company when they give it (PoppyManager.settleApproval), with the agent
+ * told what came of it. Nothing here approves anything: the agent cannot, and is told so.
+ */
+function askAbout(op: Operation, domain: string, ctx: PoppyToolContext): string {
+  const level = policyLevel(op);
+  const what = `\n---\nThe Company requests an operation (policy level L${level}):\n\n${consentDescription(op)}`;
+  if (ctx.requestConfirmation === undefined) {
+    return `${what}\n\nThere is nobody here to approve it, so it is not approved. Say so to whoever asked; do not tell ${domain} it was approved.`;
+  }
+  // The card names the Company and the operation: the gate folds cards with the same words into
+  // one approval, and two Companies asking in the same words must not share one answer.
+  const approval = ctx.requestConfirmation({
+    agentId: ctx.who,
+    agentName: ctx.agentName ?? "Poppy",
+    description: `${domain} asks (operation ${op.id}):\n\n${consentDescription(op)}`,
+    action: `answer ${domain}'s ${op.type} request`,
+  });
+  ctx.manager.awaitDecision(approval.id, { who: ctx.who, domain, operation: op, agentId: ctx.who, conversation: ctx.conversation });
+  ctx.log?.(`asked the person about operation ${op.id} (${op.type}, L${level}) from ${domain}`);
+  return `${what}\n\nThis is waiting for the person to approve or decline. Their answer goes to ${domain} by itself, and you will be told what came of it. Do not answer it yourself or ask again.`;
 }
 
 // ── PoppyStatus ───────────────────────────────────────────────
 
 async function poppyStatus(ctx: PoppyToolContext): Promise<PoppyToolResult> {
-  const status = ctx.manager.status();
+  const status = ctx.manager.status(ctx.who);
   const lines: string[] = [
     `# Poppy Protocol Status`,
     `Agent ID: ${status.clientId ?? "(not initialized)"}`,
@@ -312,31 +315,16 @@ async function poppyStatus(ctx: PoppyToolContext): Promise<PoppyToolResult> {
 
   if (status.activeSessions.length > 0) {
     lines.push(`\nActive Sessions (${status.activeSessions.length}):`);
-    for (const domain of status.activeSessions) {
-      lines.push(`  - ${domain}`);
-    }
+    for (const domain of status.activeSessions) lines.push(`  - ${domain}`);
   }
 
   if (status.tokens.length > 0) {
-    lines.push(`\nStored Tokens (${status.tokens.length}):`);
-    for (const t of status.tokens) {
-      lines.push(`  - ${t.issuer}: access=${t.hasAccess}, refresh=${t.hasRefresh}`);
-    }
+    lines.push(`\nSigned in (${status.tokens.length}):`);
+    for (const t of status.tokens) lines.push(`  - ${t.domain} (${t.issuer}): access=${t.hasAccess}, refresh=${t.hasRefresh}`);
   }
 
-  if (status.negativeCache.length > 0) {
-    lines.push(`\nDomains without Poppy (${status.negativeCache.length}):`);
-    for (const domain of status.negativeCache.slice(0, 10)) {
-      lines.push(`  - ${domain}`);
-    }
-    if (status.negativeCache.length > 10) {
-      lines.push(`  ... and ${status.negativeCache.length - 10} more`);
-    }
-  }
-
-  if (status.pendingAuthFlows > 0) {
-    lines.push(`\nPending sign-in flows: ${status.pendingAuthFlows}`);
-  }
+  if (status.domainsWithoutPoppy > 0) lines.push(`\nDomains checked and found without Poppy: ${status.domainsWithoutPoppy}`);
+  if (status.pendingAuthFlows > 0) lines.push(`\nPending sign-in flows: ${status.pendingAuthFlows}`);
 
   return { text: lines.join("\n") };
 }
@@ -347,6 +335,7 @@ async function poppyStatus(ctx: PoppyToolContext): Promise<PoppyToolResult> {
 export interface PoppyCallContext {
   poppyManager?: PoppyManager;
   agent: { id: string; profile: { name: string } };
+  conversation?: string;
   policy?: { requestConfirmation(input: { agentId: string; agentName: string; description: string; action?: string }): { id: string } };
 }
 
@@ -357,7 +346,8 @@ export async function poppyCall(name: string, input: Record<string, unknown>, co
   await context.poppyManager.init().catch(() => undefined);
   const result = await dispatchPoppyTool(name, input, {
     manager: context.poppyManager,
-    agentId: context.agent.id,
+    who: context.agent.id,
+    conversation: context.conversation ?? "main",
     agentName: context.agent.profile.name,
     ...(context.policy !== undefined ? { requestConfirmation: (request: Parameters<NonNullable<PoppyToolContext["requestConfirmation"]>>[0]) => context.policy!.requestConfirmation(request) } : {}),
     log: line => console.error(`[poppy] ${line}`),
@@ -369,8 +359,8 @@ export async function poppyCall(name: string, input: Record<string, unknown>, co
  * Browser Join (spec 8.3) before a page opens: when the site joins browsers to a Poppy session,
  * open its one-time join URL first. A failed join is not fatal; the page opens without it.
  */
-export async function poppyJoin(manager: PoppyManager | undefined, url: string, open: (joinUrl: string) => Promise<unknown>): Promise<void> {
+export async function poppyJoin(manager: PoppyManager | undefined, who: string, url: string, open: (joinUrl: string) => Promise<unknown>): Promise<void> {
   if (manager?.ready !== true) return;
-  const joinUrl = await poppyBrowserJoinUrl(manager, url);
+  const joinUrl = await poppyBrowserJoinUrl(manager, who, url);
   if (joinUrl !== undefined) await open(joinUrl).catch(() => undefined);
 }

@@ -26,7 +26,7 @@ function fakeManager(opts: {
         ready: true,
         clientId: "agent_test",
         activeSessions: [],
-        negativeCache: [],
+        domainsWithoutPoppy: 0,
         tokens: [],
         pendingAuthFlows: 0,
         pendingDeviceFlows: 0,
@@ -48,7 +48,7 @@ describe("poppyToolDefinitions", () => {
 
 describe("dispatchPoppyTool", () => {
   test("returns error when manager is not ready", async () => {
-    const ctx: PoppyToolContext = { manager: fakeManager({ ready: false }) };
+    const ctx: PoppyToolContext = { who: "ada", conversation: "main", manager: fakeManager({ ready: false }) };
     const result = await dispatchPoppyTool("PoppyDiscover", { domain: "test.com" }, ctx);
     assert.ok(result.isError);
     assert.ok(result.text.includes("not available"));
@@ -56,6 +56,8 @@ describe("dispatchPoppyTool", () => {
 
   test("PoppyDiscover returns info for a known domain", async () => {
     const ctx: PoppyToolContext = {
+      who: "ada",
+      conversation: "main",
       manager: fakeManager({
         discover: {
           "test.example": {
@@ -75,19 +77,21 @@ describe("dispatchPoppyTool", () => {
   });
 
   test("PoppyDiscover returns message for unknown domain", async () => {
-    const ctx: PoppyToolContext = { manager: fakeManager() };
+    const ctx: PoppyToolContext = { who: "ada", conversation: "main", manager: fakeManager() };
     const result = await dispatchPoppyTool("PoppyDiscover", { domain: "unknown.example" }, ctx);
     assert.ok(result.text.includes("does not publish"));
   });
 
   test("PoppyStatus returns status", async () => {
     const ctx: PoppyToolContext = {
+      who: "ada",
+      conversation: "main",
       manager: fakeManager({
         status: {
           ready: true,
           clientId: "agent_xyz",
           activeSessions: ["allbirds.com"],
-          negativeCache: ["example.com"],
+          domainsWithoutPoppy: 1,
           tokens: [],
           pendingAuthFlows: 0,
           pendingDeviceFlows: 0,
@@ -100,7 +104,7 @@ describe("dispatchPoppyTool", () => {
   });
 
   test("PoppyConverse returns error when domain has no conversation", async () => {
-    const ctx: PoppyToolContext = { manager: fakeManager() };
+    const ctx: PoppyToolContext = { who: "ada", conversation: "main", manager: fakeManager() };
     const result = await dispatchPoppyTool(
       "PoppyConverse",
       { domain: "test.example", message: "hello" },
@@ -111,7 +115,7 @@ describe("dispatchPoppyTool", () => {
   });
 
   test("unknown tool returns error", async () => {
-    const ctx: PoppyToolContext = { manager: fakeManager() };
+    const ctx: PoppyToolContext = { who: "ada", conversation: "main", manager: fakeManager() };
     const result = await dispatchPoppyTool("PoppyFoo", {}, ctx);
     assert.ok(result.isError);
     assert.ok(result.text.includes("Unknown"));

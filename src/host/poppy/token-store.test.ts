@@ -1,120 +1,86 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { TokenStore } from "./token-store.ts";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-function tmpStore(): { store: TokenStore; dir: string } {
+const ISSUER = "https://auth.shop.example";
+const key = TokenStore.key("ada", "shop.example");
+const token = (accessToken: string, ms: number, refreshToken?: string) => ({ accessToken, tokenType: "Bearer", expiresAt: Date.now() + ms, ...(refreshToken ? { refreshToken } : {}) });
+
+function withStore(run: (store: TokenStore, dir: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), "poppy-tokens-"));
-  return { store: new TokenStore(dir), dir };
+  try {
+    run(new TokenStore(dir), dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 describe("TokenStore", () => {
-  test("stores and retrieves a token", () => {
-    const { store, dir } = tmpStore();
-    try {
-      store.set("https://auth.example.com", {
-        accessToken: "at_123",
-        tokenType: "Bearer",
-        expiresAt: Date.now() + 3600_000,
-        refreshToken: "rt_456",
-        scope: "read write",
-      });
-
-      const got = store.get("https://auth.example.com");
-      assert.ok(got);
-      assert.equal(got.accessToken, "at_123");
-      assert.equal(got.refreshToken, "rt_456");
-      assert.equal(got.scope, "read write");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  test("a token is kept per person and domain, owner-only on disk, and survives a restart", () => {
+    withStore((store, dir) => {
+      store.set(key, ISSUER, { ...token("at_1", 3600_000, "rt_1"), scope: "read" });
+      assert.equal(store.get(key, ISSUER)?.accessToken, "at_1");
+      assert.equal(store.get(TokenStore.key("bob", "shop.example"), ISSUER), undefined, "another person's sign-in is not this one's");
+      assert.equal(new TokenStore(dir).get(key, ISSUER)?.refreshToken, "rt_1");
+      assert.equal(statSync(join(dir, "poppy-tokens.json")).mode & 0o777, 0o600);
+    });
   });
 
-  test("persists across instances", () => {
-    const { dir } = tmpStore();
-    try {
-      const store1 = new TokenStore(dir);
-      store1.set("https://auth.example.com", {
-        accessToken: "at_persist",
-        tokenType: "Bearer",
-        expiresAt: Date.now() + 3600_000,
-      });
-
-      const store2 = new TokenStore(dir);
-      const got = store2.get("https://auth.example.com");
-      assert.ok(got);
-      assert.equal(got.accessToken, "at_persist");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  test("a site that names another Company's issuer is not handed that Company's token", () => {
+    withStore(store => {
+      store.set(key, ISSUER, token("at_shop", 3600_000));
+      assert.equal(store.get(TokenStore.key("ada", "evil.example"), ISSUER), undefined, "keyed by the domain it was granted at");
+      assert.equal(store.get(key, "https://auth.evil.example"), undefined, "and only while that domain still names its issuer");
+    });
   });
 
-  test("hasValid and needsRefresh report correctly", () => {
-    const { store, dir } = tmpStore();
-    try {
-      // Token valid for 1 hour.
-      store.set("fresh", {
-        accessToken: "at",
-        tokenType: "Bearer",
-        expiresAt: Date.now() + 3600_000,
-      });
-      assert.equal(store.hasValid("fresh"), true);
-      assert.equal(store.needsRefresh("fresh"), false);
-
-      // Token expired 1 second ago.
-      store.set("stale", {
-        accessToken: "at",
-        tokenType: "Bearer",
-        expiresAt: Date.now() - 1000,
-      });
-      assert.equal(store.hasValid("stale"), false);
-      assert.equal(store.needsRefresh("stale"), true);
-
-      // No token.
-      assert.equal(store.hasValid("unknown"), false);
-      assert.equal(store.needsRefresh("unknown"), false);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  test("a refresh that sends no new refresh token keeps the old one", () => {
+    withStore(store => {
+      store.set(key, ISSUER, token("at_1", 3600_000, "rt_1"));
+      store.set(key, ISSUER, token("at_2", 3600_000), { refreshed: true });
+      assert.equal(store.get(key, ISSUER)?.refreshToken, "rt_1");
+      assert.equal(store.get(key, ISSUER)?.accessToken, "at_2");
+    });
   });
 
-  test("remove deletes a token", () => {
-    const { store, dir } = tmpStore();
-    try {
-      store.set("https://auth.example.com", {
-        accessToken: "at",
-        tokenType: "Bearer",
-        expiresAt: Date.now() + 3600_000,
-      });
-      assert.ok(store.get("https://auth.example.com"));
-
-      store.remove("https://auth.example.com");
-      assert.equal(store.get("https://auth.example.com"), undefined);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  test("a sign-in that sends no refresh token does not inherit the last account's", () => {
+    withStore(store => {
+      store.set(key, ISSUER, token("at_old_account", 3600_000, "rt_old_account"));
+      store.set(key, ISSUER, token("at_new_account", 3600_000));
+      assert.equal(store.get(key, ISSUER)?.refreshToken, undefined);
+    });
   });
 
-  test("status() summarises all stored tokens", () => {
-    const { store, dir } = tmpStore();
-    try {
-      store.set("a", { accessToken: "x", tokenType: "Bearer", expiresAt: Date.now() + 3600_000, refreshToken: "r" });
-      store.set("b", { accessToken: "y", tokenType: "Bearer", expiresAt: Date.now() - 1000 });
+  test("validity and refresh-ahead", () => {
+    withStore(store => {
+      store.set(key, ISSUER, token("at", 3600_000));
+      const fresh = store.get(key, ISSUER)!;
+      assert.ok(store.hasValid(fresh) && !store.needsRefresh(fresh));
+      store.set(key, ISSUER, token("at", 30_000));
+      const soon = store.get(key, ISSUER)!;
+      assert.ok(store.hasValid(soon) && store.needsRefresh(soon), "inside the minute before expiry");
+      store.set(key, ISSUER, token("at", -1000));
+      assert.ok(!store.hasValid(store.get(key, ISSUER)!));
+    });
+  });
 
-      const s = store.status();
-      assert.equal(s.length, 2);
-      const a = s.find(t => t.issuer === "a");
-      assert.ok(a);
-      assert.equal(a.hasAccess, true);
-      assert.equal(a.hasRefresh, true);
-      const b = s.find(t => t.issuer === "b");
-      assert.ok(b);
-      assert.equal(b.hasAccess, false);
-      assert.equal(b.hasRefresh, false);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  test("an entry written before tokens were keyed by person and domain is not used", () => {
+    withStore((_, dir) => {
+      writeFileSync(join(dir, "poppy-tokens.json"), JSON.stringify([{ issuer: ISSUER, accessToken: "old", tokenType: "Bearer", expiresAt: Date.now() + 3600_000, updatedAt: 0 }]));
+      assert.equal(new TokenStore(dir).get(ISSUER, ISSUER), undefined);
+    });
+  });
+
+  test("status names keys and issuers, never a token, and narrows to one person", () => {
+    withStore(store => {
+      store.set(key, ISSUER, token("at_secret", 3600_000, "rt_secret"));
+      store.set(TokenStore.key("bob", "shop.example"), ISSUER, token("at_bob", 3600_000));
+      const ada = store.status("ada|");
+      assert.equal(ada.length, 1);
+      assert.doesNotMatch(JSON.stringify(ada), /secret/);
+    });
   });
 });

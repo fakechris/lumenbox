@@ -11,6 +11,7 @@
 
 import type { PoppyCompany } from "./discovery.ts";
 import type { PoppySession } from "./session.ts";
+import { poppyRequest } from "./http.ts";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -77,7 +78,8 @@ export async function sendMessage(
   const controller = new AbortController();
   const headers = await session.headers("POST", endpoint.endpoint, options?.accessToken);
 
-  const response = await fetch(endpoint.endpoint, {
+  // On the Company's own site, through the guarded door (http.ts).
+  const response = await poppyRequest(endpoint.endpoint, {
     method: "POST",
     headers: {
       ...headers,
@@ -89,10 +91,10 @@ export async function sendMessage(
       ...(options?.conversationId ? { conversation_id: options.conversationId } : {}),
     }),
     signal: controller.signal,
-  });
+  }, session.company.domain);
 
   if (!response.ok) {
-    onEvent({ type: "error", error: `HTTP ${response.status}: ${await response.text()}` });
+    onEvent({ type: "error", error: `HTTP ${response.status}: ${(await response.text()).slice(0, 500)}` });
     onEvent({ type: "done" });
     return controller;
   }
@@ -107,6 +109,54 @@ export async function sendMessage(
   return controller;
 }
 
+/**
+ * Reads an event stream as the SSE format defines it: an event is the lines up to a blank line,
+ * however the bytes were split into reads; lines end in \n, \r\n or \r; several `data:` lines
+ * are one value joined by \n; one space after the colon is dropped and no more. Earlier this
+ * reset its event at every read, so an event split across two reads lost its `event:` name and an
+ * operation arrived as a message.
+ */
+export class SseReader {
+  private pending = "";
+  private event = "";
+  private data: string[] = [];
+
+  constructor(private readonly emit: (event: string, data: string) => void) {}
+
+  /** Feeds decoded text; emits every event it completes. */
+  push(text: string): void {
+    this.pending += text;
+    // A trailing \r may be the first half of \r\n: keep it until the next read says which.
+    const cut = this.pending.endsWith("\r") ? this.pending.length - 1 : this.pending.length;
+    const lines = this.pending.slice(0, cut).split(/\r\n|\r|\n/);
+    this.pending = (lines.pop() ?? "") + this.pending.slice(cut);
+    for (const line of lines) this.line(line);
+  }
+
+  /** The stream ended: an event with no blank line after it is still dispatched. */
+  end(): void {
+    if (this.pending !== "") this.line(this.pending.replace(/\r$/, ""));
+    this.pending = "";
+    this.line("");
+  }
+
+  private line(line: string): void {
+    if (line === "") {
+      if (this.data.length > 0) this.emit(this.event, this.data.join("\n"));
+      this.event = "";
+      this.data = [];
+      return;
+    }
+    if (line.startsWith(":")) return;
+    const colon = line.indexOf(":");
+    const field = colon === -1 ? line : line.slice(0, colon);
+    let value = colon === -1 ? "" : line.slice(colon + 1);
+    if (value.startsWith(" ")) value = value.slice(1);
+    if (field === "event") this.event = value;
+    else if (field === "data") this.data.push(value);
+  }
+}
+
 async function processStream(
   response: Response,
   onEvent: ConversationEventHandler,
@@ -119,34 +169,16 @@ async function processStream(
   }
 
   const decoder = new TextDecoder();
-  let buffer = "";
+  const sse = new SseReader((event, data) => dispatchSseEvent(event, data, onEvent));
 
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-
-      let currentEvent = "";
-      let currentData = "";
-
-      for (const line of lines) {
-        if (line.startsWith("event:")) {
-          currentEvent = line.slice(6).trim();
-        } else if (line.startsWith("data:")) {
-          currentData += line.slice(5).trim();
-        } else if (line === "") {
-          if (currentData) {
-            dispatchSseEvent(currentEvent, currentData, onEvent);
-          }
-          currentEvent = "";
-          currentData = "";
-        }
-      }
+      sse.push(decoder.decode(value, { stream: true }));
     }
+    sse.push(decoder.decode());
+    sse.end();
   } finally {
     reader.releaseLock();
     onEvent({ type: "done" });

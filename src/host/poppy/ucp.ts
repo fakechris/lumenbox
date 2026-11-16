@@ -13,6 +13,7 @@
 
 import type { PoppyCompany } from "./discovery.ts";
 import type { PoppySession } from "./session.ts";
+import { poppyRequest, poppyUrl } from "./http.ts";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -68,6 +69,8 @@ export interface UcpOrder {
 
 export class UcpClient {
   private readonly baseUrl: string;
+  /** Every UCP call is on the Company's own site, through the guarded door (http.ts). */
+  private readonly site: string;
   private readonly session: PoppySession;
   private accessToken?: string;
 
@@ -79,7 +82,8 @@ export class UcpClient {
     if (!endpoint) {
       throw new Error(`Company ${company.name} has no UCP endpoint`);
     }
-    this.baseUrl = endpoint.replace(/\/$/, "");
+    this.baseUrl = poppyUrl(endpoint, company.domain).toString().replace(/\/$/, "");
+    this.site = company.domain;
     this.session = session;
     this.accessToken = accessToken;
   }
@@ -106,10 +110,10 @@ export class UcpClient {
    */
   async discoverProfile(): Promise<UcpProfile> {
     const path = "/ucp/v1/profile";
-    const response = await fetch(`${this.baseUrl}${path}`, {
+    const response = await poppyRequest(`${this.baseUrl}${path}`, {
       headers: await this.headers("GET", path),
-      signal: AbortSignal.timeout(15_000),
-    });
+      timeoutMs: 15_000,
+    }, this.site);
 
     if (!response.ok) {
       throw new UcpError(`Profile discovery failed: HTTP ${response.status}`, await response.text());
@@ -137,12 +141,12 @@ export class UcpClient {
     agentCapabilities: string[],
   ): Promise<UcpCapabilities> {
     const path = "/ucp/v1/capabilities";
-    const response = await fetch(`${this.baseUrl}${path}`, {
+    const response = await poppyRequest(`${this.baseUrl}${path}`, {
       method: "POST",
       headers: await this.headers("POST", path),
       body: JSON.stringify({ capabilities: agentCapabilities }),
-      signal: AbortSignal.timeout(15_000),
-    });
+      timeoutMs: 15_000,
+    }, this.site);
 
     if (!response.ok) {
       throw new UcpError(`Capability negotiation failed: HTTP ${response.status}`, await response.text());
@@ -163,12 +167,12 @@ export class UcpClient {
    */
   async createCart(items: UcpCartItem[]): Promise<UcpCart> {
     const path = "/ucp/v1/cart";
-    const response = await fetch(`${this.baseUrl}${path}`, {
+    const response = await poppyRequest(`${this.baseUrl}${path}`, {
       method: "POST",
       headers: await this.headers("POST", path),
       body: JSON.stringify({ items }),
-      signal: AbortSignal.timeout(15_000),
-    });
+      timeoutMs: 15_000,
+    }, this.site);
 
     if (!response.ok) {
       throw new UcpError(`Cart creation failed: HTTP ${response.status}`, await response.text());
@@ -182,10 +186,10 @@ export class UcpClient {
    */
   async getCart(cartId: string): Promise<UcpCart> {
     const path = `/ucp/v1/cart/${encodeURIComponent(cartId)}`;
-    const response = await fetch(`${this.baseUrl}${path}`, {
+    const response = await poppyRequest(`${this.baseUrl}${path}`, {
       headers: await this.headers("GET", path),
-      signal: AbortSignal.timeout(15_000),
-    });
+      timeoutMs: 15_000,
+    }, this.site);
 
     if (!response.ok) {
       throw new UcpError(`Cart fetch failed: HTTP ${response.status}`, await response.text());
@@ -201,12 +205,12 @@ export class UcpClient {
    */
   async createCheckout(cartId: string): Promise<UcpCheckout> {
     const path = "/ucp/v1/checkout";
-    const response = await fetch(`${this.baseUrl}${path}`, {
+    const response = await poppyRequest(`${this.baseUrl}${path}`, {
       method: "POST",
       headers: await this.headers("POST", path),
       body: JSON.stringify({ cart_id: cartId }),
-      signal: AbortSignal.timeout(15_000),
-    });
+      timeoutMs: 15_000,
+    }, this.site);
 
     if (!response.ok) {
       throw new UcpError(`Checkout creation failed: HTTP ${response.status}`, await response.text());
@@ -228,11 +232,11 @@ export class UcpClient {
    */
   async completeCheckout(checkoutId: string): Promise<UcpCheckout> {
     const path = `/ucp/v1/checkout/${encodeURIComponent(checkoutId)}/complete`;
-    const response = await fetch(`${this.baseUrl}${path}`, {
+    const response = await poppyRequest(`${this.baseUrl}${path}`, {
       method: "POST",
       headers: await this.headers("POST", path),
-      signal: AbortSignal.timeout(30_000),
-    });
+      timeoutMs: 30_000,
+    }, this.site);
 
     if (!response.ok) {
       throw new UcpError(`Checkout completion failed: HTTP ${response.status}`, await response.text());
@@ -256,10 +260,10 @@ export class UcpClient {
    */
   async listOrders(): Promise<UcpOrder[]> {
     const path = "/ucp/v1/orders";
-    const response = await fetch(`${this.baseUrl}${path}`, {
+    const response = await poppyRequest(`${this.baseUrl}${path}`, {
       headers: await this.headers("GET", path),
-      signal: AbortSignal.timeout(15_000),
-    });
+      timeoutMs: 15_000,
+    }, this.site);
 
     if (!response.ok) {
       throw new UcpError(`Orders fetch failed: HTTP ${response.status}`, await response.text());

@@ -5,6 +5,8 @@
  * This module fetches, validates, and caches the document.
  */
 
+import { poppyGetFollowing } from "./http.ts";
+
 export interface PoppyCompany {
   /** The protocol version the document declares. */
   protocolVersion: string;
@@ -73,14 +75,11 @@ export async function discoverCompany(
     if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) return cached.company;
   }
 
-  const url = `https://${domain}/.well-known/poppy.json`;
+  // Through the guarded door (http.ts): every hop https and resolved to an outside address.
   let response: Response;
+  let finalUrl: URL;
   try {
-    response = await fetch(url, {
-      redirect: "follow",
-      headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(15_000),
-    });
+    ({ response, url: finalUrl } = await poppyGetFollowing(`https://${domain}/.well-known/poppy.json`, { headers: { Accept: "application/json" } }, domain));
   } catch {
     return null;
   }
@@ -88,10 +87,7 @@ export async function discoverCompany(
   if (!response.ok) return null;
 
   // Spec 3: the final URL's path must be exactly /.well-known/poppy.json with no query.
-  const finalUrl = new URL(response.url);
   if (finalUrl.pathname !== "/.well-known/poppy.json" || finalUrl.search !== "") return null;
-  // Every redirect must have been HTTPS.
-  if (finalUrl.protocol !== "https:") return null;
 
   let doc: Record<string, unknown>;
   try {

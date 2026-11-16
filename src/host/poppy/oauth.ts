@@ -16,6 +16,7 @@
 
 import { signJwt, randomId, ES256 } from "./jose.ts";
 import type { AgentIdentity } from "./identity.ts";
+import { poppyRequest, poppyUrl } from "./http.ts";
 
 // ── Authorization Server Metadata (RFC 8414) ──────────────────
 
@@ -45,13 +46,11 @@ export async function discoverAuthServer(issuer: string): Promise<AuthServerMeta
   const cached = metaCache.get(key);
   if (cached && Date.now() - cached.at < META_TTL_MS) return cached.meta;
 
-  const url = `${issuer.replace(/\/$/, "")}/.well-known/oauth-authorization-server`;
   let response: Response;
+  let site: string;
   try {
-    response = await fetch(url, {
-      headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(10_000),
-    });
+    site = poppyUrl(issuer).hostname;
+    response = await poppyRequest(`${issuer.replace(/\/$/, "")}/.well-known/oauth-authorization-server`, { headers: { Accept: "application/json" }, timeoutMs: 10_000 }, site);
   } catch {
     return null;
   }
@@ -65,13 +64,24 @@ export async function discoverAuthServer(issuer: string): Promise<AuthServerMeta
   }
 
   if (typeof doc.issuer !== "string" || typeof doc.token_endpoint !== "string") return null;
+  // RFC 8414 §3.3: the document names the issuer it was asked for, or it is not that issuer's.
+  if (doc.issuer.replace(/\/$/, "") !== issuer.replace(/\/$/, "")) return null;
+  // What the host calls is on the issuer's site; what the person's browser opens is at least https.
+  const onSite = (value: unknown) => {
+    if (typeof value !== "string") return undefined;
+    try { return poppyUrl(value, site).toString(); } catch { return undefined; }
+  };
+  if (onSite(doc.token_endpoint) === undefined) return null;
+  if (typeof doc.authorization_endpoint === "string") {
+    try { poppyUrl(doc.authorization_endpoint); } catch { return null; }
+  }
 
   const meta: AuthServerMeta = {
     issuer: String(doc.issuer),
     authorizationEndpoint: typeof doc.authorization_endpoint === "string" ? doc.authorization_endpoint : "",
     tokenEndpoint: String(doc.token_endpoint),
-    deviceAuthorizationEndpoint: typeof doc.device_authorization_endpoint === "string" ? doc.device_authorization_endpoint : undefined,
-    revocationEndpoint: typeof doc.revocation_endpoint === "string" ? doc.revocation_endpoint : undefined,
+    deviceAuthorizationEndpoint: onSite(doc.device_authorization_endpoint),
+    revocationEndpoint: onSite(doc.revocation_endpoint),
     jwksUri: typeof doc.jwks_uri === "string" ? doc.jwks_uri : undefined,
     scopesSupported: Array.isArray(doc.scopes_supported) ? doc.scopes_supported.filter((s): s is string => typeof s === "string") : undefined,
     responseTypesSupported: Array.isArray(doc.response_types_supported) ? doc.response_types_supported.filter((s): s is string => typeof s === "string") : undefined,
@@ -219,12 +229,12 @@ export async function exchangeCode(
     client_assertion: assertion,
   });
 
-  const response = await fetch(server.tokenEndpoint, {
+  const response = await poppyRequest(server.tokenEndpoint, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
     body: body.toString(),
-    signal: AbortSignal.timeout(15_000),
-  });
+    timeoutMs: 15_000,
+  }, siteOf(server));
 
   if (!response.ok) {
     const text = await response.text();
@@ -259,12 +269,12 @@ export async function startDeviceAuth(
     client_assertion: assertion,
   });
 
-  const response = await fetch(server.deviceAuthorizationEndpoint, {
+  const response = await poppyRequest(server.deviceAuthorizationEndpoint, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
     body: body.toString(),
-    signal: AbortSignal.timeout(15_000),
-  });
+    timeoutMs: 15_000,
+  }, siteOf(server));
 
   if (!response.ok) {
     const text = await response.text();
@@ -303,12 +313,12 @@ export async function pollDeviceToken(
     client_assertion: assertion,
   });
 
-  const response = await fetch(server.tokenEndpoint, {
+  const response = await poppyRequest(server.tokenEndpoint, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
     body: body.toString(),
-    signal: AbortSignal.timeout(15_000),
-  });
+    timeoutMs: 15_000,
+  }, siteOf(server));
 
   if (!response.ok) {
     const text = await response.text();
@@ -344,16 +354,16 @@ export async function refreshToken(
     client_assertion: assertion,
   });
 
-  const response = await fetch(server.tokenEndpoint, {
+  const response = await poppyRequest(server.tokenEndpoint, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
     body: body.toString(),
-    signal: AbortSignal.timeout(15_000),
-  });
+    timeoutMs: 15_000,
+  }, siteOf(server));
 
   if (!response.ok) {
     const text = await response.text();
-    throw new OAuthError(`Token refresh failed: HTTP ${response.status}`, text);
+    throw new OAuthError(`Token refresh failed: HTTP ${response.status}`, text, response.status);
   }
 
   return parseTokenResponse(await response.json() as Record<string, unknown>);
@@ -383,12 +393,12 @@ export async function revokeToken(
   });
 
   try {
-    await fetch(server.revocationEndpoint, {
+    await poppyRequest(server.revocationEndpoint, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: body.toString(),
-      signal: AbortSignal.timeout(10_000),
-    });
+      timeoutMs: 10_000,
+    }, siteOf(server));
   } catch {
     // Best-effort; the token will expire regardless.
   }
@@ -411,7 +421,22 @@ function parseTokenResponse(doc: Record<string, unknown>): TokenSet {
 }
 
 export class OAuthError extends Error {
-  constructor(message: string, readonly detail: string) {
+  constructor(message: string, readonly detail: string, readonly status?: number) {
     super(message);
   }
+
+  /** Whether the server said this grant is finished (RFC 6749 §5.2), as opposed to failing for now. */
+  get grantGone(): boolean {
+    if (this.status === undefined || this.status < 400 || this.status >= 500) return false;
+    try {
+      return (JSON.parse(this.detail) as { error?: unknown }).error === "invalid_grant";
+    } catch {
+      return false;
+    }
+  }
+}
+
+/** The site an authorization server's endpoints must be on: its issuer's host. */
+function siteOf(server: AuthServerMeta): string {
+  return new URL(server.issuer).hostname;
 }

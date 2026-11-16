@@ -15,6 +15,7 @@
 
 import type { PoppyCompany } from "./discovery.ts";
 import type { PoppySession } from "./session.ts";
+import { poppyRequest, poppyUrl } from "./http.ts";
 
 export interface BrowserJoinResult {
   /** The URL the browser should navigate to. */
@@ -42,7 +43,8 @@ export async function requestBrowserJoin(
 
   const headers = await session.headers("POST", endpoint, accessToken);
 
-  const response = await fetch(endpoint, {
+  // On the Company's own site, through the guarded door (http.ts).
+  const response = await poppyRequest(endpoint, {
     method: "POST",
     headers: {
       ...headers,
@@ -53,14 +55,19 @@ export async function requestBrowserJoin(
       session_id: session.sid,
       user_id: session.userId,
     }),
-    signal: AbortSignal.timeout(15_000),
-  });
+  }, company.domain);
 
   if (!response.ok) return null;
 
   const doc = (await response.json()) as Record<string, unknown>;
   const url = typeof doc.url === "string" ? doc.url : typeof doc.redirect_uri === "string" ? doc.redirect_uri : undefined;
   if (!url) return null;
+  // The browser is sent there next: it must be the Company's own https page, not one it names elsewhere.
+  try {
+    poppyUrl(url, company.domain);
+  } catch {
+    return null;
+  }
 
   return {
     url,

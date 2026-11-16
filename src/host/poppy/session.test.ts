@@ -25,16 +25,16 @@ describe("User IDs", () => {
   it("generates a stable User ID per Company", () => {
     const store = new MemoryUserIdStore();
     const company = testCompany();
-    const id1 = userIdFor(company, store);
-    const id2 = userIdFor(company, store);
+    const id1 = userIdFor(`ada|${company.domain}`, store);
+    const id2 = userIdFor(`ada|${company.domain}`, store);
     assert.equal(id1, id2, "same Company → same User ID");
     assert.ok(id1.startsWith("usr_"));
   });
 
   it("different Companies get different User IDs", () => {
     const store = new MemoryUserIdStore();
-    const a = userIdFor(testCompany("a.com"), store);
-    const b = userIdFor(testCompany("b.com"), store);
+    const a = userIdFor("ada|a.com", store);
+    const b = userIdFor("ada|b.com", store);
     assert.notEqual(a, b, "different Companies → different User IDs");
   });
 });
@@ -66,7 +66,7 @@ describe("Session", () => {
       const identity = await loadOrCreateIdentity(tmp, "https://test.example");
       const company = testCompany();
       const store = new MemoryUserIdStore();
-      const userId = userIdFor(company, store);
+      const userId = userIdFor(`ada|${company.domain}`, store);
       const keyMgr = new DelegatedKeyManager(identity);
       const session = createSession(identity, company, userId, keyMgr);
 
@@ -105,7 +105,7 @@ describe("Session", () => {
       const identity = await loadOrCreateIdentity(tmp, "https://test.example");
       const company = testCompany();
       const store = new MemoryUserIdStore();
-      const userId = userIdFor(company, store);
+      const userId = userIdFor(`ada|${company.domain}`, store);
       const keyMgr = new DelegatedKeyManager(identity);
       const session = createSession(identity, company, userId, keyMgr);
 
@@ -124,7 +124,7 @@ describe("Session", () => {
       const identity = await loadOrCreateIdentity(tmp, "https://test.example");
       const company = testCompany();
       const store = new MemoryUserIdStore();
-      const userId = userIdFor(company, store);
+      const userId = userIdFor(`ada|${company.domain}`, store);
       const keyMgr = new DelegatedKeyManager(identity);
       const session = createSession(identity, company, userId, keyMgr);
 

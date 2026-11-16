@@ -20,7 +20,8 @@ export function base64url(buf: ArrayBuffer | Uint8Array): string {
 /** SHA-256, returned as raw bytes. */
 export async function sha256(data: string | Uint8Array): Promise<Uint8Array> {
   const input = typeof data === "string" ? encoder.encode(data) : data;
-  const buf = await crypto.subtle.digest("SHA-256", input.buffer as ArrayBuffer);
+  // The view, not `input.buffer`: a subarray's buffer is the whole parent, and hashing it hashes the wrong bytes.
+  const buf = await crypto.subtle.digest("SHA-256", input as Uint8Array<ArrayBuffer>);
   return new Uint8Array(buf);
 }
 
@@ -104,9 +105,4 @@ export async function exportPrivateJwk(key: CryptoKey): Promise<JsonWebKey> {
 /** Imports a private key from a stored JWK. */
 export async function importPrivateKey(jwk: JsonWebKey): Promise<CryptoKey> {
   return crypto.subtle.importKey("jwk", jwk, ES256, false, ["sign"]);
-}
-
-/** Imports an extractable private key from a stored JWK (for the agent's long-lived key). */
-export async function importExtractablePrivateKey(jwk: JsonWebKey): Promise<CryptoKey> {
-  return crypto.subtle.importKey("jwk", jwk, ES256, true, ["sign"]);
 }

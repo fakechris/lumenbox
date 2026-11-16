@@ -10,6 +10,7 @@
  */
 
 import type { PoppySession } from "./session.ts";
+import { poppyRequest } from "./http.ts";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -113,7 +114,8 @@ export async function respondToOperation(
 ): Promise<OperationResult> {
   const headers = await session.headers("POST", op.endpoint, accessToken);
 
-  const response = await fetch(op.endpoint, {
+  // The answer goes to the Company that asked, on its own site (http.ts), whatever endpoint the operation named.
+  const response = await poppyRequest(op.endpoint, {
     method: "POST",
     headers: {
       ...headers,
@@ -125,13 +127,13 @@ export async function respondToOperation(
       decision: decision.approved ? "approved" : "rejected",
       ...(decision.reason ? { reason: decision.reason } : {}),
     }),
-    signal: AbortSignal.timeout(30_000),
-  });
+    timeoutMs: 30_000,
+  }, session.company.domain);
 
   if (!response.ok) {
     return {
       success: false,
-      message: `HTTP ${response.status}: ${await response.text()}`,
+      message: `HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`,
     };
   }
 
