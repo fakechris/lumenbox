@@ -78,8 +78,8 @@ import { RELAY_PATH } from "../host/model-relay.ts";
 import { IdempotencyStore } from "./idempotency.ts";
 import { mcpServerTools } from "./mcp-tools.ts";
 import { BackupSchedule, backupRoot } from "../host/backup.ts";
-import { Orchestrator } from "../host/orchestrator.ts";
-import { describeProvider, type ProviderProfile } from "../host/provider.ts";
+import { ALL_TOOLS, Orchestrator } from "../host/orchestrator.ts";
+import { describeProvider, hasCredential, PRESET_MODELS, providerConfigured, providerNames, resolveProvider, testProvider, type ProviderProfile } from "../host/provider.ts";
 import { configuredProviders, SEARCH_PROVIDERS } from "../host/web.ts";
 import type { TurnEvent } from "../host/turn.ts";
 import { LOGIN_PAGE, pageChoice, localeOf, localizeScript, requestLocaleOf } from "./page-locale.ts"; import { apiError, localizedBody } from "./api-error.ts"; import { bootstrapPage, desktopWaitingPage, notLinkedPage, oauthResultPage } from "./server-pages.ts"; import { invitationLink, loginPageWithDoors, webSignInDoors } from "./sign-in.ts";
@@ -174,7 +174,7 @@ import { decidePart, partIn, type PartKey, partViews, strayOverrides } from "../
 import { ownerOf } from "../host/follow-up.ts";
 import { Outbox } from "../host/outbox.ts";
 import { OutboxSender } from "../channels/outbox-sender.ts"; import { SentLedger } from "../channels/sent-ledger.ts"; import { withSent } from "./sent-in-thread.ts"; import { asRequests, spanOf } from "./request-thread.ts";
-import { ALL_TOOLS } from "../host/orchestrator.ts";
+import { lastReply } from "../agents/conversation-tail.ts";
 import {
   CATALOG_CONNECTORS,
   CATALOG_CREWS,
@@ -208,7 +208,6 @@ import { connectorSatisfied } from "../host/mcp-connectors.ts";
 import { adminRecipients } from "../host/upgrade.ts";
 import { BoxUpdateService, boxUpdateRoute } from "./box-update-routes.ts"; import { personRoute } from "./person-routes.ts"; import { PERSON_JS } from "./person-ui.ts"; import { agentFactsRoute } from "./agent-facts.ts"; import { agentCaseText } from "../host/consent-case.ts"; import { ROW_ORDER_JS } from "./row-order.ts"; import { BOARD_ORDER_JS } from "./board-order.ts"; import { teamMemoryReviewRoute } from "./team-memory-review-routes.ts"; import { outboxRoute } from "./outbox-routes.ts"; import { OUTBOX_JS } from "./outbox-ui.ts"; import { chatTarget } from "../host/outbox-drafts.ts"; import { TEAM_MEMORY_REVIEW_JS } from "./team-memory-review-ui.ts"; import { orgKnowledgeRoute } from "./org-knowledge-routes.ts"; import { orgCorrectionRoute } from "./org-correction-routes.ts"; import { ORG_CORRECTION_JS } from "./org-correction-ui.ts"; import { ORG_KNOWLEDGE_JS } from "./org-knowledge-ui.ts"; import { pendingReviews } from "../host/team-memory-review.ts"; import { CLAIM_ACCOUNT_JS } from "./claim-account-ui.ts"; import { DIGEST_HOUR, heldSection, PushBudget } from "../host/push-budget.ts"; import { pushBudgetRoute } from "./push-budget-routes.ts"; import { PUSH_BUDGET_JS } from "./push-budget-ui.ts"; import { SpendLimits, todaysRows } from "../host/spend-limits.ts"; import { spendLimitRoute } from "./spend-limit-routes.ts"; import { SPEND_LIMIT_JS } from "./spend-limit-ui.ts"; import { configuredRates } from "../host/provider-fallback.ts"; import { BoxKeeper } from "./box-keeper.ts"; import { AgentPauses } from "../host/agent-pause.ts"; import { ProbeKeeper, type ProbeKind } from "../host/boundary-probe.ts"; import { longWorkRoute } from "./long-work-routes.ts"; import { taskArchiveRoute } from "./task-archive-routes.ts";
 import { agentPauseRoute } from "./agent-pause-routes.ts"; import { exceptionRetryDeps, exceptionRoute, noteDelivery } from "./exception-routes.ts"; import { EXCEPTIONS_JS } from "./exceptions-ui.ts"; import { AGENT_PAUSE_JS } from "./agent-pause-ui.ts"; import { diagnosticsRoute } from "./diagnostics-routes.ts"; import { DIAGNOSTICS_JS } from "./diagnostics-ui.ts"; import { providerRests, quotaStatusLine } from "../host/provider-rest.ts"; import { providerRestRoute, restNotice } from "./provider-rest-routes.ts"; import { PROVIDER_REST_JS } from "./provider-rest-ui.ts"; import { fallbackRoute } from "./provider-fallback-routes.ts"; import { PROVIDER_FALLBACK_JS } from "./provider-fallback-ui.ts"; import { routineRunsRoute } from "./routine-runs-routes.ts"; import { ROUTINE_RUNS_JS } from "./routine-runs-ui.ts"; import { deliverableRoute } from "./deliverable-routes.ts"; import { DELIVERABLES_JS } from "./deliverables-ui.ts"; import { DIVISION_JS } from "./division-ui.ts"; import { taskGateRoute } from "./task-gate-routes.ts"; import { TASK_GATE_JS } from "./task-gate-ui.ts"; import { isForkChild } from "../host/pending-work.ts"; import { readToolPermissions, toolPermissionRoute } from "./tool-permission-routes.ts"; import { TOOL_PERMS_JS } from "./tool-permissions-ui.ts"; import { configVersionRoute } from "./config-version-routes.ts"; import { CONFIG_HISTORY_JS } from "./config-history-ui.ts"; import { switchesForTask } from "../agents/config-versions.ts"; import { CredentialWaits } from "../host/credential-waits.ts"; import { secretsNeededBy, taskCredentialEvent, templateCredentialEvent, templateSkillNeeds, type CredentialEvent } from "./credential-routes.ts"; import { CREDENTIALS_JS } from "./credentials-ui.ts"; import { ORGANISATIONS_JS } from "./organisations-ui.ts"; import { INSTALLATIONS_JS } from "./installations-ui.ts"; import { MACHINE_JS } from "./machine-use-ui.ts"; import { GuestDesk } from "../host/guests.ts"; import { answerGuest, guestMessageOf } from "../host/guest-turn.ts"; import { guestAnswerReview } from "../host/answer-review.ts"; import { guestRoute } from "./guest-routes.ts"; import { GUEST_JS } from "./guest-ui.ts"; import { boxRegisterRoute } from "./box-register-routes.ts"; import { nodeMembersRefusal, nodeOfBox, nodeRoute } from "./node-routes.ts"; import { NODES_JS } from "./nodes-ui.ts"; import { blockerProblem, dependencyView, notReady, parseBlockers } from "../host/task-deps.ts"; import { TASK_DEPS_JS } from "./task-deps-ui.ts";
-import { hasCredential, PRESET_MODELS, providerConfigured, providerNames, resolveProvider, testProvider } from "../host/provider.ts";
 import { BootstrapAdmins } from "../host/bootstrap.ts"; import { boxRegistrationModeAt, openRoster, PERSONAL_ONLY_KEY, PersonalInstallationOnly, roleLabel } from "../host/installation.ts"; import { redeemInvite } from "../host/invite-redeem.ts"; import { installationRoute, mergeRoute, routeErrorReply } from "./installation-routes.ts"; import { adoptOperatorNotes, applyPendingMerge, mergePaths } from "../host/self-merge.ts"; import { operatorKey } from "../host/person.ts"; import { INSTALLATION_JS } from "./installation-ui.ts";
 import { Principals, principalsPath, roleAtLeast, soleAdmin, type Principal, type Role } from "../host/principals.ts";
 import type { MandateWorld } from "../host/mandate.ts";
@@ -5945,14 +5944,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // a room's worth of topics would pay it for entries nobody scrolled to.
           const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 50, 1), 200);
           const offset = Math.max(Number(url.searchParams.get("offset")) || 0, 0);
-          const forks = orchestrator.pendingWork?.forks?.children(id) ?? []; const page = sorted.slice(offset, offset + limit).map(conversation => { // each thread's children, folded under it in the picker (INV-1667)
+          const forks = orchestrator.pendingWork?.forks?.children(id) ?? [], only = url.searchParams.get("ids")?.split(",").slice(0, 50);
+          const page = (only ? sorted.filter(row => only.includes(row.id)) : sorted.slice(offset, offset + limit)).map(conversation => { // each thread's children, folded under it in the picker (INV-1667)
             // Labelled by what was said, because the id is a flattened chatKey nobody
             // can read. Head-of-file only, so a page stays cheap.
-            const firstLine =
-              conversation.id === MAIN_CONVERSATION
-                ? undefined
-                : registry.conversationFirstLine(id, conversation.id);
-            const children = forks.filter(fork => fork.parent === conversation.id).map(fork => ({ id: fork.child, brief: fork.brief, status: fork.status, ...(fork.reason !== undefined ? { reason: fork.reason } : {}), lastAt: fork.lastAt })); const chatKey = conversations.chatKeyFor(conversation.id); return { ...conversation, ...(firstLine !== undefined ? { firstLine } : {}), ...(chatKey !== undefined ? { chat: chatKey.split(":").slice(0, 2).join(":"), topic: chatKey.split(":").length > 2 } : {}), ...(children.length > 0 ? { forks: children } : {}) };
+            const firstLine = conversation.id === MAIN_CONVERSATION ? undefined : registry.conversationFirstLine(id, conversation.id);
+            const reply = only ? lastReply(registry.transcriptPathFor(id, conversation.id)) : undefined; // only when asked for by id: a tail read per row
+            const children = forks.filter(fork => fork.parent === conversation.id).map(fork => ({ id: fork.child, brief: fork.brief, status: fork.status, ...(fork.reason !== undefined ? { reason: fork.reason } : {}), lastAt: fork.lastAt })); const chatKey = conversations.chatKeyFor(conversation.id); return { ...conversation, ...(firstLine !== undefined ? { firstLine } : {}),
+              ...(reply !== undefined ? { lastReply: reply } : {}),
+              ...(chatKey !== undefined ? { chat: chatKey.split(":").slice(0, 2).join(":"), topic: chatKey.split(":").length > 2 } : {}), ...(children.length > 0 ? { forks: children } : {}) };
           });
           send(res, 200, { conversations: page, total: sorted.length });
           return;

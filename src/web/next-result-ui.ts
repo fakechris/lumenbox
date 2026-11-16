@@ -138,26 +138,47 @@ function askedList() {
 /** A row of work belongs to the conversation it was asked in; one with none recorded is the main one's. */
 function inThisConversation(row) { return (row.conversation || "main") === chat.conversation; }
 
-/** What waits in the agent's other conversations: results to look at, and messages not read. Each line goes there. */
+/**
+ * What happened in the agent's other conversations, as one block: each a row with the question that opened it, the
+ * agent's last reply, and what waits there (2026-11-15). An agent that works in chat topics did all its work out of
+ * sight of its main conversation, which showed only "2 unread in another conversation" lines.
+ */
 function elsewhereNotes(agent, waiting) {
-  var notes = [], seen = {};
-  function line(conversation, text) {
-    var note = el("button", "elsewhere", text);
-    note.addEventListener("click", function () { showConversation(agent.id, conversation); });
-    notes.push(note);
+  var counts = {};
+  function at(conversation) { return counts[conversation] || (counts[conversation] = { unread: 0, results: 0 }); }
+  waiting.forEach(function (row) { at(row.conversation || "main").results += 1; });
+  ((agent.facts && agent.facts.unreadIn) || []).forEach(function (entry) { if (entry.conversation !== chat.conversation) at(entry.conversation).unread += entry.count; });
+  var ids = Object.keys(counts).filter(function (id) { return id !== chat.conversation; });
+  if (ids.length === 0) return [];
+  var key = agent.id + "|" + ids.slice().sort().join(",");
+  if (chat.others.key !== key) {
+    chat.others = { key: key, rows: null };
+    getJson("/api/conversations?agent=" + encodeURIComponent(agent.id) + "&ids=" + encodeURIComponent(ids.join(","))).then(function (got) {
+      if (chat.others.key === key) { chat.others.rows = got.conversations || []; if (next.view === "chat") render(); }
+    }, function () { if (chat.others.key === key) chat.others.rows = []; });
   }
-  waiting.forEach(function (row) {
-    var where = row.conversation || "main";
-    if (seen[where]) return;
-    seen[where] = true;
-    var n = waiting.filter(function (other) { return (other.conversation || "main") === where; }).length;
-    line(where, t("ui.next.chat.resultsElsewhere", { n: n, where: conversationLabel(where) }));
+  var found = {};
+  (chat.others.rows || []).forEach(function (row) { found[row.id] = row; });
+  var box = el("section", "others"), list = el("div", "list");
+  box.appendChild(el("h2", "group", t("ui.next.chat.others", { n: ids.length })));
+  ids.sort(function (x, y) { return String(((found[y] || {}).lastReply || {}).at || (found[y] || {}).lastAt || "").localeCompare(String(((found[x] || {}).lastReply || {}).at || (found[x] || {}).lastAt || "")); });
+  ids.slice(0, 8).forEach(function (id) {
+    var row = found[id] || {}, item = el("button", "other"), head = el("div", "title"), door = /^(feishu|dingtalk|telegram)/.exec(id);
+    if (door) head.appendChild(el("span", "why", t("ui.next.chat.source." + door[1]) + " · "));
+    head.appendChild(document.createTextNode(clip(row.firstLine || (id === "main" ? t("ui.next.chat.main") : t("ui.next.chat.another")), 60)));
+    item.appendChild(head);
+    if (row.lastReply) item.appendChild(el("div", "why", clip(row.lastReply.text, 140)));
+    var marks = [];
+    if (counts[id].results) marks.push(t("ui.next.chat.waitsHere", { n: counts[id].results }));
+    if (counts[id].unread) marks.push(t("ui.next.chat.unreadHere", { n: counts[id].unread }));
+    var when = (row.lastReply && row.lastReply.at) || row.lastAt;
+    item.appendChild(el("div", "why", marks.concat(when ? [agoText(when)] : []).join(" · ")));
+    item.addEventListener("click", function () { showConversation(agent.id, id); });
+    list.appendChild(item);
   });
-  ((agent.facts && agent.facts.unreadIn) || []).forEach(function (entry) {
-    if (entry.conversation === chat.conversation || seen[entry.conversation]) return;
-    line(entry.conversation, t("ui.next.chat.unreadElsewhere", { n: entry.count, where: conversationLabel(entry.conversation) }));
-  });
-  return notes;
+  if (ids.length > 8) list.appendChild(el("p", "why", t("ui.next.more", { n: ids.length - 8 })));
+  box.appendChild(list);
+  return [box];
 }
 
 /** A result waiting for the person: what it is, where it came from, what was reported, and the decision. */
