@@ -28,6 +28,16 @@ export type Speaker =
   /** A part of the host writing on its own account: an audit, a job notice, a reminder. */
   | { by: "host"; origin: string };
 
+/** What an agent said to the person in a turn, as the host filed it: the line it opened with, or its reply (INV-1845). */
+export interface SaidRow {
+  turnId: string;
+  at: string;
+  conversation: string;
+  kind: "opening" | "reply";
+  text: string;
+  root?: string;
+}
+
 export interface HeardRow {
   id: string;
   at: string;
@@ -47,6 +57,39 @@ export function speakerOf(message: InboundMessage, isAgent: (id: string) => bool
 
 export class HeardRecord {
   private readonly cache = new Map<string, Map<string, HeardRow>>();
+  private readonly saidCache = new Map<string, Map<string, SaidRow[]>>();
+
+  /**
+   * What the agent said to the person, written where the turn files it — the same place the chat reply is read
+   * from — so the conversation and the chat take the agent's words from one record rather than each from its own
+   * reading of the transcript.
+   */
+  said(agentId: string, conversation: string, turnId: string, text: string, kind: SaidRow["kind"], root?: string): void {
+    if (text.trim() === "") return;
+    try {
+      mkdirSync(this.dir, { recursive: true });
+      const row: SaidRow = { turnId, at: new Date().toISOString(), conversation, kind, text, ...(root !== undefined ? { root } : {}) };
+      appendLine(this.pathFor(agentId), JSON.stringify({ said: true, ...row }));
+      const turns = this.saidRows(agentId);
+      turns.set(turnId, [...(turns.get(turnId) ?? []), row]);
+    } catch (error) {
+      this.onError(`heard record: what ${agentId} said in ${turnId} was not recorded (${error instanceof Error ? error.message : String(error)})`);
+    }
+  }
+
+  /** What the agent said in one turn, in order; empty for a turn from before this record. */
+  saidIn(agentId: string, turnId: string): readonly SaidRow[] {
+    return this.saidRows(agentId).get(turnId) ?? [];
+  }
+
+  private saidRows(agentId: string): Map<string, SaidRow[]> {
+    const cached = this.saidCache.get(agentId);
+    if (cached !== undefined) return cached;
+    this.rows(agentId); // reads the file once, filling both
+    const filled = this.saidCache.get(agentId) ?? new Map<string, SaidRow[]>();
+    this.saidCache.set(agentId, filled);
+    return filled;
+  }
   constructor(private readonly dir: string, private readonly onError: (why: string) => void = () => {}) {}
 
   /** The messages a turn is about to start on. A failed write is reported and never holds the turn up. */
@@ -79,7 +122,13 @@ export class HeardRecord {
     const path = this.pathFor(agentId);
     if (existsSync(path)) for (const line of readFileSync(path, "utf8").split("\n")) {
       if (line.trim() === "") continue;
-      try { const row = JSON.parse(line) as HeardRow; rows.set(row.id, row); } catch { /* a torn last line is the crash it records */ }
+      try {
+        const row = JSON.parse(line) as HeardRow & { said?: true } & Partial<SaidRow>;
+        if (row.said === true) {
+          const turns = this.saidCache.get(agentId) ?? new Map<string, SaidRow[]>(); this.saidCache.set(agentId, turns);
+          const said = row as unknown as SaidRow; turns.set(said.turnId, [...(turns.get(said.turnId) ?? []), said]);
+        } else rows.set(row.id, row);
+      } catch { /* a torn last line is the crash it records */ }
     }
     this.cache.set(agentId, rows);
     return rows;

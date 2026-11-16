@@ -2530,7 +2530,7 @@ export class Orchestrator {
   }
 
   replyForMessage(agentId: string, messageId: string, conversation: string = MAIN_CONVERSATION): string {
-    return replyForMessage(this.registry.readTranscript(agentId, conversation), messageId);
+    return replyForMessage(this.registry.readTranscript(agentId, conversation), messageId, this.bus.heard === undefined ? undefined : turn => this.bus.heard!.saidIn(agentId, turn));
   }
 
   /** Whether the turn a message opened ended by calling `NothingToSay` (INV-775), and why; see `silenceForMessage` (INV-801). */

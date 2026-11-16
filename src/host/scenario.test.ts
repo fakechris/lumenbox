@@ -3184,6 +3184,8 @@ test("INV-1841: an answer a gate sent back still reaches the chat when the agent
   const sent: string[] = [], interims = new Set<(line: string) => void>();
   let opened = false, blocked = false, page: string[] = [], recorded: string[] = [], repeated = -1;
   const sentDir = mkdtempSync(join(tmpdir(), "sent-")), ledger = new SentLedger(sentDir);
+  const { HeardRecord } = await import("../agents/heard-record.ts"), heard = new HeardRecord(join(sentDir, "heard"));
+  let recorded2: string[] = [];
   const result = await runEpisode({
     team: [{ name: "Nova" }], says: [],
     onEvent: event => { if (event.type === "interim") for (const tell of interims) tell(event.text); },
@@ -3196,7 +3198,7 @@ test("INV-1841: an answer a gate sent back still reaches the chat when the agent
       return { say: answer };
     },
     drive: async ({ registry, bus, frontId }) => {
-      const conversation = conversationIdFor("feishu:private");
+      const conversation = conversationIdFor("feishu:private"); bus.heard = heard;
       let receive!: (message: ChannelMessage) => Promise<string | undefined>;
       const manager = new ChannelManager({
         mayDrive: () => true, log: () => {}, sent: ledger,
@@ -3216,7 +3218,9 @@ test("INV-1841: an answer a gate sent back still reaches the chat when the agent
         await receive({ ...room, text: "另一篇也看下", messageId: "m-2" });
         for (let i = 0; i < 200 && bus.queuedCount(frontId, conversation) === 0; i++) await new Promise(resolve => setTimeout(resolve, 5));
       } finally { release(); await manager.idle(); manager.stop(); }
-      const drawn = withSent(toDisplayEntries(registry.readTranscript(frontId, conversation), []), ledger.in(conversation)) as { kind: string; role?: string; aside?: true; text?: string }[];
+      const turns = [...new Set((registry.readTranscript(frontId, conversation) as { turnId?: string }[]).map(entry => entry.turnId).filter((id): id is string => id !== undefined))];
+      recorded2 = turns.flatMap(turn => heard.saidIn(frontId, turn).map(row => row.text));
+      const drawn = withSent(toDisplayEntries(registry.readTranscript(frontId, conversation), [], () => undefined, true, id => heard.get(frontId, id), turn => heard.saidIn(frontId, turn)), ledger.in(conversation)) as { kind: string; role?: string; aside?: true; text?: string }[];
       page = drawn.filter(entry => entry.kind === "text" && entry.role === "assistant" && entry.aside !== true).map(entry => entry.text!);
       recorded = ledger.in(conversation).map(row => row.text ?? "");
       repeated = drawn.filter(entry => entry.kind === "sent").length;
@@ -3227,6 +3231,7 @@ test("INV-1841: an answer a gate sent back still reaches the chat when the agent
     assert.deepEqual(said, ["我先核对来源。", `${answer}\n\n看到了，另一篇下一条处理。`, "另一篇也核过了。"], "the chat gets the opening line, the answer with the note after it, and the next turn's reply");
     assert.deepEqual(page, said, "the page's bubbles are what the chat received: nothing more said, nothing less");
     assert.deepEqual(recorded, sent, "every send through the door left a line, in order");
+    assert.deepEqual(recorded2, said, "and what the agent said is one record, which the chat's reply and the page's bubbles both read (INV-1845)");
     assert.equal(repeated, 0, "what the thread already says is not drawn a second time as something sent");
   } finally { result.cleanup(); rmSync(sentDir, { recursive: true, force: true }); }
 });
