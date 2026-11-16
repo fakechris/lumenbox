@@ -233,6 +233,8 @@ async function poppyConverse(
       resolve();
     };
     const handleEvent = (event: ConversationEvent): void => {
+      // After the tool has answered, nothing more is taken from the stream — least of all an operation.
+      if (timedOut) return;
       switch (event.type) {
         case "message":
           messages.push(event.message.content);
@@ -255,6 +257,8 @@ async function poppyConverse(
     ctx.manager.converse(domain, ctx.who, message, handleEvent, { conversationId })
       .then(ctrl => {
         stream = ctrl;
+        // Started after the wait gave up: closed at once, so nothing it says arrives unheard.
+        if (timedOut) ctrl?.abort();
         if (!ctrl) {
           error = "Could not start conversation (no session or endpoint)";
           finish();

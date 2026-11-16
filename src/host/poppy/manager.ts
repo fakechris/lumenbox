@@ -37,7 +37,7 @@ import {
   OAuthError,
 } from "./oauth.ts";
 import { join } from "node:path";
-import { TokenStore } from "./token-store.ts";
+import { type StoredToken, TokenStore } from "./token-store.ts";
 import { UcpClient } from "./ucp.ts";
 import { requestBrowserJoin, type BrowserJoinResult } from "./browser-join.ts";
 import {
@@ -77,6 +77,8 @@ export interface PendingOperation {
   /** Where to tell the agent what came of it. */
   agentId: string;
   conversation: string;
+  /** Which sign-in it was asked under, or none: the answer goes only under the same one. */
+  signIn?: string;
 }
 
 /** How the manager tells an agent what came of an operation it was waiting on. */
@@ -400,26 +402,34 @@ export class PoppyManager {
     // twice, and the loser — its refresh token already rotated away — deleted the winner's token.
     const inFlight = this.refreshing.get(key);
     if (inFlight) return inFlight;
-    const refreshing = this.refresh(key, issuer, stored.refreshToken, stored.accessToken, this.tokenStore.hasValid(stored)).finally(() => this.refreshing.delete(key));
+    const refreshing = this.refresh(key, issuer, stored).finally(() => this.refreshing.delete(key));
     this.refreshing.set(key, refreshing);
     return refreshing;
   }
 
-  private async refresh(key: string, issuer: string, refreshTokenValue: string, current: string, currentValid: boolean): Promise<string | undefined> {
+  private async refresh(key: string, issuer: string, stored: StoredToken): Promise<string | undefined> {
+    const store = this.tokenStore;
+    // Judged when it is returned, not when the refresh began: it may have lapsed while we waited.
+    const stillGood = () => (store?.hasValid(stored) ? stored.accessToken : undefined);
     const server = await this.authServerFor(issuer);
-    if (!server || !this.tokenStore || !this.identity) return currentValid ? current : undefined;
+    if (!server || !store || !this.identity || !stored.refreshToken) return stillGood();
+    // A sign-in that landed while this refresh was out is newer than anything it brings back:
+    // its answer, or its "grant gone", is about a token no longer held, and is not written.
+    const superseded = () => store.get(key, issuer)?.refreshToken !== stored.refreshToken;
     try {
-      const fresh = await refreshToken(server, this.identity, refreshTokenValue);
-      this.tokenStore.set(key, issuer, fresh, { refreshed: true });
+      const fresh = await refreshToken(server, this.identity, stored.refreshToken);
+      if (superseded()) return store.get(key, issuer)?.accessToken;
+      store.set(key, issuer, fresh, { refreshed: true });
       return fresh.accessToken;
     } catch (error) {
+      if (superseded()) return store.get(key, issuer)?.accessToken;
       // Only the server saying the grant is finished ends it. A 503 or a dropped connection is
       // this hour's problem: the token is kept, and used while it still has time on it.
       if (error instanceof OAuthError && error.grantGone) {
-        this.tokenStore.remove(key);
+        store.remove(key);
         return undefined;
       }
-      return currentValid ? current : undefined;
+      return stillGood();
     }
   }
 
@@ -522,9 +532,16 @@ export class PoppyManager {
     return respondToOperation(operation, decision, session, await this.getValidToken(who, session.company));
   }
 
-  /** Holds an operation until the person answers the approval `approvalId`. */
+  /** Holds an operation until the person answers the approval `approvalId`, with the sign-in it came under. */
   awaitDecision(approvalId: string, pending: PendingOperation): void {
-    this.pendingOperations.set(approvalId, pending);
+    this.pendingOperations.set(approvalId, { ...pending, ...this.signInOf(pending.who, pending.domain) });
+  }
+
+  private signInOf(who: string, domain: string): { signIn?: string } {
+    const company = this.sessions.get(`${who}|${domain.toLowerCase()}`)?.company;
+    const issuer = company?.auth?.issuer;
+    const at = issuer === undefined ? undefined : this.tokenStore?.get(TokenStore.key(who, company!.domain), issuer)?.signIn;
+    return at === undefined ? {} : { signIn: at };
   }
 
   /**
@@ -537,13 +554,19 @@ export class PoppyManager {
     this.pendingOperations.delete(approvalId);
     const { who, domain, operation, agentId, conversation } = pending;
     const approved = how === "allowed";
+    const asked = `${operation.type} (${operation.id}) at ${domain}`;
+    // Signed in as someone else since it asked: the answer would go under an account that never saw the request.
+    if (this.signInOf(who, domain).signIn !== pending.signIn) {
+      const said = approved ? "approved" : "declined";
+      tell(agentId, conversation, `The person ${said} the Poppy operation ${asked}, but the sign-in at ${domain} changed since it was asked, so the answer was not sent. Ask ${domain} again if it is still needed.`);
+      return;
+    }
     let result: OperationResult;
     try {
       result = await this.respondToOperation(domain, who, operation, { approved, ...(approved ? {} : { reason: "declined by the person" }) });
     } catch (error) {
       result = { success: false, message: error instanceof Error ? error.message : String(error) };
     }
-    const asked = `${operation.type} (${operation.id}) at ${domain}`;
     const outcome = result.success
       ? `${domain} was told, and accepted the answer${result.message ? `: ${result.message}` : "."}`
       : `but telling ${domain} failed: ${result.message ?? "no reason given"}. Nothing confirms the Company acted on it.`;

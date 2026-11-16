@@ -12,7 +12,7 @@
 
 import type { PoppyManager } from "./poppy/manager.ts";
 
-/** `who|domain` already joined in this process: each agent's browser joins its own session. */
+/** `who|domain|sid` already joined: each agent's browser joins its own session, and joins again when that session is new. */
 const joined = new Set<string>();
 
 /**
@@ -32,7 +32,9 @@ export async function poppyBrowserJoinUrl(
     const target = new URL(targetUrl);
     if (target.protocol !== "https:") return undefined;
     const domain = target.hostname.toLowerCase();
-    const key = `${who}|${domain}`;
+    const session = await manager.sessionFor(domain, who);
+    if (!session) return undefined;
+    const key = `${who}|${domain}|${session.sid}`;
     if (joined.has(key)) return undefined;
 
     const result = await manager.browserJoin(domain, who);

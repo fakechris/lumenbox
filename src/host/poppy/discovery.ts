@@ -79,7 +79,7 @@ export async function discoverCompany(
   let response: Response;
   let finalUrl: URL;
   try {
-    ({ response, url: finalUrl } = await poppyGetFollowing(`https://${domain}/.well-known/poppy.json`, { headers: { Accept: "application/json" } }));
+    ({ response, url: finalUrl } = await poppyGetFollowing(`https://${domain}/.well-known/poppy.json`, { headers: { Accept: "application/json" } }, domain));
   } catch {
     return null;
   }

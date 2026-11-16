@@ -84,26 +84,34 @@ export async function poppyRequest(raw: string, init: PoppyRequest = {}, site?: 
   return response;
 }
 
-/** A GET that follows up to `hops` redirects, each one checked as the first was. */
-export async function poppyGetFollowing(raw: string, init: PoppyRequest, hops = 3): Promise<{ response: Response; url: URL }> {
-  let url = poppyUrl(raw);
+/**
+ * A GET that follows up to `hops` redirects, each one checked as the first was — and kept on `site`.
+ * Discovery is why: a document reached by redirect speaks for the host it ended on, so a redirect
+ * from one site to another Company's would make the first site's pages carry that Company's token.
+ */
+export async function poppyGetFollowing(raw: string, init: PoppyRequest, site: string, hops = 3): Promise<{ response: Response; url: URL }> {
+  let url = poppyUrl(raw, site);
   for (let hop = 0; ; hop++) {
     const response = await transport(url, { ...init, method: "GET" });
     const location = response.headers.get("location");
     if (response.status < 300 || response.status >= 400 || location === null) return { response, url };
     await response.body?.cancel().catch(() => undefined);
     if (hop >= hops) throw new PoppyRefused(`${url.host} redirected more than ${hops} times`);
-    url = poppyUrl(new URL(location, url).toString());
+    url = poppyUrl(new URL(location, url).toString(), site);
   }
 }
 
 function guardedHttps(url: URL, init: PoppyRequest): Promise<Response> {
   return new Promise((resolve, reject) => {
-    const timeoutMs = init.signal === undefined ? (init.timeoutMs ?? DEFAULT_TIMEOUT_MS) : undefined;
+    const timeoutMs = init.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     // A deadline for the whole exchange, body included: a socket timeout only measures silence,
-    // and an endpoint dripping a byte a second would never trip it.
+    // and an endpoint dripping a byte a second would never trip it. A stream (a request with its
+    // own signal) has this deadline only until its headers arrive; after that its signal ends it.
     let deadline: NodeJS.Timeout | undefined;
-    const call = httpsRequest(url, { method: init.method ?? "GET", headers: init.headers ?? {}, lookup: guardedLookup }, incoming => {
+    // Uncompressed unless a caller says otherwise: nothing here decodes a compressed body.
+    const headers = { "accept-encoding": "identity", ...(init.headers ?? {}) };
+    const call = httpsRequest(url, { method: init.method ?? "GET", headers, lookup: guardedLookup }, incoming => {
+      if (init.signal !== undefined) clearTimeout(deadline);
       incoming.on("close", () => clearTimeout(deadline));
       let size = 0;
       incoming.on("data", (chunk: Buffer) => {
@@ -116,19 +124,17 @@ function guardedHttps(url: URL, init: PoppyRequest): Promise<Response> {
         reject(new PoppyRefused(`${url.host} answered with status ${status}`));
         return;
       }
-      const headers = new Headers();
+      const answered = new Headers();
       for (const [name, value] of Object.entries(incoming.headers)) {
         if (value === undefined) continue;
-        for (const one of Array.isArray(value) ? value : [value]) headers.append(name, one);
+        for (const one of Array.isArray(value) ? value : [value]) answered.append(name, one);
       }
       const empty = status === 204 || status === 205 || status === 304;
       if (empty) incoming.resume();
-      resolve(new Response(empty ? null : (Readable.toWeb(incoming) as ReadableStream<Uint8Array>), { status, headers }));
+      resolve(new Response(empty ? null : (Readable.toWeb(incoming) as ReadableStream<Uint8Array>), { status, headers: answered }));
     });
-    if (timeoutMs !== undefined) {
-      deadline = setTimeout(() => call.destroy(new PoppyRefused(`${url.host} did not finish within ${timeoutMs / 1000}s`)), timeoutMs);
-      deadline.unref();
-    }
+    deadline = setTimeout(() => call.destroy(new PoppyRefused(`${url.host} did not finish within ${timeoutMs / 1000}s`)), timeoutMs);
+    deadline.unref();
     // With no answer, nothing else will clear it; with one, the body's close does.
     call.on("error", () => clearTimeout(deadline));
     call.on("error", reject);

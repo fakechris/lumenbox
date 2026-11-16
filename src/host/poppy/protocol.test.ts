@@ -94,9 +94,9 @@ describe("the door every Poppy request goes through", () => {
   test("a redirect is refused, except in discovery, where each hop is checked again", async () => {
     routes["https://shop.example/go"] = () => new Response(null, { status: 302, headers: { location: "https://127.0.0.1/admin" } });
     await assert.rejects(poppyRequest("https://shop.example/go"), PoppyRefused);
-    await assert.rejects(poppyGetFollowing("https://shop.example/go", {}), PoppyRefused, "followed, but not to an inside address");
+    await assert.rejects(poppyGetFollowing("https://shop.example/go", {}, "shop.example"), PoppyRefused, "followed, but not to an inside address");
     routes["https://shop.example/plain"] = () => new Response(null, { status: 301, headers: { location: "http://shop.example/x" } });
-    await assert.rejects(poppyGetFollowing("https://shop.example/plain", {}), PoppyRefused, "nor down to http");
+    await assert.rejects(poppyGetFollowing("https://shop.example/plain", {}, "shop.example"), PoppyRefused, "nor down to http");
   });
 
   test("the real transport resolves a name through the guarded lookup: localhost is refused before any connection", async () => {
@@ -126,6 +126,38 @@ describe("endpoints a Company names", () => {
 });
 
 describe("tokens", () => {
+  test("a site whose poppy.json redirects to another Company's is not taken for it, so its pages never carry that Company's token", async () => {
+    routes["https://shop.example/.well-known/poppy.json"] = company("shop.example", { auth: { issuer: "https://auth.shop.example" } });
+    routes["https://attacker.example/.well-known/poppy.json"] = () => new Response(null, { status: 302, headers: { location: "https://shop.example/.well-known/poppy.json" } });
+    authServer("https://auth.shop.example", () => json({ access_token: "at_shop", expires_in: 3600 }));
+    const mgr = await manager();
+    await signIn(mgr, "shop.example", "ada");
+    assert.deepEqual(await mgr.headersFor("GET", "https://attacker.example/page", "ada"), {});
+    assert.equal(await mgr.discover("attacker.example"), null);
+  });
+
+  test("a refresh that comes back after a new sign-in does not overwrite or delete it", async () => {
+    let release: () => void = () => {};
+    let signIns = 0;
+    routes["https://shop.example/.well-known/poppy.json"] = company("shop.example", { auth: { issuer: "https://auth.shop.example" } });
+    authServer("https://auth.shop.example", async call => {
+      if (call.body?.includes("grant_type=refresh_token")) {
+        await new Promise<void>(resolve => { release = resolve; });
+        return json({ error: "invalid_grant" }, 400);
+      }
+      signIns++;
+      return json({ access_token: `at_signin_${signIns}`, expires_in: signIns === 1 ? 1 : 3600, refresh_token: `rt_${signIns}` });
+    });
+    const mgr = await manager();
+    await signIn(mgr, "shop.example", "ada");
+    const stale = mgr.headersFor("GET", "https://shop.example/a", "ada");
+    while (calls.filter(call => call.body?.includes("refresh_token")).length === 0) await new Promise(resolve => setImmediate(resolve));
+    await signIn(mgr, "shop.example", "ada");
+    release();
+    assert.equal((await stale).Authorization, "Bearer at_signin_2", "the answer about the old grant is not applied to the new one");
+    assert.equal((await mgr.headersFor("GET", "https://shop.example/b", "ada")).Authorization, "Bearer at_signin_2");
+  });
+
   test("a site that claims another Company's issuer gets none of its tokens, and another agent's sign-in is not this one's", async () => {
     routes["https://shop.example/.well-known/poppy.json"] = company("shop.example", { auth: { issuer: "https://auth.shop.example" } });
     routes["https://evil.example/.well-known/poppy.json"] = company("evil.example", { auth: { issuer: "https://auth.shop.example" } });
@@ -249,6 +281,37 @@ describe("a Company's operation", () => {
     routes["https://shop.example/.well-known/poppy.json"] = company("shop.example", { agent: { protocols: [{ type: "poppy", endpoint: "https://shop.example/v2/chat" }] } });
     clearDiscoveryCache();
     assert.match((await dispatchPoppyTool("PoppyConverse", { domain: "shop.example", message: "hi" }, ctx)).text, /new/);
+  });
+
+  test("an answer is not sent under a different sign-in than the one the operation was asked under", async () => {
+    routes["https://shop.example/.well-known/poppy.json"] = company("shop.example", { auth: { issuer: "https://auth.shop.example" } });
+    authServer("https://auth.shop.example", () => json({ access_token: `at_${calls.length}`, expires_in: 3600 }));
+    routes["https://shop.example/poppy/chat"] = () => sse("event: operation\ndata: {\"id\":\"op1\",\"type\":\"refund\",\"description\":\"Refund\",\"requires_approval\":true}\n\n");
+    const mgr = await manager();
+    await signIn(mgr, "shop.example", "ada");
+    await dispatchPoppyTool("PoppyConverse", { domain: "shop.example", message: "refund" }, { manager: mgr, who: "ada", conversation: "main", requestConfirmation: () => ({ id: "ap1" }) });
+    await signIn(mgr, "shop.example", "ada");
+    const posts = calls.filter(call => call.method === "POST" && call.url.endsWith("/poppy/chat")).length;
+    const told: string[] = [];
+    await mgr.settleApproval("ap1", "allowed", (_agent, _conversation, text) => told.push(text));
+    assert.equal(calls.filter(call => call.method === "POST" && call.url.endsWith("/poppy/chat")).length, posts, "nothing sent");
+    assert.match(told[0]!, /sign-in .* changed .* not sent/);
+  });
+
+  test("a conversation that starts only after the wait gave up is closed at once, and opens no card", async () => {
+    routes["https://shop.example/.well-known/poppy.json"] = company("shop.example");
+    let signal: AbortSignal | undefined;
+    routes["https://shop.example/poppy/chat"] = async call => {
+      signal = call.signal;
+      await new Promise(resolve => setTimeout(resolve, 80));
+      return sse("event: operation\ndata: {\"id\":\"op1\",\"type\":\"refund\",\"description\":\"Refund\",\"requires_approval\":true}\n\n");
+    };
+    let cards = 0;
+    const result = await dispatchPoppyTool("PoppyConverse", { domain: "shop.example", message: "hi" }, { manager: await manager(), who: "ada", conversation: "main", timeoutMs: 20, requestConfirmation: () => ({ id: `ap${++cards}` }) });
+    assert.match(result.text, /closed/);
+    await new Promise(resolve => setTimeout(resolve, 120));
+    assert.equal(cards, 0);
+    assert.equal(signal?.aborted, true);
   });
 
   test("with nobody to ask, the agent is told it is not approved, and the Company is told nothing", async () => {

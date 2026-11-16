@@ -11,6 +11,7 @@
  * issuer that granted it.
  */
 
+import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { TokenSet } from "./oauth.ts";
@@ -28,6 +29,8 @@ export interface StoredToken {
   refreshToken?: string;
   scope?: string;
   updatedAt: number;
+  /** Which sign-in this is: kept across refreshes, new with every sign-in. */
+  signIn: string;
 }
 
 export class TokenStore {
@@ -79,6 +82,7 @@ export class TokenStore {
       ...(refreshToken !== undefined ? { refreshToken } : {}),
       ...(tokenSet.scope !== undefined ? { scope: tokenSet.scope } : {}),
       updatedAt: Date.now(),
+      signIn: how.refreshed === true && before?.signIn !== undefined ? before.signIn : randomUUID(),
     });
     this.save();
   }
