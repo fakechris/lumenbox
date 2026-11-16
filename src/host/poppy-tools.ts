@@ -353,6 +353,8 @@ export interface PoppyCallContext {
 /** One Poppy tool call, refused plainly when Poppy is off on this host. */
 export async function poppyCall(name: string, input: Record<string, unknown>, context: PoppyCallContext): Promise<{ text: string; isError?: boolean }> {
   if (context.poppyManager === undefined) return { text: "The Poppy protocol is not enabled on this installation.", isError: true };
+  // The manager is made lazily, on the first fetch; a Poppy tool may be the first thing to need it.
+  await context.poppyManager.init().catch(() => undefined);
   const result = await dispatchPoppyTool(name, input, {
     manager: context.poppyManager,
     agentId: context.agent.id,

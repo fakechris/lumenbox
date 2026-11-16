@@ -52,6 +52,7 @@ import type { OrgKnowledge } from "./org-knowledge.ts";
 import { buildPitfallPrompt, type PitfallSource, parsePitfall } from "./pitfalls.ts";
 import type { ProviderProfile } from "./provider.ts";
 import { credentialIn } from "./secret-scan.ts";
+import { executionTarget } from "./tool-roster.ts";
 import type { UsageLog } from "./usage.ts";
 
 /**
@@ -130,7 +131,11 @@ export function touchesExternalContent(entries: readonly HistoryEntry[], externa
     entry =>
       "kind" in entry &&
       entry.kind === "blocks" &&
-      entry.blocks.some(block => (block as { type?: string }).type === "tool_use" && external((block as { name: string }).name))
+      // A deferred built-in is called through UseMcpTool (INV-1341): judged by the tool it named.
+      entry.blocks.some(block => {
+        const use = block as { type?: string; name: string; input?: Record<string, unknown> };
+        return use.type === "tool_use" && external(executionTarget(use.name, use.input ?? {}));
+      })
   );
 }
 

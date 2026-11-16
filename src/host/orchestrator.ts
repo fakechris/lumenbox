@@ -2784,6 +2784,6 @@ export const STARTER_TEAM: readonly {
     // It keeps `bash`, because reproducing a step is its whole job and reproducing needs running.
     // Nor MCP services: whether a service's tool reads or writes is not something we can tell, and
     // a reviewer that can post to Slack or edit a Notion page is changing what it checks.
-    tools: NO_TEAM_BUILDING.filter(tool => tool !== "write_file" && tool !== ALL_MCP_TOOLS),
+    tools: NO_TEAM_BUILDING.filter(tool => tool !== "write_file" && tool !== ALL_MCP_TOOLS && tool !== "PoppyConverse"),
   },
 ];

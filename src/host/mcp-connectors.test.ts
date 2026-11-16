@@ -55,11 +55,12 @@ test("credentials expand into the spec; the google door covers both gmail and ca
 
 test("config.json entries override a door with the same name, and keep their own names otherwise", () => {
   const merged = mergeServers(
-    [{ name: "mcp:notion", command: "/usr/local/bin/my-notion", args: [] }, { name: "jira", command: "jira-mcp" }],
+    [{ name: "mcp:notion", command: "/usr/local/bin/my-notion", args: [], sandbox: "off", allowWrite: ["/tmp/notion"], host: true, hostOnlyTools: ["sync"] }, { name: "jira", command: "jira-mcp" }],
     ENV
   );
   const notion = merged.find(config => config.name === "mcp:notion");
   assert.equal(notion?.command, "/usr/local/bin/my-notion", "the operator's entry wins outright");
+  assert.deepEqual([notion?.sandbox, notion?.allowWrite, notion?.host, notion?.hostOnlyTools], ["off", ["/tmp/notion"], true, ["sync"]], "and whole: every field it wrote");
   assert.ok(merged.find(config => config.name === "jira"), "an unrelated entry rides along");
   assert.ok(merged.find(config => config.name === "mcp:linear"), "the other doors stay up");
 });
