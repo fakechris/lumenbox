@@ -3122,6 +3122,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (route === "GET /poppy/jwks.json" && orchestrator.poppy?.ready) {
         send(res, 200, orchestrator.poppy.jwks()); return;
       }
+      // Poppy status — diagnostics for the operator.
+      if (route === "GET /poppy/status" && orchestrator.poppy?.ready) {
+        send(res, 200, orchestrator.poppy.status()); return;
+      }
       // Poppy OAuth callback — the Company's auth server redirects here after the user consents.
       if (route === "GET /poppy/callback" && orchestrator.poppy?.ready) {
         const code = url.searchParams.get("code");

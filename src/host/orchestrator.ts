@@ -1934,6 +1934,7 @@ export class Orchestrator {
       // The reader for the door this conversation's messages come through (INV-871).
       docReader: this.options.docReader ?? this.docReaderFor?.(conversation) ?? this.docReader,
       ...(this.poppyFetch !== undefined ? { webFetch: this.poppyFetch } : {}),
+      ...(this.poppyManager !== undefined ? { poppyManager: this.poppyManager } : {}),
       conversation,
       provider: runtime.provider,
       effort: this.options.effort,

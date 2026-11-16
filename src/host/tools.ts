@@ -107,6 +107,9 @@ import { describeDeferred } from "./tool-roster.ts";
 import { guardShellCommand } from "./ui-automation-guard.ts";
 import type { Vault } from "./vault.ts";
 import { canSearch, type FetchedPage, fetchPage, guardUrl, isSearchEngine, MAX_TEXT, pageReadOutcome, searchWeb, WebError } from "./web.ts";
+import { poppyToolDefinitions, dispatchPoppyTool, type PoppyToolContext } from "./poppy-tools.ts";
+import { poppyBrowserJoinUrl } from "./poppy-browser.ts";
+import type { PoppyManager } from "./poppy/manager.ts";
 import { afterCommit, withWritePath, writePathKey, writePaths } from "./write-path.ts";
 import { fetchXPost, XResolversUnavailable, xStatusRef } from "./x-post.ts";
 
@@ -132,6 +135,8 @@ export interface ToolContext {
    * must not; the default is the guarded fetch in web.ts.
    */
   webFetch?: (url: string) => Promise<FetchedPage>;
+  /** The Poppy protocol manager, when enabled. Used for Browser Join and agent conversations. */
+  poppyManager?: PoppyManager;
   /**
    * How WebFetch reads a post on X. Replaced only by tests, for the same reason as
    * `webFetch`: the three routes a post can arrive by are exactly what needs testing, and
@@ -383,6 +388,9 @@ export const FORK_PREFIX = "fork/";
 export const PARALLEL_SAFE_TOOLS: ReadonlySet<string> = new Set([
   "WebSearch",
   "WebFetch",
+  "PoppyDiscover",
+  "PoppyConverse",
+  "PoppyStatus",
   "read_file",
   "list_dir",
   "Recall",
@@ -2354,6 +2362,11 @@ evidence: {
     },
   });
 
+  // Poppy protocol tools — offered when Poppy is enabled (AGENTBOX_POPPY != 0).
+  if (process.env.AGENTBOX_POPPY !== "0") {
+    tools.push(...poppyToolDefinitions());
+  }
+
   const offered = withheldFrom(allowed, tools);
   return fork ? offered.filter(tool => !FORK_WITHHELD_TOOLS.has(tool.name)) : offered;
 }
@@ -4105,6 +4118,20 @@ export async function dispatchTool(
           const target = await guardUrl(String(input.url ?? ""), true);
           request.url = target.toString();
           if (typeof input.page === "string" && input.page !== "") request.page = input.page;
+
+          // Poppy Browser Join (spec 8.3): before navigating to the target, join the
+          // browser session to the Poppy Session so the Company recognises us. The join
+          // URL is a one-time redirect that sets cookies. Once done per domain per process.
+          if (context.poppyManager?.ready) {
+            const joinUrl = await poppyBrowserJoinUrl(context.poppyManager, request.url);
+            if (joinUrl) {
+              try {
+                await box.browser({ op: "open", display: context.displayIndex!, url: joinUrl, ...callFor(context) });
+              } catch {
+                // Join failure is not fatal; the page still opens, just without Poppy cookies.
+              }
+            }
+          }
         } catch (error) {
           return {
             text: error instanceof WebError ? error.message : `Cannot open that: ${error}`,
@@ -4376,6 +4403,20 @@ export async function dispatchTool(
         return { text: "This installation has no Feishu identity configured.", isError: true };
       }
       return await context.docReader.read(String(input.url ?? ""));
+    }
+
+    case "PoppyDiscover":
+    case "PoppyConverse":
+    case "PoppyStatus": {
+      if (!context.poppyManager) {
+        return { text: "The Poppy protocol is not enabled on this installation.", isError: true };
+      }
+      const poppyCtx: PoppyToolContext = {
+        manager: context.poppyManager,
+        log: line => console.error(`[poppy] ${line}`),
+      };
+      const result = await dispatchPoppyTool(name, input, poppyCtx);
+      return { text: result.text, ...(result.isError ? { isError: true } : {}) };
     }
 
     case "WebFetch": {
