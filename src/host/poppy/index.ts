@@ -12,3 +12,14 @@ export type { PoppySession } from "./session.ts";
 export type { UserIdStore } from "./session.ts";
 export { MemoryUserIdStore } from "./session.ts";
 export type { AgentIdentity } from "./identity.ts";
+
+// Phase 2: OAuth
+export { discoverAuthServer, clearAuthServerCache, OAuthError } from "./oauth.ts";
+export type { AuthServerMeta, TokenSet, DeviceCodeResponse } from "./oauth.ts";
+
+// Phase 2: Token Store
+export { TokenStore } from "./token-store.ts";
+
+// Phase 2: UCP
+export { UcpClient, UcpError } from "./ucp.ts";
+export type { UcpProfile, UcpCapabilities, UcpCart, UcpCheckout, UcpOrder, UcpCartItem } from "./ucp.ts";

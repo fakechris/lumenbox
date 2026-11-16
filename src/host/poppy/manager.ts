@@ -1,10 +1,10 @@
 /**
  * PoppyManager — the single entry point for Poppy protocol support.
  *
- * Coordinates discovery, identity, sessions and header injection. The host
- * creates one instance at startup. Agents never touch it directly: their
- * requests go through fetchPage (which calls shouldInjectHeaders → getHeaders)
- * and MCP client calls (same path).
+ * Coordinates discovery, identity, sessions, OAuth, UCP, and header injection.
+ * The host creates one instance at startup. Agents never touch it directly:
+ * their requests go through fetchPage (which calls shouldInjectHeaders →
+ * headersFor) and MCP client calls (same path).
  *
  * Keys and tokens stay in the manager, never in model context (spec 10.1).
  */
@@ -19,6 +19,20 @@ import {
   createSession,
   type PoppySession,
 } from "./session.ts";
+import {
+  type AuthServerMeta,
+  type TokenSet,
+  type DeviceCodeResponse,
+  discoverAuthServer,
+  buildAuthorizationUrl,
+  exchangeCode,
+  startDeviceAuth,
+  pollDeviceToken,
+  refreshToken,
+  revokeToken,
+} from "./oauth.ts";
+import { TokenStore } from "./token-store.ts";
+import { UcpClient, type UcpProfile, type UcpCapabilities } from "./ucp.ts";
 
 export interface PoppyManagerOptions {
   /** The agentbox home directory (~/.agentbox). */
@@ -47,6 +61,28 @@ export class PoppyManager {
   /** Pending discovery requests, so we don't fetch poppy.json twice for the same domain. */
   private readonly pending = new Map<string, Promise<PoppyCompany | null>>();
 
+  /** Discovered auth server metadata by issuer. */
+  private readonly authServers = new Map<string, AuthServerMeta>();
+  /** Persistent token store. Created after init(). */
+  private tokenStore: TokenStore | undefined;
+  /** Active OAuth authorization flows waiting for callback. */
+  private readonly pendingAuthFlows = new Map<string, {
+    server: AuthServerMeta;
+    company: PoppyCompany;
+    verifier: string;
+    redirectUri: string;
+    scopes: string[];
+    startedAt: number;
+  }>();
+  /** Active device code flows waiting for user action. */
+  private readonly pendingDeviceFlows = new Map<string, {
+    server: AuthServerMeta;
+    company: PoppyCompany;
+    deviceCode: string;
+    expiresAt: number;
+    interval: number;
+  }>();
+
   constructor(options: PoppyManagerOptions) {
     this.home = options.home;
     this.origin = options.origin;
@@ -54,9 +90,10 @@ export class PoppyManager {
     this.autoDiscover = options.autoDiscover ?? true;
   }
 
-  /** Initialize: load or create the agent's key pair. Call once at startup. */
+  /** Initialize: load or create the agent's key pair + token store. Call once at startup. */
   async init(): Promise<void> {
     this.identity = await loadOrCreateIdentity(this.home, this.origin);
+    this.tokenStore = new TokenStore(this.home);
   }
 
   /** Whether init() has been called. */
@@ -95,6 +132,28 @@ export class PoppyManager {
     return promise;
   }
 
+  /** Discover the Company for a domain AND its auth server (if any). */
+  async discoverWithAuth(domain: string): Promise<{
+    company: PoppyCompany;
+    authServer: AuthServerMeta | null;
+  } | null> {
+    const company = await this.discover(domain);
+    if (!company) return null;
+
+    let authServer: AuthServerMeta | null = null;
+    if (company.auth?.issuer && !company.auth.disabled) {
+      const cached = this.authServers.get(company.auth.issuer);
+      if (cached) {
+        authServer = cached;
+      } else {
+        authServer = await discoverAuthServer(company.auth.issuer);
+        if (authServer) this.authServers.set(company.auth.issuer, authServer);
+      }
+    }
+
+    return { company, authServer };
+  }
+
   // ── Sessions ──────────────────────────────────────────────────
 
   /**
@@ -113,7 +172,6 @@ export class PoppyManager {
 
     const userId = userIdFor(company, this.userIdStore);
 
-    // One DelegatedKeyManager per User ID per Company (spec 5.2, 10.7).
     let keyMgr = this.keyManagers.get(company.identifier);
     if (!keyMgr) {
       keyMgr = new DelegatedKeyManager(this.identity);
@@ -129,8 +187,6 @@ export class PoppyManager {
 
   /**
    * Whether a request to this URL should carry Poppy headers.
-   *
-   * Called by fetchPage and MCP clients before making a request.
    * Discovery (poppy.json itself) and OAuth endpoints do not carry the header.
    */
   shouldInjectHeaders(url: string): boolean {
@@ -148,7 +204,8 @@ export class PoppyManager {
 
   /**
    * Returns Poppy headers for a request, or an empty object when the domain
-   * does not support Poppy. Never throws.
+   * does not support Poppy. Automatically includes Authorization when a stored
+   * token exists (and refreshes it if needed). Never throws.
    */
   async headersFor(
     method: string,
@@ -159,10 +216,240 @@ export class PoppyManager {
       const domain = new URL(url).hostname.toLowerCase();
       const session = await this.sessionFor(domain);
       if (!session) return {};
-      return session.headers(method, url, accessToken);
+
+      // Auto-inject stored token when none was explicitly provided.
+      let token = accessToken;
+      if (!token && this.tokenStore) {
+        const company = await this.discover(domain);
+        if (company?.auth?.issuer) {
+          token = await this.getValidToken(company.auth.issuer);
+        }
+      }
+
+      return session.headers(method, url, token);
     } catch {
       return {};
     }
+  }
+
+  // ── OAuth: Authorization Code Flow ────────────────────────────
+
+  /**
+   * Starts an authorization code flow for a Company.
+   *
+   * Returns the URL the user's browser should open, and a state value
+   * that identifies this flow in the callback.
+   */
+  async startSignIn(
+    domain: string,
+    scopes?: string[],
+  ): Promise<{ url: string; state: string } | null> {
+    if (!this.identity) return null;
+
+    const discovery = await this.discoverWithAuth(domain);
+    if (!discovery?.authServer?.authorizationEndpoint) return null;
+
+    const { company, authServer } = discovery;
+    const requestedScopes = scopes ?? Object.keys(company.auth?.scopes ?? {});
+    const redirectUri = `${this.origin}/poppy/callback`;
+
+    const { url, state, verifier } = await buildAuthorizationUrl({
+      server: authServer,
+      identity: this.identity,
+      redirectUri,
+      scopes: requestedScopes,
+    });
+
+    this.pendingAuthFlows.set(state, {
+      server: authServer,
+      company,
+      verifier,
+      redirectUri,
+      scopes: requestedScopes,
+      startedAt: Date.now(),
+    });
+
+    // Clean up old flows (older than 15 min).
+    const cutoff = Date.now() - 15 * 60_000;
+    for (const [s, flow] of this.pendingAuthFlows) {
+      if (flow.startedAt < cutoff) this.pendingAuthFlows.delete(s);
+    }
+
+    return { url, state };
+  }
+
+  /**
+   * Handles the OAuth callback (code + state).
+   *
+   * Returns the Company name and scopes on success, or throws.
+   */
+  async handleCallback(
+    code: string,
+    state: string,
+  ): Promise<{ companyName: string; scopes: string }> {
+    const flow = this.pendingAuthFlows.get(state);
+    if (!flow) throw new Error("Unknown or expired OAuth state");
+    this.pendingAuthFlows.delete(state);
+
+    const tokens = await exchangeCode(
+      flow.server,
+      this.getIdentity(),
+      code,
+      flow.redirectUri,
+      flow.verifier,
+    );
+
+    this.tokenStore?.set(flow.company.identifier, tokens);
+    return {
+      companyName: flow.company.name,
+      scopes: tokens.scope ?? flow.scopes.join(" "),
+    };
+  }
+
+  // ── OAuth: Device Code Flow ───────────────────────────────────
+
+  /**
+   * Starts a device authorization flow for a Company.
+   *
+   * Returns a user code + URL for the user to visit on another device.
+   */
+  async startDeviceSignIn(
+    domain: string,
+    scopes?: string[],
+  ): Promise<DeviceCodeResponse | null> {
+    if (!this.identity) return null;
+
+    const discovery = await this.discoverWithAuth(domain);
+    if (!discovery?.authServer?.deviceAuthorizationEndpoint) return null;
+
+    const { company, authServer } = discovery;
+    const requestedScopes = scopes ?? Object.keys(company.auth?.scopes ?? {});
+
+    const result = await startDeviceAuth(authServer, this.identity, requestedScopes);
+
+    this.pendingDeviceFlows.set(result.deviceCode, {
+      server: authServer,
+      company,
+      deviceCode: result.deviceCode,
+      expiresAt: Date.now() + result.expiresIn * 1000,
+      interval: result.interval,
+    });
+
+    return result;
+  }
+
+  /**
+   * Polls for a device code flow completion.
+   * Returns true when the user has authorized, false when still pending,
+   * throws when the flow expired or was denied.
+   */
+  async pollDeviceSignIn(deviceCode: string): Promise<boolean> {
+    const flow = this.pendingDeviceFlows.get(deviceCode);
+    if (!flow) throw new Error("Unknown device code flow");
+    if (Date.now() > flow.expiresAt) {
+      this.pendingDeviceFlows.delete(deviceCode);
+      throw new Error("Device code flow expired");
+    }
+
+    const tokens = await pollDeviceToken(flow.server, this.getIdentity(), deviceCode);
+    if (!tokens) return false;
+
+    this.tokenStore?.set(flow.company.identifier, tokens);
+    this.pendingDeviceFlows.delete(deviceCode);
+    return true;
+  }
+
+  // ── Token Management ──────────────────────────────────────────
+
+  /**
+   * Gets a valid access token for a Company (by issuer), refreshing if needed.
+   * Returns undefined if no token is stored or refresh fails.
+   */
+  private async getValidToken(issuer: string): Promise<string | undefined> {
+    if (!this.tokenStore || !this.identity) return undefined;
+
+    const stored = this.tokenStore.get(issuer);
+    if (!stored) return undefined;
+
+    // Still valid and not about to expire.
+    if (this.tokenStore.hasValid(issuer) && !this.tokenStore.needsRefresh(issuer)) {
+      return stored.accessToken;
+    }
+
+    // Needs refresh.
+    if (stored.refreshToken) {
+      const server = this.authServers.get(issuer);
+      if (server) {
+        try {
+          const newTokens = await refreshToken(server, this.identity, stored.refreshToken);
+          this.tokenStore.set(issuer, newTokens);
+          return newTokens.accessToken;
+        } catch {
+          // Refresh failed; remove the stored token.
+          this.tokenStore.remove(issuer);
+          return undefined;
+        }
+      }
+    }
+
+    // Token expired with no way to refresh.
+    if (!this.tokenStore.hasValid(issuer)) {
+      this.tokenStore.remove(issuer);
+      return undefined;
+    }
+
+    return stored.accessToken;
+  }
+
+  /** Whether a Company has a stored (possibly refreshable) token. */
+  hasTokenFor(domain: string): boolean {
+    // Look up issuer from a cached session's company.
+    for (const [d, session] of this.sessions) {
+      if (d === domain.toLowerCase()) {
+        return this.tokenStore?.get(session.company.identifier) !== undefined;
+      }
+    }
+    return false;
+  }
+
+  /** Revokes and removes a stored token for a Company. */
+  async revokeTokenFor(domain: string): Promise<void> {
+    if (!this.identity || !this.tokenStore) return;
+    const session = this.sessions.get(domain.toLowerCase());
+    if (!session) return;
+
+    const issuer = session.company.identifier;
+    const stored = this.tokenStore.get(issuer);
+    if (!stored) return;
+
+    const server = this.authServers.get(issuer);
+    if (server) {
+      if (stored.refreshToken) {
+        await revokeToken(server, this.identity, stored.refreshToken, "refresh_token");
+      }
+      await revokeToken(server, this.identity, stored.accessToken, "access_token");
+    }
+    this.tokenStore.remove(issuer);
+  }
+
+  // ── UCP ───────────────────────────────────────────────────────
+
+  /**
+   * Creates a UCP client for a Poppy-enabled Company with UCP support.
+   * Returns null if the Company doesn't support UCP.
+   */
+  async ucpClientFor(domain: string): Promise<UcpClient | null> {
+    const session = await this.sessionFor(domain);
+    if (!session) return null;
+
+    const company = await this.discover(domain);
+    if (!company || !hasUcpExtension(company)) return null;
+
+    const token = company.auth?.issuer
+      ? await this.getValidToken(company.auth.issuer)
+      : undefined;
+
+    return new UcpClient(company, session, token);
   }
 
   // ── HTTP endpoints (served by the host's web server) ──────────
@@ -185,12 +472,22 @@ export class PoppyManager {
     clientId: string | undefined;
     activeSessions: string[];
     negativeCache: string[];
+    tokens: Array<{ issuer: string; hasAccess: boolean; hasRefresh: boolean }>;
+    pendingAuthFlows: number;
+    pendingDeviceFlows: number;
   } {
     return {
       ready: this.ready,
       clientId: this.identity?.clientId,
       activeSessions: [...this.sessions.keys()],
       negativeCache: [...this.negative],
+      tokens: this.tokenStore?.status().map(t => ({
+        issuer: t.issuer,
+        hasAccess: t.hasAccess,
+        hasRefresh: t.hasRefresh,
+      })) ?? [],
+      pendingAuthFlows: this.pendingAuthFlows.size,
+      pendingDeviceFlows: this.pendingDeviceFlows.size,
     };
   }
 }

@@ -3122,6 +3122,24 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (route === "GET /poppy/jwks.json" && orchestrator.poppy?.ready) {
         send(res, 200, orchestrator.poppy.jwks()); return;
       }
+      // Poppy OAuth callback — the Company's auth server redirects here after the user consents.
+      if (route === "GET /poppy/callback" && orchestrator.poppy?.ready) {
+        const code = url.searchParams.get("code");
+        const state = url.searchParams.get("state");
+        const error = url.searchParams.get("error");
+        if (error) {
+          send(res, 200, `<html><body><h2>Sign-in declined</h2><p>${error}</p></body></html>`, "text/html"); return;
+        }
+        if (!code || !state) {
+          send(res, 400, { error: "missing code or state" }); return;
+        }
+        try {
+          const result = await orchestrator.poppy.handleCallback(code, state);
+          send(res, 200, `<html><body><h2>Connected to ${result.companyName}</h2><p>Scopes: ${result.scopes}</p><p>You can close this window.</p></body></html>`, "text/html"); return;
+        } catch (err) {
+          send(res, 400, { error: err instanceof Error ? err.message : "callback failed" }); return;
+        }
+      }
 
       const decision = admit({
         authorization: req.headers.authorization,
