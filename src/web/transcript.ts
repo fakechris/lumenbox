@@ -19,7 +19,7 @@ import { type EditDiff, editDiffOf } from "./line-diff.ts";
 import type { GateVerdict } from "../host/gate-verdict.ts";
 import { entryChannel } from "../host/model-text.ts";
 import { BUDGET_REPORT } from "../host/turn-budget.ts";
-import type { HeardRow } from "../agents/heard-record.ts";
+import type { HeardRow, SaidRow } from "../agents/heard-record.ts";
 import { activityPhrases } from "../host/activity-phrase.ts";
 import type { HistoryEntry } from "../host/compaction.ts";
 
@@ -201,8 +201,14 @@ export function toDisplayEntries(
   /** The conversation is a chat's: what is filed as said there, and is not the host's or a cue, came through the door from a person. */
   fromChat = false,
   /** What the host knew about a message when the agent started on it (heard-record.ts): where it has a row, it decides. */
-  heardOf: (messageId: string) => HeardRow | undefined = () => undefined
+  heardOf: (messageId: string) => HeardRow | undefined = () => undefined,
+  /** What the host recorded the agent saying in a turn (heard-record.ts): where it has rows, they decide what is a bubble. */
+  saidOf: (turnId: string) => readonly SaidRow[] = () => []
 ): DisplayEntry[] {
+  const saidHere = (turnId: unknown, kind: SaidRow["kind"], text: string): boolean | undefined => {
+    const rows = typeof turnId === "string" ? saidOf(turnId) : [];
+    return rows.length === 0 ? undefined : rows.some(row => row.kind === kind && (row.text.trim() === text.trim() || row.text.includes(text.trim())));
+  };
   const display: DisplayEntry[] = [];
   const knownNames = roster.map(entry => entry.name);
   /** The ids of the calls in the entry just pushed, so results can be matched to it. */
@@ -244,7 +250,7 @@ export function toDisplayEntries(
       // The first thing an agent says beside its calls in a turn a person opened went to that person while the
       // tools ran (turn.ts, the opening line) — in a chat it is a message they received. It is what was said,
       // not commentary: measured on 2026-11-13, 29 of 246 chat requests had their longest answer drawn as nothing.
-      const told = entry.told === true || (owedOpening && calls.length > 0 && entry.silent === undefined);
+      const told = saidHere(entry.turnId, "opening", text) ?? (entry.told === true || (owedOpening && calls.length > 0 && entry.silent === undefined));
       if (text && told) owedOpening = false;
       if (text) push({ kind: "text", role: "assistant", text, ...(told ? { opening: true as const } : { aside: true as const }), ...stamp(raw) });
 
@@ -350,7 +356,9 @@ export function toDisplayEntries(
     // Written by the host in the agent's place when the turn was cut short: said as a state, not as its words.
     const ended = /^A person stopped this turn\./.test(text) ? "stopped" as const : BUDGET_REPORT.test(text) ? "budget" as const : undefined;
     if (ended !== undefined) { push({ kind: "status", what: ended, text, ...stamp(raw) }); continue; }
-    push({ kind: "text", role: "assistant", text, ...stamp(raw) });
+    // Where the host recorded what was said in this turn, text it did not record as a reply was not said to anyone.
+    const reply = saidHere(entry.turnId, "reply", text);
+    push({ kind: "text", role: "assistant", text, ...(reply === false ? { aside: true as const } : {}), ...stamp(raw) });
   }
 
   return display;

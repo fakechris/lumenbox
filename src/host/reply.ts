@@ -1,7 +1,10 @@
 /** Select a reply by causal identity, never by when a queued request arrived. */
-export function replyForMessage(entries: readonly unknown[], messageId: string): string {
+export function replyForMessage(entries: readonly unknown[], messageId: string, saidIn?: (turnId: string) => readonly { kind: string; text: string }[]): string {
   const records = entries as readonly { role?: string; kind?: string; text?: string; turnId?: string; causedBy?: readonly string[]; host?: true }[];
   const turns = new Set(records.filter(entry => entry.role === "user" && entry.causedBy?.includes(messageId) && entry.turnId !== undefined).map(entry => entry.turnId));
+  // What the host recorded the agent saying in those turns, where it did (INV-1845): one record for the chat and the page.
+  const said = saidIn === undefined ? [] : [...turns].flatMap(turn => turn === undefined ? [] : saidIn(turn).filter(row => row.kind === "reply").map(row => row.text));
+  if (said.length > 0) return said.join("\n\n");
   // A host-authored line (the empty-output note, INV-775) is for the record, not a reply.
   return records.filter(entry => entry.role === "assistant" && entry.kind === undefined && entry.host !== true && entry.turnId !== undefined && turns.has(entry.turnId) && entry.text)
     .map(entry => entry.text!).join("\n\n");

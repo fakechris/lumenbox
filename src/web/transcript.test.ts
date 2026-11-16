@@ -502,3 +502,29 @@ test("where the host recorded who said a message, that decides; the text's openi
       "a request says where it came from when it was not typed here, and a routine's brief is the request it opened");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("where the host recorded what the agent said in a turn, that record decides what was said — for the page and for the chat's reply", async () => {
+  const { HeardRecord } = await import("../agents/heard-record.ts"), { replyForMessage } = await import("../host/reply.ts");
+  const { mkdtempSync, rmSync } = await import("node:fs"), { tmpdir } = await import("node:os"), { join } = await import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "said-"));
+  try {
+    const heard = new HeardRecord(dir), at = "t";
+    heard.said("ada", "main", "turn-1", "Checking both.", "opening");
+    heard.said("ada", "main", "turn-1", "The second one, by about 3x.", "reply");
+    const entries = [
+      { role: "user", text: "which is faster?", causedBy: ["m1"], turnId: "turn-1", at },
+      { role: "assistant", kind: "blocks", turnId: "turn-1", blocks: [{ type: "text", text: "Checking both." }, { type: "tool_use", id: "1", name: "bash", input: { command: "true" } }], at },
+      { role: "user", kind: "results", turnId: "turn-1", blocks: [{ type: "tool_result", tool_use_id: "1", content: "ok" }], at },
+      // Written to the record as plain prose but never said to anyone: what the old reading would have drawn as a reply.
+      { role: "assistant", turnId: "turn-1", text: "Note to self: rerun with -O2.", at },
+      { role: "assistant", turnId: "turn-1", text: "The second one, by about 3x.", at },
+    ];
+    const fresh = new HeardRecord(dir), said = (turn: string) => fresh.saidIn("ada", turn);
+    const shown = toDisplayEntries(entries, [], () => undefined, false, () => undefined, said)
+      .filter(entry => entry.kind === "text" && entry.role === "assistant") as { text: string; aside?: true; opening?: true }[];
+    assert.deepEqual(shown.map(entry => [entry.text.slice(0, 12), entry.opening === true ? "opening" : entry.aside === true ? "aside" : "reply"]),
+      [["Checking bot", "opening"], ["Note to self", "aside"], ["The second o", "reply"]]);
+    assert.equal(replyForMessage(entries, "m1", said), "The second one, by about 3x.", "and the chat is sent the same words, read from the same record");
+    assert.equal(replyForMessage(entries, "m1"), "Note to self: rerun with -O2.\n\nThe second one, by about 3x.", "which the transcript alone gets wrong");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

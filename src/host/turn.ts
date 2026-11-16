@@ -3059,7 +3059,7 @@ ${outcome.text}`;
       }
 
       if (finalText.trim()) {
-        const answer = answerAfterSendBack(sentBack, finalText); lastFinalText = answer; sentBack = undefined;
+        const answer = answerAfterSendBack(sentBack, finalText); lastFinalText = answer; sentBack = undefined; if (!quietGoal) bus.heard?.said(agent.id, conversation, turnId, answer, "reply", work?.id);
         // A continuation's closing words are the record's, not the person's reply: filed as
         // blocks, which `replySince` never delivers, so a goal working in the background does
         // not talk into the chat (docs/74 §3.7). The finish-only report is sent by the loop.
@@ -3157,7 +3157,7 @@ ${outcome.text}`;
     const filedAnswer =
       roundText.trim().length >= FILED_ANSWER_FLOOR &&
       toolUses.every(use => BOOKKEEPING_TOOLS.has(use.name));
-    if (filedAnswer) {
+    if (filedAnswer) { if (!quietGoal) bus.heard?.said(agent.id, conversation, turnId, roundText, "reply", work?.id);
       registry.appendTranscript(agent.id, quietGoal
         ? { role: "assistant", kind: "blocks", blocks: [{ type: "text", text: roundText }], at: new Date().toISOString(), turnId, silent: { reason: "goal continuation: kept on the record, not delivered" } }
         // Stamped with the turn (INV-1264): the channel reply is selected by turn id, and an
@@ -3172,7 +3172,7 @@ ${outcome.text}`;
     // Measured on Bob's thread: the line "你说得对，我先查一下" had been filed as blocks and shown to nobody.
     const told = personOpened && !interimDelivered && toolUses.length > 0 && !filedAnswer && roundText.trim() !== "";
     if (told) {
-      interimDelivered = true;
+      interimDelivered = true; bus.heard?.said(agent.id, conversation, turnId, roundText.trim(), "opening", work?.id);
       emit({ type: "interim", agentId: agent.id, agentName: agent.profile.name, text: roundText.trim() });
       console.error(`[conduct] ${agent.profile.name}: interim line delivered (${roundText.trim().length} chars)`);
     }
