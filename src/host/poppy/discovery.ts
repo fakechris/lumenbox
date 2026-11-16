@@ -201,11 +201,6 @@ export function hasUcpExtension(company: PoppyCompany): boolean {
   return company.extensions?.ucp?.some(e => e.version === "1") === true;
 }
 
-/** The UCP endpoint, from agent.protocols or extensions. */
-export function ucpEndpoint(company: PoppyCompany): string | undefined {
-  return company.agentProtocols?.find(p => p.type === "ucp")?.endpoint;
-}
-
 /** Clears the discovery cache (for tests). */
 export function clearDiscoveryCache(): void {
   cache.clear();

@@ -1,123 +1,26 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { poppyToolDefinitions, dispatchPoppyTool, type PoppyToolContext } from "./poppy-tools.ts";
+import { POPPY_TOOLS, dispatchPoppyTool, poppyToolDefinitions, type PoppyToolContext } from "./poppy-tools.ts";
 
-/** Minimal fake PoppyManager. */
-function fakeManager(opts: {
-  ready?: boolean;
-  discover?: Record<string, unknown>;
-  status?: Record<string, unknown>;
-} = {}) {
-  return {
-    ready: opts.ready ?? true,
-    get clientId() { return "agent_test"; },
-    async discover(domain: string) {
-      return opts.discover?.[domain] ?? null;
-    },
-    async discoverWithAuth(domain: string) {
-      const company = opts.discover?.[domain];
-      if (!company) return null;
-      return { company, authServer: null };
-    },
-    async conversationEndpointFor() { return null; },
-    async converse() { return null; },
-    status() {
-      return opts.status ?? {
-        ready: true,
-        clientId: "agent_test",
-        activeSessions: [],
-        domainsWithoutPoppy: 0,
-        tokens: [],
-        pendingAuthFlows: 0,
-        pendingDeviceFlows: 0,
-      };
-    },
-  } as unknown as PoppyToolContext["manager"];
-}
+// The tools against a real manager on a scripted network are in poppy/protocol.test.ts; this is the table itself.
+const notReady = { ready: false } as unknown as PoppyToolContext["manager"];
 
-describe("poppyToolDefinitions", () => {
-  test("returns three tools", () => {
-    const tools = poppyToolDefinitions();
-    assert.equal(tools.length, 3);
-    const names = tools.map(t => t.name);
-    assert.ok(names.includes("PoppyDiscover"));
-    assert.ok(names.includes("PoppyConverse"));
-    assert.ok(names.includes("PoppyStatus"));
-  });
-});
-
-describe("dispatchPoppyTool", () => {
-  test("returns error when manager is not ready", async () => {
-    const ctx: PoppyToolContext = { who: "ada", conversation: "main", manager: fakeManager({ ready: false }) };
-    const result = await dispatchPoppyTool("PoppyDiscover", { domain: "test.com" }, ctx);
-    assert.ok(result.isError);
-    assert.ok(result.text.includes("not available"));
+describe("the Poppy tools", () => {
+  test("four, and POPPY_TOOLS names exactly them", () => {
+    assert.deepEqual(new Set(poppyToolDefinitions().map(tool => tool.name)), POPPY_TOOLS);
   });
 
-  test("PoppyDiscover returns info for a known domain", async () => {
-    const ctx: PoppyToolContext = {
-      who: "ada",
-      conversation: "main",
-      manager: fakeManager({
-        discover: {
-          "test.example": {
-            protocolVersion: "1.0",
-            name: "TestCo",
-            domain: "test.example",
-            identifier: "https://test.example",
-            agentProtocols: [{ type: "poppy", endpoint: "https://test.example/chat" }],
-            raw: {},
-          },
-        },
-      }),
-    };
-    const result = await dispatchPoppyTool("PoppyDiscover", { domain: "test.example" }, ctx);
-    assert.ok(result.text.includes("TestCo"));
-    assert.ok(result.text.includes("test.example"));
+  test("PoppyRequest tells the model where it may go and what it may not do", () => {
+    const request = poppyToolDefinitions().find(tool => tool.name === "PoppyRequest")!;
+    assert.match(request.description ?? "", /only to its destinations/);
+    assert.match(request.description ?? "", /continue_url/);
+    assert.match(request.description ?? "", /never approve or retry it yourself/);
   });
 
-  test("PoppyDiscover returns message for unknown domain", async () => {
-    const ctx: PoppyToolContext = { who: "ada", conversation: "main", manager: fakeManager() };
-    const result = await dispatchPoppyTool("PoppyDiscover", { domain: "unknown.example" }, ctx);
-    assert.ok(result.text.includes("does not publish"));
-  });
-
-  test("PoppyStatus returns status", async () => {
-    const ctx: PoppyToolContext = {
-      who: "ada",
-      conversation: "main",
-      manager: fakeManager({
-        status: {
-          ready: true,
-          clientId: "agent_xyz",
-          activeSessions: ["allbirds.com"],
-          domainsWithoutPoppy: 1,
-          tokens: [],
-          pendingAuthFlows: 0,
-          pendingDeviceFlows: 0,
-        },
-      }),
-    };
-    const result = await dispatchPoppyTool("PoppyStatus", {}, ctx);
-    assert.ok(result.text.includes("agent_xyz"));
-    assert.ok(result.text.includes("allbirds.com"));
-  });
-
-  test("PoppyConverse returns error when domain has no conversation", async () => {
-    const ctx: PoppyToolContext = { who: "ada", conversation: "main", manager: fakeManager() };
-    const result = await dispatchPoppyTool(
-      "PoppyConverse",
-      { domain: "test.example", message: "hello" },
-      ctx,
-    );
-    assert.ok(result.isError);
-    assert.ok(result.text.includes("does not support"));
-  });
-
-  test("unknown tool returns error", async () => {
-    const ctx: PoppyToolContext = { who: "ada", conversation: "main", manager: fakeManager() };
-    const result = await dispatchPoppyTool("PoppyFoo", {}, ctx);
-    assert.ok(result.isError);
-    assert.ok(result.text.includes("Unknown"));
+  test("refused plainly before the identity exists, and for a name that is not a Poppy tool", async () => {
+    const ctx: PoppyToolContext = { manager: notReady, who: "ada", conversation: "main" };
+    assert.match((await dispatchPoppyTool("PoppyDiscover", { domain: "x.example" }, ctx)).text, /not available/);
+    const ready = { ...ctx, manager: { ready: true } as unknown as PoppyToolContext["manager"] };
+    assert.match((await dispatchPoppyTool("PoppyFoo", {}, ready)).text, /Unknown Poppy tool/);
   });
 });

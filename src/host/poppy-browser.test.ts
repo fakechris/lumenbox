@@ -9,6 +9,7 @@ const sessions: Record<string, string> = {};
 function fakeManager(domains: Record<string, string | null> = {}) {
   return {
     ready: true,
+    known: (domain: string) => domain in domains,
     async sessionFor(domain: string) {
       return domains[domain] ? { sid: sessions[domain] ?? "s1" } : null;
     },
@@ -59,6 +60,13 @@ describe("poppyBrowserJoinUrl", () => {
     sessions["shop.example"] = "s2";
     assert.ok(await poppyBrowserJoinUrl(mgr, "ada", "https://shop.example/c"));
     delete sessions["shop.example"];
+  });
+
+  test("a site never discovered is not asked anything: opening its page does not probe it", async () => {
+    let asked = 0;
+    const mgr = { ready: true, known: () => false, sessionFor: async () => { asked++; return null; }, browserJoin: async () => { asked++; return null; } } as unknown as Parameters<typeof poppyBrowserJoinUrl>[0];
+    assert.equal(await poppyBrowserJoinUrl(mgr, "ada", "https://shop.example/a"), undefined);
+    assert.equal(asked, 0);
   });
 
   test("handles invalid URLs gracefully", async () => {

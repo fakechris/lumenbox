@@ -32,6 +32,8 @@ export async function poppyBrowserJoinUrl(
     const target = new URL(targetUrl);
     if (target.protocol !== "https:") return undefined;
     const domain = target.hostname.toLowerCase();
+    // Only a Company already discovered: opening a page never makes the host ask the site for poppy.json.
+    if (!manager.known(domain)) return undefined;
     const session = await manager.sessionFor(domain, who);
     if (!session) return undefined;
     const key = `${who}|${domain}|${session.sid}`;

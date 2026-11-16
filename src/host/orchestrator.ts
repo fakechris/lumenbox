@@ -108,7 +108,7 @@ import { loadConfig } from "../config.ts"; import { FallbackRuntimes, fallbackNa
 import { McpManager } from "./mcp.ts";
 import { mcpServersFrom } from "./mcp-connectors.ts";
 import { CapabilityLedger } from "./mcp-capabilities.ts";
-import { poppyFor } from "./poppy-fetch.ts"; import { POPPY_TOOLS } from "./poppy-tools.ts";
+import { poppyFor } from "./poppy-host.ts"; import { POPPY_TOOLS } from "./poppy-tools.ts";
 import { PolicyGate } from "./policy.ts";
 import { TaskStore, type Task } from "./tasks.ts";
 import type { MandateWorld } from "./mandate.ts";

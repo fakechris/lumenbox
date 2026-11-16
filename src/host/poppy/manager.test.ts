@@ -43,23 +43,6 @@ describe("PoppyManager", () => {
     assert.equal(jwks.keys[0]!.use, "sig");
   });
 
-  it("shouldInjectHeaders skips poppy.json itself", async () => {
-    const home = tmpHome();
-    dirs.push(home);
-    const mgr = new PoppyManager({ home, origin: "https://agent.test" });
-    await mgr.init();
-    assert.ok(!mgr.shouldInjectHeaders("https://example.com/.well-known/poppy.json"));
-    assert.ok(!mgr.shouldInjectHeaders("https://example.com/.well-known/oauth-protected-resource"));
-  });
-
-  it("shouldInjectHeaders returns true for unknown domains", async () => {
-    const home = tmpHome();
-    dirs.push(home);
-    const mgr = new PoppyManager({ home, origin: "https://agent.test" });
-    await mgr.init();
-    assert.ok(mgr.shouldInjectHeaders("https://example.com/api/orders"));
-  });
-
   it("persists the agent key across restarts", async () => {
     const home = tmpHome();
     dirs.push(home);

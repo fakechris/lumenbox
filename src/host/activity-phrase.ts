@@ -62,6 +62,7 @@ const TEMPLATES: Record<string, Template> = {
   NoteSiteLearning: { en: "noting how a website works", zh: "记下网站的使用方法" },
   WebFetch: { en: "fetching {detail}", zh: "抓取网页 {detail}" },
   PoppyDiscover: { en: "checking whether a site has a company agent", zh: "查看网站是否有企业 agent" },
+  PoppyRequest: { en: "sending a signed request to a company", zh: "向企业发送签名请求" },
   PoppyConverse: { en: "talking to a company's agent", zh: "与企业的 agent 对话" },
   PoppyStatus: { en: "checking company connections", zh: "查看与企业的连接" },
   WebSearch: { en: "searching the web", zh: "搜索网络" },
