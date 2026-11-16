@@ -83,12 +83,12 @@ export class HeardRecord {
   }
 
   private saidRows(agentId: string): Map<string, SaidRow[]> {
-    let turns = this.saidCache.get(agentId);
-    if (turns !== undefined) return turns;
-    turns = new Map();
+    const cached = this.saidCache.get(agentId);
+    if (cached !== undefined) return cached;
     this.rows(agentId); // reads the file once, filling both
-    this.saidCache.set(agentId, turns = this.saidCache.get(agentId) ?? turns);
-    return turns;
+    const filled = this.saidCache.get(agentId) ?? new Map<string, SaidRow[]>();
+    this.saidCache.set(agentId, filled);
+    return filled;
   }
   constructor(private readonly dir: string, private readonly onError: (why: string) => void = () => {}) {}
 
