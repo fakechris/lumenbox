@@ -52,6 +52,7 @@ import type { OrgKnowledge } from "./org-knowledge.ts";
 import { buildPitfallPrompt, type PitfallSource, parsePitfall } from "./pitfalls.ts";
 import type { ProviderProfile } from "./provider.ts";
 import { credentialIn } from "./secret-scan.ts";
+import { executionTarget } from "./tool-roster.ts";
 import type { UsageLog } from "./usage.ts";
 
 /**
@@ -117,7 +118,7 @@ const FLUSH_EXCHANGE_CHARS = 4_000;
  * content, but so is nothing else it does, and the call cannot tell which). MCP tools are
  * decided per server: see `McpManager.pollutesMemory`.
  */
-const EXTERNAL_CONTENT_TOOLS = new Set(["WebFetch", "WebSearch", "ReadFeishuDoc", "connector_request"]);
+const EXTERNAL_CONTENT_TOOLS = new Set(["WebFetch", "WebSearch", "ReadFeishuDoc", "connector_request", "PoppyDiscover", "PoppyConverse"]);
 
 /** Whether a built-in tool's result is outside content (INV-894). Every `browser_*` tool returns page state. */
 export function readsExternalContent(tool: string): boolean {
@@ -130,7 +131,11 @@ export function touchesExternalContent(entries: readonly HistoryEntry[], externa
     entry =>
       "kind" in entry &&
       entry.kind === "blocks" &&
-      entry.blocks.some(block => (block as { type?: string }).type === "tool_use" && external((block as { name: string }).name))
+      // A deferred built-in is called through UseMcpTool (INV-1341): judged by the tool it named.
+      entry.blocks.some(block => {
+        const use = block as { type?: string; name: string; input?: Record<string, unknown> };
+        return use.type === "tool_use" && external(executionTarget(use.name, use.input ?? {}));
+      })
   );
 }
 

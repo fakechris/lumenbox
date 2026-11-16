@@ -38,6 +38,7 @@ export const SERVER_ERRORS = {
   "err.sign-in-channel-changed": ["登录用的渠道变了，请重新开始。", "The sign-in channel changed; start again."],
   "err.bootstrap-gone": ["首位管理员的设置入口已经关闭。", "First-admin bootstrap is no longer available."],
   "err.sign-in-failed": ["登录失败：{detail}", "Sign-in failed: {detail}"],
+  "err.poppy-callback-incomplete": ["登录回调缺少 code 或 state，请从头重新登录。", "The sign-in callback is missing its code or state; sign in again from the start."],
   "err.bootstrap-unavailable": ["首位管理员的设置入口暂时不可用。", "First-admin bootstrap is unavailable."],
   "err.body-invalid": ["请求体无法读取。", "Invalid request body."],
   "err.bootstrap-code-malformed": ["验证码格式不对。", "Invalid bootstrap code."],

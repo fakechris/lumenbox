@@ -209,7 +209,7 @@ export function doorServers(env: NodeJS.ProcessEnv = process.env, versions: Read
  * the off switch. Order is doors first, then the config's own entries.
  */
 export function mergeServers(
-  fromConfig: readonly { name: string; command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string> }[],
+  fromConfig: readonly McpServerConfig[],
   env: NodeJS.ProcessEnv = process.env,
   versions: Readonly<Record<string, string>> = {}
 ): McpServerConfig[] {
@@ -217,7 +217,9 @@ export function mergeServers(
   const merged = [...configs];
   for (const entry of fromConfig) {
     const at = merged.findIndex(server => server.name === entry.name);
-    const config: McpServerConfig = { name: entry.name, command: entry.command, args: entry.args, env: entry.env, url: entry.url, headers: entry.headers };
+    // Whole: an entry rebuilt field by field dropped every field added later — `sandbox: "off"`,
+    // `allowWrite`, `host`, `hostOnlyTools`, `pollutesMemory` — and the operator's words with them.
+    const config: McpServerConfig = { ...entry };
     if (at >= 0) merged[at] = config;
     else merged.push(config);
   }
@@ -250,4 +252,20 @@ export function pinnedPackage(args: readonly string[] | undefined): { package: s
     if (match !== null) return { package: match[1]!, version: match[2]! };
   }
   return undefined;
+}
+
+/** An MCP server entry as config.json spells it. */
+type ConfiguredServer = {
+  command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string>; host?: boolean;
+  hostOnlyTools?: string[]; pollutesMemory?: boolean; sandbox?: "on" | "off"; allowWrite?: string[];
+};
+
+/** The MCP server list as config.json spells it, in the manager's shape. */
+export function mcpServersFrom(config: { mcpServers?: Record<string, ConfiguredServer>; connectorVersions?: Record<string, string> }) {
+  // The connector doors above sit under the operator's entries: a config.json line with the same
+  // name overrides a door's default, an env credential turns a door on, and either may exist
+  // without the other. `connectorVersions` pins a door's package differently from the catalog
+  // without replacing its spec (INV-813).
+  const configured = Object.entries(config.mcpServers ?? {}).map(([name, server]) => ({ name, ...server }));
+  return mergeServers(configured, process.env, config.connectorVersions ?? {});
 }

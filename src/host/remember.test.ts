@@ -9,6 +9,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { MemoryJudge } from "./memory-judge.ts";
+import type { HistoryEntry } from "./compaction.ts";
 import { exchangesOf, payerOf, Rememberer, readsExternalContent, touchesExternalContent } from "./remember.ts";
 
 /** Clears everything: the fixtures below are about batching and flushing, not about the judge (INV-1333). */
@@ -485,4 +486,11 @@ test("rendering only the exchanges shown changes nothing about them (INV-1566)",
     }
     assert.deepEqual(exchangesOf(entries as never, "main").map(group => ({ text: group.text, at: group.at })), before(entries), `${count} exchanges`);
   }
+});
+
+test("a deferred built-in that reads outside, called through UseMcpTool, still marks the turn as having read outside", () => {
+  const entries = [{ kind: "blocks", blocks: [{ type: "tool_use", id: "t1", name: "UseMcpTool", input: { tool: "PoppyConverse", input: {} } }] }] as unknown as HistoryEntry[];
+  assert.ok(touchesExternalContent(entries, readsExternalContent));
+  const own = [{ kind: "blocks", blocks: [{ type: "tool_use", id: "t2", name: "UseMcpTool", input: { tool: "PackTemplate", input: {} } }] }] as unknown as HistoryEntry[];
+  assert.ok(!touchesExternalContent(own, readsExternalContent));
 });

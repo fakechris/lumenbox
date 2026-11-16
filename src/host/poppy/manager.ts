@@ -107,9 +107,14 @@ export class PoppyManager {
 
   /** Initialize: load or create the agent's key pair + token store. Call once at startup. */
   async init(): Promise<void> {
-    this.identity = await loadOrCreateIdentity(this.home, this.origin);
-    this.tokenStore = new TokenStore(this.home);
+    // Once, however many callers race to it: two first calls must not each make a key.
+    this.initialising ??= (async () => {
+      this.identity = await loadOrCreateIdentity(this.home, this.origin);
+      this.tokenStore = new TokenStore(this.home);
+    })();
+    return this.initialising;
   }
+  private initialising?: Promise<void>;
 
   /** Whether init() has been called. */
   get ready(): boolean {

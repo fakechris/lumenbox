@@ -1,7 +1,7 @@
 import type { ResultChecks } from "./result-check-policy.ts";
 import {workBox} from "./work-executor.ts";
 import { taskHoldsAttention } from "./task-attention.ts";
-import { executionTarget } from "./tool-roster.ts";
+import { POPPY_TOOLS } from "./poppy-tools.ts";
 import { needsComputer } from "./tool-capabilities.ts";
 import { SIDE_TURN_NOTE, sideTurnBudget } from "../agents/side-work.ts";
 import { whyWaiting, workHistoryConversation, workRegistry } from "../agents/work-attention.ts";
@@ -23,10 +23,9 @@ import { reserveFailedModelSpend } from "./failed-model-spend.ts";
 import { ModelRetries } from "./model-retries.ts";
 import { watchModelStream, waitForRetry } from "./model-stream.ts";
 import { hostBoxWrite } from "./host-box.ts"; import { workDir } from "./box-paths.ts";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { buildInfo } from "./build-info.ts";
 import { envNumber, hostTokens } from "../config.ts";
-import { randomUUID } from "node:crypto";
 import type Anthropic from "@anthropic-ai/sdk";
 import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
 import type { AgentBus, InboundMessage } from "../agents/bus.ts";
@@ -38,9 +37,8 @@ import type { PolicyGate } from "./policy.ts";
 import type { Claims } from "./claims.ts";
 import type { FileVersions } from "./files.ts";
 import type { StepLedger, TurnLedger, ResumeMarker } from "./resume.ts";
-import { approvalOutcomeResult, notStartedResult, outcomeUnknownResult } from "./resume.ts";
+import { approvalOutcomeResult, changedPromptSegments, notStartedResult, outcomeUnknownResult, type PromptFingerprint } from "./resume.ts";
 import { idempotencyOf } from "../protocol/idempotency.ts";
-import { changedPromptSegments, type PromptFingerprint } from "./resume.ts";
 import type { PendingWork } from "./pending-work.ts";
 import { admittedAudit, auditCurrent, auditToolAllowed, AUDIT_READ_TOOLS, isAuditConversation } from "./audit-context.ts";
 import type { Effects } from "./effects.ts";
@@ -163,11 +161,10 @@ import { imageRefusalOf, replaceRefusedImages } from "./image-refusal.ts";
 import { budgetReport, budgetWarning, replayNote, TurnBudget, type TurnBudgetConfig } from "./turn-budget.ts";
 import { writePathKey, writePaths } from "./write-path.ts";
 import { outboundRedactor, redactEvent, redactResult } from "./redact-outbound.ts";
-import { lookupPair, splitRoster } from "./tool-roster.ts";
+import { executionTarget, lookupPair, splitRoster } from "./tool-roster.ts";
 import { narrowTools, toolAllowed } from "./scopes.ts";
 import { conversationIdFor, MAIN_CONVERSATION } from "../agents/registry.ts";
-import { effortConfig, summaryRuntimeFor } from "./provider.ts";
-import type { Effort, ProviderProfile } from "./provider.ts";
+import { effortConfig, summaryRuntimeFor, type Effort, type ProviderProfile } from "./provider.ts";
 
 /**
  * Round cap.
@@ -545,10 +542,8 @@ export interface TurnDeps {
   bundles?: BundleStore;
   /** MCP servers whose tools this turn may offer and call. Absent means none. */
   mcp?: McpManager;
-  /** How WebFetch reads a page. When present, replaces the default `fetchPage` — used for Poppy header injection. */
-  webFetch?: ToolContext["webFetch"];
-  /** The Poppy protocol manager. Used for Browser Join and Poppy tools. */
-  poppyManager?: ToolContext["poppyManager"];
+  /** Poppy, when this host has it on (docs/poppy.md): the WebFetch carrying its headers, and the manager its tools use. */
+  webFetch?: ToolContext["webFetch"]; poppyManager?: ToolContext["poppyManager"];
   /** Puts a question to whoever drove this agent. Absent means there is nobody to ask. */
   askUser?: ToolContext["askUser"];
   showUI?: ToolContext["showUI"];
@@ -2084,7 +2079,7 @@ ${outcome.text}`;
     // it needs decided goes back to the sender instead. The test is the whole conversation, not this turn: the
     // front agent woken by a worker's report is still the person's counterpart, and it is the one that has to
     // be able to ask.
-    .filter(tool => tool.name !== "TaskProgress" || deps.tasks !== undefined)
+    .filter(tool => (tool.name !== "TaskProgress" || deps.tasks !== undefined) && (!POPPY_TOOLS.has(tool.name) || deps.poppyManager !== undefined))
     .filter(tool => !(!personIsHere && PERSON_FACING_TOOLS.has(tool.name)))
     // Deliberate silence is for turns nobody is waiting on (INV-775): withheld, not refused,
     // wherever a person opened the turn and is reading for the answer.
@@ -3361,8 +3356,7 @@ ${outcome.text}`;
             askSecret: deps.askSecret,
             handOver: deps.handOver,
             docReader: deps.docReader,
-            ...(deps.webFetch !== undefined ? { webFetch: deps.webFetch } : {}),
-            ...(deps.poppyManager !== undefined ? { poppyManager: deps.poppyManager } : {}),
+            ...(deps.webFetch !== undefined ? { webFetch: deps.webFetch } : {}), ...(deps.poppyManager !== undefined ? { poppyManager: deps.poppyManager } : {}),
             skillProvenance: deps.skillProvenance, jobWatch: deps.jobWatch, verifications: deps.verifications,
             workId,
             ...(deps.pendingWork !== undefined ? { pendingWork: deps.pendingWork } : {}),

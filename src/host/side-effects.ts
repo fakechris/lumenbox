@@ -53,6 +53,10 @@ const DECLARED: Record<string, SideEffect> = {
   OtherThreads: { tier: "observe" },
   Recall: { tier: "observe" },
   WebFetch: { tier: "observe" },
+  PoppyDiscover: { tier: "observe" },
+  PoppyStatus: { tier: "observe" },
+  // A message the agent wrote, sent to a company's own agent: past the box, to somebody else.
+  PoppyConverse: { tier: "reach", action: "send a message to a company's agent" },
   WebSearch: { tier: "observe" },
   ReadFeishuDoc: { tier: "observe" },
   WaitForControl: { tier: "observe" },

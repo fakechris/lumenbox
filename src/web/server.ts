@@ -37,7 +37,7 @@ import { taskExportRoute } from "./task-export-routes.ts";
  * control.
  */
 
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { NetworkEventLog, networkEventsPath, summariseEvents } from "../egress/events.ts";
 import { request as httpsRequest } from "node:https";
 import { connect as tlsConnect } from "node:tls";
@@ -61,7 +61,7 @@ import { isStandingName, readStanding, STANDING_BYTE_CAP, STANDING_FILES, writeS
 import { isRecoveryCommand, recoverTask } from "../host/task-recovery.ts";
 import { isRetryCommand, retryLastAnswer } from "../host/retry-recovery.ts";
 import type { BusEvent } from "../agents/bus.ts";
-import { BoxManager, defaultBoxConfig } from "../box/docker.ts";
+import { BoxManager, defaultBoxConfig, dockerEnvironment, readBoxToken, type DockerEnvironmentState } from "../box/docker.ts";
 import { managesLocalDocker, resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts"; import { boxHeldDown, releaseBoxDown } from "../box/held-down.ts";
 import { classifyBox, auditNotice } from "../box/access.ts";
 import { configPath, envNumber } from "../config.ts";
@@ -202,7 +202,7 @@ import {
 } from "../host/webhooks.ts";
 import { ConversationDirectory, conversationsPath } from "../channels/conversations.ts";
 import { SentRootsLedger, sentRootsPath } from "../channels/sent-roots.ts";
-import { randomUUID } from "node:crypto";
+import { poppyRoute } from "./poppy-routes.ts";
 import { isLive, isTaskStatus, type Task } from "../host/tasks.ts"; import { UnknownAgentError } from "../host/task-agents.ts";
 import { connectorSatisfied } from "../host/mcp-connectors.ts";
 import { adminRecipients } from "../host/upgrade.ts";
@@ -265,7 +265,6 @@ import { compileSurface, parseActionText, SurfaceLedger, surfaceLedgerPath, type
 import { appendLine } from "../host/jsonl.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
 import { chatFilesRoot, firstRunCue } from "../host/prompt.ts";
-import { dockerEnvironment, readBoxToken, type DockerEnvironmentState } from "../box/docker.ts";
 import { attachedBox, tokenOf } from "../box/boxes.ts";
 import { catalogTemplate, describeTemplate, parseTemplate, resolveBundleRefs, rewriteFrontmatter, templatesEnabled, unresolvedPlaceholders } from "../host/template.ts";
 import { SKILL_FILENAME, authoringHints, parseSkillFile, slugify } from "../host/skills.ts";
@@ -3115,36 +3114,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (process.env.AGENTBOX_LOG_HTTP === "1") log(`web: ${route} from ${req.socket.remoteAddress}`);
       const boxSide = boxSideRefusal(req.headers.host, url.pathname); if (boxSide !== undefined) { send(res, 403, { error: boxSide }); return; } // INV-1543
 
-      // Poppy agent metadata — public endpoints that Companies fetch to verify Session JWTs.
-      if (route === "GET /poppy/agent.json" && orchestrator.poppy?.ready) {
-        send(res, 200, orchestrator.poppy.clientMetadata()); return;
-      }
-      if (route === "GET /poppy/jwks.json" && orchestrator.poppy?.ready) {
-        send(res, 200, orchestrator.poppy.jwks()); return;
-      }
-      // Poppy status — diagnostics for the operator.
-      if (route === "GET /poppy/status" && orchestrator.poppy?.ready) {
-        send(res, 200, orchestrator.poppy.status()); return;
-      }
-      // Poppy OAuth callback — the Company's auth server redirects here after the user consents.
-      if (route === "GET /poppy/callback" && orchestrator.poppy?.ready) {
-        const code = url.searchParams.get("code");
-        const state = url.searchParams.get("state");
-        const error = url.searchParams.get("error");
-        if (error) {
-          send(res, 200, `<html><body><h2>Sign-in declined</h2><p>${error}</p></body></html>`, "text/html"); return;
-        }
-        if (!code || !state) {
-          send(res, 400, { error: "missing code or state" }); return;
-        }
-        try {
-          const result = await orchestrator.poppy.handleCallback(code, state);
-          send(res, 200, `<html><body><h2>Connected to ${result.companyName}</h2><p>Scopes: ${result.scopes}</p><p>You can close this window.</p></body></html>`, "text/html"); return;
-        } catch (err) {
-          send(res, 400, { error: err instanceof Error ? err.message : "callback failed" }); return;
-        }
-      }
-
+      const poppyAnswer = await poppyRoute(route, url, orchestrator.poppy?.poppyManager); if (poppyAnswer !== undefined) { send(res, poppyAnswer.status, poppyAnswer.body, poppyAnswer.type); return; } // docs/poppy.md
       const decision = admit({
         authorization: req.headers.authorization,
         cookie: req.headers.cookie,

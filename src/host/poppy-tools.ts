@@ -14,6 +14,10 @@ import type { PoppyManager } from "./poppy/manager.ts";
 import { parseOperation, policyLevel, consentDescription, type Operation, type OperationDecision } from "./poppy/operations.ts";
 import type { ConversationEvent } from "./poppy/conversations.ts";
 import type Anthropic from "@anthropic-ai/sdk";
+import { poppyBrowserJoinUrl } from "./poppy-browser.ts";
+
+/** The Poppy tools by name: offered only to a turn whose host has Poppy on (docs/poppy.md). */
+export const POPPY_TOOLS: ReadonlySet<string> = new Set(["PoppyDiscover", "PoppyConverse", "PoppyStatus"]);
 
 // ── Tool definitions ──────────────────────────────────────────
 
@@ -335,4 +339,38 @@ async function poppyStatus(ctx: PoppyToolContext): Promise<PoppyToolResult> {
   }
 
   return { text: lines.join("\n") };
+}
+
+// ── The seam tools.ts calls ───────────────────────────────────
+
+/** What a tool call brings: the subset of the turn's ToolContext Poppy reads. */
+export interface PoppyCallContext {
+  poppyManager?: PoppyManager;
+  agent: { id: string; profile: { name: string } };
+  policy?: { requestConfirmation(input: { agentId: string; agentName: string; description: string; action?: string }): { id: string } };
+}
+
+/** One Poppy tool call, refused plainly when Poppy is off on this host. */
+export async function poppyCall(name: string, input: Record<string, unknown>, context: PoppyCallContext): Promise<{ text: string; isError?: boolean }> {
+  if (context.poppyManager === undefined) return { text: "The Poppy protocol is not enabled on this installation.", isError: true };
+  // The manager is made lazily, on the first fetch; a Poppy tool may be the first thing to need it.
+  await context.poppyManager.init().catch(() => undefined);
+  const result = await dispatchPoppyTool(name, input, {
+    manager: context.poppyManager,
+    agentId: context.agent.id,
+    agentName: context.agent.profile.name,
+    ...(context.policy !== undefined ? { requestConfirmation: (request: Parameters<NonNullable<PoppyToolContext["requestConfirmation"]>>[0]) => context.policy!.requestConfirmation(request) } : {}),
+    log: line => console.error(`[poppy] ${line}`),
+  });
+  return { text: result.text, ...(result.isError ? { isError: true } : {}) };
+}
+
+/**
+ * Browser Join (spec 8.3) before a page opens: when the site joins browsers to a Poppy session,
+ * open its one-time join URL first. A failed join is not fatal; the page opens without it.
+ */
+export async function poppyJoin(manager: PoppyManager | undefined, url: string, open: (joinUrl: string) => Promise<unknown>): Promise<void> {
+  if (manager?.ready !== true) return;
+  const joinUrl = await poppyBrowserJoinUrl(manager, url);
+  if (joinUrl !== undefined) await open(joinUrl).catch(() => undefined);
 }
