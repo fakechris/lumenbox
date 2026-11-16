@@ -33,6 +33,21 @@ import {
 } from "./oauth.ts";
 import { TokenStore } from "./token-store.ts";
 import { UcpClient, type UcpProfile, type UcpCapabilities } from "./ucp.ts";
+import { requestBrowserJoin, type BrowserJoinResult } from "./browser-join.ts";
+import {
+  conversationEndpoint,
+  sendMessage,
+  type ConversationEndpoint,
+  type ConversationEventHandler,
+} from "./conversations.ts";
+import {
+  type Operation,
+  type OperationDecision,
+  type OperationResult,
+  respondToOperation,
+  policyLevel,
+  consentDescription,
+} from "./operations.ts";
 
 export interface PoppyManagerOptions {
   /** The agentbox home directory (~/.agentbox). */
@@ -450,6 +465,107 @@ export class PoppyManager {
       : undefined;
 
     return new UcpClient(company, session, token);
+  }
+
+  // ── Browser Join (spec 8.3) ────────────────────────────────────
+
+  /**
+   * Joins the agent's browser session to the Poppy Session.
+   *
+   * Returns a URL the box browser should navigate to, which associates it
+   * with the Poppy Session. Returns null if the Company doesn't support it.
+   */
+  async browserJoin(domain: string): Promise<BrowserJoinResult | null> {
+    const session = await this.sessionFor(domain);
+    if (!session) return null;
+
+    const company = await this.discover(domain);
+    if (!company?.web?.browserSessionEndpoint) return null;
+
+    const token = company.auth?.issuer
+      ? await this.getValidToken(company.auth.issuer)
+      : undefined;
+
+    return requestBrowserJoin(company, session, token);
+  }
+
+  // ── Conversations (spec 8.2) ──────────────────────────────────
+
+  /**
+   * Finds the conversation endpoint for a Company.
+   */
+  async conversationEndpointFor(domain: string): Promise<ConversationEndpoint | null> {
+    const company = await this.discover(domain);
+    if (!company) return null;
+    return conversationEndpoint(company);
+  }
+
+  /**
+   * Sends a message to a Company's agent and streams the response.
+   *
+   * Returns an AbortController to cancel the stream.
+   */
+  async converse(
+    domain: string,
+    message: string,
+    onEvent: ConversationEventHandler,
+    options?: { conversationId?: string },
+  ): Promise<AbortController | null> {
+    const session = await this.sessionFor(domain);
+    if (!session) return null;
+
+    const company = await this.discover(domain);
+    if (!company) return null;
+
+    const ep = conversationEndpoint(company);
+    if (!ep) return null;
+
+    const token = company.auth?.issuer
+      ? await this.getValidToken(company.auth.issuer)
+      : undefined;
+
+    return sendMessage(ep, session, message, onEvent, {
+      accessToken: token,
+      conversationId: options?.conversationId,
+    });
+  }
+
+  // ── Operations (spec 8.4) ─────────────────────────────────────
+
+  /**
+   * Responds to a Company's operation request (approve/reject).
+   *
+   * This is typically called after the user has reviewed a consent card
+   * generated from the operation.
+   */
+  async respondToOperation(
+    domain: string,
+    operation: Operation,
+    decision: OperationDecision,
+  ): Promise<OperationResult> {
+    const session = await this.sessionFor(domain);
+    if (!session) return { success: false, message: "No session for domain" };
+
+    const company = await this.discover(domain);
+    const token = company?.auth?.issuer
+      ? await this.getValidToken(company.auth.issuer)
+      : undefined;
+
+    return respondToOperation(operation, decision, session, token);
+  }
+
+  /**
+   * Maps an operation to a policy gate level (2/3/4).
+   */
+  operationPolicyLevel(operation: Operation): 2 | 3 | 4 {
+    return policyLevel(operation);
+  }
+
+  /**
+   * Builds a consent card description from an operation.
+   */
+  operationConsentDescription(operation: Operation): string {
+    return consentDescription(operation);
   }
 
   // ── HTTP endpoints (served by the host's web server) ──────────
