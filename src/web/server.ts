@@ -174,6 +174,7 @@ import { decidePart, partIn, type PartKey, partViews, strayOverrides } from "../
 import { ownerOf } from "../host/follow-up.ts";
 import { Outbox } from "../host/outbox.ts";
 import { OutboxSender } from "../channels/outbox-sender.ts"; import { SentLedger } from "../channels/sent-ledger.ts"; import { withSent } from "./sent-in-thread.ts"; import { asRequests, spanOf } from "./request-thread.ts";
+import { lastReply } from "../agents/conversation-tail.ts";
 import { ALL_TOOLS } from "../host/orchestrator.ts";
 import {
   CATALOG_CONNECTORS,
@@ -5945,14 +5946,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // a room's worth of topics would pay it for entries nobody scrolled to.
           const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 50, 1), 200);
           const offset = Math.max(Number(url.searchParams.get("offset")) || 0, 0);
-          const forks = orchestrator.pendingWork?.forks?.children(id) ?? []; const page = sorted.slice(offset, offset + limit).map(conversation => { // each thread's children, folded under it in the picker (INV-1667)
+          const forks = orchestrator.pendingWork?.forks?.children(id) ?? [], only = url.searchParams.get("ids")?.split(",").slice(0, 50);
+          const page = (only ? sorted.filter(row => only.includes(row.id)) : sorted.slice(offset, offset + limit)).map(conversation => { // each thread's children, folded under it in the picker (INV-1667)
             // Labelled by what was said, because the id is a flattened chatKey nobody
             // can read. Head-of-file only, so a page stays cheap.
-            const firstLine =
-              conversation.id === MAIN_CONVERSATION
-                ? undefined
-                : registry.conversationFirstLine(id, conversation.id);
-            const children = forks.filter(fork => fork.parent === conversation.id).map(fork => ({ id: fork.child, brief: fork.brief, status: fork.status, ...(fork.reason !== undefined ? { reason: fork.reason } : {}), lastAt: fork.lastAt })); const chatKey = conversations.chatKeyFor(conversation.id); return { ...conversation, ...(firstLine !== undefined ? { firstLine } : {}), ...(chatKey !== undefined ? { chat: chatKey.split(":").slice(0, 2).join(":"), topic: chatKey.split(":").length > 2 } : {}), ...(children.length > 0 ? { forks: children } : {}) };
+            const firstLine = conversation.id === MAIN_CONVERSATION ? undefined : registry.conversationFirstLine(id, conversation.id);
+            const reply = only ? lastReply(registry.transcriptPathFor(id, conversation.id)) : undefined; // only when asked for by id: a tail read per row
+            const children = forks.filter(fork => fork.parent === conversation.id).map(fork => ({ id: fork.child, brief: fork.brief, status: fork.status, ...(fork.reason !== undefined ? { reason: fork.reason } : {}), lastAt: fork.lastAt })); const chatKey = conversations.chatKeyFor(conversation.id); return { ...conversation, ...(firstLine !== undefined ? { firstLine } : {}),
+              ...(reply !== undefined ? { lastReply: reply } : {}),
+              ...(chatKey !== undefined ? { chat: chatKey.split(":").slice(0, 2).join(":"), topic: chatKey.split(":").length > 2 } : {}), ...(children.length > 0 ? { forks: children } : {}) };
           });
           send(res, 200, { conversations: page, total: sorted.length });
           return;

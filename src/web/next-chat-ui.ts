@@ -7,7 +7,8 @@
  * between agents are one folded line each, opened on demand; the host's own notes are not shown.
  */
 export const NEXT_CHAT_JS = `
-var chat = { agentId: "", conversation: "main", conversations: [], plan: null, box: "", entries: [], live: null, loading: "", loadedFor: "", request: 0, jump: false, liveSurfaces: {}, expired: {}, find: "", changing: "", tail: 0 };
+var chat = { agentId: "", conversation: "main", conversations: [], plan: null, box: "", entries: [], live: null, loading: "", loadedFor: "", request: 0, jump: false, liveSurfaces: {}, expired: {}, find: "", changing: "", tail: 0,
+  others: { key: "", rows: null } };
 var markdown = window.markdownit ? window.markdownit({ html: false, linkify: true, breaks: true }) : null;
 
 function agentsHere() {
