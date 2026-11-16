@@ -72,9 +72,56 @@ export interface PendingOperation {
   conversation: string;
   /** Which sign-in it was asked under, or none: the answer goes only under the same one. */
   signIn?: string;
+  /**
+   * Puts new terms for the same action to the person, the way the first ones were, and says so in
+   * words for the agent. A Company answers an approval with a new revision when the terms changed.
+   */
+  reask?: (operation: Operation) => string;
 }
 
 /** A signed request's answer, as the agent sees it. */
+/** Whether a body the agent wrote carries an Operations approval, anywhere a Company would read one. */
+function carriesApproval(body: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return /personalagentprotocol\.org\/approval/.test(body);
+  }
+  const visit = (value: unknown): boolean => {
+    if (Array.isArray(value)) return value.some(visit);
+    if (typeof value !== "object" || value === null) return false;
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.some(([key]) => key === "personalagentprotocol.org/approval")) return true;
+    const operations = (value as { operations?: { approval?: unknown } }).operations;
+    if (operations !== undefined && typeof operations === "object" && operations !== null && "approval" in operations) return true;
+    return entries.some(([, nested]) => visit(nested));
+  };
+  return visit(parsed);
+}
+
+/** The answer as JSON: the body itself, or for an MCP event stream the last JSON-RPC message in it. */
+function parseAnswer(text: string, contentType: string): unknown {
+  if (/text\/event-stream/i.test(contentType)) {
+    let last: unknown;
+    for (const line of text.split(/\r\n|\r|\n/)) {
+      if (!line.startsWith("data:")) continue;
+      try {
+        const message = JSON.parse(line.slice(5).trim()) as { jsonrpc?: unknown };
+        if (message?.jsonrpc === "2.0") last = message;
+      } catch {
+        // A data line that isn't JSON is not a JSON-RPC message.
+      }
+    }
+    return last;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
 export interface PoppyResponse {
   /** How the answer was read: a JSON-RPC (MCP) answer carries an operation differently from an API's. */
   transport: "api" | "mcp";
@@ -85,6 +132,8 @@ export interface PoppyResponse {
   operation?: Operation;
   /** The Company declined an approval. */
   declined?: Declined;
+  /** The sign-in the request went under, if any: an approval of its operation goes only under the same one. */
+  signIn?: string;
 }
 
 /** Headers the agent may not set: credentials, and the ones this host signs or names itself. */
@@ -507,37 +556,42 @@ export class PoppyManager {
    * an MCP `tools/call`, in `arguments.meta["ucp-agent"]`. An answer that asks for approval comes
    * back with the operation; the caller puts it to the person.
    */
-  async request(who: string, input: { method: string; url: string; body?: string; headers?: Record<string, string>; domain?: string }, approval?: string): Promise<PoppyResponse> {
+  async request(who: string, input: { method: string; url: string; body?: string; headers?: Record<string, string>; domain?: string }, approval?: { header?: string }): Promise<PoppyResponse> {
     const target = new URL(input.url);
     const domain = (input.domain ?? target.hostname).toLowerCase();
     const found = await this.destinationsFor(domain);
     if (!found) throw new PoppyRefused(`${domain} is not a Poppy Company (no usable poppy.json)`);
     const kind = found.destinations.kindOf(target);
     if (kind === undefined) throw new PoppyRefused(`${target.origin}${target.pathname} is not one of ${found.company.domain}'s destinations`);
+    // Only the host sends an approval, after the person gave it on a card. One the agent wrote into a
+    // body would be signed as this agent's and read by the Company as the person's (extension §5).
+    if (approval === undefined && input.body !== undefined && carriesApproval(input.body)) {
+      throw new PoppyRefused("a request may not carry an approval: the person approves on the consent card, and the host sends it");
+    }
     const method = input.method.toUpperCase();
     const own = Object.fromEntries(Object.entries(input.headers ?? {}).filter(([name]) => !RESERVED_HEADERS.test(name)));
     const profile = platformProfileUrl(this.origin);
-    const isMcp = kind === "ucp" && input.body !== undefined;
-    const body = isMcp ? withUcpMeta(input.body!, profile) : input.body;
+    // By what the Company's UCP profile declares for this service, not by the request's shape.
+    const ucpMcp = kind === "ucp" && found.destinations.ucpTransportOf(target) === "mcp";
+    const body = ucpMcp && input.body !== undefined ? withUcpMeta(input.body, profile) : input.body;
+    const signIn = this.signInOf(who, found.company.domain);
     const headers: Record<string, string> = {
       ...own,
       ...(body !== undefined && !Object.keys(own).some(name => /^content-type$/i.test(name)) ? { "Content-Type": "application/json" } : {}),
+      ...(ucpMcp && !Object.keys(own).some(name => /^accept$/i.test(name)) ? { Accept: "application/json, text/event-stream" } : {}),
       ...(await this.headersFor(method, input.url, who, found.company.domain)),
       ...(kind === "ucp" ? { "UCP-Agent": ucpAgentHeader(profile) } : {}),
-      ...(approval !== undefined ? { "Poppy-Approval": approval } : {}),
+      ...(approval?.header !== undefined ? { "Poppy-Approval": approval.header } : {}),
     };
     const response = await poppyRequest(input.url, { method, headers, ...(body !== undefined ? { body } : {}), timeoutMs: 30_000 }, found.destinations);
+    const contentType = response.headers.get("content-type") ?? "";
     const text = await response.text();
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      parsed = undefined;
-    }
-    const transport = isMcp || (parsed as { jsonrpc?: unknown } | undefined)?.jsonrpc === "2.0" ? "mcp" : "api";
+    const parsed = parseAnswer(text, contentType);
+    const transport = ucpMcp || (parsed as { jsonrpc?: unknown } | undefined)?.jsonrpc === "2.0" ? "mcp" : "api";
     const asks = transport === "mcp" ? operationFromMcp(parsed) : operationFromApi(response.status, parsed);
-    return { transport, status: response.status, contentType: response.headers.get("content-type") ?? "", body: text.slice(0, MAX_ANSWER_CHARS), ...asks };
+    return { transport, status: response.status, contentType, body: text.slice(0, MAX_ANSWER_CHARS), ...signIn, ...asks };
   }
+
 
   // ── Conversations (spec 8) ────────────────────────────────────
 
@@ -545,7 +599,7 @@ export class PoppyManager {
    * Sends `who`'s message to a Company's agent — starting a conversation, or continuing
    * `conversationId` — and reads its reply until it has finished or `deadline` passes.
    */
-  async converse(who: string, domain: string, message: { text?: string; approval?: ReturnType<typeof approvalOf> }, conversationId: string | undefined, deadline: number): Promise<ConversationTurn> {
+  async converse(who: string, domain: string, message: { text?: string; approval?: ReturnType<typeof approvalOf> }, conversationId: string | undefined, deadline: number): Promise<ConversationTurn & { signIn?: string }> {
     const found = await this.destinationsFor(domain);
     if (!found) throw new PoppyRefused(`${domain} is not a Poppy Company (no usable poppy.json)`);
     const endpoint = conversationEndpoint(found.company);
@@ -556,19 +610,20 @@ export class PoppyManager {
       const headers = { Accept: "application/json", ...(body !== undefined ? { "Content-Type": "application/json" } : {}), ...(await this.headersFor(method, url, who, found.company.domain)) };
       return poppyRequest(url, { method, headers, ...(body !== undefined ? { body } : {}), timeoutMs: 30_000 }, found.destinations);
     };
+    const signIn = this.signInOf(who, found.company.domain);
     const result = await exchange(endpoint, send, message, state, deadline);
     this.conversations.set(key(result.state.conversationId), result.state);
-    return result.turn;
+    return { ...result.turn, ...signIn };
   }
 
   // ── Operations (Operations extension v3) ──────────────────────
 
   /** Holds an operation until the person answers the approval `approvalId`, with the sign-in it came under. */
-  awaitDecision(approvalId: string, pending: PendingOperation): void {
-    this.pendingOperations.set(approvalId, { ...pending, ...this.signInOf(pending.who, pending.domain) });
+  awaitDecision(approvalId: string, pending: PendingOperation, signIn: { signIn?: string }): void {
+    this.pendingOperations.set(approvalId, { ...pending, ...signIn });
   }
 
-  private signInOf(who: string, domain: string): { signIn?: string } {
+  signInOf(who: string, domain: string): { signIn?: string } {
     const company = this.sessions.get(`${who}|${domain.toLowerCase()}`)?.company;
     const issuer = company?.auth?.issuer;
     const at = issuer === undefined ? undefined : this.tokenStore?.get(TokenStore.key(who, company!.domain), issuer)?.signIn;
@@ -606,18 +661,23 @@ export class PoppyManager {
         const turn = await this.converse(who, domain, { text: "The user approved this.", approval }, via.conversationId, Date.now() + 60_000);
         const said = turn.messages.map(message => message.text).filter(Boolean).join("\n\n");
         const declined = turn.declined.find(entry => entry.operation_id === operation.operation_id);
+        // New terms in the reply go to the person again: these events are now read, so nothing else would show them.
+        const again = turn.operations.map(next => pending.reask?.(next) ?? `${domain} answered with new terms (revision ${next.revision}) that nobody here can approve.`);
+        const reply = said ? ` ${domain} said:\n\n${said}` : ` ${domain} has not replied yet.`;
+        const terms = again.length > 0 ? `\n\n${again.join("\n\n")}` : "";
+        const unread = turn.readError ? ` Reading the rest of the reply failed (${turn.readError}); continue the conversation to read it.` : "";
         tell(agentId, conversation, declined
           ? `The person approved ${asked}, and ${domain} declined it${declined.reason ? `: ${declined.reason}` : "."} Nothing was performed; do not send the approval again.`
-          : `The person approved ${asked}; the approval was sent in conversation ${via.conversationId}.${said ? ` ${domain} said:\n\n${said}` : ` ${domain} has not replied yet.`}`);
+          : `The person approved ${asked}; the approval was sent in conversation ${via.conversationId}.${reply}${terms}${unread}`);
         return;
       }
       // The same request again: an MCP tool call with the approval in its _meta, an API request with it in Poppy-Approval.
       const body = via.kind === "mcp" && via.body !== undefined ? withMcpApproval(via.body, approval) : via.body;
-      const answer = await this.request(who, { method: via.method, url: via.url, ...(body !== undefined ? { body } : {}), headers: via.headers, domain }, via.kind === "api" ? approvalHeader(approval) : undefined);
+      const answer = await this.request(who, { method: via.method, url: via.url, ...(body !== undefined ? { body } : {}), headers: via.headers, domain }, via.kind === "api" ? { header: approvalHeader(approval) } : {});
       tell(agentId, conversation, answer.declined
         ? `The person approved ${asked}, and ${domain} declined it${answer.declined.reason ? `: ${answer.declined.reason}` : "."} Nothing was performed; do not send the approval again.`
         : answer.operation
-          ? `The person approved ${asked}, but ${domain} answered with new terms (revision ${answer.operation.revision}); they need the person's approval again. Make the request again to put them to the person.`
+          ? `The person approved ${asked}, but ${domain} answered with new terms (revision ${answer.operation.revision}).\n\n${pending.reask?.(answer.operation) ?? "Nobody here can approve them; nothing was performed."}`
           : `The person approved ${asked}; the request was made again with the approval and ${domain} answered HTTP ${answer.status}:\n\n${answer.body.slice(0, 4000)}`);
     } catch (error) {
       tell(agentId, conversation, `The person approved ${asked}, but sending the approval to ${domain} failed: ${error instanceof Error ? error.message : String(error)}. Nothing confirms the action was performed.`);

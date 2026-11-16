@@ -43,6 +43,8 @@ export interface ConversationTurn {
   authorization: string[];
   /** The Company asks to talk with the person themselves (8.10). */
   userRequested: string[];
+  /** A read after the message was accepted failed: what came before it is here, the rest is still at the Company. */
+  readError?: string;
   working: boolean;
   closed: boolean;
   responder: string;
@@ -81,14 +83,20 @@ export async function exchange(
   const current: ConversationState = state ?? { conversationId: String(read.conversation_id ?? ""), seen: new Set() };
   if (current.conversationId === "") throw new Error("the Company started a conversation without an id");
   const turn: ConversationTurn = { conversationId: current.conversationId, messages: [], operations: [], declined: [], authorization: [], userRequested: [], working: true, closed: false, responder: "agent" };
+  // The cursor and the handled events move only with what this turn returns: a read that fails
+  // stops the loop, and everything applied before it goes back to the caller with the error,
+  // so nothing is marked read that the agent didn't get.
   for (;;) {
     apply(read, current, turn);
-    if (read.has_more === true) {
-      read = await expectRead(await send("GET", `${base}/${encodeURIComponent(current.conversationId)}/events${query(current.cursor).replace(/wait=\d+/, "wait=0")}`));
-      continue;
+    const more = read.has_more === true;
+    if (Date.now() >= deadline || (!more && (!turn.working || turn.closed))) break;
+    const events = `${base}/${encodeURIComponent(current.conversationId)}/events${query(current.cursor)}`;
+    try {
+      read = await expectRead(await send("GET", more ? events.replace(/wait=\d+/, "wait=0") : events));
+    } catch (error) {
+      turn.readError = error instanceof Error ? error.message : String(error);
+      break;
     }
-    if (!turn.working || turn.closed || Date.now() >= deadline) break;
-    read = await expectRead(await send("GET", `${base}/${encodeURIComponent(current.conversationId)}/events${query(current.cursor)}`));
   }
   return { turn, state: current };
 }

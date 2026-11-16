@@ -26,7 +26,8 @@ test("what a Company verifies against is public; what the agent holds is not, an
   assert.equal((await at("/poppy/agent.json"))?.status, 200);
   const profile = await at("/poppy/ucp/2026-08-25.json");
   assert.equal(profile?.status, 200, "the UCP platform profile a Company fetches to negotiate");
-  assert.deepEqual((profile?.body as { ucp: { payment_handlers: unknown } }).ucp.payment_handlers, {}, "no payment handler: the person pays at continue_url");
+  assert.ok(profile);
+  assert.deepEqual((profile.body as { ucp: { payment_handlers: unknown } }).ucp.payment_handlers, {}, "no payment handler: the person pays at continue_url");
   assert.equal(await at("/poppy/status"), undefined, "sessions and visited domains are not answered before sign-in");
   assert.equal(await poppyRoute("GET /poppy/jwks.json", new URL("https://agent.example/poppy/jwks.json"), undefined), undefined);
 });

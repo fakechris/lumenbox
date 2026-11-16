@@ -21,6 +21,8 @@ export interface Destinations extends PoppyScope {
   kindOf(url: URL): DestinationKind | undefined;
   /** The UCP service endpoints, which get the platform profile on every request. */
   ucp: string[];
+  /** The transport a UCP service declares (`mcp`, `rest`, …) for this URL, when it is one. */
+  ucpTransportOf(url: URL): string | undefined;
 }
 
 /** An endpoint covers itself and the paths under it (a `/mcp` endpoint, an `/api` base). */
@@ -51,7 +53,8 @@ export function destinationsOf(company: PoppyCompany, ucp: UcpProfile | null): D
     ...(company.tasksEndpoint ? [company.tasksEndpoint] : []),
     ...Object.values(company.extensions ?? {}).flatMap(entries => entries.flatMap(entry => (entry.endpoint ? [entry.endpoint] : []))),
   ];
-  const ucpEndpoints = (ucp?.services ?? []).map(service => service.endpoint);
+  const ucpServices = ucp?.services ?? [];
+  const ucpEndpoints = ucpServices.map(service => service.endpoint);
   const domain = company.domain.toLowerCase();
   const kindOf = (url: URL): DestinationKind | undefined => {
     if (url.protocol !== "https:") return undefined;
@@ -60,5 +63,6 @@ export function destinationsOf(company: PoppyCompany, ucp: UcpProfile | null): D
     if (url.hostname.toLowerCase() === domain) return "page";
     return undefined;
   };
-  return { name: company.domain, kindOf, allows: url => kindOf(url) !== undefined, ucp: ucpEndpoints };
+  const ucpTransportOf = (url: URL) => ucpServices.find(service => covers(service.endpoint, url))?.transport;
+  return { name: company.domain, kindOf, allows: url => kindOf(url) !== undefined, ucp: ucpEndpoints, ucpTransportOf };
 }

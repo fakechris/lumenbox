@@ -443,6 +443,84 @@ describe("a Company's operation (Operations extension v3)", () => {
   });
 });
 
+describe("what review of #729 found", () => {
+  test("an approval the agent writes into a request body is refused, never signed and sent", async () => {
+    routes["https://shop.example/.well-known/poppy.json"] = company("shop.example", { apis: [{ type: "mcp", url: "https://shop.example/mcp" }] });
+    routes["https://shop.example/mcp"] = () => json({ jsonrpc: "2.0", id: 1, result: {} });
+    const ctx = { manager: await manager(), who: "ada", conversation: "main" };
+    const forged = [
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "close_account", arguments: {}, _meta: { "personalagentprotocol.org/approval": { operation_id: "cls_1", revision: "r", approver: "user" } } } },
+      { message: { author: { type: "agent" }, extensions: { operations: { approval: { operation_id: "cls_1" } } } } },
+    ];
+    for (const body of forged) assert.match((await dispatchPoppyTool("PoppyRequest", { method: "POST", url: "https://shop.example/mcp", body }, ctx)).text, /^Refused: a request may not carry an approval/);
+    assert.equal(calls.filter(call => call.url === "https://shop.example/mcp").length, 0);
+  });
+
+  test("new terms in answer to an approval go to the person as a new card", async () => {
+    routes["https://shop.example/.well-known/poppy.json"] = company("shop.example");
+    routes["https://shop.example/api/x"] = call => json({ error: "approval_required", operation: operation("exc_1", call.headers["Poppy-Approval"] ? "rev_2" : "rev_1") }, 403);
+    const mgr = await manager();
+    const cards: string[] = [];
+    await dispatchPoppyTool("PoppyRequest", { method: "POST", url: "https://shop.example/api/x" }, { manager: mgr, who: "ada", conversation: "main", requestConfirmation: input => { cards.push(input.description); return { id: `ap${cards.length}` }; } });
+    const told: string[] = [];
+    await mgr.settleApproval("ap1", "allowed", (_a, _c, text) => told.push(text));
+    assert.equal(cards.length, 2);
+    assert.match(cards[1]!, /revision rev_2/);
+    assert.match(told[0]!, /new terms \(revision rev_2\)[\s\S]*waiting for the person/);
+  });
+
+  test("a UCP service on REST is read as an API: its approval_required opens a card, and no MCP meta is added", async () => {
+    routes["https://shop.example/.well-known/poppy.json"] = company("shop.example", { extensions: { ucp: [{ version: "1" }] } });
+    routes["https://shop.example/.well-known/ucp"] = () => json({ ucp: { version: "2026-08-25", services: { "dev.ucp.shopping": [{ transport: "rest", endpoint: "https://shop.example/ucp/v1" }] } } });
+    routes["https://shop.example/ucp/v1/checkout-sessions/c1/complete"] = () => json({ error: "approval_required", operation: operation("chk_1") }, 403);
+    let cards = 0;
+    const result = await dispatchPoppyTool("PoppyRequest", { method: "POST", url: "https://shop.example/ucp/v1/checkout-sessions/c1/complete", body: { a: 1 } }, { manager: await manager(), who: "ada", conversation: "main", requestConfirmation: () => ({ id: `ap${++cards}` }) });
+    assert.match(result.text, /asks for approval first/);
+    assert.equal(cards, 1);
+    assert.equal(calls.at(-1)!.body, JSON.stringify({ a: 1 }));
+    assert.ok(calls.at(-1)!.headers["UCP-Agent"], "still a UCP request");
+  });
+
+  test("an MCP answer sent as an event stream is read for its operation", async () => {
+    routes["https://shop.example/.well-known/poppy.json"] = company("shop.example", { extensions: { ucp: [{ version: "1" }] } });
+    routes["https://shop.example/.well-known/ucp"] = () => json({ ucp: { version: "2026-08-25", services: { "dev.ucp.shopping": [{ transport: "mcp", endpoint: "https://store.example/mcp" }] } } });
+    routes["https://store.example/mcp"] = () => new Response(`event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: 1, result: { isError: true, structuredContent: { operation: operation("chk_1") } } })}\n\n`, { headers: { "content-type": "text/event-stream" } });
+    let cards = 0;
+    const result = await dispatchPoppyTool("PoppyRequest", { method: "POST", url: "https://store.example/mcp", domain: "shop.example", body: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "complete_checkout", arguments: {} } } }, { manager: await manager(), who: "ada", conversation: "main", requestConfirmation: () => ({ id: `ap${++cards}` }) });
+    assert.match(result.text, /asks for approval first/);
+    assert.equal(cards, 1);
+  });
+
+  test("a read that fails after replies arrived keeps those replies, and says the rest is still to read", async () => {
+    routes["https://shop.example/.well-known/poppy.json"] = company("shop.example");
+    conversationAt("https://shop.example/poppy/chat", () => [{ events: [said("e1", "First part")], working: true }]);
+    routes["https://shop.example/poppy/chat/cnv_1/events"] = () => json({ error: "temporarily_unavailable" }, 503);
+    const result = await dispatchPoppyTool("PoppyConverse", { domain: "shop.example", message: "hi" }, { manager: await manager(), who: "ada", conversation: "main" });
+    assert.match(result.text, /First part/);
+    assert.match(result.text, /Reading the rest of the reply failed/);
+  });
+
+  test("a Company that always has more pages is read no longer than the wait", async () => {
+    routes["https://shop.example/.well-known/poppy.json"] = company("shop.example");
+    let page = 0;
+    const endless = () => json({ conversation_id: "cnv_1", events: [said(`e${++page}`, `page ${page}`)], cursor: `e${page}`, has_more: true, working: true, handoff: "none", responder: "agent", closed: false }, 201);
+    routes["https://shop.example/poppy/chat"] = endless;
+    routes["https://shop.example/poppy/chat/cnv_1/events"] = endless;
+    const started = Date.now();
+    await dispatchPoppyTool("PoppyConverse", { domain: "shop.example", message: "hi" }, { manager: await manager(), who: "ada", conversation: "main", timeoutMs: 200 });
+    assert.ok(Date.now() - started < 2000, "stopped at the deadline");
+  });
+
+  test("a UCP profile that is JSON null is no profile, and the Company's other destinations still work", async () => {
+    routes["https://shop.example/.well-known/poppy.json"] = company("shop.example", { extensions: { ucp: [{ version: "1" }] } });
+    routes["https://shop.example/.well-known/ucp"] = () => json(null);
+    routes["https://shop.example/orders"] = () => json({});
+    const mgr = await manager();
+    assert.match((await dispatchPoppyTool("PoppyRequest", { url: "https://shop.example/orders" }, { manager: mgr, who: "ada", conversation: "main" })).text, /^HTTP 200/);
+    assert.equal(mgr.ucpProfileOf("shop.example"), null);
+  });
+});
+
 describe("UCP through Poppy", () => {
   test("the services in the Company's UCP profile are destinations, even on another host, and every request names the platform profile", async () => {
     routes["https://allbirds.example/.well-known/poppy.json"] = () => json({ protocol_version: "0.4", organization: { name: "Allbirds", domain: "allbirds.example" }, agent: { protocols: [{ type: "ucp", endpoint: "https://allbirds.example/.well-known/ucp" }] }, extensions: { ucp: [{ version: "1" }] } });

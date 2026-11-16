@@ -168,7 +168,7 @@ async function poppyRequestTool(input: Record<string, unknown>, ctx: PoppyToolCo
   const head = `HTTP ${answer.status}${answer.contentType ? ` (${answer.contentType})` : ""}`;
   if (answer.operation) {
     const via = { kind: answer.transport, method, url, ...(body !== undefined ? { body } : {}), headers } as const;
-    return { text: `${head}. Not done: ${company} asks for approval first.\n${askAbout(answer.operation, company, via, ctx)}` };
+    return { text: `${head}. Not done: ${company} asks for approval first.\n${askAbout(answer.operation, company, via, { ...(answer.signIn !== undefined ? { signIn: answer.signIn } : {}) }, ctx)}` };
   }
   if (answer.declined) return { text: `${head}. ${company} declined the approval${answer.declined.reason ? `: ${answer.declined.reason}` : "."} Nothing was performed; do not send it again.` };
   return { text: `${head}\n\n${answer.body}`, ...(answer.status >= 400 ? { isError: true } : {}) };
@@ -187,11 +187,12 @@ async function poppyConverse(domain: string, message: string, conversationId: st
     const who = said.author.type === "human" ? `${said.author.name ?? "a person"} at ${domain}` : `${domain}'s agent`;
     parts.push(`${who}: ${said.text ?? ""}${said.data !== undefined ? `\n${JSON.stringify(said.data)}` : ""}`);
   }
-  for (const op of turn.operations) parts.push(askAbout(op, domain, { kind: "conversation", conversationId: turn.conversationId }, ctx));
+  for (const op of turn.operations) parts.push(askAbout(op, domain, { kind: "conversation", conversationId: turn.conversationId }, { ...(turn.signIn !== undefined ? { signIn: turn.signIn } : {}) }, ctx));
   for (const declined of turn.declined) parts.push(`${domain} declined approval of ${declined.operation_id}${declined.reason ? `: ${declined.reason}` : "."} Nothing was performed.`);
   for (const reason of turn.userRequested) parts.push(`${domain} asks to talk with the person directly${reason ? `: ${reason}` : "."} Tell them.`);
   for (const error of turn.authorization) parts.push(`${domain} needs the person signed in (${error}); this agent cannot sign in yet.`);
-  if (turn.working) parts.push(`${domain} is still working on it; continue the conversation later to read the rest.`);
+  if (turn.readError) parts.push(`Reading the rest of the reply failed (${turn.readError}); continue the conversation to read it.`);
+  else if (turn.working) parts.push(`${domain} is still working on it; continue the conversation later to read the rest.`);
   if (turn.closed) parts.push("The conversation is closed.");
   if (turn.messages.length === 0 && !turn.working) parts.push("(No reply.)");
   return { text: parts.join("\n\n") };
@@ -202,7 +203,7 @@ async function poppyConverse(domain: string, message: string, conversationId: st
  * the Company and the revision's terms; their answer goes back when they give it
  * (PoppyManager.settleApproval). Nothing here approves anything: the agent cannot, and is told so.
  */
-function askAbout(op: Operation, domain: string, via: Parameters<PoppyManager["awaitDecision"]>[1]["via"], ctx: PoppyToolContext): string {
+function askAbout(op: Operation, domain: string, via: Parameters<PoppyManager["awaitDecision"]>[1]["via"], signIn: { signIn?: string }, ctx: PoppyToolContext): string {
   const terms = consentDescription(op, domain);
   if (ctx.requestConfirmation === undefined) {
     return `---\n${terms}\n\nThere is nobody here to approve it, so it is not approved and nothing was performed. Say so to whoever asked.`;
@@ -210,7 +211,9 @@ function askAbout(op: Operation, domain: string, via: Parameters<PoppyManager["a
   // The gate folds cards with the same words into one approval: the description names the Company,
   // the operation and its revision, so two requests never share one answer.
   const approval = ctx.requestConfirmation({ agentId: ctx.who, agentName: ctx.agentName ?? "Poppy", description: terms, action: `approve ${domain}'s operation ${op.operation_id}` });
-  ctx.manager.awaitDecision(approval.id, { who: ctx.who, domain, operation: op, via, agentId: ctx.who, conversation: ctx.conversation });
+  // Under the sign-in the request went with, and able to put the next revision to the person the same way.
+  const reask = (next: Operation) => askAbout(next, domain, via, signIn, ctx);
+  ctx.manager.awaitDecision(approval.id, { who: ctx.who, domain, operation: op, via, agentId: ctx.who, conversation: ctx.conversation, reask }, signIn);
   ctx.log?.(`asked the person about operation ${op.operation_id} from ${domain}`);
   return `---\n${terms}\n\nThis is waiting for the person to approve or decline. If they approve, the approval goes to ${domain} by itself and you will be told what came of it. Do not approve it, retry it, or ask again.`;
 }

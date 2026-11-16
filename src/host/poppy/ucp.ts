@@ -44,6 +44,7 @@ export async function fetchUcpProfile(domain: string): Promise<UcpProfile | null
   } catch {
     return null;
   }
+  if (typeof doc !== "object" || doc === null) return null;
   const ucp = doc.ucp as { version?: unknown; services?: unknown } | undefined;
   if (typeof ucp?.version !== "string" || typeof ucp.services !== "object" || ucp.services === null) return null;
   const services: UcpService[] = [];
