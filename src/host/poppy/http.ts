@@ -13,8 +13,9 @@
  * - https only, no user:password in the URL.
  * - Redirects are not followed, except where the protocol needs them (discovery), and then by
  *   hand, each hop back through the same checks.
- * - An endpoint a Company named must be on that Company's own site (`within`): a site cannot have
- *   the agent sign sessions, or send a token, to a third party it names.
+ * - Where a request may go is a scope the caller names: a host and the names under it (`within`),
+ *   or a Company's destinations (destinations.ts) — its own pages and the endpoints its documents
+ *   list. A site cannot have the agent sign sessions, or send a token, anywhere else.
  * - The body is capped, so a hostile endpoint cannot stream without end into memory.
  */
 
@@ -48,8 +49,15 @@ export function withinSite(host: string, site: string): boolean {
   return h === s || h.endsWith(`.${s}`);
 }
 
-/** The URL, if Poppy may call it: https, no credentials, and on `site` when one is named. */
-export function poppyUrl(raw: string, site?: string): URL {
+/** Where a request may go, when a host and the names under it is not the answer. */
+export interface PoppyScope {
+  /** For the refusal: whose destinations these are. */
+  name: string;
+  allows(url: URL): boolean;
+}
+
+/** The URL, if Poppy may call it: https, no credentials, and inside `site` when one is named. */
+export function poppyUrl(raw: string, site?: string | PoppyScope): URL {
   let url: URL;
   try {
     url = new URL(raw);
@@ -58,7 +66,8 @@ export function poppyUrl(raw: string, site?: string): URL {
   }
   if (url.protocol !== "https:") throw new PoppyRefused(`${url.origin} is not https`);
   if (url.username !== "" || url.password !== "") throw new PoppyRefused(`${url.host} carries credentials in its URL`);
-  if (site !== undefined && !withinSite(url.hostname, site)) throw new PoppyRefused(`${url.hostname} is not on ${site}, the site that named it`);
+  if (typeof site === "string" && !withinSite(url.hostname, site)) throw new PoppyRefused(`${url.hostname} is not on ${site}, the site that named it`);
+  if (typeof site === "object" && !site.allows(url)) throw new PoppyRefused(`${url.origin}${url.pathname} is not one of ${site.name}'s destinations`);
   // A literal address is never looked up, so the guarded lookup never sees it: judged here instead.
   const literal = url.hostname.replace(/^\[|\]$/g, "");
   const inside = isIP(literal) !== 0 ? forbiddenAddress(literal) : undefined;
@@ -74,7 +83,7 @@ export function usePoppyTransport(next?: PoppyTransport): void {
 }
 
 /** One request; a redirect is refused, not followed. */
-export async function poppyRequest(raw: string, init: PoppyRequest = {}, site?: string): Promise<Response> {
+export async function poppyRequest(raw: string, init: PoppyRequest = {}, site?: string | PoppyScope): Promise<Response> {
   const url = poppyUrl(raw, site);
   const response = await transport(url, init);
   if (response.status >= 300 && response.status < 400) {

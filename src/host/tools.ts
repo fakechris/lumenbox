@@ -4337,7 +4337,7 @@ export async function dispatchTool(
       return await context.docReader.read(String(input.url ?? ""));
     }
 
-    case "PoppyDiscover": case "PoppyConverse": case "PoppyStatus":
+    case "PoppyDiscover": case "PoppyRequest": case "PoppyConverse": case "PoppyStatus":
       return await poppyCall(name, input, context);
 
     case "WebFetch": {

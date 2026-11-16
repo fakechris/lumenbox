@@ -1,316 +1,122 @@
 /**
- * UCP (Universal Commerce Protocol) client for the Poppy UCP extension.
+ * UCP through Poppy (the `ucp` extension, version 1): where a Company's commerce services are, and
+ * what every request to them carries.
  *
- * UCP is Shopify's protocol for agent commerce. When a Company's poppy.json
- * has an `extensions.ucp` entry, the agent can discover the Company's UCP
- * profile, negotiate capabilities, and perform shopping operations.
+ * UCP is the business protocol; Poppy finds the Company and identifies the agent. A Company that
+ * lists `ucp` in its poppy.json publishes a UCP profile at `https://{domain}/.well-known/ucp`, which
+ * names its services — usually an MCP endpoint, often on another host (Allbirds's is on
+ * myshopify.com). Those endpoints are the Company's destinations because its own profile lists them.
  *
- * Flow:
- *   1. Profile discovery: GET /ucp/v1/profile → what the Company offers
- *   2. Capability negotiation: POST /ucp/v1/capabilities → what both sides support
- *   3. Shopping operations: cart, checkout, orders
+ * Every UCP request names this agent's platform profile: in the `UCP-Agent` header, and for an MCP
+ * `tools/call` also in `arguments.meta["ucp-agent"]`, the same URL in both. The profile describes the
+ * agent, never a User, so it is one document for everyone (`platformProfile`). There is no payment
+ * handler: a checkout is finished by the person at the Company's `continue_url`.
  */
 
-import type { PoppyCompany } from "./discovery.ts";
-import type { PoppySession } from "./session.ts";
-import { poppyRequest, poppyUrl } from "./http.ts";
+import { poppyRequest } from "./http.ts";
 
-// ── Types ─────────────────────────────────────────────────────
+/** The UCP version this agent speaks, and names in its platform profile's URL. */
+export const UCP_VERSION = "2026-08-25";
+
+export interface UcpService {
+  /** The service's name, e.g. `dev.ucp.shopping`. */
+  name: string;
+  version: string;
+  transport: string;
+  endpoint: string;
+}
 
 export interface UcpProfile {
-  name: string;
-  domain: string;
-  capabilities: string[];
-  endpoints: Record<string, string>;
-  raw: Record<string, unknown>;
+  version: string;
+  services: UcpService[];
 }
 
-export interface UcpCapabilities {
-  /** What both sides agreed on. */
-  negotiated: string[];
-  /** Endpoints for the negotiated capabilities. */
-  endpoints: Record<string, string>;
-  raw: Record<string, unknown>;
+/**
+ * The Company's UCP profile, or null when it has none we can use. Not followed through a redirect:
+ * a profile from another host doesn't speak for this Company (ucp extension §3).
+ */
+export async function fetchUcpProfile(domain: string): Promise<UcpProfile | null> {
+  let doc: Record<string, unknown>;
+  try {
+    const response = await poppyRequest(`https://${domain}/.well-known/ucp`, { headers: { Accept: "application/json" } }, domain);
+    if (!response.ok) return null;
+    doc = (await response.json()) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  const ucp = doc.ucp as { version?: unknown; services?: unknown } | undefined;
+  if (typeof ucp?.version !== "string" || typeof ucp.services !== "object" || ucp.services === null) return null;
+  const services: UcpService[] = [];
+  for (const [name, entries] of Object.entries(ucp.services as Record<string, unknown>)) {
+    if (!Array.isArray(entries)) continue;
+    for (const entry of entries as Record<string, unknown>[]) {
+      if (typeof entry?.endpoint !== "string" || typeof entry.transport !== "string") continue;
+      try {
+        if (new URL(entry.endpoint).protocol !== "https:") continue;
+      } catch {
+        continue;
+      }
+      services.push({ name, version: String(entry.version ?? ucp.version), transport: entry.transport, endpoint: entry.endpoint });
+    }
+  }
+  return { version: ucp.version, services };
 }
 
-export interface UcpCartItem {
-  variantId: string;
-  quantity: number;
-  attributes?: Record<string, string>;
+/** The platform profile URL this host publishes, under its public origin. */
+export function platformProfileUrl(origin: string): string {
+  return `${origin}/poppy/ucp/${UCP_VERSION}.json`;
 }
 
-export interface UcpCart {
-  id: string;
-  items: Array<{ variantId: string; quantity: number; title?: string; price?: string }>;
-  subtotal?: string;
-  currency?: string;
-  checkoutUrl?: string;
-  raw: Record<string, unknown>;
-}
+const spec = (path: string) => `https://ucp.dev/${UCP_VERSION}/${path}`;
+const capability = (path: string, extendsCart = false) => [{
+  version: UCP_VERSION,
+  spec: spec(`specification/shopping/${path}/`),
+  schema: spec(`schemas/shopping/${path.split("/").pop()}.json`),
+  ...(extendsCart ? { extends: ["dev.ucp.shopping.checkout", "dev.ucp.shopping.cart"] } : {}),
+}];
 
-export interface UcpCheckout {
-  id: string;
-  status: string;
-  webUrl?: string;
-  totalPrice?: string;
-  currency?: string;
-  raw: Record<string, unknown>;
-}
-
-export interface UcpOrder {
-  id: string;
-  status: string;
-  totalPrice?: string;
-  currency?: string;
-  raw: Record<string, unknown>;
-}
-
-// ── UCP Client ────────────────────────────────────────────────
-
-export class UcpClient {
-  private readonly baseUrl: string;
-  /** Every UCP call is on the Company's own site, through the guarded door (http.ts). */
-  private readonly site: string;
-  private readonly session: PoppySession;
-  private accessToken?: string;
-
-  constructor(company: PoppyCompany, session: PoppySession, accessToken?: string) {
-    const ucpExt = company.extensions?.ucp?.find(e => e.endpoint);
-    const ucpProto = company.agentProtocols?.find(p => p.type === "ucp");
-    const endpoint = ucpExt?.endpoint ?? ucpProto?.endpoint;
-
-    if (!endpoint) {
-      throw new Error(`Company ${company.name} has no UCP endpoint`);
-    }
-    this.baseUrl = poppyUrl(endpoint, company.domain).toString().replace(/\/$/, "");
-    this.site = company.domain;
-    this.session = session;
-    this.accessToken = accessToken;
-  }
-
-  /** Sets or updates the access token (after OAuth). */
-  setAccessToken(token: string): void {
-    this.accessToken = token;
-  }
-
-  private async headers(method: string, path: string): Promise<Record<string, string>> {
-    const url = `${this.baseUrl}${path}`;
-    const h = await this.session.headers(method, url, this.accessToken);
-    return {
-      ...h,
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    };
-  }
-
-  // ── Profile Discovery ─────────────────────────────────────
-
-  /**
-   * Fetches the Company's UCP profile (what they offer).
-   */
-  async discoverProfile(): Promise<UcpProfile> {
-    const path = "/ucp/v1/profile";
-    const response = await poppyRequest(`${this.baseUrl}${path}`, {
-      headers: await this.headers("GET", path),
-      timeoutMs: 15_000,
-    }, this.site);
-
-    if (!response.ok) {
-      throw new UcpError(`Profile discovery failed: HTTP ${response.status}`, await response.text());
-    }
-
-    const doc = (await response.json()) as Record<string, unknown>;
-    return {
-      name: String(doc.name ?? ""),
-      domain: String(doc.domain ?? ""),
-      capabilities: Array.isArray(doc.capabilities) ? doc.capabilities.filter((s): s is string => typeof s === "string") : [],
-      endpoints: isStringRecord(doc.endpoints) ? doc.endpoints : {},
-      raw: doc,
-    };
-  }
-
-  // ── Capability Negotiation ────────────────────────────────
-
-  /**
-   * Negotiates capabilities with the Company.
-   *
-   * The agent sends what it supports; the Company responds with the
-   * intersection — what both sides can do.
-   */
-  async negotiateCapabilities(
-    agentCapabilities: string[],
-  ): Promise<UcpCapabilities> {
-    const path = "/ucp/v1/capabilities";
-    const response = await poppyRequest(`${this.baseUrl}${path}`, {
-      method: "POST",
-      headers: await this.headers("POST", path),
-      body: JSON.stringify({ capabilities: agentCapabilities }),
-      timeoutMs: 15_000,
-    }, this.site);
-
-    if (!response.ok) {
-      throw new UcpError(`Capability negotiation failed: HTTP ${response.status}`, await response.text());
-    }
-
-    const doc = (await response.json()) as Record<string, unknown>;
-    return {
-      negotiated: Array.isArray(doc.capabilities) ? doc.capabilities.filter((s): s is string => typeof s === "string") : [],
-      endpoints: isStringRecord(doc.endpoints) ? doc.endpoints : {},
-      raw: doc,
-    };
-  }
-
-  // ── Shopping: Cart ────────────────────────────────────────
-
-  /**
-   * Creates a cart or adds items to an existing one.
-   */
-  async createCart(items: UcpCartItem[]): Promise<UcpCart> {
-    const path = "/ucp/v1/cart";
-    const response = await poppyRequest(`${this.baseUrl}${path}`, {
-      method: "POST",
-      headers: await this.headers("POST", path),
-      body: JSON.stringify({ items }),
-      timeoutMs: 15_000,
-    }, this.site);
-
-    if (!response.ok) {
-      throw new UcpError(`Cart creation failed: HTTP ${response.status}`, await response.text());
-    }
-
-    return parseCart(await response.json() as Record<string, unknown>);
-  }
-
-  /**
-   * Retrieves the current cart.
-   */
-  async getCart(cartId: string): Promise<UcpCart> {
-    const path = `/ucp/v1/cart/${encodeURIComponent(cartId)}`;
-    const response = await poppyRequest(`${this.baseUrl}${path}`, {
-      headers: await this.headers("GET", path),
-      timeoutMs: 15_000,
-    }, this.site);
-
-    if (!response.ok) {
-      throw new UcpError(`Cart fetch failed: HTTP ${response.status}`, await response.text());
-    }
-
-    return parseCart(await response.json() as Record<string, unknown>);
-  }
-
-  // ── Shopping: Checkout ────────────────────────────────────
-
-  /**
-   * Initiates checkout from a cart.
-   */
-  async createCheckout(cartId: string): Promise<UcpCheckout> {
-    const path = "/ucp/v1/checkout";
-    const response = await poppyRequest(`${this.baseUrl}${path}`, {
-      method: "POST",
-      headers: await this.headers("POST", path),
-      body: JSON.stringify({ cart_id: cartId }),
-      timeoutMs: 15_000,
-    }, this.site);
-
-    if (!response.ok) {
-      throw new UcpError(`Checkout creation failed: HTTP ${response.status}`, await response.text());
-    }
-
-    const doc = (await response.json()) as Record<string, unknown>;
-    return {
-      id: String(doc.id ?? ""),
-      status: String(doc.status ?? "pending"),
-      webUrl: typeof doc.web_url === "string" ? doc.web_url : undefined,
-      totalPrice: typeof doc.total_price === "string" ? doc.total_price : undefined,
-      currency: typeof doc.currency === "string" ? doc.currency : undefined,
-      raw: doc,
-    };
-  }
-
-  /**
-   * Completes a checkout (the irreversible step — charges the user).
-   */
-  async completeCheckout(checkoutId: string): Promise<UcpCheckout> {
-    const path = `/ucp/v1/checkout/${encodeURIComponent(checkoutId)}/complete`;
-    const response = await poppyRequest(`${this.baseUrl}${path}`, {
-      method: "POST",
-      headers: await this.headers("POST", path),
-      timeoutMs: 30_000,
-    }, this.site);
-
-    if (!response.ok) {
-      throw new UcpError(`Checkout completion failed: HTTP ${response.status}`, await response.text());
-    }
-
-    const doc = (await response.json()) as Record<string, unknown>;
-    return {
-      id: String(doc.id ?? ""),
-      status: String(doc.status ?? ""),
-      webUrl: typeof doc.web_url === "string" ? doc.web_url : undefined,
-      totalPrice: typeof doc.total_price === "string" ? doc.total_price : undefined,
-      currency: typeof doc.currency === "string" ? doc.currency : undefined,
-      raw: doc,
-    };
-  }
-
-  // ── Shopping: Orders ──────────────────────────────────────
-
-  /**
-   * Lists orders for the current user.
-   */
-  async listOrders(): Promise<UcpOrder[]> {
-    const path = "/ucp/v1/orders";
-    const response = await poppyRequest(`${this.baseUrl}${path}`, {
-      headers: await this.headers("GET", path),
-      timeoutMs: 15_000,
-    }, this.site);
-
-    if (!response.ok) {
-      throw new UcpError(`Orders fetch failed: HTTP ${response.status}`, await response.text());
-    }
-
-    const doc = (await response.json()) as Record<string, unknown>;
-    const orders = Array.isArray(doc.orders) ? doc.orders : [];
-    return orders
-      .filter((o): o is Record<string, unknown> => typeof o === "object" && o !== null)
-      .map(o => ({
-        id: String(o.id ?? ""),
-        status: String(o.status ?? ""),
-        totalPrice: typeof o.total_price === "string" ? o.total_price : undefined,
-        currency: typeof o.currency === "string" ? o.currency : undefined,
-        raw: o,
-      }));
-  }
-}
-
-// ── Helpers ───────────────────────────────────────────────────
-
-function parseCart(doc: Record<string, unknown>): UcpCart {
-  const items = Array.isArray(doc.items) ? doc.items : [];
+/** This agent's UCP platform profile: what it can negotiate, the same for every User (ucp extension §3). */
+export function platformProfile(): Record<string, unknown> {
   return {
-    id: String(doc.id ?? ""),
-    items: items
-      .filter((i): i is Record<string, unknown> => typeof i === "object" && i !== null)
-      .map(i => ({
-        variantId: String(i.variant_id ?? i.variantId ?? ""),
-        quantity: Number(i.quantity ?? 0),
-        title: typeof i.title === "string" ? i.title : undefined,
-        price: typeof i.price === "string" ? i.price : undefined,
-      })),
-    subtotal: typeof doc.subtotal === "string" ? doc.subtotal : undefined,
-    currency: typeof doc.currency === "string" ? doc.currency : undefined,
-    checkoutUrl: typeof doc.checkout_url === "string" ? doc.checkout_url : undefined,
-    raw: doc,
+    ucp: {
+      version: UCP_VERSION,
+      services: { "dev.ucp.shopping": [{ version: UCP_VERSION, spec: spec("specification/overview/"), transport: "mcp", schema: spec("services/shopping/mcp.openrpc.json") }] },
+      capabilities: {
+        "dev.ucp.shopping.checkout": capability("checkout"),
+        "dev.ucp.shopping.cart": capability("cart"),
+        "dev.ucp.shopping.order": capability("order"),
+        "dev.ucp.shopping.fulfillment": capability("extensions/fulfillment", true),
+        "dev.ucp.shopping.discount": capability("extensions/discount", true),
+      },
+      // No payment handler: the person pays at the Company's continue_url.
+      payment_handlers: {},
+    },
   };
 }
 
-function isStringRecord(v: unknown): v is Record<string, string> {
-  if (typeof v !== "object" || v === null) return false;
-  return Object.values(v).every(val => typeof val === "string");
+/** The `UCP-Agent` header: a Dictionary Structured Field naming the profile. */
+export function ucpAgentHeader(profileUrl: string): string {
+  return `profile="${profileUrl.replace(/["\\]/g, "")}"`;
 }
 
-export class UcpError extends Error {
-  constructor(message: string, readonly detail: string) {
-    super(message);
+/**
+ * An MCP body with the profile in each `tools/call`'s `arguments.meta["ucp-agent"]`, as UCP's MCP
+ * binding requires. Anything that isn't a JSON-RPC `tools/call` (or a batch of them) is left as it is.
+ */
+export function withUcpMeta(body: string, profileUrl: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return body;
   }
+  const stamp = (message: unknown): unknown => {
+    if (typeof message !== "object" || message === null) return message;
+    const call = message as { method?: unknown; params?: { arguments?: Record<string, unknown> } };
+    if (call.method !== "tools/call" || typeof call.params !== "object" || call.params === null) return message;
+    const args = typeof call.params.arguments === "object" && call.params.arguments !== null ? call.params.arguments : {};
+    const meta = typeof args.meta === "object" && args.meta !== null ? (args.meta as Record<string, unknown>) : {};
+    return { ...call, params: { ...call.params, arguments: { ...args, meta: { ...meta, "ucp-agent": { profile: profileUrl } } } } };
+  };
+  return JSON.stringify(Array.isArray(parsed) ? parsed.map(stamp) : stamp(parsed));
 }

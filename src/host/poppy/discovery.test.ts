@@ -1,7 +1,7 @@
 import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
-import { clearDiscoveryCache, discoverCompany, hasUcpExtension, ucpEndpoint } from "./discovery.ts";
+import { clearDiscoveryCache, discoverCompany, hasUcpExtension } from "./discovery.ts";
 
 /** A minimal valid poppy.json for a domain. */
 function minimalPoppyJson(domain: string): Record<string, unknown> {
@@ -66,7 +66,6 @@ describe("discovery", () => {
     };
 
     assert.ok(hasUcpExtension(company));
-    assert.equal(ucpEndpoint(company), "https://allbirds.com/.well-known/ucp");
   });
 
   it("no UCP extension when absent", () => {
@@ -78,7 +77,6 @@ describe("discovery", () => {
       raw: {},
     };
     assert.ok(!hasUcpExtension(company));
-    assert.equal(ucpEndpoint(company), undefined);
   });
 
   it("parses scope hints", () => {

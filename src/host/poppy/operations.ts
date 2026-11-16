@@ -1,181 +1,137 @@
 /**
- * Poppy Operations (spec section 8.4).
+ * The Operations extension, version 3: a Company asks for approval of exact terms before an action.
  *
- * When a Company's agent requests an action that has consequences — placing
- * an order, booking a flight, changing account settings — it sends an
- * Operation. The personal agent presents this to the user for approval
- * before executing it.
+ * The Company refuses the request and returns an operation (an API's 403 `approval_required`, an
+ * MCP tool's error result with `structuredContent.operation`, or a conversation message's
+ * `extensions.operations.operation`). Once the person approves that revision, the agent makes the
+ * same request again with the approval: in the `Poppy-Approval` header at an API, in
+ * `_meta["personalagentprotocol.org/approval"]` of the same tool call at MCP, or in a message's
+ * `extensions.operations.approval` in a conversation. A declined card sends nothing — the extension
+ * has no rejection message; the action simply isn't performed. A Company may still decline an
+ * approval (`approval_declined`); that approval is never sent again.
  *
- * This maps naturally to agentbox's consent cards (policy gate L3–L4).
+ * The person's answer is taken through LumenBox's own consent card, never from anything the
+ * Company wrote; the card shows the Company's name and the revision's terms (extension §5).
  */
 
-import type { PoppySession } from "./session.ts";
-import { poppyRequest } from "./http.ts";
+import { randomUUID } from "node:crypto";
 
-// ── Types ─────────────────────────────────────────────────────
+export const OPERATIONS_EXTENSION = `"operations";v="3"`;
 
 export interface Operation {
-  /** Unique ID assigned by the Company. */
-  id: string;
-  /** What kind of action this is (checkout, booking, account_update, etc.). */
-  type: string;
-  /** Human-readable description for the user. */
-  description: string;
-  /** The endpoint to POST approval/rejection to. */
-  endpoint: string;
-  /** Structured parameters the Company sent. */
-  parameters: Record<string, unknown>;
-  /** Whether irreversible (maps to L4+ in the policy gate). */
-  irreversible: boolean;
-  /** Whether it involves personal data. */
-  personalData: boolean;
-  /** Display information. */
-  display?: {
-    title?: string;
-    summary?: string;
-    details?: Array<{ label: string; value: string }>;
-    amount?: string;
-    currency?: string;
-  };
-  /** When the operation expires. */
-  expiresAt?: number;
+  operation_id: string;
+  revision: string;
+  summary?: string;
+  terms: Record<string, unknown>;
+  expires_at: string;
 }
 
-export interface OperationDecision {
-  approved: boolean;
+export interface Approval {
+  operation_id: string;
+  revision: string;
+  approver: "user";
+  approved_at: number;
+  input_type: "tap";
+  reference: string;
+}
+
+export interface Declined {
+  operation_id: string;
+  revision: string;
   reason?: string;
+  alternative?: unknown;
 }
 
-export interface OperationResult {
-  success: boolean;
-  message?: string;
-  data?: Record<string, unknown>;
+const ID = /^[A-Za-z0-9_-]{1,256}$/;
+
+/** An operation object, if `raw` is a well-formed one. */
+export function asOperation(raw: unknown): Operation | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const op = raw as Record<string, unknown>;
+  if (typeof op.operation_id !== "string" || !ID.test(op.operation_id)) return undefined;
+  if (typeof op.revision !== "string" || !ID.test(op.revision)) return undefined;
+  if (typeof op.terms !== "object" || op.terms === null || Array.isArray(op.terms)) return undefined;
+  if (typeof op.expires_at !== "string" || Number.isNaN(Date.parse(op.expires_at))) return undefined;
+  return {
+    operation_id: op.operation_id,
+    revision: op.revision,
+    terms: op.terms as Record<string, unknown>,
+    expires_at: op.expires_at,
+    ...(typeof op.summary === "string" ? { summary: op.summary } : {}),
+  };
 }
 
-// ── Helpers ───────────────────────────────────────────────────
+/** The decline in a body, if it is one (an API's or MCP's `approval_declined`, or a message's `declined`). */
+export function asDeclined(raw: unknown): Declined | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const body = raw as Record<string, unknown>;
+  if (typeof body.operation_id !== "string" || typeof body.revision !== "string") return undefined;
+  return { operation_id: body.operation_id, revision: body.revision, ...(typeof body.reason === "string" ? { reason: body.reason } : {}), ...(body.alternative !== undefined ? { alternative: body.alternative } : {}) };
+}
+
+/** What an API response asks or says about an operation. */
+export function operationFromApi(status: number, body: unknown): { operation?: Operation; declined?: Declined } {
+  if (status !== 403 || typeof body !== "object" || body === null) return {};
+  const parsed = body as Record<string, unknown>;
+  if (parsed.error === "approval_required") {
+    const operation = asOperation(parsed.operation);
+    return operation ? { operation } : {};
+  }
+  if (parsed.error === "approval_declined") {
+    const declined = asDeclined(parsed);
+    return declined ? { declined } : {};
+  }
+  return {};
+}
+
+/** What an MCP JSON-RPC response asks or says about an operation. */
+export function operationFromMcp(body: unknown): { operation?: Operation; declined?: Declined } {
+  const result = (body as { result?: { isError?: unknown; structuredContent?: Record<string, unknown> } } | null)?.result;
+  if (result?.isError !== true || typeof result.structuredContent !== "object" || result.structuredContent === null) return {};
+  const content = result.structuredContent;
+  const operation = asOperation(content.operation);
+  if (operation) return { operation };
+  if (content.error === "approval_declined") {
+    const declined = asDeclined(content);
+    return declined ? { declined } : {};
+  }
+  return {};
+}
+
+/** A user approval of this revision, given now. The reference is new each time, so two Companies never share one. */
+export function approvalOf(op: Operation, now = Date.now()): Approval {
+  return { operation_id: op.operation_id, revision: op.revision, approver: "user", approved_at: Math.floor(now / 1000), input_type: "tap", reference: `apr_${randomUUID().replace(/-/g, "")}` };
+}
+
+/** The `Poppy-Approval` header: a Dictionary Structured Field (RFC 9651). */
+export function approvalHeader(approval: Approval): string {
+  const str = (value: string) => `"${value.replace(/["\\]/g, "")}"`;
+  return [
+    `operation_id=${str(approval.operation_id)}`,
+    `revision=${str(approval.revision)}`,
+    `approver=${str(approval.approver)}`,
+    `approved_at=${approval.approved_at}`,
+    `input_type=${str(approval.input_type)}`,
+    `reference=${str(approval.reference)}`,
+  ].join(", ");
+}
+
+/** The same MCP `tools/call`, with the approval in `_meta` (extension §6). */
+export function withMcpApproval(body: string, approval: Approval): string {
+  const call = JSON.parse(body) as { params?: Record<string, unknown>; id?: unknown };
+  const params = call.params ?? {};
+  const meta = typeof params._meta === "object" && params._meta !== null ? (params._meta as Record<string, unknown>) : {};
+  return JSON.stringify({ ...call, id: `${String(call.id ?? "call")}-approved`, params: { ...params, _meta: { ...meta, "personalagentprotocol.org/approval": approval } } });
+}
 
 /**
- * Maps an Operation to a policy gate level.
- *
- * The mapping follows the analysis document's table (section 6.3 D):
- * - irreversible → L4 (needs explicit user confirmation)
- * - personal_data → L3 (needs user awareness)
- * - everything else → L2 (logged, not blocked)
+ * What the person reads on the card: the Company's name, its summary, and the terms themselves,
+ * so a summary that says less than the terms can be caught. Shown as text, never rendered: a
+ * summary must not carry a link or an image into the decision (extension §3).
  */
-export function policyLevel(op: Operation): 2 | 3 | 4 {
-  if (op.irreversible) return 4;
-  if (op.personalData) return 3;
-  return 2;
-}
-
-/**
- * Builds a consent card description from an Operation.
- *
- * The description is what the user sees when asked to approve.
- */
-export function consentDescription(op: Operation): string {
-  const lines: string[] = [];
-
-  if (op.display?.title) {
-    lines.push(`**${op.display.title}**`);
-  } else {
-    lines.push(`**${op.type}** operation from the Company`);
-  }
-
-  lines.push(op.description);
-
-  if (op.display?.details) {
-    for (const d of op.display.details) {
-      lines.push(`- ${d.label}: ${d.value}`);
-    }
-  }
-
-  if (op.display?.amount) {
-    lines.push(`\nAmount: ${op.display.amount}${op.display.currency ? ` ${op.display.currency}` : ""}`);
-  }
-
-  if (op.irreversible) {
-    lines.push("\n⚠️ This action is **irreversible**.");
-  }
-
+export function consentDescription(op: Operation, company: string): string {
+  const lines = [`${company} asks for approval (operation ${op.operation_id}, revision ${op.revision}):`];
+  if (op.summary) lines.push("", op.summary);
+  lines.push("", "Terms:", JSON.stringify(op.terms, null, 2), "", `Approval accepted until ${op.expires_at}.`);
   return lines.join("\n");
-}
-
-// ── Execution ─────────────────────────────────────────────────
-
-/**
- * Sends the user's decision (approve/reject) back to the Company.
- */
-export async function respondToOperation(
-  op: Operation,
-  decision: OperationDecision,
-  session: PoppySession,
-  accessToken?: string,
-): Promise<OperationResult> {
-  const headers = await session.headers("POST", op.endpoint, accessToken);
-
-  // The answer goes to the Company that asked, on its own site (http.ts), whatever endpoint the operation named.
-  const response = await poppyRequest(op.endpoint, {
-    method: "POST",
-    headers: {
-      ...headers,
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
-    body: JSON.stringify({
-      operation_id: op.id,
-      decision: decision.approved ? "approved" : "rejected",
-      ...(decision.reason ? { reason: decision.reason } : {}),
-    }),
-    timeoutMs: 30_000,
-  }, session.company.domain);
-
-  if (!response.ok) {
-    return {
-      success: false,
-      message: `HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`,
-    };
-  }
-
-  const doc = (await response.json()) as Record<string, unknown>;
-  return {
-    success: doc.success !== false,
-    message: typeof doc.message === "string" ? doc.message : undefined,
-    data: typeof doc.data === "object" && doc.data !== null
-      ? doc.data as Record<string, unknown>
-      : undefined,
-  };
-}
-
-/**
- * Parses an Operation from raw JSON (from a conversation event or webhook).
- */
-export function parseOperation(
-  raw: Record<string, unknown>,
-  defaultEndpoint: string,
-): Operation {
-  const display = raw.display as Record<string, unknown> | undefined;
-  return {
-    id: String(raw.id ?? raw.operation_id ?? ""),
-    type: String(raw.type ?? "unknown"),
-    description: String(raw.description ?? ""),
-    endpoint: typeof raw.endpoint === "string" ? raw.endpoint : defaultEndpoint,
-    parameters: typeof raw.parameters === "object" && raw.parameters !== null
-      ? raw.parameters as Record<string, unknown>
-      : {},
-    irreversible: raw.irreversible === true || raw.changes === "irreversible",
-    personalData: raw.personal_data === true,
-    display: display ? {
-      title: typeof display.title === "string" ? display.title : undefined,
-      summary: typeof display.summary === "string" ? display.summary : undefined,
-      details: Array.isArray(display.details)
-        ? display.details
-          .filter((d): d is Record<string, unknown> => typeof d === "object" && d !== null)
-          .map(d => ({ label: String(d.label ?? ""), value: String(d.value ?? "") }))
-        : undefined,
-      amount: typeof display.amount === "string" ? display.amount : undefined,
-      currency: typeof display.currency === "string" ? display.currency : undefined,
-    } : undefined,
-    expiresAt: typeof raw.expires_at === "number" ? raw.expires_at : undefined,
-  };
 }

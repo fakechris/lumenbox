@@ -1,235 +1,152 @@
 /**
- * Poppy Conversations (spec section 8.2).
+ * Poppy conversations (spec section 8): how the agent talks with a Company's agent.
  *
- * A Company can expose a conversation endpoint (agent.protocols type "poppy")
- * that the personal agent connects to via SSE. Messages flow both ways:
- * the personal agent sends on behalf of the user, the Company agent responds.
+ * JSON over HTTPS. The first message starts a conversation (`POST {endpoint}`, 201 with its id);
+ * later ones go to `{endpoint}/{id}/messages` (202). Each POST carries a request `id` the agent
+ * chooses, so a retry is safe, and `?wait=` so the reply comes back in the same response as a read
+ * of the conversation's events would (8.3). While `working` is true the Company hasn't finished, so
+ * the agent reads `{endpoint}/{id}/events?cursor=…&wait=…` until it is false (8.5, 8.7). Events are
+ * handled in order, once each, and the cursor is kept for the next turn of the conversation.
  *
- * This is a structured channel — not a browser, not an API call — specifically
- * for agent-to-agent dialogue.
+ * Everything the Company says is content from the Company, not instructions (10.1).
  */
 
+import { randomUUID } from "node:crypto";
 import type { PoppyCompany } from "./discovery.ts";
-import type { PoppySession } from "./session.ts";
-import { poppyRequest } from "./http.ts";
+import { asDeclined, asOperation, type Approval, type Declined, type Operation } from "./operations.ts";
 
-// ── Types ─────────────────────────────────────────────────────
-
-export interface ConversationMessage {
-  role: "user" | "assistant";
-  content: string;
-  timestamp?: string;
-  metadata?: Record<string, unknown>;
+/** The `poppy` conversation endpoint a Company lists, or null (8.1: unfamiliar types are skipped). */
+export function conversationEndpoint(company: PoppyCompany): string | null {
+  return company.agentProtocols?.find(protocol => protocol.type === "poppy")?.endpoint ?? null;
 }
 
-export interface ConversationEndpoint {
-  endpoint: string;
-  description?: string;
-  access?: string;
+/** Where an ongoing conversation is: its id, the last cursor read, and the events already handled. */
+export interface ConversationState {
+  conversationId: string;
+  cursor?: string;
+  seen: Set<string>;
 }
 
-export type ConversationEventHandler = (event: ConversationEvent) => void;
-
-export type ConversationEvent =
-  | { type: "message"; message: ConversationMessage }
-  | { type: "error"; error: string }
-  | { type: "done" }
-  | { type: "operation"; operation: OperationRequest };
-
-/** An operation the Company agent wants the user to approve (spec 8.4). */
-export interface OperationRequest {
-  id: string;
-  type: string;
-  description: string;
-  parameters?: Record<string, unknown>;
-  requiresApproval: boolean;
+export interface CompanyMessage {
+  author: { type: string; name?: string };
+  text?: string;
+  data?: unknown;
 }
 
-// ── Conversation Client ───────────────────────────────────────
+/** What one exchange brought back. */
+export interface ConversationTurn {
+  conversationId: string;
+  messages: CompanyMessage[];
+  operations: Operation[];
+  declined: Declined[];
+  /** Sign-in or more scopes asked for (8.11): passed on, since sign-in isn't offered yet. */
+  authorization: string[];
+  /** The Company asks to talk with the person themselves (8.10). */
+  userRequested: string[];
+  working: boolean;
+  closed: boolean;
+  responder: string;
+}
+
+/** Sends a request with the Session headers for this exact method and URL. */
+export type SignedSend = (method: string, url: string, body?: string) => Promise<Response>;
+
+const READ_WAIT_SECONDS = 20;
 
 /**
- * Finds the Poppy conversation endpoint from a Company's protocols.
+ * Sends one message — text, or an approval — and reads until the Company is no longer working or
+ * `deadline` passes. `state` is updated in place; pass undefined to start a conversation.
  */
-export function conversationEndpoint(company: PoppyCompany): ConversationEndpoint | null {
-  const proto = company.agentProtocols?.find(
-    p => p.type === "poppy" || p.type === "poppy-conversation"
-  );
-  if (!proto) return null;
-  return {
-    endpoint: proto.endpoint,
-    description: proto.description,
-    access: proto.access,
-  };
-}
-
-/**
- * Sends a message to the Company's conversation endpoint and streams
- * the response via SSE.
- *
- * Returns an AbortController that can cancel the stream.
- */
-export async function sendMessage(
-  endpoint: ConversationEndpoint,
-  session: PoppySession,
-  message: string,
-  onEvent: ConversationEventHandler,
-  options?: { accessToken?: string; conversationId?: string },
-): Promise<AbortController> {
-  const controller = new AbortController();
-  const headers = await session.headers("POST", endpoint.endpoint, options?.accessToken);
-
-  // On the Company's own site, through the guarded door (http.ts).
-  const response = await poppyRequest(endpoint.endpoint, {
-    method: "POST",
-    headers: {
-      ...headers,
-      "Content-Type": "application/json",
-      Accept: "text/event-stream",
+export async function exchange(
+  endpoint: string,
+  send: SignedSend,
+  message: { text?: string; approval?: Approval },
+  state: ConversationState | undefined,
+  deadline: number,
+): Promise<{ turn: ConversationTurn; state: ConversationState }> {
+  const wait = () => Math.max(0, Math.min(READ_WAIT_SECONDS, Math.floor((deadline - Date.now()) / 1000)));
+  const base = endpoint.replace(/\/+$/, "");
+  const body = JSON.stringify({
+    id: `req_${randomUUID().replace(/-/g, "")}`,
+    message: {
+      author: { type: "agent" },
+      ...(message.text !== undefined ? { text: message.text } : {}),
+      ...(state?.cursor !== undefined ? { as_of_cursor: state.cursor } : {}),
+      ...(message.approval !== undefined ? { extensions: { operations: { approval: message.approval } } } : {}),
     },
-    body: JSON.stringify({
-      message: { role: "user", content: message },
-      ...(options?.conversationId ? { conversation_id: options.conversationId } : {}),
-    }),
-    signal: controller.signal,
-  }, session.company.domain);
-
-  if (!response.ok) {
-    onEvent({ type: "error", error: `HTTP ${response.status}: ${(await response.text()).slice(0, 500)}` });
-    onEvent({ type: "done" });
-    return controller;
-  }
-
-  // Process SSE stream.
-  void processStream(response, onEvent).catch(error => {
-    if (error instanceof Error && error.name === "AbortError") return;
-    onEvent({ type: "error", error: error instanceof Error ? error.message : String(error) });
-    onEvent({ type: "done" });
   });
-
-  return controller;
-}
-
-/**
- * Reads an event stream as the SSE format defines it: an event is the lines up to a blank line,
- * however the bytes were split into reads; lines end in \n, \r\n or \r; several `data:` lines
- * are one value joined by \n; one space after the colon is dropped and no more. Earlier this
- * reset its event at every read, so an event split across two reads lost its `event:` name and an
- * operation arrived as a message.
- */
-export class SseReader {
-  private pending = "";
-  private event = "";
-  private data: string[] = [];
-
-  constructor(private readonly emit: (event: string, data: string) => void) {}
-
-  /** Feeds decoded text; emits every event it completes. */
-  push(text: string): void {
-    this.pending += text;
-    // A trailing \r may be the first half of \r\n: keep it until the next read says which.
-    const cut = this.pending.endsWith("\r") ? this.pending.length - 1 : this.pending.length;
-    const lines = this.pending.slice(0, cut).split(/\r\n|\r|\n/);
-    this.pending = (lines.pop() ?? "") + this.pending.slice(cut);
-    for (const line of lines) this.line(line);
-  }
-
-  /** The stream ended: an event with no blank line after it is still dispatched. */
-  end(): void {
-    if (this.pending !== "") this.line(this.pending.replace(/\r$/, ""));
-    this.pending = "";
-    this.line("");
-  }
-
-  private line(line: string): void {
-    if (line === "") {
-      if (this.data.length > 0) this.emit(this.event, this.data.join("\n"));
-      this.event = "";
-      this.data = [];
-      return;
+  const query = (cursor?: string) => `?${cursor !== undefined ? `cursor=${encodeURIComponent(cursor)}&` : ""}wait=${wait()}`;
+  const url = state === undefined ? `${base}${query()}` : `${base}/${encodeURIComponent(state.conversationId)}/messages${query(state.cursor)}`;
+  let read = await expectRead(await send("POST", url, body));
+  const current: ConversationState = state ?? { conversationId: String(read.conversation_id ?? ""), seen: new Set() };
+  if (current.conversationId === "") throw new Error("the Company started a conversation without an id");
+  const turn: ConversationTurn = { conversationId: current.conversationId, messages: [], operations: [], declined: [], authorization: [], userRequested: [], working: true, closed: false, responder: "agent" };
+  for (;;) {
+    apply(read, current, turn);
+    if (read.has_more === true) {
+      read = await expectRead(await send("GET", `${base}/${encodeURIComponent(current.conversationId)}/events${query(current.cursor).replace(/wait=\d+/, "wait=0")}`));
+      continue;
     }
-    if (line.startsWith(":")) return;
-    const colon = line.indexOf(":");
-    const field = colon === -1 ? line : line.slice(0, colon);
-    let value = colon === -1 ? "" : line.slice(colon + 1);
-    if (value.startsWith(" ")) value = value.slice(1);
-    if (field === "event") this.event = value;
-    else if (field === "data") this.data.push(value);
+    if (!turn.working || turn.closed || Date.now() >= deadline) break;
+    read = await expectRead(await send("GET", `${base}/${encodeURIComponent(current.conversationId)}/events${query(current.cursor)}`));
   }
+  return { turn, state: current };
 }
 
-async function processStream(
-  response: Response,
-  onEvent: ConversationEventHandler,
-): Promise<void> {
-  const reader = response.body?.getReader();
-  if (!reader) {
-    onEvent({ type: "error", error: "No response body" });
-    onEvent({ type: "done" });
-    return;
-  }
+interface Read {
+  conversation_id?: unknown;
+  events?: unknown;
+  cursor?: unknown;
+  has_more?: unknown;
+  working?: unknown;
+  responder?: unknown;
+  closed?: unknown;
+}
 
-  const decoder = new TextDecoder();
-  const sse = new SseReader((event, data) => dispatchSseEvent(event, data, onEvent));
-
+async function expectRead(response: Response): Promise<Read> {
+  const text = await response.text();
+  let parsed: unknown;
   try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      sse.push(decoder.decode(value, { stream: true }));
-    }
-    sse.push(decoder.decode());
-    sse.end();
-  } finally {
-    reader.releaseLock();
-    onEvent({ type: "done" });
-  }
-}
-
-function dispatchSseEvent(
-  event: string,
-  data: string,
-  onEvent: ConversationEventHandler,
-): void {
-  try {
-    const parsed = JSON.parse(data) as Record<string, unknown>;
-
-    if (event === "message" || (!event && parsed.role)) {
-      onEvent({
-        type: "message",
-        message: {
-          role: String(parsed.role ?? "assistant") as "user" | "assistant",
-          content: String(parsed.content ?? ""),
-          timestamp: typeof parsed.timestamp === "string" ? parsed.timestamp : undefined,
-          metadata: typeof parsed.metadata === "object" && parsed.metadata !== null
-            ? parsed.metadata as Record<string, unknown>
-            : undefined,
-        },
-      });
-    } else if (event === "operation" && parsed.id) {
-      onEvent({
-        type: "operation",
-        operation: {
-          id: String(parsed.id),
-          type: String(parsed.type ?? ""),
-          description: String(parsed.description ?? ""),
-          parameters: typeof parsed.parameters === "object" && parsed.parameters !== null
-            ? parsed.parameters as Record<string, unknown>
-            : undefined,
-          requiresApproval: parsed.requires_approval === true,
-        },
-      });
-    } else if (event === "error") {
-      onEvent({ type: "error", error: String(parsed.message ?? parsed.error ?? data) });
-    } else if (event === "done" || event === "[DONE]") {
-      // Stream finished; processStream will emit `done` on reader close.
-    }
+    parsed = JSON.parse(text);
   } catch {
-    // Non-JSON data line; treat as plain text message.
-    if (data.trim()) {
-      onEvent({
-        type: "message",
-        message: { role: "assistant", content: data },
-      });
-    }
+    parsed = undefined;
   }
+  if (!response.ok) {
+    const code = (parsed as { error?: unknown } | undefined)?.error;
+    throw new Error(`the Company answered HTTP ${response.status}${typeof code === "string" ? ` (${code})` : `: ${text.slice(0, 300)}`}`);
+  }
+  if (typeof parsed !== "object" || parsed === null) throw new Error("the Company's answer was not JSON");
+  return parsed as Read;
+}
+
+function apply(read: Read, state: ConversationState, turn: ConversationTurn): void {
+  for (const raw of Array.isArray(read.events) ? (read.events as Record<string, unknown>[]) : []) {
+    const id = typeof raw?.id === "string" ? raw.id : undefined;
+    if (id === undefined || state.seen.has(id)) continue;
+    state.seen.add(id);
+    if (raw.type === "message") {
+      const message = raw.message as Record<string, unknown> | undefined;
+      if (message?.role !== "company") continue;
+      const author = (message.author ?? {}) as { type?: unknown; name?: unknown };
+      turn.messages.push({
+        author: { type: String(author.type ?? "agent"), ...(typeof author.name === "string" ? { name: author.name } : {}) },
+        ...(typeof message.text === "string" ? { text: message.text } : {}),
+        ...(message.data !== undefined ? { data: message.data } : {}),
+      });
+      const operations = (message.extensions as { operations?: { operation?: unknown; declined?: unknown } } | undefined)?.operations;
+      const operation = asOperation(operations?.operation);
+      if (operation) turn.operations.push(operation);
+      const declined = asDeclined(operations?.declined);
+      if (declined) turn.declined.push(declined);
+    } else if (raw.type === "authorization") {
+      turn.authorization.push(String(raw.error ?? "sign-in required"));
+    } else if (raw.type === "user_requested") {
+      turn.userRequested.push(String(raw.reason ?? ""));
+    }
+    // Other types — state, direct_opened, ones from later versions — are skipped (8.5); state is read below.
+  }
+  if (typeof read.cursor === "string") state.cursor = read.cursor;
+  turn.working = read.working === true;
+  turn.closed = read.closed === true;
+  turn.responder = typeof read.responder === "string" ? read.responder : turn.responder;
 }

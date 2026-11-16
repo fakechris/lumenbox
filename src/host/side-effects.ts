@@ -54,6 +54,8 @@ const DECLARED: Record<string, SideEffect> = {
   Recall: { tier: "observe" },
   WebFetch: { tier: "observe" },
   PoppyDiscover: { tier: "observe" },
+  // Decided per call by its method, like connector_request (sideEffectOf); this is the default.
+  PoppyRequest: { tier: "reach", action: "send a signed request to a company" },
   PoppyStatus: { tier: "observe" },
   // A message the agent wrote, sent to a company's own agent: past the box, to somebody else.
   PoppyConverse: { tier: "reach", action: "send a message to a company's agent" },
@@ -141,6 +143,13 @@ export function sideEffectOf(tool: string, input: Record<string, unknown> = {}):
     const connector = String(input.connector ?? "a connected service");
     if (method === "GET" || method === "HEAD") return { tier: "observe" };
     return { tier: "reach", action: `change something in ${connector} as the person who connected it` };
+  }
+  if (tool === "PoppyRequest") {
+    // A signed request to a company: reading a page or an API is looking; anything else acts there.
+    const method = String(input.method ?? "GET").toUpperCase();
+    const host = (() => { try { return new URL(String(input.url ?? "")).hostname; } catch { return "a company"; } })();
+    if (method === "GET" || method === "HEAD") return { tier: "observe" };
+    return { tier: "reach", action: `send a signed request that changes something at ${host}` };
   }
   if (tool === "FeishuWrite" || tool === "DingTalkWrite") {
     const others = (key: string) => Array.isArray(input[key]) && (input[key] as unknown[]).some(item => typeof item === "string" && item.trim() !== "");
