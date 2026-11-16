@@ -108,6 +108,7 @@ import { loadConfig } from "../config.ts"; import { FallbackRuntimes, fallbackNa
 import { McpManager } from "./mcp.ts";
 import { mergeServers } from "./mcp-connectors.ts";
 import { CapabilityLedger } from "./mcp-capabilities.ts";
+import { createPoppyFetch } from "./poppy-fetch.ts";
 import { PolicyGate } from "./policy.ts";
 import { TaskStore, type Task } from "./tasks.ts";
 import type { MandateWorld } from "./mandate.ts";
@@ -351,6 +352,10 @@ export class Orchestrator {
    * agents each believe they held it.
    */
   private readonly display = new DisplayLease();
+  /** The Poppy (Personal Agent Protocol) manager, when enabled. */
+  private readonly poppyManager?: import("./poppy/manager.ts").PoppyManager;
+  /** A webFetch wrapper that injects Poppy-Session headers. Undefined when Poppy is off. */
+  private readonly poppyFetch?: (url: string) => Promise<import("./web.ts").FetchedPage>;
   /** Desktops already brought up, so each is started once per process. */
   /** `boxId:index` — two boxes each have a desktop 1. */
   private readonly startingDisplays = new Map<string, Promise<number | undefined>>();
@@ -1141,6 +1146,17 @@ export class Orchestrator {
       },
       log: line => console.error(`[goal] ${line}`),
     });
+
+    // Poppy (Personal Agent Protocol) — disabled with AGENTBOX_POPPY=0.
+    if (process.env.AGENTBOX_POPPY !== "0") {
+      const origin = process.env.AGENTBOX_PUBLIC_URL ?? `https://localhost`;
+      const poppy = createPoppyFetch(
+        { home: agentboxHome(), origin },
+        line => console.error(`[poppy] ${line}`),
+      );
+      (this as unknown as { poppyManager: typeof poppy.manager }).poppyManager = poppy.manager;
+      (this as unknown as { poppyFetch: typeof poppy.fetch }).poppyFetch = poppy.fetch;
+    }
   }
 
   /**
@@ -1523,6 +1539,11 @@ export class Orchestrator {
   boxClient(agentId?: string): BoxClient | undefined {
     if (agentId === undefined) return this.box;
     return this.boxFor(agentId) ?? undefined;
+  }
+
+  /** The Poppy manager, when Poppy is enabled. Used by the server to serve agent metadata endpoints. */
+  get poppy(): import("./poppy/manager.ts").PoppyManager | undefined {
+    return this.poppyManager;
   }
 
   /** The record of an agent's box, for paths and labels. */
@@ -1912,6 +1933,8 @@ export class Orchestrator {
       handOver: this.options.handOver,
       // The reader for the door this conversation's messages come through (INV-871).
       docReader: this.options.docReader ?? this.docReaderFor?.(conversation) ?? this.docReader,
+      ...(this.poppyFetch !== undefined ? { webFetch: this.poppyFetch } : {}),
+      ...(this.poppyManager !== undefined ? { poppyManager: this.poppyManager } : {}),
       conversation,
       provider: runtime.provider,
       effort: this.options.effort,
