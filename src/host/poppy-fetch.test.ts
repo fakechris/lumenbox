@@ -20,7 +20,7 @@ describe("createPoppyFetch", () => {
   test("returns fetch function and manager", () => {
     const { fetch, manager } = createPoppyFetch(stubOptions());
     assert.equal(typeof fetch, "function");
-    assert.equal(fetch.length, 1);
+    assert.equal(fetch.length, 2, "a page and whom the request is for");
     assert.ok(manager);
     assert.equal(manager.ready, false, "manager not yet initialised");
   });
@@ -37,7 +37,7 @@ describe("createPoppyFetch", () => {
     t.after(() => rmSync(home, { recursive: true, force: true }));
     t.mock.method(globalThis, "fetch", async () => { throw new Error("no network in tests"); });
     const { fetch } = createPoppyFetch({ home, origin: "https://test.agent.example" }, () => {});
-    await assert.rejects(fetch("http://127.0.0.1/page"), (error: Error) => !error.message.includes("PoppyManager"));
+    await assert.rejects(fetch("http://127.0.0.1/page", "ada"), (error: Error) => !error.message.includes("PoppyManager"));
   });
 });
 
@@ -49,7 +49,7 @@ describe("poppyFor", () => {
     assert.equal(poppyFor({ AGENTBOX_POPPY: "1" }, home, () => {}), undefined, "nothing a Company could verify a session against");
     assert.equal(poppyFor({ AGENTBOX_POPPY: "1", AGENTBOX_PUBLIC_URL: "http://agent.example" }, home, () => {}), undefined, "not over plain http");
     const on = poppyFor({ AGENTBOX_POPPY: "1", AGENTBOX_PUBLIC_URL: "https://agent.example/" }, home, () => {});
-    assert.equal(typeof on?.webFetch, "function");
+    assert.equal(typeof on?.forAgent("ada").webFetch, "function");
     assert.equal(on?.poppyManager.ready, false, "made lazily: nothing written until it is used");
   });
 });

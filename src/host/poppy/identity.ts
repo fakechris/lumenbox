@@ -19,7 +19,7 @@ import {
   exportPrivateJwk,
   exportPublicJwk,
   generateExtractableKeyPair,
-  importExtractablePrivateKey,
+  importPrivateKey,
   jwkThumbprint,
   type EcPublicJwk,
 } from "./jose.ts";
@@ -60,19 +60,16 @@ export async function loadOrCreateIdentity(
 
   if (existsSync(path)) {
     const stored = JSON.parse(readFileSync(path, "utf8")) as JsonWebKey;
-    const extractable = await importExtractablePrivateKey(stored);
     publicJwk = { kty: "EC", crv: "P-256", x: stored.x!, y: stored.y! };
-    // Re-import as non-extractable for daily use.
-    privateKey = await importExtractablePrivateKey(stored);
-    // Actually use the extractable one since we might need to re-export for delegation
-    privateKey = extractable;
+    // Signing needs no export: held non-extractable, the key in memory cannot be read back out.
+    privateKey = await importPrivateKey(stored);
   } else {
     const pair = await generateExtractableKeyPair();
     publicJwk = await exportPublicJwk(pair.publicKey);
     const jwk = await exportPrivateJwk(pair.privateKey);
     mkdirSync(home, { recursive: true });
     writeFileSync(path, JSON.stringify(jwk, null, 2), { mode: 0o600 });
-    privateKey = pair.privateKey;
+    privateKey = await importPrivateKey(jwk);
   }
 
   const kid = await jwkThumbprint(publicJwk);

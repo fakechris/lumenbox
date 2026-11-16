@@ -12,7 +12,7 @@
 
 import type { PoppyManager } from "./poppy/manager.ts";
 
-/** Domains that have already been joined in this process. */
+/** `who|domain` already joined in this process: each agent's browser joins its own session. */
 const joined = new Set<string>();
 
 /**
@@ -24,18 +24,23 @@ const joined = new Set<string>();
  */
 export async function poppyBrowserJoinUrl(
   manager: PoppyManager,
+  who: string,
   targetUrl: string,
   log: (line: string) => void = () => {},
 ): Promise<string | undefined> {
   try {
-    const domain = new URL(targetUrl).hostname.toLowerCase();
-    if (joined.has(domain)) return undefined;
+    const target = new URL(targetUrl);
+    if (target.protocol !== "https:") return undefined;
+    const domain = target.hostname.toLowerCase();
+    const key = `${who}|${domain}`;
+    if (joined.has(key)) return undefined;
 
-    const result = await manager.browserJoin(domain);
+    const result = await manager.browserJoin(domain, who);
     if (!result) return undefined;
 
-    joined.add(domain);
-    log(`Browser Join for ${domain}: navigating to ${result.url}`);
+    joined.add(key);
+    // Not the URL: it is a one-time credential for the session.
+    log(`Browser Join for ${domain}`);
     return result.url;
   } catch {
     return undefined;

@@ -1,11 +1,14 @@
 /**
  * Persistent token storage for Poppy OAuth (spec 10.1).
  *
- * Stores access and refresh tokens per Company (by issuer) on the host's
- * filesystem. Tokens never enter model context — the manager reads them
- * here and injects them as Authorization headers on outbound requests.
+ * Tokens are kept on the host and never enter model context — the manager reads them here and
+ * puts them on outbound requests itself. The file is written mode 0o600, like the agent key.
  *
- * The file is written mode 0o600 (owner-only), same as the agent key.
+ * Keyed by who signed in, at which domain (`TokenStore.key`), with the issuer that granted the
+ * token beside it. Not by issuer alone: an issuer is whatever a site's poppy.json says, and a
+ * site claiming another Company's issuer would otherwise be handed that Company's token. A token
+ * is used only at the domain it was granted for, and only while that domain still names the
+ * issuer that granted it.
  */
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
@@ -16,6 +19,8 @@ const TOKEN_FILENAME = "poppy-tokens.json";
 const REFRESH_AHEAD_MS = 60_000;
 
 export interface StoredToken {
+  /** `who|domain` — see `TokenStore.key`. */
+  key: string;
   issuer: string;
   accessToken: string;
   tokenType: string;
@@ -29,6 +34,11 @@ export class TokenStore {
   private tokens: Map<string, StoredToken>;
   private readonly path: string;
 
+  /** The key for a token: whom the agent signed in as, at which domain. */
+  static key(who: string, domain: string): string {
+    return `${who}|${domain.toLowerCase()}`;
+  }
+
   constructor(home: string) {
     this.path = join(home, TOKEN_FILENAME);
     this.tokens = new Map();
@@ -38,7 +48,8 @@ export class TokenStore {
   private load(): void {
     try {
       const data = JSON.parse(readFileSync(this.path, "utf8")) as StoredToken[];
-      this.tokens = new Map(data.map(t => [t.issuer, t]));
+      // An entry from before the key existed was keyed by issuer alone; it is not used.
+      this.tokens = new Map(data.filter(t => typeof t.key === "string").map(t => [t.key, t]));
     } catch {
       // File doesn't exist or is corrupt; start fresh.
     }
@@ -50,57 +61,51 @@ export class TokenStore {
     writeFileSync(this.path, JSON.stringify([...this.tokens.values()], null, 2), { mode: 0o600 });
   }
 
-  /** Stores a token set for a Company. */
-  set(issuer: string, tokenSet: TokenSet): void {
-    this.tokens.set(issuer, {
+  /**
+   * Stores a token set. A refresh that answers without a new refresh token keeps the old one
+   * (RFC 6749 §6: the server may leave it unchanged), rather than losing the way to refresh again.
+   */
+  set(key: string, issuer: string, tokenSet: TokenSet): void {
+    const before = this.tokens.get(key);
+    const refreshToken = tokenSet.refreshToken ?? (before?.issuer === issuer ? before.refreshToken : undefined);
+    this.tokens.set(key, {
+      key,
       issuer,
       accessToken: tokenSet.accessToken,
       tokenType: tokenSet.tokenType,
       expiresAt: tokenSet.expiresAt,
-      refreshToken: tokenSet.refreshToken,
-      scope: tokenSet.scope,
+      ...(refreshToken !== undefined ? { refreshToken } : {}),
+      ...(tokenSet.scope !== undefined ? { scope: tokenSet.scope } : {}),
       updatedAt: Date.now(),
     });
     this.save();
   }
 
-  /** Returns the stored token for a Company, or undefined if none or expired without refresh. */
-  get(issuer: string): StoredToken | undefined {
-    return this.tokens.get(issuer);
+  /** The stored token under this key, only if it was granted by `issuer`. */
+  get(key: string, issuer: string): StoredToken | undefined {
+    const token = this.tokens.get(key);
+    return token?.issuer === issuer ? token : undefined;
   }
 
   /** Whether the token needs refreshing (expired or about to). */
-  needsRefresh(issuer: string): boolean {
-    const t = this.tokens.get(issuer);
-    if (!t) return false;
-    return Date.now() > t.expiresAt - REFRESH_AHEAD_MS;
+  needsRefresh(token: StoredToken): boolean {
+    return Date.now() > token.expiresAt - REFRESH_AHEAD_MS;
   }
 
-  /** Whether there's a valid (non-expired) access token for a Company. */
-  hasValid(issuer: string): boolean {
-    const t = this.tokens.get(issuer);
-    if (!t) return false;
-    return Date.now() < t.expiresAt;
+  /** Whether the access token has not expired. */
+  hasValid(token: StoredToken): boolean {
+    return Date.now() < token.expiresAt;
   }
 
-  /** Whether there's a refresh token available for a Company. */
-  hasRefreshToken(issuer: string): boolean {
-    return this.tokens.get(issuer)?.refreshToken !== undefined;
+  /** Removes a token (on revocation or a refused grant). */
+  remove(key: string): void {
+    if (this.tokens.delete(key)) this.save();
   }
 
-  /** Removes a Company's tokens (on revocation or error). */
-  remove(issuer: string): void {
-    if (this.tokens.delete(issuer)) this.save();
-  }
-
-  /** All issuers we hold tokens for. */
-  issuers(): string[] {
-    return [...this.tokens.keys()];
-  }
-
-  /** Summary for diagnostics. */
-  status(): Array<{ issuer: string; hasAccess: boolean; hasRefresh: boolean; expiresAt: number }> {
-    return [...this.tokens.values()].map(t => ({
+  /** Summary for diagnostics, for keys starting with `prefix` (one person's). Never the tokens. */
+  status(prefix = ""): Array<{ key: string; issuer: string; hasAccess: boolean; hasRefresh: boolean; expiresAt: number }> {
+    return [...this.tokens.values()].filter(t => t.key.startsWith(prefix)).map(t => ({
+      key: t.key,
       issuer: t.issuer,
       hasAccess: Date.now() < t.expiresAt,
       hasRefresh: t.refreshToken !== undefined,

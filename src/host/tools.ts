@@ -4063,7 +4063,7 @@ export async function dispatchTool(
           const target = await guardUrl(String(input.url ?? ""), true);
           request.url = target.toString();
           if (typeof input.page === "string" && input.page !== "") request.page = input.page;
-          await poppyJoin(context.poppyManager, request.url, async url => box.browser({ op: "open", display: context.displayIndex!, url: (await guardUrl(url, true)).toString(), ...callFor(context) }));
+          await poppyJoin(context.poppyManager, context.agent.id, request.url, async url => box.browser({ op: "open", display: context.displayIndex!, url: (await guardUrl(url, true)).toString(), ...callFor(context) }));
         } catch (error) {
           return {
             text: error instanceof WebError ? error.message : `Cannot open that: ${error}`,

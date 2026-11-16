@@ -81,7 +81,7 @@ describe("PoppyManager", () => {
     dirs.push(home);
     const mgr = new PoppyManager({ home, origin: "https://agent.test" });
     await mgr.init();
-    const headers = await mgr.headersFor("GET", "https://definitely-no-poppy.invalid/api");
+    const headers = await mgr.headersFor("GET", "https://definitely-no-poppy.invalid/api", "ada");
     assert.deepEqual(headers, {});
   });
 
@@ -91,7 +91,7 @@ describe("PoppyManager", () => {
     const mgr = new PoppyManager({ home, origin: "https://agent.test" });
     await mgr.init();
 
-    const s = mgr.status();
+    const s = mgr.status("ada");
     assert.ok(s.ready);
     assert.equal(s.clientId, "https://agent.test/poppy/agent.json");
     assert.deepEqual(s.activeSessions, []);

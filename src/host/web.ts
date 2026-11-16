@@ -99,7 +99,7 @@ export { forbiddenAddress };
  * whatever this returns, so a name that resolves differently on a second query — the
  * standard way of defeating a pre-flight check — never gets a second query.
  */
-const guardedLookup: LookupFunction = (hostname, options, callback) => {
+export const guardedLookup: LookupFunction = (hostname, options, callback) => {
   dnsLookup(hostname, options as never, (error, address, family) => {
     if (error) {
       // Node ignores the address once an error is set; "" is the conventional filler.

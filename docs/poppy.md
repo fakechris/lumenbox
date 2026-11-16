@@ -37,9 +37,10 @@ Poppy **默认关闭**，要两个条件同时满足才开：`AGENTBOX_POPPY=1`�
 
 ### 3. 自动行为
 
-- **Header 注入**：agent 用 `WebFetch` 访问支持 Poppy 的网站时，每个请求自动携带 `Poppy-Session` JWT + `Poppy-Version`。重定向每一跳都签发新 JWT（因为 JWT 绑定 URL）。
-- **Browser Join**：agent 用 `browser_open` 打开网页时，自动检测 Browser Join 支持。首次访问某域名时先导航到 join URL，让浏览器加入 Poppy Session（获得 Cookie），后续浏览就是已认证状态。
-- **Token 自动刷新**：OAuth token 快到期时自动 refresh。
+- **每个 agent 是一个独立的 Poppy User**：User ID、Session、登录和 token 都按 agent 分开。两个 agent 去同一家公司，公司看到的是两个人；一个 agent 登录拿到的 token 别的 agent 用不到。User ID 存在 `~/.agentbox/poppy-user-ids.json`（0600），重启后不变。
+- **Header 注入**：agent 用 `WebFetch` 访问支持 Poppy 的 https 网站时，每个请求自动携带它自己的 `Poppy-Session` JWT + `Poppy-Version`。重定向每一跳都签发新 JWT（因为 JWT 绑定 URL）；JWT 一分钟过期。http 页面不带。
+- **Browser Join**：agent 用 `browser_open` 打开 https 网页时，自动检测 Browser Join 支持。每个 agent 首次访问某域名时先导航到 join URL（必须是该公司自己站点上的 https 地址，并再过一遍地址检查），让浏览器加入它的 Poppy Session。
+- **Token 自动刷新**：同一个 token 同时只刷新一次；服务器明确说 `invalid_grant` 才删除，临时失败（503、断网）保留，刷新响应没带新 refresh token 时保留旧的。
 
 ### 4. OAuth 登录
 
@@ -48,7 +49,7 @@ Poppy **默认关闭**，要两个条件同时满足才开：`AGENTBOX_POPPY=1`�
 #### Authorization Code + PKCE（需要浏览器）
 
 ```
-1. agent 调用 manager.startSignIn("allbirds.com")
+1. （尚无工具入口）代码调用 manager.startSignIn("allbirds.com", agentId)
 2. 返回一个 URL，用户在浏览器中打开
 3. 用户授权后，公司的 auth server 重定向到 /poppy/callback
 4. agentbox 自动交换 code → token 并存储
@@ -57,7 +58,7 @@ Poppy **默认关闭**，要两个条件同时满足才开：`AGENTBOX_POPPY=1`�
 #### Device Code（无浏览器场景）
 
 ```
-1. agent 调用 manager.startDeviceSignIn("allbirds.com")
+1. （尚无工具入口）代码调用 manager.startDeviceSignIn("allbirds.com", agentId)
 2. 返回 user_code + verification_uri
 3. 用户在手机上访问 URL 并输入 code
 4. agent 轮询 manager.pollDeviceSignIn(deviceCode) 直到完成
@@ -70,7 +71,7 @@ Token 持久化在 `~/.agentbox/poppy-tokens.json`（mode 0600）。
 对支持 UCP 扩展的 Shopify 商家：
 
 ```typescript
-const ucp = await manager.ucpClientFor("allbirds.com");
+const ucp = await manager.ucpClientFor("allbirds.com", agentId);
 if (ucp) {
   const profile = await ucp.discoverProfile();
   const cart = await ucp.createCart([{ productId: "...", quantity: 1 }]);
@@ -83,7 +84,7 @@ if (ucp) {
 
 ```typescript
 // 与公司 agent 对话
-const ctrl = await manager.converse("allbirds.com", "我想退货", (event) => {
+const ctrl = await manager.converse("allbirds.com", agentId, "我想退货", (event) => {
   if (event.type === "message") console.log(event.message.content);
   if (event.type === "operation") {
     // 公司请求执行某个操作（如退款）
@@ -92,7 +93,7 @@ const ctrl = await manager.converse("allbirds.com", "我想退货", (event) => {
 });
 ```
 
-Operation 会在 Policy Gate 上开一张确认卡（`irreversible` → L4，`personalData` → L3，其他 → L2）。**但确认的结果目前不会回传给公司**：见下面"还没做好的"。
+公司要求的 operation（`requires_approval: true`）会在 Policy Gate 上开一张确认卡（`irreversible` → L4，`personalData` → L3，其他 → L2）。agent 不能自己批准：人在卡片上同意或拒绝后，答复由主机直接发给这家公司，再把公司的回应告诉 agent。没有人可问的地方（没有 Policy Gate）不开卡，agent 被告知"未批准"，公司那边什么也不发。等待中的 operation 只在内存里：主机重启后，之前那张卡的答复不会再发给公司。
 
 ## 架构
 
@@ -135,7 +136,11 @@ Operation 会在 Policy Gate 上开一张确认卡（`irreversible` → L4，`pe
 - **access token / refresh token / private key** 始终在 PoppyManager 内，永远不进入 model context
 - **Session JWT** 由 manager 签发后直接注入 HTTP header，agent 不可见
 - **Token 文件** mode 0600
-- **Pairwise User ID**：每用户每公司一个 ID，跨公司不可关联
+- **Pairwise User ID**：每个 agent 每家公司一个 ID，按公司域名区分（不按 poppy.json 自称的 issuer），跨公司不可关联
+- **所有请求走同一扇门**（`src/host/poppy/http.ts`）：只用 https；URL 里不能带账号密码；域名解析和 WebFetch 用同一个受防护的 lookup，内网和本机地址在连接时就被拒绝，字面 IP 在连接前被拒绝；不跟随重定向（发现 `poppy.json` 时例外，每一跳重新检查）；响应体最多 4 MB
+- **端点必须在公司自己的站点上**：poppy.json 里的对话、Browser Join、UCP 端点，operation 的答复地址，都必须是该域名或它的子域名。授权服务器的元数据必须声明它被问到的那个 issuer，token / device / revocation 端点必须在 issuer 的站点上
+- **token 按"哪个 agent、哪个域名"存**，旁边记着签发它的 issuer；只有这个域名、而且它现在声明的 issuer 和签发者一致时才会用。冒称别家 issuer 的站点拿不到别家的 token
+- **`PoppyStatus`** 只显示调用它的 agent 自己的会话和登录；查过哪些没有 Poppy 的域名只给数量，不给列表
 
 ## 配置
 
@@ -156,14 +161,10 @@ Operation 会在 Policy Gate 上开一张确认卡（`irreversible` → L4，`pe
 node --experimental-transform-types --test src/host/poppy/*.test.ts src/host/poppy-fetch.test.ts src/host/poppy-browser.test.ts src/host/poppy-tools.test.ts
 ```
 
-## 还没做好的（2026-11-16 审查）
+## 还没有的
 
-这些是开启前要知道的，修好之前不建议在有真实账号的机器上打开：
+- **没有让 agent 发起登录的工具**。`startSignIn` / `startDeviceSignIn` 在 PoppyManager 里，但没有工具调用它们，所以实际上拿不到 token：对话、Browser Join、发现都以匿名 Session 进行。
+- **UCP 电商没有工具入口**，只能在代码里调用 `ucpClientFor`。
+- **等待中的 operation 不跨重启**（见上）。
 
-- **请求不经过地址防护**：发现 `poppy.json`、对话、Browser Join、OAuth 各端点的请求用的是全局 `fetch`，不走 `web.ts` 的 `guardUrl`；`poppy.json` 里写的端点地址也不检查是否同源、是否公网。一个网站可以让主机去请求内网地址，并把返回内容带进模型上下文。
-- **确认卡不回传**：`PoppyConverse` 开出的确认卡是单向的，没有代码调用 `respondToOperation`，确认了也不会告诉公司。
-- **token 按 issuer 存**：一个站点在 `poppy.json` 里声称别家的 issuer，就能拿到别家的 token（目前没有发起登录的入口，所以还没有 token 可拿）。
-- **明文 HTTP 也会带 header**；Session JWT 没有 `exp`。
-- **SSE 解析**跨数据块的事件会丢；token 刷新有竞争，任何失败都会删掉 token。
-- **Pairwise User ID** 存在内存里，所有人共用，重启就变。
-
+2026-11-16 审查列出的问题（INV-1893）：请求不经过地址防护、确认卡不回传、token 按 issuer 存、明文 HTTP 带 header、JWT 无 exp、SSE 解析、刷新竞争、User ID 不持久、对话超时不中止，都已修复，测试在 `src/host/poppy/protocol.test.ts`（整套请求走脚本化的网络，不联网）。

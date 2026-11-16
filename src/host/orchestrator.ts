@@ -929,6 +929,7 @@ export class Orchestrator {
       // A confirmation an extension asked for is continued by its callback (INV-861).
       if (approval.harnessResumes === true) {
         // A plan's confirmation (INV-862) or an extension's pause (INV-861); each ignores the other's.
+        void this.poppy?.poppyManager.settleApproval(approval.id, how, (agentId, conversation, text) => this.bus.deliverSystem(agentId, text, conversation)); // a Company's operation is answered (INV-1893)
         this.orchestrations?.settleApproval(approval.id, how); void this.outboxDrafts.settled(approval.id, how).catch(error => console.error(`[outbox] ${error instanceof Error ? error.message : String(error)}`)); // an Outbox draft is delivered or refused (INV-1739)
         void this.effects?.settleApproval(approval.id, how).catch(error =>
           console.error(`[effects] ${error instanceof Error ? error.message : String(error)}`)
@@ -1915,7 +1916,7 @@ export class Orchestrator {
       handOver: this.options.handOver,
       // The reader for the door this conversation's messages come through (INV-871).
       docReader: this.options.docReader ?? this.docReaderFor?.(conversation) ?? this.docReader,
-      ...this.poppy,
+      ...this.poppy?.forAgent(agent.id),
       conversation,
       provider: runtime.provider,
       effort: this.options.effort,
