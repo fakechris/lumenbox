@@ -7,9 +7,8 @@
  * where the card did not look. The person was asked to accept something they could not see, from a
  * request they could not place, with three buttons two of which did the same thing.
  *
- * So a card says where the work came from and what was reported, belongs to the conversation the
- * work was asked in, and its three buttons do three things. A result waiting in another conversation,
- * and a message not yet read in one, are each a line that goes there.
+ * So a card says where the work came from and what was reported, and its three buttons do three
+ * things. It stands in the agent's one conversation, wherever the work was asked (INV-1896).
  */
 export const NEXT_RESULT_JS = `
 /** Markdown as the agent wrote it; raw HTML is off in the renderer, so what is said cannot become markup. */
@@ -32,22 +31,6 @@ function conversationLabel(id) {
   if (!id || id === "main") return t("ui.next.chat.main");
   var row = chat.conversations.filter(function (entry) { return entry.id === id; })[0];
   return row && row.firstLine ? clip(row.firstLine, 40) : t("ui.next.chat.another");
-}
-
-/** Whether a chat has more than one conversation here: only then is it worth a heading of its own. */
-function chatHasTopics(rows, chatKey) { return rows.filter(function (row) { return row.chat === chatKey; }).length > 1; }
-/** A chat's name on the page: the door it is behind and how the chat itself began, or the end of its id where that is not loaded. */
-function chatLabel(rows, chatKey) {
-  var door = chatKey.split(":")[0].split("-")[0], root = rows.filter(function (row) { return row.chat === chatKey && !row.topic; })[0];
-  var name = MSG["ui.next.door." + door] ? t("ui.next.door." + door) : door;
-  return name + " · " + (root && root.firstLine ? clip(root.firstLine, 24) : chatKey.slice(-6)) + " (" + rows.filter(function (row) { return row.chat === chatKey; }).length + ")";
-}
-
-/** Another conversation of the agent being talked to, without leaving the page. */
-function showConversation(agentId, conversation) {
-  if (agentId !== chat.agentId) openChat(agentId);
-  chat.conversation = conversation || "main"; chat.loadedFor = ""; chat.entries = []; chat.live = null; chat.plan = null; chat.liveSurfaces = {};
-  next.view = "chat"; closePanel(); render();
 }
 
 /** Something the chat was sent that is not the agent speaking: a notice in LumenBox's own voice, a card, a file. */
@@ -133,52 +116,6 @@ function askedList() {
   });
   box.appendChild(list);
   return box;
-}
-
-/** A row of work belongs to the conversation it was asked in; one with none recorded is the main one's. */
-function inThisConversation(row) { return (row.conversation || "main") === chat.conversation; }
-
-/**
- * What happened in the agent's other conversations, as one block: each a row with the question that opened it, the
- * agent's last reply, and what waits there (2026-11-15). An agent that works in chat topics did all its work out of
- * sight of its main conversation, which showed only "2 unread in another conversation" lines.
- */
-function elsewhereNotes(agent, waiting) {
-  var counts = {};
-  function at(conversation) { return counts[conversation] || (counts[conversation] = { unread: 0, results: 0 }); }
-  waiting.forEach(function (row) { at(row.conversation || "main").results += 1; });
-  ((agent.facts && agent.facts.unreadIn) || []).forEach(function (entry) { if (entry.conversation !== chat.conversation) at(entry.conversation).unread += entry.count; });
-  var ids = Object.keys(counts).filter(function (id) { return id !== chat.conversation; });
-  if (ids.length === 0) return [];
-  var key = agent.id + "|" + ids.slice().sort().join(",");
-  if (chat.others.key !== key) {
-    chat.others = { key: key, rows: null };
-    getJson("/api/conversations?agent=" + encodeURIComponent(agent.id) + "&ids=" + encodeURIComponent(ids.join(","))).then(function (got) {
-      if (chat.others.key === key) { chat.others.rows = got.conversations || []; if (next.view === "chat") render(); }
-    }, function () { if (chat.others.key === key) chat.others.rows = []; });
-  }
-  var found = {};
-  (chat.others.rows || []).forEach(function (row) { found[row.id] = row; });
-  var box = el("section", "others"), list = el("div", "list");
-  box.appendChild(el("h2", "group", t("ui.next.chat.others", { n: ids.length })));
-  ids.sort(function (x, y) { return String(((found[y] || {}).lastReply || {}).at || (found[y] || {}).lastAt || "").localeCompare(String(((found[x] || {}).lastReply || {}).at || (found[x] || {}).lastAt || "")); });
-  ids.slice(0, 8).forEach(function (id) {
-    var row = found[id] || {}, item = el("button", "other"), head = el("div", "title"), door = /^(feishu|dingtalk|telegram)/.exec(id);
-    if (door) head.appendChild(el("span", "why", t("ui.next.chat.source." + door[1]) + " · "));
-    head.appendChild(document.createTextNode(clip(row.firstLine || (id === "main" ? t("ui.next.chat.main") : t("ui.next.chat.another")), 60)));
-    item.appendChild(head);
-    if (row.lastReply) item.appendChild(el("div", "why", clip(row.lastReply.text, 140)));
-    var marks = [];
-    if (counts[id].results) marks.push(t("ui.next.chat.waitsHere", { n: counts[id].results }));
-    if (counts[id].unread) marks.push(t("ui.next.chat.unreadHere", { n: counts[id].unread }));
-    var when = (row.lastReply && row.lastReply.at) || row.lastAt;
-    item.appendChild(el("div", "why", marks.concat(when ? [agoText(when)] : []).join(" · ")));
-    item.addEventListener("click", function () { showConversation(agent.id, id); });
-    list.appendChild(item);
-  });
-  if (ids.length > 8) list.appendChild(el("p", "why", t("ui.next.more", { n: ids.length - 8 })));
-  box.appendChild(list);
-  return [box];
 }
 
 /** A result waiting for the person: what it is, where it came from, what was reported, and the decision. */

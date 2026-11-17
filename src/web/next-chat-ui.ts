@@ -8,7 +8,7 @@
  */
 export const NEXT_CHAT_JS = `
 var chat = { agentId: "", conversation: "main", conversations: [], plan: null, box: "", entries: [], live: null, loading: "", loadedFor: "", request: 0, jump: false, liveSurfaces: {}, expired: {}, find: "", changing: "", tail: 0,
-  others: { key: "", rows: null } };
+  topics: {}, topicLive: {}, topicSeen: {}, topicExtra: [], focus: "", focusAsked: "" };
 var markdown = window.markdownit ? window.markdownit({ html: false, linkify: true, breaks: true }) : null;
 
 function agentsHere() {
@@ -73,7 +73,10 @@ function renderSide() {
 function openChat(agentId) {
   chat.find = ""; $("find").hidden = true; $("find-text").value = "";
   // Another agent's half-written words and its thread are not this one's.
-  if (agentId !== chat.agentId) { chat.live = null; chat.loadedFor = ""; chat.entries = []; chat.conversation = "main"; chat.conversations = []; chat.plan = null; chat.liveSurfaces = {}; }
+  if (agentId !== chat.agentId) {
+    chat.live = null; chat.loadedFor = ""; chat.entries = []; chat.conversation = "main"; chat.conversations = []; chat.plan = null; chat.liveSurfaces = {};
+    chat.topics = {}; chat.topicLive = {}; chat.topicSeen = {}; chat.topicExtra = []; chat.focusAsked = "";
+  }
   chat.agentId = agentId; next.view = "chat"; document.body.dataset.open = "1";
   if (next.agents[agentId] && next.agents[agentId].boxId) chat.box = next.agents[agentId].boxId; // an agent on another computer brings its computer with it
   history.replaceState(null, "", "?agent=" + encodeURIComponent(agentId));
@@ -104,7 +107,7 @@ function bubble(entry, bare) {
   // Words filed as a person's that the record cannot attribute are said to be so, not shown as theirs.
   if (entry.provenance === "unknown") node.insertBefore(el("div", "why", t("ui.next.chat.unknown")), node.firstChild);
   // Where a request came from when it was not typed here: the chat it arrived through, or a routine.
-  if (entry.source) node.insertBefore(el("div", "why", t("ui.next.chat.source." + entry.source)), node.firstChild);
+  if (entry.source) node.insertBefore(doorMark(entry.source) || el("div", "why", t("ui.next.chat.source." + entry.source)), node.firstChild);
   if (!bare) node.appendChild(messageTools(entry));
   return node;
 }
@@ -149,41 +152,26 @@ function planCard() {
 
 function clip(text, limit) { text = String(text || "").replace(/\\s+/g, " "); return text.length > limit ? text.slice(0, limit) + "…" : text; }
 
-/** The thread as a person reads it: adjacent steps become one fold, the host's notes are left out. */
-function renderThread(view) {
-  var thread = el("div", "thread"), agent = next.agents[chat.agentId], steps = [];
+/**
+ * Entries drawn as a person reads them: adjacent steps become one fold, the host's notes are left out. between(entry) gives
+ * what goes before an entry in time (the agent's topics, in its own conversation); what it gives is drawn after the steps so far.
+ */
+function drawEntries(target, entries, between) {
+  var steps = [], lastAsk = null, drawn = {};
   function flush() {
     if (steps.length === 0) return;
-    thread.appendChild(fold(t("ui.next.chat.steps", { n: steps.length }), steps.map(function (tool) { return { head: (tool.phrase && tool.phrase["{{@locale}}"]) || tool.name, text: clip(tool.detail, 160), bad: tool.isError }; })));
+    target.appendChild(fold(t("ui.next.chat.steps", { n: steps.length }), steps.map(function (tool) { return { head: (tool.phrase && tool.phrase["{{@locale}}"]) || tool.name, text: clip(tool.detail, 160), bad: tool.isError }; })));
     steps = [];
   }
-  // Looking for something: only what was said that holds it, and none of the cards around it.
-  if (chat.find) {
-    var found = chat.entries.filter(function (entry) { return threadFinds(entry, chat.find); });
-    found.forEach(function (entry) { thread.appendChild(bubble(entry)); });
-    renderThreadTools(found.length); view.appendChild(thread);
-    return;
-  }
-  var mine = next.rows.filter(function (row) { return row.assigneeId === chat.agentId; }), delivered = mine.filter(function (row) { return nextStateOf(row).key === "review"; });
-  mine.filter(inThisConversation).filter(function (row) { var group = nextGroupOf(nextStateOf(row).key); return group !== "done" && group !== "review"; }).forEach(function (row) {
-    var pin = el("button", "pin"), body = el("span", "body");
-    body.appendChild(el("div", "title", row.title)); body.appendChild(el("div", "why", reasonOf(row)));
-    pin.appendChild(chip(nextStateOf(row))); pin.appendChild(body);
-    pin.addEventListener("click", function () { openPanel(row.id); });
-    thread.appendChild(pin);
-  });
-  // The plan shown is the plan of what the person asked: one an agent made for work nobody here asked for stays with that work.
-  var plan = planIsMine() ? planCard() : null, lastAsk = null, drawn = {}, setup = setupCard();
-  var mine = askedList(); if (mine) thread.appendChild(mine);
-  if (setup) thread.appendChild(setup);
-  if (plan) thread.appendChild(plan);
-  chat.entries.forEach(function (entry, index) {
+  entries.forEach(function (entry, index) {
+    var before = between ? between(entry) : [];
+    if (before.length) { flush(); before.forEach(function (node) { target.appendChild(node); }); }
     if (entry.kind === "tools") {
       (entry.tools || []).forEach(function (tool) { if (tool.question && tool.result === undefined) lastAsk = tool; });
       (entry.tools || []).forEach(function (tool) {
         if (!tool.surface || tool.isError) return;
         flush();
-        thread.appendChild(feedSurface(tool.surface.surfaceId, tool.surface.title, tool.surface.messages || [], true));
+        target.appendChild(feedSurface(tool.surface.surfaceId, tool.surface.title, tool.surface.messages || [], true));
         drawn[tool.surface.surfaceId] = true;
       });
       steps = steps.concat((entry.tools || []).filter(function (tool) { return !tool.question && !(tool.surface && !tool.isError); }));
@@ -192,21 +180,50 @@ function renderThread(view) {
     if (entry.kind === "text" && entry.role === "user") lastAsk = null; // answered by what was said next
     if (entry.kind === "text" && entry.aside) return; // commentary beside steps: the fold's, not the thread's
     flush();
-    if (entry.kind === "text") { var said = bubble(entry); said.dataset.entry = index; thread.appendChild(said); }
-    else if (entry.kind === "peer") thread.appendChild(fold(t("ui.next.chat.team", { n: (entry.messages || []).length }), (entry.messages || []).map(function (message) { return { head: message.from, text: clip(message.text, 300) }; })));
-    else if (entry.kind === "sent") thread.appendChild(sentRow(entry));
-    else if (entry.kind === "background") thread.appendChild(backgroundRow(entry));
-    else if (entry.kind === "status") thread.appendChild(statusRow(entry));
-    else if (entry.kind === "trigger" && entry.skipped) thread.appendChild(earlierRow(entry));
+    if (entry.kind === "text") { var said = bubble(entry); said.dataset.entry = index; target.appendChild(said); }
+    else if (entry.kind === "peer") target.appendChild(fold(t("ui.next.chat.team", { n: (entry.messages || []).length }), (entry.messages || []).map(function (message) { return { head: message.from, text: clip(message.text, 300) }; })));
+    else if (entry.kind === "sent") target.appendChild(sentRow(entry));
+    else if (entry.kind === "background") target.appendChild(backgroundRow(entry));
+    else if (entry.kind === "status") target.appendChild(statusRow(entry));
+    else if (entry.kind === "trigger" && entry.skipped) target.appendChild(earlierRow(entry));
   });
   flush();
+  return { lastAsk: lastAsk, drawn: drawn };
+}
+
+/** The agent's one conversation: what was said here, with its topics in other chats set among it by time. */
+function renderThread(view) {
+  var thread = el("div", "thread"), agent = next.agents[chat.agentId];
+  // Looking for something: only what was said that holds it, and none of the cards around it.
+  if (chat.find) {
+    var found = chat.entries.filter(function (entry) { return threadFinds(entry, chat.find); });
+    found.forEach(function (entry) { thread.appendChild(bubble(entry)); });
+    renderThreadTools(found.length); view.appendChild(thread);
+    return;
+  }
+  var mine = next.rows.filter(function (row) { return row.assigneeId === chat.agentId; }), delivered = mine.filter(function (row) { return nextStateOf(row).key === "review"; });
+  mine.filter(function (row) { var group = nextGroupOf(nextStateOf(row).key); return group !== "done" && group !== "review"; }).forEach(function (row) {
+    var pin = el("button", "pin"), body = el("span", "body");
+    body.appendChild(el("div", "title", row.title)); body.appendChild(el("div", "why", reasonOf(row)));
+    pin.appendChild(chip(nextStateOf(row))); pin.appendChild(body);
+    pin.addEventListener("click", function () { openPanel(row.id); });
+    thread.appendChild(pin);
+  });
+  // The plan shown is the plan of what the person asked: one an agent made for work nobody here asked for stays with that work.
+  var plan = planIsMine() ? planCard() : null, setup = setupCard(), asked = askedList();
+  if (asked) thread.appendChild(asked);
+  if (setup) thread.appendChild(setup);
+  if (plan) thread.appendChild(plan);
+  var older = olderTopicsButton(); if (older) thread.appendChild(older);
+  var topics = topicsBetween(delivered), drew = drawEntries(thread, chat.entries, topics.before);
+  topics.rest().forEach(function (node) { thread.appendChild(node); });
+  var lastAsk = drew.lastAsk;
   // A card drawn in the turn still running is not in the record yet: it is kept from the live event.
-  Object.keys(chat.liveSurfaces).forEach(function (id) { if (!drawn[id]) thread.appendChild(feedSurface(id, "", [], false)); });
+  Object.keys(chat.liveSurfaces).forEach(function (id) { if (!drew.drawn[id]) thread.appendChild(feedSurface(id, "", [], false)); });
   if (lastAsk && chat.expired[lastAsk.question.question]) thread.appendChild(el("div", "aside", t("ui.next.chat.expired", { name: agent ? agent.name : "" })));
   else if (lastAsk && !chat.live) thread.appendChild(askCard(lastAsk, agent));
   if (agent) pendingCards(agent).forEach(function (card) { thread.appendChild(card); });
-  delivered.filter(inThisConversation).forEach(function (row) { thread.appendChild(resultCard(row)); });
-  if (agent) elsewhereNotes(agent, delivered.filter(function (row) { return !inThisConversation(row); })).forEach(function (note) { thread.appendChild(note); });
+  delivered.filter(function (row) { return (row.conversation || "main") === chat.conversation; }).forEach(function (row) { thread.appendChild(resultCard(row)); });
   if (chat.live) {
     // Its words and its steps are shown as they come only for what the person asked; other work is one line saying it is busy.
     var own = ownTurn();
@@ -219,6 +236,7 @@ function renderThread(view) {
   }
   if (thread.childNodes.length === 0) thread.appendChild(el("p", "empty", t(agent ? "ui.next.chat.empty" : "ui.next.chat.none")));
   view.appendChild(thread);
+  if (focusTopic(view)) return;
   // Follow the newest words only for somebody who was already reading the end (measured before the redraw).
   if (next.atEnd || chat.jump) view.scrollTop = view.scrollHeight; else view.scrollTop = next.scrollTop;
   chat.jump = false;
@@ -230,36 +248,8 @@ function renderChat(view) {
   $("view-hint").textContent = agent ? (agent.title || agent.description || "") : "";
   $("composer").hidden = !agent;
   $("composer-text").placeholder = agent ? t("ui.next.chat.placeholder", { name: agent.name }) : "";
-  var picker = $("conversations");
-  picker.hidden = chat.conversations.length < 2;
-  if (!picker.hidden) {
-    picker.replaceChildren();
-    // One chat is one entry: its topics sit under it, as they do in the chat itself, not beside a hundred others.
-    var groups = {};
-    chat.conversations.forEach(function (row) {
-      var unread = ((agent && agent.facts && agent.facts.unreadIn) || []).some(function (entry) { return entry.conversation === row.id && row.id !== chat.conversation; });
-      var option = el("option", "", (unread ? "● " : "") + (row.id === "main" ? t("ui.next.chat.main") : clip(row.firstLine || row.id, 40)));
-      option.value = row.id; option.selected = row.id === chat.conversation;
-      if (!row.chat || !chatHasTopics(chat.conversations, row.chat)) { picker.appendChild(option); return; }
-      if (!groups[row.chat]) { groups[row.chat] = el("optgroup"); groups[row.chat].label = chatLabel(chat.conversations, row.chat); picker.appendChild(groups[row.chat]); }
-      groups[row.chat].appendChild(option);
-    });
-    if (chat.conversationsTotal > chat.conversations.length) {
-      var older = el("option", "", t("ui.next.chat.older", { n: chat.conversationsTotal - chat.conversations.length }));
-      older.value = "+"; picker.appendChild(older);
-    }
-  }
   if (agent && chat.loading !== chat.agentId && chat.loadedFor !== chat.agentId) loadThread();
   if (chat.loadedFor === chat.agentId || !agent) renderThread(view);
-}
-
-/** The agent's conversations, thirty at a time: the first page replaces the list, a later one adds to it. */
-function loadConversations(id, offset) {
-  getJson("/api/conversations?agent=" + encodeURIComponent(id) + "&limit=30&offset=" + offset).then(function (got) {
-    if (chat.agentId !== id) return;
-    chat.conversations = (offset ? chat.conversations : []).concat(got.conversations || []); chat.conversationsTotal = got.total || chat.conversations.length;
-    if (next.view === "chat") render();
-  }, function () {});
 }
 
 /** The conversation is on screen: this agent's, in a visible tab, not behind the agent list on a narrow screen. */
@@ -311,7 +301,7 @@ function sendMessage() {
 /** Live events for the open conversation: words as they come, what it is doing, and a re-read when the turn ends. */
 function chatEvent(event) {
   if (!event || event.agentId !== chat.agentId || next.view !== "chat") return;
-  if ((event.conversation || "main") !== chat.conversation) return;
+  if ((event.conversation || "main") !== chat.conversation) { topicEvent(event); return; }
   if (event.type === "turn_started") { chat.live = { text: "", doing: "" }; render(); }
   else if (event.type === "text" && typeof event.delta === "string") { chat.live = chat.live || { text: "", doing: "" }; chat.live.text += event.delta; render(); }
   // What it said as it set to work stays said: the same line a chat receives while the tools run.
@@ -337,12 +327,7 @@ function chatStart() {
   input.addEventListener("input", function () { input.style.height = ""; input.style.height = Math.min(input.scrollHeight, 180) + "px"; });
   // Back is always to the agents: from a conversation, and from the two views that cut across them.
   $("back").addEventListener("click", function () { next.view = "chat"; delete document.body.dataset.open; render(); });
-  $("conversations").addEventListener("change", function (event) {
-    if (event.target.value === "+") { loadConversations(chat.agentId, chat.conversations.length); return; }
-    chat.conversation = event.target.value; chat.loadedFor = ""; chat.entries = []; chat.live = null; chat.plan = null; chat.liveSurfaces = {};
-    render();
-  });
   var asked = new URLSearchParams(location.search).get("agent"), thread = new URLSearchParams(location.search).get("conversation");
-  if (asked) { chat.agentId = asked; if (thread) chat.conversation = thread; document.body.dataset.open = "1"; }
+  if (asked) { chat.agentId = asked; if (thread && thread !== "main") chat.focus = thread; document.body.dataset.open = "1"; }
 }
 `;
