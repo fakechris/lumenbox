@@ -41,10 +41,13 @@ function imageBlock() {
     var log = el("pre", "raw"); log.textContent = (image.progress || []).slice(-12).join(String.fromCharCode(10)); box.appendChild(log);
     return box;
   }
-  backup.type = "checkbox"; backup.checked = image.backupByDefault === true; keep.appendChild(backup); keep.appendChild(document.createTextNode(" " + t("ui.next.boxset.backup"))); // the server's one default (INV-1906)
+  // The server's one default (INV-1906); a tick, once made, outlives the redraw "update now" asks through.
+  backup.type = "checkbox"; backup.checked = boxSet.backup !== undefined ? boxSet.backup : image.backupByDefault === true;
+  backup.addEventListener("change", function () { boxSet.backup = backup.checked; });
+  keep.appendChild(backup); keep.appendChild(document.createTextNode(" " + t("ui.next.boxset.backup")));
   keep.appendChild(el("span", "why", " " + t("ui.next.boxset.backupWhy")));
   var check = el("button", "act", t("ui.next.boxset.check")), later = el("button", "act-primary", t("ui.next.boxset.whenIdle")), now = el("button", "act", t("ui.next.boxset.now"));
-  var start = function (body) { postJson("/api/box/image/update", body).then(function () { boxSet.confirming = ""; loadBoxSet(); }, function (error) { failed(error); loadBoxSet(); }); };
+  var start = function (body) { postJson("/api/box/image/update", body).then(function () { boxSet.confirming = ""; boxSet.backup = undefined; loadBoxSet(); }, function (error) { failed(error); loadBoxSet(); }); };
   check.addEventListener("click", function () { check.disabled = true; postJson("/api/box/image/check", {}).then(function (got) { boxSet.image = got; render(); }, function (error) { check.disabled = false; failed(error); }); });
   later.addEventListener("click", function () { start({ whenIdle: true, backup: backup.checked }); });
   now.addEventListener("click", function () {

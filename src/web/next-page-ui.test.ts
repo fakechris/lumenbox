@@ -372,9 +372,11 @@ test("the box update's backup is unticked unless the server says otherwise, and 
   };
   const all = (node: Fake): Fake[] => [node, ...node.kids.flatMap(all)];
   const posted: unknown[] = [];
+  let boxSet: Record<string, unknown> = {};
   const draw = (image: Record<string, unknown>) => {
+    boxSet.image = image; boxSet.confirming = boxSet.confirming ?? "";
     const imageBlock = pageFunction("imageBlock", {
-      el, t: (key: string) => key, fact: (a: string, b: string) => el("div", "", a + b), imageWord: () => "available", boxSet: { image, confirming: "" },
+      el, t: (key: string) => key, fact: (a: string, b: string) => el("div", "", a + b), imageWord: () => "available", boxSet,
       document: { createTextNode: (text: string) => el("#text", "", text) }, String, Date,
       postJson: (path: string, body: unknown) => { posted.push([path, body]); return Promise.resolve({}); }, loadBoxSet: () => {}, failed: () => {}, render: () => {},
     });
@@ -384,8 +386,12 @@ test("the box update's backup is unticked unless the server says otherwise, and 
   const box = nodes.find(node => node.type === "checkbox")!;
   assert.equal(box.checked, false, "unticked: an update leaves the volumes alone");
   assert.ok(nodes.some(node => node.text.includes("ui.next.boxset.backupWhy")), "the cost of ticking it is said beside it");
-  box.checked = true;
+  box.checked = true; box.press!(); // the change event: the choice is kept by the page, not by this checkbox
   nodes.find(node => node.text === "ui.next.boxset.whenIdle")!.press!();
   assert.deepEqual(JSON.parse(JSON.stringify(posted)), [["/api/box/image/update", { whenIdle: true, backup: true }]]);
+  // "Update now" asks twice, through a redraw: the tick made before it is still there (Devin on #736).
+  const redrawn = draw({ state: {}, backupByDefault: false });
+  assert.equal(redrawn.find(node => node.type === "checkbox")!.checked, true, "the person's tick outlives the redraw");
+  boxSet = {};
   assert.equal(draw({ state: {}, backupByDefault: true }).find(node => node.type === "checkbox")!.checked, true, "the server's default, whatever it is");
 });
