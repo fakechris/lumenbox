@@ -9,9 +9,10 @@
 
 import { closeSync, existsSync, fstatSync, openSync, readSync } from "node:fs";
 
-const TAIL_BYTES = 32_768;
+// Enough for a long answer in Chinese (three bytes a character): the page shows the reply whole, as it was written.
+const TAIL_BYTES = 98_304, REPLY_CHARS = 8_000;
 
-export function lastReply(path: string): { text: string; at?: string } | undefined {
+export function lastReply(path: string): { text: string; at?: string; cut?: true } | undefined {
   if (!existsSync(path)) return undefined;
   let tail = "";
   try {
@@ -27,7 +28,8 @@ export function lastReply(path: string): { text: string; at?: string } | undefin
     let entry: { role?: string; kind?: string; text?: string; at?: string; host?: true };
     try { entry = JSON.parse(lines[i]!); } catch { continue; } // the first line of the window may be cut
     if (entry.role !== "assistant" || entry.kind !== undefined || entry.host === true || typeof entry.text !== "string" || entry.text.trim() === "") continue;
-    return { text: entry.text.trim().slice(0, 400), ...(entry.at !== undefined ? { at: entry.at } : {}) };
+    const text = entry.text.trim();
+    return { text: text.slice(0, REPLY_CHARS), ...(text.length > REPLY_CHARS ? { cut: true as const } : {}), ...(entry.at !== undefined ? { at: entry.at } : {}) };
   }
   return undefined;
 }

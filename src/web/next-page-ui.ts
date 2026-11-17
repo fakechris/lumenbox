@@ -18,6 +18,7 @@ import { NEXT_SETTINGS_JS } from "./next-settings-ui.ts";
 import { NEXT_AUTO_JS } from "./next-auto-ui.ts";
 import { NEXT_THREAD_JS } from "./next-thread-ui.ts";
 import { NEXT_RESULT_JS } from "./next-result-ui.ts";
+import { NEXT_TOPICS_JS } from "./next-topics-ui.ts";
 import { NEXT_AGENT_CONFIG_JS } from "./next-agent-config-ui.ts";
 import { NEXT_AGENT_TOOLS_JS } from "./next-agent-tools-ui.ts";
 import { NEXT_SHELF_JS } from "./next-shelf-ui.ts";
@@ -234,10 +235,11 @@ body[data-view="chat"] #view-title { cursor: pointer; }
 .card-plain textarea { width: 100%; min-height: 64px; }
 .sent { align-self: flex-start; max-width: 82%; display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; color: var(--soft); }
 .sent .why { white-space: normal; }
-.others { align-self: stretch; display: flex; flex-direction: column; gap: 6px; }
-.others .list { display: flex; flex-direction: column; gap: 6px; }
-.others .other { text-align: left; padding: 9px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); display: flex; flex-direction: column; gap: 3px; }
-.others .other .why { white-space: normal; }
+.topic { align-self: stretch; display: flex; flex-direction: column; gap: 6px; }
+.topic-body { display: flex; flex-direction: column; gap: 10px; padding-left: 12px; border-left: 2px solid var(--border); }
+.topic .topic-foot { white-space: normal; display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.door { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 5px; margin-right: 7px; vertical-align: -3px; flex: none; }
+.msg-me > .door { box-shadow: 0 0 0 1.5px var(--bg); }
 .elsewhere { align-self: flex-start; color: var(--soft); font-size: 13px; text-align: left; text-decoration: underline; text-underline-offset: 3px; }
 .card-code { display: block; background: var(--surface); border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.5 "IBM Plex Mono", ui-monospace, monospace; }
 .card-need .acts { flex-wrap: wrap; }
@@ -367,7 +369,6 @@ export const NEXT_HTML = `<!doctype html>
   <header class="bar">
     <button class="back" id="back" aria-label="{{ui.next.side.label}}">‹</button>
     <h1 id="view-title"></h1><span class="hint" id="view-hint"></span>
-    <select id="conversations" aria-label="{{ui.next.chat.conversation}}" hidden></select>
     <button class="act" id="screen-toggle" aria-pressed="false" hidden>{{ui.next.screen.toggle}}</button>
     <button class="act" id="thread-more" aria-label="{{ui.next.thread.more}}" title="{{ui.next.thread.more}}" hidden>⋯</button>
     <div class="menu" id="thread-menu" hidden>
@@ -453,6 +454,7 @@ ${NEXT_SETTINGS_JS}
 ${NEXT_AUTO_JS}
 ${NEXT_THREAD_JS}
 ${NEXT_RESULT_JS}
+${NEXT_TOPICS_JS}
 ${NEXT_AGENT_CONFIG_JS}
 ${NEXT_AGENT_TOOLS_JS}
 ${NEXT_SHELF_JS}

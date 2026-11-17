@@ -124,7 +124,8 @@ function pressSurface(item, action) {
   if (item.sent && item.sent.text === text && now - item.sent.at < 5000) return;
   item.sent = { text: text, at: now };
   item.done.textContent = t("ui.next.card.pressed", { name: action.name });
-  postJson("/api/prompt", { agent: chat.agentId, conversation: chat.conversation, text: text, surfaceAction: { surface: item.id, name: action.name } }).catch(failed);
+  // A card in an open topic answers in that topic: the work it was drawn for is recorded there.
+  postJson("/api/prompt", { agent: chat.agentId, conversation: item.conversation, text: text, surfaceAction: { surface: item.id, name: action.name } }).catch(failed);
 }
 
 function mountSurface(item) {
@@ -147,10 +148,10 @@ function mountSurface(item) {
 }
 
 /** The card for a surface id, made once and kept: redrawing the thread moves the same node, it does not rebuild the card. */
-function surfaceItem(id, title) {
-  var key = chat.agentId + "/" + chat.conversation + "/" + id, item = cards.surfaces[key];
+function surfaceItem(id, title, conversation) {
+  var where = conversation || chat.conversation, key = chat.agentId + "/" + where + "/" + id, item = cards.surfaces[key];
   if (!item) {
-    item = cards.surfaces[key] = { id: id, messages: [], applied: 0, node: el("div", "card-plain"), body: el("div", "", t("ui.next.card.drawing")), done: el("div", "why") };
+    item = cards.surfaces[key] = { id: id, conversation: where, messages: [], applied: 0, node: el("div", "card-plain"), body: el("div", "", t("ui.next.card.drawing")), done: el("div", "why") };
     item.head = el("div", "card-head", title || "");
     item.node.appendChild(item.head); item.node.appendChild(item.body); item.node.appendChild(item.done);
   } else if (title) item.head.textContent = title;
@@ -158,8 +159,8 @@ function surfaceItem(id, title) {
 }
 
 /** Messages for a surface: from the transcript on load (the whole draw), or one live event's new part. */
-function feedSurface(id, title, messages, whole) {
-  var item = surfaceItem(id, title);
+function feedSurface(id, title, messages, whole, conversation) {
+  var item = surfaceItem(id, title, conversation);
   if (whole) { if (messages.length > item.messages.length) item.messages = messages.slice(); }
   else item.messages = item.messages.concat(messages || []);
   if (cards.vendor === "failed") item.body.textContent = t("ui.next.card.noVendor");

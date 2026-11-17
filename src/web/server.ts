@@ -5949,7 +5949,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             // Labelled by what was said, because the id is a flattened chatKey nobody
             // can read. Head-of-file only, so a page stays cheap.
             const firstLine = conversation.id === MAIN_CONVERSATION ? undefined : registry.conversationFirstLine(id, conversation.id);
-            const reply = only ? lastReply(registry.transcriptPathFor(id, conversation.id)) : undefined; // only when asked for by id: a tail read per row
+            const reply = only || url.searchParams.get("replies") === "1" ? lastReply(registry.transcriptPathFor(id, conversation.id)) : undefined; // asked for: a tail read per row
             const children = forks.filter(fork => fork.parent === conversation.id).map(fork => ({ id: fork.child, brief: fork.brief, status: fork.status, ...(fork.reason !== undefined ? { reason: fork.reason } : {}), lastAt: fork.lastAt })); const chatKey = conversations.chatKeyFor(conversation.id); return { ...conversation, ...(firstLine !== undefined ? { firstLine } : {}),
               ...(reply !== undefined ? { lastReply: reply } : {}),
               ...(chatKey !== undefined ? { chat: chatKey.split(":").slice(0, 2).join(":"), topic: chatKey.split(":").length > 2 } : {}), ...(children.length > 0 ? { forks: children } : {}) };
