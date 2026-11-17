@@ -8,7 +8,7 @@
  * has to name the box.
  */
 
-import { type ImageState, applyUpdate, dockerUpdateDeps, imageState, resetBox } from "../box/box-update.ts";
+import { BACKUP_BY_DEFAULT, type ImageState, applyUpdate, dockerUpdateDeps, imageState, resetBox } from "../box/box-update.ts";
 import { BoxManager, defaultBoxConfig } from "../box/docker.ts";
 import { cpuLimitOf, defaultCpusFor, engineCpus, setCpuLimit } from "../box/box-cpus.ts";
 import { boxCpusFromEnvironment, loadConfig, saveConfig, validCpus } from "../config.ts";
@@ -54,7 +54,7 @@ export class BoxUpdateService {
   }
 
   view(): Record<string, unknown> {
-    return { state: this.state ?? null, checkedAt: this.checkedAt ?? null, running: this.running, progress: this.progress.slice(-40), last: this.last ?? null };
+    return { state: this.state ?? null, checkedAt: this.checkedAt ?? null, running: this.running, progress: this.progress.slice(-40), last: this.last ?? null, backupByDefault: BACKUP_BY_DEFAULT };
   }
 
   private say(line: string): void {
@@ -146,7 +146,7 @@ export async function boxUpdateRoute(route: string, service: BoxUpdateService, d
   if (route === "POST /api/box/image/update") {
     if (deps.refusedAdmin()) return { status: 0, body: null };
     const body = await deps.readJson();
-    const started = service.start({ whenIdle: body.whenIdle !== false, backup: body.backup === true, interrupt: body.interrupt === true });
+    const started = service.start({ whenIdle: body.whenIdle !== false, backup: typeof body.backup === "boolean" ? body.backup : BACKUP_BY_DEFAULT, interrupt: body.interrupt === true });
     return started ? { status: 202, body: { started: true } } : { status: 409, body: apiError("update-running") };
   }
   // The box's CPU ceiling (INV-1552): what it is, what the engine has, and a change applied in place.

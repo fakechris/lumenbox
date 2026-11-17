@@ -516,6 +516,7 @@ export const UI_NEXT: Record<string, readonly [string, string]> = {
   "ui.next.boxset.last": ["上次更新：{outcome} · {when}", "Last update: {outcome} · {when}"],
   "ui.next.boxset.updating": ["正在更新，成员暂时不能工作。", "Updating; the agents cannot work meanwhile."],
   "ui.next.boxset.backup": ["更新前备份工作目录", "Back up the work folder first"],
+  "ui.next.boxset.backupWhy": ["更新不会动 box 里的文件；备份要多花几分钟，并占用约 1 GB 磁盘。", "An update leaves the box's files alone; a backup adds a few minutes and about 1 GB of disk."],
   "ui.next.boxset.check": ["检查更新", "Check for an update"],
   "ui.next.boxset.whenIdle": ["等成员空闲时更新", "Update when the agents are idle"],
   "ui.next.boxset.now": ["现在更新", "Update now"],
