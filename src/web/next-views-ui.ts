@@ -16,7 +16,11 @@ function isTask(ref) { return /^t\\d+$/.test(ref); }
 
 /** What an inbox item asks, in the page's own words where the server's are bookkeeping. */
 function owedText(item) {
-  if (item.kind === "review") return t("ui.next.panel.review");
+  if (item.kind === "review") {
+    // Why it waits for the person, in what their word changes (INV-1904); the plain phrase where the row is not loaded.
+    var row = next.rows.filter(function (candidate) { return candidate.id === item.ref; })[0], because = row ? signOffLines(row) : [];
+    return because.length ? because[0].textContent : t("ui.next.chat.review");
+  }
   if (item.kind === "nudged") return t("ui.next.inbox.nudged");
   // A question's choices are buttons on its row; its sentence is the question alone.
   if (item.answer && item.answer.options) return String(item.detail || "").split(" — ")[0];

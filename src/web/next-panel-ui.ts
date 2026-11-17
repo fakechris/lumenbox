@@ -37,6 +37,8 @@ function needBlock(task) {
     acts.appendChild(commit); acts.appendChild(dismiss);
   } else if (stage === "person/review") {
     box.appendChild(el("div", "", t("ui.next.panel.review")));
+    signOffLines(task).forEach(function (line) { box.appendChild(line); });
+    box.appendChild(el("div", "why", t("ui.next.chat.reviewHint", { name: agentName(task.assigneeId) })));
     var accept = el("button", "act-primary", t("ui.next.act.accept")), changes = el("button", "act", t("ui.next.act.changes"));
     accept.addEventListener("click", function () { updateTask({ status: "done" }, t("ui.next.done.accepted")); });
     changes.addEventListener("click", function () {
@@ -197,6 +199,7 @@ function renderPanel() {
   if (task.assigneeId && task.conversation && task.conversation !== "main") {
     var there = el("button", "elsewhere", t("ui.next.panel.where", { where: conversationLabel(task.conversation) }));
     there.addEventListener("click", function () { showConversation(task.assigneeId, task.conversation); });
+    nameConversation(task.assigneeId, task.conversation, function () { there.textContent = t("ui.next.panel.where", { where: conversationLabel(task.conversation) }); }); // the label alone: a redraw would drop a note being typed
     from.appendChild(document.createTextNode(" · ")); from.appendChild(there);
   }
   inner.appendChild(from);

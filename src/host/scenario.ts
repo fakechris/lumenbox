@@ -30,6 +30,7 @@ import { join } from "node:path";
 import type Anthropic from "@anthropic-ai/sdk";
 import { AgentBus } from "../agents/bus.ts";
 import { AgentRegistry } from "../agents/registry.ts";
+import { settleDelivered } from "./review-settle.ts";
 import type { BoxClient } from "../box/client.ts";
 import { AcpDelegates } from "./acp-delegate.ts";
 import type { HistoryEntry } from "./compaction.ts";
@@ -577,6 +578,9 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
   if (options.tasks !== undefined) watchDependencies(options.tasks, (task, text) => { bus.deliverSystem(task.assigneeId!, text, task.conversation ?? "main", taskWorkId(task,bus)); });
   goalLoop = options.goalLoop?.({ bus, registry, tasks: options.tasks, files });
   options.tasks?.onChange(task => taskAttentionChanged(bus, task));
+  // A person's delivered request ends unless their word changes something (INV-1904), wired as the orchestrator wires it, a running check included.
+  const board = options.tasks, settleWorld = { isAgent: (id: string) => registry.has(id), checking: () => false, ...(options.resultChecks ? { checks: options.resultChecks } : {}) };
+  board?.onChange(task => { if (task.status === "review") setImmediate(() => settleDelivered(board, task.id, { board, ...settleWorld })); });
   jobWatch = options.jobWatch?.({ bus, box });
   goalGate = options.goalGate?.({ bus, registry, tasks: options.tasks, files });
 
@@ -601,6 +605,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
     await rememberer.settle(front.id);
   };
   if (options.drive !== undefined) await options.drive({ bus, registry, frontId: front.id, files, surfaces: shownSurfaces, say, ...(goalLoop !== undefined ? { goalLoop } : {}) });
+  await new Promise(resolve => setImmediate(resolve)); // a settle the last step queued (INV-1904) lands before the episode is read
   for (const line of options.says) await say(line);
 
   // Errors are read off the transcripts: a refused tool is the rail doing its job, and a

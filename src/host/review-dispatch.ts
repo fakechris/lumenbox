@@ -159,7 +159,7 @@ export interface RoundDeps {
   ask: (reviewerId: string, task: Task) => Promise<{ reply: string; voided?: string }>;
   /** The board, as it stands when the round ends. */
   current: (taskId: string) => Task | undefined;
-  move: (taskId: string, change: { status?: "review" | "doing" | "done"; note: string }) => void;
+  move: (taskId: string, change: { status?: "review" | "doing" | "done"; note: string; decide?: true }) => void;
   /** Whether an id is one of the agents (INV-1647): an agent's own ask is done when the record passes; a person's waits for their word. */
   isAgent?: (id: string) => boolean;
   log: (line: string) => void;
@@ -203,7 +203,7 @@ export async function reviewRound(deps: RoundDeps, task: Task): Promise<{ asked:
   const records = deps.ledger.recordsFor(task.id, plan.digest);
   if (settled === undefined) {
     const said = records.filter(r => r.verdict !== "none");
-    deps.move(task.id, { status: "review", note: said.length >= deps.k ? `reviewers disagree (${said.map(r => `${deps.nameOf(r.reviewerId)}: ${r.verdict}`).join(", ")}); no additional reviewers; a person decides` : `audit gave ${records.length - said.length} void or no-verdict repl${records.length - said.length === 1 ? "y" : "ies"}; not accepted — a person decides` });
+    deps.move(task.id, { status: "review", note: said.length >= deps.k ? `reviewers disagree (${said.map(r => `${deps.nameOf(r.reviewerId)}: ${r.verdict}`).join(", ")}); no additional reviewers; a person decides` : `audit gave ${records.length - said.length} void or no-verdict repl${records.length - said.length === 1 ? "y" : "ies"}; not accepted — a person decides` , decide: true });
     return { asked: plan.reviewers };
   }
   const names = settled.by.map(deps.nameOf).join(", ");

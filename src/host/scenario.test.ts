@@ -4383,3 +4383,36 @@ test("INV-1845: the bus records who said each message as a turn starts on it, an
       "the person's request, and a job notice no request stood behind folded away — known from the record, which the wording alone did not say");
   } finally { episode.cleanup(); rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("a person's request ends when its result is delivered, and 不对，重做 in the chat reopens it (INV-1904)", async () => {
+  // 2026-11-17: a card asked Chris to Accept an answer given in Feishu 27 days earlier. Delivered is the end of a plain
+  // request; the person sends it back in the conversation, as they would anywhere else, and the agent reopens it.
+  const tasks = new TaskStore(null); let target = "", round = 0;
+  const episode = await runEpisode({
+    team: [{ name: "Bob", tools: ["Tasks"] }], tasks, says: [],
+    script: () => {
+      round++;
+      if (round === 1) return { call: "Tasks", input: { action: "submit", id: target, evidence: ["brief: weighted BM25, 150 queries over 536 tools"] } };
+      if (round === 2) return { say: "选型说明写好了：用加权 BM25。" };
+      if (round === 3) {
+        const ended = tasks.get(target)!;
+        assert.equal(ended.status, "done", JSON.stringify(ended.history));
+        assert.equal(ended.history.at(-1)!.closed, "delivery", "an ending, not an acceptance");
+        return { call: "Tasks", input: { action: "update", id: target, status: "doing", note: "the person says the numbers do not hold; redoing" } };
+      }
+      return { say: "好，我重新核对数字。" };
+    },
+    drive: async ({ bus, frontId }) => {
+      target = tasks.create({ title: "MCP 工具搜索方案选型", requester: "feishu:ou_chris", assigneeId: frontId, conversation: "main" })!.id;
+      tasks.update(target, { status: "doing" }, frontId);
+      bus.sendFromUser(frontId, "把 MCP 工具搜索的选型说明交给我"); await bus.wake(frontId); await bus.idle();
+      await new Promise(resolve => setImmediate(resolve));
+      bus.sendFromUser(frontId, "不对，卡上的数字对不上，重做"); await bus.wake(frontId); await bus.idle();
+    },
+  });
+  try {
+    const task = tasks.get(target)!;
+    assert.equal(task.status, "doing", JSON.stringify(task.history));
+    assert.ok(task.history.some(change => change.closed === "delivery"), "it had ended on delivery before it was sent back");
+  } finally { episode.cleanup(); }
+});
