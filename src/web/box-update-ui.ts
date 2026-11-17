@@ -19,6 +19,7 @@ export const BOX_UPDATE_JS = `(function () {
     var s = d.state;
     if (!s) { ui.line.textContent = "{{ui.box-update.the-boxs-image-could-not}}"; return; }
     ui.line.textContent = "{{ui.box-update.runs}} " + short(s.runningRef) + "{{ui.box-update.this-app-expects}} " + short(s.expectedRef) + (s.available ? " {{ui.box-update.an-update-is-available}}" + (s.needsPull ? " {{ui.box-update.it-will-be-downloaded-first}}" : "") + "." : " {{ui.box-update.up-to-date}}");
+    if (!ui.backup.dataset.read) { ui.backup.checked = d.backupByDefault === true; ui.backup.dataset.read = "1"; } // the server's one default (INV-1906); a tick, once made, stays
     ui.apply.disabled = d.running || !s.available;
     ui.now.style.display = d.running || !s.available ? "none" : "";
     ui.apply.textContent = d.running ? "{{ui.box-update.updating}}" : "{{ui.box-update.apply-update}}";

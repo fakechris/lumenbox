@@ -18,3 +18,14 @@ test("a box that answers: its turns and running jobs are what an update waits fo
   assert.deepEqual(await busyOf(service(2), running), ["2 turn(s) in progress", "job j1: npm test"]);
   await assert.rejects(busyOf(service(0), box(async () => ({ ok: true }), async () => { throw new Error("jobs timed out"); })), /jobs timed out/);
 });
+
+test("an update backs the volumes up only when asked: one default, sent to both pages and applied when a request does not say (INV-1906)", async () => {
+  const { boxUpdateRoute } = await import("./box-update-routes.ts");
+  const { BACKUP_BY_DEFAULT } = await import("../box/box-update.ts");
+  assert.equal(BACKUP_BY_DEFAULT, false, "an update leaves the volumes alone; copying them every time costs minutes and a gigabyte");
+  assert.equal(service(0).view().backupByDefault, false, "the pages read the default from the server");
+  const asked: { backup: boolean }[] = [];
+  const fake = { view: () => ({ checkedAt: 1 }), check: async () => {}, start: (options: { backup: boolean }) => { asked.push(options); return true; } } as unknown as BoxUpdateService;
+  for (const body of [{}, { backup: true }, { backup: false }]) await boxUpdateRoute("POST /api/box/image/update", fake, { readJson: async () => body, refusedAdmin: () => false });
+  assert.deepEqual(asked.map(options => options.backup), [false, true, false]);
+});

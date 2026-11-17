@@ -362,3 +362,30 @@ test("an agent's topics stay its own: a refresh keeps the older ones, a stale re
   assert.deepEqual(JSON.parse(JSON.stringify((entries() as { text: string; source?: string }[]).map(entry => [entry.text, entry.source ?? null]))),
     [["early", null], ["asked in feishu-room-t1", "feishu"], ["answered", null], ["late", null]], "a topic stands at its time, marked with its chat");
 });
+
+test("the box update's backup is unticked unless the server says otherwise, and a tick is sent (INV-1906)", async () => {
+  // 2026-11-17: the rebuilt page ticked it by default, against box-update.ts; an update spent two minutes and 1 GB copying volumes it never touches.
+  interface Fake { tag: string; cls: string; text: string; kids: Fake[]; type?: string; checked?: boolean; className?: string; textContent?: string; press?: () => void; appendChild(kid: Fake): void; addEventListener(name: string, run: () => void): void }
+  const el = (tag: string, cls = "", text = ""): Fake => {
+    const node: Fake = { tag, cls, text, kids: [], appendChild(kid) { node.kids.push(kid); }, addEventListener(_name, run) { node.press = run; } };
+    return node;
+  };
+  const all = (node: Fake): Fake[] => [node, ...node.kids.flatMap(all)];
+  const posted: unknown[] = [];
+  const draw = (image: Record<string, unknown>) => {
+    const imageBlock = pageFunction("imageBlock", {
+      el, t: (key: string) => key, fact: (a: string, b: string) => el("div", "", a + b), imageWord: () => "available", boxSet: { image, confirming: "" },
+      document: { createTextNode: (text: string) => el("#text", "", text) }, String, Date,
+      postJson: (path: string, body: unknown) => { posted.push([path, body]); return Promise.resolve({}); }, loadBoxSet: () => {}, failed: () => {}, render: () => {},
+    });
+    return all(imageBlock() as Fake);
+  };
+  const nodes = draw({ state: { runningRef: "fakechris/lumenbox:0.4.3", expectedRef: "fakechris/lumenbox:0.4.4" }, backupByDefault: false });
+  const box = nodes.find(node => node.type === "checkbox")!;
+  assert.equal(box.checked, false, "unticked: an update leaves the volumes alone");
+  assert.ok(nodes.some(node => node.text.includes("ui.next.boxset.backupWhy")), "the cost of ticking it is said beside it");
+  box.checked = true;
+  nodes.find(node => node.text === "ui.next.boxset.whenIdle")!.press!();
+  assert.deepEqual(JSON.parse(JSON.stringify(posted)), [["/api/box/image/update", { whenIdle: true, backup: true }]]);
+  assert.equal(draw({ state: {}, backupByDefault: true }).find(node => node.type === "checkbox")!.checked, true, "the server's default, whatever it is");
+});

@@ -69,6 +69,13 @@ export interface UpdateDeps {
   now?: () => number;
 }
 
+/**
+ * Whether an update backs the volumes up unless told otherwise: no, for the reason above. The one
+ * default: the server says it to both pages, and a request that does not say applies it (INV-1906 —
+ * the rebuilt page had its own, the opposite one, and every update spent two minutes and a gigabyte).
+ */
+export const BACKUP_BY_DEFAULT = false;
+
 export interface UpdateOptions {
   /** Recreate even when the box already runs the expected image (`box up --recreate`). */
   force?: boolean;

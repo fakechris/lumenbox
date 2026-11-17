@@ -41,7 +41,8 @@ function imageBlock() {
     var log = el("pre", "raw"); log.textContent = (image.progress || []).slice(-12).join(String.fromCharCode(10)); box.appendChild(log);
     return box;
   }
-  backup.type = "checkbox"; backup.checked = true; keep.appendChild(backup); keep.appendChild(document.createTextNode(" " + t("ui.next.boxset.backup")));
+  backup.type = "checkbox"; backup.checked = image.backupByDefault === true; keep.appendChild(backup); keep.appendChild(document.createTextNode(" " + t("ui.next.boxset.backup"))); // the server's one default (INV-1906)
+  keep.appendChild(el("span", "why", " " + t("ui.next.boxset.backupWhy")));
   var check = el("button", "act", t("ui.next.boxset.check")), later = el("button", "act-primary", t("ui.next.boxset.whenIdle")), now = el("button", "act", t("ui.next.boxset.now"));
   var start = function (body) { postJson("/api/box/image/update", body).then(function () { boxSet.confirming = ""; loadBoxSet(); }, function (error) { failed(error); loadBoxSet(); }); };
   check.addEventListener("click", function () { check.disabled = true; postJson("/api/box/image/check", {}).then(function (got) { boxSet.image = got; render(); }, function (error) { check.disabled = false; failed(error); }); });
