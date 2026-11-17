@@ -56,16 +56,44 @@ test("a result waits for the person exactly when their word changes something", 
   settleDelivered(named.board, named.id, named.world());
   assert.equal(named.board.get(named.id)!.status, "done", "and once it has passed, nothing is left to ask");
 
+  // Handed back unfinished — out of budget or stuck — is not a delivery (Devin on #734).
+  const board = new TaskStore(null);
+  const stuck = board.create({ title: "index the tools", requester: "feishu:ou_chris", assigneeId: "bob" })!;
+  board.update(stuck.id, { status: "doing" }, "bob");
+  board.deliveryCommand(stuck.id, "handoff", "bob", { note: "incomplete (turn_budget): handed back" });
+  assert.equal(board.get(stuck.id)!.status, "review");
+  assert.deepEqual(signOffReasons(board.get(stuck.id)!, board, isAgent), ["unfinished"]);
+  settleDelivered(board, stuck.id, { board, isAgent, checking: () => false });
+  assert.equal(board.get(stuck.id)!.status, "review", "unfinished work never ends as if delivered");
+
+  // "Show me first" holds when the turn ends, not only after an explicit submit; written criteria are asked for too.
+  const shown = board.create({ title: "draft the brief", requester: "feishu:ou_chris", assigneeId: "bob", signOff: true })!;
+  board.update(shown.id, { status: "doing" }, "bob");
+  board.turnFinished(shown.id);
+  assert.equal(board.get(shown.id)!.status, "review", "the turn ending submits it instead of closing it");
+  const criteria = board.create({ title: "ship the brief", requester: "feishu:ou_chris", assigneeId: "bob", contract: { acceptance: "cites the benchmark" } })!;
+  board.update(criteria.id, { status: "doing" }, "bob");
+  board.turnFinished(criteria.id);
+  assert.deepEqual(signOffReasons(board.get(criteria.id)!, board, isAgent), ["asked"]);
+
   // A check could not settle it.
   const undecided = delivered();
   undecided.board.update(undecided.id, { note: "reviewers disagree; a person decides", decide: true }, "review-guard");
   assert.deepEqual(signOffReasons(undecided.board.get(undecided.id)!, undecided.board, isAgent), ["undecided"]);
+  // A check that ran on this evidence and never moved the task — exhausted, interrupted — gave no verdict either (CodeRabbit on #734).
+  const cut = delivered(), ran = { running: () => false, checked: () => true };
+  assert.deepEqual(signOffReasons(cut.board.get(cut.id)!, cut.board, isAgent, ran), ["undecided"]);
+  cut.board.update(cut.id, { status: "review", note: "verified complete by Ada" }, "review-guard");
+  assert.deepEqual(signOffReasons(cut.board.get(cut.id)!, cut.board, isAgent, ran), [], "a check that moved it gave its verdict");
 
   // Somebody wrote about the result after it was delivered — the 2026-11-02 note said it did not hold.
   const remarked = delivered();
   remarked.board.update(remarked.id, { note: "不能按原样验收：卡面三项数字不成立" }, "bob");
   remarked.board.update(remarked.id, { note: "nudge 1/2: idle" }, "aging");
   assert.deepEqual(signOffReasons(remarked.board.get(remarked.id)!, remarked.board, isAgent), ["remarked"], "the sweep's own notes are not remarks");
+  const answered = delivered();
+  answered.board.update(answered.id, { note: "数字不对，先别用" }, "feishu:ou_chris");
+  assert.deepEqual(signOffReasons(answered.board.get(answered.id)!, answered.board, isAgent), ["remarked"], "the requester's own word on it holds it too");
 
   // Files handed over are looked at before they are used.
   const files = delivered();

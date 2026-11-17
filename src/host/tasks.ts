@@ -52,8 +52,8 @@ export function isTaskStatus(value: string): value is TaskStatus {
 }
 
 /** Why a task is not closed by its turn ending, or undefined for the one-shot ask that is (INV-817): a due date, a wait or acceptance criteria mean a check was promised. */
-export function heldForReview(task: Pick<Task, "due" | "waitingOn" | "contract">): string | undefined {
-  if (task.contract?.acceptance !== undefined) return "it has acceptance criteria";
+export function heldForReview(task: Pick<Task, "due" | "waitingOn" | "contract" | "signOff">): string | undefined {
+  if (task.contract?.acceptance !== undefined) return "it has acceptance criteria"; if (task.signOff === true) return "the person asked to see it first"; // INV-1904
   if (task.due !== undefined) return `it is due ${task.due}`;
   if (task.waitingOn !== undefined) return `it is waiting on ${task.waitingOn}`;
   return undefined;

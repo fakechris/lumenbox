@@ -864,7 +864,7 @@ export class Orchestrator {
   }
 
   /** What the settle rule reads (INV-1904): the board, who is an agent, whether a check of the result runs. The board sweep calls settleReviews, hourly and at start. */
-  settleWorld(): SettleWorld { return { board: this.tasks ?? { get: () => undefined, list: () => [] }, isAgent: id => this.registry.has(id), checking: task => this.auditing.has(task.id) || this.resultChecks.running(task) }; }
+  settleWorld(): SettleWorld { return { board: this.tasks ?? { get: () => undefined, list: () => [] }, isAgent: id => this.registry.has(id), checking: task => this.auditing.has(task.id), checks: this.resultChecks }; }
   settleReviews(now = new Date()): string[] { return this.tasks ? settleReviews(this.tasks, this.settleWorld(), now) : []; }
   /** The box workspace as path→hash, or undefined when there is no box to ask. */
   private async workspaceManifest(): Promise<Map<string, string> | undefined> {
@@ -2142,7 +2142,7 @@ export class Orchestrator {
     if (!turn.audit && !isAuditConversation(turn.conversation ?? "")) return false;
     const task = turn.audit ? this.tasks?.get(turn.audit.taskId) : undefined;
     if (task && turn.audit?.planId) this.resultChecks.stop(task, turn.audit.planId, "Host restart interrupted this check; it is not resumed as ordinary work. Reserved costs remain consumed.");
-    this.turns?.end(turn.id, "result-check-interrupted"); this.steps?.closed(turn.id);
+    this.turns?.end(turn.id, "result-check-interrupted"); this.steps?.closed(turn.id); if (task?.status === "review") this.tasks!.update(task.id, { note: "A restart interrupted the check of this result; a person decides.", decide: true }, REVIEW_ACTOR); // INV-1904
     return true;
   }
   private continueTurn(turn: InterruptedTurn, approval?: { id: string; how: "allowed" | "refused" | "gone" }): boolean {

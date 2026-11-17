@@ -199,7 +199,7 @@ function renderPanel() {
   if (task.assigneeId && task.conversation && task.conversation !== "main") {
     var there = el("button", "elsewhere", t("ui.next.panel.where", { where: conversationLabel(task.conversation) }));
     there.addEventListener("click", function () { showConversation(task.assigneeId, task.conversation); });
-    nameConversation(task.assigneeId, task.conversation, function () { if (panel.task === task) renderPanel(); });
+    nameConversation(task.assigneeId, task.conversation, function () { there.textContent = t("ui.next.panel.where", { where: conversationLabel(task.conversation) }); }); // the label alone: a redraw would drop a note being typed
     from.appendChild(document.createTextNode(" · ")); from.appendChild(there);
   }
   inner.appendChild(from);

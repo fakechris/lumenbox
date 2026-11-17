@@ -27,12 +27,13 @@ export const REVIEW_LAPSE_MS = envNumber("AGENTBOX_REVIEW_LAPSE_DAYS", 7) * 86_4
  * Why a person's word matters here:
  * - `blocks`: live work waits on this result, and would start on something nobody looked at;
  * - `files`: files were handed over, and a file is looked at before it is used;
- * - `asked`: the person asked to see the result before it counts (`Task.signOff`), or a person is named to review it;
+ * - `asked`: the person asked to see the result before it counts (`Task.signOff`), wrote acceptance criteria, or is named to review it;
+ * - `unfinished`: the work was handed back incomplete (a `handoff`: out of budget, stuck), not delivered;
  * - `undecided`: a check could not settle it and said a person decides;
- * - `remarked`: somebody wrote about the result after it was delivered — the 2026-11-02 note on
+ * - `remarked`: somebody — the requester included — wrote about the result after it was delivered — the 2026-11-02 note on
  *   that card said the result did not hold, and a closing would have buried it.
  */
-export type SignOff = "blocks" | "files" | "asked" | "undecided" | "remarked";
+export type SignOff = "blocks" | "files" | "asked" | "unfinished" | "undecided" | "remarked";
 
 /** Who writes notes to keep the books, not to say anything about the result. */
 const BOOKKEEPERS: ReadonlySet<string> = new Set(["aging", "audit-guard", "review-guard", "restart", "host", "channel", SETTLE_ACTOR]);
@@ -55,17 +56,20 @@ function sinceDelivery(history: readonly TaskChange[]): TaskChange[] {
 }
 
 /** What the page shows beside a result: why it waits for the person, only while it does. */
-export function signOffView(task: Task, board: Board, isAgent: (id: string) => boolean): SignOff[] { return task.status === "review" ? signOffReasons(task, board, isAgent) : []; }
+export function signOffView(task: Task, board: Board, isAgent: (id: string) => boolean, checks?: ChecksRecord): SignOff[] { return task.status === "review" ? signOffReasons(task, board, isAgent, checks) : []; }
 
 /** Every reason a person's word is needed on this result; empty when none is. */
-export function signOffReasons(task: Task, board: Board, isAgent: (id: string) => boolean): SignOff[] {
+export function signOffReasons(task: Task, board: Board, isAgent: (id: string) => boolean, checks?: ChecksRecord): SignOff[] {
   const reasons: SignOff[] = [];
   if (blocksAny(task, board)) reasons.push("blocks");
   if ((task.deliverables?.length ?? 0) > 0) reasons.push("files");
-  if (task.signOff === true || task.reviewerId !== undefined && !isAgent(task.reviewerId)) reasons.push("asked");
+  if (task.signOff === true || task.contract?.acceptance !== undefined || task.reviewerId !== undefined && !isAgent(task.reviewerId)) reasons.push("asked");
+  if (task.delivery?.action === "handoff" && task.delivery.submitted !== true) reasons.push("unfinished");
   const since = sinceDelivery(task.history);
-  if (since.some(change => change.decide === true) || task.history.at(-1)?.decide === true) reasons.push("undecided");
-  if (since.some(change => change.note !== undefined && change.status === undefined && !BOOKKEEPERS.has(change.by) && change.by !== task.requester)) reasons.push("remarked");
+  // A check said a person decides, or ran on this evidence and never moved it: exhausted, interrupted, cut short — no verdict either way.
+  const verdict = since.some(change => change.by === "review-guard" && change.status !== undefined);
+  if (since.some(change => change.decide === true) || task.history.at(-1)?.decide === true || checks?.checked(task) === true && !verdict) reasons.push("undecided");
+  if (since.some(change => change.note !== undefined && change.status === undefined && !BOOKKEEPERS.has(change.by))) reasons.push("remarked"); // the requester's own word on it too: they answered
   return reasons;
 }
 
@@ -73,13 +77,17 @@ export interface SettleWorld {
   board: Board;
   /** Whether an id is an agent: an agent's own request is settled by the check record (review-dispatch.ts), not here. */
   isAgent: (id: string) => boolean;
-  /** A check of this result is running or about to: it speaks first. */
+  /** A check of this result is about to run (its listener has it): it speaks first. */
   checking: (task: Task) => boolean;
+  /** The result checks: one running speaks first; one that ran on this evidence and moved nothing gave no verdict. */
+  checks?: ChecksRecord;
 }
+/** What the rule reads of the result checks (result-check-policy.ts). */
+export interface ChecksRecord { running(task: Task): boolean; checked(task: Task): boolean }
 
 /** Work this rule never ends: a goal closes by the person's word (INV-768), a proposal is not work yet. */
 function outOfScope(task: Task, world: SettleWorld): boolean {
-  return task.status !== "review" || task.pursuit !== undefined || task.goal !== undefined || task.proposedBy !== undefined || world.isAgent(task.requester) || world.checking(task);
+  return task.status !== "review" || task.pursuit !== undefined || task.goal !== undefined || task.proposedBy !== undefined || world.isAgent(task.requester) || world.checking(task) || world.checks?.running(task) === true;
 }
 
 /** A named agent reviewer that has not yet spoken on this delivery: its verdict comes before anything ends the work. */
@@ -90,7 +98,7 @@ function reviewerToCome(task: Task, isAgent: (id: string) => boolean): boolean {
 
 /** The note that ends a delivered result nobody needs to answer, or undefined when it waits for a person. */
 export function deliveredClose(task: Task, world: SettleWorld): string | undefined {
-  if (outOfScope(task, world) || reviewerToCome(task, world.isAgent) || signOffReasons(task, world.board, world.isAgent).length > 0) return undefined;
+  if (outOfScope(task, world) || reviewerToCome(task, world.isAgent) || signOffReasons(task, world.board, world.isAgent, world.checks).length > 0) return undefined;
   return "ended on delivery: nothing waits on it, no files were handed over, and nobody asked to see it first. Not accepted by a person — if it is wrong, say so and it reopens.";
 }
 

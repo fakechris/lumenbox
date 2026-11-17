@@ -217,5 +217,8 @@ test("restart retires new and legacy result checks; neither recovery queue nor m
     assert.equal(modelCalls, 0); assert.equal(tasks.list().length, 1);
     assert.equal(turns.interrupted().length, 0);
     assert.match(orch.resultChecks.snapshot(tasks.get(task.id)!).plans[0]!.reason!, /restart interrupted/);
+    await new Promise(resolve => setImmediate(resolve)); // the settle rule has had its look (INV-1904)
+    assert.equal(tasks.get(task.id)!.status, "review", "an interrupted check is no verdict: the result waits for a person");
+    assert.equal(tasks.get(task.id)!.history.at(-1)!.decide, true);
   } finally { if (previousHome === undefined) delete process.env.AGENTBOX_HOME; else process.env.AGENTBOX_HOME = previousHome; rmSync(root, { recursive: true, force: true }); }
 });

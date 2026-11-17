@@ -12,7 +12,7 @@ const registry = new AgentRegistry(join(agentboxHome(), "agents"));
 const agent = registry.create({ name: "Nova" });
 registry.appendTranscript(agent.id, { role: "assistant", text: "Anonymous layout fixture", at: new Date().toISOString() });
 const tasks = new TaskStore(join(agentboxHome(), "tasks.jsonl"));
-const task = tasks.create({ title: "Install the approved skill · 安装指定技能", requester: "web:layout-viewer", assigneeId: agent.id, conversation: "main", origin: { kind: "user" }, description: "## Expected result\nInstall the approved skill and retain the original files.\n\n- Verify the installed artifact\n- Return the loading evidence" })!;
+const task = tasks.create({ title: "Install the approved skill · 安装指定技能", requester: "web:layout-viewer", assigneeId: agent.id, conversation: "main", origin: { kind: "user" }, signOff: true, description: "## Expected result\nInstall the approved skill and retain the original files.\n\n- Verify the installed artifact\n- Return the loading evidence" })!;
 tasks.deliveryCommand(task.id, "submit", agent.id, { evidence: ["Approved artifact and loading report"] });
 if (process.argv.includes("--work-scale")) {
   for (let n = 1; n < 1600; n++) tasks.create({ title: `Target work ${n} · 用户工作`, requester: "web:layout-viewer", assigneeId: agent.id, conversation: "main", origin: { kind: "user" } });

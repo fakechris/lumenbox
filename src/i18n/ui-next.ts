@@ -88,6 +88,7 @@ export const UI_NEXT: Record<string, readonly [string, string]> = {
   "ui.next.because.blocks": ["确认后，等着它的 {n} 件事会开始。", "Once you confirm, the {n} task(s) waiting on it start."],
   "ui.next.because.files": ["交给你 {n} 个文件，用之前先看一眼。", "{n} file(s) were handed over; look before they are used."],
   "ui.next.because.asked": ["你要求做完先给你过目。", "You asked to see it before it counts as done."],
+  "ui.next.because.unfinished": ["没做完就交回来了（预算用完或卡住），需要你决定接下来怎么办。", "It was handed back unfinished (out of budget, or stuck); what next is yours to decide."],
   "ui.next.because.undecided": ["检查没能下结论，需要你来判断。", "The check could not decide; it is yours to judge."],
   "ui.next.because.remarked": ["交付之后有人对结果提了意见，见下面的说明。", "Somebody commented on the result after it was delivered; see below."],
   "ui.next.panel.slice": ["第 {n} 片 / 上限 {max}", "Slice {n} of at most {max}"],

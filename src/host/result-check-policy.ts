@@ -195,6 +195,8 @@ export class ResultChecks {
     );
   }
   /** Whether a check of this task's current evidence is running: it speaks before anything settles the result (INV-1904). */
+  /** Whether any check ran on this task's current evidence, finished or not (INV-1904). */
+  checked(task: Task): boolean { return this.snapshot(task).plans.some(plan => plan.taskId === task.id && plan.digest === evidenceDigest(task)); }
   running(task: Task): boolean { return this.snapshot(task).plans.some(plan => plan.taskId === task.id && plan.digest === evidenceDigest(task) && this.active(task, plan.id)); }
   begin(task: Task, reviewers: string[]): { plan?: CheckPlan; reason?: string; decide?: true } { // decide: an authorized check cannot run, so a person decides (INV-1904)
     const account = this.accounts.get(keyOf(task));
